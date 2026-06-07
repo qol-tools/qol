@@ -8,9 +8,23 @@ use objc2_foundation::{MainThreadMarker, NSPoint};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(debug_assertions)]
+const GHOST_COLOR_UNSET: u32 = u32::MAX;
+
+#[cfg(debug_assertions)]
 static GHOST_DEBUG_ALPHA: AtomicU32 = AtomicU32::new(0);
 #[cfg(debug_assertions)]
-static GHOST_DEBUG_COLOR: AtomicU32 = AtomicU32::new(0x00FF00);
+static GHOST_DEBUG_COLOR: AtomicU32 = AtomicU32::new(GHOST_COLOR_UNSET);
+
+pub fn sync_window_layout(
+    title: &str,
+    window: &mut gpui::Window,
+    origin: gpui::Point<gpui::Pixels>,
+    size: gpui::Size<gpui::Pixels>,
+) -> bool {
+    let backing = window_backing_scale(title);
+    crate::window::resize_or_sync_scale(window, size, backing);
+    reposition_window_by_title(title, origin.x.to_f64(), origin.y.to_f64())
+}
 
 pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool {
     let Some(mtm) = MainThreadMarker::new() else {
@@ -44,14 +58,44 @@ pub fn hide_window_by_title(title: &str) -> bool {
     {
         let alpha = f32::from_bits(GHOST_DEBUG_ALPHA.load(Ordering::Relaxed));
         if alpha > 0.0 {
-            window.setBackgroundColor(Some(&debug_ghost_color()));
+            match debug_ghost_color() {
+                Some(color) => window.setBackgroundColor(Some(&color)),
+                None => window.setBackgroundColor(Some(&NSColor::clearColor())),
+            }
             window.setAlphaValue(alpha as f64);
             window.setIgnoresMouseEvents(true);
+            qol_runtime::probe!(
+                "HIDE_WIN",
+                "title={title} path=rest alpha={alpha} reason={}",
+                crate::popup_window::change_reason()
+            );
             return true;
         }
     }
     window.setAlphaValue(0.0);
     window.setIgnoresMouseEvents(true);
+    qol_runtime::probe!(
+        "HIDE_WIN",
+        "title={title} path=hidden reason={}",
+        crate::popup_window::change_reason()
+    );
+    true
+}
+
+pub fn hide_invisible(title: &str) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
+    let Some(window) = find_window_by_title(mtm, title) else {
+        return false;
+    };
+    window.setAlphaValue(0.0);
+    window.setIgnoresMouseEvents(true);
+    qol_runtime::probe!(
+        "HIDE_WIN",
+        "title={title} path=invisible reason={}",
+        crate::popup_window::change_reason()
+    );
     true
 }
 
@@ -59,9 +103,10 @@ pub fn set_ghost_debug(opacity: Option<f32>, color_hex: Option<&str>) {
     #[cfg(debug_assertions)]
     {
         GHOST_DEBUG_ALPHA.store(opacity.unwrap_or(0.0).to_bits(), Ordering::Relaxed);
-        if let Some(rgb) = color_hex.and_then(parse_hex_rgb) {
-            GHOST_DEBUG_COLOR.store(rgb, Ordering::Relaxed);
-        }
+        let color = color_hex
+            .and_then(parse_hex_rgb)
+            .unwrap_or(GHOST_COLOR_UNSET);
+        GHOST_DEBUG_COLOR.store(color, Ordering::Relaxed);
     }
     #[cfg(not(debug_assertions))]
     let _ = (opacity, color_hex);
@@ -77,12 +122,15 @@ fn parse_hex_rgb(hex: &str) -> Option<u32> {
 }
 
 #[cfg(debug_assertions)]
-fn debug_ghost_color() -> Retained<NSColor> {
+fn debug_ghost_color() -> Option<Retained<NSColor>> {
     let rgb = GHOST_DEBUG_COLOR.load(Ordering::Relaxed);
+    if rgb == GHOST_COLOR_UNSET {
+        return None;
+    }
     let r = ((rgb >> 16) & 0xFF) as f64 / 255.0;
     let g = ((rgb >> 8) & 0xFF) as f64 / 255.0;
     let b = (rgb & 0xFF) as f64 / 255.0;
-    NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, 1.0)
+    Some(NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, 1.0))
 }
 
 pub fn show_window_by_title(title: &str) -> bool {
@@ -92,9 +140,15 @@ pub fn show_window_by_title(title: &str) -> bool {
     let Some(window) = find_window_by_title(mtm, title) else {
         return false;
     };
+    window.setBackgroundColor(Some(&NSColor::clearColor()));
     window.setIgnoresMouseEvents(false);
     window.makeKeyAndOrderFront(None);
     window.setAlphaValue(1.0);
+    qol_runtime::probe!(
+        "SHOW_WIN",
+        "title={title} reason={}",
+        crate::popup_window::change_reason()
+    );
     true
 }
 
@@ -110,8 +164,10 @@ pub fn disable_window_shadow(title: &str) -> bool {
     {
         let alpha = f32::from_bits(GHOST_DEBUG_ALPHA.load(Ordering::Relaxed));
         if alpha > 0.0 {
-            window.setBackgroundColor(Some(&debug_ghost_color()));
-            return true;
+            if let Some(color) = debug_ghost_color() {
+                window.setBackgroundColor(Some(&color));
+                return true;
+            }
         }
     }
     window.setBackgroundColor(Some(&NSColor::clearColor()));

@@ -16,6 +16,18 @@ rest), never a geometry move**. Both plugins go through the shared `ghost` layer
 (`reconcile`, `reconcile_active`, `show_ghost_window`, `dismiss_to_ghost`) so the
 mechanism is identical.
 
+Topology changes invalidate the set: on `RuntimeEvent::MonitorsChanged`
+(resolution change, monitor added/removed) each plugin destroys its hidden ghost
+set (`ActiveWindows::destroy_all`) and re-runs its boot pre-create, after
+`ghost::refresh_active_monitor_from_state()` flushes the cached active monitor.
+Keys are geometry (`MonitorKey`), so any geometry change is a new key; stale
+ghosts the OS displaced during reconfiguration must never be shown again.
+`MonitorsChanged` needs its **own** event-router subscription - the router
+coalesces a burst to the latest event, and the server batches
+`ActiveMonitorChanged` after `MonitorsChanged` in the same tick, so sharing one
+subscription would swallow the rebuild. Rebuilds are skipped while the popup is
+visible (next `MonitorsChanged` or fresh-key show self-heals).
+
 Why, not preference: chasing a single window across monitors with an X11
 `ConfigureWindow` (move/resize) on a WM-managed `_NET_WM_WINDOW_TYPE_DOCK` window
 is unreliable. Muffin (Cinnamon) intermittently drops the cross-monitor move - the

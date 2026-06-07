@@ -36,7 +36,15 @@ pub(crate) fn spawn(cx: &mut App, inputs: ListenerInputs) {
         vec![qol_gpui::protocol::RuntimeEventKind::ActiveMonitorChanged],
         {
             let inputs = inputs.clone();
-            move |_app_cx, event| reposition_ghost_only(&inputs, event)
+            move |app_cx, event| reposition_ghost_only(&inputs, event, app_cx)
+        },
+    );
+    qol_gpui::event_router::spawn_runtime_event_router(
+        cx,
+        vec![qol_gpui::protocol::RuntimeEventKind::MonitorsChanged],
+        {
+            let inputs = inputs.clone();
+            move |app_cx, event| rebuild_ghosts_for_topology(&inputs, event, app_cx)
         },
     );
     spawn_data_refresh_router(cx, refresh_rx, inputs);
@@ -94,26 +102,91 @@ fn drain(rx: &Arc<Mutex<mpsc::Receiver<()>>>) {
     }
 }
 
-fn reposition_ghost_only(inputs: &ListenerInputs, event: &RuntimeEvent) {
+fn reposition_ghost_only(inputs: &ListenerInputs, event: &RuntimeEvent, app_cx: &mut App) {
     #[cfg(debug_assertions)]
     if let RuntimeEvent::ActiveMonitorChanged { monitor_idx, .. } = event {
         qol_runtime::probe!("PLUGIN_RECV_AMC", "monitor_idx={:?}", monitor_idx);
     }
+    qol_gpui::ghost::record_active_monitor(event);
     if PICKER_VISIBLE.load(Ordering::Relaxed) {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/listener] picker visible, skipping ghost reposition");
         return;
     }
     let _reason = qol_gpui::popup_window::reason_scope("amc");
-    let reconciled = qol_gpui::ghost::reconcile_from_event(
-        event,
-        &inputs.current.borrow(),
-        super::platform::picker_window_title,
-        || inputs.tracker.snapshot_monitor(),
-    );
+    let reconciled = if super::platform::reuse_picker_across_targets() {
+        recenter_single_ghost(inputs, event, app_cx)
+    } else {
+        qol_gpui::ghost::reconcile_from_event(
+            event,
+            &inputs.current.borrow(),
+            super::platform::picker_window_title,
+            || inputs.tracker.snapshot_monitor(),
+        )
+    };
     if reconciled {
         request_data_refresh();
     }
+}
+
+fn recenter_single_ghost(inputs: &ListenerInputs, event: &RuntimeEvent, app_cx: &mut App) -> bool {
+    let monitor =
+        qol_gpui::ghost::record_active_monitor(event).or_else(|| inputs.tracker.snapshot_monitor());
+    let Some(monitor) = monitor else {
+        return false;
+    };
+    let placement = PopupPlacement::from_monitor(Some(monitor));
+    let target = placement.target();
+    let Some((source_key, handle)) = inputs.current.borrow().iter().into_iter().next() else {
+        return false;
+    };
+    let layout = super::reuse::compute_layout(
+        &super::reuse::LayoutInput {
+            placement: &placement,
+        },
+        app_cx,
+    );
+    let synced = handle
+        .update(app_cx, |view, window: &mut Window, _cx| {
+            let title = view.picker_title.clone();
+            super::platform::sync_picker_window_layout(
+                &title,
+                window,
+                layout.bounds.origin,
+                layout.size,
+            )
+        })
+        .unwrap_or(false);
+    if synced && source_key != target {
+        let mut current = inputs.current.borrow_mut();
+        current.remove(source_key);
+        current.insert(target, handle);
+    }
+    qol_runtime::probe!(
+        "GHOST_RECENTER",
+        "target={},{} synced={synced}",
+        target.x,
+        target.y
+    );
+    synced
+}
+
+fn rebuild_ghosts_for_topology(inputs: &ListenerInputs, event: &RuntimeEvent, app_cx: &mut App) {
+    if !matches!(event, RuntimeEvent::MonitorsChanged { .. }) {
+        return;
+    }
+    if PICKER_VISIBLE.load(Ordering::Relaxed) {
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/listener] picker visible, skipping topology rebuild");
+        return;
+    }
+    let _reason = qol_gpui::popup_window::reason_scope("topology");
+    qol_gpui::ghost::refresh_active_monitor_from_state();
+    let config = crate::config::load_alt_tab_config();
+    let mut stale = std::mem::take(&mut *inputs.current.borrow_mut());
+    stale.destroy_all(app_cx);
+    super::platform::pre_create(&config, &inputs.current, &inputs.tracker, app_cx);
+    request_data_refresh();
 }
 
 fn trigger_data_refresh(inputs: &ListenerInputs, app_cx: &mut App) {

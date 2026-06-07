@@ -15,6 +15,7 @@ notify = { version = "8", default-features = false, features = [
 qol-plugin-daemon.workspace = true
 qol-app-icon.workspace = true
 qol-gpui.workspace = true
+qol-runtime.workspace = true
 qol-search.workspace = true
 qol-frecency.workspace = true
 qol-platform.workspace = true

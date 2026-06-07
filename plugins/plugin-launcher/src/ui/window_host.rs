@@ -51,8 +51,6 @@ pub(crate) fn pre_create_ghost(
         let _ = handle.update(cx, |view, _window, _cx| view.set_showing(false));
 
         popup_window::configure_popup_window(&title);
-        #[cfg(target_os = "linux")]
-        popup_window::disable_window_shadow(&title);
         qol_gpui::ghost::hide_invisible(&title);
     }
     let keys: Vec<_> = active
@@ -74,15 +72,67 @@ pub(crate) fn spawn_ghost_reposition_listener(
     qol_gpui::event_router::spawn_runtime_event_router(
         cx,
         vec![qol_gpui::protocol::RuntimeEventKind::ActiveMonitorChanged],
-        move |_app, event| reposition_idle_ghost(&active, &focus_cache, event),
+        move |app, event| reposition_idle_ghost(&active, &focus_cache, event, app),
     );
+}
+
+pub(crate) fn spawn_topology_listener(
+    entries: SharedEntries,
+    active: Rc<RefCell<ActiveLaunchers>>,
+    tracker: MonitorTracker,
+    cx: &mut App,
+) {
+    qol_gpui::event_router::spawn_runtime_event_router(
+        cx,
+        vec![qol_gpui::protocol::RuntimeEventKind::MonitorsChanged],
+        move |app, event| rebuild_ghosts_for_topology(&entries, &active, &tracker, event, app),
+    );
+}
+
+pub(crate) fn any_showing(active: &Rc<RefCell<ActiveLaunchers>>, cx: &App) -> bool {
+    active
+        .borrow()
+        .iter()
+        .into_iter()
+        .any(|(_, handle)| handle.read(cx).map(|view| view.is_showing).unwrap_or(false))
+}
+
+fn rebuild_ghosts_for_topology(
+    entries: &SharedEntries,
+    active: &Rc<RefCell<ActiveLaunchers>>,
+    tracker: &MonitorTracker,
+    event: &qol_gpui::protocol::RuntimeEvent,
+    cx: &mut App,
+) {
+    if !matches!(
+        event,
+        qol_gpui::protocol::RuntimeEvent::MonitorsChanged { .. }
+    ) {
+        return;
+    }
+    if any_showing(active, cx) {
+        return;
+    }
+    qol_gpui::ghost::refresh_active_monitor_from_state();
+    let mut stale = std::mem::take(&mut *active.borrow_mut());
+    stale.destroy_all(cx);
+    pre_create_ghost(entries.clone(), active.clone(), tracker.clone(), cx);
 }
 
 fn reposition_idle_ghost(
     active: &Rc<RefCell<ActiveLaunchers>>,
     focus_cache: &MonitorTracker,
     event: &qol_gpui::protocol::RuntimeEvent,
+    cx: &App,
 ) {
+    #[cfg(debug_assertions)]
+    if let qol_gpui::protocol::RuntimeEvent::ActiveMonitorChanged { monitor_idx, .. } = event {
+        qol_runtime::probe!("PLUGIN_RECV_AMC", "monitor_idx={:?}", monitor_idx);
+    }
+    qol_gpui::ghost::record_active_monitor(event);
+    if any_showing(active, cx) {
+        return;
+    }
     qol_gpui::ghost::reconcile_from_event(
         event,
         &active.borrow(),
