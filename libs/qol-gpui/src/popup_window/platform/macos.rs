@@ -192,13 +192,42 @@ pub fn window_backing_scale(title: &str) -> Option<f32> {
     Some(window.backingScaleFactor() as f32)
 }
 
-pub fn dump_ghost_windows(_context: &str) {}
+pub fn dump_ghost_windows(context: &str) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    for window in app.windows().iter() {
+        let frame = window.frame();
+        qol_runtime::probe!(
+            "GHOST_DUMP",
+            "ctx=({context}) title={:?} alpha={:.2} level={} mouse_ignored={} frame={}x{}@{},{}",
+            window.title().to_string(),
+            window.alphaValue(),
+            window.level(),
+            window.ignoresMouseEvents(),
+            frame.size.width,
+            frame.size.height,
+            frame.origin.x,
+            frame.origin.y
+        );
+    }
+}
 
 fn find_window_by_title(mtm: MainThreadMarker, title: &str) -> Option<Retained<NSWindow>> {
     let app = NSApplication::sharedApplication(mtm);
-    app.windows()
+    let found = app
+        .windows()
         .iter()
-        .find(|win| win.title().to_string() == title)
+        .find(|win| win.title().to_string() == title);
+    if found.is_none() {
+        qol_runtime::probe!(
+            "WIN_MISS",
+            "title={title} reason={}",
+            crate::popup_window::change_reason()
+        );
+    }
+    found
 }
 
 fn sync_backing_properties(window: &NSWindow) {

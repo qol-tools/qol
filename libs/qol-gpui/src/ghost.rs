@@ -117,12 +117,15 @@ pub fn rebuild_on_topology<T: Render + 'static>(
         return false;
     }
     if visible {
+        qol_runtime::probe!("GHOST_TOPOLOGY", "skipped: popup visible");
         return false;
     }
     refresh_active_monitor_from_state();
     let mut stale = std::mem::take(&mut *active.borrow_mut());
+    let n_stale = stale.len();
     stale.destroy_all(cx);
     pre_create(cx);
+    qol_runtime::probe!("GHOST_TOPOLOGY", "rebuilt: destroyed={n_stale}");
     true
 }
 
