@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Style, Stylize};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
@@ -347,80 +347,142 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
 }
 
 fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: ratatui::layout::Rect) {
-    let (health_text, health_color) = match dash.health {
+    let (tray_text, tray_color) = match dash.health {
         Health::Checking => ("starting", Color::Yellow),
         Health::Up => ("running", Color::Green),
         Health::Down => ("down", Color::Red),
     };
-    let rebuild_row = match &dash.rebuild {
-        RebuildState::Idle => Line::from("  rebuild   ctrl+r to trigger"),
-        RebuildState::Requested(at) => Line::from(format!(
-            "  rebuild   requested {} ago",
-            format_duration(at.elapsed())
-        )),
-        RebuildState::Failed(error) => Line::from(vec![
-            "  rebuild   ".into(),
-            "failed".fg(Color::Red).bold(),
-            format!(" · {error}").into(),
-        ]),
-    };
-    let plugins_row = match &dash.plugin_reload {
-        RebuildState::Idle => Line::from(format!(
-            "  plugins   {} linked · ctrl+p to reload",
-            dash.plugins
-        )),
-        RebuildState::Requested(at) => Line::from(format!(
-            "  plugins   {} linked · reload requested {} ago",
-            dash.plugins,
-            format_duration(at.elapsed())
-        )),
-        RebuildState::Failed(error) => Line::from(vec![
-            format!("  plugins   {} linked · reload ", dash.plugins).into(),
-            "failed".fg(Color::Red).bold(),
-            format!(" · {error}").into(),
-        ]),
-    };
-    let doctor_row = match &dash.doctor {
-        DoctorState::Running => Line::from("  doctor    checking · d to run"),
-        DoctorState::Done(report) if report.divergences() == 0 => Line::from(vec![
-            "  doctor    ".into(),
-            "all good".fg(Color::Green).bold(),
-            format!(" · {} checks · d to run", report.ok).into(),
-        ]),
-        DoctorState::Done(report) => Line::from(vec![
-            "  doctor    ".into(),
-            format!("{} divergences", report.divergences())
-                .fg(Color::Yellow)
-                .bold(),
-            format!(
-                " · {} warn · {} err · d to run",
-                report.warn,
-                report.error + report.crash
-            )
-            .into(),
-        ]),
-        DoctorState::Failed(error) => Line::from(vec![
-            "  doctor    ".into(),
-            "failed".fg(Color::Red).bold(),
-            format!(" · {error} · d to run").into(),
-        ]),
-    };
-    let rows = vec![
-        Line::from(vec![
-            "  tray      ".into(),
-            health_text.fg(health_color).bold(),
-            format!(" · up {}", format_duration(dash.started.elapsed())).into(),
-        ]),
-        plugins_row,
-        rebuild_row,
-        doctor_row,
-        Line::from(format!(
-            "  logs      {} buffered · L to view",
-            dash.logs.len()
-        )),
+    let tray_value = vec![
+        tray_text.fg(tray_color).bold(),
+        format!(" · up {}", format_duration(dash.started.elapsed())).fg(Color::DarkGray),
     ];
-    let block = Block::bordered().title(" qol dev ");
-    frame.render_widget(Paragraph::new(rows).block(block), area);
+    let (plugins_color, plugins_value) = plugins_status(&dash.plugin_reload, dash.plugins);
+    let (rebuild_color, rebuild_value) = rebuild_status(&dash.rebuild);
+    let (doctor_color, doctor_value) = doctor_status(&dash.doctor);
+
+    let rows = vec![
+        dash_row(tray_color, "tray", tray_value),
+        dash_row(plugins_color, "plugins", plugins_value),
+        dash_row(rebuild_color, "rebuild", rebuild_value),
+        dash_row(doctor_color, "doctor", doctor_value),
+        dash_row(
+            Color::DarkGray,
+            "logs",
+            vec![format!("{} buffered · L to view", dash.logs.len()).fg(Color::DarkGray)],
+        ),
+    ];
+    frame.render_widget(Paragraph::new(rows).block(panel(" qol dev ")), area);
+}
+
+fn dash_row(color: Color, label: &str, value: Vec<Span<'static>>) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = vec![
+        "  ".into(),
+        "●".fg(color).bold(),
+        format!(" {label:<8} ").fg(Color::DarkGray),
+    ];
+    spans.extend(value);
+    Line::from(spans)
+}
+
+fn panel(title: &str) -> Block<'static> {
+    Block::bordered()
+        .border_style(Style::new().fg(Color::DarkGray))
+        .title(Span::from(title.to_string()).fg(Color::Green).bold())
+}
+
+fn plugins_status(state: &RebuildState, plugins: usize) -> (Color, Vec<Span<'static>>) {
+    match state {
+        RebuildState::Idle => (
+            Color::Green,
+            vec![
+                format!("{plugins} linked").fg(Color::Green),
+                " · ctrl+p to reload".fg(Color::DarkGray),
+            ],
+        ),
+        RebuildState::Requested(at) => (
+            Color::Green,
+            vec![
+                format!("{plugins} linked").fg(Color::Green),
+                format!(" · reload requested {} ago", format_duration(at.elapsed()))
+                    .fg(Color::Yellow),
+            ],
+        ),
+        RebuildState::Failed(error) => (
+            Color::Red,
+            vec![
+                format!("{plugins} linked · reload ").fg(Color::DarkGray),
+                "failed".fg(Color::Red).bold(),
+                format!(" · {error}").fg(Color::DarkGray),
+            ],
+        ),
+    }
+}
+
+fn rebuild_status(state: &RebuildState) -> (Color, Vec<Span<'static>>) {
+    match state {
+        RebuildState::Idle => (
+            Color::DarkGray,
+            vec!["ctrl+r to trigger".fg(Color::DarkGray)],
+        ),
+        RebuildState::Requested(at) => (
+            Color::Yellow,
+            vec![format!("requested {} ago", format_duration(at.elapsed())).fg(Color::Yellow)],
+        ),
+        RebuildState::Failed(error) => (
+            Color::Red,
+            vec![
+                "failed".fg(Color::Red).bold(),
+                format!(" · {error}").fg(Color::DarkGray),
+            ],
+        ),
+    }
+}
+
+fn doctor_status(state: &DoctorState) -> (Color, Vec<Span<'static>>) {
+    match state {
+        DoctorState::Running => (
+            Color::Yellow,
+            vec![
+                "checking".fg(Color::Yellow),
+                " · d to run".fg(Color::DarkGray),
+            ],
+        ),
+        DoctorState::Done(report) if report.divergences() == 0 => (
+            Color::Green,
+            vec![
+                "all good".fg(Color::Green).bold(),
+                format!(" · {} checks · d to run", report.ok).fg(Color::DarkGray),
+            ],
+        ),
+        DoctorState::Done(report) => {
+            let color = if report.error + report.crash > 0 {
+                Color::Red
+            } else {
+                Color::Yellow
+            };
+            (
+                color,
+                vec![
+                    format!("{} divergences", report.divergences())
+                        .fg(color)
+                        .bold(),
+                    format!(
+                        " · {} warn · {} err · d to run",
+                        report.warn,
+                        report.error + report.crash
+                    )
+                    .fg(Color::DarkGray),
+                ],
+            )
+        }
+        DoctorState::Failed(error) => (
+            Color::Red,
+            vec![
+                "failed".fg(Color::Red).bold(),
+                format!(" · {error} · d to run").fg(Color::DarkGray),
+            ],
+        ),
+    }
 }
 
 fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: ratatui::layout::Rect) {
@@ -435,10 +497,7 @@ fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: ratatui::layout::Rect) {
         .map(|line| styled_line(line))
         .collect();
     let title = format!(" logs · {} ", list_status(total, dash.scroll_offset));
-    frame.render_widget(
-        Paragraph::new(visible).block(Block::bordered().title(title)),
-        area,
-    );
+    frame.render_widget(Paragraph::new(visible).block(panel(&title)), area);
 }
 
 fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: ratatui::layout::Rect) {
@@ -447,10 +506,7 @@ fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: ratatui::layout::Rect) 
             DoctorState::Running => "  running checks",
             _ => "  no checks reported · press d to run",
         };
-        frame.render_widget(
-            Paragraph::new(message).block(Block::bordered().title(" doctor ")),
-            area,
-        );
+        frame.render_widget(Paragraph::new(message).block(panel(" doctor ")), area);
         return;
     }
     let total = dash.doctor_lines.len();
@@ -463,10 +519,7 @@ fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: ratatui::layout::Rect) 
         .map(|line| styled_doctor_line(line))
         .collect();
     let title = format!(" doctor · {} ", list_status(total, dash.scroll_offset));
-    frame.render_widget(
-        Paragraph::new(visible).block(Block::bordered().title(title)),
-        area,
-    );
+    frame.render_widget(Paragraph::new(visible).block(panel(&title)), area);
 }
 
 fn list_window(dash: &mut Dash, area: ratatui::layout::Rect, total: usize) -> (usize, usize) {
