@@ -9,13 +9,13 @@ pub mod report;
 pub mod trigger;
 
 use anyhow::Result;
-use diagnosis::{apply_fix, FixAction};
+use diagnosis::{apply_fix, FixAction, FixApplicability};
 use framework::{run_check, DoctorCheckResult, DoctorContext, Selector};
 pub use report::{FixReport, Outcome, OutcomeStatus, Report};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FixPolicy {
-    pub apply_de_fixes: bool,
+    max_applicability: FixApplicability,
 }
 
 impl FixPolicy {
@@ -23,17 +23,14 @@ impl FixPolicy {
         Self::default()
     }
 
-    pub fn with_de_fixes() -> Self {
+    pub fn startup() -> Self {
         Self {
-            apply_de_fixes: true,
+            max_applicability: FixApplicability::ReversibleHostMutation,
         }
     }
 
     fn allows(&self, action: &FixAction) -> bool {
-        if action.is_safe_to_auto_apply() {
-            return true;
-        }
-        self.apply_de_fixes
+        action.applicability() <= self.max_applicability
     }
 }
 
@@ -69,7 +66,7 @@ pub fn auto_fix_startup() -> FixReport {
     if let Some(trigger) = trigger::take() {
         run_triggered_check(&trigger);
     }
-    let report = fix_with_policy(FixPolicy::with_de_fixes());
+    let report = fix_with_policy(FixPolicy::startup());
     log_fix_attempts(&report);
     log_fix_failures(&report);
     log_remaining_outcomes(&report.after);
@@ -90,10 +87,8 @@ fn run_triggered_check(trigger: &trigger::Trigger) {
         trigger.check_id,
         trigger.reason
     );
-    let report = fix_with_selector_and_policy(
-        Selector::Id(trigger.check_id.clone()),
-        FixPolicy::with_de_fixes(),
-    );
+    let report =
+        fix_with_selector_and_policy(Selector::Id(trigger.check_id.clone()), FixPolicy::startup());
     log_fix_attempts(&report);
     log_fix_failures(&report);
 }
@@ -298,11 +293,11 @@ mod tests {
     }
 
     #[test]
-    fn safe_policy_skips_de_fixes_without_invoking_them() {
+    fn safe_policy_skips_host_mutations_without_invoking_them() {
         let summary = apply_fixes(vec![unshadow_result()], FixPolicy::safe());
         assert_eq!(
             summary.attempted, 0,
-            "FixPolicy::safe (CLI default `fix` without --apply-de-fixes) must not attempt DE fixes"
+            "FixPolicy::safe (CLI default `fix` without --apply-host-fixes) must not attempt host mutations"
         );
         assert_eq!(summary.applied, 0);
         assert_eq!(summary.skipped, 1);
@@ -310,15 +305,15 @@ mod tests {
     }
 
     #[test]
-    fn with_de_fixes_policy_attempts_de_fixes_at_startup() {
-        let summary = apply_fixes(vec![unshadow_result()], FixPolicy::with_de_fixes());
+    fn startup_policy_attempts_host_mutations() {
+        let summary = apply_fixes(vec![unshadow_result()], FixPolicy::startup());
         assert_eq!(
             summary.attempted, 1,
-            "auto_fix_startup uses with_de_fixes and must attempt the unshadow"
+            "auto_fix_startup uses FixPolicy::startup and must attempt the unshadow"
         );
         assert_eq!(
             summary.skipped, 0,
-            "with_de_fixes must not skip UnshadowDeBinding"
+            "startup policy must not skip UnshadowDeBinding"
         );
         assert_eq!(
             summary.applied + summary.failures.len(),
@@ -366,7 +361,7 @@ mod tests {
                     key: "y".into(),
                     qol_combo: "Super+Space".into(),
                 },
-                FixPolicy::with_de_fixes(),
+                FixPolicy::startup(),
                 true,
             ),
             (
@@ -382,7 +377,7 @@ mod tests {
                     hotkey_id: 64,
                     qol_combo: "Cmd+Space".into(),
                 },
-                FixPolicy::with_de_fixes(),
+                FixPolicy::startup(),
                 true,
             ),
             (
@@ -398,7 +393,7 @@ mod tests {
                     app_key: "17".into(),
                     qol_combo: "Win+E".into(),
                 },
-                FixPolicy::with_de_fixes(),
+                FixPolicy::startup(),
                 true,
             ),
         ];

@@ -47,20 +47,30 @@ pub(super) enum FixAction {
     },
 }
 
+// Extend with ManualOnly / Destructive when a real FixAction first needs those tiers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum FixApplicability {
+    #[default]
+    SafeAutomatic,
+    ReversibleHostMutation,
+}
+
 impl FixAction {
-    pub(super) fn is_safe_to_auto_apply(&self) -> bool {
+    pub(super) fn applicability(&self) -> FixApplicability {
         match self {
             FixAction::SetActiveInstallId(_)
             | FixAction::WriteInstallMarker { .. }
             | FixAction::WriteAutostartEntry { .. }
             | FixAction::EnsurePluginsDir { .. }
             | FixAction::KillPluginProcessLeaks { .. }
-            | FixAction::InstallShellHook => true,
+            | FixAction::InstallShellHook => FixApplicability::SafeAutomatic,
             FixAction::UnshadowDeBinding { .. }
             | FixAction::DisableSymbolicHotkey { .. }
-            | FixAction::ClearWindowsAppKey { .. } => false,
+            | FixAction::ClearWindowsAppKey { .. } => FixApplicability::ReversibleHostMutation,
             #[cfg(feature = "dev")]
-            FixAction::RelocateDevLink { .. } | FixAction::PruneOrphanFingerprints { .. } => true,
+            FixAction::RelocateDevLink { .. } | FixAction::PruneOrphanFingerprints { .. } => {
+                FixApplicability::SafeAutomatic
+            }
         }
     }
 }
@@ -330,81 +340,89 @@ mod tests {
         }
     }
 
+    #[test]
+    fn safe_automatic_orders_below_reversible_host_mutation() {
+        assert!(FixApplicability::SafeAutomatic < FixApplicability::ReversibleHostMutation);
+    }
+
     #[cfg(feature = "dev")]
     #[test]
-    fn relocate_dev_link_is_safe_to_auto_apply() {
+    fn relocate_dev_link_is_safe_automatic() {
         let action = FixAction::RelocateDevLink {
             plugin_id: "plugin-foo".into(),
             to: PathBuf::from("/ws/plugins/plugin-foo"),
         };
-        assert!(action.is_safe_to_auto_apply());
+        assert_eq!(action.applicability(), FixApplicability::SafeAutomatic);
     }
 
     #[cfg(feature = "dev")]
     #[test]
-    fn prune_orphan_fingerprints_is_safe_to_auto_apply() {
+    fn prune_orphan_fingerprints_is_safe_automatic() {
         let action = FixAction::PruneOrphanFingerprints {
             ids: vec!["plugin-orphan".into()],
         };
-        assert!(action.is_safe_to_auto_apply());
+        assert_eq!(action.applicability(), FixApplicability::SafeAutomatic);
     }
 
     #[test]
-    fn safe_actions_are_auto_appliable() {
+    fn applicability_maps_each_action() {
         let cases = [
-            (FixAction::SetActiveInstallId("abc".into()), true),
+            (
+                FixAction::SetActiveInstallId("abc".into()),
+                FixApplicability::SafeAutomatic,
+            ),
             (
                 FixAction::WriteInstallMarker {
                     marker_path: PathBuf::from("/tmp/x"),
                     install_id: "abc".into(),
                 },
-                true,
+                FixApplicability::SafeAutomatic,
             ),
             (
                 FixAction::WriteAutostartEntry {
                     binary_path: PathBuf::from("/usr/bin/qol-tray"),
                 },
-                true,
+                FixApplicability::SafeAutomatic,
             ),
             (
                 FixAction::EnsurePluginsDir {
                     path: PathBuf::from("/tmp/plugins"),
                 },
-                true,
+                FixApplicability::SafeAutomatic,
             ),
             (
                 FixAction::KillPluginProcessLeaks {
                     processes: Vec::new(),
                 },
-                true,
+                FixApplicability::SafeAutomatic,
             ),
-            (FixAction::InstallShellHook, true),
+            (FixAction::InstallShellHook, FixApplicability::SafeAutomatic),
             (
                 FixAction::UnshadowDeBinding {
                     schema: "org.cinnamon.desktop.keybindings.wm".into(),
                     key: "switch-input-source".into(),
                     qol_combo: "Super+Space".into(),
                 },
-                false,
+                FixApplicability::ReversibleHostMutation,
             ),
             (
                 FixAction::DisableSymbolicHotkey {
                     hotkey_id: 64,
                     qol_combo: "Cmd+Space".into(),
                 },
-                false,
+                FixApplicability::ReversibleHostMutation,
             ),
             (
                 FixAction::ClearWindowsAppKey {
                     app_key: "17".into(),
                     qol_combo: "Win+E".into(),
                 },
-                false,
+                FixApplicability::ReversibleHostMutation,
             ),
         ];
         for (action, expected) in cases {
             assert_eq!(
-                action.is_safe_to_auto_apply(),
+                action.applicability(),
                 expected,
                 "action variant: {:?}",
                 std::mem::discriminant(&action)
