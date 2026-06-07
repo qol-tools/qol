@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["apps/*", "libs/*", "plugins/*", "tools/*"]
+exclude = ["tools/__pycache__"]
 
 [workspace.package]
 version = "1.0.0"
