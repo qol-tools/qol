@@ -246,6 +246,10 @@ fn log_applied(action: &FixAction) {
                 ids.join(", ")
             );
         }
+        #[cfg(feature = "dev")]
+        FixAction::FormatRustSources { workspace } => {
+            log::info!("doctor: ran cargo fmt in {}", workspace.display());
+        }
     }
 }
 
