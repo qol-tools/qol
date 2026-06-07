@@ -106,6 +106,26 @@ pub fn reconcile_from_event<T: 'static>(
     true
 }
 
+pub fn rebuild_on_topology<T: Render + 'static>(
+    event: &RuntimeEvent,
+    visible: bool,
+    active: &std::rc::Rc<std::cell::RefCell<crate::window::ActiveWindows<T>>>,
+    cx: &mut App,
+    pre_create: impl FnOnce(&mut App),
+) -> bool {
+    if !matches!(event, RuntimeEvent::MonitorsChanged { .. }) {
+        return false;
+    }
+    if visible {
+        return false;
+    }
+    refresh_active_monitor_from_state();
+    let mut stale = std::mem::take(&mut *active.borrow_mut());
+    stale.destroy_all(cx);
+    pre_create(cx);
+    true
+}
+
 pub fn dismiss_to_ghost(prefix: &str, my_title: &str) {
     dismiss_to_ghost_with(my_title, |key| ghost_window_title(prefix, key));
 }

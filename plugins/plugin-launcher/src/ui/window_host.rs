@@ -104,19 +104,10 @@ fn rebuild_ghosts_for_topology(
     event: &qol_gpui::protocol::RuntimeEvent,
     cx: &mut App,
 ) {
-    if !matches!(
-        event,
-        qol_gpui::protocol::RuntimeEvent::MonitorsChanged { .. }
-    ) {
-        return;
-    }
-    if any_showing(active, cx) {
-        return;
-    }
-    qol_gpui::ghost::refresh_active_monitor_from_state();
-    let mut stale = std::mem::take(&mut *active.borrow_mut());
-    stale.destroy_all(cx);
-    pre_create_ghost(entries.clone(), active.clone(), tracker.clone(), cx);
+    let visible = any_showing(active, cx);
+    qol_gpui::ghost::rebuild_on_topology(event, visible, active, cx, |cx| {
+        pre_create_ghost(entries.clone(), active.clone(), tracker.clone(), cx)
+    });
 }
 
 fn reposition_idle_ghost(
