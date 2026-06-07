@@ -171,7 +171,7 @@ mod tests {
 
     fn registry_with(entries: Vec<Entry>) -> Registry {
         Registry {
-            version: registry::CURRENT_REGISTRY_VERSION,
+            version: crate::plugins::registry::CURRENT_REGISTRY_VERSION,
             entries,
         }
     }
