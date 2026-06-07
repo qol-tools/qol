@@ -1,4 +1,5 @@
 use crate::cli::optional_single_arg;
+use crate::dev_console;
 use crate::dev_server::{post_dev_link, post_recompile, wait_for_health, DevLinkOutcome};
 use crate::host_facade;
 use crate::progress::{print_hint, print_title, run_step, step_label, StepKind};
@@ -53,9 +54,9 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     let mut child = Command::new(&binary)
         .current_dir(&root)
         .arg("--write-mode=dev")
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .context("failed to start qol-tray dev process")?;
 
@@ -72,13 +73,13 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         post_recompile(branch)?;
     }
 
-    let status = child
-        .wait()
-        .context("failed waiting for qol-tray dev process")?;
-    if !status.success() {
-        bail!("qol-tray dev process exited with {status}");
+    match dev_console::run_session(&mut child, verbose, buildable.len())? {
+        dev_console::SessionEnd::UserQuit => Ok(()),
+        dev_console::SessionEnd::ChildExited(status) if status.success() => Ok(()),
+        dev_console::SessionEnd::ChildExited(status) => {
+            bail!("qol-tray dev process exited with {status}")
+        }
     }
-    Ok(())
 }
 
 fn collect_buildable_plugins(root: &Path, skip_plugins: bool) -> Result<Vec<BuildablePlugin>> {
