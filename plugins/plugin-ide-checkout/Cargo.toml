@@ -5,3 +5,4 @@ edition = "2021"
 
 [dev-dependencies]
 qol-tray.workspace = true
+tempfile = "3.8"

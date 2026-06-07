@@ -17,11 +17,10 @@ fn main() -> ExitCode {
 }
 
 fn run_daemon() -> ExitCode {
-    let server_path = plugin_dir().join("server.py");
-    if !server_path.is_file() {
-        eprintln!("Missing daemon server script: {}", server_path.display());
+    let Some(server_path) = find_server_script(server_script_dirs()) else {
+        eprintln!("Missing daemon server script server.py (looked next to the binary and in QOL_TRAY_PLUGIN_DIR)");
         return ExitCode::from(1);
-    }
+    };
 
     #[cfg(unix)]
     {
@@ -148,12 +147,24 @@ fn escape_applescript(input: &str) -> String {
     input.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn plugin_dir() -> PathBuf {
-    env::current_exe()
+fn server_script_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(exe_dir) = env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|parent| parent.to_path_buf()))
-        .or_else(|| env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."))
+    {
+        dirs.push(exe_dir);
+    }
+    if let Some(plugin_dir) = env::var_os("QOL_TRAY_PLUGIN_DIR") {
+        dirs.push(PathBuf::from(plugin_dir));
+    }
+    dirs
+}
+
+fn find_server_script(dirs: Vec<PathBuf>) -> Option<PathBuf> {
+    dirs.into_iter()
+        .map(|dir| dir.join("server.py"))
+        .find(|path| path.is_file())
 }
 
 #[cfg(test)]
@@ -163,5 +174,24 @@ mod tests {
     #[test]
     fn validate_plugin_contract() {
         PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
+    }
+
+    #[test]
+    fn find_server_script_picks_first_dir_containing_it() {
+        let empty = tempfile::tempdir().unwrap();
+        let with_script = tempfile::tempdir().unwrap();
+        std::fs::write(with_script.path().join("server.py"), "").unwrap();
+
+        let dirs = vec![empty.path().to_path_buf(), with_script.path().to_path_buf()];
+        assert_eq!(
+            super::find_server_script(dirs),
+            Some(with_script.path().join("server.py")),
+            "skips dirs without the script"
+        );
+        assert_eq!(
+            super::find_server_script(vec![empty.path().to_path_buf()]),
+            None,
+            "no candidate yields None"
+        );
     }
 }
