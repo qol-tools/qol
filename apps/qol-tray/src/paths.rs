@@ -277,6 +277,10 @@ pub fn mode_config_path() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join("mode.json"))
 }
 
+pub fn runtime_gpui_config_path() -> Result<PathBuf> {
+    shared_config_dir().map(|p| p.join("runtime/gpui.json"))
+}
+
 const RUNTIME_DIR: &str = "/tmp/qol-tray";
 
 pub fn runtime_dir() -> PathBuf {

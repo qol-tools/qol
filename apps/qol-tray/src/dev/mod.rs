@@ -5,6 +5,7 @@ mod config;
 pub mod core;
 mod discovery;
 mod linking;
+pub mod runtime_gpui;
 #[cfg(feature = "dev")]
 pub mod state;
 
@@ -27,3 +28,4 @@ pub use linking::{
     active_dev_links, create_link, get_active_worktree_branch, list_linked_plugins, remove_link,
     LinkRequest, LinkedPlugin,
 };
+pub use runtime_gpui::GpuiRuntimeConfig;
