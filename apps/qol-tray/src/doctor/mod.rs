@@ -238,6 +238,14 @@ fn log_applied(action: &FixAction) {
                 ids.join(", ")
             );
         }
+        #[cfg(feature = "dev")]
+        FixAction::PruneReservedPlugins { ids } => {
+            log::info!(
+                "doctor: pruned {} reserved plugin id(s) from registry: {}",
+                ids.len(),
+                ids.join(", ")
+            );
+        }
     }
 }
 

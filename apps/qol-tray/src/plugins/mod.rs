@@ -13,12 +13,14 @@ pub mod manager;
 pub mod manifest;
 pub(crate) mod paths;
 pub mod registry;
+mod reserved;
 pub mod resolver;
 
 pub use config::PluginConfigManager;
 pub use loader::PluginLoader;
 pub use manager::PluginManager;
 pub use manifest::{ActionType, MenuItem, PluginManifest};
+pub use reserved::is_reserved_plugin_id;
 pub use resolver::PluginSource;
 
 use anyhow::Result;
