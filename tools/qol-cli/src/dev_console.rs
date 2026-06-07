@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
@@ -434,7 +434,7 @@ fn footer_text(dash: &Dash) -> String {
     }
 }
 
-fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: ratatui::layout::Rect) {
+fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
     let (tray_color, tray_value) = tray_status(dash);
     let (plugins_color, plugins_value) =
         plugins_status(&dash.plugin_reload, dash.plugin_names.len());
@@ -451,7 +451,51 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: ratatui::layout::Rect) {
             vec![format!("{} buffered", dash.logs.len()).fg(Color::DarkGray)],
         ),
     ];
-    frame.render_widget(Paragraph::new(rows).block(panel(" qol dev ")), area);
+
+    let [cap, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+    let block = Block::bordered().border_style(Style::new().fg(Color::DarkGray));
+    let inner = block.inner(body);
+    frame.render_widget(block, body);
+    let rows_area = Rect {
+        y: inner.y + 1,
+        height: inner.height.saturating_sub(1),
+        ..inner
+    };
+    frame.render_widget(Paragraph::new(rows), rows_area);
+    draw_title_badge(frame, cap, body, "qol dev");
+}
+
+fn draw_title_badge(frame: &mut Frame, cap: Rect, body: Rect, label: &str) {
+    let span = label.chars().count() as u16 + 2;
+    let width = span + 2;
+    if width + 2 > body.width {
+        return;
+    }
+    let x = body.x + (body.width - width) / 2;
+    let bar = "─".repeat(span as usize);
+    let edge = Color::DarkGray;
+    render_overlay(frame, x, cap.y, Line::from(format!("╭{bar}╮").fg(edge)));
+    render_overlay(
+        frame,
+        x,
+        body.y,
+        Line::from(vec![
+            "┤ ".fg(edge),
+            label.to_string().fg(Color::Green).bold(),
+            " ├".fg(edge),
+        ]),
+    );
+    render_overlay(
+        frame,
+        x,
+        body.y + 1,
+        Line::from(format!("╰{bar}╯").fg(edge)),
+    );
+}
+
+fn render_overlay(frame: &mut Frame, x: u16, y: u16, line: Line<'static>) {
+    let width = line.width() as u16;
+    frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
 }
 
 fn tray_status(dash: &Dash) -> (Color, Vec<Span<'static>>) {
@@ -528,7 +572,7 @@ fn plugins_status(state: &RebuildState, plugins: usize) -> (Color, Vec<Span<'sta
     }
 }
 
-fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: ratatui::layout::Rect) {
+fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     if dash.plugin_names.is_empty() {
         frame.render_widget(
             Paragraph::new("  no dev-linked plugins").block(panel(" plugins ")),
@@ -597,7 +641,7 @@ fn doctor_status(state: &DoctorState) -> (Color, Vec<Span<'static>>) {
     }
 }
 
-fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: ratatui::layout::Rect) {
+fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let total = dash.logs.len();
     let (start, height) = list_window(dash, area, total);
     let visible: Vec<Line> = dash
@@ -612,7 +656,7 @@ fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: ratatui::layout::Rect) {
     frame.render_widget(Paragraph::new(visible).block(panel(&title)), area);
 }
 
-fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: ratatui::layout::Rect) {
+fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     if dash.doctor_lines.is_empty() {
         let message = match dash.doctor {
             DoctorState::Running => "  running checks",
@@ -634,7 +678,7 @@ fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: ratatui::layout::Rect) 
     frame.render_widget(Paragraph::new(visible).block(panel(&title)), area);
 }
 
-fn list_window(dash: &mut Dash, area: ratatui::layout::Rect, total: usize) -> (usize, usize) {
+fn list_window(dash: &mut Dash, area: Rect, total: usize) -> (usize, usize) {
     let height = area.height.saturating_sub(2) as usize;
     dash.log_height = height;
     dash.scroll_offset = clamp_offset(total, height, dash.scroll_offset);
