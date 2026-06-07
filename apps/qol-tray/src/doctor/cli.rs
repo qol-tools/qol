@@ -83,14 +83,15 @@ fn print_failures(failures: &[String]) {
 
 fn print_report(title: &str, report: &Report) {
     println!("{}", title);
-    for outcome in &report.outcomes {
+    for outcome in report.outcomes() {
         print_outcome(outcome);
     }
     println!(
-        "Summary: ok={}, warn={}, error={}",
+        "Summary: ok={}, warn={}, error={}, crash={}",
         report.count_ok(),
         report.count_warn(),
-        report.count_error()
+        report.count_error(),
+        report.count_crash()
     );
 }
 
@@ -109,6 +110,7 @@ fn status_label(status: OutcomeStatus) -> &'static str {
         OutcomeStatus::Ok => "OK",
         OutcomeStatus::Warn => "WARN",
         OutcomeStatus::Error => "ERR",
+        OutcomeStatus::Crash => "CRASH",
     }
 }
 
@@ -120,6 +122,9 @@ fn fix_suffix(fix_available: bool) -> &'static str {
 }
 
 fn exit_code_for_report(report: &Report) -> i32 {
+    if report.has_crashes() {
+        return 2;
+    }
     if report.has_errors() {
         return 2;
     }

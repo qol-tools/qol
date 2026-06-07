@@ -1,29 +1,37 @@
-use super::super::diagnosis::{ok_outcome, warn_outcome, Diagnosis};
+use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use crate::dev;
-use crate::plugins::registry::{self, Registry, SlotSource};
+use crate::plugins::registry::{Registry, SlotSource};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const ID: &str = "plugin_staleness";
 
-pub(super) fn check() -> Diagnosis {
-    let config_dir = match crate::paths::shared_config_dir() {
-        Ok(dir) => dir,
-        Err(error) => return ok_outcome(ID, format!("could not resolve config dir: {error}")),
-    };
-    let registry = match registry::load_registry(&config_dir) {
-        Ok(registry) => registry,
-        Err(error) => return ok_outcome(ID, format!("could not read plugin registry: {error}")),
-    };
-    let linked = dev::list_linked_plugins(&config_dir).unwrap_or_default();
-    let workspace_root = plugin_sources_dir();
+pub(super) struct PluginStalenessCheck;
 
-    let findings = collect_findings(&registry, &linked, &workspace_root, &dir_has_plugin_toml);
-
-    if findings.is_empty() {
-        return ok_outcome(ID, "no plugin staleness detected".into());
+impl DoctorCheck for PluginStalenessCheck {
+    fn meta(&self) -> CheckMeta {
+        CheckMeta::new(ID, "Plugin staleness", CheckCategory::DevBuild)
+            .group(&["dev-loop"])
+            .dev_only()
     }
-    warn_outcome(ID, format_message(&findings), None)
+
+    fn run(&self, ctx: &DoctorContext) -> CheckReport {
+        let registry = match ctx.registry() {
+            Ok(registry) => registry,
+            Err(error) => {
+                return CheckReport::ok(format!("could not read plugin registry: {error}"));
+            }
+        };
+        let linked = ctx.linked();
+        let workspace_root = plugin_sources_dir();
+
+        let findings = collect_findings(registry, linked, &workspace_root, &dir_has_plugin_toml);
+
+        if findings.is_empty() {
+            return CheckReport::ok("no plugin staleness detected".to_string());
+        }
+        CheckReport::warn(format_message(&findings), ID, Vec::new())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

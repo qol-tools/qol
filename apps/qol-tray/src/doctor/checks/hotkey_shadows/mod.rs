@@ -1,7 +1,6 @@
 use super::super::de_bindings::normalize_combo;
-use super::super::diagnosis::{
-    error_outcome, ok_outcome, warn_outcome_with_fixes, Diagnosis, FixAction,
-};
+use super::super::diagnosis::FixAction;
+use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use crate::hotkeys::{HotkeyBinding, HotkeyManager};
 use std::collections::BTreeMap;
 
@@ -30,6 +29,30 @@ mod fallback {
 
 const ID: &str = "hotkey_shadows";
 
+pub(super) struct HotkeyShadowsCheck;
+
+impl DoctorCheck for HotkeyShadowsCheck {
+    fn meta(&self) -> CheckMeta {
+        CheckMeta::new(ID, "Hotkey shadows", CheckCategory::HostSurface)
+    }
+
+    fn run(&self, _ctx: &DoctorContext) -> CheckReport {
+        let bindings = match enabled_bindings() {
+            Ok(bindings) => bindings,
+            Err(error) => {
+                return CheckReport::ok(format!("could not load hotkey config: {error}"));
+            }
+        };
+        if bindings.is_empty() {
+            return CheckReport::ok("no hotkeys configured".to_string());
+        }
+
+        let qol_index = build_qol_index(&bindings);
+        let shadows = platform_impl::collect_shadows(&qol_index);
+        diagnose(shadows)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DetectedShadow {
     pub qol_combo: String,
@@ -43,32 +66,16 @@ pub(crate) enum ShadowKind {
     Reserved { hint: String },
 }
 
-pub(super) fn check() -> Diagnosis {
-    let bindings = match enabled_bindings() {
-        Ok(bindings) => bindings,
-        Err(error) => {
-            return ok_outcome(ID, format!("could not load hotkey config: {error}"));
-        }
-    };
-    if bindings.is_empty() {
-        return ok_outcome(ID, "no hotkeys configured".into());
-    }
-
-    let qol_index = build_qol_index(&bindings);
-    let shadows = platform_impl::collect_shadows(&qol_index);
-    diagnose(shadows)
-}
-
-fn diagnose(shadows: Vec<DetectedShadow>) -> Diagnosis {
+fn diagnose(shadows: Vec<DetectedShadow>) -> CheckReport {
     if shadows.is_empty() {
-        return ok_outcome(ID, "no DE keybinding conflicts detected".into());
+        return CheckReport::ok("no DE keybinding conflicts detected".to_string());
     }
     let (fixable, reserved): (Vec<_>, Vec<_>) = shadows
         .into_iter()
         .partition(|shadow| matches!(shadow.kind, ShadowKind::Fixable(_)));
 
     if fixable.is_empty() {
-        return error_outcome(ID, format_reserved_message(&reserved));
+        return CheckReport::error(format_reserved_message(&reserved), ID);
     }
 
     let fixes: Vec<FixAction> = fixable
@@ -83,7 +90,7 @@ fn diagnose(shadows: Vec<DetectedShadow>) -> Diagnosis {
         message.push_str(" | reserved (manual remap required): ");
         message.push_str(&format_reserved_message(&reserved));
     }
-    warn_outcome_with_fixes(ID, message, fixes)
+    CheckReport::warn(message, ID, fixes)
 }
 
 pub(crate) fn build_qol_index(bindings: &[HotkeyBinding]) -> BTreeMap<String, String> {
@@ -136,6 +143,7 @@ fn format_reserved_message(shadows: &[DetectedShadow]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::framework::Severity;
     use super::*;
 
     fn binding(key: &str) -> HotkeyBinding {
@@ -150,11 +158,10 @@ mod tests {
 
     #[test]
     fn diagnose_returns_ok_when_no_shadows() {
-        let diagnosis = diagnose(Vec::new());
-        assert_eq!(
-            diagnosis.outcome.status,
-            crate::doctor::OutcomeStatus::Ok,
-            "no shadows must be Ok status"
+        let report = diagnose(Vec::new());
+        assert!(
+            report.issues.is_empty(),
+            "no shadows must produce no issues"
         );
     }
 
@@ -169,10 +176,10 @@ mod tests {
                 qol_combo: "Super+Space".into(),
             }),
         }];
-        let diagnosis = diagnose(shadows);
-        assert_eq!(diagnosis.outcome.status, crate::doctor::OutcomeStatus::Warn);
-        assert!(diagnosis.outcome.fix_available);
-        assert_eq!(diagnosis.fixes.len(), 1);
+        let report = diagnose(shadows);
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues[0].severity, Severity::Warn);
+        assert_eq!(report.fixes.len(), 1);
     }
 
     #[test]
@@ -184,14 +191,12 @@ mod tests {
                 hint: "remap qol-tray's plugin to a different combo".into(),
             },
         }];
-        let diagnosis = diagnose(shadows);
-        assert_eq!(
-            diagnosis.outcome.status,
-            crate::doctor::OutcomeStatus::Error
-        );
-        assert!(!diagnosis.outcome.fix_available);
-        assert!(diagnosis.outcome.message.contains("Cmd+Tab"));
-        assert!(diagnosis.outcome.message.contains("App Switcher"));
+        let report = diagnose(shadows);
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues[0].severity, Severity::Error);
+        assert!(report.fixes.is_empty());
+        assert!(report.summary.contains("Cmd+Tab"));
+        assert!(report.summary.contains("App Switcher"));
     }
 
     #[test]
@@ -214,14 +219,14 @@ mod tests {
                 },
             },
         ];
-        let diagnosis = diagnose(shadows);
-        assert_eq!(diagnosis.outcome.status, crate::doctor::OutcomeStatus::Warn);
-        assert!(diagnosis.outcome.fix_available);
-        assert_eq!(diagnosis.fixes.len(), 1, "only fixable shadow yields a fix");
+        let report = diagnose(shadows);
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues[0].severity, Severity::Warn);
+        assert_eq!(report.fixes.len(), 1, "only fixable shadow yields a fix");
         assert!(
-            diagnosis.outcome.message.contains("reserved"),
-            "message must call out reserved combos: {}",
-            diagnosis.outcome.message
+            report.summary.contains("reserved"),
+            "summary must call out reserved combos: {}",
+            report.summary
         );
     }
 

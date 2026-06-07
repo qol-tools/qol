@@ -1,22 +1,31 @@
-use super::super::diagnosis::{ok_outcome, warn_outcome, Diagnosis, FixAction};
+use super::super::diagnosis::FixAction;
+use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use crate::plugins::daemon_tracker::ManagedProcess;
 
 const ID: &str = "plugin_process_leaks";
 
-pub(super) fn check() -> Diagnosis {
-    diagnose(crate::plugins::daemon_tracker::leaked_processes())
+pub(super) struct PluginProcessLeaksCheck;
+
+impl DoctorCheck for PluginProcessLeaksCheck {
+    fn meta(&self) -> CheckMeta {
+        CheckMeta::new(ID, "Plugin process leaks", CheckCategory::Plugins).group(&["dev-loop"])
+    }
+
+    fn run(&self, _ctx: &DoctorContext) -> CheckReport {
+        diagnose(crate::plugins::daemon_tracker::leaked_processes())
+    }
 }
 
-fn diagnose(leaks: Vec<ManagedProcess>) -> Diagnosis {
+fn diagnose(leaks: Vec<ManagedProcess>) -> CheckReport {
     if leaks.is_empty() {
-        return ok_outcome(ID, "no leaked plugin processes detected".to_string());
+        return CheckReport::ok("no leaked plugin processes detected".to_string());
     }
 
     let message = format!("leaked plugin processes detected: {}", format_leaks(&leaks));
-    warn_outcome(
-        ID,
+    CheckReport::warn(
         message,
-        Some(FixAction::KillPluginProcessLeaks { processes: leaks }),
+        ID,
+        vec![FixAction::KillPluginProcessLeaks { processes: leaks }],
     )
 }
 
@@ -31,30 +40,28 @@ fn format_leaks(leaks: &[ManagedProcess]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::doctor::OutcomeStatus;
     use std::path::PathBuf;
 
     #[test]
     fn diagnose_ok_when_no_leaks() {
-        let diagnosis = diagnose(Vec::new());
-
-        assert_eq!(diagnosis.outcome.status, OutcomeStatus::Ok);
-        assert!(!diagnosis.outcome.fix_available);
+        let report = diagnose(Vec::new());
+        assert!(report.issues.is_empty(), "Ok report has no issues");
+        assert!(report.fixes.is_empty());
     }
 
     #[test]
     fn diagnose_warns_with_safe_fix_when_leaks_exist() {
-        let diagnosis = diagnose(vec![ManagedProcess {
+        let report = diagnose(vec![ManagedProcess {
             pid: 42,
             executable: PathBuf::from("/plugins/plugin-lights/daemon"),
         }]);
 
-        assert_eq!(diagnosis.outcome.status, OutcomeStatus::Warn);
-        assert!(diagnosis.outcome.fix_available);
-        assert!(diagnosis.outcome.message.contains("42"));
-        assert!(diagnosis.outcome.message.contains("plugin-lights"));
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.fixes.len(), 1);
+        assert!(report.summary.contains("42"));
+        assert!(report.summary.contains("plugin-lights"));
         assert!(matches!(
-            diagnosis.fixes.as_slice(),
+            report.fixes.as_slice(),
             [FixAction::KillPluginProcessLeaks { processes }]
                 if processes.len() == 1 && processes[0].pid == 42
         ));
