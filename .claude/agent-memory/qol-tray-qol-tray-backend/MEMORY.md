@@ -17,3 +17,8 @@
 ## 2026-06-05
 - In qol-tray registry, `WorktreeLink` variant exists but is never created in production code; only dev code paths produce `DevLink`, with worktree overrides mutating `entry.active.path` while leaving variant as `DevLink`.
 - `auto_fix_startup` runs pre-tokio before plugin load, so registry-mutating fixes (like `RelocateDevLink`) take effect on first plugin resolution with no daemon restart needed.
+
+## 2026-06-07
+- `make build` in apps/qol-tray invokes `lint` (clippy `--all-targets -D warnings`) - test-only code (e.g. inside `#[test]` fns) blocks the build, not just CI.
+- HashMap-backed JSON saves (e.g. build-fingerprints.json) re-emit keys in nondeterministic order; verify "no content change" with `jq -S` semantic diff, not raw `diff`.
+- CI clippy args come from `.github/scripts/affected_crates.py` (`--workspace --exclude keyremap --all-targets` on Ubuntu); local repro needs `--all-targets`, plain `cargo clippy -p X` misses it.
