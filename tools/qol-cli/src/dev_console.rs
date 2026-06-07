@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, IsTerminal, Read};
-use std::process::{Child, ExitStatus};
+use std::process::{Child, Command, ExitStatus};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
@@ -31,6 +31,7 @@ enum Action {
     ToggleView,
     Rebuild,
     ReloadPlugins,
+    Doctor,
     Quit,
     ScrollUp,
     ScrollDown,
@@ -51,6 +52,7 @@ fn action_for(code: KeyCode, mods: KeyModifiers) -> Action {
     }
     match code {
         KeyCode::Char('l') | KeyCode::Char('L') => Action::ToggleView,
+        KeyCode::Char('d') | KeyCode::Char('D') => Action::Doctor,
         KeyCode::Char('q') => Action::Quit,
         KeyCode::Up => Action::ScrollUp,
         KeyCode::Down => Action::ScrollDown,
@@ -105,6 +107,26 @@ enum Health {
     Down,
 }
 
+#[derive(Clone, Copy)]
+struct DoctorReport {
+    ok: usize,
+    warn: usize,
+    error: usize,
+    crash: usize,
+}
+
+impl DoctorReport {
+    fn divergences(&self) -> usize {
+        self.warn + self.error + self.crash
+    }
+}
+
+enum DoctorState {
+    Running,
+    Done(DoctorReport),
+    Failed(String),
+}
+
 enum RebuildState {
     Idle,
     Requested(Instant),
@@ -121,6 +143,8 @@ struct Dash {
     plugin_reload: RebuildState,
     plugins: usize,
     log_height: usize,
+    doctor: DoctorState,
+    doctor_rx: Option<Receiver<Result<DoctorReport, String>>>,
 }
 
 impl Dash {
@@ -135,7 +159,14 @@ impl Dash {
             plugin_reload: RebuildState::Idle,
             plugins,
             log_height: 0,
+            doctor: DoctorState::Running,
+            doctor_rx: None,
         }
+    }
+
+    fn start_doctor(&mut self) {
+        self.doctor = DoctorState::Running;
+        self.doctor_rx = Some(spawn_doctor_run());
     }
 }
 
@@ -146,6 +177,7 @@ pub(crate) fn run_session(child: &mut Child, verbose: bool, plugins: usize) -> R
     }
     let health = spawn_health_probe();
     let mut dash = Dash::new(plugins);
+    dash.start_doctor();
     let mut terminal = ratatui::init();
     let result = tui_session(&mut terminal, child, &lines, &health, &mut dash);
     ratatui::restore();
@@ -198,6 +230,14 @@ fn tui_session(
         }
         while let Ok(up) = health.try_recv() {
             dash.health = if up { Health::Up } else { Health::Down };
+        }
+        let doctor_outcome = dash.doctor_rx.as_ref().and_then(|rx| rx.try_recv().ok());
+        if let Some(outcome) = doctor_outcome {
+            dash.doctor = match outcome {
+                Ok(report) => DoctorState::Done(report),
+                Err(error) => DoctorState::Failed(error),
+            };
+            dash.doctor_rx = None;
         }
         if let Some(status) = try_wait(child)? {
             while let Ok(line) = lines.try_recv() {
@@ -253,6 +293,7 @@ fn apply_action(dash: &mut Dash, action: Action) {
                 Err(error) => RebuildState::Failed(format!("{error:#}")),
             };
         }
+        Action::Doctor => dash.start_doctor(),
         Action::ScrollUp => dash.scroll_offset = dash.scroll_offset.saturating_add(1),
         Action::ScrollDown => dash.scroll_offset = dash.scroll_offset.saturating_sub(1),
         Action::PageUp => dash.scroll_offset = dash.scroll_offset.saturating_add(page),
@@ -271,8 +312,10 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         View::Logs => draw_logs(frame, dash, main),
     }
     let keys = match dash.view {
-        View::Dashboard => " L logs · ^R rebuild · ^P plugins · q quit ",
-        View::Logs => " L dashboard · ^R rebuild · ^P plugins · ↑/↓ scroll · f follow · q quit ",
+        View::Dashboard => " L logs · ^R rebuild · ^P plugins · d doctor · q quit ",
+        View::Logs => {
+            " L dashboard · ^R rebuild · ^P plugins · d doctor · ↑/↓ scroll · f follow · q quit "
+        }
     };
     frame.render_widget(Paragraph::new(keys).style(Style::new().dim()), footer);
 }
@@ -311,6 +354,31 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: ratatui::layout::Rect) {
             format!(" · {error}").into(),
         ]),
     };
+    let doctor_row = match &dash.doctor {
+        DoctorState::Running => Line::from("  doctor    checking · d to run"),
+        DoctorState::Done(report) if report.divergences() == 0 => Line::from(vec![
+            "  doctor    ".into(),
+            "all good".fg(Color::Green).bold(),
+            format!(" · {} checks · d to run", report.ok).into(),
+        ]),
+        DoctorState::Done(report) => Line::from(vec![
+            "  doctor    ".into(),
+            format!("{} divergences", report.divergences())
+                .fg(Color::Yellow)
+                .bold(),
+            format!(
+                " · {} warn · {} err · d to run",
+                report.warn,
+                report.error + report.crash
+            )
+            .into(),
+        ]),
+        DoctorState::Failed(error) => Line::from(vec![
+            "  doctor    ".into(),
+            "failed".fg(Color::Red).bold(),
+            format!(" · {error} · d to run").into(),
+        ]),
+    };
     let rows = vec![
         Line::from(vec![
             "  tray      ".into(),
@@ -319,6 +387,7 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: ratatui::layout::Rect) {
         ]),
         plugins_row,
         rebuild_row,
+        doctor_row,
         Line::from(format!(
             "  logs      {} buffered · L to view",
             dash.logs.len()
@@ -437,6 +506,48 @@ fn spawn_health_probe() -> Receiver<bool> {
     rx
 }
 
+fn spawn_doctor_run() -> Receiver<Result<DoctorReport, String>> {
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(run_doctor_once());
+    });
+    rx
+}
+
+fn run_doctor_once() -> Result<DoctorReport, String> {
+    let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
+    let binary = root
+        .join("target")
+        .join("debug")
+        .join(host_facade::exe_name("qol-tray-doctor"));
+    let output = Command::new(&binary)
+        .current_dir(&root)
+        .arg("check")
+        .output()
+        .map_err(|error| error.to_string())?;
+    parse_doctor_summary(&String::from_utf8_lossy(&output.stdout))
+        .ok_or_else(|| "could not read doctor summary".to_string())
+}
+
+fn parse_doctor_summary(text: &str) -> Option<DoctorReport> {
+    let line = text
+        .lines()
+        .rev()
+        .find(|line| line.trim_start().starts_with("Summary:"))?;
+    Some(DoctorReport {
+        ok: parse_summary_field(line, "ok=")?,
+        warn: parse_summary_field(line, "warn=")?,
+        error: parse_summary_field(line, "error=")?,
+        crash: parse_summary_field(line, "crash=")?,
+    })
+}
+
+fn parse_summary_field(line: &str, key: &str) -> Option<usize> {
+    let rest = line.split(key).nth(1)?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,6 +559,8 @@ mod tests {
         let cases = [
             (KeyCode::Char('l'), none, Action::ToggleView),
             (KeyCode::Char('L'), none, Action::ToggleView),
+            (KeyCode::Char('d'), none, Action::Doctor),
+            (KeyCode::Char('D'), none, Action::Doctor),
             (KeyCode::Char('r'), ctrl, Action::Rebuild),
             (KeyCode::Char('p'), ctrl, Action::ReloadPlugins),
             (KeyCode::Char('c'), ctrl, Action::Quit),
@@ -465,6 +578,20 @@ mod tests {
         for (code, mods, expected) in cases {
             assert_eq!(action_for(code, mods), expected, "{code:?} {mods:?}");
         }
+    }
+
+    #[test]
+    fn parse_doctor_summary_reads_counts() {
+        let report = parse_doctor_summary(
+            "Doctor Check\n[OK] x: y\nSummary: ok=9, warn=2, error=1, crash=0",
+        )
+        .expect("summary present");
+        assert_eq!(
+            (report.ok, report.warn, report.error, report.crash),
+            (9, 2, 1, 0)
+        );
+        assert_eq!(report.divergences(), 3);
+        assert!(parse_doctor_summary("no summary line here").is_none());
     }
 
     #[test]
