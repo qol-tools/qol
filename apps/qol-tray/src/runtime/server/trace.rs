@@ -39,6 +39,11 @@ pub(super) fn publish_summary(
     #[cfg(debug_assertions)]
     {
         for event in events {
+            if let RuntimeEvent::MonitorsChanged { monitors } = event {
+                qol_runtime::probe!("PUBLISH_MONITORS", "n={}", monitors.len());
+            }
+        }
+        for event in events {
             let RuntimeEvent::ActiveMonitorChanged {
                 monitor_idx,
                 monitor,

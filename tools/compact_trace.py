@@ -865,6 +865,45 @@ def process_line(ts_raw, pid, tag, msg):
             event_buffer.append((int(ts_raw), ts, "MARK", "host", text))
             last_event_real_time = time.time()
 
+    elif tag == "GHOST_DUMP":
+        m = re.search(
+            r'ctx=\((?P<ctx>[^)]*)\)\s+title="(?P<title>[^"]*)"\s+alpha=(?P<alpha>[\d.]+)'
+            r'\s+level=(?P<level>-?\d+)\s+mouse_ignored=(?P<mi>\w+)\s+frame=(?P<frame>\S+)',
+            msg,
+        )
+        if m:
+            proc_name = get_process_name(pid)
+            if filter_plugin and proc_name != filter_plugin:
+                return
+            ctx = m.group("ctx")
+            title = m.group("title")
+            alpha = float(m.group("alpha"))
+            level = int(m.group("level"))
+            mouse_ignored = m.group("mi") == "true"
+            is_ghost = title.startswith("qol-")
+            wrong_level = is_ghost and level == 0
+            opaque_outside_show = (
+                is_ghost and alpha >= 1.0 and not mouse_ignored and not ctx.startswith("show")
+            )
+            text = (f"\"{title}\" alpha={alpha} level={level} "
+                    f"mouse_ignored={m.group('mi')} {m.group('frame')} ({ctx})")
+            if wrong_level or opaque_outside_show:
+                stats["divergence"] += 1
+                why = "ghost at normal window level" if wrong_level else "opaque clickable ghost outside show"
+                text = f"{COLOR_FAIL}⚠ DIVERGENCE ({why}): {text}{COLOR_RESET}"
+            event_buffer.append((int(ts_raw), ts, "GHOST_DUMP", proc_name, text))
+            last_event_real_time = time.time()
+
+    else:
+        proc_name = get_process_name(pid)
+        if filter_plugin and proc_name != filter_plugin:
+            return
+        color = COLOR_FAIL if "DIVERGENCE" in msg else ""
+        reset = COLOR_RESET if color else ""
+        text = f"{color}{tag}: {msg}{reset}"
+        event_buffer.append((int(ts_raw), ts, tag, proc_name, text))
+        last_event_real_time = time.time()
+
 def flush_buffer():
     global event_buffer, last_printed_state_summary
     if not event_buffer:

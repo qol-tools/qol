@@ -97,9 +97,10 @@ fn monitors_changed_event(shared: &SharedState, changed: bool) -> Option<Runtime
         return None;
     }
 
-    Some(RuntimeEvent::MonitorsChanged {
-        monitors: shared.monitors(),
-    })
+    let monitors = shared.monitors();
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!("HOST_EMIT_MONITORS", "n={}", monitors.len());
+    Some(RuntimeEvent::MonitorsChanged { monitors })
 }
 
 fn active_monitor_idx(input: &InputState, monitors: &[MonitorBounds]) -> Option<usize> {
