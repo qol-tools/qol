@@ -221,10 +221,15 @@ impl AltTabApp {
         &mut self,
         gathered: &GatheredWindows,
         reset: bool,
+        rest_forward: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.apply_gathered(gathered, reset, window, cx);
+        if rest_forward {
+            self.delegate.update(cx, |s, _| s.select_next());
+            cx.notify();
+        }
     }
 
     pub(crate) fn update_icons(
