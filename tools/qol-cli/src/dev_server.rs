@@ -20,7 +20,7 @@ pub(crate) enum DevLinkOutcome {
 pub(crate) fn wait_for_health() -> Result<()> {
     let deadline = Instant::now() + HEALTH_TIMEOUT;
     while Instant::now() < deadline {
-        if http_get_ok(DEV_HEALTH_URL).unwrap_or(false) {
+        if health_ok() {
             return Ok(());
         }
         std::thread::sleep(HEALTH_INTERVAL);
@@ -30,7 +30,19 @@ pub(crate) fn wait_for_health() -> Result<()> {
 
 pub(crate) fn post_recompile(branch: &str) -> Result<()> {
     let body = json!({ "worktree_branch": branch }).to_string();
-    let status = http_request("POST", DEV_RECOMPILE_URL, Some(&body))?;
+    post_recompile_body(&body)
+}
+
+pub(crate) fn health_ok() -> bool {
+    http_get_ok(DEV_HEALTH_URL).unwrap_or(false)
+}
+
+pub(crate) fn post_recompile_current() -> Result<()> {
+    post_recompile_body("{}")
+}
+
+fn post_recompile_body(body: &str) -> Result<()> {
+    let status = http_request("POST", DEV_RECOMPILE_URL, Some(body))?;
     if status / 100 == 2 {
         return Ok(());
     }
