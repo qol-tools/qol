@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, IsTerminal, Read};
-use std::process::{Child, Command, ExitStatus};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
@@ -42,6 +42,7 @@ enum Action {
     PageUp,
     PageDown,
     Follow,
+    Filter,
     Ignore,
 }
 
@@ -66,6 +67,7 @@ fn action_for(code: KeyCode, mods: KeyModifiers) -> Action {
         KeyCode::PageUp => Action::PageUp,
         KeyCode::PageDown => Action::PageDown,
         KeyCode::End | KeyCode::Char('f') => Action::Follow,
+        KeyCode::Char('/') => Action::Filter,
         _ => Action::Ignore,
     }
 }
@@ -107,6 +109,7 @@ enum View {
     Logs,
     Doctor,
     Plugins,
+    Trace,
 }
 
 #[derive(Clone, Copy)]
@@ -115,9 +118,10 @@ enum Row {
     Plugins,
     Doctor,
     Logs,
+    Trace,
 }
 
-const ROWS: [Row; 4] = [Row::Tray, Row::Plugins, Row::Doctor, Row::Logs];
+const ROWS: [Row; 5] = [Row::Tray, Row::Plugins, Row::Doctor, Row::Logs, Row::Trace];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Health {
@@ -171,6 +175,11 @@ struct Dash {
     doctor: DoctorState,
     doctor_lines: Vec<String>,
     doctor_rx: Option<Receiver<Result<DoctorRun, String>>>,
+    trace: LogRing,
+    trace_child: Option<Child>,
+    trace_rx: Option<Receiver<String>>,
+    filter: String,
+    filtering: bool,
 }
 
 impl Dash {
@@ -189,6 +198,11 @@ impl Dash {
             doctor: DoctorState::Running,
             doctor_lines: Vec::new(),
             doctor_rx: None,
+            trace: LogRing::new(),
+            trace_child: None,
+            trace_rx: None,
+            filter: String::new(),
+            filtering: false,
         }
     }
 
@@ -277,26 +291,60 @@ fn tui_session(
             }
             dash.doctor_rx = None;
         }
+        drain_trace(dash);
         if let Some(status) = try_wait(child)? {
             while let Ok(line) = lines.try_recv() {
                 dash.logs.push(line);
             }
+            stop_trace(dash);
             return Ok(SessionEnd::ChildExited(status));
         }
         terminal.draw(|frame| draw(frame, dash))?;
-        if let Some(action) = poll_action()? {
-            match action {
-                Action::Quit => {
-                    stop_child(child)?;
-                    return Ok(SessionEnd::UserQuit);
+        if let Some((code, mods)) = poll_key()? {
+            if dash.filtering {
+                edit_filter(dash, code);
+            } else {
+                match action_for(code, mods) {
+                    Action::Quit => {
+                        stop_trace(dash);
+                        stop_child(child)?;
+                        return Ok(SessionEnd::UserQuit);
+                    }
+                    other => apply_action(dash, other),
                 }
-                other => apply_action(dash, other),
             }
         }
     }
 }
 
-fn poll_action() -> Result<Option<Action>> {
+fn drain_trace(dash: &mut Dash) {
+    let mut received = Vec::new();
+    if let Some(rx) = dash.trace_rx.as_ref() {
+        while let Ok(line) = rx.try_recv() {
+            received.push(line);
+        }
+    }
+    for line in received {
+        dash.trace.push(line);
+    }
+}
+
+fn edit_filter(dash: &mut Dash, code: KeyCode) {
+    match code {
+        KeyCode::Char(c) => dash.filter.push(c),
+        KeyCode::Backspace => {
+            dash.filter.pop();
+        }
+        KeyCode::Enter => dash.filtering = false,
+        KeyCode::Esc => {
+            dash.filter.clear();
+            dash.filtering = false;
+        }
+        _ => {}
+    }
+}
+
+fn poll_key() -> Result<Option<(KeyCode, KeyModifiers)>> {
     if !event::poll(TICK)? {
         return Ok(None);
     }
@@ -306,7 +354,7 @@ fn poll_action() -> Result<Option<Action>> {
     if key.kind != KeyEventKind::Press {
         return Ok(None);
     }
-    Ok(Some(action_for(key.code, key.modifiers)))
+    Ok(Some((key.code, key.modifiers)))
 }
 
 fn apply_action(dash: &mut Dash, action: Action) {
@@ -318,6 +366,7 @@ fn apply_action(dash: &mut Dash, action: Action) {
                 _ => View::Logs,
             };
             dash.scroll_offset = 0;
+            dash.filter.clear();
         }
         Action::Rebuild => trigger_rebuild(dash),
         Action::ReloadPlugins => trigger_reload(dash),
@@ -333,8 +382,13 @@ fn apply_action(dash: &mut Dash, action: Action) {
             }
         }
         Action::Back => {
+            if dash.view == View::Trace {
+                stop_trace(dash);
+            }
             dash.view = View::Dashboard;
             dash.scroll_offset = 0;
+            dash.filter.clear();
+            dash.filtering = false;
         }
         Action::ScrollUp => {
             if dash.view == View::Dashboard {
@@ -353,9 +407,19 @@ fn apply_action(dash: &mut Dash, action: Action) {
         Action::PageUp => dash.scroll_offset = dash.scroll_offset.saturating_add(page),
         Action::PageDown => dash.scroll_offset = dash.scroll_offset.saturating_sub(page),
         Action::Follow => dash.scroll_offset = 0,
+        Action::Filter => {
+            if matches!(dash.view, View::Logs | View::Trace) {
+                dash.filtering = true;
+            }
+        }
         Action::Quit | Action::Ignore => {}
     }
-    dash.scroll_offset = clamp_offset(dash.logs.len(), dash.log_height, dash.scroll_offset);
+    let len = if dash.view == View::Trace {
+        dash.trace.len()
+    } else {
+        dash.logs.len()
+    };
+    dash.scroll_offset = clamp_offset(len, dash.log_height, dash.scroll_offset);
 }
 
 fn act_row(dash: &mut Dash) {
@@ -363,7 +427,7 @@ fn act_row(dash: &mut Dash) {
         Row::Tray => trigger_rebuild(dash),
         Row::Plugins => trigger_reload(dash),
         Row::Doctor => dash.start_doctor(),
-        Row::Logs => {}
+        Row::Logs | Row::Trace => {}
     }
 }
 
@@ -379,7 +443,47 @@ fn dive_row(dash: &mut Dash) {
             dash.view = View::Logs;
             dash.scroll_offset = 0;
         }
+        Row::Trace => open_trace(dash),
     }
+}
+
+fn open_trace(dash: &mut Dash) {
+    dash.view = View::Trace;
+    dash.scroll_offset = 0;
+    if dash.trace_child.is_some() {
+        return;
+    }
+    match spawn_trace() {
+        Some((child, rx)) => {
+            dash.trace_child = Some(child);
+            dash.trace_rx = Some(rx);
+        }
+        None => dash.trace.push(
+            "[qol dev] could not start tracer (need python3 + tools/compact_trace.py)".to_string(),
+        ),
+    }
+}
+
+fn spawn_trace() -> Option<(Child, Receiver<String>)> {
+    let root = crate::workspace::repo_root().ok()?;
+    let mut child = Command::new("python3")
+        .arg(root.join("tools/compact_trace.py"))
+        .current_dir(&root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let rx = spawn_forwarders(&mut child);
+    Some((child, rx))
+}
+
+fn stop_trace(dash: &mut Dash) {
+    if let Some(mut child) = dash.trace_child.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    dash.trace_rx = None;
 }
 
 fn trigger_rebuild(dash: &mut Dash) {
@@ -410,6 +514,7 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         View::Logs => draw_logs(frame, dash, main),
         View::Doctor => draw_doctor(frame, dash, main),
         View::Plugins => draw_plugins(frame, dash, main),
+        View::Trace => draw_trace(frame, dash, main),
     }
     frame.render_widget(
         Paragraph::new(footer_text(dash)).style(Style::new().dim()),
@@ -418,6 +523,9 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
 }
 
 fn footer_text(dash: &Dash) -> String {
+    if dash.filtering {
+        return format!(" filter: {}_ · enter apply · esc cancel ", dash.filter);
+    }
     match dash.view {
         View::Dashboard => {
             let hints = match ROWS[dash.cursor] {
@@ -425,13 +533,23 @@ fn footer_text(dash: &Dash) -> String {
                 Row::Plugins => "enter reload · → list",
                 Row::Doctor => "enter run · → steps",
                 Row::Logs => "→ open",
+                Row::Trace => "→ open",
             };
             format!(" ↑/↓ move · {hints} · q quit ")
         }
-        View::Logs => " ↑/↓ scroll · f follow · ← back · q quit ".to_string(),
+        View::Logs | View::Trace => stream_footer(dash),
         View::Doctor => " d refresh · ↑/↓ scroll · ← back · q quit ".to_string(),
         View::Plugins => " ↑/↓ scroll · ← back · q quit ".to_string(),
     }
+}
+
+fn stream_footer(dash: &Dash) -> String {
+    let filter = if dash.filter.is_empty() {
+        String::new()
+    } else {
+        format!(" · filter: {}", dash.filter)
+    };
+    format!(" ↑/↓ scroll · f follow · / filter{filter} · ← back · q quit ")
 }
 
 fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
@@ -449,6 +567,12 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
             Color::DarkGray,
             "logs",
             vec![format!("{} buffered", dash.logs.len()).fg(Color::DarkGray)],
+        ),
+        dash_row(
+            dash.cursor == 4,
+            Color::DarkGray,
+            "trace",
+            trace_value(dash),
         ),
     ];
 
@@ -642,18 +766,71 @@ fn doctor_status(state: &DoctorState) -> (Color, Vec<Span<'static>>) {
 }
 
 fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
-    let total = dash.logs.len();
-    let (start, height) = list_window(dash, area, total);
-    let visible: Vec<Line> = dash
-        .logs
+    draw_stream(
+        frame,
+        area,
+        &dash.logs,
+        &dash.filter,
+        &mut dash.scroll_offset,
+        &mut dash.log_height,
+        "logs",
+    );
+}
+
+fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+    if dash.trace.lines.is_empty() && dash.filter.is_empty() {
+        frame.render_widget(
+            Paragraph::new("  waiting for trace events").block(panel(" trace ")),
+            area,
+        );
+        return;
+    }
+    draw_stream(
+        frame,
+        area,
+        &dash.trace,
+        &dash.filter,
+        &mut dash.scroll_offset,
+        &mut dash.log_height,
+        "trace",
+    );
+}
+
+fn draw_stream(
+    frame: &mut Frame,
+    area: Rect,
+    ring: &LogRing,
+    filter: &str,
+    scroll_offset: &mut usize,
+    log_height: &mut usize,
+    title_word: &str,
+) {
+    let height = area.height.saturating_sub(2) as usize;
+    *log_height = height;
+    let filtered: Vec<&String> = ring
         .lines
         .iter()
+        .filter(|line| filter.is_empty() || line.contains(filter))
+        .collect();
+    let total = filtered.len();
+    *scroll_offset = clamp_offset(total, height, *scroll_offset);
+    let start = window_start(total, height, *scroll_offset);
+    let visible: Vec<Line> = filtered
+        .into_iter()
         .skip(start)
         .take(height)
         .map(|line| styled_line(line))
         .collect();
-    let title = format!(" logs · {} ", list_status(total, dash.scroll_offset));
+    let title = format!(" {title_word} · {} ", list_status(total, *scroll_offset));
     frame.render_widget(Paragraph::new(visible).block(panel(&title)), area);
+}
+
+fn trace_value(dash: &Dash) -> Vec<Span<'static>> {
+    if dash.trace_child.is_some() {
+        vec![format!("{} lines", dash.trace.len()).fg(Color::DarkGray)]
+    } else {
+        vec!["idle · → open".fg(Color::DarkGray)]
+    }
 }
 
 fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
@@ -889,6 +1066,7 @@ mod tests {
             (KeyCode::PageDown, none, Action::PageDown),
             (KeyCode::End, none, Action::Follow),
             (KeyCode::Char('f'), none, Action::Follow),
+            (KeyCode::Char('/'), none, Action::Filter),
             (KeyCode::Char('r'), none, Action::Ignore),
             (KeyCode::Char('p'), none, Action::Ignore),
             (KeyCode::Char('x'), none, Action::Ignore),
@@ -910,6 +1088,25 @@ mod tests {
         assert_eq!(dash.cursor, ROWS.len() - 1, "clamps at bottom");
         apply_action(&mut dash, Action::ScrollUp);
         assert_eq!(dash.cursor, ROWS.len() - 2);
+    }
+
+    #[test]
+    fn edit_filter_types_backspaces_applies_and_cancels() {
+        let mut dash = Dash::new(Vec::new());
+        dash.filtering = true;
+        for c in "focus".chars() {
+            edit_filter(&mut dash, KeyCode::Char(c));
+        }
+        assert_eq!(dash.filter, "focus");
+        edit_filter(&mut dash, KeyCode::Backspace);
+        assert_eq!(dash.filter, "focu", "backspace deletes last char");
+        edit_filter(&mut dash, KeyCode::Enter);
+        assert!(!dash.filtering, "enter exits typing mode");
+        assert_eq!(dash.filter, "focu", "enter keeps the applied query");
+        dash.filtering = true;
+        edit_filter(&mut dash, KeyCode::Esc);
+        assert!(dash.filter.is_empty(), "esc clears the query");
+        assert!(!dash.filtering, "esc exits typing mode");
     }
 
     #[test]
