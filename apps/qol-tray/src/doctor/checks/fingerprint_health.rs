@@ -1,4 +1,6 @@
 use super::super::diagnosis::FixAction;
+#[cfg(test)]
+use super::super::diagnosis::FixApplicability;
 use super::super::framework::{
     CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext, DoctorIssue, Severity,
 };
@@ -242,7 +244,10 @@ mod tests {
             [FixAction::PruneOrphanFingerprints { ids }] if ids == &vec!["plugin-x".to_string()]
         ));
         assert!(
-            report.fixes.iter().all(FixAction::is_safe_to_auto_apply),
+            report
+                .fixes
+                .iter()
+                .all(|fix| fix.applicability() == FixApplicability::SafeAutomatic),
             "prune fix must be safe-automatic"
         );
     }

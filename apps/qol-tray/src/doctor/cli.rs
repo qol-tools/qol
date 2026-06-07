@@ -52,20 +52,25 @@ fn parse_check_flags(rest: &[String]) -> Result<Option<String>> {
 
 fn parse_fix_flags(rest: &[String]) -> Result<(Option<String>, FixPolicy)> {
     let mut id = None;
-    let mut policy = FixPolicy::safe();
+    let mut host_fixes = false;
     let mut args = rest.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--id" => id = Some(take_id_value(&mut args)?),
-            "--apply-de-fixes" => policy.apply_de_fixes = true,
+            "--apply-host-fixes" | "--apply-de-fixes" => host_fixes = true,
             _ => {
                 return Err(usage_error(
-                    "fix [--id <CHECK_ID>] [--apply-de-fixes]",
+                    "fix [--id <CHECK_ID>] [--apply-host-fixes]",
                     rest,
                 ))
             }
         }
     }
+    let policy = if host_fixes {
+        FixPolicy::startup()
+    } else {
+        FixPolicy::safe()
+    };
     Ok((id, policy))
 }
 
