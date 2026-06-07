@@ -467,6 +467,7 @@ fn open_trace(dash: &mut Dash) {
 fn spawn_trace() -> Option<(Child, Receiver<String>)> {
     let root = crate::workspace::repo_root().ok()?;
     let mut child = Command::new("python3")
+        .arg("-u")
         .arg(root.join("tools/compact_trace.py"))
         .current_dir(&root)
         .stdin(Stdio::null())
