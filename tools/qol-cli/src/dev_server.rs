@@ -56,7 +56,7 @@ pub(crate) fn probe_endpoints() -> Vec<EndpointStatus> {
     const ENDPOINTS: [(&str, &str); 4] = [
         ("website", WEB_HEALTH_URL),
         ("dev api", DEV_HEALTH_URL),
-        ("auth", AUTH_HEALTH_URL),
+        ("github", AUTH_HEALTH_URL),
         ("logs", LOGS_HEALTH_URL),
     ];
     ENDPOINTS
