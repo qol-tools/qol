@@ -74,7 +74,8 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         post_recompile(branch)?;
     }
 
-    match dev_console::run_session(&mut child, verbose, buildable.len())? {
+    let plugin_names: Vec<String> = buildable.iter().map(|p| display_name(&p.dir)).collect();
+    match dev_console::run_session(&mut child, verbose, plugin_names)? {
         dev_console::SessionEnd::UserQuit => Ok(()),
         dev_console::SessionEnd::ChildExited(status) if status.success() => Ok(()),
         dev_console::SessionEnd::ChildExited(status) => {
