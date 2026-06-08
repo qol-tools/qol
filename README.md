@@ -23,7 +23,10 @@ qol dev
 
 ## About
 
-Install once, configure once. Your plugins, keybindings, and settings travel with you: boot the tray on any machine and it becomes yours; pull away and the host is exactly as you found it.
+Install once, configure once. The idea is that your plugins, keybindings, and settings follow you: boot the tray on any machine and it becomes yours; pull away and the host is left as you found it.
+
+> [!NOTE]
+> Alpha. The portable-profile story works in parts today; "leaves no trace" is the goal, not yet a promise.
 
 ## License
 
