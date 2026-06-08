@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use crate::installer::desktop_entry::{format_desktop_exec_command, DesktopExecArg};
+use self::desktop_entry::{format_desktop_exec_command, DesktopExecArg};
+
+pub(crate) mod desktop_entry;
 
 const ICON_64: &[u8] = include_bytes!("../../../assets/icons/64.png");
 const ICON_128: &[u8] = include_bytes!("../../../assets/icons/128.png");

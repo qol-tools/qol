@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 use super::AutostartOps;
-use crate::installer::desktop_entry::{format_desktop_exec_command, parse_desktop_exec_program};
+use crate::installer::platform::desktop_entry::{
+    format_desktop_exec_command, parse_desktop_exec_program,
+};
 
 const DESKTOP_TEMPLATE: &str =
     include_str!("../../../../scripts/installer/platform/linux/desktop/qol-tray.desktop");

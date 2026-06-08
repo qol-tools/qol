@@ -1,5 +1,5 @@
 use super::super::LauncherEntry;
-use crate::installer::desktop_entry::{format_desktop_exec_command, DesktopExecArg};
+use crate::installer::platform::desktop_entry::{format_desktop_exec_command, DesktopExecArg};
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
