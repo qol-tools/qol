@@ -23,6 +23,7 @@ pub(super) use media_cover_handlers::serve_cover;
 pub(super) use media_icon_handlers::serve_icon;
 pub(super) use plugin_config_handlers::get_plugin_config;
 pub(super) use plugin_config_handlers::get_plugin_config_form;
+#[cfg(feature = "dev")]
 pub(super) use plugin_config_handlers::notify_plugin_reload;
 pub(super) use plugin_config_handlers::set_plugin_config;
 

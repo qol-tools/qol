@@ -12,6 +12,7 @@ mod form;
 mod io;
 mod notify;
 
+#[cfg(feature = "dev")]
 pub(in super::super) use notify::notify_plugin_reload;
 
 type HttpResult<T> = Result<T, Box<Response>>;
