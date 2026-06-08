@@ -1,5 +1,5 @@
 use super::PlatformOps;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 
 pub(crate) struct Platform;
 
@@ -17,4 +17,8 @@ impl PlatformOps for Platform {
     }
 
     fn open_url(&self, _url: &str) {}
+
+    fn copy_to_clipboard(&self, _text: &str) -> Result<()> {
+        Err(anyhow!("clipboard not supported on this platform"))
+    }
 }

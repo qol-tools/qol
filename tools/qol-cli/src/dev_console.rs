@@ -46,6 +46,7 @@ enum Action {
     PageDown,
     Follow,
     Filter,
+    Copy,
     Ignore,
 }
 
@@ -71,6 +72,7 @@ fn action_for(code: KeyCode, mods: KeyModifiers) -> Action {
         KeyCode::PageDown => Action::PageDown,
         KeyCode::End | KeyCode::Char('f') => Action::Follow,
         KeyCode::Char('/') => Action::Filter,
+        KeyCode::Char('c') | KeyCode::Char('C') => Action::Copy,
         _ => Action::Ignore,
     }
 }
@@ -219,6 +221,9 @@ struct Dash {
     trace_rx: Option<Receiver<String>>,
     filter: String,
     filtering: bool,
+    copy_count: String,
+    copying: bool,
+    copy_ack: Option<(Instant, String)>,
     armed: bool,
 }
 
@@ -246,6 +251,9 @@ impl Dash {
             trace_rx: None,
             filter: String::new(),
             filtering: false,
+            copy_count: String::new(),
+            copying: false,
+            copy_ack: None,
             armed: false,
         }
     }
@@ -357,6 +365,8 @@ fn tui_session(
         if let Some((code, mods)) = poll_key()? {
             if dash.filtering {
                 edit_filter(dash, code);
+            } else if dash.copying {
+                edit_copy(dash, code);
             } else if code == KeyCode::Char(' ') {
                 dash.armed = !dash.armed;
             } else if dash.armed && code == KeyCode::Esc {
@@ -406,6 +416,73 @@ fn edit_filter(dash: &mut Dash, code: KeyCode) {
         }
         _ => {}
     }
+}
+
+fn edit_copy(dash: &mut Dash, code: KeyCode) {
+    match code {
+        KeyCode::Char(c) if c.is_ascii_digit() => dash.copy_count.push(c),
+        KeyCode::Backspace => {
+            dash.copy_count.pop();
+        }
+        KeyCode::Enter => finish_copy(dash),
+        KeyCode::Esc => {
+            dash.copy_count.clear();
+            dash.copying = false;
+        }
+        _ => {}
+    }
+}
+
+fn finish_copy(dash: &mut Dash) {
+    dash.copying = false;
+    let count = dash.copy_count.parse::<usize>().ok().filter(|&n| n > 0);
+    dash.copy_count.clear();
+    let Some(count) = count else {
+        return;
+    };
+    let text = newest_lines(dash, count);
+    let message = match host_facade::copy_to_clipboard(&text) {
+        Ok(()) => format!("copied {} lines to clipboard", text.lines().count()),
+        Err(error) => format!("copy failed: {error}"),
+    };
+    dash.copy_ack = Some((Instant::now(), message));
+}
+
+fn newest_lines(dash: &Dash, count: usize) -> String {
+    let ring = if dash.view == View::Trace {
+        &dash.trace
+    } else {
+        &dash.logs
+    };
+    let filtered: Vec<&String> = ring
+        .lines
+        .iter()
+        .filter(|line| dash.filter.is_empty() || line.contains(&dash.filter))
+        .collect();
+    let start = filtered.len().saturating_sub(count);
+    filtered[start..]
+        .iter()
+        .map(|line| strip_ansi(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn strip_ansi(raw: &str) -> String {
+    use ansi_to_tui::IntoText;
+    let Ok(text) = raw.into_text() else {
+        return raw.to_string();
+    };
+    text.lines
+        .iter()
+        .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+        .collect()
+}
+
+fn copy_highlight(dash: &Dash) -> Option<usize> {
+    if !dash.copying {
+        return None;
+    }
+    dash.copy_count.parse::<usize>().ok().filter(|&n| n > 0)
 }
 
 fn poll_key() -> Result<Option<(KeyCode, KeyModifiers)>> {
@@ -474,6 +551,13 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
         Action::Filter => {
             if matches!(dash.view, View::Logs | View::Trace) {
                 dash.filtering = true;
+            }
+        }
+        Action::Copy => {
+            if matches!(dash.view, View::Logs | View::Trace) {
+                dash.copying = true;
+                dash.copy_count.clear();
+                dash.scroll_offset = 0;
             }
         }
         Action::Quit | Action::Ignore => {}
@@ -629,11 +713,22 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
 }
 
 fn footer_text(dash: &Dash) -> String {
+    if dash.copying {
+        return format!(
+            " copy last N: {}_ · enter copy · esc cancel ",
+            dash.copy_count
+        );
+    }
     if dash.filtering {
         return format!(" filter: {}_ · enter apply · esc cancel ", dash.filter);
     }
     if dash.armed {
         return armed_footer(dash);
+    }
+    if let Some((at, message)) = &dash.copy_ack {
+        if at.elapsed() < ACK_TTL {
+            return format!(" {message} ");
+        }
     }
     match dash.view {
         View::Dashboard => {
@@ -678,7 +773,7 @@ fn stream_footer(dash: &Dash) -> String {
     } else {
         format!(" · filter: {}", dash.filter)
     };
-    format!(" ↑/↓ scroll · f follow · / filter{filter} · ← back · q quit ")
+    format!(" ↑/↓ scroll · f follow · c copy · / filter{filter} · ← back · q quit ")
 }
 
 fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
@@ -930,6 +1025,7 @@ fn doctor_status(state: &DoctorState) -> (Color, Vec<Span<'static>>) {
 
 fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let accent = accent_color(dash.armed);
+    let highlight = copy_highlight(dash);
     draw_stream(
         frame,
         area,
@@ -939,6 +1035,7 @@ fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         &mut dash.log_height,
         "logs",
         accent,
+        highlight,
     );
 }
 
@@ -951,6 +1048,7 @@ fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         );
         return;
     }
+    let highlight = copy_highlight(dash);
     draw_stream(
         frame,
         area,
@@ -960,6 +1058,7 @@ fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         &mut dash.log_height,
         "trace",
         accent,
+        highlight,
     );
 }
 
@@ -973,6 +1072,7 @@ fn draw_stream(
     log_height: &mut usize,
     title_word: &str,
     accent: Color,
+    highlight_tail: Option<usize>,
 ) {
     let height = area.height.saturating_sub(2) as usize;
     *log_height = height;
@@ -984,14 +1084,32 @@ fn draw_stream(
     let total = filtered.len();
     *scroll_offset = clamp_offset(total, height, *scroll_offset);
     let start = window_start(total, height, *scroll_offset);
+    let highlight_from = highlight_tail.map(|n| total.saturating_sub(n));
+    let inner_width = area.width.saturating_sub(2) as usize;
     let visible: Vec<Line> = filtered
         .into_iter()
+        .enumerate()
         .skip(start)
         .take(height)
-        .map(|line| styled_line(line))
+        .map(|(index, line)| {
+            let styled = styled_line(line);
+            match highlight_from {
+                Some(from) if index >= from => highlight_bar(styled, inner_width),
+                _ => styled,
+            }
+        })
         .collect();
     let title = format!(" {title_word} · {} ", list_status(total, *scroll_offset));
     frame.render_widget(Paragraph::new(visible).block(panel(&title, accent)), area);
+}
+
+fn highlight_bar(line: Line<'_>, inner_width: usize) -> Line<'_> {
+    let pad = inner_width.saturating_sub(line.width());
+    let mut spans = line.spans;
+    if pad > 0 {
+        spans.push(Span::raw(" ".repeat(pad)));
+    }
+    Line::from(spans).style(Style::new().bg(Color::Rgb(38, 44, 74)))
 }
 
 fn trace_value(dash: &Dash) -> Vec<Span<'static>> {
@@ -1361,6 +1479,8 @@ mod tests {
             (KeyCode::End, none, Action::Follow),
             (KeyCode::Char('f'), none, Action::Follow),
             (KeyCode::Char('/'), none, Action::Filter),
+            (KeyCode::Char('c'), none, Action::Copy),
+            (KeyCode::Char('C'), none, Action::Copy),
             (KeyCode::Char('r'), none, Action::Ignore),
             (KeyCode::Char('p'), none, Action::Ignore),
             (KeyCode::Char('x'), none, Action::Ignore),
@@ -1459,6 +1579,47 @@ mod tests {
         edit_filter(&mut dash, KeyCode::Esc);
         assert!(dash.filter.is_empty(), "esc clears the query");
         assert!(!dash.filtering, "esc exits typing mode");
+    }
+
+    #[test]
+    fn edit_copy_accepts_only_digits_and_cancels() {
+        let mut dash = Dash::new(Vec::new());
+        dash.copying = true;
+        for code in [KeyCode::Char('4'), KeyCode::Char('x'), KeyCode::Char('2')] {
+            edit_copy(&mut dash, code);
+        }
+        assert_eq!(dash.copy_count, "42", "non-digits are ignored");
+        edit_copy(&mut dash, KeyCode::Backspace);
+        assert_eq!(dash.copy_count, "4", "backspace deletes last digit");
+        edit_copy(&mut dash, KeyCode::Esc);
+        assert!(dash.copy_count.is_empty(), "esc clears the count");
+        assert!(!dash.copying, "esc exits copy mode");
+    }
+
+    #[test]
+    fn newest_lines_takes_filtered_tail_and_strips_ansi() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Trace;
+        for line in ["alpha", "\u{1b}[31mbeta\u{1b}[0m", "gamma", "delta"] {
+            dash.trace.push(line.to_string());
+        }
+        assert_eq!(
+            newest_lines(&dash, 2),
+            "gamma\ndelta",
+            "tail of N newest lines"
+        );
+        dash.filter = "a".to_string();
+        assert_eq!(
+            newest_lines(&dash, 2),
+            "gamma\ndelta",
+            "filter keeps only matching lines before taking the tail"
+        );
+        dash.filter = "beta".to_string();
+        assert_eq!(
+            newest_lines(&dash, 5),
+            "beta",
+            "ansi codes are stripped from the copied text"
+        );
     }
 
     #[test]

@@ -23,4 +23,8 @@ impl PlatformOps for Platform {
     fn open_url(&self, url: &str) {
         let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
     }
+
+    fn copy_to_clipboard(&self, text: &str) -> Result<()> {
+        super::pipe_to_clipboard("clip", &[], text)
+    }
 }
