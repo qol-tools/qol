@@ -24,7 +24,13 @@ impl DoctorCheck for DevLinkPathsCheck {
             }
         };
 
-        let findings = collect_findings(registry, &fs_manifest_probe, &fs_subplugins_probe);
+        let dev_root = std::env::current_dir().ok().map(|dir| dir.join("plugins"));
+        let findings = collect_findings(
+            registry,
+            dev_root.as_deref(),
+            &fs_manifest_probe,
+            &fs_subplugins_probe,
+        );
 
         if findings.is_empty() {
             return CheckReport::ok("no dev-link path corruption detected".to_string());
@@ -84,6 +90,7 @@ pub(crate) enum Finding {
     Missing {
         plugin_id: String,
         path: PathBuf,
+        resolution: Resolution,
     },
     IdMismatch {
         plugin_id: String,
@@ -110,6 +117,11 @@ impl Finding {
                 plugin_id,
                 resolution: Resolution::Relocate(to),
                 ..
+            }
+            | Finding::Missing {
+                plugin_id,
+                resolution: Resolution::Relocate(to),
+                ..
             } => Some(FixAction::RelocateDevLink {
                 plugin_id: plugin_id.clone(),
                 to: to.clone(),
@@ -128,6 +140,7 @@ fn is_live_source(source: &SlotSource) -> bool {
 
 pub(crate) fn collect_findings(
     registry: &Registry,
+    dev_root: Option<&Path>,
     manifest_probe: &dyn Fn(&Path) -> ManifestStatus,
     subplugins_probe: &dyn Fn(&Path) -> Vec<(String, PathBuf)>,
 ) -> Vec<Finding> {
@@ -141,6 +154,7 @@ pub(crate) fn collect_findings(
             classify(
                 &entry.id,
                 &entry.active.path,
+                dev_root,
                 manifest_probe,
                 subplugins_probe,
             )
@@ -151,6 +165,7 @@ pub(crate) fn collect_findings(
 fn classify(
     plugin_id: &str,
     path: &Path,
+    dev_root: Option<&Path>,
     manifest_probe: &dyn Fn(&Path) -> ManifestStatus,
     subplugins_probe: &dyn Fn(&Path) -> Vec<(String, PathBuf)>,
 ) -> Option<Finding> {
@@ -158,6 +173,7 @@ fn classify(
         ManifestStatus::Missing => Some(Finding::Missing {
             plugin_id: plugin_id.to_string(),
             path: path.to_path_buf(),
+            resolution: resolve(plugin_id, path, dev_root, manifest_probe, subplugins_probe),
         }),
         ManifestStatus::WithId(found) if found == plugin_id => None,
         ManifestStatus::WithId(found) => Some(Finding::IdMismatch {
@@ -172,17 +188,24 @@ fn classify(
         ManifestStatus::NoManifest => Some(Finding::NoManifest {
             plugin_id: plugin_id.to_string(),
             path: path.to_path_buf(),
-            resolution: resolve_no_manifest(plugin_id, path, manifest_probe, subplugins_probe),
+            resolution: resolve(plugin_id, path, dev_root, manifest_probe, subplugins_probe),
         }),
     }
 }
 
-fn resolve_no_manifest(
+fn resolve(
     plugin_id: &str,
     path: &Path,
+    dev_root: Option<&Path>,
     manifest_probe: &dyn Fn(&Path) -> ManifestStatus,
     subplugins_probe: &dyn Fn(&Path) -> Vec<(String, PathBuf)>,
 ) -> Resolution {
+    if let Some(root) = dev_root {
+        let monorepo = root.join(plugin_id);
+        if matches!(manifest_probe(&monorepo), ManifestStatus::WithId(ref id) if id == plugin_id) {
+            return Resolution::Relocate(monorepo);
+        }
+    }
     let direct = path.join("plugins").join(plugin_id);
     if matches!(manifest_probe(&direct), ManifestStatus::WithId(ref id) if id == plugin_id) {
         return Resolution::Relocate(direct);
@@ -282,7 +305,21 @@ fn format_message(findings: &[Finding]) -> String {
                     .or_default()
                     .push(label);
             }
-            Finding::Missing { plugin_id, path } => by_kind
+            Finding::Missing {
+                plugin_id,
+                path,
+                resolution: Resolution::Relocate(to),
+            } => by_kind
+                .entry("dev-link path missing")
+                .or_default()
+                .push(format!(
+                    "{plugin_id} ({} -> {})",
+                    path.display(),
+                    to.display()
+                )),
+            Finding::Missing {
+                plugin_id, path, ..
+            } => by_kind
                 .entry("dev-link path missing")
                 .or_default()
                 .push(format!("{plugin_id} ({})", path.display())),
@@ -377,7 +414,7 @@ mod tests {
             PathBuf::from("/ws/plugins/plugin-foo"),
             ManifestStatus::WithId("plugin-foo".into()),
         );
-        let findings = collect_findings(&registry, &map_probe(probe), &empty_subprobe());
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
         assert!(findings.is_empty(), "got: {findings:?}");
     }
 
@@ -385,24 +422,174 @@ mod tests {
     fn release_asset_entries_are_ignored() {
         let registry = registry_with(vec![release("plugin-foo", "/installed/plugin-foo")]);
         let probe = HashMap::new();
-        let findings = collect_findings(&registry, &map_probe(probe), &empty_subprobe());
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
         assert!(findings.is_empty(), "got: {findings:?}");
     }
 
     #[test]
-    fn missing_path_reports_missing_no_fix() {
+    fn missing_path_with_no_monorepo_match_reports_missing_no_fix() {
         let registry = registry_with(vec![devlink("plugin-foo", "/gone")]);
         let mut probe = HashMap::new();
         probe.insert(PathBuf::from("/gone"), ManifestStatus::Missing);
-        let findings = collect_findings(&registry, &map_probe(probe), &empty_subprobe());
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
         assert_eq!(
             findings,
             vec![Finding::Missing {
                 plugin_id: "plugin-foo".into(),
                 path: PathBuf::from("/gone"),
+                resolution: Resolution::NoMatch,
             }]
         );
         assert!(findings[0].fix_action().is_none());
+    }
+
+    #[test]
+    fn missing_path_relocates_to_monorepo_plugin_when_present() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/old/external/plugin-foo")]);
+        let mut probe = HashMap::new();
+        probe.insert(
+            PathBuf::from("/old/external/plugin-foo"),
+            ManifestStatus::Missing,
+        );
+        probe.insert(
+            PathBuf::from("/mono/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-foo".into()),
+        );
+        let dev_root = PathBuf::from("/mono/plugins");
+        let findings = collect_findings(
+            &registry,
+            Some(&dev_root),
+            &map_probe(probe),
+            &empty_subprobe(),
+        );
+        assert_eq!(
+            findings,
+            vec![Finding::Missing {
+                plugin_id: "plugin-foo".into(),
+                path: PathBuf::from("/old/external/plugin-foo"),
+                resolution: Resolution::Relocate(PathBuf::from("/mono/plugins/plugin-foo")),
+            }],
+            "a dead external dev-link relocates to the monorepo plugin of the same id",
+        );
+        assert_eq!(
+            findings[0].fix_action(),
+            Some(FixAction::RelocateDevLink {
+                plugin_id: "plugin-foo".into(),
+                to: PathBuf::from("/mono/plugins/plugin-foo"),
+            })
+        );
+    }
+
+    #[test]
+    fn monorepo_resolution_wins_over_registered_subdir() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/ws")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/ws"), ManifestStatus::NoManifest);
+        probe.insert(
+            PathBuf::from("/ws/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-foo".into()),
+        );
+        probe.insert(
+            PathBuf::from("/mono/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-foo".into()),
+        );
+        let dev_root = PathBuf::from("/mono/plugins");
+        let findings = collect_findings(
+            &registry,
+            Some(&dev_root),
+            &map_probe(probe),
+            &empty_subprobe(),
+        );
+        assert_eq!(
+            findings[0].fix_action(),
+            Some(FixAction::RelocateDevLink {
+                plugin_id: "plugin-foo".into(),
+                to: PathBuf::from("/mono/plugins/plugin-foo"),
+            }),
+            "the monorepo candidate is preferred over a match under the registered path",
+        );
+    }
+
+    #[test]
+    fn monorepo_candidate_with_mismatched_id_is_skipped() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/ws")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/ws"), ManifestStatus::NoManifest);
+        probe.insert(
+            PathBuf::from("/mono/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-bar".into()),
+        );
+        probe.insert(
+            PathBuf::from("/ws/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-foo".into()),
+        );
+        let dev_root = PathBuf::from("/mono/plugins");
+        let findings = collect_findings(
+            &registry,
+            Some(&dev_root),
+            &map_probe(probe),
+            &empty_subprobe(),
+        );
+        assert_eq!(
+            findings[0].fix_action(),
+            Some(FixAction::RelocateDevLink {
+                plugin_id: "plugin-foo".into(),
+                to: PathBuf::from("/ws/plugins/plugin-foo"),
+            }),
+            "a monorepo dir whose manifest declares a different id is not trusted; falls through",
+        );
+    }
+
+    #[test]
+    fn missing_path_with_unusable_monorepo_candidate_yields_no_fix() {
+        let cases = [
+            ManifestStatus::Missing,
+            ManifestStatus::NoManifest,
+            ManifestStatus::Unparseable,
+        ];
+        for status in cases {
+            let registry = registry_with(vec![devlink("plugin-foo", "/gone")]);
+            let mut probe = HashMap::new();
+            probe.insert(PathBuf::from("/gone"), ManifestStatus::Missing);
+            probe.insert(PathBuf::from("/mono/plugins/plugin-foo"), status.clone());
+            let dev_root = PathBuf::from("/mono/plugins");
+            let findings = collect_findings(
+                &registry,
+                Some(&dev_root),
+                &map_probe(probe),
+                &empty_subprobe(),
+            );
+            assert!(
+                findings[0].fix_action().is_none(),
+                "monorepo candidate status {status:?} is not a usable target",
+            );
+        }
+    }
+
+    #[test]
+    fn missing_worktree_link_also_relocates_to_monorepo() {
+        let registry = registry_with(vec![worktree_link("plugin-foo", "/gone", "feature")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/gone"), ManifestStatus::Missing);
+        probe.insert(
+            PathBuf::from("/mono/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-foo".into()),
+        );
+        let dev_root = PathBuf::from("/mono/plugins");
+        let findings = collect_findings(
+            &registry,
+            Some(&dev_root),
+            &map_probe(probe),
+            &empty_subprobe(),
+        );
+        assert_eq!(
+            findings[0].fix_action(),
+            Some(FixAction::RelocateDevLink {
+                plugin_id: "plugin-foo".into(),
+                to: PathBuf::from("/mono/plugins/plugin-foo"),
+            }),
+            "worktree-link entries resolve to the monorepo the same way dev-links do",
+        );
     }
 
     #[test]
@@ -413,7 +600,7 @@ mod tests {
             PathBuf::from("/other/plugin-bar"),
             ManifestStatus::WithId("plugin-bar".into()),
         );
-        let findings = collect_findings(&registry, &map_probe(probe), &empty_subprobe());
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
         assert_eq!(
             findings,
             vec![Finding::IdMismatch {
@@ -434,7 +621,7 @@ mod tests {
             PathBuf::from("/workspace/plugins/plugin-foo"),
             ManifestStatus::WithId("plugin-foo".into()),
         );
-        let findings = collect_findings(&registry, &map_probe(probe), &empty_subprobe());
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
         assert_eq!(
             findings,
             vec![Finding::NoManifest {
@@ -467,7 +654,7 @@ mod tests {
                 Vec::new()
             }
         };
-        let findings = collect_findings(&registry, &map_probe(probe), &sub_probe);
+        let findings = collect_findings(&registry, None, &map_probe(probe), &sub_probe);
         assert_eq!(
             findings,
             vec![Finding::NoManifest {
@@ -499,7 +686,7 @@ mod tests {
                 Vec::new()
             }
         };
-        let findings = collect_findings(&registry, &map_probe(probe), &sub_probe);
+        let findings = collect_findings(&registry, None, &map_probe(probe), &sub_probe);
         match &findings[..] {
             [Finding::NoManifest {
                 resolution: Resolution::Ambiguous(candidates),
@@ -517,7 +704,7 @@ mod tests {
         let registry = registry_with(vec![devlink("plugin-foo", "/workspace")]);
         let mut probe = HashMap::new();
         probe.insert(PathBuf::from("/workspace"), ManifestStatus::NoManifest);
-        let findings = collect_findings(&registry, &map_probe(probe), &empty_subprobe());
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
         assert_eq!(
             findings,
             vec![Finding::NoManifest {
@@ -544,7 +731,7 @@ mod tests {
             calls.set(calls.get() + 1);
             Vec::new()
         };
-        let findings = collect_findings(&registry, &map_probe(probe), &sub_probe);
+        let findings = collect_findings(&registry, None, &map_probe(probe), &sub_probe);
         assert!(matches!(
             findings[0],
             Finding::NoManifest {
@@ -564,7 +751,7 @@ mod tests {
         let registry = registry_with(vec![devlink("plugin-foo", "/path")]);
         let mut probe = HashMap::new();
         probe.insert(PathBuf::from("/path"), ManifestStatus::Unparseable);
-        let findings = collect_findings(&registry, &map_probe(probe), &empty_subprobe());
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
         assert_eq!(
             findings,
             vec![Finding::Unparseable {
@@ -586,6 +773,7 @@ mod tests {
             Finding::Missing {
                 plugin_id: "plugin-b".into(),
                 path: PathBuf::from("/gone"),
+                resolution: Resolution::NoMatch,
             },
             Finding::IdMismatch {
                 plugin_id: "plugin-c".into(),
@@ -783,7 +971,7 @@ mod tests {
             PathBuf::from("/workspace/plugins/plugin-foo"),
             ManifestStatus::WithId("plugin-foo".into()),
         );
-        let findings = collect_findings(&registry, &map_probe(probe), &empty_subprobe());
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
         assert_eq!(
             findings,
             vec![Finding::NoManifest {

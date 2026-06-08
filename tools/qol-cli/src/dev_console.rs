@@ -75,6 +75,20 @@ fn action_for(code: KeyCode, mods: KeyModifiers) -> Action {
     }
 }
 
+fn preserves_arm(action: Action) -> bool {
+    matches!(
+        action,
+        Action::ScrollUp
+            | Action::ScrollDown
+            | Action::PageUp
+            | Action::PageDown
+            | Action::Dive
+            | Action::Back
+            | Action::ToggleView
+            | Action::Follow
+    )
+}
+
 struct LogRing {
     lines: VecDeque<String>,
 }
@@ -167,7 +181,7 @@ impl DoctorReport {
 }
 
 enum DoctorState {
-    Running,
+    Running(DoctorMode),
     Done(DoctorReport),
     Failed(String),
 }
@@ -205,6 +219,7 @@ struct Dash {
     trace_rx: Option<Receiver<String>>,
     filter: String,
     filtering: bool,
+    armed: bool,
 }
 
 impl Dash {
@@ -223,7 +238,7 @@ impl Dash {
             plugin_names,
             log_height: 0,
             cursor: 0,
-            doctor: DoctorState::Running,
+            doctor: DoctorState::Running(DoctorMode::Check),
             doctor_lines: Vec::new(),
             doctor_rx: None,
             trace: LogRing::new(),
@@ -231,12 +246,18 @@ impl Dash {
             trace_rx: None,
             filter: String::new(),
             filtering: false,
+            armed: false,
         }
     }
 
     fn start_doctor(&mut self) {
-        self.doctor = DoctorState::Running;
-        self.doctor_rx = Some(spawn_doctor_run());
+        self.doctor = DoctorState::Running(DoctorMode::Check);
+        self.doctor_rx = Some(spawn_doctor(DoctorMode::Check));
+    }
+
+    fn start_doctor_fix(&mut self) {
+        self.doctor = DoctorState::Running(DoctorMode::Fix);
+        self.doctor_rx = Some(spawn_doctor(DoctorMode::Fix));
     }
 }
 
@@ -336,14 +357,24 @@ fn tui_session(
         if let Some((code, mods)) = poll_key()? {
             if dash.filtering {
                 edit_filter(dash, code);
+            } else if code == KeyCode::Char(' ') {
+                dash.armed = !dash.armed;
+            } else if dash.armed && code == KeyCode::Esc {
+                dash.armed = false;
             } else {
+                let modified = dash.armed;
                 match action_for(code, mods) {
                     Action::Quit => {
                         stop_trace(dash);
                         stop_child(child)?;
                         return Ok(SessionEnd::UserQuit);
                     }
-                    other => apply_action(dash, other),
+                    action => {
+                        apply_action(dash, action, modified);
+                        if modified && !preserves_arm(action) {
+                            dash.armed = false;
+                        }
+                    }
                 }
             }
         }
@@ -390,7 +421,7 @@ fn poll_key() -> Result<Option<(KeyCode, KeyModifiers)>> {
     Ok(Some((key.code, key.modifiers)))
 }
 
-fn apply_action(dash: &mut Dash, action: Action) {
+fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
     let page = dash.log_height.max(1);
     match action {
         Action::ToggleView => {
@@ -406,7 +437,7 @@ fn apply_action(dash: &mut Dash, action: Action) {
         Action::Doctor => open_doctor(dash),
         Action::Activate => {
             if dash.view == View::Dashboard {
-                act_row(dash);
+                act_row(dash, modified);
             }
         }
         Action::Dive => {
@@ -455,12 +486,30 @@ fn apply_action(dash: &mut Dash, action: Action) {
     dash.scroll_offset = clamp_offset(len, dash.log_height, dash.scroll_offset);
 }
 
-fn act_row(dash: &mut Dash) {
+fn act_row(dash: &mut Dash, modified: bool) {
     match ROWS[dash.cursor] {
-        Row::Tray => trigger_rebuild(dash),
-        Row::Web => host_facade::open_url(WEBSITE_URL),
-        Row::Plugins => trigger_reload(dash),
-        Row::Doctor => dash.start_doctor(),
+        Row::Tray => {
+            if !modified {
+                trigger_rebuild(dash);
+            }
+        }
+        Row::Web => {
+            if !modified {
+                host_facade::open_url(WEBSITE_URL);
+            }
+        }
+        Row::Plugins => {
+            if !modified {
+                trigger_reload(dash);
+            }
+        }
+        Row::Doctor => {
+            if modified {
+                dash.start_doctor_fix();
+            } else {
+                dash.start_doctor();
+            }
+        }
         Row::Logs | Row::Trace => {}
     }
 }
@@ -568,8 +617,13 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         View::Trace => draw_trace(frame, dash, main),
         View::Endpoints => draw_endpoints(frame, dash, main),
     }
+    let footer_style = if dash.armed {
+        Style::new().fg(Color::Yellow).bold()
+    } else {
+        Style::new().dim()
+    };
     frame.render_widget(
-        Paragraph::new(footer_text(dash)).style(Style::new().dim()),
+        Paragraph::new(footer_text(dash)).style(footer_style),
         footer,
     );
 }
@@ -577,6 +631,9 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
 fn footer_text(dash: &Dash) -> String {
     if dash.filtering {
         return format!(" filter: {}_ · enter apply · esc cancel ", dash.filter);
+    }
+    if dash.armed {
+        return armed_footer(dash);
     }
     match dash.view {
         View::Dashboard => {
@@ -588,12 +645,30 @@ fn footer_text(dash: &Dash) -> String {
                 Row::Logs => "→ open",
                 Row::Trace => "→ open",
             };
-            format!(" ↑/↓ move · {hints} · q quit ")
+            format!(" ↑/↓ move · {hints} · space modify · q quit ")
         }
         View::Logs | View::Trace => stream_footer(dash),
-        View::Doctor => " d refresh · ↑/↓ scroll · ← back · q quit ".to_string(),
+        View::Doctor => " space raw · d refresh · ↑/↓ scroll · ← back · q quit ".to_string(),
         View::Plugins => " ↑/↓ scroll · ← back · q quit ".to_string(),
         View::Endpoints => " ← back · q quit ".to_string(),
+    }
+}
+
+fn armed_footer(dash: &Dash) -> String {
+    match dash.view {
+        View::Dashboard => {
+            let hint = match ROWS[dash.cursor] {
+                Row::Doctor => "enter fix",
+                Row::Tray | Row::Web | Row::Plugins | Row::Logs | Row::Trace => {
+                    "no modified action"
+                }
+            };
+            format!(" MODIFIED · {hint} · space/esc cancel ")
+        }
+        View::Doctor => " RAW · space friendly · esc done ".to_string(),
+        View::Logs | View::Trace | View::Plugins | View::Endpoints => {
+            " MODIFIED · space/esc cancel ".to_string()
+        }
     }
 }
 
@@ -632,8 +707,14 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
         ),
     ];
 
+    let accent = accent_color(dash.armed);
+    let label = if dash.armed {
+        "qol dev · MODIFIED"
+    } else {
+        "qol dev"
+    };
     let [cap, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
-    let block = Block::bordered().border_style(Style::new().fg(Color::DarkGray));
+    let block = Block::bordered().border_style(Style::new().fg(accent));
     let inner = block.inner(body);
     frame.render_widget(block, body);
     let rows_area = Rect {
@@ -642,10 +723,10 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
         ..inner
     };
     frame.render_widget(Paragraph::new(rows), rows_area);
-    draw_title_badge(frame, cap, body, "qol dev");
+    draw_title_badge(frame, cap, body, label, accent);
 }
 
-fn draw_title_badge(frame: &mut Frame, cap: Rect, body: Rect, label: &str) {
+fn draw_title_badge(frame: &mut Frame, cap: Rect, body: Rect, label: &str, accent: Color) {
     let span = label.chars().count() as u16 + 2;
     let width = span + 2;
     if width + 2 > body.width {
@@ -653,7 +734,7 @@ fn draw_title_badge(frame: &mut Frame, cap: Rect, body: Rect, label: &str) {
     }
     let x = body.x + (body.width - width) / 2;
     let bar = "─".repeat(span as usize);
-    let edge = Color::DarkGray;
+    let edge = accent;
     render_overlay(frame, x, cap.y, Line::from(format!("╭{bar}╮").fg(edge)));
     render_overlay(
         frame,
@@ -661,7 +742,7 @@ fn draw_title_badge(frame: &mut Frame, cap: Rect, body: Rect, label: &str) {
         body.y,
         Line::from(vec![
             "┤ ".fg(edge),
-            label.to_string().fg(Color::Green).bold(),
+            label.to_string().fg(accent).bold(),
             " ├".fg(edge),
         ]),
     );
@@ -735,14 +816,22 @@ fn dash_row(selected: bool, color: Color, label: &str, value: Vec<Span<'static>>
     Line::from(spans)
 }
 
-fn panel(title: &str) -> Block<'static> {
+fn accent_color(armed: bool) -> Color {
+    if armed {
+        Color::Yellow
+    } else {
+        Color::Green
+    }
+}
+
+fn panel(title: &str, accent: Color) -> Block<'static> {
     Block::bordered()
-        .border_style(Style::new().fg(Color::DarkGray))
+        .border_style(Style::new().fg(accent))
         .title(
             Line::from(vec![
-                "┤ ".fg(Color::DarkGray),
-                title.trim().to_string().fg(Color::Green).bold(),
-                " ├".fg(Color::DarkGray),
+                "┤ ".fg(accent),
+                title.trim().to_string().fg(accent).bold(),
+                " ├".fg(accent),
             ])
             .centered(),
         )
@@ -770,9 +859,10 @@ fn plugins_status(state: &RebuildState, plugins: usize) -> (Color, Vec<Span<'sta
 }
 
 fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+    let accent = accent_color(dash.armed);
     if dash.plugin_names.is_empty() {
         frame.render_widget(
-            Paragraph::new("  no dev-linked plugins").block(panel(" plugins ")),
+            Paragraph::new("  no dev-linked plugins").block(panel(" plugins ", accent)),
             area,
         );
         return;
@@ -794,12 +884,12 @@ fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         })
         .collect();
     let title = format!(" plugins · {} ", list_status(total, dash.scroll_offset));
-    frame.render_widget(Paragraph::new(visible).block(panel(&title)), area);
+    frame.render_widget(Paragraph::new(visible).block(panel(&title, accent)), area);
 }
 
 fn doctor_status(state: &DoctorState) -> (Color, Vec<Span<'static>>) {
     match state {
-        DoctorState::Running => (Color::Yellow, vec!["checking".fg(Color::Yellow)]),
+        DoctorState::Running(mode) => (Color::Yellow, vec![mode.gerund().fg(Color::Yellow)]),
         DoctorState::Done(report) if report.divergences() == 0 => (
             Color::Green,
             vec![
@@ -839,6 +929,7 @@ fn doctor_status(state: &DoctorState) -> (Color, Vec<Span<'static>>) {
 }
 
 fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+    let accent = accent_color(dash.armed);
     draw_stream(
         frame,
         area,
@@ -847,13 +938,15 @@ fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         &mut dash.scroll_offset,
         &mut dash.log_height,
         "logs",
+        accent,
     );
 }
 
 fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+    let accent = accent_color(dash.armed);
     if dash.trace.lines.is_empty() && dash.filter.is_empty() {
         frame.render_widget(
-            Paragraph::new("  waiting for trace events").block(panel(" trace ")),
+            Paragraph::new("  waiting for trace events").block(panel(" trace ", accent)),
             area,
         );
         return;
@@ -866,9 +959,11 @@ fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         &mut dash.scroll_offset,
         &mut dash.log_height,
         "trace",
+        accent,
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_stream(
     frame: &mut Frame,
     area: Rect,
@@ -877,6 +972,7 @@ fn draw_stream(
     scroll_offset: &mut usize,
     log_height: &mut usize,
     title_word: &str,
+    accent: Color,
 ) {
     let height = area.height.saturating_sub(2) as usize;
     *log_height = height;
@@ -895,7 +991,7 @@ fn draw_stream(
         .map(|line| styled_line(line))
         .collect();
     let title = format!(" {title_word} · {} ", list_status(total, *scroll_offset));
-    frame.render_widget(Paragraph::new(visible).block(panel(&title)), area);
+    frame.render_widget(Paragraph::new(visible).block(panel(&title, accent)), area);
 }
 
 fn trace_value(dash: &Dash) -> Vec<Span<'static>> {
@@ -907,11 +1003,15 @@ fn trace_value(dash: &Dash) -> Vec<Span<'static>> {
 }
 
 fn draw_endpoints(frame: &mut Frame, dash: &Dash, area: Rect) {
+    let accent = accent_color(dash.armed);
     let lines: Vec<Line> = match &dash.endpoints {
         EndpointsState::Probing => vec![Line::from("  probing endpoints".fg(Color::DarkGray))],
         EndpointsState::Done(items) => items.iter().map(endpoint_line).collect(),
     };
-    frame.render_widget(Paragraph::new(lines).block(panel(" endpoints ")), area);
+    frame.render_widget(
+        Paragraph::new(lines).block(panel(" endpoints ", accent)),
+        area,
+    );
 }
 
 fn endpoint_line(status: &EndpointStatus) -> Line<'static> {
@@ -928,25 +1028,36 @@ fn endpoint_line(status: &EndpointStatus) -> Line<'static> {
 }
 
 fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+    let accent = accent_color(dash.armed);
     if dash.doctor_lines.is_empty() {
         let message = match dash.doctor {
-            DoctorState::Running => "  running checks",
-            _ => "  no checks reported · press d to run",
+            DoctorState::Running(mode) => mode.progress_message(),
+            DoctorState::Done(_) | DoctorState::Failed(_) => {
+                "  no checks reported · press d to run"
+            }
         };
-        frame.render_widget(Paragraph::new(message).block(panel(" doctor ")), area);
+        frame.render_widget(
+            Paragraph::new(message).block(panel(" doctor ", accent)),
+            area,
+        );
         return;
     }
     let total = dash.doctor_lines.len();
     let (start, height) = list_window(dash, area, total);
+    let render = if dash.armed {
+        styled_doctor_line
+    } else {
+        friendly_doctor_line
+    };
     let visible: Vec<Line> = dash
         .doctor_lines
         .iter()
         .skip(start)
         .take(height)
-        .map(|line| styled_doctor_line(line))
+        .map(|line| render(line))
         .collect();
     let title = format!(" doctor · {} ", list_status(total, dash.scroll_offset));
-    frame.render_widget(Paragraph::new(visible).block(panel(&title)), area);
+    frame.render_widget(Paragraph::new(visible).block(panel(&title, accent)), area);
 }
 
 fn list_window(dash: &mut Dash, area: Rect, total: usize) -> (usize, usize) {
@@ -996,6 +1107,44 @@ fn styled_doctor_line(raw: &str) -> Line<'static> {
         format!("  {symbol} ").fg(color).bold(),
         rest.to_string().into(),
     ])
+}
+
+fn friendly_doctor_line(raw: &str) -> Line<'static> {
+    let Some((symbol, color)) = doctor_line_style(raw) else {
+        return Line::from(format!("  {}", raw.trim_start()));
+    };
+    let rest = raw
+        .trim_start()
+        .split_once(']')
+        .map(|(_, rest)| rest.trim_start())
+        .unwrap_or("");
+    let Some((id, message)) = rest.split_once(": ") else {
+        return Line::from(vec![
+            format!("  {symbol} ").fg(color).bold(),
+            rest.to_string().into(),
+        ]);
+    };
+    let head = format!("  {symbol} {}", humanize_check_id(id));
+    if symbol == "✓" {
+        return Line::from(head.fg(color).bold());
+    }
+    let detail = message
+        .split_once('\u{2014}')
+        .map_or(message, |(_, tail)| tail)
+        .trim();
+    Line::from(vec![
+        format!("{head} - ").fg(color).bold(),
+        detail.to_string().into(),
+    ])
+}
+
+fn humanize_check_id(id: &str) -> String {
+    let spaced = id.replace('_', " ");
+    let mut chars = spaced.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => spaced,
+    }
 }
 
 fn styled_line(raw: &str) -> Line<'_> {
@@ -1096,15 +1245,44 @@ fn spawn_endpoints_probe() -> Receiver<Vec<EndpointStatus>> {
     rx
 }
 
-fn spawn_doctor_run() -> Receiver<Result<DoctorRun, String>> {
+#[derive(Clone, Copy)]
+enum DoctorMode {
+    Check,
+    Fix,
+}
+
+impl DoctorMode {
+    fn arg(self) -> &'static str {
+        match self {
+            DoctorMode::Check => "check",
+            DoctorMode::Fix => "fix",
+        }
+    }
+
+    fn gerund(self) -> &'static str {
+        match self {
+            DoctorMode::Check => "checking",
+            DoctorMode::Fix => "fixing",
+        }
+    }
+
+    fn progress_message(self) -> &'static str {
+        match self {
+            DoctorMode::Check => "  running checks",
+            DoctorMode::Fix => "  applying fixes",
+        }
+    }
+}
+
+fn spawn_doctor(mode: DoctorMode) -> Receiver<Result<DoctorRun, String>> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let _ = tx.send(run_doctor_once());
+        let _ = tx.send(run_doctor(mode));
     });
     rx
 }
 
-fn run_doctor_once() -> Result<DoctorRun, String> {
+fn run_doctor(mode: DoctorMode) -> Result<DoctorRun, String> {
     let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
     let binary = root
         .join("target")
@@ -1112,18 +1290,28 @@ fn run_doctor_once() -> Result<DoctorRun, String> {
         .join(host_facade::exe_name("qol-tray-doctor"));
     let output = Command::new(&binary)
         .current_dir(&root)
-        .arg("check")
+        .arg(mode.arg())
         .output()
         .map_err(|error| error.to_string())?;
     let text = String::from_utf8_lossy(&output.stdout);
     let report =
         parse_doctor_summary(&text).ok_or_else(|| "could not read doctor summary".to_string())?;
-    let lines = text
+    Ok(DoctorRun {
+        report,
+        lines: doctor_lines(&text, mode),
+    })
+}
+
+fn doctor_lines(text: &str, mode: DoctorMode) -> Vec<String> {
+    let relevant = match mode {
+        DoctorMode::Check => text,
+        DoctorMode::Fix => text.rsplit("Doctor Check (After)").next().unwrap_or(text),
+    };
+    relevant
         .lines()
         .filter(|line| line.trim_start().starts_with('['))
         .map(|line| line.to_string())
-        .collect();
-    Ok(DoctorRun { report, lines })
+        .collect()
 }
 
 fn parse_doctor_summary(text: &str) -> Option<DoctorReport> {
@@ -1186,14 +1374,72 @@ mod tests {
     fn dashboard_cursor_moves_and_clamps() {
         let mut dash = Dash::new(Vec::new());
         assert_eq!(dash.cursor, 0);
-        apply_action(&mut dash, Action::ScrollUp);
+        apply_action(&mut dash, Action::ScrollUp, false);
         assert_eq!(dash.cursor, 0, "clamps at top");
         for _ in 0..10 {
-            apply_action(&mut dash, Action::ScrollDown);
+            apply_action(&mut dash, Action::ScrollDown, false);
         }
         assert_eq!(dash.cursor, ROWS.len() - 1, "clamps at bottom");
-        apply_action(&mut dash, Action::ScrollUp);
+        apply_action(&mut dash, Action::ScrollUp, false);
         assert_eq!(dash.cursor, ROWS.len() - 2);
+    }
+
+    #[test]
+    fn armed_footer_offers_fix_only_on_doctor_row() {
+        let mut dash = Dash::new(Vec::new());
+        dash.armed = true;
+        let cases = [(3usize, "enter fix"), (0, "no modified action")];
+        for (cursor, expected) in cases {
+            dash.cursor = cursor;
+            let footer = armed_footer(&dash);
+            assert!(footer.contains(expected), "cursor {cursor}: {footer}");
+        }
+    }
+
+    #[test]
+    fn humanize_check_id_titlecases_first_word_only() {
+        let cases = [
+            ("plugin_staleness", "Plugin staleness"),
+            ("install_identity", "Install identity"),
+            ("rust_formatting", "Rust formatting"),
+        ];
+        for (id, expected) in cases {
+            assert_eq!(humanize_check_id(id), expected, "id: {id}");
+        }
+    }
+
+    #[test]
+    fn friendly_doctor_line_hides_detail_for_ok_and_keeps_it_for_warn() {
+        let ok = friendly_doctor_line("[OK] install_identity: marker and id are aligned (x)");
+        assert_eq!(
+            ok.to_string(),
+            "  ✓ Install identity",
+            "ok hides the detail"
+        );
+
+        let warn = friendly_doctor_line(
+            "[WARN] plugin_staleness: plugin staleness detected \u{2014} rebuild required: a, b",
+        );
+        assert_eq!(
+            warn.to_string(),
+            "  ▲ Plugin staleness - rebuild required: a, b",
+            "warn humanizes the name and keeps the post-dash detail",
+        );
+    }
+
+    #[test]
+    fn doctor_lines_fix_mode_keeps_only_after_block() {
+        let text = "Doctor Check (Before)\n[WARN] a: x\nSummary: ok=0\n\nDoctor Check (After)\n[OK] a: x\nSummary: ok=1\n";
+        assert_eq!(
+            doctor_lines(text, DoctorMode::Check).len(),
+            2,
+            "check keeps every bracket line"
+        );
+        assert_eq!(
+            doctor_lines(text, DoctorMode::Fix),
+            vec!["[OK] a: x".to_string()],
+            "fix keeps only the after block"
+        );
     }
 
     #[test]

@@ -141,6 +141,7 @@ pub(crate) struct PluginScan {
     pub(crate) buildable: Vec<BuildablePlugin>,
     pub(crate) skipped_host: usize,
     pub(crate) skipped_no_runtime: usize,
+    pub(crate) skipped_reserved: usize,
 }
 
 pub(crate) fn scan_buildable_plugins(root: &Path) -> Result<PluginScan> {
@@ -148,6 +149,7 @@ pub(crate) fn scan_buildable_plugins(root: &Path) -> Result<PluginScan> {
         buildable: Vec::new(),
         skipped_host: 0,
         skipped_no_runtime: 0,
+        skipped_reserved: 0,
     };
     for dir in discover_plugin_dirs(root)? {
         match PluginEligibility::for_path(&dir)? {
@@ -158,6 +160,7 @@ pub(crate) fn scan_buildable_plugins(root: &Path) -> Result<PluginScan> {
             }
             PluginEligibility::SkippedHost => scan.skipped_host += 1,
             PluginEligibility::SkippedNoRuntime => scan.skipped_no_runtime += 1,
+            PluginEligibility::SkippedReserved => scan.skipped_reserved += 1,
         }
     }
     Ok(scan)
@@ -176,10 +179,24 @@ pub(crate) fn non_host_plugin_packages(root: &Path) -> Result<Vec<String>> {
     Ok(excluded)
 }
 
+const RESERVED_PLUGIN_IDS: &[&str] = &["plugin-template"];
+
+fn is_reserved_plugin_id(id: &str) -> bool {
+    RESERVED_PLUGIN_IDS.contains(&id)
+}
+
+fn manifest_plugin_id(manifest: &Value) -> Option<&str> {
+    manifest
+        .get("plugin")
+        .and_then(|plugin| plugin.get("id"))
+        .and_then(Value::as_str)
+}
+
 enum PluginEligibility {
     Buildable,
     SkippedHost,
     SkippedNoRuntime,
+    SkippedReserved,
 }
 
 impl PluginEligibility {
@@ -192,6 +209,9 @@ impl PluginEligibility {
             .with_context(|| format!("failed to read {}", manifest_path.display()))?;
         let manifest: Value = toml::from_str(&content)
             .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
+        if manifest_plugin_id(&manifest).is_some_and(is_reserved_plugin_id) {
+            return Ok(Self::SkippedReserved);
+        }
         if !supports_host(&manifest) {
             return Ok(Self::SkippedHost);
         }
@@ -555,6 +575,11 @@ mod tests {
             &daemon_only,
             "[plugin]\nname = \"d\"\nversion = \"0\"\nplatforms = [\"linux\", \"macos\", \"windows\"]\n[daemon]\nenabled = true\ncommand = \"x\"\n",
         );
+        let reserved = tmp.path().join("reserved");
+        write_manifest(
+            &reserved,
+            "[plugin]\nid = \"plugin-template\"\nname = \"t\"\nversion = \"0\"\nplatforms = [\"linux\", \"macos\", \"windows\"]\n[runtime]\ncommand = \"x\"\n",
+        );
 
         let cases: &[(&Path, &str)] = &[
             (&buildable, "Buildable"),
@@ -562,12 +587,14 @@ mod tests {
             (&no_runtime, "SkippedNoRuntime"),
             (&missing, "SkippedNoRuntime"),
             (&daemon_only, "Buildable"),
+            (&reserved, "SkippedReserved"),
         ];
         for (path, want) in cases {
             let got = match PluginEligibility::for_path(path).unwrap() {
                 PluginEligibility::Buildable => "Buildable",
                 PluginEligibility::SkippedHost => "SkippedHost",
                 PluginEligibility::SkippedNoRuntime => "SkippedNoRuntime",
+                PluginEligibility::SkippedReserved => "SkippedReserved",
             };
             assert_eq!(got, *want, "path: {}", path.display());
         }
