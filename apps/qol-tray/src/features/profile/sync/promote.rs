@@ -14,9 +14,11 @@ pub(super) fn promote_allowlisted_clone(staging: &Path, profile: &Path) -> Resul
             .with_context(|| format!("strip prefix {}", absolute.display()))?
             .to_path_buf();
         if rel.starts_with(".git") {
+            trace_promote_entry(&rel, "skip", "git_dir");
             continue;
         }
         if !ProfileScopeStore::is_sync_allowlisted(&rel) {
+            trace_promote_entry(&rel, "skip", "not_allowlisted");
             continue;
         }
         let dst = profile.join(&rel);
@@ -26,6 +28,7 @@ pub(super) fn promote_allowlisted_clone(staging: &Path, profile: &Path) -> Resul
         }
         std::fs::copy(&absolute, &dst)
             .with_context(|| format!("copy {} -> {}", absolute.display(), dst.display()))?;
+        trace_promote_entry(&rel, "copy", "allowlisted");
     }
     Ok(())
 }
@@ -61,22 +64,58 @@ fn walk_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        if !dir.is_dir() {
+        let metadata =
+            std::fs::symlink_metadata(&dir).with_context(|| format!("stat {}", dir.display()))?;
+        if metadata.file_type().is_symlink() {
+            trace_walk_entry(root, &dir, "skip", "symlink");
+            continue;
+        }
+        if !metadata.is_dir() {
+            trace_walk_entry(root, &dir, "skip", "unsupported_entry");
             continue;
         }
         for entry in
             std::fs::read_dir(&dir).with_context(|| format!("read dir {}", dir.display()))?
         {
             let entry = entry?;
+            let file_type = entry
+                .file_type()
+                .with_context(|| format!("read entry type {}", entry.path().display()))?;
             let path = entry.path();
-            if path.is_dir() {
+            if file_type.is_symlink() {
+                trace_walk_entry(root, &path, "skip", "symlink");
+            } else if file_type.is_dir() {
                 stack.push(path);
-            } else if path.is_file() {
+            } else if file_type.is_file() {
                 out.push(path);
+            } else {
+                trace_walk_entry(root, &path, "skip", "unsupported_entry");
             }
         }
     }
     Ok(out)
+}
+
+fn trace_promote_entry(rel: &Path, outcome: &str, reason: &str) {
+    #[cfg(debug_assertions)]
+    {
+        qol_runtime::probe!(
+            "PROFILE_SYNC_PROMOTE",
+            "entry={:?} outcome={outcome} reason={reason}",
+            rel.to_string_lossy()
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (rel, outcome, reason);
+}
+
+fn trace_walk_entry(root: &Path, path: &Path, outcome: &str, reason: &str) {
+    let rel = path
+        .strip_prefix(root)
+        .ok()
+        .filter(|rel| !rel.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    trace_promote_entry(rel, outcome, reason);
 }
 
 #[cfg(test)]
@@ -103,6 +142,28 @@ mod tests {
         fs::create_dir_all(&staging).unwrap();
         fs::create_dir_all(&profile).unwrap();
         (tmp, staging, profile)
+    }
+
+    fn symlink_file(source: &Path, link: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(source, link)
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(source, link)
+        }
+    }
+
+    fn symlink_dir(source: &Path, link: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(source, link)
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(source, link)
+        }
     }
 
     #[test]
@@ -284,6 +345,46 @@ mod tests {
             b"\"local-toggles\"",
             "sync/toggles.json is per-machine; staging copy is ignored, local survives"
         );
+    }
+
+    #[test]
+    fn promote_skips_allowlisted_symlink_file_from_staging() {
+        let (_tmp, staging, profile) = setup();
+        let external = staging.parent().unwrap().join("external/secret.json");
+        write(&external, b"{\"source\":\"host\"}");
+        write(&profile.join("default/core/plugins.lock.json"), b"local");
+        fs::create_dir_all(staging.join("default/core")).unwrap();
+        if symlink_file(&external, &staging.join("default/core/plugins.lock.json")).is_err() {
+            return;
+        }
+
+        promote_allowlisted_clone(&staging, &profile).unwrap();
+
+        assert_eq!(
+            read(&profile.join("default/core/plugins.lock.json")),
+            b"local",
+            "symlinked allowlisted files from staging must not be dereferenced into the profile"
+        );
+    }
+
+    #[test]
+    fn promote_skips_symlink_directory_from_staging() {
+        let (_tmp, staging, profile) = setup();
+        let external_dir = staging.parent().unwrap().join("external-dir");
+        write(&external_dir.join("leak.txt"), b"leak");
+        fs::create_dir_all(staging.join("default")).unwrap();
+        if symlink_dir(&external_dir, &staging.join("default/core")).is_err() {
+            return;
+        }
+        write(&staging.join("default/manifest.json"), b"{\"v\":1}");
+
+        promote_allowlisted_clone(&staging, &profile).unwrap();
+
+        assert!(
+            !profile.join("default/core/leak.txt").exists(),
+            "symlinked directories from staging must not be traversed"
+        );
+        assert_eq!(read(&profile.join("default/manifest.json")), b"{\"v\":1}");
     }
 
     #[test]
