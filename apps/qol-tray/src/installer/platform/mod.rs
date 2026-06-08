@@ -18,6 +18,9 @@ use macos as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
+#[cfg(target_os = "linux")]
+pub(crate) use linux::desktop_entry;
+
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 compile_error!("installer platform implementation is required for this target OS");
 
