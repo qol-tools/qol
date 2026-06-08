@@ -929,6 +929,21 @@ def process_line(ts_raw, pid, tag, msg):
         event_buffer.append((int(ts_raw), ts, tag, "profile", text))
         last_event_real_time = time.time()
 
+    elif tag.startswith("WORLD_"):
+        if filter_plugin and filter_plugin != "world":
+            return
+        is_bad = (
+            "outcome=reject" in msg
+            or "outcome=skip" in msg
+            or "reason=already_dived" in msg
+            or "visible_slots=0" in msg
+        )
+        color = COLOR_FAIL if is_bad else ""
+        reset = COLOR_RESET if color else ""
+        text = f"{color}{tag}: {msg}{reset}"
+        event_buffer.append((int(ts_raw), ts, tag, "world", text))
+        last_event_real_time = time.time()
+
     else:
         proc_name = get_process_name(pid)
         if filter_plugin and proc_name != filter_plugin:

@@ -33,6 +33,7 @@ mod restart;
 mod security;
 mod settings;
 mod types;
+mod ui_trace_handlers;
 
 use anyhow::Result;
 use axum::{
@@ -104,6 +105,7 @@ fn api_router(app_state: AppState) -> Router {
         .merge(crate::features::github_auth::routes())
         .merge(crate::features::auth::routes())
         .merge(meta_handlers::routes())
+        .merge(ui_trace_handlers::routes())
         .merge(logs_handlers::routes());
     #[cfg(feature = "dev")]
     let api = api.merge(dev_api_router());

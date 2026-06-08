@@ -2,6 +2,7 @@ import { html } from '../lib/html.js';
 import { useRef, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'preact/hooks';
 import { PaletteProvider, usePaletteContext } from '../palette/context.js';
 import { createDebug, elLabel } from '../lib/debug.js';
+import { traceWorld } from '../lib/trace.js';
 import { prettyLabel } from '../auto-config/heuristics.js';
 import { createNavigation, selectorFor, animateTransition } from '../lib/world-navigation.js';
 import { setAscend, setDiveFromSurface, setDiveViaSelector } from '../lib/world-navigation-singleton.js';
@@ -588,17 +589,67 @@ function AppShell() {
     }, [ascend]);
 
     const diveRef = useRef(false);
+    const lastActivePluginIdRef = useRef(activePluginId);
     const [hiddenUntilDive, setHiddenUntilDive] = useState(() => {
         try { return !!window.localStorage?.getItem('qoltray.activePlugin'); } catch { return false; }
     });
     useEffect(() => {
+        const previousPluginId = lastActivePluginIdRef.current;
+        const pluginChanged = previousPluginId !== activePluginId;
+        if (pluginChanged) {
+            traceWorld('route', {
+                action: 'active_plugin_change',
+                from_plugin_id: previousPluginId || '',
+                to_plugin_id: activePluginId || '',
+                dive_ref: diveRef.current ? 'true' : 'false',
+                camera_layer: cameraLayer,
+            });
+            lastActivePluginIdRef.current = activePluginId;
+        }
         if (activePluginId && !diveRef.current) {
-            if (diveViaSelector(`[data-plugin-id="${activePluginId}"]`)) {
+            const selector = `[data-plugin-id="${activePluginId}"]`;
+            const didDive = diveViaSelector(selector);
+            traceWorld('dive', {
+                action: 'auto_plugin_config_dive',
+                plugin_id: activePluginId,
+                selector,
+                outcome: didDive ? 'dove' : 'no_target',
+                stack_depth: navigation.stackDepth(),
+            });
+            traceWorldSnapshot('plugin_config_world_snapshot', {
+                plugin_id: activePluginId,
+                reason: 'after_auto_dive',
+            });
+            if (didDive) {
                 diveRef.current = true;
             }
+        } else if (activePluginId && diveRef.current && pluginChanged) {
+            traceWorld('dive', {
+                action: 'auto_plugin_config_dive',
+                plugin_id: activePluginId,
+                previous_plugin_id: previousPluginId || '',
+                outcome: 'skip',
+                reason: 'already_dived',
+                stack_depth: navigation.stackDepth(),
+            });
+            traceWorldSnapshot('plugin_config_world_snapshot', {
+                plugin_id: activePluginId,
+                previous_plugin_id: previousPluginId || '',
+                reason: 'after_skip_already_dived',
+            });
         } else if (!activePluginId && diveRef.current) {
             diveRef.current = false;
-            ascend();
+            const didAscend = ascend();
+            traceWorld('dive', {
+                action: 'clear_plugin_config_dive',
+                previous_plugin_id: previousPluginId || '',
+                outcome: didAscend ? 'ascended' : 'no_stack',
+                stack_depth: navigation.stackDepth(),
+            });
+            traceWorldSnapshot('plugin_config_world_snapshot', {
+                previous_plugin_id: previousPluginId || '',
+                reason: 'after_clear',
+            });
         }
         if (!activePluginId && hiddenUntilDive) setHiddenUntilDive(false);
     }, [activePluginId, diveViaSelector, ascend, targetsVersion, hiddenUntilDive]);
@@ -703,4 +754,52 @@ function AppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginC
     const palette = usePaletteContext();
     useAppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginConfig, switchView, viewOrder, palette, dive, ascend, navigation, registry });
     return null;
+}
+
+function traceWorldSnapshot(action, fields = {}) {
+    afterNextPaint(() => {
+        const visibleIds = visibleWorldSlotIds();
+        const visibleConfigIds = visibleIds.filter(id => id.startsWith('plugin-'));
+        const visibleLayers = visibleWorldSlotLayers();
+        traceWorld('dive', {
+            action,
+            ...fields,
+            hash: window.location.hash || '#',
+            visible_slots: visibleIds.length,
+            visible_slot_ids: visibleIds.slice(0, 8).join(',') || 'none',
+            visible_config_slots: visibleConfigIds.length,
+            visible_config_slot_ids: visibleConfigIds.slice(0, 8).join(',') || 'none',
+            visible_layers: visibleLayers.join(',') || 'none',
+            world_transform: document.querySelector('#world')?.style.transform || 'none',
+        });
+    });
+}
+
+function afterNextPaint(callback) {
+    requestAnimationFrame(() => requestAnimationFrame(callback));
+}
+
+function visibleWorldSlotIds() {
+    return Array.from(document.querySelectorAll('.world-view-slot'))
+        .filter(isVisibleWorldSlot)
+        .map(el => el.dataset.viewId)
+        .filter(Boolean);
+}
+
+function visibleWorldSlotLayers() {
+    return Array.from(new Set(
+        Array.from(document.querySelectorAll('.world-view-slot'))
+            .filter(isVisibleWorldSlot)
+            .map(el => el.dataset.layer)
+            .filter(layer => layer !== undefined),
+    )).sort();
+}
+
+function isVisibleWorldSlot(el) {
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0) {
+        return false;
+    }
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
 }
