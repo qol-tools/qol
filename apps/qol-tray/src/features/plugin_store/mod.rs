@@ -14,7 +14,7 @@ use anyhow::Result;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 
-const DEFAULT_SERVER_PORT: u16 = 42700;
+pub(crate) const DEFAULT_SERVER_PORT: u16 = 42700;
 const MENU_ITEM_ID: &str = "plugins";
 static ACTIVE_SERVER_PORT: AtomicU16 = AtomicU16::new(DEFAULT_SERVER_PORT);
 

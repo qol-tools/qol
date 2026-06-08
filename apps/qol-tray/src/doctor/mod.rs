@@ -250,6 +250,17 @@ fn log_applied(action: &FixAction) {
         FixAction::FormatRustSources { workspace } => {
             log::info!("doctor: ran cargo fmt in {}", workspace.display());
         }
+        #[cfg(feature = "dev")]
+        FixAction::HealDevLinkedPlugins { rebuild_ids } => {
+            log::info!(
+                "doctor: healed dev-linked plugin(s) (rebuilt: {}; restarted stale daemons)",
+                if rebuild_ids.is_empty() {
+                    "none".to_string()
+                } else {
+                    rebuild_ids.join(", ")
+                }
+            );
+        }
     }
 }
 

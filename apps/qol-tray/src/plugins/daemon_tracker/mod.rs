@@ -24,6 +24,17 @@ pub fn managed_processes() -> Vec<ManagedProcess> {
     without_host_binaries(platform::managed_processes())
 }
 
+pub fn running_exe_path(pid: i32) -> Option<PathBuf> {
+    #[cfg(unix)]
+    return platform::pid_exe_path(pid);
+
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
 fn without_host_binaries(processes: Vec<ManagedProcess>) -> Vec<ManagedProcess> {
     processes
         .into_iter()
