@@ -1,4 +1,5 @@
 use super::super::LauncherEntry;
+use crate::installer::desktop_entry::{format_desktop_exec_command, DesktopExecArg};
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -29,21 +30,25 @@ fn desktop_filename(entry: &LauncherEntry) -> String {
 }
 
 fn write_desktop_file(dir: &Path, entry: &LauncherEntry, binary_path: &Path) -> Result<()> {
-    let escaped_bin = exec_escape_path(&binary_path.display().to_string());
+    let exec_args = entry
+        .exec_args
+        .iter()
+        .map(|arg| DesktopExecArg::Literal(arg.as_str()))
+        .collect::<Vec<_>>();
+    let exec = format_desktop_exec_command(binary_path, &exec_args);
     let name = desktop_entry_escape(&entry.display_name);
     let comment = desktop_entry_escape(&entry.description);
-    let args: String = entry.exec_args.join(" ");
 
     let content = format!(
         "[Desktop Entry]\n\
          Type=Application\n\
          Name={}\n\
          Comment={}\n\
-         Exec=\"{}\" {}\n\
+         Exec={}\n\
          Terminal=false\n\
          Categories=Utility;\n\
          StartupNotify=false\n",
-        name, comment, escaped_bin, args
+        name, comment, exec
     );
 
     let path = dir.join(desktop_filename(entry));
@@ -80,17 +85,38 @@ fn desktop_entry_escape(s: &str) -> String {
         .replace('\r', "\\r")
 }
 
-fn exec_escape_path(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '"' | '`' | '$' | '\\' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            '%' => out.push_str("%%"),
-            _ => out.push(ch),
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn entry(exec_args: &[&str]) -> LauncherEntry {
+        LauncherEntry {
+            file_stem: "shortcut-space".to_string(),
+            display_name: "Open Space".to_string(),
+            description: "QoL Shortcut: Open Space".to_string(),
+            bundle_id: "com.qol-tools.shortcut.space".to_string(),
+            exec_args: exec_args.iter().map(|arg| arg.to_string()).collect(),
+            shortcut_action: None,
         }
     }
-    out
+
+    #[test]
+    fn desktop_file_quotes_binary_and_literal_args() {
+        let tmp = TempDir::new().unwrap();
+        let binary = Path::new("/tmp/qol tray/qol-tray");
+
+        write_desktop_file(
+            tmp.path(),
+            &entry(&["exec", "shortcut id", "path%to%tool"]),
+            binary,
+        )
+        .unwrap();
+
+        let content =
+            std::fs::read_to_string(tmp.path().join("qol-shortcut-space.desktop")).unwrap();
+        assert!(content.lines().any(|line| {
+            line == "Exec=\"/tmp/qol tray/qol-tray\" \"exec\" \"shortcut id\" \"path%%to%%tool\""
+        }));
+    }
 }
