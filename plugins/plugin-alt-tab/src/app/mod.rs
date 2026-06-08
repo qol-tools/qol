@@ -29,6 +29,48 @@ pub(crate) struct AltTabApp {
     pub(crate) _alt_poll_task: Option<Task<()>>,
     _live_preview_task: Option<Task<()>>,
     _dismiss_sub: (Subscription, Subscription, Option<Task<()>>),
+    #[cfg(debug_assertions)]
+    pending_cycle: Option<PendingCycle>,
+}
+
+#[cfg(debug_assertions)]
+pub(crate) struct PendingCycle {
+    pub(crate) method: &'static str,
+    pub(crate) from: Option<usize>,
+    pub(crate) started: Instant,
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    static CYCLE_ORIGIN: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn set_cycle_origin(at: Instant) {
+    CYCLE_ORIGIN.with(|cell| cell.set(Some(at)));
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn clear_cycle_origin() {
+    CYCLE_ORIGIN.with(|cell| cell.set(None));
+}
+
+impl AltTabApp {
+    pub(crate) fn mark_cycle(&mut self, method: &'static str, from: Option<usize>) {
+        #[cfg(debug_assertions)]
+        {
+            let started = CYCLE_ORIGIN
+                .with(|cell| cell.take())
+                .unwrap_or_else(Instant::now);
+            self.pending_cycle = Some(PendingCycle {
+                method,
+                from,
+                started,
+            });
+        }
+        #[cfg(not(debug_assertions))]
+        let _ = (method, from);
+    }
 }
 
 impl AltTabApp {
@@ -93,6 +135,8 @@ impl AltTabApp {
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
             blur_guard_armed: true,
             _alt_poll_task: None,
+            #[cfg(debug_assertions)]
+            pending_cycle: None,
         };
 
         if shown && action_mode == ActionMode::HoldToSwitch {

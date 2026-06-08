@@ -22,10 +22,12 @@ pub(crate) fn handle_key_down(
         "r" => on_minimize(this, window, cx),
         "tab" => on_tab(this, event.keystroke.modifiers.shift, cx),
         "backtab" => on_tab(this, true, cx),
-        "right" | "arrowright" => on_arrow(this, |s, c| s.select_right(c), window, cx),
-        "left" | "arrowleft" => on_arrow(this, |s, c| s.select_left(c), window, cx),
-        "down" | "arrowdown" => on_arrow(this, |s, c| s.select_down(c), window, cx),
-        "up" | "arrowup" => on_arrow(this, |s, c| s.select_up(c), window, cx),
+        "right" | "arrowright" => {
+            on_arrow(this, "arrow-right", |s, c| s.select_right(c), window, cx)
+        }
+        "left" | "arrowleft" => on_arrow(this, "arrow-left", |s, c| s.select_left(c), window, cx),
+        "down" | "arrowdown" => on_arrow(this, "arrow-down", |s, c| s.select_down(c), window, cx),
+        "up" | "arrowup" => on_arrow(this, "arrow-up", |s, c| s.select_up(c), window, cx),
         _ => {}
     }
 }
@@ -79,6 +81,7 @@ fn on_minimize(this: &mut AltTabApp, window: &mut Window, cx: &mut Context<AltTa
 }
 
 fn on_tab(this: &mut AltTabApp, reverse: bool, cx: &mut Context<AltTabApp>) {
+    let from = this.delegate.read(cx).selected_index;
     this.delegate.update(cx, |s, _| {
         if reverse {
             s.select_prev();
@@ -86,18 +89,22 @@ fn on_tab(this: &mut AltTabApp, reverse: bool, cx: &mut Context<AltTabApp>) {
             s.select_next();
         }
     });
+    this.mark_cycle(if reverse { "shift-tab" } else { "tab" }, from);
     cx.notify();
 }
 
 fn on_arrow(
     this: &mut AltTabApp,
+    method: &'static str,
     nav: impl FnOnce(&mut crate::picker::state::PickerState, usize),
     _window: &Window,
     cx: &mut Context<AltTabApp>,
 ) {
     let state = this.delegate.read(cx);
     let cols = rendered_column_count(state.max_columns, state.windows.len());
+    let from = state.selected_index;
     this.delegate.update(cx, |s, _| nav(s, cols));
+    this.mark_cycle(method, from);
     cx.notify();
 }
 

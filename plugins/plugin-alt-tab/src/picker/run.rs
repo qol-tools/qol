@@ -154,6 +154,28 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/daemon] received Show (reverse={})", reverse);
 
+    if crate::app::PICKER_VISIBLE.load(Ordering::Relaxed) {
+        let state_fast = state.clone();
+        let cycled = cx
+            .update(move |app_cx| {
+                #[cfg(debug_assertions)]
+                crate::app::set_cycle_origin(t_total);
+                let cycled = super::try_cycle_visible(&state_fast.current, reverse, app_cx);
+                #[cfg(debug_assertions)]
+                crate::app::clear_cycle_origin();
+                cycled
+            })
+            .unwrap_or(false);
+        if cycled {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[alt-tab/daemon] fast cycle, no requery ({}ms)",
+                t_total.elapsed().as_millis()
+            );
+            return;
+        }
+    }
+
     #[cfg(debug_assertions)]
     let t_config = std::time::Instant::now();
     let config = crate::config::load_alt_tab_config();
@@ -189,7 +211,11 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
         if let Some(icons) = rendered_icons {
             commit_icons_to_shared_cache(&state_for_update.caches.icon_cache, icons, app_cx);
         }
+        #[cfg(debug_assertions)]
+        crate::app::set_cycle_origin(t_total);
         state_for_update.open_picker(&config, reverse, app_cx);
+        #[cfg(debug_assertions)]
+        crate::app::clear_cycle_origin();
     });
     #[cfg(debug_assertions)]
     let update_ms = t_update.elapsed().as_millis();
