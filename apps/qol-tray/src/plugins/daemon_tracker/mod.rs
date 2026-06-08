@@ -36,7 +36,10 @@ fn is_host_binary(executable: &Path) -> bool {
         return false;
     };
     let name = name.strip_suffix(" (deleted)").unwrap_or(name);
-    name == crate::installer::binary_filename() || name == "qol"
+    let name = name.strip_suffix(".exe").unwrap_or(name);
+    let tray = crate::installer::binary_filename();
+    let tray = tray.strip_suffix(".exe").unwrap_or(&tray);
+    name == tray || name == "qol" || name == "qol-tray-doctor"
 }
 
 pub fn leaked_processes() -> Vec<ManagedProcess> {
@@ -266,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn without_host_binaries_drops_tray_and_cli_keeps_plugins() {
+    fn without_host_binaries_drops_tray_cli_and_doctor_keeps_plugins() {
         let tray = format!("/qol/target/debug/{}", crate::installer::binary_filename());
         let processes = vec![
             ManagedProcess {
@@ -276,6 +279,10 @@ mod tests {
             ManagedProcess {
                 pid: 150,
                 executable: PathBuf::from("/qol/target/debug/qol"),
+            },
+            ManagedProcess {
+                pid: 175,
+                executable: PathBuf::from("/qol/target/debug/qol-tray-doctor"),
             },
             ManagedProcess {
                 pid: 200,
@@ -288,7 +295,8 @@ mod tests {
             vec![ManagedProcess {
                 pid: 200,
                 executable: PathBuf::from("/qol/target/debug/keyremap"),
-            }]
+            }],
+            "tray, qol cli, and qol-tray-doctor are host binaries; only the plugin remains",
         );
     }
 }

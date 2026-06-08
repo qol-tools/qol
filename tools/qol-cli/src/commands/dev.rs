@@ -90,7 +90,11 @@ fn collect_buildable_plugins(root: &Path, skip_plugins: bool) -> Result<Vec<Buil
         return Ok(Vec::new());
     }
     let scan = scan_buildable_plugins(root)?;
-    if scan.buildable.is_empty() && scan.skipped_host == 0 && scan.skipped_no_runtime == 0 {
+    if scan.buildable.is_empty()
+        && scan.skipped_host == 0
+        && scan.skipped_no_runtime == 0
+        && scan.skipped_reserved == 0
+    {
         step_label("plugins", StepKind::Info, "no plugins discovered");
         return Ok(Vec::new());
     }
@@ -98,10 +102,11 @@ fn collect_buildable_plugins(root: &Path, skip_plugins: bool) -> Result<Vec<Buil
         "plugins",
         StepKind::Info,
         &format!(
-            "{} buildable, {} unsupported here, {} without runtime",
+            "{} buildable, {} unsupported here, {} without runtime, {} reserved",
             scan.buildable.len(),
             scan.skipped_host,
-            scan.skipped_no_runtime
+            scan.skipped_no_runtime,
+            scan.skipped_reserved
         ),
     );
     Ok(scan.buildable)
