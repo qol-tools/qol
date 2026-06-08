@@ -920,6 +920,15 @@ def process_line(ts_raw, pid, tag, msg):
             event_buffer.append((int(ts_raw), ts, "GHOST_DUMP", proc_name, text))
             last_event_real_time = time.time()
 
+    elif tag.startswith("PROFILE_"):
+        if filter_plugin and filter_plugin != "profile":
+            return
+        color = COLOR_FAIL if "outcome=include" in msg and "entry_kind=symlink" in msg else ""
+        reset = COLOR_RESET if color else ""
+        text = f"{color}{tag}: {msg}{reset}"
+        event_buffer.append((int(ts_raw), ts, tag, "profile", text))
+        last_event_real_time = time.time()
+
     else:
         proc_name = get_process_name(pid)
         if filter_plugin and proc_name != filter_plugin:
