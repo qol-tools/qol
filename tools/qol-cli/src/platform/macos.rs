@@ -26,4 +26,8 @@ impl PlatformOps for Platform {
             .stderr(Stdio::null())
             .spawn();
     }
+
+    fn copy_to_clipboard(&self, text: &str) -> Result<()> {
+        super::pipe_to_clipboard("pbcopy", &[], text)
+    }
 }
