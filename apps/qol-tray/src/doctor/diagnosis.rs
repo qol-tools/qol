@@ -53,6 +53,10 @@ pub(super) enum FixAction {
     FormatRustSources {
         workspace: PathBuf,
     },
+    #[cfg(feature = "dev")]
+    HealDevLinkedPlugins {
+        rebuild_ids: Vec<String>,
+    },
 }
 
 // Extend with ManualOnly / Destructive when a real FixAction first needs those tiers.
@@ -79,7 +83,8 @@ impl FixAction {
             FixAction::RelocateDevLink { .. }
             | FixAction::PruneOrphanFingerprints { .. }
             | FixAction::PruneReservedPlugins { .. }
-            | FixAction::FormatRustSources { .. } => FixApplicability::SafeAutomatic,
+            | FixAction::FormatRustSources { .. }
+            | FixAction::HealDevLinkedPlugins { .. } => FixApplicability::SafeAutomatic,
         }
     }
 }
@@ -128,7 +133,93 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         FixAction::PruneReservedPlugins { ids } => prune_reserved_plugins(ids),
         #[cfg(feature = "dev")]
         FixAction::FormatRustSources { workspace } => format_rust_sources(workspace),
+        #[cfg(feature = "dev")]
+        FixAction::HealDevLinkedPlugins { rebuild_ids } => heal_dev_linked_plugins(rebuild_ids),
     }
+}
+
+#[cfg(feature = "dev")]
+fn heal_dev_linked_plugins(rebuild_ids: &[String]) -> Result<()> {
+    if !rebuild_ids.is_empty() {
+        rebuild_dev_linked_plugins(rebuild_ids)?;
+    }
+    reload_stale_dev_daemons();
+    Ok(())
+}
+
+#[cfg(feature = "dev")]
+fn reload_stale_dev_daemons() {
+    let Ok(config_dir) = crate::paths::shared_config_dir() else {
+        return;
+    };
+    for (plugin_id, _) in super::checks::stale_running_daemons(&config_dir) {
+        if let Err(error) = request_daemon_reload(&plugin_id) {
+            log::warn!("doctor heal: could not reload stale daemon {plugin_id}: {error}");
+        }
+    }
+}
+
+#[cfg(feature = "dev")]
+fn request_daemon_reload(plugin_id: &str) -> Result<()> {
+    use std::io::{Read, Write};
+
+    let port = crate::features::plugin_store::DEFAULT_SERVER_PORT;
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))
+        .with_context(|| format!("qol-tray host not reachable on 127.0.0.1:{port}"))?;
+    let request = format!(
+        "POST /api/dev/reload/{plugin_id} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes())?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+
+    let status = response.lines().next().unwrap_or_default();
+    if status.contains(" 200") || status.contains(" 202") {
+        Ok(())
+    } else {
+        Err(anyhow!("reload endpoint returned: {status}"))
+    }
+}
+
+#[cfg(feature = "dev")]
+struct NoopEventSink;
+
+#[cfg(feature = "dev")]
+impl crate::dev::adapters::CoreEventSink for NoopEventSink {
+    fn publish(&self, _event: crate::dev::core::CoreEvent) {}
+}
+
+#[cfg(feature = "dev")]
+fn rebuild_dev_linked_plugins(ids: &[String]) -> Result<()> {
+    let config_dir = crate::paths::shared_config_dir()?;
+
+    let dev_links: std::collections::HashMap<String, PathBuf> =
+        crate::plugins::registry::dev_linked_paths(&config_dir)
+            .into_iter()
+            .filter(|(id, _)| ids.iter().any(|wanted| wanted == id))
+            .collect();
+    if dev_links.is_empty() {
+        return Err(anyhow!(
+            "no dev-linked sources found for: {}",
+            ids.join(", ")
+        ));
+    }
+
+    let branch = crate::dev::get_active_worktree_branch(&config_dir);
+    let sink = NoopEventSink;
+    let service = crate::dev::default_build_application_service(&sink);
+    let run = service.run(&dev_links, Some(&config_dir), branch.as_deref());
+
+    let failures: Vec<&str> = run
+        .results
+        .iter()
+        .filter(|result| !result.success && !result.skipped)
+        .map(|result| result.plugin_id.as_str())
+        .collect();
+    if failures.is_empty() {
+        return Ok(());
+    }
+    Err(anyhow!("rebuild failed for: {}", failures.join(", ")))
 }
 
 #[cfg(feature = "dev")]

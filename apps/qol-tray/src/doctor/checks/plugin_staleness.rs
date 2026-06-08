@@ -1,8 +1,11 @@
+use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use crate::dev;
-use crate::plugins::registry::{Registry, SlotSource};
-use std::collections::BTreeMap;
+use crate::plugins::daemon_tracker::{list_tracked_pids, running_exe_path};
+use crate::plugins::registry::{dev_linked_paths, Registry, SlotSource};
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 const ID: &str = "plugin_staleness";
 
@@ -25,13 +28,70 @@ impl DoctorCheck for PluginStalenessCheck {
         let linked = ctx.linked();
         let workspace_root = plugin_sources_dir();
 
-        let findings = collect_findings(registry, linked, &workspace_root, &dir_has_plugin_toml);
+        let mut findings =
+            collect_findings(registry, linked, &workspace_root, &dir_has_plugin_toml);
+        for (plugin_id, _) in stale_running_daemons(ctx.config_dir()) {
+            findings.push(Finding::RunningDaemonStale { plugin_id });
+        }
 
         if findings.is_empty() {
             return CheckReport::ok("no plugin staleness detected".to_string());
         }
-        CheckReport::warn(format_message(&findings), ID, Vec::new())
+        CheckReport::warn(format_message(&findings), ID, heal_fixes(&findings))
     }
+}
+
+fn heal_fixes(findings: &[Finding]) -> Vec<FixAction> {
+    let rebuild_ids: Vec<String> = findings
+        .iter()
+        .filter_map(|finding| match finding {
+            Finding::DevLinkStale { plugin_id, .. } => Some(plugin_id.clone()),
+            Finding::UnlinkedSource { .. } | Finding::RunningDaemonStale { .. } => None,
+        })
+        .collect();
+    let has_running_stale = findings
+        .iter()
+        .any(|finding| matches!(finding, Finding::RunningDaemonStale { .. }));
+    if rebuild_ids.is_empty() && !has_running_stale {
+        return Vec::new();
+    }
+    vec![FixAction::HealDevLinkedPlugins { rebuild_ids }]
+}
+
+fn dev_build_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+}
+
+fn file_mtime(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+}
+
+pub(crate) fn stale_running_daemons(config_dir: &Path) -> Vec<(String, u32)> {
+    let dev_ids: HashSet<String> = dev_linked_paths(config_dir).into_keys().collect();
+    if dev_ids.is_empty() {
+        return Vec::new();
+    }
+    let pids_dir = crate::paths::runtime_pids_dir();
+    let build_dir = dev_build_dir();
+    list_tracked_pids(&pids_dir)
+        .filter(|(id, _)| dev_ids.contains(id))
+        .filter_map(|(id, pid)| {
+            if !crate::process_utils::is_pid_alive(pid as i32) {
+                return None;
+            }
+            let exe = running_exe_path(pid as i32)?;
+            if !build_dir.as_ref().is_some_and(|dir| exe.starts_with(dir)) {
+                return None;
+            }
+            let launched = file_mtime(&pids_dir.join(format!("{id}.pid")))?;
+            let built = file_mtime(&exe)?;
+            (built > launched).then_some((id, pid))
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,6 +103,9 @@ pub(crate) enum Finding {
     DevLinkStale {
         plugin_id: String,
         reason: String,
+    },
+    RunningDaemonStale {
+        plugin_id: String,
     },
 }
 
@@ -115,6 +178,10 @@ fn format_message(findings: &[Finding]) -> String {
                 .entry("dev-link rebuild required")
                 .or_default()
                 .push(format!("{plugin_id} ({reason})")),
+            Finding::RunningDaemonStale { plugin_id } => by_kind
+                .entry("running daemon stale (rebuilt since launch, reload required)")
+                .or_default()
+                .push(plugin_id.clone()),
         }
     }
     let parts: Vec<String> = by_kind
@@ -250,6 +317,53 @@ mod tests {
             message.contains("dev-link rebuild required: plugin-c (Source changed)"),
             "actual: {message}"
         );
+    }
+
+    #[test]
+    fn heal_fix_rebuilds_only_source_stale_dev_links() {
+        let findings = vec![
+            Finding::UnlinkedSource {
+                plugin_id: "plugin-a".into(),
+                sibling_path: PathBuf::from("/ws/plugin-a"),
+            },
+            Finding::DevLinkStale {
+                plugin_id: "plugin-b".into(),
+                reason: "Source changed".into(),
+            },
+            Finding::DevLinkStale {
+                plugin_id: "plugin-c".into(),
+                reason: "Source changed".into(),
+            },
+        ];
+        assert_eq!(
+            heal_fixes(&findings),
+            vec![FixAction::HealDevLinkedPlugins {
+                rebuild_ids: vec!["plugin-b".into(), "plugin-c".into()],
+            }],
+        );
+    }
+
+    #[test]
+    fn running_daemon_stale_heals_with_no_rebuild() {
+        let findings = vec![Finding::RunningDaemonStale {
+            plugin_id: "plugin-b".into(),
+        }];
+        assert_eq!(
+            heal_fixes(&findings),
+            vec![FixAction::HealDevLinkedPlugins {
+                rebuild_ids: Vec::new(),
+            }],
+            "a stale running daemon must still trigger a heal (restart), with nothing to rebuild",
+        );
+    }
+
+    #[test]
+    fn unlinked_only_findings_produce_no_fix() {
+        let findings = vec![Finding::UnlinkedSource {
+            plugin_id: "plugin-a".into(),
+            sibling_path: PathBuf::from("/ws/plugin-a"),
+        }];
+        assert!(heal_fixes(&findings).is_empty());
     }
 
     #[test]

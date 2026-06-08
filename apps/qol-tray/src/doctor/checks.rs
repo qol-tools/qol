@@ -17,6 +17,8 @@ mod shell_hook_present;
 
 #[cfg(feature = "dev")]
 pub(super) use dev_link_paths::relocate_dev_link;
+#[cfg(feature = "dev")]
+pub(super) use plugin_staleness::stale_running_daemons;
 
 use super::framework::DoctorCheck;
 
