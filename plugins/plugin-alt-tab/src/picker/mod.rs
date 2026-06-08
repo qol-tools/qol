@@ -43,26 +43,12 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     eprintln!("[alt-tab/open] show request (reverse={})", req.reverse);
 
     let is_visible = PICKER_VISIBLE.load(Ordering::Relaxed);
-    let mut placement = PopupPlacement::from_tracker(req.tracker);
-    if is_visible {
-        if let Some(active_target) = *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap() {
-            if let Some(monitor) =
-                req.tracker.all_monitors().into_iter().find(|m| {
-                    qol_gpui::window::MonitorKey::from_bounds(&m.bounds()) == active_target
-                })
-            {
-                placement = PopupPlacement::from_monitor(Some(monitor));
-            }
-        }
-    } else {
-        let target = placement.target();
-        *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap() = Some(target);
-    }
+    let placement = resolve_placement(req.tracker, is_visible);
 
     if req.reverse && req.current.borrow().is_empty() {
         return;
     }
-    if try_cycle_existing(req, &placement, cx) {
+    if try_cycle_existing(req.current, req.reverse, &placement, cx) {
         return;
     }
 
@@ -79,22 +65,59 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     create_from_request(req, placement, gathered, cx);
 }
 
-fn try_cycle_existing(req: &OpenPickerRequest, placement: &PopupPlacement, cx: &mut App) -> bool {
-    let handle = match req
-        .current
-        .borrow()
-        .existing(placement.target())
-        .or_else(|| any_existing(req.current).map(|(_, h)| h))
+fn resolve_placement(tracker: &MonitorTracker, is_visible: bool) -> PopupPlacement {
+    let placement = PopupPlacement::from_tracker(tracker);
+    if !is_visible {
+        *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap() = Some(placement.target());
+        return placement;
+    }
+    let Some(active_target) = *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap() else {
+        return placement;
+    };
+    tracker
+        .all_monitors()
+        .into_iter()
+        .find(|m| MonitorKey::from_bounds(&m.bounds()) == active_target)
+        .map(|monitor| PopupPlacement::from_monitor(Some(monitor)))
+        .unwrap_or(placement)
+}
+
+fn try_cycle_existing(
+    current: &PickerWindowState,
+    reverse: bool,
+    placement: &PopupPlacement,
+    cx: &mut App,
+) -> bool {
+    cycle_existing_window(current, Some(placement.target()), reverse, cx)
+}
+
+fn cycle_existing_window(
+    current: &PickerWindowState,
+    target: Option<MonitorKey>,
+    reverse: bool,
+    cx: &mut App,
+) -> bool {
+    let handle = match target
+        .and_then(|key| current.borrow().existing(key))
+        .or_else(|| any_existing(current).map(|(_, h)| h))
     {
         Some(h) => h,
         None => return false,
     };
-    if !try_cycle_selection(&handle, req.reverse, cx) {
+    if !try_cycle_selection(&handle, reverse, cx) {
         return false;
     }
     PICKER_VISIBLE.store(true, Ordering::Relaxed);
     cx.activate(true);
     true
+}
+
+pub(super) fn try_cycle_visible(current: &PickerWindowState, reverse: bool, cx: &mut App) -> bool {
+    if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+        return false;
+    }
+    let target = *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap();
+    cycle_existing_window(current, target, reverse, cx)
 }
 
 fn try_reuse_existing(
@@ -213,7 +236,9 @@ fn try_cycle_selection(handle: &WindowHandle<AltTabApp>, reverse: bool, cx: &mut
                 "[alt-tab/hold] window already visible (reverse={}) — cycling",
                 reverse
             );
+            let from = view.delegate.read(cx).selected_index;
             view.delegate.update(cx, |s, _| s.cycle(reverse));
+            view.mark_cycle(if reverse { "shift-tab" } else { "tab" }, from);
             cx.notify();
             true
         })

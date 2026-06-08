@@ -33,6 +33,28 @@ impl Render for AltTabApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let visible = crate::app::PICKER_VISIBLE.load(std::sync::atomic::Ordering::Relaxed);
         #[cfg(debug_assertions)]
+        if let Some(p) = self.pending_cycle.take() {
+            let d = self.delegate.read(cx);
+            let to = d.selected_index;
+            let (app, title) = to
+                .and_then(|i| d.windows.get(i))
+                .map(|w| (w.app_name.as_str(), w.title.as_str()))
+                .unwrap_or(("none", ""));
+            let fmt_idx =
+                |o: Option<usize>| o.map(|i| i.to_string()).unwrap_or_else(|| "none".into());
+            qol_runtime::probe!(
+                "CYCLE",
+                "method={} from={} to={} count={} to_app=\"{}\" to_title=\"{}\" elapsed_ms={}",
+                p.method,
+                fmt_idx(p.from),
+                fmt_idx(to),
+                d.windows.len(),
+                app,
+                title,
+                p.started.elapsed().as_millis(),
+            );
+        }
+        #[cfg(debug_assertions)]
         {
             let n = RENDER_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             let win_count = self.delegate.read(cx).windows.len();

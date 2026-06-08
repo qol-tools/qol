@@ -537,7 +537,29 @@ def process_line(ts_raw, pid, tag, msg):
         text = f"Closed{comp_title_str} (from={src_color}{src}{COLOR_RESET})"
         event_buffer.append((int(ts_raw), ts, "DISMISS", proc_name, text))
         last_event_real_time = time.time()
-        
+
+    elif tag == "CYCLE":
+        m = re.search(
+            r'method=(?P<method>\S+)\s+from=(?P<from>\S+)\s+to=(?P<to>\S+)\s+count=(?P<count>\d+)'
+            r'\s+to_app="(?P<app>[^"]*)"\s+to_title="(?P<title>[^"]*)"\s+elapsed_ms=(?P<ms>\d+)',
+            msg,
+        )
+        if m:
+            proc_name = get_process_name(pid)
+            if filter_plugin and proc_name != filter_plugin:
+                return
+
+            ms = int(m.group("ms"))
+            ms_color = COLOR_FAIL if ms > 100 else (COLOR_WARN if ms > 50 else COLOR_OK)
+            app = m.group("app")
+            title = m.group("title")
+            target = f"{app}: {title}" if title else app
+            text = (f"Cycle {COLOR_HOTKEY}{m.group('method')}{COLOR_RESET} "
+                    f"[{m.group('from')}->{m.group('to')}/{m.group('count')}] -> {target} "
+                    f"{ms_color}({ms}ms){COLOR_RESET}")
+            event_buffer.append((int(ts_raw), ts, "CYCLE", proc_name, text))
+            last_event_real_time = time.time()
+
     elif tag == "ACTIVATE_WIN":
         m = re.search(r'wid=(?P<wid>\d+)\s+title="(?P<title>[^"]+)"', msg)
         if m:
