@@ -1,10 +1,13 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
+#[cfg(target_os = "windows")]
 use super::AutostartOps;
 
+#[cfg(target_os = "windows")]
 pub(crate) struct Platform;
 
+#[cfg(target_os = "windows")]
 impl AutostartOps for Platform {
     fn read_target(&self) -> Result<Option<PathBuf>> {
         let path = autostart_path_impl()?;
@@ -21,6 +24,7 @@ impl AutostartOps for Platform {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn autostart_path_impl() -> Result<PathBuf> {
     let app_data = std::env::var_os("APPDATA").context("APPDATA is not set")?;
     Ok(PathBuf::from(app_data)
@@ -33,8 +37,9 @@ fn autostart_path_impl() -> Result<PathBuf> {
 }
 
 fn write_cmd_to(path: &Path, binary: &Path) -> Result<()> {
-    let escaped = binary.display().to_string().replace('"', "\"\"");
-    let content = format!("@echo off\r\nstart \"\" \"{escaped}\"\r\n");
+    let escaped = escape_autostart_batch_path(binary);
+    let content =
+        format!("@echo off\r\nsetlocal DisableDelayedExpansion\r\nstart \"\" \"{escaped}\"\r\n");
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Autostart path has no parent directory"))?;
@@ -43,6 +48,14 @@ fn write_cmd_to(path: &Path, binary: &Path) -> Result<()> {
     std::fs::write(path, content)
         .with_context(|| format!("Failed to write autostart file {}", path.display()))?;
     Ok(())
+}
+
+fn escape_autostart_batch_path(binary: &Path) -> String {
+    binary
+        .display()
+        .to_string()
+        .replace('%', "%%")
+        .replace('"', "\"\"")
 }
 
 fn read_cmd_at(path: &Path) -> Result<Option<PathBuf>> {
@@ -59,7 +72,7 @@ fn parse_start_line(content: &str) -> Option<String> {
     let rest = &content[start..];
     let end = rest.rfind('"')?;
     let raw = &rest[..end];
-    Some(raw.replace("\"\"", "\""))
+    Some(raw.replace("\"\"", "\"").replace("%%", "%"))
 }
 
 #[cfg(test)]
@@ -86,5 +99,22 @@ mod tests {
         let cmd = tmp.path().join("qol-tray.cmd");
         let binary = PathBuf::from(r"C:\Users\x y\repos\qol-tray\target\debug\qol-tray.exe");
         assert_eq!(write_then_read(&cmd, &binary), Some(binary));
+    }
+
+    #[test]
+    fn writes_literal_percent_pairs_for_batch_file() {
+        let tmp = TempDir::new().unwrap();
+        let cmd = tmp.path().join("qol-tray.cmd");
+        let binary =
+            PathBuf::from(r"C:\Users\x%USERNAME%\repos\qol-tray\target\debug\qol-tray.exe");
+
+        write_cmd_to(&cmd, &binary).unwrap();
+
+        let content = std::fs::read_to_string(&cmd).unwrap();
+        assert_eq!(
+            content,
+            "@echo off\r\nsetlocal DisableDelayedExpansion\r\nstart \"\" \"C:\\Users\\x%%USERNAME%%\\repos\\qol-tray\\target\\debug\\qol-tray.exe\"\r\n"
+        );
+        assert_eq!(read_cmd_at(&cmd).unwrap(), Some(binary));
     }
 }

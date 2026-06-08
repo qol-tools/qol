@@ -8,6 +8,7 @@ use crate::mode::{ModeConfig, ModeFlag};
 
 pub mod autostart;
 pub mod boot_environment;
+pub(crate) mod desktop_entry;
 mod files;
 mod platform;
 mod shell_hook;

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 use super::AutostartOps;
+use crate::installer::desktop_entry::{format_desktop_exec_command, parse_desktop_exec_program};
 
 const DESKTOP_TEMPLATE: &str =
     include_str!("../../../../scripts/installer/platform/linux/desktop/qol-tray.desktop");
@@ -30,7 +31,7 @@ fn autostart_path_impl() -> Result<PathBuf> {
 }
 
 fn write_desktop_to(path: &Path, binary: &Path) -> Result<()> {
-    let exec_line = format!("Exec={}", binary.display());
+    let exec_line = format!("Exec={}", format_desktop_exec_command(binary, &[]));
     let mut rendered = DESKTOP_TEMPLATE
         .lines()
         .map(|line| {
@@ -66,7 +67,7 @@ fn parse_exec_line(content: &str) -> Option<String> {
     content
         .lines()
         .find_map(|line| line.strip_prefix("Exec="))
-        .map(|s| s.trim().to_string())
+        .and_then(parse_desktop_exec_program)
         .filter(|s| !s.is_empty())
 }
 

@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
+use crate::installer::desktop_entry::{format_desktop_exec_command, DesktopExecArg};
+
 const ICON_64: &[u8] = include_bytes!("../../../assets/icons/64.png");
 const ICON_128: &[u8] = include_bytes!("../../../assets/icons/128.png");
 const ICON_256: &[u8] = include_bytes!("../../../assets/icons/256.png");
@@ -75,21 +77,19 @@ fn install_desktop_entry(binary_path: &Path) -> Result<()> {
 }
 
 fn render_app_desktop_entry(binary_path: &Path) -> String {
-    // `%u` passes a clicked `qol://` URL as argv (handled by `try_url_courier`);
-    // it expands to nothing for a plain daemon launch. `MimeType` registers the
-    // scheme so a browser/file manager routes `qol://` links here.
+    let exec = format_desktop_exec_command(binary_path, &[DesktopExecArg::Url]);
     format!(
         "[Desktop Entry]\n\
          Type=Application\n\
          Name=QoL Tray\n\
          Comment=Quality of Life Tray daemon\n\
-         Exec={} %u\n\
+         Exec={}\n\
          Icon=qol-tray\n\
          Terminal=false\n\
          Categories=Utility;\n\
          MimeType=x-scheme-handler/qol;\n\
          StartupNotify=false\n",
-        binary_path.display()
+        exec
     )
 }
 
@@ -129,7 +129,9 @@ mod tests {
     fn desktop_entry_registers_qol_scheme_and_passes_url() {
         let entry = render_app_desktop_entry(Path::new("/home/u/.local/bin/qol-tray"));
         assert!(entry.contains("MimeType=x-scheme-handler/qol;"));
-        assert!(entry.contains("Exec=/home/u/.local/bin/qol-tray %u"));
+        assert!(entry
+            .lines()
+            .any(|line| line == "Exec=\"/home/u/.local/bin/qol-tray\" %u"));
         assert!(entry.contains("Type=Application"));
     }
 }
