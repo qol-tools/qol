@@ -25,7 +25,7 @@ async fn entries(
     Query(query): Query<EntriesQuery>,
 ) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
     tokio::task::spawn_blocking(move || {
-        let date_str = query.date.unwrap_or_else(today_str);
+        let date_str = log_date_str(query.date)?;
         let filename = format!("qol-tray.{}.log", date_str);
         let path = crate::logging::platform::log_dir().join(filename);
 
@@ -103,4 +103,58 @@ fn join_error_status(error: tokio::task::JoinError) -> StatusCode {
 
 fn today_str() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn log_date_str(date: Option<String>) -> Result<String, StatusCode> {
+    let Some(date) = date else {
+        return Ok(today_str());
+    };
+    if !is_strict_log_date(&date) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let parsed = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok(parsed.format("%Y-%m-%d").to_string())
+}
+
+fn is_strict_log_date(date: &str) -> bool {
+    let bytes = date.as_bytes();
+    bytes.len() == 10
+        && bytes[0..4].iter().all(u8::is_ascii_digit)
+        && bytes[4] == b'-'
+        && bytes[5..7].iter().all(u8::is_ascii_digit)
+        && bytes[7] == b'-'
+        && bytes[8..10].iter().all(u8::is_ascii_digit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_date_str_accepts_valid_calendar_date() {
+        assert_eq!(
+            log_date_str(Some("2026-06-08".to_string())).unwrap(),
+            "2026-06-08"
+        );
+    }
+
+    #[test]
+    fn log_date_str_rejects_path_traversal() {
+        assert_eq!(
+            log_date_str(Some("../../../tmp".to_string())).unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn log_date_str_rejects_invalid_or_loose_dates() {
+        for raw in ["2026-02-30", "2026-6-8", "20260608", "2026-06-08/extra"] {
+            assert_eq!(
+                log_date_str(Some(raw.to_string())).unwrap_err(),
+                StatusCode::BAD_REQUEST,
+                "raw={raw}"
+            );
+        }
+    }
 }
