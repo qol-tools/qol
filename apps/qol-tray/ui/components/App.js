@@ -643,6 +643,7 @@ function AppShell() {
     }, [camera, registry]);
 
     const renderCtx = useMemo(() => ({
+        activeViewId,
         activePluginId,
         openPluginConfig,
         closePluginConfig,
@@ -652,7 +653,7 @@ function AppShell() {
         refreshSyncStatus,
         devEnabled,
         onJumpTo,
-    }), [activePluginId, openPluginConfig, closePluginConfig,
+    }), [activeViewId, activePluginId, openPluginConfig, closePluginConfig,
         syncStatus, syncProviders, setSyncStatus, refreshSyncStatus, devEnabled, onJumpTo]);
     const renderPage = useCallback((pageId) => renderPageContent(pageId, renderCtx), [renderCtx]);
 
@@ -703,4 +704,3 @@ function AppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginC
     useAppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginConfig, switchView, viewOrder, palette, dive, ascend, navigation, registry });
     return null;
 }
-
