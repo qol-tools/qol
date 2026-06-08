@@ -37,7 +37,7 @@ const WORLD_PAGES = [
     { id: 'shortcuts',         contentSized: true, render: () => html`<${ShortcutsView} />` },
     { id: 'task-runner',       contentSized: true, render: () => html`<${TaskRunnerView} />` },
     { id: 'profile',           contentSized: true, render: (ctx) => html`<${ProfileView} syncStatus=${ctx.syncStatus} syncProviders=${ctx.syncProviders} onSyncStatusChange=${ctx.onSyncStatusChange} refreshSyncStatus=${ctx.refreshSyncStatus} />` },
-    { id: 'logs',              contentSized: true, render: () => html`<${LogsView} active=${true} />` },
+    { id: 'logs',              contentSized: true, render: (ctx) => html`<${LogsView} active=${ctx.activeViewId === 'logs'} />` },
     { id: 'dev',               devOnly: true, contentSized: true, render: () => html`<${DevView} />` },
     { id: 'hotkeys-editor',    render: () => html`<${HotkeyEditorSubPage} slot=${hotkeyEditorSlot} />` },
     { id: 'shortcuts-editor',  render: () => html`<${ShortcutEditorSubPage} slot=${shortcutEditorSlot} />` },
