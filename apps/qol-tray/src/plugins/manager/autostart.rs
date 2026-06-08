@@ -9,17 +9,15 @@ where
     I: IntoIterator<Item = &'a mut Plugin>,
 {
     let mut expected_lifelines = Vec::new();
-    std::thread::scope(|scope| {
-        for plugin in plugins {
-            if !should_start_daemon(plugin) {
-                continue;
-            }
-            if daemon_enabled(plugin) {
-                expected_lifelines.push(plugin.id.as_str().to_string());
-            }
-            scope.spawn(|| start_daemon(plugin));
+    for plugin in plugins {
+        if !should_start_daemon(plugin) {
+            continue;
         }
-    });
+        if daemon_enabled(plugin) {
+            expected_lifelines.push(plugin.id.as_str().to_string());
+        }
+        start_daemon(plugin);
+    }
     audit_host_death_lifelines(expected_lifelines);
 }
 
