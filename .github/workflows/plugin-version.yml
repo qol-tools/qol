@@ -1,4 +1,5 @@
 name: Version and Release Plugins
+run-name: ${{ inputs.plugin_id && format('Version plugin {0}', inputs.plugin_id) || 'Version changed plugins' }}
 
 on:
   workflow_dispatch:
@@ -50,6 +51,25 @@ jobs:
             --apply \
             --tag-file "${RUNNER_TEMP}/plugin-release-tags.txt" \
             "${args[@]}"
+
+      - name: Summarize release plan
+        shell: bash
+        env:
+          SHOULD_RELEASE: ${{ steps.version.outputs.should_release }}
+          RELEASE_SUMMARY: ${{ steps.version.outputs.summary }}
+          RELEASE_TAGS: ${{ steps.version.outputs.tags }}
+        run: |
+          {
+            echo "### Plugin version plan"
+            echo
+            if [[ "${SHOULD_RELEASE}" == "true" ]]; then
+              echo "${RELEASE_SUMMARY}" | tr ',' '\n' | sed 's/^/- /'
+              echo
+              echo "**Tags:** \`${RELEASE_TAGS}\`"
+            else
+              echo "No plugin releases required."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Commit and tag plugin versions
         if: steps.version.outputs.should_release == 'true'
