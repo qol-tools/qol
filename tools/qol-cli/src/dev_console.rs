@@ -12,6 +12,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
+use crate::commands::emu::{
+    emu_config_path, environment_statuses, EnvironmentStatus, ResolveState,
+};
 use crate::dev_server::{
     health_ok, post_recompile_current, post_reload_plugins, probe_endpoints, web_ok,
     EndpointStatus, WEBSITE_URL,
@@ -21,6 +24,7 @@ use crate::host_facade;
 const LOG_CAP: usize = 2000;
 const TICK: Duration = Duration::from_millis(150);
 const HEALTH_PROBE_INTERVAL: Duration = Duration::from_secs(2);
+const EMU_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const STOP_GRACE: Duration = Duration::from_secs(5);
 const CRASH_TAIL: usize = 40;
 const ACK_TTL: Duration = Duration::from_secs(6);
@@ -128,6 +132,7 @@ enum View {
     Logs,
     Doctor,
     Plugins,
+    Emu,
     Trace,
     Endpoints,
 }
@@ -137,15 +142,17 @@ enum Row {
     Tray,
     Web,
     Plugins,
+    Emu,
     Doctor,
     Logs,
     Trace,
 }
 
-const ROWS: [Row; 6] = [
+const ROWS: [Row; 7] = [
     Row::Tray,
     Row::Web,
     Row::Plugins,
+    Row::Emu,
     Row::Doctor,
     Row::Logs,
     Row::Trace,
@@ -166,6 +173,12 @@ struct HealthSnapshot {
 enum EndpointsState {
     Probing,
     Done(Vec<EndpointStatus>),
+}
+
+enum EmuState {
+    Probing,
+    Done(Vec<EnvironmentStatus>),
+    Failed(String),
 }
 
 #[derive(Clone, Copy)]
@@ -211,6 +224,9 @@ struct Dash {
     rebuild: RebuildState,
     plugin_reload: RebuildState,
     plugin_names: Vec<String>,
+    emu: EmuState,
+    emu_rx: Option<Receiver<Result<Vec<EnvironmentStatus>, String>>>,
+    emu_last_refresh: Option<Instant>,
     log_height: usize,
     cursor: usize,
     doctor: DoctorState,
@@ -241,6 +257,9 @@ impl Dash {
             rebuild: RebuildState::Idle,
             plugin_reload: RebuildState::Idle,
             plugin_names,
+            emu: EmuState::Probing,
+            emu_rx: None,
+            emu_last_refresh: None,
             log_height: 0,
             cursor: 0,
             doctor: DoctorState::Running(DoctorMode::Check),
@@ -266,6 +285,23 @@ impl Dash {
     fn start_doctor_fix(&mut self) {
         self.doctor = DoctorState::Running(DoctorMode::Fix);
         self.doctor_rx = Some(spawn_doctor(DoctorMode::Fix));
+    }
+
+    fn start_emu_refresh(&mut self, force: bool) {
+        if self.emu_rx.is_some() {
+            return;
+        }
+        let due = self
+            .emu_last_refresh
+            .is_none_or(|last| last.elapsed() >= EMU_REFRESH_INTERVAL);
+        if !force && !due {
+            return;
+        }
+        if force || self.emu_last_refresh.is_none() {
+            self.emu = EmuState::Probing;
+        }
+        self.emu_last_refresh = Some(Instant::now());
+        self.emu_rx = Some(spawn_emu_probe());
     }
 }
 
@@ -328,6 +364,7 @@ fn tui_session(
     dash: &mut Dash,
 ) -> Result<SessionEnd> {
     loop {
+        dash.start_emu_refresh(false);
         while let Ok(line) = lines.try_recv() {
             dash.logs.push(line);
         }
@@ -338,6 +375,13 @@ fn tui_session(
         if let Some(results) = dash.endpoints_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             dash.endpoints = EndpointsState::Done(results);
             dash.endpoints_rx = None;
+        }
+        if let Some(outcome) = dash.emu_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            dash.emu = match outcome {
+                Ok(statuses) => EmuState::Done(statuses),
+                Err(error) => EmuState::Failed(error),
+            };
+            dash.emu_rx = None;
         }
         let doctor_outcome = dash.doctor_rx.as_ref().and_then(|rx| rx.try_recv().ok());
         if let Some(outcome) = doctor_outcome {
@@ -587,6 +631,11 @@ fn act_row(dash: &mut Dash, modified: bool) {
                 trigger_reload(dash);
             }
         }
+        Row::Emu => {
+            if !modified {
+                open_emu(dash);
+            }
+        }
         Row::Doctor => {
             if modified {
                 dash.start_doctor_fix();
@@ -606,6 +655,7 @@ fn dive_row(dash: &mut Dash) {
             dash.view = View::Plugins;
             dash.scroll_offset = 0;
         }
+        Row::Emu => open_emu(dash),
         Row::Doctor => open_doctor(dash),
         Row::Logs => {
             dash.view = View::Logs;
@@ -620,6 +670,12 @@ fn open_endpoints(dash: &mut Dash) {
     dash.scroll_offset = 0;
     dash.endpoints = EndpointsState::Probing;
     dash.endpoints_rx = Some(spawn_endpoints_probe());
+}
+
+fn open_emu(dash: &mut Dash) {
+    dash.view = View::Emu;
+    dash.scroll_offset = 0;
+    dash.start_emu_refresh(true);
 }
 
 fn health_state(up: bool) -> Health {
@@ -698,6 +754,7 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         View::Logs => draw_logs(frame, dash, main),
         View::Doctor => draw_doctor(frame, dash, main),
         View::Plugins => draw_plugins(frame, dash, main),
+        View::Emu => draw_emu(frame, dash, main),
         View::Trace => draw_trace(frame, dash, main),
         View::Endpoints => draw_endpoints(frame, dash, main),
     }
@@ -736,6 +793,7 @@ fn footer_text(dash: &Dash) -> String {
                 Row::Tray => "enter rebuild tray",
                 Row::Web => "enter open site · → endpoints",
                 Row::Plugins => "enter reload · → list",
+                Row::Emu => "enter open · → open",
                 Row::Doctor => "enter run · → steps",
                 Row::Logs => "→ open",
                 Row::Trace => "→ open",
@@ -744,7 +802,7 @@ fn footer_text(dash: &Dash) -> String {
         }
         View::Logs | View::Trace => stream_footer(dash),
         View::Doctor => " space raw · d refresh · ↑/↓ scroll · ← back · q quit ".to_string(),
-        View::Plugins => " ↑/↓ scroll · ← back · q quit ".to_string(),
+        View::Plugins | View::Emu => " ↑/↓ scroll · ← back · q quit ".to_string(),
         View::Endpoints => " ← back · q quit ".to_string(),
     }
 }
@@ -754,14 +812,14 @@ fn armed_footer(dash: &Dash) -> String {
         View::Dashboard => {
             let hint = match ROWS[dash.cursor] {
                 Row::Doctor => "enter fix",
-                Row::Tray | Row::Web | Row::Plugins | Row::Logs | Row::Trace => {
+                Row::Tray | Row::Web | Row::Plugins | Row::Emu | Row::Logs | Row::Trace => {
                     "no modified action"
                 }
             };
             format!(" MODIFIED · {hint} · space/esc cancel ")
         }
         View::Doctor => " RAW · space friendly · esc done ".to_string(),
-        View::Logs | View::Trace | View::Plugins | View::Endpoints => {
+        View::Logs | View::Trace | View::Plugins | View::Emu | View::Endpoints => {
             " MODIFIED · space/esc cancel ".to_string()
         }
     }
@@ -781,21 +839,23 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
     let (web_color, web_value) = web_status(dash.web);
     let (plugins_color, plugins_value) =
         plugins_status(&dash.plugin_reload, dash.plugin_names.len());
+    let (emu_color, emu_value) = emu_status(&dash.emu);
     let (doctor_color, doctor_value) = doctor_status(&dash.doctor);
 
     let rows = vec![
         dash_row(dash.cursor == 0, tray_color, "tray", tray_value),
         dash_row(dash.cursor == 1, web_color, "web", web_value),
         dash_row(dash.cursor == 2, plugins_color, "plugins", plugins_value),
-        dash_row(dash.cursor == 3, doctor_color, "doctor", doctor_value),
+        dash_row(dash.cursor == 3, emu_color, "emu", emu_value),
+        dash_row(dash.cursor == 4, doctor_color, "doctor", doctor_value),
         dash_row(
-            dash.cursor == 4,
+            dash.cursor == 5,
             Color::DarkGray,
             "logs",
             vec![format!("{} buffered", dash.logs.len()).fg(Color::DarkGray)],
         ),
         dash_row(
-            dash.cursor == 5,
+            dash.cursor == 6,
             Color::DarkGray,
             "trace",
             trace_value(dash),
@@ -953,6 +1013,79 @@ fn plugins_status(state: &RebuildState, plugins: usize) -> (Color, Vec<Span<'sta
     }
 }
 
+fn emu_status(state: &EmuState) -> (Color, Vec<Span<'static>>) {
+    let statuses = match state {
+        EmuState::Probing => {
+            return (
+                Color::Yellow,
+                vec![
+                    "scanning".fg(Color::Yellow).bold(),
+                    " · → open".fg(Color::DarkGray),
+                ],
+            )
+        }
+        EmuState::Done(statuses) => statuses,
+        EmuState::Failed(error) => {
+            return (
+                Color::Red,
+                vec![
+                    "registry error".fg(Color::Red).bold(),
+                    format!(" · {error}").fg(Color::DarkGray),
+                ],
+            )
+        }
+    };
+    if statuses.is_empty() {
+        return (
+            Color::Yellow,
+            vec![
+                "no envs".fg(Color::Yellow).bold(),
+                " · → open".fg(Color::DarkGray),
+            ],
+        );
+    }
+    let ready = statuses
+        .iter()
+        .filter(|status| status.state == ResolveState::Ready)
+        .count();
+    let missing = statuses
+        .iter()
+        .filter(|status| status.state == ResolveState::Missing)
+        .count();
+    let unsupported = statuses
+        .iter()
+        .filter(|status| status.state == ResolveState::Unsupported)
+        .count();
+    if ready > 0 {
+        return (
+            Color::Green,
+            vec![
+                format!("{} envs · {ready} ready", statuses.len())
+                    .fg(Color::Green)
+                    .bold(),
+                " · → open".fg(Color::DarkGray),
+            ],
+        );
+    }
+    let color = if unsupported == statuses.len() {
+        Color::Red
+    } else {
+        Color::Yellow
+    };
+    (
+        color,
+        vec![
+            format!(
+                "{} envs · {missing} missing · {unsupported} unsupported",
+                statuses.len()
+            )
+            .fg(color)
+            .bold(),
+            " · → open".fg(Color::DarkGray),
+        ],
+    )
+}
+
 fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let accent = accent_color(dash.armed);
     if dash.plugin_names.is_empty() {
@@ -979,6 +1112,81 @@ fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         })
         .collect();
     let title = format!(" plugins · {} ", list_status(total, dash.scroll_offset));
+    frame.render_widget(Paragraph::new(visible).block(panel(&title, accent)), area);
+}
+
+fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+    let accent = accent_color(dash.armed);
+    let config = emu_config_path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "~/.config/qol-tray/emu.toml".to_string());
+    let up_command = match &dash.emu {
+        EmuState::Done(statuses) => statuses.first(),
+        EmuState::Probing | EmuState::Failed(_) => None,
+    }
+    .map(|status| format!("qol emu up {}", status.id))
+    .unwrap_or_else(|| "qol emu up <id>".to_string());
+    let mut lines = match &dash.emu {
+        EmuState::Probing => vec![Line::from("  scanning emus".fg(Color::Yellow))],
+        EmuState::Done(statuses) if statuses.is_empty() => {
+            vec![Line::from("  no emus found".fg(Color::DarkGray))]
+        }
+        EmuState::Done(statuses) => statuses
+            .iter()
+            .flat_map(|status| {
+                let color = match status.state {
+                    ResolveState::Ready => Color::Green,
+                    ResolveState::Missing => Color::Yellow,
+                    ResolveState::Unsupported => Color::Red,
+                };
+                [
+                    Line::from(vec![
+                        "  ● ".fg(color).bold(),
+                        format!("{:<12}", status.id).fg(Color::White),
+                        format!(" {} ", status.state.as_str()).fg(color).bold(),
+                        format!("· {} · {} · {}", status.name, status.backend, status.arch)
+                            .fg(Color::DarkGray),
+                    ]),
+                    Line::from(vec![
+                        "    ".into(),
+                        status.reason.clone().fg(Color::DarkGray),
+                    ]),
+                ]
+            })
+            .collect(),
+        EmuState::Failed(error) => vec![Line::from(vec![
+            "  registry error ".fg(Color::Red).bold(),
+            error.clone().fg(Color::DarkGray),
+        ])],
+    };
+    lines.extend([
+        Line::from(""),
+        Line::from(vec![
+            "  list    ".fg(Color::DarkGray),
+            "qol emu list".fg(Color::White),
+        ]),
+        Line::from(vec![
+            "  doctor  ".fg(Color::DarkGray),
+            "qol emu doctor".fg(Color::White),
+        ]),
+        Line::from(vec![
+            "  up      ".fg(Color::DarkGray),
+            up_command.fg(Color::White),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            "  config  ".fg(Color::DarkGray),
+            config.fg(Color::White),
+        ]),
+        Line::from(vec![
+            "  runs    ".fg(Color::DarkGray),
+            "target/qol-emu".fg(Color::White),
+        ]),
+    ]);
+    let total = lines.len();
+    let (start, height) = list_window(dash, area, total);
+    let visible: Vec<Line> = lines.into_iter().skip(start).take(height).collect();
+    let title = format!(" emu · {} ", list_status(total, dash.scroll_offset));
     frame.render_widget(Paragraph::new(visible).block(panel(&title, accent)), area);
 }
 
@@ -1363,6 +1571,15 @@ fn spawn_endpoints_probe() -> Receiver<Vec<EndpointStatus>> {
     rx
 }
 
+fn spawn_emu_probe() -> Receiver<Result<Vec<EnvironmentStatus>, String>> {
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        let outcome = environment_statuses().map_err(|error| format!("{error:#}"));
+        let _ = tx.send(outcome);
+    });
+    rx
+}
+
 #[derive(Clone, Copy)]
 enum DoctorMode {
     Check,
@@ -1508,12 +1725,20 @@ mod tests {
     fn armed_footer_offers_fix_only_on_doctor_row() {
         let mut dash = Dash::new(Vec::new());
         dash.armed = true;
-        let cases = [(3usize, "enter fix"), (0, "no modified action")];
+        let cases = [(4usize, "enter fix"), (0, "no modified action")];
         for (cursor, expected) in cases {
             dash.cursor = cursor;
             let footer = armed_footer(&dash);
             assert!(footer.contains(expected), "cursor {cursor}: {footer}");
         }
+    }
+
+    #[test]
+    fn emu_row_opens_emu_view() {
+        let mut dash = Dash::new(Vec::new());
+        dash.cursor = 3;
+        apply_action(&mut dash, Action::Activate, false);
+        assert!(matches!(dash.view, View::Emu));
     }
 
     #[test]
