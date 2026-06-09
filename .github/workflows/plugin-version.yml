@@ -1,0 +1,85 @@
+name: Version and Release Plugins
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugin_id:
+        description: Optional plugin id, for example alt-tab
+        required: false
+        type: string
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: plugin-version-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch tags
+        run: git fetch --tags --force
+
+      - name: Compute plugin versions
+        id: version
+        shell: bash
+        env:
+          PLUGIN_ID: ${{ github.event.inputs.plugin_id }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ -n "${PLUGIN_ID}" ]]; then
+            args+=(--plugin-id "${PLUGIN_ID}")
+          fi
+          python3 .github/scripts/plugin_version.py \
+            --apply \
+            --tag-file "${RUNNER_TEMP}/plugin-release-tags.txt" \
+            "${args[@]}"
+
+      - name: Commit and tag plugin versions
+        if: steps.version.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add Cargo.lock plugins/*/Cargo.toml plugins/*/plugin.toml
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(plugins): bump plugin versions"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+          mapfile -t tags < "${RUNNER_TEMP}/plugin-release-tags.txt"
+          for tag in "${tags[@]}"; do
+            [[ -n "${tag}" ]] || continue
+            git tag "${tag}"
+          done
+          git push origin "${tags[@]}"
+
+      - name: Dispatch plugin releases
+        if: steps.version.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            [[ -n "${tag}" ]] || continue
+            gh workflow run release.yml --ref main -f tag="${tag}"
+          done < "${RUNNER_TEMP}/plugin-release-tags.txt"
