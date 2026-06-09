@@ -1,4 +1,4 @@
-import { BUILD_ANIMATION } from '../build-animation.js';
+import { BUILD_ANIMATION } from '../../../fx/build/animation.js';
 
 const COMPILE_PHASE_COUNT = 24;
 const COMPILE_STEP_COUNT = 66;

@@ -2,8 +2,8 @@ import {
     createEvaporateState, activateBatch, drawSolidPixels, processBubbles,
     evaporateFrame, runDissolve, computeCanvasSize,
     cancelExistingDissolve, createDissolveCanvas, sampleCompositeBg,
-} from './dissolve-engine.js';
-import { resolveColor } from './canvas.js';
+} from './engine.js';
+import { resolveColor } from '../canvas.js';
 import { createField, renderField } from './glitch-squares.js';
 
 export { createEvaporateState, evaporateFrame, runDissolve };

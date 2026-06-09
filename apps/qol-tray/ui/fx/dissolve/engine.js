@@ -487,7 +487,7 @@ function buildParticleBuffer(s, buf) {
 let gpuModule = null;
 try {
     if (typeof document !== 'undefined') {
-        gpuModule = await import('./dissolve-gpu.js');
+        gpuModule = await import('./gpu.js');
     }
 } catch {}
 
@@ -571,7 +571,7 @@ function runDissolveWorker(canvas, bgColor, targetColor, onComplete, opts) {
     const bufferSize = W * H * 4;
     let pixelBuffer = new ArrayBuffer(bufferSize);
     const imgData = ctx.createImageData(W, H);
-    const worker = new Worker('./lib/dissolve-worker.js', { type: 'module' });
+    const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
     let rafId = null;
     function cancel() {
         if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
