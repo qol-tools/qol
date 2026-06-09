@@ -1,15 +1,23 @@
 name: Release Plugin
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Plugin release tag, for example plugin-alt-tab-v0.14.0
+        required: true
+        type: string
   push:
     tags:
-      - 'plugin-*-v[0-9]+.[0-9]+.[0-9]+'
+      - 'plugin-*-v*.*.*'
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_REF: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   setup:
@@ -21,20 +29,34 @@ jobs:
       matrix: ${{ steps.resolve.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
 
       - name: Resolve tag to crate
         id: resolve
         shell: bash
         run: |
-          tag="${GITHUB_REF_NAME}"
-          if [[ ! "$tag" =~ ^plugin-(.+)-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          tag="${RELEASE_TAG}"
+          if [[ ! "$tag" =~ ^plugin-([a-z0-9][a-z0-9-]*)-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             echo "::error::tag '$tag' must match plugin-<id>-vX.Y.Z"
             exit 1
           fi
           plugin_id="${BASH_REMATCH[1]}"
+          tag_version="${BASH_REMATCH[2]}"
           crate_dir="plugins/plugin-${plugin_id}"
           if [[ ! -f "$crate_dir/plugin.toml" ]]; then
             echo "::error::no plugin.toml at $crate_dir"
+            exit 1
+          fi
+          manifest_id="$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["plugin"]["id"])' "$crate_dir/plugin.toml")"
+          if [[ "$manifest_id" != "plugin-${plugin_id}" ]]; then
+            echo "::error::tag $tag expects manifest id plugin-${plugin_id}, got $manifest_id"
+            exit 1
+          fi
+          cargo_version="$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["version"])' "$crate_dir/Cargo.toml")"
+          plugin_version="$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["plugin"]["version"])' "$crate_dir/plugin.toml")"
+          if [[ "$cargo_version" != "$tag_version" || "$plugin_version" != "$tag_version" ]]; then
+            echo "::error::tag $tag expects version $tag_version, got cargo=$cargo_version plugin=$plugin_version"
             exit 1
           fi
           python3 .github/scripts/plugin_matrix.py "$crate_dir" "$plugin_id" >> "$GITHUB_OUTPUT"
@@ -48,6 +70,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -90,6 +114,8 @@ jobs:
     name: Publish GitHub release
     needs: [setup, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -106,7 +132,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          tag="${GITHUB_REF_NAME}"
+          tag="${RELEASE_TAG}"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" release_files/* --clobber
           else
