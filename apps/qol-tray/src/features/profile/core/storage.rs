@@ -223,26 +223,71 @@ pub(super) fn read_installed_plugin_configs_from_dir(
     let mut configs = Vec::new();
     for entry in entries.filter_map(|entry| entry.ok()) {
         let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
         let file_name = entry.file_name();
         let Some(plugin_id) = file_name.to_str().map(String::from) else {
+            trace_installed_plugin_config_entry("", &path, "skip_non_utf8");
             continue;
         };
         if !crate::paths::is_safe_path_component(&plugin_id) {
+            trace_installed_plugin_config_entry(&plugin_id, &path, "skip_invalid_id");
+            continue;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            trace_installed_plugin_config_entry(&plugin_id, &path, "skip_missing");
+            continue;
+        };
+        if metadata.file_type().is_symlink() {
+            trace_installed_plugin_config_entry(&plugin_id, &path, "skip_symlink");
+            continue;
+        }
+        if !metadata.is_dir() {
+            trace_installed_plugin_config_entry(&plugin_id, &path, "skip_not_dir");
             continue;
         }
         let config_path = crate::plugins::paths::config_path(&path);
         if !config_path.exists() {
+            trace_installed_plugin_config_entry(&plugin_id, &path, "skip_no_config");
             continue;
         }
         let Ok(config) = crate::file_io::read_json::<Value>(&config_path) else {
+            trace_installed_plugin_config_entry(&plugin_id, &path, "skip_invalid_json");
             continue;
         };
+        trace_installed_plugin_config_entry(&plugin_id, &path, "include");
         configs.push((plugin_id, config));
     }
     Ok(configs)
+}
+
+fn trace_installed_plugin_config_entry(plugin_id: &str, path: &Path, outcome: &str) {
+    #[cfg(debug_assertions)]
+    {
+        qol_runtime::probe!(
+            "PROFILE_CONFIG_SOURCE",
+            "plugin={:?} entry_kind={} outcome={outcome}",
+            plugin_id,
+            trace_plugin_entry_kind(path)
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (plugin_id, path, outcome);
+}
+
+#[cfg(debug_assertions)]
+fn trace_plugin_entry_kind(path: &Path) -> &'static str {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return "missing";
+    };
+    if metadata.file_type().is_symlink() {
+        return "symlink";
+    }
+    if metadata.is_dir() {
+        return "dir";
+    }
+    if metadata.is_file() {
+        return "file";
+    }
+    "other"
 }
 
 pub(super) fn write_plugin_config_in_dir(

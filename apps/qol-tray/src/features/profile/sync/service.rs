@@ -200,6 +200,7 @@ impl SyncService {
 
     pub fn open_backup_file(&self, file_name: &str) -> Result<()> {
         let path = backup_file_path(file_name)?;
+        trace_backup_file("PROFILE_BACKUP_OPEN", file_name, &path);
         if !path.exists() {
             anyhow::bail!("backup not found");
         }
@@ -213,6 +214,7 @@ impl SyncService {
 
     pub fn preview_backup(&self, file_name: &str) -> Result<SyncBackupPreview> {
         let path = backup_file_path(file_name)?;
+        trace_backup_file("PROFILE_BACKUP_PREVIEW", file_name, &path);
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("read backup {}", path.display()))?;
         Ok(SyncBackupPreview {
@@ -384,6 +386,37 @@ impl SyncService {
     fn snapshot_toggles(&self) -> SyncToggles {
         *self.toggles_mut()
     }
+}
+
+fn trace_backup_file(tag: &str, file_name: &str, path: &Path) {
+    #[cfg(debug_assertions)]
+    {
+        qol_runtime::probe!(
+            tag,
+            "file={:?} path_kind={}",
+            file_name,
+            trace_path_kind(path)
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (tag, file_name, path);
+}
+
+#[cfg(debug_assertions)]
+fn trace_path_kind(path: &Path) -> &'static str {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return "missing";
+    };
+    if metadata.file_type().is_symlink() {
+        return "symlink";
+    }
+    if metadata.is_dir() {
+        return "dir";
+    }
+    if metadata.is_file() {
+        return "file";
+    }
+    "other"
 }
 
 fn require_github_token() -> Result<String> {
