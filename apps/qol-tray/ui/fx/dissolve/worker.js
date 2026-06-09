@@ -1,6 +1,6 @@
 import {
     createEvaporateState, evaporateFrame,
-} from './dissolve-engine.js';
+} from './engine.js';
 
 let state = null;
 let buffer = null;

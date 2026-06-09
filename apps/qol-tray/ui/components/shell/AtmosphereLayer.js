@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useEffect, useState } from 'preact/hooks';
-import { resolvePresetClass } from '../../lib/atmosphere-presets.js';
+import { resolvePresetClass } from '../../fx/atmosphere/presets.js';
 
 export function AtmosphereLayer({ navigation }) {
     const [, setTick] = useState(0);

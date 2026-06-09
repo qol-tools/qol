@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
-import { createWorldCanvasBg } from '../../lib/world-canvas-bg.js';
+import { createWorldCanvasBg } from '../../fx/world-canvas-bg.js';
 import { createDebug, elLabel } from '../../lib/debug.js';
 import { isCtrlHeld } from '../../lib/ctrl-state.js';
 import { nearestSurfaceToCenter } from '../../lib/viewport-spatial.js';

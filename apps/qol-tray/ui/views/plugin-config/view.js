@@ -10,7 +10,7 @@ import {
     selectorGridTemplate,
 } from '../../auto-config/display-rules.js';
 import { renderField, fieldSurfaceAttrs } from './field-map.js';
-import { dissolveIn, DISSOLVE_PRESETS } from '../../lib/dissolve.js';
+import { dissolveIn, DISSOLVE_PRESETS } from '../../fx/dissolve/index.js';
 import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
 import { PageShell } from '../../components/PageShell.js';
 

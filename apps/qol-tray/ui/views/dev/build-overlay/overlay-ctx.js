@@ -1,4 +1,4 @@
-import { BUILD_ANIMATION } from '../build-animation.js';
+import { BUILD_ANIMATION } from '../../../fx/build/animation.js';
 import { applyFillScale, clearOverlayNodes, ensureOverlayNodes, finiteOr, setOverlayCopy } from './dom.js';
 import { createCompletionController } from './completion.js';
 import { createFillController } from './fill.js';
