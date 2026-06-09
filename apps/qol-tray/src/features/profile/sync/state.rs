@@ -169,13 +169,90 @@ fn backup_timestamp(file_name: &str) -> String {
 
 pub(crate) fn backup_file_path(file_name: &str) -> Result<PathBuf> {
     let safe = file_name.trim();
-    if safe.is_empty() || safe.contains('/') || safe.contains('\\') {
+    if let Some(reason) = backup_file_reject_reason(safe) {
+        trace_backup_path(safe, "reject", Some(reason));
         anyhow::bail!("invalid backup file name");
     }
+    trace_backup_path(safe, "accept", None);
     Ok(crate::paths::sync_backups_dir()?.join(safe))
+}
+
+fn backup_file_reject_reason(file_name: &str) -> Option<&'static str> {
+    if file_name.is_empty() {
+        Some("empty")
+    } else if file_name == "." || file_name == ".." {
+        Some("dot_entry")
+    } else if file_name.contains('/') || file_name.contains('\\') {
+        Some("separator")
+    } else {
+        None
+    }
 }
 
 pub(crate) fn now_rfc3339() -> String {
     let datetime: DateTime<chrono::Utc> = std::time::SystemTime::now().into();
     datetime.to_rfc3339()
+}
+
+fn trace_backup_path(file_name: &str, outcome: &str, reason: Option<&str>) {
+    #[cfg(debug_assertions)]
+    {
+        if let Some(reason) = reason {
+            qol_runtime::probe!(
+                "PROFILE_BACKUP_PATH",
+                "file={:?} outcome={outcome} reason={reason}",
+                file_name
+            );
+        } else {
+            qol_runtime::probe!(
+                "PROFILE_BACKUP_PATH",
+                "file={:?} outcome={outcome}",
+                file_name
+            );
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (file_name, outcome, reason);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::backup_file_path;
+    use tempfile::TempDir;
+
+    #[test]
+    fn backup_file_path_accepts_plain_backup_file_names() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(tmp.path());
+
+        let path = backup_file_path("20260508-conflict.json").unwrap();
+
+        assert!(path.ends_with("sync/backups/20260508-conflict.json"));
+    }
+
+    #[test]
+    fn backup_file_path_rejects_traversal_and_path_components() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(tmp.path());
+        let invalid_names = [
+            "",
+            " ",
+            ".",
+            " . ",
+            "..",
+            " .. ",
+            "../backup.json",
+            "subdir/backup.json",
+            "subdir\\backup.json",
+            "/absolute.json",
+            "\\absolute.json",
+        ];
+
+        for file_name in invalid_names {
+            assert!(
+                backup_file_path(file_name).is_err(),
+                "backup file name should be rejected: {file_name:?}"
+            );
+        }
+    }
 }

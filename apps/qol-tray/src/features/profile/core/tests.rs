@@ -430,6 +430,33 @@ fn read_installed_plugin_configs_from_dir_filters_invalid_entries() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn read_installed_plugin_configs_from_dir_skips_symlinked_plugin_dirs() {
+    let tmp = TempDir::new().unwrap();
+    let plugins_dir = tmp.path().join("plugins");
+    let external_dir = tmp.path().join("external").join("plugin-linked");
+    fs::create_dir_all(&plugins_dir).unwrap();
+    write_installed_plugin_config(&plugins_dir, "plugin-valid", &json!({"ok": true}));
+    fs::create_dir_all(&external_dir).unwrap();
+    crate::file_io::write_pretty_json(
+        &crate::plugins::paths::config_path(&external_dir),
+        &json!({"from": "symlink"}),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&external_dir, plugins_dir.join("plugin-linked")).unwrap();
+
+    let configs = read_installed_plugin_configs_from_dir(&plugins_dir)
+        .unwrap()
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+
+    assert_eq!(
+        configs,
+        HashMap::from([("plugin-valid".to_string(), json!({"ok": true}))])
+    );
+}
+
 #[test]
 fn replace_plugin_configs_removes_stale_profile_entries() {
     let tmp = TempDir::new().unwrap();
