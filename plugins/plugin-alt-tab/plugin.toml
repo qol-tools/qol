@@ -2,7 +2,7 @@
 id = "plugin-alt-tab"
 name = "Alt Tab"
 description = "Better alt-tab experience with window previews"
-version = "0.13.7"
+version = "0.14.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
