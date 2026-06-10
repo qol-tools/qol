@@ -64,6 +64,12 @@ pub fn spawn_reassert_driver<F, G>(
             if is_active() {
                 continue;
             }
+            // is_active can take several ms (OS roundtrip); a newer activation
+            // may have committed meanwhile. Re-check so a stale driver never
+            // reasserts over it.
+            if gen.load(std::sync::atomic::Ordering::SeqCst) != commit_gen {
+                return;
+            }
             reassert();
         }
     });

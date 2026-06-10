@@ -33,6 +33,7 @@ extern "C" {
 static ACTIVATE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn activate_window(window_id: u32) {
+    let commit_gen = ACTIVATE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     #[cfg(debug_assertions)]
     let started = std::time::Instant::now();
     let Some((pid, title)) = cg_window_pid_and_title(window_id) else {
@@ -62,15 +63,16 @@ pub fn activate_window(window_id: u32) {
         "wid={window_id} lookup_ms={lookup_ms} ax_ms={ax_ms} total_ms={} forced={forced}",
         started.elapsed().as_millis(),
     );
-    let commit_gen = ACTIVATE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     qol_gpui::platform::spawn_reassert_driver(
         &ACTIVATE_GEN,
         commit_gen,
-        &[16u64, 24, 40, 60, 100, 150, 250, 400],
+        &[8u64, 16, 24, 40, 60, 100, 150, 250, 400],
         {
             let mut settled_logged = false;
             #[cfg(debug_assertions)]
             let mut key_focus_logged = false;
+            #[cfg(debug_assertions)]
+            let mut key_focus_sampled = false;
             move || {
                 let active = cg_frontmost_window_id() == Some(window_id);
                 if active && !settled_logged {
@@ -82,16 +84,24 @@ pub fn activate_window(window_id: u32) {
                     );
                 }
                 #[cfg(debug_assertions)]
-                if !key_focus_logged
-                    && unsafe { crate::discovery::macos::ax::ax_focused_window_id(pid) }
-                        == Some(window_id)
                 {
-                    key_focus_logged = true;
-                    qol_runtime::probe!(
-                        "ACTIVATE_KEY_FOCUS",
-                        "wid={window_id} elapsed_ms={}",
-                        started.elapsed().as_millis(),
-                    );
+                    let focused = unsafe { crate::discovery::macos::ax::ax_focused_window_id(pid) };
+                    if !key_focus_sampled {
+                        key_focus_sampled = true;
+                        qol_runtime::probe!(
+                            "ACTIVATE_KEY_SAMPLE",
+                            "wid={window_id} focused={focused:?} elapsed_ms={}",
+                            started.elapsed().as_millis(),
+                        );
+                    }
+                    if !key_focus_logged && focused == Some(window_id) {
+                        key_focus_logged = true;
+                        qol_runtime::probe!(
+                            "ACTIVATE_KEY_FOCUS",
+                            "wid={window_id} elapsed_ms={}",
+                            started.elapsed().as_millis(),
+                        );
+                    }
                 }
                 active
             }
