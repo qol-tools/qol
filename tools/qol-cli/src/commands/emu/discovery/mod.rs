@@ -8,6 +8,8 @@ mod dedupe;
 mod filesystem;
 mod libvirt;
 
+pub(crate) use filesystem::is_vm_image_path;
+
 pub(crate) struct DiscoveryContext {
     pub(crate) config_path: Option<PathBuf>,
     pub(crate) home_dir: Option<PathBuf>,

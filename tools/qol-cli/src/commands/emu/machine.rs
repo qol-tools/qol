@@ -4,7 +4,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-const DISPOSABLE_FILES: [&str; 1] = ["overlay.qcow2"];
+use super::discovery::is_vm_image_path;
 
 pub(crate) fn free_qmp_port() -> Result<u16> {
     let listener = TcpListener::bind("127.0.0.1:0").context("failed to probe a free qmp port")?;
@@ -43,14 +43,17 @@ pub(crate) fn ensure_usb_stick(run_dir: &Path, qemu_img: &Path) -> Result<PathBu
 
 pub(crate) fn teardown(run_dir: &Path) -> Result<Vec<PathBuf>> {
     let mut removed = Vec::new();
-    for name in DISPOSABLE_FILES {
-        let path = run_dir.join(name);
-        if path.is_file() {
+    let entries =
+        fs::read_dir(run_dir).with_context(|| format!("failed to read {}", run_dir.display()))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && is_vm_image_path(&path) {
             fs::remove_file(&path)
                 .with_context(|| format!("failed to remove {}", path.display()))?;
             removed.push(path);
         }
     }
+    removed.sort();
     Ok(removed)
 }
 
@@ -76,18 +79,35 @@ mod tests {
     }
 
     #[test]
-    fn teardown_removes_overlay_and_keeps_artifacts() {
+    fn teardown_removes_disk_images_and_keeps_evidence() {
         let dir = std::env::temp_dir().join(format!("qol-emu-teardown-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("overlay.qcow2"), b"x").unwrap();
-        fs::write(dir.join("report.json"), b"{}").unwrap();
-        fs::write(dir.join("qemu-command.txt"), b"qemu").unwrap();
+        let files = [
+            "overlay.qcow2",
+            "overlay-snap-1.qcow2",
+            "usb-stick.raw",
+            "report.json",
+            "qemu-command.txt",
+            "screenshot-1.ppm",
+        ];
+        for name in files {
+            fs::write(dir.join(name), b"x").unwrap();
+        }
         let removed = teardown(&dir).unwrap();
-        assert_eq!(removed, vec![dir.join("overlay.qcow2")]);
+        let mut expected_removed = vec![
+            dir.join("overlay-snap-1.qcow2"),
+            dir.join("overlay.qcow2"),
+            dir.join("usb-stick.raw"),
+        ];
+        expected_removed.sort();
+        assert_eq!(removed, expected_removed);
         let expectations = [
             ("overlay.qcow2", false),
+            ("overlay-snap-1.qcow2", false),
+            ("usb-stick.raw", false),
             ("report.json", true),
             ("qemu-command.txt", true),
+            ("screenshot-1.ppm", true),
         ];
         for (name, should_exist) in expectations {
             assert_eq!(dir.join(name).exists(), should_exist, "file: {name}");
