@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 pub(crate) enum QmpLine {
     Greeting { qemu_version: String },
     Return(Value),
-    Event,
+    Event(String),
     Error(String),
 }
 
@@ -21,8 +21,10 @@ pub(crate) fn classify_line(line: &str) -> Result<QmpLine> {
             qemu_version: greeting_version(&value),
         });
     }
-    if value.get("event").is_some() {
-        return Ok(QmpLine::Event);
+    if let Some(event) = value.get("event") {
+        return Ok(QmpLine::Event(
+            event.as_str().unwrap_or_default().to_string(),
+        ));
     }
     if let Some(error) = value.get("error") {
         return Ok(QmpLine::Error(error.to_string()));
@@ -83,7 +85,7 @@ impl QmpClient {
         let line = client.read_line()?;
         match classify_line(&line)? {
             QmpLine::Greeting { qemu_version } => client.qemu_version = qemu_version,
-            QmpLine::Return(_) | QmpLine::Event | QmpLine::Error(_) => {
+            QmpLine::Return(_) | QmpLine::Event(_) | QmpLine::Error(_) => {
                 bail!("expected qmp greeting, got: {line}")
             }
         }
@@ -102,7 +104,7 @@ impl QmpClient {
             let line = self.read_line()?;
             match classify_line(&line)? {
                 QmpLine::Return(value) => return Ok(value),
-                QmpLine::Event => continue,
+                QmpLine::Event(_) => continue,
                 QmpLine::Greeting { .. } => bail!("unexpected qmp greeting mid-session"),
                 QmpLine::Error(error) => bail!("qmp {command} failed: {error}"),
             }
@@ -119,6 +121,53 @@ impl QmpClient {
         self.execute(
             "screendump",
             Some(serde_json::json!({"filename": path.display().to_string()})),
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn wait_event(&mut self, name: &str, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            let line = self.read_line()?;
+            match classify_line(&line)? {
+                QmpLine::Event(event) if event == name => return Ok(()),
+                QmpLine::Event(_) | QmpLine::Return(_) => continue,
+                QmpLine::Greeting { .. } => bail!("unexpected qmp greeting mid-session"),
+                QmpLine::Error(error) => {
+                    bail!("qmp error while waiting for event {name}: {error}")
+                }
+            }
+        }
+        bail!("timed out waiting for qmp event {name}")
+    }
+
+    pub(crate) fn attach_usb_stick(&mut self, image: &Path) -> Result<()> {
+        self.execute(
+            "blockdev-add",
+            Some(serde_json::json!({
+                "driver": "raw",
+                "node-name": "qolusb",
+                "file": {"driver": "file", "filename": image.display().to_string()},
+            })),
+        )?;
+        self.execute(
+            "device_add",
+            Some(serde_json::json!({
+                "driver": "usb-storage",
+                "id": "qolusbdev",
+                "bus": "xhci.0",
+                "drive": "qolusb",
+            })),
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn detach_usb_stick(&mut self) -> Result<()> {
+        self.execute("device_del", Some(serde_json::json!({"id": "qolusbdev"})))?;
+        self.wait_event("DEVICE_DELETED", Duration::from_secs(5))?;
+        self.execute(
+            "blockdev-del",
+            Some(serde_json::json!({"node-name": "qolusb"})),
         )?;
         Ok(())
     }
@@ -219,6 +268,65 @@ mod tests {
     }
 
     #[test]
+    fn attach_usb_stick_adds_blockdev_then_device() {
+        let (server, port) = fake_server(
+            vec![r#"{"return":{}}"#, r#"{"return":{}}"#],
+            |index, line| match index {
+                0 => {
+                    assert!(line.contains(r#""execute":"blockdev-add""#), "line: {line}");
+                    assert!(line.contains(r#""node-name":"qolusb""#), "line: {line}");
+                    assert!(line.contains("usb-stick.raw"), "line: {line}");
+                }
+                1 => {
+                    assert!(line.contains(r#""execute":"device_add""#), "line: {line}");
+                    assert!(line.contains(r#""driver":"usb-storage""#), "line: {line}");
+                    assert!(line.contains(r#""bus":"xhci.0""#), "line: {line}");
+                }
+                other => panic!("unexpected command index {other}: {line}"),
+            },
+        );
+        let mut client = connect(port, Duration::from_secs(2)).unwrap();
+        client
+            .attach_usb_stick(Path::new("/a/b/usb-stick.raw"))
+            .unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn detach_usb_stick_deletes_device_waits_then_drops_blockdev() {
+        let (server, port) = fake_server(
+            vec![
+                "{\"return\":{}}\n{\"event\":\"DEVICE_DELETED\",\"data\":{\"device\":\"qolusbdev\"},\"timestamp\":{\"seconds\":0,\"microseconds\":0}}",
+                r#"{"return":{}}"#,
+            ],
+            |index, line| match index {
+                0 => assert!(line.contains(r#""execute":"device_del""#), "line: {line}"),
+                1 => assert!(line.contains(r#""execute":"blockdev-del""#), "line: {line}"),
+                other => panic!("unexpected command index {other}: {line}"),
+            },
+        );
+        let mut client = connect(port, Duration::from_secs(2)).unwrap();
+        client.detach_usb_stick().unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn wait_event_skips_unrelated_lines_until_match() {
+        let (server, port) = fake_server(
+            vec![
+                "{\"return\":{}}\n{\"event\":\"NIC_RX_FILTER_CHANGED\",\"timestamp\":{\"seconds\":0,\"microseconds\":0}}\n{\"event\":\"DEVICE_DELETED\",\"data\":{\"device\":\"qolusbdev\"},\"timestamp\":{\"seconds\":0,\"microseconds\":0}}",
+            ],
+            |_, line| assert!(line.contains(r#""execute":"query-status""#), "line: {line}"),
+        );
+        let mut client = connect(port, Duration::from_secs(2)).unwrap();
+        client.execute("query-status", None).unwrap();
+        client
+            .wait_event("DEVICE_DELETED", Duration::from_secs(2))
+            .unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
     fn classifies_qmp_lines() {
         let cases = [
             (
@@ -228,7 +336,7 @@ mod tests {
             (r#"{"return":{}}"#, "return"),
             (
                 r#"{"event":"POWERDOWN","timestamp":{"seconds":0,"microseconds":0}}"#,
-                "event",
+                "event POWERDOWN",
             ),
             (
                 r#"{"error":{"class":"GenericError","desc":"nope"}}"#,
@@ -239,7 +347,7 @@ mod tests {
             let label = match classify_line(line).unwrap() {
                 QmpLine::Greeting { qemu_version } => format!("greeting {qemu_version}"),
                 QmpLine::Return(_) => "return".to_string(),
-                QmpLine::Event => "event".to_string(),
+                QmpLine::Event(name) => format!("event {name}"),
                 QmpLine::Error(_) => "error".to_string(),
             };
             assert_eq!(label, expected, "line: {line}");

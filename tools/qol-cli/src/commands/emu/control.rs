@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::progress::{print_hint, print_title, step_label, StepKind};
 use crate::workspace::repo_root;
 
-use super::{live, qmp, unix_millis};
+use super::{find_on_path, live, machine, qmp, unix_millis};
 
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -32,6 +32,30 @@ pub(crate) fn cmd_key(args: &[OsString], verbose: bool) -> Result<()> {
     let mut client = qmp::connect(live.qmp_port, CONTROL_TIMEOUT)?;
     client.send_keys(&keys)?;
     step_label("key", StepKind::Success, &keys.join("+"));
+    Ok(())
+}
+
+pub(crate) fn cmd_insert(args: &[OsString], verbose: bool) -> Result<()> {
+    let id = single_id(args, "insert")?;
+    print_title("qol emu insert");
+    print_hint(verbose);
+    let live = live::find(&runs_root()?, &id)?;
+    let qemu_img = find_on_path("qemu-img").ok_or_else(|| anyhow!("missing qemu-img on PATH"))?;
+    let stick = machine::ensure_usb_stick(&live.run_dir, &qemu_img)?;
+    let mut client = qmp::connect(live.qmp_port, CONTROL_TIMEOUT)?;
+    client.attach_usb_stick(&stick)?;
+    step_label("insert", StepKind::Success, &stick.display().to_string());
+    Ok(())
+}
+
+pub(crate) fn cmd_pull(args: &[OsString], verbose: bool) -> Result<()> {
+    let id = single_id(args, "pull")?;
+    print_title("qol emu pull");
+    print_hint(verbose);
+    let live = live::find(&runs_root()?, &id)?;
+    let mut client = qmp::connect(live.qmp_port, CONTROL_TIMEOUT)?;
+    client.detach_usb_stick()?;
+    step_label("pull", StepKind::Success, "usb stick detached");
     Ok(())
 }
 
