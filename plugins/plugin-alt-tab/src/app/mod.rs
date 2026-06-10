@@ -353,12 +353,12 @@ async fn alt_release_check(
     eprintln!("[alt-tab/hold] Alt released via poll — activating selection");
     let weak = this.clone();
     let updated = cx.update_window(window_handle, move |_, window, cx| {
-        delegate.update(cx, |s, _| s.activate_selected_target());
         if let Some(entity) = weak.upgrade() {
             entity.update(cx, |app, cx| app.dismiss("alt-release/poll", window, cx));
         } else {
             qol_gpui::probe::probe("ALT_POLL", "weak gone in update, NO dismiss");
         }
+        delegate.update(cx, |s, _| s.activate_selected_target());
     });
     if updated.is_err() {
         qol_gpui::probe::probe("ALT_POLL", "update_window FAILED, NO dismiss");

@@ -33,39 +33,75 @@ extern "C" {
 static ACTIVATE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn activate_window(window_id: u32) {
+    let started = std::time::Instant::now();
     let Some((pid, title)) = cg_window_pid_and_title(window_id) else {
         return;
     };
+    let lookup_ms = started.elapsed().as_millis();
     qol_runtime::probe!("ACTIVATE_WIN", "wid={window_id} title=\"{title}\"");
     let win = unsafe { ax_find_window(pid, window_id, &title) };
     if !win.is_null() {
         unsafe {
             ax_unminimize(win);
             ax_raise(win);
+            ax_make_main(win);
             CFRelease(win);
         }
     }
+    let ax_ms = started.elapsed().as_millis() - lookup_ms;
     let forced = force_front(pid, window_id);
     if !forced {
         ns_activate_app(pid);
     }
     unsafe { ax_app_frontmost(pid) };
+    qol_runtime::probe!(
+        "ACTIVATE_TIMING",
+        "wid={window_id} lookup_ms={lookup_ms} ax_ms={ax_ms} total_ms={} forced={forced}",
+        started.elapsed().as_millis(),
+    );
     let commit_gen = ACTIVATE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     qol_gpui::platform::spawn_reassert_driver(
         &ACTIVATE_GEN,
         commit_gen,
-        &[16u64, 24, 40, 60, 100, 150],
-        move || cg_frontmost_pid() == pid,
+        &[16u64, 24, 40, 60, 100, 150, 250, 400],
+        {
+            let mut settled_logged = false;
+            move || {
+                let active = cg_frontmost_window_id() == Some(window_id);
+                if active && !settled_logged {
+                    settled_logged = true;
+                    qol_runtime::probe!(
+                        "ACTIVATE_SETTLED",
+                        "wid={window_id} elapsed_ms={}",
+                        started.elapsed().as_millis(),
+                    );
+                }
+                active
+            }
+        },
         move || {
+            qol_runtime::probe!(
+                "ACTIVATE_REASSERT",
+                "wid={window_id} elapsed_ms={}",
+                started.elapsed().as_millis(),
+            );
             if forced {
                 force_front(pid, window_id);
             }
             unsafe { ax_app_frontmost(pid) };
+            let win = unsafe { ax_find_window(pid, window_id, &title) };
+            if !win.is_null() {
+                unsafe {
+                    ax_raise(win);
+                    ax_make_main(win);
+                    CFRelease(win);
+                }
+            }
         },
     );
 }
 
-fn cg_frontmost_pid() -> i32 {
+fn cg_frontmost_window_id() -> Option<u32> {
     let list = unsafe {
         CGWindowListCopyWindowInfo(
             K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
@@ -73,12 +109,12 @@ fn cg_frontmost_pid() -> i32 {
         )
     };
     if list.is_null() {
-        return -1;
+        return None;
     }
-    let key_pid = ffi::cfstr(b"kCGWindowOwnerPID");
+    let key_num = ffi::cfstr(b"kCGWindowNumber");
     let key_layer = ffi::cfstr(b"kCGWindowLayer");
 
-    let mut pid = -1;
+    let mut wid = None;
     let count = unsafe { CFArrayGetCount(list) };
     for i in 0..count {
         let dict = unsafe { CFArrayGetValueAtIndex(list, i) } as CFDictionaryRef;
@@ -88,16 +124,16 @@ fn cg_frontmost_pid() -> i32 {
         if ffi::dict_get_i32(dict, key_layer) != Some(K_CG_WINDOW_LAYER_NORMAL) {
             continue;
         }
-        pid = ffi::dict_get_i32(dict, key_pid).unwrap_or(-1);
+        wid = ffi::dict_get_i32(dict, key_num).map(|n| n as u32);
         break;
     }
 
     unsafe {
-        CFRelease(key_pid);
+        CFRelease(key_num);
         CFRelease(key_layer);
         CFRelease(list);
     }
-    pid
+    wid
 }
 
 pub fn close_window(window_id: u32) {
@@ -249,6 +285,11 @@ unsafe fn ax_raise(win: *const c_void) {
     let action = ffi::cfstr(b"AXRaise");
     let _ = AXUIElementPerformAction(win, action);
     CFRelease(action);
+}
+
+unsafe fn ax_make_main(win: *const c_void) {
+    ax_set_bool_attr(win, b"AXMain", kCFBooleanTrue);
+    ax_set_bool_attr(win, b"AXFocused", kCFBooleanTrue);
 }
 
 unsafe fn ax_press_button(win: *const c_void, button_attr: &[u8]) {
