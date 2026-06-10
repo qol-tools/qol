@@ -2,6 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 #[derive(Debug)]
@@ -108,6 +109,29 @@ impl QmpClient {
         }
     }
 
+    pub(crate) fn fire(&mut self, command: &str) -> Result<()> {
+        let request = serde_json::json!({ "execute": command });
+        writeln!(self.stream, "{request}")
+            .with_context(|| format!("failed to send qmp command {command}"))
+    }
+
+    pub(crate) fn screendump(&mut self, path: &Path) -> Result<()> {
+        self.execute(
+            "screendump",
+            Some(serde_json::json!({"filename": path.display().to_string()})),
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn send_keys(&mut self, keys: &[String]) -> Result<()> {
+        let chord: Vec<Value> = keys
+            .iter()
+            .map(|key| serde_json::json!({"type": "qcode", "data": key}))
+            .collect();
+        self.execute("send-key", Some(serde_json::json!({"keys": chord})))?;
+        Ok(())
+    }
+
     pub(crate) fn query_status(&mut self) -> Result<String> {
         let value = self.execute("query-status", None)?;
         value
@@ -134,6 +158,65 @@ impl QmpClient {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    fn fake_server(
+        replies: Vec<&'static str>,
+        assert_lines: fn(usize, &str),
+    ) -> (std::thread::JoinHandle<()>, u16) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut stream = stream;
+            writeln!(
+                stream,
+                r#"{{"QMP":{{"version":{{"qemu":{{"major":9,"minor":2,"micro":0}}}},"capabilities":[]}}}}"#
+            )
+            .unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            writeln!(stream, r#"{{"return":{{}}}}"#).unwrap();
+            for (index, reply) in replies.into_iter().enumerate() {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                assert_lines(index, &line);
+                writeln!(stream, "{reply}").unwrap();
+            }
+        });
+        (handle, port)
+    }
+
+    #[test]
+    fn send_keys_builds_qcode_chord() {
+        let (server, port) = fake_server(vec![r#"{"return":{}}"#], |_, line| {
+            assert!(line.contains(r#""execute":"send-key""#), "line: {line}");
+            assert!(
+                line.contains(r#"{"data":"ctrl","type":"qcode"}"#),
+                "line: {line}"
+            );
+            assert!(
+                line.contains(r#"{"data":"c","type":"qcode"}"#),
+                "line: {line}"
+            );
+        });
+        let mut client = connect(port, Duration::from_secs(2)).unwrap();
+        client
+            .send_keys(&["ctrl".to_string(), "c".to_string()])
+            .unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn screendump_sends_filename() {
+        let (server, port) = fake_server(vec![r#"{"return":{}}"#], |_, line| {
+            assert!(line.contains(r#""execute":"screendump""#), "line: {line}");
+            assert!(line.contains("shot.ppm"), "line: {line}");
+        });
+        let mut client = connect(port, Duration::from_secs(2)).unwrap();
+        client.screendump(Path::new("/a/b/shot.ppm")).unwrap();
+        server.join().unwrap();
+    }
 
     #[test]
     fn classifies_qmp_lines() {

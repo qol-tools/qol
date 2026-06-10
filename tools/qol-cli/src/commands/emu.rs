@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod control;
 mod discovery;
+mod live;
 mod machine;
 mod platform;
 mod qmp;
@@ -83,6 +85,9 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
         "list" => cmd_list(rest, verbose),
         "doctor" => cmd_doctor(rest, verbose),
         "up" => cmd_up(rest, verbose),
+        "shot" => control::cmd_shot(rest, verbose),
+        "key" => control::cmd_key(rest, verbose),
+        "down" => control::cmd_down(rest, verbose),
         "help" | "-h" | "--help" => {
             print_emu_help();
             Ok(())
@@ -683,7 +688,7 @@ fn kind_for_resolution(state: ResolveState) -> StepKind {
     }
 }
 
-fn unix_millis() -> Result<u64> {
+pub(crate) fn unix_millis() -> Result<u64> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system time is before UNIX_EPOCH")?
