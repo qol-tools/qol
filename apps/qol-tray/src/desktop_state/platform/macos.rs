@@ -267,7 +267,7 @@ impl Platform for MacQueries {
 #[cfg(debug_assertions)]
 mod focus_probe {
     use std::ffi::c_void;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
     use super::{
         ax_attr_str, CFArrayGetCount, CFArrayGetValueAtIndex, CGPoint, CGRect, CGSize, CfGuard,
@@ -295,6 +295,7 @@ mod focus_probe {
     const UTF8: u32 = 0x0800_0100;
 
     static LAST_FOCUS_WID: AtomicU32 = AtomicU32::new(0);
+    static LAST_POLL_TS: AtomicU64 = AtomicU64::new(0);
 
     struct FrontWindow {
         wid: u32,
@@ -304,12 +305,22 @@ mod focus_probe {
     }
 
     pub(super) fn log_focus_change(own_pid: i32) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let prev_poll_ms = LAST_POLL_TS.swap(now_ms, Ordering::Relaxed);
         let Some(win) = frontmost_normal_window() else {
             return;
         };
         if LAST_FOCUS_WID.swap(win.wid, Ordering::Relaxed) == win.wid {
             return;
         }
+        let detect_lag_ms = if prev_poll_ms == 0 {
+            0
+        } else {
+            now_ms.saturating_sub(prev_poll_ms)
+        };
         let ignored = win.pid == own_pid || crate::desktop_state::is_ignored_pid(win.pid as u32);
         let winpos = win
             .bounds
@@ -322,10 +333,11 @@ mod focus_probe {
             .unwrap_or_else(|| "none".to_string());
         qol_runtime::probe!(
             "FOCUS_WIN",
-            "wid={} pid={} ignored={} winpos={} title={:?}",
+            "wid={} pid={} ignored={} detect_lag_ms={} winpos={} title={:?}",
             win.wid,
             win.pid,
             ignored,
+            detect_lag_ms,
             winpos,
             win.title
         );

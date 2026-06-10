@@ -33,10 +33,12 @@ extern "C" {
 static ACTIVATE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn activate_window(window_id: u32) {
+    #[cfg(debug_assertions)]
     let started = std::time::Instant::now();
     let Some((pid, title)) = cg_window_pid_and_title(window_id) else {
         return;
     };
+    #[cfg(debug_assertions)]
     let lookup_ms = started.elapsed().as_millis();
     qol_runtime::probe!("ACTIVATE_WIN", "wid={window_id} title=\"{title}\"");
     let win = unsafe { ax_find_window(pid, window_id, &title) };
@@ -48,6 +50,7 @@ pub fn activate_window(window_id: u32) {
             CFRelease(win);
         }
     }
+    #[cfg(debug_assertions)]
     let ax_ms = started.elapsed().as_millis() - lookup_ms;
     let forced = force_front(pid, window_id);
     if !forced {
@@ -66,12 +69,26 @@ pub fn activate_window(window_id: u32) {
         &[16u64, 24, 40, 60, 100, 150, 250, 400],
         {
             let mut settled_logged = false;
+            #[cfg(debug_assertions)]
+            let mut key_focus_logged = false;
             move || {
                 let active = cg_frontmost_window_id() == Some(window_id);
                 if active && !settled_logged {
                     settled_logged = true;
                     qol_runtime::probe!(
                         "ACTIVATE_SETTLED",
+                        "wid={window_id} elapsed_ms={}",
+                        started.elapsed().as_millis(),
+                    );
+                }
+                #[cfg(debug_assertions)]
+                if !key_focus_logged
+                    && unsafe { crate::discovery::macos::ax::ax_focused_window_id(pid) }
+                        == Some(window_id)
+                {
+                    key_focus_logged = true;
+                    qol_runtime::probe!(
+                        "ACTIVATE_KEY_FOCUS",
                         "wid={window_id} elapsed_ms={}",
                         started.elapsed().as_millis(),
                     );
