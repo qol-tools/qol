@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, IsTerminal, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -13,7 +13,7 @@ use ratatui::widgets::{Block, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::commands::emu::{
-    emu_config_path, environment_statuses, EnvironmentStatus, ResolveState,
+    emu_config_path, environment_statuses, EnvironmentStatus, LastRun, ResolveState,
 };
 use crate::dev_server::{
     health_ok, post_recompile_current, post_reload_plugins, probe_endpoints, web_ok,
@@ -1120,12 +1120,6 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let config = emu_config_path()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "~/.config/qol-tray/emu.toml".to_string());
-    let up_command = match &dash.emu {
-        EmuState::Done(statuses) => statuses.first(),
-        EmuState::Probing | EmuState::Failed(_) => None,
-    }
-    .map(|status| format!("qol emu up {}", status.id))
-    .unwrap_or_else(|| "qol emu up <id>".to_string());
     let mut lines = match &dash.emu {
         EmuState::Probing => vec![Line::from("  scanning emus".fg(Color::Yellow))],
         EmuState::Done(statuses) if statuses.is_empty() => {
@@ -1139,7 +1133,7 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
                     ResolveState::Missing => Color::Yellow,
                     ResolveState::Unsupported => Color::Red,
                 };
-                [
+                let mut entry = vec![
                     Line::from(vec![
                         "  ● ".fg(color).bold(),
                         format!("{:<12}", status.id).fg(Color::White),
@@ -1151,7 +1145,9 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
                         "    ".into(),
                         status.reason.clone().fg(Color::DarkGray),
                     ]),
-                ]
+                ];
+                entry.push(last_run_line(status.last_run.as_ref()));
+                entry
             })
             .collect(),
         EmuState::Failed(error) => vec![Line::from(vec![
@@ -1160,19 +1156,6 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         ])],
     };
     lines.extend([
-        Line::from(""),
-        Line::from(vec![
-            "  list    ".fg(Color::DarkGray),
-            "qol emu list".fg(Color::White),
-        ]),
-        Line::from(vec![
-            "  doctor  ".fg(Color::DarkGray),
-            "qol emu doctor".fg(Color::White),
-        ]),
-        Line::from(vec![
-            "  up      ".fg(Color::DarkGray),
-            up_command.fg(Color::White),
-        ]),
         Line::from(""),
         Line::from(vec![
             "  config  ".fg(Color::DarkGray),
@@ -1188,6 +1171,51 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let visible: Vec<Line> = lines.into_iter().skip(start).take(height).collect();
     let title = format!(" emu · {} ", list_status(total, dash.scroll_offset));
     frame.render_widget(Paragraph::new(visible).block(panel(&title, accent)), area);
+}
+
+fn last_run_line(last_run: Option<&LastRun>) -> Line<'static> {
+    let Some(run) = last_run else {
+        return Line::from(vec![
+            "    last ".fg(Color::DarkGray),
+            "never run".fg(Color::DarkGray),
+        ]);
+    };
+    let color = match run.status.as_str() {
+        "pass" => Color::Green,
+        "failed" => Color::Red,
+        "running" => Color::Yellow,
+        _ => Color::DarkGray,
+    };
+    let mut spans = vec![
+        "    last ".fg(Color::DarkGray),
+        run.status.clone().fg(color).bold(),
+        format!(
+            " · {}",
+            relative_age(now_unix_ms(), run.finished_at_unix_ms)
+        )
+        .fg(Color::DarkGray),
+    ];
+    if let Some(version) = &run.qemu_version {
+        spans.push(format!(" · qemu {version}").fg(Color::DarkGray));
+    }
+    Line::from(spans)
+}
+
+fn relative_age(now_ms: u64, then_ms: u64) -> String {
+    let seconds = now_ms.saturating_sub(then_ms) / 1000;
+    match seconds {
+        0..=59 => "just now".to_string(),
+        60..=3599 => format!("{}m ago", seconds / 60),
+        3600..=86399 => format!("{}h ago", seconds / 3600),
+        _ => format!("{}d ago", seconds / 86400),
+    }
+}
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn doctor_status(state: &DoctorState) -> (Color, Vec<Span<'static>>) {
@@ -1671,6 +1699,27 @@ fn parse_summary_field(line: &str, key: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relative_age_buckets_seconds_minutes_hours_days() {
+        let cases = [
+            (5_000, "just now"),
+            (59_000, "just now"),
+            (60_000, "1m ago"),
+            (3_599_000, "59m ago"),
+            (3_600_000, "1h ago"),
+            (86_399_000, "23h ago"),
+            (86_400_000, "1d ago"),
+            (0, "just now"),
+        ];
+        for (elapsed_ms, expected) in cases {
+            assert_eq!(
+                relative_age(1_000_000_000 + elapsed_ms, 1_000_000_000),
+                expected,
+                "elapsed_ms: {elapsed_ms}"
+            );
+        }
+    }
 
     #[test]
     fn action_for_maps_keys() {
