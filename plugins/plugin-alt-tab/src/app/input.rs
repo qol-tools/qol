@@ -109,22 +109,22 @@ fn on_arrow(
         state.card_scale,
     );
     let from = state.selected_index;
-    let count = state.windows.len();
-    let scale = state.card_scale;
-    let budget = state.layout_budget;
     this.delegate.update(cx, |s, _| nav(s, layout.columns));
-    let to = this.delegate.read(cx).selected_index;
-    qol_runtime::probe!(
-        "NAV_GRID",
-        "method={} from={:?} to={:?} cols={} count={} scale={} budget={:?}",
-        method,
-        from,
-        to,
-        layout.columns,
-        count,
-        scale,
-        budget,
-    );
+    #[cfg(debug_assertions)]
+    {
+        let state = this.delegate.read(cx);
+        qol_runtime::probe!(
+            "NAV_GRID",
+            "method={} from={:?} to={:?} cols={} count={} scale={} budget={:?}",
+            method,
+            from,
+            state.selected_index,
+            layout.columns,
+            state.windows.len(),
+            state.card_scale,
+            state.layout_budget,
+        );
+    }
     this.mark_cycle(method, from);
     cx.notify();
 }

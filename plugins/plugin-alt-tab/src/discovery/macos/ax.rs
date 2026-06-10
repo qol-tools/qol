@@ -99,6 +99,27 @@ unsafe fn ax_read_window_id(win: *const c_void, attr: *const c_void) -> Option<u
     id
 }
 
+#[cfg(debug_assertions)]
+pub(crate) unsafe fn ax_focused_window_id(pid: i32) -> Option<u32> {
+    let app = AXUIElementCreateApplication(pid);
+    if app.is_null() {
+        return None;
+    }
+    cap_messaging_timeout(app);
+    let focused_attr = ffi::cfstr(b"AXFocusedWindow");
+    let win = ax_copy_attr(app, focused_attr);
+    CFRelease(focused_attr);
+    CFRelease(app);
+    if win.is_null() {
+        return None;
+    }
+    let id_attr = ffi::cfstr(b"_AXWindowID");
+    let id = ax_read_window_id(win, id_attr);
+    CFRelease(id_attr);
+    CFRelease(win);
+    id
+}
+
 unsafe fn ax_read_title(win: *const c_void, attr: *const c_void) -> String {
     let val = ax_copy_attr(win, attr);
     if val.is_null() {

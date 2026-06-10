@@ -402,9 +402,13 @@ def process_line(ts_raw, pid, tag, msg):
                 else:
                     is_match = (target.lower() in title.lower()) or (title.lower() in target.lower())
 
+                detect_m = re.search(r"\bdetect_lag_ms=(?P<lag>\d+)", msg)
+                detect_tag = f" (detect ±{detect_m.group('lag')}ms)" if detect_m else ""
+
                 if is_match:
                     text = (f"{COLOR_SUCCESS}✔ FOCUS SUCCESS{COLOR_RESET}: Focused \"{title}\" "
-                            f"(wid: {req_wid}) in {COLOR_SUCCESS}{latency}ms{COLOR_RESET}{ignored_tag}")
+                            f"(wid: {req_wid}) in {COLOR_SUCCESS}{latency}ms{COLOR_RESET}"
+                            f"{detect_tag}{ignored_tag}")
                     record_focus_ok(int(ts_raw), req_wid, latency)
                 else:
                     text = (f"{COLOR_WARN}⚠ MISDIRECTED FOCUS{COLOR_RESET}: Requested \"{target}\" "
@@ -982,9 +986,8 @@ def flush_buffer():
     t_root_ms, ts_root, _, source_root, text_root = unique_events[0]
     
     t_last_ms = unique_events[-1][0]
-    latency_ms = t_last_ms - t_root_ms
-    latency_color = COLOR_FAIL if latency_ms > 100 else (COLOR_WARN if latency_ms > 50 else COLOR_OK)
-    latency_str = f" {latency_color}(latency: {latency_ms}ms){COLOR_RESET}" if latency_ms > 0 else ""
+    span_ms = t_last_ms - t_root_ms
+    latency_str = f" {COLOR_TIME}(span: {span_ms}ms){COLOR_RESET}" if span_ms > 0 else ""
     
     n = len(unique_events)
     src_color = hash_color(source_root)
