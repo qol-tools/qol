@@ -580,9 +580,14 @@ fn qemu_args(
         "-smp".to_string(),
         "2".to_string(),
         "-drive".to_string(),
-        format!("file={},if=virtio,format=qcow2", overlay.display()),
+        format!(
+            "file={},id=qoldisk,if=virtio,format=qcow2",
+            overlay.display()
+        ),
         "-nic".to_string(),
         "user,model=virtio-net-pci".to_string(),
+        "-device".to_string(),
+        "qemu-xhci,id=xhci".to_string(),
         "-display".to_string(),
         display.to_string(),
         "-qmp".to_string(),
@@ -781,7 +786,8 @@ mod tests {
             "-accel kvm",
             "-display gtk",
             "-qmp tcp:127.0.0.1:4444,server,nowait",
-            "-drive file=/a/b/overlay.qcow2,if=virtio,format=qcow2",
+            "-drive file=/a/b/overlay.qcow2,id=qoldisk,if=virtio,format=qcow2",
+            "-device qemu-xhci,id=xhci",
         ];
         for fragment in expected {
             assert!(
