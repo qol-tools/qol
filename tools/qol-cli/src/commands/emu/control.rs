@@ -1,0 +1,84 @@
+use anyhow::{anyhow, bail, Result};
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use crate::progress::{print_hint, print_title, step_label, StepKind};
+use crate::workspace::repo_root;
+
+use super::{live, qmp, unix_millis};
+
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
+
+pub(crate) fn cmd_shot(args: &[OsString], verbose: bool) -> Result<()> {
+    let id = single_id(args, "shot")?;
+    print_title("qol emu shot");
+    print_hint(verbose);
+    let live = live::find(&runs_root()?, &id)?;
+    let mut client = qmp::connect(live.qmp_port, CONTROL_TIMEOUT)?;
+    let path = live
+        .run_dir
+        .join(format!("screenshot-{}.ppm", unix_millis()?));
+    client.screendump(&path)?;
+    step_label("shot", StepKind::Success, &path.display().to_string());
+    Ok(())
+}
+
+pub(crate) fn cmd_key(args: &[OsString], verbose: bool) -> Result<()> {
+    let (id, keys) = id_and_rest(args, "key", "<qcode>...")?;
+    print_title("qol emu key");
+    print_hint(verbose);
+    let live = live::find(&runs_root()?, &id)?;
+    let mut client = qmp::connect(live.qmp_port, CONTROL_TIMEOUT)?;
+    client.send_keys(&keys)?;
+    step_label("key", StepKind::Success, &keys.join("+"));
+    Ok(())
+}
+
+pub(crate) fn cmd_down(args: &[OsString], verbose: bool) -> Result<()> {
+    let id = single_id(args, "down")?;
+    print_title("qol emu down");
+    print_hint(verbose);
+    let live = live::find(&runs_root()?, &id)?;
+    let mut client = qmp::connect(live.qmp_port, CONTROL_TIMEOUT)?;
+    client.fire("quit")?;
+    step_label(
+        "down",
+        StepKind::Success,
+        "quit sent; up will finalize the report",
+    );
+    Ok(())
+}
+
+fn runs_root() -> Result<PathBuf> {
+    Ok(repo_root()?.join("target/qol-emu"))
+}
+
+fn single_id(args: &[OsString], command: &str) -> Result<String> {
+    let [id] = args else {
+        bail!("usage: qol emu {command} <environment>");
+    };
+    utf8(id)
+}
+
+fn id_and_rest(
+    args: &[OsString],
+    command: &str,
+    rest_usage: &str,
+) -> Result<(String, Vec<String>)> {
+    let Some((id, rest)) = args.split_first() else {
+        bail!("usage: qol emu {command} <environment> {rest_usage}");
+    };
+    if rest.is_empty() {
+        bail!("usage: qol emu {command} <environment> {rest_usage}");
+    }
+    let rest = rest.iter().map(utf8).collect::<Result<Vec<_>>>()?;
+    Ok((utf8(id)?, rest))
+}
+
+fn utf8(value: &OsString) -> Result<String> {
+    value
+        .to_str()
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("argument is not valid UTF-8"))
+}
