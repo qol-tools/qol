@@ -85,9 +85,9 @@ impl Render for AltTabApp {
             qol_gpui::probe::probe("MODS_UP", "alt released -> activate+dismiss");
             #[cfg(debug_assertions)]
             eprintln!("[alt-tab/hold] Alt released via on_modifiers_changed");
+            this.dismiss("modifiers/alt-up", window, cx);
             this.delegate
                 .update(cx, |s, _| s.activate_selected_target());
-            this.dismiss("modifiers/alt-up", window, cx);
         });
 
         let d = self.delegate.read(cx);
@@ -243,11 +243,10 @@ fn render_card(
                 let entity = entity.clone();
                 move |_, window, cx| {
                     let _ = entity.update(cx, |this, cx| {
-                        this.delegate.update(cx, |s, _| {
-                            s.selected_index = Some(i);
-                            s.activate_selected_target();
-                        });
+                        this.delegate.update(cx, |s, _| s.selected_index = Some(i));
                         this.dismiss("click/card", window, cx);
+                        this.delegate
+                            .update(cx, |s, _| s.activate_selected_target());
                     });
                 }
             })
