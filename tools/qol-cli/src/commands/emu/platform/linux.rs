@@ -10,6 +10,10 @@ pub(crate) fn acceleration() -> &'static str {
     }
 }
 
+pub(crate) fn display() -> &'static str {
+    "gtk"
+}
+
 pub(crate) fn libvirt_uris() -> &'static [&'static str] {
     &["qemu:///system", "qemu:///session"]
 }

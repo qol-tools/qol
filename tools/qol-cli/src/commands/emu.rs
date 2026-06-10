@@ -264,7 +264,13 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
         .qemu_system
         .clone()
         .ok_or_else(|| anyhow!("ready environment has no qemu-system path"))?;
-    let qemu_args = qemu_args(&environment, &overlay, resolution.acceleration);
+    let qemu_args = qemu_args(
+        &environment,
+        &overlay,
+        resolution.acceleration,
+        platform::display(),
+        4444,
+    );
     let qemu_command = command_line(&qemu_system, &qemu_args);
     let qemu_command_path = run_dir.join("qemu-command.txt");
     fs::write(&qemu_command_path, format!("{qemu_command}\n"))
@@ -417,7 +423,13 @@ fn detect_image_format(program: &Path, image_path: &Path, verbose: bool) -> Resu
         .ok_or_else(|| anyhow!("qemu-img info did not report an image format"))
 }
 
-fn qemu_args(environment: &Environment, overlay: &Path, acceleration: &str) -> Vec<String> {
+fn qemu_args(
+    environment: &Environment,
+    overlay: &Path,
+    acceleration: &str,
+    display: &str,
+    qmp_port: u16,
+) -> Vec<String> {
     vec![
         "-name".to_string(),
         format!("qol-emu-{}", environment.id),
@@ -434,7 +446,9 @@ fn qemu_args(environment: &Environment, overlay: &Path, acceleration: &str) -> V
         "-nic".to_string(),
         "user,model=virtio-net-pci".to_string(),
         "-display".to_string(),
-        "gtk".to_string(),
+        display.to_string(),
+        "-qmp".to_string(),
+        format!("tcp:127.0.0.1:{qmp_port},server,nowait"),
     ]
 }
 
@@ -601,6 +615,38 @@ mod tests {
     fn sanitizes_domain_names_for_cli_ids() {
         assert_eq!(sanitize_id("Windows 11 Pro"), "windows-11-pro");
         assert_eq!(sanitize_id("!!!"), "emu");
+    }
+
+    #[test]
+    fn qemu_args_wire_accel_display_and_qmp() {
+        let environment = Environment {
+            id: "foo".to_string(),
+            name: "Foo".to_string(),
+            backend: "qemu".to_string(),
+            arch: "x86_64".to_string(),
+            image_path: PathBuf::from("/a/b/base.qcow2"),
+            source: "config".to_string(),
+        };
+        let args = qemu_args(
+            &environment,
+            Path::new("/a/b/overlay.qcow2"),
+            "kvm",
+            "gtk",
+            4444,
+        );
+        let joined = args.join(" ");
+        let expected = [
+            "-accel kvm",
+            "-display gtk",
+            "-qmp tcp:127.0.0.1:4444,server,nowait",
+            "-drive file=/a/b/overlay.qcow2,if=virtio,format=qcow2",
+        ];
+        for fragment in expected {
+            assert!(
+                joined.contains(fragment),
+                "missing `{fragment}` in: {joined}"
+            );
+        }
     }
 
     #[test]
