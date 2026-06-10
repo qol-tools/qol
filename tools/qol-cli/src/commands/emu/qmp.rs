@@ -86,12 +86,15 @@ impl QmpClient {
                 bail!("expected qmp greeting, got: {line}")
             }
         }
-        client.execute("qmp_capabilities")?;
+        client.execute("qmp_capabilities", None)?;
         Ok(client)
     }
 
-    fn execute(&mut self, command: &str) -> Result<Value> {
-        let request = serde_json::json!({ "execute": command });
+    pub(crate) fn execute(&mut self, command: &str, arguments: Option<Value>) -> Result<Value> {
+        let mut request = serde_json::json!({ "execute": command });
+        if let Some(arguments) = arguments {
+            request["arguments"] = arguments;
+        }
         writeln!(self.stream, "{request}")
             .with_context(|| format!("failed to send qmp command {command}"))?;
         loop {
@@ -106,7 +109,7 @@ impl QmpClient {
     }
 
     pub(crate) fn query_status(&mut self) -> Result<String> {
-        let value = self.execute("query-status")?;
+        let value = self.execute("query-status", None)?;
         value
             .get("status")
             .and_then(Value::as_str)
@@ -201,6 +204,41 @@ mod tests {
         let mut client = connect(port, Duration::from_secs(2)).unwrap();
         assert_eq!(client.qemu_version, "9.2.0");
         assert_eq!(client.query_status().unwrap(), "running");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn execute_sends_arguments_payload() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut stream = stream;
+            writeln!(
+                stream,
+                r#"{{"QMP":{{"version":{{"qemu":{{"major":9,"minor":2,"micro":0}}}},"capabilities":[]}}}}"#
+            )
+            .unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            writeln!(stream, r#"{{"return":{{}}}}"#).unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(line.contains(r#""execute":"screendump""#), "line: {line}");
+            assert!(
+                line.contains(r#""filename":"/a/b/shot.ppm""#),
+                "line: {line}"
+            );
+            writeln!(stream, r#"{{"return":{{}}}}"#).unwrap();
+        });
+        let mut client = connect(port, Duration::from_secs(2)).unwrap();
+        client
+            .execute(
+                "screendump",
+                Some(serde_json::json!({"filename": "/a/b/shot.ppm"})),
+            )
+            .unwrap();
         server.join().unwrap();
     }
 }
