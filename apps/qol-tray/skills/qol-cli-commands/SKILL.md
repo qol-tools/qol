@@ -66,7 +66,7 @@ After changing `tools/qol-cli`, run `qol setup` and restart the current `qol dev
 
 - `qol emu list`: list discovered/configured emus and resolver state.
 - `qol emu doctor`: show QEMU binaries, acceleration, config path, and run directory.
-- `qol emu up <id>`: create a disposable qcow2 overlay and write `qemu-command.txt` plus `report.json`; it does not launch the VM yet.
+- `qol emu up <id>`: create a disposable qcow2 overlay, boot it in QEMU (per-host accel: kvm/hvf/whpx), confirm control over a loopback QMP socket, and block until the VM exits; teardown removes the overlay and leaves `report.json` + `qemu-command.txt` in the run directory. Report statuses: `running` while up, then `pass` / `failed` / `skipped`.
 
 Emus shown in `qol dev` must be found, not hard-coded. Discovery sources:
 
