@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -22,6 +22,25 @@ pub(crate) fn spawn_qemu(qemu_system: &Path, args: &[String]) -> Result<Child> {
         .with_context(|| format!("failed to spawn {}", qemu_system.display()))
 }
 
+pub(crate) fn ensure_usb_stick(run_dir: &Path, qemu_img: &Path) -> Result<PathBuf> {
+    let stick = run_dir.join("usb-stick.raw");
+    if stick.is_file() {
+        return Ok(stick);
+    }
+    let status = Command::new(qemu_img)
+        .arg("create")
+        .arg("-f")
+        .arg("raw")
+        .arg(&stick)
+        .arg("16M")
+        .status()
+        .with_context(|| format!("failed to run {}", qemu_img.display()))?;
+    if !status.success() {
+        bail!("qemu-img create failed for {}", stick.display());
+    }
+    Ok(stick)
+}
+
 pub(crate) fn teardown(run_dir: &Path) -> Result<Vec<PathBuf>> {
     let mut removed = Vec::new();
     for name in DISPOSABLE_FILES {
@@ -43,6 +62,17 @@ mod tests {
     fn free_qmp_port_returns_bindable_port() {
         let port = free_qmp_port().unwrap();
         assert_ne!(port, 0);
+    }
+
+    #[test]
+    fn ensure_usb_stick_is_idempotent() {
+        let dir = std::env::temp_dir().join(format!("qol-emu-stick-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("usb-stick.raw"), b"existing").unwrap();
+        let stick = ensure_usb_stick(&dir, Path::new("/nonexistent/qemu-img")).unwrap();
+        assert_eq!(stick, dir.join("usb-stick.raw"));
+        assert_eq!(fs::read(&stick).unwrap(), b"existing");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

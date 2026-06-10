@@ -87,6 +87,8 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
         "up" => cmd_up(rest, verbose),
         "shot" => control::cmd_shot(rest, verbose),
         "key" => control::cmd_key(rest, verbose),
+        "insert" => control::cmd_insert(rest, verbose),
+        "pull" => control::cmd_pull(rest, verbose),
         "down" => control::cmd_down(rest, verbose),
         "help" | "-h" | "--help" => {
             print_emu_help();
@@ -535,7 +537,7 @@ fn image_path_status(path: &Path) -> std::result::Result<PathBuf, (ResolveState,
     }
 }
 
-fn find_on_path(program: &str) -> Option<PathBuf> {
+pub(crate) fn find_on_path(program: &str) -> Option<PathBuf> {
     let paths = env::var_os("PATH")?;
     env::split_paths(&paths)
         .map(|path| path.join(program))
