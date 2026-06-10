@@ -89,6 +89,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
         "key" => control::cmd_key(rest, verbose),
         "insert" => control::cmd_insert(rest, verbose),
         "pull" => control::cmd_pull(rest, verbose),
+        "snap" => control::cmd_snap(rest, verbose),
         "down" => control::cmd_down(rest, verbose),
         "help" | "-h" | "--help" => {
             print_emu_help();

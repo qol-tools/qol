@@ -172,6 +172,18 @@ impl QmpClient {
         Ok(())
     }
 
+    pub(crate) fn disk_snapshot(&mut self, snapshot_file: &Path) -> Result<()> {
+        self.execute(
+            "blockdev-snapshot-sync",
+            Some(serde_json::json!({
+                "device": "qoldisk",
+                "snapshot-file": snapshot_file.display().to_string(),
+                "format": "qcow2",
+            })),
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn send_keys(&mut self, keys: &[String]) -> Result<()> {
         let chord: Vec<Value> = keys
             .iter()
@@ -322,6 +334,23 @@ mod tests {
         client.execute("query-status", None).unwrap();
         client
             .wait_event("DEVICE_DELETED", Duration::from_secs(2))
+            .unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn disk_snapshot_targets_qoldisk() {
+        let (server, port) = fake_server(vec![r#"{"return":{}}"#], |_, line| {
+            assert!(
+                line.contains(r#""execute":"blockdev-snapshot-sync""#),
+                "line: {line}"
+            );
+            assert!(line.contains(r#""device":"qoldisk""#), "line: {line}");
+            assert!(line.contains("overlay-snap"), "line: {line}");
+        });
+        let mut client = connect(port, Duration::from_secs(2)).unwrap();
+        client
+            .disk_snapshot(Path::new("/a/b/overlay-snap-1.qcow2"))
             .unwrap();
         server.join().unwrap();
     }

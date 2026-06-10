@@ -74,6 +74,25 @@ pub(crate) fn cmd_down(args: &[OsString], verbose: bool) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn cmd_snap(args: &[OsString], verbose: bool) -> Result<()> {
+    let id = single_id(args, "snap")?;
+    print_title("qol emu snap");
+    print_hint(verbose);
+    let live = live::find(&runs_root()?, &id)?;
+    let mut client = qmp::connect(live.qmp_port, CONTROL_TIMEOUT)?;
+    let snapshot = live
+        .run_dir
+        .join(format!("overlay-snap-{}.qcow2", unix_millis()?));
+    client.disk_snapshot(&snapshot)?;
+    step_label("snap", StepKind::Success, &snapshot.display().to_string());
+    step_label(
+        "frozen",
+        StepKind::Info,
+        "previous overlay is now read-only and safe for host inspection",
+    );
+    Ok(())
+}
+
 fn runs_root() -> Result<PathBuf> {
     Ok(repo_root()?.join("target/qol-emu"))
 }
