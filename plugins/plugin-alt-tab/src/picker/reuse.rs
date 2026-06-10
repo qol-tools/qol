@@ -16,6 +16,7 @@ pub(crate) struct ReuseRequest<'a> {
     pub gathered: &'a GatheredWindows,
     pub all_titles: &'a [String],
     pub reverse: bool,
+    pub monitor_size: Option<(f32, f32)>,
 }
 
 pub(super) struct LayoutInput<'a> {

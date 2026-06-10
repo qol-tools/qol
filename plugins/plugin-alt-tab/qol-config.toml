@@ -63,6 +63,17 @@ min = 0
 max = 60
 step = 1
 
+[field.display_card_scale]
+type = "number"
+config_key = "display.card_scale"
+label = "Card Size"
+description = "Scale multiplier for window cards and previews. 1.0 is the compact legacy size."
+section = "layout"
+default = 1.5
+min = 0.5
+max = 2.5
+step = 0.1
+
 [field.display_max_columns]
 type = "number"
 config_key = "display.max_columns"
@@ -143,6 +154,20 @@ step = 0.05
 label = "Labels"
 description = "What text each window row should show."
 actions = ["open", "open-reverse"]
+
+[field.label_size]
+type = "select"
+config_key = "label.size"
+label = "Label Size"
+description = "Text size relative to the card size."
+section = "labels"
+default = "medium"
+options = ["small", "medium", "large"]
+
+[field.label_size.option_labels]
+small = "Small"
+medium = "Medium"
+large = "Large"
 
 [field.label_show_app_name]
 type = "boolean"

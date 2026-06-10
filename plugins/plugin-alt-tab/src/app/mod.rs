@@ -195,7 +195,7 @@ impl AltTabApp {
         self.blur_guard_until = Instant::now() + Duration::from_millis(BLUR_GUARD_MS);
         self.blur_guard_armed = true;
         self.delegate.update(cx, |s, _| {
-            s.apply_config(req.config, card_color, card_opacity)
+            s.apply_config(req.config, card_color, card_opacity, req.monitor_size)
         });
         if now_transparent {
             picker::platform::disable_window_shadow(&self.picker_title);

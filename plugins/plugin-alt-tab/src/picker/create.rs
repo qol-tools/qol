@@ -28,7 +28,13 @@ pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mu
     let handle = open_picker_window(
         bounds,
         title.clone(),
-        PickerInit::new(req.config, gathered, title, true),
+        PickerInit::new(
+            req.config,
+            gathered,
+            title,
+            true,
+            req.placement.monitor_size(),
+        ),
         true,
         cx,
     );
@@ -58,13 +64,14 @@ fn estimate_picker_size(req: &CreateRequest, gathered: &GatheredWindows) -> Size
     let estimated = target
         .max(req.last_window_count.load(Ordering::Relaxed))
         .max(1);
-    let (w, h) = picker_dimensions(
+    let layout = picker_layout(
         estimated,
         req.config.display.max_columns,
         req.placement.monitor_size(),
         req.config.display.show_hotkey_hints,
+        req.config.display.card_scale,
     );
-    size(px(w), px(h))
+    size(px(layout.width), px(layout.height))
 }
 
 pub(crate) struct PickerInit {
@@ -79,6 +86,8 @@ pub(crate) struct PickerInit {
     pub(crate) show_hotkey_hints: bool,
     pub(crate) cycle_on_open: bool,
     pub(crate) max_columns: usize,
+    pub(crate) card_scale: f32,
+    pub(crate) layout_budget: Option<(f32, f32)>,
     pub(crate) windows: Vec<WindowInfo>,
     pub(crate) previews: PreviewMap,
     pub(crate) icons: IconMap,
@@ -90,6 +99,7 @@ impl PickerInit {
         gathered: GatheredWindows,
         picker_title: String,
         shown: bool,
+        layout_budget: Option<(f32, f32)>,
     ) -> Self {
         let (card_color, card_opacity) = super::resolve_card_bg(&config.display);
         Self {
@@ -104,6 +114,8 @@ impl PickerInit {
             show_hotkey_hints: config.display.show_hotkey_hints,
             cycle_on_open: config.open_behavior == crate::config::OpenBehavior::CycleOnce,
             max_columns: config.display.max_columns,
+            card_scale: config.display.card_scale,
+            layout_budget,
             windows: gathered.windows,
             previews: gathered.previews,
             icons: gathered.icons,
@@ -182,7 +194,13 @@ pub(crate) fn pre_create_ghost(
         previews: PreviewMap::new(),
         icons: IconMap::new(),
     };
-    let init = PickerInit::new(config, gathered, title.clone(), false);
+    let init = PickerInit::new(
+        config,
+        gathered,
+        title.clone(),
+        false,
+        placement.monitor_size(),
+    );
     let bounds = layout.bounds;
     let Some(handle) = open_picker_window(bounds, title.clone(), init, false, cx) else {
         #[cfg(debug_assertions)]

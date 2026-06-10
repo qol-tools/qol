@@ -158,6 +158,7 @@ fn try_reuse_existing(
         gathered,
         all_titles: &all_titles,
         reverse: req.reverse,
+        monitor_size: placement.monitor_size(),
     };
     if reuse::try_reuse(&reuse_req, cx) {
         if source_key != target {
@@ -296,6 +297,8 @@ pub(crate) mod state {
         pub(crate) show_debug_overlay: bool,
         pub(crate) show_hotkey_hints: bool,
         pub(crate) max_columns: usize,
+        pub(crate) card_scale: f32,
+        pub(crate) layout_budget: Option<(f32, f32)>,
         pub(crate) live_previews: PreviewMap,
         pub(crate) icon_cache: IconMap,
     }
@@ -323,6 +326,8 @@ pub(crate) mod state {
                 show_debug_overlay: init.show_debug_overlay,
                 show_hotkey_hints: init.show_hotkey_hints,
                 max_columns: init.max_columns,
+                card_scale: init.card_scale,
+                layout_budget: init.layout_budget,
                 live_previews: init.previews,
                 icon_cache: init.icons,
             }
@@ -438,13 +443,16 @@ pub(crate) mod state {
             config: &AltTabConfig,
             card_color: u32,
             card_opacity: f32,
+            layout_budget: Option<(f32, f32)>,
         ) {
+            self.layout_budget = layout_budget;
             self.label_config = config.label.clone();
             self.transparent_background = config.display.transparent_background;
             self.card_bg_color = card_color;
             self.card_bg_opacity = card_opacity;
             self.show_debug_overlay = config.display.show_debug_overlay;
             self.show_hotkey_hints = config.display.show_hotkey_hints;
+            self.card_scale = config.display.card_scale;
         }
 
         pub(crate) fn remove_window(
@@ -722,6 +730,8 @@ pub(crate) mod state {
                 action_mode: ActionMode::HoldToSwitch,
                 cycle_on_open: false,
                 max_columns: 6,
+                card_scale: 1.0,
+                layout_budget: None,
                 previews: HashMap::new(),
                 icons: HashMap::new(),
             })
@@ -880,6 +890,8 @@ pub(crate) mod state {
                 action_mode: ActionMode::HoldToSwitch,
                 cycle_on_open: false,
                 max_columns: 6,
+                card_scale: 1.0,
+                layout_budget: None,
                 previews: HashMap::new(),
                 icons: HashMap::new(),
             });
