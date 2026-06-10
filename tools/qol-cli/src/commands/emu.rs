@@ -8,10 +8,12 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod discovery;
+mod machine;
 mod platform;
+mod qmp;
 
 use discovery::DiscoveryContext;
 
@@ -210,6 +212,8 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
             overlay: None,
             qemu_command: None,
             commands: Vec::new(),
+            qmp: None,
+            teardown: None,
             next: next_for_resolution(&environment, &resolution),
             started_at,
         })?;
@@ -253,6 +257,8 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
                 "args": create_args,
                 "status": status.to_string(),
             })],
+            qmp: None,
+            teardown: None,
             next: vec!["Inspect the qemu-img output, remove the run directory if needed, then rerun `qol emu up`.".to_string()],
             started_at,
         })?;
@@ -264,54 +270,123 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
         .qemu_system
         .clone()
         .ok_or_else(|| anyhow!("ready environment has no qemu-system path"))?;
+    let qmp_port = machine::free_qmp_port()?;
     let qemu_args = qemu_args(
         &environment,
         &overlay,
         resolution.acceleration,
         platform::display(),
-        4444,
+        qmp_port,
     );
     let qemu_command = command_line(&qemu_system, &qemu_args);
     let qemu_command_path = run_dir.join("qemu-command.txt");
     fs::write(&qemu_command_path, format!("{qemu_command}\n"))
         .with_context(|| format!("failed to write {}", qemu_command_path.display()))?;
+    let commands = vec![
+        json!({
+            "program": qemu_img,
+            "args": ["info", "--output=json", &resolution.image_path.display().to_string()],
+            "detected_format": image_format,
+        }),
+        json!({
+            "program": qemu_img,
+            "args": create_args,
+            "status": status.to_string(),
+        }),
+        json!({
+            "program": qemu_system,
+            "args": qemu_args,
+        }),
+    ];
+
+    step_label(
+        "boot",
+        StepKind::Pending,
+        &format!("{} · qmp 127.0.0.1:{qmp_port}", environment.id),
+    );
+    let mut child = machine::spawn_qemu(&qemu_system, &qemu_args)?;
+    let handshake = qmp::connect(qmp_port, Duration::from_secs(10)).and_then(|mut client| {
+        let status = client.query_status()?;
+        Ok((client.qemu_version.clone(), status))
+    });
+    let (qemu_version, vm_status) = match handshake {
+        Ok(values) => values,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let removed = machine::teardown(&run_dir)?;
+            let report = report_json(ReportInput {
+                environment: &environment,
+                resolution: &resolution,
+                run_dir: &run_dir,
+                status: "failed",
+                overlay: Some(&overlay),
+                qemu_command: Some(&qemu_command_path),
+                commands,
+                qmp: Some(json!({ "port": qmp_port, "error": error.to_string() })),
+                teardown: Some(json!({ "removed": removed })),
+                next: vec!["Inspect the qemu output above, then rerun `qol emu up`.".to_string()],
+                started_at,
+            })?;
+            write_report(&run_dir, &report)?;
+            bail!("qmp handshake failed: {error:#}");
+        }
+    };
+    step_label(
+        "qmp",
+        StepKind::Success,
+        &format!("qemu {qemu_version} · {vm_status}"),
+    );
     let report = report_json(ReportInput {
         environment: &environment,
         resolution: &resolution,
         run_dir: &run_dir,
-        status: "pass",
+        status: "running",
         overlay: Some(&overlay),
         qemu_command: Some(&qemu_command_path),
-        commands: vec![
-            json!({
-                "program": qemu_img,
-                "args": ["info", "--output=json", &resolution.image_path.display().to_string()],
-                "detected_format": image_format,
-            }),
-            json!({
-                "program": qemu_img,
-                "args": create_args,
-                "status": status.to_string(),
-            }),
-        ],
-        next: vec![format!(
-            "Run `{qemu_command}` when you want to launch this disposable clone."
-        )],
+        commands: commands.clone(),
+        qmp: Some(json!({ "port": qmp_port, "qemu_version": qemu_version, "status": vm_status })),
+        teardown: None,
+        next: vec!["Close the VM window (or shut the guest down) to end the run.".to_string()],
         started_at,
     })?;
     write_report(&run_dir, &report)?;
-
-    step_label("ready", StepKind::Success, &run_dir.display().to_string());
     step_label(
-        "command",
-        StepKind::Info,
-        &qemu_command_path.display().to_string(),
+        "running",
+        StepKind::Success,
+        "close the VM window to end the run",
+    );
+
+    let exit = child.wait().context("failed to wait for qemu")?;
+    let removed = machine::teardown(&run_dir)?;
+    let final_status = if exit.success() { "pass" } else { "failed" };
+    let report = report_json(ReportInput {
+        environment: &environment,
+        resolution: &resolution,
+        run_dir: &run_dir,
+        status: final_status,
+        overlay: None,
+        qemu_command: Some(&qemu_command_path),
+        commands,
+        qmp: Some(json!({ "port": qmp_port, "qemu_version": qemu_version, "status": vm_status })),
+        teardown: Some(json!({ "removed": removed, "exit": exit.to_string() })),
+        next: vec!["Rerun `qol emu up` for a fresh disposable clone.".to_string()],
+        started_at,
+    })?;
+    write_report(&run_dir, &report)?;
+    step_label(
+        "clean",
+        StepKind::Success,
+        &format!("removed {} disposable file(s)", removed.len()),
     );
     step_label(
         "report",
         StepKind::Info,
         &run_dir.join("report.json").display().to_string(),
     );
+    if !exit.success() {
+        bail!("qemu exited with {exit}");
+    }
     Ok(())
 }
 
@@ -480,6 +555,8 @@ struct ReportInput<'a> {
     overlay: Option<&'a Path>,
     qemu_command: Option<&'a Path>,
     commands: Vec<serde_json::Value>,
+    qmp: Option<serde_json::Value>,
+    teardown: Option<serde_json::Value>,
     next: Vec<String>,
     started_at: u64,
 }
@@ -514,6 +591,8 @@ fn report_json(input: ReportInput<'_>) -> Result<serde_json::Value> {
             "report": input.run_dir.join("report.json"),
         },
         "commands": input.commands,
+        "qmp": input.qmp,
+        "teardown": input.teardown,
         "next": input.next,
     }))
 }
