@@ -1,6 +1,6 @@
 use super::AltTabApp;
 use crate::actions;
-use crate::shared::layout::rendered_column_count;
+use crate::shared::layout::picker_layout;
 use gpui::{Context, Window};
 
 pub(crate) fn handle_key_down(
@@ -101,9 +101,30 @@ fn on_arrow(
     cx: &mut Context<AltTabApp>,
 ) {
     let state = this.delegate.read(cx);
-    let cols = rendered_column_count(state.max_columns, state.windows.len());
+    let layout = picker_layout(
+        state.windows.len().max(1),
+        state.max_columns,
+        state.layout_budget,
+        state.show_hotkey_hints,
+        state.card_scale,
+    );
     let from = state.selected_index;
-    this.delegate.update(cx, |s, _| nav(s, cols));
+    let count = state.windows.len();
+    let scale = state.card_scale;
+    let budget = state.layout_budget;
+    this.delegate.update(cx, |s, _| nav(s, layout.columns));
+    let to = this.delegate.read(cx).selected_index;
+    qol_runtime::probe!(
+        "NAV_GRID",
+        "method={} from={:?} to={:?} cols={} count={} scale={} budget={:?}",
+        method,
+        from,
+        to,
+        layout.columns,
+        count,
+        scale,
+        budget,
+    );
     this.mark_cycle(method, from);
     cx.notify();
 }

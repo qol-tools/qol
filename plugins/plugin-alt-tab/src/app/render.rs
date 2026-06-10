@@ -1,9 +1,7 @@
 use super::AltTabApp;
 use crate::config::{ActionMode, LabelConfig};
 use crate::discovery::WindowInfo;
-use crate::shared::layout::{
-    picker_dimensions, GRID_CARD_HEIGHT, GRID_CARD_WIDTH, GRID_PREVIEW_HEIGHT, GRID_PREVIEW_WIDTH,
-};
+use crate::shared::layout::{picker_layout, CardMetrics};
 use crate::{IconMap, PreviewMap};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -27,6 +25,7 @@ struct RenderSnap {
     show_debug_overlay: bool,
     show_hotkey_hints: bool,
     card_bg_rgba: u32,
+    metrics: CardMetrics,
 }
 
 impl Render for AltTabApp {
@@ -100,15 +99,18 @@ impl Render for AltTabApp {
             show_debug_overlay: d.show_debug_overlay,
             show_hotkey_hints: d.show_hotkey_hints,
             card_bg_rgba: (d.card_bg_color << 8) | alpha,
+            metrics: CardMetrics::from_scale(d.card_scale),
         };
 
         let _ = window;
-        let (panel_w, panel_h) = picker_dimensions(
+        let layout = picker_layout(
             d.windows.len().max(1),
             d.max_columns,
-            None,
+            d.layout_budget,
             d.show_hotkey_hints,
+            d.card_scale,
         );
+        let (panel_w, panel_h) = (layout.width, layout.height);
 
         let grid = render_grid(
             &d.windows,
@@ -253,8 +255,8 @@ fn render_card(
         .flex()
         .flex_col()
         .items_center()
-        .w(px(GRID_CARD_WIDTH))
-        .h(px(GRID_CARD_HEIGHT))
+        .w(px(snap.metrics.card_width))
+        .h(px(snap.metrics.card_height))
         .p_2()
         .rounded_xl()
         .when(snap.visible, |el| el.cursor_pointer())
@@ -267,7 +269,7 @@ fn render_card(
                 snap.card_bg_rgba,
             )
         })
-        .child(render_preview(win, previews, icons))
+        .child(render_preview(win, previews, icons, &snap.metrics))
         .child(render_label(
             i,
             win,
@@ -275,6 +277,7 @@ fn render_card(
             label_config,
             icons,
             snap.show_debug_overlay,
+            &snap.metrics,
         ))
 }
 
@@ -306,7 +309,12 @@ fn card_bg(
     })
 }
 
-fn render_preview(win: &WindowInfo, live_previews: &PreviewMap, icon_cache: &IconMap) -> Div {
+fn render_preview(
+    win: &WindowInfo,
+    live_previews: &PreviewMap,
+    icon_cache: &IconMap,
+    metrics: &CardMetrics,
+) -> Div {
     let minimized_icon = if win.is_minimized {
         icon_cache.get(&win.app_name)
     } else {
@@ -316,6 +324,7 @@ fn render_preview(win: &WindowInfo, live_previews: &PreviewMap, icon_cache: &Ico
         live_previews.get(&win.id),
         &win.preview_path,
         minimized_icon,
+        metrics,
     ))
 }
 
@@ -326,6 +335,7 @@ fn render_label(
     label_config: &LabelConfig,
     icons: &IconMap,
     show_debug: bool,
+    metrics: &CardMetrics,
 ) -> Div {
     let label = label_config.format(&win.app_name, &win.title);
     let text = if show_debug {
@@ -339,6 +349,8 @@ fn render_label(
         rgb(0x7a849e)
     };
     let app_icon = icons.get(&win.app_name).cloned();
+    let size_factor = label_config.size.factor();
+    let icon_px = metrics.label_icon_px(size_factor);
 
     div()
         .mt_2()
@@ -352,15 +364,15 @@ fn render_label(
         .when_some(app_icon, |el, icon| {
             el.child(
                 img(icon)
-                    .w(px(16.0))
-                    .h(px(16.0))
+                    .w(px(icon_px))
+                    .h(px(icon_px))
                     .rounded_sm()
                     .flex_shrink_0(),
             )
         })
         .child(
             div()
-                .text_xs()
+                .text_size(px(metrics.label_font_px(size_factor)))
                 .text_ellipsis()
                 .overflow_hidden()
                 .child(text),
@@ -371,47 +383,49 @@ fn preview_tile(
     live_image: Option<&Arc<RenderImage>>,
     preview_path: &Option<String>,
     minimized_icon: Option<&Arc<RenderImage>>,
+    metrics: &CardMetrics,
 ) -> AnyElement {
     if let Some(icon) = minimized_icon {
-        return minimized_placeholder(icon);
+        return minimized_placeholder(icon, metrics);
     }
     if let Some(render_image) = live_image {
         return img(render_image.clone())
-            .w(px(GRID_PREVIEW_WIDTH))
-            .h(px(GRID_PREVIEW_HEIGHT))
+            .w(px(metrics.preview_width))
+            .h(px(metrics.preview_height))
             .object_fit(ObjectFit::Fill)
             .rounded_md()
             .into_any_element();
     }
     if let Some(path) = preview_path {
         return img(std::path::PathBuf::from(path))
-            .w(px(GRID_PREVIEW_WIDTH))
-            .h(px(GRID_PREVIEW_HEIGHT))
+            .w(px(metrics.preview_width))
+            .h(px(metrics.preview_height))
             .object_fit(ObjectFit::Fill)
             .rounded_md()
             .into_any_element();
     }
-    empty_placeholder()
+    empty_placeholder(metrics)
 }
 
-fn minimized_placeholder(icon: &Arc<RenderImage>) -> AnyElement {
-    placeholder_frame()
-        .child(img(icon.clone()).w(px(48.0)).h(px(48.0)).rounded_md())
+fn minimized_placeholder(icon: &Arc<RenderImage>, metrics: &CardMetrics) -> AnyElement {
+    let icon_px = metrics.minimized_icon_px();
+    placeholder_frame(metrics)
+        .child(img(icon.clone()).w(px(icon_px)).h(px(icon_px)).rounded_md())
         .into_any_element()
 }
 
-fn empty_placeholder() -> AnyElement {
-    placeholder_frame()
+fn empty_placeholder(metrics: &CardMetrics) -> AnyElement {
+    placeholder_frame(metrics)
         .text_xs()
         .text_color(rgb(0x4a5268))
         .child("...")
         .into_any_element()
 }
 
-fn placeholder_frame() -> Div {
+fn placeholder_frame(metrics: &CardMetrics) -> Div {
     div()
-        .w(px(GRID_PREVIEW_WIDTH))
-        .h(px(GRID_PREVIEW_HEIGHT))
+        .w(px(metrics.preview_width))
+        .h(px(metrics.preview_height))
         .bg(rgb(0x1e2130))
         .rounded_md()
         .border_1()

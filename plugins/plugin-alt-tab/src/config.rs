@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct DisplayConfig {
     pub max_columns: usize,
+    pub card_scale: f32,
     pub transparent_background: bool,
     pub card_background_color: String,
     pub card_background_opacity: f32,
@@ -18,6 +19,7 @@ impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
             max_columns: 6,
+            card_scale: crate::shared::layout::DEFAULT_CARD_SCALE,
             transparent_background: false,
             card_background_color: "1a1e2a".to_string(),
             card_background_opacity: 0.85,
@@ -32,11 +34,31 @@ impl Default for DisplayConfig {
 
 pub use qol_color::parse_hex_color;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl LabelSize {
+    pub fn factor(&self) -> f32 {
+        match self {
+            LabelSize::Small => 0.8,
+            LabelSize::Medium => 1.0,
+            LabelSize::Large => 1.25,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LabelConfig {
     pub show_app_name: bool,
     pub show_window_title: bool,
+    pub size: LabelSize,
 }
 
 impl Default for LabelConfig {
@@ -44,6 +66,7 @@ impl Default for LabelConfig {
         Self {
             show_app_name: true,
             show_window_title: true,
+            size: LabelSize::default(),
         }
     }
 }
@@ -120,9 +143,10 @@ pub fn load_alt_tab_config() -> AltTabConfig {
     let config: AltTabConfig = qol_config::load_plugin_config_from_env(PLUGIN_ID);
     #[cfg(debug_assertions)]
     eprintln!(
-        "[alt-tab] config: action_mode={:?} max_columns={} reset_selection_on_open={} open_behavior={:?}",
+        "[alt-tab] config: action_mode={:?} max_columns={} card_scale={} reset_selection_on_open={} open_behavior={:?}",
         config.action_mode,
         config.display.max_columns,
+        config.display.card_scale,
         config.reset_selection_on_open,
         config.open_behavior,
     );
