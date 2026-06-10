@@ -8,6 +8,10 @@ This records the architecture and scopes Milestone 1 as the next implementation 
 Items marked "(default, redline in review)" are my calls on forks that were left open
 during brainstorming.
 
+M1 implemented 2026-06-10. M2 control surface implemented 2026-06-10
+(shot/key/insert/pull/snap/down, plan `2026-06-10-emu-m2-control-surface.md`);
+the hvf/whpx finish remains as its own follow-up plan.
+
 ## Purpose
 
 qol-tools promises: walk up to any machine, inject qol-tray, it becomes yours, pull the

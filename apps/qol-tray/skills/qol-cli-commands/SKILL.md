@@ -64,17 +64,29 @@ After changing `tools/qol-cli`, run `qol setup` and restart the current `qol dev
 
 `qol emu` is the QEMU-backed clean-environment MVP. Architecture (capability x
 platform grid, Medium injector strategy, Machine substrate, milestones M1-M5):
-`docs/superpowers/specs/2026-06-10-emu-test-harness-design.md`. M1 (launch) is
-implemented; M2 (QMP snapshot/screendump/sendkey/USB hot-plug) is next.
+`docs/superpowers/specs/2026-06-10-emu-test-harness-design.md`. M1 (launch) and
+the M2 control verbs are implemented; the remaining M2 item is arch-aware
+hvf/whpx selection (own plan), then M3 (first GuestOs adapter + workflow).
 
 Verified on macOS arm64: hvf cannot accelerate x86_64 guests, so acceleration
 falls back to tcg whenever host arch differs from the guest arch. The QMP
-socket stays connectable after `up` reports `running`, so external tooling can
-drive the VM (for example `{"execute":"quit"}` ends the run cleanly).
+socket stays connectable after `up` reports `running`; the control verbs below
+use that socket, resolving the newest run whose `report.json` says `running`.
+QEMU emits `DEVICE_DELETED` before the `device_del` return, so the QMP client
+buffers events read while awaiting a return; `wait_event` checks that buffer
+first.
 
 - `qol emu list`: list discovered/configured emus and resolver state.
 - `qol emu doctor`: show QEMU binaries, acceleration, config path, and run directory.
-- `qol emu up <id>`: create a disposable qcow2 overlay, boot it in QEMU (per-host accel: kvm/hvf/whpx), confirm control over a loopback QMP socket, and block until the VM exits; teardown removes the overlay and leaves `report.json` + `qemu-command.txt` in the run directory. Report statuses: `running` while up, then `pass` / `failed` / `skipped`.
+- `qol emu up <id>`: create a disposable qcow2 overlay, boot it in QEMU (per-host accel: kvm/hvf/whpx), confirm control over a loopback QMP socket, and block until the VM exits; teardown removes every disk image in the run dir (`overlay*.qcow2`, `usb-stick.raw`) and keeps `report.json`, `qemu-command.txt`, and screenshots. Report statuses: `running` while up, then `pass` / `failed` / `skipped`.
+- `qol emu shot <id>`: QMP screendump into the run dir (kept as evidence).
+- `qol emu key <id> <qcode>...`: send one key chord (e.g. `ctrl alt delete`).
+- `qol emu insert <id>` / `qol emu pull <id>`: hot-plug a scratch 16M USB stick (xhci + usb-storage); pull waits for `DEVICE_DELETED` then drops the blockdev.
+- `qol emu snap <id>`: `blockdev-snapshot-sync` on the active overlay; the previous overlay freezes read-only for host inspection (the M3 `DiskSnapshot`).
+- `qol emu down <id>`: send `quit` fire-and-forget; the blocking `up` finalizes the report and teardown.
+
+All control verbs work against a guest with no OS (SeaBIOS screen), which is
+how they are runtime-verified.
 
 Emus shown in `qol dev` must be found, not hard-coded. Discovery sources:
 
