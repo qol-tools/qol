@@ -62,7 +62,15 @@ After changing `tools/qol-cli`, run `qol setup` and restart the current `qol dev
 
 ## Emu
 
-`qol emu` is the QEMU-backed clean-environment MVP.
+`qol emu` is the QEMU-backed clean-environment MVP. Architecture (capability x
+platform grid, Medium injector strategy, Machine substrate, milestones M1-M5):
+`docs/superpowers/specs/2026-06-10-emu-test-harness-design.md`. M1 (launch) is
+implemented; M2 (QMP snapshot/screendump/sendkey/USB hot-plug) is next.
+
+Verified on macOS arm64: hvf cannot accelerate x86_64 guests, so acceleration
+falls back to tcg whenever host arch differs from the guest arch. The QMP
+socket stays connectable after `up` reports `running`, so external tooling can
+drive the VM (for example `{"execute":"quit"}` ends the run cleanly).
 
 - `qol emu list`: list discovered/configured emus and resolver state.
 - `qol emu doctor`: show QEMU binaries, acceleration, config path, and run directory.
