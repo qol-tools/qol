@@ -51,6 +51,7 @@ fn greeting_version(value: &Value) -> String {
 pub(crate) struct QmpClient {
     stream: TcpStream,
     reader: BufReader<TcpStream>,
+    pending_events: Vec<String>,
     pub(crate) qemu_version: String,
 }
 
@@ -80,6 +81,7 @@ impl QmpClient {
         let mut client = Self {
             stream,
             reader,
+            pending_events: Vec::new(),
             qemu_version: String::new(),
         };
         let line = client.read_line()?;
@@ -104,7 +106,7 @@ impl QmpClient {
             let line = self.read_line()?;
             match classify_line(&line)? {
                 QmpLine::Return(value) => return Ok(value),
-                QmpLine::Event(_) => continue,
+                QmpLine::Event(event) => self.pending_events.push(event),
                 QmpLine::Greeting { .. } => bail!("unexpected qmp greeting mid-session"),
                 QmpLine::Error(error) => bail!("qmp {command} failed: {error}"),
             }
@@ -126,12 +128,17 @@ impl QmpClient {
     }
 
     pub(crate) fn wait_event(&mut self, name: &str, timeout: Duration) -> Result<()> {
+        if let Some(index) = self.pending_events.iter().position(|event| event == name) {
+            self.pending_events.remove(index);
+            return Ok(());
+        }
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             let line = self.read_line()?;
             match classify_line(&line)? {
                 QmpLine::Event(event) if event == name => return Ok(()),
-                QmpLine::Event(_) | QmpLine::Return(_) => continue,
+                QmpLine::Event(event) => self.pending_events.push(event),
+                QmpLine::Return(_) => continue,
                 QmpLine::Greeting { .. } => bail!("unexpected qmp greeting mid-session"),
                 QmpLine::Error(error) => {
                     bail!("qmp error while waiting for event {name}: {error}")
@@ -308,7 +315,7 @@ mod tests {
     fn detach_usb_stick_deletes_device_waits_then_drops_blockdev() {
         let (server, port) = fake_server(
             vec![
-                "{\"return\":{}}\n{\"event\":\"DEVICE_DELETED\",\"data\":{\"device\":\"qolusbdev\"},\"timestamp\":{\"seconds\":0,\"microseconds\":0}}",
+                "{\"event\":\"DEVICE_DELETED\",\"data\":{\"device\":\"qolusbdev\"},\"timestamp\":{\"seconds\":0,\"microseconds\":0}}\n{\"return\":{}}",
                 r#"{"return":{}}"#,
             ],
             |index, line| match index {
