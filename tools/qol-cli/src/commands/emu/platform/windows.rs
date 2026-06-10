@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 
 pub(crate) fn acceleration() -> &'static str {
-    "tcg"
+    "whpx"
+}
+
+pub(crate) fn display() -> &'static str {
+    "sdl"
 }
 
 pub(crate) fn libvirt_uris() -> &'static [&'static str] {
