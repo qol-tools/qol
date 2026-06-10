@@ -2,6 +2,7 @@ use crate::progress::{print_hint, print_title, step_label, StepKind};
 use crate::workspace::repo_root;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::json;
+use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -52,6 +53,14 @@ pub(crate) struct EnvironmentStatus {
     pub(crate) arch: String,
     pub(crate) state: ResolveState,
     pub(crate) reason: String,
+    pub(crate) last_run: Option<LastRun>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LastRun {
+    pub(crate) status: String,
+    pub(crate) finished_at_unix_ms: u64,
+    pub(crate) qemu_version: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -83,11 +92,13 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
 }
 
 pub(crate) fn environment_statuses() -> Result<Vec<EnvironmentStatus>> {
+    let mut last_runs = last_runs_by_id();
     Ok(discover_environments()?
         .into_iter()
         .map(|environment| {
             let resolution = resolve_environment(&environment);
             EnvironmentStatus {
+                last_run: last_runs.remove(&environment.id),
                 id: environment.id,
                 name: environment.name,
                 backend: environment.backend,
@@ -97,6 +108,53 @@ pub(crate) fn environment_statuses() -> Result<Vec<EnvironmentStatus>> {
             }
         })
         .collect())
+}
+
+fn last_runs_by_id() -> HashMap<String, LastRun> {
+    let mut latest = HashMap::new();
+    let Some(root) = repo_root().ok() else {
+        return latest;
+    };
+    let Ok(entries) = fs::read_dir(root.join("target/qol-emu")) else {
+        return latest;
+    };
+    for entry in entries.flatten() {
+        let Ok(content) = fs::read_to_string(entry.path().join("report.json")) else {
+            continue;
+        };
+        let Ok(report) = serde_json::from_str(&content) else {
+            continue;
+        };
+        let Some((id, run)) = last_run_from_report(&report) else {
+            continue;
+        };
+        let newer = latest
+            .get(&id)
+            .is_none_or(|existing| run.finished_at_unix_ms > existing.finished_at_unix_ms);
+        if newer {
+            latest.insert(id, run);
+        }
+    }
+    latest
+}
+
+fn last_run_from_report(report: &serde_json::Value) -> Option<(String, LastRun)> {
+    let id = report.get("environment")?.get("id")?.as_str()?.to_string();
+    let status = report.get("status")?.as_str()?.to_string();
+    let finished_at_unix_ms = report.get("finished_at_unix_ms")?.as_u64()?;
+    let qemu_version = report
+        .get("qmp")
+        .and_then(|qmp| qmp.get("qemu_version"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    Some((
+        id,
+        LastRun {
+            status,
+            finished_at_unix_ms,
+            qemu_version,
+        },
+    ))
 }
 
 pub(crate) fn emu_config_path() -> Option<PathBuf> {
@@ -725,6 +783,51 @@ mod tests {
                 joined.contains(fragment),
                 "missing `{fragment}` in: {joined}"
             );
+        }
+    }
+
+    #[test]
+    fn last_run_parsing_extracts_id_status_and_version() {
+        let full = json!({
+            "environment": {"id": "foo"},
+            "status": "pass",
+            "finished_at_unix_ms": 42u64,
+            "qmp": {"qemu_version": "9.2.0"},
+        });
+        let no_qmp = json!({
+            "environment": {"id": "bar"},
+            "status": "failed",
+            "finished_at_unix_ms": 7u64,
+            "qmp": null,
+        });
+        let unrelated = json!({"unrelated": 1});
+        let cases = [
+            (
+                &full,
+                Some((
+                    "foo".to_string(),
+                    LastRun {
+                        status: "pass".to_string(),
+                        finished_at_unix_ms: 42,
+                        qemu_version: Some("9.2.0".to_string()),
+                    },
+                )),
+            ),
+            (
+                &no_qmp,
+                Some((
+                    "bar".to_string(),
+                    LastRun {
+                        status: "failed".to_string(),
+                        finished_at_unix_ms: 7,
+                        qemu_version: None,
+                    },
+                )),
+            ),
+            (&unrelated, None),
+        ];
+        for (report, expected) in cases {
+            assert_eq!(last_run_from_report(report), expected, "report: {report}");
         }
     }
 
