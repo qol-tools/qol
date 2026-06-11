@@ -25,6 +25,8 @@ qol dev [worktree]
 qol emu list
 qol emu doctor
 qol emu up <environment>
+qol emu check <environment>
+qol emu sh <environment> <command>...
 qol cat [--no-less] [--plain|--color=auto|always|never] <path|->
 qol build [name]
 qol clean [name]
@@ -65,8 +67,14 @@ After changing `tools/qol-cli`, run `qol setup` and restart the current `qol dev
 `qol emu` is the QEMU-backed clean-environment MVP. Architecture (capability x
 platform grid, Medium injector strategy, Machine substrate, milestones M1-M5):
 `docs/superpowers/specs/2026-06-10-emu-test-harness-design.md`. M1 (launch) and
-M2 (control verbs + arch-aware accel) are complete; next is M3 (first GuestOs
-adapter + workflow).
+M2 (control verbs + arch-aware accel) are complete. M3 is complete for one
+cell: Debian 13 nocloud arm64 + USB stick + `leaves-no-trace`, via the
+hardcoded `DebianNocloud` GuestOs adapter and `qol emu check <id>`.
+
+M3 MVP deviations: the USB stick is formatted and provisioned inside the guest
+over serial, trace listing uses guest-side `find / -xdev -iname '*qol*'` after
+reboot instead of host-reading a disk snapshot, the injected qol artifact is a
+stub shell script, and there is no adapter registry yet.
 
 Binary, accelerator, machine type, and firmware all derive from the guest
 arch (`GuestArch` in `commands/emu/arch.rs`): `qemu-system-<arch>`, hvf/kvm/
@@ -81,13 +89,21 @@ verbs below use that socket, resolving the newest run whose `report.json` says
 QMP client buffers events read while awaiting a return; `wait_event` checks
 that buffer first.
 
+Every `up` / `check` run also opens a guest serial console with
+`-serial tcp:127.0.0.1:<port>,server,nowait`; the port is recorded under
+`report.json` key `serial.port`. `qol emu sh` and the M3 workflow use this
+console expect-style to answer Debian first-boot prompts, obtain a root shell,
+and run commands with an explicit return-code marker.
+
 - `qol emu list`: list discovered/configured emus and resolver state.
 - `qol emu doctor`: one row per guest arch (binary path + chosen accelerator), plus qemu-img, virsh, config path, and run directory.
 - `qol emu up <id>`: create a disposable qcow2 overlay, boot it in QEMU (per-host accel: kvm/hvf/whpx), confirm control over a loopback QMP socket, and block until the VM exits; teardown removes every disk image in the run dir (`overlay*.qcow2`, `usb-stick.raw`) and keeps `report.json`, `qemu-command.txt`, and screenshots. Report statuses: `running` while up, then `pass` / `failed` / `skipped`.
+- `qol emu check <id>`: boot a fresh disposable VM, run `leaves-no-trace` through QMP + serial (`insert`, provision/run stub from stick, `pull`, reboot, list traces), write `workflow: {id, verdict, traces}` into `report.json`, and exit nonzero when the workflow verdict fails or errors.
 - `qol emu shot <id>`: QMP screendump into the run dir (kept as evidence).
 - `qol emu key <id> <qcode>...`: send one key chord (e.g. `ctrl alt delete`).
 - `qol emu insert <id>` / `qol emu pull <id>`: hot-plug a scratch 16M USB stick (xhci + usb-storage); pull waits for `DEVICE_DELETED` then drops the blockdev.
 - `qol emu snap <id>`: `blockdev-snapshot-sync` on the active overlay; the previous overlay freezes read-only for host inspection (the M3 `DiskSnapshot`).
+- `qol emu sh <id> <command>...`: connect to the newest running VM's serial console, get a Debian root shell, run the command, and print serial output.
 - `qol emu down <id>`: send `quit` fire-and-forget; the blocking `up` finalizes the report and teardown.
 
 All control verbs work against a guest with no OS (SeaBIOS screen), which is
@@ -109,6 +125,17 @@ my-windows = "/path/to/windows.qcow2"
 path = "~/VMs/arm-linux.qcow2"
 arch = "aarch64"
 ```
+
+Verified M3 Debian image config:
+
+```toml
+[images.debian-13-nocloud-arm64]
+path = "~/VMs/debian-13-nocloud-arm64.qcow2"
+arch = "aarch64"
+```
+
+The image used for live verification was downloaded from Debian cloud's trixie
+nocloud arm64 qcow2 stream and stored under `~/VMs/`.
 
 Config path is the platform config dir as reported by `qol emu doctor`
 (macOS: `~/Library/Application Support/qol-tray/emu.toml`, Linux:

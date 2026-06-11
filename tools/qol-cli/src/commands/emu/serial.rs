@@ -65,7 +65,7 @@ impl SerialClient {
                 return Ok((index, consumed));
             }
             if Instant::now() >= deadline {
-                let mut start = self.buffer.len().saturating_sub(200);
+                let mut start = self.buffer.len().saturating_sub(600);
                 while !self.buffer.is_char_boundary(start) {
                     start -= 1;
                 }

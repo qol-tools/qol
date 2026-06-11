@@ -12,7 +12,25 @@ M1 implemented 2026-06-10. M2 control surface implemented 2026-06-10
 (shot/key/insert/pull/snap/down, plan `2026-06-10-emu-m2-control-surface.md`).
 M2 completed 2026-06-11 with arch-aware binary/accel/firmware selection
 (plan `2026-06-11-emu-arch-aware-accel.md`): hvf-accelerated aarch64 guests
-verified on macOS arm64 booting the EDK II UEFI shell. Next: M3.
+verified on macOS arm64 booting the EDK II UEFI shell.
+
+M3 implemented and live-verified 2026-06-11
+(plan `2026-06-11-emu-m3-leaves-no-trace.md`): Debian 13 nocloud arm64 boots
+under hvf, exposes a guest serial console, supports `qol emu sh`, and
+`qol emu check debian-13-nocloud-arm64` drives the `leaves-no-trace` workflow
+through insert / launch / pull / reboot / list-traces and writes
+`workflow.verdict` into `report.json`. Clean runs pass with no traces; a
+temporary `/root/.qol-residue` self-test fails with that path listed.
+
+M3 MVP deviations from the long-term contract:
+
+- The USB stick is provisioned inside the guest (`mkfs`, mounted script write)
+  instead of pre-loaded on the host.
+- Trace listing runs guest-side `find / -xdev -iname '*qol*'` after reboot
+  instead of host-reading a `DiskSnapshot`.
+- The injected artifact is a stub shell script, not the real qol payload.
+- The adapter registry is deferred; `qol emu check` currently uses the hardcoded
+  Debian nocloud adapter. Next: M4.
 
 ## Purpose
 

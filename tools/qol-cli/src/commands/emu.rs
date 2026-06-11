@@ -20,6 +20,7 @@ mod machine;
 mod platform;
 mod qmp;
 mod serial;
+mod workflow;
 
 use arch::GuestArch;
 use discovery::DiscoveryContext;
@@ -90,6 +91,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
         "list" => cmd_list(rest, verbose),
         "doctor" => cmd_doctor(rest, verbose),
         "up" => cmd_up(rest, verbose),
+        "check" => cmd_check(rest, verbose),
         "shot" => control::cmd_shot(rest, verbose),
         "key" => control::cmd_key(rest, verbose),
         "insert" => control::cmd_insert(rest, verbose),
@@ -278,6 +280,82 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
         bail!("qemu exited with {exit}");
     }
     Ok(())
+}
+
+fn cmd_check(args: &[OsString], verbose: bool) -> Result<()> {
+    if args.len() != 1 {
+        bail!("usage: qol emu check <environment>");
+    }
+    let target = args[0]
+        .to_str()
+        .ok_or_else(|| anyhow!("environment id is not valid UTF-8"))?;
+    print_title("qol emu check");
+    print_hint(verbose);
+    let mut vm = boot_vm(target, "check", verbose)?;
+    let outcome = drive_leaves_no_trace(&vm);
+    let exit = shutdown_vm(&mut vm)?;
+    let workflow_report = match &outcome {
+        Ok(verdict) => json!({
+            "id": "leaves-no-trace",
+            "verdict": if verdict.pass { "pass" } else { "fail" },
+            "traces": verdict.traces,
+        }),
+        Err(error) => json!({
+            "id": "leaves-no-trace",
+            "verdict": "error",
+            "error": error.to_string(),
+        }),
+    };
+    let (report_path, removed) = finalize_vm(vm, exit, Some(workflow_report), "check")?;
+    step_label(
+        "clean",
+        StepKind::Success,
+        &format!("removed {} disposable file(s)", removed.len()),
+    );
+    step_label("report", StepKind::Info, &report_path.display().to_string());
+    let verdict = outcome?;
+    if !verdict.pass {
+        bail!(
+            "leaves-no-trace failed; traces: {}",
+            verdict.traces.join(", ")
+        );
+    }
+    step_label("verdict", StepKind::Success, "pass · no qol traces survive");
+    Ok(())
+}
+
+fn drive_leaves_no_trace(vm: &BootedVm) -> Result<workflow::Verdict> {
+    let qemu_img = vm
+        .resolution
+        .qemu_img
+        .clone()
+        .ok_or_else(|| anyhow!("ready environment has no qemu-img path"))?;
+    let stick = machine::ensure_usb_stick(&vm.run_dir, &qemu_img)?;
+    let mut qmp = qmp::connect(vm.qmp_port, Duration::from_secs(10))?;
+    let mut serial = serial::connect(vm.serial_port, Duration::from_secs(10))?;
+    let os = guest::DebianNocloud;
+    step_label("login", StepKind::Pending, "waiting for a root shell");
+    guest::GuestOs::ensure_root_shell(&os, &mut serial)?;
+    step_label("login", StepKind::Success, "root shell over serial");
+    let mut run = workflow::Run {
+        qmp: &mut qmp,
+        serial: &mut serial,
+        os: &os,
+        stick: &stick,
+    };
+    workflow::leaves_no_trace(&mut run)
+}
+
+fn shutdown_vm(vm: &mut BootedVm) -> Result<ExitStatus> {
+    match qmp::connect(vm.qmp_port, Duration::from_secs(5)) {
+        Ok(mut client) => {
+            let _ = client.fire("quit");
+        }
+        Err(_) => {
+            let _ = vm.child.kill();
+        }
+    }
+    vm.child.wait().context("failed to wait for qemu")
 }
 
 struct BootedVm {
@@ -531,7 +609,7 @@ fn print_emu_help() {
 }
 
 fn emu_help_text() -> &'static str {
-    "qol emu commands:\n  qol emu list\n  qol emu doctor\n  qol emu up <environment>\n  qol emu shot <environment>\n  qol emu key <environment> <qcode>...\n  qol emu insert <environment>\n  qol emu pull <environment>\n  qol emu snap <environment>\n  qol emu sh <environment> <command>...\n  qol emu down <environment>\n\nControl verbs target the newest running `qol emu up` for that environment.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n"
+    "qol emu commands:\n  qol emu list\n  qol emu doctor\n  qol emu up <environment>\n  qol emu check <environment>\n  qol emu shot <environment>\n  qol emu key <environment> <qcode>...\n  qol emu insert <environment>\n  qol emu pull <environment>\n  qol emu snap <environment>\n  qol emu sh <environment> <command>...\n  qol emu down <environment>\n\nControl verbs target the newest running `qol emu up` for that environment.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n"
 }
 
 fn discover_environments() -> Result<Vec<Environment>> {
@@ -720,6 +798,8 @@ fn qemu_args(
         "user,model=virtio-net-pci".to_string(),
         "-device".to_string(),
         "qemu-xhci,id=xhci".to_string(),
+        "-device".to_string(),
+        "virtio-rng-pci".to_string(),
         "-display".to_string(),
         display.to_string(),
         "-qmp".to_string(),
@@ -930,6 +1010,7 @@ mod tests {
             "-serial tcp:127.0.0.1:5555,server,nowait",
             "-drive file=/a/b/overlay.qcow2,id=qoldisk,if=virtio,format=qcow2",
             "-device qemu-xhci,id=xhci",
+            "-device virtio-rng-pci",
         ];
         for fragment in expected {
             assert!(
