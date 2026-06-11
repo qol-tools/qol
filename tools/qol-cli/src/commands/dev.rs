@@ -10,47 +10,41 @@ use anyhow::{bail, Context, Result};
 use std::ffi::OsString;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{channel, Receiver};
+
+const RELOAD_ENV: &str = "QOL_DEV_RELOAD";
 
 pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
     let branch = optional_single_arg(args, "qol dev [worktree]")?;
     let root = repo_root()?;
+    let reload = std::env::var_os(RELOAD_ENV).is_some();
     print_title("qol dev");
     print_hint(verbose);
     match branch {
         Some(branch) => ensure_worktree_branch(&root, branch)?,
         None => clear_active_worktree_marker(),
     }
-    run_doctor_preflight(&root, verbose);
-    let buildable = collect_buildable_plugins(&root, skip_plugins)?;
-    build_plugins_batch(&root, &buildable, verbose)?;
-    run_dev_hook(&root, verbose)?;
-    run_step(
-        "check",
-        StepKind::Pending,
-        "rustfmt",
-        Command::new("cargo")
-            .current_dir(&root)
-            .args(["fmt", "--all", "--check"]),
-        verbose,
-    )?;
+    let buildable = boot_preflight(&root, verbose, skip_plugins, reload)?;
     host_facade::stop_qol_tray()?;
-    run_step(
-        "build",
-        StepKind::Pending,
-        "qol-tray dev",
-        Command::new("cargo").current_dir(&root).args([
-            "build",
-            "--bin",
-            "qol-tray",
-            "--features",
-            "dev",
-        ]),
-        verbose,
-    )?;
     let binary = root
         .join("target")
         .join("debug")
         .join(host_facade::exe_name("qol-tray"));
+    if !reload || !binary.is_file() {
+        run_step(
+            "build",
+            StepKind::Pending,
+            "qol-tray dev",
+            Command::new("cargo").current_dir(&root).args([
+                "build",
+                "--bin",
+                "qol-tray",
+                "--features",
+                "dev",
+            ]),
+            verbose,
+        )?;
+    }
     step_label("run", StepKind::Pending, &binary.display().to_string());
     let mut child = Command::new(&binary)
         .current_dir(&root)
@@ -61,23 +55,16 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         .spawn()
         .context("failed to start qol-tray dev process")?;
 
-    if !buildable.is_empty() {
-        if let Err(error) = wait_for_health() {
-            eprintln!("qol dev: dev server did not become healthy: {error:#}");
-        } else {
-            register_dev_links(&buildable);
-        }
-    }
-
-    if let Some(branch) = branch {
-        wait_for_health()?;
-        post_recompile(branch)?;
-    }
-
     let plugin_names: Vec<String> = buildable.iter().map(|p| display_name(&p.dir)).collect();
-    match dev_console::run_session(&mut child, verbose, plugin_names)? {
+    let boot = if reload {
+        Some(spawn_post_boot(buildable, branch.map(str::to_string)))
+    } else {
+        finish_boot(&buildable, branch)?;
+        None
+    };
+    match dev_console::run_session(&mut child, verbose, plugin_names, boot)? {
         dev_console::SessionEnd::UserQuit => Ok(()),
-        dev_console::SessionEnd::ReloadRequested => reload_self(verbose),
+        dev_console::SessionEnd::ReloadRequested => reload_self(),
         dev_console::SessionEnd::ChildExited(status) if status.success() => Ok(()),
         dev_console::SessionEnd::ChildExited(status) => {
             bail!("qol-tray dev process exited with {status}")
@@ -85,20 +72,92 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     }
 }
 
-fn reload_self(verbose: bool) -> Result<()> {
-    crate::setup::cmd_setup(&[], verbose)?;
+fn finish_boot(buildable: &[BuildablePlugin], branch: Option<&str>) -> Result<()> {
+    if !buildable.is_empty() {
+        if let Err(error) = wait_for_health() {
+            eprintln!("qol dev: dev server did not become healthy: {error:#}");
+        } else {
+            register_dev_links(buildable);
+        }
+    }
+    if let Some(branch) = branch {
+        wait_for_health()?;
+        post_recompile(branch)?;
+    }
+    Ok(())
+}
+
+fn spawn_post_boot(plugins: Vec<BuildablePlugin>, branch: Option<String>) -> Receiver<String> {
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        if plugins.is_empty() && branch.is_none() {
+            return;
+        }
+        if let Err(error) = wait_for_health() {
+            let _ = tx.send(format!(
+                "[qol dev] dev server did not become healthy: {error:#}"
+            ));
+            return;
+        }
+        for plugin in &plugins {
+            let display = display_name(&plugin.dir);
+            let message = match post_dev_link(&plugin.dir) {
+                Ok(DevLinkOutcome::Created) => format!("[qol dev] linked {display}"),
+                Ok(DevLinkOutcome::AlreadyLinked) => format!("[qol dev] link kept {display}"),
+                Err(error) => format!("[qol dev] failed to link {display}: {error:#}"),
+            };
+            let _ = tx.send(message);
+        }
+        let Some(branch) = branch else { return };
+        if let Err(error) = post_recompile(&branch) {
+            let _ = tx.send(format!(
+                "[qol dev] failed to recompile worktree {branch}: {error:#}"
+            ));
+        }
+    });
+    rx
+}
+
+fn boot_preflight(
+    root: &Path,
+    verbose: bool,
+    skip_plugins: bool,
+    reload: bool,
+) -> Result<Vec<BuildablePlugin>> {
+    if reload {
+        step_label("reload", StepKind::Info, "fast boot, preflight skipped");
+        return collect_buildable_plugins(root, skip_plugins);
+    }
+    run_doctor_preflight(root, verbose);
+    let buildable = collect_buildable_plugins(root, skip_plugins)?;
+    build_plugins_batch(root, &buildable, verbose)?;
+    run_dev_hook(root, verbose)?;
+    run_step(
+        "check",
+        StepKind::Pending,
+        "rustfmt",
+        Command::new("cargo")
+            .current_dir(root)
+            .args(["fmt", "--all", "--check"]),
+        verbose,
+    )?;
+    Ok(buildable)
+}
+
+fn reload_self() -> Result<()> {
     let exe = crate::setup::installed_qol_path()?;
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let mut command = Command::new(&exe);
+    command.args(&args).env(RELOAD_ENV, "1");
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        let error = Command::new(&exe).args(&args).exec();
+        let error = command.exec();
         Err(error).context("failed to exec the reloaded qol binary")
     }
     #[cfg(not(unix))]
     {
-        let status = Command::new(&exe)
-            .args(&args)
+        let status = command
             .status()
             .context("failed to run the reloaded qol binary")?;
         std::process::exit(status.code().unwrap_or(0));

@@ -61,7 +61,9 @@ logs
 trace
 ```
 
-After changing `tools/qol-cli`, run `qol setup` and restart the current `qol dev` session, or press ctrl+u inside the dashboard: it stops the tray child, runs `qol setup`, and re-execs the freshly installed binary with the original `qol dev` arguments. The running dashboard is otherwise the old process and cannot show newly compiled rows.
+After changing `tools/qol-cli`, run `qol setup` and restart the current `qol dev` session, or press ctrl+u inside the dashboard for a rolling reload: it runs `qol setup` as a child while the tray keeps running and the dashboard stays fully interactive, tinting the whole UI red with a `RELOADING` title and footer for the duration. On success it re-execs the freshly installed binary with the original `qol dev` arguments plus the `QOL_DEV_RELOAD` env marker; the reloaded instance fast-boots (skips doctor preflight, plugin builds, the dev hook, the rustfmt check, and the tray rebuild when `target/debug/qol-tray` exists) and enters the dashboard immediately, while the dev-server health wait, plugin dev-link registration, and any worktree recompile run on a background thread whose step results stream into the logs pane. The gap between the two UIs is just the tray respawn. When `qol setup` finds the install already current the red phase is near-instant and ctrl+u degenerates to a quick UI restart. A failed `qol setup` leaves the session running and logs the error. The running dashboard is otherwise the old process and cannot show newly compiled rows.
+
+ctrl+r rebuilds the tray and reloads plugins together. Rebuilding only the tray or only the plugins is done from the dashboard rows (Enter on `tray` or `plugins`).
 
 The emu pane is interactive: up/down select an environment, Enter launches
 `qol emu up <id>` for a `ready` one, and Enter while a run is active sends
