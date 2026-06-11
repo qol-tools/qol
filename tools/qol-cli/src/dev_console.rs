@@ -2051,6 +2051,7 @@ fn spawn_doctor(mode: DoctorMode) -> Receiver<Result<DoctorRun, String>> {
 
 fn run_doctor(mode: DoctorMode) -> Result<DoctorRun, String> {
     let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
+    build_doctor(&root)?;
     let binary = root
         .join("target")
         .join("debug")
@@ -2067,6 +2068,31 @@ fn run_doctor(mode: DoctorMode) -> Result<DoctorRun, String> {
         report,
         lines: doctor_lines(&text, mode),
     })
+}
+
+fn build_doctor(root: &std::path::Path) -> Result<(), String> {
+    let output = Command::new("cargo")
+        .current_dir(root)
+        .args([
+            "build",
+            "-p",
+            "qol-tray",
+            "--features",
+            "dev",
+            "--bin",
+            "qol-tray-doctor",
+        ])
+        .output()
+        .map_err(|error| error.to_string())?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = stderr
+        .lines()
+        .rfind(|line| line.contains("error"))
+        .unwrap_or("no cargo error line captured");
+    Err(format!("doctor build failed ({}): {detail}", output.status))
 }
 
 fn doctor_lines(text: &str, mode: DoctorMode) -> Vec<String> {
