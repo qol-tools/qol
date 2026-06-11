@@ -65,19 +65,24 @@ After changing `tools/qol-cli`, run `qol setup` and restart the current `qol dev
 `qol emu` is the QEMU-backed clean-environment MVP. Architecture (capability x
 platform grid, Medium injector strategy, Machine substrate, milestones M1-M5):
 `docs/superpowers/specs/2026-06-10-emu-test-harness-design.md`. M1 (launch) and
-the M2 control verbs are implemented; the remaining M2 item is arch-aware
-hvf/whpx selection (own plan), then M3 (first GuestOs adapter + workflow).
+M2 (control verbs + arch-aware accel) are complete; next is M3 (first GuestOs
+adapter + workflow).
 
-Verified on macOS arm64: hvf cannot accelerate x86_64 guests, so acceleration
-falls back to tcg whenever host arch differs from the guest arch. The QMP
-socket stays connectable after `up` reports `running`; the control verbs below
-use that socket, resolving the newest run whose `report.json` says `running`.
-QEMU emits `DEVICE_DELETED` before the `device_del` return, so the QMP client
-buffers events read while awaiting a return; `wait_event` checks that buffer
-first.
+Binary, accelerator, machine type, and firmware all derive from the guest
+arch (`GuestArch` in `commands/emu/arch.rs`): `qemu-system-<arch>`, hvf/kvm/
+whpx only when host arch == guest arch (else tcg), `q35` for x86_64 vs `virt`
++ edk2 pflash (located at `<bin>/../share/qemu/edk2-aarch64-code.fd`) +
+`-cpu host|max` for aarch64. Verified on macOS arm64: an aarch64 guest boots
+the EDK II UEFI shell under hvf; x86_64 guests fall back to tcg.
+
+The QMP socket stays connectable after `up` reports `running`; the control
+verbs below use that socket, resolving the newest run whose `report.json` says
+`running`. QEMU emits `DEVICE_DELETED` before the `device_del` return, so the
+QMP client buffers events read while awaiting a return; `wait_event` checks
+that buffer first.
 
 - `qol emu list`: list discovered/configured emus and resolver state.
-- `qol emu doctor`: show QEMU binaries, acceleration, config path, and run directory.
+- `qol emu doctor`: one row per guest arch (binary path + chosen accelerator), plus qemu-img, virsh, config path, and run directory.
 - `qol emu up <id>`: create a disposable qcow2 overlay, boot it in QEMU (per-host accel: kvm/hvf/whpx), confirm control over a loopback QMP socket, and block until the VM exits; teardown removes every disk image in the run dir (`overlay*.qcow2`, `usb-stick.raw`) and keeps `report.json`, `qemu-command.txt`, and screenshots. Report statuses: `running` while up, then `pass` / `failed` / `skipped`.
 - `qol emu shot <id>`: QMP screendump into the run dir (kept as evidence).
 - `qol emu key <id> <qcode>...`: send one key chord (e.g. `ctrl alt delete`).
@@ -94,18 +99,20 @@ Emus shown in `qol dev` must be found, not hard-coded. Discovery sources:
 - libvirt/QEMU domains from `virsh --connect qemu:///session list --all --name`
 - optional local image config
 
-Local image config:
+Local image config (string form defaults to x86_64; table form sets the arch):
 
 ```toml
 [images]
 my-windows = "/path/to/windows.qcow2"
+
+[images.my-arm-linux]
+path = "~/VMs/arm-linux.qcow2"
+arch = "aarch64"
 ```
 
-Config path:
-
-```text
-~/.config/qol-tray/emu.toml
-```
+Config path is the platform config dir as reported by `qol emu doctor`
+(macOS: `~/Library/Application Support/qol-tray/emu.toml`, Linux:
+`~/.config/qol-tray/emu.toml`).
 
 Run artifacts live under:
 
