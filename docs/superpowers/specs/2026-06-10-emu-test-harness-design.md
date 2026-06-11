@@ -35,7 +35,7 @@ M3 MVP deviations from the long-term contract:
 M4 started 2026-06-11: `qol emu run <workflow> <id>` resolves workflows from
 the registry in `commands/emu/workflow.rs`, and `check` is sugar for
 `run leaves-no-trace`. The `qol dev` emu pane is interactive: select an
-environment, Enter boots it, a space-modified Enter runs the check, Enter
+environment, Enter boots it, a space-armed Enter runs the check, Enter
 while active sends `down`. Remaining: adapter registry, the grid.
 
 ## Purpose
