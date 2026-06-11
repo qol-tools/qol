@@ -222,6 +222,20 @@ enum RebuildState {
     Failed(String),
 }
 
+enum Reload {
+    Idle,
+    Running {
+        child: Child,
+        rx: Receiver<String>,
+        since: Instant,
+    },
+}
+
+enum ReloadOutcome {
+    Pending,
+    Ready,
+}
+
 struct Dash {
     view: View,
     logs: LogRing,
@@ -248,12 +262,14 @@ struct Dash {
     trace: LogRing,
     trace_child: Option<Child>,
     trace_rx: Option<Receiver<String>>,
+    boot_rx: Option<Receiver<String>>,
     filter: String,
     filtering: bool,
     copy_count: String,
     copying: bool,
     copy_ack: Option<(Instant, String)>,
     armed: bool,
+    reload: Reload,
 }
 
 impl Dash {
@@ -284,13 +300,19 @@ impl Dash {
             trace: LogRing::new(),
             trace_child: None,
             trace_rx: None,
+            boot_rx: None,
             filter: String::new(),
             filtering: false,
             copy_count: String::new(),
             copying: false,
             copy_ack: None,
             armed: false,
+            reload: Reload::Idle,
         }
+    }
+
+    fn is_reloading(&self) -> bool {
+        matches!(self.reload, Reload::Running { .. })
     }
 
     fn start_doctor(&mut self) {
@@ -325,13 +347,15 @@ pub(crate) fn run_session(
     child: &mut Child,
     verbose: bool,
     plugins: Vec<String>,
+    boot: Option<Receiver<String>>,
 ) -> Result<SessionEnd> {
     let lines = spawn_forwarders(child);
     if verbose || !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
-        return plain_session(child, &lines);
+        return plain_session(child, &lines, boot);
     }
     let health = spawn_health_probe();
     let mut dash = Dash::new(plugins);
+    dash.boot_rx = boot;
     dash.start_doctor();
     let mut terminal = ratatui::init();
     let result = tui_session(&mut terminal, child, &lines, &health, &mut dash);
@@ -351,8 +375,17 @@ fn print_crash_tail(logs: &LogRing) {
     }
 }
 
-fn plain_session(child: &mut Child, lines: &Receiver<String>) -> Result<SessionEnd> {
+fn plain_session(
+    child: &mut Child,
+    lines: &Receiver<String>,
+    boot: Option<Receiver<String>>,
+) -> Result<SessionEnd> {
     loop {
+        if let Some(rx) = boot.as_ref() {
+            while let Ok(line) = rx.try_recv() {
+                println!("{line}");
+            }
+        }
         match lines.recv_timeout(TICK) {
             Ok(line) => println!("{line}"),
             Err(RecvTimeoutError::Timeout) => {}
@@ -414,7 +447,14 @@ fn tui_session(
             dash.doctor_rx = None;
         }
         drain_trace(dash);
+        drain_boot(dash);
         drain_emu_run(dash);
+        if let ReloadOutcome::Ready = poll_reload(dash) {
+            stop_trace(dash);
+            stop_emu_run(dash);
+            stop_child(child)?;
+            return Ok(SessionEnd::ReloadRequested);
+        }
         if let Some(status) = try_wait(child)? {
             while let Ok(line) = lines.try_recv() {
                 dash.logs.push(line);
@@ -442,12 +482,7 @@ fn tui_session(
                         stop_child(child)?;
                         return Ok(SessionEnd::UserQuit);
                     }
-                    Action::ReloadSelf => {
-                        stop_trace(dash);
-                        stop_emu_run(dash);
-                        stop_child(child)?;
-                        return Ok(SessionEnd::ReloadRequested);
-                    }
+                    Action::ReloadSelf => start_reload(dash),
                     action => {
                         apply_action(dash, action, modified);
                         if modified && !preserves_arm(action) {
@@ -469,6 +504,18 @@ fn drain_trace(dash: &mut Dash) {
     }
     for line in received {
         dash.trace.push(line);
+    }
+}
+
+fn drain_boot(dash: &mut Dash) {
+    let mut received = Vec::new();
+    if let Some(rx) = dash.boot_rx.as_ref() {
+        while let Ok(line) = rx.try_recv() {
+            received.push(line);
+        }
+    }
+    for line in received {
+        dash.logs.push(line);
     }
 }
 
@@ -878,6 +925,71 @@ fn stop_emu_run(dash: &mut Dash) {
     dash.emu_run = EmuRun::Idle;
 }
 
+fn start_reload(dash: &mut Dash) {
+    if dash.is_reloading() {
+        return;
+    }
+    match spawn_reload() {
+        Some((child, rx)) => {
+            dash.logs.push("[qol dev] reloading: qol setup".to_string());
+            dash.reload = Reload::Running {
+                child,
+                rx,
+                since: Instant::now(),
+            };
+        }
+        None => dash
+            .logs
+            .push("[qol dev] reload failed to start".to_string()),
+    }
+}
+
+fn spawn_reload() -> Option<(Child, Receiver<String>)> {
+    let exe = std::env::current_exe().ok()?;
+    let root = crate::workspace::repo_root().ok()?;
+    let mut child = Command::new(exe)
+        .arg("setup")
+        .current_dir(&root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let rx = spawn_forwarders(&mut child);
+    Some((child, rx))
+}
+
+fn poll_reload(dash: &mut Dash) -> ReloadOutcome {
+    let mut drained = Vec::new();
+    let status = match &mut dash.reload {
+        Reload::Idle => return ReloadOutcome::Pending,
+        Reload::Running { child, rx, .. } => {
+            while let Ok(line) = rx.try_recv() {
+                drained.push(line);
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => status,
+                _ => {
+                    for line in drained {
+                        dash.logs.push(line);
+                    }
+                    return ReloadOutcome::Pending;
+                }
+            }
+        }
+    };
+    for line in drained {
+        dash.logs.push(line);
+    }
+    dash.reload = Reload::Idle;
+    if status.success() {
+        return ReloadOutcome::Ready;
+    }
+    dash.logs
+        .push(format!("[qol dev] reload aborted: qol setup {status}"));
+    ReloadOutcome::Pending
+}
+
 fn trigger_rebuild(dash: &mut Dash) {
     dash.rebuild = match post_recompile_current() {
         Ok(()) => RebuildState::Requested(Instant::now()),
@@ -910,7 +1022,9 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         View::Trace => draw_trace(frame, dash, main),
         View::Endpoints => draw_endpoints(frame, dash, main),
     }
-    let status_style = if dash.armed || dash.filtering || dash.copying {
+    let status_style = if dash.is_reloading() {
+        Style::new().fg(Color::Red).bold()
+    } else if dash.armed || dash.filtering || dash.copying {
         Style::new().fg(Color::Yellow).bold()
     } else {
         Style::new().dim()
@@ -987,7 +1101,7 @@ fn draw_keys_hud(frame: &mut Frame, dash: &Dash, area: Rect) {
         height: footprint,
     };
     frame.render_widget(Clear, rect);
-    draw_badge_box(frame, rect, "keys", lines, accent_color(dash.armed));
+    draw_badge_box(frame, rect, "keys", lines, frame_accent(dash));
 }
 
 fn draw_badge_box(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>, accent: Color) {
@@ -1010,6 +1124,12 @@ fn draw_badge_box(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>, 
 }
 
 fn status_line(dash: &Dash) -> String {
+    if let Reload::Running { since, .. } = &dash.reload {
+        return format!(
+            " RELOADING qol dev · rebuilding · {}",
+            format_duration(since.elapsed())
+        );
+    }
     if dash.copying {
         return format!(
             " copy last N: {}_ · enter copy · esc cancel",
@@ -1102,8 +1222,10 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
         ),
     ];
 
-    let accent = accent_color(dash.armed);
-    let label = if dash.armed {
+    let accent = frame_accent(dash);
+    let label = if dash.is_reloading() {
+        "qol dev · RELOADING"
+    } else if dash.armed {
         "qol dev · ARMED"
     } else {
         "qol dev"
@@ -1218,8 +1340,10 @@ fn dash_row(selected: bool, color: Color, label: &str, value: Vec<Span<'static>>
     Line::from(spans)
 }
 
-fn accent_color(armed: bool) -> Color {
-    if armed {
+fn frame_accent(dash: &Dash) -> Color {
+    if dash.is_reloading() {
+        Color::Red
+    } else if dash.armed {
         Color::Yellow
     } else {
         Color::Green
@@ -1334,7 +1458,7 @@ fn emu_status(state: &EmuState) -> (Color, Vec<Span<'static>>) {
 }
 
 fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
-    let accent = accent_color(dash.armed);
+    let accent = frame_accent(dash);
     if dash.plugin_names.is_empty() {
         frame.render_widget(
             Paragraph::new("  no dev-linked plugins").block(panel(" plugins ", accent)),
@@ -1363,7 +1487,7 @@ fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
 }
 
 fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
-    let accent = accent_color(dash.armed);
+    let accent = frame_accent(dash);
     let config = emu_config_path()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "~/.config/qol-tray/emu.toml".to_string());
@@ -1531,7 +1655,7 @@ fn doctor_status(state: &DoctorState) -> (Color, Vec<Span<'static>>) {
 }
 
 fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
-    let accent = accent_color(dash.armed);
+    let accent = frame_accent(dash);
     let highlight = copy_highlight(dash);
     draw_stream(
         frame,
@@ -1547,7 +1671,7 @@ fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
 }
 
 fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
-    let accent = accent_color(dash.armed);
+    let accent = frame_accent(dash);
     if dash.trace.lines.is_empty() && dash.filter.is_empty() {
         frame.render_widget(
             Paragraph::new("  waiting for trace events").block(panel(" trace ", accent)),
@@ -1628,7 +1752,7 @@ fn trace_value(dash: &Dash) -> Vec<Span<'static>> {
 }
 
 fn draw_endpoints(frame: &mut Frame, dash: &Dash, area: Rect) {
-    let accent = accent_color(dash.armed);
+    let accent = frame_accent(dash);
     let lines: Vec<Line> = match &dash.endpoints {
         EndpointsState::Probing => vec![Line::from("  probing endpoints".fg(Color::DarkGray))],
         EndpointsState::Done(items) => items.iter().map(endpoint_line).collect(),
@@ -1653,7 +1777,7 @@ fn endpoint_line(status: &EndpointStatus) -> Line<'static> {
 }
 
 fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
-    let accent = accent_color(dash.armed);
+    let accent = frame_accent(dash);
     if dash.doctor_lines.is_empty() {
         let message = match dash.doctor {
             DoctorState::Running(mode) => mode.progress_message(),
@@ -2132,6 +2256,25 @@ mod tests {
             assert!(text.contains(expected), "missing {expected:?}");
             assert!(text.contains("ctrl+u"), "missing globals");
             assert!(text.contains("reload qol dev"), "missing globals");
+        }
+    }
+
+    #[test]
+    fn reloading_state_drives_red_accent_and_status() {
+        let mut dash = Dash::new(Vec::new());
+        let child = Command::new("true").spawn().unwrap();
+        let (_tx, rx) = channel();
+        dash.reload = Reload::Running {
+            child,
+            rx,
+            since: Instant::now(),
+        };
+        assert!(dash.is_reloading());
+        assert_eq!(frame_accent(&dash), Color::Red);
+        let status = status_line(&dash);
+        assert!(status.contains("RELOADING"), "{status}");
+        if let Reload::Running { mut child, .. } = dash.reload {
+            let _ = child.wait();
         }
     }
 
