@@ -207,9 +207,19 @@ fn cmd_doctor(args: &[OsString], verbose: bool) -> Result<()> {
     }
     print_title("qol emu doctor");
     print_hint(verbose);
-    match find_on_path("qemu-system-x86_64") {
-        Some(path) => step_label("qemu", StepKind::Success, &path.display().to_string()),
-        None => step_label("qemu", StepKind::Info, "missing qemu-system-x86_64"),
+    for arch in GuestArch::ALL {
+        match find_on_path(arch.qemu_system_binary()) {
+            Some(path) => step_label(
+                arch.as_str(),
+                StepKind::Success,
+                &format!("{} \u{b7} {}", path.display(), platform::acceleration(arch)),
+            ),
+            None => step_label(
+                arch.as_str(),
+                StepKind::Info,
+                &format!("missing {}", arch.qemu_system_binary()),
+            ),
+        }
     }
     match find_on_path("qemu-img") {
         Some(path) => step_label("qemu-img", StepKind::Success, &path.display().to_string()),
@@ -223,7 +233,6 @@ fn cmd_doctor(args: &[OsString], verbose: bool) -> Result<()> {
             "missing virsh (libvirt discovery disabled)",
         ),
     }
-    step_label("accel", StepKind::Info, platform::acceleration());
     if let Some(path) = emu_config_path() {
         step_label("config", StepKind::Info, &path.display().to_string());
     }
@@ -479,7 +488,7 @@ fn discover_environments() -> Result<Vec<Environment>> {
 fn resolve_environment(environment: &Environment) -> Resolution {
     let qemu_system = find_on_path(environment.arch.qemu_system_binary());
     let qemu_img = find_on_path("qemu-img");
-    let acceleration = platform::acceleration();
+    let acceleration = platform::acceleration(environment.arch);
     if qemu_system.is_none() {
         return Resolution {
             state: ResolveState::Unsupported,

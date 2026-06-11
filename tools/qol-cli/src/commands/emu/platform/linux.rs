@@ -2,12 +2,12 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub(crate) fn acceleration() -> &'static str {
-    if Path::new("/dev/kvm").exists() {
-        "kvm"
-    } else {
-        "tcg"
-    }
+pub(crate) fn hypervisor() -> &'static str {
+    "kvm"
+}
+
+pub(crate) fn hypervisor_available() -> bool {
+    Path::new("/dev/kvm").exists()
 }
 
 pub(crate) fn display() -> &'static str {
