@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 pub(crate) struct LiveRun {
     pub(crate) run_dir: PathBuf,
     pub(crate) qmp_port: u16,
+    pub(crate) serial_port: Option<u16>,
 }
 
 pub(crate) fn find(runs_root: &Path, id: &str) -> Result<LiveRun> {
@@ -19,14 +20,21 @@ pub(crate) fn find(runs_root: &Path, id: &str) -> Result<LiveRun> {
         let Ok(report) = serde_json::from_str::<Value>(&content) else {
             continue;
         };
-        let Some((started_at, qmp_port)) = running_report(&report, id) else {
+        let Some((started_at, qmp_port, serial_port)) = running_report(&report, id) else {
             continue;
         };
         let newer = best
             .as_ref()
             .is_none_or(|(best_started, _)| started_at > *best_started);
         if newer {
-            best = Some((started_at, LiveRun { run_dir, qmp_port }));
+            best = Some((
+                started_at,
+                LiveRun {
+                    run_dir,
+                    qmp_port,
+                    serial_port,
+                },
+            ));
         }
     }
     best.map(|(_, live)| live).ok_or_else(|| no_live_run(id))
@@ -36,7 +44,7 @@ fn no_live_run(id: &str) -> anyhow::Error {
     anyhow!("no running emu `{id}`; start one with `qol emu up {id}`")
 }
 
-fn running_report(report: &Value, id: &str) -> Option<(u64, u16)> {
+fn running_report(report: &Value, id: &str) -> Option<(u64, u16, Option<u16>)> {
     if report.get("environment")?.get("id")?.as_str()? != id {
         return None;
     }
@@ -45,7 +53,12 @@ fn running_report(report: &Value, id: &str) -> Option<(u64, u16)> {
     }
     let started_at = report.get("started_at_unix_ms")?.as_u64()?;
     let port = u16::try_from(report.get("qmp")?.get("port")?.as_u64()?).ok()?;
-    Some((started_at, port))
+    let serial_port = report
+        .get("serial")
+        .and_then(|serial| serial.get("port"))
+        .and_then(Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok());
+    Some((started_at, port, serial_port))
 }
 
 #[cfg(test)]
@@ -55,12 +68,19 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn running_report_filters_id_status_and_port() {
+    fn running_report_filters_id_status_and_ports() {
         let running = json!({
             "environment": {"id": "foo"},
             "status": "running",
             "started_at_unix_ms": 10u64,
             "qmp": {"port": 4444},
+            "serial": {"port": 4500},
+        });
+        let no_serial = json!({
+            "environment": {"id": "foo"},
+            "status": "running",
+            "started_at_unix_ms": 15u64,
+            "qmp": {"port": 4447},
         });
         let finished = json!({
             "environment": {"id": "foo"},
@@ -75,7 +95,8 @@ mod tests {
             "qmp": {"port": 4446},
         });
         let cases = [
-            (&running, Some((10u64, 4444u16))),
+            (&running, Some((10u64, 4444u16, Some(4500u16)))),
+            (&no_serial, Some((15u64, 4447u16, None))),
             (&finished, None),
             (&other_id, None),
         ];
@@ -100,10 +121,12 @@ mod tests {
         write(
             "foo-20",
             json!({"environment": {"id": "foo"}, "status": "running",
-                   "started_at_unix_ms": 20u64, "qmp": {"port": 5555}}),
+                   "started_at_unix_ms": 20u64, "qmp": {"port": 5555},
+                   "serial": {"port": 5600}}),
         );
         let live = find(&root, "foo").unwrap();
         assert_eq!(live.qmp_port, 5555);
+        assert_eq!(live.serial_port, Some(5600));
         assert_eq!(live.run_dir, root.join("foo-20"));
         assert!(find(&root, "bar").is_err(), "bar has no running run");
         fs::remove_dir_all(&root).unwrap();
