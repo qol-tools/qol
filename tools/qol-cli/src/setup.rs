@@ -16,7 +16,7 @@ pub(crate) fn cmd_setup(args: &[OsString], verbose: bool) -> Result<()> {
     }
     let root = repo_root()?;
     let package = root.join("tools").join("qol-cli");
-    let target = cargo_bin_dir()?.join(exe_name("qol"));
+    let target = installed_qol_path()?;
     let version = package_version(&package)?;
     print_title("qol setup");
     print_hint(verbose);
@@ -40,6 +40,10 @@ pub(crate) fn cmd_setup(args: &[OsString], verbose: bool) -> Result<()> {
     )?;
     step_label("ready", StepKind::Success, &target_display);
     Ok(())
+}
+
+pub(crate) fn installed_qol_path() -> Result<PathBuf> {
+    Ok(cargo_bin_dir()?.join(exe_name("qol")))
 }
 
 fn install_is_current(root: &Path, package: &Path, target: &Path, version: &str) -> Result<bool> {

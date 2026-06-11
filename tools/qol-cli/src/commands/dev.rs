@@ -77,10 +77,31 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     let plugin_names: Vec<String> = buildable.iter().map(|p| display_name(&p.dir)).collect();
     match dev_console::run_session(&mut child, verbose, plugin_names)? {
         dev_console::SessionEnd::UserQuit => Ok(()),
+        dev_console::SessionEnd::ReloadRequested => reload_self(verbose),
         dev_console::SessionEnd::ChildExited(status) if status.success() => Ok(()),
         dev_console::SessionEnd::ChildExited(status) => {
             bail!("qol-tray dev process exited with {status}")
         }
+    }
+}
+
+fn reload_self(verbose: bool) -> Result<()> {
+    crate::setup::cmd_setup(&[], verbose)?;
+    let exe = crate::setup::installed_qol_path()?;
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let error = Command::new(&exe).args(&args).exec();
+        Err(error).context("failed to exec the reloaded qol binary")
+    }
+    #[cfg(not(unix))]
+    {
+        let status = Command::new(&exe)
+            .args(&args)
+            .status()
+            .context("failed to run the reloaded qol binary")?;
+        std::process::exit(status.code().unwrap_or(0));
     }
 }
 

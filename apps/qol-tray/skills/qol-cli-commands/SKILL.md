@@ -61,7 +61,7 @@ logs
 trace
 ```
 
-After changing `tools/qol-cli`, run `qol setup` and restart the current `qol dev` session. The running dashboard is the old process and cannot show newly compiled rows.
+After changing `tools/qol-cli`, run `qol setup` and restart the current `qol dev` session, or press ctrl+u inside the dashboard: it stops the tray child, runs `qol setup`, and re-execs the freshly installed binary with the original `qol dev` arguments. The running dashboard is otherwise the old process and cannot show newly compiled rows.
 
 The emu pane is interactive: up/down select an environment, Enter launches
 `qol emu up <id>` for a `ready` one, and Enter while a run is active sends

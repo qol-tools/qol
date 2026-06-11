@@ -32,6 +32,7 @@ const ACK_TTL: Duration = Duration::from_secs(6);
 pub(crate) enum SessionEnd {
     ChildExited(ExitStatus),
     UserQuit,
+    ReloadRequested,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -39,6 +40,7 @@ enum Action {
     ToggleView,
     Rebuild,
     ReloadPlugins,
+    ReloadSelf,
     Doctor,
     Back,
     Activate,
@@ -59,6 +61,7 @@ fn action_for(code: KeyCode, mods: KeyModifiers) -> Action {
         return match code {
             KeyCode::Char('r') => Action::Rebuild,
             KeyCode::Char('p') => Action::ReloadPlugins,
+            KeyCode::Char('u') => Action::ReloadSelf,
             KeyCode::Char('c') => Action::Quit,
             _ => Action::Ignore,
         };
@@ -441,6 +444,12 @@ fn tui_session(
                         stop_child(child)?;
                         return Ok(SessionEnd::UserQuit);
                     }
+                    Action::ReloadSelf => {
+                        stop_trace(dash);
+                        stop_emu_run(dash);
+                        stop_child(child)?;
+                        return Ok(SessionEnd::ReloadRequested);
+                    }
                     action => {
                         apply_action(dash, action, modified);
                         if modified && !preserves_arm(action) {
@@ -624,7 +633,7 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
                 dash.scroll_offset = 0;
             }
         }
-        Action::Quit | Action::Ignore => {}
+        Action::Quit | Action::ReloadSelf | Action::Ignore => {}
     }
     let len = if dash.view == View::Trace {
         dash.trace.len()
@@ -1915,6 +1924,7 @@ mod tests {
             (KeyCode::Right, none, Action::Dive),
             (KeyCode::Char('r'), ctrl, Action::Rebuild),
             (KeyCode::Char('p'), ctrl, Action::ReloadPlugins),
+            (KeyCode::Char('u'), ctrl, Action::ReloadSelf),
             (KeyCode::Char('c'), ctrl, Action::Quit),
             (KeyCode::Char('q'), none, Action::Quit),
             (KeyCode::Up, none, Action::ScrollUp),
@@ -1929,6 +1939,7 @@ mod tests {
             (KeyCode::Char('r'), none, Action::Ignore),
             (KeyCode::Char('p'), none, Action::Ignore),
             (KeyCode::Char('x'), none, Action::Ignore),
+            (KeyCode::Char('u'), none, Action::Ignore),
         ];
         for (code, mods, expected) in cases {
             assert_eq!(action_for(code, mods), expected, "{code:?} {mods:?}");
