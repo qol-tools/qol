@@ -30,21 +30,19 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         .join("target")
         .join("debug")
         .join(host_facade::exe_name("qol-tray"));
-    if !reload || !binary.is_file() {
-        run_step(
+    run_step(
+        "build",
+        StepKind::Pending,
+        "qol-tray dev",
+        Command::new("cargo").current_dir(&root).args([
             "build",
-            StepKind::Pending,
-            "qol-tray dev",
-            Command::new("cargo").current_dir(&root).args([
-                "build",
-                "--bin",
-                "qol-tray",
-                "--features",
-                "dev",
-            ]),
-            verbose,
-        )?;
-    }
+            "--bin",
+            "qol-tray",
+            "--features",
+            "dev",
+        ]),
+        verbose,
+    )?;
     step_label("run", StepKind::Pending, &binary.display().to_string());
     let mut child = Command::new(&binary)
         .current_dir(&root)
