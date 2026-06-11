@@ -75,6 +75,7 @@ struct Resolution {
     qemu_system: Option<PathBuf>,
     qemu_img: Option<PathBuf>,
     acceleration: &'static str,
+    firmware: Option<PathBuf>,
 }
 
 pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
@@ -354,6 +355,7 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
         resolution.acceleration,
         platform::display(),
         qmp_port,
+        resolution.firmware.as_deref(),
     );
     let qemu_command = command_line(&qemu_system, &qemu_args);
     let qemu_command_path = run_dir.join("qemu-command.txt");
@@ -497,6 +499,7 @@ fn resolve_environment(environment: &Environment) -> Resolution {
             qemu_system,
             qemu_img,
             acceleration,
+            firmware: None,
         };
     }
     if qemu_img.is_none() {
@@ -507,8 +510,26 @@ fn resolve_environment(environment: &Environment) -> Resolution {
             qemu_system,
             qemu_img,
             acceleration,
+            firmware: None,
         };
     }
+    let firmware = match qemu_system.as_deref() {
+        Some(path) => match locate_firmware(path, environment.arch) {
+            Ok(firmware) => firmware,
+            Err(reason) => {
+                return Resolution {
+                    state: ResolveState::Unsupported,
+                    reason,
+                    image_path: environment.image_path.clone(),
+                    qemu_system,
+                    qemu_img,
+                    acceleration,
+                    firmware: None,
+                }
+            }
+        },
+        None => None,
+    };
     match image_path_status(&environment.image_path) {
         Ok(canonical) => Resolution {
             state: ResolveState::Ready,
@@ -517,6 +538,7 @@ fn resolve_environment(environment: &Environment) -> Resolution {
             qemu_system,
             qemu_img,
             acceleration,
+            firmware,
         },
         Err((state, reason)) => Resolution {
             state,
@@ -525,7 +547,26 @@ fn resolve_environment(environment: &Environment) -> Resolution {
             qemu_system,
             qemu_img,
             acceleration,
+            firmware,
         },
+    }
+}
+
+fn locate_firmware(
+    qemu_system: &Path,
+    arch: GuestArch,
+) -> std::result::Result<Option<PathBuf>, String> {
+    let Some(file) = arch.firmware_file() else {
+        return Ok(None);
+    };
+    let Some(bin_dir) = qemu_system.parent() else {
+        return Err(format!("{} has no parent directory", qemu_system.display()));
+    };
+    let share = bin_dir.join("../share/qemu");
+    let candidate = share.join(file);
+    match candidate.canonicalize() {
+        Ok(path) if path.is_file() => Ok(Some(path)),
+        _ => Err(format!("missing {file} under {}", share.display())),
     }
 }
 
@@ -581,18 +622,37 @@ fn qemu_args(
     acceleration: &str,
     display: &str,
     qmp_port: u16,
+    firmware: Option<&Path>,
 ) -> Vec<String> {
-    vec![
+    let mut args = vec![
         "-name".to_string(),
         format!("qol-emu-{}", environment.id),
         "-machine".to_string(),
-        "q35".to_string(),
+        environment.arch.machine_type().to_string(),
         "-accel".to_string(),
         acceleration.to_string(),
         "-m".to_string(),
         "4096".to_string(),
         "-smp".to_string(),
         "2".to_string(),
+    ];
+    match environment.arch {
+        GuestArch::X86_64 => {}
+        GuestArch::Aarch64 => {
+            let cpu = if acceleration == "tcg" { "max" } else { "host" };
+            args.extend(["-cpu".to_string(), cpu.to_string()]);
+        }
+    }
+    if let Some(firmware) = firmware {
+        args.extend([
+            "-drive".to_string(),
+            format!(
+                "if=pflash,format=raw,readonly=on,file={}",
+                firmware.display()
+            ),
+        ]);
+    }
+    args.extend([
         "-drive".to_string(),
         format!(
             "file={},id=qoldisk,if=virtio,format=qcow2",
@@ -606,7 +666,8 @@ fn qemu_args(
         display.to_string(),
         "-qmp".to_string(),
         format!("tcp:127.0.0.1:{qmp_port},server,nowait"),
-    ]
+    ]);
+    args
 }
 
 fn run_child_status(program: &Path, args: &[String], verbose: bool) -> Result<ExitStatus> {
@@ -794,6 +855,7 @@ mod tests {
             "kvm",
             "gtk",
             4444,
+            None,
         );
         let joined = args.join(" ");
         let expected = [
@@ -809,6 +871,77 @@ mod tests {
                 "missing `{fragment}` in: {joined}"
             );
         }
+        assert!(joined.contains("-machine q35"), "machine in: {joined}");
+        assert!(!joined.contains("-cpu"), "unexpected -cpu in: {joined}");
+        assert!(!joined.contains("pflash"), "unexpected pflash in: {joined}");
+    }
+
+    #[test]
+    fn qemu_args_wire_aarch64_machine_cpu_and_firmware() {
+        let environment = Environment {
+            id: "foo".to_string(),
+            name: "Foo".to_string(),
+            backend: "qemu".to_string(),
+            arch: GuestArch::Aarch64,
+            image_path: PathBuf::from("/a/b/base.qcow2"),
+            source: "config".to_string(),
+        };
+        let accelerated = qemu_args(
+            &environment,
+            Path::new("/a/b/overlay.qcow2"),
+            "hvf",
+            "cocoa",
+            4444,
+            Some(Path::new("/fw/edk2-aarch64-code.fd")),
+        )
+        .join(" ");
+        let expected = [
+            "-machine virt",
+            "-cpu host",
+            "-drive if=pflash,format=raw,readonly=on,file=/fw/edk2-aarch64-code.fd",
+        ];
+        for fragment in expected {
+            assert!(
+                accelerated.contains(fragment),
+                "missing `{fragment}` in: {accelerated}"
+            );
+        }
+        let emulated = qemu_args(
+            &environment,
+            Path::new("/a/b/overlay.qcow2"),
+            "tcg",
+            "cocoa",
+            4444,
+            None,
+        )
+        .join(" ");
+        assert!(emulated.contains("-cpu max"), "cpu in: {emulated}");
+        assert!(
+            !emulated.contains("pflash"),
+            "unexpected pflash in: {emulated}"
+        );
+    }
+
+    #[test]
+    fn locate_firmware_finds_edk2_next_to_binary() {
+        let root = std::env::temp_dir().join(format!("qol-emu-fw-{}", std::process::id()));
+        let bin = root.join("bin");
+        let share = root.join("share/qemu");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&share).unwrap();
+        let qemu_system = bin.join("qemu-system-aarch64");
+        fs::write(&qemu_system, b"x").unwrap();
+
+        assert_eq!(locate_firmware(&qemu_system, GuestArch::X86_64), Ok(None));
+        let missing = locate_firmware(&qemu_system, GuestArch::Aarch64).unwrap_err();
+        assert!(missing.contains("edk2-aarch64-code.fd"), "error: {missing}");
+
+        fs::write(share.join("edk2-aarch64-code.fd"), b"fw").unwrap();
+        let found = locate_firmware(&qemu_system, GuestArch::Aarch64)
+            .unwrap()
+            .unwrap();
+        assert!(found.ends_with("edk2-aarch64-code.fd"), "found: {found:?}");
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

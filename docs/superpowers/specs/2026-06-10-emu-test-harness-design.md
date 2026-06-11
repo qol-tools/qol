@@ -9,8 +9,10 @@ Items marked "(default, redline in review)" are my calls on forks that were left
 during brainstorming.
 
 M1 implemented 2026-06-10. M2 control surface implemented 2026-06-10
-(shot/key/insert/pull/snap/down, plan `2026-06-10-emu-m2-control-surface.md`);
-the hvf/whpx finish remains as its own follow-up plan.
+(shot/key/insert/pull/snap/down, plan `2026-06-10-emu-m2-control-surface.md`).
+M2 completed 2026-06-11 with arch-aware binary/accel/firmware selection
+(plan `2026-06-11-emu-arch-aware-accel.md`): hvf-accelerated aarch64 guests
+verified on macOS arm64 booting the EDK II UEFI shell. Next: M3.
 
 ## Purpose
 

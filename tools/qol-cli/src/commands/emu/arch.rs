@@ -28,6 +28,20 @@ impl GuestArch {
             GuestArch::Aarch64 => "qemu-system-aarch64",
         }
     }
+
+    pub(crate) fn machine_type(self) -> &'static str {
+        match self {
+            GuestArch::X86_64 => "q35",
+            GuestArch::Aarch64 => "virt",
+        }
+    }
+
+    pub(crate) fn firmware_file(self) -> Option<&'static str> {
+        match self {
+            GuestArch::X86_64 => None,
+            GuestArch::Aarch64 => Some("edk2-aarch64-code.fd"),
+        }
+    }
 }
 
 #[cfg(test)]
