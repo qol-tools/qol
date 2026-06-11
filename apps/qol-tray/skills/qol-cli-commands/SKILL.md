@@ -63,6 +63,15 @@ trace
 
 After changing `tools/qol-cli`, run `qol setup` and restart the current `qol dev` session. The running dashboard is the old process and cannot show newly compiled rows.
 
+The emu pane is interactive: up/down select an environment, Enter launches
+`qol emu up <id>` for a `ready` one, and Enter while a run is active sends
+`qol emu down`. Space arms the MODIFIED mode (the same modifier grammar as
+the dashboard rows); a modified Enter launches `qol emu check <id>`.
+The child re-invokes the current `qol` binary; its output streams into the
+pane below the config lines, and the environment list force-refreshes when
+the child exits. Quitting the dashboard sends `down`, waits up to the stop
+grace, then kills the child.
+
 ## Emu
 
 `qol emu` is the QEMU-backed clean-environment MVP. Architecture (capability x

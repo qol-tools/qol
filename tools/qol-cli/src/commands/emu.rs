@@ -22,7 +22,7 @@ mod qmp;
 mod serial;
 mod workflow;
 
-use arch::GuestArch;
+pub(crate) use arch::GuestArch;
 use discovery::DiscoveryContext;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
