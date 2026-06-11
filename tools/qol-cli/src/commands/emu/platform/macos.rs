@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
-pub(crate) fn acceleration() -> &'static str {
-    if cfg!(target_arch = "x86_64") {
-        "hvf"
-    } else {
-        "tcg"
-    }
+pub(crate) fn hypervisor() -> &'static str {
+    "hvf"
+}
+
+pub(crate) fn hypervisor_available() -> bool {
+    true
 }
 
 pub(crate) fn display() -> &'static str {

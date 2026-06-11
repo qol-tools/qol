@@ -5,6 +5,8 @@ pub(crate) enum GuestArch {
 }
 
 impl GuestArch {
+    pub(crate) const ALL: [GuestArch; 2] = [GuestArch::X86_64, GuestArch::Aarch64];
+
     pub(crate) fn parse(value: &str) -> Option<GuestArch> {
         match value {
             "x86_64" => Some(GuestArch::X86_64),
