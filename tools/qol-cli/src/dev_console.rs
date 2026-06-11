@@ -39,7 +39,6 @@ pub(crate) enum SessionEnd {
 enum Action {
     ToggleView,
     Rebuild,
-    ReloadPlugins,
     ReloadSelf,
     Doctor,
     Back,
@@ -60,7 +59,6 @@ fn action_for(code: KeyCode, mods: KeyModifiers) -> Action {
     if mods.contains(KeyModifiers::CONTROL) {
         return match code {
             KeyCode::Char('r') => Action::Rebuild,
-            KeyCode::Char('p') => Action::ReloadPlugins,
             KeyCode::Char('u') => Action::ReloadSelf,
             KeyCode::Char('c') => Action::Quit,
             _ => Action::Ignore,
@@ -580,8 +578,10 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             dash.scroll_offset = 0;
             dash.filter.clear();
         }
-        Action::Rebuild => trigger_rebuild(dash),
-        Action::ReloadPlugins => trigger_reload(dash),
+        Action::Rebuild => {
+            trigger_rebuild(dash);
+            trigger_reload(dash);
+        }
         Action::Doctor => open_doctor(dash),
         Action::Activate => match dash.view {
             View::Dashboard => act_row(dash, modified),
@@ -955,8 +955,7 @@ fn keys_legend(view: View) -> Vec<(&'static str, &'static str)> {
     };
     let mut keys = view_keys.to_vec();
     keys.extend([
-        ("ctrl+r", "rebuild tray"),
-        ("ctrl+p", "reload plugins"),
+        ("ctrl+r", "rebuild tray+plugins"),
         ("ctrl+u", "reload qol dev"),
         ("q", "quit"),
     ]);
@@ -2007,7 +2006,7 @@ mod tests {
             (KeyCode::Enter, none, Action::Activate),
             (KeyCode::Right, none, Action::Dive),
             (KeyCode::Char('r'), ctrl, Action::Rebuild),
-            (KeyCode::Char('p'), ctrl, Action::ReloadPlugins),
+            (KeyCode::Char('p'), ctrl, Action::Ignore),
             (KeyCode::Char('u'), ctrl, Action::ReloadSelf),
             (KeyCode::Char('c'), ctrl, Action::Quit),
             (KeyCode::Char('q'), none, Action::Quit),
