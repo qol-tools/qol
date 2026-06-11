@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod arch;
 mod control;
 mod discovery;
 mod live;
@@ -18,6 +19,7 @@ mod machine;
 mod platform;
 mod qmp;
 
+use arch::GuestArch;
 use discovery::DiscoveryContext;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,7 +27,7 @@ pub(crate) struct Environment {
     id: String,
     name: String,
     backend: String,
-    arch: String,
+    arch: GuestArch,
     image_path: PathBuf,
     source: String,
 }
@@ -52,7 +54,7 @@ pub(crate) struct EnvironmentStatus {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) backend: String,
-    pub(crate) arch: String,
+    pub(crate) arch: GuestArch,
     pub(crate) state: ResolveState,
     pub(crate) reason: String,
     pub(crate) last_run: Option<LastRun>,
@@ -475,13 +477,13 @@ fn discover_environments() -> Result<Vec<Environment>> {
 }
 
 fn resolve_environment(environment: &Environment) -> Resolution {
-    let qemu_system = find_on_path("qemu-system-x86_64");
+    let qemu_system = find_on_path(environment.arch.qemu_system_binary());
     let qemu_img = find_on_path("qemu-img");
     let acceleration = platform::acceleration();
     if qemu_system.is_none() {
         return Resolution {
             state: ResolveState::Unsupported,
-            reason: "missing qemu-system-x86_64".to_string(),
+            reason: format!("missing {}", environment.arch.qemu_system_binary()),
             image_path: environment.image_path.clone(),
             qemu_system,
             qemu_img,
@@ -643,7 +645,7 @@ fn report_json(input: ReportInput<'_>) -> Result<serde_json::Value> {
             "id": input.environment.id,
             "name": input.environment.name,
             "backend": input.environment.backend,
-            "arch": input.environment.arch,
+            "arch": input.environment.arch.as_str(),
             "image_path": input.environment.image_path,
             "source": input.environment.source,
         },
@@ -773,7 +775,7 @@ mod tests {
             id: "foo".to_string(),
             name: "Foo".to_string(),
             backend: "qemu".to_string(),
-            arch: "x86_64".to_string(),
+            arch: GuestArch::X86_64,
             image_path: PathBuf::from("/a/b/base.qcow2"),
             source: "config".to_string(),
         };

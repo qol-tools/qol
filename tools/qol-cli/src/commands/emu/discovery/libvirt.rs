@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::super::{sanitize_id, Environment};
+use super::super::{arch::GuestArch, sanitize_id, Environment};
 
 pub(crate) fn discover(virsh: Option<&Path>, uris: &[&str]) -> Vec<Environment> {
     let Some(virsh) = virsh else {
@@ -20,7 +20,7 @@ pub(crate) fn discover(virsh: Option<&Path>, uris: &[&str]) -> Vec<Environment> 
                 id: sanitize_id(&domain),
                 name: domain,
                 backend: "qemu".to_string(),
-                arch: "x86_64".to_string(),
+                arch: GuestArch::X86_64,
                 image_path,
                 source: format!("libvirt:{uri}"),
             });

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::super::{humanize_id, sanitize_id, Environment};
+use super::super::{arch::GuestArch, humanize_id, sanitize_id, Environment};
 
 const MAX_SCAN_DEPTH: usize = 4;
 
@@ -45,7 +45,7 @@ fn collect_image_environments(
             name: humanize_id(&id),
             id,
             backend: "qemu".to_string(),
-            arch: "x86_64".to_string(),
+            arch: GuestArch::X86_64,
             image_path: canonical,
             source: "scan".to_string(),
         });
