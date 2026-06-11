@@ -14,10 +14,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 mod arch;
 mod control;
 mod discovery;
+mod guest;
 mod live;
 mod machine;
 mod platform;
 mod qmp;
+mod serial;
 
 use arch::GuestArch;
 use discovery::DiscoveryContext;
@@ -93,6 +95,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
         "insert" => control::cmd_insert(rest, verbose),
         "pull" => control::cmd_pull(rest, verbose),
         "snap" => control::cmd_snap(rest, verbose),
+        "sh" => control::cmd_sh(rest, verbose),
         "down" => control::cmd_down(rest, verbose),
         "help" | "-h" | "--help" => {
             print_emu_help();
@@ -481,7 +484,7 @@ fn print_emu_help() {
 }
 
 fn emu_help_text() -> &'static str {
-    "qol emu commands:\n  qol emu list\n  qol emu doctor\n  qol emu up <environment>\n  qol emu shot <environment>\n  qol emu key <environment> <qcode>...\n  qol emu insert <environment>\n  qol emu pull <environment>\n  qol emu snap <environment>\n  qol emu down <environment>\n\nControl verbs target the newest running `qol emu up` for that environment.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n"
+    "qol emu commands:\n  qol emu list\n  qol emu doctor\n  qol emu up <environment>\n  qol emu shot <environment>\n  qol emu key <environment> <qcode>...\n  qol emu insert <environment>\n  qol emu pull <environment>\n  qol emu snap <environment>\n  qol emu sh <environment> <command>...\n  qol emu down <environment>\n\nControl verbs target the newest running `qol emu up` for that environment.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n"
 }
 
 fn discover_environments() -> Result<Vec<Environment>> {

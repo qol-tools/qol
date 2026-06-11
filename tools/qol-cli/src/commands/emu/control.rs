@@ -6,9 +6,11 @@ use std::time::Duration;
 use crate::progress::{print_hint, print_title, step_label, StepKind};
 use crate::workspace::repo_root;
 
-use super::{find_on_path, live, machine, qmp, unix_millis};
+use super::guest::{DebianNocloud, GuestOs};
+use super::{find_on_path, live, machine, qmp, serial, unix_millis};
 
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
+const SH_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) fn cmd_shot(args: &[OsString], verbose: bool) -> Result<()> {
     let id = single_id(args, "shot")?;
@@ -45,6 +47,24 @@ pub(crate) fn cmd_insert(args: &[OsString], verbose: bool) -> Result<()> {
     let mut client = qmp::connect(live.qmp_port, CONTROL_TIMEOUT)?;
     client.attach_usb_stick(&stick)?;
     step_label("insert", StepKind::Success, &stick.display().to_string());
+    Ok(())
+}
+
+pub(crate) fn cmd_sh(args: &[OsString], verbose: bool) -> Result<()> {
+    let (id, words) = id_and_rest(args, "sh", "<command>...")?;
+    print_title("qol emu sh");
+    print_hint(verbose);
+    let live = live::find(&runs_root()?, &id)?;
+    let port = live
+        .serial_port
+        .ok_or_else(|| anyhow!("run has no serial console; rerun `qol emu up {id}`"))?;
+    let mut serial = serial::connect(port, CONTROL_TIMEOUT)?;
+    DebianNocloud.ensure_root_shell(&mut serial)?;
+    let command = words.join(" ");
+    let output = serial.run_command(&command, SH_TIMEOUT)?;
+    print!("{output}");
+    println!();
+    step_label("sh", StepKind::Success, &command);
     Ok(())
 }
 
