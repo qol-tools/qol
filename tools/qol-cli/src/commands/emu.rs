@@ -258,6 +258,43 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
     let target = args[0]
         .to_str()
         .ok_or_else(|| anyhow!("environment id is not valid UTF-8"))?;
+    print_title("qol emu up");
+    print_hint(verbose);
+    let mut vm = boot_vm(target, "up", verbose)?;
+    step_label(
+        "running",
+        StepKind::Success,
+        "close the VM window to end the run",
+    );
+    let exit = vm.child.wait().context("failed to wait for qemu")?;
+    let (report_path, removed) = finalize_vm(vm, exit, None, "up")?;
+    step_label(
+        "clean",
+        StepKind::Success,
+        &format!("removed {} disposable file(s)", removed.len()),
+    );
+    step_label("report", StepKind::Info, &report_path.display().to_string());
+    if !exit.success() {
+        bail!("qemu exited with {exit}");
+    }
+    Ok(())
+}
+
+struct BootedVm {
+    environment: Environment,
+    resolution: Resolution,
+    run_dir: PathBuf,
+    qemu_command_path: PathBuf,
+    commands: Vec<serde_json::Value>,
+    qmp_port: u16,
+    serial_port: u16,
+    qemu_version: String,
+    vm_status: String,
+    child: std::process::Child,
+    started_at: u64,
+}
+
+fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> {
     let root = repo_root()?;
     let environments = discover_environments()?;
     if environments.is_empty() {
@@ -276,8 +313,6 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
     fs::create_dir_all(&run_dir)
         .with_context(|| format!("failed to create {}", run_dir.display()))?;
 
-    print_title("qol emu up");
-    print_hint(verbose);
     step_label(
         "resolve",
         kind_for_resolution(resolution.state),
@@ -295,6 +330,7 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
             commands: Vec::new(),
             qmp: None,
             serial: None,
+            workflow: None,
             teardown: None,
             next: next_for_resolution(&environment, &resolution),
             started_at,
@@ -341,8 +377,9 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
             })],
             qmp: None,
             serial: None,
+            workflow: None,
             teardown: None,
-            next: vec!["Inspect the qemu-img output, remove the run directory if needed, then rerun `qol emu up`.".to_string()],
+            next: vec![format!("Inspect the qemu-img output, remove the run directory if needed, then rerun `qol emu {command_name}`.")],
             started_at,
         })?;
         write_report(&run_dir, &report)?;
@@ -411,8 +448,11 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
                 commands,
                 qmp: Some(json!({ "port": qmp_port, "error": error.to_string() })),
                 serial: Some(json!({ "port": serial_port })),
+                workflow: None,
                 teardown: Some(json!({ "removed": removed })),
-                next: vec!["Inspect the qemu output above, then rerun `qol emu up`.".to_string()],
+                next: vec![format!(
+                    "Inspect the qemu output above, then rerun `qol emu {command_name}`."
+                )],
                 started_at,
             })?;
             write_report(&run_dir, &report)?;
@@ -434,49 +474,56 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
         commands: commands.clone(),
         qmp: Some(json!({ "port": qmp_port, "qemu_version": qemu_version, "status": vm_status })),
         serial: Some(json!({ "port": serial_port })),
+        workflow: None,
         teardown: None,
         next: vec!["Close the VM window (or shut the guest down) to end the run.".to_string()],
         started_at,
     })?;
     write_report(&run_dir, &report)?;
-    step_label(
-        "running",
-        StepKind::Success,
-        "close the VM window to end the run",
-    );
+    Ok(BootedVm {
+        environment,
+        resolution,
+        run_dir,
+        qemu_command_path,
+        commands,
+        qmp_port,
+        serial_port,
+        qemu_version,
+        vm_status,
+        child,
+        started_at,
+    })
+}
 
-    let exit = child.wait().context("failed to wait for qemu")?;
-    let removed = machine::teardown(&run_dir)?;
+fn finalize_vm(
+    vm: BootedVm,
+    exit: ExitStatus,
+    workflow: Option<serde_json::Value>,
+    command_name: &str,
+) -> Result<(PathBuf, Vec<PathBuf>)> {
+    let removed = machine::teardown(&vm.run_dir)?;
     let final_status = if exit.success() { "pass" } else { "failed" };
     let report = report_json(ReportInput {
-        environment: &environment,
-        resolution: &resolution,
-        run_dir: &run_dir,
+        environment: &vm.environment,
+        resolution: &vm.resolution,
+        run_dir: &vm.run_dir,
         status: final_status,
         overlay: None,
-        qemu_command: Some(&qemu_command_path),
-        commands,
-        qmp: Some(json!({ "port": qmp_port, "qemu_version": qemu_version, "status": vm_status })),
-        serial: Some(json!({ "port": serial_port })),
+        qemu_command: Some(&vm.qemu_command_path),
+        commands: vm.commands.clone(),
+        qmp: Some(
+            json!({ "port": vm.qmp_port, "qemu_version": vm.qemu_version, "status": vm.vm_status }),
+        ),
+        serial: Some(json!({ "port": vm.serial_port })),
+        workflow,
         teardown: Some(json!({ "removed": removed, "exit": exit.to_string() })),
-        next: vec!["Rerun `qol emu up` for a fresh disposable clone.".to_string()],
-        started_at,
+        next: vec![format!(
+            "Rerun `qol emu {command_name}` for a fresh disposable clone."
+        )],
+        started_at: vm.started_at,
     })?;
-    write_report(&run_dir, &report)?;
-    step_label(
-        "clean",
-        StepKind::Success,
-        &format!("removed {} disposable file(s)", removed.len()),
-    );
-    step_label(
-        "report",
-        StepKind::Info,
-        &run_dir.join("report.json").display().to_string(),
-    );
-    if !exit.success() {
-        bail!("qemu exited with {exit}");
-    }
-    Ok(())
+    write_report(&vm.run_dir, &report)?;
+    Ok((vm.run_dir.join("report.json"), removed))
 }
 
 fn print_emu_help() {
@@ -713,6 +760,7 @@ struct ReportInput<'a> {
     commands: Vec<serde_json::Value>,
     qmp: Option<serde_json::Value>,
     serial: Option<serde_json::Value>,
+    workflow: Option<serde_json::Value>,
     teardown: Option<serde_json::Value>,
     next: Vec<String>,
     started_at: u64,
@@ -750,6 +798,7 @@ fn report_json(input: ReportInput<'_>) -> Result<serde_json::Value> {
         "commands": input.commands,
         "qmp": input.qmp,
         "serial": input.serial,
+        "workflow": input.workflow,
         "teardown": input.teardown,
         "next": input.next,
     }))
