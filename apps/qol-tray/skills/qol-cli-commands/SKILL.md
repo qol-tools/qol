@@ -25,6 +25,7 @@ qol dev [worktree]
 qol emu list
 qol emu doctor
 qol emu up <environment>
+qol emu run <workflow> <environment>
 qol emu check <environment>
 qol emu sh <environment> <command>...
 qol cat [--no-less] [--plain|--color=auto|always|never] <path|->
@@ -98,7 +99,8 @@ and run commands with an explicit return-code marker.
 - `qol emu list`: list discovered/configured emus and resolver state.
 - `qol emu doctor`: one row per guest arch (binary path + chosen accelerator), plus qemu-img, virsh, config path, and run directory.
 - `qol emu up <id>`: create a disposable qcow2 overlay, boot it in QEMU (per-host accel: kvm/hvf/whpx), confirm control over a loopback QMP socket, and block until the VM exits; teardown removes every disk image in the run dir (`overlay*.qcow2`, `usb-stick.raw`) and keeps `report.json`, `qemu-command.txt`, and screenshots. Report statuses: `running` while up, then `pass` / `failed` / `skipped`.
-- `qol emu check <id>`: boot a fresh disposable VM, run `leaves-no-trace` through QMP + serial (`insert`, provision/run stub from stick, `pull`, reboot, list traces), write `workflow: {id, verdict, traces}` into `report.json`, and exit nonzero when the workflow verdict fails or errors.
+- `qol emu run <workflow> <id>`: resolve the workflow by id from the registry in `commands/emu/workflow.rs` (currently `leaves-no-trace`), boot a fresh disposable VM, drive the workflow through QMP + serial, write `workflow: {id, verdict, traces}` into `report.json`, and exit nonzero when the workflow verdict fails or errors. An unknown workflow id lists the registered ones.
+- `qol emu check <id>`: sugar for `qol emu run leaves-no-trace <id>` (`insert`, provision/run stub from stick, `pull`, reboot, list traces).
 - `qol emu shot <id>`: QMP screendump into the run dir (kept as evidence).
 - `qol emu key <id> <qcode>...`: send one key chord (e.g. `ctrl alt delete`).
 - `qol emu insert <id>` / `qol emu pull <id>`: hot-plug a scratch 16M USB stick (xhci + usb-storage); pull waits for `DEVICE_DELETED` then drops the blockdev.

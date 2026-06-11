@@ -60,7 +60,21 @@ impl Run<'_> {
     }
 }
 
-pub(crate) fn leaves_no_trace(run: &mut Run) -> Result<Verdict> {
+pub(crate) type Workflow = fn(&mut Run) -> Result<Verdict>;
+
+const REGISTRY: &[(&str, Workflow)] = &[("leaves-no-trace", leaves_no_trace)];
+
+pub(crate) fn find(id: &str) -> Option<Workflow> {
+    REGISTRY
+        .iter()
+        .find_map(|(name, workflow)| (*name == id).then_some(*workflow))
+}
+
+pub(crate) fn ids() -> Vec<&'static str> {
+    REGISTRY.iter().map(|(name, _)| *name).collect()
+}
+
+fn leaves_no_trace(run: &mut Run) -> Result<Verdict> {
     run.insert()?;
     run.launch_qol()?;
     run.pull()?;
@@ -70,4 +84,22 @@ pub(crate) fn leaves_no_trace(run: &mut Run) -> Result<Verdict> {
         pass: traces.is_empty(),
         traces,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_resolves_only_registered_workflows() {
+        let cases = [("leaves-no-trace", true), ("unknown", false), ("", false)];
+        for (id, expected) in cases {
+            assert_eq!(find(id).is_some(), expected, "id: {id}");
+        }
+    }
+
+    #[test]
+    fn ids_lists_every_registered_workflow() {
+        assert_eq!(ids(), vec!["leaves-no-trace"]);
+    }
 }

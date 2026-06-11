@@ -91,6 +91,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
         "list" => cmd_list(rest, verbose),
         "doctor" => cmd_doctor(rest, verbose),
         "up" => cmd_up(rest, verbose),
+        "run" => cmd_run(rest, verbose),
         "check" => cmd_check(rest, verbose),
         "shot" => control::cmd_shot(rest, verbose),
         "key" => control::cmd_key(rest, verbose),
@@ -282,6 +283,19 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
     Ok(())
 }
 
+fn cmd_run(args: &[OsString], verbose: bool) -> Result<()> {
+    if args.len() != 2 {
+        bail!("usage: qol emu run <workflow> <environment>");
+    }
+    let workflow_id = args[0]
+        .to_str()
+        .ok_or_else(|| anyhow!("workflow id is not valid UTF-8"))?;
+    let target = args[1]
+        .to_str()
+        .ok_or_else(|| anyhow!("environment id is not valid UTF-8"))?;
+    run_workflow(workflow_id, target, "run", verbose)
+}
+
 fn cmd_check(args: &[OsString], verbose: bool) -> Result<()> {
     if args.len() != 1 {
         bail!("usage: qol emu check <environment>");
@@ -289,24 +303,34 @@ fn cmd_check(args: &[OsString], verbose: bool) -> Result<()> {
     let target = args[0]
         .to_str()
         .ok_or_else(|| anyhow!("environment id is not valid UTF-8"))?;
-    print_title("qol emu check");
+    run_workflow("leaves-no-trace", target, "check", verbose)
+}
+
+fn run_workflow(workflow_id: &str, target: &str, command_name: &str, verbose: bool) -> Result<()> {
+    let Some(workflow_fn) = workflow::find(workflow_id) else {
+        bail!(
+            "unknown workflow `{workflow_id}`; available: {}",
+            workflow::ids().join(", ")
+        );
+    };
+    print_title(&format!("qol emu {command_name}"));
     print_hint(verbose);
-    let mut vm = boot_vm(target, "check", verbose)?;
-    let outcome = drive_leaves_no_trace(&vm);
+    let mut vm = boot_vm(target, command_name, verbose)?;
+    let outcome = drive_workflow(&vm, workflow_fn);
     let exit = shutdown_vm(&mut vm)?;
     let workflow_report = match &outcome {
         Ok(verdict) => json!({
-            "id": "leaves-no-trace",
+            "id": workflow_id,
             "verdict": if verdict.pass { "pass" } else { "fail" },
             "traces": verdict.traces,
         }),
         Err(error) => json!({
-            "id": "leaves-no-trace",
+            "id": workflow_id,
             "verdict": "error",
             "error": error.to_string(),
         }),
     };
-    let (report_path, removed) = finalize_vm(vm, exit, Some(workflow_report), "check")?;
+    let (report_path, removed) = finalize_vm(vm, exit, Some(workflow_report), command_name)?;
     step_label(
         "clean",
         StepKind::Success,
@@ -316,7 +340,7 @@ fn cmd_check(args: &[OsString], verbose: bool) -> Result<()> {
     let verdict = outcome?;
     if !verdict.pass {
         bail!(
-            "leaves-no-trace failed; traces: {}",
+            "{workflow_id} failed; traces: {}",
             verdict.traces.join(", ")
         );
     }
@@ -324,7 +348,7 @@ fn cmd_check(args: &[OsString], verbose: bool) -> Result<()> {
     Ok(())
 }
 
-fn drive_leaves_no_trace(vm: &BootedVm) -> Result<workflow::Verdict> {
+fn drive_workflow(vm: &BootedVm, workflow_fn: workflow::Workflow) -> Result<workflow::Verdict> {
     let qemu_img = vm
         .resolution
         .qemu_img
@@ -343,7 +367,7 @@ fn drive_leaves_no_trace(vm: &BootedVm) -> Result<workflow::Verdict> {
         os: &os,
         stick: &stick,
     };
-    workflow::leaves_no_trace(&mut run)
+    workflow_fn(&mut run)
 }
 
 fn shutdown_vm(vm: &mut BootedVm) -> Result<ExitStatus> {
@@ -609,7 +633,7 @@ fn print_emu_help() {
 }
 
 fn emu_help_text() -> &'static str {
-    "qol emu commands:\n  qol emu list\n  qol emu doctor\n  qol emu up <environment>\n  qol emu check <environment>\n  qol emu shot <environment>\n  qol emu key <environment> <qcode>...\n  qol emu insert <environment>\n  qol emu pull <environment>\n  qol emu snap <environment>\n  qol emu sh <environment> <command>...\n  qol emu down <environment>\n\nControl verbs target the newest running `qol emu up` for that environment.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n"
+    "qol emu commands:\n  qol emu list\n  qol emu doctor\n  qol emu up <environment>\n  qol emu run <workflow> <environment>\n  qol emu check <environment>\n  qol emu shot <environment>\n  qol emu key <environment> <qcode>...\n  qol emu insert <environment>\n  qol emu pull <environment>\n  qol emu snap <environment>\n  qol emu sh <environment> <command>...\n  qol emu down <environment>\n\nControl verbs target the newest running `qol emu up` for that environment.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n"
 }
 
 fn discover_environments() -> Result<Vec<Environment>> {
