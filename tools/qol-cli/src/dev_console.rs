@@ -1138,8 +1138,13 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
                         "  ● ".fg(color).bold(),
                         format!("{:<12}", status.id).fg(Color::White),
                         format!(" {} ", status.state.as_str()).fg(color).bold(),
-                        format!("· {} · {} · {}", status.name, status.backend, status.arch)
-                            .fg(Color::DarkGray),
+                        format!(
+                            "· {} · {} · {}",
+                            status.name,
+                            status.backend,
+                            status.arch.as_str()
+                        )
+                        .fg(Color::DarkGray),
                     ]),
                     Line::from(vec![
                         "    ".into(),
