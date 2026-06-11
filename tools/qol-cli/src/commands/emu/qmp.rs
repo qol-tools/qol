@@ -258,15 +258,15 @@ mod tests {
     #[test]
     fn send_keys_builds_qcode_chord() {
         let (server, port) = fake_server(vec![r#"{"return":{}}"#], |_, line| {
-            assert!(line.contains(r#""execute":"send-key""#), "line: {line}");
-            assert!(
-                line.contains(r#"{"data":"ctrl","type":"qcode"}"#),
-                "line: {line}"
-            );
-            assert!(
-                line.contains(r#"{"data":"c","type":"qcode"}"#),
-                "line: {line}"
-            );
+            let request: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(request["execute"], "send-key", "line: {line}");
+            let chord: Vec<(&str, &str)> = request["arguments"]["keys"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|key| (key["type"].as_str().unwrap(), key["data"].as_str().unwrap()))
+                .collect();
+            assert_eq!(chord, [("qcode", "ctrl"), ("qcode", "c")], "line: {line}");
         });
         let mut client = connect(port, Duration::from_secs(2)).unwrap();
         client
