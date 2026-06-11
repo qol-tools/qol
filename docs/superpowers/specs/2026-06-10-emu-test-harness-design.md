@@ -29,8 +29,13 @@ M3 MVP deviations from the long-term contract:
 - Trace listing runs guest-side `find / -xdev -iname '*qol*'` after reboot
   instead of host-reading a `DiskSnapshot`.
 - The injected artifact is a stub shell script, not the real qol payload.
-- The adapter registry is deferred; `qol emu check` currently uses the hardcoded
-  Debian nocloud adapter. Next: M4.
+- The adapter registry is deferred; workflows currently use the hardcoded
+  Debian nocloud adapter.
+
+M4 started 2026-06-11: `qol emu run <workflow> <id>` resolves workflows from
+the registry in `commands/emu/workflow.rs`, and `check` is sugar for
+`run leaves-no-trace`. Remaining: adapter registry, the grid, the interactive
+emu menu in `qol dev`.
 
 ## Purpose
 
