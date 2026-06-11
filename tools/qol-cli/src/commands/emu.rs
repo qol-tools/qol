@@ -291,6 +291,7 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
             qemu_command: None,
             commands: Vec::new(),
             qmp: None,
+            serial: None,
             teardown: None,
             next: next_for_resolution(&environment, &resolution),
             started_at,
@@ -336,6 +337,7 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
                 "status": status.to_string(),
             })],
             qmp: None,
+            serial: None,
             teardown: None,
             next: vec!["Inspect the qemu-img output, remove the run directory if needed, then rerun `qol emu up`.".to_string()],
             started_at,
@@ -349,12 +351,14 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
         .clone()
         .ok_or_else(|| anyhow!("ready environment has no qemu-system path"))?;
     let qmp_port = machine::free_qmp_port()?;
+    let serial_port = machine::free_qmp_port()?;
     let qemu_args = qemu_args(
         &environment,
         &overlay,
         resolution.acceleration,
         platform::display(),
         qmp_port,
+        serial_port,
         resolution.firmware.as_deref(),
     );
     let qemu_command = command_line(&qemu_system, &qemu_args);
@@ -403,6 +407,7 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
                 qemu_command: Some(&qemu_command_path),
                 commands,
                 qmp: Some(json!({ "port": qmp_port, "error": error.to_string() })),
+                serial: Some(json!({ "port": serial_port })),
                 teardown: Some(json!({ "removed": removed })),
                 next: vec!["Inspect the qemu output above, then rerun `qol emu up`.".to_string()],
                 started_at,
@@ -425,6 +430,7 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
         qemu_command: Some(&qemu_command_path),
         commands: commands.clone(),
         qmp: Some(json!({ "port": qmp_port, "qemu_version": qemu_version, "status": vm_status })),
+        serial: Some(json!({ "port": serial_port })),
         teardown: None,
         next: vec!["Close the VM window (or shut the guest down) to end the run.".to_string()],
         started_at,
@@ -448,6 +454,7 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
         qemu_command: Some(&qemu_command_path),
         commands,
         qmp: Some(json!({ "port": qmp_port, "qemu_version": qemu_version, "status": vm_status })),
+        serial: Some(json!({ "port": serial_port })),
         teardown: Some(json!({ "removed": removed, "exit": exit.to_string() })),
         next: vec!["Rerun `qol emu up` for a fresh disposable clone.".to_string()],
         started_at,
@@ -622,6 +629,7 @@ fn qemu_args(
     acceleration: &str,
     display: &str,
     qmp_port: u16,
+    serial_port: u16,
     firmware: Option<&Path>,
 ) -> Vec<String> {
     let mut args = vec![
@@ -666,6 +674,8 @@ fn qemu_args(
         display.to_string(),
         "-qmp".to_string(),
         format!("tcp:127.0.0.1:{qmp_port},server,nowait"),
+        "-serial".to_string(),
+        format!("tcp:127.0.0.1:{serial_port},server,nowait"),
     ]);
     args
 }
@@ -699,6 +709,7 @@ struct ReportInput<'a> {
     qemu_command: Option<&'a Path>,
     commands: Vec<serde_json::Value>,
     qmp: Option<serde_json::Value>,
+    serial: Option<serde_json::Value>,
     teardown: Option<serde_json::Value>,
     next: Vec<String>,
     started_at: u64,
@@ -735,6 +746,7 @@ fn report_json(input: ReportInput<'_>) -> Result<serde_json::Value> {
         },
         "commands": input.commands,
         "qmp": input.qmp,
+        "serial": input.serial,
         "teardown": input.teardown,
         "next": input.next,
     }))
@@ -855,6 +867,7 @@ mod tests {
             "kvm",
             "gtk",
             4444,
+            5555,
             None,
         );
         let joined = args.join(" ");
@@ -862,6 +875,7 @@ mod tests {
             "-accel kvm",
             "-display gtk",
             "-qmp tcp:127.0.0.1:4444,server,nowait",
+            "-serial tcp:127.0.0.1:5555,server,nowait",
             "-drive file=/a/b/overlay.qcow2,id=qoldisk,if=virtio,format=qcow2",
             "-device qemu-xhci,id=xhci",
         ];
@@ -892,6 +906,7 @@ mod tests {
             "hvf",
             "cocoa",
             4444,
+            5555,
             Some(Path::new("/fw/edk2-aarch64-code.fd")),
         )
         .join(" ");
@@ -912,6 +927,7 @@ mod tests {
             "tcg",
             "cocoa",
             4444,
+            5555,
             None,
         )
         .join(" ");
