@@ -9,7 +9,7 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::commands::emu::{
@@ -910,33 +910,122 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         View::Trace => draw_trace(frame, dash, main),
         View::Endpoints => draw_endpoints(frame, dash, main),
     }
-    let footer_style = if dash.armed {
+    let status_style = if dash.armed || dash.filtering || dash.copying {
         Style::new().fg(Color::Yellow).bold()
     } else {
         Style::new().dim()
     };
     frame.render_widget(
-        Paragraph::new(footer_text(dash)).style(footer_style),
+        Paragraph::new(status_line(dash)).style(status_style),
         footer,
     );
+    draw_keys_hud(frame, dash, main);
 }
 
-fn footer_text(dash: &Dash) -> String {
+fn keys_legend(view: View) -> Vec<(&'static str, &'static str)> {
+    let view_keys: &[(&'static str, &'static str)] = match view {
+        View::Dashboard => &[
+            ("↑/↓", "move"),
+            ("enter", "act on row"),
+            ("→ / ←", "dive · back"),
+            ("space", "arm, then enter"),
+            ("l · d", "logs · doctor"),
+        ],
+        View::Emu => &[
+            ("↑/↓", "select emu"),
+            ("enter", "boot · stop"),
+            ("space", "arm: enter checks"),
+            ("pgup/dn", "scroll"),
+            ("←", "back"),
+        ],
+        View::Logs | View::Trace => &[
+            ("↑/↓", "scroll"),
+            ("f / end", "follow tail"),
+            ("/", "filter"),
+            ("c", "copy last N"),
+            ("←", "back"),
+        ],
+        View::Doctor => &[
+            ("d", "refresh checks"),
+            ("space", "arm: raw output"),
+            ("↑/↓", "scroll"),
+            ("←", "back"),
+        ],
+        View::Plugins | View::Endpoints => &[("↑/↓", "scroll"), ("←", "back")],
+    };
+    let mut keys = view_keys.to_vec();
+    keys.extend([
+        ("ctrl+r", "rebuild tray"),
+        ("ctrl+p", "reload plugins"),
+        ("ctrl+u", "reload qol dev"),
+        ("q", "quit"),
+    ]);
+    keys
+}
+
+fn draw_keys_hud(frame: &mut Frame, dash: &Dash, area: Rect) {
+    let keys = keys_legend(dash.view);
+    let lines: Vec<Line> = keys
+        .iter()
+        .map(|(key, desc)| {
+            Line::from(vec![
+                format!(" {key:<9}").fg(Color::White).bold(),
+                format!("{desc} ").fg(Color::DarkGray),
+            ])
+        })
+        .collect();
+    let content_width = keys
+        .iter()
+        .map(|(key, desc)| 1 + key.chars().count().max(9) + desc.chars().count() + 1)
+        .max()
+        .unwrap_or(0) as u16;
+    let width = (content_width + 2).min(area.width.saturating_sub(2));
+    let footprint = (lines.len() as u16 + 4).min(area.height.saturating_sub(3));
+    let rect = Rect {
+        x: (area.x + area.width).saturating_sub(width + 2),
+        y: area.y + 2,
+        width,
+        height: footprint,
+    };
+    frame.render_widget(Clear, rect);
+    draw_badge_box(frame, rect, "keys", lines, accent_color(dash.armed));
+}
+
+fn draw_badge_box(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>, accent: Color) {
+    let cap = Rect { height: 1, ..area };
+    let body = Rect {
+        y: area.y + 1,
+        height: area.height.saturating_sub(1),
+        ..area
+    };
+    let block = Block::bordered().border_style(Style::new().fg(accent));
+    let inner = block.inner(body);
+    frame.render_widget(block, body);
+    let rows_area = Rect {
+        y: inner.y + 1,
+        height: inner.height.saturating_sub(1),
+        ..inner
+    };
+    frame.render_widget(Paragraph::new(lines), rows_area);
+    draw_title_badge(frame, cap, body, title, accent);
+}
+
+fn status_line(dash: &Dash) -> String {
     if dash.copying {
         return format!(
-            " copy last N: {}_ · enter copy · esc cancel ",
+            " copy last N: {}_ · enter copy · esc cancel",
             dash.copy_count
         );
     }
     if dash.filtering {
-        return format!(" filter: {}_ · enter apply · esc cancel ", dash.filter);
+        return format!(" filter: {}_ · enter apply · esc cancel", dash.filter);
     }
     if dash.armed {
-        return armed_footer(dash);
+        return armed_status(dash);
     }
     if let Some((at, message)) = &dash.copy_ack {
         if at.elapsed() < ACK_TTL {
-            return format!(" {message} ");
+            return format!(" {message}");
         }
     }
     match dash.view {
@@ -950,52 +1039,40 @@ fn footer_text(dash: &Dash) -> String {
                 Row::Logs => "→ open",
                 Row::Trace => "→ open",
             };
-            format!(" ↑/↓ move · {hints} · space modify · q quit ")
+            format!(" {hints}")
         }
-        View::Logs | View::Trace => stream_footer(dash),
-        View::Doctor => " space raw · d refresh · ↑/↓ scroll · ← back · q quit ".to_string(),
-        View::Plugins => " ↑/↓ scroll · ← back · q quit ".to_string(),
-        View::Emu => emu_footer(dash),
-        View::Endpoints => " ← back · q quit ".to_string(),
+        View::Emu => match &dash.emu_run {
+            EmuRun::Active { id, .. } => format!(" {id} running · enter stop"),
+            EmuRun::Idle => " enter boots the selected emu".to_string(),
+        },
+        View::Logs | View::Trace => {
+            if dash.filter.is_empty() {
+                String::new()
+            } else {
+                format!(" filter: {}", dash.filter)
+            }
+        }
+        View::Doctor | View::Plugins | View::Endpoints => String::new(),
     }
 }
 
-fn emu_footer(dash: &Dash) -> String {
-    match &dash.emu_run {
-        EmuRun::Active { id, .. } => format!(" {id} running · enter stop · ← back · q quit "),
-        EmuRun::Idle => {
-            " ↑/↓ select · enter boot · space modify · pgup/pgdn scroll · ← back · q quit "
-                .to_string()
-        }
-    }
-}
-
-fn armed_footer(dash: &Dash) -> String {
+fn armed_status(dash: &Dash) -> String {
     match dash.view {
         View::Dashboard => {
             let hint = match ROWS[dash.cursor] {
                 Row::Doctor => "enter fix",
                 Row::Tray | Row::Web | Row::Plugins | Row::Emu | Row::Logs | Row::Trace => {
-                    "no modified action"
+                    "no armed action"
                 }
             };
-            format!(" MODIFIED · {hint} · space/esc cancel ")
+            format!(" ARMED · {hint} · space/esc cancel ")
         }
         View::Doctor => " RAW · space friendly · esc done ".to_string(),
-        View::Emu => " MODIFIED · enter check · space/esc cancel ".to_string(),
+        View::Emu => " ARMED · enter check · space/esc cancel ".to_string(),
         View::Logs | View::Trace | View::Plugins | View::Endpoints => {
-            " MODIFIED · space/esc cancel ".to_string()
+            " ARMED · space/esc cancel ".to_string()
         }
     }
-}
-
-fn stream_footer(dash: &Dash) -> String {
-    let filter = if dash.filter.is_empty() {
-        String::new()
-    } else {
-        format!(" · filter: {}", dash.filter)
-    };
-    format!(" ↑/↓ scroll · f follow · c copy · / filter{filter} · ← back · q quit ")
 }
 
 fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
@@ -1028,7 +1105,7 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
 
     let accent = accent_color(dash.armed);
     let label = if dash.armed {
-        "qol dev · MODIFIED"
+        "qol dev · ARMED"
     } else {
         "qol dev"
     };
@@ -1036,13 +1113,20 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
     let block = Block::bordered().border_style(Style::new().fg(accent));
     let inner = block.inner(body);
     frame.render_widget(block, body);
-    let rows_area = Rect {
-        y: inner.y + 1,
-        height: inner.height.saturating_sub(1),
-        ..inner
-    };
-    frame.render_widget(Paragraph::new(rows), rows_area);
     draw_title_badge(frame, cap, body, label, accent);
+    let menu_width = rows
+        .iter()
+        .map(|row| row.width() as u16 + 2)
+        .max()
+        .unwrap_or(0)
+        .min(inner.width.saturating_sub(1));
+    let menu_area = Rect {
+        x: inner.x + 1,
+        y: inner.y + 1,
+        width: menu_width,
+        height: (rows.len() as u16 + 4).min(inner.height.saturating_sub(1)),
+    };
+    draw_badge_box(frame, menu_area, "menu", rows, accent);
 }
 
 fn draw_title_badge(frame: &mut Frame, cap: Rect, body: Rect, label: &str, accent: Color) {
@@ -1961,13 +2045,13 @@ mod tests {
     }
 
     #[test]
-    fn armed_footer_offers_fix_only_on_doctor_row() {
+    fn armed_status_offers_fix_only_on_doctor_row() {
         let mut dash = Dash::new(Vec::new());
         dash.armed = true;
-        let cases = [(4usize, "enter fix"), (0, "no modified action")];
+        let cases = [(4usize, "enter fix"), (0, "no armed action")];
         for (cursor, expected) in cases {
             dash.cursor = cursor;
-            let footer = armed_footer(&dash);
+            let footer = armed_status(&dash);
             assert!(footer.contains(expected), "cursor {cursor}: {footer}");
         }
     }
@@ -2025,6 +2109,38 @@ mod tests {
             dash.emu_run_log.lines.back().map(String::as_str),
             Some("  skip     foo is not ready")
         );
+    }
+
+    #[test]
+    fn keys_hud_renders_permanently_with_view_keys_and_globals() {
+        use ratatui::backend::TestBackend;
+        let cases = [
+            (View::Dashboard, "arm, then enter"),
+            (View::Emu, "boot · stop"),
+        ];
+        for (view, expected) in cases {
+            let mut dash = Dash::new(Vec::new());
+            dash.view = view;
+            let mut terminal = ratatui::Terminal::new(TestBackend::new(110, 30)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut dash)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(text.contains(expected), "missing {expected:?}");
+            assert!(text.contains("ctrl+u"), "missing globals");
+            assert!(text.contains("reload qol dev"), "missing globals");
+        }
+    }
+
+    #[test]
+    fn status_line_tracks_emu_run_state() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Emu;
+        assert_eq!(status_line(&dash), " enter boots the selected emu");
     }
 
     #[test]
