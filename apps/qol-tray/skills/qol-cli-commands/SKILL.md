@@ -70,9 +70,10 @@ The emu pane is interactive: up/down select an environment, Enter launches
 `qol emu down`. Space arms the next Enter (ARMED, the same grammar as the
 dashboard rows); an armed Enter launches `qol emu check <id>`.
 
-A compact `keys` frame floats permanently over every view's top-right
-corner: the active view's keys plus the global chords (ctrl+r, ctrl+p,
-ctrl+u, q). It wears the same capsule title badge as the outer `qol dev`
+A compact keys frame floats over every view's top-right corner: the active
+view's keys plus the global chords (ctrl+r, ctrl+u, q). Its title badge
+reads `keys · k`, and `k` toggles the frame (session-scoped, visible by
+default). It wears the same capsule title badge as the outer `qol dev`
 frame (via the shared `draw_badge_box` helper), and the dashboard rows sit
 in a matching `menu` badge box. The one-line footer below the pane is purely
 dynamic status: selected row hint, emu run state, filter or copy prompt,

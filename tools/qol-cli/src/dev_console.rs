@@ -38,6 +38,7 @@ pub(crate) enum SessionEnd {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Action {
     ToggleView,
+    ToggleKeys,
     Rebuild,
     ReloadSelf,
     Doctor,
@@ -66,6 +67,7 @@ fn action_for(code: KeyCode, mods: KeyModifiers) -> Action {
     }
     match code {
         KeyCode::Char('l') | KeyCode::Char('L') => Action::ToggleView,
+        KeyCode::Char('k') | KeyCode::Char('K') => Action::ToggleKeys,
         KeyCode::Char('d') | KeyCode::Char('D') => Action::Doctor,
         KeyCode::Esc | KeyCode::Left => Action::Back,
         KeyCode::Enter => Action::Activate,
@@ -92,6 +94,7 @@ fn preserves_arm(action: Action) -> bool {
             | Action::Dive
             | Action::Back
             | Action::ToggleView
+            | Action::ToggleKeys
             | Action::Follow
     )
 }
@@ -263,6 +266,7 @@ struct Dash {
     trace_child: Option<Child>,
     trace_rx: Option<Receiver<String>>,
     boot_rx: Option<Receiver<String>>,
+    keys_hidden: bool,
     filter: String,
     filtering: bool,
     copy_count: String,
@@ -301,6 +305,7 @@ impl Dash {
             trace_child: None,
             trace_rx: None,
             boot_rx: None,
+            keys_hidden: false,
             filter: String::new(),
             filtering: false,
             copy_count: String::new(),
@@ -625,6 +630,7 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             dash.scroll_offset = 0;
             dash.filter.clear();
         }
+        Action::ToggleKeys => dash.keys_hidden = !dash.keys_hidden,
         Action::Rebuild => {
             trigger_rebuild(dash);
             trigger_reload(dash);
@@ -1077,6 +1083,9 @@ fn keys_legend(view: View) -> Vec<(&'static str, &'static str)> {
 }
 
 fn draw_keys_hud(frame: &mut Frame, dash: &Dash, area: Rect) {
+    if dash.keys_hidden {
+        return;
+    }
     let keys = keys_legend(dash.view);
     let lines: Vec<Line> = keys
         .iter()
@@ -1101,7 +1110,7 @@ fn draw_keys_hud(frame: &mut Frame, dash: &Dash, area: Rect) {
         height: footprint,
     };
     frame.render_widget(Clear, rect);
-    draw_badge_box(frame, rect, "keys", lines, frame_accent(dash));
+    draw_badge_box(frame, rect, "keys · k", lines, frame_accent(dash));
 }
 
 fn draw_badge_box(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>, accent: Color) {
@@ -2143,6 +2152,8 @@ mod tests {
             (KeyCode::Char('/'), none, Action::Filter),
             (KeyCode::Char('c'), none, Action::Copy),
             (KeyCode::Char('C'), none, Action::Copy),
+            (KeyCode::Char('k'), none, Action::ToggleKeys),
+            (KeyCode::Char('K'), none, Action::ToggleKeys),
             (KeyCode::Char('r'), none, Action::Ignore),
             (KeyCode::Char('p'), none, Action::Ignore),
             (KeyCode::Char('x'), none, Action::Ignore),
@@ -2234,9 +2245,21 @@ mod tests {
         );
     }
 
-    #[test]
-    fn keys_hud_renders_permanently_with_view_keys_and_globals() {
+    fn render_text(dash: &mut Dash) -> String {
         use ratatui::backend::TestBackend;
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(110, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, dash)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn keys_hud_renders_with_view_keys_and_globals() {
         let cases = [
             (View::Dashboard, "arm, then enter"),
             (View::Emu, "boot · stop"),
@@ -2244,19 +2267,25 @@ mod tests {
         for (view, expected) in cases {
             let mut dash = Dash::new(Vec::new());
             dash.view = view;
-            let mut terminal = ratatui::Terminal::new(TestBackend::new(110, 30)).unwrap();
-            terminal.draw(|frame| draw(frame, &mut dash)).unwrap();
-            let text: String = terminal
-                .backend()
-                .buffer()
-                .content()
-                .iter()
-                .map(|cell| cell.symbol())
-                .collect();
+            let text = render_text(&mut dash);
             assert!(text.contains(expected), "missing {expected:?}");
             assert!(text.contains("ctrl+u"), "missing globals");
             assert!(text.contains("reload qol dev"), "missing globals");
+            assert!(text.contains("keys · k"), "missing toggle badge");
         }
+    }
+
+    #[test]
+    fn toggle_keys_hides_and_restores_the_hud() {
+        let mut dash = Dash::new(Vec::new());
+        apply_action(&mut dash, Action::ToggleKeys, false);
+        assert!(dash.keys_hidden);
+        let text = render_text(&mut dash);
+        assert!(!text.contains("reload qol dev"), "hud still rendered");
+        apply_action(&mut dash, Action::ToggleKeys, false);
+        assert!(!dash.keys_hidden);
+        let text = render_text(&mut dash);
+        assert!(text.contains("reload qol dev"), "hud did not come back");
     }
 
     #[test]
