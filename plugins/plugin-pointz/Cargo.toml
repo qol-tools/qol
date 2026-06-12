@@ -1,6 +1,6 @@
 [package]
 name = "pointzerver"
-version = "1.4.0"
+version = "1.4.1"
 edition = "2021"
 description = "PointZerver - Headless server for remote PC control from mobile devices"
 license = "PolyForm-Noncommercial-1.0.0"
