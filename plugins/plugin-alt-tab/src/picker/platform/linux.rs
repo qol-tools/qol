@@ -8,8 +8,16 @@ pub fn picker_window_title(target: qol_gpui::window::MonitorKey) -> String {
     )
 }
 
+pub fn picker_window_kind() -> gpui::WindowKind {
+    qol_gpui::platform::ghost_window_kind()
+}
+
 pub fn configure_picker_window(title: &str) {
     qol_gpui::popup_window::configure_popup_window(title);
+}
+
+pub fn show_picker_window(target_title: &str, all_titles: &[String]) {
+    qol_gpui::ghost::show_ghost_window(target_title, all_titles);
 }
 
 pub fn reuse_hidden_picker_across_shows() -> bool {
@@ -23,6 +31,8 @@ pub fn reuse_picker_across_targets() -> bool {
 pub fn disable_window_shadow(title: &str) {
     qol_gpui::popup_window::disable_window_shadow(title);
 }
+
+pub fn probe_picker_app_active(_at: &'static str) {}
 
 pub fn pre_create(
     config: &crate::config::AltTabConfig,

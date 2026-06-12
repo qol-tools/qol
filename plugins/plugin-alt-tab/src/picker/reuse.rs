@@ -25,6 +25,8 @@ pub(super) struct LayoutInput<'a> {
 
 pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
     let _reason = qol_gpui::popup_window::reason_scope("show");
+    #[cfg(debug_assertions)]
+    let t_show = std::time::Instant::now();
     req.handle
         .update(cx, |view, window: &mut Window, cx| {
             if !view.apply_reuse(req, window, cx) {
@@ -41,7 +43,11 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
             }
             window.focus(&view.focus_handle(cx));
             window.activate_window();
-            qol_gpui::ghost::show_ghost_window(&title, req.all_titles);
+            super::platform::show_picker_window(&title, req.all_titles);
+            #[cfg(debug_assertions)]
+            window.on_next_frame(move |_, _| {
+                qol_runtime::probe!("SHOW_PAINTED", "frame={}ms", t_show.elapsed().as_millis());
+            });
             true
         })
         .unwrap_or(false)

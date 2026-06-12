@@ -109,7 +109,19 @@ fn cycle_existing_window(
     }
     PICKER_VISIBLE.store(true, Ordering::Relaxed);
     cx.activate(true);
+    probe_app_active_after_frame(handle, cx);
     true
+}
+
+fn probe_app_active_after_frame(handle: WindowHandle<AltTabApp>, cx: &mut App) {
+    #[cfg(debug_assertions)]
+    {
+        let _ = handle.update(cx, |_, window, _| {
+            window.on_next_frame(|_, _| platform::probe_picker_app_active("show"));
+        });
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (handle, cx);
 }
 
 pub(super) fn try_cycle_visible(current: &PickerWindowState, reverse: bool, cx: &mut App) -> bool {
@@ -270,6 +282,7 @@ fn finalize_reuse(
     };
     spawn_icon_fill(icon_req, &gathered.icons, cx);
     cx.activate(true);
+    probe_app_active_after_frame(handle, cx);
 }
 
 pub(crate) fn resolve_card_bg(display: &DisplayConfig) -> (u32, f32) {
