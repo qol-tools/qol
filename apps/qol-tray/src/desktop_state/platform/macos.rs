@@ -217,8 +217,20 @@ impl Platform for MacQueries {
 
     fn focused_window_bounds(&self) -> Option<MonitorBounds> {
         #[cfg(debug_assertions)]
+        let t = std::time::Instant::now();
+        #[cfg(debug_assertions)]
         focus_probe::log_focus_change(self.own_pid);
-        focused_window_bounds_ax(self.own_pid)
+        #[cfg(debug_assertions)]
+        let cg_ms = t.elapsed().as_millis();
+        let bounds = focused_window_bounds_ax(self.own_pid);
+        #[cfg(debug_assertions)]
+        {
+            let total_ms = t.elapsed().as_millis();
+            if total_ms >= 100 {
+                qol_runtime::probe!("FOCUS_POLL_SLOW", "cg={cg_ms}ms ax={}ms", total_ms - cg_ms);
+            }
+        }
+        bounds
     }
 
     fn physical_monitors(&self) -> Vec<MonitorBounds> {
