@@ -22,6 +22,23 @@ pub(crate) enum DevLinkOutcome {
     AlreadyLinked,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, PartialEq, serde::Deserialize)]
+pub(crate) struct DevLink {
+    pub(crate) name: String,
+    pub(crate) needs_rebuild: bool,
+    pub(crate) rebuild_reason: String,
+}
+
+#[allow(dead_code)]
+pub(crate) fn fetch_dev_links() -> Result<Vec<DevLink>> {
+    let (status, body) = http_exchange("GET", DEV_LINKS_URL, None)?;
+    if status != 200 {
+        bail!("GET {DEV_LINKS_URL} returned {status}");
+    }
+    serde_json::from_str(&body).context("invalid dev links payload")
+}
+
 pub(crate) fn wait_for_health() -> Result<()> {
     let deadline = Instant::now() + HEALTH_TIMEOUT;
     while Instant::now() < deadline {
@@ -110,6 +127,10 @@ fn http_get_ok(url: &str) -> Result<bool> {
 }
 
 fn http_request(method: &str, url: &str, body: Option<&str>) -> Result<u16> {
+    Ok(http_exchange(method, url, body)?.0)
+}
+
+fn http_exchange(method: &str, url: &str, body: Option<&str>) -> Result<(u16, String)> {
     let target = HttpTarget::parse(url)?;
     let mut addrs = (target.host.as_str(), target.port)
         .to_socket_addrs()
@@ -133,7 +154,15 @@ fn http_request(method: &str, url: &str, body: Option<&str>) -> Result<u16> {
     stream.write_all(request.as_bytes())?;
     let mut response = String::new();
     stream.read_to_string(&mut response)?;
-    parse_http_status(&response)
+    let status = parse_http_status(&response)?;
+    Ok((status, response_body(&response)))
+}
+
+fn response_body(response: &str) -> String {
+    response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body.to_string())
+        .unwrap_or_default()
 }
 
 struct HttpTarget {
@@ -191,6 +220,28 @@ mod tests {
             parse_http_status("HTTP/1.1 202 Accepted\r\n\r\n").unwrap(),
             202
         );
+    }
+
+    #[test]
+    fn response_body_splits_headers_from_payload() {
+        let cases = [
+            ("HTTP/1.1 200 OK\r\nA: b\r\n\r\n[1,2]", "[1,2]"),
+            ("HTTP/1.1 204 No Content\r\n\r\n", ""),
+            ("HTTP/1.1 200 OK no separator", ""),
+        ];
+        for (response, expected) in cases {
+            assert_eq!(response_body(response), expected, "response: {response:?}");
+        }
+    }
+
+    #[test]
+    fn parses_dev_links_payload_ignoring_unknown_fields() {
+        let payload = r#"[{"id":"a","name":"foo","source":"/a/b/c","needs_rebuild":true,"rebuild_reason":"Source changed","fingerprint":"x"}]"#;
+        let links: Vec<DevLink> = serde_json::from_str(payload).unwrap();
+        assert_eq!(links.len(), 1, "one link parsed");
+        assert_eq!(links[0].name, "foo");
+        assert!(links[0].needs_rebuild, "needs_rebuild carried through");
+        assert_eq!(links[0].rebuild_reason, "Source changed");
     }
 
     #[test]
