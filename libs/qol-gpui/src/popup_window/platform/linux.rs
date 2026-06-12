@@ -112,10 +112,12 @@ fn set_window_bounds_by_title(
 
 pub fn sync_window_layout(
     title: &str,
-    _window: &mut gpui::Window,
+    window: &mut gpui::Window,
     origin: gpui::Point<gpui::Pixels>,
     size: gpui::Size<gpui::Pixels>,
 ) -> bool {
+    let backing = window_backing_scale(title);
+    crate::window::resize_or_sync_scale(window, size, backing);
     set_window_bounds_by_title(
         title,
         origin.x.to_f64(),

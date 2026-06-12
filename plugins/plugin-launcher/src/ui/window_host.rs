@@ -8,7 +8,7 @@ use crate::monitor::{self, MonitorTracker};
 use crate::open_window_with_focus;
 
 use super::layout::{window_height_for_rows, WINDOW_WIDTH};
-use super::{LauncherView, LAUNCHER_APP_ID, LAUNCHER_WINDOW_TITLE};
+use super::{trace, LauncherView, LAUNCHER_APP_ID, LAUNCHER_WINDOW_TITLE};
 
 use qol_gpui::popup_window;
 use qol_gpui::window::{centered_window_placement, ActiveWindows, WindowPlacement};
@@ -181,6 +181,7 @@ fn show_ghost(
         active.borrow_mut().remove(target);
         return false;
     }
+    trace::show("reuse", &title, &placement);
     qol_gpui::ghost::show_ghost_window(&title, &all_titles);
     cx.activate(true);
     true
@@ -202,6 +203,7 @@ fn create_and_show_ghost(
     };
     active.borrow_mut().insert(target, handle);
     popup_window::configure_popup_window(&title);
+    trace::show("create", &title, &placement);
     cx.activate(true);
 }
 
