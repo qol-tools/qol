@@ -1,20 +1,24 @@
 pub const MIN_CARD_SCALE: f32 = 0.5;
 pub const MAX_CARD_SCALE: f32 = 2.5;
 pub const DEFAULT_CARD_SCALE: f32 = 1.5;
+pub const MIN_CARD_PADDING: f32 = 0.0;
+pub const MAX_CARD_PADDING: f32 = 24.0;
+pub const DEFAULT_CARD_PADDING: f32 = 4.0;
 
 const BASE_CARD_WIDTH: f32 = 220.0;
 const BASE_CARD_HEIGHT: f32 = 156.0;
-const BASE_PREVIEW_WIDTH: f32 = 204.0;
-const BASE_PREVIEW_HEIGHT: f32 = 114.0;
-const BASE_LABEL_FONT: f32 = 12.0;
+const PREVIEW_ASPECT_W: f32 = 16.0;
+const PREVIEW_ASPECT_H: f32 = 9.0;
+const BASE_LABEL_FONT: f32 = 10.5;
 const BASE_LABEL_ICON: f32 = 16.0;
 const BASE_MINIMIZED_ICON: f32 = 48.0;
 /// Height of the hotkey hints bar (py_2 + text_xs + border_b_1).
 pub const HOTKEY_HINTS_HEIGHT: f32 = 48.0;
 /// Capture ceiling: previews are captured once at the largest size any
 /// card scale can display, then downscaled by the renderer.
-pub const PREVIEW_MAX_WIDTH: usize = (BASE_PREVIEW_WIDTH * MAX_CARD_SCALE) as usize;
-pub const PREVIEW_MAX_HEIGHT: usize = (BASE_PREVIEW_HEIGHT * MAX_CARD_SCALE) as usize;
+pub const PREVIEW_MAX_WIDTH: usize = (BASE_CARD_WIDTH * MAX_CARD_SCALE + 1.0) as usize;
+pub const PREVIEW_MAX_HEIGHT: usize =
+    (BASE_CARD_WIDTH * MAX_CARD_SCALE * PREVIEW_ASPECT_H / PREVIEW_ASPECT_W + 1.0) as usize;
 /// Matches render: px_5 * 2 = 40px horizontal, py_4 * 2 = 32px vertical, gap_3 = 12px.
 const RENDER_PAD_X: f32 = 40.0;
 const RENDER_PAD_Y: f32 = 32.0;
@@ -26,6 +30,7 @@ const WIDTH_SLACK: f32 = 1.0;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CardMetrics {
     pub scale: f32,
+    pub card_padding: f32,
     pub card_width: f32,
     pub card_height: f32,
     pub preview_width: f32,
@@ -33,14 +38,18 @@ pub struct CardMetrics {
 }
 
 impl CardMetrics {
-    pub fn from_scale(scale: f32) -> Self {
+    pub fn from_config(scale: f32, card_padding: f32) -> Self {
         let s = clamp_card_scale(scale);
+        let card_padding = clamp_card_padding(card_padding);
+        let card_width = BASE_CARD_WIDTH * s;
+        let preview_width = (card_width - card_padding * 2.0).max(1.0);
         Self {
             scale: s,
-            card_width: BASE_CARD_WIDTH * s,
+            card_padding,
+            card_width,
             card_height: BASE_CARD_HEIGHT * s,
-            preview_width: BASE_PREVIEW_WIDTH * s,
-            preview_height: BASE_PREVIEW_HEIGHT * s,
+            preview_width,
+            preview_height: preview_width * PREVIEW_ASPECT_H / PREVIEW_ASPECT_W,
         }
     }
 
@@ -65,6 +74,14 @@ pub fn clamp_card_scale(scale: f32) -> f32 {
     }
 }
 
+pub fn clamp_card_padding(padding: f32) -> f32 {
+    if padding.is_finite() {
+        padding.clamp(MIN_CARD_PADDING, MAX_CARD_PADDING)
+    } else {
+        DEFAULT_CARD_PADDING
+    }
+}
+
 /// The single source of truth for picker geometry. Render sizes the panel
 /// from this and arrow navigation moves by `columns` from this, so the two
 /// can never disagree on the grid shape.
@@ -81,8 +98,9 @@ pub fn picker_layout(
     monitor_size: Option<(f32, f32)>,
     show_hotkey_hints: bool,
     card_scale: f32,
+    card_padding: f32,
 ) -> PickerLayout {
-    let metrics = CardMetrics::from_scale(card_scale);
+    let metrics = CardMetrics::from_config(card_scale, card_padding);
     let count = window_count.max(1);
     let (max_w, max_h) = monitor_size
         .map(|(w, h)| (w * 0.9, h * 0.9))
@@ -142,23 +160,42 @@ mod tests {
     #[test]
     fn card_metrics_scale_and_clamp() {
         let cases = [
-            (1.0, (220.0, 156.0, 204.0, 114.0)),
-            (1.5, (330.0, 234.0, 306.0, 171.0)),
-            (0.1, (110.0, 78.0, 102.0, 57.0)),
-            (10.0, (550.0, 390.0, 510.0, 285.0)),
-            (f32::NAN, (330.0, 234.0, 306.0, 171.0)),
+            (1.0, (220.0, 156.0, 212.0, 119.25)),
+            (1.5, (330.0, 234.0, 322.0, 181.125)),
+            (0.1, (110.0, 78.0, 102.0, 57.375)),
+            (10.0, (550.0, 390.0, 542.0, 304.875)),
+            (f32::NAN, (330.0, 234.0, 322.0, 181.125)),
         ];
         for (scale, (cw, ch, pw, ph)) in cases {
-            let m = CardMetrics::from_scale(scale);
+            let m = CardMetrics::from_config(scale, DEFAULT_CARD_PADDING);
             assert_eq!(
                 (
                     m.card_width,
                     m.card_height,
                     m.preview_width,
-                    m.preview_height
+                    m.preview_height,
+                    m.card_padding
                 ),
-                (cw, ch, pw, ph),
+                (cw, ch, pw, ph, DEFAULT_CARD_PADDING),
                 "scale: {scale}"
+            );
+        }
+    }
+
+    #[test]
+    fn card_padding_is_configurable_and_clamped() {
+        let cases = [
+            (0.0, (330.0, 185.625, 0.0)),
+            (12.0, (306.0, 172.125, 12.0)),
+            (100.0, (282.0, 158.625, MAX_CARD_PADDING)),
+            (f32::NAN, (322.0, 181.125, DEFAULT_CARD_PADDING)),
+        ];
+        for (padding, (pw, ph, cp)) in cases {
+            let m = CardMetrics::from_config(1.5, padding);
+            assert_eq!(
+                (m.preview_width, m.preview_height, m.card_padding),
+                (pw, ph, cp),
+                "padding: {padding}"
             );
         }
     }
@@ -176,8 +213,8 @@ mod tests {
         for budget in budgets {
             for scale in scales {
                 for count in counts {
-                    let layout = picker_layout(count, 6, budget, true, scale);
-                    let metrics = CardMetrics::from_scale(scale);
+                    let layout = picker_layout(count, 6, budget, true, scale, DEFAULT_CARD_PADDING);
+                    let metrics = CardMetrics::from_config(scale, DEFAULT_CARD_PADDING);
                     let wrapped = cols_for_width(layout.width, count, &metrics);
                     assert_eq!(
                         layout.columns, wrapped,
@@ -194,8 +231,15 @@ mod tests {
     fn width_hugs_columns_exactly() {
         let cases = [(1, 1.0), (1, 2.5), (4, 1.5), (6, 1.5), (12, 2.5), (30, 0.5)];
         for (count, scale) in cases {
-            let layout = picker_layout(count, 6, Some((3440.0, 1440.0)), false, scale);
-            let metrics = CardMetrics::from_scale(scale);
+            let layout = picker_layout(
+                count,
+                6,
+                Some((3440.0, 1440.0)),
+                false,
+                scale,
+                DEFAULT_CARD_PADDING,
+            );
+            let metrics = CardMetrics::from_config(scale, DEFAULT_CARD_PADDING);
             let exact = width_for_cols(layout.columns, &metrics);
             assert!(
                 layout.width >= exact && layout.width <= exact + WIDTH_SLACK,
@@ -210,7 +254,14 @@ mod tests {
     fn layout_stays_within_monitor() {
         let cases = [(1, 1.0), (4, 1.5), (12, 2.5), (30, 2.5), (30, 0.5)];
         for (count, scale) in cases {
-            let layout = picker_layout(count, 6, Some((1280.0, 800.0)), true, scale);
+            let layout = picker_layout(
+                count,
+                6,
+                Some((1280.0, 800.0)),
+                true,
+                scale,
+                DEFAULT_CARD_PADDING,
+            );
             assert!(
                 layout.width <= 1280.0 * 0.9 && layout.height <= 800.0 * 0.9,
                 "count={count} scale={scale}: {}x{} exceeds monitor budget",
@@ -223,15 +274,22 @@ mod tests {
 
     #[test]
     fn single_window_gets_single_column_panel() {
-        let layout = picker_layout(1, 6, Some((1920.0, 1080.0)), false, 1.5);
-        let metrics = CardMetrics::from_scale(1.5);
+        let layout = picker_layout(
+            1,
+            6,
+            Some((1920.0, 1080.0)),
+            false,
+            1.5,
+            DEFAULT_CARD_PADDING,
+        );
+        let metrics = CardMetrics::from_config(1.5, DEFAULT_CARD_PADDING);
         assert_eq!(layout.columns, 1);
         assert!(layout.width <= width_for_cols(1, &metrics) + WIDTH_SLACK);
     }
 
     #[test]
     fn capture_ceiling_covers_max_scale() {
-        let m = CardMetrics::from_scale(MAX_CARD_SCALE);
+        let m = CardMetrics::from_config(MAX_CARD_SCALE, DEFAULT_CARD_PADDING);
         assert!(PREVIEW_MAX_WIDTH as f32 >= m.preview_width);
         assert!(PREVIEW_MAX_HEIGHT as f32 >= m.preview_height);
     }

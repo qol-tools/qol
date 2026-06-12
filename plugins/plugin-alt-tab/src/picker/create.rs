@@ -70,6 +70,7 @@ fn estimate_picker_size(req: &CreateRequest, gathered: &GatheredWindows) -> Size
         req.placement.monitor_size(),
         req.config.display.show_hotkey_hints,
         req.config.display.card_scale,
+        req.config.display.card_padding,
     );
     size(px(layout.width), px(layout.height))
 }
@@ -87,6 +88,7 @@ pub(crate) struct PickerInit {
     pub(crate) cycle_on_open: bool,
     pub(crate) max_columns: usize,
     pub(crate) card_scale: f32,
+    pub(crate) card_padding: f32,
     pub(crate) layout_budget: Option<(f32, f32)>,
     pub(crate) windows: Vec<WindowInfo>,
     pub(crate) previews: PreviewMap,
@@ -115,6 +117,7 @@ impl PickerInit {
             cycle_on_open: config.open_behavior == crate::config::OpenBehavior::CycleOnce,
             max_columns: config.display.max_columns,
             card_scale: config.display.card_scale,
+            card_padding: config.display.card_padding,
             layout_budget,
             windows: gathered.windows,
             previews: gathered.previews,

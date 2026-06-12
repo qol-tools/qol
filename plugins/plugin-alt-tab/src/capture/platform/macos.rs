@@ -172,11 +172,9 @@ fn extract_cgimage_pixels(img: CGImageRef, max_w: usize, max_h: usize) -> Option
     let src = BlitSource {
         data: &raw,
         bytes_per_row: unsafe { CGImageGetBytesPerRow(img) },
-        w: src_w,
-        h: src_h,
     };
-    let scaled = compute_scaled_rect(src_w, src_h, max_w, max_h);
-    Some(blit_scaled(&src, &scaled))
+    let cover = compute_cover_rect(src_w, src_h, max_w, max_h);
+    Some(blit_cover(&src, &cover))
 }
 
 fn copy_cgimage_data(img: CGImageRef) -> Option<Vec<u8>> {
@@ -198,56 +196,99 @@ fn copy_cgimage_data(img: CGImageRef) -> Option<Vec<u8>> {
 struct BlitSource<'a> {
     data: &'a [u8],
     bytes_per_row: usize,
-    w: usize,
-    h: usize,
 }
 
-struct ScaledRect {
-    w: usize,
-    h: usize,
-    offset_x: usize,
-    offset_y: usize,
-    canvas_w: usize,
-    canvas_h: usize,
+struct CoverRect {
+    src_x: usize,
+    src_y: usize,
+    src_w: usize,
+    src_h: usize,
+    dst_w: usize,
+    dst_h: usize,
 }
 
-fn compute_scaled_rect(src_w: usize, src_h: usize, max_w: usize, max_h: usize) -> ScaledRect {
-    let scale = (max_w as f32 / src_w as f32)
-        .min(max_h as f32 / src_h as f32)
-        .min(1.0);
-    let w = ((src_w as f32 * scale).round() as usize).max(1).min(max_w);
-    let h = ((src_h as f32 * scale).round() as usize).max(1).min(max_h);
-    ScaledRect {
-        w,
-        h,
-        offset_x: (max_w - w) / 2,
-        offset_y: (max_h - h) / 2,
-        canvas_w: max_w,
-        canvas_h: max_h,
+fn compute_cover_rect(src_w: usize, src_h: usize, dst_w: usize, dst_h: usize) -> CoverRect {
+    let src_aspect = src_w as f64 / src_h as f64;
+    let dst_aspect = dst_w as f64 / dst_h as f64;
+    if src_aspect > dst_aspect {
+        let crop_w = ((src_h as f64 * dst_aspect).round() as usize)
+            .max(1)
+            .min(src_w);
+        return CoverRect {
+            src_x: (src_w - crop_w) / 2,
+            src_y: 0,
+            src_w: crop_w,
+            src_h,
+            dst_w,
+            dst_h,
+        };
+    }
+
+    let crop_h = ((src_w as f64 / dst_aspect).round() as usize)
+        .max(1)
+        .min(src_h);
+    CoverRect {
+        src_x: 0,
+        src_y: (src_h - crop_h) / 2,
+        src_w,
+        src_h: crop_h,
+        dst_w,
+        dst_h,
     }
 }
 
-fn blit_scaled(src: &BlitSource, rect: &ScaledRect) -> RgbaImage {
-    let mut bgra = vec![0u8; rect.canvas_w * rect.canvas_h * 4];
-    for y in 0..rect.h {
-        let src_row = (y * src.h) / rect.h * src.bytes_per_row;
-        let dst_row = (rect.offset_y + y) * rect.canvas_w + rect.offset_x;
-        blit_row(src, src_row, rect.w, &mut bgra, dst_row);
+fn blit_cover(src: &BlitSource, rect: &CoverRect) -> RgbaImage {
+    let mut bgra = vec![0u8; rect.dst_w * rect.dst_h * 4];
+    for y in 0..rect.dst_h {
+        let src_y = rect.src_y + (y * rect.src_h) / rect.dst_h;
+        let src_row = src_y * src.bytes_per_row;
+        let dst_row = y * rect.dst_w;
+        blit_cover_row(src, rect, src_row, &mut bgra, dst_row);
     }
     RgbaImage {
         data: bgra,
-        width: rect.canvas_w,
-        height: rect.canvas_h,
+        width: rect.dst_w,
+        height: rect.dst_h,
     }
 }
 
-fn blit_row(src: &BlitSource, src_row: usize, dst_w: usize, dst: &mut [u8], dst_row: usize) {
-    for x in 0..dst_w {
-        let s = src_row + (x * src.w / dst_w) * 4;
+fn blit_cover_row(
+    src: &BlitSource,
+    rect: &CoverRect,
+    src_row: usize,
+    dst: &mut [u8],
+    dst_row: usize,
+) {
+    for x in 0..rect.dst_w {
+        let src_x = rect.src_x + (x * rect.src_w) / rect.dst_w;
+        let s = src_row + src_x * 4;
         if s + 4 > src.data.len() {
             continue;
         }
         let d = (dst_row + x) * 4;
         dst[d..d + 4].copy_from_slice(&src.data[s..s + 4]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_cover_rect;
+
+    #[test]
+    fn cover_rect_crops_height_for_tall_source() {
+        let rect = compute_cover_rect(1600, 1000, 542, 305);
+        assert_eq!(rect.src_x, 0);
+        assert!(rect.src_h < 1000);
+        assert_eq!(rect.dst_w, 542);
+        assert_eq!(rect.dst_h, 305);
+    }
+
+    #[test]
+    fn cover_rect_crops_width_for_wide_source() {
+        let rect = compute_cover_rect(2400, 1000, 542, 305);
+        assert_eq!(rect.src_y, 0);
+        assert!(rect.src_w < 2400);
+        assert_eq!(rect.dst_w, 542);
+        assert_eq!(rect.dst_h, 305);
     }
 }
