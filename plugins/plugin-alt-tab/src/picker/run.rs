@@ -151,8 +151,7 @@ async fn dispatch_reload(cx: &AsyncApp, state: &PickerState) {
 async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     #[cfg(debug_assertions)]
     let t_total = std::time::Instant::now();
-    #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/daemon] received Show (reverse={})", reverse);
+    qol_runtime::probe!("SHOW_RECV", "reverse={reverse}");
 
     if crate::app::PICKER_VISIBLE.load(Ordering::Relaxed) {
         let state_fast = state.clone();
@@ -220,14 +219,11 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     #[cfg(debug_assertions)]
     let update_ms = t_update.elapsed().as_millis();
 
-    #[cfg(debug_assertions)]
-    {
-        let total_ms = t_total.elapsed().as_millis();
-        eprintln!(
-            "[alt-tab/timing] total={}ms config={}ms query={}ms({} windows) update={}ms",
-            total_ms, config_ms, query_ms, window_count, update_ms
-        );
-    }
+    qol_runtime::probe!(
+        "SHOW_TIMING",
+        "total={}ms config={config_ms}ms query={query_ms}ms({window_count} windows) update={update_ms}ms",
+        t_total.elapsed().as_millis()
+    );
 }
 
 pub(super) fn apply_show_windows(caches: &PickerCaches, windows: Vec<WindowInfo>, app: &mut App) {
