@@ -29,6 +29,7 @@ const EMU_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const LINKS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const DOCTOR_BASE_INTERVAL: Duration = Duration::from_secs(10);
 const DOCTOR_CAP_INTERVAL: Duration = Duration::from_secs(60);
+const ENDPOINTS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const STOP_GRACE: Duration = Duration::from_secs(5);
 const CRASH_TAIL: usize = 40;
 const ACK_TTL: Duration = Duration::from_secs(6);
@@ -183,6 +184,7 @@ struct Probes {
     emu: Poller<Result<Vec<EnvironmentStatus>, String>>,
     links: Poller<Result<Vec<DevLink>, String>>,
     doctor: Poller<Result<DoctorRun, String>>,
+    endpoints: Option<Poller<Vec<EndpointStatus>>>,
 }
 
 impl Probes {
@@ -199,6 +201,7 @@ impl Probes {
                 fetch_dev_links().map_err(|error| format!("{error:#}"))
             }),
             doctor: spawn_doctor_probe(),
+            endpoints: None,
         }
     }
 }
@@ -310,7 +313,6 @@ struct Dash {
     health: Health,
     web: Health,
     endpoints: EndpointsState,
-    endpoints_rx: Option<Receiver<Vec<EndpointStatus>>>,
     started: Instant,
     rebuild: RebuildState,
     plugin_reload: RebuildState,
@@ -347,7 +349,6 @@ impl Dash {
             health: Health::Checking,
             web: Health::Checking,
             endpoints: EndpointsState::Probing,
-            endpoints_rx: None,
             started: Instant::now(),
             rebuild: RebuildState::Idle,
             plugin_reload: RebuildState::Idle,
@@ -465,9 +466,15 @@ fn tui_session(
         if let Some(snapshot) = probes.health.latest() {
             apply_health(dash, snapshot);
         }
-        if let Some(results) = dash.endpoints_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+        match (dash.view == View::Endpoints, probes.endpoints.is_some()) {
+            (true, false) => {
+                probes.endpoints = Some(Poller::spawn(ENDPOINTS_REFRESH_INTERVAL, probe_endpoints));
+            }
+            (false, true) => probes.endpoints = None,
+            (true, true) | (false, false) => {}
+        }
+        if let Some(results) = probes.endpoints.as_ref().and_then(|poller| poller.latest()) {
             dash.endpoints = EndpointsState::Done(results);
-            dash.endpoints_rx = None;
         }
         if let Some(outcome) = probes.emu.latest() {
             dash.emu = match outcome {
@@ -797,8 +804,6 @@ fn dive_row(dash: &mut Dash) {
 fn open_endpoints(dash: &mut Dash) {
     dash.view = View::Endpoints;
     dash.scroll_offset = 0;
-    dash.endpoints = EndpointsState::Probing;
-    dash.endpoints_rx = Some(spawn_endpoints_probe());
 }
 
 fn open_emu(dash: &mut Dash) {
@@ -2132,14 +2137,6 @@ fn spawn_forwarder(reader: impl Read + Send + 'static, tx: Sender<String>) {
             }
         }
     });
-}
-
-fn spawn_endpoints_probe() -> Receiver<Vec<EndpointStatus>> {
-    let (tx, rx) = channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(probe_endpoints());
-    });
-    rx
 }
 
 #[derive(Clone, Copy)]
