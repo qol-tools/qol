@@ -327,6 +327,7 @@ struct Dash {
     trace: LogRing,
     trace_child: Option<Child>,
     trace_rx: Option<Receiver<String>>,
+    trace_unavailable: bool,
     boot_rx: Option<Receiver<String>>,
     keys_hidden: bool,
     filter: String,
@@ -368,6 +369,7 @@ impl Dash {
             trace: LogRing::new(),
             trace_child: None,
             trace_rx: None,
+            trace_unavailable: false,
             boot_rx: None,
             keys_hidden: false,
             filter: String::new(),
@@ -404,6 +406,7 @@ pub(crate) fn run_session(
     let mut probes = Probes::spawn();
     let mut dash = Dash::new(plugins);
     dash.boot_rx = boot;
+    start_trace(&mut dash);
     let mut terminal = ratatui::init();
     let result = tui_session(&mut terminal, child, &lines, &mut probes, &mut dash);
     ratatui::restore();
@@ -701,9 +704,6 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             }
         }
         Action::Back => {
-            if dash.view == View::Trace {
-                stop_trace(dash);
-            }
             dash.view = View::Dashboard;
             dash.scroll_offset = 0;
             dash.filter.clear();
@@ -841,9 +841,7 @@ fn apply_health(dash: &mut Dash, snapshot: HealthSnapshot) {
     }
 }
 
-fn open_trace(dash: &mut Dash) {
-    dash.view = View::Trace;
-    dash.scroll_offset = 0;
+fn start_trace(dash: &mut Dash) {
     if dash.trace_child.is_some() {
         return;
     }
@@ -851,11 +849,24 @@ fn open_trace(dash: &mut Dash) {
         Some((child, rx)) => {
             dash.trace_child = Some(child);
             dash.trace_rx = Some(rx);
+            dash.trace_unavailable = false;
         }
-        None => dash.trace.push(
-            "[qol dev] could not start tracer (need python3 + tools/compact_trace.py)".to_string(),
-        ),
+        None => {
+            if !dash.trace_unavailable {
+                dash.trace.push(
+                    "[qol dev] could not start tracer (need python3 + tools/compact_trace.py)"
+                        .to_string(),
+                );
+            }
+            dash.trace_unavailable = true;
+        }
     }
+}
+
+fn open_trace(dash: &mut Dash) {
+    dash.view = View::Trace;
+    dash.scroll_offset = 0;
+    start_trace(dash);
 }
 
 fn spawn_trace() -> Option<(Child, Receiver<String>)> {
@@ -1899,10 +1910,12 @@ fn highlight_bar(line: Line<'_>, inner_width: usize) -> Line<'_> {
 
 fn trace_value(dash: &Dash) -> Vec<Span<'static>> {
     if dash.trace_child.is_some() {
-        vec![format!("{} lines", dash.trace.len()).fg(Color::DarkGray)]
-    } else {
-        vec!["idle · → open".fg(Color::DarkGray)]
+        return vec![format!("{} lines", dash.trace.len()).fg(Color::DarkGray)];
     }
+    if dash.trace_unavailable {
+        return vec!["tracer unavailable".fg(Color::DarkGray)];
+    }
+    vec!["idle · → open".fg(Color::DarkGray)]
 }
 
 fn draw_endpoints(frame: &mut Frame, dash: &Dash, area: Rect) {
