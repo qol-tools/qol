@@ -1,6 +1,7 @@
 use gpui::{ClipboardItem, Context, KeyDownEvent};
 
 use super::input::InputEffect;
+use super::trace;
 use super::LauncherView;
 
 enum ClipboardShortcut {
@@ -29,6 +30,7 @@ impl LauncherView {
         let effect = self
             .state
             .apply_key(key, secondary, control, shift, alt, result_count);
+        trace::input(self, key, effect, result_count);
 
         if !matches!(effect, InputEffect::BoostUp | InputEffect::BoostDown) {
             self.state.boost_adjusting = false;

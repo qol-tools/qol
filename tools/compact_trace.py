@@ -97,7 +97,7 @@ parser.add_argument("plugin", nargs="?", default=legacy_plugin, help="Plugin nam
 parser.add_argument("-f", "--focus-only", action="store_true", default=legacy_focus, help="Focus events only")
 parser.add_argument("-g", "--no-ghosts", action="store_true", help="Hide ghost window dumps")
 parser.add_argument("-o", "--no-opacity", action="store_true", help="Hide opacity events")
-parser.add_argument("--topic", choices=["focus", "monitor", "boot", "opacity", "all"], default="all", help="Slice trace by topic")
+parser.add_argument("--topic", choices=["focus", "monitor", "boot", "opacity", "ui", "all"], default="all", help="Slice trace by topic")
 parser.add_argument("--grep", help="Filter output lines by substring")
 parser.add_argument("--since", help="Filter events since duration (e.g. 5s, 10m)")
 parser.add_argument("--mark", help="Inject a custom marker label into the log and exit")
@@ -297,6 +297,8 @@ def parse_line(line):
 def match_topic(tag, topic):
     if not topic or topic == "all":
         return True
+    if topic == "ui":
+        return tag.startswith("LAUNCHER_") or tag.startswith("WORLD_")
     categories = {
         "focus": ("FOCUS", "FOCUS_WIN", "ACTIVATE", "ACTIVATE_WIN", "WM_RECEIVE", "ALT_POLL_START", "DISMISS"),
         "monitor": ("PUBLISH", "SUBSCRIBE", "RECV", "LEGEND", "AMC", "HOST_EMIT_AMC", "PLUGIN_RECV_AMC"),
@@ -304,6 +306,77 @@ def match_topic(tag, topic):
         "opacity": ("SHOW_WIN", "HIDE_WIN", "GHOSTWIN", "GHOSTDUMP", "SUMMARY")
     }
     return tag in categories.get(topic, ())
+
+def launcher_field(msg, name):
+    m = re.search(rf"\b{name}=(?P<value>\S+)", msg)
+    return m.group("value") if m else "?"
+
+def launcher_quoted(msg, name):
+    m = re.search(rf'\b{name}="(?P<value>[^"]*)"', msg)
+    return m.group("value") if m else ""
+
+def launcher_window(msg):
+    m = re.search(r"\bwin=\((?P<x>-?\d+),(?P<y>-?\d+),(?P<w>\d+)x(?P<h>\d+)\)", msg)
+    if not m:
+        return "win=?"
+    return f"{m.group('w')}x{m.group('h')}@({m.group('x')},{m.group('y')})"
+
+def format_launcher_event(tag, msg):
+    if tag == "LAUNCHER_SHOW":
+        title = format_title_compact(launcher_field(msg, "title"))
+        path = launcher_field(msg, "path")
+        m = re.search(r"\bpos=\((?P<x>-?\d+),(?P<y>-?\d+)\)\s+size=(?P<w>\d+)x(?P<h>\d+)", msg)
+        if m:
+            return (f"Launcher show {COLOR_OK}{path}{COLOR_RESET} {title} "
+                    f"{m.group('w')}x{m.group('h')}@({m.group('x')},{m.group('y')})")
+        return f"Launcher show {COLOR_OK}{path}{COLOR_RESET} {title}"
+
+    if tag == "LAUNCHER_INPUT":
+        effect = launcher_field(msg, "effect")
+        key = launcher_field(msg, "key")
+        q = launcher_quoted(msg, "q")
+        selected = launcher_field(msg, "selected")
+        results = launcher_field(msg, "results_before")
+        return (f"Launcher input {COLOR_HOTKEY}{key}{COLOR_RESET} -> {effect} "
+                f"q=\"{q}\" selected={selected} results_before={results}")
+
+    if tag == "LAUNCHER_RESIZE":
+        q = launcher_quoted(msg, "q")
+        rows = launcher_field(msg, "rows")
+        results = launcher_field(msg, "results")
+        from_h = launcher_field(msg, "from_h")
+        to_h = launcher_field(msg, "to_h")
+        return (f"{COLOR_OPACITY}Launcher resize{COLOR_RESET} h {from_h}->{to_h} "
+                f"rows={rows} results={results} q=\"{q}\" {launcher_window(msg)}")
+
+    if tag == "LAUNCHER_RENDER":
+        q = launcher_quoted(msg, "q")
+        selected_name = launcher_quoted(msg, "selected_name")
+        results = launcher_field(msg, "results")
+        visible = launcher_field(msg, "visible")
+        selected = launcher_field(msg, "selected")
+        scroll = launcher_field(msg, "scroll")
+        hidden = launcher_field(msg, "hidden")
+        target_h = launcher_field(msg, "target_h")
+        visual_h = launcher_field(msg, "visual_h")
+        total_us = launcher_field(msg, "total_us")
+        filter_us = launcher_field(msg, "filter_us")
+        rows_us = launcher_field(msg, "rows_us")
+        return (f"Launcher render q=\"{q}\" results={results} visible={visible} "
+                f"selected={selected} \"{selected_name}\" scroll={scroll} hidden={hidden} "
+                f"{launcher_window(msg)} target_h={target_h} visual_h={visual_h} "
+                f"{COLOR_DIM}time={total_us}us filter={filter_us}us rows={rows_us}us{COLOR_RESET}")
+
+    if tag == "LAUNCHER_DISMISS":
+        src = launcher_field(msg, "from")
+        q = launcher_quoted(msg, "q")
+        results = launcher_field(msg, "results")
+        selected = launcher_field(msg, "selected")
+        selected_name = launcher_quoted(msg, "selected_name")
+        return (f"Launcher closed from={COLOR_WARN}{src}{COLOR_RESET} q=\"{q}\" "
+                f"results={results} selected={selected} \"{selected_name}\"")
+
+    return f"{tag}: {msg}"
 
 def process_line(ts_raw, pid, tag, msg):
     global last_winner, last_cursor_pos, last_focus_pos
@@ -894,6 +967,14 @@ def process_line(ts_raw, pid, tag, msg):
             text = f"\n{COLOR_HOTKEY}" + "─" * ((width - len(msg_text) - 8) // 2) + f" MARK: {msg_text} " + "─" * ((width - len(msg_text) - 9) // 2) + f"{COLOR_RESET}\n"
             event_buffer.append((int(ts_raw), ts, "MARK", "host", text))
             last_event_real_time = time.time()
+
+    elif tag.startswith("LAUNCHER_"):
+        proc_name = get_process_name(pid)
+        if filter_plugin and proc_name != filter_plugin:
+            return
+        text = format_launcher_event(tag, msg)
+        event_buffer.append((int(ts_raw), ts, tag, proc_name, text))
+        last_event_real_time = time.time()
 
     elif tag == "GHOST_DUMP":
         m = re.search(

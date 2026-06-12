@@ -5,6 +5,7 @@ mod layout;
 mod render;
 pub mod run;
 mod state;
+mod trace;
 mod view;
 mod window_host;
 
@@ -40,6 +41,8 @@ pub(crate) struct LauncherView {
     pub(crate) showing_flag: Arc<std::sync::atomic::AtomicBool>,
     blur_guard_until: Instant,
     pub(crate) window_title: String,
+    #[cfg(debug_assertions)]
+    last_render_trace: Option<trace::RenderSignature>,
 }
 
 impl LauncherView {
@@ -62,6 +65,8 @@ impl LauncherView {
             showing_flag: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
             window_title: title,
+            #[cfg(debug_assertions)]
+            last_render_trace: None,
         }
     }
 
@@ -72,7 +77,7 @@ impl LauncherView {
     }
 
     pub(crate) fn hide_to_ghost(&mut self, _from: &'static str) {
-        qol_runtime::probe!("LAUNCHER_DISMISS", "from={_from}");
+        trace::dismiss(self, _from);
         self.set_showing(false);
         qol_gpui::ghost::dismiss_to_ghost(LAUNCHER_WINDOW_TITLE, &self.window_title);
     }
@@ -88,6 +93,10 @@ impl LauncherView {
         self.dismiss_requested = false;
         self.set_showing(true);
         self.blur_guard_until = Instant::now() + Duration::from_millis(BLUR_GUARD_MS);
+        #[cfg(debug_assertions)]
+        {
+            self.last_render_trace = None;
+        }
         should_resize
     }
 

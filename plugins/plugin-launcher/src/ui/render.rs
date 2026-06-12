@@ -3,8 +3,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::*;
 
-use super::layout::{resize_for_visible_rows, MAX_VISIBLE, ROW_HEIGHT};
+use super::layout::{
+    resize_for_visible_rows, window_height_for_rows, MAX_VISIBLE, ROW_HEIGHT, WINDOW_WIDTH,
+};
 use super::state::{EdgeHit, NavDirection};
+#[cfg(debug_assertions)]
+use super::trace;
 use super::view;
 use super::LauncherView;
 
@@ -97,10 +101,23 @@ impl Render for LauncherView {
                 (min.min(score), max.max(score))
             });
         let results_height = visible as f32 * ROW_HEIGHT;
-        resize_for_visible_rows(&mut self.state.window_height, visible, window);
+        let target_height = window_height_for_rows(visible);
+        let resize = resize_for_visible_rows(
+            &mut self.state.window_height,
+            visible,
+            window,
+            &self.window_title,
+        );
 
         #[cfg(debug_assertions)]
         let t1 = std::time::Instant::now();
+        #[cfg(debug_assertions)]
+        let selected_name = self
+            .store
+            .get(self.state.selected)
+            .map(|scored| self.store.name(scored))
+            .unwrap_or("")
+            .to_string();
         let rows = self.build_visible_rows(
             scroll_offset,
             visible,
@@ -116,6 +133,25 @@ impl Render for LauncherView {
         {
             let rows_us = t1.elapsed().as_micros();
             let total_us = render_start.elapsed().as_micros();
+            trace::render(
+                self,
+                window,
+                trace::RenderSample {
+                    result_count,
+                    visible_rows: visible,
+                    scroll_offset,
+                    hidden_above,
+                    hidden_below,
+                    results_height,
+                    target_height,
+                    selected_name,
+                    resize,
+                    total_us,
+                    filter_us,
+                    rows_us,
+                    gap_us,
+                },
+            );
             let n = RENDER_COUNT.fetch_add(1, Ordering::Relaxed);
             if n.is_multiple_of(10) {
                 eprintln!(
@@ -124,10 +160,13 @@ impl Render for LauncherView {
                 );
             }
         }
+        #[cfg(not(debug_assertions))]
+        let _ = resize;
         div()
             .id("launcher")
             .track_focus(&self.focus_handle)
-            .size_full()
+            .w(px(WINDOW_WIDTH))
+            .h(px(target_height))
             .overflow_hidden()
             .flex()
             .flex_col()
@@ -138,11 +177,7 @@ impl Render for LauncherView {
                 }
                 match event.keystroke.key.as_str() {
                     "escape" | "esc" => {
-                        this.set_showing(false);
-                        qol_gpui::ghost::dismiss_to_ghost(
-                            super::LAUNCHER_WINDOW_TITLE,
-                            &this.window_title,
-                        );
+                        this.hide_to_ghost("key");
                     }
                     _ => this.handle_key(event, window, cx),
                 }
