@@ -102,6 +102,18 @@ pub(super) fn is_regular_app(pid: i32) -> bool {
     })
 }
 
+#[cfg(debug_assertions)]
+pub(super) fn app_policy_debug(pid: i32) -> String {
+    use objc2_app_kit::NSRunningApplication;
+
+    objc2::rc::autoreleasepool(|_pool| {
+        match NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
+            None => "no-app".to_string(),
+            Some(app) => format!("{:?}", app.activationPolicy()),
+        }
+    })
+}
+
 pub(super) fn is_app_hidden(pid: i32) -> bool {
     use objc2_app_kit::NSRunningApplication;
 

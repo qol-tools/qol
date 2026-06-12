@@ -7,12 +7,13 @@ use ffi::{
 use std::collections::HashSet;
 use std::ffi::c_void;
 use window_enum::{
-    collect_minimized_windows, collect_on_screen_windows, KnownWindowTracker, WindowEnumeration,
+    collect_off_screen_windows, collect_on_screen_windows, KnownWindowTracker, WindowEnumeration,
 };
 
 pub(crate) mod ax;
 pub(crate) mod ffi;
 mod process;
+mod spaces;
 mod window_enum;
 
 pub struct Platform;
@@ -31,6 +32,7 @@ pub(super) struct CgWindow {
     pub title: String,
     pub has_title: bool,
     pub is_onscreen: bool,
+    pub is_cross_space: bool,
     pub x: f32,
     pub y: f32,
     pub w: f32,
@@ -182,6 +184,7 @@ fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<
         title: display_title,
         has_title,
         is_onscreen,
+        is_cross_space: false,
         x: wx as f32,
         y: wy as f32,
         w: ww as f32,
@@ -194,31 +197,86 @@ fn discover_live_windows(include_minimized: bool) -> Vec<WindowInfo> {
 
     let on_screen_opts =
         K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
+    #[cfg(debug_assertions)]
+    let t_cg = std::time::Instant::now();
     let on_screen = fetch_cg_windows(on_screen_opts, own_pid);
 
-    let all_windows = include_minimized
-        .then(|| fetch_cg_windows(K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, own_pid));
+    let mut all_windows = fetch_cg_windows(K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, own_pid);
+    let known_ids: HashSet<u32> = all_windows.iter().map(|w| w.id).collect();
+    #[cfg(debug_assertions)]
+    let cg_ms = t_cg.elapsed().as_millis();
+    #[cfg(debug_assertions)]
+    let t_sls = std::time::Instant::now();
+    let cross_space = spaces::cross_space_windows(own_pid, &known_ids);
+    #[cfg(debug_assertions)]
+    let sls_ms = t_sls.elapsed().as_millis();
+    for window in &mut all_windows {
+        if cross_space.ids.contains(&window.id) {
+            window.is_cross_space = true;
+        }
+    }
+    #[allow(unused_variables)]
+    let (on_screen_count, full_count, cross_count, hydrated_count) = (
+        on_screen.len(),
+        all_windows.len(),
+        cross_space.ids.len(),
+        cross_space.hydrated.len(),
+    );
+    all_windows.extend(cross_space.hydrated);
+    #[cfg(debug_assertions)]
+    let t_ax = std::time::Instant::now();
     let mut ax_cache = prefetch_on_screen_ax(&on_screen);
+    #[cfg(debug_assertions)]
+    let ax_ms = t_ax.elapsed().as_millis();
 
     let mut state = WindowEnumeration::default();
     let mut tracker = KnownWindowTracker::new();
+    #[cfg(debug_assertions)]
+    let on_ids = on_screen
+        .iter()
+        .take(16)
+        .map(|w| w.id.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    #[cfg(debug_assertions)]
+    let t_on = std::time::Instant::now();
     collect_on_screen_windows(on_screen, &mut state, &mut tracker, &mut ax_cache);
+    #[cfg(debug_assertions)]
+    let on_ms = t_on.elapsed().as_millis();
+    #[cfg(debug_assertions)]
+    let on_section = state.windows.len();
 
-    if !include_minimized {
-        tracker.persist();
-        return state.windows;
-    }
-    let Some(all_windows) = all_windows else {
-        tracker.persist();
-        return state.windows;
-    };
-    if all_windows.is_empty() {
-        tracker.persist();
-        return state.windows;
-    }
     let off_screen: Vec<_> = all_windows.into_iter().filter(|w| !w.is_onscreen).collect();
-    collect_minimized_windows(off_screen, &mut state, &mut tracker, &mut ax_cache);
+    #[cfg(debug_assertions)]
+    let t_off = std::time::Instant::now();
+    collect_off_screen_windows(
+        off_screen,
+        include_minimized,
+        &mut state,
+        &mut tracker,
+        &mut ax_cache,
+    );
+    #[cfg(debug_assertions)]
+    let off_ms = t_off.elapsed().as_millis();
     tracker.persist();
+    qol_runtime::probe!(
+        "DISCOVERY",
+        "onscreen={} full={} cross={} hydrated={} out={} sect=on{}/cross{}/min{} onids=[{on_ids}] cg={cg_ms}ms sls={sls_ms}ms ax={ax_ms}ms on={on_ms}ms off={off_ms}ms",
+        on_screen_count,
+        full_count,
+        cross_count,
+        hydrated_count,
+        state.windows.len(),
+        on_section,
+        state.windows[on_section..]
+            .iter()
+            .filter(|w| !w.is_minimized)
+            .count(),
+        state.windows[on_section..]
+            .iter()
+            .filter(|w| w.is_minimized)
+            .count()
+    );
     state.windows
 }
 
