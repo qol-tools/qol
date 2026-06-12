@@ -311,6 +311,7 @@ pub(crate) mod state {
         pub(crate) show_hotkey_hints: bool,
         pub(crate) max_columns: usize,
         pub(crate) card_scale: f32,
+        pub(crate) card_padding: f32,
         pub(crate) layout_budget: Option<(f32, f32)>,
         pub(crate) live_previews: PreviewMap,
         pub(crate) icon_cache: IconMap,
@@ -340,6 +341,7 @@ pub(crate) mod state {
                 show_hotkey_hints: init.show_hotkey_hints,
                 max_columns: init.max_columns,
                 card_scale: init.card_scale,
+                card_padding: init.card_padding,
                 layout_budget: init.layout_budget,
                 live_previews: init.previews,
                 icon_cache: init.icons,
@@ -466,6 +468,7 @@ pub(crate) mod state {
             self.show_debug_overlay = config.display.show_debug_overlay;
             self.show_hotkey_hints = config.display.show_hotkey_hints;
             self.card_scale = config.display.card_scale;
+            self.card_padding = config.display.card_padding;
         }
 
         pub(crate) fn remove_window(
@@ -744,6 +747,7 @@ pub(crate) mod state {
                 cycle_on_open: false,
                 max_columns: 6,
                 card_scale: 1.0,
+                card_padding: crate::shared::layout::DEFAULT_CARD_PADDING,
                 layout_budget: None,
                 previews: HashMap::new(),
                 icons: HashMap::new(),
@@ -904,6 +908,7 @@ pub(crate) mod state {
                 cycle_on_open: false,
                 max_columns: 6,
                 card_scale: 1.0,
+                card_padding: crate::shared::layout::DEFAULT_CARD_PADDING,
                 layout_budget: None,
                 previews: HashMap::new(),
                 icons: HashMap::new(),

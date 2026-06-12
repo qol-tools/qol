@@ -21,13 +21,16 @@ Install ID is resolved from `$QOL_TRAY_INSTALL_ID` env var or `<base>/active-ins
   "open_behavior": "cycle_once",
   "display": {
     "max_columns": 6,
+    "card_scale": 1.5,
+    "card_padding": 4,
     "transparent_background": false,
     "card_background_color": "1a1e2a",
     "card_background_opacity": 0.85
   },
   "label": {
     "show_app_name": true,
-    "show_window_title": true
+    "show_window_title": true,
+    "size": "medium"
   }
 }
 ```
@@ -47,6 +50,8 @@ Install ID is resolved from `$QOL_TRAY_INSTALL_ID` env var or `<base>/active-ins
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `max_columns` | int (2-12) | `6` | Maximum number of columns in the grid. |
+| `card_scale` | float (0.5-2.5) | `1.5` | Scale multiplier for window cards and previews. |
+| `card_padding` | float (0-24) | `4` | Inner card padding in pixels around the preview and label. |
 | `transparent_background` | bool | `false` | Remove the window background so only preview cards are visible. |
 | `card_background_color` | hex string | `"1a1e2a"` | Card fill color in transparent mode (6-char hex, no `#` prefix). |
 | `card_background_opacity` | float (0.0-1.0) | `0.85` | Card opacity in transparent mode. |
@@ -57,6 +62,7 @@ Install ID is resolved from `$QOL_TRAY_INSTALL_ID` env var or `<base>/active-ins
 |-----|------|---------|-------------|
 | `show_app_name` | bool | `true` | Show app name in card label. |
 | `show_window_title` | bool | `true` | Show window title in card label. |
+| `size` | `"small"` \| `"medium"` \| `"large"` | `"medium"` | Label text size relative to card size. |
 
 ## Legacy Keys
 

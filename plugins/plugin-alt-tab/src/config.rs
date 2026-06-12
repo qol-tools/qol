@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct DisplayConfig {
     pub max_columns: usize,
     pub card_scale: f32,
+    pub card_padding: f32,
     pub transparent_background: bool,
     pub card_background_color: String,
     pub card_background_opacity: f32,
@@ -20,6 +21,7 @@ impl Default for DisplayConfig {
         Self {
             max_columns: 6,
             card_scale: crate::shared::layout::DEFAULT_CARD_SCALE,
+            card_padding: crate::shared::layout::DEFAULT_CARD_PADDING,
             transparent_background: false,
             card_background_color: "1a1e2a".to_string(),
             card_background_opacity: 0.85,
@@ -143,10 +145,11 @@ pub fn load_alt_tab_config() -> AltTabConfig {
     let config: AltTabConfig = qol_config::load_plugin_config_from_env(PLUGIN_ID);
     #[cfg(debug_assertions)]
     eprintln!(
-        "[alt-tab] config: action_mode={:?} max_columns={} card_scale={} reset_selection_on_open={} open_behavior={:?}",
+        "[alt-tab] config: action_mode={:?} max_columns={} card_scale={} card_padding={} reset_selection_on_open={} open_behavior={:?}",
         config.action_mode,
         config.display.max_columns,
         config.display.card_scale,
+        config.display.card_padding,
         config.reset_selection_on_open,
         config.open_behavior,
     );

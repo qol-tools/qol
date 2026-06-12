@@ -74,6 +74,17 @@ min = 0.5
 max = 2.5
 step = 0.1
 
+[field.display_card_padding]
+type = "number"
+config_key = "display.card_padding"
+label = "Card Padding"
+description = "Inner padding around each card preview and title."
+section = "layout"
+default = 4
+min = 0
+max = 24
+step = 1
+
 [field.display_max_columns]
 type = "number"
 config_key = "display.max_columns"

@@ -103,11 +103,14 @@ fn capture_window_scaled(
 
     let fmt = session.formats.get(&geom.depth).copied()?;
 
-    let scale = (max_w as f64 / src_w as f64)
-        .min(max_h as f64 / src_h as f64)
-        .min(1.0);
-    let dst_w = ((src_w as f64 * scale).round() as u16).max(1);
-    let dst_h = ((src_h as f64 * scale).round() as u16).max(1);
+    let scale = (max_w as f64 / src_w as f64).max(max_h as f64 / src_h as f64);
+    let dst_w_usize = ((src_w as f64 * scale).round() as usize).max(max_w);
+    let dst_h_usize = ((src_h as f64 * scale).round() as usize).max(max_h);
+    if dst_w_usize > u16::MAX as usize || dst_h_usize > u16::MAX as usize {
+        return None;
+    }
+    let dst_w = dst_w_usize as u16;
+    let dst_h = dst_h_usize as u16;
 
     let raw = render_scaled_capture(
         session,
@@ -123,13 +126,13 @@ fn capture_window_scaled(
     )?;
 
     let force_opaque = geom.depth < 32;
-    let offset_x = (max_w - dst_w as usize) / 2;
-    let offset_y = (max_h - dst_h as usize) / 2;
+    let offset_x = (dst_w_usize - max_w) / 2;
+    let offset_y = (dst_h_usize - max_h) / 2;
     let mut out = vec![0u8; max_w * max_h * 4];
-    for y in 0..dst_h as usize {
-        for x in 0..dst_w as usize {
-            let s = (y * dst_w as usize + x) * 4;
-            let d = ((offset_y + y) * max_w + offset_x + x) * 4;
+    for y in 0..max_h {
+        for x in 0..max_w {
+            let s = ((offset_y + y) * dst_w_usize + offset_x + x) * 4;
+            let d = (y * max_w + x) * 4;
             if s + 4 <= raw.len() {
                 out[d..d + 3].copy_from_slice(&raw[s..s + 3]);
                 out[d + 3] = if force_opaque { 255 } else { raw[s + 3] };

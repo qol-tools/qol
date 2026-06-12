@@ -99,7 +99,7 @@ impl Render for AltTabApp {
             show_debug_overlay: d.show_debug_overlay,
             show_hotkey_hints: d.show_hotkey_hints,
             card_bg_rgba: (d.card_bg_color << 8) | alpha,
-            metrics: CardMetrics::from_scale(d.card_scale),
+            metrics: CardMetrics::from_config(d.card_scale, d.card_padding),
         };
 
         let _ = window;
@@ -109,6 +109,7 @@ impl Render for AltTabApp {
             d.layout_budget,
             d.show_hotkey_hints,
             d.card_scale,
+            d.card_padding,
         );
         let (panel_w, panel_h) = (layout.width, layout.height);
 
@@ -253,10 +254,10 @@ fn render_card(
         })
         .flex()
         .flex_col()
-        .items_center()
+        .items_start()
         .w(px(snap.metrics.card_width))
         .h(px(snap.metrics.card_height))
-        .p_2()
+        .p(px(snap.metrics.card_padding))
         .rounded_xl()
         .when(snap.visible, |el| el.cursor_pointer())
         .map(|el| {
@@ -319,12 +320,18 @@ fn render_preview(
     } else {
         None
     };
-    div().rounded_md().overflow_hidden().child(preview_tile(
-        live_previews.get(&win.id),
-        &win.preview_path,
-        minimized_icon,
-        metrics,
-    ))
+    div()
+        .w(px(metrics.preview_width))
+        .h(px(metrics.preview_height))
+        .flex_none()
+        .rounded_md()
+        .overflow_hidden()
+        .child(preview_tile(
+            live_previews.get(&win.id),
+            &win.preview_path,
+            minimized_icon,
+            metrics,
+        ))
 }
 
 fn render_label(
@@ -353,12 +360,14 @@ fn render_label(
 
     div()
         .mt_2()
-        .w_full()
+        .w(px(metrics.preview_width))
+        .max_w(px(metrics.preview_width))
+        .flex_none()
         .flex()
         .flex_row()
         .items_center()
         .gap_1()
-        .px_1()
+        .overflow_hidden()
         .text_color(color)
         .when_some(app_icon, |el, icon| {
             el.child(
@@ -371,9 +380,10 @@ fn render_label(
         })
         .child(
             div()
+                .flex_1()
+                .min_w(px(0.))
                 .text_size(px(metrics.label_font_px(size_factor)))
-                .text_ellipsis()
-                .overflow_hidden()
+                .truncate()
                 .child(text),
         )
 }

@@ -107,6 +107,7 @@ fn on_arrow(
         state.layout_budget,
         state.show_hotkey_hints,
         state.card_scale,
+        state.card_padding,
     );
     let from = state.selected_index;
     this.delegate.update(cx, |s, _| nav(s, layout.columns));
@@ -115,13 +116,14 @@ fn on_arrow(
         let state = this.delegate.read(cx);
         qol_runtime::probe!(
             "NAV_GRID",
-            "method={} from={:?} to={:?} cols={} count={} scale={} budget={:?}",
+            "method={} from={:?} to={:?} cols={} count={} scale={} padding={} budget={:?}",
             method,
             from,
             state.selected_index,
             layout.columns,
             state.windows.len(),
             state.card_scale,
+            state.card_padding,
             state.layout_budget,
         );
     }
