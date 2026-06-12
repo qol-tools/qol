@@ -41,6 +41,7 @@ pub(crate) struct LauncherView {
     pub(crate) showing_flag: Arc<std::sync::atomic::AtomicBool>,
     blur_guard_until: Instant,
     pub(crate) window_title: String,
+    pub(crate) window_origin: Point<Pixels>,
     #[cfg(debug_assertions)]
     last_render_trace: Option<trace::RenderSignature>,
 }
@@ -65,6 +66,7 @@ impl LauncherView {
             showing_flag: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
             window_title: title,
+            window_origin: point(px(0.0), px(0.0)),
             #[cfg(debug_assertions)]
             last_render_trace: None,
         }
@@ -76,14 +78,29 @@ impl LauncherView {
             .store(showing, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub(crate) fn hide_to_ghost(&mut self, _from: &'static str) {
+    pub(crate) fn hide_to_ghost(&mut self, _from: &'static str, window: &mut Window) {
         trace::dismiss(self, _from);
         self.set_showing(false);
         qol_gpui::ghost::dismiss_to_ghost(LAUNCHER_WINDOW_TITLE, &self.window_title);
+        self.shrink_hidden_ghost(window);
     }
 
     pub(super) fn schedule_query_render(&mut self, cx: &mut Context<Self>) {
         cx.notify();
+    }
+
+    fn shrink_hidden_ghost(&mut self, window: &mut Window) {
+        qol_gpui::ghost::sync_window_layout(
+            &self.window_title,
+            window,
+            self.window_origin,
+            size(px(layout::WINDOW_WIDTH), px(HEADER_HEIGHT)),
+        );
+        self.state.window_height = HEADER_HEIGHT;
+    }
+
+    pub(crate) fn set_window_origin(&mut self, origin: Point<Pixels>) {
+        self.window_origin = origin;
     }
 
     pub(crate) fn reset_for_show(&mut self) -> bool {

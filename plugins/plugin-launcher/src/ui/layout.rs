@@ -1,4 +1,4 @@
-use gpui::{px, size, Window};
+use gpui::{px, size, Point, Window};
 
 pub const MAX_VISIBLE: usize = 8;
 pub const HEADER_HEIGHT: f32 = 42.0;
@@ -14,6 +14,7 @@ pub fn resize_for_visible_rows(
     visible_rows: usize,
     window: &mut Window,
     title: &str,
+    origin: Point<gpui::Pixels>,
 ) -> Option<(f32, f32)> {
     let target_height = window_height_for_rows(visible_rows);
     if (*window_height - target_height).abs() <= f32::EPSILON {
@@ -21,7 +22,6 @@ pub fn resize_for_visible_rows(
     }
 
     let previous_height = *window_height;
-    let origin = window.window_bounds().get_bounds().origin;
     qol_gpui::ghost::sync_window_layout(
         title,
         window,

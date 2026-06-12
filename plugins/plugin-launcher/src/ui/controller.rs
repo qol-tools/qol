@@ -68,7 +68,7 @@ impl LauncherView {
                 cx.notify();
             }
             InputEffect::Launch => self.launch_selected(window, cx),
-            InputEffect::Dismiss => self.hide_to_ghost("key"),
+            InputEffect::Dismiss => self.hide_to_ghost("key", window),
         }
     }
 
@@ -142,7 +142,7 @@ impl LauncherView {
         self.store.adjust_boost(&name, delta);
     }
 
-    fn launch_selected(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) {
+    fn launch_selected(&mut self, window: &mut gpui::Window, _cx: &mut Context<Self>) {
         self.store
             .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
         let Some(scored) = self.store.get(self.state.selected) else {
@@ -173,6 +173,6 @@ impl LauncherView {
         if is_app {
             self.store.record_launch(&name);
         }
-        self.hide_to_ghost("launch");
+        self.hide_to_ghost("launch", window);
     }
 }

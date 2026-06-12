@@ -27,7 +27,7 @@ impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.dismiss_requested {
             self.dismiss_requested = false;
-            self.hide_to_ghost("requested");
+            self.hide_to_ghost("requested", window);
         }
 
         if self.dismiss_sub.is_none() {
@@ -37,8 +37,8 @@ impl Render for LauncherView {
                 |this: &Self| this.blur_guard_until,
                 |this: &Self| this.is_showing,
                 cx,
-                |this, _window, _cx| {
-                    this.hide_to_ghost("blur");
+                |this, window, _cx| {
+                    this.hide_to_ghost("blur", window);
                 },
             ));
             if !self.is_showing {
@@ -61,6 +61,50 @@ impl Render for LauncherView {
             };
             (render_start, gap_us)
         };
+
+        if !self.is_showing {
+            let resize = resize_for_visible_rows(
+                &mut self.state.window_height,
+                0,
+                window,
+                &self.window_title,
+                self.window_origin,
+            );
+
+            #[cfg(debug_assertions)]
+            {
+                let total_us = render_start.elapsed().as_micros();
+                trace::render(
+                    self,
+                    window,
+                    trace::RenderSample {
+                        result_count: self.store.result_count(),
+                        visible_rows: 0,
+                        scroll_offset: 0,
+                        hidden_above: 0,
+                        hidden_below: 0,
+                        results_height: 0.0,
+                        target_height: window_height_for_rows(0),
+                        selected_name: String::new(),
+                        resize,
+                        total_us,
+                        filter_us: 0,
+                        rows_us: 0,
+                        gap_us,
+                    },
+                );
+            }
+            #[cfg(not(debug_assertions))]
+            let _ = resize;
+
+            return div()
+                .id("launcher")
+                .track_focus(&self.focus_handle)
+                .w(px(WINDOW_WIDTH))
+                .h(px(window_height_for_rows(0)))
+                .overflow_hidden()
+                .bg(view::bg_color());
+        }
 
         if self.is_showing {
             self.sync_entries_from_shared();
@@ -107,6 +151,7 @@ impl Render for LauncherView {
             visible,
             window,
             &self.window_title,
+            self.window_origin,
         );
 
         #[cfg(debug_assertions)]
@@ -177,7 +222,7 @@ impl Render for LauncherView {
                 }
                 match event.keystroke.key.as_str() {
                     "escape" | "esc" => {
-                        this.hide_to_ghost("key");
+                        this.hide_to_ghost("key", window);
                     }
                     _ => this.handle_key(event, window, cx),
                 }
