@@ -11,6 +11,7 @@ pub struct DisplayConfig {
     pub transparent_background: bool,
     pub card_background_color: String,
     pub card_background_opacity: f32,
+    pub icon_position: PreviewIconPosition,
     pub show_minimized: bool,
     pub show_debug_overlay: bool,
     pub show_hotkey_hints: bool,
@@ -27,6 +28,7 @@ impl Default for DisplayConfig {
             transparent_background: false,
             card_background_color: DEFAULT_CARD_BACKGROUND_COLOR.to_string(),
             card_background_opacity: 0.85,
+            icon_position: PreviewIconPosition::default(),
             show_minimized: true,
             show_debug_overlay: false,
             show_hotkey_hints: true,
@@ -37,6 +39,14 @@ impl Default for DisplayConfig {
 }
 
 pub use qol_color::parse_hex_color;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewIconPosition {
+    TopLeft,
+    #[default]
+    TopRight,
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -51,7 +61,7 @@ impl LabelSize {
     pub fn factor(&self) -> f32 {
         match self {
             LabelSize::Small => 0.8,
-            LabelSize::Medium => 1.0,
+            LabelSize::Medium => 0.92,
             LabelSize::Large => 1.25,
         }
     }
@@ -68,7 +78,7 @@ pub struct LabelConfig {
 impl Default for LabelConfig {
     fn default() -> Self {
         Self {
-            show_app_name: true,
+            show_app_name: false,
             show_window_title: true,
             size: LabelSize::default(),
         }
@@ -134,11 +144,12 @@ pub fn load_alt_tab_config() -> AltTabConfig {
     let config: AltTabConfig = qol_config::load_plugin_config_from_env(PLUGIN_ID);
     #[cfg(debug_assertions)]
     eprintln!(
-        "[alt-tab] config: action_mode={:?} max_columns={} card_scale={} card_padding={} reset_selection_on_open={} open_behavior={:?}",
+        "[alt-tab] config: action_mode={:?} max_columns={} card_scale={} card_padding={} icon_position={:?} reset_selection_on_open={} open_behavior={:?}",
         config.action_mode,
         config.display.max_columns,
         config.display.card_scale,
         config.display.card_padding,
+        config.display.icon_position,
         config.reset_selection_on_open,
         config.open_behavior,
     );

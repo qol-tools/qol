@@ -1,5 +1,5 @@
 use super::AltTabApp;
-use crate::config::{capitalize_first, ActionMode, LabelConfig};
+use crate::config::{capitalize_first, ActionMode, LabelConfig, PreviewIconPosition};
 use crate::discovery::WindowInfo;
 use crate::shared::layout::{picker_layout, CardMetrics};
 use crate::{IconMap, PreviewMap};
@@ -24,8 +24,19 @@ struct RenderSnap {
     transparent_bg: bool,
     show_debug_overlay: bool,
     show_hotkey_hints: bool,
+    icon_position: PreviewIconPosition,
     palette: SurfacePalette,
     metrics: CardMetrics,
+}
+
+struct CardRenderContext<'a> {
+    snap: &'a RenderSnap,
+    label_config: &'a LabelConfig,
+    previews: &'a PreviewMap,
+    icons: &'a IconMap,
+    entity: WeakEntity<AltTabApp>,
+    window: &'a Window,
+    app: &'a App,
 }
 
 #[derive(Clone, Copy)]
@@ -39,11 +50,9 @@ struct SurfacePalette {
     card_selected_border: u32,
     card_bg_rgba: u32,
     card_selected_rgba: u32,
-    icon_bg: u32,
-    icon_border: u32,
-    icon_selected_bg: u32,
-    icon_selected_border: u32,
     caption_divider: u32,
+    preview_icon_border: u32,
+    preview_icon_selected_border: u32,
 }
 
 impl SurfacePalette {
@@ -59,11 +68,9 @@ impl SurfacePalette {
             card_selected_border: mix_rgb(card_bg, 0xc7d0c9, 0.36),
             card_bg_rgba: rgba_from_rgb(card_bg, opacity),
             card_selected_rgba: rgba_from_rgb(mix_rgb(card_bg, 0xffffff, 0.13), opacity.max(0.92)),
-            icon_bg: rgba_from_rgb(mix_rgb(card_bg, 0x000000, 0.18), 0.78),
-            icon_border: rgba_from_rgb(mix_rgb(card_bg, 0xffffff, 0.11), 0.76),
-            icon_selected_bg: rgba_from_rgb(mix_rgb(card_bg, 0xffffff, 0.16), 0.82),
-            icon_selected_border: rgba_from_rgb(mix_rgb(card_bg, 0xd2d9d4, 0.42), 0.70),
             caption_divider: rgba_from_rgb(mix_rgb(card_bg, 0xffffff, 0.12), 0.58),
+            preview_icon_border: rgba_from_rgb(mix_rgb(card_bg, 0xffffff, 0.12), 0.48),
+            preview_icon_selected_border: rgba_from_rgb(mix_rgb(card_bg, 0xffffff, 0.18), 0.52),
         }
     }
 }
@@ -154,11 +161,11 @@ impl Render for AltTabApp {
             transparent_bg: d.transparent_background,
             show_debug_overlay: d.show_debug_overlay,
             show_hotkey_hints: d.show_hotkey_hints,
+            icon_position: d.icon_position,
             palette: SurfacePalette::from_card_color(d.card_bg_color, d.card_bg_opacity),
             metrics: CardMetrics::from_config(d.card_scale, d.card_padding),
         };
 
-        let _ = window;
         let layout = picker_layout(
             d.windows.len().max(1),
             d.max_columns,
@@ -169,14 +176,16 @@ impl Render for AltTabApp {
         );
         let (panel_w, panel_h) = (layout.width, layout.height);
 
-        let grid = render_grid(
-            &d.windows,
-            &snap,
-            &d.label_config,
-            &d.live_previews,
-            &d.icon_cache,
+        let render_context = CardRenderContext {
+            snap: &snap,
+            label_config: &d.label_config,
+            previews: &d.live_previews,
+            icons: &d.icon_cache,
             entity,
-        );
+            window,
+            app: cx,
+        };
+        let grid = render_grid(&d.windows, &render_context);
 
         let panel = div()
             .id("alt-tab-panel")
@@ -249,14 +258,7 @@ fn header_bar(left: &str, right: &str, palette: &SurfacePalette) -> Div {
         )
 }
 
-fn render_grid(
-    windows: &[WindowInfo],
-    snap: &RenderSnap,
-    label_config: &LabelConfig,
-    previews: &PreviewMap,
-    icons: &IconMap,
-    entity: WeakEntity<AltTabApp>,
-) -> Div {
+fn render_grid(windows: &[WindowInfo], context: &CardRenderContext<'_>) -> Div {
     div().flex_1().w_full().min_h_0().child(
         div()
             .id("preview-grid")
@@ -278,28 +280,24 @@ fn render_grid(
                         .child("Scanning windows..."),
                 )
             })
-            .children(windows.iter().enumerate().map(|(i, win)| {
-                render_card(i, win, snap, label_config, previews, icons, entity.clone())
-            })),
+            .children(
+                windows
+                    .iter()
+                    .enumerate()
+                    .map(|(i, win)| render_card(i, win, context)),
+            ),
     )
 }
 
-fn render_card(
-    i: usize,
-    win: &WindowInfo,
-    snap: &RenderSnap,
-    label_config: &LabelConfig,
-    previews: &PreviewMap,
-    icons: &IconMap,
-    entity: WeakEntity<AltTabApp>,
-) -> Stateful<Div> {
+fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> Stateful<Div> {
+    let snap = context.snap;
     let is_selected = snap.selected_index == Some(i);
 
     div()
         .id(ElementId::Integer(i as u64))
         .when(snap.visible, |el| {
             el.on_click({
-                let entity = entity.clone();
+                let entity = context.entity.clone();
                 move |_, window, cx| {
                     let _ = entity.update(cx, |this, cx| {
                         this.delegate.update(cx, |s, _| s.selected_index = Some(i));
@@ -327,8 +325,23 @@ fn render_card(
                 &snap.palette,
             )
         })
-        .child(render_preview(win, previews, icons, &snap.metrics))
-        .child(render_label(i, win, snap, label_config, icons))
+        .child(render_preview(
+            win,
+            context.previews,
+            context.icons,
+            &snap.metrics,
+            &snap.palette,
+            snap.icon_position,
+            is_selected,
+        ))
+        .child(render_label(
+            i,
+            win,
+            snap,
+            context.label_config,
+            context.window,
+            context.app,
+        ))
 }
 
 fn card_bg(
@@ -367,13 +380,32 @@ fn render_preview(
     live_previews: &PreviewMap,
     icon_cache: &IconMap,
     metrics: &CardMetrics,
+    palette: &SurfacePalette,
+    icon_position: PreviewIconPosition,
+    selected: bool,
 ) -> Div {
     let minimized_icon = if win.is_minimized {
         icon_cache.get(&win.app_name)
     } else {
         None
     };
+    let overlay_icon = if win.is_minimized {
+        None
+    } else {
+        icon_cache.get(&win.app_name).cloned()
+    };
+    let icon_px = (metrics.label_icon_px(1.0) * 1.46)
+        .max(22.0)
+        .min(metrics.preview_width * 0.18);
+    let inset_px = (metrics.card_padding + 3.0).clamp(6.0, 10.0);
+    let icon_border = if selected {
+        palette.preview_icon_selected_border
+    } else {
+        palette.preview_icon_border
+    };
+
     div()
+        .relative()
         .w(px(metrics.preview_width))
         .h(px(metrics.preview_height))
         .flex_none()
@@ -385,6 +417,30 @@ fn render_preview(
             minimized_icon,
             metrics,
         ))
+        .when_some(overlay_icon, |el, icon| {
+            let icon = div()
+                .absolute()
+                .top(px(inset_px))
+                .w(px(icon_px))
+                .h(px(icon_px))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_md()
+                .border_1()
+                .border_color(rgba(icon_border))
+                .child(
+                    img(icon)
+                        .w(px(icon_px - 2.0))
+                        .h(px(icon_px - 2.0))
+                        .rounded_sm()
+                        .opacity(0.8),
+                );
+            match icon_position {
+                PreviewIconPosition::TopLeft => el.child(icon.left(px(inset_px))),
+                PreviewIconPosition::TopRight => el.child(icon.right(px(inset_px))),
+            }
+        })
 }
 
 fn render_label(
@@ -392,151 +448,117 @@ fn render_label(
     win: &WindowInfo,
     snap: &RenderSnap,
     label_config: &LabelConfig,
-    icons: &IconMap,
+    window: &Window,
+    cx: &App,
 ) -> Div {
     let selected = snap.selected_index == Some(i);
     let metrics = &snap.metrics;
     let palette = &snap.palette;
-    let show_app = label_config.show_app_name && !win.app_name.is_empty();
-    let show_title = label_config.show_window_title && !win.title.is_empty();
-    let app_label = show_app.then(|| capitalize_first(&win.app_name));
-    let title_label = show_title.then(|| {
-        if snap.show_debug_overlay {
-            format!("[{}] {}", i, win.title)
-        } else {
-            win.title.clone()
-        }
-    });
-    let has_app = app_label.is_some();
-    let has_title = title_label.is_some();
-    let app_icon = icons.get(&win.app_name).cloned();
-    let has_icon = app_icon.is_some();
+    let label = label_text(i, win, snap, label_config);
     let size_factor = label_config.size.factor();
-    let icon_px = metrics.label_icon_px(size_factor);
     let text_px = metrics.label_font_px(size_factor);
-    let label_slot_px =
-        (metrics.card_height - metrics.card_padding * 2.0 - metrics.preview_height).max(icon_px);
-    let icon_gap_px = if has_icon { 4.0 } else { 0.0 };
-    let text_area_px =
-        (metrics.preview_width - icon_gap_px - if has_icon { icon_px } else { 0.0 }).max(1.0);
-    let app_max_width_px = if has_title {
-        text_area_px * 0.42
-    } else {
-        text_area_px
-    };
+    let line_height_px = metrics.label_line_height_px(size_factor);
+    let label_slot_px = metrics.label_strip_height;
+    let label_padding_px = (metrics.scale * 3.0).clamp(3.0, 7.0);
+    let label_width_px = (metrics.preview_width - label_padding_px * 2.0).max(1.0);
     let primary_color = if selected {
         rgb(0xf8fbff)
     } else {
         rgb(0xd4dbea)
     };
-    let secondary_color = if selected {
-        rgb(0xaebfe3)
-    } else {
-        rgb(0x8995ad)
-    };
 
-    div()
+    let base = div()
         .w(px(metrics.preview_width))
         .max_w(px(metrics.preview_width))
         .h(px(label_slot_px))
         .flex_none()
         .flex()
-        .flex_row()
         .items_center()
-        .gap_1()
+        .justify_center()
         .overflow_hidden()
         .border_t_1()
-        .border_color(rgba(palette.caption_divider))
-        .when_some(app_icon, |el, icon| {
-            el.child(
-                div()
-                    .w(px(icon_px))
-                    .h(px(icon_px))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_md()
-                    .bg(rgba(if selected {
-                        palette.icon_selected_bg
-                    } else {
-                        palette.icon_bg
-                    }))
-                    .border_1()
-                    .border_color(rgba(if selected {
-                        palette.icon_selected_border
-                    } else {
-                        palette.icon_border
-                    }))
-                    .child(
-                        img(icon)
-                            .w(px((icon_px * 0.72).max(12.0)))
-                            .h(px((icon_px * 0.72).max(12.0)))
-                            .rounded_sm(),
-                    ),
-            )
+        .border_color(rgba(palette.caption_divider));
+
+    if label.is_empty() {
+        return base;
+    }
+
+    base.child(render_single_label(
+        label,
+        label_width_px,
+        text_px,
+        line_height_px,
+        primary_color,
+        window,
+        cx,
+    ))
+}
+
+fn label_text(i: usize, win: &WindowInfo, snap: &RenderSnap, label_config: &LabelConfig) -> String {
+    let app = if label_config.show_app_name && !win.app_name.is_empty() {
+        Some(capitalize_first(&win.app_name))
+    } else {
+        None
+    };
+    let title = if label_config.show_window_title && !win.title.is_empty() {
+        Some(if snap.show_debug_overlay {
+            format!("[{}] {}", i, win.title)
+        } else {
+            win.title.clone()
         })
-        .child(
-            div()
-                .w(px(text_area_px))
-                .max_w(px(text_area_px))
-                .flex_none()
-                .min_w(px(0.))
-                .flex()
-                .flex_row()
-                .items_center()
-                .overflow_hidden()
-                .when_some(app_label, |el, app| {
-                    el.child(
-                        div()
-                            .max_w(px(app_max_width_px))
-                            .min_w(px(0.))
-                            .flex_initial()
-                            .text_size(px(text_px))
-                            .line_height(relative(0.95))
-                            .font_weight(if has_title {
-                                FontWeight::MEDIUM
-                            } else {
-                                FontWeight::SEMIBOLD
-                            })
-                            .text_color(if has_title {
-                                secondary_color
-                            } else {
-                                primary_color
-                            })
-                            .truncate()
-                            .child(app),
-                    )
-                })
-                .when(has_app && has_title, |el| {
-                    el.child(
-                        div()
-                            .flex_none()
-                            .text_size(px(text_px))
-                            .line_height(relative(0.95))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(if selected {
-                                rgb(0x7f94bf)
-                            } else {
-                                rgb(0x626d82)
-                            })
-                            .child("/"),
-                    )
-                })
-                .when_some(title_label, |el, title| {
-                    el.child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .text_size(px(text_px))
-                            .line_height(relative(0.95))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(primary_color)
-                            .truncate()
-                            .child(title),
-                    )
-                }),
-        )
+    } else {
+        None
+    };
+
+    match (app, title) {
+        (Some(app), Some(title)) => format!("{app} · {title}"),
+        (Some(label), None) | (None, Some(label)) => label,
+        (None, None) => String::new(),
+    }
+}
+
+fn render_single_label(
+    label: String,
+    width_px: f32,
+    text_px: f32,
+    line_height_px: f32,
+    color: Rgba,
+    window: &Window,
+    cx: &App,
+) -> Div {
+    let label = truncate_label(label, width_px, text_px, window, cx);
+    div()
+        .w(px(width_px))
+        .max_w(px(width_px))
+        .flex_none()
+        .min_w(px(0.))
+        .text_center()
+        .text_size(px(text_px))
+        .line_height(px(line_height_px))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(color)
+        .truncate()
+        .overflow_hidden()
+        .child(label)
+}
+
+fn truncate_label(
+    label: String,
+    max_width_px: f32,
+    text_px: f32,
+    window: &Window,
+    cx: &App,
+) -> SharedString {
+    if label.is_empty() {
+        return SharedString::from(label);
+    }
+
+    let mut text_style = window.text_style();
+    text_style.font_weight = FontWeight::SEMIBOLD;
+    let mut runs = vec![text_style.to_run(label.len())];
+    cx.text_system()
+        .line_wrapper(text_style.font(), px(text_px))
+        .truncate_line(SharedString::from(label), px(max_width_px), "…", &mut runs)
 }
 
 fn preview_tile(

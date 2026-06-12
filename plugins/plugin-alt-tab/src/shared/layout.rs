@@ -6,10 +6,11 @@ pub const MAX_CARD_PADDING: f32 = 24.0;
 pub const DEFAULT_CARD_PADDING: f32 = 4.0;
 
 const BASE_CARD_WIDTH: f32 = 220.0;
-const BASE_CARD_HEIGHT: f32 = 156.0;
 const PREVIEW_ASPECT_W: f32 = 16.0;
 const PREVIEW_ASPECT_H: f32 = 9.0;
-const BASE_LABEL_FONT: f32 = 10.5;
+const BASE_LABEL_FONT: f32 = 10.0;
+const BASE_LABEL_STRIP_HEIGHT: f32 = BASE_LABEL_FONT * 1.75;
+const LABEL_LINE_HEIGHT_FACTOR: f32 = 1.25;
 const BASE_LABEL_ICON: f32 = 16.0;
 const BASE_MINIMIZED_ICON: f32 = 48.0;
 /// Height of the hotkey hints bar (py_2 + text_xs + border_b_1).
@@ -35,6 +36,7 @@ pub struct CardMetrics {
     pub card_height: f32,
     pub preview_width: f32,
     pub preview_height: f32,
+    pub label_strip_height: f32,
 }
 
 impl CardMetrics {
@@ -43,18 +45,25 @@ impl CardMetrics {
         let card_padding = clamp_card_padding(card_padding);
         let card_width = BASE_CARD_WIDTH * s;
         let preview_width = (card_width - card_padding * 2.0).max(1.0);
+        let preview_height = preview_width * PREVIEW_ASPECT_H / PREVIEW_ASPECT_W;
+        let label_strip_height = BASE_LABEL_STRIP_HEIGHT * s;
         Self {
             scale: s,
             card_padding,
             card_width,
-            card_height: BASE_CARD_HEIGHT * s,
+            card_height: preview_height + label_strip_height + card_padding * 2.0,
             preview_width,
-            preview_height: preview_width * PREVIEW_ASPECT_H / PREVIEW_ASPECT_W,
+            preview_height,
+            label_strip_height,
         }
     }
 
     pub fn label_font_px(&self, size_factor: f32) -> f32 {
         BASE_LABEL_FONT * self.scale * size_factor
+    }
+
+    pub fn label_line_height_px(&self, size_factor: f32) -> f32 {
+        self.label_font_px(size_factor) * LABEL_LINE_HEIGHT_FACTOR
     }
 
     pub fn label_icon_px(&self, size_factor: f32) -> f32 {
@@ -160,26 +169,44 @@ mod tests {
     #[test]
     fn card_metrics_scale_and_clamp() {
         let cases = [
-            (1.0, (220.0, 156.0, 212.0, 119.25)),
-            (1.5, (330.0, 234.0, 322.0, 181.125)),
-            (0.1, (110.0, 78.0, 102.0, 57.375)),
-            (10.0, (550.0, 390.0, 542.0, 304.875)),
-            (f32::NAN, (330.0, 234.0, 322.0, 181.125)),
+            (1.0, (220.0, 144.75, 212.0, 119.25, 17.5)),
+            (1.5, (330.0, 215.375, 322.0, 181.125, 26.25)),
+            (0.1, (110.0, 74.125, 102.0, 57.375, 8.75)),
+            (10.0, (550.0, 356.625, 542.0, 304.875, 43.75)),
+            (f32::NAN, (330.0, 215.375, 322.0, 181.125, 26.25)),
         ];
-        for (scale, (cw, ch, pw, ph)) in cases {
+        for (scale, (cw, ch, pw, ph, lh)) in cases {
             let m = CardMetrics::from_config(scale, DEFAULT_CARD_PADDING);
-            assert_eq!(
-                (
-                    m.card_width,
-                    m.card_height,
-                    m.preview_width,
-                    m.preview_height,
-                    m.card_padding
-                ),
-                (cw, ch, pw, ph, DEFAULT_CARD_PADDING),
-                "scale: {scale}"
+            assert_close(m.card_width, cw, &format!("scale {scale}: card_width"));
+            assert_close(m.card_height, ch, &format!("scale {scale}: card_height"));
+            assert_close(
+                m.preview_width,
+                pw,
+                &format!("scale {scale}: preview_width"),
+            );
+            assert_close(
+                m.preview_height,
+                ph,
+                &format!("scale {scale}: preview_height"),
+            );
+            assert_close(
+                m.label_strip_height,
+                lh,
+                &format!("scale {scale}: label_strip_height"),
+            );
+            assert_close(
+                m.card_padding,
+                DEFAULT_CARD_PADDING,
+                &format!("scale {scale}: card_padding"),
             );
         }
+    }
+
+    fn assert_close(actual: f32, expected: f32, context: &str) {
+        assert!(
+            (actual - expected).abs() <= 0.0001,
+            "{context}: got {actual}, expected {expected}"
+        );
     }
 
     #[test]

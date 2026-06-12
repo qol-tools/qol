@@ -85,6 +85,19 @@ min = 0
 max = 24
 step = 1
 
+[field.display_icon_position]
+type = "select"
+config_key = "display.icon_position"
+label = "Preview Icon Position"
+description = "Where the app icon appears over each window preview."
+section = "layout"
+default = "top_right"
+options = ["top_right", "top_left"]
+
+[field.display_icon_position.option_labels]
+top_right = "Top Right"
+top_left = "Top Left"
+
 [field.display_max_columns]
 type = "number"
 config_key = "display.max_columns"
@@ -184,8 +197,9 @@ large = "Large"
 type = "boolean"
 config_key = "label.show_app_name"
 label = "Show App Name"
+description = "Prefix the window title with the app name and a separator when both labels are visible."
 section = "labels"
-default = true
+default = false
 
 [field.label_show_window_title]
 type = "boolean"

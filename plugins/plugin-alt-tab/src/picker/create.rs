@@ -1,6 +1,6 @@
 use super::GatheredWindows;
 use crate::app::{AltTabApp, PICKER_VISIBLE};
-use crate::config::{ActionMode, AltTabConfig, LabelConfig};
+use crate::config::{ActionMode, AltTabConfig, LabelConfig, PreviewIconPosition};
 use crate::discovery::WindowInfo;
 use crate::shared::layout::*;
 use crate::{IconMap, PickerWindowState, PreviewMap, SharedIconCache};
@@ -83,6 +83,7 @@ pub(crate) struct PickerInit {
     pub(crate) transparent_bg: bool,
     pub(crate) card_color: u32,
     pub(crate) card_opacity: f32,
+    pub(crate) icon_position: PreviewIconPosition,
     pub(crate) show_debug_overlay: bool,
     pub(crate) show_hotkey_hints: bool,
     pub(crate) cycle_on_open: bool,
@@ -112,6 +113,7 @@ impl PickerInit {
             transparent_bg: config.display.transparent_background,
             card_color,
             card_opacity,
+            icon_position: config.display.icon_position,
             show_debug_overlay: config.display.show_debug_overlay,
             show_hotkey_hints: config.display.show_hotkey_hints,
             cycle_on_open: config.open_behavior == crate::config::OpenBehavior::CycleOnce,
