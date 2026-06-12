@@ -20,6 +20,7 @@ use crate::dev_server::{
     EndpointStatus, WEBSITE_URL,
 };
 use crate::host_facade;
+use crate::poller::Poller;
 
 const LOG_CAP: usize = 2000;
 const TICK: Duration = Duration::from_millis(150);
@@ -174,6 +175,36 @@ struct HealthSnapshot {
     web: bool,
 }
 
+struct Probes {
+    health: Poller<HealthSnapshot>,
+    emu: Poller<Result<Vec<EnvironmentStatus>, String>>,
+}
+
+impl Probes {
+    fn spawn() -> Self {
+        Self {
+            health: Poller::spawn(HEALTH_PROBE_INTERVAL, || HealthSnapshot {
+                api: health_ok(),
+                web: web_ok(),
+            }),
+            emu: Poller::spawn(EMU_REFRESH_INTERVAL, || {
+                environment_statuses().map_err(|error| format!("{error:#}"))
+            }),
+        }
+    }
+}
+
+#[derive(Default)]
+struct Pokes {
+    emu: bool,
+}
+
+fn flush_pokes(dash: &mut Dash, probes: &Probes) {
+    if std::mem::take(&mut dash.pokes.emu) {
+        probes.emu.poke();
+    }
+}
+
 enum EndpointsState {
     Probing,
     Done(Vec<EndpointStatus>),
@@ -252,8 +283,6 @@ struct Dash {
     plugin_reload: RebuildState,
     plugin_names: Vec<String>,
     emu: EmuState,
-    emu_rx: Option<Receiver<Result<Vec<EnvironmentStatus>, String>>>,
-    emu_last_refresh: Option<Instant>,
     emu_run: EmuRun,
     emu_run_log: LogRing,
     emu_cursor: usize,
@@ -274,6 +303,7 @@ struct Dash {
     copy_ack: Option<(Instant, String)>,
     armed: bool,
     reload: Reload,
+    pokes: Pokes,
 }
 
 impl Dash {
@@ -291,8 +321,6 @@ impl Dash {
             plugin_reload: RebuildState::Idle,
             plugin_names,
             emu: EmuState::Probing,
-            emu_rx: None,
-            emu_last_refresh: None,
             emu_run: EmuRun::Idle,
             emu_run_log: LogRing::new(),
             emu_cursor: 0,
@@ -313,6 +341,7 @@ impl Dash {
             copy_ack: None,
             armed: false,
             reload: Reload::Idle,
+            pokes: Pokes::default(),
         }
     }
 
@@ -329,23 +358,6 @@ impl Dash {
         self.doctor = DoctorState::Running(DoctorMode::Fix);
         self.doctor_rx = Some(spawn_doctor(DoctorMode::Fix));
     }
-
-    fn start_emu_refresh(&mut self, force: bool) {
-        if self.emu_rx.is_some() {
-            return;
-        }
-        let due = self
-            .emu_last_refresh
-            .is_none_or(|last| last.elapsed() >= EMU_REFRESH_INTERVAL);
-        if !force && !due {
-            return;
-        }
-        if force || self.emu_last_refresh.is_none() {
-            self.emu = EmuState::Probing;
-        }
-        self.emu_last_refresh = Some(Instant::now());
-        self.emu_rx = Some(spawn_emu_probe());
-    }
 }
 
 pub(crate) fn run_session(
@@ -358,12 +370,12 @@ pub(crate) fn run_session(
     if verbose || !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
         return plain_session(child, &lines, boot);
     }
-    let health = spawn_health_probe();
+    let mut probes = Probes::spawn();
     let mut dash = Dash::new(plugins);
     dash.boot_rx = boot;
     dash.start_doctor();
     let mut terminal = ratatui::init();
-    let result = tui_session(&mut terminal, child, &lines, &health, &mut dash);
+    let result = tui_session(&mut terminal, child, &lines, &mut probes, &mut dash);
     ratatui::restore();
     if let Ok(SessionEnd::ChildExited(status)) = &result {
         if !status.success() {
@@ -414,28 +426,25 @@ fn tui_session(
     terminal: &mut DefaultTerminal,
     child: &mut Child,
     lines: &Receiver<String>,
-    health: &Receiver<HealthSnapshot>,
+    probes: &mut Probes,
     dash: &mut Dash,
 ) -> Result<SessionEnd> {
     loop {
-        dash.start_emu_refresh(false);
         while let Ok(line) = lines.try_recv() {
             dash.logs.push(line);
         }
-        while let Ok(snapshot) = health.try_recv() {
-            dash.health = health_state(snapshot.api);
-            dash.web = health_state(snapshot.web);
+        if let Some(snapshot) = probes.health.latest() {
+            apply_health(dash, snapshot);
         }
         if let Some(results) = dash.endpoints_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             dash.endpoints = EndpointsState::Done(results);
             dash.endpoints_rx = None;
         }
-        if let Some(outcome) = dash.emu_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+        if let Some(outcome) = probes.emu.latest() {
             dash.emu = match outcome {
                 Ok(statuses) => EmuState::Done(statuses),
                 Err(error) => EmuState::Failed(error),
             };
-            dash.emu_rx = None;
         }
         let doctor_outcome = dash.doctor_rx.as_ref().and_then(|rx| rx.try_recv().ok());
         if let Some(outcome) = doctor_outcome {
@@ -468,6 +477,7 @@ fn tui_session(
             stop_emu_run(dash);
             return Ok(SessionEnd::ChildExited(status));
         }
+        flush_pokes(dash, probes);
         terminal.draw(|frame| draw(frame, dash))?;
         if let Some((code, mods)) = poll_key()? {
             if dash.filtering {
@@ -757,7 +767,7 @@ fn open_endpoints(dash: &mut Dash) {
 fn open_emu(dash: &mut Dash) {
     dash.view = View::Emu;
     dash.scroll_offset = 0;
-    dash.start_emu_refresh(true);
+    dash.pokes.emu = true;
 }
 
 fn health_state(up: bool) -> Health {
@@ -766,6 +776,11 @@ fn health_state(up: bool) -> Health {
     } else {
         Health::Down
     }
+}
+
+fn apply_health(dash: &mut Dash, snapshot: HealthSnapshot) {
+    dash.health = health_state(snapshot.api);
+    dash.web = health_state(snapshot.web);
 }
 
 fn open_trace(dash: &mut Dash) {
@@ -906,7 +921,7 @@ fn drain_emu_run(dash: &mut Dash) {
     dash.emu_run_log
         .push(emu_run_line("done", &status.to_string()));
     dash.emu_run = EmuRun::Idle;
-    dash.start_emu_refresh(true);
+    dash.pokes.emu = true;
 }
 
 fn stop_emu_run(dash: &mut Dash) {
@@ -1980,34 +1995,10 @@ fn spawn_forwarder(reader: impl Read + Send + 'static, tx: Sender<String>) {
     });
 }
 
-fn spawn_health_probe() -> Receiver<HealthSnapshot> {
-    let (tx, rx) = channel();
-    std::thread::spawn(move || loop {
-        let snapshot = HealthSnapshot {
-            api: health_ok(),
-            web: web_ok(),
-        };
-        if tx.send(snapshot).is_err() {
-            return;
-        }
-        std::thread::sleep(HEALTH_PROBE_INTERVAL);
-    });
-    rx
-}
-
 fn spawn_endpoints_probe() -> Receiver<Vec<EndpointStatus>> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {
         let _ = tx.send(probe_endpoints());
-    });
-    rx
-}
-
-fn spawn_emu_probe() -> Receiver<Result<Vec<EnvironmentStatus>, String>> {
-    let (tx, rx) = channel();
-    std::thread::spawn(move || {
-        let outcome = environment_statuses().map_err(|error| format!("{error:#}"));
-        let _ = tx.send(outcome);
     });
     rx
 }
@@ -2149,6 +2140,15 @@ mod tests {
                 "elapsed_ms: {elapsed_ms}"
             );
         }
+    }
+
+    #[test]
+    fn diving_into_emu_requests_an_emu_poke() {
+        let mut dash = Dash::new(Vec::new());
+        dash.cursor = 3;
+        apply_action(&mut dash, Action::Dive, false);
+        assert!(dash.pokes.emu, "emu dive marks the emu probe dirty");
+        assert!(matches!(dash.view, View::Emu), "dive opened the emu view");
     }
 
     #[test]
