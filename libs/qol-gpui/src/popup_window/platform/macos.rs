@@ -195,6 +195,10 @@ pub fn window_backing_scale(title: &str) -> Option<f32> {
     Some(window.backingScaleFactor() as f32)
 }
 
+#[cfg(not(debug_assertions))]
+pub fn dump_ghost_windows(_context: &str) {}
+
+#[cfg(debug_assertions)]
 pub fn dump_ghost_windows(context: &str) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;

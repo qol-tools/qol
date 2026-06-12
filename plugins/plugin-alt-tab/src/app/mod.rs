@@ -172,6 +172,9 @@ impl AltTabApp {
             req.layout.bounds.origin.x.to_f64(),
             req.layout.bounds.origin.y.to_f64(),
         );
+
+        #[cfg(not(debug_assertions))]
+        let _ = req;
     }
 
     fn apply_reuse_config(
