@@ -24,7 +24,7 @@ Install ID is resolved from `$QOL_TRAY_INSTALL_ID` env var or `<base>/active-ins
     "card_scale": 1.5,
     "card_padding": 4,
     "transparent_background": false,
-    "card_background_color": "1a1e2a",
+    "card_background_color": "#202322",
     "card_background_opacity": 0.85
   },
   "label": {
@@ -53,8 +53,8 @@ Install ID is resolved from `$QOL_TRAY_INSTALL_ID` env var or `<base>/active-ins
 | `card_scale` | float (0.5-2.5) | `1.5` | Scale multiplier for window cards and previews. |
 | `card_padding` | float (0-24) | `4` | Inner card padding in pixels around the preview and label. |
 | `transparent_background` | bool | `false` | Remove the window background so only preview cards are visible. |
-| `card_background_color` | hex string | `"1a1e2a"` | Card fill color in transparent mode (6-char hex, no `#` prefix). |
-| `card_background_opacity` | float (0.0-1.0) | `0.85` | Card opacity in transparent mode. |
+| `card_background_color` | hex string | `"#202322"` | Base picker card color. Panel, hover, and selected colors derive from it. |
+| `card_background_opacity` | float (0.0-1.0) | `0.85` | Card opacity when transparent background is enabled. |
 
 ### `label`
 

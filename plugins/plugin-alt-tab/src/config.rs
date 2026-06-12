@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_CARD_BACKGROUND_COLOR: &str = "#202322";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DisplayConfig {
@@ -23,7 +25,7 @@ impl Default for DisplayConfig {
             card_scale: crate::shared::layout::DEFAULT_CARD_SCALE,
             card_padding: crate::shared::layout::DEFAULT_CARD_PADDING,
             transparent_background: false,
-            card_background_color: "1a1e2a".to_string(),
+            card_background_color: DEFAULT_CARD_BACKGROUND_COLOR.to_string(),
             card_background_opacity: 0.85,
             show_minimized: true,
             show_debug_overlay: false,
@@ -73,20 +75,7 @@ impl Default for LabelConfig {
     }
 }
 
-impl LabelConfig {
-    pub fn format(&self, app_name: &str, title: &str) -> String {
-        let show_app = self.show_app_name && !app_name.is_empty();
-        let show_title = self.show_window_title && !title.is_empty();
-        match (show_app, show_title) {
-            (true, true) => format!("{} - {}", capitalize_first(app_name), title),
-            (true, false) => capitalize_first(app_name),
-            (false, true) => title.to_string(),
-            (false, false) => String::new(),
-        }
-    }
-}
-
-fn capitalize_first(s: &str) -> String {
+pub(crate) fn capitalize_first(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
         None => String::new(),

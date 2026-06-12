@@ -10,7 +10,9 @@ pub use platform::is_modifier_held;
 pub(crate) use reuse::ReuseRequest;
 
 use crate::app::{AltTabApp, PICKER_VISIBLE};
-use crate::config::{parse_hex_color, ActionMode, AltTabConfig, DisplayConfig};
+use crate::config::{
+    parse_hex_color, ActionMode, AltTabConfig, DisplayConfig, DEFAULT_CARD_BACKGROUND_COLOR,
+};
 use crate::{PickerWindowState, SharedIconCache};
 use gather::{gather, spawn_icon_fill, GatheredWindows, IconFillRequest};
 use gpui::*;
@@ -286,9 +288,36 @@ fn finalize_reuse(
 }
 
 pub(crate) fn resolve_card_bg(display: &DisplayConfig) -> (u32, f32) {
-    let (r, g, b) = parse_hex_color(&display.card_background_color).unwrap_or((0x1a, 0x1e, 0x2a));
+    let fallback = parse_hex_color(DEFAULT_CARD_BACKGROUND_COLOR).unwrap_or((0x20, 0x23, 0x22));
+    let (r, g, b) = parse_hex_color(&display.card_background_color).unwrap_or(fallback);
     let color = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
     (color, display.card_background_opacity.clamp(0.0, 1.0))
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::resolve_card_bg;
+    use crate::config::DisplayConfig;
+
+    #[test]
+    fn card_background_accepts_color_picker_hex() {
+        let display = DisplayConfig {
+            card_background_color: "#203040".to_string(),
+            card_background_opacity: 1.2,
+            ..Default::default()
+        };
+        assert_eq!(resolve_card_bg(&display), (0x203040, 1.0));
+    }
+
+    #[test]
+    fn invalid_card_background_falls_back_to_default() {
+        let display = DisplayConfig {
+            card_background_color: "nope".to_string(),
+            card_background_opacity: -1.0,
+            ..Default::default()
+        };
+        assert_eq!(resolve_card_bg(&display), (0x202322, 0.0));
+    }
 }
 
 pub(crate) mod state {
