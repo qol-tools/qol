@@ -22,7 +22,6 @@ pub(crate) enum DevLinkOutcome {
     AlreadyLinked,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, PartialEq, serde::Deserialize)]
 pub(crate) struct DevLink {
     pub(crate) name: String,
@@ -30,7 +29,6 @@ pub(crate) struct DevLink {
     pub(crate) rebuild_reason: String,
 }
 
-#[allow(dead_code)]
 pub(crate) fn fetch_dev_links() -> Result<Vec<DevLink>> {
     let (status, body) = http_exchange("GET", DEV_LINKS_URL, None)?;
     if status != 200 {
