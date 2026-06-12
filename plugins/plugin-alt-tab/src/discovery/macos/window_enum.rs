@@ -50,6 +50,10 @@ impl WindowEnumeration {
     pub fn push_minimized(&mut self, window: &CgWindow, title: String) {
         self.windows.push(window.to_window_info(true, title));
     }
+
+    pub fn push_other_space(&mut self, window: &CgWindow, title: String) {
+        self.windows.push(window.to_window_info(false, title));
+    }
 }
 
 pub(super) struct KnownWindowTracker {
@@ -305,6 +309,30 @@ fn persist_stable_window_order(order: Vec<StableWindowKey>) {
     let Ok(mut cached) = stable_window_order().lock() else {
         return;
     };
+    #[cfg(debug_assertions)]
+    {
+        let new_set: HashSet<StableWindowKey> = order.iter().copied().collect();
+        let dropped: Vec<String> = cached
+            .iter()
+            .filter(|key| !new_set.contains(key))
+            .map(|key| key.window_id.to_string())
+            .collect();
+        if !dropped.is_empty() || cached.len() != order.len() {
+            qol_runtime::probe!(
+                "ORDER_PERSIST",
+                "prev={} new={} dropped=[{}] head=[{}]",
+                cached.len(),
+                order.len(),
+                dropped.join(" "),
+                order
+                    .iter()
+                    .take(8)
+                    .map(|key| key.window_id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        }
+    }
     *cached = order;
 }
 
@@ -327,19 +355,25 @@ fn filter_visible(parsed: Vec<CgWindow>, regular_cache: &HashMap<i32, bool>) -> 
         .into_iter()
         .filter(|w| {
             if w.w < MIN_WINDOW_DIM || w.h < MIN_WINDOW_DIM {
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[alt-tab/enum] FILTERED (too small {}x{}): wid={} app={:?}",
-                    w.w, w.h, w.id, w.app_name
+                qol_runtime::probe!(
+                    "FILTERED",
+                    "reason=small wid={} app={:?} dims={}x{}",
+                    w.id,
+                    w.app_name,
+                    w.w,
+                    w.h
                 );
                 return false;
             }
             let is_regular = regular_cache[&w.pid];
-            #[cfg(debug_assertions)]
             if !is_regular {
-                eprintln!(
-                    "[alt-tab/enum] FILTERED (not regular app): wid={} pid={} app={:?}",
-                    w.id, w.pid, w.app_name
+                qol_runtime::probe!(
+                    "FILTERED",
+                    "reason=irregular wid={} pid={} app={:?} policy={}",
+                    w.id,
+                    w.pid,
+                    w.app_name,
+                    super::process::app_policy_debug(w.pid)
                 );
             }
             is_regular
@@ -399,16 +433,13 @@ fn allowed_minimized_count(
     usize::MAX
 }
 
-fn detect_other_space_pids(
+fn detect_cross_space_pids(
     state: &WindowEnumeration,
     ax_cache: &AxCache,
     candidate_pids: &HashSet<i32>,
 ) -> HashSet<i32> {
     let mut result = HashSet::new();
     for &pid in candidate_pids {
-        if !state.on_screen_pids.contains(&pid) {
-            continue;
-        }
         let Some(entry) = ax_cache.get(&pid) else {
             continue;
         };
@@ -423,6 +454,35 @@ fn detect_other_space_pids(
         }
     }
     result
+}
+
+fn accept_cross_space(
+    window: &CgWindow,
+    cross_space_pids: &HashSet<i32>,
+    hidden_pids: &HashSet<i32>,
+    ax_cache: &AxCache,
+) -> Option<String> {
+    if hidden_pids.contains(&window.pid) {
+        return None;
+    }
+    if !window.is_cross_space && !cross_space_pids.contains(&window.pid) {
+        return None;
+    }
+    let ax_meta = match ax_cache.get(&window.pid) {
+        Some(Some((id_map, _, _))) => id_map.get(&window.id),
+        _ => None,
+    };
+    let Some(meta) = ax_meta else {
+        return window.is_cross_space.then(|| window.title.clone());
+    };
+    if meta.is_minimized {
+        return None;
+    }
+    Some(if meta.title.is_empty() {
+        window.title.clone()
+    } else {
+        meta.title.clone()
+    })
 }
 
 fn passes_ax_filter(
@@ -584,8 +644,9 @@ fn resolve_minimized_budget(
     })
 }
 
-pub(super) fn collect_minimized_windows(
+pub(super) fn collect_off_screen_windows(
     off_screen: Vec<CgWindow>,
+    include_minimized: bool,
     state: &mut WindowEnumeration,
     tracker: &mut KnownWindowTracker,
     ax_cache: &mut AxCache,
@@ -599,11 +660,29 @@ pub(super) fn collect_minimized_windows(
     let candidates = filter_minimized_candidates(off_screen, state);
     let candidate_pids = candidate_pids(&candidates);
     prefetch_missing_ax(&candidate_pids, ax_cache);
-    let other_space_pids = detect_other_space_pids(state, ax_cache, &candidate_pids);
+    let cross_space_pids = detect_cross_space_pids(state, ax_cache, &candidate_pids);
+    let other_space_pids: HashSet<i32> = cross_space_pids
+        .iter()
+        .copied()
+        .filter(|pid| state.on_screen_pids.contains(pid))
+        .collect();
     let hidden_pids = detect_hidden_pids(&candidate_pids);
     let mut budget_counts: HashMap<i32, usize> = HashMap::new();
+    #[cfg(debug_assertions)]
+    let mut cross_accepted: Vec<String> = Vec::new();
 
     for window in candidates {
+        if let Some(title) = accept_cross_space(&window, &cross_space_pids, &hidden_pids, ax_cache)
+        {
+            #[cfg(debug_assertions)]
+            cross_accepted.push(format!("{}:{}", window.id, window.app_name));
+            tracker.remember_window(window.pid, window.id);
+            state.push_other_space(&window, title);
+            continue;
+        }
+        if !include_minimized {
+            continue;
+        }
         if !passes_ax_filter(&window, state, &other_space_pids, &hidden_pids, ax_cache) {
             #[cfg(debug_assertions)]
             eprintln!(
@@ -630,6 +709,21 @@ pub(super) fn collect_minimized_windows(
         );
         tracker.remember_window(window.pid, window.id);
         state.push_minimized(&window, resolved.title);
+    }
+
+    #[cfg(debug_assertions)]
+    if !cross_accepted.is_empty() {
+        qol_runtime::probe!(
+            "CROSS_SPACE",
+            "n={} head=[{}]",
+            cross_accepted.len(),
+            cross_accepted
+                .iter()
+                .take(6)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
     }
 
     #[cfg(debug_assertions)]
@@ -718,6 +812,189 @@ mod tests {
             identity: ProcessIdentity { pid, start_time_us },
             window_id,
         }
+    }
+
+    fn cg(id: u32, pid: i32) -> CgWindow {
+        CgWindow {
+            id,
+            pid,
+            app_name: "foo".to_string(),
+            title: "bar".to_string(),
+            has_title: true,
+            is_onscreen: false,
+            is_cross_space: false,
+            x: 0.0,
+            y: 0.0,
+            w: 500.0,
+            h: 400.0,
+        }
+    }
+
+    fn cg_cross(id: u32, pid: i32) -> CgWindow {
+        CgWindow {
+            is_cross_space: true,
+            ..cg(id, pid)
+        }
+    }
+
+    fn ax_entry(
+        windows: &[(u32, &str, bool)],
+        accepted: usize,
+    ) -> Option<(HashMap<u32, AxWindowMeta>, Vec<AxWindowMeta>, usize)> {
+        let id_map = windows
+            .iter()
+            .map(|(id, title, minimized)| {
+                (
+                    *id,
+                    AxWindowMeta {
+                        title: title.to_string(),
+                        is_minimized: *minimized,
+                    },
+                )
+            })
+            .collect();
+        let all_meta = windows
+            .iter()
+            .map(|(_, title, minimized)| AxWindowMeta {
+                title: title.to_string(),
+                is_minimized: *minimized,
+            })
+            .collect();
+        Some((id_map, all_meta, accepted))
+    }
+
+    #[test]
+    fn cross_space_acceptance_lists_real_windows_only() {
+        let cross: HashSet<i32> = [1].into_iter().collect();
+        let no_cross: HashSet<i32> = HashSet::new();
+        let hidden: HashSet<i32> = [1].into_iter().collect();
+        let no_hidden: HashSet<i32> = HashSet::new();
+        let ax_live: AxCache = [(1, ax_entry(&[(10, "win a", false)], 1))]
+            .into_iter()
+            .collect();
+        let ax_minimized: AxCache = [(1, ax_entry(&[(10, "win a", true)], 1))]
+            .into_iter()
+            .collect();
+        let ax_unknown_wid: AxCache = [(1, ax_entry(&[(11, "win b", false)], 1))]
+            .into_iter()
+            .collect();
+        let ax_untitled: AxCache = [(1, ax_entry(&[(10, "", false)], 1))].into_iter().collect();
+
+        type Case<'a> = (
+            &'a str,
+            &'a HashSet<i32>,
+            &'a HashSet<i32>,
+            &'a AxCache,
+            Option<&'a str>,
+        );
+        let cases: &[Case] = &[
+            (
+                "ax-known live window",
+                &cross,
+                &no_hidden,
+                &ax_live,
+                Some("win a"),
+            ),
+            (
+                "minimized goes to minimized flow",
+                &cross,
+                &no_hidden,
+                &ax_minimized,
+                None,
+            ),
+            ("hidden app excluded", &cross, &hidden, &ax_live, None),
+            ("pid not cross-space", &no_cross, &no_hidden, &ax_live, None),
+            (
+                "cg-only phantom not in ax",
+                &cross,
+                &no_hidden,
+                &ax_unknown_wid,
+                None,
+            ),
+            (
+                "empty ax title falls back to cg",
+                &cross,
+                &no_hidden,
+                &ax_untitled,
+                Some("bar"),
+            ),
+        ];
+        for (name, cross_pids, hidden_pids, ax_cache, expected) in cases {
+            assert_eq!(
+                accept_cross_space(&cg(10, 1), cross_pids, hidden_pids, ax_cache).as_deref(),
+                *expected,
+                "case: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn sls_flagged_windows_accepted_without_ax() {
+        let no_cross: HashSet<i32> = HashSet::new();
+        let hidden: HashSet<i32> = [1].into_iter().collect();
+        let no_hidden: HashSet<i32> = HashSet::new();
+        let ax_empty: AxCache = HashMap::new();
+        let ax_empty_map: AxCache = [(1, ax_entry(&[], 0))].into_iter().collect();
+        let ax_titled: AxCache = [(1, ax_entry(&[(10, "win a", false)], 1))]
+            .into_iter()
+            .collect();
+        let ax_minimized: AxCache = [(1, ax_entry(&[(10, "win a", true)], 1))]
+            .into_iter()
+            .collect();
+
+        type Case<'a> = (&'a str, &'a HashSet<i32>, &'a AxCache, Option<&'a str>);
+        let cases: &[Case] = &[
+            (
+                "no ax entry falls back to cg",
+                &no_hidden,
+                &ax_empty,
+                Some("bar"),
+            ),
+            (
+                "empty ax id_map falls back to cg",
+                &no_hidden,
+                &ax_empty_map,
+                Some("bar"),
+            ),
+            (
+                "ax title wins when present",
+                &no_hidden,
+                &ax_titled,
+                Some("win a"),
+            ),
+            (
+                "ax-known minimized rejected",
+                &no_hidden,
+                &ax_minimized,
+                None,
+            ),
+            ("hidden app excluded", &hidden, &ax_empty, None),
+        ];
+        for (name, hidden_pids, ax_cache, expected) in cases {
+            assert_eq!(
+                accept_cross_space(&cg_cross(10, 1), &no_cross, hidden_pids, ax_cache).as_deref(),
+                *expected,
+                "case: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn cross_space_pid_detection_does_not_require_onscreen_presence() {
+        let state = WindowEnumeration::default();
+        let pids: HashSet<i32> = [1, 2, 3].into_iter().collect();
+        let ax_cache: AxCache = [
+            (1, ax_entry(&[(10, "a", false)], 1)),
+            (2, ax_entry(&[], 0)),
+            (3, None),
+        ]
+        .into_iter()
+        .collect();
+
+        let result = detect_cross_space_pids(&state, &ax_cache, &pids);
+        assert!(result.contains(&1), "pid with ax windows and zero onscreen");
+        assert!(!result.contains(&2), "pid with empty ax id_map");
+        assert!(!result.contains(&3), "pid with failed ax read");
     }
 
     #[test]

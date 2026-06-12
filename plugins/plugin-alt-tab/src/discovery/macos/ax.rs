@@ -18,6 +18,13 @@ extern "C" {
         val: *mut *const c_void,
     ) -> i32;
     fn AXUIElementSetMessagingTimeout(el: *const c_void, timeout: f32) -> i32;
+    fn _AXUIElementCreateWithRemoteToken(token: *const c_void) -> *const c_void;
+    fn _AXUIElementGetWindow(el: *const c_void, window_id: *mut u32) -> i32;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFDataCreate(allocator: *const c_void, bytes: *const u8, length: isize) -> *const c_void;
 }
 
 pub(crate) fn init_messaging_timeout() {
@@ -89,7 +96,21 @@ unsafe fn ax_check_subrole(win: *const c_void, attr: *const c_void) -> bool {
     matches!(subrole.as_deref(), Some("AXStandardWindow" | "AXDialog"))
 }
 
+unsafe fn ax_has_window_subrole(win: *const c_void, attr: *const c_void) -> bool {
+    let val = ax_copy_attr(win, attr);
+    if val.is_null() {
+        return false;
+    }
+    let subrole = ffi::cfstring_to_string(val);
+    CFRelease(val);
+    matches!(subrole.as_deref(), Some("AXStandardWindow" | "AXDialog"))
+}
+
 unsafe fn ax_read_window_id(win: *const c_void, attr: *const c_void) -> Option<u32> {
+    let mut id = 0;
+    if _AXUIElementGetWindow(win, &mut id) == 0 && id > 0 {
+        return Some(id);
+    }
     let val = ax_copy_attr(win, attr);
     if val.is_null() {
         return None;
@@ -454,6 +475,77 @@ pub(crate) unsafe fn ax_find_window(
     CFRelease(title_attr);
     CFRelease(wins_val);
     result
+}
+
+pub(crate) unsafe fn ax_find_window_brute_force(pid: i32, cg_window_id: u32) -> *const c_void {
+    let started = Instant::now();
+    let deadline = started + Duration::from_millis(100);
+    let id_attr = ffi::cfstr(b"_AXWindowID");
+    let subrole_attr = ffi::cfstr(b"AXSubrole");
+    let mut result = std::ptr::null();
+    #[cfg(debug_assertions)]
+    let mut scanned = 0;
+    #[cfg(debug_assertions)]
+    let mut readable = 0;
+    #[cfg(debug_assertions)]
+    let mut windowish = 0;
+    for element_id in 0..1000i64 {
+        if Instant::now() >= deadline {
+            break;
+        }
+        #[cfg(debug_assertions)]
+        {
+            scanned += 1;
+        }
+        let el = ax_element_from_remote_token(pid, element_id);
+        if el.is_null() {
+            continue;
+        }
+        let id = ax_read_window_id(el, id_attr);
+        #[cfg(debug_assertions)]
+        {
+            if id.is_some() {
+                readable += 1;
+            }
+        }
+        if id == Some(cg_window_id) {
+            if !ax_has_window_subrole(el, subrole_attr) {
+                CFRelease(el);
+                continue;
+            }
+            #[cfg(debug_assertions)]
+            {
+                windowish += 1;
+            }
+            result = el;
+            break;
+        }
+        CFRelease(el);
+    }
+    CFRelease(id_attr);
+    CFRelease(subrole_attr);
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "ACTIVATE_BRUTE_SCAN",
+        "wid={cg_window_id} scanned={scanned} readable={readable} windowish={windowish} elapsed_ms={} hit={}",
+        started.elapsed().as_millis(),
+        !result.is_null()
+    );
+    result
+}
+
+unsafe fn ax_element_from_remote_token(pid: i32, element_id: i64) -> *const c_void {
+    let mut token = [0u8; 20];
+    token[0..4].copy_from_slice(&pid.to_le_bytes());
+    token[8..12].copy_from_slice(&0x636f636f_i32.to_le_bytes());
+    token[12..20].copy_from_slice(&element_id.to_le_bytes());
+    let data = CFDataCreate(std::ptr::null(), token.as_ptr(), token.len() as isize);
+    if data.is_null() {
+        return std::ptr::null();
+    }
+    let el = _AXUIElementCreateWithRemoteToken(data);
+    CFRelease(data);
+    el
 }
 
 unsafe fn scan_for_match(

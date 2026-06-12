@@ -68,6 +68,21 @@ extern "C" {
     fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CGRect) -> bool;
 }
 
+#[allow(unused_variables)]
+pub(crate) fn copy_window_list_timed(options: u32, relative_to: u32, tag: &str) -> CFArrayRef {
+    #[cfg(debug_assertions)]
+    let t = std::time::Instant::now();
+    let list = unsafe { CGWindowListCopyWindowInfo(options, relative_to) };
+    #[cfg(debug_assertions)]
+    {
+        let ms = t.elapsed().as_millis();
+        if ms >= 100 {
+            qol_runtime::probe!("CG_SLOW", "tag={tag} ms={ms}");
+        }
+    }
+    list
+}
+
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     pub(crate) fn CFArrayGetCount(arr: CFArrayRef) -> isize;
@@ -76,8 +91,12 @@ extern "C" {
     pub(crate) fn CFRetain(cf: *const c_void) -> *const c_void;
     pub(crate) fn CFDataGetBytePtr(data: CFDataRef) -> *const u8;
     pub(crate) fn CFDataGetLength(data: CFDataRef) -> isize;
-    fn CFDictionaryGetValue(dict: CFDictionaryRef, key: *const c_void) -> *const c_void;
-    fn CFNumberGetValue(num: *const c_void, the_type: isize, value_ptr: *mut c_void) -> bool;
+    pub(crate) fn CFDictionaryGetValue(dict: CFDictionaryRef, key: *const c_void) -> *const c_void;
+    pub(crate) fn CFNumberGetValue(
+        num: *const c_void,
+        the_type: isize,
+        value_ptr: *mut c_void,
+    ) -> bool;
     fn CFBooleanGetValue(boolean: *const c_void) -> bool;
     fn CFStringCreateWithBytes(
         alloc: *const c_void,

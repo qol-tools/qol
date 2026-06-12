@@ -1,9 +1,9 @@
-use crate::discovery::macos::ax::ax_find_window;
+use crate::discovery::macos::ax::{ax_find_window, ax_find_window_brute_force};
 use crate::discovery::macos::ffi;
 use crate::discovery::macos::ffi::{
-    CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryRef, CFRelease,
-    CGWindowListCopyWindowInfo, K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LAYER_NORMAL,
-    K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
+    copy_window_list_timed, CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryRef, CFRelease,
+    K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LAYER_NORMAL, K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
+    K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -42,7 +42,16 @@ pub fn activate_window(window_id: u32) {
     #[cfg(debug_assertions)]
     let lookup_ms = started.elapsed().as_millis();
     qol_runtime::probe!("ACTIVATE_WIN", "wid={window_id} title=\"{title}\"");
-    let win = unsafe { ax_find_window(pid, window_id, &title) };
+    qol_runtime::probe!(
+        "ACTIVATE_STACK",
+        "phase=req wid={window_id} stack=[{}]",
+        stack_snapshot(),
+    );
+    let mut win = unsafe { ax_find_window(pid, window_id, &title) };
+    if win.is_null() {
+        win = unsafe { ax_find_window_brute_force(pid, window_id) };
+        qol_runtime::probe!("ACTIVATE_BRUTE", "wid={window_id} hit={}", !win.is_null());
+    }
     if !win.is_null() {
         unsafe {
             ax_unminimize(win);
@@ -66,21 +75,39 @@ pub fn activate_window(window_id: u32) {
     qol_gpui::platform::spawn_reassert_driver(
         &ACTIVATE_GEN,
         commit_gen,
-        &[8u64, 16, 24, 40, 60, 100, 150, 250, 400],
+        &[60u64, 40, 50, 100, 150, 250, 400],
         {
             let mut settled_logged = false;
+            #[cfg(debug_assertions)]
+            let mut stack_stuck_logged = false;
             #[cfg(debug_assertions)]
             let mut key_focus_logged = false;
             #[cfg(debug_assertions)]
             let mut key_focus_sampled = false;
             move || {
-                let active = cg_frontmost_window_id() == Some(window_id);
+                let active = target_effectively_front(window_id, pid);
                 if active && !settled_logged {
                     settled_logged = true;
                     qol_runtime::probe!(
                         "ACTIVATE_SETTLED",
                         "wid={window_id} elapsed_ms={}",
                         started.elapsed().as_millis(),
+                    );
+                    qol_runtime::probe!(
+                        "ACTIVATE_STACK",
+                        "phase=settled wid={window_id} elapsed_ms={} stack=[{}]",
+                        started.elapsed().as_millis(),
+                        stack_snapshot(),
+                    );
+                }
+                #[cfg(debug_assertions)]
+                if !active && !stack_stuck_logged && started.elapsed().as_millis() >= 250 {
+                    stack_stuck_logged = true;
+                    qol_runtime::probe!(
+                        "ACTIVATE_STACK",
+                        "phase=stuck wid={window_id} elapsed_ms={} stack=[{}]",
+                        started.elapsed().as_millis(),
+                        stack_snapshot(),
                     );
                 }
                 #[cfg(debug_assertions)]
@@ -115,8 +142,12 @@ pub fn activate_window(window_id: u32) {
             if forced {
                 force_front(pid, window_id);
             }
+            ns_activate_app(pid);
             unsafe { ax_app_frontmost(pid) };
-            let win = unsafe { ax_find_window(pid, window_id, &title) };
+            let mut win = unsafe { ax_find_window(pid, window_id, &title) };
+            if win.is_null() {
+                win = unsafe { ax_find_window_brute_force(pid, window_id) };
+            }
             if !win.is_null() {
                 unsafe {
                     ax_raise(win);
@@ -128,20 +159,68 @@ pub fn activate_window(window_id: u32) {
     );
 }
 
-fn cg_frontmost_window_id() -> Option<u32> {
-    let list = unsafe {
-        CGWindowListCopyWindowInfo(
-            K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
-            K_CG_NULL_WINDOW_ID,
-        )
-    };
+#[cfg(debug_assertions)]
+fn stack_snapshot() -> String {
+    let list = copy_window_list_timed(
+        K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
+        K_CG_NULL_WINDOW_ID,
+        "stack_snapshot",
+    );
     if list.is_null() {
-        return None;
+        return "unavailable".to_string();
     }
     let key_num = ffi::cfstr(b"kCGWindowNumber");
     let key_layer = ffi::cfstr(b"kCGWindowLayer");
+    let key_app = ffi::cfstr(b"kCGWindowOwnerName");
+    let key_bounds = ffi::cfstr(b"kCGWindowBounds");
 
-    let mut wid = None;
+    let mut entries = Vec::new();
+    let count = unsafe { CFArrayGetCount(list) };
+    for i in 0..count {
+        if entries.len() >= 8 {
+            break;
+        }
+        let dict = unsafe { CFArrayGetValueAtIndex(list, i) } as CFDictionaryRef;
+        if dict.is_null() {
+            continue;
+        }
+        let Some(layer) = ffi::dict_get_i32(dict, key_layer) else {
+            continue;
+        };
+        if !(0..=1000).contains(&layer) {
+            continue;
+        }
+        let wid = ffi::dict_get_i32(dict, key_num).unwrap_or(-1);
+        let app = ffi::dict_get_string(dict, key_app).unwrap_or_default();
+        let (y, h) = ffi::dict_get_rect(dict, key_bounds)
+            .map(|(_, y, _, h)| (y as i32, h as i32))
+            .unwrap_or((-1, -1));
+        entries.push(format!("{wid}:l{layer}:{app}:y{y}h{h}"));
+    }
+    unsafe {
+        CFRelease(key_num);
+        CFRelease(key_layer);
+        CFRelease(key_app);
+        CFRelease(key_bounds);
+        CFRelease(list);
+    }
+    entries.join(" ")
+}
+
+fn target_effectively_front(window_id: u32, pid: i32) -> bool {
+    let list = copy_window_list_timed(
+        K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
+        K_CG_NULL_WINDOW_ID,
+        "settle_check",
+    );
+    if list.is_null() {
+        return false;
+    }
+    let key_num = ffi::cfstr(b"kCGWindowNumber");
+    let key_layer = ffi::cfstr(b"kCGWindowLayer");
+    let key_pid = ffi::cfstr(b"kCGWindowOwnerPID");
+
+    let mut stack = Vec::new();
     let count = unsafe { CFArrayGetCount(list) };
     for i in 0..count {
         let dict = unsafe { CFArrayGetValueAtIndex(list, i) } as CFDictionaryRef;
@@ -151,16 +230,34 @@ fn cg_frontmost_window_id() -> Option<u32> {
         if ffi::dict_get_i32(dict, key_layer) != Some(K_CG_WINDOW_LAYER_NORMAL) {
             continue;
         }
-        wid = ffi::dict_get_i32(dict, key_num).map(|n| n as u32);
-        break;
+        let Some(wid) = ffi::dict_get_i32(dict, key_num) else {
+            continue;
+        };
+        let Some(owner) = ffi::dict_get_i32(dict, key_pid) else {
+            continue;
+        };
+        stack.push((wid as u32, owner));
     }
 
     unsafe {
         CFRelease(key_num);
         CFRelease(key_layer);
+        CFRelease(key_pid);
         CFRelease(list);
     }
-    wid
+    front_before_other_apps(window_id, pid, &stack)
+}
+
+fn front_before_other_apps(window_id: u32, pid: i32, stack: &[(u32, i32)]) -> bool {
+    for &(wid, owner) in stack {
+        if wid == window_id {
+            return true;
+        }
+        if owner != pid {
+            return false;
+        }
+    }
+    false
 }
 
 pub fn close_window(window_id: u32) {
@@ -339,12 +436,11 @@ unsafe fn ax_set_bool_attr(win: *const c_void, name: &[u8], val: *const c_void) 
 }
 
 fn cg_window_pid_and_title(window_id: u32) -> Option<(i32, String)> {
-    let list = unsafe {
-        CGWindowListCopyWindowInfo(
-            K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
-            K_CG_NULL_WINDOW_ID,
-        )
-    };
+    let list = copy_window_list_timed(
+        K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
+        K_CG_NULL_WINDOW_ID,
+        "activate_lookup",
+    );
     if list.is_null() {
         return None;
     }
@@ -386,4 +482,42 @@ fn find_window_in_list(list: ffi::CFArrayRef, window_id: u32) -> Option<(i32, St
         CFRelease(key_name);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::front_before_other_apps;
+
+    type Case = (&'static str, u32, i32, &'static [(u32, i32)], bool);
+
+    #[test]
+    fn settle_skips_same_app_siblings_but_not_other_apps() {
+        let cases: &[Case] = &[
+            ("target on top", 10, 1, &[(10, 1), (20, 2)], true),
+            (
+                "same-app chrome above target",
+                10,
+                1,
+                &[(11, 1), (10, 1), (20, 2)],
+                true,
+            ),
+            ("other app above target", 10, 1, &[(20, 2), (10, 1)], false),
+            ("target absent", 10, 1, &[(20, 2), (30, 3)], false),
+            ("empty stack", 10, 1, &[], false),
+            (
+                "same-app then other app, target below",
+                10,
+                1,
+                &[(11, 1), (20, 2), (10, 1)],
+                false,
+            ),
+        ];
+        for (name, wid, pid, stack, expected) in cases {
+            assert_eq!(
+                front_before_other_apps(*wid, *pid, stack),
+                *expected,
+                "case: {name}"
+            );
+        }
+    }
 }
