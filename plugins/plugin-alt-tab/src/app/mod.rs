@@ -156,6 +156,7 @@ impl AltTabApp {
         self.apply_reuse_config(req, window, cx);
         self.sync_alt_poll(window, cx);
         self.apply_reuse_windows(req, window, cx);
+        self.probe_show_list("reuse", cx);
         true
     }
 
@@ -229,6 +230,34 @@ impl AltTabApp {
         self.delegate.update(cx, |s, _| s.cycle(req.reverse));
     }
 
+    #[allow(unused_variables)]
+    fn probe_show_list(&self, path: &str, cx: &Context<Self>) {
+        #[cfg(debug_assertions)]
+        {
+            let state = self.delegate.read(cx);
+            let head: Vec<String> = state
+                .windows
+                .iter()
+                .take(6)
+                .map(|w| format!("{}:{}:\"{:.24}\"", w.id, w.app_name, w.title))
+                .collect();
+            let order: Vec<String> = state
+                .windows
+                .iter()
+                .take(24)
+                .map(|w| w.id.to_string())
+                .collect();
+            qol_runtime::probe!(
+                "SHOW_LIST",
+                "path={path} sel={:?} n={} head=[{}] order=[{}]",
+                state.selected_index,
+                state.windows.len(),
+                head.join(" "),
+                order.join(" "),
+            );
+        }
+    }
+
     fn apply_gathered(
         &mut self,
         gathered: &GatheredWindows,
@@ -279,6 +308,7 @@ impl AltTabApp {
             self.delegate.update(cx, |s, _| s.select_next());
             cx.notify();
         }
+        self.probe_show_list("ghost", cx);
     }
 
     pub(crate) fn update_icons(
@@ -412,6 +442,7 @@ impl AltTabApp {
             &self.picker_title,
             picker::platform::picker_window_title,
         );
+        picker::platform::probe_picker_app_active("dismiss");
         picker::request_data_refresh();
         cx.notify();
     }

@@ -2,10 +2,10 @@ use crate::discovery::macos::ffi;
 use crate::discovery::macos::ffi::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFDataGetBytePtr, CFDataGetLength, CFDictionaryRef,
     CFRelease, CGDataProviderCopyData, CGImageGetBytesPerRow, CGImageGetDataProvider,
-    CGImageGetHeight, CGImageGetWidth, CGImageRef, CGWindowListCopyWindowInfo,
-    CGWindowListCreateImage, CG_RECT_NULL, K_CG_NULL_WINDOW_ID,
-    K_CG_WINDOW_IMAGE_BOUNDS_IGNORE_FRAMING, K_CG_WINDOW_IMAGE_NOMINAL_RESOLUTION,
-    K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, K_CG_WINDOW_LIST_OPTION_INCLUDING_WINDOW,
+    CGImageGetHeight, CGImageGetWidth, CGImageRef, CGWindowListCreateImage, CG_RECT_NULL,
+    K_CG_NULL_WINDOW_ID, K_CG_WINDOW_IMAGE_BOUNDS_IGNORE_FRAMING,
+    K_CG_WINDOW_IMAGE_NOMINAL_RESOLUTION, K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
+    K_CG_WINDOW_LIST_OPTION_INCLUDING_WINDOW,
 };
 use crate::discovery::WindowInfo;
 use qol_app_icon::RgbaImage;
@@ -33,12 +33,11 @@ pub fn get_app_icons(windows: &[WindowInfo]) -> HashMap<String, RgbaImage> {
 
 fn resolve_app_pids() -> HashMap<String, i32> {
     let own_pid = std::process::id() as i32;
-    let list = unsafe {
-        CGWindowListCopyWindowInfo(
-            K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
-            K_CG_NULL_WINDOW_ID,
-        )
-    };
+    let list = ffi::copy_window_list_timed(
+        K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
+        K_CG_NULL_WINDOW_ID,
+        "icon_pids",
+    );
     if list.is_null() {
         return HashMap::new();
     }
@@ -110,10 +109,9 @@ pub fn capture_previews_cg(
                     {
                         let ms = t.elapsed().as_millis();
                         if ms >= 100 {
-                            eprintln!(
-                                "[alt-tab/capture] SLOW cg_capture_window wid={} {}ms ok={}",
-                                wid,
-                                ms,
+                            qol_runtime::probe!(
+                                "CAPTURE_SLOW",
+                                "wid={wid} ms={ms} ok={}",
                                 result.is_some()
                             );
                         }
@@ -124,9 +122,9 @@ pub fn capture_previews_cg(
             .collect();
         handles.into_iter().filter_map(|h| h.join().ok()).collect()
     });
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "[alt-tab/capture] capture_previews_cg targets={} total={}ms",
+    qol_runtime::probe!(
+        "CAPTURE",
+        "targets={} total={}ms",
         targets.len(),
         t_all.elapsed().as_millis()
     );
@@ -134,6 +132,8 @@ pub fn capture_previews_cg(
 }
 
 fn cg_capture_window(wid: u32, max_w: usize, max_h: usize) -> Option<RgbaImage> {
+    #[cfg(debug_assertions)]
+    let t_create = std::time::Instant::now();
     let img = unsafe {
         CGWindowListCreateImage(
             CG_RECT_NULL,
@@ -145,7 +145,20 @@ fn cg_capture_window(wid: u32, max_w: usize, max_h: usize) -> Option<RgbaImage> 
     if img.is_null() {
         return None;
     }
+    #[cfg(debug_assertions)]
+    let create_ms = t_create.elapsed().as_millis();
     let result = extract_cgimage_pixels(img, max_w, max_h);
+    #[cfg(debug_assertions)]
+    {
+        let total_ms = t_create.elapsed().as_millis();
+        if total_ms >= 100 {
+            qol_runtime::probe!(
+                "CAPTURE_SPLIT",
+                "wid={wid} create={create_ms}ms extract={}ms",
+                total_ms - create_ms
+            );
+        }
+    }
     unsafe { CFRelease(img) };
     result
 }

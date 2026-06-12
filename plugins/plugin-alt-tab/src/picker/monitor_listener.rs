@@ -51,6 +51,7 @@ pub(crate) fn spawn(cx: &mut App, inputs: ListenerInputs) {
 }
 
 pub(crate) fn request_data_refresh() {
+    qol_runtime::probe!("REFRESH_REQ", "queued");
     if let Some(tx) = DATA_REFRESH_TX.get() {
         let _ = tx.send(());
     }
@@ -190,6 +191,7 @@ fn rebuild_ghosts_for_topology(inputs: &ListenerInputs, event: &RuntimeEvent, ap
 
 fn trigger_data_refresh(inputs: &ListenerInputs, app_cx: &mut App) {
     let generation = inputs.refresh_generation.fetch_add(1, Ordering::AcqRel) + 1;
+    qol_runtime::probe!("REFRESH_TRIGGER", "gen={generation}");
     let inputs = inputs.clone();
     app_cx
         .spawn(async move |cx: &mut AsyncApp| {
@@ -206,12 +208,14 @@ async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usi
         .timer(Duration::from_millis(DATA_REFRESH_DELAY_MS))
         .await;
     if inputs.refresh_generation.load(Ordering::Acquire) != generation {
+        qol_runtime::probe!("REFRESH_RUN", "gen={generation} outcome=superseded");
         return;
     }
     let windows = executor
         .spawn(async move { Platform.visible_windows(show_minimized).unwrap_or_default() })
         .await;
     if windows.is_empty() {
+        qol_runtime::probe!("REFRESH_RUN", "gen={generation} outcome=empty");
         return;
     }
     let rendered_icons =
@@ -219,8 +223,10 @@ async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usi
     let windows_for_previews = windows.clone();
     let _ = cx.update(move |app_cx| {
         if inputs.refresh_generation.load(Ordering::Acquire) != generation {
+            qol_runtime::probe!("REFRESH_RUN", "gen={generation} outcome=stale_apply");
             return;
         }
+        qol_runtime::probe!("REFRESH_RUN", "gen={generation} outcome=applied");
         super::run::apply_window_cache(
             &inputs.last_window_count,
             &inputs.window_cache,

@@ -36,6 +36,10 @@ pub fn cleanup() {
 }
 
 fn parse_command(cmd: &str) -> ReadResult<Command> {
+    #[cfg(debug_assertions)]
+    if cmd != "ping" {
+        qol_runtime::probe!("CMD_RECV", "cmd={cmd}");
+    }
     match cmd {
         "ping" => ReadResult::Handled,
         "show" | "open" => ReadResult::Command(Command::Show),
