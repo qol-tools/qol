@@ -5,6 +5,9 @@ use std::time::{Duration, Instant};
 const NAV_FAST_WINDOW: Duration = Duration::from_millis(95);
 const NAV_DECAY_STEP_FAST: Duration = Duration::from_millis(35);
 const NAV_DECAY_STEP_SLOW: Duration = Duration::from_millis(90);
+const NAV_MOTION_BASE: u8 = 3;
+const NAV_MOTION_MAX: u8 = 5;
+const NAV_TRAIL_FADE_OFFSET: u8 = 2;
 const FOCUS_GRAVITY_IDLE: Duration = Duration::from_millis(140);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,9 +194,9 @@ impl LauncherState {
 
         let accelerating = fast_repeat && self.nav_direction == Some(direction);
         self.nav_momentum = if accelerating {
-            self.nav_momentum.saturating_add(1).min(2)
+            self.nav_momentum.saturating_add(1).min(NAV_MOTION_MAX)
         } else {
-            1
+            NAV_MOTION_BASE
         };
         self.nav_decay_step = if accelerating {
             NAV_DECAY_STEP_FAST
@@ -220,18 +223,15 @@ impl LauncherState {
             Some(NavDirection::Up) => -(decayed_momentum as i8),
             None => 0,
         };
-        let trail_len = match decayed_momentum {
-            0 => 0,
-            1 => 1,
-            2 => 2,
-            _ => 3,
-        };
-        let trail_direction = if decayed_momentum > 0 {
+        let trail_len = decayed_momentum
+            .saturating_sub(NAV_TRAIL_FADE_OFFSET)
+            .min(3) as usize;
+        let trail_direction = if trail_len > 0 {
             self.nav_direction
         } else {
             None
         };
-        let previous_selected = if decayed_momentum > 0 {
+        let previous_selected = if trail_len > 0 {
             self.previous_selected
         } else {
             None
@@ -258,5 +258,42 @@ impl LauncherState {
         }
         let max_offset = result_count.saturating_sub(visible);
         self.selected.saturating_sub(visible / 2).min(max_offset)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slow_single_step_keeps_a_fading_motion_badge_after_trail_drops() {
+        let mut state = LauncherState::new();
+
+        state.register_nav(NavDirection::Down);
+
+        let initial = state.nav_cues();
+        assert_eq!(initial.momentum_signed, NAV_MOTION_BASE as i8);
+        assert_eq!(initial.trail_len, 1);
+
+        state.last_nav_at = Some(Instant::now() - (NAV_DECAY_STEP_SLOW * 2));
+        let faded = state.nav_cues();
+        assert_eq!(faded.momentum_signed, 1);
+        assert_eq!(faded.trail_len, 0);
+
+        state.last_nav_at = Some(Instant::now() - (NAV_DECAY_STEP_SLOW * 3));
+        assert_eq!(state.nav_cues().momentum_signed, 0);
+    }
+
+    #[test]
+    fn repeated_navigation_reaches_extra_motion_color_levels() {
+        let mut state = LauncherState::new();
+
+        state.register_nav(NavDirection::Down);
+        state.register_nav(NavDirection::Down);
+        state.register_nav(NavDirection::Down);
+
+        let cues = state.nav_cues();
+        assert_eq!(cues.momentum_signed, NAV_MOTION_MAX as i8);
+        assert_eq!(cues.trail_len, 3);
     }
 }

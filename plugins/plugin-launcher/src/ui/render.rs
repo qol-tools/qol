@@ -104,10 +104,9 @@ impl Render for LauncherView {
         let rows = self.build_visible_rows(
             scroll_offset,
             visible,
-            hidden_above,
-            hidden_below,
             previous_selected,
             edge_hit,
+            momentum_signed,
             trail_len,
             trail_direction,
             min_score,
@@ -218,10 +217,9 @@ impl LauncherView {
         &self,
         scroll_offset: usize,
         visible: usize,
-        hidden_above: usize,
-        hidden_below: usize,
         previous_selected: Option<usize>,
         edge_hit: Option<EdgeHit>,
+        momentum_signed: i8,
         trail_len: usize,
         trail_direction: Option<NavDirection>,
         min_score: i32,
@@ -246,8 +244,6 @@ impl LauncherView {
 
             let is_top_row = i == scroll_offset;
             let is_bottom_row = i + 1 == scroll_offset + visible;
-            let hidden_above_for_row = if is_top_row { hidden_above } else { 0 };
-            let hidden_below_for_row = if is_bottom_row { hidden_below } else { 0 };
             let trail_depth = Self::trail_depth_for_row(i, selected, trail_len, trail_direction);
             let confidence_pct = Self::confidence_pct(scored.m.score, min_score, max_score);
 
@@ -259,10 +255,9 @@ impl LauncherView {
                     previous_selected: previous_selected == Some(i),
                     trail_depth,
                     distance_from_selected: i.abs_diff(selected),
-                    hidden_above: hidden_above_for_row,
-                    hidden_below: hidden_below_for_row,
                     edge_hit_top: is_top_row && matches!(edge_hit, Some(EdgeHit::Top)),
                     edge_hit_bottom: is_bottom_row && matches!(edge_hit, Some(EdgeHit::Bottom)),
+                    momentum_signed: if i == selected { momentum_signed } else { 0 },
                     confidence_pct,
                     cluster_break,
                 },
