@@ -164,6 +164,7 @@ fn show_ghost(
         .update(cx, |view, window, cx| {
             view.sync_entries_from_shared();
             view.reset_for_show();
+            view.set_window_origin(placement.bounds.origin);
             view.store
                 .ensure_filtered(&view.state.query, view.state.mode, view.state.fuzziness);
             qol_gpui::ghost::sync_window_layout(
@@ -217,9 +218,14 @@ fn open_hidden_ghost(
     let handle = cx
         .open_window(ghost_window_options(placement, false), {
             let title = title.clone();
+            let origin = placement.bounds.origin;
             move |window, cx| {
                 window.set_window_title(&title);
-                cx.new(move |cx| LauncherView::new(title.clone(), entries, cx))
+                cx.new(move |cx| {
+                    let mut view = LauncherView::new(title.clone(), entries, cx);
+                    view.set_window_origin(origin);
+                    view
+                })
             }
         })
         .ok()?;
@@ -234,12 +240,15 @@ fn open_visible_ghost(
     title: &str,
 ) -> Option<WindowHandle<LauncherView>> {
     let title = title.to_string();
+    let origin = placement.bounds.origin;
     open_window_with_focus(
         cx,
         ghost_window_options(placement, true),
         move |window, cx| {
             window.set_window_title(&title);
-            LauncherView::new(title.clone(), entries, cx)
+            let mut view = LauncherView::new(title.clone(), entries, cx);
+            view.set_window_origin(origin);
+            view
         },
     )
     .ok()
