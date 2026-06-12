@@ -23,8 +23,7 @@ impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.dismiss_requested {
             self.dismiss_requested = false;
-            self.set_showing(false);
-            qol_gpui::ghost::dismiss_to_ghost(super::LAUNCHER_WINDOW_TITLE, &self.window_title);
+            self.hide_to_ghost("requested");
         }
 
         if self.dismiss_sub.is_none() {
@@ -35,11 +34,7 @@ impl Render for LauncherView {
                 |this: &Self| this.is_showing,
                 cx,
                 |this, _window, _cx| {
-                    this.set_showing(false);
-                    qol_gpui::ghost::dismiss_to_ghost(
-                        super::LAUNCHER_WINDOW_TITLE,
-                        &this.window_title,
-                    );
+                    this.hide_to_ghost("blur");
                 },
             ));
             if !self.is_showing {

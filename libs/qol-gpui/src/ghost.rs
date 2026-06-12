@@ -193,12 +193,43 @@ pub fn track_dismiss<V: gpui::Focusable + 'static>(
         if !is_showing_2(view) {
             return;
         }
-        if !window.is_window_active() {
-            if std::time::Instant::now() < get_blur_guard_2(view) {
-                return;
-            }
-            (*on_dismiss_2.borrow_mut())(view, window, cx);
+        if window.is_window_active() {
+            return;
         }
+        let guard = get_blur_guard_2(view);
+        if std::time::Instant::now() >= guard {
+            (*on_dismiss_2.borrow_mut())(view, window, cx);
+            return;
+        }
+        let wait = guard.saturating_duration_since(std::time::Instant::now())
+            + std::time::Duration::from_millis(20);
+        let get_blur_guard = get_blur_guard_2.clone();
+        let is_showing = is_showing_2.clone();
+        let on_dismiss = on_dismiss_2.clone();
+        cx.spawn(move |view_handle: WeakEntity<V>, cx: &mut gpui::AsyncApp| {
+            let mut cx = cx.clone();
+            async move {
+                cx.background_executor().timer(wait).await;
+                let _ = cx.update_window(window_handle, move |_, window, cx| {
+                    if window.is_window_active() {
+                        return;
+                    }
+                    let Some(view_handle) = view_handle.upgrade() else {
+                        return;
+                    };
+                    view_handle.update(cx, |view, cx| {
+                        if !is_showing(view) {
+                            return;
+                        }
+                        if std::time::Instant::now() < get_blur_guard(view) {
+                            return;
+                        }
+                        (*on_dismiss.borrow_mut())(view, window, cx);
+                    });
+                });
+            }
+        })
+        .detach();
     });
 
     let mut poll_task = None;

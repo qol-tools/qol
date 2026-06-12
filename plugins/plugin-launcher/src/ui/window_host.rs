@@ -150,6 +150,7 @@ fn show_ghost(
     monitor_snapshot: Option<&monitor::ActiveMonitor>,
     cx: &mut App,
 ) -> bool {
+    let _reason = qol_gpui::popup_window::reason_scope("show");
     let placement = centered_window_placement(monitor_snapshot, header_size(), cx);
     let target = placement.target;
     let handle = active.borrow().existing(target);
@@ -165,8 +166,12 @@ fn show_ghost(
             view.reset_for_show();
             view.store
                 .ensure_filtered(&view.state.query, view.state.mode, view.state.fuzziness);
-            let backing = qol_gpui::popup_window::window_backing_scale(&title);
-            qol_gpui::window::resize_or_sync_scale(window, header_size(), backing);
+            qol_gpui::ghost::sync_window_layout(
+                &title,
+                window,
+                placement.bounds.origin,
+                header_size(),
+            );
             window.focus(&view.focus_handle(cx));
             window.activate_window();
             cx.notify();
@@ -187,6 +192,7 @@ fn create_and_show_ghost(
     monitor_snapshot: Option<&monitor::ActiveMonitor>,
     cx: &mut App,
 ) {
+    let _reason = qol_gpui::popup_window::reason_scope("create");
     let placement = centered_window_placement(monitor_snapshot, header_size(), cx);
     let target = placement.target;
     let title = qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, target);
