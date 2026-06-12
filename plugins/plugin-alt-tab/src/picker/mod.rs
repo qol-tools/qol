@@ -322,7 +322,7 @@ mod color_tests {
 
 pub(crate) mod state {
     use crate::actions;
-    use crate::config::{AltTabConfig, LabelConfig};
+    use crate::config::{AltTabConfig, LabelConfig, PreviewIconPosition};
     use crate::discovery::WindowInfo;
     use crate::picker::create::PickerInit;
     use crate::shared::image_registry::{extend_with, replace_map, retain_or_release, REGISTRY};
@@ -336,6 +336,7 @@ pub(crate) mod state {
         pub(crate) transparent_background: bool,
         pub(crate) card_bg_color: u32,
         pub(crate) card_bg_opacity: f32,
+        pub(crate) icon_position: PreviewIconPosition,
         pub(crate) show_debug_overlay: bool,
         pub(crate) show_hotkey_hints: bool,
         pub(crate) max_columns: usize,
@@ -366,6 +367,7 @@ pub(crate) mod state {
                 transparent_background: init.transparent_bg,
                 card_bg_color: init.card_color,
                 card_bg_opacity: init.card_opacity,
+                icon_position: init.icon_position,
                 show_debug_overlay: init.show_debug_overlay,
                 show_hotkey_hints: init.show_hotkey_hints,
                 max_columns: init.max_columns,
@@ -494,6 +496,7 @@ pub(crate) mod state {
             self.transparent_background = config.display.transparent_background;
             self.card_bg_color = card_color;
             self.card_bg_opacity = card_opacity;
+            self.icon_position = config.display.icon_position;
             self.show_debug_overlay = config.display.show_debug_overlay;
             self.show_hotkey_hints = config.display.show_hotkey_hints;
             self.card_scale = config.display.card_scale;
@@ -770,6 +773,7 @@ pub(crate) mod state {
                 transparent_bg: false,
                 card_color: 0,
                 card_opacity: 1.0,
+                icon_position: crate::config::PreviewIconPosition::default(),
                 show_debug_overlay: false,
                 show_hotkey_hints: false,
                 action_mode: ActionMode::HoldToSwitch,
@@ -931,6 +935,7 @@ pub(crate) mod state {
                 transparent_bg: false,
                 card_color: 0,
                 card_opacity: 1.0,
+                icon_position: crate::config::PreviewIconPosition::default(),
                 show_debug_overlay: false,
                 show_hotkey_hints: false,
                 action_mode: ActionMode::HoldToSwitch,

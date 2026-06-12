@@ -25,10 +25,11 @@ Install ID is resolved from `$QOL_TRAY_INSTALL_ID` env var or `<base>/active-ins
     "card_padding": 4,
     "transparent_background": false,
     "card_background_color": "#202322",
-    "card_background_opacity": 0.85
+    "card_background_opacity": 0.85,
+    "icon_position": "top_right"
   },
   "label": {
-    "show_app_name": true,
+    "show_app_name": false,
     "show_window_title": true,
     "size": "medium"
   }
@@ -55,12 +56,13 @@ Install ID is resolved from `$QOL_TRAY_INSTALL_ID` env var or `<base>/active-ins
 | `transparent_background` | bool | `false` | Remove the window background so only preview cards are visible. |
 | `card_background_color` | hex string | `"#202322"` | Base picker card color. Panel, hover, and selected colors derive from it. |
 | `card_background_opacity` | float (0.0-1.0) | `0.85` | Card opacity when transparent background is enabled. |
+| `icon_position` | `"top_left"` \| `"top_right"` | `"top_right"` | Where the app icon appears over each preview. |
 
 ### `label`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `show_app_name` | bool | `true` | Show app name in card label. |
+| `show_app_name` | bool | `false` | Show app name in card label. When the window title is also shown, the app name prefixes it with a separator. |
 | `show_window_title` | bool | `true` | Show window title in card label. |
 | `size` | `"small"` \| `"medium"` \| `"large"` | `"medium"` | Label text size relative to card size. |
 
