@@ -66,10 +66,7 @@ impl LauncherView {
                 cx.notify();
             }
             InputEffect::Launch => self.launch_selected(window, cx),
-            InputEffect::Dismiss => {
-                self.set_showing(false);
-                qol_gpui::ghost::dismiss_to_ghost(super::LAUNCHER_WINDOW_TITLE, &self.window_title);
-            }
+            InputEffect::Dismiss => self.hide_to_ghost("key"),
         }
     }
 
@@ -174,7 +171,6 @@ impl LauncherView {
         if is_app {
             self.store.record_launch(&name);
         }
-        self.set_showing(false);
-        qol_gpui::ghost::dismiss_to_ghost(super::LAUNCHER_WINDOW_TITLE, &self.window_title);
+        self.hide_to_ghost("launch");
     }
 }

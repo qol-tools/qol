@@ -71,6 +71,12 @@ impl LauncherView {
             .store(showing, std::sync::atomic::Ordering::Relaxed);
     }
 
+    pub(crate) fn hide_to_ghost(&mut self, _from: &'static str) {
+        qol_runtime::probe!("LAUNCHER_DISMISS", "from={_from}");
+        self.set_showing(false);
+        qol_gpui::ghost::dismiss_to_ghost(LAUNCHER_WINDOW_TITLE, &self.window_title);
+    }
+
     pub(super) fn schedule_query_render(&mut self, cx: &mut Context<Self>) {
         cx.notify();
     }
