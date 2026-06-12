@@ -21,15 +21,17 @@ const HIGHLIGHT: u32 = 0xf9e2af;
 const HIGHLIGHT_WARM: u32 = 0xf7dc9f;
 const HIGHLIGHT_HOT: u32 = 0xfde5b8;
 const HIGHLIGHT_COOL: u32 = 0xe6c983;
-const OVERFLOW: u32 = 0x6f88b8;
-const EDGE_PULSE: u32 = 0xaa7383;
 const BORDER: u32 = 0x45475a;
-const MOMENTUM_UP_1: u32 = 0x3a4761;
-const MOMENTUM_UP_2: u32 = 0x35527a;
-const MOMENTUM_UP_3: u32 = 0x2f5e8c;
-const MOMENTUM_DOWN_1: u32 = 0x4c4650;
-const MOMENTUM_DOWN_2: u32 = 0x5e4851;
-const MOMENTUM_DOWN_3: u32 = 0x714b53;
+const MOMENTUM_UP_1: u32 = 0x2d3348;
+const MOMENTUM_UP_2: u32 = 0x343e59;
+const MOMENTUM_UP_3: u32 = 0x3a4761;
+const MOMENTUM_UP_4: u32 = 0x35527a;
+const MOMENTUM_UP_5: u32 = 0x2f5e8c;
+const MOMENTUM_DOWN_1: u32 = 0x3a3640;
+const MOMENTUM_DOWN_2: u32 = 0x443f48;
+const MOMENTUM_DOWN_3: u32 = 0x4c4650;
+const MOMENTUM_DOWN_4: u32 = 0x5e4851;
+const MOMENTUM_DOWN_5: u32 = 0x714b53;
 const COMPASS_UP_LOW: u32 = 0x5b6f9a;
 const COMPASS_UP_MID: u32 = 0x7390ca;
 const COMPASS_UP_HIGH: u32 = 0x8fb1ff;
@@ -194,10 +196,9 @@ pub struct RowWindowCue {
     pub previous_selected: bool,
     pub trail_depth: u8,
     pub distance_from_selected: usize,
-    pub hidden_above: usize,
-    pub hidden_below: usize,
     pub edge_hit_top: bool,
     pub edge_hit_bottom: bool,
+    pub momentum_signed: i8,
     pub confidence_pct: u8,
     pub cluster_break: bool,
 }
@@ -249,13 +250,6 @@ pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f
         row = row.child(cluster_badge());
     }
 
-    if cues.edge_hit_top {
-        row = row.child(edge_badge("^"));
-    }
-    if !cues.edge_hit_top && cues.hidden_above > 0 {
-        row = row.child(overflow_badge("^", cues.hidden_above));
-    }
-
     row = row.child(
         div()
             .flex_1()
@@ -276,12 +270,11 @@ pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f
     ));
     row = row.child(confidence_bar(cues.confidence_pct, true));
 
-    if cues.edge_hit_bottom {
-        row = row.child(edge_badge("v"));
-    }
-    if !cues.edge_hit_bottom && cues.hidden_below > 0 {
-        row = row.child(overflow_badge("v", cues.hidden_below));
-    }
+    row = row.child(motion_badge(
+        cues.momentum_signed,
+        cues.edge_hit_top,
+        cues.edge_hit_bottom,
+    ));
 
     row
 }
@@ -324,28 +317,34 @@ fn status_badge(label: String) -> Div {
         .child(label)
 }
 
-fn overflow_badge(direction: &str, count: usize) -> Div {
-    div()
-        .h(px(18.))
-        .px_2()
-        .flex()
-        .items_center()
-        .bg(rgb(BG_BADGE))
-        .text_color(rgb(OVERFLOW))
-        .text_size(px(11.))
-        .child(format!("{direction} {count}"))
+fn motion_badge(momentum_signed: i8, edge_hit_top: bool, edge_hit_bottom: bool) -> Div {
+    if momentum_signed < 0 {
+        return motion_badge_element(if edge_hit_top { "^ edge" } else { "^" }, momentum_signed);
+    }
+    if momentum_signed > 0 {
+        return motion_badge_element(
+            if edge_hit_bottom { "v edge" } else { "v" },
+            momentum_signed,
+        );
+    }
+    motion_badge_placeholder()
 }
 
-fn edge_badge(direction: &str) -> Div {
+fn motion_badge_element(label: &'static str, momentum_signed: i8) -> Div {
     div()
         .h(px(18.))
-        .px_2()
+        .w(px(48.))
         .flex()
         .items_center()
-        .bg(rgb(BG_BADGE))
-        .text_color(rgb(EDGE_PULSE))
-        .text_size(px(11.))
-        .child(format!("{direction} edge"))
+        .justify_center()
+        .bg(momentum_badge_bg(momentum_signed))
+        .text_color(rgb(TEXT_SELECTED))
+        .text_size(px(10.))
+        .child(label)
+}
+
+fn motion_badge_placeholder() -> Div {
+    div().h(px(18.)).w(px(48.))
 }
 
 fn confidence_bar(confidence_pct: u8, selected: bool) -> Div {
@@ -437,15 +436,19 @@ fn semantic_badge(kind: MatchKind, freq_bonus: bool, selected: bool) -> Div {
 
 fn momentum_badge_bg(momentum_signed: i8) -> gpui::Rgba {
     match momentum_signed {
-        -3..=-1 => match momentum_signed.abs() {
+        -5..=-1 => match momentum_signed.abs() {
             1 => rgb(MOMENTUM_UP_1),
             2 => rgb(MOMENTUM_UP_2),
-            _ => rgb(MOMENTUM_UP_3),
+            3 => rgb(MOMENTUM_UP_3),
+            4 => rgb(MOMENTUM_UP_4),
+            _ => rgb(MOMENTUM_UP_5),
         },
-        1..=3 => match momentum_signed {
+        1..=5 => match momentum_signed {
             1 => rgb(MOMENTUM_DOWN_1),
             2 => rgb(MOMENTUM_DOWN_2),
-            _ => rgb(MOMENTUM_DOWN_3),
+            3 => rgb(MOMENTUM_DOWN_3),
+            4 => rgb(MOMENTUM_DOWN_4),
+            _ => rgb(MOMENTUM_DOWN_5),
         },
         _ => rgb(BG_SELECTED),
     }
