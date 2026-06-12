@@ -16,8 +16,8 @@ use crate::commands::emu::{
     emu_config_path, environment_statuses, EnvironmentStatus, LastRun, ResolveState,
 };
 use crate::dev_server::{
-    health_ok, post_recompile_current, post_reload_plugins, probe_endpoints, web_ok,
-    EndpointStatus, WEBSITE_URL,
+    fetch_dev_links, health_ok, post_recompile_current, post_reload_plugins, probe_endpoints,
+    web_ok, DevLink, EndpointStatus, WEBSITE_URL,
 };
 use crate::host_facade;
 use crate::poller::Poller;
@@ -26,6 +26,7 @@ const LOG_CAP: usize = 2000;
 const TICK: Duration = Duration::from_millis(150);
 const HEALTH_PROBE_INTERVAL: Duration = Duration::from_secs(2);
 const EMU_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+const LINKS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const STOP_GRACE: Duration = Duration::from_secs(5);
 const CRASH_TAIL: usize = 40;
 const ACK_TTL: Duration = Duration::from_secs(6);
@@ -178,6 +179,7 @@ struct HealthSnapshot {
 struct Probes {
     health: Poller<HealthSnapshot>,
     emu: Poller<Result<Vec<EnvironmentStatus>, String>>,
+    links: Poller<Result<Vec<DevLink>, String>>,
 }
 
 impl Probes {
@@ -190,6 +192,9 @@ impl Probes {
             emu: Poller::spawn(EMU_REFRESH_INTERVAL, || {
                 environment_statuses().map_err(|error| format!("{error:#}"))
             }),
+            links: Poller::spawn(LINKS_REFRESH_INTERVAL, || {
+                fetch_dev_links().map_err(|error| format!("{error:#}"))
+            }),
         }
     }
 }
@@ -197,11 +202,15 @@ impl Probes {
 #[derive(Default)]
 struct Pokes {
     emu: bool,
+    links: bool,
 }
 
 fn flush_pokes(dash: &mut Dash, probes: &Probes) {
     if std::mem::take(&mut dash.pokes.emu) {
         probes.emu.poke();
+    }
+    if std::mem::take(&mut dash.pokes.links) {
+        probes.links.poke();
     }
 }
 
@@ -214,6 +223,12 @@ enum EmuState {
     Probing,
     Done(Vec<EnvironmentStatus>),
     Failed(String),
+}
+
+enum LinksState {
+    Unknown,
+    Live(Vec<DevLink>),
+    Unreachable,
 }
 
 enum EmuRun {
@@ -304,6 +319,7 @@ struct Dash {
     armed: bool,
     reload: Reload,
     pokes: Pokes,
+    links: LinksState,
 }
 
 impl Dash {
@@ -342,6 +358,7 @@ impl Dash {
             armed: false,
             reload: Reload::Idle,
             pokes: Pokes::default(),
+            links: LinksState::Unknown,
         }
     }
 
@@ -444,6 +461,12 @@ fn tui_session(
             dash.emu = match outcome {
                 Ok(statuses) => EmuState::Done(statuses),
                 Err(error) => EmuState::Failed(error),
+            };
+        }
+        if let Some(outcome) = probes.links.latest() {
+            dash.links = match outcome {
+                Ok(links) => LinksState::Live(links),
+                Err(_) => LinksState::Unreachable,
             };
         }
         let doctor_outcome = dash.doctor_rx.as_ref().and_then(|rx| rx.try_recv().ok());
@@ -779,8 +802,12 @@ fn health_state(up: bool) -> Health {
 }
 
 fn apply_health(dash: &mut Dash, snapshot: HealthSnapshot) {
+    let was_up = dash.health == Health::Up;
     dash.health = health_state(snapshot.api);
     dash.web = health_state(snapshot.web);
+    if !was_up && dash.health == Health::Up {
+        dash.pokes.links = true;
+    }
 }
 
 fn open_trace(dash: &mut Dash) {
@@ -1020,7 +1047,10 @@ fn trigger_rebuild(dash: &mut Dash) {
 
 fn trigger_reload(dash: &mut Dash) {
     dash.plugin_reload = match post_reload_plugins() {
-        Ok(()) => RebuildState::Requested(Instant::now()),
+        Ok(()) => {
+            dash.pokes.links = true;
+            RebuildState::Requested(Instant::now())
+        }
         Err(error) => RebuildState::Failed(format!("{error:#}")),
     };
 }
@@ -1222,7 +1252,7 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
     let (tray_color, tray_value) = tray_status(dash);
     let (web_color, web_value) = web_status(dash.web);
     let (plugins_color, plugins_value) =
-        plugins_status(&dash.plugin_reload, dash.plugin_names.len());
+        plugins_status(&dash.plugin_reload, dash.plugin_names.len(), &dash.links);
     let (emu_color, emu_value) = emu_status(&dash.emu);
     let (doctor_color, doctor_value) = doctor_status(&dash.doctor);
 
@@ -1387,25 +1417,55 @@ fn panel(title: &str, accent: Color) -> Block<'static> {
         )
 }
 
-fn plugins_status(state: &RebuildState, plugins: usize) -> (Color, Vec<Span<'static>>) {
-    let base = format!("{plugins} linked");
-    match state {
-        RebuildState::Requested(at) if at.elapsed() < ACK_TTL => (
+fn plugins_status(
+    state: &RebuildState,
+    boot_count: usize,
+    links: &LinksState,
+) -> (Color, Vec<Span<'static>>) {
+    let (live_color, mut value) = match links {
+        LinksState::Live(links) => {
+            let stale = links.iter().filter(|link| link.needs_rebuild).count();
+            if stale > 0 {
+                (
+                    Color::Yellow,
+                    vec![
+                        format!("{} linked", links.len()).fg(Color::Green),
+                        format!(" · {stale} stale").fg(Color::Yellow).bold(),
+                    ],
+                )
+            } else {
+                (
+                    Color::Green,
+                    vec![format!("{} linked", links.len()).fg(Color::Green)],
+                )
+            }
+        }
+        LinksState::Unknown => (
             Color::Green,
-            vec![base.fg(Color::Green), " · reload sent".fg(Color::Yellow)],
+            vec![format!("{boot_count} linked").fg(Color::DarkGray)],
         ),
-        RebuildState::Failed(error) => (
-            Color::Red,
+        LinksState::Unreachable => (
+            Color::Yellow,
             vec![
-                format!("{base} · reload ").fg(Color::DarkGray),
-                "failed".fg(Color::Red).bold(),
-                format!(" · {error}").fg(Color::DarkGray),
+                format!("{boot_count} linked").fg(Color::DarkGray),
+                " · api down".fg(Color::DarkGray),
             ],
         ),
-        RebuildState::Idle | RebuildState::Requested(_) => {
-            (Color::Green, vec![base.fg(Color::Green)])
+    };
+    let color = match state {
+        RebuildState::Requested(at) if at.elapsed() < ACK_TTL => {
+            value.push(" · reload sent".fg(Color::Yellow));
+            live_color
         }
-    }
+        RebuildState::Failed(error) => {
+            value.push(" · reload ".fg(Color::DarkGray));
+            value.push("failed".fg(Color::Red).bold());
+            value.push(format!(" · {error}").fg(Color::DarkGray));
+            Color::Red
+        }
+        RebuildState::Idle | RebuildState::Requested(_) => live_color,
+    };
+    (color, value)
 }
 
 fn emu_status(state: &EmuState) -> (Color, Vec<Span<'static>>) {
@@ -1483,31 +1543,55 @@ fn emu_status(state: &EmuState) -> (Color, Vec<Span<'static>>) {
 
 fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let accent = frame_accent(dash);
-    if dash.plugin_names.is_empty() {
+    let entries = plugin_view_lines(dash);
+    if entries.is_empty() {
         frame.render_widget(
             Paragraph::new("  no dev-linked plugins").block(panel(" plugins ", accent)),
             area,
         );
         return;
     }
-    let total = dash.plugin_names.len();
+    let total = entries.len();
     let (start, height) = list_window(dash, area, total);
-    let visible: Vec<Line> = dash
-        .plugin_names
-        .iter()
-        .skip(start)
-        .take(height)
-        .map(|name| {
-            Line::from(vec![
-                "  ".into(),
-                "●".fg(Color::Green).bold(),
-                format!(" {name}").fg(Color::White),
-                " · dev-linked".fg(Color::DarkGray),
-            ])
-        })
-        .collect();
+    let visible: Vec<Line> = entries.into_iter().skip(start).take(height).collect();
     let title = format!(" plugins · {} ", list_status(total, dash.scroll_offset));
     frame.render_widget(Paragraph::new(visible).block(panel(&title, accent)), area);
+}
+
+fn plugin_view_lines(dash: &Dash) -> Vec<Line<'static>> {
+    match &dash.links {
+        LinksState::Live(links) => links.iter().map(plugin_link_line).collect(),
+        LinksState::Unknown | LinksState::Unreachable => dash
+            .plugin_names
+            .iter()
+            .map(|name| {
+                Line::from(vec![
+                    "  ".into(),
+                    "●".fg(Color::DarkGray).bold(),
+                    format!(" {name}").fg(Color::White),
+                    " · link state unknown".fg(Color::DarkGray),
+                ])
+            })
+            .collect(),
+    }
+}
+
+fn plugin_link_line(link: &DevLink) -> Line<'static> {
+    if link.needs_rebuild {
+        return Line::from(vec![
+            "  ".into(),
+            "●".fg(Color::Yellow).bold(),
+            format!(" {}", link.name).fg(Color::White),
+            " · stale · ".fg(Color::Yellow),
+            link.rebuild_reason.clone().fg(Color::DarkGray),
+        ]);
+    }
+    Line::from(vec![
+        "  ".into(),
+        "●".fg(Color::Green).bold(),
+        format!(" {}", link.name).fg(Color::White),
+        " · dev-linked".fg(Color::DarkGray),
+    ])
 }
 
 fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
@@ -2140,6 +2224,62 @@ mod tests {
                 "elapsed_ms: {elapsed_ms}"
             );
         }
+    }
+
+    fn span_text(spans: &[Span<'static>]) -> String {
+        spans.iter().map(|span| span.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn plugins_status_reflects_link_state() {
+        let fresh = DevLink {
+            name: "foo".to_string(),
+            needs_rebuild: false,
+            rebuild_reason: "Up to date".to_string(),
+        };
+        let stale = DevLink {
+            name: "bar".to_string(),
+            needs_rebuild: true,
+            rebuild_reason: "Source changed".to_string(),
+        };
+        let cases = [
+            (
+                LinksState::Live(vec![fresh.clone(), stale.clone()]),
+                Color::Yellow,
+                "2 linked · 1 stale",
+            ),
+            (
+                LinksState::Live(vec![fresh.clone()]),
+                Color::Green,
+                "1 linked",
+            ),
+            (LinksState::Unknown, Color::Green, "3 linked"),
+            (
+                LinksState::Unreachable,
+                Color::Yellow,
+                "3 linked · api down",
+            ),
+        ];
+        for (links, expected_color, expected_text) in cases {
+            let (color, spans) = plugins_status(&RebuildState::Idle, 3, &links);
+            assert_eq!(color, expected_color, "text: {expected_text}");
+            assert_eq!(span_text(&spans), expected_text);
+        }
+    }
+
+    #[test]
+    fn plugins_status_appends_reload_failure() {
+        let (color, spans) = plugins_status(
+            &RebuildState::Failed("boom".to_string()),
+            3,
+            &LinksState::Unknown,
+        );
+        assert_eq!(color, Color::Red, "failed reload turns the row red");
+        assert!(
+            span_text(&spans).contains("reload failed · boom"),
+            "spans: {}",
+            span_text(&spans)
+        );
     }
 
     #[test]
