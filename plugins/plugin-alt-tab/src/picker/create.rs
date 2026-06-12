@@ -258,7 +258,9 @@ impl PostCreateData {
         PICKER_VISIBLE.store(true, Ordering::Relaxed);
         has_shown_once.store(true, Ordering::Release);
         qol_runtime::probe!("PICKER_READY", "title={}", self.title);
+        super::platform::show_picker_window(&self.title, std::slice::from_ref(&self.title));
         cx.activate(true);
+        super::probe_app_active_after_frame(handle, cx);
         if self.transparent_bg {
             super::platform::disable_window_shadow(&self.title);
         }

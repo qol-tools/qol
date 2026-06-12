@@ -16,7 +16,7 @@ use windows as imp;
 compile_error!("plugin-alt-tab picker: unsupported target OS");
 
 pub fn picker_window_kind() -> gpui::WindowKind {
-    qol_gpui::platform::ghost_window_kind()
+    imp::picker_window_kind()
 }
 pub fn picker_window_decorations(transparent: bool) -> gpui::WindowDecorations {
     qol_gpui::platform::ghost_window_decorations(transparent)
@@ -29,6 +29,9 @@ pub fn picker_window_title(target: qol_gpui::window::MonitorKey) -> String {
 }
 pub fn configure_picker_window(title: &str) {
     imp::configure_picker_window(title)
+}
+pub fn show_picker_window(target_title: &str, all_titles: &[String]) {
+    imp::show_picker_window(target_title, all_titles)
 }
 pub fn sync_picker_window_layout(
     title: &str,
@@ -56,6 +59,9 @@ pub fn is_shift_held() -> bool {
 }
 pub fn disable_window_shadow(title: &str) {
     imp::disable_window_shadow(title)
+}
+pub fn probe_picker_app_active(at: &'static str) {
+    imp::probe_picker_app_active(at)
 }
 pub fn pre_create(
     config: &crate::config::AltTabConfig,
