@@ -144,12 +144,12 @@ placeholder = "ff0000"
 default = "ff0000"
 
 [field.display_card_background_color]
-type = "string"
+type = "color"
 config_key = "display.card_background_color"
 label = "Card Background Color"
+description = "Base color for picker cards; the panel, hover, and selected colors derive from this."
 section = "layout"
-placeholder = "1a1e2a"
-default = "1a1e2a"
+default = "#202322"
 
 [field.display_card_background_opacity]
 type = "number"

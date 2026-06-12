@@ -1,5 +1,5 @@
 use super::AltTabApp;
-use crate::config::{ActionMode, LabelConfig};
+use crate::config::{capitalize_first, ActionMode, LabelConfig};
 use crate::discovery::WindowInfo;
 use crate::shared::layout::{picker_layout, CardMetrics};
 use crate::{IconMap, PreviewMap};
@@ -24,8 +24,65 @@ struct RenderSnap {
     transparent_bg: bool,
     show_debug_overlay: bool,
     show_hotkey_hints: bool,
-    card_bg_rgba: u32,
+    palette: SurfacePalette,
     metrics: CardMetrics,
+}
+
+#[derive(Clone, Copy)]
+struct SurfacePalette {
+    panel_bg: u32,
+    header_bg: u32,
+    header_border: u32,
+    card_bg: u32,
+    card_hover_bg: u32,
+    card_selected_bg: u32,
+    card_selected_border: u32,
+    card_bg_rgba: u32,
+    card_selected_rgba: u32,
+    icon_bg: u32,
+    icon_border: u32,
+    icon_selected_bg: u32,
+    icon_selected_border: u32,
+    caption_divider: u32,
+}
+
+impl SurfacePalette {
+    fn from_card_color(card_bg: u32, opacity: f32) -> Self {
+        let opacity = opacity.clamp(0.0, 1.0);
+        Self {
+            panel_bg: mix_rgb(card_bg, 0x000000, 0.56),
+            header_bg: mix_rgb(card_bg, 0x000000, 0.35),
+            header_border: mix_rgb(card_bg, 0xffffff, 0.08),
+            card_bg,
+            card_hover_bg: mix_rgb(card_bg, 0xffffff, 0.07),
+            card_selected_bg: mix_rgb(card_bg, 0xffffff, 0.13),
+            card_selected_border: mix_rgb(card_bg, 0xc7d0c9, 0.36),
+            card_bg_rgba: rgba_from_rgb(card_bg, opacity),
+            card_selected_rgba: rgba_from_rgb(mix_rgb(card_bg, 0xffffff, 0.13), opacity.max(0.92)),
+            icon_bg: rgba_from_rgb(mix_rgb(card_bg, 0x000000, 0.18), 0.78),
+            icon_border: rgba_from_rgb(mix_rgb(card_bg, 0xffffff, 0.11), 0.76),
+            icon_selected_bg: rgba_from_rgb(mix_rgb(card_bg, 0xffffff, 0.16), 0.82),
+            icon_selected_border: rgba_from_rgb(mix_rgb(card_bg, 0xd2d9d4, 0.42), 0.70),
+            caption_divider: rgba_from_rgb(mix_rgb(card_bg, 0xffffff, 0.12), 0.58),
+        }
+    }
+}
+
+fn mix_rgb(color: u32, target: u32, amount: f32) -> u32 {
+    let amount = amount.clamp(0.0, 1.0);
+    let r = mix_channel((color >> 16) & 0xff, (target >> 16) & 0xff, amount);
+    let g = mix_channel((color >> 8) & 0xff, (target >> 8) & 0xff, amount);
+    let b = mix_channel(color & 0xff, target & 0xff, amount);
+    (r << 16) | (g << 8) | b
+}
+
+fn mix_channel(from: u32, to: u32, amount: f32) -> u32 {
+    (from as f32 + (to as f32 - from as f32) * amount).round() as u32
+}
+
+fn rgba_from_rgb(color: u32, opacity: f32) -> u32 {
+    let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u32;
+    (color << 8) | alpha
 }
 
 impl Render for AltTabApp {
@@ -91,14 +148,13 @@ impl Render for AltTabApp {
         });
 
         let d = self.delegate.read(cx);
-        let alpha = (d.card_bg_opacity.clamp(0.0, 1.0) * 255.0) as u32;
         let snap = RenderSnap {
             selected_index: d.selected_index,
             visible,
             transparent_bg: d.transparent_background,
             show_debug_overlay: d.show_debug_overlay,
             show_hotkey_hints: d.show_hotkey_hints,
-            card_bg_rgba: (d.card_bg_color << 8) | alpha,
+            palette: SurfacePalette::from_card_color(d.card_bg_color, d.card_bg_opacity),
             metrics: CardMetrics::from_config(d.card_scale, d.card_padding),
         };
 
@@ -129,7 +185,7 @@ impl Render for AltTabApp {
             .flex_col()
             .w(px(panel_w))
             .h(px(panel_h))
-            .when(!snap.transparent_bg, |s| s.bg(rgb(0x0f111a)))
+            .when(!snap.transparent_bg, |s| s.bg(rgb(snap.palette.panel_bg)))
             .when(snap.visible, |s| {
                 s.on_key_down(key_handler)
                     .on_modifiers_changed(modifiers_handler)
@@ -141,12 +197,14 @@ impl Render for AltTabApp {
                 s.child(header_bar(
                     "Alt Tab",
                     "W close  ·  Q quit  ·  R minimize  ·  ↑↓←→ navigate  ·  ⏎ switch  ·  esc close",
+                    &snap.palette,
                 ))
             })
             .when(!snap.transparent_bg && snap.show_debug_overlay, |s| {
                 s.child(header_bar(
                     "Alt Tab  ·  Live Window Grid",
                     "↑↓←→ navigate  ·  ⏎ switch  ·  esc close",
+                    &snap.palette,
                 ))
             })
             .child(grid);
@@ -167,13 +225,13 @@ impl Render for AltTabApp {
     }
 }
 
-fn header_bar(left: &str, right: &str) -> Div {
+fn header_bar(left: &str, right: &str, palette: &SurfacePalette) -> Div {
     div()
         .px_4()
         .py_2()
         .border_b_1()
-        .border_color(rgb(0x1e2333))
-        .bg(rgb(0x13151f))
+        .border_color(rgb(palette.header_border))
+        .bg(rgb(palette.header_bg))
         .flex()
         .items_center()
         .justify_between()
@@ -266,19 +324,11 @@ fn render_card(
                 is_selected,
                 snap.visible,
                 snap.transparent_bg,
-                snap.card_bg_rgba,
+                &snap.palette,
             )
         })
         .child(render_preview(win, previews, icons, &snap.metrics))
-        .child(render_label(
-            i,
-            win,
-            is_selected,
-            label_config,
-            icons,
-            snap.show_debug_overlay,
-            &snap.metrics,
-        ))
+        .child(render_label(i, win, snap, label_config, icons))
 }
 
 fn card_bg(
@@ -286,25 +336,28 @@ fn card_bg(
     selected: bool,
     visible: bool,
     transparent: bool,
-    card_rgba: u32,
+    palette: &SurfacePalette,
 ) -> Stateful<Div> {
     if selected && transparent {
         return el
-            .bg(rgba(card_rgba))
+            .bg(rgba(palette.card_selected_rgba))
             .border_1()
-            .border_color(rgb(0x4a6fa5));
+            .border_color(rgb(palette.card_selected_border));
     }
     if selected {
-        return el.bg(rgb(0x233050)).border_1().border_color(rgb(0x4a6fa5));
+        return el
+            .bg(rgb(palette.card_selected_bg))
+            .border_1()
+            .border_color(rgb(palette.card_selected_border));
     }
     if transparent {
-        return el.bg(rgba(card_rgba));
+        return el.bg(rgba(palette.card_bg_rgba));
     }
     if !visible {
-        return el.bg(rgb(0x1a1e2a));
+        return el.bg(rgb(palette.card_bg));
     }
-    el.bg(rgb(0x1a1e2a)).hover(|mut h| {
-        h.background = Some(rgb(0x1e2640).into());
+    el.bg(rgb(palette.card_bg)).hover(|mut h| {
+        h.background = Some(rgb(palette.card_hover_bg).into());
         h
     })
 }
@@ -337,54 +390,152 @@ fn render_preview(
 fn render_label(
     i: usize,
     win: &WindowInfo,
-    selected: bool,
+    snap: &RenderSnap,
     label_config: &LabelConfig,
     icons: &IconMap,
-    show_debug: bool,
-    metrics: &CardMetrics,
 ) -> Div {
-    let label = label_config.format(&win.app_name, &win.title);
-    let text = if show_debug {
-        format!("[{}] {}", i, label)
-    } else {
-        label
-    };
-    let color = if selected {
-        rgb(0xffffff)
-    } else {
-        rgb(0x7a849e)
-    };
+    let selected = snap.selected_index == Some(i);
+    let metrics = &snap.metrics;
+    let palette = &snap.palette;
+    let show_app = label_config.show_app_name && !win.app_name.is_empty();
+    let show_title = label_config.show_window_title && !win.title.is_empty();
+    let app_label = show_app.then(|| capitalize_first(&win.app_name));
+    let title_label = show_title.then(|| {
+        if snap.show_debug_overlay {
+            format!("[{}] {}", i, win.title)
+        } else {
+            win.title.clone()
+        }
+    });
+    let has_app = app_label.is_some();
+    let has_title = title_label.is_some();
     let app_icon = icons.get(&win.app_name).cloned();
+    let has_icon = app_icon.is_some();
     let size_factor = label_config.size.factor();
     let icon_px = metrics.label_icon_px(size_factor);
+    let text_px = metrics.label_font_px(size_factor);
+    let label_slot_px =
+        (metrics.card_height - metrics.card_padding * 2.0 - metrics.preview_height).max(icon_px);
+    let icon_gap_px = if has_icon { 4.0 } else { 0.0 };
+    let text_area_px =
+        (metrics.preview_width - icon_gap_px - if has_icon { icon_px } else { 0.0 }).max(1.0);
+    let app_max_width_px = if has_title {
+        text_area_px * 0.42
+    } else {
+        text_area_px
+    };
+    let primary_color = if selected {
+        rgb(0xf8fbff)
+    } else {
+        rgb(0xd4dbea)
+    };
+    let secondary_color = if selected {
+        rgb(0xaebfe3)
+    } else {
+        rgb(0x8995ad)
+    };
 
     div()
-        .mt_2()
         .w(px(metrics.preview_width))
         .max_w(px(metrics.preview_width))
+        .h(px(label_slot_px))
         .flex_none()
         .flex()
         .flex_row()
         .items_center()
         .gap_1()
         .overflow_hidden()
-        .text_color(color)
+        .border_t_1()
+        .border_color(rgba(palette.caption_divider))
         .when_some(app_icon, |el, icon| {
             el.child(
-                img(icon)
+                div()
                     .w(px(icon_px))
                     .h(px(icon_px))
-                    .rounded_sm()
-                    .flex_shrink_0(),
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .bg(rgba(if selected {
+                        palette.icon_selected_bg
+                    } else {
+                        palette.icon_bg
+                    }))
+                    .border_1()
+                    .border_color(rgba(if selected {
+                        palette.icon_selected_border
+                    } else {
+                        palette.icon_border
+                    }))
+                    .child(
+                        img(icon)
+                            .w(px((icon_px * 0.72).max(12.0)))
+                            .h(px((icon_px * 0.72).max(12.0)))
+                            .rounded_sm(),
+                    ),
             )
         })
         .child(
             div()
-                .flex_1()
+                .w(px(text_area_px))
+                .max_w(px(text_area_px))
+                .flex_none()
                 .min_w(px(0.))
-                .text_size(px(metrics.label_font_px(size_factor)))
-                .truncate()
-                .child(text),
+                .flex()
+                .flex_row()
+                .items_center()
+                .overflow_hidden()
+                .when_some(app_label, |el, app| {
+                    el.child(
+                        div()
+                            .max_w(px(app_max_width_px))
+                            .min_w(px(0.))
+                            .flex_initial()
+                            .text_size(px(text_px))
+                            .line_height(relative(0.95))
+                            .font_weight(if has_title {
+                                FontWeight::MEDIUM
+                            } else {
+                                FontWeight::SEMIBOLD
+                            })
+                            .text_color(if has_title {
+                                secondary_color
+                            } else {
+                                primary_color
+                            })
+                            .truncate()
+                            .child(app),
+                    )
+                })
+                .when(has_app && has_title, |el| {
+                    el.child(
+                        div()
+                            .flex_none()
+                            .text_size(px(text_px))
+                            .line_height(relative(0.95))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(if selected {
+                                rgb(0x7f94bf)
+                            } else {
+                                rgb(0x626d82)
+                            })
+                            .child("/"),
+                    )
+                })
+                .when_some(title_label, |el, title| {
+                    el.child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .text_size(px(text_px))
+                            .line_height(relative(0.95))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(primary_color)
+                            .truncate()
+                            .child(title),
+                    )
+                }),
         )
 }
 
