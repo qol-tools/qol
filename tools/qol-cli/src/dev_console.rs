@@ -9,7 +9,7 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui::widgets::{Block, Clear, Padding, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::commands::emu::{
@@ -1451,9 +1451,17 @@ fn frame_accent(dash: &Dash) -> Color {
     }
 }
 
+const PANEL_PADDING: Padding = Padding {
+    left: 1,
+    right: 1,
+    top: 1,
+    bottom: 1,
+};
+
 fn panel(title: &str, accent: Color) -> Block<'static> {
     Block::bordered()
         .border_style(Style::new().fg(accent))
+        .padding(PANEL_PADDING)
         .title(
             Line::from(vec![
                 "┤ ".fg(accent),
@@ -1462,6 +1470,16 @@ fn panel(title: &str, accent: Color) -> Block<'static> {
             ])
             .centered(),
         )
+}
+
+fn panel_inner_height(area: Rect) -> usize {
+    area.height
+        .saturating_sub(2 + PANEL_PADDING.top + PANEL_PADDING.bottom) as usize
+}
+
+fn panel_inner_width(area: Rect) -> usize {
+    area.width
+        .saturating_sub(2 + PANEL_PADDING.left + PANEL_PADDING.right) as usize
 }
 
 fn plugins_status(
@@ -1849,7 +1867,7 @@ fn draw_stream(
     accent: Color,
     highlight_tail: Option<usize>,
 ) {
-    let height = area.height.saturating_sub(2) as usize;
+    let height = panel_inner_height(area);
     *log_height = height;
     let filtered: Vec<&String> = ring
         .lines
@@ -1860,7 +1878,7 @@ fn draw_stream(
     *scroll_offset = clamp_offset(total, height, *scroll_offset);
     let start = window_start(total, height, *scroll_offset);
     let highlight_from = highlight_tail.map(|n| total.saturating_sub(n));
-    let inner_width = area.width.saturating_sub(2) as usize;
+    let inner_width = panel_inner_width(area);
     let visible: Vec<Line> = filtered
         .into_iter()
         .enumerate()
@@ -1970,7 +1988,7 @@ fn doctor_view_lines(panel: &DoctorPanel) -> Vec<String> {
 }
 
 fn list_window(dash: &mut Dash, area: Rect, total: usize) -> (usize, usize) {
-    let height = area.height.saturating_sub(2) as usize;
+    let height = panel_inner_height(area);
     dash.log_height = height;
     dash.scroll_offset = clamp_offset(total, height, dash.scroll_offset);
     (window_start(total, height, dash.scroll_offset), height)
