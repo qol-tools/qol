@@ -27,6 +27,8 @@ const TICK: Duration = Duration::from_millis(150);
 const HEALTH_PROBE_INTERVAL: Duration = Duration::from_secs(2);
 const EMU_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const LINKS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+const DOCTOR_BASE_INTERVAL: Duration = Duration::from_secs(10);
+const DOCTOR_CAP_INTERVAL: Duration = Duration::from_secs(60);
 const STOP_GRACE: Duration = Duration::from_secs(5);
 const CRASH_TAIL: usize = 40;
 const ACK_TTL: Duration = Duration::from_secs(6);
@@ -180,6 +182,7 @@ struct Probes {
     health: Poller<HealthSnapshot>,
     emu: Poller<Result<Vec<EnvironmentStatus>, String>>,
     links: Poller<Result<Vec<DevLink>, String>>,
+    doctor: Poller<Result<DoctorRun, String>>,
 }
 
 impl Probes {
@@ -195,14 +198,24 @@ impl Probes {
             links: Poller::spawn(LINKS_REFRESH_INTERVAL, || {
                 fetch_dev_links().map_err(|error| format!("{error:#}"))
             }),
+            doctor: spawn_doctor_probe(),
         }
     }
+}
+
+fn spawn_doctor_probe() -> Poller<Result<DoctorRun, String>> {
+    Poller::spawn_adaptive(
+        DOCTOR_BASE_INTERVAL,
+        DOCTOR_CAP_INTERVAL,
+        run_doctor_prebuilt,
+    )
 }
 
 #[derive(Default)]
 struct Pokes {
     emu: bool,
     links: bool,
+    doctor: bool,
 }
 
 fn flush_pokes(dash: &mut Dash, probes: &Probes) {
@@ -211,6 +224,9 @@ fn flush_pokes(dash: &mut Dash, probes: &Probes) {
     }
     if std::mem::take(&mut dash.pokes.links) {
         probes.links.poke();
+    }
+    if std::mem::take(&mut dash.pokes.doctor) {
+        probes.doctor.poke();
     }
 }
 
@@ -240,7 +256,7 @@ enum EmuRun {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct DoctorReport {
     ok: usize,
     warn: usize,
@@ -254,12 +270,14 @@ impl DoctorReport {
     }
 }
 
-enum DoctorState {
-    Running(DoctorMode),
-    Done(DoctorReport),
-    Failed(String),
+struct DoctorPanel {
+    last: Option<DoctorRun>,
+    last_at_ms: Option<u64>,
+    manual: Option<(DoctorMode, Receiver<Result<DoctorRun, String>>)>,
+    error: Option<String>,
 }
 
+#[derive(Clone, PartialEq)]
 struct DoctorRun {
     report: DoctorReport,
     lines: Vec<String>,
@@ -303,9 +321,7 @@ struct Dash {
     emu_cursor: usize,
     log_height: usize,
     cursor: usize,
-    doctor: DoctorState,
-    doctor_lines: Vec<String>,
-    doctor_rx: Option<Receiver<Result<DoctorRun, String>>>,
+    doctor: DoctorPanel,
     trace: LogRing,
     trace_child: Option<Child>,
     trace_rx: Option<Receiver<String>>,
@@ -342,9 +358,12 @@ impl Dash {
             emu_cursor: 0,
             log_height: 0,
             cursor: 0,
-            doctor: DoctorState::Running(DoctorMode::Check),
-            doctor_lines: Vec::new(),
-            doctor_rx: None,
+            doctor: DoctorPanel {
+                last: None,
+                last_at_ms: None,
+                manual: None,
+                error: None,
+            },
             trace: LogRing::new(),
             trace_child: None,
             trace_rx: None,
@@ -366,14 +385,8 @@ impl Dash {
         matches!(self.reload, Reload::Running { .. })
     }
 
-    fn start_doctor(&mut self) {
-        self.doctor = DoctorState::Running(DoctorMode::Check);
-        self.doctor_rx = Some(spawn_doctor(DoctorMode::Check));
-    }
-
-    fn start_doctor_fix(&mut self) {
-        self.doctor = DoctorState::Running(DoctorMode::Fix);
-        self.doctor_rx = Some(spawn_doctor(DoctorMode::Fix));
+    fn start_doctor(&mut self, mode: DoctorMode) {
+        self.doctor.manual = Some((mode, spawn_doctor(mode)));
     }
 }
 
@@ -390,7 +403,6 @@ pub(crate) fn run_session(
     let mut probes = Probes::spawn();
     let mut dash = Dash::new(plugins);
     dash.boot_rx = boot;
-    dash.start_doctor();
     let mut terminal = ratatui::init();
     let result = tui_session(&mut terminal, child, &lines, &mut probes, &mut dash);
     ratatui::restore();
@@ -469,19 +481,21 @@ fn tui_session(
                 Err(_) => LinksState::Unreachable,
             };
         }
-        let doctor_outcome = dash.doctor_rx.as_ref().and_then(|rx| rx.try_recv().ok());
-        if let Some(outcome) = doctor_outcome {
-            match outcome {
-                Ok(run) => {
-                    dash.doctor = DoctorState::Done(run.report);
-                    dash.doctor_lines = run.lines;
-                }
-                Err(error) => {
-                    dash.doctor_lines = vec![format!("[ERR] doctor: {error}")];
-                    dash.doctor = DoctorState::Failed(error);
-                }
+        let manual_outcome = dash
+            .doctor
+            .manual
+            .as_ref()
+            .and_then(|(_, rx)| rx.try_recv().ok());
+        if let Some(outcome) = manual_outcome {
+            dash.doctor.manual = None;
+            apply_doctor_outcome(dash, outcome);
+            probes.doctor = spawn_doctor_probe();
+        } else if dash.doctor.manual.is_none() {
+            if let Some(outcome) = probes.doctor.latest() {
+                apply_doctor_outcome(dash, outcome);
             }
-            dash.doctor_rx = None;
+        } else {
+            let _ = probes.doctor.latest();
         }
         drain_trace(dash);
         drain_boot(dash);
@@ -753,9 +767,9 @@ fn act_row(dash: &mut Dash, modified: bool) {
         }
         Row::Doctor => {
             if modified {
-                dash.start_doctor_fix();
+                dash.start_doctor(DoctorMode::Fix);
             } else {
-                dash.start_doctor();
+                dash.start_doctor(DoctorMode::Check);
             }
         }
         Row::Logs | Row::Trace => {}
@@ -801,12 +815,24 @@ fn health_state(up: bool) -> Health {
     }
 }
 
+fn apply_doctor_outcome(dash: &mut Dash, outcome: Result<DoctorRun, String>) {
+    match outcome {
+        Ok(run) => {
+            dash.doctor.last = Some(run);
+            dash.doctor.last_at_ms = Some(now_unix_ms());
+            dash.doctor.error = None;
+        }
+        Err(error) => dash.doctor.error = Some(error),
+    }
+}
+
 fn apply_health(dash: &mut Dash, snapshot: HealthSnapshot) {
     let was_up = dash.health == Health::Up;
     dash.health = health_state(snapshot.api);
     dash.web = health_state(snapshot.web);
     if !was_up && dash.health == Health::Up {
         dash.pokes.links = true;
+        dash.pokes.doctor = true;
     }
 }
 
@@ -949,6 +975,7 @@ fn drain_emu_run(dash: &mut Dash) {
         .push(emu_run_line("done", &status.to_string()));
     dash.emu_run = EmuRun::Idle;
     dash.pokes.emu = true;
+    dash.pokes.doctor = true;
 }
 
 fn stop_emu_run(dash: &mut Dash) {
@@ -1040,7 +1067,10 @@ fn poll_reload(dash: &mut Dash) -> ReloadOutcome {
 
 fn trigger_rebuild(dash: &mut Dash) {
     dash.rebuild = match post_recompile_current() {
-        Ok(()) => RebuildState::Requested(Instant::now()),
+        Ok(()) => {
+            dash.pokes.doctor = true;
+            RebuildState::Requested(Instant::now())
+        }
         Err(error) => RebuildState::Failed(format!("{error:#}")),
     };
 }
@@ -1049,6 +1079,7 @@ fn trigger_reload(dash: &mut Dash) {
     dash.plugin_reload = match post_reload_plugins() {
         Ok(()) => {
             dash.pokes.links = true;
+            dash.pokes.doctor = true;
             RebuildState::Requested(Instant::now())
         }
         Err(error) => RebuildState::Failed(format!("{error:#}")),
@@ -1058,7 +1089,7 @@ fn trigger_reload(dash: &mut Dash) {
 fn open_doctor(dash: &mut Dash) {
     dash.view = View::Doctor;
     dash.scroll_offset = 0;
-    dash.start_doctor();
+    dash.pokes.doctor = true;
 }
 
 fn draw(frame: &mut Frame, dash: &mut Dash) {
@@ -1254,7 +1285,7 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
     let (plugins_color, plugins_value) =
         plugins_status(&dash.plugin_reload, dash.plugin_names.len(), &dash.links);
     let (emu_color, emu_value) = emu_status(&dash.emu);
-    let (doctor_color, doctor_value) = doctor_status(&dash.doctor);
+    let (doctor_color, doctor_value) = doctor_status(&dash.doctor, now_unix_ms());
 
     let rows = vec![
         dash_row(dash.cursor == 0, tray_color, "tray", tray_value),
@@ -1707,7 +1738,8 @@ fn last_run_line(last_run: Option<&LastRun>) -> Line<'static> {
 fn relative_age(now_ms: u64, then_ms: u64) -> String {
     let seconds = now_ms.saturating_sub(then_ms) / 1000;
     match seconds {
-        0..=59 => "just now".to_string(),
+        0..=9 => "just now".to_string(),
+        10..=59 => format!("{seconds}s ago"),
         60..=3599 => format!("{}m ago", seconds / 60),
         3600..=86399 => format!("{}h ago", seconds / 3600),
         _ => format!("{}d ago", seconds / 86400),
@@ -1721,45 +1753,54 @@ fn now_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn doctor_status(state: &DoctorState) -> (Color, Vec<Span<'static>>) {
-    match state {
-        DoctorState::Running(mode) => (Color::Yellow, vec![mode.gerund().fg(Color::Yellow)]),
-        DoctorState::Done(report) if report.divergences() == 0 => (
+fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Span<'static>>) {
+    if let Some((mode, _)) = &panel.manual {
+        return (Color::Yellow, vec![mode.gerund().fg(Color::Yellow)]);
+    }
+    let Some(run) = &panel.last else {
+        let detail = panel
+            .error
+            .clone()
+            .unwrap_or_else(|| "waiting for first check".to_string());
+        return (Color::Yellow, vec![detail.fg(Color::DarkGray)]);
+    };
+    let report = run.report;
+    let (color, mut value) = if report.divergences() == 0 {
+        (
             Color::Green,
             vec![
                 "all good".fg(Color::Green).bold(),
                 format!(" · {} checks", report.ok).fg(Color::DarkGray),
             ],
-        ),
-        DoctorState::Done(report) => {
-            let color = if report.error + report.crash > 0 {
-                Color::Red
-            } else {
-                Color::Yellow
-            };
-            (
-                color,
-                vec![
-                    format!("{} divergences", report.divergences())
-                        .fg(color)
-                        .bold(),
-                    format!(
-                        " · {} warn · {} err",
-                        report.warn,
-                        report.error + report.crash
-                    )
-                    .fg(Color::DarkGray),
-                ],
-            )
-        }
-        DoctorState::Failed(error) => (
-            Color::Red,
+        )
+    } else {
+        let color = if report.error + report.crash > 0 {
+            Color::Red
+        } else {
+            Color::Yellow
+        };
+        (
+            color,
             vec![
-                "failed".fg(Color::Red).bold(),
-                format!(" · {error}").fg(Color::DarkGray),
+                format!("{} divergences", report.divergences())
+                    .fg(color)
+                    .bold(),
+                format!(
+                    " · {} warn · {} err",
+                    report.warn,
+                    report.error + report.crash
+                )
+                .fg(Color::DarkGray),
             ],
-        ),
+        )
+    };
+    if let Some(at) = panel.last_at_ms {
+        value.push(format!(" · {}", relative_age(now_ms, at)).fg(Color::DarkGray));
     }
+    if panel.error.is_some() {
+        value.push(" · probe failed".fg(Color::DarkGray));
+    }
+    (color, value)
 }
 
 fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
@@ -1886,12 +1927,11 @@ fn endpoint_line(status: &EndpointStatus) -> Line<'static> {
 
 fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let accent = frame_accent(dash);
-    if dash.doctor_lines.is_empty() {
-        let message = match dash.doctor {
-            DoctorState::Running(mode) => mode.progress_message(),
-            DoctorState::Done(_) | DoctorState::Failed(_) => {
-                "  no checks reported · press d to run"
-            }
+    let lines = doctor_view_lines(&dash.doctor);
+    if lines.is_empty() {
+        let message = match &dash.doctor.manual {
+            Some((mode, _)) => mode.progress_message(),
+            None => "  no checks reported · press d to run",
         };
         frame.render_widget(
             Paragraph::new(message).block(panel(" doctor ", accent)),
@@ -1899,22 +1939,37 @@ fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         );
         return;
     }
-    let total = dash.doctor_lines.len();
+    let total = lines.len();
     let (start, height) = list_window(dash, area, total);
     let render = if dash.armed {
         styled_doctor_line
     } else {
         friendly_doctor_line
     };
-    let visible: Vec<Line> = dash
-        .doctor_lines
+    let visible: Vec<Line> = lines
         .iter()
         .skip(start)
         .take(height)
         .map(|line| render(line))
         .collect();
-    let title = format!(" doctor · {} ", list_status(total, dash.scroll_offset));
+    let age = dash
+        .doctor
+        .last_at_ms
+        .map(|at| format!(" · {}", relative_age(now_unix_ms(), at)))
+        .unwrap_or_default();
+    let title = format!(" doctor · {}{age} ", list_status(total, dash.scroll_offset));
     frame.render_widget(Paragraph::new(visible).block(panel(&title, accent)), area);
+}
+
+fn doctor_view_lines(panel: &DoctorPanel) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(error) = &panel.error {
+        lines.push(format!("[ERR] doctor: {error}"));
+    }
+    if let Some(run) = &panel.last {
+        lines.extend(run.lines.iter().cloned());
+    }
+    lines
 }
 
 fn list_window(dash: &mut Dash, area: Rect, total: usize) -> (usize, usize) {
@@ -2127,12 +2182,31 @@ fn spawn_doctor(mode: DoctorMode) -> Receiver<Result<DoctorRun, String>> {
 fn run_doctor(mode: DoctorMode) -> Result<DoctorRun, String> {
     let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
     build_doctor(&root)?;
-    let binary = root
-        .join("target")
+    run_doctor_binary(&doctor_binary(&root), &root, mode)
+}
+
+fn run_doctor_prebuilt() -> Result<DoctorRun, String> {
+    let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
+    let binary = doctor_binary(&root);
+    if !binary.exists() {
+        return Err("doctor binary not built · press d".to_string());
+    }
+    run_doctor_binary(&binary, &root, DoctorMode::Check)
+}
+
+fn doctor_binary(root: &std::path::Path) -> std::path::PathBuf {
+    root.join("target")
         .join("debug")
-        .join(host_facade::exe_name("qol-tray-doctor"));
-    let output = Command::new(&binary)
-        .current_dir(&root)
+        .join(host_facade::exe_name("qol-tray-doctor"))
+}
+
+fn run_doctor_binary(
+    binary: &std::path::Path,
+    root: &std::path::Path,
+    mode: DoctorMode,
+) -> Result<DoctorRun, String> {
+    let output = Command::new(binary)
+        .current_dir(root)
         .arg(mode.arg())
         .output()
         .map_err(|error| error.to_string())?;
@@ -2209,7 +2283,7 @@ mod tests {
     fn relative_age_buckets_seconds_minutes_hours_days() {
         let cases = [
             (5_000, "just now"),
-            (59_000, "just now"),
+            (59_000, "59s ago"),
             (60_000, "1m ago"),
             (3_599_000, "59m ago"),
             (3_600_000, "1h ago"),
@@ -2228,6 +2302,105 @@ mod tests {
 
     fn span_text(spans: &[Span<'static>]) -> String {
         spans.iter().map(|span| span.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn relative_age_gains_a_seconds_bucket() {
+        let cases = [
+            (5_000, "just now"),
+            (10_000, "10s ago"),
+            (59_000, "59s ago"),
+            (60_000, "1m ago"),
+        ];
+        for (elapsed_ms, expected) in cases {
+            assert_eq!(
+                relative_age(1_000_000_000 + elapsed_ms, 1_000_000_000),
+                expected,
+                "elapsed_ms: {elapsed_ms}"
+            );
+        }
+    }
+
+    #[test]
+    fn doctor_status_covers_panel_states() {
+        let report = DoctorReport {
+            ok: 11,
+            warn: 0,
+            error: 0,
+            crash: 0,
+        };
+        let run = DoctorRun {
+            report,
+            lines: Vec::new(),
+        };
+        let warn_report = DoctorReport {
+            ok: 9,
+            warn: 2,
+            error: 0,
+            crash: 0,
+        };
+        let warn_run = DoctorRun {
+            report: warn_report,
+            lines: Vec::new(),
+        };
+        let now = 1_000_000_000;
+        let cases = [
+            (
+                DoctorPanel {
+                    last: None,
+                    last_at_ms: None,
+                    manual: None,
+                    error: None,
+                },
+                Color::Yellow,
+                "waiting for first check",
+            ),
+            (
+                DoctorPanel {
+                    last: Some(run.clone()),
+                    last_at_ms: Some(now - 15_000),
+                    manual: None,
+                    error: None,
+                },
+                Color::Green,
+                "all good · 11 checks · 15s ago",
+            ),
+            (
+                DoctorPanel {
+                    last: Some(warn_run.clone()),
+                    last_at_ms: Some(now - 5_000),
+                    manual: None,
+                    error: None,
+                },
+                Color::Yellow,
+                "2 divergences · 2 warn · 0 err · just now",
+            ),
+            (
+                DoctorPanel {
+                    last: Some(run.clone()),
+                    last_at_ms: Some(now - 15_000),
+                    manual: None,
+                    error: Some("boom".to_string()),
+                },
+                Color::Green,
+                "all good · 11 checks · 15s ago · probe failed",
+            ),
+            (
+                DoctorPanel {
+                    last: None,
+                    last_at_ms: None,
+                    manual: None,
+                    error: Some("doctor binary not built · press d".to_string()),
+                },
+                Color::Yellow,
+                "doctor binary not built · press d",
+            ),
+        ];
+        for (panel, expected_color, expected_text) in cases {
+            let (color, spans) = doctor_status(&panel, now);
+            assert_eq!(color, expected_color, "text: {expected_text}");
+            assert_eq!(span_text(&spans), expected_text);
+        }
     }
 
     #[test]
