@@ -55,9 +55,7 @@ impl ResolveState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct EnvironmentStatus {
     pub(crate) id: String,
-    pub(crate) name: String,
     pub(crate) backend: String,
-    pub(crate) arch: GuestArch,
     pub(crate) state: ResolveState,
     pub(crate) reason: String,
     pub(crate) last_run: Option<LastRun>,
@@ -67,7 +65,6 @@ pub(crate) struct EnvironmentStatus {
 pub(crate) struct LastRun {
     pub(crate) status: String,
     pub(crate) finished_at_unix_ms: u64,
-    pub(crate) qemu_version: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -117,9 +114,7 @@ pub(crate) fn environment_statuses() -> Result<Vec<EnvironmentStatus>> {
             EnvironmentStatus {
                 last_run: last_runs.remove(&environment.id),
                 id: environment.id,
-                name: environment.name,
                 backend: environment.backend,
-                arch: environment.arch,
                 state: resolution.state,
                 reason: resolution.reason,
             }
@@ -159,17 +154,11 @@ fn last_run_from_report(report: &serde_json::Value) -> Option<(String, LastRun)>
     let id = report.get("environment")?.get("id")?.as_str()?.to_string();
     let status = report.get("status")?.as_str()?.to_string();
     let finished_at_unix_ms = report.get("finished_at_unix_ms")?.as_u64()?;
-    let qemu_version = report
-        .get("qmp")
-        .and_then(|qmp| qmp.get("qemu_version"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
     Some((
         id,
         LastRun {
             status,
             finished_at_unix_ms,
-            qemu_version,
         },
     ))
 }
@@ -1118,7 +1107,7 @@ mod tests {
     }
 
     #[test]
-    fn last_run_parsing_extracts_id_status_and_version() {
+    fn last_run_parsing_extracts_id_and_status() {
         let full = json!({
             "environment": {"id": "foo"},
             "status": "pass",
@@ -1140,7 +1129,6 @@ mod tests {
                     LastRun {
                         status: "pass".to_string(),
                         finished_at_unix_ms: 42,
-                        qemu_version: Some("9.2.0".to_string()),
                     },
                 )),
             ),
@@ -1151,7 +1139,6 @@ mod tests {
                     LastRun {
                         status: "failed".to_string(),
                         finished_at_unix_ms: 7,
-                        qemu_version: None,
                     },
                 )),
             ),

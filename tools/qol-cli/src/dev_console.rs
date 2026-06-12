@@ -1643,13 +1643,19 @@ fn plugin_link_line(link: &DevLink) -> Line<'static> {
 
 fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let accent = frame_accent(dash);
-    let config = emu_config_path()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "~/.config/qol-tray/emu.toml".to_string());
     let mut lines = match &dash.emu {
         EmuState::Probing => vec![Line::from("  scanning emus".fg(Color::Yellow))],
         EmuState::Done(statuses) if statuses.is_empty() => {
-            vec![Line::from("  no emus found".fg(Color::DarkGray))]
+            let config = emu_config_path()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "~/.config/qol-tray/emu.toml".to_string());
+            vec![
+                Line::from("  no emus found".fg(Color::DarkGray)),
+                Line::from(vec![
+                    "  config ".fg(Color::DarkGray),
+                    config.fg(Color::White),
+                ]),
+            ]
         }
         EmuState::Done(statuses) => statuses
             .iter()
@@ -1667,30 +1673,25 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
                     "  ".into()
                 };
                 let id_span = if selected {
-                    format!("{:<12}", status.id).fg(Color::White).bold()
+                    status.id.clone().fg(Color::White).bold()
                 } else {
-                    format!("{:<12}", status.id).fg(Color::White)
+                    status.id.clone().fg(Color::White)
                 };
-                let mut entry = vec![
-                    Line::from(vec![
-                        caret,
-                        "● ".fg(color).bold(),
-                        id_span,
-                        format!(" {} ", status.state.as_str()).fg(color).bold(),
-                        format!(
-                            "· {} · {} · {}",
-                            status.name,
-                            status.backend,
-                            status.arch.as_str()
-                        )
-                        .fg(Color::DarkGray),
-                    ]),
-                    Line::from(vec![
+                let mut header = vec![
+                    caret,
+                    "● ".fg(color).bold(),
+                    id_span,
+                    format!("  {}", status.state.as_str()).fg(color).bold(),
+                    format!(" · {}", status.backend).fg(Color::DarkGray),
+                ];
+                header.extend(last_run_spans(status.last_run.as_ref()));
+                let mut entry = vec![Line::from(header)];
+                if status.state != ResolveState::Ready {
+                    entry.push(Line::from(vec![
                         "    ".into(),
                         status.reason.clone().fg(Color::DarkGray),
-                    ]),
-                ];
-                entry.push(last_run_line(status.last_run.as_ref()));
+                    ]));
+                }
                 entry
             })
             .collect(),
@@ -1699,17 +1700,6 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
             error.clone().fg(Color::DarkGray),
         ])],
     };
-    lines.extend([
-        Line::from(""),
-        Line::from(vec![
-            "  config  ".fg(Color::DarkGray),
-            config.fg(Color::White),
-        ]),
-        Line::from(vec![
-            "  runs    ".fg(Color::DarkGray),
-            "target/qol-emu".fg(Color::White),
-        ]),
-    ]);
     if dash.emu_run_log.len() > 0 {
         lines.push(Line::from(""));
         for line in &dash.emu_run_log.lines {
@@ -1723,12 +1713,9 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     frame.render_widget(Paragraph::new(visible).block(panel(&title, accent)), area);
 }
 
-fn last_run_line(last_run: Option<&LastRun>) -> Line<'static> {
+fn last_run_spans(last_run: Option<&LastRun>) -> Vec<Span<'static>> {
     let Some(run) = last_run else {
-        return Line::from(vec![
-            "    last ".fg(Color::DarkGray),
-            "never run".fg(Color::DarkGray),
-        ]);
+        return Vec::new();
     };
     let color = match run.status.as_str() {
         "pass" => Color::Green,
@@ -1736,19 +1723,11 @@ fn last_run_line(last_run: Option<&LastRun>) -> Line<'static> {
         "running" => Color::Yellow,
         _ => Color::DarkGray,
     };
-    let mut spans = vec![
-        "    last ".fg(Color::DarkGray),
-        run.status.clone().fg(color).bold(),
-        format!(
-            " · {}",
-            relative_age(now_unix_ms(), run.finished_at_unix_ms)
-        )
-        .fg(Color::DarkGray),
-    ];
-    if let Some(version) = &run.qemu_version {
-        spans.push(format!(" · qemu {version}").fg(Color::DarkGray));
-    }
-    Line::from(spans)
+    vec![
+        " · ".fg(Color::DarkGray),
+        run.status.clone().fg(color),
+        format!(" {}", relative_age(now_unix_ms(), run.finished_at_unix_ms)).fg(Color::DarkGray),
+    ]
 }
 
 fn relative_age(now_ms: u64, then_ms: u64) -> String {
@@ -2548,12 +2527,9 @@ mod tests {
     }
 
     fn emu_env(id: &str, state: ResolveState) -> EnvironmentStatus {
-        use crate::commands::emu::GuestArch;
         EnvironmentStatus {
             id: id.to_string(),
-            name: id.to_string(),
             backend: "qemu".to_string(),
-            arch: GuestArch::Aarch64,
             state,
             reason: String::new(),
             last_run: None,
