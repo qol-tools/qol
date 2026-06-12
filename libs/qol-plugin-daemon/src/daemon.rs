@@ -185,6 +185,8 @@ fn read_and_parse<C>(stream: &mut UnixStream, parser: fn(&str) -> ReadResult<C>)
         Err(e) => {
             #[cfg(debug_assertions)]
             eprintln!("[daemon] read_line error: {:?}", e);
+            #[cfg(not(debug_assertions))]
+            let _ = e;
             return ReadResult::Ignore;
         }
         Ok(_) => {}
