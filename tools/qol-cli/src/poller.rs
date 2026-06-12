@@ -11,6 +11,7 @@ impl<T: Send + 'static> Poller<T> {
         Self::spawn_with_backoff(interval, interval, work, |_| true)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn spawn_adaptive(
         base: Duration,
         cap: Duration,
