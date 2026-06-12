@@ -4,6 +4,8 @@ mod dev_console;
 mod dev_server;
 mod host_facade;
 mod platform;
+#[allow(dead_code)]
+mod poller;
 mod progress;
 mod setup;
 mod workspace;
