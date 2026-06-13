@@ -5660,7 +5660,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "toml 0.8.23",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
@@ -5728,7 +5728,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "toml 0.8.23",
+ "toml 0.9.12+spec-1.1.0",
  "unicode-normalization",
 ]
 
@@ -5748,7 +5748,7 @@ dependencies = [
  "qol-runtime",
  "serde",
  "serde_json",
- "toml 0.8.23",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
