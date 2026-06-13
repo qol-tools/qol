@@ -6,12 +6,10 @@ description = "Alt-Tab window switcher plugin for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
-dirs = "6.0"
 gpui = "0.2"
 image = { version = "0.25", default-features = false }
 open = "5"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 smallvec = "1.13"
 qol-color.workspace = true
 qol-config.workspace = true
@@ -30,7 +28,6 @@ x11rb = { version = "0.13", features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-block2 = "0.6"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = [
   "NSString",
@@ -57,13 +54,6 @@ objc2-app-kit = { version = "0.3", features = [
   "NSGraphicsContext",
   "objc2-core-graphics",
 ] }
-objc2-core-graphics = { version = "0.3", features = [
-  "CGWindow",
-  "CGImage",
-  "CGDataProvider",
-] }
 
 [dev-dependencies]
-proptest = "1.10.0"
 qol-tray.workspace = true
-toml = "0.9.8"
