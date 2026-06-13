@@ -2,7 +2,7 @@
 id = "plugin-lights"
 name = "Lights"
 description = "Control lights through backend adapters"
-version = "1.4.0"
+version = "1.4.1"
 author = ""
 platforms = ["linux", "macos"]
 
