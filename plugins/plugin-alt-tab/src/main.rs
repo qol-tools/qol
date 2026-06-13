@@ -69,7 +69,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use qol_tray::plugins::manifest::PluginManifest;
+    use qol_plugin_api::manifest::PluginManifest;
 
     #[test]
     fn validate_plugin_contract() {

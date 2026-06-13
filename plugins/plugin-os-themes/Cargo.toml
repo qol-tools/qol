@@ -16,4 +16,4 @@ x11 = { version = "2", features = ["xlib", "xcursor", "xfixes"] }
 libc = "0.2"
 
 [dev-dependencies]
-qol-tray.workspace = true
+qol-plugin-api.workspace = true

@@ -96,6 +96,7 @@ qol-app-icon.workspace = true
 png = "0.17"
 qol-config.workspace = true
 qol-migrations.workspace = true
+qol-plugin-api.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"

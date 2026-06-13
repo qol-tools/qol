@@ -33,7 +33,7 @@ x11 = "2.21"
 rdev = "0.5"
 
 [dev-dependencies]
-qol-tray.workspace = true
+qol-plugin-api.workspace = true
 
 [package.metadata.deb]
 maintainer = "KMRH47"
