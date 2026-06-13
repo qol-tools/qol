@@ -6,9 +6,11 @@ license.workspace = true
 description = "Plugin manifest and restore-claim wire contract for qol-tray plugins"
 
 [dependencies]
+anyhow = "1.0"
 serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
 qol-runtime.workspace = true
 
 [dev-dependencies]
-toml.workspace = true
-serde_json.workspace = true
+proptest = "1.6"

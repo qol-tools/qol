@@ -1,5 +1,4 @@
-use crate::plugins::manifest::PluginInfo;
-use crate::plugins::PluginId;
+use crate::manifest::{PluginId, PluginInfo};
 use anyhow::{anyhow, bail, Result};
 
 impl PluginInfo {
@@ -37,7 +36,7 @@ pub(super) fn validate_plugin_id(value: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::is_valid_plugin_id;
-    use crate::plugins::manifest::PluginInfo;
+    use crate::manifest::PluginInfo;
 
     fn plugin_info(id: Option<&str>) -> PluginInfo {
         PluginInfo {

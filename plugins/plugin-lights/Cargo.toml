@@ -16,4 +16,4 @@ serialport = { version = "4", default-features = false }
 tungstenite = "0.26"
 
 [dev-dependencies]
-qol-tray.workspace = true
+qol-plugin-api.workspace = true

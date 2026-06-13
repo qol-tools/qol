@@ -1,4 +1,4 @@
-use crate::plugins::manifest::{PluginManifest, CURRENT_MANIFEST_VERSION};
+use crate::manifest::{PluginManifest, CURRENT_MANIFEST_VERSION};
 use anyhow::{bail, Context, Result};
 
 impl PluginManifest {

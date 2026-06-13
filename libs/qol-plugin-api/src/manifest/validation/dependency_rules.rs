@@ -1,4 +1,4 @@
-use crate::plugins::manifest::{BinaryDependency, Dependencies};
+use crate::manifest::{BinaryDependency, Dependencies};
 use anyhow::Result;
 
 impl Dependencies {
