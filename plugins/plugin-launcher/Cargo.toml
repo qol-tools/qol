@@ -8,12 +8,10 @@ license = "PolyForm-Noncommercial-1.0.0"
 [dependencies]
 gpui = { version = "0.2", features = ["test-support"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 notify = { version = "8", default-features = false, features = [
   "macos_fsevent",
 ] }
 qol-plugin-daemon.workspace = true
-qol-app-icon.workspace = true
 qol-gpui.workspace = true
 qol-runtime.workspace = true
 qol-search.workspace = true
@@ -24,13 +22,6 @@ toml = "0.9"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 shell-words = "1.1"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2-foundation = { version = "0.3", features = ["NSObject"] }
-objc2-app-kit = { version = "0.3", features = [
-  "NSApplication",
-  "NSRunningApplication",
-] }
 
 [dev-dependencies]
 proptest = "1.0"
