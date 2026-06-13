@@ -46,3 +46,9 @@ core-foundation-sys = { git = "https://github.com/servo/core-foundation-rs", tag
 strip = true
 lto = "thin"
 codegen-units = 16
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
