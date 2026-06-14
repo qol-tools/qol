@@ -1,5 +1,6 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, IsTerminal, Read};
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -13,7 +14,8 @@ use ratatui::widgets::{Block, Clear, Padding, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::commands::emu::{
-    emu_config_path, environment_statuses, EnvironmentStatus, LastRun, ResolveState,
+    emu_config_path, environment_statuses, newest_run_detail, EnvironmentStatus, LastRun,
+    ResolveState, RunDetail,
 };
 use crate::dev_server::{
     fetch_dev_links, health_ok, post_recompile_current, post_reload_plugins, probe_endpoints,
@@ -192,6 +194,64 @@ impl LogPane {
             let _ = source.child.wait();
         }
     }
+
+    fn replay(title: &'static str, path: &Path) -> Self {
+        let mut ring = LogRing::new();
+        if let Ok(content) = std::fs::read_to_string(path) {
+            for line in content.lines() {
+                ring.push(line.to_string());
+            }
+        }
+        Self {
+            title,
+            ring,
+            source: None,
+        }
+    }
+
+    fn poll_finished(&mut self, keep: impl Fn(&str) -> bool) -> bool {
+        let mut received = Vec::new();
+        let mut exited = None;
+        if let Some(source) = self.source.as_mut() {
+            while let Ok(line) = source.rx.try_recv() {
+                received.push(line);
+            }
+            if let Ok(Some(status)) = source.child.try_wait() {
+                while let Ok(line) = source.rx.try_recv() {
+                    received.push(line);
+                }
+                exited = Some(status);
+            }
+        }
+        for line in received {
+            if keep(&line) {
+                self.ring.push(line);
+            }
+        }
+        match exited {
+            Some(status) => {
+                self.ring.push(emu_run_line("done", &status.to_string()));
+                self.source = None;
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn stop_graceful(&mut self) {
+        let Some(mut source) = self.source.take() else {
+            return;
+        };
+        let deadline = Instant::now() + STOP_GRACE;
+        while Instant::now() < deadline {
+            if matches!(source.child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _ = source.child.kill();
+        let _ = source.child.wait();
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -201,6 +261,7 @@ enum View {
     Doctor,
     Plugins,
     Emu,
+    EmuDetail,
     Trace,
     Endpoints,
 }
@@ -309,13 +370,10 @@ enum LinksState {
     Unreachable,
 }
 
-enum EmuRun {
-    Idle,
-    Active {
-        id: String,
-        child: Child,
-        rx: Receiver<String>,
-    },
+struct EmuDetail {
+    id: String,
+    info: Vec<Line<'static>>,
+    replay: Option<LogPane>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -377,8 +435,8 @@ struct Dash {
     plugin_reload: RebuildState,
     plugin_names: Vec<String>,
     emu: EmuState,
-    emu_run: EmuRun,
-    emu_run_log: LogRing,
+    active_runs: HashMap<String, LogPane>,
+    emu_detail: Option<EmuDetail>,
     emu_cursor: usize,
     log_height: usize,
     cursor: usize,
@@ -412,8 +470,8 @@ impl Dash {
             plugin_reload: RebuildState::Idle,
             plugin_names,
             emu: EmuState::Probing,
-            emu_run: EmuRun::Idle,
-            emu_run_log: LogRing::new(),
+            active_runs: HashMap::new(),
+            emu_detail: None,
             emu_cursor: 0,
             log_height: 0,
             cursor: 0,
@@ -564,10 +622,10 @@ fn tui_session(
         }
         dash.trace.drain(|_| true);
         drain_boot(dash);
-        drain_emu_run(dash);
+        drain_emu_runs(dash);
         if let ReloadOutcome::Ready = poll_reload(dash) {
             stop_trace(dash);
-            stop_emu_run(dash);
+            stop_emu_runs(dash);
             stop_child(child)?;
             return Ok(SessionEnd::ReloadRequested);
         }
@@ -576,7 +634,7 @@ fn tui_session(
                 dash.logs.push(line);
             }
             stop_trace(dash);
-            stop_emu_run(dash);
+            stop_emu_runs(dash);
             return Ok(SessionEnd::ChildExited(status));
         }
         flush_pokes(dash, probes);
@@ -595,7 +653,7 @@ fn tui_session(
                 match action_for(code, mods) {
                     Action::Quit => {
                         stop_trace(dash);
-                        stop_emu_run(dash);
+                        stop_emu_runs(dash);
                         stop_child(child)?;
                         return Ok(SessionEnd::UserQuit);
                     }
@@ -670,10 +728,18 @@ fn finish_copy(dash: &mut Dash) {
 }
 
 fn newest_lines(dash: &Dash, count: usize) -> String {
-    let ring = if dash.view == View::Trace {
-        &dash.trace.ring
-    } else {
-        &dash.logs.ring
+    let ring = match dash.view {
+        View::Trace => Some(&dash.trace.ring),
+        View::EmuDetail => emu_detail_ring(dash),
+        View::Dashboard
+        | View::Logs
+        | View::Doctor
+        | View::Plugins
+        | View::Emu
+        | View::Endpoints => Some(&dash.logs.ring),
+    };
+    let Some(ring) = ring else {
+        return String::new();
     };
     let filtered: Vec<&String> = ring
         .lines
@@ -739,15 +805,30 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
         Action::Activate => match dash.view {
             View::Dashboard => act_row(dash, modified),
             View::Emu => act_emu(dash, modified),
-            View::Logs | View::Doctor | View::Plugins | View::Trace | View::Endpoints => {}
+            View::Logs
+            | View::Doctor
+            | View::Plugins
+            | View::Trace
+            | View::Endpoints
+            | View::EmuDetail => {}
         },
-        Action::Dive => {
-            if dash.view == View::Dashboard {
-                dive_row(dash);
-            }
-        }
+        Action::Dive => match dash.view {
+            View::Dashboard => dive_row(dash),
+            View::Emu => open_emu_detail(dash),
+            View::Logs
+            | View::Doctor
+            | View::Plugins
+            | View::Trace
+            | View::Endpoints
+            | View::EmuDetail => {}
+        },
         Action::Back => {
-            dash.view = View::Dashboard;
+            dash.view = if dash.view == View::EmuDetail {
+                View::Emu
+            } else {
+                View::Dashboard
+            };
+            dash.emu_detail = None;
             dash.scroll_offset = 0;
             dash.filter.clear();
             dash.filtering = false;
@@ -755,29 +836,35 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
         Action::ScrollUp => match dash.view {
             View::Dashboard => dash.cursor = dash.cursor.saturating_sub(1),
             View::Emu => dash.emu_cursor = dash.emu_cursor.saturating_sub(1),
-            View::Logs | View::Doctor | View::Plugins | View::Trace | View::Endpoints => {
-                dash.scroll_offset = dash.scroll_offset.saturating_add(1)
-            }
+            View::Logs
+            | View::Doctor
+            | View::Plugins
+            | View::Trace
+            | View::Endpoints
+            | View::EmuDetail => dash.scroll_offset = dash.scroll_offset.saturating_add(1),
         },
         Action::ScrollDown => match dash.view {
             View::Dashboard => dash.cursor = (dash.cursor + 1).min(ROWS.len() - 1),
             View::Emu => {
                 dash.emu_cursor = (dash.emu_cursor + 1).min(emu_env_count(dash).saturating_sub(1))
             }
-            View::Logs | View::Doctor | View::Plugins | View::Trace | View::Endpoints => {
-                dash.scroll_offset = dash.scroll_offset.saturating_sub(1)
-            }
+            View::Logs
+            | View::Doctor
+            | View::Plugins
+            | View::Trace
+            | View::Endpoints
+            | View::EmuDetail => dash.scroll_offset = dash.scroll_offset.saturating_sub(1),
         },
         Action::PageUp => dash.scroll_offset = dash.scroll_offset.saturating_add(page),
         Action::PageDown => dash.scroll_offset = dash.scroll_offset.saturating_sub(page),
         Action::Follow => dash.scroll_offset = 0,
         Action::Filter => {
-            if matches!(dash.view, View::Logs | View::Trace) {
+            if matches!(dash.view, View::Logs | View::Trace | View::EmuDetail) {
                 dash.filtering = true;
             }
         }
         Action::Copy => {
-            if matches!(dash.view, View::Logs | View::Trace) {
+            if matches!(dash.view, View::Logs | View::Trace | View::EmuDetail) {
                 dash.copying = true;
                 dash.copy_count.clear();
                 dash.scroll_offset = 0;
@@ -787,6 +874,8 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
     }
     let len = if dash.view == View::Trace {
         dash.trace.len()
+    } else if dash.view == View::EmuDetail {
+        emu_detail_ring(dash).map_or(0, LogRing::len)
     } else {
         dash.logs.len()
     };
@@ -937,50 +1026,52 @@ fn emu_env_count(dash: &Dash) -> usize {
     }
 }
 
+fn selected_emu_status(dash: &Dash) -> Option<&EnvironmentStatus> {
+    match &dash.emu {
+        EmuState::Done(statuses) => statuses.get(dash.emu_cursor),
+        EmuState::Probing | EmuState::Failed(_) => None,
+    }
+}
+
+fn is_running(dash: &Dash, id: &str) -> bool {
+    dash.active_runs.get(id).is_some_and(LogPane::is_live)
+}
+
 fn act_emu(dash: &mut Dash, modified: bool) {
-    if let EmuRun::Active { id, .. } = &dash.emu_run {
-        let id = id.clone();
+    let Some(status) = selected_emu_status(dash) else {
+        return;
+    };
+    let id = status.id.clone();
+    if is_running(dash, &id) {
         fire_emu_down(dash, &id);
         return;
     }
-    let EmuState::Done(statuses) = &dash.emu else {
-        return;
-    };
-    let Some(status) = statuses.get(dash.emu_cursor) else {
-        return;
-    };
     if status.state != ResolveState::Ready {
-        dash.emu_run_log
-            .push(emu_run_line("skip", &format!("{} is not ready", status.id)));
         return;
     }
     let verb = if modified { "check" } else { "up" };
-    launch_emu(dash, verb, status.id.clone());
+    launch_emu(dash, verb, id);
 }
 
 fn launch_emu(dash: &mut Dash, verb: &'static str, id: String) {
+    let mut pane = LogPane::new("run.log");
     match spawn_emu_verb(verb, &id) {
-        Some((child, rx)) => {
-            dash.emu_run_log = LogRing::new();
-            dash.emu_run = EmuRun::Active { id, child, rx };
-        }
-        None => dash.emu_run_log.push(emu_run_line(
+        Some((child, rx)) => pane.attach(child, rx),
+        None => pane.push(emu_run_line(
             "error",
             &format!("could not launch qol emu {verb} {id}"),
         )),
     }
+    dash.active_runs.insert(id, pane);
 }
 
 fn emu_run_line(verb: &str, detail: &str) -> String {
     format!("  {verb:<9}{detail}")
 }
 
-fn push_emu_output(log: &mut LogRing, line: String) {
+fn keep_emu_line(line: &str) -> bool {
     let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with("qol emu") || trimmed.starts_with("hint:") {
-        return;
-    }
-    log.push(line);
+    !(trimmed.is_empty() || trimmed.starts_with("qol emu") || trimmed.starts_with("hint:"))
 }
 
 fn spawn_emu_verb(verb: &str, id: &str) -> Option<(Child, Receiver<String>)> {
@@ -999,59 +1090,134 @@ fn spawn_emu_verb(verb: &str, id: &str) -> Option<(Child, Receiver<String>)> {
 }
 
 fn fire_emu_down(dash: &mut Dash, id: &str) {
-    match spawn_emu_verb("down", id) {
+    let line = match spawn_emu_verb("down", id) {
         Some((mut child, _)) => {
             let _ = child.wait();
-            dash.emu_run_log
-                .push(emu_run_line("down", &format!("sent to {id}")));
+            emu_run_line("down", &format!("sent to {id}"))
         }
-        None => dash.emu_run_log.push(emu_run_line(
-            "error",
-            &format!("could not send down to {id}"),
-        )),
+        None => emu_run_line("error", &format!("could not send down to {id}")),
+    };
+    if let Some(pane) = dash.active_runs.get_mut(id) {
+        pane.push(line);
     }
 }
 
-fn drain_emu_run(dash: &mut Dash) {
-    let EmuRun::Active { child, rx, .. } = &mut dash.emu_run else {
-        return;
-    };
-    while let Ok(line) = rx.try_recv() {
-        push_emu_output(&mut dash.emu_run_log, line);
+fn drain_emu_runs(dash: &mut Dash) {
+    let mut finished = false;
+    for pane in dash.active_runs.values_mut() {
+        if pane.poll_finished(keep_emu_line) {
+            finished = true;
+        }
     }
-    let Ok(Some(status)) = child.try_wait() else {
-        return;
-    };
-    while let Ok(line) = rx.try_recv() {
-        push_emu_output(&mut dash.emu_run_log, line);
+    if finished {
+        dash.pokes.emu = true;
+        dash.pokes.doctor = true;
     }
-    dash.emu_run_log
-        .push(emu_run_line("done", &status.to_string()));
-    dash.emu_run = EmuRun::Idle;
-    dash.pokes.emu = true;
-    dash.pokes.doctor = true;
 }
 
-fn stop_emu_run(dash: &mut Dash) {
-    let EmuRun::Active { id, .. } = &dash.emu_run else {
-        return;
-    };
-    let id = id.clone();
-    fire_emu_down(dash, &id);
-    let EmuRun::Active { child, .. } = &mut dash.emu_run else {
-        return;
-    };
-    let deadline = Instant::now() + STOP_GRACE;
-    while Instant::now() < deadline {
-        if matches!(child.try_wait(), Ok(Some(_))) {
-            dash.emu_run = EmuRun::Idle;
-            return;
+fn stop_emu_runs(dash: &mut Dash) {
+    let live: Vec<String> = dash
+        .active_runs
+        .iter()
+        .filter(|(_, pane)| pane.is_live())
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in live {
+        fire_emu_down(dash, &id);
+        if let Some(pane) = dash.active_runs.get_mut(&id) {
+            pane.stop_graceful();
         }
-        std::thread::sleep(Duration::from_millis(100));
     }
-    let _ = child.kill();
-    let _ = child.wait();
-    dash.emu_run = EmuRun::Idle;
+}
+
+fn open_emu_detail(dash: &mut Dash) {
+    let Some(status) = selected_emu_status(dash).cloned() else {
+        return;
+    };
+    let detail = newest_run_detail(&status.id);
+    let info = emu_info_lines(&status, detail.as_ref());
+    let replay = if dash.active_runs.contains_key(&status.id) {
+        None
+    } else {
+        detail
+            .as_ref()
+            .map(|d| LogPane::replay("run.log", &d.run_log()))
+    };
+    dash.emu_detail = Some(EmuDetail {
+        id: status.id,
+        info,
+        replay,
+    });
+    dash.view = View::EmuDetail;
+    dash.scroll_offset = 0;
+    dash.filter.clear();
+}
+
+fn emu_detail_ring(dash: &Dash) -> Option<&LogRing> {
+    let detail = dash.emu_detail.as_ref()?;
+    if let Some(pane) = dash.active_runs.get(&detail.id) {
+        return Some(&pane.ring);
+    }
+    detail.replay.as_ref().map(|pane| &pane.ring)
+}
+
+fn live_verb(dash: &Dash, id: &str) -> Option<String> {
+    let pane = dash.active_runs.get(id)?;
+    if !pane.is_live() {
+        return None;
+    }
+    let latest = pane.ring.lines.back()?;
+    Some(
+        latest
+            .split_whitespace()
+            .next()
+            .unwrap_or("running")
+            .to_string(),
+    )
+}
+
+fn state_color(state: ResolveState) -> Color {
+    match state {
+        ResolveState::Ready => Color::Green,
+        ResolveState::Missing => Color::Yellow,
+        ResolveState::Unsupported => Color::Red,
+    }
+}
+
+fn emu_info_lines(status: &EnvironmentStatus, detail: Option<&RunDetail>) -> Vec<Line<'static>> {
+    let color = state_color(status.state);
+    let mut head = vec![
+        "● ".fg(color).bold(),
+        status.state.as_str().fg(color).bold(),
+        format!(" · {}", status.backend).fg(Color::DarkGray),
+    ];
+    if let Some(detail) = detail {
+        head.push(format!(" · {}", detail.arch).fg(Color::DarkGray));
+    }
+    head.extend(last_run_spans(status.last_run.as_ref()));
+    let mut lines = vec![Line::from(head)];
+    if status.state != ResolveState::Ready {
+        lines.push(Line::from(vec![
+            "  ".into(),
+            status.reason.clone().fg(Color::DarkGray),
+        ]));
+    }
+    match detail {
+        Some(detail) => {
+            lines.push(info_row("image", &detail.image_path));
+            lines.push(info_row("accel", &detail.acceleration));
+            lines.push(info_row("run dir", &detail.run_dir.display().to_string()));
+        }
+        None => lines.push(Line::from("  no runs yet".fg(Color::DarkGray))),
+    }
+    lines
+}
+
+fn info_row(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        format!("  {label:<8} ").fg(Color::White),
+        value.to_string().fg(Color::DarkGray),
+    ])
 }
 
 fn start_reload(dash: &mut Dash) {
@@ -1159,6 +1325,7 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         View::Doctor => draw_doctor(frame, dash, shell),
         View::Plugins => draw_plugins(frame, dash, shell),
         View::Emu => draw_emu(frame, dash, shell),
+        View::EmuDetail => draw_emu_detail(frame, dash, shell),
         View::Trace => draw_trace(frame, dash, shell),
         View::Endpoints => draw_endpoints(frame, dash, shell),
     }
@@ -1198,11 +1365,11 @@ fn keys_legend(view: View) -> Vec<(&'static str, &'static str)> {
         View::Emu => &[
             ("↑/↓", "select emu"),
             ("enter", "boot · stop"),
-            ("space", "arm: enter checks"),
-            ("pgup/dn", "scroll"),
+            ("→", "detail · log"),
+            ("space", "arm: checks"),
             ("←", "back"),
         ],
-        View::Logs | View::Trace => &[
+        View::Logs | View::Trace | View::EmuDetail => &[
             ("↑/↓", "scroll"),
             ("f / end", "follow tail"),
             ("/", "filter"),
@@ -1347,9 +1514,16 @@ fn status_line(dash: &Dash) -> String {
             };
             format!(" {hints}")
         }
-        View::Emu => match &dash.emu_run {
-            EmuRun::Active { id, .. } => format!(" {id} running · enter stop"),
-            EmuRun::Idle => " enter boots the selected emu".to_string(),
+        View::Emu => match selected_emu_status(dash) {
+            Some(status) if is_running(dash, &status.id) => {
+                format!(" {} running · enter stop · → log", status.id)
+            }
+            _ => " enter boots the selected emu · → detail".to_string(),
+        },
+        View::EmuDetail => match (dash.emu_detail.as_ref(), dash.filter.is_empty()) {
+            (Some(detail), true) => format!(" {}", detail.id),
+            (Some(detail), false) => format!(" {} · filter: {}", detail.id, dash.filter),
+            (None, _) => String::new(),
         },
         View::Logs | View::Trace => {
             if dash.filter.is_empty() {
@@ -1375,7 +1549,7 @@ fn armed_status(dash: &Dash) -> String {
         }
         View::Doctor => " RAW · space friendly · esc done ".to_string(),
         View::Emu => " ARMED · enter check · space/esc cancel ".to_string(),
-        View::Logs | View::Trace | View::Plugins | View::Endpoints => {
+        View::Logs | View::Trace | View::Plugins | View::Endpoints | View::EmuDetail => {
             " ARMED · space/esc cancel ".to_string()
         }
     }
@@ -1732,7 +1906,7 @@ fn plugin_link_line(link: &DevLink) -> Line<'static> {
 
 fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let accent = frame_accent(dash);
-    let mut lines = match &dash.emu {
+    let lines = match &dash.emu {
         EmuState::Probing => vec![Line::from("  scanning emus".fg(Color::Yellow))],
         EmuState::Done(statuses) if statuses.is_empty() => {
             let config = emu_config_path()
@@ -1751,11 +1925,7 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
             .enumerate()
             .flat_map(|(index, status)| {
                 let selected = index == dash.emu_cursor;
-                let color = match status.state {
-                    ResolveState::Ready => Color::Green,
-                    ResolveState::Missing => Color::Yellow,
-                    ResolveState::Unsupported => Color::Red,
-                };
+                let color = state_color(status.state);
                 let caret: Span<'static> = if selected {
                     "▸ ".fg(Color::Green).bold()
                 } else {
@@ -1773,7 +1943,13 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
                     format!("  {}", status.state.as_str()).fg(color).bold(),
                     format!(" · {}", status.backend).fg(Color::DarkGray),
                 ];
-                header.extend(last_run_spans(status.last_run.as_ref()));
+                match live_verb(dash, &status.id) {
+                    Some(verb) => {
+                        header.push(format!(" · {verb}").fg(Color::Yellow).bold());
+                        header.push(" · → log".fg(Color::DarkGray));
+                    }
+                    None => header.extend(last_run_spans(status.last_run.as_ref())),
+                }
                 let mut entry = vec![Line::from(header)];
                 if status.state != ResolveState::Ready {
                     entry.push(Line::from(vec![
@@ -1789,17 +1965,78 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
             error.clone().fg(Color::DarkGray),
         ])],
     };
-    if dash.emu_run_log.len() > 0 {
-        lines.push(Line::from(""));
-        for line in &dash.emu_run_log.lines {
-            lines.push(Line::from(line.clone()));
-        }
-    }
     let total = lines.len();
     let (start, height) = list_window(dash, area, total);
     let visible: Vec<Line> = lines.into_iter().skip(start).take(height).collect();
     let title = format!("emu · {}", list_status(total, dash.scroll_offset));
     view_box(frame, area, &title, visible, accent);
+}
+
+fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+    let accent = frame_accent(dash);
+    let Some((id, info)) = dash
+        .emu_detail
+        .as_ref()
+        .map(|detail| (detail.id.clone(), detail.info.clone()))
+    else {
+        return;
+    };
+    let info_height = (info.len() as u16 + SignBox::CHROME_ROWS).min(area.height);
+    let info_area = Rect {
+        height: info_height,
+        ..area
+    };
+    view_box(frame, info_area, &format!("emu · {id}"), info, accent);
+    let used = info_height.saturating_add(1);
+    if used >= area.height {
+        return;
+    }
+    let log_area = Rect {
+        y: area.y + used,
+        height: area.height - used,
+        ..area
+    };
+    let highlight = copy_highlight(dash);
+    if let Some(pane) = dash.active_runs.get(&id) {
+        draw_stream(
+            frame,
+            log_area,
+            &pane.ring,
+            &dash.filter,
+            &mut dash.scroll_offset,
+            &mut dash.log_height,
+            "run.log",
+            accent,
+            highlight,
+        );
+        return;
+    }
+    match dash
+        .emu_detail
+        .as_ref()
+        .and_then(|detail| detail.replay.as_ref())
+    {
+        Some(pane) => draw_stream(
+            frame,
+            log_area,
+            &pane.ring,
+            &dash.filter,
+            &mut dash.scroll_offset,
+            &mut dash.log_height,
+            "run.log",
+            accent,
+            highlight,
+        ),
+        None => view_box(
+            frame,
+            log_area,
+            "run.log",
+            vec![Line::from(
+                "  no run.log yet · boot to create one".fg(Color::DarkGray),
+            )],
+            accent,
+        ),
+    }
 }
 
 fn last_run_spans(last_run: Option<&LastRun>) -> Vec<Span<'static>> {
@@ -2660,11 +2897,50 @@ mod tests {
         dash.view = View::Emu;
         dash.emu = EmuState::Done(vec![emu_env("foo", ResolveState::Missing)]);
         act_emu(&mut dash, false);
-        assert!(matches!(dash.emu_run, EmuRun::Idle));
-        assert_eq!(
-            dash.emu_run_log.lines.back().map(String::as_str),
-            Some("  skip     foo is not ready")
+        assert!(
+            dash.active_runs.is_empty(),
+            "a not-ready emu does not start a run"
         );
+    }
+
+    fn live_pane(line: &str) -> LogPane {
+        let mut pane = LogPane::new("run.log");
+        let child = Command::new("true").spawn().unwrap();
+        let (_tx, rx) = channel::<String>();
+        pane.attach(child, rx);
+        pane.push(line.to_string());
+        pane
+    }
+
+    #[test]
+    fn diving_into_an_emu_opens_its_detail() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Emu;
+        dash.emu = EmuState::Done(vec![emu_env("foo", ResolveState::Ready)]);
+        apply_action(&mut dash, Action::Dive, false);
+        assert!(
+            matches!(dash.view, View::EmuDetail),
+            "dive opened the detail"
+        );
+        assert_eq!(
+            dash.emu_detail.as_ref().map(|detail| detail.id.as_str()),
+            Some("foo")
+        );
+        apply_action(&mut dash, Action::Back, false);
+        assert!(matches!(dash.view, View::Emu), "back returns to the list");
+        assert!(dash.emu_detail.is_none(), "back clears the detail");
+    }
+
+    #[test]
+    fn list_and_status_reflect_a_live_run() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Emu;
+        dash.emu = EmuState::Done(vec![emu_env("foo", ResolveState::Ready)]);
+        dash.active_runs
+            .insert("foo".to_string(), live_pane("  boot     foo · qmp"));
+        assert!(is_running(&dash, "foo"));
+        assert_eq!(live_verb(&dash, "foo").as_deref(), Some("boot"));
+        assert_eq!(status_line(&dash), " foo running · enter stop · → log");
     }
 
     fn render_text(dash: &mut Dash) -> String {
@@ -2797,14 +3073,17 @@ mod tests {
     }
 
     #[test]
-    fn status_line_tracks_emu_run_state() {
+    fn status_line_prompts_to_boot_when_no_emu_runs() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Emu;
-        assert_eq!(status_line(&dash), " enter boots the selected emu");
+        assert_eq!(
+            status_line(&dash),
+            " enter boots the selected emu · → detail"
+        );
     }
 
     #[test]
-    fn emu_output_filter_drops_noise_lines() {
+    fn keep_emu_line_drops_noise_lines() {
         let cases = [
             ("qol emu up", false),
             ("  hint: use -v/--verbose for detailed output", false),
@@ -2814,9 +3093,7 @@ mod tests {
             ("  verdict  pass · no qol traces survive", true),
         ];
         for (line, kept) in cases {
-            let mut log = LogRing::new();
-            push_emu_output(&mut log, line.to_string());
-            assert_eq!(log.len() == 1, kept, "line: {line:?}");
+            assert_eq!(keep_emu_line(line), kept, "line: {line:?}");
         }
     }
 
