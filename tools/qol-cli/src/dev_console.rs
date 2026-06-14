@@ -135,6 +135,65 @@ fn clamp_offset(len: usize, height: usize, offset: usize) -> usize {
     offset.min(len.saturating_sub(height))
 }
 
+struct OwnedSource {
+    child: Child,
+    rx: Receiver<String>,
+}
+
+struct LogPane {
+    title: &'static str,
+    ring: LogRing,
+    source: Option<OwnedSource>,
+}
+
+impl LogPane {
+    fn new(title: &'static str) -> Self {
+        Self {
+            title,
+            ring: LogRing::new(),
+            source: None,
+        }
+    }
+
+    fn attach(&mut self, child: Child, rx: Receiver<String>) {
+        self.source = Some(OwnedSource { child, rx });
+    }
+
+    fn is_live(&self) -> bool {
+        self.source.is_some()
+    }
+
+    fn push(&mut self, line: String) {
+        self.ring.push(line);
+    }
+
+    fn len(&self) -> usize {
+        self.ring.len()
+    }
+
+    fn drain(&mut self, keep: impl Fn(&str) -> bool) {
+        let Some(source) = self.source.as_ref() else {
+            return;
+        };
+        let mut received = Vec::new();
+        while let Ok(line) = source.rx.try_recv() {
+            received.push(line);
+        }
+        for line in received {
+            if keep(&line) {
+                self.ring.push(line);
+            }
+        }
+    }
+
+    fn stop(&mut self) {
+        if let Some(mut source) = self.source.take() {
+            let _ = source.child.kill();
+            let _ = source.child.wait();
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum View {
     Dashboard,
@@ -308,7 +367,7 @@ enum ReloadOutcome {
 
 struct Dash {
     view: View,
-    logs: LogRing,
+    logs: LogPane,
     scroll_offset: usize,
     health: Health,
     web: Health,
@@ -324,9 +383,7 @@ struct Dash {
     log_height: usize,
     cursor: usize,
     doctor: DoctorPanel,
-    trace: LogRing,
-    trace_child: Option<Child>,
-    trace_rx: Option<Receiver<String>>,
+    trace: LogPane,
     trace_unavailable: bool,
     boot_rx: Option<Receiver<String>>,
     keys_hidden: bool,
@@ -345,7 +402,7 @@ impl Dash {
     fn new(plugin_names: Vec<String>) -> Self {
         Self {
             view: View::Dashboard,
-            logs: LogRing::new(),
+            logs: LogPane::new("logs"),
             scroll_offset: 0,
             health: Health::Checking,
             web: Health::Checking,
@@ -366,9 +423,7 @@ impl Dash {
                 manual: None,
                 error: None,
             },
-            trace: LogRing::new(),
-            trace_child: None,
-            trace_rx: None,
+            trace: LogPane::new("trace"),
             trace_unavailable: false,
             boot_rx: None,
             keys_hidden: false,
@@ -412,7 +467,7 @@ pub(crate) fn run_session(
     ratatui::restore();
     if let Ok(SessionEnd::ChildExited(status)) = &result {
         if !status.success() {
-            print_crash_tail(&dash.logs);
+            print_crash_tail(&dash.logs.ring);
         }
     }
     result
@@ -507,7 +562,7 @@ fn tui_session(
         } else {
             let _ = probes.doctor.latest();
         }
-        drain_trace(dash);
+        dash.trace.drain(|_| true);
         drain_boot(dash);
         drain_emu_run(dash);
         if let ReloadOutcome::Ready = poll_reload(dash) {
@@ -554,18 +609,6 @@ fn tui_session(
                 }
             }
         }
-    }
-}
-
-fn drain_trace(dash: &mut Dash) {
-    let mut received = Vec::new();
-    if let Some(rx) = dash.trace_rx.as_ref() {
-        while let Ok(line) = rx.try_recv() {
-            received.push(line);
-        }
-    }
-    for line in received {
-        dash.trace.push(line);
     }
 }
 
@@ -628,9 +671,9 @@ fn finish_copy(dash: &mut Dash) {
 
 fn newest_lines(dash: &Dash, count: usize) -> String {
     let ring = if dash.view == View::Trace {
-        &dash.trace
+        &dash.trace.ring
     } else {
-        &dash.logs
+        &dash.logs.ring
     };
     let filtered: Vec<&String> = ring
         .lines
@@ -842,13 +885,12 @@ fn apply_health(dash: &mut Dash, snapshot: HealthSnapshot) {
 }
 
 fn start_trace(dash: &mut Dash) {
-    if dash.trace_child.is_some() {
+    if dash.trace.is_live() {
         return;
     }
     match spawn_trace() {
         Some((child, rx)) => {
-            dash.trace_child = Some(child);
-            dash.trace_rx = Some(rx);
+            dash.trace.attach(child, rx);
             dash.trace_unavailable = false;
         }
         None => {
@@ -885,11 +927,7 @@ fn spawn_trace() -> Option<(Child, Receiver<String>)> {
 }
 
 fn stop_trace(dash: &mut Dash) {
-    if let Some(mut child) = dash.trace_child.take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    dash.trace_rx = None;
+    dash.trace.stop();
 }
 
 fn emu_env_count(dash: &Dash) -> usize {
@@ -1855,11 +1893,11 @@ fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     draw_stream(
         frame,
         area,
-        &dash.logs,
+        &dash.logs.ring,
         &dash.filter,
         &mut dash.scroll_offset,
         &mut dash.log_height,
-        "logs",
+        dash.logs.title,
         accent,
         highlight,
     );
@@ -1867,7 +1905,7 @@ fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
 
 fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let accent = frame_accent(dash);
-    if dash.trace.lines.is_empty() && dash.filter.is_empty() {
+    if dash.trace.ring.lines.is_empty() && dash.filter.is_empty() {
         view_box(
             frame,
             area,
@@ -1881,11 +1919,11 @@ fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     draw_stream(
         frame,
         area,
-        &dash.trace,
+        &dash.trace.ring,
         &dash.filter,
         &mut dash.scroll_offset,
         &mut dash.log_height,
-        "trace",
+        dash.trace.title,
         accent,
         highlight,
     );
@@ -1953,7 +1991,7 @@ fn highlight_bar(line: Line<'_>, inner_width: usize) -> Line<'_> {
 }
 
 fn trace_value(dash: &Dash) -> Vec<Span<'static>> {
-    if dash.trace_child.is_some() {
+    if dash.trace.is_live() {
         return vec![format!("{} lines", dash.trace.len()).fg(Color::DarkGray)];
     }
     if dash.trace_unavailable {
