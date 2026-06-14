@@ -24,6 +24,17 @@ pub(super) fn handle_request(request: &str, writer: &mut UnixStream, shared: &Sh
     handle_text_request(request, writer, shared);
 }
 
+pub(super) fn request_is_long_lived(request: &str) -> bool {
+    if !request.starts_with('{') {
+        return false;
+    }
+
+    matches!(
+        serde_json::from_str::<RuntimeRequest>(request),
+        Ok(RuntimeRequest::Subscribe { .. } | RuntimeRequest::Lifeline { .. })
+    )
+}
+
 fn handle_json_request(request: &str, writer: &mut UnixStream, shared: &SharedState) -> bool {
     let Ok(request) = serde_json::from_str::<RuntimeRequest>(request) else {
         return false;
@@ -292,6 +303,39 @@ mod tests {
             response.is_empty(),
             "unknown text payload returns nothing: {response:?}",
         );
+    }
+
+    #[test]
+    fn request_is_long_lived_only_for_held_open_json_commands() {
+        let cases = [
+            ("text get_state", "GET_STATE", false),
+            ("json get_state", r#"{"cmd":"get_state"}"#, false),
+            (
+                "json set_focus",
+                r#"{"cmd":"set_focus","monitor_idx":0}"#,
+                false,
+            ),
+            (
+                "json armed_lifelines",
+                r#"{"cmd":"armed_lifelines"}"#,
+                false,
+            ),
+            (
+                "json subscribe",
+                r#"{"cmd":"subscribe","events":["cursor_moved"]}"#,
+                true,
+            ),
+            (
+                "json lifeline",
+                r#"{"cmd":"lifeline","plugin_id":"plugin-x"}"#,
+                true,
+            ),
+            ("unknown json", r#"{"cmd":"unknown"}"#, false),
+        ];
+
+        for (label, request, expected) in cases {
+            assert_eq!(request_is_long_lived(request), expected, "case: {label}",);
+        }
     }
 
     #[test]
