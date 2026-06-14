@@ -6,6 +6,7 @@ fn frontmost_screen() -> Result<(i32, Rect), String> {
     let pid = ax::frontmost_pid().ok_or("No frontmost application")?;
     #[cfg(debug_assertions)]
     eprintln!("[window-actions:dbg] frontmost pid={pid}");
+    #[cfg(debug_assertions)]
     let is_normal = ax::is_normal_window(pid);
     #[cfg(debug_assertions)]
     eprintln!("[window-actions:dbg] is_normal_window={is_normal}");
