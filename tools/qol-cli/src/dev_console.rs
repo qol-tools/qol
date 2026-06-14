@@ -1459,8 +1459,38 @@ impl SignBox<'_> {
     }
 }
 
+const ITEM_GAP: u16 = 1;
+
+fn space_rows(rows: Vec<Line>, gap: u16) -> Vec<Line> {
+    if gap == 0 || rows.len() <= 1 {
+        return rows;
+    }
+    let last = rows.len() - 1;
+    let mut spaced = Vec::with_capacity(rows.len() + last * gap as usize);
+    for (index, row) in rows.into_iter().enumerate() {
+        spaced.push(row);
+        if index != last {
+            spaced.extend((0..gap).map(|_| Line::from("")));
+        }
+    }
+    spaced
+}
+
+fn spaced_height(items: usize, gap: u16) -> u16 {
+    items as u16 + items.saturating_sub(1) as u16 * gap
+}
+
+fn list_capacity(height: u16) -> usize {
+    let rows = SignBox::capacity(height);
+    (rows + ITEM_GAP as usize) / (1 + ITEM_GAP as usize)
+}
+
 fn view_box(frame: &mut Frame, shell: Rect, title: &str, lines: Vec<Line>, accent: Color) {
-    SignBox { title, rows: lines }.render(frame, shell, accent);
+    SignBox {
+        title,
+        rows: space_rows(lines, ITEM_GAP),
+    }
+    .render(frame, shell, accent);
 }
 
 fn status_line(dash: &Dash) -> String {
@@ -1967,7 +1997,7 @@ fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     else {
         return;
     };
-    let info_height = (info.len() as u16 + SignBox::CHROME_ROWS).min(area.height);
+    let info_height = (spaced_height(info.len(), ITEM_GAP) + SignBox::CHROME_ROWS).min(area.height);
     let info_area = Rect {
         height: info_height,
         ..area
@@ -2284,7 +2314,7 @@ fn doctor_view_lines(panel: &DoctorPanel) -> Vec<String> {
 }
 
 fn list_window(dash: &mut Dash, area: Rect, total: usize) -> (usize, usize) {
-    let height = SignBox::capacity(area.height);
+    let height = list_capacity(area.height);
     dash.log_height = height;
     dash.scroll_offset = clamp_offset(total, height, dash.scroll_offset);
     (window_start(total, height, dash.scroll_offset), height)
