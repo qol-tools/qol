@@ -7,6 +7,8 @@ use crate::discovery;
 use crate::frecency::{self, FrequencyData};
 
 use super::search::{self, FrecencyConfig, Fuzziness, ResultItem, Scored, SearchMode};
+#[cfg(debug_assertions)]
+use super::trace::{self, FilterSample};
 
 const HALF_LIFE_DAYS: f64 = 7.0;
 const FREQUENCY_BONUS: i32 = 500;
@@ -59,6 +61,8 @@ impl EntryStore {
         if self.cache_key.as_ref() == Some(&key) {
             return;
         }
+        #[cfg(debug_assertions)]
+        let started = std::time::Instant::now();
 
         if let Some(prev_key) = self.cache_key.take() {
             let prev_results = std::mem::take(&mut self.cache);
@@ -70,8 +74,22 @@ impl EntryStore {
 
         if let Some(idx) = self.filter_history.iter().position(|(k, _)| k == &key) {
             let (_, results) = self.filter_history.remove(idx);
+            #[cfg(debug_assertions)]
+            let result_count = results.len();
             self.cache = results;
             self.cache_key = Some(key);
+            #[cfg(debug_assertions)]
+            trace::filter(FilterSample {
+                path: "history_cache",
+                query,
+                mode,
+                fuzziness,
+                app_count: self.app_entries.len(),
+                file_count: self.file_entries.len(),
+                candidate_count: result_count,
+                result_count,
+                elapsed_us: started.elapsed().as_micros(),
+            });
             return;
         }
 
@@ -80,6 +98,24 @@ impl EntryStore {
             .last()
             .map(|(prev, _)| Self::can_incremental_filter(prev, &key))
             .unwrap_or(false);
+        #[cfg(debug_assertions)]
+        let (path, candidate_count) = if incremental {
+            (
+                "incremental",
+                self.filter_history
+                    .last()
+                    .map(|(_, results)| results.len())
+                    .unwrap_or(0),
+            )
+        } else {
+            (
+                "full",
+                match mode {
+                    SearchMode::Apps => self.app_entries.len(),
+                    SearchMode::Files => self.file_entries.len(),
+                },
+            )
+        };
 
         self.cache = if incremental {
             let frecency = self.frecency_config();
@@ -96,6 +132,18 @@ impl EntryStore {
             self.filtered_full(query, mode, fuzziness)
         };
         self.cache_key = Some(key);
+        #[cfg(debug_assertions)]
+        trace::filter(FilterSample {
+            path,
+            query,
+            mode,
+            fuzziness,
+            app_count: self.app_entries.len(),
+            file_count: self.file_entries.len(),
+            candidate_count,
+            result_count: self.cache.len(),
+            elapsed_us: started.elapsed().as_micros(),
+        });
     }
 
     pub fn results(&self) -> &[Scored] {
