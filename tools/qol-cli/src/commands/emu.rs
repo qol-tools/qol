@@ -1,4 +1,4 @@
-use crate::progress::{print_hint, print_title, step_label, StepKind};
+use crate::progress::{begin_run_log, print_hint, print_title, step_label, StepKind};
 use crate::workspace::repo_root;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::json;
@@ -403,6 +403,7 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
         .join(format!("{}-{started_at}", environment.id));
     fs::create_dir_all(&run_dir)
         .with_context(|| format!("failed to create {}", run_dir.display()))?;
+    begin_run_log(&run_dir.join("run.log"));
 
     step_label(
         "resolve",
