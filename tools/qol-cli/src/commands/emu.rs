@@ -150,6 +150,63 @@ fn last_runs_by_id() -> HashMap<String, LastRun> {
     latest
 }
 
+pub(crate) struct RunDetail {
+    pub(crate) run_dir: PathBuf,
+    pub(crate) arch: String,
+    pub(crate) image_path: String,
+    pub(crate) acceleration: String,
+}
+
+impl RunDetail {
+    pub(crate) fn run_log(&self) -> PathBuf {
+        self.run_dir.join("run.log")
+    }
+}
+
+pub(crate) fn newest_run_detail(id: &str) -> Option<RunDetail> {
+    let root = repo_root().ok()?;
+    let entries = fs::read_dir(root.join("target/qol-emu")).ok()?;
+    let mut best: Option<(u64, RunDetail)> = None;
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        let Ok(content) = fs::read_to_string(dir.join("report.json")) else {
+            continue;
+        };
+        let Ok(report) = serde_json::from_str::<serde_json::Value>(&content) else {
+            continue;
+        };
+        if report_str(&report, &["environment", "id"]) != Some(id.to_string()) {
+            continue;
+        }
+        let finished = report
+            .get("finished_at_unix_ms")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        if best.as_ref().is_some_and(|(newest, _)| *newest >= finished) {
+            continue;
+        }
+        best = Some((
+            finished,
+            RunDetail {
+                run_dir: dir,
+                arch: report_str(&report, &["environment", "arch"]).unwrap_or_default(),
+                image_path: report_str(&report, &["environment", "image_path"]).unwrap_or_default(),
+                acceleration: report_str(&report, &["resolution", "acceleration"])
+                    .unwrap_or_default(),
+            },
+        ));
+    }
+    best.map(|(_, detail)| detail)
+}
+
+fn report_str(report: &serde_json::Value, path: &[&str]) -> Option<String> {
+    let mut node = report;
+    for key in path {
+        node = node.get(key)?;
+    }
+    node.as_str().map(str::to_string)
+}
+
 fn last_run_from_report(report: &serde_json::Value) -> Option<(String, LastRun)> {
     let id = report.get("environment")?.get("id")?.as_str()?.to_string();
     let status = report.get("status")?.as_str()?.to_string();
