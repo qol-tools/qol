@@ -59,14 +59,55 @@ impl SharedState {
         let _ = self.platform.set(facade);
     }
 
-    /// Forces an inline AX focus query against the OS, bypassing the poll
-    /// loop's adaptive interval. Used by GET_STATE so callers (popup placement,
-    /// alt-tab) see the OS focus at request time, not the last poll tick.
-    /// No-op when no facade is attached (test builds).
-    pub(crate) fn refresh_focus_synchronously(&self) {
+    /// Forces inline desktop queries against the OS, bypassing the poll loop's
+    /// adaptive interval. Used by GET_STATE and subscription replay so callers
+    /// see request-time state even when no poll-driven subscriber is active.
+    pub(crate) fn refresh_snapshot_synchronously(&self) {
         let Some(facade) = self.platform.get() else {
             return;
         };
+        self.refresh_monitors_synchronously(facade);
+        self.refresh_cursor_synchronously(facade);
+        self.refresh_focus_synchronously(facade);
+    }
+
+    fn refresh_monitors_synchronously(&self, facade: &SharedPlatform) {
+        let fresh = facade.physical_monitors();
+        if fresh.is_empty() {
+            return;
+        }
+        let mut monitors = lock_or_recover(&self.monitors);
+        if *monitors == fresh {
+            return;
+        }
+        *monitors = fresh;
+    }
+
+    fn refresh_cursor_synchronously(&self, facade: &SharedPlatform) {
+        let fresh = facade.cursor_position();
+        self.set_cursor_pos(fresh);
+        let Some((x, y)) = fresh else {
+            return;
+        };
+        let monitors = self.monitors();
+        let Some(fresh_monitor) = state::monitor_for_point(&monitors, x, y) else {
+            return;
+        };
+        let mut input = lock_or_recover(&self.input);
+        if input
+            .cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.monitor == fresh_monitor)
+        {
+            return;
+        }
+        input.cursor = Some(Stamped {
+            monitor: fresh_monitor,
+            at: Instant::now(),
+        });
+    }
+
+    fn refresh_focus_synchronously(&self, facade: &SharedPlatform) {
         if !facade.poll_focused_window() {
             return;
         }
@@ -111,6 +152,10 @@ impl SharedState {
 
     pub(super) fn has_subscribers(&self) -> bool {
         subscribers::has_subscribers(&self.subscribers)
+    }
+
+    pub(super) fn has_poll_subscribers(&self) -> bool {
+        subscribers::has_poll_subscribers(&self.subscribers)
     }
 
     pub(super) fn input(&self) -> InputState {

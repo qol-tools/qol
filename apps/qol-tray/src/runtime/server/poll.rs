@@ -167,6 +167,9 @@ impl PollRuntime {
     }
 
     fn tick(&mut self) -> Duration {
+        if !self.shared.has_poll_subscribers() {
+            return self.poller.tick(false);
+        }
         let mon_list = self.shared.monitors();
         let monitors_changed = self.refresh_monitors();
         let (input_changed, cursor_moved) = self.poll_inputs(&mon_list);
@@ -193,17 +196,31 @@ mod tests {
     use proptest::prelude::*;
     use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
     use std::collections::HashSet;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
 
     type CursorPos = Option<(f32, f32)>;
     type FocusBounds = Option<MonitorBounds>;
     type Monitors = Vec<MonitorBounds>;
 
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    struct PlatformCallCounts {
+        cursor: usize,
+        focus: usize,
+        monitors: usize,
+    }
+
     struct ScriptedPlatform {
         cursor: Mutex<Vec<CursorPos>>,
         focus: Mutex<Vec<FocusBounds>>,
         monitors: Mutex<Vec<Monitors>>,
+        cursor_calls: AtomicUsize,
+        focus_calls: AtomicUsize,
+        monitor_calls: AtomicUsize,
         poll_focus: bool,
+        call_delay: Duration,
     }
 
     impl ScriptedPlatform {
@@ -212,17 +229,48 @@ mod tests {
             focus: Vec<FocusBounds>,
             monitors: Vec<Monitors>,
         ) -> Arc<Self> {
+            Self::with_delay(cursor, focus, monitors, Duration::ZERO)
+        }
+
+        fn with_delay(
+            cursor: Vec<CursorPos>,
+            focus: Vec<FocusBounds>,
+            monitors: Vec<Monitors>,
+            call_delay: Duration,
+        ) -> Arc<Self> {
             Arc::new(Self {
                 cursor: Mutex::new(cursor),
                 focus: Mutex::new(focus),
                 monitors: Mutex::new(monitors),
+                cursor_calls: AtomicUsize::new(0),
+                focus_calls: AtomicUsize::new(0),
+                monitor_calls: AtomicUsize::new(0),
                 poll_focus: true,
+                call_delay,
             })
+        }
+
+        fn call_counts(&self) -> PlatformCallCounts {
+            PlatformCallCounts {
+                cursor: self.cursor_calls.load(Ordering::Relaxed),
+                focus: self.focus_calls.load(Ordering::Relaxed),
+                monitors: self.monitor_calls.load(Ordering::Relaxed),
+            }
+        }
+
+        fn delay_call(&self) {
+            if self.call_delay.is_zero() {
+                return;
+            }
+
+            std::thread::sleep(self.call_delay);
         }
     }
 
     impl Platform for ScriptedPlatform {
         fn cursor_position(&self) -> Option<(f32, f32)> {
+            self.cursor_calls.fetch_add(1, Ordering::Relaxed);
+            self.delay_call();
             let mut q = self.cursor.lock().unwrap();
             if q.is_empty() {
                 return None;
@@ -230,6 +278,8 @@ mod tests {
             q.remove(0)
         }
         fn focused_window_bounds(&self) -> Option<MonitorBounds> {
+            self.focus_calls.fetch_add(1, Ordering::Relaxed);
+            self.delay_call();
             let mut q = self.focus.lock().unwrap();
             if q.is_empty() {
                 return None;
@@ -237,6 +287,7 @@ mod tests {
             q.remove(0)
         }
         fn physical_monitors(&self) -> Vec<MonitorBounds> {
+            self.monitor_calls.fetch_add(1, Ordering::Relaxed);
             let mut q = self.monitors.lock().unwrap();
             if q.is_empty() {
                 return Vec::new();
@@ -263,23 +314,56 @@ mod tests {
         monitor_seq: Vec<Monitors>,
         initial_monitors: Monitors,
     ) -> (Arc<SharedState>, PollRuntime) {
-        let platform = ScriptedPlatform::new(cursor_seq, focus_seq, monitor_seq);
-        let channels = RuntimeChannels::new(platform);
-        let shared = Arc::new(SharedState::new(initial_monitors));
-        let runtime = PollRuntime::new(Arc::clone(&shared), channels);
+        let (shared, runtime, _platform) =
+            build_runtime_with_platform(cursor_seq, focus_seq, monitor_seq, initial_monitors);
         (shared, runtime)
     }
 
+    fn build_runtime_with_platform(
+        cursor_seq: Vec<CursorPos>,
+        focus_seq: Vec<FocusBounds>,
+        monitor_seq: Vec<Monitors>,
+        initial_monitors: Monitors,
+    ) -> (Arc<SharedState>, PollRuntime, Arc<ScriptedPlatform>) {
+        let platform = ScriptedPlatform::new(cursor_seq, focus_seq, monitor_seq);
+        let channels = RuntimeChannels::new(platform.clone());
+        let shared = Arc::new(SharedState::new(initial_monitors));
+        let runtime = PollRuntime::new(Arc::clone(&shared), channels);
+        (shared, runtime, platform)
+    }
+
+    fn build_runtime_with_delayed_platform(
+        cursor_seq: Vec<CursorPos>,
+        focus_seq: Vec<FocusBounds>,
+        monitor_seq: Vec<Monitors>,
+        initial_monitors: Monitors,
+        call_delay: Duration,
+    ) -> (Arc<SharedState>, PollRuntime, Arc<ScriptedPlatform>) {
+        let platform = ScriptedPlatform::with_delay(cursor_seq, focus_seq, monitor_seq, call_delay);
+        let channels = RuntimeChannels::new(platform.clone());
+        let shared = Arc::new(SharedState::new(initial_monitors));
+        let runtime = PollRuntime::new(Arc::clone(&shared), channels);
+        (shared, runtime, platform)
+    }
+
     fn subscribe_all(shared: &SharedState) -> std::sync::mpsc::Receiver<RuntimeEvent> {
+        subscribe_to(
+            shared,
+            &[
+                RuntimeEventKind::ActiveMonitorChanged,
+                RuntimeEventKind::CursorMoved,
+                RuntimeEventKind::FocusChanged,
+                RuntimeEventKind::MonitorsChanged,
+            ],
+        )
+    }
+
+    fn subscribe_to(
+        shared: &SharedState,
+        kinds: &[RuntimeEventKind],
+    ) -> std::sync::mpsc::Receiver<RuntimeEvent> {
         let (tx, rx) = std::sync::mpsc::channel();
-        let interests: HashSet<RuntimeEventKind> = [
-            RuntimeEventKind::ActiveMonitorChanged,
-            RuntimeEventKind::CursorMoved,
-            RuntimeEventKind::FocusChanged,
-            RuntimeEventKind::MonitorsChanged,
-        ]
-        .into_iter()
-        .collect();
+        let interests: HashSet<RuntimeEventKind> = kinds.iter().copied().collect();
         shared.add_subscriber("test-plugin".to_string(), interests, tx);
         rx
     }
@@ -632,12 +716,13 @@ mod tests {
     #[test]
     fn tick_returns_poll_interval_and_advances_poller_state() {
         let monitors = vec![mon(0.0)];
-        let (_shared, mut runtime) = build_runtime(
+        let (shared, mut runtime) = build_runtime(
             vec![Some((50.0, 50.0)), Some((50.0, 50.0))],
             vec![None, None],
             vec![monitors.clone()],
             monitors.clone(),
         );
+        let _rx = subscribe_all(&shared);
         let initial = runtime.poller.current();
         let returned = runtime.tick();
         assert_eq!(
@@ -654,6 +739,94 @@ mod tests {
             "must remain bounded below",
         );
         assert!(returned <= initial, "first tick after change halves");
+    }
+
+    #[test]
+    fn tick_skips_input_polling_without_poll_driven_subscribers() {
+        let monitors = vec![mon(0.0)];
+        let focus_bounds = MonitorBounds {
+            x: 10.0,
+            y: 10.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let (shared, mut runtime, platform) = build_runtime_with_platform(
+            vec![Some((50.0, 50.0))],
+            vec![Some(focus_bounds)],
+            vec![monitors.clone()],
+            monitors,
+        );
+        let _rx = subscribe_to(&shared, &[RuntimeEventKind::LauncherAppsSynced]);
+        let before = platform.call_counts();
+
+        let returned = runtime.tick();
+        let after = platform.call_counts();
+
+        assert_eq!(returned, Duration::from_millis(POLL_MAX_MS));
+        assert_eq!(
+            after, before,
+            "non-poll subscribers must not trigger cursor/focus/monitor platform calls",
+        );
+        assert_eq!(shared.cursor_pos(), None, "cursor platform was not polled");
+        assert_eq!(
+            shared.focused_window(),
+            None,
+            "focus platform was not polled",
+        );
+        assert!(
+            shared.input().cursor.is_none(),
+            "input cursor must not be stamped by non-poll subscribers",
+        );
+    }
+
+    #[test]
+    fn tick_polls_inputs_for_poll_driven_subscribers() {
+        let monitors = vec![mon(0.0)];
+        let (shared, mut runtime, platform) = build_runtime_with_platform(
+            vec![Some((50.0, 50.0))],
+            vec![None],
+            vec![monitors.clone()],
+            monitors,
+        );
+        let _rx = subscribe_to(&shared, &[RuntimeEventKind::CursorMoved]);
+        let before = platform.call_counts();
+
+        let _ = runtime.tick();
+        let after = platform.call_counts();
+
+        assert_eq!(after.cursor, before.cursor + 1);
+        assert_eq!(after.focus, before.focus + 1);
+        assert_eq!(shared.cursor_pos(), Some((50.0, 50.0)));
+        assert!(shared.input().cursor.is_some());
+    }
+
+    #[test]
+    fn tick_polls_on_next_tick_after_poll_subscriber_arrives_at_max_backoff() {
+        let monitors = vec![mon(0.0)];
+        let (shared, mut runtime, platform) = build_runtime_with_platform(
+            vec![Some((50.0, 50.0))],
+            vec![None],
+            vec![monitors.clone()],
+            monitors,
+        );
+        let _launcher_rx = subscribe_to(&shared, &[RuntimeEventKind::LauncherAppsSynced]);
+
+        for _ in 0..4 {
+            let _ = runtime.tick();
+        }
+
+        assert_eq!(runtime.poller.current(), Duration::from_millis(POLL_MAX_MS));
+        assert_eq!(
+            platform.call_counts().cursor,
+            0,
+            "launcher-only ticks must not consume the pending cursor sample",
+        );
+
+        let _cursor_rx = subscribe_to(&shared, &[RuntimeEventKind::CursorMoved]);
+        let _ = runtime.tick();
+
+        assert_eq!(platform.call_counts().cursor, 1);
+        assert_eq!(shared.cursor_pos(), Some((50.0, 50.0)));
     }
 
     #[test]
@@ -679,12 +852,13 @@ mod tests {
     #[test]
     fn tick_unchanged_doubles_poller_interval_until_max() {
         let monitors = vec![mon(0.0)];
-        let (_shared, mut runtime) = build_runtime(
+        let (shared, mut runtime) = build_runtime(
             std::iter::repeat_n(None, 16).collect(),
             std::iter::repeat_n(None, 16).collect(),
             vec![monitors.clone()],
             monitors.clone(),
         );
+        let _rx = subscribe_all(&shared);
         for _ in 0..8 {
             runtime.tick();
         }
@@ -693,6 +867,72 @@ mod tests {
             Duration::from_millis(POLL_MAX_MS),
             "no input change ⇒ poller climbs to MAX",
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_tick_poll_subscriber_gate_with_slow_platform() {
+        const ITERATIONS: u32 = 32;
+        const PLATFORM_CALL_DELAY: Duration = Duration::from_millis(1);
+
+        let launcher_only = run_tick_gate_bench(
+            &[RuntimeEventKind::LauncherAppsSynced],
+            ITERATIONS,
+            PLATFORM_CALL_DELAY,
+        );
+        let poll_driven = run_tick_gate_bench(
+            &[RuntimeEventKind::CursorMoved],
+            ITERATIONS,
+            PLATFORM_CALL_DELAY,
+        );
+
+        println!(
+            "mode=launcher_only iterations={ITERATIONS} elapsed_ns={} cursor_calls={} focus_calls={} monitor_calls={}",
+            launcher_only.0.as_nanos(),
+            launcher_only.1.cursor,
+            launcher_only.1.focus,
+            launcher_only.1.monitors,
+        );
+        println!(
+            "mode=poll_driven iterations={ITERATIONS} elapsed_ns={} cursor_calls={} focus_calls={} monitor_calls={}",
+            poll_driven.0.as_nanos(),
+            poll_driven.1.cursor,
+            poll_driven.1.focus,
+            poll_driven.1.monitors,
+        );
+    }
+
+    fn run_tick_gate_bench(
+        interests: &[RuntimeEventKind],
+        iterations: u32,
+        call_delay: Duration,
+    ) -> (Duration, PlatformCallCounts) {
+        let monitors = vec![mon(0.0), mon(2000.0)];
+        let cursor_seq = std::iter::repeat_n(Some((50.0, 50.0)), iterations as usize).collect();
+        let focus_seq = std::iter::repeat_n(None, iterations as usize).collect();
+        let (shared, mut runtime, platform) = build_runtime_with_delayed_platform(
+            cursor_seq,
+            focus_seq,
+            vec![monitors.clone()],
+            monitors,
+            call_delay,
+        );
+        let _rx = subscribe_to(&shared, interests);
+        let before = platform.call_counts();
+        let started = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(runtime.tick());
+        }
+        let elapsed = started.elapsed();
+        let after = platform.call_counts();
+        (
+            elapsed,
+            PlatformCallCounts {
+                cursor: after.cursor - before.cursor,
+                focus: after.focus - before.focus,
+                monitors: after.monitors - before.monitors,
+            },
+        )
     }
 
     type RefreshCase = (
@@ -794,12 +1034,13 @@ mod tests {
             let monitors = vec![mon(0.0)];
             let n = cursor_seq.len();
             let focus_seq = vec![None; n];
-            let (_shared, mut runtime) = build_runtime(
+            let (shared, mut runtime) = build_runtime(
                 cursor_seq,
                 focus_seq,
                 vec![monitors.clone()],
                 monitors.clone(),
             );
+            let _rx = subscribe_all(&shared);
             for _ in 0..n {
                 let returned = runtime.tick();
                 prop_assert!(returned >= Duration::from_millis(POLL_MIN_MS));
