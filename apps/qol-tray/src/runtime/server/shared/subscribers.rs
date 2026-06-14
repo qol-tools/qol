@@ -29,6 +29,12 @@ pub(super) fn has_subscribers(subscribers: &Mutex<Vec<SubscriberEntry>>) -> bool
     !lock_or_recover(subscribers).is_empty()
 }
 
+pub(super) fn has_poll_subscribers(subscribers: &Mutex<Vec<SubscriberEntry>>) -> bool {
+    lock_or_recover(subscribers)
+        .iter()
+        .any(|entry| entry.interests.iter().any(is_poll_event_kind))
+}
+
 pub(super) fn publish(
     subscribers: &Mutex<Vec<SubscriberEntry>>,
     events: &[RuntimeEvent],
@@ -105,6 +111,16 @@ fn event_kind(event: &RuntimeEvent) -> RuntimeEventKind {
     }
 }
 
+fn is_poll_event_kind(kind: &RuntimeEventKind) -> bool {
+    matches!(
+        kind,
+        RuntimeEventKind::ActiveMonitorChanged
+            | RuntimeEventKind::CursorMoved
+            | RuntimeEventKind::FocusChanged
+            | RuntimeEventKind::MonitorsChanged
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +186,19 @@ mod tests {
         kinds.iter().copied().collect()
     }
 
+    fn subscriber(
+        plugin_id: &str,
+        kinds: &[RuntimeEventKind],
+    ) -> (
+        Mutex<Vec<SubscriberEntry>>,
+        std_mpsc::Receiver<RuntimeEvent>,
+    ) {
+        let subscribers = Mutex::new(Vec::new());
+        let (tx, rx) = std_mpsc::channel();
+        push(&subscribers, plugin_id.to_string(), interests(kinds), tx);
+        (subscribers, rx)
+    }
+
     #[test]
     fn event_kind_maps_every_variant_exhaustively() {
         let cases = [
@@ -200,6 +229,59 @@ mod tests {
             tx,
         );
         assert!(has_subscribers(&subs));
+    }
+
+    #[test]
+    fn has_poll_subscribers_matches_only_poll_driven_events() {
+        let cases: &[(&str, &[RuntimeEventKind], bool)] = &[
+            (
+                "active monitor is poll-driven",
+                &[RuntimeEventKind::ActiveMonitorChanged],
+                true,
+            ),
+            (
+                "cursor is poll-driven",
+                &[RuntimeEventKind::CursorMoved],
+                true,
+            ),
+            (
+                "focus is poll-driven",
+                &[RuntimeEventKind::FocusChanged],
+                true,
+            ),
+            (
+                "monitors are poll-driven",
+                &[RuntimeEventKind::MonitorsChanged],
+                true,
+            ),
+            (
+                "launcher sync is externally published",
+                &[RuntimeEventKind::LauncherAppsSynced],
+                false,
+            ),
+            (
+                "window list has its own thread",
+                &[RuntimeEventKind::WindowListChanged],
+                false,
+            ),
+            (
+                "mixed interests need polling",
+                &[
+                    RuntimeEventKind::LauncherAppsSynced,
+                    RuntimeEventKind::FocusChanged,
+                ],
+                true,
+            ),
+        ];
+
+        for (label, kinds, expected) in cases {
+            let (subscribers, _rx) = subscriber("test-plugin", kinds);
+            assert_eq!(
+                has_poll_subscribers(&subscribers),
+                *expected,
+                "case: {label}",
+            );
+        }
     }
 
     #[test]

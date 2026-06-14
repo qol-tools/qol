@@ -4,11 +4,12 @@ use super::SharedState;
 use crate::runtime::state::{self, InputState};
 
 pub(super) fn build_state(shared: &SharedState) -> PlatformState {
-    shared.refresh_focus_synchronously();
+    shared.refresh_snapshot_synchronously();
     let monitors = shared.monitors();
-    let cursor = shared.cursor_pos().map(|(x, y)| CursorPos { x, y });
+    let cursor_pos = shared.cursor_pos();
+    let cursor = cursor_pos.map(|(x, y)| CursorPos { x, y });
     let input = shared.input();
-    let cursor_monitor_idx = cursor_monitor_idx(&input, &monitors);
+    let cursor_monitor_idx = cursor_monitor_idx(cursor_pos, &monitors);
     let focus_monitor_idx = focus_monitor_idx(&input, &monitors);
     let active_monitor_idx = active_monitor_idx(&input, &monitors);
     log::debug!(
@@ -27,9 +28,10 @@ pub(super) fn build_state(shared: &SharedState) -> PlatformState {
     }
 }
 
-fn cursor_monitor_idx(input: &InputState, monitors: &[MonitorBounds]) -> Option<usize> {
-    let cursor = input.cursor.as_ref()?;
-    monitor_idx(monitors, cursor.monitor)
+fn cursor_monitor_idx(cursor_pos: Option<(f32, f32)>, monitors: &[MonitorBounds]) -> Option<usize> {
+    let (x, y) = cursor_pos?;
+    let monitor = state::monitor_for_point(monitors, x, y)?;
+    monitor_idx(monitors, monitor)
 }
 
 fn focus_monitor_idx(input: &InputState, monitors: &[MonitorBounds]) -> Option<usize> {
@@ -58,8 +60,30 @@ fn focused_window(shared: &SharedState) -> Option<WindowBounds> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::desktop_state::Platform;
     use crate::runtime::state::Stamped;
+    use std::sync::Arc;
     use std::time::Instant;
+
+    struct SnapshotPlatform {
+        cursor: Option<(f32, f32)>,
+        focus: Option<MonitorBounds>,
+        monitors: Vec<MonitorBounds>,
+    }
+
+    impl Platform for SnapshotPlatform {
+        fn cursor_position(&self) -> Option<(f32, f32)> {
+            self.cursor
+        }
+
+        fn focused_window_bounds(&self) -> Option<MonitorBounds> {
+            self.focus
+        }
+
+        fn physical_monitors(&self) -> Vec<MonitorBounds> {
+            self.monitors.clone()
+        }
+    }
 
     fn mon(x: f32) -> MonitorBounds {
         MonitorBounds {
@@ -112,6 +136,51 @@ mod tests {
             "newer focus stamp wins active",
         );
         assert_eq!(state.cursor.map(|c| (c.x, c.y)), Some((10.0, 10.0)));
+    }
+
+    #[test]
+    fn build_state_resolves_cursor_monitor_from_cursor_position() {
+        let monitors = vec![mon(0.0), mon(2000.0)];
+        let shared = SharedState::new(monitors);
+        shared.set_cursor_pos(Some((2010.0, 10.0)));
+
+        let state = build_state(&shared);
+
+        assert_eq!(state.cursor_monitor_idx, Some(1));
+        assert_eq!(
+            state.active_monitor_idx,
+            Some(0),
+            "active still falls back to first monitor without an input stamp",
+        );
+    }
+
+    #[test]
+    fn build_state_refreshes_attached_platform_snapshot() {
+        let initial_monitors = vec![mon(0.0)];
+        let fresh_monitors = vec![mon(0.0), mon(2000.0)];
+        let focus = MonitorBounds {
+            x: 2010.0,
+            y: 10.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let shared = SharedState::new(initial_monitors);
+        shared.attach_platform(Arc::new(SnapshotPlatform {
+            cursor: Some((2010.0, 10.0)),
+            focus: Some(focus),
+            monitors: fresh_monitors.clone(),
+        }));
+
+        let state = build_state(&shared);
+
+        assert_eq!(state.monitors, fresh_monitors);
+        assert_eq!(
+            state.cursor.map(|cursor| (cursor.x, cursor.y)),
+            Some((2010.0, 10.0))
+        );
+        assert_eq!(state.cursor_monitor_idx, Some(1));
+        assert_eq!(state.focus_monitor_idx, Some(1));
+        assert_eq!(state.active_monitor_idx, Some(1));
     }
 
     #[test]

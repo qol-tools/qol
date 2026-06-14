@@ -109,6 +109,7 @@ fn replay_active_monitor(
     if !events.contains(&RuntimeEventKind::ActiveMonitorChanged) {
         return None;
     }
+    shared.refresh_snapshot_synchronously();
     let monitors = shared.monitors();
     let input = shared.input();
     let active =
