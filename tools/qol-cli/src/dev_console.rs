@@ -1315,20 +1315,28 @@ fn open_doctor(dash: &mut Dash) {
 fn draw(frame: &mut Frame, dash: &mut Dash) {
     let [main, footer] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
-    let shell = Shell {
-        title: shell_label(dash),
+    let accent = frame_accent(dash);
+    let [_, body] =
+        Layout::vertical([Constraint::Length(TITLE_CAP), Constraint::Min(0)]).areas(main);
+    let block = Block::bordered()
+        .border_style(Style::new().fg(accent))
+        .padding(PANEL_PADDING);
+    let inner = block.inner(body);
+    frame.render_widget(block, body);
+    let leaf = match dash.view {
+        View::Dashboard => draw_dashboard(frame, dash, inner),
+        View::Logs => draw_logs(frame, dash, inner),
+        View::Doctor => draw_doctor(frame, dash, inner),
+        View::Plugins => draw_plugins(frame, dash, inner),
+        View::Emu => draw_emu(frame, dash, inner),
+        View::EmuDetail => draw_emu_detail(frame, dash, inner),
+        View::Trace => draw_trace(frame, dash, inner),
+        View::Endpoints => draw_endpoints(frame, dash, inner),
+    };
+    Sign {
+        content: breadcrumb(leaf, dash, accent),
     }
-    .render(frame, main, frame_accent(dash));
-    match dash.view {
-        View::Dashboard => draw_dashboard(frame, dash, shell),
-        View::Logs => draw_logs(frame, dash, shell),
-        View::Doctor => draw_doctor(frame, dash, shell),
-        View::Plugins => draw_plugins(frame, dash, shell),
-        View::Emu => draw_emu(frame, dash, shell),
-        View::EmuDetail => draw_emu_detail(frame, dash, shell),
-        View::Trace => draw_trace(frame, dash, shell),
-        View::Endpoints => draw_endpoints(frame, dash, shell),
-    }
+    .render(frame, body, accent);
     let status_style = if dash.is_reloading() {
         Style::new().fg(Color::Red).bold()
     } else if dash.armed || dash.filtering || dash.copying {
@@ -1340,17 +1348,23 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         Paragraph::new(status_line(dash)).style(status_style),
         footer,
     );
-    draw_keys_hud(frame, dash, shell);
+    draw_keys_hud(frame, dash, inner);
 }
 
-fn shell_label(dash: &Dash) -> &'static str {
-    if dash.is_reloading() {
-        "qol dev · RELOADING"
-    } else if dash.armed {
-        "qol dev · ARMED"
+fn breadcrumb(leaf: Vec<Span<'static>>, dash: &Dash, accent: Color) -> Line<'static> {
+    let mut spans = if leaf.is_empty() {
+        vec!["qol dev".fg(accent).bold()]
     } else {
-        "qol dev"
+        let mut trail = vec!["qol dev".fg(Color::DarkGray), " · ".fg(Color::DarkGray)];
+        trail.extend(leaf);
+        trail
+    };
+    if dash.is_reloading() {
+        spans.push(" · RELOADING".fg(Color::Red).bold());
+    } else if dash.armed {
+        spans.push(" · ARMED".fg(Color::Yellow).bold());
     }
+    Line::from(spans)
 }
 
 fn keys_legend(view: View) -> Vec<(&'static str, &'static str)> {
@@ -1455,7 +1469,10 @@ impl SignBox<'_> {
             ..inner
         };
         frame.render_widget(Paragraph::new(self.rows), rows_area);
-        Sign { label: self.title }.render(frame, body, accent);
+        Sign {
+            content: Line::from(self.title.to_string().fg(accent).bold()),
+        }
+        .render(frame, body, accent);
     }
 }
 
@@ -1481,16 +1498,19 @@ fn spaced_height(items: usize, gap: u16) -> u16 {
 }
 
 fn list_capacity(height: u16) -> usize {
-    let rows = SignBox::capacity(height);
-    (rows + ITEM_GAP as usize) / (1 + ITEM_GAP as usize)
+    (height as usize + ITEM_GAP as usize) / (1 + ITEM_GAP as usize)
 }
 
-fn view_box(frame: &mut Frame, shell: Rect, title: &str, lines: Vec<Line>, accent: Color) {
-    SignBox {
-        title,
-        rows: space_rows(lines, ITEM_GAP),
+fn view_content(frame: &mut Frame, area: Rect, lines: Vec<Line>) {
+    frame.render_widget(Paragraph::new(space_rows(lines, ITEM_GAP)), area);
+}
+
+fn leaf(name: &str, status: String, accent: Color) -> Vec<Span<'static>> {
+    let mut spans = vec![name.to_string().fg(accent).bold()];
+    if !status.is_empty() {
+        spans.push(status.fg(Color::DarkGray));
     }
-    .render(frame, shell, accent);
+    spans
 }
 
 fn status_line(dash: &Dash) -> String {
@@ -1571,7 +1591,7 @@ fn armed_status(dash: &Dash) -> String {
     }
 }
 
-fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
+fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) -> Vec<Span<'static>> {
     let (tray_color, tray_value) = tray_status(dash);
     let (web_color, web_value) = web_status(dash.web);
     let (plugins_color, plugins_value) =
@@ -1599,17 +1619,17 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
         ),
     ];
 
-    view_box(frame, area, "menu", rows, frame_accent(dash));
+    view_content(frame, area, rows);
+    Vec::new()
 }
 
-struct Sign<'a> {
-    label: &'a str,
+struct Sign {
+    content: Line<'static>,
 }
 
-impl Sign<'_> {
+impl Sign {
     fn render(self, frame: &mut Frame, body: Rect, accent: Color) {
-        let label = self.label.trim();
-        let span = label.chars().count() as u16 + 2;
+        let span = self.content.width() as u16 + 2;
         let width = span + 2;
         if width + 2 > body.width {
             return;
@@ -1622,16 +1642,10 @@ impl Sign<'_> {
             body.y.saturating_sub(1),
             Line::from(format!("╭{bar}╮").fg(accent)),
         );
-        render_overlay(
-            frame,
-            x,
-            body.y,
-            Line::from(vec![
-                "┤ ".fg(accent),
-                label.to_string().fg(accent).bold(),
-                " ├".fg(accent),
-            ]),
-        );
+        let mut middle = vec!["┤ ".fg(accent)];
+        middle.extend(self.content.spans);
+        middle.push(" ├".fg(accent));
+        render_overlay(frame, x, body.y, Line::from(middle));
         render_overlay(
             frame,
             x,
@@ -1716,29 +1730,11 @@ fn frame_accent(dash: &Dash) -> Color {
 const PANEL_PADDING: Padding = Padding {
     left: 1,
     right: 1,
-    top: 1,
+    top: 2,
     bottom: 1,
 };
 
 const TITLE_CAP: u16 = 1;
-
-struct Shell<'a> {
-    title: &'a str,
-}
-
-impl Shell<'_> {
-    fn render(self, frame: &mut Frame, area: Rect, accent: Color) -> Rect {
-        let [_, body] =
-            Layout::vertical([Constraint::Length(TITLE_CAP), Constraint::Min(0)]).areas(area);
-        let block = Block::bordered()
-            .border_style(Style::new().fg(accent))
-            .padding(PANEL_PADDING);
-        let inner = block.inner(body);
-        frame.render_widget(block, body);
-        Sign { label: self.title }.render(frame, body, accent);
-        inner
-    }
-}
 
 fn plugins_status(
     state: &RebuildState,
@@ -1864,24 +1860,22 @@ fn emu_status(state: &EmuState) -> (Color, Vec<Span<'static>>) {
     )
 }
 
-fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'static>> {
     let accent = frame_accent(dash);
     let entries = plugin_view_lines(dash);
     if entries.is_empty() {
-        view_box(
-            frame,
-            area,
-            "plugins",
-            vec![Line::from("  no dev-linked plugins")],
-            accent,
-        );
-        return;
+        view_content(frame, area, vec![Line::from("  no dev-linked plugins")]);
+        return leaf("plugins", String::new(), accent);
     }
     let total = entries.len();
     let (start, height) = list_window(dash, area, total);
     let visible: Vec<Line> = entries.into_iter().skip(start).take(height).collect();
-    let title = format!("plugins · {}", list_status(total, dash.scroll_offset));
-    view_box(frame, area, &title, visible, accent);
+    view_content(frame, area, visible);
+    leaf(
+        "plugins",
+        format!(" · {}", list_status(total, dash.scroll_offset)),
+        accent,
+    )
 }
 
 fn plugin_view_lines(dash: &Dash) -> Vec<Line<'static>> {
@@ -1920,7 +1914,7 @@ fn plugin_link_line(link: &DevLink) -> Line<'static> {
     ])
 }
 
-fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'static>> {
     let accent = frame_accent(dash);
     let lines = match &dash.emu {
         EmuState::Probing => vec![Line::from("  scanning emus".fg(Color::Yellow))],
@@ -1984,28 +1978,40 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let total = lines.len();
     let (start, height) = list_window(dash, area, total);
     let visible: Vec<Line> = lines.into_iter().skip(start).take(height).collect();
-    let title = format!("emu · {}", list_status(total, dash.scroll_offset));
-    view_box(frame, area, &title, visible, accent);
+    view_content(frame, area, visible);
+    leaf(
+        "emu",
+        format!(" · {}", list_status(total, dash.scroll_offset)),
+        accent,
+    )
 }
 
-fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'static>> {
     let accent = frame_accent(dash);
     let Some((id, info)) = dash
         .emu_detail
         .as_ref()
         .map(|detail| (detail.id.clone(), detail.info.clone()))
     else {
-        return;
+        return leaf("emu", String::new(), accent);
     };
-    let info_height = (spaced_height(info.len(), ITEM_GAP) + SignBox::CHROME_ROWS).min(area.height);
-    let info_area = Rect {
-        height: info_height,
-        ..area
-    };
-    view_box(frame, info_area, &format!("emu · {id}"), info, accent);
+    let crumb = vec![
+        "emu".fg(Color::DarkGray),
+        " · ".fg(Color::DarkGray),
+        id.clone().fg(accent).bold(),
+    ];
+    let info_height = spaced_height(info.len(), ITEM_GAP).min(area.height);
+    view_content(
+        frame,
+        Rect {
+            height: info_height,
+            ..area
+        },
+        info,
+    );
     let used = info_height.saturating_add(1);
     if used >= area.height {
-        return;
+        return crumb;
     }
     let log_area = Rect {
         y: area.y + used,
@@ -2014,45 +2020,42 @@ fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     };
     let highlight = copy_highlight(dash);
     if let Some(pane) = dash.active_runs.get(&id) {
-        draw_stream(
+        draw_run_log(
             frame,
             log_area,
             &pane.ring,
             &dash.filter,
             &mut dash.scroll_offset,
             &mut dash.log_height,
-            "run.log",
             accent,
             highlight,
         );
-        return;
+        return crumb;
     }
     match dash
         .emu_detail
         .as_ref()
         .and_then(|detail| detail.replay.as_ref())
     {
-        Some(pane) => draw_stream(
+        Some(pane) => draw_run_log(
             frame,
             log_area,
             &pane.ring,
             &dash.filter,
             &mut dash.scroll_offset,
             &mut dash.log_height,
-            "run.log",
             accent,
             highlight,
         ),
-        None => view_box(
+        None => view_content(
             frame,
             log_area,
-            "run.log",
             vec![Line::from(
                 "  no run.log yet · boot to create one".fg(Color::DarkGray),
             )],
-            accent,
         ),
     }
+    crumb
 }
 
 fn last_run_spans(last_run: Option<&LastRun>) -> Vec<Span<'static>> {
@@ -2140,63 +2143,62 @@ fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Span<'static>>
     (color, value)
 }
 
-fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'static>> {
     let accent = frame_accent(dash);
     let highlight = copy_highlight(dash);
-    draw_stream(
-        frame,
-        area,
+    let (rows, total) = stream_rows(
         &dash.logs.ring,
         &dash.filter,
         &mut dash.scroll_offset,
         &mut dash.log_height,
-        dash.logs.title,
-        accent,
+        area.height as usize,
         highlight,
+        area.width as usize,
     );
+    frame.render_widget(Paragraph::new(rows), area);
+    leaf(
+        dash.logs.title,
+        format!(" · {}", list_status(total, dash.scroll_offset)),
+        accent,
+    )
 }
 
-fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'static>> {
     let accent = frame_accent(dash);
     if dash.trace.ring.lines.is_empty() && dash.filter.is_empty() {
-        view_box(
-            frame,
-            area,
-            "trace",
-            vec![Line::from("  waiting for trace events")],
-            accent,
-        );
-        return;
+        view_content(frame, area, vec![Line::from("  waiting for trace events")]);
+        return leaf("trace", String::new(), accent);
     }
     let highlight = copy_highlight(dash);
-    draw_stream(
-        frame,
-        area,
+    let (rows, total) = stream_rows(
         &dash.trace.ring,
         &dash.filter,
         &mut dash.scroll_offset,
         &mut dash.log_height,
-        dash.trace.title,
-        accent,
+        area.height as usize,
         highlight,
+        area.width as usize,
     );
+    frame.render_widget(Paragraph::new(rows), area);
+    leaf(
+        dash.trace.title,
+        format!(" · {}", list_status(total, dash.scroll_offset)),
+        accent,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_stream(
-    frame: &mut Frame,
-    area: Rect,
-    ring: &LogRing,
+fn stream_rows<'a>(
+    ring: &'a LogRing,
     filter: &str,
     scroll_offset: &mut usize,
     log_height: &mut usize,
-    title_word: &str,
-    accent: Color,
+    height: usize,
     highlight_tail: Option<usize>,
-) {
-    let height = SignBox::capacity(area.height);
+    inner_width: usize,
+) -> (Vec<Line<'a>>, usize) {
     *log_height = height;
-    let filtered: Vec<&String> = ring
+    let filtered: Vec<&'a String> = ring
         .lines
         .iter()
         .filter(|line| filter.is_empty() || line.contains(filter))
@@ -2205,25 +2207,48 @@ fn draw_stream(
     *scroll_offset = clamp_offset(total, height, *scroll_offset);
     let start = window_start(total, height, *scroll_offset);
     let highlight_from = highlight_tail.map(|n| total.saturating_sub(n));
-    let styled: Vec<(usize, Line)> = filtered
+    let rows = filtered
         .into_iter()
         .enumerate()
         .skip(start)
         .take(height)
-        .map(|(index, line)| (index, styled_line(line)))
-        .collect();
-    let title = format!("{title_word} · {}", list_status(total, *scroll_offset));
-    let inner_width = area.width.saturating_sub(2) as usize;
-    let visible: Vec<Line> = styled
-        .into_iter()
-        .map(|(index, line)| match highlight_from {
-            Some(from) if index >= from => highlight_bar(line, inner_width),
-            _ => line,
+        .map(|(index, line)| {
+            let styled = styled_line(line);
+            match highlight_from {
+                Some(from) if index >= from => highlight_bar(styled, inner_width),
+                _ => styled,
+            }
         })
         .collect();
+    (rows, total)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_run_log(
+    frame: &mut Frame,
+    area: Rect,
+    ring: &LogRing,
+    filter: &str,
+    scroll_offset: &mut usize,
+    log_height: &mut usize,
+    accent: Color,
+    highlight_tail: Option<usize>,
+) {
+    let height = SignBox::capacity(area.height);
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let (rows, total) = stream_rows(
+        ring,
+        filter,
+        scroll_offset,
+        log_height,
+        height,
+        highlight_tail,
+        inner_width,
+    );
+    let title = format!("run.log · {}", list_status(total, *scroll_offset));
     SignBox {
         title: &title,
-        rows: visible,
+        rows,
     }
     .render(frame, area, accent);
 }
@@ -2247,13 +2272,14 @@ fn trace_value(dash: &Dash) -> Vec<Span<'static>> {
     vec!["idle · → open".fg(Color::DarkGray)]
 }
 
-fn draw_endpoints(frame: &mut Frame, dash: &Dash, area: Rect) {
+fn draw_endpoints(frame: &mut Frame, dash: &Dash, area: Rect) -> Vec<Span<'static>> {
     let accent = frame_accent(dash);
     let lines: Vec<Line> = match &dash.endpoints {
         EndpointsState::Probing => vec![Line::from("  probing endpoints".fg(Color::DarkGray))],
         EndpointsState::Done(items) => items.iter().map(endpoint_line).collect(),
     };
-    view_box(frame, area, "endpoints", lines, accent);
+    view_content(frame, area, lines);
+    leaf("endpoints", String::new(), accent)
 }
 
 fn endpoint_line(status: &EndpointStatus) -> Line<'static> {
@@ -2269,7 +2295,7 @@ fn endpoint_line(status: &EndpointStatus) -> Line<'static> {
     ])
 }
 
-fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'static>> {
     let accent = frame_accent(dash);
     let lines = doctor_view_lines(&dash.doctor);
     if lines.is_empty() {
@@ -2277,8 +2303,8 @@ fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
             Some((mode, _)) => mode.progress_message(),
             None => "  no checks reported · press d to run",
         };
-        view_box(frame, area, "doctor", vec![Line::from(message)], accent);
-        return;
+        view_content(frame, area, vec![Line::from(message)]);
+        return leaf("doctor", String::new(), accent);
     }
     let total = lines.len();
     let (start, height) = list_window(dash, area, total);
@@ -2293,13 +2319,17 @@ fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         .take(height)
         .map(|line| render(line))
         .collect();
+    view_content(frame, area, visible);
     let age = dash
         .doctor
         .last_at_ms
         .map(|at| format!(" · {}", relative_age(now_unix_ms(), at)))
         .unwrap_or_default();
-    let title = format!("doctor · {}{age}", list_status(total, dash.scroll_offset));
-    view_box(frame, area, &title, visible, accent);
+    leaf(
+        "doctor",
+        format!(" · {}{age}", list_status(total, dash.scroll_offset)),
+        accent,
+    )
 }
 
 fn doctor_view_lines(panel: &DoctorPanel) -> Vec<String> {
@@ -2981,32 +3011,36 @@ mod tests {
     }
 
     #[test]
-    fn every_view_nests_a_sign_box_inside_the_qol_dev_shell() {
+    fn every_view_shows_its_page_as_a_breadcrumb_on_the_qol_dev_sign() {
         let cases = [
-            (View::Dashboard, "┤ menu ├"),
-            (View::Endpoints, "┤ endpoints ├"),
-            (View::Plugins, "┤ plugins ├"),
-            (View::Doctor, "┤ doctor ├"),
+            (View::Endpoints, "qol dev · endpoints"),
+            (View::Plugins, "qol dev · plugins"),
+            (View::Doctor, "qol dev · doctor"),
+            (View::Emu, "qol dev · emu"),
         ];
-        for (view, box_sign) in cases {
+        for (view, crumb) in cases {
             let mut dash = Dash::new(Vec::new());
             dash.view = view;
             let rows = render_rows(&mut dash);
-            assert!(
-                rows.iter().any(|row| row.contains("┤ qol dev ├")),
-                "{box_sign}: qol dev shell missing"
-            );
-            let border = rows
+            let sign = rows
                 .iter()
-                .position(|row| row.contains(box_sign))
-                .unwrap_or_else(|| panic!("{box_sign} not rendered as a sign-box"));
+                .position(|row| row.contains(crumb))
+                .unwrap_or_else(|| panic!("{crumb} not rendered on the shell sign"));
             assert!(
-                rows[border - 1].contains('╭') && rows[border - 1].contains('╮'),
-                "{box_sign}: missing poke-up cap above the box"
+                rows[sign].contains('┤') && rows[sign].contains('├'),
+                "{crumb}: breadcrumb not framed as a sign"
             );
             assert!(
-                rows[border + 1].contains('╰') && rows[border + 1].contains('╯'),
-                "{box_sign}: missing sign base below the box"
+                rows[sign - 1].contains('╭') && rows[sign - 1].contains('╮'),
+                "{crumb}: missing poke-up cap above the sign"
+            );
+            assert!(
+                rows[sign + 1].contains('╰') && rows[sign + 1].contains('╯'),
+                "{crumb}: missing sign base below"
+            );
+            assert!(
+                !rows.iter().any(|row| row.contains("┤ menu ├")),
+                "{crumb}: page should not nest its own sign-box"
             );
         }
     }
