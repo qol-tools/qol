@@ -41,7 +41,10 @@ pub fn get_monitors() -> Result<Vec<Monitor>> {
         return Err(anyhow!("xrandr failed"));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let monitors: Vec<Monitor> = stdout.lines().filter_map(parse_xrandr_line).collect();
+    let monitors: Vec<Monitor> = qol_runtime::xrandr::parse_monitors(&stdout)
+        .into_iter()
+        .map(monitor_from_xrandr)
+        .collect();
     if monitors.is_empty() {
         return Err(anyhow!("no monitors found from xrandr"));
     }
@@ -238,30 +241,11 @@ fn parse_selection_geometry(raw: &str) -> Result<Rect> {
     })
 }
 
-fn parse_xrandr_line(line: &str) -> Option<Monitor> {
-    if !line.contains(" connected") {
-        return None;
+fn monitor_from_xrandr(monitor: qol_runtime::xrandr::XrandrMonitor) -> Monitor {
+    Monitor {
+        x: monitor.bounds.x as i32,
+        y: monitor.bounds.y as i32,
+        w: monitor.bounds.width as i32,
+        h: monitor.bounds.height as i32,
     }
-    let geometry = line
-        .split_whitespace()
-        .find(|token| token.contains('x') && token.contains('+'))?;
-    parse_monitor_geometry(geometry)
-}
-
-fn parse_monitor_geometry(token: &str) -> Option<Monitor> {
-    let x_split = token.find('x')?;
-    let width = token[..x_split].parse::<i32>().ok()?;
-    let after_x = &token[x_split + 1..];
-    let first_sign = after_x.find(['+', '-'])?;
-    let height = after_x[..first_sign].parse::<i32>().ok()?;
-    let after_height = &after_x[first_sign..];
-    let second_sign = after_height[1..].find(['+', '-'])? + 1;
-    let x = after_height[..second_sign].parse::<i32>().ok()?;
-    let y = after_height[second_sign..].parse::<i32>().ok()?;
-    Some(Monitor {
-        x,
-        y,
-        w: width,
-        h: height,
-    })
 }

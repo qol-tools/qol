@@ -118,6 +118,15 @@ struct MonitorBounds {
 }
 
 impl MonitorBounds {
+    fn from_xrandr(monitor: qol_runtime::xrandr::XrandrMonitor) -> Self {
+        Self {
+            x: monitor.bounds.x as i32,
+            y: monitor.bounds.y as i32,
+            width: monitor.bounds.width as i32,
+            height: monitor.bounds.height as i32,
+        }
+    }
+
     fn left(self) -> i32 {
         self.x
     }
@@ -144,40 +153,9 @@ fn xrandr_monitor_bounds() -> Vec<MonitorBounds> {
         _ => return Vec::new(),
     };
 
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter(|line| line.contains(" connected"))
-        .filter_map(parse_monitor_bounds_from_xrandr_line)
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    qol_runtime::xrandr::parse_monitors(&stdout)
+        .into_iter()
+        .map(MonitorBounds::from_xrandr)
         .collect()
-}
-
-fn parse_monitor_bounds_from_xrandr_line(line: &str) -> Option<MonitorBounds> {
-    line.split_whitespace()
-        .find_map(parse_xrandr_geometry_token)
-}
-
-fn parse_xrandr_geometry_token(token: &str) -> Option<MonitorBounds> {
-    let (width_raw, rest) = token.split_once('x')?;
-    let width = width_raw.parse::<i32>().ok()?;
-
-    let x_offset_start = rest.find(['+', '-'])?;
-    let height = rest.get(..x_offset_start)?.parse::<i32>().ok()?;
-    if width <= 0 || height <= 0 {
-        return None;
-    }
-
-    let offsets = rest.get(x_offset_start..)?;
-    let y_offset_start = offsets
-        .char_indices()
-        .skip(1)
-        .find_map(|(idx, ch)| ((ch == '+') || (ch == '-')).then_some(idx))?;
-    let x_offset = offsets.get(..y_offset_start)?.parse::<i32>().ok()?;
-    let y_offset = offsets.get(y_offset_start..)?.parse::<i32>().ok()?;
-
-    Some(MonitorBounds {
-        x: x_offset,
-        y: y_offset,
-        width,
-        height,
-    })
 }

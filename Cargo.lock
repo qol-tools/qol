@@ -6665,6 +6665,7 @@ dependencies = [
  "chrono",
  "qol-config",
  "qol-plugin-api",
+ "qol-runtime",
  "serde",
 ]
 
@@ -8882,6 +8883,7 @@ dependencies = [
  "proptest",
  "qol-config",
  "qol-plugin-api",
+ "qol-runtime",
  "serde",
  "serde_json",
  "toml 0.9.12+spec-1.1.0",
