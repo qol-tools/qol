@@ -1,6 +1,7 @@
 pub mod pane_field;
 pub mod probe;
 pub mod protocol;
+pub mod xrandr;
 
 #[cfg(unix)]
 pub mod broker;

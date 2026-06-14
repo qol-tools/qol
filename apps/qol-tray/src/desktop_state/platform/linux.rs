@@ -1,5 +1,5 @@
 use crate::desktop_state::Platform;
-use qol_runtime::MonitorBounds;
+use qol_runtime::{xrandr, MonitorBounds};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
 use x11rb::rust_connection::RustConnection;
@@ -235,30 +235,11 @@ fn xrandr_monitors() -> Vec<MonitorBounds> {
         _ => return Vec::new(),
     };
 
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(parse_xrandr_line)
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    xrandr::parse_monitors(&stdout)
+        .into_iter()
+        .map(|monitor| monitor.bounds)
         .collect()
-}
-
-fn parse_xrandr_line(line: &str) -> Option<MonitorBounds> {
-    if !line.contains(" connected") {
-        return None;
-    }
-
-    let geom = line
-        .split_whitespace()
-        .find(|s| s.contains('+') && s.contains('x'))?;
-    let (res, offsets) = geom.split_once('+')?;
-    let (w, h) = res.split_once('x')?;
-    let (ox, oy) = offsets.split_once('+')?;
-
-    Some(MonitorBounds {
-        x: ox.parse::<f32>().ok()?,
-        y: oy.parse::<f32>().ok()?,
-        width: w.parse::<f32>().ok()?,
-        height: h.parse::<f32>().ok()?,
-    })
 }
 
 fn is_wayland() -> bool {

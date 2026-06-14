@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 qol-config.workspace = true
+qol-runtime.workspace = true
 serde = { version = "1", features = ["derive"] }
 chrono = "0.4"
 
