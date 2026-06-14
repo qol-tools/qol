@@ -2,12 +2,13 @@ use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex, OnceLock,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -51,9 +52,33 @@ pub(crate) fn print_hint(verbose: bool) {
 
 pub(crate) fn step_label(verb: &str, kind: StepKind, target: &str) {
     let padded = format!("{verb:<STEP_LABEL_WIDTH$}");
+    append_run_log(&format!("  {padded}{target}"));
     let painted_verb = paint_stdout(&padded, step_color(kind));
     let painted_target = paint_stdout(target, COLOR_TARGET);
     println!("  {painted_verb}{painted_target}");
+}
+
+fn run_log() -> &'static Mutex<Option<File>> {
+    static RUN_LOG: OnceLock<Mutex<Option<File>>> = OnceLock::new();
+    RUN_LOG.get_or_init(|| Mutex::new(None))
+}
+
+pub(crate) fn begin_run_log(path: &Path) {
+    let file = OpenOptions::new().create(true).append(true).open(path).ok();
+    if let Ok(mut slot) = run_log().lock() {
+        *slot = file;
+    }
+}
+
+fn append_run_log(line: &str) {
+    let Ok(mut slot) = run_log().lock() else {
+        return;
+    };
+    let Some(file) = slot.as_mut() else {
+        return;
+    };
+    let _ = writeln!(file, "{line}");
+    let _ = file.flush();
 }
 
 pub(crate) fn run_step(
@@ -756,6 +781,26 @@ mod tests {
     fn formats_progress_elapsed_time() {
         assert_eq!(format_elapsed(Duration::from_secs(0)), "00:00");
         assert_eq!(format_elapsed(Duration::from_secs(65)), "01:05");
+    }
+
+    #[test]
+    fn run_log_appends_and_flushes_each_line() {
+        let dir = std::env::temp_dir().join(format!("qol-runlog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("run.log");
+        begin_run_log(&path);
+        append_run_log("  boot     foo");
+        let after_first =
+            std::fs::read_to_string(&path).expect("line is on disk before the next write");
+        append_run_log("  done     exit status: 0");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            after_first, "  boot     foo\n",
+            "flush persists each line eagerly"
+        );
+        assert_eq!(content, "  boot     foo\n  done     exit status: 0\n");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
