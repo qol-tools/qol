@@ -143,15 +143,13 @@ struct OwnedSource {
 }
 
 struct LogPane {
-    title: &'static str,
     ring: LogRing,
     source: Option<OwnedSource>,
 }
 
 impl LogPane {
-    fn new(title: &'static str) -> Self {
+    fn new() -> Self {
         Self {
-            title,
             ring: LogRing::new(),
             source: None,
         }
@@ -195,18 +193,14 @@ impl LogPane {
         }
     }
 
-    fn replay(title: &'static str, path: &Path) -> Self {
+    fn replay(path: &Path) -> Self {
         let mut ring = LogRing::new();
         if let Ok(content) = std::fs::read_to_string(path) {
             for line in content.lines() {
                 ring.push(line.to_string());
             }
         }
-        Self {
-            title,
-            ring,
-            source: None,
-        }
+        Self { ring, source: None }
     }
 
     fn poll_finished(&mut self, keep: impl Fn(&str) -> bool) -> bool {
@@ -460,7 +454,7 @@ impl Dash {
     fn new(plugin_names: Vec<String>) -> Self {
         Self {
             view: View::Dashboard,
-            logs: LogPane::new("logs"),
+            logs: LogPane::new(),
             scroll_offset: 0,
             health: Health::Checking,
             web: Health::Checking,
@@ -481,7 +475,7 @@ impl Dash {
                 manual: None,
                 error: None,
             },
-            trace: LogPane::new("trace"),
+            trace: LogPane::new(),
             trace_unavailable: false,
             boot_rx: None,
             keys_hidden: false,
@@ -1054,7 +1048,7 @@ fn act_emu(dash: &mut Dash, modified: bool) {
 }
 
 fn launch_emu(dash: &mut Dash, verb: &'static str, id: String) {
-    let mut pane = LogPane::new("run.log");
+    let mut pane = LogPane::new();
     match spawn_emu_verb(verb, &id) {
         Some((child, rx)) => pane.attach(child, rx),
         None => pane.push(emu_run_line(
@@ -1139,9 +1133,7 @@ fn open_emu_detail(dash: &mut Dash) {
     let replay = if dash.active_runs.contains_key(&status.id) {
         None
     } else {
-        detail
-            .as_ref()
-            .map(|d| LogPane::replay("run.log", &d.run_log()))
+        detail.as_ref().map(|d| LogPane::replay(&d.run_log()))
     };
     dash.emu_detail = Some(EmuDetail {
         id: status.id,
@@ -1323,18 +1315,19 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         .padding(PANEL_PADDING);
     let inner = block.inner(body);
     frame.render_widget(block, body);
-    let leaf = match dash.view {
-        View::Dashboard => draw_dashboard(frame, dash, inner),
-        View::Logs => draw_logs(frame, dash, inner),
-        View::Doctor => draw_doctor(frame, dash, inner),
-        View::Plugins => draw_plugins(frame, dash, inner),
-        View::Emu => draw_emu(frame, dash, inner),
-        View::EmuDetail => draw_emu_detail(frame, dash, inner),
-        View::Trace => draw_trace(frame, dash, inner),
-        View::Endpoints => draw_endpoints(frame, dash, inner),
-    };
+    let content = page_header(frame, dash.view, inner);
+    match dash.view {
+        View::Dashboard => draw_dashboard(frame, dash, content),
+        View::Logs => draw_logs(frame, dash, content),
+        View::Doctor => draw_doctor(frame, dash, content),
+        View::Plugins => draw_plugins(frame, dash, content),
+        View::Emu => draw_emu(frame, dash, content),
+        View::EmuDetail => draw_emu_detail(frame, dash, content),
+        View::Trace => draw_trace(frame, dash, content),
+        View::Endpoints => draw_endpoints(frame, dash, content),
+    }
     Sign {
-        content: breadcrumb(leaf, dash, accent),
+        content: breadcrumb(dash, accent),
     }
     .render(frame, body, accent);
     let status_style = if dash.is_reloading() {
@@ -1348,17 +1341,69 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         Paragraph::new(status_line(dash)).style(status_style),
         footer,
     );
-    draw_keys_hud(frame, dash, inner);
+    draw_keys_hud(frame, dash, content);
 }
 
-fn breadcrumb(leaf: Vec<Span<'static>>, dash: &Dash, accent: Color) -> Line<'static> {
-    let mut spans = if leaf.is_empty() {
-        vec!["qol dev".fg(accent).bold()]
-    } else {
-        let mut trail = vec!["qol dev".fg(Color::DarkGray), " · ".fg(Color::DarkGray)];
-        trail.extend(leaf);
-        trail
+fn page_header(frame: &mut Frame, view: View, inner: Rect) -> Rect {
+    let Some(desc) = page_description(view) else {
+        return inner;
     };
+    frame.render_widget(
+        Paragraph::new(Line::from(format!("  {desc}").fg(Color::DarkGray))),
+        Rect { height: 1, ..inner },
+    );
+    Rect {
+        y: inner.y + 2,
+        height: inner.height.saturating_sub(2),
+        ..inner
+    }
+}
+
+fn page_description(view: View) -> Option<&'static str> {
+    match view {
+        View::Logs => Some("live daemon logs"),
+        View::Trace => Some("runtime trace events"),
+        View::Doctor => Some("install health checks"),
+        View::Plugins => Some("dev-linked plugins"),
+        View::Emu => Some("clean-os test envs"),
+        View::Endpoints => Some("local service endpoints"),
+        View::Dashboard | View::EmuDetail => None,
+    }
+}
+
+fn breadcrumb(dash: &Dash, accent: Color) -> Line<'static> {
+    let trail: Vec<String> = match dash.view {
+        View::Dashboard => Vec::new(),
+        View::Logs => vec!["logs".to_string()],
+        View::Trace => vec!["trace".to_string()],
+        View::Doctor => vec!["doctor".to_string()],
+        View::Plugins => vec!["plugins".to_string()],
+        View::Emu => vec!["emu".to_string()],
+        View::Endpoints => vec!["endpoints".to_string()],
+        View::EmuDetail => {
+            let id = dash
+                .emu_detail
+                .as_ref()
+                .map(|detail| detail.id.clone())
+                .unwrap_or_default();
+            vec!["emu".to_string(), id]
+        }
+    };
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    if trail.is_empty() {
+        spans.push("qol dev".fg(accent).bold());
+    } else {
+        spans.push("qol dev".fg(Color::DarkGray));
+        let last = trail.len() - 1;
+        for (index, segment) in trail.into_iter().enumerate() {
+            spans.push(" · ".fg(Color::DarkGray));
+            if index == last {
+                spans.push(segment.fg(accent).bold());
+            } else {
+                spans.push(segment.fg(Color::DarkGray));
+            }
+        }
+    }
     if dash.is_reloading() {
         spans.push(" · RELOADING".fg(Color::Red).bold());
     } else if dash.armed {
@@ -1505,14 +1550,6 @@ fn view_content(frame: &mut Frame, area: Rect, lines: Vec<Line>) {
     frame.render_widget(Paragraph::new(space_rows(lines, ITEM_GAP)), area);
 }
 
-fn leaf(name: &str, status: String, accent: Color) -> Vec<Span<'static>> {
-    let mut spans = vec![name.to_string().fg(accent).bold()];
-    if !status.is_empty() {
-        spans.push(status.fg(Color::DarkGray));
-    }
-    spans
-}
-
 fn status_line(dash: &Dash) -> String {
     if let Reload::Running { since, .. } = &dash.reload {
         return format!(
@@ -1591,7 +1628,7 @@ fn armed_status(dash: &Dash) -> String {
     }
 }
 
-fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) -> Vec<Span<'static>> {
+fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
     let (tray_color, tray_value) = tray_status(dash);
     let (web_color, web_value) = web_status(dash.web);
     let (plugins_color, plugins_value) =
@@ -1620,7 +1657,6 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) -> Vec<Span<'stati
     ];
 
     view_content(frame, area, rows);
-    Vec::new()
 }
 
 struct Sign {
@@ -1860,22 +1896,16 @@ fn emu_status(state: &EmuState) -> (Color, Vec<Span<'static>>) {
     )
 }
 
-fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'static>> {
-    let accent = frame_accent(dash);
+fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let entries = plugin_view_lines(dash);
     if entries.is_empty() {
         view_content(frame, area, vec![Line::from("  no dev-linked plugins")]);
-        return leaf("plugins", String::new(), accent);
+        return;
     }
     let total = entries.len();
     let (start, height) = list_window(dash, area, total);
     let visible: Vec<Line> = entries.into_iter().skip(start).take(height).collect();
     view_content(frame, area, visible);
-    leaf(
-        "plugins",
-        format!(" · {}", list_status(total, dash.scroll_offset)),
-        accent,
-    )
 }
 
 fn plugin_view_lines(dash: &Dash) -> Vec<Line<'static>> {
@@ -1914,8 +1944,7 @@ fn plugin_link_line(link: &DevLink) -> Line<'static> {
     ])
 }
 
-fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'static>> {
-    let accent = frame_accent(dash);
+fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let lines = match &dash.emu {
         EmuState::Probing => vec![Line::from("  scanning emus".fg(Color::Yellow))],
         EmuState::Done(statuses) if statuses.is_empty() => {
@@ -1979,27 +2008,17 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'static>
     let (start, height) = list_window(dash, area, total);
     let visible: Vec<Line> = lines.into_iter().skip(start).take(height).collect();
     view_content(frame, area, visible);
-    leaf(
-        "emu",
-        format!(" · {}", list_status(total, dash.scroll_offset)),
-        accent,
-    )
 }
 
-fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'static>> {
+fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let accent = frame_accent(dash);
     let Some((id, info)) = dash
         .emu_detail
         .as_ref()
         .map(|detail| (detail.id.clone(), detail.info.clone()))
     else {
-        return leaf("emu", String::new(), accent);
+        return;
     };
-    let crumb = vec![
-        "emu".fg(Color::DarkGray),
-        " · ".fg(Color::DarkGray),
-        id.clone().fg(accent).bold(),
-    ];
     let info_height = spaced_height(info.len(), ITEM_GAP).min(area.height);
     view_content(
         frame,
@@ -2011,7 +2030,7 @@ fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'
     );
     let used = info_height.saturating_add(1);
     if used >= area.height {
-        return crumb;
+        return;
     }
     let log_area = Rect {
         y: area.y + used,
@@ -2030,7 +2049,7 @@ fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'
             accent,
             highlight,
         );
-        return crumb;
+        return;
     }
     match dash
         .emu_detail
@@ -2055,7 +2074,6 @@ fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'
             )],
         ),
     }
-    crumb
 }
 
 fn last_run_spans(last_run: Option<&LastRun>) -> Vec<Span<'static>> {
@@ -2143,10 +2161,9 @@ fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Span<'static>>
     (color, value)
 }
 
-fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'static>> {
-    let accent = frame_accent(dash);
+fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let highlight = copy_highlight(dash);
-    let (rows, total) = stream_rows(
+    let (rows, _) = stream_rows(
         &dash.logs.ring,
         &dash.filter,
         &mut dash.scroll_offset,
@@ -2156,21 +2173,15 @@ fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'static
         area.width as usize,
     );
     frame.render_widget(Paragraph::new(rows), area);
-    leaf(
-        dash.logs.title,
-        format!(" · {}", list_status(total, dash.scroll_offset)),
-        accent,
-    )
 }
 
-fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'static>> {
-    let accent = frame_accent(dash);
+fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     if dash.trace.ring.lines.is_empty() && dash.filter.is_empty() {
         view_content(frame, area, vec![Line::from("  waiting for trace events")]);
-        return leaf("trace", String::new(), accent);
+        return;
     }
     let highlight = copy_highlight(dash);
-    let (rows, total) = stream_rows(
+    let (rows, _) = stream_rows(
         &dash.trace.ring,
         &dash.filter,
         &mut dash.scroll_offset,
@@ -2180,11 +2191,6 @@ fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'stati
         area.width as usize,
     );
     frame.render_widget(Paragraph::new(rows), area);
-    leaf(
-        dash.trace.title,
-        format!(" · {}", list_status(total, dash.scroll_offset)),
-        accent,
-    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2272,14 +2278,12 @@ fn trace_value(dash: &Dash) -> Vec<Span<'static>> {
     vec!["idle · → open".fg(Color::DarkGray)]
 }
 
-fn draw_endpoints(frame: &mut Frame, dash: &Dash, area: Rect) -> Vec<Span<'static>> {
-    let accent = frame_accent(dash);
+fn draw_endpoints(frame: &mut Frame, dash: &Dash, area: Rect) {
     let lines: Vec<Line> = match &dash.endpoints {
         EndpointsState::Probing => vec![Line::from("  probing endpoints".fg(Color::DarkGray))],
         EndpointsState::Done(items) => items.iter().map(endpoint_line).collect(),
     };
     view_content(frame, area, lines);
-    leaf("endpoints", String::new(), accent)
 }
 
 fn endpoint_line(status: &EndpointStatus) -> Line<'static> {
@@ -2295,8 +2299,7 @@ fn endpoint_line(status: &EndpointStatus) -> Line<'static> {
     ])
 }
 
-fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'static>> {
-    let accent = frame_accent(dash);
+fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let lines = doctor_view_lines(&dash.doctor);
     if lines.is_empty() {
         let message = match &dash.doctor.manual {
@@ -2304,7 +2307,7 @@ fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'stat
             None => "  no checks reported · press d to run",
         };
         view_content(frame, area, vec![Line::from(message)]);
-        return leaf("doctor", String::new(), accent);
+        return;
     }
     let total = lines.len();
     let (start, height) = list_window(dash, area, total);
@@ -2320,16 +2323,6 @@ fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Vec<Span<'stat
         .map(|line| render(line))
         .collect();
     view_content(frame, area, visible);
-    let age = dash
-        .doctor
-        .last_at_ms
-        .map(|at| format!(" · {}", relative_age(now_unix_ms(), at)))
-        .unwrap_or_default();
-    leaf(
-        "doctor",
-        format!(" · {}{age}", list_status(total, dash.scroll_offset)),
-        accent,
-    )
 }
 
 fn doctor_view_lines(panel: &DoctorPanel) -> Vec<String> {
@@ -2944,7 +2937,7 @@ mod tests {
     }
 
     fn live_pane(line: &str) -> LogPane {
-        let mut pane = LogPane::new("run.log");
+        let mut pane = LogPane::new();
         let child = Command::new("true").spawn().unwrap();
         let (_tx, rx) = channel::<String>();
         pane.attach(child, rx);
@@ -3041,6 +3034,11 @@ mod tests {
             assert!(
                 !rows.iter().any(|row| row.contains("┤ menu ├")),
                 "{crumb}: page should not nest its own sign-box"
+            );
+            let desc = page_description(view).expect("listed views carry a description");
+            assert!(
+                rows.iter().any(|row| row.contains(desc)),
+                "{crumb}: description {desc:?} not rendered under the title"
             );
         }
     }
