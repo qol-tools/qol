@@ -3,6 +3,8 @@ mod file_cache;
 mod file_scan;
 pub(crate) mod platform;
 pub mod search;
+#[cfg(debug_assertions)]
+mod trace;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
