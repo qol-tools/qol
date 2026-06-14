@@ -286,6 +286,7 @@ async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usi
                     handle,
                     windows: windows_for_previews,
                     preview_cache: inputs.preview_cache.clone(),
+                    refresh_frontmost: picker_visible,
                 },
                 app_cx,
             );

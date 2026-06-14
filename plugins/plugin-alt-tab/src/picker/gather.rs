@@ -141,6 +141,7 @@ pub(super) struct PreviewFillRequest {
     pub handle: WindowHandle<AltTabApp>,
     pub windows: Vec<WindowInfo>,
     pub preview_cache: SharedPreviewCache,
+    pub refresh_frontmost: bool,
 }
 
 pub(super) fn spawn_preview_fill(req: PreviewFillRequest, cx: &mut App) {
@@ -162,20 +163,19 @@ pub(super) fn spawn_preview_fill(req: PreviewFillRequest, cx: &mut App) {
     .detach();
 }
 
-/// Pick the minimal set of windows to (re)capture on this fill pass.
-///
-/// Cold cache → capture all non-minimized. Warm cache → always refresh the
-/// frontmost (idx 0, which is the window the user was just on before Alt+Tab)
-/// plus any non-minimized window with no cached preview (new windows that
-/// appeared since the last capture). Every other card reuses its existing
-/// cached preview.
-fn select_capture_targets(windows: &[WindowInfo], cached_ids: &HashSet<u32>) -> Vec<(usize, u32)> {
-    let cache_is_cold = cached_ids.is_empty();
+// idx 0 is the window the user was just on before Alt+Tab - the most-visible
+// card - so it is re-shot only while the picker is visible (refresh_frontmost).
+// Ghost refreshes skip it; uncached windows always need a first capture.
+fn select_capture_targets(
+    windows: &[WindowInfo],
+    cached_ids: &HashSet<u32>,
+    refresh_frontmost: bool,
+) -> Vec<(usize, u32)> {
     windows
         .iter()
         .enumerate()
         .filter(|(_, w)| !w.is_minimized)
-        .filter(|(idx, w)| cache_is_cold || *idx == 0 || !cached_ids.contains(&w.id))
+        .filter(|(idx, w)| !cached_ids.contains(&w.id) || (refresh_frontmost && *idx == 0))
         .map(|(i, w)| (i, w.id))
         .collect()
 }
@@ -189,7 +189,7 @@ async fn fill_previews(cx: &mut AsyncApp, req: PreviewFillRequest) {
 
     let cached_ids = snapshot_preview_keys(&req.preview_cache);
     let eligible = req.windows.iter().filter(|w| !w.is_minimized).count();
-    let targets = select_capture_targets(&req.windows, &cached_ids);
+    let targets = select_capture_targets(&req.windows, &cached_ids, req.refresh_frontmost);
     if targets.is_empty() {
         return;
     }
@@ -283,7 +283,7 @@ mod preview_target_selection_tests {
     fn cold_cache_captures_all_non_minimized() {
         let windows = vec![w(10, false), w(20, false), w(30, true), w(40, false)];
         let cached = HashSet::new();
-        let got = select_capture_targets(&windows, &cached);
+        let got = select_capture_targets(&windows, &cached, true);
         assert_eq!(ids(&got), vec![10, 20, 40]);
         assert!(!got.iter().any(|(_, id)| *id == 30));
     }
@@ -292,7 +292,7 @@ mod preview_target_selection_tests {
     fn warm_cache_all_cached_captures_only_frontmost() {
         let windows = vec![w(10, false), w(20, false), w(30, false)];
         let cached: HashSet<u32> = [10, 20, 30].into_iter().collect();
-        let got = select_capture_targets(&windows, &cached);
+        let got = select_capture_targets(&windows, &cached, true);
         assert_eq!(ids(&got), vec![10]);
         assert_eq!(got[0].0, 0, "idx 0 must be the frontmost");
     }
@@ -301,7 +301,7 @@ mod preview_target_selection_tests {
     fn warm_cache_missing_id_is_also_captured() {
         let windows = vec![w(10, false), w(20, false), w(30, false)];
         let cached: HashSet<u32> = [10].into_iter().collect();
-        let got = select_capture_targets(&windows, &cached);
+        let got = select_capture_targets(&windows, &cached, true);
         assert_eq!(ids(&got), vec![10, 20, 30]);
     }
 
@@ -309,7 +309,7 @@ mod preview_target_selection_tests {
     fn warm_cache_missing_id_when_frontmost_already_cached() {
         let windows = vec![w(10, false), w(20, false), w(30, false), w(40, false)];
         let cached: HashSet<u32> = [10, 20, 40].into_iter().collect();
-        let got = select_capture_targets(&windows, &cached);
+        let got = select_capture_targets(&windows, &cached, true);
         assert_eq!(ids(&got), vec![10, 30]);
     }
 
@@ -317,7 +317,7 @@ mod preview_target_selection_tests {
     fn minimized_frontmost_not_captured_even_when_first() {
         let windows = vec![w(10, true), w(20, false)];
         let cached: HashSet<u32> = [20].into_iter().collect();
-        let got = select_capture_targets(&windows, &cached);
+        let got = select_capture_targets(&windows, &cached, true);
         assert!(
             got.is_empty(),
             "minimized windows must never be capture targets"
@@ -328,7 +328,7 @@ mod preview_target_selection_tests {
     fn minimized_windows_without_cache_still_skipped() {
         let windows = vec![w(10, true), w(20, true), w(30, false)];
         let cached = HashSet::new();
-        let got = select_capture_targets(&windows, &cached);
+        let got = select_capture_targets(&windows, &cached, true);
         assert_eq!(ids(&got), vec![30]);
     }
 
@@ -336,22 +336,79 @@ mod preview_target_selection_tests {
     fn cold_cache_with_minimized_frontmost_still_captures_visible_windows() {
         let windows = vec![w(10, true), w(20, false), w(30, false)];
         let cached = HashSet::new();
-        let got = select_capture_targets(&windows, &cached);
+        let got = select_capture_targets(&windows, &cached, true);
         assert_eq!(ids(&got), vec![20, 30]);
         assert!(!got.iter().any(|(_, id)| *id == 10));
     }
 
     #[test]
     fn empty_windows_yields_empty() {
-        let got = select_capture_targets(&[], &HashSet::new());
+        let got = select_capture_targets(&[], &HashSet::new(), true);
         assert!(got.is_empty());
+    }
+
+    #[test]
+    fn invisible_skips_already_cached_frontmost() {
+        let windows = vec![w(10, false), w(20, false), w(30, false)];
+        let cached: HashSet<u32> = [10, 20, 30].into_iter().collect();
+        let got = select_capture_targets(&windows, &cached, false);
+        assert!(
+            got.is_empty(),
+            "invisible refresh must not re-capture an already-cached frontmost"
+        );
+    }
+
+    #[test]
+    fn invisible_still_captures_uncached_windows() {
+        let windows = vec![w(10, false), w(20, false), w(30, false)];
+        let cached: HashSet<u32> = [10].into_iter().collect();
+        let got = select_capture_targets(&windows, &cached, false);
+        assert_eq!(
+            ids(&got),
+            vec![20, 30],
+            "uncached windows still need a first capture even while invisible"
+        );
+    }
+
+    #[test]
+    fn invisible_skips_minimized_but_captures_uncached() {
+        let windows = vec![w(10, true), w(20, false)];
+        let got = select_capture_targets(&windows, &HashSet::new(), false);
+        assert_eq!(
+            ids(&got),
+            vec![20],
+            "minimized filter wins regardless of refresh_frontmost"
+        );
+    }
+
+    #[test]
+    fn invisible_cold_cache_still_captures_all_non_minimized() {
+        let windows = vec![w(10, false), w(20, false)];
+        let got = select_capture_targets(&windows, &HashSet::new(), false);
+        assert_eq!(
+            ids(&got),
+            vec![10, 20],
+            "cold cache captures all non-minimized whether or not frontmost is forced"
+        );
+    }
+
+    #[test]
+    fn invisible_mixed_captures_only_uncached_visible() {
+        let windows = vec![w(10, true), w(20, false), w(30, false)];
+        let cached: HashSet<u32> = [20].into_iter().collect();
+        let got = select_capture_targets(&windows, &cached, false);
+        assert_eq!(
+            ids(&got),
+            vec![30],
+            "invisible: skip minimized, skip cached, capture uncached visible"
+        );
     }
 
     #[test]
     fn indices_returned_are_the_original_window_positions() {
         let windows = vec![w(10, true), w(20, false), w(30, false)];
         let cached: HashSet<u32> = [20, 30].into_iter().collect();
-        let got = select_capture_targets(&windows, &cached);
+        let got = select_capture_targets(&windows, &cached, true);
         assert!(
             got.is_empty(),
             "no non-minimized frontmost + all cached = nothing to do"
