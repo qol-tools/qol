@@ -1459,22 +1459,8 @@ impl SignBox<'_> {
     }
 }
 
-fn box_rect(shell: Rect, title: &str, content_width: u16, rows: u16) -> Rect {
-    let sign_min = title.trim().chars().count() as u16 + 6;
-    let width = (content_width + 2).max(sign_min).min(shell.width);
-    let height = (rows + SignBox::CHROME_ROWS).min(shell.height);
-    Rect {
-        x: shell.x,
-        y: shell.y,
-        width,
-        height,
-    }
-}
-
 fn view_box(frame: &mut Frame, shell: Rect, title: &str, lines: Vec<Line>, accent: Color) {
-    let content_width = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
-    let rect = box_rect(shell, title, content_width, lines.len() as u16);
-    SignBox { title, rows: lines }.render(frame, rect, accent);
+    SignBox { title, rows: lines }.render(frame, shell, accent);
 }
 
 fn status_line(dash: &Dash) -> String {
@@ -2196,14 +2182,8 @@ fn draw_stream(
         .take(height)
         .map(|(index, line)| (index, styled_line(line)))
         .collect();
-    let content_width = styled
-        .iter()
-        .map(|(_, line)| line.width())
-        .max()
-        .unwrap_or(0) as u16;
     let title = format!("{title_word} · {}", list_status(total, *scroll_offset));
-    let rect = box_rect(area, &title, content_width, styled.len() as u16);
-    let inner_width = rect.width.saturating_sub(2) as usize;
+    let inner_width = area.width.saturating_sub(2) as usize;
     let visible: Vec<Line> = styled
         .into_iter()
         .map(|(index, line)| match highlight_from {
@@ -2215,7 +2195,7 @@ fn draw_stream(
         title: &title,
         rows: visible,
     }
-    .render(frame, rect, accent);
+    .render(frame, area, accent);
 }
 
 fn highlight_bar(line: Line<'_>, inner_width: usize) -> Line<'_> {
