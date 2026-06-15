@@ -221,7 +221,7 @@ fn last_run_from_report(report: &serde_json::Value) -> Option<(String, LastRun)>
 }
 
 pub(crate) fn emu_config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|dir| dir.join("qol-tray/emu.toml"))
+    qol_config::config_dir().map(|dir| dir.join("emu.toml"))
 }
 
 fn cmd_list(args: &[OsString], verbose: bool) -> Result<()> {
@@ -1215,6 +1215,21 @@ mod tests {
                 &["-drive".to_string(), "file=/tmp/a b.qcow2".to_string()],
             ),
             "/usr/bin/qemu-system-x86_64 -drive 'file=/tmp/a b.qcow2'"
+        );
+    }
+
+    #[test]
+    fn emu_config_path_is_under_qol_config_namespace() {
+        let path = emu_config_path().expect("config dir resolves in test env");
+        assert!(
+            path.ends_with("emu.toml"),
+            "expected emu.toml leaf, got {path:?}"
+        );
+        let parent = path.parent().expect("emu.toml has a parent");
+        assert!(
+            parent.ends_with(qol_config::NAMESPACE),
+            "expected parent under {} namespace, got {parent:?}",
+            qol_config::NAMESPACE
         );
     }
 }
