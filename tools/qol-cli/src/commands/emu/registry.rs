@@ -15,7 +15,6 @@ pub(crate) struct QemuImgInfo {
 
 const KNOWN_FORMATS: &[&str] = &["qcow2", "qcow", "raw", "vhd", "vhdx", "vmdk", "vpc"];
 
-#[allow(dead_code)]
 pub(crate) fn register_image(
     emu_toml: &Path,
     candidate: &ImageCandidate,

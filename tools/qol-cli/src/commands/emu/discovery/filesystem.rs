@@ -81,7 +81,6 @@ pub(crate) fn image_id(path: &Path) -> String {
     sanitize_id(source)
 }
 
-#[allow(dead_code)]
 pub(crate) fn infer_candidate(path: &Path) -> ImageCandidate {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let id = image_id(&canonical);
