@@ -14,8 +14,8 @@ use ratatui::widgets::{Block, Clear, Padding, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::commands::emu::{
-    emu_config_path, environment_statuses, newest_run_detail, EnvironmentStatus, LastRun,
-    ResolveState, RunDetail,
+    emu_config_path, environment_statuses, legacy_advisory_count, newest_run_detail,
+    EnvironmentStatus, LastRun, ResolveState, RunDetail,
 };
 use crate::dev_server::{
     fetch_dev_links, health_ok, post_recompile_current, post_reload_plugins, probe_endpoints,
@@ -1944,6 +1944,23 @@ fn plugin_link_line(link: &DevLink) -> Line<'static> {
     ])
 }
 
+fn emu_empty_lines(config: &str, advisory: Option<String>) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from("  no emus found".fg(Color::DarkGray)),
+        Line::from(vec![
+            "  config ".fg(Color::DarkGray),
+            config.to_string().fg(Color::White),
+        ]),
+    ];
+    if let Some(advisory) = advisory {
+        lines.push(Line::from(vec![
+            "  legacy ".fg(Color::DarkGray),
+            advisory.fg(Color::Yellow),
+        ]));
+    }
+    lines
+}
+
 fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let lines = match &dash.emu {
         EmuState::Probing => vec![Line::from("  scanning emus".fg(Color::Yellow))],
@@ -1951,13 +1968,7 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
             let config = emu_config_path()
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "~/.config/qol-tray/emu.toml".to_string());
-            vec![
-                Line::from("  no emus found".fg(Color::DarkGray)),
-                Line::from(vec![
-                    "  config ".fg(Color::DarkGray),
-                    config.fg(Color::White),
-                ]),
-            ]
+            emu_empty_lines(&config, legacy_advisory_count())
         }
         EmuState::Done(statuses) => statuses
             .iter()
@@ -3308,5 +3319,16 @@ mod tests {
         }
         assert_eq!(clamp_offset(100, 10, 500), 90, "clamp to len-height");
         assert_eq!(clamp_offset(5, 10, 3), 0, "short log clamps to zero");
+    }
+
+    #[test]
+    fn emu_empty_lines_include_advisory_when_legacy_present() {
+        let with = emu_empty_lines(
+            "~/.config/qol-tray/emu.toml",
+            Some("2 image(s) in legacy roots".to_string()),
+        );
+        assert_eq!(with.len(), 3, "lines: {with:?}");
+        let without = emu_empty_lines("~/.config/qol-tray/emu.toml", None);
+        assert_eq!(without.len(), 2, "lines: {without:?}");
     }
 }

@@ -224,7 +224,7 @@ pub(crate) fn emu_config_path() -> Option<PathBuf> {
     qol_config::config_dir().map(|dir| dir.join("emu.toml"))
 }
 
-fn emu_dir() -> Option<PathBuf> {
+pub(crate) fn emu_dir() -> Option<PathBuf> {
     let override_dir = emu_config_path()
         .filter(|path| path.is_file())
         .and_then(|path| fs::read_to_string(path).ok())
@@ -251,6 +251,12 @@ fn registered_image_paths() -> Result<std::collections::HashSet<PathBuf>> {
         .into_iter()
         .map(|environment| environment.image_path)
         .collect())
+}
+
+pub(crate) fn legacy_advisory_count() -> Option<String> {
+    let dir = emu_dir()?;
+    let registered = registered_image_paths().ok()?;
+    legacy_advisory(legacy_root_image_count(&registered), &dir)
 }
 
 fn cmd_list(args: &[OsString], verbose: bool) -> Result<()> {
