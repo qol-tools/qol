@@ -3,11 +3,14 @@ use std::path::PathBuf;
 
 use super::Environment;
 
+mod candidate;
 mod config;
 mod dedupe;
 mod filesystem;
 mod libvirt;
 
+#[allow(unused_imports)]
+pub(crate) use candidate::{Discovered, ImageCandidate};
 pub(crate) use config::parse_emu_dir;
 pub(crate) use filesystem::{is_vm_image_path, legacy_root_image_count};
 
