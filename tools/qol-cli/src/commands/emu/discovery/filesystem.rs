@@ -126,7 +126,8 @@ mod tests {
 
     #[test]
     fn collect_image_paths_walks_recursively_and_dedupes_non_images() {
-        let root = std::env::temp_dir().join(format!("qol-emu-walk-{}", std::process::id()));
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
         let nested = root.join("sub");
         fs::create_dir_all(&nested).unwrap();
         fs::write(root.join("a.qcow2"), b"x").unwrap();
@@ -146,14 +147,12 @@ mod tests {
             paths.iter().any(|p| p.ends_with("b.img")),
             "paths: {paths:?}"
         );
-        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn infer_candidate_fills_arch_firmware_and_id_from_filename() {
-        let root = std::env::temp_dir().join(format!("qol-emu-infer-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        let image = root.join("win11-arm64.qcow2");
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("win11-arm64.qcow2");
         fs::write(&image, b"x").unwrap();
 
         let candidate = infer_candidate(&image);
@@ -163,14 +162,12 @@ mod tests {
         assert_eq!(candidate.firmware, Firmware::Uefi, "arm => uefi");
         assert_eq!(candidate.id, "win11-arm64");
         assert_eq!(candidate.path, image.canonicalize().unwrap());
-
-        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn legacy_count_excludes_registered_canonical_paths() {
-        let root = std::env::temp_dir().join(format!("qol-emu-legacy-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
         fs::write(root.join("a.qcow2"), b"x").unwrap();
         fs::write(root.join("b.img"), b"x").unwrap();
 
@@ -183,6 +180,5 @@ mod tests {
 
         all.insert(walked[0].clone());
         assert_eq!(count_unregistered(std::slice::from_ref(&root), &all), 1);
-        fs::remove_dir_all(&root).unwrap();
     }
 }
