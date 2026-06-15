@@ -6,10 +6,27 @@ use serde::de::DeserializeOwned;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub const NAMESPACE: &str = "qol-tray";
+
+fn resolve_namespaced(base: Option<PathBuf>) -> Option<PathBuf> {
+    base.map(|path| path.join(NAMESPACE))
+}
+
+pub fn data_dir() -> Option<PathBuf> {
+    resolve_namespaced(dirs::data_local_dir().or_else(dirs::data_dir))
+}
+
+pub fn config_dir() -> Option<PathBuf> {
+    resolve_namespaced(dirs::config_dir())
+}
+
+pub fn data_subdir(name: &str) -> Option<PathBuf> {
+    data_dir().map(|path| path.join(name))
+}
+
+#[doc(hidden)]
 pub fn base_data_dir() -> Option<PathBuf> {
-    dirs::data_local_dir()
-        .or_else(dirs::data_dir)
-        .map(|path| path.join("qol-tray"))
+    data_dir()
 }
 
 pub fn config_roots() -> Vec<PathBuf> {
@@ -153,6 +170,38 @@ pub fn valid_install_id(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn namespaced_resolver_joins_base_with_namespace() {
+        let cases = [
+            (
+                Some(PathBuf::from("/data")),
+                Some(PathBuf::from("/data/qol-tray")),
+            ),
+            (
+                Some(PathBuf::from("/home/user/.local/share")),
+                Some(PathBuf::from("/home/user/.local/share/qol-tray")),
+            ),
+            (None, None),
+        ];
+        for (base, expected) in cases {
+            assert_eq!(resolve_namespaced(base.clone()), expected, "base: {base:?}");
+        }
+    }
+
+    #[test]
+    fn data_subdir_appends_under_namespaced_data_dir() {
+        let Some(data) = data_dir() else {
+            return;
+        };
+        assert_eq!(data_subdir("emu"), Some(data.join("emu")));
+    }
+
+    #[test]
+    fn base_data_dir_is_an_alias_of_data_dir() {
+        assert_eq!(base_data_dir(), data_dir());
+        assert_eq!(NAMESPACE, "qol-tray");
+    }
 
     #[test]
     fn without_pinned_install_base_is_the_only_data_root() {
