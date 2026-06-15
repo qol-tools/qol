@@ -28,6 +28,8 @@ pub(crate) fn discover(context: DiscoveryContext) -> Result<Vec<Environment>> {
         context.virsh.as_deref(),
         context.libvirt_uris,
     ));
-    environments.extend(filesystem::discover(&context.image_search_roots));
+    for root in &context.image_search_roots {
+        environments.extend(filesystem::discover(root));
+    }
     Ok(dedupe::dedupe_and_sort(environments))
 }
