@@ -6,21 +6,38 @@ use super::super::{arch::GuestArch, humanize_id, sanitize_id, Environment};
 
 const MAX_SCAN_DEPTH: usize = 4;
 
-pub(crate) fn discover(roots: &[PathBuf]) -> Vec<Environment> {
-    let mut environments = Vec::new();
+pub(crate) fn discover(dir: &Path) -> Vec<Environment> {
     let mut seen = HashSet::new();
-    for root in roots {
-        collect_image_environments(root, MAX_SCAN_DEPTH, &mut seen, &mut environments);
-    }
-    environments
+    let paths = collect_image_paths(std::slice::from_ref(&dir.to_path_buf()), &mut seen);
+    collect_image_environments(paths)
 }
 
-fn collect_image_environments(
-    root: &Path,
-    depth: usize,
-    seen: &mut HashSet<PathBuf>,
-    environments: &mut Vec<Environment>,
-) {
+fn collect_image_environments(paths: Vec<PathBuf>) -> Vec<Environment> {
+    paths
+        .into_iter()
+        .map(|path| {
+            let id = image_id(&path);
+            Environment {
+                name: humanize_id(&id),
+                id,
+                backend: "qemu".to_string(),
+                arch: GuestArch::X86_64,
+                image_path: path,
+                source: "scan".to_string(),
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn collect_image_paths(roots: &[PathBuf], seen: &mut HashSet<PathBuf>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for root in roots {
+        collect_into(root, MAX_SCAN_DEPTH, seen, &mut paths);
+    }
+    paths
+}
+
+fn collect_into(root: &Path, depth: usize, seen: &mut HashSet<PathBuf>, paths: &mut Vec<PathBuf>) {
     if depth == 0 || !root.is_dir() {
         return;
     }
@@ -30,25 +47,16 @@ fn collect_image_environments(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_image_environments(&path, depth - 1, seen, environments);
+            collect_into(&path, depth - 1, seen, paths);
             continue;
         }
         if !is_vm_image_path(&path) {
             continue;
         }
         let canonical = path.canonicalize().unwrap_or(path);
-        if !seen.insert(canonical.clone()) {
-            continue;
+        if seen.insert(canonical.clone()) {
+            paths.push(canonical);
         }
-        let id = image_id(&canonical);
-        environments.push(Environment {
-            name: humanize_id(&id),
-            id,
-            backend: "qemu".to_string(),
-            arch: GuestArch::X86_64,
-            image_path: canonical,
-            source: "scan".to_string(),
-        });
     }
 }
 
@@ -99,5 +107,30 @@ mod tests {
         assert!(is_vm_image_path(Path::new("a.qcow2")));
         assert!(is_vm_image_path(Path::new("a.VHDX")));
         assert!(!is_vm_image_path(Path::new("a.txt")));
+    }
+
+    #[test]
+    fn collect_image_paths_walks_recursively_and_dedupes_non_images() {
+        let root = std::env::temp_dir().join(format!("qol-emu-walk-{}", std::process::id()));
+        let nested = root.join("sub");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(root.join("a.qcow2"), b"x").unwrap();
+        fs::write(root.join("notes.txt"), b"x").unwrap();
+        fs::write(nested.join("b.img"), b"x").unwrap();
+
+        let mut seen = HashSet::new();
+        let mut paths = collect_image_paths(std::slice::from_ref(&root), &mut seen);
+        paths.sort();
+
+        assert_eq!(paths.len(), 2, "paths: {paths:?}");
+        assert!(
+            paths.iter().any(|p| p.ends_with("a.qcow2")),
+            "paths: {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p.ends_with("b.img")),
+            "paths: {paths:?}"
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 }
