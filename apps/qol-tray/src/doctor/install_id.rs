@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use crate::file_io;
 
-const APP_NAME: &str = "qol-tray";
 const INSTALL_ID_MARKER_FILE: &str = "qol-tray.install-id";
 const ACTIVE_INSTALL_ID_FILE: &str = "active-install-id";
 
@@ -19,10 +18,8 @@ pub(super) fn marker_path_for(current_exe: &Path) -> Result<PathBuf> {
 }
 
 pub(super) fn active_install_id_path() -> Result<PathBuf> {
-    let base = dirs::data_local_dir()
-        .or_else(dirs::data_dir)
-        .context("could not determine local data directory")?;
-    Ok(base.join(APP_NAME).join(ACTIVE_INSTALL_ID_FILE))
+    let base = qol_config::data_dir().context("could not determine local data directory")?;
+    Ok(base.join(ACTIVE_INSTALL_ID_FILE))
 }
 
 pub(super) fn read_install_id_file(path: &Path) -> Option<String> {
@@ -50,4 +47,24 @@ fn valid_install_id(value: &str) -> bool {
         && value
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_install_id_path_nests_namespace_and_marker_file() {
+        let path = active_install_id_path().expect("data dir resolves in test env");
+        assert!(
+            path.ends_with(ACTIVE_INSTALL_ID_FILE),
+            "expected {ACTIVE_INSTALL_ID_FILE} leaf, got {path:?}"
+        );
+        let parent = path.parent().expect("active-install-id has a parent");
+        assert!(
+            parent.ends_with(qol_config::NAMESPACE),
+            "expected parent under {} namespace, got {parent:?}",
+            qol_config::NAMESPACE
+        );
+    }
 }
