@@ -36,10 +36,15 @@ impl GuestArch {
         }
     }
 
-    pub(crate) fn firmware_file(self) -> Option<&'static str> {
-        match self {
-            GuestArch::X86_64 => None,
-            GuestArch::Aarch64 => Some("edk2-aarch64-code.fd"),
+    pub(crate) fn firmware_file(self, firmware: Firmware) -> Vec<&'static str> {
+        match (self, firmware) {
+            (GuestArch::X86_64, Firmware::Bios) => vec![],
+            (GuestArch::X86_64, Firmware::Uefi) => {
+                vec!["edk2-x86_64-code.fd", "OVMF_CODE.fd", "OVMF_CODE_4M.fd"]
+            }
+            (GuestArch::Aarch64, Firmware::Bios | Firmware::Uefi) => {
+                vec!["edk2-aarch64-code.fd"]
+            }
         }
     }
 }
@@ -50,7 +55,6 @@ pub(crate) enum Firmware {
     Uefi,
 }
 
-#[allow(dead_code)]
 impl Firmware {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -75,7 +79,6 @@ impl Firmware {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn infer_arch_from_filename(name: &str) -> Option<GuestArch> {
     let lower = name.to_ascii_lowercase();
     let contains = |needle: &str| lower.contains(needle);
@@ -93,13 +96,11 @@ pub(crate) fn infer_arch_from_filename(name: &str) -> Option<GuestArch> {
     None
 }
 
-#[allow(dead_code)]
 pub(crate) fn is_windows_image_hint(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.contains("win") || lower.contains("windows") || lower.ends_with(".vhdx")
 }
 
-#[allow(dead_code)]
 pub(crate) fn infer_firmware(arch: GuestArch, name: &str) -> Firmware {
     match arch {
         GuestArch::Aarch64 => Firmware::Uefi,
@@ -138,6 +139,35 @@ mod tests {
         ];
         for (arch, expected) in cases {
             assert_eq!(arch.qemu_system_binary(), expected, "arch: {arch:?}");
+        }
+    }
+
+    #[test]
+    fn firmware_file_selection_by_arch_and_mode() {
+        let cases: [(GuestArch, Firmware, Vec<&str>); 4] = [
+            (GuestArch::X86_64, Firmware::Bios, vec![]),
+            (
+                GuestArch::X86_64,
+                Firmware::Uefi,
+                vec!["edk2-x86_64-code.fd", "OVMF_CODE.fd", "OVMF_CODE_4M.fd"],
+            ),
+            (
+                GuestArch::Aarch64,
+                Firmware::Bios,
+                vec!["edk2-aarch64-code.fd"],
+            ),
+            (
+                GuestArch::Aarch64,
+                Firmware::Uefi,
+                vec!["edk2-aarch64-code.fd"],
+            ),
+        ];
+        for (arch, firmware, expected) in cases {
+            assert_eq!(
+                GuestArch::firmware_file(arch, firmware),
+                expected,
+                "arch: {arch:?}, firmware: {firmware:?}"
+            );
         }
     }
 

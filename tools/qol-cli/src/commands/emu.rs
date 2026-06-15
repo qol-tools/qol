@@ -787,7 +787,7 @@ fn resolve_environment(environment: &Environment) -> Resolution {
         };
     }
     let firmware = match qemu_system.as_deref() {
-        Some(path) => match locate_firmware(path, environment.arch) {
+        Some(path) => match locate_firmware(path, environment.arch, environment.firmware) {
             Ok(firmware) => firmware,
             Err(reason) => {
                 return Resolution {
@@ -825,22 +825,51 @@ fn resolve_environment(environment: &Environment) -> Resolution {
     }
 }
 
+const FIRMWARE_FALLBACK_DIRS: [&str; 3] =
+    ["/usr/share/qemu", "/usr/share/OVMF", "/usr/share/edk2/x64"];
+
 fn locate_firmware(
     qemu_system: &Path,
     arch: GuestArch,
+    firmware: Firmware,
 ) -> std::result::Result<Option<PathBuf>, String> {
-    let Some(file) = arch.firmware_file() else {
+    locate_firmware_in(qemu_system, arch, firmware, &FIRMWARE_FALLBACK_DIRS)
+}
+
+fn locate_firmware_in(
+    qemu_system: &Path,
+    arch: GuestArch,
+    firmware: Firmware,
+    fallback_dirs: &[&str],
+) -> std::result::Result<Option<PathBuf>, String> {
+    let candidates = arch.firmware_file(firmware);
+    if candidates.is_empty() {
         return Ok(None);
-    };
+    }
     let Some(bin_dir) = qemu_system.parent() else {
         return Err(format!("{} has no parent directory", qemu_system.display()));
     };
-    let share = bin_dir.join("../share/qemu");
-    let candidate = share.join(file);
-    match candidate.canonicalize() {
-        Ok(path) if path.is_file() => Ok(Some(path)),
-        _ => Err(format!("missing {file} under {}", share.display())),
+    let mut search_dirs = vec![bin_dir.join("../share/qemu")];
+    search_dirs.extend(fallback_dirs.iter().map(PathBuf::from));
+    for dir in &search_dirs {
+        for file in &candidates {
+            let candidate = dir.join(file);
+            if let Ok(path) = candidate.canonicalize() {
+                if path.is_file() {
+                    return Ok(Some(path));
+                }
+            }
+        }
     }
+    Err(format!(
+        "missing firmware ({}) under {}",
+        candidates.join(", "),
+        search_dirs
+            .iter()
+            .map(|dir| dir.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
 }
 
 fn image_path_status(path: &Path) -> std::result::Result<PathBuf, (ResolveState, String)> {
@@ -1312,24 +1341,43 @@ mod tests {
 
     #[test]
     fn locate_firmware_finds_edk2_next_to_binary() {
-        let root = std::env::temp_dir().join(format!("qol-emu-fw-{}", std::process::id()));
-        let bin = root.join("bin");
-        let share = root.join("share/qemu");
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        let share = root.path().join("share/qemu");
         fs::create_dir_all(&bin).unwrap();
         fs::create_dir_all(&share).unwrap();
         let qemu_system = bin.join("qemu-system-aarch64");
         fs::write(&qemu_system, b"x").unwrap();
 
-        assert_eq!(locate_firmware(&qemu_system, GuestArch::X86_64), Ok(None));
-        let missing = locate_firmware(&qemu_system, GuestArch::Aarch64).unwrap_err();
-        assert!(missing.contains("edk2-aarch64-code.fd"), "error: {missing}");
+        assert_eq!(
+            locate_firmware_in(&qemu_system, GuestArch::X86_64, Firmware::Bios, &[]),
+            Ok(None)
+        );
+
+        let arm_missing =
+            locate_firmware_in(&qemu_system, GuestArch::Aarch64, Firmware::Uefi, &[]).unwrap_err();
+        assert!(
+            arm_missing.contains("edk2-aarch64-code.fd"),
+            "error: {arm_missing}"
+        );
+        let x86_missing =
+            locate_firmware_in(&qemu_system, GuestArch::X86_64, Firmware::Uefi, &[]).unwrap_err();
+        assert!(x86_missing.contains("OVMF_CODE.fd"), "error: {x86_missing}");
 
         fs::write(share.join("edk2-aarch64-code.fd"), b"fw").unwrap();
-        let found = locate_firmware(&qemu_system, GuestArch::Aarch64)
+        let arm_found = locate_firmware_in(&qemu_system, GuestArch::Aarch64, Firmware::Uefi, &[])
             .unwrap()
             .unwrap();
-        assert!(found.ends_with("edk2-aarch64-code.fd"), "found: {found:?}");
-        fs::remove_dir_all(&root).unwrap();
+        assert!(
+            arm_found.ends_with("edk2-aarch64-code.fd"),
+            "found: {arm_found:?}"
+        );
+
+        fs::write(share.join("OVMF_CODE.fd"), b"fw").unwrap();
+        let x86_found = locate_firmware_in(&qemu_system, GuestArch::X86_64, Firmware::Uefi, &[])
+            .unwrap()
+            .unwrap();
+        assert!(x86_found.ends_with("OVMF_CODE.fd"), "found: {x86_found:?}");
     }
 
     #[test]
