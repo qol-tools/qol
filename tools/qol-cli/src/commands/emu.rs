@@ -24,7 +24,9 @@ mod workflow;
 
 #[allow(unused_imports)]
 pub(crate) use arch::{Firmware, GuestArch};
-use discovery::{legacy_root_image_count, parse_emu_dir, DiscoveryContext};
+pub(crate) use discovery::{
+    legacy_root_image_count, parse_emu_dir, Discovered, DiscoveryContext, ImageCandidate,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Environment {
@@ -106,9 +108,9 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
     }
 }
 
-pub(crate) fn environment_statuses() -> Result<Vec<EnvironmentStatus>> {
+fn statuses_for(environments: Vec<Environment>) -> Vec<EnvironmentStatus> {
     let mut last_runs = last_runs_by_id();
-    Ok(discover_environments()?
+    environments
         .into_iter()
         .map(|environment| {
             let resolution = resolve_environment(&environment);
@@ -120,7 +122,17 @@ pub(crate) fn environment_statuses() -> Result<Vec<EnvironmentStatus>> {
                 reason: resolution.reason,
             }
         })
-        .collect())
+        .collect()
+}
+
+pub(crate) fn environment_statuses() -> Result<Vec<EnvironmentStatus>> {
+    Ok(statuses_for(discover_environments()?))
+}
+
+#[allow(dead_code)]
+pub(crate) fn emu_scan() -> Result<(Vec<EnvironmentStatus>, Vec<ImageCandidate>)> {
+    let discovered = discover_all()?;
+    Ok((statuses_for(discovered.environments), discovered.candidates))
 }
 
 fn last_runs_by_id() -> HashMap<String, LastRun> {
@@ -732,7 +744,7 @@ fn emu_help_text() -> &'static str {
     "qol emu commands:\n  qol emu list\n  qol emu doctor\n  qol emu up <environment>\n  qol emu run <workflow> <environment>\n  qol emu check <environment>\n  qol emu shot <environment>\n  qol emu key <environment> <qcode>...\n  qol emu insert <environment>\n  qol emu pull <environment>\n  qol emu snap <environment>\n  qol emu sh <environment> <command>...\n  qol emu down <environment>\n\nControl verbs target the newest running `qol emu up` for that environment.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n"
 }
 
-fn discover_environments() -> Result<Vec<Environment>> {
+pub(crate) fn discover_all() -> Result<Discovered> {
     discovery::discover(DiscoveryContext {
         config_path: emu_config_path(),
         home_dir: dirs::home_dir(),
@@ -740,6 +752,10 @@ fn discover_environments() -> Result<Vec<Environment>> {
         libvirt_uris: platform::libvirt_uris(),
         emu_dir: emu_dir().unwrap_or_default(),
     })
+}
+
+fn discover_environments() -> Result<Vec<Environment>> {
+    Ok(discover_all()?.environments)
 }
 
 fn resolve_environment(environment: &Environment) -> Resolution {
@@ -1101,6 +1117,32 @@ mod tests {
     fn sanitizes_domain_names_for_cli_ids() {
         assert_eq!(sanitize_id("Windows 11 Pro"), "windows-11-pro");
         assert_eq!(sanitize_id("!!!"), "emu");
+    }
+
+    #[test]
+    fn statuses_for_maps_each_environment_to_a_status() {
+        let environments = vec![
+            Environment {
+                id: "alpha".to_string(),
+                name: "Alpha".to_string(),
+                backend: "qemu".to_string(),
+                arch: GuestArch::X86_64,
+                image_path: PathBuf::from("/a/b/alpha.qcow2"),
+                source: "config".to_string(),
+            },
+            Environment {
+                id: "beta".to_string(),
+                name: "Beta".to_string(),
+                backend: "qemu".to_string(),
+                arch: GuestArch::Aarch64,
+                image_path: PathBuf::from("/a/b/beta.qcow2"),
+                source: "config".to_string(),
+            },
+        ];
+        let statuses = statuses_for(environments);
+        let ids: Vec<&str> = statuses.iter().map(|status| status.id.as_str()).collect();
+        assert_eq!(ids, vec!["alpha", "beta"], "statuses: {statuses:?}");
+        assert!(statuses.iter().all(|status| status.backend == "qemu"));
     }
 
     #[test]

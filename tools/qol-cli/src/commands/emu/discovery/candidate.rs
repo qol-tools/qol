@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use super::super::{arch::Firmware, arch::GuestArch, humanize_id, Environment};
 use super::filesystem::{image_id, is_vm_image_path};
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ImageCandidate {
     pub(crate) id: String,
@@ -15,14 +14,12 @@ pub(crate) struct ImageCandidate {
     pub(crate) firmware: Firmware,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Discovered {
     pub(crate) environments: Vec<Environment>,
     pub(crate) candidates: Vec<ImageCandidate>,
 }
 
-#[allow(dead_code)]
 impl Discovered {
     pub(crate) fn partition(environments: Vec<Environment>, emu_dir_entries: &[PathBuf]) -> Self {
         let registered: HashSet<PathBuf> = environments
@@ -51,12 +48,10 @@ impl Discovered {
     }
 }
 
-#[allow(dead_code)]
 fn canonical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-#[allow(dead_code)]
 fn candidate_for(path: PathBuf) -> ImageCandidate {
     let id = image_id(&path);
     let display_name = humanize_id(&id);
