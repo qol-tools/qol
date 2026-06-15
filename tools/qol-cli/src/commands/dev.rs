@@ -8,7 +8,7 @@ use crate::workspace::{
 };
 use anyhow::{bail, Context, Result};
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{channel, Receiver};
 
@@ -223,11 +223,14 @@ fn register_dev_links(plugins: &[BuildablePlugin]) {
     }
 }
 
+fn active_worktree_marker_path() -> Option<PathBuf> {
+    qol_config::config_dir().map(|dir| dir.join("dev/active-worktree.txt"))
+}
+
 fn clear_active_worktree_marker() {
-    let Some(config_dir) = dirs::config_dir() else {
+    let Some(path) = active_worktree_marker_path() else {
         return;
     };
-    let path = config_dir.join("qol-tray/dev/active-worktree.txt");
     let _ = std::fs::remove_file(path);
 }
 
@@ -340,5 +343,18 @@ mod tests {
             parse_worktree_branches(input),
             vec!["main".to_string(), "feat/x".to_string()]
         );
+    }
+
+    #[test]
+    fn active_worktree_marker_path_is_under_qol_config_namespace() {
+        let path = active_worktree_marker_path().expect("config dir resolves in test env");
+        assert!(
+            path.ends_with("dev/active-worktree.txt"),
+            "expected dev/active-worktree.txt tail, got {path:?}"
+        );
+        let namespaced = path
+            .components()
+            .any(|c| c.as_os_str() == qol_config::NAMESPACE);
+        assert!(namespaced, "expected {} in {path:?}", qol_config::NAMESPACE);
     }
 }
