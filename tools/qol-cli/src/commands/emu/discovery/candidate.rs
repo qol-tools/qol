@@ -79,6 +79,7 @@ mod tests {
             arch: GuestArch::X86_64,
             image_path: path.to_path_buf(),
             source: "config".to_string(),
+            firmware: Firmware::for_arch(GuestArch::X86_64),
         }
     }
 

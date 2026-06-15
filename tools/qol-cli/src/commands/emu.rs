@@ -36,6 +36,7 @@ pub(crate) struct Environment {
     arch: GuestArch,
     image_path: PathBuf,
     source: String,
+    firmware: Firmware,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -996,6 +997,7 @@ fn report_json(input: ReportInput<'_>) -> Result<serde_json::Value> {
             "arch": input.environment.arch.as_str(),
             "image_path": input.environment.image_path,
             "source": input.environment.source,
+            "firmware": input.environment.firmware.as_str(),
         },
         "resolution": {
             "state": input.resolution.state.as_str(),
@@ -1120,6 +1122,45 @@ mod tests {
     }
 
     #[test]
+    fn report_json_serializes_firmware() {
+        let environment = Environment {
+            id: "foo".to_string(),
+            name: "Foo".to_string(),
+            backend: "qemu".to_string(),
+            arch: GuestArch::X86_64,
+            image_path: PathBuf::from("/a/b/base.qcow2"),
+            source: "config".to_string(),
+            firmware: Firmware::Uefi,
+        };
+        let resolution = Resolution {
+            state: ResolveState::Ready,
+            reason: "ready".to_string(),
+            image_path: PathBuf::from("/a/b/base.qcow2"),
+            qemu_system: None,
+            qemu_img: None,
+            acceleration: "kvm",
+            firmware: None,
+        };
+        let report = report_json(ReportInput {
+            environment: &environment,
+            resolution: &resolution,
+            run_dir: Path::new("/a/b/run"),
+            status: "ok",
+            overlay: None,
+            qemu_command: None,
+            commands: Vec::new(),
+            qmp: None,
+            serial: None,
+            workflow: None,
+            teardown: None,
+            next: Vec::new(),
+            started_at: 0,
+        })
+        .unwrap();
+        assert_eq!(report["environment"]["firmware"], "uefi");
+    }
+
+    #[test]
     fn statuses_for_maps_each_environment_to_a_status() {
         let environments = vec![
             Environment {
@@ -1129,6 +1170,7 @@ mod tests {
                 arch: GuestArch::X86_64,
                 image_path: PathBuf::from("/a/b/alpha.qcow2"),
                 source: "config".to_string(),
+                firmware: Firmware::Bios,
             },
             Environment {
                 id: "beta".to_string(),
@@ -1137,6 +1179,7 @@ mod tests {
                 arch: GuestArch::Aarch64,
                 image_path: PathBuf::from("/a/b/beta.qcow2"),
                 source: "config".to_string(),
+                firmware: Firmware::Uefi,
             },
         ];
         let statuses = statuses_for(environments);
@@ -1190,6 +1233,7 @@ mod tests {
             arch: GuestArch::X86_64,
             image_path: PathBuf::from("/a/b/base.qcow2"),
             source: "config".to_string(),
+            firmware: Firmware::Bios,
         };
         let args = qemu_args(
             &environment,
@@ -1230,6 +1274,7 @@ mod tests {
             arch: GuestArch::Aarch64,
             image_path: PathBuf::from("/a/b/base.qcow2"),
             source: "config".to_string(),
+            firmware: Firmware::Uefi,
         };
         let accelerated = qemu_args(
             &environment,

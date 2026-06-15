@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
 
-use super::super::{arch::GuestArch, humanize_id, sanitize_id, Environment};
+use super::super::{arch::GuestArch, humanize_id, sanitize_id, Environment, Firmware};
 
 pub(crate) fn discover(path: Option<&Path>, home: Option<&PathBuf>) -> Result<Vec<Environment>> {
     Ok(load_image_overrides(path, home)?
@@ -16,6 +16,7 @@ pub(crate) fn discover(path: Option<&Path>, home: Option<&PathBuf>) -> Result<Ve
             arch,
             image_path,
             source: "config".to_string(),
+            firmware: Firmware::for_arch(arch),
         })
         .collect())
 }
