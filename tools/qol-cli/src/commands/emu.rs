@@ -880,13 +880,8 @@ fn detect_image_format(program: &Path, image_path: &Path, verbose: bool) -> Resu
     if !output.status.success() {
         bail!("qemu-img info failed with {}", output.status);
     }
-    let parsed: serde_json::Value =
-        serde_json::from_slice(&output.stdout).context("failed to parse qemu-img info JSON")?;
-    parsed
-        .get("format")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| anyhow!("qemu-img info did not report an image format"))
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(registry::parse_qemu_img_info(&stdout)?.format)
 }
 
 fn qemu_args(
