@@ -5656,6 +5656,7 @@ dependencies = [
  "ansi-to-tui",
  "anyhow",
  "dirs 6.0.0",
+ "qol-config",
  "ratatui",
  "serde",
  "serde_json",
