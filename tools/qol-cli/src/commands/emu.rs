@@ -19,6 +19,7 @@ mod live;
 mod machine;
 mod platform;
 mod qmp;
+mod registry;
 mod serial;
 mod workflow;
 
