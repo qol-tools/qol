@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::super::sanitize_id;
+use super::super::arch::{infer_arch_from_filename, infer_firmware, GuestArch};
+use super::super::{humanize_id, sanitize_id};
+use super::candidate::ImageCandidate;
 
 const MAX_SCAN_DEPTH: usize = 4;
 
@@ -79,8 +81,31 @@ pub(crate) fn image_id(path: &Path) -> String {
     sanitize_id(source)
 }
 
+#[allow(dead_code)]
+pub(crate) fn infer_candidate(path: &Path) -> ImageCandidate {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let id = image_id(&canonical);
+    let display_name = humanize_id(&id);
+    let name = canonical
+        .file_name()
+        .and_then(|os| os.to_str())
+        .unwrap_or_default();
+    let inferred = infer_arch_from_filename(name);
+    let arch = inferred.unwrap_or(GuestArch::X86_64);
+    let firmware = infer_firmware(arch, name);
+    ImageCandidate {
+        id,
+        path: canonical,
+        display_name,
+        arch,
+        arch_inferred: inferred.is_some(),
+        firmware,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::super::arch::Firmware;
     use super::*;
 
     #[test]
@@ -121,6 +146,24 @@ mod tests {
             paths.iter().any(|p| p.ends_with("b.img")),
             "paths: {paths:?}"
         );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn infer_candidate_fills_arch_firmware_and_id_from_filename() {
+        let root = std::env::temp_dir().join(format!("qol-emu-infer-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let image = root.join("win11-arm64.qcow2");
+        fs::write(&image, b"x").unwrap();
+
+        let candidate = infer_candidate(&image);
+
+        assert_eq!(candidate.arch, GuestArch::Aarch64, "arm64 token");
+        assert!(candidate.arch_inferred, "arch was inferred from filename");
+        assert_eq!(candidate.firmware, Firmware::Uefi, "arm => uefi");
+        assert_eq!(candidate.id, "win11-arm64");
+        assert_eq!(candidate.path, image.canonicalize().unwrap());
+
         fs::remove_dir_all(&root).unwrap();
     }
 

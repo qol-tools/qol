@@ -75,6 +75,44 @@ impl Firmware {
     }
 }
 
+#[allow(dead_code)]
+pub(crate) fn infer_arch_from_filename(name: &str) -> Option<GuestArch> {
+    let lower = name.to_ascii_lowercase();
+    let contains = |needle: &str| lower.contains(needle);
+    if contains("arm64") || contains("aarch64") {
+        return Some(GuestArch::Aarch64);
+    }
+    if contains("amd64")
+        || contains("x86_64")
+        || contains("x64")
+        || contains("i386")
+        || contains("i686")
+    {
+        return Some(GuestArch::X86_64);
+    }
+    None
+}
+
+#[allow(dead_code)]
+pub(crate) fn is_windows_image_hint(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.contains("win") || lower.contains("windows") || lower.ends_with(".vhdx")
+}
+
+#[allow(dead_code)]
+pub(crate) fn infer_firmware(arch: GuestArch, name: &str) -> Firmware {
+    match arch {
+        GuestArch::Aarch64 => Firmware::Uefi,
+        GuestArch::X86_64 => {
+            if is_windows_image_hint(name) {
+                Firmware::Uefi
+            } else {
+                Firmware::Bios
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,6 +164,49 @@ mod tests {
         ];
         for (arch, expected) in cases {
             assert_eq!(Firmware::for_arch(arch), expected, "arch: {arch:?}");
+        }
+    }
+
+    #[test]
+    fn infers_arch_from_filename_tokens() {
+        let cases = [
+            ("ubuntu-arm64.qcow2", Some(GuestArch::Aarch64)),
+            ("debian-aarch64.img", Some(GuestArch::Aarch64)),
+            ("win11-amd64.vhdx", Some(GuestArch::X86_64)),
+            ("fedora-x86_64.raw", Some(GuestArch::X86_64)),
+            ("disk-x64.qcow2", Some(GuestArch::X86_64)),
+            ("legacy-i386.img", Some(GuestArch::X86_64)),
+            ("old-i686.img", Some(GuestArch::X86_64)),
+            ("mystery.qcow2", None),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(infer_arch_from_filename(name), expected, "name: {name}");
+        }
+    }
+
+    #[test]
+    fn detects_windows_image_hint() {
+        let cases = [
+            ("win11.qcow2", true),
+            ("windows-server.img", true),
+            ("disk.vhdx", true),
+            ("ubuntu.qcow2", false),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(is_windows_image_hint(name), expected, "name: {name}");
+        }
+    }
+
+    #[test]
+    fn infers_firmware_per_arch_and_windows_hint() {
+        let cases = [
+            (GuestArch::Aarch64, "ubuntu-arm64.qcow2", Firmware::Uefi),
+            (GuestArch::X86_64, "ubuntu.qcow2", Firmware::Bios),
+            (GuestArch::X86_64, "win11.vhdx", Firmware::Uefi),
+            (GuestArch::X86_64, "windows-server.qcow2", Firmware::Uefi),
+        ];
+        for (arch, name, expected) in cases {
+            assert_eq!(infer_firmware(arch, name), expected, "name: {name}");
         }
     }
 }

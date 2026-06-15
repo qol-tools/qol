@@ -11,6 +11,8 @@ mod libvirt;
 pub(crate) use candidate::{Discovered, ImageCandidate};
 pub(crate) use config::parse_emu_dir;
 pub(crate) use filesystem::{is_vm_image_path, legacy_root_image_count};
+#[allow(unused_imports)]
+pub(crate) use filesystem::infer_candidate;
 
 pub(crate) struct DiscoveryContext {
     pub(crate) config_path: Option<PathBuf>,
