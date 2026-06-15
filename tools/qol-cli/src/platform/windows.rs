@@ -1,5 +1,6 @@
 use super::PlatformOps;
 use anyhow::Result;
+use std::path::Path;
 use std::process::Command;
 
 pub(crate) struct Platform;
@@ -24,7 +25,16 @@ impl PlatformOps for Platform {
         let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
     }
 
+    fn open_path(&self, dir: &Path) {
+        let (program, args) = open_path_argv(dir);
+        let _ = Command::new(program).args(args).spawn();
+    }
+
     fn copy_to_clipboard(&self, text: &str) -> Result<()> {
         super::pipe_to_clipboard("clip", &[], text)
     }
+}
+
+fn open_path_argv(dir: &Path) -> (&'static str, Vec<String>) {
+    ("explorer", vec![dir.display().to_string()])
 }

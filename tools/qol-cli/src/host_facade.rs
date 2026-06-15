@@ -17,6 +17,10 @@ pub(crate) fn open_url(url: &str) {
     Platform.open_url(url)
 }
 
+pub(crate) fn open_path(dir: &std::path::Path) {
+    Platform.open_path(dir)
+}
+
 pub(crate) fn copy_to_clipboard(text: &str) -> Result<()> {
     Platform.copy_to_clipboard(text)
 }
