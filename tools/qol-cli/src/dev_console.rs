@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, Clear, Padding, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::commands::emu::{
-    emu_config_path, environment_statuses, legacy_advisory_count, newest_run_detail,
+    emu_config_path, emu_scan, legacy_advisory_count, newest_run_detail, ImageCandidate,
     EnvironmentStatus, LastRun, ResolveState, RunDetail,
 };
 use crate::dev_server::{
@@ -293,9 +293,11 @@ struct HealthSnapshot {
     web: bool,
 }
 
+type EmuScanResult = Result<(Vec<EnvironmentStatus>, Vec<ImageCandidate>), String>;
+
 struct Probes {
     health: Poller<HealthSnapshot>,
-    emu: Poller<Result<Vec<EnvironmentStatus>, String>>,
+    emu: Poller<EmuScanResult>,
     links: Poller<Result<Vec<DevLink>, String>>,
     doctor: Poller<Result<DoctorRun, String>>,
     endpoints: Option<Poller<Vec<EndpointStatus>>>,
@@ -309,7 +311,7 @@ impl Probes {
                 web: web_ok(),
             }),
             emu: Poller::spawn(EMU_REFRESH_INTERVAL, || {
-                environment_statuses().map_err(|error| format!("{error:#}"))
+                emu_scan().map_err(|error| format!("{error:#}"))
             }),
             links: Poller::spawn(LINKS_REFRESH_INTERVAL, || {
                 fetch_dev_links().map_err(|error| format!("{error:#}"))
@@ -432,6 +434,7 @@ struct Dash {
     active_runs: HashMap<String, LogPane>,
     emu_detail: Option<EmuDetail>,
     emu_cursor: usize,
+    emu_candidates: Vec<ImageCandidate>,
     log_height: usize,
     cursor: usize,
     doctor: DoctorPanel,
@@ -467,6 +470,7 @@ impl Dash {
             active_runs: HashMap::new(),
             emu_detail: None,
             emu_cursor: 0,
+            emu_candidates: Vec::new(),
             log_height: 0,
             cursor: 0,
             doctor: DoctorPanel {
@@ -588,7 +592,10 @@ fn tui_session(
         }
         if let Some(outcome) = probes.emu.latest() {
             dash.emu = match outcome {
-                Ok(statuses) => EmuState::Done(statuses),
+                Ok((statuses, candidates)) => {
+                    dash.emu_candidates = candidates;
+                    EmuState::Done(statuses)
+                }
                 Err(error) => EmuState::Failed(error),
             };
         }
@@ -840,7 +847,8 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
         Action::ScrollDown => match dash.view {
             View::Dashboard => dash.cursor = (dash.cursor + 1).min(ROWS.len() - 1),
             View::Emu => {
-                dash.emu_cursor = (dash.emu_cursor + 1).min(emu_env_count(dash).saturating_sub(1))
+                let total = emu_env_count(dash) + dash.emu_candidates.len();
+                dash.emu_cursor = (dash.emu_cursor + 1).min(total.saturating_sub(1));
             }
             View::Logs
             | View::Doctor
@@ -1961,6 +1969,34 @@ fn emu_empty_lines(config: &str, advisory: Option<String>) -> Vec<Line<'static>>
     lines
 }
 
+fn candidate_row_label(arch: crate::commands::emu::GuestArch, arch_inferred: bool) -> String {
+    if arch_inferred {
+        format!("needs arch · {}", arch.as_str())
+    } else {
+        format!("needs arch · {} (host default)", arch.as_str())
+    }
+}
+
+fn candidate_line(candidate: &ImageCandidate, selected: bool) -> Line<'static> {
+    let caret: Span<'static> = if selected {
+        "▸ ".fg(Color::Green).bold()
+    } else {
+        "  ".into()
+    };
+    let id_span = if selected {
+        candidate.id.clone().fg(Color::White).bold()
+    } else {
+        candidate.id.clone().fg(Color::White)
+    };
+    Line::from(vec![
+        caret,
+        "○ ".fg(Color::DarkGray),
+        id_span,
+        format!("  {}", candidate_row_label(candidate.arch, candidate.arch_inferred))
+            .fg(Color::DarkGray),
+    ])
+}
+
 fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let lines = match &dash.emu {
         EmuState::Probing => vec![Line::from("  scanning emus".fg(Color::Yellow))],
@@ -2015,6 +2051,11 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
             error.clone().fg(Color::DarkGray),
         ])],
     };
+    let mut lines = lines;
+    let env_count = emu_env_count(dash);
+    for (index, candidate) in dash.emu_candidates.iter().enumerate() {
+        lines.push(candidate_line(candidate, env_count + index == dash.emu_cursor));
+    }
     let total = lines.len();
     let (start, height) = list_window(dash, area, total);
     let visible: Vec<Line> = lines.into_iter().skip(start).take(height).collect();
@@ -2932,6 +2973,59 @@ mod tests {
             apply_action(&mut dash, action, false);
             assert_eq!(dash.emu_cursor, expected, "after {action:?}");
             assert_eq!(dash.scroll_offset, 0, "after {action:?}");
+        }
+    }
+
+    fn emu_candidate(id: &str) -> ImageCandidate {
+        use crate::commands::emu::{Firmware, GuestArch};
+        ImageCandidate {
+            id: id.to_string(),
+            path: std::path::PathBuf::from(format!("/a/b/{id}.qcow2")),
+            display_name: id.to_string(),
+            arch: GuestArch::X86_64,
+            arch_inferred: true,
+            firmware: Firmware::Uefi,
+        }
+    }
+
+    #[test]
+    fn emu_cursor_extends_into_candidate_rows_and_clamps() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Emu;
+        dash.emu = EmuState::Done(vec![
+            emu_env("foo", ResolveState::Ready),
+            emu_env("bar", ResolveState::Ready),
+        ]);
+        dash.emu_candidates = vec![emu_candidate("baz"), emu_candidate("qux")];
+        let moves = [
+            (Action::ScrollDown, 1),
+            (Action::ScrollDown, 2),
+            (Action::ScrollDown, 3),
+            (Action::ScrollDown, 3),
+        ];
+        for (action, expected) in moves {
+            apply_action(&mut dash, action, false);
+            assert_eq!(dash.emu_cursor, expected, "after {action:?}");
+        }
+    }
+
+    #[test]
+    fn candidate_row_label_marks_inferred_arch() {
+        use crate::commands::emu::GuestArch;
+        let cases = [
+            (GuestArch::X86_64, true, "needs arch · x86_64"),
+            (
+                GuestArch::X86_64,
+                false,
+                "needs arch · x86_64 (host default)",
+            ),
+        ];
+        for (arch, inferred, expected) in cases {
+            assert_eq!(
+                candidate_row_label(arch, inferred),
+                expected,
+                "arch {arch:?} inferred {inferred}"
+            );
         }
     }
 

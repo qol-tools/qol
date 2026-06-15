@@ -134,7 +134,6 @@ pub(crate) fn environment_statuses() -> Result<Vec<EnvironmentStatus>> {
     Ok(statuses_for(discover_environments()?))
 }
 
-#[allow(dead_code)]
 pub(crate) fn emu_scan() -> Result<(Vec<EnvironmentStatus>, Vec<ImageCandidate>)> {
     let discovered = discover_all()?;
     Ok((statuses_for(discovered.environments), discovered.candidates))
