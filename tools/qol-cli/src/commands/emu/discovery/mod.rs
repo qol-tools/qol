@@ -1,7 +1,6 @@
 use anyhow::Result;
+use std::collections::HashSet;
 use std::path::PathBuf;
-
-use super::Environment;
 
 mod candidate;
 mod config;
@@ -9,7 +8,6 @@ mod dedupe;
 mod filesystem;
 mod libvirt;
 
-#[allow(unused_imports)]
 pub(crate) use candidate::{Discovered, ImageCandidate};
 pub(crate) use config::parse_emu_dir;
 pub(crate) use filesystem::{is_vm_image_path, legacy_root_image_count};
@@ -22,7 +20,7 @@ pub(crate) struct DiscoveryContext {
     pub(crate) emu_dir: PathBuf,
 }
 
-pub(crate) fn discover(context: DiscoveryContext) -> Result<Vec<Environment>> {
+pub(crate) fn discover(context: DiscoveryContext) -> Result<Discovered> {
     let mut environments = Vec::new();
     environments.extend(config::discover(
         context.config_path.as_deref(),
@@ -32,24 +30,35 @@ pub(crate) fn discover(context: DiscoveryContext) -> Result<Vec<Environment>> {
         context.virsh.as_deref(),
         context.libvirt_uris,
     ));
-    environments.extend(filesystem::discover(&context.emu_dir));
-    Ok(dedupe::dedupe_and_sort(environments))
+    let environments = dedupe::dedupe_and_sort(environments);
+    let mut seen = HashSet::new();
+    let entries =
+        filesystem::collect_image_paths(std::slice::from_ref(&context.emu_dir), &mut seen);
+    Ok(Discovered::partition(environments, &entries))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
     use std::fs;
 
     #[test]
-    fn discover_scans_the_single_emu_dir() {
+    fn discover_partitions_emu_dir_images_into_candidates() {
         let dir = std::env::temp_dir().join(format!("qol-emu-ctx-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
+        let registered_file = dir.join("registered.qcow2");
+        fs::write(&registered_file, b"x").unwrap();
         fs::write(dir.join("win11.qcow2"), b"x").unwrap();
 
-        let environments = discover(DiscoveryContext {
-            config_path: None,
+        let config = dir.join("emu.toml");
+        fs::write(
+            &config,
+            format!("[images]\nregistered = \"{}\"\n", registered_file.display()),
+        )
+        .unwrap();
+
+        let discovered = discover(DiscoveryContext {
+            config_path: Some(config),
             home_dir: None,
             virsh: None,
             libvirt_uris: &[],
@@ -57,12 +66,20 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(environments.len(), 1, "environments: {environments:?}");
-        assert_eq!(environments[0].source, "scan");
-
-        let mut registered = HashSet::new();
-        registered.insert(environments[0].image_path.clone());
-        assert!(registered.iter().any(|p| p.ends_with("win11.qcow2")));
+        assert_eq!(
+            discovered.environments.len(),
+            1,
+            "envs: {:?}",
+            discovered.environments
+        );
+        assert_eq!(discovered.environments[0].id, "registered");
+        assert_eq!(
+            discovered.candidates.len(),
+            1,
+            "candidates: {:?}",
+            discovered.candidates
+        );
+        assert!(discovered.candidates[0].path.ends_with("win11.qcow2"));
         fs::remove_dir_all(&dir).unwrap();
     }
 }

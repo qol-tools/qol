@@ -2,32 +2,9 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::super::{arch::GuestArch, humanize_id, sanitize_id, Environment};
+use super::super::sanitize_id;
 
 const MAX_SCAN_DEPTH: usize = 4;
-
-pub(crate) fn discover(dir: &Path) -> Vec<Environment> {
-    let mut seen = HashSet::new();
-    let paths = collect_image_paths(std::slice::from_ref(&dir.to_path_buf()), &mut seen);
-    collect_image_environments(paths)
-}
-
-fn collect_image_environments(paths: Vec<PathBuf>) -> Vec<Environment> {
-    paths
-        .into_iter()
-        .map(|path| {
-            let id = image_id(&path);
-            Environment {
-                name: humanize_id(&id),
-                id,
-                backend: "qemu".to_string(),
-                arch: GuestArch::X86_64,
-                image_path: path,
-                source: "scan".to_string(),
-            }
-        })
-        .collect()
-}
 
 pub(crate) fn collect_image_paths(roots: &[PathBuf], seen: &mut HashSet<PathBuf>) -> Vec<PathBuf> {
     let mut paths = Vec::new();
