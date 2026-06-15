@@ -17,6 +17,7 @@ qol-config.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml.workspace = true
+toml_edit.workspace = true
 ratatui = "0.30"
 ansi-to-tui = "8.0"
 
