@@ -48,8 +48,8 @@ mod tests {
 
     #[test]
     fn discover_partitions_emu_dir_images_into_candidates() {
-        let dir = std::env::temp_dir().join(format!("qol-emu-ctx-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().to_path_buf();
         let registered_file = dir.join("registered.qcow2");
         fs::write(&registered_file, b"x").unwrap();
         fs::write(dir.join("win11.qcow2"), b"x").unwrap();
@@ -84,6 +84,5 @@ mod tests {
             discovered.candidates
         );
         assert!(discovered.candidates[0].path.ends_with("win11.qcow2"));
-        fs::remove_dir_all(&dir).unwrap();
     }
 }

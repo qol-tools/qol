@@ -85,8 +85,8 @@ mod tests {
 
     #[test]
     fn partition_excludes_registered_paths_and_keeps_unregistered_candidates() {
-        let root = std::env::temp_dir().join(format!("qol-emu-b2-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
         let registered_file = root.join("registered.qcow2");
         let candidate_file = root.join("fresh.qcow2");
         let not_an_image = root.join("notes.txt");
@@ -117,14 +117,12 @@ mod tests {
         assert_eq!(candidate.arch, GuestArch::X86_64);
         assert!(!candidate.arch_inferred);
         assert_eq!(candidate.firmware, Firmware::Bios);
-
-        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn partition_dedups_repeated_entries_and_registered_into_emu_dir() {
-        let root = std::env::temp_dir().join(format!("qol-emu-b2dup-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
         let registered_image = root.join("vm.qcow2");
         let plain_image = root.join("plain.qcow2");
         for file in [&registered_image, &plain_image] {
@@ -146,7 +144,5 @@ mod tests {
             "registered-into-emu_dir not double-listed, repeated entry collapsed"
         );
         assert_eq!(discovered.candidates[0].id, "plain");
-
-        fs::remove_dir_all(&root).unwrap();
     }
 }
