@@ -48,9 +48,8 @@ fn config_path() -> PathBuf {
 }
 
 fn fallback_config_path() -> PathBuf {
-    dirs::config_dir()
+    qol_config::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("qol-tray")
         .join(CONFIG_FILENAME)
 }
 
@@ -199,5 +198,22 @@ mod tests {
         assert_eq!(config.actions["action1"].timeout, 60);
         assert_eq!(config.actions["action2"].timeout, 10);
         assert_eq!(config.actions["action3"].cwd, Some("/x".to_string()));
+    }
+
+    #[test]
+    fn fallback_config_path_uses_qol_config_namespace_when_available() {
+        let path = fallback_config_path();
+        assert!(
+            path.ends_with(CONFIG_FILENAME),
+            "expected {CONFIG_FILENAME} leaf, got {path:?}"
+        );
+        if path != PathBuf::from(".").join(CONFIG_FILENAME) {
+            let parent = path.parent().expect("config path has a parent");
+            assert!(
+                parent.ends_with(qol_config::NAMESPACE),
+                "expected parent under {} namespace, got {parent:?}",
+                qol_config::NAMESPACE
+            );
+        }
     }
 }
