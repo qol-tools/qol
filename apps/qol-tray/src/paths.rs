@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use crate::file_io;
 
-const APP_NAME: &str = "qol-tray";
 const ACTIVE_INSTALL_ID_FILE: &str = "active-install-id";
 const ACTIVE_PROFILE_FILE: &str = "active";
 pub const DEFAULT_PROFILE_NAME: &str = "default";
@@ -90,12 +89,10 @@ pub fn is_safe_path_component(s: &str) -> bool {
 fn legacy_config_dir() -> Result<PathBuf> {
     #[cfg(any(test, debug_assertions))]
     if let Some(root) = test_path_root() {
-        return Ok(root.join("config").join(APP_NAME));
+        return Ok(root.join("config").join(qol_config::NAMESPACE));
     }
 
-    dirs::config_dir()
-        .context("Could not determine config directory")
-        .map(|p| p.join(APP_NAME))
+    qol_config::config_dir().context("Could not determine config directory")
 }
 
 pub fn shared_config_dir() -> Result<PathBuf> {
@@ -105,13 +102,10 @@ pub fn shared_config_dir() -> Result<PathBuf> {
 pub(crate) fn base_data_dir() -> Result<PathBuf> {
     #[cfg(any(test, debug_assertions))]
     if let Some(root) = test_path_root() {
-        return Ok(root.join("data").join(APP_NAME));
+        return Ok(root.join("data").join(qol_config::NAMESPACE));
     }
 
-    dirs::data_local_dir()
-        .or_else(dirs::data_dir)
-        .context("Could not determine local data directory")
-        .map(|p| p.join(APP_NAME))
+    qol_config::data_dir().context("Could not determine local data directory")
 }
 
 pub fn installs_dir() -> Result<PathBuf> {
@@ -584,5 +578,23 @@ mod tests {
         assert!(work_shortcuts.to_string_lossy().contains(&work_tail));
         assert_ne!(personal_hotkeys, work_hotkeys);
         assert_ne!(personal_shortcuts, work_shortcuts);
+    }
+
+    #[test]
+    fn override_branch_nests_under_qol_config_namespace() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = push_test_path_root(tmp.path());
+
+        let data = base_data_dir().unwrap();
+        assert!(
+            data.ends_with(format!("data/{}", qol_config::NAMESPACE)),
+            "data dir {data:?} should nest data/<namespace>"
+        );
+
+        let config = shared_config_dir().unwrap();
+        assert!(
+            config.ends_with(format!("config/{}", qol_config::NAMESPACE)),
+            "config dir {config:?} should nest config/<namespace>"
+        );
     }
 }
