@@ -1341,7 +1341,7 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         Paragraph::new(status_line(dash)).style(status_style),
         footer,
     );
-    draw_keys_hud(frame, dash, content);
+    draw_keys_hud(frame, dash, inner);
 }
 
 fn page_header(frame: &mut Frame, view: View, inner: Rect) -> Rect {
