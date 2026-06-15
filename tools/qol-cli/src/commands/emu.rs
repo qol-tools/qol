@@ -28,6 +28,7 @@ pub(crate) use arch::{Firmware, GuestArch};
 pub(crate) use discovery::{
     legacy_root_image_count, parse_emu_dir, Discovered, DiscoveryContext, ImageCandidate,
 };
+pub(crate) use registry::register_image;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Environment {
@@ -91,6 +92,8 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
     let rest = &args[1..];
     match command {
         "list" => cmd_list(rest, verbose),
+        "add" => cmd_add(rest, verbose),
+        "open" => cmd_open(rest, verbose),
         "doctor" => cmd_doctor(rest, verbose),
         "up" => cmd_up(rest, verbose),
         "run" => cmd_run(rest, verbose),
@@ -738,12 +741,113 @@ fn finalize_vm(
     Ok((vm.run_dir.join("report.json"), removed))
 }
 
+const ADD_SYNTAX: &str =
+    "qol emu add <path> [--arch x86_64|aarch64] [--firmware bios|uefi] [--id <id>]";
+
+struct AddArgs {
+    path: PathBuf,
+    arch: Option<GuestArch>,
+    firmware: Option<Firmware>,
+    id: Option<String>,
+}
+
+fn parse_add_args(args: &[OsString]) -> Result<AddArgs> {
+    let mut path: Option<PathBuf> = None;
+    let mut arch: Option<GuestArch> = None;
+    let mut firmware: Option<Firmware> = None;
+    let mut id: Option<String> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.to_str() {
+            Some("--arch") => {
+                let value = iter
+                    .next()
+                    .and_then(|value| value.to_str())
+                    .context("--arch needs a value")?;
+                arch = Some(
+                    GuestArch::parse(value)
+                        .ok_or_else(|| anyhow!("--arch must be one of: x86_64, aarch64"))?,
+                );
+            }
+            Some("--firmware") => {
+                let value = iter
+                    .next()
+                    .and_then(|value| value.to_str())
+                    .context("--firmware needs a value")?;
+                firmware = Some(
+                    Firmware::parse(value)
+                        .ok_or_else(|| anyhow!("--firmware must be one of: bios, uefi"))?,
+                );
+            }
+            Some("--id") => {
+                let value = iter
+                    .next()
+                    .and_then(|value| value.to_str())
+                    .context("--id needs a value")?;
+                id = Some(sanitize_id(value));
+            }
+            _ => {
+                if path.is_some() {
+                    bail!("usage: {ADD_SYNTAX}");
+                }
+                path = Some(PathBuf::from(arg));
+            }
+        }
+    }
+    Ok(AddArgs {
+        path: path.with_context(|| format!("usage: {ADD_SYNTAX}"))?,
+        arch,
+        firmware,
+        id,
+    })
+}
+
+fn cmd_add(args: &[OsString], verbose: bool) -> Result<()> {
+    print_title("qol emu add");
+    print_hint(verbose);
+    let parsed = parse_add_args(args)?;
+    let mut candidate = discovery::infer_candidate(&parsed.path);
+    if let Some(arch) = parsed.arch {
+        candidate.arch = arch;
+        candidate.arch_inferred = false;
+    }
+    if let Some(firmware) = parsed.firmware {
+        candidate.firmware = firmware;
+    }
+    if let Some(id) = parsed.id {
+        candidate.id = id;
+    }
+    let qemu_img = find_on_path("qemu-img").context("missing qemu-img")?;
+    let emu_toml = emu_config_path().context("could not determine emu.toml path")?;
+    let id = register_image(&emu_toml, &candidate, &qemu_img)?;
+    step_label("add", StepKind::Info, &format!("registered {id}"));
+    Ok(())
+}
+
+fn cmd_open(args: &[OsString], _verbose: bool) -> Result<()> {
+    if !args.is_empty() {
+        bail!("usage: qol emu open");
+    }
+    let dir = emu_dir().context("could not determine emu dir")?;
+    fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    print_title("qol emu open");
+    step_label("dir", StepKind::Info, &dir.display().to_string());
+    if env::var_os("DISPLAY").is_none()
+        && env::var_os("WAYLAND_DISPLAY").is_none()
+        && crate::host_facade::os_name() == "linux"
+    {
+        return Ok(());
+    }
+    crate::host_facade::open_path(&dir);
+    Ok(())
+}
+
 fn print_emu_help() {
     print!("{}", emu_help_text());
 }
 
-fn emu_help_text() -> &'static str {
-    "qol emu commands:\n  qol emu list\n  qol emu doctor\n  qol emu up <environment>\n  qol emu run <workflow> <environment>\n  qol emu check <environment>\n  qol emu shot <environment>\n  qol emu key <environment> <qcode>...\n  qol emu insert <environment>\n  qol emu pull <environment>\n  qol emu snap <environment>\n  qol emu sh <environment> <command>...\n  qol emu down <environment>\n\nControl verbs target the newest running `qol emu up` for that environment.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n"
+fn emu_help_text() -> String {
+    format!("qol emu commands:\n  qol emu list\n  {ADD_SYNTAX}\n  qol emu open\n  qol emu doctor\n  qol emu up <environment>\n  qol emu run <workflow> <environment>\n  qol emu check <environment>\n  qol emu shot <environment>\n  qol emu key <environment> <qcode>...\n  qol emu insert <environment>\n  qol emu pull <environment>\n  qol emu snap <environment>\n  qol emu sh <environment> <command>...\n  qol emu down <environment>\n\nControl verbs target the newest running `qol emu up` for that environment.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n")
 }
 
 pub(crate) fn discover_all() -> Result<Discovered> {
@@ -1447,5 +1551,47 @@ mod tests {
             "expected parent under {} namespace, got {parent:?}",
             qol_config::NAMESPACE
         );
+    }
+
+    #[test]
+    fn parse_add_args_extracts_path_and_overrides() {
+        let args: Vec<OsString> = [
+            "/a/b/win.qcow2",
+            "--arch",
+            "aarch64",
+            "--firmware",
+            "uefi",
+            "--id",
+            "My Box!",
+        ]
+        .iter()
+        .map(OsString::from)
+        .collect();
+        let parsed = parse_add_args(&args).unwrap();
+        assert_eq!(parsed.path, PathBuf::from("/a/b/win.qcow2"), "path");
+        assert_eq!(parsed.arch, Some(GuestArch::Aarch64), "arch");
+        assert_eq!(parsed.firmware, Some(Firmware::Uefi), "firmware");
+        assert_eq!(parsed.id.as_deref(), Some("my-box"), "id sanitized");
+    }
+
+    #[test]
+    fn parse_add_args_requires_a_path() {
+        let args: Vec<OsString> = ["--arch", "x86_64"].iter().map(OsString::from).collect();
+        assert!(parse_add_args(&args).is_err(), "missing path must error");
+    }
+
+    #[test]
+    fn parse_add_args_rejects_unknown_arch_and_firmware() {
+        let cases = [
+            (["/a/b/x.img", "--arch", "riscv"], "unknown arch must error"),
+            (
+                ["/a/b/x.img", "--firmware", "coreboot"],
+                "unknown firmware must error",
+            ),
+        ];
+        for (raw, why) in cases {
+            let args: Vec<OsString> = raw.iter().map(OsString::from).collect();
+            assert!(parse_add_args(&args).is_err(), "{why}");
+        }
     }
 }
