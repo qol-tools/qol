@@ -9,14 +9,14 @@ use super::super::{arch::GuestArch, humanize_id, sanitize_id, Environment, Firmw
 pub(crate) fn discover(path: Option<&Path>, home: Option<&PathBuf>) -> Result<Vec<Environment>> {
     Ok(load_image_overrides(path, home)?
         .into_iter()
-        .map(|(id, (image_path, arch))| Environment {
+        .map(|(id, (image_path, arch, firmware))| Environment {
             name: humanize_id(&id),
             id,
             backend: "qemu".to_string(),
             arch,
             image_path,
             source: "config".to_string(),
-            firmware: Firmware::for_arch(arch),
+            firmware,
         })
         .collect())
 }
@@ -24,7 +24,7 @@ pub(crate) fn discover(path: Option<&Path>, home: Option<&PathBuf>) -> Result<Ve
 fn load_image_overrides(
     path: Option<&Path>,
     home: Option<&PathBuf>,
-) -> Result<HashMap<String, (PathBuf, GuestArch)>> {
+) -> Result<HashMap<String, (PathBuf, GuestArch, Firmware)>> {
     let Some(path) = path else {
         return Ok(HashMap::new());
     };
@@ -37,18 +37,18 @@ fn load_image_overrides(
         .with_context(|| format!("failed to parse {}", path.display()))
 }
 
-fn parse_image_overrides(
+pub(crate) fn parse_image_overrides(
     content: &str,
     home: Option<&PathBuf>,
-) -> Result<HashMap<String, (PathBuf, GuestArch)>> {
+) -> Result<HashMap<String, (PathBuf, GuestArch, Firmware)>> {
     let parsed: TomlValue = toml::from_str(content).context("invalid emu config TOML")?;
     let Some(images) = parsed.get("images").and_then(TomlValue::as_table) else {
         return Ok(HashMap::new());
     };
     let mut overrides = HashMap::new();
     for (id, value) in images {
-        let (path, arch) = match value {
-            TomlValue::String(path) => (path.as_str(), GuestArch::X86_64),
+        let (path, arch, firmware) = match value {
+            TomlValue::String(path) => (path.as_str(), GuestArch::X86_64, Firmware::Bios),
             TomlValue::Table(table) => {
                 let path = table
                     .get("path")
@@ -60,11 +60,17 @@ fn parse_image_overrides(
                         anyhow!("images.{id}.arch must be one of: x86_64, aarch64")
                     })?,
                 };
-                (path, arch)
+                let firmware = match table.get("firmware") {
+                    None => Firmware::for_arch(arch),
+                    Some(value) => value.as_str().and_then(Firmware::parse).ok_or_else(|| {
+                        anyhow!("images.{id}.firmware must be one of: bios, uefi")
+                    })?,
+                };
+                (path, arch, firmware)
             }
             _ => bail!("images.{id} must be a string path or a table with path/arch"),
         };
-        overrides.insert(sanitize_id(id), (expand_home(path, home), arch));
+        overrides.insert(sanitize_id(id), (expand_home(path, home), arch, firmware));
     }
     Ok(overrides)
 }
@@ -106,9 +112,10 @@ mod tests {
             Some(&home),
         )
         .unwrap();
-        let (path, arch) = overrides.get("windows-11").unwrap();
+        let (path, arch, firmware) = overrides.get("windows-11").unwrap();
         assert_eq!(path, &PathBuf::from("/home/me/vm/windows.qcow2"));
         assert_eq!(*arch, GuestArch::X86_64);
+        assert_eq!(*firmware, Firmware::Bios);
     }
 
     #[test]
@@ -122,9 +129,32 @@ arch = "aarch64"
             None,
         )
         .unwrap();
-        let (path, arch) = overrides.get("foo").unwrap();
+        let (path, arch, firmware) = overrides.get("foo").unwrap();
         assert_eq!(path, &PathBuf::from("/a/b/foo.qcow2"));
         assert_eq!(*arch, GuestArch::Aarch64);
+        assert_eq!(*firmware, Firmware::Uefi);
+    }
+
+    #[test]
+    fn firmware_defaults_per_arch_and_reads_explicit() {
+        let cases = [
+            ("path = \"/a/x.qcow2\"\narch = \"x86_64\"", Firmware::Bios),
+            ("path = \"/a/x.qcow2\"\narch = \"aarch64\"", Firmware::Uefi),
+            (
+                "path = \"/a/x.qcow2\"\narch = \"x86_64\"\nfirmware = \"uefi\"",
+                Firmware::Uefi,
+            ),
+            (
+                "path = \"/a/x.qcow2\"\narch = \"aarch64\"\nfirmware = \"bios\"",
+                Firmware::Bios,
+            ),
+        ];
+        for (body, expected) in cases {
+            let content = format!("[images.foo]\n{body}\n");
+            let overrides = parse_image_overrides(&content, None).unwrap();
+            let (_, _, firmware) = overrides.get("foo").unwrap();
+            assert_eq!(*firmware, expected, "body: {body}");
+        }
     }
 
     #[test]
@@ -140,6 +170,23 @@ arch = "sparc"
         .unwrap_err();
         assert!(
             error.to_string().contains("images.foo.arch"),
+            "error: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_firmware() {
+        let error = parse_image_overrides(
+            r#"
+[images.foo]
+path = "/a/b/foo.qcow2"
+firmware = "coreboot"
+"#,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("images.foo.firmware"),
             "error: {error}"
         );
     }
