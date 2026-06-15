@@ -8,11 +8,13 @@ mod dedupe;
 mod filesystem;
 mod libvirt;
 
+#[allow(unused_imports)]
+pub(crate) use super::arch::Firmware;
 pub(crate) use candidate::{Discovered, ImageCandidate};
-pub(crate) use config::parse_emu_dir;
-pub(crate) use filesystem::{is_vm_image_path, legacy_root_image_count};
+pub(crate) use config::{parse_emu_dir, parse_image_overrides};
 #[allow(unused_imports)]
 pub(crate) use filesystem::infer_candidate;
+pub(crate) use filesystem::{is_vm_image_path, legacy_root_image_count};
 
 pub(crate) struct DiscoveryContext {
     pub(crate) config_path: Option<PathBuf>,
