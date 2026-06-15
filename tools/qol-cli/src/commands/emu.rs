@@ -22,7 +22,8 @@ mod qmp;
 mod serial;
 mod workflow;
 
-pub(crate) use arch::GuestArch;
+#[allow(unused_imports)]
+pub(crate) use arch::{Firmware, GuestArch};
 use discovery::{legacy_root_image_count, parse_emu_dir, DiscoveryContext};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
