@@ -23,7 +23,7 @@ mod serial;
 mod workflow;
 
 pub(crate) use arch::GuestArch;
-use discovery::DiscoveryContext;
+use discovery::{legacy_root_image_count, parse_emu_dir, DiscoveryContext};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Environment {
@@ -224,6 +224,35 @@ pub(crate) fn emu_config_path() -> Option<PathBuf> {
     qol_config::config_dir().map(|dir| dir.join("emu.toml"))
 }
 
+fn emu_dir() -> Option<PathBuf> {
+    let override_dir = emu_config_path()
+        .filter(|path| path.is_file())
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|content| parse_emu_dir(&content, dirs::home_dir().as_ref()));
+    resolve_emu_dir(override_dir, qol_config::data_subdir("emu"))
+}
+
+fn resolve_emu_dir(override_dir: Option<PathBuf>, default_dir: Option<PathBuf>) -> Option<PathBuf> {
+    override_dir.or(default_dir)
+}
+
+fn legacy_advisory(count: usize, emu_dir: &Path) -> Option<String> {
+    if count == 0 {
+        return None;
+    }
+    Some(format!(
+        "{count} image(s) found in legacy roots (~/VMs, ...); run `qol emu add <path>` to register, or move them into {}",
+        emu_dir.display()
+    ))
+}
+
+fn registered_image_paths() -> Result<std::collections::HashSet<PathBuf>> {
+    Ok(discover_environments()?
+        .into_iter()
+        .map(|environment| environment.image_path)
+        .collect())
+}
+
 fn cmd_list(args: &[OsString], verbose: bool) -> Result<()> {
     if !args.is_empty() {
         bail!("usage: qol emu list");
@@ -235,6 +264,12 @@ fn cmd_list(args: &[OsString], verbose: bool) -> Result<()> {
         step_label("env", StepKind::Info, "no emus found");
         if let Some(path) = emu_config_path() {
             step_label("config", StepKind::Info, &path.display().to_string());
+        }
+        if let Some(dir) = emu_dir() {
+            let count = legacy_root_image_count(&registered_image_paths()?);
+            if let Some(advisory) = legacy_advisory(count, &dir) {
+                step_label("legacy", StepKind::Info, &advisory);
+            }
         }
         return Ok(());
     }
@@ -297,6 +332,13 @@ fn cmd_doctor(args: &[OsString], verbose: bool) -> Result<()> {
         StepKind::Info,
         &root.join("target/qol-emu").display().to_string(),
     );
+    if let Some(dir) = emu_dir() {
+        step_label("emu-dir", StepKind::Info, &dir.display().to_string());
+        let count = legacy_root_image_count(&registered_image_paths()?);
+        if let Some(advisory) = legacy_advisory(count, &dir) {
+            step_label("legacy", StepKind::Info, &advisory);
+        }
+    }
     Ok(())
 }
 
@@ -689,7 +731,7 @@ fn discover_environments() -> Result<Vec<Environment>> {
         home_dir: dirs::home_dir(),
         virsh: find_on_path("virsh"),
         libvirt_uris: platform::libvirt_uris(),
-        image_search_roots: platform::image_search_roots(dirs::home_dir()),
+        emu_dir: emu_dir().unwrap_or_default(),
     })
 }
 
@@ -1052,6 +1094,42 @@ mod tests {
     fn sanitizes_domain_names_for_cli_ids() {
         assert_eq!(sanitize_id("Windows 11 Pro"), "windows-11-pro");
         assert_eq!(sanitize_id("!!!"), "emu");
+    }
+
+    #[test]
+    fn resolve_emu_dir_prefers_parsed_override() {
+        let parsed = Some(PathBuf::from("/home/me/vms"));
+        let fallback = Some(PathBuf::from("/data/qol-tray/emu"));
+        let cases = [
+            (
+                parsed.clone(),
+                fallback.clone(),
+                Some(PathBuf::from("/home/me/vms")),
+            ),
+            (
+                None,
+                fallback.clone(),
+                Some(PathBuf::from("/data/qol-tray/emu")),
+            ),
+            (None, None, None),
+        ];
+        for (override_dir, default_dir, expected) in cases {
+            assert_eq!(
+                resolve_emu_dir(override_dir.clone(), default_dir.clone()),
+                expected,
+                "override: {override_dir:?}, default: {default_dir:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_advisory_renders_only_for_nonzero_count() {
+        let dir = PathBuf::from("/data/qol-tray/emu");
+        assert_eq!(legacy_advisory(0, &dir), None);
+        let line = legacy_advisory(3, &dir).expect("nonzero count yields advisory");
+        assert!(line.contains("3 image"), "line: {line}");
+        assert!(line.contains("qol emu add"), "line: {line}");
+        assert!(line.contains("/data/qol-tray/emu"), "line: {line}");
     }
 
     #[test]

@@ -68,8 +68,14 @@ fn parse_image_overrides(
     Ok(overrides)
 }
 
-fn expand_home(path: &str, home: Option<&PathBuf>) -> PathBuf {
-    let path = PathBuf::from(path);
+pub(crate) fn parse_emu_dir(content: &str, home: Option<&PathBuf>) -> Option<PathBuf> {
+    let parsed: TomlValue = toml::from_str(content).ok()?;
+    let dir = parsed.get("dir").and_then(TomlValue::as_str)?;
+    Some(expand_home(dir, home))
+}
+
+pub(crate) fn expand_home(value: &str, home: Option<&PathBuf>) -> PathBuf {
+    let path = PathBuf::from(value);
     let Some(path_str) = path.to_str() else {
         return path;
     };
@@ -148,5 +154,22 @@ foo = 42
         )
         .unwrap_err();
         assert!(error.to_string().contains("images.foo"), "error: {error}");
+    }
+
+    #[test]
+    fn parses_top_level_dir_with_home_expansion() {
+        let home = PathBuf::from("/home/me");
+        let cases = [
+            ("dir = \"~/vms\"\n", Some(PathBuf::from("/home/me/vms"))),
+            ("dir = \"/srv/vms\"\n", Some(PathBuf::from("/srv/vms"))),
+            ("[images]\n", None),
+        ];
+        for (content, expected) in cases {
+            assert_eq!(
+                parse_emu_dir(content, Some(&home)),
+                expected,
+                "content: {content}"
+            );
+        }
     }
 }

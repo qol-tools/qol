@@ -37,6 +37,19 @@ pub(crate) fn collect_image_paths(roots: &[PathBuf], seen: &mut HashSet<PathBuf>
     paths
 }
 
+pub(crate) fn legacy_root_image_count(registered: &HashSet<PathBuf>) -> usize {
+    let roots = super::super::platform::image_search_roots(dirs::home_dir());
+    count_unregistered(&roots, registered)
+}
+
+fn count_unregistered(roots: &[PathBuf], registered: &HashSet<PathBuf>) -> usize {
+    let mut seen = HashSet::new();
+    collect_image_paths(roots, &mut seen)
+        .into_iter()
+        .filter(|path| !registered.contains(path))
+        .count()
+}
+
 fn collect_into(root: &Path, depth: usize, seen: &mut HashSet<PathBuf>, paths: &mut Vec<PathBuf>) {
     if depth == 0 || !root.is_dir() {
         return;
@@ -131,6 +144,25 @@ mod tests {
             paths.iter().any(|p| p.ends_with("b.img")),
             "paths: {paths:?}"
         );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn legacy_count_excludes_registered_canonical_paths() {
+        let root = std::env::temp_dir().join(format!("qol-emu-legacy-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a.qcow2"), b"x").unwrap();
+        fs::write(root.join("b.img"), b"x").unwrap();
+
+        let mut seen = HashSet::new();
+        let walked = collect_image_paths(std::slice::from_ref(&root), &mut seen);
+        assert_eq!(walked.len(), 2, "walked: {walked:?}");
+
+        let mut all = HashSet::new();
+        assert_eq!(count_unregistered(std::slice::from_ref(&root), &all), 2);
+
+        all.insert(walked[0].clone());
+        assert_eq!(count_unregistered(std::slice::from_ref(&root), &all), 1);
         fs::remove_dir_all(&root).unwrap();
     }
 }
