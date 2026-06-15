@@ -68,7 +68,9 @@ pub(crate) fn parse_image_overrides(
                 };
                 (path, arch, firmware)
             }
-            _ => bail!("images.{id} must be a string path or a table with path/arch"),
+            _ => {
+                bail!("images.{id} must be a string path or a table with path/arch/firmware")
+            }
         };
         overrides.insert(sanitize_id(id), (expand_home(path, home), arch, firmware));
     }
