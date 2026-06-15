@@ -22,6 +22,13 @@ impl GuestArch {
         }
     }
 
+    pub(crate) fn toggled(self) -> GuestArch {
+        match self {
+            GuestArch::X86_64 => GuestArch::Aarch64,
+            GuestArch::Aarch64 => GuestArch::X86_64,
+        }
+    }
+
     pub(crate) fn qemu_system_binary(self) -> &'static str {
         match self {
             GuestArch::X86_64 => "qemu-system-x86_64",
@@ -128,6 +135,17 @@ mod tests {
         ];
         for (input, expected) in cases {
             assert_eq!(GuestArch::parse(input), expected, "input: {input}");
+        }
+    }
+
+    #[test]
+    fn toggled_swaps_between_arches() {
+        let cases = [
+            (GuestArch::X86_64, GuestArch::Aarch64),
+            (GuestArch::Aarch64, GuestArch::X86_64),
+        ];
+        for (arch, expected) in cases {
+            assert_eq!(arch.toggled(), expected, "arch: {arch:?}");
         }
     }
 

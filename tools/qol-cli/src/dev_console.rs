@@ -14,8 +14,8 @@ use ratatui::widgets::{Block, Clear, Padding, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::commands::emu::{
-    emu_config_path, emu_scan, legacy_advisory_count, newest_run_detail, ImageCandidate,
-    EnvironmentStatus, LastRun, ResolveState, RunDetail,
+    emu_config_path, emu_dir, emu_scan, legacy_advisory_count, newest_run_detail,
+    EnvironmentStatus, ImageCandidate, LastRun, ResolveState, RunDetail,
 };
 use crate::dev_server::{
     fetch_dev_links, health_ok, post_recompile_current, post_reload_plugins, probe_endpoints,
@@ -60,6 +60,9 @@ enum Action {
     Follow,
     Filter,
     Copy,
+    OpenEmuDir,
+    ToggleArch,
+    Confirm,
     Ignore,
 }
 
@@ -87,6 +90,9 @@ fn action_for(code: KeyCode, mods: KeyModifiers) -> Action {
         KeyCode::End | KeyCode::Char('f') => Action::Follow,
         KeyCode::Char('/') => Action::Filter,
         KeyCode::Char('c') | KeyCode::Char('C') => Action::Copy,
+        KeyCode::Char('o') | KeyCode::Char('O') => Action::OpenEmuDir,
+        KeyCode::Char('t') | KeyCode::Char('T') => Action::ToggleArch,
+        KeyCode::Char('a') | KeyCode::Char('A') => Action::Confirm,
         _ => Action::Ignore,
     }
 }
@@ -872,6 +878,24 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
                 dash.scroll_offset = 0;
             }
         }
+        Action::OpenEmuDir => {
+            if dash.view == View::Emu {
+                open_emu_dir();
+            }
+        }
+        Action::ToggleArch => {
+            if dash.view == View::Emu {
+                if let Some(candidate) = selected_candidate_mut(dash) {
+                    candidate.arch = candidate.arch.toggled();
+                    candidate.arch_inferred = true;
+                }
+            }
+        }
+        Action::Confirm => {
+            if dash.view == View::Emu {
+                confirm_selected_candidate(dash);
+            }
+        }
         Action::Quit | Action::ReloadSelf | Action::Ignore => {}
     }
     let len = if dash.view == View::Trace {
@@ -1035,6 +1059,12 @@ fn selected_emu_status(dash: &Dash) -> Option<&EnvironmentStatus> {
     }
 }
 
+fn selected_candidate_mut(dash: &mut Dash) -> Option<&mut ImageCandidate> {
+    dash.emu_cursor
+        .checked_sub(emu_env_count(dash))
+        .and_then(|index| dash.emu_candidates.get_mut(index))
+}
+
 fn is_running(dash: &Dash, id: &str) -> bool {
     dash.active_runs.get(id).is_some_and(LogPane::is_live)
 }
@@ -1101,6 +1131,29 @@ fn fire_emu_down(dash: &mut Dash, id: &str) {
     };
     if let Some(pane) = dash.active_runs.get_mut(id) {
         pane.push(line);
+    }
+}
+
+fn open_emu_dir() {
+    let Some(dir) = emu_dir() else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    crate::host_facade::open_path(&dir);
+}
+
+fn confirm_selected_candidate(dash: &mut Dash) {
+    let Some(qemu_img) = crate::commands::emu::find_on_path("qemu-img") else {
+        return;
+    };
+    let Some(emu_toml) = emu_config_path() else {
+        return;
+    };
+    let Some(candidate) = selected_candidate_mut(dash).map(|candidate| candidate.clone()) else {
+        return;
+    };
+    if crate::commands::emu::register_image(&emu_toml, &candidate, &qemu_img).is_ok() {
+        dash.pokes.emu = true;
     }
 }
 
@@ -1434,6 +1487,9 @@ fn keys_legend(view: View) -> Vec<(&'static str, &'static str)> {
             ("enter", "boot · stop"),
             ("→", "detail · log"),
             ("space", "arm: checks"),
+            ("o", "open emu dir"),
+            ("t", "toggle arch"),
+            ("a", "add image"),
             ("←", "back"),
         ],
         View::Logs | View::Trace | View::EmuDetail => &[
@@ -1992,8 +2048,11 @@ fn candidate_line(candidate: &ImageCandidate, selected: bool) -> Line<'static> {
         caret,
         "○ ".fg(Color::DarkGray),
         id_span,
-        format!("  {}", candidate_row_label(candidate.arch, candidate.arch_inferred))
-            .fg(Color::DarkGray),
+        format!(
+            "  {}",
+            candidate_row_label(candidate.arch, candidate.arch_inferred)
+        )
+        .fg(Color::DarkGray),
     ])
 }
 
@@ -2054,7 +2113,10 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let mut lines = lines;
     let env_count = emu_env_count(dash);
     for (index, candidate) in dash.emu_candidates.iter().enumerate() {
-        lines.push(candidate_line(candidate, env_count + index == dash.emu_cursor));
+        lines.push(candidate_line(
+            candidate,
+            env_count + index == dash.emu_cursor,
+        ));
     }
     let total = lines.len();
     let (start, height) = list_window(dash, area, total);
@@ -3010,23 +3072,81 @@ mod tests {
     }
 
     #[test]
-    fn candidate_row_label_marks_inferred_arch() {
+    fn candidate_row_label_marks_inferred_and_host_default() {
         use crate::commands::emu::GuestArch;
         let cases = [
             (GuestArch::X86_64, true, "needs arch · x86_64"),
+            (GuestArch::Aarch64, true, "needs arch · aarch64"),
             (
                 GuestArch::X86_64,
                 false,
                 "needs arch · x86_64 (host default)",
+            ),
+            (
+                GuestArch::Aarch64,
+                false,
+                "needs arch · aarch64 (host default)",
             ),
         ];
         for (arch, inferred, expected) in cases {
             assert_eq!(
                 candidate_row_label(arch, inferred),
                 expected,
-                "arch {arch:?} inferred {inferred}"
+                "arch: {arch:?} inferred: {inferred}"
             );
         }
+    }
+
+    #[test]
+    fn emu_keys_map_open_toggle_and_confirm() {
+        let cases = [
+            (KeyCode::Char('o'), Action::OpenEmuDir),
+            (KeyCode::Char('t'), Action::ToggleArch),
+            (KeyCode::Char('a'), Action::Confirm),
+        ];
+        for (code, expected) in cases {
+            assert_eq!(
+                action_for(code, KeyModifiers::NONE),
+                expected,
+                "code: {code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn toggle_arch_flips_selected_candidate_only() {
+        use crate::commands::emu::GuestArch;
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Emu;
+        dash.emu = EmuState::Done(vec![
+            emu_env("foo", ResolveState::Ready),
+            emu_env("bar", ResolveState::Ready),
+        ]);
+        dash.emu_candidates = vec![emu_candidate("baz"), emu_candidate("qux")];
+
+        dash.emu_cursor = 0;
+        apply_action(&mut dash, Action::ToggleArch, false);
+        assert_eq!(
+            dash.emu_candidates
+                .iter()
+                .map(|candidate| candidate.arch)
+                .collect::<Vec<_>>(),
+            vec![GuestArch::X86_64, GuestArch::X86_64],
+            "cursor on an env row must not mutate any candidate"
+        );
+
+        dash.emu_cursor = 3;
+        apply_action(&mut dash, Action::ToggleArch, false);
+        assert_eq!(dash.emu_candidates[0].arch, GuestArch::X86_64, "untouched");
+        assert_eq!(
+            dash.emu_candidates[1].arch,
+            GuestArch::Aarch64,
+            "selected candidate flips"
+        );
+        assert!(
+            dash.emu_candidates[1].arch_inferred,
+            "toggle sets arch_inferred"
+        );
     }
 
     #[test]
@@ -3184,6 +3304,9 @@ mod tests {
             assert!(text.contains("ctrl+u"), "missing globals");
             assert!(text.contains("reload qol dev"), "missing globals");
             assert!(text.contains("keys · k"), "missing toggle badge");
+            if matches!(view, View::Emu) {
+                assert!(text.contains("toggle arch"), "missing emu o/t/a keys");
+            }
         }
     }
 
