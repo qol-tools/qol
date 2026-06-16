@@ -184,6 +184,10 @@ pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result
     Ok(child.id())
 }
 
+pub fn recording_format(format: &str) -> String {
+    format.to_string()
+}
+
 pub fn stop_capture(pid: u32) -> Result<()> {
     Command::new("kill")
         .args(["-INT", &pid.to_string()])

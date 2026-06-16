@@ -193,7 +193,8 @@ fn run_record_action() -> Result<()> {
         rect.h -= 1;
     }
 
-    let output_file = output_file_path(&config.video.format)?;
+    let output_format = platform::recording_format(&config.video.format);
+    let output_file = output_file_path(&output_format)?;
     let pid = platform::start_capture(&rect, &config, &output_file)?;
 
     fs::write(PIDFILE, pid.to_string()).context("failed to write pid file")?;

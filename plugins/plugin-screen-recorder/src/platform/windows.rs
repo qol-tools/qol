@@ -27,6 +27,10 @@ pub fn start_capture(_rect: &Rect, _config: &Config, _output_file: &Path) -> Res
     ))
 }
 
+pub fn recording_format(format: &str) -> String {
+    format.to_string()
+}
+
 pub fn stop_capture(_pid: u32) -> Result<()> {
     Err(anyhow!(
         "plugin-screen-recorder: capture stop is not implemented on Windows"
