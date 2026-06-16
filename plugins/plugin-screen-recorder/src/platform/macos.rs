@@ -20,359 +20,11 @@ const STATUS_OVERLAY_SERVER_PID_FILE: &str = "status-overlay-server.pid";
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 static STATUS_OVERLAY_PID: Mutex<Option<u32>> = Mutex::new(None);
-const SWIFT_PRELUDE: &str = r#"
-import AppKit
-import CoreGraphics
-import Darwin
-import Dispatch
-import Foundation
-
-struct OverlayText {
-    let title: String
-    let subtitle: String?
-    let titleSize: CGFloat
-    let subtitleSize: CGFloat
-
-    func drawPanel(in panel: NSRect) {
-        let panelPath = NSBezierPath(roundedRect: panel, xRadius: 14, yRadius: 14)
-        NSColor.black.withAlphaComponent(0.78).setFill()
-        panelPath.fill()
-        NSColor.white.withAlphaComponent(0.86).setStroke()
-        panelPath.lineWidth = 1.5
-        panelPath.stroke()
-
-        let contentX = panel.minX + 18
-        let contentWidth = panel.width - 36
-        let titleHeight: CGFloat = 28
-
-        guard let subtitle else {
-            drawLine(
-                title,
-                in: NSRect(x: contentX, y: panel.midY - titleHeight / 2, width: contentWidth, height: titleHeight),
-                size: titleSize,
-                weight: .semibold,
-                alpha: 1.0
-            )
-            return
-        }
-
-        let subtitleHeight: CGFloat = 20
-        let gap: CGFloat = 6
-        let contentHeight = titleHeight + gap + subtitleHeight
-        let subtitleRect = NSRect(
-            x: contentX,
-            y: panel.midY - contentHeight / 2,
-            width: contentWidth,
-            height: subtitleHeight
-        )
-        drawLine(
-            title,
-            in: NSRect(x: contentX, y: subtitleRect.maxY + gap, width: contentWidth, height: titleHeight),
-            size: titleSize,
-            weight: .semibold,
-            alpha: 1.0
-        )
-
-        drawLine(
-            subtitle,
-            in: subtitleRect,
-            size: subtitleSize,
-            weight: .regular,
-            alpha: 0.78
-        )
-    }
-
-    func drawLabel(in rect: NSRect) {
-        drawLine(title, in: rect, size: titleSize, weight: .semibold, alpha: 0.96)
-    }
-
-    private func drawLine(_ text: String, in rect: NSRect, size: CGFloat, weight: NSFont.Weight, alpha: CGFloat) {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: size, weight: weight),
-            .foregroundColor: NSColor.white.withAlphaComponent(alpha),
-            .paragraphStyle: paragraph
-        ]
-        text.draw(in: rect, withAttributes: attributes)
-    }
-}
-"#;
-
-const REGION_SELECTOR_SWIFT: &str = r#"
-
-final class SelectionView: NSView {
-    let displayBounds: CGRect
-    var startPoint: NSPoint?
-    var currentPoint: NSPoint?
-
-    init(frame: NSRect, displayBounds: CGRect) {
-        self.displayBounds = displayBounds
-        super.init(frame: NSRect(origin: .zero, size: frame.size))
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override var acceptsFirstResponder: Bool {
-        true
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.black.withAlphaComponent(0.42).setFill()
-        bounds.fill()
-        drawGuide()
-
-        guard let rect = selectionRect() else {
-            return
-        }
-
-        NSColor.systemRed.withAlphaComponent(0.34).setFill()
-        rect.fill()
-        NSColor.white.setStroke()
-        let outerPath = NSBezierPath(rect: rect)
-        outerPath.lineWidth = 7
-        outerPath.stroke()
-        NSColor.systemRed.setStroke()
-        let path = NSBezierPath(rect: rect)
-        path.lineWidth = 4
-        path.stroke()
-        drawSelectionLabel(rect)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        startPoint = point
-        currentPoint = point
-        needsDisplay = true
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        currentPoint = convert(event.locationInWindow, from: nil)
-        needsDisplay = true
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        currentPoint = convert(event.locationInWindow, from: nil)
-        finishSelection()
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 {
-            exit(2)
-        }
-    }
-
-    private func selectionRect() -> NSRect? {
-        guard let start = startPoint, let current = currentPoint else {
-            return nil
-        }
-
-        let x = min(start.x, current.x)
-        let y = min(start.y, current.y)
-        return NSRect(
-            x: x,
-            y: y,
-            width: abs(start.x - current.x),
-            height: abs(start.y - current.y)
-        )
-    }
-
-    private func drawGuide() {
-        let title = startPoint == nil ? "Drag to select recording area" : "Release mouse to start recording"
-        let width = min(bounds.width - 48, 520)
-        let panel = NSRect(x: bounds.midX - width / 2, y: bounds.maxY - 126, width: width, height: 78)
-        OverlayText(title: title, subtitle: "Press Esc to cancel", titleSize: 22, subtitleSize: 14)
-            .drawPanel(in: panel)
-    }
-
-    private func drawSelectionLabel(_ rect: NSRect) {
-        guard rect.width >= 180, rect.height >= 80 else {
-            return
-        }
-
-        let labelRect = NSRect(x: rect.minX + 12, y: rect.midY - 13, width: rect.width - 24, height: 26)
-        OverlayText(title: "Recording area", subtitle: nil, titleSize: 18, subtitleSize: 14)
-            .drawLabel(in: labelRect)
-    }
-
-    private func finishSelection() {
-        guard let rect = selectionRect(), rect.width >= 4, rect.height >= 4 else {
-            exit(2)
-        }
-
-        let x = displayBounds.origin.x + rect.minX
-        let y = displayBounds.origin.y + bounds.height - rect.maxY
-        let line = "\(Int(x.rounded())),\(Int(y.rounded())),\(Int(rect.width.rounded())),\(Int(rect.height.rounded()))\n"
-        FileHandle.standardOutput.write(Data(line.utf8))
-        NSApp.terminate(nil)
-    }
-}
-
-let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
-
-var windows: [NSWindow] = []
-for screen in NSScreen.screens {
-    let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? CGMainDisplayID()
-    let view = SelectionView(frame: screen.frame, displayBounds: CGDisplayBounds(displayID))
-    let window = NSWindow(
-        contentRect: screen.frame,
-        styleMask: [.borderless],
-        backing: .buffered,
-        defer: false,
-        screen: screen
-    )
-    window.level = .screenSaver
-    window.backgroundColor = .clear
-    window.isOpaque = false
-    window.hasShadow = false
-    window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-    window.contentView = view
-    window.makeKeyAndOrderFront(nil)
-    window.makeFirstResponder(view)
-    windows.append(window)
-}
-
-app.activate(ignoringOtherApps: true)
-app.run()
-"#;
-
-const STATUS_OVERLAY_SWIFT: &str = r#"
-
-final class StatusView: NSView {
-    private var title: String
-    private var subtitle: String?
-
-    init(frame: NSRect, title: String, subtitle: String?) {
-        self.title = title
-        self.subtitle = subtitle
-        super.init(frame: NSRect(origin: .zero, size: frame.size))
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func configure(title: String, subtitle: String?) {
-        self.title = title
-        self.subtitle = subtitle
-        needsDisplay = true
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let panelWidth = min(max(bounds.width - 48, 280), 560)
-        let panel = NSRect(
-            x: bounds.midX - panelWidth / 2,
-            y: bounds.maxY - 132,
-            width: panelWidth,
-            height: 78
-        )
-        OverlayText(title: title, subtitle: subtitle, titleSize: 22, subtitleSize: 14)
-            .drawPanel(in: panel)
-    }
-}
-
-struct StatusCommand {
-    let title: String
-    let subtitle: String?
-    let durationMs: Int
-    let exitAfterHide: Bool
-}
-
-let environment = ProcessInfo.processInfo.environment
-let title = environment["QOL_STATUS_TITLE"] ?? "Recording ended"
-let rawSubtitle = environment["QOL_STATUS_SUBTITLE"] ?? ""
-let subtitle = rawSubtitle.isEmpty ? nil : rawSubtitle
-let durationMs = max(300, Int(environment["QOL_STATUS_DURATION_MS"] ?? "") ?? 1800)
-let exitAfterHide = environment["QOL_STATUS_EXIT_AFTER_HIDE"] == "1"
-let commandFile = environment["QOL_STATUS_COMMAND_FILE"] ?? ""
-let readyFile = environment["QOL_STATUS_READY_FILE"] ?? ""
-let serverMode = environment["QOL_STATUS_SERVER"] == "1"
-
-let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
-
-guard let screen = NSScreen.main ?? NSScreen.screens.first else {
-    exit(0)
-}
-
-let window = NSWindow(
-    contentRect: screen.frame,
-    styleMask: [.borderless],
-    backing: .buffered,
-    defer: false,
-    screen: screen
-)
-window.level = .screenSaver
-window.backgroundColor = .clear
-window.isOpaque = false
-window.hasShadow = false
-window.ignoresMouseEvents = true
-window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-let statusView = StatusView(frame: screen.frame, title: title, subtitle: subtitle)
-window.contentView = statusView
-
-var hideWorkItem: DispatchWorkItem?
-func showStatus(_ command: StatusCommand) {
-    hideWorkItem?.cancel()
-    statusView.configure(title: command.title, subtitle: command.subtitle)
-    window.orderFrontRegardless()
-
-    let workItem = DispatchWorkItem {
-        window.orderOut(nil)
-        if command.exitAfterHide {
-            NSApp.terminate(nil)
-        }
-    }
-    hideWorkItem = workItem
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(command.durationMs), execute: workItem)
-}
-
-func readStatusCommand() -> StatusCommand? {
-    guard !commandFile.isEmpty else {
-        return nil
-    }
-    guard let raw = try? String(contentsOfFile: commandFile, encoding: .utf8) else {
-        return nil
-    }
-    let lines = raw.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-    guard lines.count >= 4 else {
-        return nil
-    }
-    return StatusCommand(
-        title: lines[0],
-        subtitle: lines[1].isEmpty ? nil : lines[1],
-        durationMs: max(300, Int(lines[2]) ?? 1800),
-        exitAfterHide: lines[3] == "1"
-    )
-}
-
-if serverMode {
-    signal(SIGUSR1, SIG_IGN)
-    let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
-    source.setEventHandler {
-        guard let command = readStatusCommand() else {
-            return
-        }
-        showStatus(command)
-    }
-    source.resume()
-    if !readyFile.isEmpty {
-        FileManager.default.createFile(atPath: readyFile, contents: Data(), attributes: nil)
-    }
-} else {
-    showStatus(StatusCommand(
-        title: title,
-        subtitle: subtitle,
-        durationMs: durationMs,
-        exitAfterHide: true
-    ))
-}
-
-app.run()
-"#;
+const SWIFT_PRELUDE: &str = include_str!("macos_swift/prelude.swift");
+const REGION_SELECTOR_SWIFT: &str = include_str!("macos_swift/region_selector.swift");
+const STATUS_OVERLAY_SWIFT: &str = include_str!("macos_swift/status_overlay.swift");
+const REGION_SELECTOR_HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/region-selector"));
+const STATUS_OVERLAY_HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/status-overlay"));
 
 type CGDirectDisplayID = u32;
 
@@ -632,18 +284,16 @@ fn select_region_with_overlay() -> Result<Option<Rect>> {
 }
 
 fn run_region_selector() -> Result<Output> {
-    match ensure_swift_helper("region-selector", REGION_SELECTOR_SWIFT) {
-        Ok(helper) => match run_compiled_region_selector(&helper) {
-            Ok(output) => Ok(output),
-            Err(error) => {
-                let _ = fs::remove_file(&helper);
-                run_source_region_selector()
-                    .with_context(|| format!("compiled region selector failed first: {error:#}"))
-            }
-        },
-        Err(error) => run_source_region_selector()
-            .with_context(|| format!("failed to build region selector helper: {error:#}")),
-    }
+    let helper = ensure_swift_helper(
+        "region-selector",
+        REGION_SELECTOR_SWIFT,
+        REGION_SELECTOR_HELPER,
+    )
+    .context("failed to install embedded region selector helper")?;
+
+    run_compiled_region_selector(&helper).inspect_err(|_| {
+        let _ = fs::remove_file(&helper);
+    })
 }
 
 fn run_compiled_region_selector(helper: &Path) -> Result<Output> {
@@ -653,17 +303,6 @@ fn run_compiled_region_selector(helper: &Path) -> Result<Output> {
         .stderr(Stdio::piped())
         .output()
         .context("failed to start compiled macOS region selector")
-}
-
-fn run_source_region_selector() -> Result<Output> {
-    let child = spawn_source_swift(REGION_SELECTOR_SWIFT, |command| {
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    })
-    .context("failed to start source macOS region selector")?;
-
-    child
-        .wait_with_output()
-        .context("failed to wait for macOS region selector")
 }
 
 fn parse_selection_geometry(raw: &str) -> Result<Rect> {
@@ -790,7 +429,11 @@ fn spawn_status_overlay(
     timeout_ms: u32,
     lifecycle: StatusOverlayLifecycle,
 ) -> Result<Child> {
-    match ensure_swift_helper("status-overlay", STATUS_OVERLAY_SWIFT) {
+    match ensure_swift_helper(
+        "status-overlay",
+        STATUS_OVERLAY_SWIFT,
+        STATUS_OVERLAY_HELPER,
+    ) {
         Ok(helper) => {
             match spawn_compiled_status_overlay(&helper, title, message, timeout_ms, lifecycle) {
                 Ok(child) => Ok(child),
@@ -887,8 +530,16 @@ fn take_status_overlay_pid() -> Option<u32> {
 
 fn prewarm_recording_helpers() {
     clear_status_server_files();
-    prewarm_swift_helper("status-overlay", STATUS_OVERLAY_SWIFT);
-    prewarm_swift_helper("region-selector", REGION_SELECTOR_SWIFT);
+    prewarm_swift_helper(
+        "status-overlay",
+        STATUS_OVERLAY_SWIFT,
+        STATUS_OVERLAY_HELPER,
+    );
+    prewarm_swift_helper(
+        "region-selector",
+        REGION_SELECTOR_SWIFT,
+        REGION_SELECTOR_HELPER,
+    );
 }
 
 fn read_status_server_pid() -> Option<u32> {
@@ -920,9 +571,9 @@ fn status_overlay_server_pid_path() -> PathBuf {
     swift_helper_cache_dir().join(STATUS_OVERLAY_SERVER_PID_FILE)
 }
 
-fn prewarm_swift_helper(name: &'static str, body: &'static str) {
+fn prewarm_swift_helper(name: &'static str, body: &'static str, embedded_helper: &'static [u8]) {
     thread::spawn(move || {
-        let _ = ensure_swift_helper(name, body);
+        let _ = ensure_swift_helper(name, body, embedded_helper);
     });
 }
 
@@ -945,14 +596,14 @@ fn write_swift_source(mut writer: impl Write, body: &str) -> std::io::Result<()>
     writer.write_all(body.as_bytes())
 }
 
-fn ensure_swift_helper(name: &str, body: &str) -> Result<PathBuf> {
+fn ensure_swift_helper(name: &str, body: &str, embedded_helper: &[u8]) -> Result<PathBuf> {
     let helper = swift_helper_path(name, body);
     if is_usable_swift_helper(&helper) {
         return Ok(helper);
     }
 
     let _ = fs::remove_file(&helper);
-    compile_swift_helper(name, body, &helper)?;
+    install_embedded_swift_helper(name, embedded_helper, &helper)?;
     Ok(helper)
 }
 
@@ -966,38 +617,18 @@ fn is_usable_swift_helper(path: &Path) -> bool {
     metadata.permissions().mode() & 0o111 != 0 && metadata.uid() == current_uid()
 }
 
-fn compile_swift_helper(name: &str, body: &str, helper: &Path) -> Result<()> {
+fn install_embedded_swift_helper(name: &str, embedded_helper: &[u8], helper: &Path) -> Result<()> {
     let cache_dir = ensure_swift_helper_cache_dir()?;
-
     let token = format!("{}-{}", std::process::id(), unix_nanos());
-    let source = cache_dir.join(format!("{name}-{token}.swift"));
-    let binary = cache_dir.join(format!("{name}-{token}"));
-    write_swift_source(
-        File::create(&source).context("failed to create Swift helper source")?,
-        body,
-    )
-    .context("failed to write Swift helper source")?;
+    let temporary_helper = cache_dir.join(format!("{name}-{token}"));
+    let mut file = File::create(&temporary_helper).context("failed to create Swift helper")?;
+    file.write_all(embedded_helper)
+        .context("failed to write embedded Swift helper")?;
+    file.flush().context("failed to flush Swift helper")?;
+    fs::set_permissions(&temporary_helper, fs::Permissions::from_mode(0o700))
+        .context("failed to mark Swift helper executable")?;
 
-    let output = Command::new("swiftc")
-        .arg(&source)
-        .arg("-o")
-        .arg(&binary)
-        .stdin(Stdio::null())
-        .output()
-        .context("failed to compile Swift helper")?;
-
-    let _ = fs::remove_file(&source);
-    if !output.status.success() {
-        let _ = fs::remove_file(&binary);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!(
-            "swiftc exited with {}: {}",
-            output.status,
-            stderr.trim()
-        ));
-    }
-
-    fs::rename(&binary, helper).context("failed to install compiled Swift helper")
+    fs::rename(&temporary_helper, helper).context("failed to install embedded Swift helper")
 }
 
 fn ensure_swift_helper_cache_dir() -> Result<PathBuf> {
