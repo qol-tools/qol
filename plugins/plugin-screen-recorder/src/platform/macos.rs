@@ -1,19 +1,30 @@
 use anyhow::{anyhow, Context, Result};
 use std::env;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::{Config, Monitor, Rect};
 
 const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-screen-recorder/";
 const MAX_DISPLAYS: u32 = 16;
-const REGION_SELECTOR_SWIFT: &str = r#"
+const SWIFT_HELPER_CACHE_DIR: &str = "qol-screen-recorder-swift";
+const STATUS_OVERLAY_COMMAND_FILE: &str = "status-overlay-command.txt";
+const STATUS_OVERLAY_READY_FILE: &str = "status-overlay-ready";
+const STATUS_OVERLAY_SERVER_PID_FILE: &str = "status-overlay-server.pid";
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
+static STATUS_OVERLAY_PID: Mutex<Option<u32>> = Mutex::new(None);
+const SWIFT_PRELUDE: &str = r#"
 import AppKit
 import CoreGraphics
+import Darwin
+import Dispatch
 import Foundation
 
 struct OverlayText {
@@ -30,21 +41,41 @@ struct OverlayText {
         panelPath.lineWidth = 1.5
         panelPath.stroke()
 
+        let contentX = panel.minX + 18
+        let contentWidth = panel.width - 36
+        let titleHeight: CGFloat = 28
+
+        guard let subtitle else {
+            drawLine(
+                title,
+                in: NSRect(x: contentX, y: panel.midY - titleHeight / 2, width: contentWidth, height: titleHeight),
+                size: titleSize,
+                weight: .semibold,
+                alpha: 1.0
+            )
+            return
+        }
+
+        let subtitleHeight: CGFloat = 20
+        let gap: CGFloat = 6
+        let contentHeight = titleHeight + gap + subtitleHeight
+        let subtitleRect = NSRect(
+            x: contentX,
+            y: panel.midY - contentHeight / 2,
+            width: contentWidth,
+            height: subtitleHeight
+        )
         drawLine(
             title,
-            in: NSRect(x: panel.minX + 18, y: panel.minY + 37, width: panel.width - 36, height: 28),
+            in: NSRect(x: contentX, y: subtitleRect.maxY + gap, width: contentWidth, height: titleHeight),
             size: titleSize,
             weight: .semibold,
             alpha: 1.0
         )
 
-        guard let subtitle else {
-            return
-        }
-
         drawLine(
             subtitle,
-            in: NSRect(x: panel.minX + 18, y: panel.minY + 15, width: panel.width - 36, height: 20),
+            in: subtitleRect,
             size: subtitleSize,
             weight: .regular,
             alpha: 0.78
@@ -66,6 +97,9 @@ struct OverlayText {
         text.draw(in: rect, withAttributes: attributes)
     }
 }
+"#;
+
+const REGION_SELECTOR_SWIFT: &str = r#"
 
 final class SelectionView: NSView {
     let displayBounds: CGRect
@@ -205,6 +239,141 @@ app.activate(ignoringOtherApps: true)
 app.run()
 "#;
 
+const STATUS_OVERLAY_SWIFT: &str = r#"
+
+final class StatusView: NSView {
+    private var title: String
+    private var subtitle: String?
+
+    init(frame: NSRect, title: String, subtitle: String?) {
+        self.title = title
+        self.subtitle = subtitle
+        super.init(frame: NSRect(origin: .zero, size: frame.size))
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(title: String, subtitle: String?) {
+        self.title = title
+        self.subtitle = subtitle
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let panelWidth = min(max(bounds.width - 48, 280), 560)
+        let panel = NSRect(
+            x: bounds.midX - panelWidth / 2,
+            y: bounds.maxY - 132,
+            width: panelWidth,
+            height: 78
+        )
+        OverlayText(title: title, subtitle: subtitle, titleSize: 22, subtitleSize: 14)
+            .drawPanel(in: panel)
+    }
+}
+
+struct StatusCommand {
+    let title: String
+    let subtitle: String?
+    let durationMs: Int
+    let exitAfterHide: Bool
+}
+
+let environment = ProcessInfo.processInfo.environment
+let title = environment["QOL_STATUS_TITLE"] ?? "Recording ended"
+let rawSubtitle = environment["QOL_STATUS_SUBTITLE"] ?? ""
+let subtitle = rawSubtitle.isEmpty ? nil : rawSubtitle
+let durationMs = max(300, Int(environment["QOL_STATUS_DURATION_MS"] ?? "") ?? 1800)
+let exitAfterHide = environment["QOL_STATUS_EXIT_AFTER_HIDE"] == "1"
+let commandFile = environment["QOL_STATUS_COMMAND_FILE"] ?? ""
+let readyFile = environment["QOL_STATUS_READY_FILE"] ?? ""
+let serverMode = environment["QOL_STATUS_SERVER"] == "1"
+
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+
+guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+    exit(0)
+}
+
+let window = NSWindow(
+    contentRect: screen.frame,
+    styleMask: [.borderless],
+    backing: .buffered,
+    defer: false,
+    screen: screen
+)
+window.level = .screenSaver
+window.backgroundColor = .clear
+window.isOpaque = false
+window.hasShadow = false
+window.ignoresMouseEvents = true
+window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+let statusView = StatusView(frame: screen.frame, title: title, subtitle: subtitle)
+window.contentView = statusView
+
+var hideWorkItem: DispatchWorkItem?
+func showStatus(_ command: StatusCommand) {
+    hideWorkItem?.cancel()
+    statusView.configure(title: command.title, subtitle: command.subtitle)
+    window.orderFrontRegardless()
+
+    let workItem = DispatchWorkItem {
+        window.orderOut(nil)
+        if command.exitAfterHide {
+            NSApp.terminate(nil)
+        }
+    }
+    hideWorkItem = workItem
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(command.durationMs), execute: workItem)
+}
+
+func readStatusCommand() -> StatusCommand? {
+    guard !commandFile.isEmpty else {
+        return nil
+    }
+    guard let raw = try? String(contentsOfFile: commandFile, encoding: .utf8) else {
+        return nil
+    }
+    let lines = raw.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    guard lines.count >= 4 else {
+        return nil
+    }
+    return StatusCommand(
+        title: lines[0],
+        subtitle: lines[1].isEmpty ? nil : lines[1],
+        durationMs: max(300, Int(lines[2]) ?? 1800),
+        exitAfterHide: lines[3] == "1"
+    )
+}
+
+if serverMode {
+    signal(SIGUSR1, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+    source.setEventHandler {
+        guard let command = readStatusCommand() else {
+            return
+        }
+        showStatus(command)
+    }
+    source.resume()
+    if !readyFile.isEmpty {
+        FileManager.default.createFile(atPath: readyFile, contents: Data(), attributes: nil)
+    }
+} else {
+    showStatus(StatusCommand(
+        title: title,
+        subtitle: subtitle,
+        durationMs: durationMs,
+        exitAfterHide: true
+    ))
+}
+
+app.run()
+"#;
+
 type CGDirectDisplayID = u32;
 
 #[repr(C)]
@@ -236,6 +405,10 @@ extern "C" {
         display_count: *mut u32,
     ) -> i32;
     fn CGDisplayBounds(display: CGDirectDisplayID) -> CGRect;
+}
+
+extern "C" {
+    fn getuid() -> u32;
 }
 
 pub fn select_region() -> Result<Option<Rect>> {
@@ -293,6 +466,7 @@ pub fn capture_file_path(output_file: &Path) -> PathBuf {
 
 pub fn recording_started() {
     show_notification("Recording started", "Press your hotkey to stop", 1200);
+    prewarm_recording_helpers();
 }
 
 pub fn recording_stopped(output_file: Option<&Path>, capture_file: Option<&Path>) {
@@ -312,6 +486,12 @@ pub fn recording_stopped(output_file: Option<&Path>, capture_file: Option<&Path>
         }
     }
 
+    show_status_overlay(
+        "Recording stopped",
+        "Opening Videos...",
+        1800,
+        StatusOverlayLifecycle::ExitAfterHide,
+    );
     if let Some(videos_dir) = videos_dir() {
         open_path(&videos_dir);
     }
@@ -433,24 +613,7 @@ fn round_i32(value: f64) -> i32 {
 }
 
 fn select_region_with_overlay() -> Result<Option<Rect>> {
-    let mut child = Command::new("swift")
-        .arg("-")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("failed to start macOS region selector")?;
-
-    child
-        .stdin
-        .take()
-        .context("failed to open region selector stdin")?
-        .write_all(REGION_SELECTOR_SWIFT.as_bytes())
-        .context("failed to write region selector source")?;
-
-    let output = child
-        .wait_with_output()
-        .context("failed to wait for macOS region selector")?;
+    let output = run_region_selector().context("failed to run macOS region selector")?;
 
     if output.status.code() == Some(2) {
         return Ok(None);
@@ -466,6 +629,41 @@ fn select_region_with_overlay() -> Result<Option<Rect>> {
     }
 
     parse_selection_geometry(&raw).map(Some)
+}
+
+fn run_region_selector() -> Result<Output> {
+    match ensure_swift_helper("region-selector", REGION_SELECTOR_SWIFT) {
+        Ok(helper) => match run_compiled_region_selector(&helper) {
+            Ok(output) => Ok(output),
+            Err(error) => {
+                let _ = fs::remove_file(&helper);
+                run_source_region_selector()
+                    .with_context(|| format!("compiled region selector failed first: {error:#}"))
+            }
+        },
+        Err(error) => run_source_region_selector()
+            .with_context(|| format!("failed to build region selector helper: {error:#}")),
+    }
+}
+
+fn run_compiled_region_selector(helper: &Path) -> Result<Output> {
+    Command::new(helper)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("failed to start compiled macOS region selector")
+}
+
+fn run_source_region_selector() -> Result<Output> {
+    let child = spawn_source_swift(REGION_SELECTOR_SWIFT, |command| {
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    })
+    .context("failed to start source macOS region selector")?;
+
+    child
+        .wait_with_output()
+        .context("failed to wait for macOS region selector")
 }
 
 fn parse_selection_geometry(raw: &str) -> Result<Rect> {
@@ -502,6 +700,12 @@ fn finalize_recording(output_file: &Path, capture_file: &Path) -> Result<PathBuf
 }
 
 fn conversion_fallback(error: anyhow::Error, capture_file: &Path) -> PathBuf {
+    show_status_overlay(
+        "Conversion failed",
+        "Saved native MOV instead",
+        3000,
+        StatusOverlayLifecycle::ExitAfterHide,
+    );
     show_notification(
         "Recording conversion failed",
         &format!("Saved native MOV instead. {}", error),
@@ -512,15 +716,24 @@ fn conversion_fallback(error: anyhow::Error, capture_file: &Path) -> PathBuf {
 
 fn show_recording_ended(output_file: &Path, conversion_needed: bool) {
     if !conversion_needed {
-        show_notification("Recording ended", "Saving recording...", 1600);
+        show_status_overlay(
+            "Recording stopped",
+            "Saving recording...",
+            1800,
+            StatusOverlayLifecycle::KeepAlive,
+        );
+        show_notification("Recording stopped", "Saving recording...", 1600);
         return;
     }
 
-    show_notification(
-        "Recording ended",
-        &format!("Converting to {}...", output_format_label(output_file)),
-        2200,
+    let message = format!("Converting to {}...", output_format_label(output_file));
+    show_status_overlay(
+        "Recording stopped",
+        &message,
+        2400,
+        StatusOverlayLifecycle::KeepAlive,
     );
+    show_notification("Recording stopped", &message, 2200);
 }
 
 fn show_recording_saved(output_file: &Path, converted: bool) {
@@ -530,7 +743,314 @@ fn show_recording_saved(output_file: &Path, converted: bool) {
     } else {
         format!("Saved as {} in Videos", format)
     };
+    show_status_overlay(
+        "Recording saved",
+        &message,
+        2400,
+        StatusOverlayLifecycle::ExitAfterHide,
+    );
     show_notification("Recording saved", &message, 2200);
+}
+
+#[derive(Clone, Copy)]
+enum StatusOverlayLifecycle {
+    KeepAlive,
+    ExitAfterHide,
+}
+
+impl StatusOverlayLifecycle {
+    fn exit_after_hide(self) -> bool {
+        matches!(self, StatusOverlayLifecycle::ExitAfterHide)
+    }
+}
+
+fn show_status_overlay(
+    title: &str,
+    message: &str,
+    timeout_ms: u32,
+    lifecycle: StatusOverlayLifecycle,
+) {
+    dismiss_status_overlay();
+    let Ok(child) = spawn_status_overlay(title, message, timeout_ms, lifecycle) else {
+        return;
+    };
+    let pid = child.id();
+    write_status_overlay_pid(pid);
+
+    thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+        clear_status_overlay_pid(pid);
+    });
+}
+
+fn spawn_status_overlay(
+    title: &str,
+    message: &str,
+    timeout_ms: u32,
+    lifecycle: StatusOverlayLifecycle,
+) -> Result<Child> {
+    match ensure_swift_helper("status-overlay", STATUS_OVERLAY_SWIFT) {
+        Ok(helper) => {
+            match spawn_compiled_status_overlay(&helper, title, message, timeout_ms, lifecycle) {
+                Ok(child) => Ok(child),
+                Err(error) => {
+                    let _ = fs::remove_file(&helper);
+                    spawn_source_status_overlay(title, message, timeout_ms, lifecycle)
+                        .with_context(|| format!("compiled status overlay failed first: {error:#}"))
+                }
+            }
+        }
+        Err(error) => spawn_source_status_overlay(title, message, timeout_ms, lifecycle)
+            .with_context(|| format!("failed to build status overlay helper: {error:#}")),
+    }
+}
+
+fn spawn_compiled_status_overlay(
+    helper: &Path,
+    title: &str,
+    message: &str,
+    timeout_ms: u32,
+    lifecycle: StatusOverlayLifecycle,
+) -> Result<Child> {
+    let mut command = Command::new(helper);
+    configure_status_overlay(&mut command, title, message, timeout_ms, lifecycle);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to start compiled macOS status overlay")
+}
+
+fn spawn_source_status_overlay(
+    title: &str,
+    message: &str,
+    timeout_ms: u32,
+    lifecycle: StatusOverlayLifecycle,
+) -> Result<Child> {
+    spawn_source_swift(STATUS_OVERLAY_SWIFT, |command| {
+        configure_status_overlay(command, title, message, timeout_ms, lifecycle);
+        command.stdout(Stdio::null()).stderr(Stdio::null());
+    })
+    .context("failed to start source macOS status overlay")
+}
+
+fn configure_status_overlay(
+    command: &mut Command,
+    title: &str,
+    message: &str,
+    timeout_ms: u32,
+    lifecycle: StatusOverlayLifecycle,
+) {
+    command
+        .env("QOL_STATUS_TITLE", title)
+        .env("QOL_STATUS_SUBTITLE", message)
+        .env("QOL_STATUS_DURATION_MS", timeout_ms.to_string())
+        .env(
+            "QOL_STATUS_EXIT_AFTER_HIDE",
+            if lifecycle.exit_after_hide() {
+                "1"
+            } else {
+                "0"
+            },
+        );
+}
+
+fn dismiss_status_overlay() {
+    let Some(pid) = take_status_overlay_pid() else {
+        return;
+    };
+
+    let _ = signal_process(pid, "TERM");
+}
+
+fn write_status_overlay_pid(pid: u32) {
+    if let Ok(mut current_pid) = STATUS_OVERLAY_PID.lock() {
+        *current_pid = Some(pid);
+    }
+}
+
+fn clear_status_overlay_pid(pid: u32) {
+    let Ok(mut current_pid) = STATUS_OVERLAY_PID.lock() else {
+        return;
+    };
+
+    if *current_pid == Some(pid) {
+        *current_pid = None;
+    }
+}
+
+fn take_status_overlay_pid() -> Option<u32> {
+    STATUS_OVERLAY_PID.lock().ok()?.take()
+}
+
+fn prewarm_recording_helpers() {
+    clear_status_server_files();
+    prewarm_swift_helper("status-overlay", STATUS_OVERLAY_SWIFT);
+    prewarm_swift_helper("region-selector", REGION_SELECTOR_SWIFT);
+}
+
+fn read_status_server_pid() -> Option<u32> {
+    fs::read_to_string(status_overlay_server_pid_path())
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+fn clear_status_server_files() {
+    if let Some(pid) = read_status_server_pid() {
+        let _ = signal_process(pid, "TERM");
+    }
+    let _ = fs::remove_file(status_overlay_command_path());
+    let _ = fs::remove_file(status_overlay_ready_path());
+    let _ = fs::remove_file(status_overlay_server_pid_path());
+}
+
+fn status_overlay_command_path() -> PathBuf {
+    swift_helper_cache_dir().join(STATUS_OVERLAY_COMMAND_FILE)
+}
+
+fn status_overlay_ready_path() -> PathBuf {
+    swift_helper_cache_dir().join(STATUS_OVERLAY_READY_FILE)
+}
+
+fn status_overlay_server_pid_path() -> PathBuf {
+    swift_helper_cache_dir().join(STATUS_OVERLAY_SERVER_PID_FILE)
+}
+
+fn prewarm_swift_helper(name: &'static str, body: &'static str) {
+    thread::spawn(move || {
+        let _ = ensure_swift_helper(name, body);
+    });
+}
+
+fn spawn_source_swift(body: &str, configure: impl FnOnce(&mut Command)) -> Result<Child> {
+    let mut command = Command::new("swift");
+    command.arg("-").stdin(Stdio::piped());
+    configure(&mut command);
+    let mut child = command.spawn().context("failed to start Swift source")?;
+
+    let Some(stdin) = child.stdin.take() else {
+        return Err(anyhow!("failed to open Swift source stdin"));
+    };
+
+    write_swift_source(stdin, body).context("failed to write Swift source")?;
+    Ok(child)
+}
+
+fn write_swift_source(mut writer: impl Write, body: &str) -> std::io::Result<()> {
+    writer.write_all(SWIFT_PRELUDE.as_bytes())?;
+    writer.write_all(body.as_bytes())
+}
+
+fn ensure_swift_helper(name: &str, body: &str) -> Result<PathBuf> {
+    let helper = swift_helper_path(name, body);
+    if is_usable_swift_helper(&helper) {
+        return Ok(helper);
+    }
+
+    let _ = fs::remove_file(&helper);
+    compile_swift_helper(name, body, &helper)?;
+    Ok(helper)
+}
+
+fn is_usable_swift_helper(path: &Path) -> bool {
+    let Ok(metadata) = path.symlink_metadata() else {
+        return false;
+    };
+    if !metadata.file_type().is_file() {
+        return false;
+    }
+    metadata.permissions().mode() & 0o111 != 0 && metadata.uid() == current_uid()
+}
+
+fn compile_swift_helper(name: &str, body: &str, helper: &Path) -> Result<()> {
+    let cache_dir = ensure_swift_helper_cache_dir()?;
+
+    let token = format!("{}-{}", std::process::id(), unix_nanos());
+    let source = cache_dir.join(format!("{name}-{token}.swift"));
+    let binary = cache_dir.join(format!("{name}-{token}"));
+    write_swift_source(
+        File::create(&source).context("failed to create Swift helper source")?,
+        body,
+    )
+    .context("failed to write Swift helper source")?;
+
+    let output = Command::new("swiftc")
+        .arg(&source)
+        .arg("-o")
+        .arg(&binary)
+        .stdin(Stdio::null())
+        .output()
+        .context("failed to compile Swift helper")?;
+
+    let _ = fs::remove_file(&source);
+    if !output.status.success() {
+        let _ = fs::remove_file(&binary);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!(
+            "swiftc exited with {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+
+    fs::rename(&binary, helper).context("failed to install compiled Swift helper")
+}
+
+fn ensure_swift_helper_cache_dir() -> Result<PathBuf> {
+    let cache_dir = swift_helper_cache_dir();
+    fs::create_dir_all(&cache_dir).context("failed to create Swift helper cache directory")?;
+    let metadata = cache_dir
+        .symlink_metadata()
+        .context("failed to inspect Swift helper cache directory")?;
+    if !metadata.file_type().is_dir() {
+        return Err(anyhow!("Swift helper cache path is not a directory"));
+    }
+    fs::set_permissions(&cache_dir, fs::Permissions::from_mode(0o700))
+        .context("failed to secure Swift helper cache directory")?;
+    Ok(cache_dir)
+}
+
+fn swift_helper_cache_dir() -> PathBuf {
+    if let Some(home) = env::var_os("HOME") {
+        return PathBuf::from(home)
+            .join("Library")
+            .join("Caches")
+            .join(SWIFT_HELPER_CACHE_DIR);
+    }
+
+    env::temp_dir().join(SWIFT_HELPER_CACHE_DIR)
+}
+
+fn swift_helper_path(name: &str, body: &str) -> PathBuf {
+    swift_helper_cache_dir().join(format!("{name}-{:016x}", swift_source_hash(body)))
+}
+
+fn swift_source_hash(body: &str) -> u64 {
+    swift_source_hash_with_prelude(SWIFT_PRELUDE, body)
+}
+
+fn swift_source_hash_with_prelude(prelude: &str, body: &str) -> u64 {
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in prelude.bytes().chain(body.bytes()) {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+fn current_uid() -> u32 {
+    unsafe { getuid() }
+}
+
+fn unix_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
 }
 
 fn convert_recording(capture_file: &Path, output_file: &Path) -> Result<()> {
@@ -696,19 +1216,23 @@ fn wait_for_stable_file(output_file: &Path) -> Result<()> {
 }
 
 fn signal_capture_process(pid: u32, signal: &str) -> Result<()> {
+    signal_process(pid, signal)
+}
+
+fn signal_process(pid: u32, signal: &str) -> Result<()> {
     let signal_arg = format!("-{signal}");
     let pid_arg = pid.to_string();
     let status = Command::new("kill")
         .args([signal_arg.as_str(), pid_arg.as_str()])
         .status()
-        .with_context(|| format!("failed to send SIG{signal} to screencapture"))?;
+        .with_context(|| format!("failed to send SIG{signal} to process"))?;
 
     if status.success() || !process_alive(pid) {
         return Ok(());
     }
 
     Err(anyhow!(
-        "failed to send SIG{} to screencapture pid {}",
+        "failed to send SIG{} to process pid {}",
         signal,
         pid
     ))
@@ -873,5 +1397,24 @@ mod tests {
     #[test]
     fn format_label_uses_uppercase_extension() {
         assert_eq!(output_format_label(Path::new("/tmp/out.mp4")), "MP4");
+    }
+
+    #[test]
+    fn swift_helper_hash_includes_prelude_and_body() {
+        assert_eq!(
+            swift_source_hash(REGION_SELECTOR_SWIFT),
+            swift_source_hash_with_prelude(SWIFT_PRELUDE, REGION_SELECTOR_SWIFT),
+            "helper hash should use the shared Swift prelude"
+        );
+        assert_ne!(
+            swift_source_hash(REGION_SELECTOR_SWIFT),
+            swift_source_hash(STATUS_OVERLAY_SWIFT),
+            "different helper bodies should use different cache keys"
+        );
+        assert_ne!(
+            swift_source_hash(REGION_SELECTOR_SWIFT),
+            swift_source_hash_with_prelude("changed prelude", REGION_SELECTOR_SWIFT),
+            "prelude changes should invalidate cached helpers"
+        );
     }
 }
