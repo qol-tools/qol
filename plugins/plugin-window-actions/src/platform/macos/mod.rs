@@ -2,6 +2,7 @@ mod ax;
 mod geometry;
 mod objc;
 mod screen;
+mod trace;
 
 use std::process::Command;
 
@@ -99,19 +100,21 @@ impl WindowSystem for MacWindowSystem {
     }
 
     fn process_start_ticks(&self, pid: u32) -> Option<u64> {
-        let output = Command::new("ps")
-            .args(["-o", "lstart=", "-p", &pid.to_string()])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let raw = String::from_utf8_lossy(&output.stdout);
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        Some(fnv1a(trimmed.as_bytes()))
+        trace::timed_opt("ps_lstart", pid as i32, || {
+            let output = Command::new("ps")
+                .args(["-o", "lstart=", "-p", &pid.to_string()])
+                .output()
+                .ok()?;
+            if !output.status.success() {
+                return None;
+            }
+            let raw = String::from_utf8_lossy(&output.stdout);
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            Some(fnv1a(trimmed.as_bytes()))
+        })
     }
 }
 
@@ -129,16 +132,18 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 }
 
 fn process_name(pid: u32) -> Option<String> {
-    let output = Command::new("ps")
-        .args(["-o", "comm=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if name.is_empty() {
-        return None;
-    }
-    Some(name)
+    trace::timed_opt("ps_comm", pid as i32, || {
+        let output = Command::new("ps")
+            .args(["-o", "comm=", "-p", &pid.to_string()])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if name.is_empty() {
+            return None;
+        }
+        Some(name)
+    })
 }

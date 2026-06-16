@@ -32,6 +32,7 @@ last_printed_state_summary = None
 # Focus/Activation tracking state
 pending_activation = None
 last_parsed_ts = 0
+winact_fail_pids = set()
 
 # Buffering for group rendering
 event_buffer = []
@@ -375,6 +376,50 @@ def format_launcher_event(tag, msg):
         selected_name = launcher_quoted(msg, "selected_name")
         return (f"Launcher closed from={COLOR_WARN}{src}{COLOR_RESET} q=\"{q}\" "
                 f"results={results} selected={selected} \"{selected_name}\"")
+
+    return f"{tag}: {msg}"
+
+def winact_ms_color(value):
+    return COLOR_FAIL if value > 100 else (COLOR_WARN if value > 50 else COLOR_OK)
+
+def winact_outcome_color(outcome):
+    if outcome == "ok":
+        return COLOR_OK
+    if outcome == "fail":
+        return COLOR_FAIL
+    return COLOR_DIM
+
+def winact_int(value):
+    return int(value) if value.isdigit() else None
+
+def format_winact_event(tag, msg, partial=False):
+    if tag == "WINACT_AX":
+        op = launcher_field(msg, "op")
+        pid = launcher_field(msg, "pid")
+        dur = launcher_field(msg, "dur_ms")
+        outcome = launcher_field(msg, "outcome")
+        dur_ms = winact_int(dur)
+        dur_str = f"{dur}ms" if dur_ms is not None else "?ms"
+        pid_suffix = f" pid={pid}" if pid not in ("0", "-1", "?") else ""
+        return (f"  {COLOR_DIM}AX{COLOR_RESET} {op}{pid_suffix} "
+                f"{winact_ms_color(dur_ms or 0)}{dur_str}{COLOR_RESET} "
+                f"{winact_outcome_color(outcome)}{outcome}{COLOR_RESET}")
+
+    if tag == "WINACT_DONE":
+        action = launcher_field(msg, "action")
+        total = launcher_field(msg, "total_ms")
+        outcome = launcher_field(msg, "outcome")
+        total_ms = winact_int(total)
+        total_str = f"{total}ms" if total_ms is not None else "?ms"
+        if outcome == "ok":
+            verdict = (f"{COLOR_WARN}ok (partial: an AX op failed){COLOR_RESET}"
+                       if partial else f"{COLOR_OK}ok{COLOR_RESET}")
+        else:
+            err_m = re.search(r"\berr=(?P<err>.*)$", msg)
+            detail = f": {err_m.group('err')}" if err_m else ""
+            verdict = f"{COLOR_FAIL}FAILED{detail}{COLOR_RESET}"
+        return (f"{COLOR_HOTKEY}▶ {action}{COLOR_RESET} "
+                f"{winact_ms_color(total_ms or 0)}{total_str}{COLOR_RESET} {verdict}")
 
     return f"{tag}: {msg}"
 
@@ -1039,6 +1084,19 @@ def process_line(ts_raw, pid, tag, msg):
         event_buffer.append((int(ts_raw), ts, tag, "world", text))
         last_event_real_time = time.time()
 
+    elif tag.startswith("WINACT_"):
+        if filter_plugin and filter_plugin != "window-actions":
+            return
+        partial = False
+        if tag == "WINACT_AX" and "outcome=fail" in msg:
+            winact_fail_pids.add(pid)
+        elif tag == "WINACT_DONE":
+            partial = pid in winact_fail_pids
+            winact_fail_pids.discard(pid)
+        text = format_winact_event(tag, msg, partial)
+        event_buffer.append((int(ts_raw), ts, tag, "window-actions", text))
+        last_event_real_time = time.time()
+
     else:
         proc_name = get_process_name(pid)
         if filter_plugin and proc_name != filter_plugin:
@@ -1065,9 +1123,10 @@ def flush_buffer():
             if text == last_printed_state_summary:
                 continue
             last_printed_state_summary = text
-        if text in seen_texts:
-            continue
-        seen_texts.add(text)
+        if not tag.startswith("WINACT_"):
+            if text in seen_texts:
+                continue
+            seen_texts.add(text)
         unique_events.append((ts_val, ts_str, tag, source, text))
         
     if not unique_events:
