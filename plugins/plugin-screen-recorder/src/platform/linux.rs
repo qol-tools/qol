@@ -196,7 +196,11 @@ pub fn recording_started() {
     show_notification("Recording started", "Press your hotkey to stop", 1200);
 }
 
-pub fn recording_stopped(_output_file: Option<&Path>, _capture_file: Option<&Path>) {
+pub fn recording_stopped(
+    _output_file: Option<&Path>,
+    _capture_file: Option<&Path>,
+    _config: &Config,
+) {
     show_notification("Recording stopped", "Saved to ~/Videos", 2000);
 }
 

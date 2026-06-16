@@ -7,17 +7,11 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::thread;
-use std::time::Duration;
 
 const PIDFILE: &str = "/tmp/record-region.pid";
 const SNAP_MARGIN_PX: i32 = 50;
 
 #[derive(Debug, Clone, Deserialize, Default)]
-#[allow(
-    dead_code,
-    reason = "fields are consumed by the linux platform impl only"
-)]
 pub(crate) struct Config {
     #[serde(default)]
     pub audio: AudioConfig,
@@ -26,18 +20,42 @@ pub(crate) struct Config {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(
-    dead_code,
-    reason = "fields are consumed by the linux platform impl only"
-)]
 pub(crate) struct AudioConfig {
     #[serde(default = "default_true")]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        allow(
+            dead_code,
+            reason = "audio capture is not implemented on this platform"
+        )
+    )]
     pub enabled: bool,
     #[serde(default = "default_audio_inputs")]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(
+            dead_code,
+            reason = "explicit audio inputs are supported by linux only"
+        )
+    )]
     pub inputs: Vec<String>,
     #[serde(default = "default_string_default")]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(
+            dead_code,
+            reason = "explicit audio devices are supported by linux only"
+        )
+    )]
     pub mic_device: String,
     #[serde(default = "default_string_default")]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(
+            dead_code,
+            reason = "explicit audio devices are supported by linux only"
+        )
+    )]
     pub system_device: String,
 }
 
@@ -53,16 +71,33 @@ impl Default for AudioConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(
-    dead_code,
-    reason = "fields are consumed by the linux platform impl only"
-)]
 pub(crate) struct VideoConfig {
     #[serde(default = "default_crf")]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        allow(
+            dead_code,
+            reason = "video encoding is not implemented on this platform"
+        )
+    )]
     pub crf: i32,
     #[serde(default = "default_preset")]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        allow(
+            dead_code,
+            reason = "video encoding is not implemented on this platform"
+        )
+    )]
     pub preset: String,
     #[serde(default = "default_framerate")]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(
+            dead_code,
+            reason = "framerate is controlled by linux ffmpeg capture only"
+        )
+    )]
     pub framerate: u32,
     #[serde(default = "default_format")]
     pub format: String,
@@ -127,7 +162,7 @@ fn default_framerate() -> u32 {
 }
 
 fn default_format() -> String {
-    "mkv".to_string()
+    "mov".to_string()
 }
 
 fn main() -> ExitCode {
@@ -148,21 +183,14 @@ fn main() -> ExitCode {
 }
 
 fn run_record_action() -> Result<()> {
+    let config: Config = qol_config::load_plugin_config_from_env("plugin-screen-recorder");
     if let Some(state) = read_capture_state() {
         if platform::process_alive(state.pid) {
-            platform::stop_capture(state.pid)?;
-            thread::sleep(Duration::from_millis(500));
-            remove_pidfile();
-            platform::recording_stopped(
-                state.output_file.as_deref(),
-                state.capture_file.as_deref(),
-            );
-            return Ok(());
+            return stop_active_recording(&state, &config);
         }
         remove_pidfile();
     }
 
-    let config: Config = qol_config::load_plugin_config_from_env("plugin-screen-recorder");
     let mut rect = match platform::select_region()? {
         Some(region) => region,
         None => return Ok(()),
@@ -209,7 +237,6 @@ fn run_record_action() -> Result<()> {
     let pid = platform::start_capture(&rect, &config, &capture_file)?;
 
     write_capture_state(pid, &output_file, &capture_file)?;
-    thread::sleep(Duration::from_millis(500));
 
     if platform::process_alive(pid) {
         platform::recording_started();
@@ -223,6 +250,24 @@ fn run_record_action() -> Result<()> {
         return Err(anyhow!("capture process exited immediately"));
     }
 
+    Ok(())
+}
+
+fn stop_active_recording(state: &CaptureState, config: &Config) -> Result<()> {
+    if let Err(error) = platform::stop_capture(state.pid) {
+        eprintln!("failed to stop recording pid {}: {error:#}", state.pid);
+        if platform::process_alive(state.pid) {
+            platform::show_notification("Recording failed", "Could not stop capture process", 1800);
+            return Err(error).context("capture process is still running after stop request");
+        }
+    }
+
+    remove_pidfile();
+    platform::recording_stopped(
+        state.output_file.as_deref(),
+        state.capture_file.as_deref(),
+        config,
+    );
     Ok(())
 }
 

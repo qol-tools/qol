@@ -14,9 +14,6 @@ use crate::{Config, Monitor, Rect};
 const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-screen-recorder/";
 const MAX_DISPLAYS: u32 = 16;
 const SWIFT_HELPER_CACHE_DIR: &str = "qol-screen-recorder-swift";
-const STATUS_OVERLAY_COMMAND_FILE: &str = "status-overlay-command.txt";
-const STATUS_OVERLAY_READY_FILE: &str = "status-overlay-ready";
-const STATUS_OVERLAY_SERVER_PID_FILE: &str = "status-overlay-server.pid";
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 static STATUS_OVERLAY_PID: Mutex<Option<u32>> = Mutex::new(None);
@@ -121,12 +118,12 @@ pub fn recording_started() {
     prewarm_recording_helpers();
 }
 
-pub fn recording_stopped(output_file: Option<&Path>, capture_file: Option<&Path>) {
+pub fn recording_stopped(output_file: Option<&Path>, capture_file: Option<&Path>, config: &Config) {
     if let Some(output_file) = output_file {
         let capture_file = capture_file.unwrap_or(output_file);
         let conversion_needed = !paths_match(output_file, capture_file);
         show_recording_ended(output_file, conversion_needed);
-        let reveal_file = match finalize_recording(output_file, capture_file) {
+        let reveal_file = match finalize_recording(output_file, capture_file, config) {
             Ok(reveal_file) => {
                 show_recording_saved(&reveal_file, conversion_needed);
                 reveal_file
@@ -161,7 +158,11 @@ pub fn stop_capture(pid: u32) -> Result<()> {
     }
 
     signal_capture_process(pid, "KILL")?;
-    Ok(())
+    if wait_for_process_exit(pid, Duration::from_secs(2)) {
+        return Ok(());
+    }
+
+    Err(anyhow!("capture process pid {} did not stop", pid))
 }
 
 pub fn process_alive(pid: u32) -> bool {
@@ -327,13 +328,13 @@ fn parse_selection_geometry(raw: &str) -> Result<Rect> {
     })
 }
 
-fn finalize_recording(output_file: &Path, capture_file: &Path) -> Result<PathBuf> {
+fn finalize_recording(output_file: &Path, capture_file: &Path, config: &Config) -> Result<PathBuf> {
     wait_for_stable_file(capture_file)?;
     if paths_match(output_file, capture_file) {
         return Ok(output_file.to_path_buf());
     }
 
-    convert_recording(capture_file, output_file)?;
+    convert_recording(capture_file, output_file, config)?;
     let _ = std::fs::remove_file(capture_file);
     Ok(output_file.to_path_buf())
 }
@@ -529,7 +530,6 @@ fn take_status_overlay_pid() -> Option<u32> {
 }
 
 fn prewarm_recording_helpers() {
-    clear_status_server_files();
     prewarm_swift_helper(
         "status-overlay",
         STATUS_OVERLAY_SWIFT,
@@ -540,35 +540,6 @@ fn prewarm_recording_helpers() {
         REGION_SELECTOR_SWIFT,
         REGION_SELECTOR_HELPER,
     );
-}
-
-fn read_status_server_pid() -> Option<u32> {
-    fs::read_to_string(status_overlay_server_pid_path())
-        .ok()?
-        .trim()
-        .parse()
-        .ok()
-}
-
-fn clear_status_server_files() {
-    if let Some(pid) = read_status_server_pid() {
-        let _ = signal_process(pid, "TERM");
-    }
-    let _ = fs::remove_file(status_overlay_command_path());
-    let _ = fs::remove_file(status_overlay_ready_path());
-    let _ = fs::remove_file(status_overlay_server_pid_path());
-}
-
-fn status_overlay_command_path() -> PathBuf {
-    swift_helper_cache_dir().join(STATUS_OVERLAY_COMMAND_FILE)
-}
-
-fn status_overlay_ready_path() -> PathBuf {
-    swift_helper_cache_dir().join(STATUS_OVERLAY_READY_FILE)
-}
-
-fn status_overlay_server_pid_path() -> PathBuf {
-    swift_helper_cache_dir().join(STATUS_OVERLAY_SERVER_PID_FILE)
 }
 
 fn prewarm_swift_helper(name: &'static str, body: &'static str, embedded_helper: &'static [u8]) {
@@ -684,20 +655,20 @@ fn unix_nanos() -> u128 {
         .unwrap_or(0)
 }
 
-fn convert_recording(capture_file: &Path, output_file: &Path) -> Result<()> {
+fn convert_recording(capture_file: &Path, output_file: &Path, config: &Config) -> Result<()> {
     match converter_for(
         output_file,
         resolve_command("ffmpeg").is_some(),
         resolve_command("avconvert").is_some(),
     )? {
-        Converter::Ffmpeg => convert_with_ffmpeg(capture_file, output_file),
+        Converter::Ffmpeg => convert_with_ffmpeg(capture_file, output_file, config),
         Converter::Avconvert => convert_with_avconvert(capture_file, output_file),
     }
 }
 
-fn convert_with_ffmpeg(capture_file: &Path, output_file: &Path) -> Result<()> {
+fn convert_with_ffmpeg(capture_file: &Path, output_file: &Path, config: &Config) -> Result<()> {
     let mut command = Command::new(resolve_command("ffmpeg").unwrap_or_else(|| "ffmpeg".into()));
-    command.args(conversion_args(capture_file, output_file));
+    command.args(conversion_args(capture_file, output_file, config));
     run_conversion_command(&mut command, "ffmpeg")
 }
 
@@ -740,7 +711,7 @@ fn run_conversion_command(command: &mut Command, name: &str) -> Result<()> {
     Err(anyhow!("{name} exited with {}", status))
 }
 
-fn conversion_args(capture_file: &Path, output_file: &Path) -> Vec<String> {
+fn conversion_args(capture_file: &Path, output_file: &Path, config: &Config) -> Vec<String> {
     let mut args = vec![
         "-hide_banner".to_string(),
         "-loglevel".to_string(),
@@ -751,9 +722,9 @@ fn conversion_args(capture_file: &Path, output_file: &Path) -> Vec<String> {
     ];
 
     match output_extension(output_file).as_deref() {
-        Some("webm") => args.extend(webm_conversion_args()),
-        Some("mp4") => args.extend(mp4_conversion_args()),
-        Some("mkv") => args.extend(mkv_conversion_args()),
+        Some("webm") => args.extend(webm_conversion_args(config)),
+        Some("mp4") => args.extend(mp4_conversion_args(config)),
+        Some("mkv") => args.extend(mkv_conversion_args(config)),
         _ => {}
     }
 
@@ -761,43 +732,60 @@ fn conversion_args(capture_file: &Path, output_file: &Path) -> Vec<String> {
     args
 }
 
-fn webm_conversion_args() -> Vec<String> {
-    [
-        "-c:v",
-        "libvpx-vp9",
-        "-b:v",
-        "0",
-        "-crf",
-        "32",
-        "-c:a",
-        "libopus",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
-}
-
-fn mp4_conversion_args() -> Vec<String> {
-    [
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-movflags",
-        "+faststart",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
-}
-
-fn mkv_conversion_args() -> Vec<String> {
-    ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"]
+fn webm_conversion_args(config: &Config) -> Vec<String> {
+    let mut args = ["-c:v", "libvpx-vp9", "-b:v", "0", "-crf"]
         .into_iter()
         .map(str::to_string)
-        .collect()
+        .collect::<Vec<_>>();
+    args.push(clamped_crf(config.video.crf).to_string());
+    args.extend(["-c:a", "libopus"].into_iter().map(str::to_string));
+    args
+}
+
+fn mp4_conversion_args(config: &Config) -> Vec<String> {
+    h264_conversion_args(config, true)
+}
+
+fn mkv_conversion_args(config: &Config) -> Vec<String> {
+    h264_conversion_args(config, false)
+}
+
+fn h264_conversion_args(config: &Config, faststart: bool) -> Vec<String> {
+    let mut args = vec![
+        "-c:v".to_string(),
+        "libx264".to_string(),
+        "-crf".to_string(),
+        clamped_crf(config.video.crf).to_string(),
+        "-preset".to_string(),
+        normalized_h264_preset(&config.video.preset).to_string(),
+        "-pix_fmt".to_string(),
+        "yuv420p".to_string(),
+        "-c:a".to_string(),
+        "aac".to_string(),
+    ];
+    if faststart {
+        args.extend(["-movflags", "+faststart"].into_iter().map(str::to_string));
+    }
+    args
+}
+
+fn clamped_crf(crf: i32) -> i32 {
+    crf.clamp(0, 51)
+}
+
+fn normalized_h264_preset(preset: &str) -> &'static str {
+    match preset {
+        "ultrafast" => "ultrafast",
+        "superfast" => "superfast",
+        "veryfast" => "veryfast",
+        "faster" => "faster",
+        "fast" => "fast",
+        "medium" => "medium",
+        "slow" => "slow",
+        "slower" => "slower",
+        "veryslow" => "veryslow",
+        _ => "veryfast",
+    }
 }
 
 fn reveal_recording(output_file: &Path) -> bool {
@@ -1002,10 +990,34 @@ mod tests {
 
     #[test]
     fn webm_conversion_uses_webm_codecs() {
-        let args = conversion_args(Path::new("/tmp/native.mov"), Path::new("/tmp/out.webm"));
+        let args = conversion_args(
+            Path::new("/tmp/native.mov"),
+            Path::new("/tmp/out.webm"),
+            &Config::default(),
+        );
         assert!(args.iter().any(|arg| arg == "libvpx-vp9"));
         assert!(args.iter().any(|arg| arg == "libopus"));
         assert_eq!(args.last().map(String::as_str), Some("/tmp/out.webm"));
+    }
+
+    #[test]
+    fn ffmpeg_conversion_uses_configured_encoding_settings() {
+        let cases = [
+            ("/tmp/out.mp4", 24, "slow", "24", "slow"),
+            ("/tmp/out.mkv", 0, "ultrafast", "0", "ultrafast"),
+            ("/tmp/out.webm", 41, "ignored", "41", ""),
+            ("/tmp/out.mp4", -2, "invalid", "0", "veryfast"),
+            ("/tmp/out.webm", 87, "ignored", "51", ""),
+        ];
+
+        for (output, crf, preset, expected_crf, expected_preset) in cases {
+            let config = config_with_encoding(crf, preset);
+            let args = conversion_args(Path::new("/tmp/native.mov"), Path::new(output), &config);
+            assert_arg_value(&args, "-crf", expected_crf);
+            if !expected_preset.is_empty() {
+                assert_arg_value(&args, "-preset", expected_preset);
+            }
+        }
     }
 
     #[test]
@@ -1047,5 +1059,19 @@ mod tests {
             swift_source_hash_with_prelude("changed prelude", REGION_SELECTOR_SWIFT),
             "prelude changes should invalidate cached helpers"
         );
+    }
+
+    fn config_with_encoding(crf: i32, preset: &str) -> Config {
+        let mut config = Config::default();
+        config.video.crf = crf;
+        config.video.preset = preset.to_string();
+        config
+    }
+
+    fn assert_arg_value(args: &[String], key: &str, expected: &str) {
+        let Some(index) = args.iter().position(|arg| arg == key) else {
+            panic!("missing arg {key} in {args:?}");
+        };
+        assert_eq!(args.get(index + 1).map(String::as_str), Some(expected));
     }
 }
