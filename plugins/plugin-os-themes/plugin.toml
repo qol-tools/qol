@@ -2,7 +2,7 @@
 id = "plugin-os-themes"
 name = "OS Themes"
 description = "Cursor effects and OS-wide theming"
-version = "0.5.5"
+version = "0.6.0"
 author = ""
 platforms = ["linux"]
 
