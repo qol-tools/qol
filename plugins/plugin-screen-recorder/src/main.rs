@@ -95,6 +95,13 @@ pub(crate) struct Rect {
     pub h: i32,
 }
 
+#[derive(Debug)]
+struct CaptureState {
+    pid: u32,
+    output_file: Option<PathBuf>,
+    capture_file: Option<PathBuf>,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -141,12 +148,15 @@ fn main() -> ExitCode {
 }
 
 fn run_record_action() -> Result<()> {
-    if let Some(pid) = read_pid() {
-        if platform::process_alive(pid) {
-            platform::stop_capture(pid)?;
-            thread::sleep(Duration::from_millis(250));
+    if let Some(state) = read_capture_state() {
+        if platform::process_alive(state.pid) {
+            platform::stop_capture(state.pid)?;
+            thread::sleep(Duration::from_millis(500));
             remove_pidfile();
-            platform::show_notification("Recording stopped", "Saved to ~/Videos", 2000);
+            platform::recording_stopped(
+                state.output_file.as_deref(),
+                state.capture_file.as_deref(),
+            );
             return Ok(());
         }
         remove_pidfile();
@@ -195,13 +205,14 @@ fn run_record_action() -> Result<()> {
 
     let output_format = platform::recording_format(&config.video.format);
     let output_file = output_file_path(&output_format)?;
-    let pid = platform::start_capture(&rect, &config, &output_file)?;
+    let capture_file = platform::capture_file_path(&output_file);
+    let pid = platform::start_capture(&rect, &config, &capture_file)?;
 
-    fs::write(PIDFILE, pid.to_string()).context("failed to write pid file")?;
+    write_capture_state(pid, &output_file, &capture_file)?;
     thread::sleep(Duration::from_millis(500));
 
     if platform::process_alive(pid) {
-        platform::show_notification("Recording started", "Press your hotkey to stop", 1200);
+        platform::recording_started();
     } else {
         remove_pidfile();
         platform::show_notification(
@@ -245,9 +256,44 @@ fn clamp_to_bounds(mut rect: Rect, bounds: Monitor) -> Rect {
     rect
 }
 
-fn read_pid() -> Option<u32> {
+fn read_capture_state() -> Option<CaptureState> {
     let content = fs::read_to_string(PIDFILE).ok()?;
-    content.trim().parse::<u32>().ok()
+    parse_capture_state(&content)
+}
+
+fn parse_capture_state(content: &str) -> Option<CaptureState> {
+    let mut lines = content.lines();
+    let pid = lines.next()?.trim().parse::<u32>().ok()?;
+    let output_file = lines
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from);
+    let capture_file = lines
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| output_file.clone());
+    Some(CaptureState {
+        pid,
+        output_file,
+        capture_file,
+    })
+}
+
+fn write_capture_state(
+    pid: u32,
+    output_file: &std::path::Path,
+    capture_file: &std::path::Path,
+) -> Result<()> {
+    let content = format!(
+        "{}\n{}\n{}\n",
+        pid,
+        output_file.display(),
+        capture_file.display()
+    );
+    fs::write(PIDFILE, content).context("failed to write pid file")
 }
 
 fn remove_pidfile() {
@@ -266,10 +312,28 @@ fn output_file_path(format: &str) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use qol_plugin_api::manifest::PluginManifest;
 
     #[test]
     fn validate_plugin_contract() {
         PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
+    }
+
+    #[test]
+    fn capture_state_reads_output_and_capture_paths() {
+        let state = super::parse_capture_state("123\n/a/final.webm\n/a/native.mov\n").unwrap();
+        assert_eq!(state.pid, 123);
+        assert_eq!(state.output_file, Some(PathBuf::from("/a/final.webm")));
+        assert_eq!(state.capture_file, Some(PathBuf::from("/a/native.mov")));
+    }
+
+    #[test]
+    fn capture_state_uses_output_path_for_legacy_pidfiles() {
+        let state = super::parse_capture_state("123\n/a/final.mov\n").unwrap();
+        assert_eq!(state.pid, 123);
+        assert_eq!(state.output_file, Some(PathBuf::from("/a/final.mov")));
+        assert_eq!(state.capture_file, Some(PathBuf::from("/a/final.mov")));
     }
 }
