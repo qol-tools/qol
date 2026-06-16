@@ -2,7 +2,7 @@
 id = "plugin-screen-recorder"
 name = "Screen Recorder"
 description = "Record screen regions with optional audio support"
-version = "1.6.0"
+version = "1.6.1"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
