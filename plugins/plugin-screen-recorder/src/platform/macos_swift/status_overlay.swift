@@ -44,9 +44,6 @@ let rawSubtitle = environment["QOL_STATUS_SUBTITLE"] ?? ""
 let subtitle = rawSubtitle.isEmpty ? nil : rawSubtitle
 let durationMs = max(300, Int(environment["QOL_STATUS_DURATION_MS"] ?? "") ?? 1800)
 let exitAfterHide = environment["QOL_STATUS_EXIT_AFTER_HIDE"] == "1"
-let commandFile = environment["QOL_STATUS_COMMAND_FILE"] ?? ""
-let readyFile = environment["QOL_STATUS_READY_FILE"] ?? ""
-let serverMode = environment["QOL_STATUS_SERVER"] == "1"
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
@@ -77,55 +74,23 @@ func showStatus(_ command: StatusCommand) {
     statusView.configure(title: command.title, subtitle: command.subtitle)
     window.orderFrontRegardless()
 
+    guard command.exitAfterHide else {
+        return
+    }
+
     let workItem = DispatchWorkItem {
         window.orderOut(nil)
-        if command.exitAfterHide {
-            NSApp.terminate(nil)
-        }
+        NSApp.terminate(nil)
     }
     hideWorkItem = workItem
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(command.durationMs), execute: workItem)
 }
 
-func readStatusCommand() -> StatusCommand? {
-    guard !commandFile.isEmpty else {
-        return nil
-    }
-    guard let raw = try? String(contentsOfFile: commandFile, encoding: .utf8) else {
-        return nil
-    }
-    let lines = raw.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-    guard lines.count >= 4 else {
-        return nil
-    }
-    return StatusCommand(
-        title: lines[0],
-        subtitle: lines[1].isEmpty ? nil : lines[1],
-        durationMs: max(300, Int(lines[2]) ?? 1800),
-        exitAfterHide: lines[3] == "1"
-    )
-}
-
-if serverMode {
-    signal(SIGUSR1, SIG_IGN)
-    let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
-    source.setEventHandler {
-        guard let command = readStatusCommand() else {
-            return
-        }
-        showStatus(command)
-    }
-    source.resume()
-    if !readyFile.isEmpty {
-        FileManager.default.createFile(atPath: readyFile, contents: Data(), attributes: nil)
-    }
-} else {
-    showStatus(StatusCommand(
-        title: title,
-        subtitle: subtitle,
-        durationMs: durationMs,
-        exitAfterHide: true
-    ))
-}
+showStatus(StatusCommand(
+    title: title,
+    subtitle: subtitle,
+    durationMs: durationMs,
+    exitAfterHide: exitAfterHide
+))
 
 app.run()

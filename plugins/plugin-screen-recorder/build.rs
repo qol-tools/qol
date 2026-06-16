@@ -18,12 +18,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is missing")?);
-    compile_helper(&out_dir, "region-selector", REGION_SELECTOR)?;
-    compile_helper(&out_dir, "status-overlay", STATUS_OVERLAY)?;
+    let target = env::var("TARGET")?;
+    let swift_target = swift_target(&target)?;
+    compile_helper(&out_dir, "region-selector", REGION_SELECTOR, swift_target)?;
+    compile_helper(&out_dir, "status-overlay", STATUS_OVERLAY, swift_target)?;
     Ok(())
 }
 
-fn compile_helper(out_dir: &Path, name: &str, body_path: &str) -> Result<(), Box<dyn Error>> {
+fn compile_helper(
+    out_dir: &Path,
+    name: &str,
+    body_path: &str,
+    swift_target: &str,
+) -> Result<(), Box<dyn Error>> {
     let source = out_dir.join(format!("{name}.swift"));
     let binary = out_dir.join(name);
     let prelude = fs::read_to_string(PRELUDE)?;
@@ -31,6 +38,8 @@ fn compile_helper(out_dir: &Path, name: &str, body_path: &str) -> Result<(), Box
     fs::write(&source, format!("{prelude}\n{body}"))?;
 
     let output = Command::new("swiftc")
+        .arg("-target")
+        .arg(swift_target)
         .arg(&source)
         .arg("-o")
         .arg(&binary)
@@ -45,4 +54,12 @@ fn compile_helper(out_dir: &Path, name: &str, body_path: &str) -> Result<(), Box
         String::from_utf8_lossy(&output.stderr).trim()
     )
     .into())
+}
+
+fn swift_target(cargo_target: &str) -> Result<&'static str, Box<dyn Error>> {
+    match cargo_target {
+        "aarch64-apple-darwin" => Ok("arm64-apple-macosx13.0"),
+        "x86_64-apple-darwin" => Ok("x86_64-apple-macosx13.0"),
+        target => Err(format!("unsupported macOS Swift helper target: {target}").into()),
+    }
 }
