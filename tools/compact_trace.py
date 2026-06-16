@@ -390,16 +390,26 @@ def process_line(ts_raw, pid, tag, msg):
     # Check timeout for pending activation relative to parsed log time
     if pending_activation:
         if last_parsed_ts - pending_activation["ts_raw"] > 600:
-            stats["focus_timeout"] += 1
+            confirmed = pending_activation.get("confirmed_front")
+            stats["focus_ok" if confirmed else "focus_timeout"] += 1
             if not filter_plugin or pending_activation.get("source") == filter_plugin:
                 target = pending_activation["title"]
                 wid = pending_activation["wid"]
-                text = f"{COLOR_FAIL}✖ FOCUS FAILURE{COLOR_RESET}: Timed out focusing \"{target}\" (wid: {wid}). WM ignored request."
-                timeout_ts = pending_activation["ts_raw"] + 600
-                timeout_ts_str = format_timestamp(str(timeout_ts))
-                event_buffer.append((timeout_ts, timeout_ts_str, "FOCUS_WARN", "host", text))
+                resolved_ts = pending_activation["ts_raw"] + 600
+                resolved_ts_str = format_timestamp(str(resolved_ts))
+                if confirmed:
+                    text = f"{COLOR_SUCCESS}✔ FOCUS OK{COLOR_RESET}: \"{target}\" (wid: {wid}) confirmed front; no WM focus-change event."
+                    event_buffer.append((resolved_ts, resolved_ts_str, "FOCUS", "host", text))
+                else:
+                    text = f"{COLOR_FAIL}✖ FOCUS FAILURE{COLOR_RESET}: Timed out focusing \"{target}\" (wid: {wid}). WM ignored request."
+                    event_buffer.append((resolved_ts, resolved_ts_str, "FOCUS_WARN", "host", text))
                 last_event_real_time = time.time()
             pending_activation = None
+
+    if pending_activation and tag in ("ACTIVATE_SETTLED", "ACTIVATE_KEY_FOCUS"):
+        confirm_wid = re.search(r"\bwid=(?P<wid>\d+)", msg)
+        if confirm_wid and confirm_wid.group("wid") == pending_activation["wid"]:
+            pending_activation["confirmed_front"] = True
             
     # Filter based on flags and topics
     if not match_topic(tag, args.topic):
@@ -1177,10 +1187,14 @@ def main():
                     if not filter_plugin or pending_activation.get("source") == filter_plugin:
                         target = pending_activation["title"]
                         wid = pending_activation["wid"]
-                        text = f"{COLOR_FAIL}✖ FOCUS FAILURE{COLOR_RESET}: Timed out focusing \"{target}\" (wid: {wid}). WM ignored request."
-                        timeout_ts = pending_activation["ts_raw"] + 600
-                        timeout_ts_str = format_timestamp(str(timeout_ts))
-                        event_buffer.append((timeout_ts, timeout_ts_str, "FOCUS_WARN", "host", text))
+                        resolved_ts = pending_activation["ts_raw"] + 600
+                        resolved_ts_str = format_timestamp(str(resolved_ts))
+                        if pending_activation.get("confirmed_front"):
+                            text = f"{COLOR_SUCCESS}✔ FOCUS OK{COLOR_RESET}: \"{target}\" (wid: {wid}) confirmed front; no WM focus-change event."
+                            event_buffer.append((resolved_ts, resolved_ts_str, "FOCUS", "host", text))
+                        else:
+                            text = f"{COLOR_FAIL}✖ FOCUS FAILURE{COLOR_RESET}: Timed out focusing \"{target}\" (wid: {wid}). WM ignored request."
+                            event_buffer.append((resolved_ts, resolved_ts_str, "FOCUS_WARN", "host", text))
                         last_event_real_time = time.time()
                     pending_activation = None
 
