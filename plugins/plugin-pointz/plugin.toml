@@ -2,7 +2,7 @@
 id = "plugin-pointz"
 name = "PointZerver"
 description = "Control your PC from mobile devices"
-version = "1.4.5"
+version = "1.4.6"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
