@@ -9,6 +9,7 @@ use super::objc::{
     CGSize, CGWindowListCopyWindowInfo, CfGuard, AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE,
     CG_WINDOW_LIST_EXCLUDE_DESKTOP, CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
+use super::trace::{timed_bool, timed_opt, timed_pred, timed_unit};
 
 /// App element + the best target window (focused, or AXWindows[0] fallback).
 /// `_keeper` owns the CF reference that `win` points into.
@@ -19,29 +20,31 @@ struct FrontTarget {
 }
 
 fn front_target(pid: i32) -> Option<FrontTarget> {
-    let app = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) })?;
-    if let Some(focused) = ax_attr(app.as_ptr(), "AXFocusedWindow") {
-        let win = focused.as_ptr();
-        return Some(FrontTarget {
+    timed_opt("front_target", pid, || {
+        let app = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) })?;
+        if let Some(focused) = ax_attr(app.as_ptr(), "AXFocusedWindow") {
+            let win = focused.as_ptr();
+            return Some(FrontTarget {
+                app,
+                _keeper: focused,
+                win,
+            });
+        }
+        let windows = ax_attr(app.as_ptr(), "AXWindows")?;
+        if unsafe { CFArrayGetCount(windows.as_ptr()) } == 0 {
+            return None;
+        }
+        let win = unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), 0) };
+        Some(FrontTarget {
             app,
-            _keeper: focused,
+            _keeper: windows,
             win,
-        });
-    }
-    let windows = ax_attr(app.as_ptr(), "AXWindows")?;
-    if unsafe { CFArrayGetCount(windows.as_ptr()) } == 0 {
-        return None;
-    }
-    let win = unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), 0) };
-    Some(FrontTarget {
-        app,
-        _keeper: windows,
-        win,
+        })
     })
 }
 
 fn activate_app(pid: i32, options: usize) {
-    unsafe {
+    timed_unit("activate_app", pid, || unsafe {
         let ns_app = msg_ptr_usize(
             cls("NSRunningApplication"),
             sel("runningApplicationWithProcessIdentifier:"),
@@ -51,7 +54,7 @@ fn activate_app(pid: i32, options: usize) {
             return;
         }
         msg_bool_usize(ns_app, sel("activateWithOptions:"), options);
-    }
+    });
 }
 
 fn read_ax_position(win: *const c_void) -> Option<CGPoint> {
@@ -103,24 +106,20 @@ fn plain_minimize(win: *const c_void) {
 /// Returns true for real application windows (standard windows and dialogs),
 /// false for transient overlays, badges, floating panels, etc.
 pub(super) fn is_normal_window(pid: i32) -> bool {
-    let Some(ft) = front_target(pid) else {
-        #[cfg(debug_assertions)]
-        eprintln!("[window-actions:dbg] is_normal_window pid={pid}: no windows");
-        return false;
-    };
-    let Some(subrole_ref) = ax_attr(ft.win, "AXSubrole") else {
-        #[cfg(debug_assertions)]
-        eprintln!("[window-actions:dbg] is_normal_window pid={pid}: no AXSubrole");
-        return false;
-    };
-    let subrole = cfstring_to_string(subrole_ref.as_const());
-    #[cfg(debug_assertions)]
-    eprintln!("[window-actions:dbg] is_normal_window pid={pid}: subrole={subrole:?}");
-    matches!(subrole.as_deref(), Some("AXStandardWindow" | "AXDialog"))
+    timed_pred("is_normal_window", pid, || {
+        let Some(ft) = front_target(pid) else {
+            return false;
+        };
+        let Some(subrole_ref) = ax_attr(ft.win, "AXSubrole") else {
+            return false;
+        };
+        let subrole = cfstring_to_string(subrole_ref.as_const());
+        matches!(subrole.as_deref(), Some("AXStandardWindow" | "AXDialog"))
+    })
 }
 
 pub(super) fn frontmost_pid() -> Option<i32> {
-    unsafe {
+    timed_opt("frontmost_pid", 0, || unsafe {
         let workspace = msg_ptr(cls("NSWorkspace"), sel("sharedWorkspace"));
         if workspace.is_null() {
             return None;
@@ -134,126 +133,114 @@ pub(super) fn frontmost_pid() -> Option<i32> {
             return None;
         }
         Some(pid)
-    }
+    })
 }
 
 pub(super) fn find_normal_window_pid() -> Option<i32> {
-    let frontmost = frontmost_pid();
-    #[cfg(debug_assertions)]
-    eprintln!("[window-actions:dbg] find_normal_window_pid: frontmost={frontmost:?}");
-    if frontmost.is_some_and(is_normal_window) {
-        #[cfg(debug_assertions)]
-        eprintln!("[window-actions:dbg] find_normal_window_pid: fast path");
-        return frontmost;
-    }
-
-    #[cfg(debug_assertions)]
-    eprintln!("[window-actions:dbg] find_normal_window_pid: walking CGWindowList");
-
-    let list = unsafe {
-        CGWindowListCopyWindowInfo(
-            CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | CG_WINDOW_LIST_EXCLUDE_DESKTOP,
-            0,
-        )
-    };
-    if list.is_null() {
-        return frontmost;
-    }
-
-    let count = unsafe { CFArrayGetCount(list) };
-    let mut seen = HashSet::new();
-    let mut result = None;
-
-    for i in 0..count {
-        let dict = unsafe { CFArrayGetValueAtIndex(list, i) };
-        let layer = dict_get_i32(dict, cg_window_layer()).unwrap_or(-1);
-        if layer != 0 {
-            continue;
+    timed_opt("find_pid", 0, || {
+        let frontmost = frontmost_pid();
+        if frontmost.is_some_and(is_normal_window) {
+            return frontmost;
         }
-        let pid = match dict_get_i32(dict, cg_window_owner_pid()) {
-            Some(p) if p > 0 => p,
-            _ => continue,
+
+        let list = unsafe {
+            CGWindowListCopyWindowInfo(
+                CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | CG_WINDOW_LIST_EXCLUDE_DESKTOP,
+                0,
+            )
         };
-        if !seen.insert(pid) {
-            continue;
+        if list.is_null() {
+            return frontmost;
         }
-        #[cfg(debug_assertions)]
-        eprintln!("[window-actions:dbg] find_normal_window_pid: checking pid={pid}");
-        if is_normal_window(pid) {
-            result = Some(pid);
-            break;
-        }
-    }
 
-    unsafe { CFRelease(list) };
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "[window-actions:dbg] find_normal_window_pid: result={result:?} (fallback={frontmost:?})"
-    );
-    result.or(frontmost)
+        let count = unsafe { CFArrayGetCount(list) };
+        let mut seen = HashSet::new();
+        let mut result = None;
+
+        for i in 0..count {
+            let dict = unsafe { CFArrayGetValueAtIndex(list, i) };
+            let layer = dict_get_i32(dict, cg_window_layer()).unwrap_or(-1);
+            if layer != 0 {
+                continue;
+            }
+            let pid = match dict_get_i32(dict, cg_window_owner_pid()) {
+                Some(p) if p > 0 => p,
+                _ => continue,
+            };
+            if !seen.insert(pid) {
+                continue;
+            }
+            if is_normal_window(pid) {
+                result = Some(pid);
+                break;
+            }
+        }
+
+        unsafe { CFRelease(list) };
+        result.or(frontmost)
+    })
 }
 
 pub(super) fn front_window_rect(pid: i32) -> Option<super::screen::Rect> {
-    let ft = front_target(pid)?;
-    let pos = read_ax_position(ft.win)?;
-    let size_ref = ax_attr(ft.win, "AXSize")?;
+    timed_opt("front_window_rect", pid, || {
+        let ft = front_target(pid)?;
+        let pos = read_ax_position(ft.win)?;
+        let size_ref = ax_attr(ft.win, "AXSize")?;
 
-    let mut size = CGSize {
-        width: 0.0,
-        height: 0.0,
-    };
-    unsafe {
-        AXValueGetValue(
-            size_ref.as_const(),
-            AX_VALUE_TYPE_CG_SIZE,
-            &mut size as *mut _ as *mut c_void,
-        );
-    }
-    Some(super::screen::Rect {
-        x: pos.x,
-        y: pos.y,
-        w: size.width,
-        h: size.height,
+        let mut size = CGSize {
+            width: 0.0,
+            height: 0.0,
+        };
+        unsafe {
+            AXValueGetValue(
+                size_ref.as_const(),
+                AX_VALUE_TYPE_CG_SIZE,
+                &mut size as *mut _ as *mut c_void,
+            );
+        }
+        Some(super::screen::Rect {
+            x: pos.x,
+            y: pos.y,
+            w: size.width,
+            h: size.height,
+        })
     })
 }
 
 pub(super) fn set_position_and_size(pid: i32, rect: super::screen::Rect) -> bool {
-    let Some(ft) = front_target(pid) else {
-        return false;
-    };
-    let pos = CGPoint {
-        x: rect.x,
-        y: rect.y,
-    };
-    let size = CGSize {
-        width: rect.w,
-        height: rect.h,
-    };
-    let pos_val = CfGuard::new(unsafe {
-        AXValueCreate(AX_VALUE_TYPE_CG_POINT, &pos as *const _ as *const c_void)
-    })
-    .unwrap();
-    let size_val = CfGuard::new(unsafe {
-        AXValueCreate(AX_VALUE_TYPE_CG_SIZE, &size as *const _ as *const c_void)
-    })
-    .unwrap();
+    timed_bool("set_pos_size", pid, || {
+        let Some(ft) = front_target(pid) else {
+            return false;
+        };
+        let pos = CGPoint {
+            x: rect.x,
+            y: rect.y,
+        };
+        let size = CGSize {
+            width: rect.w,
+            height: rect.h,
+        };
+        let pos_val = CfGuard::new(unsafe {
+            AXValueCreate(AX_VALUE_TYPE_CG_POINT, &pos as *const _ as *const c_void)
+        })
+        .unwrap();
+        let size_val = CfGuard::new(unsafe {
+            AXValueCreate(AX_VALUE_TYPE_CG_SIZE, &size as *const _ as *const c_void)
+        })
+        .unwrap();
 
-    let ax_pos = CfGuard::new(cfstr("AXPosition")).unwrap();
-    let ax_size = CfGuard::new(cfstr("AXSize")).unwrap();
+        let ax_pos = CfGuard::new(cfstr("AXPosition")).unwrap();
+        let ax_size = CfGuard::new(cfstr("AXSize")).unwrap();
 
-    // size → position → size: macOS clamps windows to screen edges,
-    // so neither order works alone. Second size corrects clamping.
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "[window-actions:dbg] set_position_and_size: pos({},{}) size({},{})",
-        rect.x, rect.y, rect.w, rect.h
-    );
-    unsafe {
-        let e1 = AXUIElementSetAttributeValue(ft.win, ax_size.as_const(), size_val.as_const());
-        let e2 = AXUIElementSetAttributeValue(ft.win, ax_pos.as_const(), pos_val.as_const());
-        AXUIElementSetAttributeValue(ft.win, ax_size.as_const(), size_val.as_const());
-        e1 == 0 && e2 == 0
-    }
+        // size → position → size: macOS clamps windows to screen edges,
+        // so neither order works alone. Second size corrects clamping.
+        unsafe {
+            let e1 = AXUIElementSetAttributeValue(ft.win, ax_size.as_const(), size_val.as_const());
+            let e2 = AXUIElementSetAttributeValue(ft.win, ax_pos.as_const(), pos_val.as_const());
+            AXUIElementSetAttributeValue(ft.win, ax_size.as_const(), size_val.as_const());
+            e1 == 0 && e2 == 0
+        }
+    })
 }
 
 /// Minimize the focused window. Strategy depends on visible window count:
@@ -261,20 +248,22 @@ pub(super) fn set_position_and_size(pid: i32, rect: super::screen::Rect) -> bool
 ///   - Multiple visible windows: `AXMinimized=true` on the focused window only
 ///     (animated, but only affects that window — other windows stay in place).
 pub(super) fn instant_minimize(pid: i32) -> bool {
-    let Some(ft) = front_target(pid) else {
-        return false;
-    };
+    timed_bool("minimize", pid, || {
+        let Some(ft) = front_target(pid) else {
+            return false;
+        };
 
-    if visible_window_count(ft.app.as_ptr()) > 1 {
-        plain_minimize(ft.win);
-        return true;
-    }
+        if visible_window_count(ft.app.as_ptr()) > 1 {
+            plain_minimize(ft.win);
+            return true;
+        }
 
-    let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
-    unsafe {
-        AXUIElementSetAttributeValue(ft.app.as_ptr(), ax_hidden.as_const(), cf_boolean_true());
-    }
-    true
+        let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
+        unsafe {
+            AXUIElementSetAttributeValue(ft.app.as_ptr(), ax_hidden.as_const(), cf_boolean_true());
+        }
+        true
+    })
 }
 
 fn visible_window_count(app: *const c_void) -> usize {
@@ -299,48 +288,54 @@ fn visible_window_count(app: *const c_void) -> usize {
 ///   - If an individual window was minimized (`AXMinimized`): unminimize only the
 ///     first minimized window and raise it, without bringing other app windows forward.
 pub(super) fn unminimize_and_raise(pid: i32) -> bool {
-    let app = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) });
-    let Some(app) = app else {
-        return false;
-    };
+    timed_bool("unminimize", pid, || {
+        let app = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) });
+        let Some(app) = app else {
+            return false;
+        };
 
-    // Check if app was hidden (AXHidden) vs individual window minimized (AXMinimized).
-    let was_hidden = ax_attr(app.as_ptr(), "AXHidden")
-        .is_some_and(|v| std::ptr::eq(v.as_ptr(), cf_boolean_true() as *mut c_void));
+        // Check if app was hidden (AXHidden) vs individual window minimized (AXMinimized).
+        let was_hidden = ax_attr(app.as_ptr(), "AXHidden")
+            .is_some_and(|v| std::ptr::eq(v.as_ptr(), cf_boolean_true() as *mut c_void));
 
-    if was_hidden {
-        // App-level hide: unhide and activate all windows (they were all hidden together).
-        let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
-        unsafe {
-            AXUIElementSetAttributeValue(app.as_ptr(), ax_hidden.as_const(), cf_boolean_false());
-        }
-        activate_app(pid, 3); // IgnoringOtherApps | AllWindows
-        return true;
-    }
-
-    // Individual window minimize: only restore one window.
-    if let Some(windows) = ax_attr(app.as_ptr(), "AXWindows") {
-        let ax_minimized = CfGuard::new(cfstr("AXMinimized")).unwrap();
-        let ax_raise = CfGuard::new(cfstr("AXRaise")).unwrap();
-        let count = unsafe { CFArrayGetCount(windows.as_ptr()) };
-        for i in 0..count {
-            let win = unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), i) };
-            let Some(val) = ax_attr(win, "AXMinimized") else {
-                continue;
-            };
-            if !std::ptr::eq(val.as_ptr(), cf_boolean_true() as *mut c_void) {
-                continue;
-            }
+        if was_hidden {
+            // App-level hide: unhide and activate all windows (they were all hidden together).
+            let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
             unsafe {
-                AXUIElementSetAttributeValue(win, ax_minimized.as_const(), cf_boolean_false());
-                AXUIElementPerformAction(win, ax_raise.as_const());
+                AXUIElementSetAttributeValue(
+                    app.as_ptr(),
+                    ax_hidden.as_const(),
+                    cf_boolean_false(),
+                );
             }
-            nudge_position(win);
-            break;
+            activate_app(pid, 3); // IgnoringOtherApps | AllWindows
+            return true;
         }
-    }
 
-    // Only raise the restored window, not all app windows.
-    activate_app(pid, 2); // IgnoringOtherApps (without AllWindows)
-    true
+        // Individual window minimize: only restore one window.
+        if let Some(windows) = ax_attr(app.as_ptr(), "AXWindows") {
+            let ax_minimized = CfGuard::new(cfstr("AXMinimized")).unwrap();
+            let ax_raise = CfGuard::new(cfstr("AXRaise")).unwrap();
+            let count = unsafe { CFArrayGetCount(windows.as_ptr()) };
+            for i in 0..count {
+                let win = unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), i) };
+                let Some(val) = ax_attr(win, "AXMinimized") else {
+                    continue;
+                };
+                if !std::ptr::eq(val.as_ptr(), cf_boolean_true() as *mut c_void) {
+                    continue;
+                }
+                unsafe {
+                    AXUIElementSetAttributeValue(win, ax_minimized.as_const(), cf_boolean_false());
+                    AXUIElementPerformAction(win, ax_raise.as_const());
+                }
+                nudge_position(win);
+                break;
+            }
+        }
+
+        // Only raise the restored window, not all app windows.
+        activate_app(pid, 2); // IgnoringOtherApps (without AllWindows)
+        true
+    })
 }
