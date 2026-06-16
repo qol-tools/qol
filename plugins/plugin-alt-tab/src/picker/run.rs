@@ -89,7 +89,13 @@ pub(crate) fn run_app(
                 refresh_generation: Arc::new(AtomicUsize::new(0)),
             },
         );
-        super::platform::pre_create(&config, &state.current, &state.tracker, cx);
+        super::platform::pre_create(
+            &config,
+            &state.current,
+            state.caches.preview_cache.clone(),
+            &state.tracker,
+            cx,
+        );
 
         if show_on_start {
             state.open_picker(&config, false, cx);

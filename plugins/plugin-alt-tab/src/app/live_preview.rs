@@ -1,8 +1,10 @@
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::capture;
+use crate::picker::run::SharedPreviewCache;
 use crate::picker::state::PickerState;
 use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
 use crate::shared::preview::{bgra_to_render_image, fast_pixel_hash};
+use crate::PreviewMap;
 use gpui::{AsyncApp, Entity, RenderImage, Task, WeakEntity};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -12,14 +14,23 @@ const TICK_MS: u64 = 200;
 const CAPTURE_INTERVAL: Duration = Duration::from_millis(500);
 const SELECTION_SETTLE: Duration = Duration::from_millis(300);
 
-pub(crate) fn spawn(delegate: Entity<PickerState>, cx: &mut gpui::Context<AltTabApp>) -> Task<()> {
+pub(crate) fn spawn(
+    delegate: Entity<PickerState>,
+    preview_cache: SharedPreviewCache,
+    cx: &mut gpui::Context<AltTabApp>,
+) -> Task<()> {
     cx.spawn(move |this: WeakEntity<AltTabApp>, cx: &mut AsyncApp| {
         let cx = cx.clone();
-        async move { preview_loop(delegate, this, cx).await }
+        async move { preview_loop(delegate, preview_cache, this, cx).await }
     })
 }
 
-async fn preview_loop(delegate: Entity<PickerState>, this: WeakEntity<AltTabApp>, cx: AsyncApp) {
+async fn preview_loop(
+    delegate: Entity<PickerState>,
+    preview_cache: SharedPreviewCache,
+    this: WeakEntity<AltTabApp>,
+    cx: AsyncApp,
+) {
     let executor = cx.background_executor().clone();
     let mut prev_hash: Option<(u32, u64)> = None;
     let mut last_captured = Instant::now() - CAPTURE_INTERVAL;
@@ -67,7 +78,14 @@ async fn preview_loop(delegate: Entity<PickerState>, this: WeakEntity<AltTabApp>
             .is_some_and(|&(id, h)| id == selected.1 && h == hash)
         {
             #[cfg(debug_assertions)]
-            probe_live_preview(selected.1, false, capture_ms, 0, stable_ms, false);
+            probe_live_preview(
+                selected.1,
+                false,
+                capture_ms,
+                0,
+                stable_ms,
+                PreviewUpdateResult::default(),
+            );
             continue;
         }
         prev_hash = Some((selected.1, hash));
@@ -78,15 +96,24 @@ async fn preview_loop(delegate: Entity<PickerState>, this: WeakEntity<AltTabApp>
         let render_ms = t_render.elapsed().as_millis();
         #[cfg(debug_assertions)]
         let wid = selected.1;
-        let update_applied = push_updates(vec![(selected.1, img)], &delegate, &this, &cx);
+        let update_result = push_updates(
+            preview_update(selected.1, img),
+            &preview_cache,
+            &delegate,
+            &this,
+            &cx,
+        );
         #[cfg(not(debug_assertions))]
-        let _ = update_applied;
+        let _ = update_result;
         #[cfg(debug_assertions)]
         {
-            if update_applied {
+            if update_result.cache_write {
+                crate::shared::preview_trace::record_shared_live(wid);
+            }
+            if update_result.state_update {
                 crate::shared::preview_trace::record_live_update(wid);
             }
-            probe_live_preview(wid, true, capture_ms, render_ms, stable_ms, update_applied);
+            probe_live_preview(wid, true, capture_ms, render_ms, stable_ms, update_result);
         }
     }
 
@@ -136,27 +163,47 @@ async fn run_capture(
         .await
 }
 
+#[derive(Clone, Copy, Default)]
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+struct PreviewUpdateResult {
+    state_update: bool,
+    cache_write: bool,
+}
+
+fn preview_update(wid: u32, img: Arc<RenderImage>) -> PreviewMap {
+    [(wid, img)].into_iter().collect()
+}
+
 fn push_updates(
-    updates: Vec<(u32, Arc<RenderImage>)>,
+    updates: PreviewMap,
+    preview_cache: &SharedPreviewCache,
     delegate: &Entity<PickerState>,
     this: &WeakEntity<AltTabApp>,
     cx: &AsyncApp,
-) -> bool {
+) -> PreviewUpdateResult {
+    let shared_updates = updates.clone();
+    let preview_cache = preview_cache.clone();
     let delegate = delegate.clone();
     let this = this.clone();
     cx.update(|app_cx| {
+        let mut cache_write = false;
+        if let Ok(mut cache) = preview_cache.lock() {
+            crate::shared::image_registry::extend_with(&mut *cache, shared_updates, app_cx, None);
+            cache_write = true;
+        }
         // App-level: no Window leased here, so insert_preview's release path
         // passes None. The picker window stays in App::windows and gets
         // touched via the iteration in App::drop_image.
         delegate.update(app_cx, |state, ctx| {
-            for (wid, img) in updates {
-                state.insert_preview(wid, img, ctx, None);
-            }
+            state.insert_previews(updates, ctx, None);
         });
         let _ = this.update(app_cx, |_, cx: &mut gpui::Context<AltTabApp>| cx.notify());
-        true
+        PreviewUpdateResult {
+            state_update: true,
+            cache_write,
+        }
     })
-    .unwrap_or(false)
+    .unwrap_or_default()
 }
 
 #[cfg(debug_assertions)]
@@ -166,14 +213,15 @@ fn probe_live_preview(
     capture_ms: u128,
     render_ms: u128,
     stable_ms: u128,
-    state_update: bool,
+    update_result: PreviewUpdateResult,
 ) {
     qol_runtime::probe!(
         "PREVIEW_LIVE",
-        "source=live wid={} changed={} state_update={} cache_write=false capture={}ms render={}ms stable={}ms",
+        "source=live wid={} changed={} state_update={} cache_write={} capture={}ms render={}ms stable={}ms",
         wid,
         changed,
-        state_update,
+        update_result.state_update,
+        update_result.cache_write,
         capture_ms,
         render_ms,
         stable_ms,

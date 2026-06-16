@@ -182,7 +182,13 @@ fn rebuild_ghosts_for_topology(inputs: &ListenerInputs, event: &RuntimeEvent, ap
     let config = crate::config::load_alt_tab_config();
     let rebuilt =
         qol_gpui::ghost::rebuild_on_topology(event, false, &inputs.current, app_cx, |cx| {
-            super::platform::pre_create(&config, &inputs.current, &inputs.tracker, cx);
+            super::platform::pre_create(
+                &config,
+                &inputs.current,
+                inputs.preview_cache.clone(),
+                &inputs.tracker,
+                cx,
+            );
         });
     if rebuilt {
         request_data_refresh();

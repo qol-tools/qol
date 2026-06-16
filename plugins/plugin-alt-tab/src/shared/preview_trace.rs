@@ -27,6 +27,10 @@ pub(crate) fn record_shared_fill(ids: impl IntoIterator<Item = u32>) {
     record_many(shared_stamps(), ids, "fill");
 }
 
+pub(crate) fn record_shared_live(wid: u32) {
+    record_many(shared_stamps(), [wid], "live");
+}
+
 pub(crate) fn record_live_update(wid: u32) {
     record_many(live_stamps(), [wid], "live");
 }

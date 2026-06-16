@@ -227,6 +227,7 @@ fn create_from_request(
         placement,
         last_window_count: req.last_window_count.clone(),
         icon_cache: req.icon_cache.clone(),
+        preview_cache: req.preview_cache.clone(),
         current: req.current,
         has_shown_once: req.has_shown_once.clone(),
     };
@@ -446,22 +447,6 @@ pub(crate) mod state {
             window: Option<&mut Window>,
         ) {
             extend_with(&mut self.live_previews, previews, app, window);
-        }
-
-        pub(crate) fn insert_preview(
-            &mut self,
-            wid: u32,
-            img: std::sync::Arc<gpui::RenderImage>,
-            app: &mut App,
-            window: Option<&mut Window>,
-        ) {
-            crate::shared::image_registry::replace_into(
-                &mut self.live_previews,
-                wid,
-                img,
-                app,
-                window,
-            );
         }
 
         pub(crate) fn replace_caches(
@@ -782,6 +767,7 @@ pub(crate) mod state {
                 card_scale: 1.0,
                 card_padding: crate::shared::layout::DEFAULT_CARD_PADDING,
                 layout_budget: None,
+                preview_cache: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
                 previews: HashMap::new(),
                 icons: HashMap::new(),
             })
@@ -944,6 +930,7 @@ pub(crate) mod state {
                 card_scale: 1.0,
                 card_padding: crate::shared::layout::DEFAULT_CARD_PADDING,
                 layout_budget: None,
+                preview_cache: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
                 previews: HashMap::new(),
                 icons: HashMap::new(),
             });
