@@ -48,23 +48,46 @@ async fn preview_loop(delegate: Entity<PickerState>, this: WeakEntity<AltTabApp>
             continue;
         }
         last_captured = now;
+        #[cfg(debug_assertions)]
+        let stable_ms = now.duration_since(selection_changed_at).as_millis();
         let target = vec![selected];
+        #[cfg(debug_assertions)]
+        let t_capture = Instant::now();
         let captured = run_capture(&target, &executor).await;
+        #[cfg(debug_assertions)]
+        let capture_ms = t_capture.elapsed().as_millis();
         let Some((_, Some(rgba))) = captured.into_iter().next() else {
             continue;
         };
+        #[cfg(debug_assertions)]
+        let t_render = Instant::now();
         let hash = fast_pixel_hash(&rgba.data);
         if prev_hash
             .as_ref()
             .is_some_and(|&(id, h)| id == selected.1 && h == hash)
         {
+            #[cfg(debug_assertions)]
+            probe_live_preview(selected.1, false, capture_ms, 0, stable_ms, false);
             continue;
         }
         prev_hash = Some((selected.1, hash));
         let Some(img) = bgra_to_render_image(rgba.data, rgba.width, rgba.height) else {
             continue;
         };
-        push_updates(vec![(selected.1, img)], &delegate, &this, &cx);
+        #[cfg(debug_assertions)]
+        let render_ms = t_render.elapsed().as_millis();
+        #[cfg(debug_assertions)]
+        let wid = selected.1;
+        let update_applied = push_updates(vec![(selected.1, img)], &delegate, &this, &cx);
+        #[cfg(not(debug_assertions))]
+        let _ = update_applied;
+        #[cfg(debug_assertions)]
+        {
+            if update_applied {
+                crate::shared::preview_trace::record_live_update(wid);
+            }
+            probe_live_preview(wid, true, capture_ms, render_ms, stable_ms, update_applied);
+        }
     }
 
     let _ = cx.update(|app_cx| {
@@ -118,10 +141,10 @@ fn push_updates(
     delegate: &Entity<PickerState>,
     this: &WeakEntity<AltTabApp>,
     cx: &AsyncApp,
-) {
+) -> bool {
     let delegate = delegate.clone();
     let this = this.clone();
-    let _ = cx.update(|app_cx| {
+    cx.update(|app_cx| {
         // App-level: no Window leased here, so insert_preview's release path
         // passes None. The picker window stays in App::windows and gets
         // touched via the iteration in App::drop_image.
@@ -131,5 +154,28 @@ fn push_updates(
             }
         });
         let _ = this.update(app_cx, |_, cx: &mut gpui::Context<AltTabApp>| cx.notify());
-    });
+        true
+    })
+    .unwrap_or(false)
+}
+
+#[cfg(debug_assertions)]
+fn probe_live_preview(
+    wid: u32,
+    changed: bool,
+    capture_ms: u128,
+    render_ms: u128,
+    stable_ms: u128,
+    state_update: bool,
+) {
+    qol_runtime::probe!(
+        "PREVIEW_LIVE",
+        "source=live wid={} changed={} state_update={} cache_write=false capture={}ms render={}ms stable={}ms",
+        wid,
+        changed,
+        state_update,
+        capture_ms,
+        render_ms,
+        stable_ms,
+    );
 }

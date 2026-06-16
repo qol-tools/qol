@@ -49,6 +49,10 @@ pub(super) fn gather(
 
     let icons = icon_cache.lock().map(|c| c.clone()).unwrap_or_default();
     let previews = preview_cache.lock().map(|c| c.clone()).unwrap_or_default();
+
+    #[cfg(debug_assertions)]
+    probe_preview_gather(&windows, &previews);
+
     GatheredWindows {
         windows,
         previews,
@@ -67,6 +71,45 @@ fn windows_from_cache_or_discovery(
         .ok()
         .map(|c| c.clone())
         .unwrap_or_default()
+}
+
+#[cfg(debug_assertions)]
+fn probe_preview_gather(windows: &[WindowInfo], previews: &PreviewMap) {
+    let cached = windows
+        .iter()
+        .filter(|w| previews.contains_key(&w.id))
+        .count();
+    let entries: Vec<String> = windows
+        .iter()
+        .take(24)
+        .map(|w| {
+            let has_preview = previews.contains_key(&w.id);
+            preview_entry(w.id, has_preview)
+        })
+        .collect();
+    let missed = windows.len().saturating_sub(cached);
+    qol_runtime::probe!(
+        "PREVIEW_GATHER",
+        "windows={} cached={} missed={} entries=[{}]",
+        windows.len(),
+        cached,
+        missed,
+        entries.join(" "),
+    );
+}
+
+#[cfg(debug_assertions)]
+fn preview_entry(wid: u32, has_shared_preview: bool) -> String {
+    let live = crate::shared::preview_trace::live_snapshot(wid)
+        .map(|stamp| format!("/{source}:{}ms", stamp.age_ms, source = stamp.source))
+        .unwrap_or_default();
+    if !has_shared_preview {
+        return format!("{wid}:miss{live}");
+    }
+    let shared = crate::shared::preview_trace::shared_snapshot(wid)
+        .map(|stamp| format!("{}:{}ms", stamp.source, stamp.age_ms))
+        .unwrap_or_else(|| "unknown".to_string());
+    format!("{wid}:cache:{shared}{live}")
 }
 
 pub(super) struct IconFillRequest {
@@ -197,12 +240,24 @@ async fn fill_previews(cx: &mut AsyncApp, req: PreviewFillRequest) {
     let (target_count, skipped_count) = (targets.len(), eligible.saturating_sub(targets.len()));
     #[cfg(not(debug_assertions))]
     let _ = eligible;
+    #[cfg(debug_assertions)]
+    let target_ids = sorted_target_ids(&targets);
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "PREVIEW_CAPTURE",
+        "source=fill refresh_frontmost={} targets={} skipped={} ids=[{}]",
+        req.refresh_frontmost,
+        target_count,
+        skipped_count,
+        format_ids(&target_ids),
+    );
 
     let id_for_idx: HashMap<usize, u32> = targets.iter().copied().collect();
     let executor = cx.background_executor().clone();
+    let capture_targets = targets.clone();
     let captured = executor
         .spawn(async move {
-            capture::capture_previews_cg(&targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
+            capture::capture_previews_cg(&capture_targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
         })
         .await;
 
@@ -244,14 +299,50 @@ fn commit_previews_foreground(
     cache: SharedPreviewCache,
     previews: PreviewMap,
 ) {
+    #[cfg(debug_assertions)]
+    let preview_count = previews.len();
+    #[cfg(debug_assertions)]
+    let preview_ids = sorted_preview_ids(&previews);
     let _ = cx.update(|cx| {
         if let Ok(mut pcache) = cache.lock() {
             crate::shared::image_registry::extend_with(&mut *pcache, previews.clone(), cx, None);
+            #[cfg(debug_assertions)]
+            crate::shared::preview_trace::record_shared_fill(preview_ids.iter().copied());
         }
         let _ = handle.update(cx, |view, window, cx| {
             view.update_previews(previews, window, cx);
         });
+        #[cfg(debug_assertions)]
+        qol_runtime::probe!(
+            "PREVIEW_CACHE_WRITE",
+            "source=fill cache=shared n={} ids=[{}]",
+            preview_count,
+            format_ids(&preview_ids),
+        );
     });
+}
+
+#[cfg(debug_assertions)]
+fn sorted_target_ids(targets: &[(usize, u32)]) -> Vec<u32> {
+    let mut ids: Vec<u32> = targets.iter().map(|(_, id)| *id).collect();
+    ids.sort_unstable();
+    ids
+}
+
+#[cfg(debug_assertions)]
+fn sorted_preview_ids(previews: &PreviewMap) -> Vec<u32> {
+    let mut ids: Vec<u32> = previews.keys().copied().collect();
+    ids.sort_unstable();
+    ids
+}
+
+#[cfg(debug_assertions)]
+fn format_ids(ids: &[u32]) -> String {
+    ids.iter()
+        .take(24)
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
