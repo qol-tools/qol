@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use super::super::media::BootMedia;
 use super::super::{arch::GuestArch, sanitize_id, Environment, Firmware};
 
 pub(crate) fn discover(virsh: Option<&Path>, uris: &[&str]) -> Vec<Environment> {
@@ -24,6 +25,7 @@ pub(crate) fn discover(virsh: Option<&Path>, uris: &[&str]) -> Vec<Environment> 
                 image_path,
                 source: format!("libvirt:{uri}"),
                 firmware: Firmware::for_arch(GuestArch::X86_64),
+                media: BootMedia::Disk,
             });
         }
     }

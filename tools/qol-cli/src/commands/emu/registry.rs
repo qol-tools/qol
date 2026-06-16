@@ -135,6 +135,7 @@ mod tests {
     use crate::commands::emu::arch::GuestArch;
     use crate::commands::emu::discovery::Firmware;
     use crate::commands::emu::discovery::ImageCandidate;
+    use crate::commands::emu::BootMedia;
     use tempfile::tempdir;
 
     fn candidate(
@@ -145,6 +146,7 @@ mod tests {
     ) -> ImageCandidate {
         let path = dir.join(file);
         std::fs::write(&path, b"img").unwrap();
+        let media = BootMedia::from_path(&path);
         ImageCandidate {
             id: "win11".to_string(),
             path,
@@ -152,6 +154,7 @@ mod tests {
             arch,
             arch_inferred: true,
             firmware: fw,
+            media,
         }
     }
 

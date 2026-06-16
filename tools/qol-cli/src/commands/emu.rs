@@ -17,6 +17,7 @@ mod discovery;
 mod guest;
 mod live;
 mod machine;
+mod media;
 mod platform;
 mod qmp;
 mod registry;
@@ -26,6 +27,7 @@ mod workflow;
 #[allow(unused_imports)]
 pub(crate) use arch::{Firmware, GuestArch};
 pub(crate) use discovery::{parse_emu_dir, Discovered, DiscoveryContext, ImageCandidate};
+pub(crate) use media::BootMedia;
 pub(crate) use registry::register_image;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,6 +39,7 @@ pub(crate) struct Environment {
     image_path: PathBuf,
     source: String,
     firmware: Firmware,
+    media: BootMedia,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,10 +129,6 @@ fn statuses_for(environments: Vec<Environment>) -> Vec<EnvironmentStatus> {
             }
         })
         .collect()
-}
-
-pub(crate) fn environment_statuses() -> Result<Vec<EnvironmentStatus>> {
-    Ok(statuses_for(discover_environments()?))
 }
 
 pub(crate) fn emu_scan() -> Result<(Vec<EnvironmentStatus>, Vec<ImageCandidate>)> {
@@ -257,8 +256,8 @@ fn cmd_list(args: &[OsString], verbose: bool) -> Result<()> {
     }
     print_title("qol emu");
     print_hint(verbose);
-    let statuses = environment_statuses()?;
-    if statuses.is_empty() {
+    let (statuses, candidates) = emu_scan()?;
+    if statuses.is_empty() && candidates.is_empty() {
         step_label("env", StepKind::Info, "no emus found");
         if let Some(path) = emu_config_path() {
             step_label("config", StepKind::Info, &path.display().to_string());
@@ -275,6 +274,18 @@ fn cmd_list(args: &[OsString], verbose: bool) -> Result<()> {
                 status.state.as_str(),
                 status.backend,
                 status.reason
+            ),
+        );
+    }
+    for candidate in candidates {
+        step_label(
+            candidate.media.as_str(),
+            StepKind::Info,
+            &format!(
+                "{} · candidate · {} · `qol emu up {}` to boot",
+                candidate.id,
+                candidate.arch.as_str(),
+                candidate.id
             ),
         );
     }
@@ -472,17 +483,38 @@ struct BootedVm {
     started_at: u64,
 }
 
+fn environment_from_candidate(candidate: &ImageCandidate) -> Environment {
+    Environment {
+        id: candidate.id.clone(),
+        name: candidate.display_name.clone(),
+        backend: "qemu".to_string(),
+        arch: candidate.arch,
+        image_path: candidate.path.clone(),
+        source: "candidate".to_string(),
+        firmware: candidate.firmware,
+        media: candidate.media,
+    }
+}
+
 fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> {
     let root = repo_root()?;
-    let environments = discover_environments()?;
-    if environments.is_empty() {
-        bail!("no emus found; create a libvirt/QEMU VM or add [images] to ~/.config/qol-tray/emu.toml");
+    let discovered = discover_all()?;
+    if discovered.environments.is_empty() && discovered.candidates.is_empty() {
+        bail!("no emus found; drop a disk image or .iso into the emu dir (`qol emu open`), create a libvirt/QEMU VM, or add [images] to ~/.config/qol-tray/emu.toml");
     }
-    let environment = environments
+    let environment = discovered
+        .environments
         .iter()
         .find(|environment| environment.id == target)
-        .ok_or_else(|| anyhow!("unknown emu `{target}`; run `qol emu list`"))?
-        .clone();
+        .cloned()
+        .or_else(|| {
+            discovered
+                .candidates
+                .iter()
+                .find(|candidate| candidate.id == target)
+                .map(environment_from_candidate)
+        })
+        .ok_or_else(|| anyhow!("unknown emu `{target}`; run `qol emu list`"))?;
     let resolution = resolve_environment(&environment);
     let started_at = unix_millis()?;
     let run_dir = root
@@ -523,47 +555,65 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
         bail!("emu `{}` is {}", environment.id, resolution.state.as_str());
     }
 
-    let qemu_img = resolution
-        .qemu_img
-        .clone()
-        .ok_or_else(|| anyhow!("ready environment has no qemu-img path"))?;
-    let image_format = detect_image_format(&qemu_img, &resolution.image_path, verbose)?;
-    let overlay = run_dir.join("overlay.qcow2");
-    let create_args = vec![
-        "create".to_string(),
-        "-f".to_string(),
-        "qcow2".to_string(),
-        "-F".to_string(),
-        image_format.clone(),
-        "-b".to_string(),
-        resolution.image_path.display().to_string(),
-        overlay.display().to_string(),
-    ];
-    step_label("clone", StepKind::Pending, &overlay.display().to_string());
-    let status = run_child_status(&qemu_img, &create_args, verbose)?;
-    if !status.success() {
-        let report = report_json(ReportInput {
-            environment: &environment,
-            resolution: &resolution,
-            run_dir: &run_dir,
-            status: "failed",
-            overlay: Some(&overlay),
-            qemu_command: None,
-            commands: vec![json!({
-                "program": qemu_img,
-                "args": create_args,
-                "status": status.to_string(),
-            })],
-            qmp: None,
-            serial: None,
-            workflow: None,
-            teardown: None,
-            next: vec![format!("Inspect the qemu-img output, remove the run directory if needed, then rerun `qol emu {command_name}`.")],
-            started_at,
-        })?;
-        write_report(&run_dir, &report)?;
-        bail!("qemu-img failed with {status}");
-    }
+    let (boot_disk, overlay_artifact, disk_commands) = match environment.media {
+        BootMedia::Iso => (resolution.image_path.clone(), None, Vec::new()),
+        BootMedia::Disk => {
+            let qemu_img = resolution
+                .qemu_img
+                .clone()
+                .ok_or_else(|| anyhow!("ready environment has no qemu-img path"))?;
+            let image_format = detect_image_format(&qemu_img, &resolution.image_path, verbose)?;
+            let overlay = run_dir.join("overlay.qcow2");
+            let create_args = vec![
+                "create".to_string(),
+                "-f".to_string(),
+                "qcow2".to_string(),
+                "-F".to_string(),
+                image_format.clone(),
+                "-b".to_string(),
+                resolution.image_path.display().to_string(),
+                overlay.display().to_string(),
+            ];
+            step_label("clone", StepKind::Pending, &overlay.display().to_string());
+            let status = run_child_status(&qemu_img, &create_args, verbose)?;
+            if !status.success() {
+                let report = report_json(ReportInput {
+                    environment: &environment,
+                    resolution: &resolution,
+                    run_dir: &run_dir,
+                    status: "failed",
+                    overlay: Some(&overlay),
+                    qemu_command: None,
+                    commands: vec![json!({
+                        "program": qemu_img,
+                        "args": create_args,
+                        "status": status.to_string(),
+                    })],
+                    qmp: None,
+                    serial: None,
+                    workflow: None,
+                    teardown: None,
+                    next: vec![format!("Inspect the qemu-img output, remove the run directory if needed, then rerun `qol emu {command_name}`.")],
+                    started_at,
+                })?;
+                write_report(&run_dir, &report)?;
+                bail!("qemu-img failed with {status}");
+            }
+            let commands = vec![
+                json!({
+                    "program": qemu_img,
+                    "args": ["info", "--output=json", &resolution.image_path.display().to_string()],
+                    "detected_format": image_format,
+                }),
+                json!({
+                    "program": qemu_img,
+                    "args": create_args,
+                    "status": status.to_string(),
+                }),
+            ];
+            (overlay.clone(), Some(overlay), commands)
+        }
+    };
 
     let qemu_system = resolution
         .qemu_system
@@ -573,7 +623,7 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
     let serial_port = machine::free_qmp_port()?;
     let qemu_args = qemu_args(
         &environment,
-        &overlay,
+        &boot_disk,
         resolution.acceleration,
         platform::display(),
         qmp_port,
@@ -584,22 +634,11 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
     let qemu_command_path = run_dir.join("qemu-command.txt");
     fs::write(&qemu_command_path, format!("{qemu_command}\n"))
         .with_context(|| format!("failed to write {}", qemu_command_path.display()))?;
-    let commands = vec![
-        json!({
-            "program": qemu_img,
-            "args": ["info", "--output=json", &resolution.image_path.display().to_string()],
-            "detected_format": image_format,
-        }),
-        json!({
-            "program": qemu_img,
-            "args": create_args,
-            "status": status.to_string(),
-        }),
-        json!({
-            "program": qemu_system,
-            "args": qemu_args,
-        }),
-    ];
+    let mut commands = disk_commands;
+    commands.push(json!({
+        "program": qemu_system,
+        "args": qemu_args,
+    }));
 
     step_label(
         "boot",
@@ -622,7 +661,7 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
                 resolution: &resolution,
                 run_dir: &run_dir,
                 status: "failed",
-                overlay: Some(&overlay),
+                overlay: overlay_artifact.as_deref(),
                 qemu_command: Some(&qemu_command_path),
                 commands,
                 qmp: Some(json!({ "port": qmp_port, "error": error.to_string() })),
@@ -648,7 +687,7 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
         resolution: &resolution,
         run_dir: &run_dir,
         status: "running",
-        overlay: Some(&overlay),
+        overlay: overlay_artifact.as_deref(),
         qemu_command: Some(&qemu_command_path),
         commands: commands.clone(),
         qmp: Some(json!({ "port": qmp_port, "qemu_version": qemu_version, "status": vm_status })),
@@ -811,7 +850,7 @@ fn print_emu_help() {
 }
 
 fn emu_help_text() -> String {
-    format!("qol emu commands:\n  qol emu list\n  {ADD_SYNTAX}\n  qol emu open\n  qol emu doctor\n  qol emu up <environment>\n  qol emu run <workflow> <environment>\n  qol emu check <environment>\n  qol emu shot <environment>\n  qol emu key <environment> <qcode>...\n  qol emu insert <environment>\n  qol emu pull <environment>\n  qol emu snap <environment>\n  qol emu sh <environment> <command>...\n  qol emu down <environment>\n\nControl verbs target the newest running `qol emu up` for that environment.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n")
+    format!("qol emu commands:\n  qol emu list\n  {ADD_SYNTAX}\n  qol emu open\n  qol emu doctor\n  qol emu up <environment>\n  qol emu run <workflow> <environment>\n  qol emu check <environment>\n  qol emu shot <environment>\n  qol emu key <environment> <qcode>...\n  qol emu insert <environment>\n  qol emu pull <environment>\n  qol emu snap <environment>\n  qol emu sh <environment> <command>...\n  qol emu down <environment>\n\nControl verbs target the newest running `qol emu up` for that environment.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nDrop a disk image or .iso into the emu dir (`qol emu open`) and it appears in\n`qol emu list`; `qol emu up <id>` boots it (an .iso boots as a disposable live CD).\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n")
 }
 
 pub(crate) fn discover_all() -> Result<Discovered> {
@@ -843,7 +882,7 @@ fn resolve_environment(environment: &Environment) -> Resolution {
             firmware: None,
         };
     }
-    if qemu_img.is_none() {
+    if environment.media == BootMedia::Disk && qemu_img.is_none() {
         return Resolution {
             state: ResolveState::Unsupported,
             reason: "missing qemu-img".to_string(),
@@ -983,7 +1022,7 @@ fn detect_image_format(program: &Path, image_path: &Path, verbose: bool) -> Resu
 
 fn qemu_args(
     environment: &Environment,
-    overlay: &Path,
+    boot_disk: &Path,
     acceleration: &str,
     display: &str,
     qmp_port: u16,
@@ -1018,12 +1057,22 @@ fn qemu_args(
             ),
         ]);
     }
+    match environment.media {
+        BootMedia::Disk => args.extend([
+            "-drive".to_string(),
+            format!(
+                "file={},id=qoldisk,if=virtio,format=qcow2",
+                boot_disk.display()
+            ),
+        ]),
+        BootMedia::Iso => args.extend([
+            "-boot".to_string(),
+            "d".to_string(),
+            "-cdrom".to_string(),
+            boot_disk.display().to_string(),
+        ]),
+    }
     args.extend([
-        "-drive".to_string(),
-        format!(
-            "file={},id=qoldisk,if=virtio,format=qcow2",
-            overlay.display()
-        ),
         "-nic".to_string(),
         "user,model=virtio-net-pci".to_string(),
         "-device".to_string(),
@@ -1091,6 +1140,7 @@ fn report_json(input: ReportInput<'_>) -> Result<serde_json::Value> {
             "image_path": input.environment.image_path,
             "source": input.environment.source,
             "firmware": input.environment.firmware.as_str(),
+            "media": input.environment.media.as_str(),
         },
         "resolution": {
             "state": input.resolution.state.as_str(),
@@ -1224,6 +1274,7 @@ mod tests {
             image_path: PathBuf::from("/a/b/base.qcow2"),
             source: "config".to_string(),
             firmware: Firmware::Uefi,
+            media: BootMedia::Disk,
         };
         let resolution = Resolution {
             state: ResolveState::Ready,
@@ -1264,6 +1315,7 @@ mod tests {
                 image_path: PathBuf::from("/a/b/alpha.qcow2"),
                 source: "config".to_string(),
                 firmware: Firmware::Bios,
+                media: BootMedia::Disk,
             },
             Environment {
                 id: "beta".to_string(),
@@ -1273,6 +1325,7 @@ mod tests {
                 image_path: PathBuf::from("/a/b/beta.qcow2"),
                 source: "config".to_string(),
                 firmware: Firmware::Uefi,
+                media: BootMedia::Disk,
             },
         ];
         let statuses = statuses_for(environments);
@@ -1317,6 +1370,7 @@ mod tests {
             image_path: PathBuf::from("/a/b/base.qcow2"),
             source: "config".to_string(),
             firmware: Firmware::Bios,
+            media: BootMedia::Disk,
         };
         let args = qemu_args(
             &environment,
@@ -1358,6 +1412,7 @@ mod tests {
             image_path: PathBuf::from("/a/b/base.qcow2"),
             source: "config".to_string(),
             firmware: Firmware::Uefi,
+            media: BootMedia::Disk,
         };
         let accelerated = qemu_args(
             &environment,
@@ -1395,6 +1450,40 @@ mod tests {
             !emulated.contains("pflash"),
             "unexpected pflash in: {emulated}"
         );
+    }
+
+    #[test]
+    fn qemu_args_wire_iso_as_cdrom_without_overlay_disk() {
+        let environment = Environment {
+            id: "mint".to_string(),
+            name: "Mint".to_string(),
+            backend: "qemu".to_string(),
+            arch: GuestArch::X86_64,
+            image_path: PathBuf::from("/a/b/mint.iso"),
+            source: "candidate".to_string(),
+            firmware: Firmware::Bios,
+            media: BootMedia::Iso,
+        };
+        let joined = qemu_args(
+            &environment,
+            Path::new("/a/b/mint.iso"),
+            "tcg",
+            "cocoa",
+            4444,
+            5555,
+            None,
+        )
+        .join(" ");
+        assert!(
+            joined.contains("-cdrom /a/b/mint.iso"),
+            "cdrom in: {joined}"
+        );
+        assert!(joined.contains("-boot d"), "boot order in: {joined}");
+        assert!(
+            !joined.contains("id=qoldisk"),
+            "iso must not attach a writable overlay disk: {joined}"
+        );
+        assert!(joined.contains("-machine q35"), "machine in: {joined}");
     }
 
     #[test]

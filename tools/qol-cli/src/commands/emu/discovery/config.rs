@@ -4,19 +4,24 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
 
+use super::super::media::BootMedia;
 use super::super::{arch::GuestArch, humanize_id, sanitize_id, Environment, Firmware};
 
 pub(crate) fn discover(path: Option<&Path>, home: Option<&PathBuf>) -> Result<Vec<Environment>> {
     Ok(load_image_overrides(path, home)?
         .into_iter()
-        .map(|(id, (image_path, arch, firmware))| Environment {
-            name: humanize_id(&id),
-            id,
-            backend: "qemu".to_string(),
-            arch,
-            image_path,
-            source: "config".to_string(),
-            firmware,
+        .map(|(id, (image_path, arch, firmware))| {
+            let media = BootMedia::from_path(&image_path);
+            Environment {
+                name: humanize_id(&id),
+                id,
+                backend: "qemu".to_string(),
+                arch,
+                image_path,
+                source: "config".to_string(),
+                firmware,
+                media,
+            }
         })
         .collect())
 }
