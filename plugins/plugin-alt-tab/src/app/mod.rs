@@ -6,6 +6,7 @@ use crate::config::ActionMode;
 use crate::picker;
 use crate::picker::create::PickerInit;
 use crate::picker::gather::GatheredWindows;
+use crate::picker::run::SharedPreviewCache;
 use crate::picker::state::PickerState;
 use crate::{IconMap, PreviewMap};
 use gpui::*;
@@ -21,6 +22,7 @@ const BLUR_GUARD_MS: u64 = 250;
 pub(crate) struct AltTabApp {
     pub(crate) picker_title: String,
     pub(crate) delegate: Entity<PickerState>,
+    preview_cache: SharedPreviewCache,
     pub(crate) focus_handle: FocusHandle,
     pub(crate) action_mode: ActionMode,
     pub(crate) alt_was_held: bool,
@@ -79,6 +81,7 @@ impl AltTabApp {
         let action_mode = init.action_mode.clone();
         let picker_title = init.picker_title.clone();
         let shown = init.shown;
+        let preview_cache = init.preview_cache.clone();
         let delegate: Entity<PickerState> = cx.new(|state_cx| {
             let state = PickerState::from_init(init);
             state_cx
@@ -129,6 +132,7 @@ impl AltTabApp {
             _live_preview_task: None,
             picker_title,
             delegate,
+            preview_cache,
             focus_handle,
             action_mode: action_mode.clone(),
             alt_was_held: true,
@@ -342,7 +346,11 @@ impl AltTabApp {
         if self._live_preview_task.is_some() {
             return;
         }
-        self._live_preview_task = Some(live_preview::spawn(self.delegate.clone(), cx));
+        self._live_preview_task = Some(live_preview::spawn(
+            self.delegate.clone(),
+            self.preview_cache.clone(),
+            cx,
+        ));
     }
 
     pub(crate) fn start_alt_poll(

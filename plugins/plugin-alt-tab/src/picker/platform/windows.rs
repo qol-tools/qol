@@ -32,6 +32,7 @@ pub fn probe_picker_app_active(_at: &'static str) {}
 pub fn pre_create(
     _config: &AltTabConfig,
     _current: &PickerWindowState,
+    _preview_cache: crate::picker::run::SharedPreviewCache,
     _tracker: &qol_gpui::monitor::MonitorTracker,
     _cx: &mut gpui::App,
 ) {

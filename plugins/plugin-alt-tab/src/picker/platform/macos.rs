@@ -52,6 +52,7 @@ pub fn probe_picker_app_active(at: &'static str) {
 pub fn pre_create(
     config: &crate::config::AltTabConfig,
     current: &crate::PickerWindowState,
+    preview_cache: crate::picker::run::SharedPreviewCache,
     tracker: &qol_gpui::monitor::MonitorTracker,
     cx: &mut gpui::App,
 ) {
@@ -63,7 +64,14 @@ pub fn pre_create(
         .visible_windows(config.display.show_minimized)
         .unwrap_or_default();
     let placement = qol_gpui::window::PopupPlacement::from_tracker(tracker);
-    crate::picker::create::pre_create_ghost(config, current, &placement, &windows, cx);
+    crate::picker::create::pre_create_ghost(
+        config,
+        current,
+        &placement,
+        preview_cache,
+        &windows,
+        cx,
+    );
 }
 
 pub fn destroy_non_target_windows(

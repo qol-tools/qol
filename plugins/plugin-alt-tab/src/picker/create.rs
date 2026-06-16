@@ -2,6 +2,7 @@ use super::GatheredWindows;
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::{ActionMode, AltTabConfig, LabelConfig, PreviewIconPosition};
 use crate::discovery::WindowInfo;
+use crate::picker::run::SharedPreviewCache;
 use crate::shared::layout::*;
 use crate::{IconMap, PickerWindowState, PreviewMap, SharedIconCache};
 use gpui::*;
@@ -16,6 +17,7 @@ pub(super) struct CreateRequest<'a> {
     pub placement: PopupPlacement,
     pub last_window_count: Arc<AtomicUsize>,
     pub icon_cache: SharedIconCache,
+    pub preview_cache: SharedPreviewCache,
     pub current: &'a PickerWindowState,
     pub has_shown_once: Arc<AtomicBool>,
 }
@@ -31,6 +33,7 @@ pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mu
         PickerInit::new(
             req.config,
             gathered,
+            req.preview_cache.clone(),
             title,
             true,
             req.placement.monitor_size(),
@@ -91,6 +94,7 @@ pub(crate) struct PickerInit {
     pub(crate) card_scale: f32,
     pub(crate) card_padding: f32,
     pub(crate) layout_budget: Option<(f32, f32)>,
+    pub(crate) preview_cache: SharedPreviewCache,
     pub(crate) windows: Vec<WindowInfo>,
     pub(crate) previews: PreviewMap,
     pub(crate) icons: IconMap,
@@ -100,6 +104,7 @@ impl PickerInit {
     fn new(
         config: &AltTabConfig,
         gathered: GatheredWindows,
+        preview_cache: SharedPreviewCache,
         picker_title: String,
         shown: bool,
         layout_budget: Option<(f32, f32)>,
@@ -121,6 +126,7 @@ impl PickerInit {
             card_scale: config.display.card_scale,
             card_padding: config.display.card_padding,
             layout_budget,
+            preview_cache,
             windows: gathered.windows,
             previews: gathered.previews,
             icons: gathered.icons,
@@ -184,6 +190,7 @@ pub(crate) fn pre_create_ghost(
     config: &AltTabConfig,
     current: &PickerWindowState,
     placement: &PopupPlacement,
+    preview_cache: SharedPreviewCache,
     windows: &[WindowInfo],
     cx: &mut App,
 ) {
@@ -202,6 +209,7 @@ pub(crate) fn pre_create_ghost(
     let init = PickerInit::new(
         config,
         gathered,
+        preview_cache,
         title.clone(),
         false,
         placement.monitor_size(),
