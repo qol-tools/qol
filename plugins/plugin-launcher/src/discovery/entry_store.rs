@@ -63,6 +63,8 @@ impl EntryStore {
         }
         #[cfg(debug_assertions)]
         let started = std::time::Instant::now();
+        #[cfg(debug_assertions)]
+        trace::reset_counters();
 
         if let Some(prev_key) = self.cache_key.take() {
             let prev_results = std::mem::take(&mut self.cache);

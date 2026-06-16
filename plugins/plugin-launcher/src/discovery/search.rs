@@ -1,3 +1,5 @@
+#[cfg(debug_assertions)]
+use super::trace;
 use crate::discovery::{AppEntry, FileEntry};
 use crate::frecency::FrequencyData;
 use crate::{fuzzy_match, FuzzyMatch};
@@ -167,9 +169,21 @@ pub struct FrecencyConfig<'a> {
     pub boosts: &'a HashMap<String, i32>,
 }
 
+fn lowercased_name(name: &str) -> String {
+    #[cfg(debug_assertions)]
+    trace::count_name_lower();
+    name.to_lowercase()
+}
+
+fn lowercased_query(query: &str) -> String {
+    #[cfg(debug_assertions)]
+    trace::count_query_lower();
+    query.trim().to_lowercase()
+}
+
 fn frecency_bonus_for(name: &str, query: &str, config: Option<&FrecencyConfig>) -> i32 {
     let Some(cfg) = config else { return 0 };
-    let key = name.to_lowercase();
+    let key = lowercased_name(name);
     let raw = crate::frecency::frequency_bonus(
         &key,
         cfg.data,
@@ -190,6 +204,8 @@ fn score_app(
     frecency_bonus: i32,
     manual_boost: i32,
 ) -> Option<Scored> {
+    #[cfg(debug_assertions)]
+    trace::count_fuzzy_call();
     let mut m = fuzzy_match(query, name)?;
     let match_kind = classify_match(name, query);
     m.score -= frecency_bonus + manual_boost;
@@ -204,7 +220,7 @@ fn score_app(
 }
 
 fn manual_boost(name: &str, boosts: &HashMap<String, i32>) -> i32 {
-    let key = name.to_lowercase();
+    let key = lowercased_name(name);
     boosts.get(&key).copied().unwrap_or(0)
 }
 
@@ -215,6 +231,8 @@ fn score_file(
     hint: Option<&str>,
     fuzziness: Fuzziness,
 ) -> Option<Scored> {
+    #[cfg(debug_assertions)]
+    trace::count_fuzzy_call();
     let mut m = fuzzy_match(query, name)?;
     let match_kind = classify_match(name, query);
     apply_extension_rule(name, hint, fuzziness, &mut m)?;
@@ -262,12 +280,12 @@ fn cap_frecency_bonus(raw_bonus: i32, name: &str, query: &str) -> i32 {
         return 0;
     }
 
-    let query = query.trim().to_lowercase();
+    let query = lowercased_query(query);
     if query.is_empty() {
         return 0;
     }
 
-    let name = name.to_lowercase();
+    let name = lowercased_name(name);
     let base_cap = (query.chars().count() as i32 * 40).clamp(80, 240);
     let cap = if name.starts_with(&query) || contains_at_word_boundary(&name, &query) {
         base_cap
@@ -306,8 +324,8 @@ fn contains_at_word_boundary(name: &str, query: &str) -> bool {
 }
 
 fn classify_match(name: &str, query: &str) -> MatchKind {
-    let q = query.trim().to_lowercase();
-    let n = name.to_lowercase();
+    let q = lowercased_query(query);
+    let n = lowercased_name(name);
 
     if n.starts_with(&q) {
         return MatchKind::Prefix;
