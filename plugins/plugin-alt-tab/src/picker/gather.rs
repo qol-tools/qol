@@ -185,6 +185,7 @@ pub(super) struct PreviewFillRequest {
     pub windows: Vec<WindowInfo>,
     pub preview_cache: SharedPreviewCache,
     pub refresh_frontmost: bool,
+    pub refresh_previous_frontmost: bool,
 }
 
 pub(super) fn spawn_preview_fill(req: PreviewFillRequest, cx: &mut App) {
@@ -208,17 +209,32 @@ pub(super) fn spawn_preview_fill(req: PreviewFillRequest, cx: &mut App) {
 
 // idx 0 is the window the user was just on before Alt+Tab - the most-visible
 // card - so it is re-shot only while the picker is visible (refresh_frontmost).
-// Ghost refreshes skip it; uncached windows always need a first capture.
+// idx 1 is usually the app window that just lost focus after MRU reorder.
+// Uncached windows always need a first capture.
+#[cfg(test)]
 fn select_capture_targets(
     windows: &[WindowInfo],
     cached_ids: &HashSet<u32>,
     refresh_frontmost: bool,
 ) -> Vec<(usize, u32)> {
+    select_capture_targets_with_focus(windows, cached_ids, refresh_frontmost, false)
+}
+
+fn select_capture_targets_with_focus(
+    windows: &[WindowInfo],
+    cached_ids: &HashSet<u32>,
+    refresh_frontmost: bool,
+    refresh_previous_frontmost: bool,
+) -> Vec<(usize, u32)> {
     windows
         .iter()
         .enumerate()
         .filter(|(_, w)| !w.is_minimized)
-        .filter(|(idx, w)| !cached_ids.contains(&w.id) || (refresh_frontmost && *idx == 0))
+        .filter(|(idx, w)| {
+            !cached_ids.contains(&w.id)
+                || (refresh_frontmost && *idx == 0)
+                || (refresh_previous_frontmost && *idx == 1)
+        })
         .map(|(i, w)| (i, w.id))
         .collect()
 }
@@ -232,7 +248,12 @@ async fn fill_previews(cx: &mut AsyncApp, req: PreviewFillRequest) {
 
     let cached_ids = snapshot_preview_keys(&req.preview_cache);
     let eligible = req.windows.iter().filter(|w| !w.is_minimized).count();
-    let targets = select_capture_targets(&req.windows, &cached_ids, req.refresh_frontmost);
+    let targets = select_capture_targets_with_focus(
+        &req.windows,
+        &cached_ids,
+        req.refresh_frontmost,
+        req.refresh_previous_frontmost,
+    );
     if targets.is_empty() {
         return;
     }
@@ -245,8 +266,9 @@ async fn fill_previews(cx: &mut AsyncApp, req: PreviewFillRequest) {
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
         "PREVIEW_CAPTURE",
-        "source=fill refresh_frontmost={} targets={} skipped={} ids=[{}]",
+        "source=fill refresh_frontmost={} refresh_previous_frontmost={} targets={} skipped={} ids=[{}]",
         req.refresh_frontmost,
+        req.refresh_previous_frontmost,
         target_count,
         skipped_count,
         format_ids(&target_ids),
@@ -347,7 +369,7 @@ fn format_ids(ids: &[u32]) -> String {
 
 #[cfg(test)]
 mod preview_target_selection_tests {
-    use super::select_capture_targets;
+    use super::{select_capture_targets, select_capture_targets_with_focus};
     use crate::discovery::WindowInfo;
     use std::collections::HashSet;
 
@@ -447,6 +469,23 @@ mod preview_target_selection_tests {
             got.is_empty(),
             "invisible refresh must not re-capture an already-cached frontmost"
         );
+    }
+
+    #[test]
+    fn focus_refresh_captures_previous_frontmost_even_when_cached() {
+        let windows = vec![w(10, false), w(20, false), w(30, false)];
+        let cached: HashSet<u32> = [10, 20, 30].into_iter().collect();
+        let got = select_capture_targets_with_focus(&windows, &cached, false, true);
+        assert_eq!(ids(&got), vec![20]);
+        assert_eq!(got[0].0, 1, "idx 1 is the previous frontmost after focus");
+    }
+
+    #[test]
+    fn focus_refresh_skips_minimized_previous_frontmost() {
+        let windows = vec![w(10, false), w(20, true), w(30, false)];
+        let cached: HashSet<u32> = [10, 20, 30].into_iter().collect();
+        let got = select_capture_targets_with_focus(&windows, &cached, false, true);
+        assert!(got.is_empty());
     }
 
     #[test]

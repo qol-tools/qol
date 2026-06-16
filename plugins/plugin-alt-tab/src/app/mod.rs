@@ -454,7 +454,7 @@ impl AltTabApp {
             picker::platform::picker_window_title,
         );
         picker::platform::probe_picker_app_active("dismiss");
-        picker::request_data_refresh();
+        picker::request_frontmost_preview_refresh();
         cx.notify();
     }
 }

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use gpui::*;
 use qol_gpui::monitor::MonitorTracker;
-use qol_gpui::protocol::RuntimeEvent;
+use qol_gpui::protocol::{RuntimeEvent, RuntimeEventKind};
 use qol_gpui::window::PopupPlacement;
 
 use super::run::{SharedPreviewCache, WindowCache};
@@ -14,7 +14,37 @@ use crate::{PickerWindowState, SharedIconCache};
 
 const DATA_REFRESH_DELAY_MS: u64 = 75;
 
-static DATA_REFRESH_TX: OnceLock<mpsc::Sender<()>> = OnceLock::new();
+static DATA_REFRESH_TX: OnceLock<mpsc::Sender<RefreshRequest>> = OnceLock::new();
+
+#[derive(Clone, Copy, Default)]
+struct RefreshRequest {
+    refresh_frontmost: bool,
+    refresh_previous_frontmost: bool,
+}
+
+impl RefreshRequest {
+    fn frontmost() -> Self {
+        Self {
+            refresh_frontmost: true,
+            refresh_previous_frontmost: false,
+        }
+    }
+
+    fn previous_frontmost() -> Self {
+        Self {
+            refresh_frontmost: false,
+            refresh_previous_frontmost: true,
+        }
+    }
+
+    fn merge(self, next: Self) -> Self {
+        Self {
+            refresh_frontmost: self.refresh_frontmost || next.refresh_frontmost,
+            refresh_previous_frontmost: self.refresh_previous_frontmost
+                || next.refresh_previous_frontmost,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct ListenerInputs {
@@ -28,7 +58,7 @@ pub(crate) struct ListenerInputs {
 }
 
 pub(crate) fn spawn(cx: &mut App, inputs: ListenerInputs) {
-    let (refresh_tx, refresh_rx) = mpsc::channel::<()>();
+    let (refresh_tx, refresh_rx) = mpsc::channel::<RefreshRequest>();
     let _ = DATA_REFRESH_TX.set(refresh_tx);
     spawn_data_refresh_listener_thread();
     qol_gpui::event_router::spawn_runtime_event_router(
@@ -51,9 +81,26 @@ pub(crate) fn spawn(cx: &mut App, inputs: ListenerInputs) {
 }
 
 pub(crate) fn request_data_refresh() {
-    qol_runtime::probe!("REFRESH_REQ", "queued");
+    request_refresh(RefreshRequest::default());
+}
+
+pub(crate) fn request_frontmost_preview_refresh() {
+    request_refresh(RefreshRequest::frontmost());
+}
+
+pub(crate) fn request_previous_frontmost_preview_refresh() {
+    request_refresh(RefreshRequest::previous_frontmost());
+}
+
+fn request_refresh(request: RefreshRequest) {
+    qol_runtime::probe!(
+        "REFRESH_REQ",
+        "queued refresh_frontmost={} refresh_previous_frontmost={}",
+        request.refresh_frontmost,
+        request.refresh_previous_frontmost
+    );
     if let Some(tx) = DATA_REFRESH_TX.get() {
-        let _ = tx.send(());
+        let _ = tx.send(request);
     }
 }
 
@@ -63,7 +110,6 @@ fn spawn_data_refresh_listener_thread() {
 
 #[cfg(unix)]
 fn data_refresh_listener_loop() {
-    use qol_gpui::protocol::RuntimeEventKind;
     let client = qol_gpui::PlatformStateClient::from_env();
     let Some(mut subscription) = client.subscribe(vec![
         RuntimeEventKind::WindowListChanged,
@@ -71,36 +117,52 @@ fn data_refresh_listener_loop() {
     ]) else {
         return;
     };
-    while subscription.next_event().is_some() {
-        request_data_refresh();
+    while let Some(event) = subscription.next_event() {
+        match event {
+            RuntimeEvent::FocusChanged { .. } => request_previous_frontmost_preview_refresh(),
+            _ => request_data_refresh(),
+        }
     }
 }
 
 #[cfg(not(unix))]
 fn data_refresh_listener_loop() {}
 
-fn spawn_data_refresh_router(cx: &mut App, rx: mpsc::Receiver<()>, inputs: ListenerInputs) {
+fn spawn_data_refresh_router(
+    cx: &mut App,
+    rx: mpsc::Receiver<RefreshRequest>,
+    inputs: ListenerInputs,
+) {
     let rx = Arc::new(Mutex::new(rx));
     cx.spawn(async move |cx: &mut AsyncApp| loop {
-        if recv(cx, rx.clone()).await.is_none() {
+        let Some(request) = recv(cx, rx.clone()).await else {
             return;
         };
-        drain(&rx);
-        let _ = cx.update(|app_cx| trigger_data_refresh(&inputs, app_cx));
+        let request = drain(&rx, request);
+        let _ = cx.update(|app_cx| trigger_data_refresh(&inputs, app_cx, request));
     })
     .detach();
 }
 
-async fn recv(cx: &AsyncApp, rx: Arc<Mutex<mpsc::Receiver<()>>>) -> Option<()> {
+async fn recv(
+    cx: &AsyncApp,
+    rx: Arc<Mutex<mpsc::Receiver<RefreshRequest>>>,
+) -> Option<RefreshRequest> {
     cx.background_executor()
         .spawn(async move { rx.lock().ok()?.recv().ok() })
         .await
 }
 
-fn drain(rx: &Arc<Mutex<mpsc::Receiver<()>>>) {
+fn drain(
+    rx: &Arc<Mutex<mpsc::Receiver<RefreshRequest>>>,
+    mut request: RefreshRequest,
+) -> RefreshRequest {
     if let Ok(guard) = rx.lock() {
-        while guard.try_recv().is_ok() {}
+        while let Ok(next) = guard.try_recv() {
+            request = request.merge(next);
+        }
     }
+    request
 }
 
 fn reposition_ghost_only(inputs: &ListenerInputs, event: &RuntimeEvent, app_cx: &mut App) {
@@ -195,18 +257,28 @@ fn rebuild_ghosts_for_topology(inputs: &ListenerInputs, event: &RuntimeEvent, ap
     }
 }
 
-fn trigger_data_refresh(inputs: &ListenerInputs, app_cx: &mut App) {
+fn trigger_data_refresh(inputs: &ListenerInputs, app_cx: &mut App, request: RefreshRequest) {
     let generation = inputs.refresh_generation.fetch_add(1, Ordering::AcqRel) + 1;
-    qol_runtime::probe!("REFRESH_TRIGGER", "gen={generation}");
+    qol_runtime::probe!(
+        "REFRESH_TRIGGER",
+        "gen={generation} refresh_frontmost={} refresh_previous_frontmost={}",
+        request.refresh_frontmost,
+        request.refresh_previous_frontmost
+    );
     let inputs = inputs.clone();
     app_cx
         .spawn(async move |cx: &mut AsyncApp| {
-            refresh_data(cx, inputs, generation).await;
+            refresh_data(cx, inputs, generation, request).await;
         })
         .detach();
 }
 
-async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usize) {
+async fn refresh_data(
+    cx: &mut AsyncApp,
+    inputs: ListenerInputs,
+    generation: usize,
+    request: RefreshRequest,
+) {
     let config = crate::config::load_alt_tab_config();
     let show_minimized = config.display.show_minimized;
     let executor = cx.background_executor().clone();
@@ -292,7 +364,8 @@ async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usi
                     handle,
                     windows: windows_for_previews,
                     preview_cache: inputs.preview_cache.clone(),
-                    refresh_frontmost: picker_visible,
+                    refresh_frontmost: picker_visible || request.refresh_frontmost,
+                    refresh_previous_frontmost: request.refresh_previous_frontmost,
                 },
                 app_cx,
             );
