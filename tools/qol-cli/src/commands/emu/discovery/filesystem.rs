@@ -16,19 +16,6 @@ pub(crate) fn collect_image_paths(roots: &[PathBuf], seen: &mut HashSet<PathBuf>
     paths
 }
 
-pub(crate) fn legacy_root_image_count(registered: &HashSet<PathBuf>) -> usize {
-    let roots = super::super::platform::image_search_roots(dirs::home_dir());
-    count_unregistered(&roots, registered)
-}
-
-fn count_unregistered(roots: &[PathBuf], registered: &HashSet<PathBuf>) -> usize {
-    let mut seen = HashSet::new();
-    collect_image_paths(roots, &mut seen)
-        .into_iter()
-        .filter(|path| !registered.contains(path))
-        .count()
-}
-
 fn collect_into(root: &Path, depth: usize, seen: &mut HashSet<PathBuf>, paths: &mut Vec<PathBuf>) {
     if depth == 0 || !root.is_dir() {
         return;
@@ -161,23 +148,5 @@ mod tests {
         assert_eq!(candidate.firmware, Firmware::Uefi, "arm => uefi");
         assert_eq!(candidate.id, "win11-arm64");
         assert_eq!(candidate.path, image.canonicalize().unwrap());
-    }
-
-    #[test]
-    fn legacy_count_excludes_registered_canonical_paths() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().to_path_buf();
-        fs::write(root.join("a.qcow2"), b"x").unwrap();
-        fs::write(root.join("b.img"), b"x").unwrap();
-
-        let mut seen = HashSet::new();
-        let walked = collect_image_paths(std::slice::from_ref(&root), &mut seen);
-        assert_eq!(walked.len(), 2, "walked: {walked:?}");
-
-        let mut all = HashSet::new();
-        assert_eq!(count_unregistered(std::slice::from_ref(&root), &all), 2);
-
-        all.insert(walked[0].clone());
-        assert_eq!(count_unregistered(std::slice::from_ref(&root), &all), 1);
     }
 }
