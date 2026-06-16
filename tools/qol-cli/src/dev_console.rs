@@ -14,8 +14,8 @@ use ratatui::widgets::{Block, Clear, Padding, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::commands::emu::{
-    emu_config_path, emu_dir, emu_scan, legacy_advisory_count, newest_run_detail,
-    EnvironmentStatus, ImageCandidate, LastRun, ResolveState, RunDetail,
+    emu_config_path, emu_dir, emu_scan, newest_run_detail, EnvironmentStatus, ImageCandidate,
+    LastRun, ResolveState, RunDetail,
 };
 use crate::dev_server::{
     fetch_dev_links, health_ok, post_recompile_current, post_reload_plugins, probe_endpoints,
@@ -2008,21 +2008,14 @@ fn plugin_link_line(link: &DevLink) -> Line<'static> {
     ])
 }
 
-fn emu_empty_lines(config: &str, advisory: Option<String>) -> Vec<Line<'static>> {
-    let mut lines = vec![
+fn emu_empty_lines(config: &str) -> Vec<Line<'static>> {
+    vec![
         Line::from("  no emus found".fg(Color::DarkGray)),
         Line::from(vec![
             "  config ".fg(Color::DarkGray),
             config.to_string().fg(Color::White),
         ]),
-    ];
-    if let Some(advisory) = advisory {
-        lines.push(Line::from(vec![
-            "  legacy ".fg(Color::DarkGray),
-            advisory.fg(Color::Yellow),
-        ]));
-    }
-    lines
+    ]
 }
 
 fn candidate_row_label(arch: crate::commands::emu::GuestArch, arch_inferred: bool) -> String {
@@ -2063,7 +2056,7 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
             let config = emu_config_path()
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "~/.config/qol-tray/emu.toml".to_string());
-            emu_empty_lines(&config, legacy_advisory_count())
+            emu_empty_lines(&config)
         }
         EmuState::Done(statuses) => statuses
             .iter()
@@ -3539,13 +3532,8 @@ mod tests {
     }
 
     #[test]
-    fn emu_empty_lines_include_advisory_when_legacy_present() {
-        let with = emu_empty_lines(
-            "~/.config/qol-tray/emu.toml",
-            Some("2 image(s) in legacy roots".to_string()),
-        );
-        assert_eq!(with.len(), 3, "lines: {with:?}");
-        let without = emu_empty_lines("~/.config/qol-tray/emu.toml", None);
-        assert_eq!(without.len(), 2, "lines: {without:?}");
+    fn emu_empty_lines_list_config_path() {
+        let lines = emu_empty_lines("~/.config/qol-tray/emu.toml");
+        assert_eq!(lines.len(), 2, "lines: {lines:?}");
     }
 }

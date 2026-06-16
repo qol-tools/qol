@@ -14,7 +14,7 @@ pub(crate) use candidate::{Discovered, ImageCandidate};
 pub(crate) use config::{parse_emu_dir, parse_image_overrides};
 #[allow(unused_imports)]
 pub(crate) use filesystem::infer_candidate;
-pub(crate) use filesystem::{is_vm_image_path, legacy_root_image_count};
+pub(crate) use filesystem::is_vm_image_path;
 
 pub(crate) struct DiscoveryContext {
     pub(crate) config_path: Option<PathBuf>,

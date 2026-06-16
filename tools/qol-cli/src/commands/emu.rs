@@ -25,9 +25,7 @@ mod workflow;
 
 #[allow(unused_imports)]
 pub(crate) use arch::{Firmware, GuestArch};
-pub(crate) use discovery::{
-    legacy_root_image_count, parse_emu_dir, Discovered, DiscoveryContext, ImageCandidate,
-};
+pub(crate) use discovery::{parse_emu_dir, Discovered, DiscoveryContext, ImageCandidate};
 pub(crate) use registry::register_image;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -253,29 +251,6 @@ fn resolve_emu_dir(override_dir: Option<PathBuf>, default_dir: Option<PathBuf>) 
     override_dir.or(default_dir)
 }
 
-fn legacy_advisory(count: usize, emu_dir: &Path) -> Option<String> {
-    if count == 0 {
-        return None;
-    }
-    Some(format!(
-        "{count} image(s) found in legacy roots (~/VMs, ...); run `qol emu add <path>` to register, or move them into {}",
-        emu_dir.display()
-    ))
-}
-
-fn registered_image_paths() -> Result<std::collections::HashSet<PathBuf>> {
-    Ok(discover_environments()?
-        .into_iter()
-        .map(|environment| environment.image_path)
-        .collect())
-}
-
-pub(crate) fn legacy_advisory_count() -> Option<String> {
-    let dir = emu_dir()?;
-    let registered = registered_image_paths().ok()?;
-    legacy_advisory(legacy_root_image_count(&registered), &dir)
-}
-
 fn cmd_list(args: &[OsString], verbose: bool) -> Result<()> {
     if !args.is_empty() {
         bail!("usage: qol emu list");
@@ -287,12 +262,6 @@ fn cmd_list(args: &[OsString], verbose: bool) -> Result<()> {
         step_label("env", StepKind::Info, "no emus found");
         if let Some(path) = emu_config_path() {
             step_label("config", StepKind::Info, &path.display().to_string());
-        }
-        if let Some(dir) = emu_dir() {
-            let count = legacy_root_image_count(&registered_image_paths()?);
-            if let Some(advisory) = legacy_advisory(count, &dir) {
-                step_label("legacy", StepKind::Info, &advisory);
-            }
         }
         return Ok(());
     }
@@ -357,10 +326,6 @@ fn cmd_doctor(args: &[OsString], verbose: bool) -> Result<()> {
     );
     if let Some(dir) = emu_dir() {
         step_label("emu-dir", StepKind::Info, &dir.display().to_string());
-        let count = legacy_root_image_count(&registered_image_paths()?);
-        if let Some(advisory) = legacy_advisory(count, &dir) {
-            step_label("legacy", StepKind::Info, &advisory);
-        }
     }
     Ok(())
 }
@@ -1340,16 +1305,6 @@ mod tests {
                 "override: {override_dir:?}, default: {default_dir:?}"
             );
         }
-    }
-
-    #[test]
-    fn legacy_advisory_renders_only_for_nonzero_count() {
-        let dir = PathBuf::from("/data/qol-tray/emu");
-        assert_eq!(legacy_advisory(0, &dir), None);
-        let line = legacy_advisory(3, &dir).expect("nonzero count yields advisory");
-        assert!(line.contains("3 image"), "line: {line}");
-        assert!(line.contains("qol emu add"), "line: {line}");
-        assert!(line.contains("/data/qol-tray/emu"), "line: {line}");
     }
 
     #[test]
