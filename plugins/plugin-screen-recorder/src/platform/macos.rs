@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::{Config, Monitor, Rect};
 
@@ -15,6 +15,57 @@ const REGION_SELECTOR_SWIFT: &str = r#"
 import AppKit
 import CoreGraphics
 import Foundation
+
+struct OverlayText {
+    let title: String
+    let subtitle: String?
+    let titleSize: CGFloat
+    let subtitleSize: CGFloat
+
+    func drawPanel(in panel: NSRect) {
+        let panelPath = NSBezierPath(roundedRect: panel, xRadius: 14, yRadius: 14)
+        NSColor.black.withAlphaComponent(0.78).setFill()
+        panelPath.fill()
+        NSColor.white.withAlphaComponent(0.86).setStroke()
+        panelPath.lineWidth = 1.5
+        panelPath.stroke()
+
+        drawLine(
+            title,
+            in: NSRect(x: panel.minX + 18, y: panel.minY + 37, width: panel.width - 36, height: 28),
+            size: titleSize,
+            weight: .semibold,
+            alpha: 1.0
+        )
+
+        guard let subtitle else {
+            return
+        }
+
+        drawLine(
+            subtitle,
+            in: NSRect(x: panel.minX + 18, y: panel.minY + 15, width: panel.width - 36, height: 20),
+            size: subtitleSize,
+            weight: .regular,
+            alpha: 0.78
+        )
+    }
+
+    func drawLabel(in rect: NSRect) {
+        drawLine(title, in: rect, size: titleSize, weight: .semibold, alpha: 0.96)
+    }
+
+    private func drawLine(_ text: String, in rect: NSRect, size: CGFloat, weight: NSFont.Weight, alpha: CGFloat) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: size, weight: weight),
+            .foregroundColor: NSColor.white.withAlphaComponent(alpha),
+            .paragraphStyle: paragraph
+        ]
+        text.draw(in: rect, withAttributes: attributes)
+    }
+}
 
 final class SelectionView: NSView {
     let displayBounds: CGRect
@@ -35,19 +86,25 @@ final class SelectionView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.black.withAlphaComponent(0.18).setFill()
+        NSColor.black.withAlphaComponent(0.42).setFill()
         bounds.fill()
+        drawGuide()
 
         guard let rect = selectionRect() else {
             return
         }
 
-        NSColor.systemRed.withAlphaComponent(0.22).setFill()
+        NSColor.systemRed.withAlphaComponent(0.34).setFill()
         rect.fill()
+        NSColor.white.setStroke()
+        let outerPath = NSBezierPath(rect: rect)
+        outerPath.lineWidth = 7
+        outerPath.stroke()
         NSColor.systemRed.setStroke()
         let path = NSBezierPath(rect: rect)
-        path.lineWidth = 3
+        path.lineWidth = 4
         path.stroke()
+        drawSelectionLabel(rect)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -86,6 +143,24 @@ final class SelectionView: NSView {
             width: abs(start.x - current.x),
             height: abs(start.y - current.y)
         )
+    }
+
+    private func drawGuide() {
+        let title = startPoint == nil ? "Drag to select recording area" : "Release mouse to start recording"
+        let width = min(bounds.width - 48, 520)
+        let panel = NSRect(x: bounds.midX - width / 2, y: bounds.maxY - 126, width: width, height: 78)
+        OverlayText(title: title, subtitle: "Press Esc to cancel", titleSize: 22, subtitleSize: 14)
+            .drawPanel(in: panel)
+    }
+
+    private func drawSelectionLabel(_ rect: NSRect) {
+        guard rect.width >= 180, rect.height >= 80 else {
+            return
+        }
+
+        let labelRect = NSRect(x: rect.minX + 12, y: rect.midY - 13, width: rect.width - 24, height: 26)
+        OverlayText(title: "Recording area", subtitle: nil, titleSize: 18, subtitleSize: 14)
+            .drawLabel(in: labelRect)
     }
 
     private func finishSelection() {
@@ -223,8 +298,15 @@ pub fn recording_started() {
 pub fn recording_stopped(output_file: Option<&Path>, capture_file: Option<&Path>) {
     if let Some(output_file) = output_file {
         let capture_file = capture_file.unwrap_or(output_file);
-        let reveal_file = finalize_recording(output_file, capture_file)
-            .unwrap_or_else(|error| conversion_fallback(error, capture_file));
+        let conversion_needed = !paths_match(output_file, capture_file);
+        show_recording_ended(output_file, conversion_needed);
+        let reveal_file = match finalize_recording(output_file, capture_file) {
+            Ok(reveal_file) => {
+                show_recording_saved(&reveal_file, conversion_needed);
+                reveal_file
+            }
+            Err(error) => conversion_fallback(error, capture_file),
+        };
         if reveal_recording(&reveal_file) {
             return;
         }
@@ -236,10 +318,17 @@ pub fn recording_stopped(output_file: Option<&Path>, capture_file: Option<&Path>
 }
 
 pub fn stop_capture(pid: u32) -> Result<()> {
-    Command::new("kill")
-        .args(["-INT", &pid.to_string()])
-        .status()
-        .context("failed to send SIGINT to screencapture")?;
+    signal_capture_process(pid, "INT")?;
+    if wait_for_process_exit(pid, Duration::from_secs(8)) {
+        return Ok(());
+    }
+
+    signal_capture_process(pid, "TERM")?;
+    if wait_for_process_exit(pid, Duration::from_secs(2)) {
+        return Ok(());
+    }
+
+    signal_capture_process(pid, "KILL")?;
     Ok(())
 }
 
@@ -402,7 +491,7 @@ fn parse_selection_geometry(raw: &str) -> Result<Rect> {
 }
 
 fn finalize_recording(output_file: &Path, capture_file: &Path) -> Result<PathBuf> {
-    wait_for_file(capture_file);
+    wait_for_stable_file(capture_file)?;
     if paths_match(output_file, capture_file) {
         return Ok(output_file.to_path_buf());
     }
@@ -421,7 +510,62 @@ fn conversion_fallback(error: anyhow::Error, capture_file: &Path) -> PathBuf {
     capture_file.to_path_buf()
 }
 
+fn show_recording_ended(output_file: &Path, conversion_needed: bool) {
+    if !conversion_needed {
+        show_notification("Recording ended", "Saving recording...", 1600);
+        return;
+    }
+
+    show_notification(
+        "Recording ended",
+        &format!("Converting to {}...", output_format_label(output_file)),
+        2200,
+    );
+}
+
+fn show_recording_saved(output_file: &Path, converted: bool) {
+    let format = output_format_label(output_file);
+    let message = if converted {
+        format!("Converted to {} in Videos", format)
+    } else {
+        format!("Saved as {} in Videos", format)
+    };
+    show_notification("Recording saved", &message, 2200);
+}
+
 fn convert_recording(capture_file: &Path, output_file: &Path) -> Result<()> {
+    match converter_for(
+        output_file,
+        resolve_command("ffmpeg").is_some(),
+        resolve_command("avconvert").is_some(),
+    )? {
+        Converter::Ffmpeg => convert_with_ffmpeg(capture_file, output_file),
+        Converter::Avconvert => convert_with_avconvert(capture_file, output_file),
+    }
+}
+
+fn convert_with_ffmpeg(capture_file: &Path, output_file: &Path) -> Result<()> {
+    let mut command = Command::new(resolve_command("ffmpeg").unwrap_or_else(|| "ffmpeg".into()));
+    command.args(conversion_args(capture_file, output_file));
+    run_conversion_command(&mut command, "ffmpeg")
+}
+
+fn convert_with_avconvert(capture_file: &Path, output_file: &Path) -> Result<()> {
+    let mut command =
+        Command::new(resolve_command("avconvert").unwrap_or_else(|| "avconvert".into()));
+    command.args([
+        "--source".to_string(),
+        capture_file.to_string_lossy().to_string(),
+        "--preset".to_string(),
+        "PresetHighestQuality".to_string(),
+        "--output".to_string(),
+        output_file.to_string_lossy().to_string(),
+        "--replace".to_string(),
+    ]);
+    run_conversion_command(&mut command, "avconvert")
+}
+
+fn run_conversion_command(command: &mut Command, name: &str) -> Result<()> {
     let log_file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -431,19 +575,18 @@ fn convert_recording(capture_file: &Path, output_file: &Path) -> Result<()> {
         .try_clone()
         .context("failed to clone recording log file")?;
 
-    let status = Command::new("ffmpeg")
-        .args(conversion_args(capture_file, output_file))
+    let status = command
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_log))
         .stderr(Stdio::from(log_file))
         .status()
-        .context("failed to run ffmpeg conversion")?;
+        .with_context(|| format!("failed to run {name} conversion"))?;
 
     if status.success() {
         return Ok(());
     }
 
-    Err(anyhow!("ffmpeg exited with {}", status))
+    Err(anyhow!("{name} exited with {}", status))
 }
 
 fn conversion_args(capture_file: &Path, output_file: &Path) -> Vec<String> {
@@ -525,6 +668,63 @@ fn wait_for_file(output_file: &Path) {
     }
 }
 
+fn wait_for_stable_file(output_file: &Path) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let mut last_len = None;
+    let mut stable_count = 0;
+
+    while Instant::now() < deadline {
+        if let Ok(metadata) = output_file.symlink_metadata() {
+            let len = metadata.len();
+            if len > 0 && Some(len) == last_len {
+                stable_count += 1;
+                if stable_count >= 3 {
+                    return Ok(());
+                }
+            } else {
+                stable_count = 0;
+                last_len = Some(len);
+            }
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    Err(anyhow!(
+        "recording file did not finish writing: {}",
+        output_file.display()
+    ))
+}
+
+fn signal_capture_process(pid: u32, signal: &str) -> Result<()> {
+    let signal_arg = format!("-{signal}");
+    let pid_arg = pid.to_string();
+    let status = Command::new("kill")
+        .args([signal_arg.as_str(), pid_arg.as_str()])
+        .status()
+        .with_context(|| format!("failed to send SIG{signal} to screencapture"))?;
+
+    if status.success() || !process_alive(pid) {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "failed to send SIG{} to screencapture pid {}",
+        signal,
+        pid
+    ))
+}
+
+fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if !process_alive(pid) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(150));
+    }
+    !process_alive(pid)
+}
+
 fn reveal_path(path: &Path) -> bool {
     Command::new("open")
         .arg("-R")
@@ -567,8 +767,54 @@ fn output_extension(path: &Path) -> Option<String> {
         .map(|ext| ext.to_ascii_lowercase())
 }
 
+fn output_format_label(path: &Path) -> String {
+    output_extension(path)
+        .map(|ext| ext.to_ascii_uppercase())
+        .unwrap_or_else(|| "recording".to_string())
+}
+
 fn escape_applescript(input: &str) -> String {
     input.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Converter {
+    Ffmpeg,
+    Avconvert,
+}
+
+fn converter_for(
+    output_file: &Path,
+    ffmpeg_available: bool,
+    avconvert_available: bool,
+) -> Result<Converter> {
+    if ffmpeg_available {
+        return Ok(Converter::Ffmpeg);
+    }
+
+    if output_extension(output_file).as_deref() == Some("mp4") && avconvert_available {
+        return Ok(Converter::Avconvert);
+    }
+
+    Err(anyhow!(
+        "ffmpeg is required to convert recordings to {}",
+        output_extension(output_file).unwrap_or_else(|| "this format".to_string())
+    ))
+}
+
+fn resolve_command(command: &str) -> Option<PathBuf> {
+    let mut dirs = env::var_os("PATH")
+        .map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .unwrap_or_default();
+    dirs.extend([
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ]);
+    dirs.into_iter()
+        .map(|dir| dir.join(command))
+        .find(|path| path.is_file())
 }
 
 #[cfg(test)]
@@ -605,5 +851,27 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "libvpx-vp9"));
         assert!(args.iter().any(|arg| arg == "libopus"));
         assert_eq!(args.last().map(String::as_str), Some("/tmp/out.webm"));
+    }
+
+    #[test]
+    fn mp4_uses_avconvert_when_ffmpeg_is_missing() {
+        let converter = converter_for(Path::new("/tmp/out.mp4"), false, true).unwrap();
+        assert_eq!(converter, Converter::Avconvert);
+    }
+
+    #[test]
+    fn ffmpeg_is_preferred_when_available() {
+        let converter = converter_for(Path::new("/tmp/out.mp4"), true, true).unwrap();
+        assert_eq!(converter, Converter::Ffmpeg);
+    }
+
+    #[test]
+    fn webm_requires_ffmpeg() {
+        assert!(converter_for(Path::new("/tmp/out.webm"), false, true).is_err());
+    }
+
+    #[test]
+    fn format_label_uses_uppercase_extension() {
+        assert_eq!(output_format_label(Path::new("/tmp/out.mp4")), "MP4");
     }
 }
