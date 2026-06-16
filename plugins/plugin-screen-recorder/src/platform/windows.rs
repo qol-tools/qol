@@ -31,6 +31,18 @@ pub fn recording_format(format: &str) -> String {
     format.to_string()
 }
 
+pub fn capture_file_path(output_file: &Path) -> std::path::PathBuf {
+    output_file.to_path_buf()
+}
+
+pub fn recording_started() {
+    show_notification("Recording started", "Press your hotkey to stop", 1200);
+}
+
+pub fn recording_stopped(_output_file: Option<&Path>, _capture_file: Option<&Path>) {
+    show_notification("Recording stopped", "Saved to ~/Videos", 2000);
+}
+
 pub fn stop_capture(_pid: u32) -> Result<()> {
     Err(anyhow!(
         "plugin-screen-recorder: capture stop is not implemented on Windows"
