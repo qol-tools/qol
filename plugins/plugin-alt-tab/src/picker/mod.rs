@@ -5,7 +5,7 @@ pub(crate) mod platform;
 mod reuse;
 pub(crate) mod run;
 
-pub(crate) use monitor_listener::request_data_refresh;
+pub(crate) use monitor_listener::request_frontmost_preview_refresh;
 pub use platform::is_modifier_held;
 pub(crate) use reuse::ReuseRequest;
 
@@ -46,6 +46,9 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
 
     let is_visible = PICKER_VISIBLE.load(Ordering::Relaxed);
     let placement = resolve_placement(req.tracker, is_visible);
+    if !is_visible {
+        monitor_listener::request_frontmost_preview_refresh();
+    }
 
     if req.reverse && req.current.borrow().is_empty() {
         return;
