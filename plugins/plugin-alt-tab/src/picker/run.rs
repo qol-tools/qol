@@ -260,6 +260,8 @@ fn replace_window_cache(window_cache: &WindowCache, windows: Vec<WindowInfo>) {
 
 fn prune_previews(preview_cache: &SharedPreviewCache, windows: &[WindowInfo], app: &mut App) {
     let active: HashSet<u32> = windows.iter().map(|w| w.id).collect();
+    #[cfg(debug_assertions)]
+    crate::shared::preview_trace::retain_active(&active);
     let Ok(mut cache) = preview_cache.lock() else {
         return;
     };
