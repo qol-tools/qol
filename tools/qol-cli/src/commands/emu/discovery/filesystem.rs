@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::super::arch::{infer_arch_from_filename, infer_firmware, GuestArch};
+use super::super::media::BootMedia;
 use super::super::{humanize_id, sanitize_id};
 use super::candidate::ImageCandidate;
 
@@ -29,7 +30,7 @@ fn collect_into(root: &Path, depth: usize, seen: &mut HashSet<PathBuf>, paths: &
             collect_into(&path, depth - 1, seen, paths);
             continue;
         }
-        if !is_vm_image_path(&path) {
+        if !is_bootable_media(&path) {
             continue;
         }
         let canonical = path.canonicalize().unwrap_or(path);
@@ -47,6 +48,10 @@ pub(crate) fn is_vm_image_path(path: &Path) -> bool {
             .as_deref(),
         Some("qcow2" | "qcow" | "img" | "raw" | "vhd" | "vhdx" | "vmdk")
     )
+}
+
+pub(crate) fn is_bootable_media(path: &Path) -> bool {
+    is_vm_image_path(path) || matches!(BootMedia::from_path(path), BootMedia::Iso)
 }
 
 pub(crate) fn image_id(path: &Path) -> String {
@@ -79,6 +84,7 @@ pub(crate) fn infer_candidate(path: &Path) -> ImageCandidate {
     let inferred = infer_arch_from_filename(name);
     let arch = inferred.unwrap_or(GuestArch::X86_64);
     let firmware = infer_firmware(arch, name);
+    let media = BootMedia::from_path(&canonical);
     ImageCandidate {
         id,
         path: canonical,
@@ -86,6 +92,7 @@ pub(crate) fn infer_candidate(path: &Path) -> ImageCandidate {
         arch,
         arch_inferred: inferred.is_some(),
         firmware,
+        media,
     }
 }
 
@@ -108,6 +115,17 @@ mod tests {
         assert!(is_vm_image_path(Path::new("a.qcow2")));
         assert!(is_vm_image_path(Path::new("a.VHDX")));
         assert!(!is_vm_image_path(Path::new("a.txt")));
+    }
+
+    #[test]
+    fn iso_is_bootable_media_but_not_a_disk_image() {
+        assert!(is_bootable_media(Path::new("mint.iso")));
+        assert!(is_bootable_media(Path::new("a.qcow2")));
+        assert!(!is_bootable_media(Path::new("a.txt")));
+        assert!(
+            !is_vm_image_path(Path::new("mint.iso")),
+            "iso must not count as a disk image so teardown never deletes it"
+        );
     }
 
     #[test]

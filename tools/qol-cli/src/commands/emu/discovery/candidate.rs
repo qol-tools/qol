@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use super::super::media::BootMedia;
 use super::super::{arch::Firmware, arch::GuestArch, humanize_id, Environment};
-use super::filesystem::{image_id, is_vm_image_path};
+use super::filesystem::{image_id, is_bootable_media};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ImageCandidate {
@@ -12,6 +13,7 @@ pub(crate) struct ImageCandidate {
     pub(crate) arch: GuestArch,
     pub(crate) arch_inferred: bool,
     pub(crate) firmware: Firmware,
+    pub(crate) media: BootMedia,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -29,7 +31,7 @@ impl Discovered {
         let mut seen = HashSet::new();
         let mut candidates = Vec::new();
         for entry in emu_dir_entries {
-            if !is_vm_image_path(entry) {
+            if !is_bootable_media(entry) {
                 continue;
             }
             let path = canonical(entry);
@@ -56,6 +58,7 @@ fn candidate_for(path: PathBuf) -> ImageCandidate {
     let id = image_id(&path);
     let display_name = humanize_id(&id);
     let arch = GuestArch::X86_64;
+    let media = BootMedia::from_path(&path);
     ImageCandidate {
         id,
         path,
@@ -63,6 +66,7 @@ fn candidate_for(path: PathBuf) -> ImageCandidate {
         arch,
         arch_inferred: false,
         firmware: Firmware::for_arch(arch),
+        media,
     }
 }
 
@@ -80,6 +84,7 @@ mod tests {
             image_path: path.to_path_buf(),
             source: "config".to_string(),
             firmware: Firmware::for_arch(GuestArch::X86_64),
+            media: BootMedia::from_path(path),
         }
     }
 
@@ -144,5 +149,19 @@ mod tests {
             "registered-into-emu_dir not double-listed, repeated entry collapsed"
         );
         assert_eq!(discovered.candidates[0].id, "plain");
+    }
+
+    #[test]
+    fn partition_surfaces_dropped_iso_as_iso_candidate() {
+        let dir = tempfile::tempdir().unwrap();
+        let iso = dir.path().join("linuxmint-22.1-cinnamon-64bit.iso");
+        fs::write(&iso, b"x").unwrap();
+
+        let discovered = Discovered::partition(Vec::new(), std::slice::from_ref(&iso));
+
+        assert_eq!(discovered.candidates.len(), 1, "iso should be a candidate");
+        let candidate = &discovered.candidates[0];
+        assert_eq!(candidate.media, BootMedia::Iso);
+        assert_eq!(candidate.arch, GuestArch::X86_64, "iso defaults to x86_64");
     }
 }

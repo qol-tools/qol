@@ -1065,24 +1065,36 @@ fn selected_candidate_mut(dash: &mut Dash) -> Option<&mut ImageCandidate> {
         .and_then(|index| dash.emu_candidates.get_mut(index))
 }
 
+fn selected_candidate(dash: &Dash) -> Option<&ImageCandidate> {
+    dash.emu_cursor
+        .checked_sub(emu_env_count(dash))
+        .and_then(|index| dash.emu_candidates.get(index))
+}
+
 fn is_running(dash: &Dash, id: &str) -> bool {
     dash.active_runs.get(id).is_some_and(LogPane::is_live)
 }
 
 fn act_emu(dash: &mut Dash, modified: bool) {
-    let Some(status) = selected_emu_status(dash) else {
+    if let Some((id, ready)) = selected_emu_status(dash)
+        .map(|status| (status.id.clone(), status.state == ResolveState::Ready))
+    {
+        if is_running(dash, &id) {
+            fire_emu_down(dash, &id);
+        } else if ready {
+            let verb = if modified { "check" } else { "up" };
+            launch_emu(dash, verb, id);
+        }
+        return;
+    }
+    let Some(id) = selected_candidate(dash).map(|candidate| candidate.id.clone()) else {
         return;
     };
-    let id = status.id.clone();
     if is_running(dash, &id) {
         fire_emu_down(dash, &id);
-        return;
+    } else {
+        launch_emu(dash, "up", id);
     }
-    if status.state != ResolveState::Ready {
-        return;
-    }
-    let verb = if modified { "check" } else { "up" };
-    launch_emu(dash, verb, id);
 }
 
 fn launch_emu(dash: &mut Dash, verb: &'static str, id: String) {
@@ -1651,12 +1663,17 @@ fn status_line(dash: &Dash) -> String {
             };
             format!(" {hints}")
         }
-        View::Emu => match selected_emu_status(dash) {
-            Some(status) if is_running(dash, &status.id) => {
-                format!(" {} running · enter stop · → log", status.id)
+        View::Emu => {
+            let selected_id = selected_emu_status(dash)
+                .map(|status| status.id.clone())
+                .or_else(|| selected_candidate(dash).map(|candidate| candidate.id.clone()));
+            match selected_id {
+                Some(id) if is_running(dash, &id) => {
+                    format!(" {id} running · enter stop · → log")
+                }
+                _ => " enter boots the selected emu · → detail".to_string(),
             }
-            _ => " enter boots the selected emu · → detail".to_string(),
-        },
+        }
         View::EmuDetail => match (dash.emu_detail.as_ref(), dash.filter.is_empty()) {
             (Some(detail), true) => format!(" {}", detail.id),
             (Some(detail), false) => format!(" {} · filter: {}", detail.id, dash.filter),
@@ -3032,7 +3049,7 @@ mod tests {
     }
 
     fn emu_candidate(id: &str) -> ImageCandidate {
-        use crate::commands::emu::{Firmware, GuestArch};
+        use crate::commands::emu::{BootMedia, Firmware, GuestArch};
         ImageCandidate {
             id: id.to_string(),
             path: std::path::PathBuf::from(format!("/a/b/{id}.qcow2")),
@@ -3040,6 +3057,7 @@ mod tests {
             arch: GuestArch::X86_64,
             arch_inferred: true,
             firmware: Firmware::Uefi,
+            media: BootMedia::Disk,
         }
     }
 
