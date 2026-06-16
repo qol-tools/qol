@@ -1,3 +1,4 @@
+pub mod keyremap_marker;
 pub mod pane_field;
 pub mod probe;
 pub mod protocol;

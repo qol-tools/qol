@@ -8,6 +8,7 @@ use core_graphics::event::{
     CGEventType, CallbackResult, EventField,
 };
 use foreign_types_shared::ForeignType;
+use qol_runtime::keyremap_marker;
 
 extern "C" {
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
@@ -230,12 +231,14 @@ fn handle_key_event(
             mods: new_mods,
             key,
         } => {
+            tag_remapped_key_event(event, mods, keycode);
             let new_flags = build_flags(flags, mods, new_mods);
             event.set_flags(new_flags);
             event.set_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE, key as i64);
             CallbackResult::Keep
         }
         KeyAction::Char { ref text } => {
+            tag_remapped_key_event(event, mods, keycode);
             let clean_flags = strip_all_modifiers(flags);
             event.set_flags(clean_flags);
             // Set keycode to SPACE so dead-key positions (like ´ on Nordic)
@@ -248,6 +251,34 @@ fn handle_key_event(
             CallbackResult::Keep
         }
     }
+}
+
+fn tag_remapped_key_event(
+    event: &core_graphics::event::CGEvent,
+    original_mods: Modifiers,
+    original_key: u16,
+) {
+    event.set_integer_value_field(
+        EventField::EVENT_SOURCE_USER_DATA,
+        keyremap_marker::encode(marker_mod_bits(original_mods), original_key),
+    );
+}
+
+fn marker_mod_bits(mods: Modifiers) -> u8 {
+    let mut bits = 0;
+    if mods.ctrl {
+        bits |= keyremap_marker::MOD_CTRL;
+    }
+    if mods.shift {
+        bits |= keyremap_marker::MOD_SHIFT;
+    }
+    if mods.alt {
+        bits |= keyremap_marker::MOD_ALT;
+    }
+    if mods.cmd {
+        bits |= keyremap_marker::MOD_SUPER;
+    }
+    bits
 }
 
 fn handle_mouse_event(
