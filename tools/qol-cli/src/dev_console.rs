@@ -47,7 +47,6 @@ enum Action {
     ToggleView,
     ToggleKeys,
     Rebuild,
-    ReloadSelf,
     Doctor,
     Back,
     Activate,
@@ -70,7 +69,6 @@ fn action_for(code: KeyCode, mods: KeyModifiers) -> Action {
     if mods.contains(KeyModifiers::CONTROL) {
         return match code {
             KeyCode::Char('r') => Action::Rebuild,
-            KeyCode::Char('u') => Action::ReloadSelf,
             KeyCode::Char('c') => Action::Quit,
             _ => Action::Ignore,
         };
@@ -657,14 +655,18 @@ fn tui_session(
                 dash.armed = false;
             } else {
                 let modified = dash.armed;
-                match action_for(code, mods) {
+                let action = action_for(code, mods);
+                match action {
                     Action::Quit => {
                         stop_trace(dash);
                         stop_emu_runs(dash);
                         stop_child(child)?;
                         return Ok(SessionEnd::UserQuit);
                     }
-                    Action::ReloadSelf => start_reload(dash),
+                    Action::Rebuild if modified => {
+                        start_reload(dash);
+                        dash.armed = false;
+                    }
                     action => {
                         apply_action(dash, action, modified);
                         if modified && !preserves_arm(action) {
@@ -901,7 +903,7 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
                 confirm_selected_candidate(dash);
             }
         }
-        Action::Quit | Action::ReloadSelf | Action::Ignore => {}
+        Action::Quit | Action::Ignore => {}
     }
     let len = if dash.view == View::Trace {
         dash.trace.len()
@@ -1550,8 +1552,10 @@ fn breadcrumb(dash: &Dash, accent: Color) -> Line<'static> {
     Line::from(spans)
 }
 
-fn keys_legend(view: View) -> Vec<(&'static str, &'static str)> {
-    let view_keys: &[(&'static str, &'static str)] = match view {
+const KEYS_HUD_WIDTH: u16 = 34;
+
+fn context_keys(view: View) -> Vec<(&'static str, &'static str)> {
+    let keys: &[(&'static str, &'static str)] = match view {
         View::Dashboard => &[
             ("↑/↓", "move"),
             ("enter", "act on row"),
@@ -1584,46 +1588,64 @@ fn keys_legend(view: View) -> Vec<(&'static str, &'static str)> {
         ],
         View::Plugins | View::Endpoints => &[("↑/↓", "scroll"), ("←", "back")],
     };
-    let mut keys = view_keys.to_vec();
-    keys.extend([
-        ("ctrl+r", "rebuild tray+plugins"),
-        ("ctrl+u", "reload qol dev"),
-        ("q", "quit"),
-    ]);
-    keys
+    keys.to_vec()
+}
+
+fn global_keys(armed: bool) -> Vec<(&'static str, &'static str)> {
+    let ctrl_r = if armed {
+        ("ctrl+r", "reload qol dev")
+    } else {
+        ("ctrl+r", "rebuild tray+plugins")
+    };
+    vec![ctrl_r, ("q", "quit")]
+}
+
+fn key_lines(keys: &[(&'static str, &'static str)]) -> Vec<Line<'static>> {
+    keys.iter()
+        .map(|(key, desc)| {
+            Line::from(vec![
+                format!(" {key:<9} ").fg(Color::White).bold(),
+                format!("{desc} ").fg(Color::DarkGray),
+            ])
+        })
+        .collect()
+}
+
+fn section_label(label: &'static str) -> Line<'static> {
+    Line::from(format!(" {label}").fg(Color::Green).bold())
+}
+
+fn keys_rows(view: View, armed: bool) -> Vec<Line<'static>> {
+    let mut rows = vec![section_label("global")];
+    rows.push(Line::from(""));
+    rows.extend(key_lines(&global_keys(armed)));
+    rows.push(Line::from(""));
+    rows.push(Line::from(""));
+    rows.push(section_label("context"));
+    rows.push(Line::from(""));
+    rows.extend(key_lines(&context_keys(view)));
+    rows
 }
 
 fn draw_keys_hud(frame: &mut Frame, dash: &Dash, area: Rect) {
     if dash.keys_hidden {
         return;
     }
-    let keys = keys_legend(dash.view);
-    let lines: Vec<Line> = keys
-        .iter()
-        .map(|(key, desc)| {
-            Line::from(vec![
-                format!(" {key:<9}").fg(Color::White).bold(),
-                format!("{desc} ").fg(Color::DarkGray),
-            ])
-        })
-        .collect();
-    let content_width = keys
-        .iter()
-        .map(|(key, desc)| 1 + key.chars().count().max(9) + desc.chars().count() + 1)
-        .max()
-        .unwrap_or(0) as u16;
-    let width = (content_width + 2).min(area.width);
-    let height = (lines.len() as u16 + SignBox::CHROME_ROWS).min(area.height);
+    let rows = keys_rows(dash.view, dash.armed);
+    let height = (rows.len() as u16 + SignBox::CHROME_ROWS).min(area.height);
+    if height == 0 {
+        return;
+    };
     let rect = Rect {
-        x: area.x + area.width.saturating_sub(width),
+        x: area.x + area.width.saturating_sub(KEYS_HUD_WIDTH),
         y: area.y,
-        width,
+        width: KEYS_HUD_WIDTH.min(area.width),
         height,
     };
     frame.render_widget(Clear, rect);
     SignBox {
         title: "keys · k",
-        rows: lines,
+        rows,
     }
     .render(frame, rect, frame_accent(dash));
 }
@@ -3028,7 +3050,7 @@ mod tests {
             (KeyCode::Right, none, Action::Dive),
             (KeyCode::Char('r'), ctrl, Action::Rebuild),
             (KeyCode::Char('p'), ctrl, Action::Ignore),
-            (KeyCode::Char('u'), ctrl, Action::ReloadSelf),
+            (KeyCode::Char('u'), ctrl, Action::Ignore),
             (KeyCode::Char('c'), ctrl, Action::Quit),
             (KeyCode::Char('q'), none, Action::Quit),
             (KeyCode::Up, none, Action::ScrollUp),
@@ -3362,6 +3384,20 @@ mod tests {
             .collect()
     }
 
+    fn row_bounds(rows: &[String], needle: &str) -> (usize, usize) {
+        let row = rows
+            .iter()
+            .find(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} not rendered"));
+        let start = row.find(needle).expect("needle already found");
+        let left = row[..start].rfind('│').expect("missing left border");
+        let right = row[start..]
+            .find('│')
+            .map(|index| start + index)
+            .expect("missing right border");
+        (left, right)
+    }
+
     #[test]
     fn every_view_shows_its_page_as_a_breadcrumb_on_the_qol_dev_sign() {
         let cases = [
@@ -3435,13 +3471,81 @@ mod tests {
             dash.view = view;
             let text = render_text(&mut dash);
             assert!(text.contains(expected), "missing {expected:?}");
-            assert!(text.contains("ctrl+u"), "missing globals");
-            assert!(text.contains("reload qol dev"), "missing globals");
-            assert!(text.contains("keys · k"), "missing toggle badge");
+            assert!(text.contains("ctrl+r"), "missing globals");
+            assert!(text.contains("rebuild tray+plugins"), "missing globals");
+            assert!(
+                !text.contains("reload qol dev"),
+                "reload shown while unarmed"
+            );
+            assert!(!text.contains("armed ctrl+r"), "stale armed label rendered");
+            assert!(!text.contains("ctrl+u"), "stale reload shortcut rendered");
+            assert!(text.contains("keys · k"), "missing keys badge");
+            assert!(text.contains("global"), "missing global section");
+            assert!(text.contains("context"), "missing context section");
+            assert!(
+                text.find("global") < text.find("context"),
+                "global section should render before context"
+            );
+            assert!(
+                !text.contains("context · k"),
+                "stale context title rendered"
+            );
             if matches!(view, View::Emu) {
                 assert!(text.contains("set arch"), "missing emu o/t/a keys");
             }
         }
+    }
+
+    #[test]
+    fn keys_hud_swaps_ctrl_r_action_when_armed() {
+        let mut dash = Dash::new(Vec::new());
+        dash.armed = true;
+        let text = render_text(&mut dash);
+        assert!(text.contains("ctrl+r"), "missing ctrl+r key");
+        assert!(
+            text.contains("reload qol dev"),
+            "missing armed reload action"
+        );
+        assert!(
+            !text.contains("rebuild tray+plugins"),
+            "unarmed rebuild action rendered"
+        );
+        assert!(text.contains("keys · k"), "missing keys badge");
+        assert!(text.contains("global"), "missing global section");
+        assert!(text.contains("context"), "missing context section");
+        assert!(!text.contains("armed ctrl+r"), "stale armed label rendered");
+        assert!(!text.contains("ctrl+u"), "stale reload shortcut rendered");
+    }
+
+    #[test]
+    fn keys_rows_space_sections() {
+        let rows: Vec<String> = keys_rows(View::Dashboard, false)
+            .into_iter()
+            .map(|line| span_text(&line.spans))
+            .collect();
+        assert_eq!(rows[0], " global");
+        assert_eq!(rows[1], "");
+        assert_eq!(rows[2], " ctrl+r    rebuild tray+plugins ");
+        assert_eq!(rows[3], " q         quit ");
+        assert_eq!(rows[4], "");
+        assert_eq!(rows[5], "");
+        assert_eq!(rows[6], " context");
+        assert_eq!(rows[7], "");
+        assert_eq!(rows[8], " ↑/↓       move ");
+    }
+
+    #[test]
+    fn keys_box_width_stays_fixed_when_armed() {
+        let mut unarmed = Dash::new(Vec::new());
+        let unarmed_rows = render_rows(&mut unarmed);
+        let mut armed = Dash::new(Vec::new());
+        armed.armed = true;
+        let armed_rows = render_rows(&mut armed);
+
+        assert_eq!(
+            row_bounds(&unarmed_rows, "rebuild tray+plugins"),
+            row_bounds(&armed_rows, "reload qol dev")
+        );
     }
 
     #[test]
@@ -3450,11 +3554,14 @@ mod tests {
         apply_action(&mut dash, Action::ToggleKeys, false);
         assert!(dash.keys_hidden);
         let text = render_text(&mut dash);
-        assert!(!text.contains("reload qol dev"), "hud still rendered");
+        assert!(!text.contains("rebuild tray+plugins"), "hud still rendered");
         apply_action(&mut dash, Action::ToggleKeys, false);
         assert!(!dash.keys_hidden);
         let text = render_text(&mut dash);
-        assert!(text.contains("reload qol dev"), "hud did not come back");
+        assert!(
+            text.contains("rebuild tray+plugins"),
+            "hud did not come back"
+        );
     }
 
     #[test]

@@ -61,27 +61,29 @@ logs
 trace
 ```
 
-After changing `tools/qol-cli`, run `qol setup` and restart the current `qol dev` session, or press ctrl+u inside the dashboard for a rolling reload: it runs `qol setup` as a child while the tray keeps running and the dashboard stays fully interactive, tinting the whole UI red with a `RELOADING` title and footer for the duration. On success it re-execs the freshly installed binary with the original `qol dev` arguments plus the `QOL_DEV_RELOAD` env marker; the reloaded instance fast-boots (skips doctor preflight, plugin builds, the dev hook, and the rustfmt check) and enters the dashboard immediately, while the dev-server health wait, plugin dev-link registration, and any worktree recompile run on a background thread whose step results stream into the logs pane. The gap between the two UIs is just the tray respawn. When `qol setup` finds the install already current the red phase is near-instant and ctrl+u degenerates to a quick UI restart. A failed `qol setup` leaves the session running and logs the error. The running dashboard is otherwise the old process and cannot show newly compiled rows.
+After changing `tools/qol-cli`, run `qol setup` and restart the current `qol dev` session, or press space to arm the dashboard and then ctrl+r for a rolling reload: it runs `qol setup` as a child while the tray keeps running and the dashboard stays fully interactive, tinting the whole UI red with a `RELOADING` title and footer for the duration. On success it re-execs the freshly installed binary with the original `qol dev` arguments plus the `QOL_DEV_RELOAD` env marker; the reloaded instance fast-boots (skips doctor preflight, plugin builds, the dev hook, and the rustfmt check) and enters the dashboard immediately, while the dev-server health wait, plugin dev-link registration, and any worktree recompile run on a background thread whose step results stream into the logs pane. The gap between the two UIs is just the tray respawn. When `qol setup` finds the install already current the red phase is near-instant and the reload action degenerates to a quick UI restart. A failed `qol setup` leaves the session running and logs the error. The running dashboard is otherwise the old process and cannot show newly compiled rows.
 
 The dashboard's doctor view rebuilds `qol-tray-doctor` with `--features dev` on its background thread before every run, so it self-heals when a plain `cargo build`/`cargo test` has clobbered `target/debug/qol-tray-doctor` with a non-dev build (which silently drops the five dev-only checks).
 
-The same clobbering hits `target/debug/qol-tray` itself: a non-dev build lacks the `/api/dev/*` routes, so the dashboard shows the tray as down (health probes `/api/dev/worktrees`) and ctrl+r fails with HTTP 405 (`/api/dev/recompile-self` missing). Every `qol dev` boot, including the ctrl+u fast boot, therefore always runs `cargo build --bin qol-tray --features dev`; cargo keeps both feature variants cached in `deps/`, so this is a sub-second relink when clobbered and a no-op when current.
+The same clobbering hits `target/debug/qol-tray` itself: a non-dev build lacks the `/api/dev/*` routes, so the dashboard shows the tray as down (health probes `/api/dev/worktrees`) and ctrl+r fails with HTTP 405 (`/api/dev/recompile-self` missing). Every `qol dev` boot, including the fast boot after reloading `qol dev`, therefore always runs `cargo build --bin qol-tray --features dev`; cargo keeps both feature variants cached in `deps/`, so this is a sub-second relink when clobbered and a no-op when current.
 
-ctrl+r rebuilds the tray and reloads plugins together. Rebuilding only the tray or only the plugins is done from the dashboard rows (Enter on `tray` or `plugins`).
+ctrl+r rebuilds the tray and reloads plugins together when unarmed. When armed, the same ctrl+r row changes to reload `qol dev` itself via `qol setup` and re-exec. Rebuilding only the tray or only the plugins is done from the dashboard rows (Enter on `tray` or `plugins`).
 
 The emu pane is interactive: up/down select an environment, Enter launches
 `qol emu up <id>` for a `ready` one, and Enter while a run is active sends
 `qol emu down`. Space arms the next Enter (ARMED, the same grammar as the
 dashboard rows); an armed Enter launches `qol emu check <id>`.
 
-A compact keys frame floats over every view's top-right corner: the active
-view's keys plus the global chords (ctrl+r, ctrl+u, q). Its title badge
-reads `keys · k`, and `k` toggles the frame (session-scoped, visible by
-default). It wears the same capsule title badge as the outer `qol dev`
-frame (via the shared `draw_badge_box` helper), and the dashboard rows sit
-in a matching `menu` badge box. The one-line footer below the pane is purely
-dynamic status: selected row hint, emu run state, filter or copy prompt,
-ARMED state.
+A compact fixed-width `keys · k` box floats over every view's top-right corner.
+It renders a `global` section first for global chords (ctrl+r, q), then a
+`context` section for the active view's keys, with a blank row after each
+section label and two blank rows between the global and context key groups. The
+ctrl+r row changes its description when the dashboard is armed, without resizing
+the box. The `k` key toggles the box (session-scoped, visible by default). It
+wears the same capsule title badge as the outer `qol dev` frame (via the shared
+`draw_badge_box` helper), and the dashboard rows sit in a matching `menu` badge
+box. The one-line footer below the pane is purely dynamic status: selected row
+hint, emu run state, filter or copy prompt, ARMED state.
 The child re-invokes the current `qol` binary; its output streams into the
 pane below the config lines, and the environment list force-refreshes when
 the child exits. Quitting the dashboard sends `down`, waits up to the stop
