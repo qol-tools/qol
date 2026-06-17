@@ -98,7 +98,7 @@ parser.add_argument("plugin", nargs="?", default=legacy_plugin, help="Plugin nam
 parser.add_argument("-f", "--focus-only", action="store_true", default=legacy_focus, help="Focus events only")
 parser.add_argument("-g", "--no-ghosts", action="store_true", help="Hide ghost window dumps")
 parser.add_argument("-o", "--no-opacity", action="store_true", help="Hide opacity events")
-parser.add_argument("--topic", choices=["focus", "monitor", "boot", "opacity", "ui", "all"], default="all", help="Slice trace by topic")
+parser.add_argument("--topic", choices=["focus", "monitor", "boot", "opacity", "ui", "preview", "all"], default="all", help="Slice trace by topic")
 parser.add_argument("--grep", help="Filter output lines by substring")
 parser.add_argument("--since", help="Filter events since duration (e.g. 5s, 10m)")
 parser.add_argument("--mark", help="Inject a custom marker label into the log and exit")
@@ -175,12 +175,31 @@ def hash_color(name):
     idx = abs(h) % len(colors)
     return colors[idx]
 
+# pid -> process name, cached so a long replay never spawns ps per line.
+_proc_name_cache = {}
+
 def get_process_name(pid):
+    cached = _proc_name_cache.get(pid)
+    if cached is not None:
+        return cached
+    name = str(pid)
     try:
         with open(f"/proc/{pid}/comm", "r") as f:
-            return f.read().strip()
+            name = f.read().strip()
     except Exception:
-        return str(pid)
+        # macOS has no /proc; fall back to ps short command name (ucomm).
+        try:
+            import subprocess
+            out = subprocess.check_output(
+                ["ps", "-p", str(pid), "-o", "ucomm="],
+                stderr=subprocess.DEVNULL,
+            ).decode().strip()
+            if out:
+                name = out
+        except Exception:
+            pass
+    _proc_name_cache[pid] = name
+    return name
 
 def reason_suffix(msg):
     m = re.search(r"\breason=(?P<reason>\S+)", msg)
@@ -300,6 +319,13 @@ def match_topic(tag, topic):
         return True
     if topic == "ui":
         return tag.startswith("LAUNCHER_") or tag.startswith("WORLD_")
+    if topic == "preview":
+        return (
+            tag.startswith("PREVIEW_")
+            or tag.startswith("REFRESH_")
+            or tag.startswith("CAPTURE")
+            or tag in ("SHOW_RECV", "SHOW_TIMING", "SHOW_PAINTED", "FOCUS_WIN")
+        )
     categories = {
         "focus": ("FOCUS", "FOCUS_WIN", "ACTIVATE", "ACTIVATE_WIN", "WM_RECEIVE", "ALT_POLL_START", "DISMISS"),
         "monitor": ("PUBLISH", "SUBSCRIBE", "RECV", "LEGEND", "AMC", "HOST_EMIT_AMC", "PLUGIN_RECV_AMC"),
