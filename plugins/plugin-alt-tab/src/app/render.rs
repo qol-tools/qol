@@ -166,6 +166,9 @@ impl Render for AltTabApp {
             metrics: CardMetrics::from_config(d.card_scale, d.card_padding),
         };
 
+        #[cfg(debug_assertions)]
+        probe_rendered_front(&d.windows, &d.live_previews, d.selected_index, visible);
+
         let layout = picker_layout(
             d.windows.len().max(1),
             d.max_columns,
@@ -231,6 +234,53 @@ impl Render for AltTabApp {
                     .on_click(|_, _, cx| cx.stop_propagation())
             })
             .child(panel)
+    }
+}
+
+// Ground truth for "what is actually on screen": the image id painted for the
+// two front cards (idx0 = window just left, idx1 = highlighted switch target),
+// deduped per position so it only fires when a displayed image changes. A
+// stale->fresh transition here IS the visible pop the cache traces cannot show.
+#[cfg(debug_assertions)]
+fn probe_rendered_front(
+    windows: &[WindowInfo],
+    live_previews: &PreviewMap,
+    selected_index: Option<usize>,
+    visible: bool,
+) {
+    use std::sync::Mutex;
+    type RenderedSlot = Option<(u32, Option<gpui::ImageId>)>;
+    static LAST: Mutex<[RenderedSlot; 2]> = Mutex::new([None, None]);
+
+    if !visible {
+        return;
+    }
+    let stamp = |snap: Option<crate::shared::preview_trace::Snapshot>| {
+        snap.map(|s| format!("{}:{}ms", s.source, s.age_ms))
+            .unwrap_or_else(|| "none".to_string())
+    };
+    for pos in 0..2 {
+        let Some(win) = windows.get(pos) else {
+            continue;
+        };
+        let img_id = live_previews.get(&win.id).map(|i| i.id);
+        {
+            let mut last = LAST.lock().unwrap();
+            if last[pos] == Some((win.id, img_id)) {
+                continue;
+            }
+            last[pos] = Some((win.id, img_id));
+        }
+        qol_runtime::probe!(
+            "PREVIEW_RENDER",
+            "pos={pos} selected={} wid={} has_preview={} img_id={:?} shared={} live={}",
+            selected_index == Some(pos),
+            win.id,
+            img_id.is_some(),
+            img_id,
+            stamp(crate::shared::preview_trace::shared_snapshot(win.id)),
+            stamp(crate::shared::preview_trace::live_snapshot(win.id)),
+        );
     }
 }
 

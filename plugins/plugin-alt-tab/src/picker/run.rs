@@ -208,11 +208,17 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
         eprintln!("[alt-tab/daemon] no windows, skipping open");
         return;
     }
+    let front_previews = capture_front_previews(&executor, &windows).await;
     let state_for_update = state.clone();
     #[cfg(debug_assertions)]
     let t_update = std::time::Instant::now();
     let _ = cx.update(move |app_cx| {
         apply_show_windows(&state_for_update.caches, windows, app_cx);
+        commit_front_previews(
+            &state_for_update.caches.preview_cache,
+            front_previews,
+            app_cx,
+        );
         if let Some(icons) = rendered_icons {
             commit_icons_to_shared_cache(&state_for_update.caches.icon_cache, icons, app_cx);
         }
@@ -230,6 +236,67 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
         "total={}ms config={config_ms}ms query={query_ms}ms({window_count} windows) update={update_ms}ms",
         t_total.elapsed().as_millis()
     );
+}
+
+// idx0 is the window the user just left, and may have just changed (e.g. a
+// browser tab switch) right before alt-tabbing. Re-shoot it synchronously
+// before paint so it is current at the first frame; CGWindowListCreateImage is
+// serialized by the WindowServer, so each extra card roughly doubles show
+// latency - capture just this one and let the live loop refresh the rest.
+const FRONT_CARD_COUNT: usize = 1;
+
+async fn capture_front_previews(
+    executor: &BackgroundExecutor,
+    windows: &[WindowInfo],
+) -> Vec<(u32, Arc<RenderImage>)> {
+    use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
+    use crate::shared::preview::bgra_to_render_image;
+
+    let targets: Vec<(usize, u32)> = windows
+        .iter()
+        .enumerate()
+        .take(FRONT_CARD_COUNT)
+        .filter(|(_, w)| !w.is_minimized)
+        .map(|(idx, w)| (idx, w.id))
+        .collect();
+    if targets.is_empty() {
+        return Vec::new();
+    }
+    let wid_by_idx: HashMap<usize, u32> = targets.iter().copied().collect();
+    let cap_targets = targets.clone();
+    let captured = executor
+        .spawn(async move {
+            capture::capture_previews_cg(&cap_targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
+        })
+        .await;
+    captured
+        .into_iter()
+        .filter_map(|(idx, rgba)| {
+            let wid = *wid_by_idx.get(&idx)?;
+            let rgba = rgba?;
+            let img = bgra_to_render_image(rgba.data, rgba.width, rgba.height)?;
+            Some((wid, img))
+        })
+        .collect()
+}
+
+fn commit_front_previews(
+    preview_cache: &SharedPreviewCache,
+    front: Vec<(u32, Arc<RenderImage>)>,
+    app: &mut App,
+) {
+    if front.is_empty() {
+        return;
+    }
+    if let Ok(mut cache) = preview_cache.lock() {
+        let map: crate::PreviewMap = front.iter().cloned().collect();
+        crate::shared::image_registry::extend_with(&mut cache, map, app, None);
+    }
+    #[cfg(debug_assertions)]
+    for (wid, _) in &front {
+        crate::shared::preview_trace::record_shared_show(*wid);
+        qol_runtime::probe!("PREVIEW_SHOW_SYNC", "wid={wid} source=show outcome=fresh");
+    }
 }
 
 pub(super) fn apply_show_windows(caches: &PickerCaches, windows: Vec<WindowInfo>, app: &mut App) {
