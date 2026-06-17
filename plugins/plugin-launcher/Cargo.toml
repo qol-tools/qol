@@ -4,6 +4,10 @@ version = "1.10.1"
 edition = "2021"
 description = "Application and file launcher plugin for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
+autoexamples = false
+
+[features]
+examples = []
 
 [dependencies]
 gpui.workspace = true
@@ -27,3 +31,63 @@ shell-words = "1.1"
 proptest = "1.0"
 qol-plugin-api.workspace = true
 toml = "0.9.8"
+
+[[example]]
+name = "01_minimal_window"
+required-features = ["examples"]
+
+[[example]]
+name = "02_borderless_popup"
+required-features = ["examples"]
+
+[[example]]
+name = "03_dynamic_resize"
+required-features = ["examples"]
+
+[[example]]
+name = "04_text_input"
+required-features = ["examples"]
+
+[[example]]
+name = "05_list_selection"
+required-features = ["examples"]
+
+[[example]]
+name = "06_blur_detection"
+required-features = ["examples"]
+
+[[example]]
+name = "07_hide_show"
+required-features = ["examples"]
+
+[[example]]
+name = "08_scrollable_list"
+required-features = ["examples"]
+
+[[example]]
+name = "09_filtered_list"
+required-features = ["examples"]
+
+[[example]]
+name = "10_icons"
+required-features = ["examples"]
+
+[[example]]
+name = "11_sections"
+required-features = ["examples"]
+
+[[example]]
+name = "12_async_loading"
+required-features = ["examples"]
+
+[[example]]
+name = "13_frecency_ranking"
+required-features = ["examples"]
+
+[[example]]
+name = "14_fuzzy_match"
+required-features = ["examples"]
+
+[[example]]
+name = "15_action_modifiers"
+required-features = ["examples"]
