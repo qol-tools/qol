@@ -431,6 +431,16 @@ def format_winact_event(tag, msg, partial=False):
                 f"{winact_ms_color(dur_ms or 0)}{dur_str}{COLOR_RESET} "
                 f"{winact_outcome_color(outcome)}{outcome}{COLOR_RESET}")
 
+    if tag == "WINACT_MINIMIZE":
+        branch = launcher_field(msg, "branch")
+        visible = launcher_field(msg, "visible")
+        regular = launcher_field(msg, "regular")
+        outcome = launcher_field(msg, "outcome")
+        label = "hide (instant)" if branch == "hide" else "minimize (animated)"
+        return (f"  {COLOR_DIM}strategy{COLOR_RESET} {label} "
+                f"visible={visible} regular={regular} "
+                f"{winact_outcome_color(outcome)}{outcome}{COLOR_RESET}")
+
     if tag == "WINACT_DONE":
         action = launcher_field(msg, "action")
         total = launcher_field(msg, "total_ms")

@@ -96,11 +96,9 @@ fn nudge_position(win: *const c_void) {
     ax_set_position(win, &pos);
 }
 
-fn plain_minimize(win: *const c_void) {
+fn plain_minimize(win: *const c_void) -> bool {
     let ax_minimized = CfGuard::new(cfstr("AXMinimized")).unwrap();
-    unsafe {
-        AXUIElementSetAttributeValue(win, ax_minimized.as_const(), cf_boolean_true());
-    }
+    unsafe { AXUIElementSetAttributeValue(win, ax_minimized.as_const(), cf_boolean_true()) == 0 }
 }
 
 /// Returns true for real application windows (standard windows and dialogs),
@@ -243,26 +241,58 @@ pub(super) fn set_position_and_size(pid: i32, rect: super::screen::Rect) -> bool
     })
 }
 
-/// Minimize the focused window. Strategy depends on visible window count:
-///   - Single visible window: `AXHidden=true` on the app (instant, no animation).
-///   - Multiple visible windows: `AXMinimized=true` on the focused window only
-///     (animated, but only affects that window — other windows stay in place).
+/// Minimize the focused window.
+///   - Single window of a regular app: `AXHidden=true` on the app (instant, no animation).
+///   - Multiple windows, or a non-regular owner (e.g. Steam's Chromium helper, which
+///     ignores app-level hide and only flashes): `AXMinimized=true` on the window.
 pub(super) fn instant_minimize(pid: i32) -> bool {
     timed_bool("minimize", pid, || {
         let Some(ft) = front_target(pid) else {
             return false;
         };
 
-        if visible_window_count(ft.app.as_ptr()) > 1 {
-            plain_minimize(ft.win);
-            return true;
-        }
+        let visible = visible_window_count(ft.app.as_ptr());
+        let regular = app_is_regular(pid);
+        let use_minimize = visible > 1 || !regular;
 
-        let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
-        unsafe {
-            AXUIElementSetAttributeValue(ft.app.as_ptr(), ax_hidden.as_const(), cf_boolean_true());
-        }
-        true
+        let ok = if use_minimize {
+            plain_minimize(ft.win)
+        } else {
+            let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
+            unsafe {
+                AXUIElementSetAttributeValue(
+                    ft.app.as_ptr(),
+                    ax_hidden.as_const(),
+                    cf_boolean_true(),
+                ) == 0
+            }
+        };
+
+        trace_minimize_branch(pid, use_minimize, visible, regular, ok);
+        ok
+    })
+}
+
+fn trace_minimize_branch(pid: i32, use_minimize: bool, visible: usize, regular: bool, ok: bool) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "WINACT_MINIMIZE",
+        "pid={pid} branch={} visible={visible} regular={regular} outcome={}",
+        if use_minimize { "minimize" } else { "hide" },
+        if ok { "ok" } else { "fail" },
+    );
+    #[cfg(not(debug_assertions))]
+    let _ = (pid, use_minimize, visible, regular, ok);
+}
+
+fn app_is_regular(pid: i32) -> bool {
+    timed_pred("app_is_regular", pid, || unsafe {
+        let ns_app = msg_ptr_usize(
+            cls("NSRunningApplication"),
+            sel("runningApplicationWithProcessIdentifier:"),
+            pid as usize,
+        );
+        !ns_app.is_null() && msg_i32(ns_app, sel("activationPolicy")) == 0
     })
 }
 
