@@ -275,18 +275,12 @@ fn try_url_courier() -> Option<i32> {
 /// accept connections so we navigate the live tab instead of opening a dead one,
 /// then forward.
 fn courier_forward_with_retry(route: &str) -> i32 {
-    for _ in 0..40 {
-        if is_already_running() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    wait_for_server_ready();
     forward_route(route)
 }
 
 fn open_pending_cold_route(route: &str) {
-    // Let the HTTP server bind before pointing a browser at the route.
-    std::thread::sleep(Duration::from_millis(1500));
+    wait_for_server_ready();
     let url = qol_tray::commands::deeplink_url(route, DEFAULT_PORT);
     let _ = qol_tray::paths::open_url(&url);
 }
@@ -420,6 +414,14 @@ fn is_already_running() -> bool {
     use std::net::{SocketAddr, TcpStream};
     let addr: SocketAddr = ([127, 0, 0, 1], DEFAULT_PORT).into();
     TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
+}
+
+fn wait_for_server_ready() -> bool {
+    qol_tray::net::wait_for_tcp_ready(
+        ([127, 0, 0, 1], DEFAULT_PORT).into(),
+        40,
+        Duration::from_millis(50),
+    )
 }
 
 struct InitResult {
@@ -627,7 +629,7 @@ fn show_first_run_welcome() {
         ])
         .status();
 
-    std::thread::sleep(std::time::Duration::from_secs(1));
+    wait_for_server_ready();
 
     #[cfg(target_os = "linux")]
     let _ = std::process::Command::new("xdg-open")
