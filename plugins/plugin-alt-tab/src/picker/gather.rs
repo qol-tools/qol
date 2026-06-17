@@ -10,11 +10,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 static PREVIEW_FILL_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static WARM_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 struct InFlightGuard;
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
         PREVIEW_FILL_IN_FLIGHT.store(false, Ordering::Release);
+    }
+}
+
+struct WarmGuard;
+impl Drop for WarmGuard {
+    fn drop(&mut self) {
+        WARM_IN_FLIGHT.store(false, Ordering::Release);
     }
 }
 
@@ -305,6 +313,95 @@ async fn fill_previews(cx: &mut AsyncApp, req: PreviewFillRequest) {
         target_count,
         skipped_count,
     );
+}
+
+pub(super) struct FrontmostWarmRequest {
+    pub windows: Vec<WindowInfo>,
+    pub preview_cache: SharedPreviewCache,
+}
+
+// Background warmer: keeps the active window (idx 0) and the window the picker
+// lands on (idx 1) current in the shared cache so a show is a pure cache reveal.
+// Writes the shared cache only - the view merges it on open - so no hidden
+// window is re-rendered on every tick.
+pub(super) fn spawn_frontmost_warm(req: FrontmostWarmRequest, cx: &mut App) {
+    if req.windows.iter().all(|w| w.is_minimized) {
+        return;
+    }
+    if WARM_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let _guard = WarmGuard;
+        warm_frontmost(cx, req).await;
+    })
+    .detach();
+}
+
+async fn warm_frontmost(cx: &mut AsyncApp, req: FrontmostWarmRequest) {
+    use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
+    use crate::shared::preview::bgra_to_render_image;
+
+    let cached_ids = snapshot_preview_keys(&req.preview_cache);
+    let targets = select_capture_targets_with_focus(&req.windows, &cached_ids, true, false);
+    if targets.is_empty() {
+        return;
+    }
+    #[cfg(debug_assertions)]
+    let target_ids = sorted_target_ids(&targets);
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "PREVIEW_CAPTURE",
+        "source=warm targets={} ids=[{}]",
+        targets.len(),
+        format_ids(&target_ids),
+    );
+
+    let id_for_idx: HashMap<usize, u32> = targets.iter().copied().collect();
+    let executor = cx.background_executor().clone();
+    let capture_targets = targets.clone();
+    let captured = executor
+        .spawn(async move {
+            capture::capture_previews_cg(&capture_targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
+        })
+        .await;
+
+    let mut previews = PreviewMap::new();
+    for (idx, rgba) in captured {
+        let Some(rgba) = rgba else { continue };
+        let Some(&wid) = id_for_idx.get(&idx) else {
+            continue;
+        };
+        if let Some(img) = bgra_to_render_image(rgba.data, rgba.width, rgba.height) {
+            previews.insert(wid, img);
+        }
+    }
+    if previews.is_empty() {
+        return;
+    }
+    commit_previews_shared_only(cx, req.preview_cache.clone(), previews);
+}
+
+fn commit_previews_shared_only(cx: &mut AsyncApp, cache: SharedPreviewCache, previews: PreviewMap) {
+    #[cfg(debug_assertions)]
+    let preview_ids = sorted_preview_ids(&previews);
+    let _ = cx.update(|app_cx| {
+        if let Ok(mut pcache) = cache.lock() {
+            crate::shared::image_registry::extend_with(&mut *pcache, previews, app_cx, None);
+            #[cfg(debug_assertions)]
+            crate::shared::preview_trace::record_shared_fill(preview_ids.iter().copied());
+        }
+        #[cfg(debug_assertions)]
+        qol_runtime::probe!(
+            "PREVIEW_CACHE_WRITE",
+            "source=warm cache=shared n={} ids=[{}]",
+            preview_ids.len(),
+            format_ids(&preview_ids),
+        );
+    });
 }
 
 fn snapshot_preview_keys(cache: &SharedPreviewCache) -> HashSet<u32> {

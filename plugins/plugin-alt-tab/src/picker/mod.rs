@@ -46,9 +46,6 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
 
     let is_visible = PICKER_VISIBLE.load(Ordering::Relaxed);
     let placement = resolve_placement(req.tracker, is_visible);
-    if !is_visible {
-        monitor_listener::request_frontmost_preview_refresh();
-    }
 
     if req.reverse && req.current.borrow().is_empty() {
         return;
