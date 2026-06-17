@@ -77,7 +77,59 @@ pub(crate) fn spawn(cx: &mut App, inputs: ListenerInputs) {
             move |app_cx, event| rebuild_ghosts_for_topology(&inputs, event, app_cx)
         },
     );
+    spawn_active_window_warmer(cx, inputs.clone());
     spawn_data_refresh_router(cx, refresh_rx, inputs);
+}
+
+const ACTIVE_WARM_INTERVAL_MS: u64 = 250;
+const WARM_IDLE_GRACE_S: f64 = 1.0;
+
+// While the picker is hidden and the user is actively working, re-shoot the
+// active window (idx 0) on a light timer so the next show reveals a current
+// cache with no on-open capture. The previous-focused window (idx 1) is kept
+// fresh by the FocusChanged capture-on-leave, not here - it does not change
+// while it is in the background. Paused while the picker is visible and while
+// the user is idle, since nothing is changing in either case.
+fn spawn_active_window_warmer(cx: &mut App, inputs: ListenerInputs) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let executor = cx.background_executor().clone();
+        loop {
+            executor
+                .timer(Duration::from_millis(ACTIVE_WARM_INTERVAL_MS))
+                .await;
+            if PICKER_VISIBLE.load(Ordering::Relaxed) {
+                continue;
+            }
+            if cx
+                .update(|app_cx| warm_active_window(&inputs, app_cx))
+                .is_err()
+            {
+                break;
+            }
+        }
+    })
+    .detach();
+}
+
+fn warm_active_window(inputs: &ListenerInputs, app_cx: &mut App) {
+    if super::platform::seconds_since_last_input().is_some_and(|idle| idle > WARM_IDLE_GRACE_S) {
+        return;
+    }
+    let windows = inputs
+        .window_cache
+        .lock()
+        .map(|c| c.clone())
+        .unwrap_or_default();
+    if windows.is_empty() {
+        return;
+    }
+    super::gather::spawn_frontmost_warm(
+        super::gather::FrontmostWarmRequest {
+            windows,
+            preview_cache: inputs.preview_cache.clone(),
+        },
+        app_cx,
+    );
 }
 
 pub(crate) fn request_data_refresh() {
