@@ -10,9 +10,9 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const TICK_MS: u64 = 200;
+const TICK_MS: u64 = 50;
 const CAPTURE_INTERVAL: Duration = Duration::from_millis(500);
-const SELECTION_SETTLE: Duration = Duration::from_millis(300);
+const SELECTION_SETTLE: Duration = Duration::from_millis(50);
 
 pub(crate) fn spawn(
     delegate: Entity<PickerState>,
@@ -50,6 +50,9 @@ async fn preview_loop(
         if last_selection != Some(selected.1) {
             last_selection = Some(selected.1);
             selection_changed_at = now;
+            // A newly selected card must not inherit the previous card's
+            // capture-interval throttle, or cycling lands on stale frames.
+            last_captured = now - CAPTURE_INTERVAL;
             continue;
         }
         if now.duration_since(selection_changed_at) < SELECTION_SETTLE {
