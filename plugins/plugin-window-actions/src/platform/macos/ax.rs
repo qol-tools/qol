@@ -1,15 +1,21 @@
 use std::collections::HashSet;
 use std::ffi::c_void;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use super::objc::{
     ax_attr, cf_boolean_false, cf_boolean_true, cfstr, cfstring_to_string, cg_window_layer,
-    cg_window_owner_pid, cls, dict_get_i32, msg_bool_usize, msg_i32, msg_ptr, msg_ptr_usize, sel,
-    AXUIElementCreateApplication, AXUIElementPerformAction, AXUIElementSetAttributeValue,
-    AXValueCreate, AXValueGetValue, CFArrayGetCount, CFArrayGetValueAtIndex, CFRelease, CGPoint,
-    CGSize, CGWindowListCopyWindowInfo, CfGuard, AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE,
-    CG_WINDOW_LIST_EXCLUDE_DESKTOP, CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
+    cg_window_owner_pid, cls, dict_get_i32, msg_bool, msg_bool_usize, msg_i32, msg_ptr,
+    msg_ptr_usize, sel, AXUIElementCreateApplication, AXUIElementPerformAction,
+    AXUIElementSetAttributeValue, AXValueCreate, AXValueGetValue, CFArrayGetCount,
+    CFArrayGetValueAtIndex, CFRelease, CGPoint, CGSize, CGWindowListCopyWindowInfo, CfGuard,
+    AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE, CG_WINDOW_LIST_EXCLUDE_DESKTOP,
+    CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
 use super::trace::{timed_bool, timed_opt, timed_pred, timed_unit};
+
+const VERIFY_TIMEOUT: Duration = Duration::from_millis(120);
+const VERIFY_INTERVAL: Duration = Duration::from_millis(8);
 
 /// App element + the best target window (focused, or AXWindows[0] fallback).
 /// `_keeper` owns the CF reference that `win` points into.
@@ -23,17 +29,32 @@ fn front_target(pid: i32) -> Option<FrontTarget> {
     timed_opt("front_target", pid, || {
         let app = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) })?;
         if let Some(focused) = ax_attr(app.as_ptr(), "AXFocusedWindow") {
-            let win = focused.as_ptr();
-            return Some(FrontTarget {
-                app,
-                _keeper: focused,
-                win,
-            });
+            if is_targetable_window(focused.as_ptr()) {
+                let win = focused.as_ptr();
+                return Some(FrontTarget {
+                    app,
+                    _keeper: focused,
+                    win,
+                });
+            }
         }
         let windows = ax_attr(app.as_ptr(), "AXWindows")?;
-        if unsafe { CFArrayGetCount(windows.as_ptr()) } == 0 {
+        let count = unsafe { CFArrayGetCount(windows.as_ptr()) };
+        if count == 0 {
             return None;
         }
+
+        for i in 0..count {
+            let win = unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), i) };
+            if is_targetable_window(win) {
+                return Some(FrontTarget {
+                    app,
+                    _keeper: windows,
+                    win,
+                });
+            }
+        }
+
         let win = unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), 0) };
         Some(FrontTarget {
             app,
@@ -43,16 +64,25 @@ fn front_target(pid: i32) -> Option<FrontTarget> {
     })
 }
 
-fn activate_app(pid: i32, options: usize) {
-    timed_unit("activate_app", pid, || unsafe {
-        let ns_app = msg_ptr_usize(
+fn ns_running_app(pid: i32) -> Option<*mut c_void> {
+    let ns_app = unsafe {
+        msg_ptr_usize(
             cls("NSRunningApplication"),
             sel("runningApplicationWithProcessIdentifier:"),
             pid as usize,
-        );
-        if ns_app.is_null() {
+        )
+    };
+    if ns_app.is_null() {
+        return None;
+    }
+    Some(ns_app)
+}
+
+fn activate_app(pid: i32, options: usize) {
+    timed_unit("activate_app", pid, || unsafe {
+        let Some(ns_app) = ns_running_app(pid) else {
             return;
-        }
+        };
         msg_bool_usize(ns_app, sel("activateWithOptions:"), options);
     });
 }
@@ -97,8 +127,82 @@ fn nudge_position(win: *const c_void) {
 }
 
 fn plain_minimize(win: *const c_void) -> bool {
-    let ax_minimized = CfGuard::new(cfstr("AXMinimized")).unwrap();
-    unsafe { AXUIElementSetAttributeValue(win, ax_minimized.as_const(), cf_boolean_true()) == 0 }
+    let _ = set_ax_bool_attr(win, "AXMinimized", true);
+    if wait_for_bool_attr(win, "AXMinimized", true) {
+        return true;
+    }
+
+    false
+}
+
+fn verified_minimize(pid: i32, win: *const c_void) -> bool {
+    timed_bool("set_minimized", pid, || {
+        if plain_minimize(win) {
+            return true;
+        }
+        let _ = press_minimize_button(pid, win);
+        wait_for_bool_attr(win, "AXMinimized", true)
+    })
+}
+
+fn press_minimize_button(pid: i32, win: *const c_void) -> bool {
+    timed_bool("press_minimize", pid, || {
+        let Some(button) = ax_attr(win, "AXMinimizeButton") else {
+            return false;
+        };
+        let action = CfGuard::new(cfstr("AXPress")).unwrap();
+        unsafe { AXUIElementPerformAction(button.as_const(), action.as_const()) == 0 }
+    })
+}
+
+fn set_ax_bool_attr(element: *const c_void, name: &str, value: bool) -> bool {
+    let attr = CfGuard::new(cfstr(name)).unwrap();
+    let value = if value {
+        cf_boolean_true()
+    } else {
+        cf_boolean_false()
+    };
+    unsafe { AXUIElementSetAttributeValue(element, attr.as_const(), value) == 0 }
+}
+
+fn ax_bool_attr(element: *const c_void, name: &str) -> Option<bool> {
+    ax_attr(element, name).map(|v| std::ptr::eq(v.as_ptr(), cf_boolean_true() as *mut c_void))
+}
+
+fn ax_bool_attr_is(element: *const c_void, name: &str, expected: bool) -> bool {
+    ax_bool_attr(element, name).is_some_and(|actual| actual == expected)
+}
+
+fn wait_for_bool_attr(element: *const c_void, name: &str, expected: bool) -> bool {
+    if ax_bool_attr_is(element, name, expected) {
+        return true;
+    }
+
+    let deadline = Instant::now() + VERIFY_TIMEOUT;
+    while Instant::now() < deadline {
+        sleep(VERIFY_INTERVAL);
+        if ax_bool_attr_is(element, name, expected) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn is_targetable_window(win: *const c_void) -> bool {
+    window_is_normal(win) && !window_is_minimized(win)
+}
+
+fn window_is_normal(win: *const c_void) -> bool {
+    let Some(subrole_ref) = ax_attr(win, "AXSubrole") else {
+        return false;
+    };
+    let subrole = cfstring_to_string(subrole_ref.as_const());
+    matches!(subrole.as_deref(), Some("AXStandardWindow" | "AXDialog"))
+}
+
+fn window_is_minimized(win: *const c_void) -> bool {
+    ax_bool_attr_is(win, "AXMinimized", true)
 }
 
 /// Returns true for real application windows (standard windows and dialogs),
@@ -108,11 +212,7 @@ pub(super) fn is_normal_window(pid: i32) -> bool {
         let Some(ft) = front_target(pid) else {
             return false;
         };
-        let Some(subrole_ref) = ax_attr(ft.win, "AXSubrole") else {
-            return false;
-        };
-        let subrole = cfstring_to_string(subrole_ref.as_const());
-        matches!(subrole.as_deref(), Some("AXStandardWindow" | "AXDialog"))
+        window_is_normal(ft.win)
     })
 }
 
@@ -255,44 +355,109 @@ pub(super) fn instant_minimize(pid: i32) -> bool {
         let regular = app_is_regular(pid);
         let use_minimize = visible > 1 || !regular;
 
-        let ok = if use_minimize {
-            plain_minimize(ft.win)
+        let (branch, ok) = if use_minimize {
+            minimize_then_hide(pid, &ft)
         } else {
-            let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
-            unsafe {
-                AXUIElementSetAttributeValue(
-                    ft.app.as_ptr(),
-                    ax_hidden.as_const(),
-                    cf_boolean_true(),
-                ) == 0
-            }
+            hide_then_minimize(pid, &ft)
         };
 
-        trace_minimize_branch(pid, use_minimize, visible, regular, ok);
+        trace_minimize_branch(pid, branch, visible, regular, ok);
         ok
     })
 }
 
-fn trace_minimize_branch(pid: i32, use_minimize: bool, visible: usize, regular: bool, ok: bool) {
+fn minimize_then_hide(pid: i32, ft: &FrontTarget) -> (&'static str, bool) {
+    if verified_minimize(pid, ft.win) {
+        return ("minimize", true);
+    }
+    ("hide-fallback", hide_app(pid, ft.app.as_ptr()))
+}
+
+fn hide_then_minimize(pid: i32, ft: &FrontTarget) -> (&'static str, bool) {
+    if hide_app(pid, ft.app.as_ptr()) {
+        return ("hide", true);
+    }
+    ("minimize-fallback", verified_minimize(pid, ft.win))
+}
+
+fn hide_app(pid: i32, app: *const c_void) -> bool {
+    timed_bool("hide_app", pid, || {
+        let _ = set_ax_bool_attr(app, "AXHidden", true);
+        if wait_for_app_hidden(pid, app, true) {
+            return true;
+        }
+        let _ = ns_hide_app(pid);
+        wait_for_app_hidden(pid, app, true)
+    })
+}
+
+fn show_app(pid: i32, app: *const c_void) -> bool {
+    timed_bool("show_app", pid, || {
+        let _ = set_ax_bool_attr(app, "AXHidden", false);
+        if wait_for_app_hidden(pid, app, false) {
+            return true;
+        }
+        let _ = ns_unhide_app(pid);
+        wait_for_app_hidden(pid, app, false)
+    })
+}
+
+fn wait_for_app_hidden(pid: i32, app: *const c_void, expected: bool) -> bool {
+    if app_is_hidden(pid, app) == expected {
+        return true;
+    }
+
+    let deadline = Instant::now() + VERIFY_TIMEOUT;
+    while Instant::now() < deadline {
+        sleep(VERIFY_INTERVAL);
+        if app_is_hidden(pid, app) == expected {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn app_is_hidden(pid: i32, app: *const c_void) -> bool {
+    ax_bool_attr_is(app, "AXHidden", true) || ns_app_is_hidden(pid)
+}
+
+fn ns_hide_app(pid: i32) -> bool {
+    timed_bool("ns_hide", pid, || ns_app_bool(pid, "hide"))
+}
+
+fn ns_unhide_app(pid: i32) -> bool {
+    timed_bool("ns_unhide", pid, || ns_app_bool(pid, "unhide"))
+}
+
+fn ns_app_is_hidden(pid: i32) -> bool {
+    ns_app_bool(pid, "isHidden")
+}
+
+fn ns_app_bool(pid: i32, selector: &str) -> bool {
+    let Some(ns_app) = ns_running_app(pid) else {
+        return false;
+    };
+    unsafe { msg_bool(ns_app, sel(selector)) }
+}
+
+fn trace_minimize_branch(pid: i32, branch: &str, visible: usize, regular: bool, ok: bool) {
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
         "WINACT_MINIMIZE",
-        "pid={pid} branch={} visible={visible} regular={regular} outcome={}",
-        if use_minimize { "minimize" } else { "hide" },
+        "pid={pid} branch={branch} visible={visible} regular={regular} outcome={}",
         if ok { "ok" } else { "fail" },
     );
     #[cfg(not(debug_assertions))]
-    let _ = (pid, use_minimize, visible, regular, ok);
+    let _ = (pid, branch, visible, regular, ok);
 }
 
 fn app_is_regular(pid: i32) -> bool {
     timed_pred("app_is_regular", pid, || unsafe {
-        let ns_app = msg_ptr_usize(
-            cls("NSRunningApplication"),
-            sel("runningApplicationWithProcessIdentifier:"),
-            pid as usize,
-        );
-        !ns_app.is_null() && msg_i32(ns_app, sel("activationPolicy")) == 0
+        let Some(ns_app) = ns_running_app(pid) else {
+            return false;
+        };
+        msg_i32(ns_app, sel("activationPolicy")) == 0
     })
 }
 
@@ -304,9 +469,7 @@ fn visible_window_count(app: *const c_void) -> usize {
     let mut visible = 0;
     for i in 0..count {
         let win = unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), i) };
-        let minimized = ax_attr(win, "AXMinimized")
-            .is_some_and(|v| std::ptr::eq(v.as_ptr(), cf_boolean_true() as *mut c_void));
-        if !minimized {
+        if is_targetable_window(win) {
             visible += 1;
         }
     }
@@ -325,19 +488,10 @@ pub(super) fn unminimize_and_raise(pid: i32) -> bool {
         };
 
         // Check if app was hidden (AXHidden) vs individual window minimized (AXMinimized).
-        let was_hidden = ax_attr(app.as_ptr(), "AXHidden")
-            .is_some_and(|v| std::ptr::eq(v.as_ptr(), cf_boolean_true() as *mut c_void));
+        let was_hidden = app_is_hidden(pid, app.as_ptr());
 
         if was_hidden {
-            // App-level hide: unhide and activate all windows (they were all hidden together).
-            let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
-            unsafe {
-                AXUIElementSetAttributeValue(
-                    app.as_ptr(),
-                    ax_hidden.as_const(),
-                    cf_boolean_false(),
-                );
-            }
+            let _ = show_app(pid, app.as_ptr());
             activate_app(pid, 3); // IgnoringOtherApps | AllWindows
             return true;
         }
@@ -349,10 +503,7 @@ pub(super) fn unminimize_and_raise(pid: i32) -> bool {
             let count = unsafe { CFArrayGetCount(windows.as_ptr()) };
             for i in 0..count {
                 let win = unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), i) };
-                let Some(val) = ax_attr(win, "AXMinimized") else {
-                    continue;
-                };
-                if !std::ptr::eq(val.as_ptr(), cf_boolean_true() as *mut c_void) {
+                if !ax_bool_attr_is(win, "AXMinimized", true) {
                     continue;
                 }
                 unsafe {

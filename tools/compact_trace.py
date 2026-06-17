@@ -436,7 +436,13 @@ def format_winact_event(tag, msg, partial=False):
         visible = launcher_field(msg, "visible")
         regular = launcher_field(msg, "regular")
         outcome = launcher_field(msg, "outcome")
-        label = "hide (instant)" if branch == "hide" else "minimize (animated)"
+        labels = {
+            "hide": "hide (instant)",
+            "minimize": "minimize (animated)",
+            "hide-fallback": "hide fallback",
+            "minimize-fallback": "minimize fallback",
+        }
+        label = labels.get(branch, branch)
         return (f"  {COLOR_DIM}strategy{COLOR_RESET} {label} "
                 f"visible={visible} regular={regular} "
                 f"{winact_outcome_color(outcome)}{outcome}{COLOR_RESET}")

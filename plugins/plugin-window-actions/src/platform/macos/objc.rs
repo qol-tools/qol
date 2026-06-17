@@ -211,6 +211,12 @@ pub(super) unsafe fn msg_bool_usize(obj: *mut c_void, sel: *mut c_void, arg: usi
     f(obj, sel, arg) != 0
 }
 
+pub(super) unsafe fn msg_bool(obj: *mut c_void, sel: *mut c_void) -> bool {
+    let f: unsafe extern "C" fn(*mut c_void, *mut c_void) -> i8 =
+        std::mem::transmute(objc_msgSend as *const ());
+    f(obj, sel) != 0
+}
+
 #[cfg(target_arch = "aarch64")]
 pub(super) unsafe fn msg_rect(obj: *mut c_void, sel: *mut c_void) -> CGRect {
     let f: unsafe extern "C" fn(*mut c_void, *mut c_void) -> CGRect =
