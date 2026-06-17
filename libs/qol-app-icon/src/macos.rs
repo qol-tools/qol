@@ -44,6 +44,84 @@ extern "C" {
     fn CFRelease(cf: *const c_void);
 }
 
+#[link(name = "proc")]
+extern "C" {
+    fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut c_void, buffersize: i32) -> i32;
+}
+
+const PROC_PIDTBSDINFO: i32 = 3;
+
+#[repr(C)]
+struct ProcBsdInfo {
+    pbi_flags: u32,
+    pbi_status: u32,
+    pbi_xstatus: u32,
+    pbi_pid: u32,
+    pbi_ppid: u32,
+    pbi_uid: u32,
+    pbi_ruid: u32,
+    pbi_gid: u32,
+    pbi_rgid: u32,
+    pbi_svuid: u32,
+    pbi_svgid: u32,
+    rfu_1: u32,
+    pbi_comm: [u8; 16],
+    pbi_name: [u8; 32],
+    pbi_nfiles: u32,
+    pbi_pgid: u32,
+    pbi_pjobc: u32,
+    e_tdev: u32,
+    e_tpgid: u32,
+    pbi_nice: i32,
+    pbi_start_tvsec: u64,
+    pbi_start_tvusec: u64,
+}
+
+fn read_proc_bsd_info(pid: i32) -> Option<ProcBsdInfo> {
+    if pid <= 0 {
+        return None;
+    }
+    let mut info: ProcBsdInfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<ProcBsdInfo>() as i32;
+    let read = unsafe {
+        proc_pidinfo(
+            pid,
+            PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut ProcBsdInfo).cast::<c_void>(),
+            size,
+        )
+    };
+    (read == size).then_some(info)
+}
+
+pub fn parent_pid(pid: i32) -> Option<i32> {
+    if pid <= 1 {
+        return None;
+    }
+    Some(read_proc_bsd_info(pid)?.pbi_ppid as i32)
+}
+
+pub fn process_start_time_us(pid: i32) -> Option<u64> {
+    let info = read_proc_bsd_info(pid)?;
+    Some(
+        info.pbi_start_tvsec
+            .saturating_mul(1_000_000)
+            .saturating_add(info.pbi_start_tvusec),
+    )
+}
+
+fn is_regular_app(pid: i32) -> bool {
+    use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication};
+
+    objc2::rc::autoreleasepool(|_pool| {
+        match NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
+            Some(app) => app.activationPolicy() == NSApplicationActivationPolicy::Regular,
+            None => false,
+        }
+    })
+}
+
 pub fn icon_for_bundle_id(bundle_id: &str, size: usize) -> Option<RgbaImage> {
     use objc2_app_kit::NSWorkspace;
     use objc2_foundation::NSString;
@@ -59,6 +137,30 @@ pub fn icon_for_bundle_id(bundle_id: &str, size: usize) -> Option<RgbaImage> {
 }
 
 pub fn icon_for_pid(pid: i32, size: usize) -> Option<RgbaImage> {
+    if !is_regular_app(pid) {
+        if let Some(icon) = ancestor_app_icon(pid, size) {
+            return Some(icon);
+        }
+    }
+    app_icon(pid, size)
+}
+
+fn ancestor_app_icon(pid: i32, size: usize) -> Option<RgbaImage> {
+    let mut current = pid;
+    for _ in 0..6 {
+        let parent = parent_pid(current)?;
+        if parent <= 1 {
+            return None;
+        }
+        if is_regular_app(parent) {
+            return app_icon(parent, size);
+        }
+        current = parent;
+    }
+    None
+}
+
+fn app_icon(pid: i32, size: usize) -> Option<RgbaImage> {
     use objc2_app_kit::NSRunningApplication;
 
     objc2::rc::autoreleasepool(|_pool| {
