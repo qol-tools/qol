@@ -1,6 +1,6 @@
 use super::ax::{AxCache, AxWindowMeta};
 use super::process::{
-    cached_process_identity, is_app_hidden, is_regular_app, known_window_ids_by_identity,
+    cached_process_identity, is_app_hidden, is_switchable_app, known_window_ids_by_identity,
     ProcessIdentity,
 };
 use super::{ax, CgWindow};
@@ -118,8 +118,8 @@ pub(super) fn collect_on_screen_windows(
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/enum] CG on-screen: {} windows", parsed.len());
 
-    let regular_cache = register_on_screen(&parsed, state);
-    let filtered = filter_visible(parsed, &regular_cache);
+    let switchable_cache = register_on_screen(&parsed, state);
+    let filtered = filter_visible(parsed, &switchable_cache);
     #[cfg(debug_assertions)]
     for w in &filtered {
         eprintln!(
@@ -337,20 +337,20 @@ fn persist_stable_window_order(order: Vec<StableWindowKey>) {
 }
 
 fn register_on_screen(parsed: &[CgWindow], state: &mut WindowEnumeration) -> HashMap<i32, bool> {
-    let mut regular_cache: HashMap<i32, bool> = HashMap::new();
+    let mut switchable_cache: HashMap<i32, bool> = HashMap::new();
     for w in parsed {
         state.on_screen_ids.insert(w.id);
-        if *regular_cache
+        if *switchable_cache
             .entry(w.pid)
-            .or_insert_with(|| is_regular_app(w.pid))
+            .or_insert_with(|| is_switchable_app(w.pid))
         {
             state.register_on_screen_pid(w.pid);
         }
     }
-    regular_cache
+    switchable_cache
 }
 
-fn filter_visible(parsed: Vec<CgWindow>, regular_cache: &HashMap<i32, bool>) -> Vec<CgWindow> {
+fn filter_visible(parsed: Vec<CgWindow>, switchable_cache: &HashMap<i32, bool>) -> Vec<CgWindow> {
     parsed
         .into_iter()
         .filter(|w| {
@@ -365,8 +365,8 @@ fn filter_visible(parsed: Vec<CgWindow>, regular_cache: &HashMap<i32, bool>) -> 
                 );
                 return false;
             }
-            let is_regular = regular_cache[&w.pid];
-            if !is_regular {
+            let is_switchable = switchable_cache[&w.pid];
+            if !is_switchable {
                 qol_runtime::probe!(
                     "FILTERED",
                     "reason=irregular wid={} pid={} app={:?} policy={}",
@@ -376,7 +376,7 @@ fn filter_visible(parsed: Vec<CgWindow>, regular_cache: &HashMap<i32, bool>) -> 
                     super::process::app_policy_debug(w.pid)
                 );
             }
-            is_regular
+            is_switchable
         })
         .collect()
 }
@@ -762,7 +762,7 @@ fn filter_minimized_candidates(
     state: &WindowEnumeration,
 ) -> Vec<CgWindow> {
     let mut seen_ids = HashSet::new();
-    let mut regular_cache: HashMap<i32, bool> = HashMap::new();
+    let mut switchable_cache: HashMap<i32, bool> = HashMap::new();
     off_screen
         .into_iter()
         .filter(|w| {
@@ -775,9 +775,9 @@ fn filter_minimized_candidates(
             if !w.has_title || w.w < 1.0 || w.h < 1.0 {
                 return false;
             }
-            *regular_cache
+            *switchable_cache
                 .entry(w.pid)
-                .or_insert_with(|| is_regular_app(w.pid))
+                .or_insert_with(|| is_switchable_app(w.pid))
         })
         .collect()
 }
