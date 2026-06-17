@@ -3960,7 +3960,7 @@ fn selected_candidate_mut(dash: &mut Dash) -> Option<&mut ImageCandidate> {
 }
 ```
 
-Add the three arms to the top-level `match action` in `apply_action`, before `Action::Quit | Action::ReloadSelf | Action::Ignore => {}`:
+Add the three arms to the top-level `match action` in `apply_action`, before `Action::Quit | Action::Ignore => {}`:
 
 ```rust
         Action::OpenEmuDir => {
