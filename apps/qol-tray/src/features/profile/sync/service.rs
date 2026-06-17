@@ -18,7 +18,7 @@ use crate::features::profile::registry::{
     clear_sync_target, load_sync_target, save_sync_target, SyncTarget,
 };
 
-const AUTO_PUSH_INTERVAL_SECS: u64 = 3;
+const AUTO_PUSH_INTERVAL_SECS: u64 = 10;
 const DEFAULT_REPO_NAME: &str = "qol-tray-profiles";
 const GITIGNORE_CONTENTS: &str = "/active\n/sync.json\n*/device/\n";
 
