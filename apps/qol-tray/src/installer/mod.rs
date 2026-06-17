@@ -260,7 +260,11 @@ fn create_install_id() -> String {
 }
 
 fn open_ui_after_start() {
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    crate::net::wait_for_tcp_ready(
+        ([127, 0, 0, 1], 42700).into(),
+        100,
+        std::time::Duration::from_millis(50),
+    );
     let url = "http://localhost:42700";
     #[cfg(target_os = "linux")]
     let _ = std::process::Command::new("xdg-open").arg(url).spawn();

@@ -15,6 +15,7 @@ pub mod logging;
 pub mod menu;
 pub mod migrations_startup;
 pub mod mode;
+pub mod net;
 pub mod paths;
 pub mod plugins;
 pub mod probe;
