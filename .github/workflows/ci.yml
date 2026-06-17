@@ -27,7 +27,7 @@ jobs:
       macos_test: ${{ steps.affected.outputs.macos_test }}
       macos_skip: ${{ steps.affected.outputs.macos_skip }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
@@ -55,7 +55,7 @@ jobs:
             skip: ${{ needs.plan.outputs.macos_skip }}
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         if: matrix.skip != 'true'
 
       - name: Free disk space
@@ -65,12 +65,12 @@ jobs:
           sudo docker image prune --all --force || true
           df -h /
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         if: matrix.skip != 'true'
         with:
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         if: matrix.skip != 'true'
         with:
           shared-key: ci-${{ matrix.os }}
