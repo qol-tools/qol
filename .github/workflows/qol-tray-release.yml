@@ -27,6 +27,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: qol-tray-linux
 
       - name: Install cargo-deb
         uses: taiki-e/install-action@v2
@@ -79,6 +81,8 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: qol-tray-macos
 
       - name: Build macOS binaries
         run: |
