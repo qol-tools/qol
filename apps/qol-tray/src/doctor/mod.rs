@@ -102,9 +102,12 @@ fn fix_with_selector_and_policy(selector: Selector, policy: FixPolicy) -> FixRep
     let before_results = run_selected(&selector, &ctx);
     let before = report::report(before_results.clone());
     let summary = apply_fixes(before_results, policy);
-    let after_ctx = DoctorContext::new();
-    let after_results = run_selected(&selector, &after_ctx);
-    let after = report::report(after_results);
+    let after = if summary.attempted == 0 {
+        before.clone()
+    } else {
+        let after_ctx = DoctorContext::new();
+        report::report(run_selected(&selector, &after_ctx))
+    };
     FixReport {
         before,
         after,
