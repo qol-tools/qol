@@ -22,16 +22,14 @@ mod tests {
     use std::time::Instant;
 
     #[test]
-    fn returns_true_on_first_attempt_when_port_accepts() {
+    fn returns_true_on_first_attempt_without_sleeping() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
-        let start = Instant::now();
-        let ready = wait_for_tcp_ready(addr, 40, Duration::from_millis(50));
-        assert!(ready, "expected ready when a listener is bound on {addr}");
+        let ready = wait_for_tcp_ready(addr, 40, Duration::from_secs(3600));
         assert!(
-            start.elapsed() < Duration::from_millis(50),
-            "expected immediate return without sleeping, took {:?}",
-            start.elapsed()
+            ready,
+            "expected ready on the first attempt for a bound listener on {addr}; \
+             the one-hour interval means any sleep on the ready path would hang this test"
         );
     }
 
