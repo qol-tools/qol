@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::super::arch::{infer_arch_from_filename, infer_firmware, GuestArch};
+use super::super::arch::{infer_arch_from_filename, infer_firmware, ArchGuess, GuestArch};
 use super::super::media::BootMedia;
 use super::super::{humanize_id, sanitize_id};
 use super::candidate::ImageCandidate;
@@ -41,13 +41,7 @@ fn collect_into(root: &Path, depth: usize, seen: &mut HashSet<PathBuf>, paths: &
 }
 
 pub(crate) fn is_vm_image_path(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("qcow2" | "qcow" | "img" | "raw" | "vhd" | "vhdx" | "vmdk")
-    )
+    BootMedia::is_disk_image_path(path)
 }
 
 pub(crate) fn is_bootable_media(path: &Path) -> bool {
@@ -81,16 +75,17 @@ pub(crate) fn infer_candidate(path: &Path) -> ImageCandidate {
         .file_name()
         .and_then(|os| os.to_str())
         .unwrap_or_default();
-    let inferred = infer_arch_from_filename(name);
-    let arch = inferred.unwrap_or(GuestArch::X86_64);
-    let firmware = infer_firmware(arch, name);
+    let arch = match infer_arch_from_filename(name) {
+        Some(arch) => ArchGuess::known(arch),
+        None => ArchGuess::assumed(GuestArch::X86_64),
+    };
+    let firmware = infer_firmware(arch.arch(), name);
     let media = BootMedia::from_path(&canonical);
     ImageCandidate {
         id,
         path: canonical,
         display_name,
         arch,
-        arch_inferred: inferred.is_some(),
         firmware,
         media,
     }
@@ -161,10 +156,25 @@ mod tests {
 
         let candidate = infer_candidate(&image);
 
-        assert_eq!(candidate.arch, GuestArch::Aarch64, "arm64 token");
-        assert!(candidate.arch_inferred, "arch was inferred from filename");
+        assert_eq!(
+            candidate.arch,
+            ArchGuess::known(GuestArch::Aarch64),
+            "arm64 token"
+        );
         assert_eq!(candidate.firmware, Firmware::Uefi, "arm => uefi");
         assert_eq!(candidate.id, "win11-arm64");
         assert_eq!(candidate.path, image.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn infer_candidate_marks_tokenless_arch_as_assumed() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("plain.qcow2");
+        fs::write(&image, b"x").unwrap();
+
+        let candidate = infer_candidate(&image);
+
+        assert_eq!(candidate.arch, ArchGuess::assumed(GuestArch::X86_64));
+        assert_eq!(candidate.firmware, Firmware::Bios);
     }
 }

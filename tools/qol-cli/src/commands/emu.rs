@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod arch;
 mod control;
+mod desktop;
 mod discovery;
 mod guest;
 mod live;
@@ -25,7 +26,7 @@ mod serial;
 mod workflow;
 
 #[allow(unused_imports)]
-pub(crate) use arch::{Firmware, GuestArch};
+pub(crate) use arch::{ArchGuess, Firmware, GuestArch};
 pub(crate) use discovery::{parse_emu_dir, Discovered, DiscoveryContext, ImageCandidate};
 pub(crate) use media::BootMedia;
 pub(crate) use registry::register_image;
@@ -96,6 +97,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
         "add" => cmd_add(rest, verbose),
         "open" => cmd_open(rest, verbose),
         "doctor" => cmd_doctor(rest, verbose),
+        "desktop" => desktop::cmd_desktop(rest, verbose),
         "up" => cmd_up(rest, verbose),
         "run" => cmd_run(rest, verbose),
         "check" => cmd_check(rest, verbose),
@@ -281,15 +283,19 @@ fn cmd_list(args: &[OsString], verbose: bool) -> Result<()> {
         step_label(
             candidate.media.as_str(),
             StepKind::Info,
-            &format!(
-                "{} · candidate · {} · `qol emu up {}` to boot",
-                candidate.id,
-                candidate.arch.as_str(),
-                candidate.id
-            ),
+            &candidate_list_detail(&candidate),
         );
     }
     Ok(())
+}
+
+fn candidate_list_detail(candidate: &ImageCandidate) -> String {
+    let mut detail = format!("{} · ready", candidate.id);
+    if let ArchGuess::Assumed(arch) = candidate.arch {
+        detail.push_str(&format!(" · arch assumed {}", arch.as_str()));
+    }
+    detail.push_str(&format!(" · `qol emu up {}` to boot", candidate.id));
+    detail
 }
 
 fn cmd_doctor(args: &[OsString], verbose: bool) -> Result<()> {
@@ -483,12 +489,74 @@ struct BootedVm {
     started_at: u64,
 }
 
+struct PreparedBootMedia {
+    boot_path: PathBuf,
+    overlay_artifact: Option<PathBuf>,
+    commands: Vec<serde_json::Value>,
+}
+
+impl BootMedia {
+    fn prepare(
+        self,
+        resolution: &Resolution,
+        run_dir: &Path,
+        verbose: bool,
+    ) -> Result<PreparedBootMedia> {
+        match self {
+            BootMedia::Iso => Ok(PreparedBootMedia {
+                boot_path: resolution.image_path.clone(),
+                overlay_artifact: None,
+                commands: Vec::new(),
+            }),
+            BootMedia::Disk => {
+                let qemu_img = resolution
+                    .qemu_img
+                    .clone()
+                    .ok_or_else(|| anyhow!("ready environment has no qemu-img path"))?;
+                let image_format = detect_image_format(&qemu_img, &resolution.image_path, verbose)?;
+                let overlay = run_dir.join("overlay.qcow2");
+                let create_args = vec![
+                    "create".to_string(),
+                    "-f".to_string(),
+                    "qcow2".to_string(),
+                    "-F".to_string(),
+                    image_format.clone(),
+                    "-b".to_string(),
+                    resolution.image_path.display().to_string(),
+                    overlay.display().to_string(),
+                ];
+                step_label("clone", StepKind::Pending, &overlay.display().to_string());
+                let status = run_child_status(&qemu_img, &create_args, verbose)?;
+                if !status.success() {
+                    bail!("qemu-img failed with {status}");
+                }
+                Ok(PreparedBootMedia {
+                    boot_path: overlay.clone(),
+                    overlay_artifact: Some(overlay),
+                    commands: vec![
+                        json!({
+                            "program": qemu_img,
+                            "args": ["info", "--output=json", &resolution.image_path.display().to_string()],
+                            "detected_format": image_format,
+                        }),
+                        json!({
+                            "program": qemu_img,
+                            "args": create_args,
+                            "status": status.to_string(),
+                        }),
+                    ],
+                })
+            }
+        }
+    }
+}
+
 fn environment_from_candidate(candidate: &ImageCandidate) -> Environment {
     Environment {
         id: candidate.id.clone(),
         name: candidate.display_name.clone(),
         backend: "qemu".to_string(),
-        arch: candidate.arch,
+        arch: candidate.arch.arch(),
         image_path: candidate.path.clone(),
         source: "candidate".to_string(),
         firmware: candidate.firmware,
@@ -502,17 +570,18 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
     if discovered.environments.is_empty() && discovered.candidates.is_empty() {
         bail!("no emus found; drop a disk image or .iso into the emu dir (`qol emu open`), create a libvirt/QEMU VM, or add [images] to ~/.config/qol-tray/emu.toml");
     }
-    let environment = discovered
+    let (environment, arch_guess) = discovered
         .environments
         .iter()
         .find(|environment| environment.id == target)
         .cloned()
+        .map(|environment| (environment, None))
         .or_else(|| {
             discovered
                 .candidates
                 .iter()
                 .find(|candidate| candidate.id == target)
-                .map(environment_from_candidate)
+                .map(|candidate| (environment_from_candidate(candidate), Some(candidate.arch)))
         })
         .ok_or_else(|| anyhow!("unknown emu `{target}`; run `qol emu list`"))?;
     let resolution = resolve_environment(&environment);
@@ -555,63 +624,28 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
         bail!("emu `{}` is {}", environment.id, resolution.state.as_str());
     }
 
-    let (boot_disk, overlay_artifact, disk_commands) = match environment.media {
-        BootMedia::Iso => (resolution.image_path.clone(), None, Vec::new()),
-        BootMedia::Disk => {
-            let qemu_img = resolution
-                .qemu_img
-                .clone()
-                .ok_or_else(|| anyhow!("ready environment has no qemu-img path"))?;
-            let image_format = detect_image_format(&qemu_img, &resolution.image_path, verbose)?;
-            let overlay = run_dir.join("overlay.qcow2");
-            let create_args = vec![
-                "create".to_string(),
-                "-f".to_string(),
-                "qcow2".to_string(),
-                "-F".to_string(),
-                image_format.clone(),
-                "-b".to_string(),
-                resolution.image_path.display().to_string(),
-                overlay.display().to_string(),
-            ];
-            step_label("clone", StepKind::Pending, &overlay.display().to_string());
-            let status = run_child_status(&qemu_img, &create_args, verbose)?;
-            if !status.success() {
-                let report = report_json(ReportInput {
-                    environment: &environment,
-                    resolution: &resolution,
-                    run_dir: &run_dir,
-                    status: "failed",
-                    overlay: Some(&overlay),
-                    qemu_command: None,
-                    commands: vec![json!({
-                        "program": qemu_img,
-                        "args": create_args,
-                        "status": status.to_string(),
-                    })],
-                    qmp: None,
-                    serial: None,
-                    workflow: None,
-                    teardown: None,
-                    next: vec![format!("Inspect the qemu-img output, remove the run directory if needed, then rerun `qol emu {command_name}`.")],
-                    started_at,
-                })?;
-                write_report(&run_dir, &report)?;
-                bail!("qemu-img failed with {status}");
-            }
-            let commands = vec![
-                json!({
-                    "program": qemu_img,
-                    "args": ["info", "--output=json", &resolution.image_path.display().to_string()],
-                    "detected_format": image_format,
-                }),
-                json!({
-                    "program": qemu_img,
-                    "args": create_args,
-                    "status": status.to_string(),
-                }),
-            ];
-            (overlay.clone(), Some(overlay), commands)
+    let prepared = match environment.media.prepare(&resolution, &run_dir, verbose) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            let report = report_json(ReportInput {
+                environment: &environment,
+                resolution: &resolution,
+                run_dir: &run_dir,
+                status: "failed",
+                overlay: None,
+                qemu_command: None,
+                commands: Vec::new(),
+                qmp: None,
+                serial: None,
+                workflow: None,
+                teardown: None,
+                next: vec![format!(
+                    "Inspect the qemu-img output, remove the run directory if needed, then rerun `qol emu {command_name}`."
+                )],
+                started_at,
+            })?;
+            write_report(&run_dir, &report)?;
+            return Err(error);
         }
     };
 
@@ -623,7 +657,7 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
     let serial_port = machine::free_qmp_port()?;
     let qemu_args = qemu_args(
         &environment,
-        &boot_disk,
+        &prepared.boot_path,
         resolution.acceleration,
         platform::display(),
         qmp_port,
@@ -634,7 +668,7 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
     let qemu_command_path = run_dir.join("qemu-command.txt");
     fs::write(&qemu_command_path, format!("{qemu_command}\n"))
         .with_context(|| format!("failed to write {}", qemu_command_path.display()))?;
-    let mut commands = disk_commands;
+    let mut commands = prepared.commands;
     commands.push(json!({
         "program": qemu_system,
         "args": qemu_args,
@@ -661,16 +695,14 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
                 resolution: &resolution,
                 run_dir: &run_dir,
                 status: "failed",
-                overlay: overlay_artifact.as_deref(),
+                overlay: prepared.overlay_artifact.as_deref(),
                 qemu_command: Some(&qemu_command_path),
                 commands,
                 qmp: Some(json!({ "port": qmp_port, "error": error.to_string() })),
                 serial: Some(json!({ "port": serial_port })),
                 workflow: None,
                 teardown: Some(json!({ "removed": removed })),
-                next: vec![format!(
-                    "Inspect the qemu output above, then rerun `qol emu {command_name}`."
-                )],
+                next: boot_failure_next(command_name, arch_guess),
                 started_at,
             })?;
             write_report(&run_dir, &report)?;
@@ -687,7 +719,7 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
         resolution: &resolution,
         run_dir: &run_dir,
         status: "running",
-        overlay: overlay_artifact.as_deref(),
+        overlay: prepared.overlay_artifact.as_deref(),
         qemu_command: Some(&qemu_command_path),
         commands: commands.clone(),
         qmp: Some(json!({ "port": qmp_port, "qemu_version": qemu_version, "status": vm_status })),
@@ -742,6 +774,19 @@ fn finalize_vm(
     })?;
     write_report(&vm.run_dir, &report)?;
     Ok((vm.run_dir.join("report.json"), removed))
+}
+
+fn boot_failure_next(command_name: &str, arch_guess: Option<ArchGuess>) -> Vec<String> {
+    let mut next = vec![format!(
+        "Inspect the qemu output above, then rerun `qol emu {command_name}`."
+    )];
+    if let Some(ArchGuess::Assumed(arch)) = arch_guess {
+        next.push(format!(
+            "Guest arch was assumed {}; if the image uses a different arch, register it with `qol emu add <path> --arch x86_64|aarch64` or press t then a in `qol dev`.",
+            arch.as_str()
+        ));
+    }
+    next
 }
 
 const ADD_SYNTAX: &str =
@@ -810,20 +855,35 @@ fn cmd_add(args: &[OsString], verbose: bool) -> Result<()> {
     print_hint(verbose);
     let parsed = parse_add_args(args)?;
     let mut candidate = discovery::infer_candidate(&parsed.path);
+    apply_add_overrides(&mut candidate, &parsed)?;
+    let qemu_img = find_on_path("qemu-img");
+    if candidate.media.requires_qemu_img() && qemu_img.is_none() {
+        bail!("missing qemu-img");
+    }
+    let emu_toml = emu_config_path().context("could not determine emu.toml path")?;
+    let id = register_image(&emu_toml, &candidate, qemu_img.as_deref())?;
+    step_label("add", StepKind::Info, &format!("registered {id}"));
+    Ok(())
+}
+
+fn apply_add_overrides(candidate: &mut ImageCandidate, parsed: &AddArgs) -> Result<()> {
     if let Some(arch) = parsed.arch {
-        candidate.arch = arch;
-        candidate.arch_inferred = false;
+        candidate.arch = ArchGuess::known(arch);
+        let name = candidate
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        candidate.firmware = arch::infer_firmware(arch, name);
+    } else if candidate.arch.known_arch().is_none() {
+        bail!("arch unconfirmed - pass --arch x86_64|aarch64");
     }
     if let Some(firmware) = parsed.firmware {
         candidate.firmware = firmware;
     }
-    if let Some(id) = parsed.id {
-        candidate.id = id;
+    if let Some(id) = &parsed.id {
+        candidate.id = id.clone();
     }
-    let qemu_img = find_on_path("qemu-img").context("missing qemu-img")?;
-    let emu_toml = emu_config_path().context("could not determine emu.toml path")?;
-    let id = register_image(&emu_toml, &candidate, &qemu_img)?;
-    step_label("add", StepKind::Info, &format!("registered {id}"));
     Ok(())
 }
 
@@ -850,7 +910,7 @@ fn print_emu_help() {
 }
 
 fn emu_help_text() -> String {
-    format!("qol emu commands:\n  qol emu list\n  {ADD_SYNTAX}\n  qol emu open\n  qol emu doctor\n  qol emu up <environment>\n  qol emu run <workflow> <environment>\n  qol emu check <environment>\n  qol emu shot <environment>\n  qol emu key <environment> <qcode>...\n  qol emu insert <environment>\n  qol emu pull <environment>\n  qol emu snap <environment>\n  qol emu sh <environment> <command>...\n  qol emu down <environment>\n\nControl verbs target the newest running `qol emu up` for that environment.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nDrop a disk image or .iso into the emu dir (`qol emu open`) and it appears in\n`qol emu list`; `qol emu up <id>` boots it (an .iso boots as a disposable live CD).\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n")
+    format!("qol emu commands:\n  qol emu list\n  {ADD_SYNTAX}\n  qol emu open\n  qol emu doctor\n  qol emu desktop mintish <environment>\n  qol emu up <environment>\n  qol emu run <workflow> <environment>\n  qol emu check <environment>\n  qol emu shot <environment>\n  qol emu key <environment> <qcode>...\n  qol emu insert <environment>\n  qol emu pull <environment>\n  qol emu snap <environment>\n  qol emu sh <environment> <command>...\n  qol emu down <environment>\n\nControl verbs target the newest running `qol emu up` for that environment.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nDrop a disk image or .iso into the emu dir (`qol emu open`) and it appears in\n`qol emu list`; `qol emu up <id>` boots it (an .iso boots as a disposable live CD).\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n")
 }
 
 pub(crate) fn discover_all() -> Result<Discovered> {
@@ -882,7 +942,7 @@ fn resolve_environment(environment: &Environment) -> Resolution {
             firmware: None,
         };
     }
-    if environment.media == BootMedia::Disk && qemu_img.is_none() {
+    if environment.media.requires_qemu_img() && qemu_img.is_none() {
         return Resolution {
             state: ResolveState::Unsupported,
             reason: "missing qemu-img".to_string(),
@@ -1046,6 +1106,7 @@ fn qemu_args(
         GuestArch::Aarch64 => {
             let cpu = if acceleration == "tcg" { "max" } else { "host" };
             args.extend(["-cpu".to_string(), cpu.to_string()]);
+            args.extend(["-device".to_string(), "virtio-gpu-pci".to_string()]);
         }
     }
     if let Some(firmware) = firmware {
@@ -1057,21 +1118,7 @@ fn qemu_args(
             ),
         ]);
     }
-    match environment.media {
-        BootMedia::Disk => args.extend([
-            "-drive".to_string(),
-            format!(
-                "file={},id=qoldisk,if=virtio,format=qcow2",
-                boot_disk.display()
-            ),
-        ]),
-        BootMedia::Iso => args.extend([
-            "-boot".to_string(),
-            "d".to_string(),
-            "-cdrom".to_string(),
-            boot_disk.display().to_string(),
-        ]),
-    }
+    environment.media.append_qemu_args(&mut args, boot_disk);
     args.extend([
         "-nic".to_string(),
         "user,model=virtio-net-pci".to_string(),
@@ -1376,7 +1423,7 @@ mod tests {
             &environment,
             Path::new("/a/b/overlay.qcow2"),
             "kvm",
-            "gtk",
+            "gtk,zoom-to-fit=on",
             4444,
             5555,
             None,
@@ -1384,7 +1431,7 @@ mod tests {
         let joined = args.join(" ");
         let expected = [
             "-accel kvm",
-            "-display gtk",
+            "-display gtk,zoom-to-fit=on",
             "-qmp tcp:127.0.0.1:4444,server,nowait",
             "-serial tcp:127.0.0.1:5555,server,nowait",
             "-drive file=/a/b/overlay.qcow2,id=qoldisk,if=virtio,format=qcow2",
@@ -1399,6 +1446,10 @@ mod tests {
         }
         assert!(joined.contains("-machine q35"), "machine in: {joined}");
         assert!(!joined.contains("-cpu"), "unexpected -cpu in: {joined}");
+        assert!(
+            !joined.contains("virtio-gpu-pci"),
+            "x86 guests should keep the default video path: {joined}"
+        );
         assert!(!joined.contains("pflash"), "unexpected pflash in: {joined}");
     }
 
@@ -1418,7 +1469,7 @@ mod tests {
             &environment,
             Path::new("/a/b/overlay.qcow2"),
             "hvf",
-            "cocoa",
+            "cocoa,zoom-to-fit=on",
             4444,
             5555,
             Some(Path::new("/fw/edk2-aarch64-code.fd")),
@@ -1427,6 +1478,7 @@ mod tests {
         let expected = [
             "-machine virt",
             "-cpu host",
+            "-device virtio-gpu-pci",
             "-drive if=pflash,format=raw,readonly=on,file=/fw/edk2-aarch64-code.fd",
         ];
         for fragment in expected {
@@ -1439,7 +1491,7 @@ mod tests {
             &environment,
             Path::new("/a/b/overlay.qcow2"),
             "tcg",
-            "cocoa",
+            "cocoa,zoom-to-fit=on",
             4444,
             5555,
             None,
@@ -1484,6 +1536,29 @@ mod tests {
             "iso must not attach a writable overlay disk: {joined}"
         );
         assert!(joined.contains("-machine q35"), "machine in: {joined}");
+    }
+
+    #[test]
+    fn candidate_list_detail_marks_assumed_arch_only() {
+        let mut candidate = ImageCandidate {
+            id: "mint".to_string(),
+            path: PathBuf::from("/a/b/mint.iso"),
+            display_name: "Mint".to_string(),
+            arch: ArchGuess::assumed(GuestArch::X86_64),
+            firmware: Firmware::Bios,
+            media: BootMedia::Iso,
+        };
+
+        assert_eq!(
+            candidate_list_detail(&candidate),
+            "mint · ready · arch assumed x86_64 · `qol emu up mint` to boot"
+        );
+
+        candidate.arch = ArchGuess::known(GuestArch::X86_64);
+        assert_eq!(
+            candidate_list_detail(&candidate),
+            "mint · ready · `qol emu up mint` to boot"
+        );
     }
 
     #[test]
@@ -1636,5 +1711,47 @@ mod tests {
             let args: Vec<OsString> = raw.iter().map(OsString::from).collect();
             assert!(parse_add_args(&args).is_err(), "{why}");
         }
+    }
+
+    #[test]
+    fn add_arch_override_preserves_windows_uefi_inference() {
+        let mut candidate = ImageCandidate {
+            id: "windows-11".to_string(),
+            path: PathBuf::from("/a/b/windows-11.qcow2"),
+            display_name: "Windows 11".to_string(),
+            arch: ArchGuess::assumed(GuestArch::X86_64),
+            firmware: Firmware::Uefi,
+            media: BootMedia::Disk,
+        };
+        let parsed = AddArgs {
+            path: candidate.path.clone(),
+            arch: Some(GuestArch::X86_64),
+            firmware: None,
+            id: None,
+        };
+
+        apply_add_overrides(&mut candidate, &parsed).unwrap();
+
+        assert_eq!(candidate.arch, ArchGuess::known(GuestArch::X86_64));
+        assert_eq!(
+            candidate.firmware,
+            Firmware::Uefi,
+            "Windows x86 images should keep the UEFI hint when --arch confirms x86_64"
+        );
+    }
+
+    #[test]
+    fn boot_failure_next_mentions_assumed_arch_recovery() {
+        let next = boot_failure_next("up", Some(ArchGuess::assumed(GuestArch::X86_64)));
+        let joined = next.join("\n");
+        assert!(
+            joined.contains("assumed x86_64"),
+            "missing assumed arch copy: {joined}"
+        );
+        assert!(joined.contains("--arch"), "missing CLI recovery: {joined}");
+        assert!(
+            joined.contains("press t then a"),
+            "missing dev recovery: {joined}"
+        );
     }
 }

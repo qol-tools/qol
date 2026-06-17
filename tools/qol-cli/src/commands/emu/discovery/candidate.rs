@@ -2,7 +2,10 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use super::super::media::BootMedia;
-use super::super::{arch::Firmware, arch::GuestArch, humanize_id, Environment};
+use super::super::{
+    arch::infer_arch_from_filename, arch::infer_firmware, arch::ArchGuess, arch::Firmware,
+    arch::GuestArch, humanize_id, Environment,
+};
 use super::filesystem::{image_id, is_bootable_media};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -10,8 +13,7 @@ pub(crate) struct ImageCandidate {
     pub(crate) id: String,
     pub(crate) path: PathBuf,
     pub(crate) display_name: String,
-    pub(crate) arch: GuestArch,
-    pub(crate) arch_inferred: bool,
+    pub(crate) arch: ArchGuess,
     pub(crate) firmware: Firmware,
     pub(crate) media: BootMedia,
 }
@@ -57,15 +59,22 @@ fn canonical(path: &Path) -> PathBuf {
 fn candidate_for(path: PathBuf) -> ImageCandidate {
     let id = image_id(&path);
     let display_name = humanize_id(&id);
-    let arch = GuestArch::X86_64;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let arch = match infer_arch_from_filename(&name) {
+        Some(arch) => ArchGuess::known(arch),
+        None => ArchGuess::assumed(GuestArch::X86_64),
+    };
     let media = BootMedia::from_path(&path);
     ImageCandidate {
         id,
         path,
         display_name,
         arch,
-        arch_inferred: false,
-        firmware: Firmware::for_arch(arch),
+        firmware: infer_firmware(arch.arch(), &name),
         media,
     }
 }
@@ -119,8 +128,7 @@ mod tests {
         assert_eq!(candidate.path, candidate_file.canonicalize().unwrap());
         assert_eq!(candidate.id, "fresh");
         assert_eq!(candidate.display_name, "Fresh");
-        assert_eq!(candidate.arch, GuestArch::X86_64);
-        assert!(!candidate.arch_inferred);
+        assert_eq!(candidate.arch, ArchGuess::assumed(GuestArch::X86_64));
         assert_eq!(candidate.firmware, Firmware::Bios);
     }
 
@@ -162,6 +170,26 @@ mod tests {
         assert_eq!(discovered.candidates.len(), 1, "iso should be a candidate");
         let candidate = &discovered.candidates[0];
         assert_eq!(candidate.media, BootMedia::Iso);
-        assert_eq!(candidate.arch, GuestArch::X86_64, "iso defaults to x86_64");
+        assert_eq!(
+            candidate.arch,
+            ArchGuess::assumed(GuestArch::X86_64),
+            "iso falls back to assumed x86_64"
+        );
+    }
+
+    #[test]
+    fn partition_preserves_filename_arch_as_known() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("fedora-aarch64.qcow2");
+        fs::write(&image, b"x").unwrap();
+
+        let discovered = Discovered::partition(Vec::new(), std::slice::from_ref(&image));
+
+        assert_eq!(discovered.candidates.len(), 1);
+        assert_eq!(
+            discovered.candidates[0].arch,
+            ArchGuess::known(GuestArch::Aarch64)
+        );
+        assert_eq!(discovered.candidates[0].firmware, Firmware::Uefi);
     }
 }
