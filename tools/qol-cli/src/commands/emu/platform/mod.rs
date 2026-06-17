@@ -56,4 +56,15 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn display_default_matches_platform_contract() {
+        #[cfg(target_os = "linux")]
+        let expected = "gtk,zoom-to-fit=on";
+        #[cfg(target_os = "macos")]
+        let expected = "cocoa,zoom-to-fit=on";
+        #[cfg(target_os = "windows")]
+        let expected = "sdl";
+        assert_eq!(display(), expected);
+    }
 }

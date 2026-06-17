@@ -5,6 +5,7 @@ use std::process::Command;
 use anyhow::{anyhow, Context, Result};
 use toml_edit::{value, DocumentMut, Item, Table};
 
+use super::arch::GuestArch;
 use super::discovery::{parse_image_overrides, ImageCandidate};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,35 +19,46 @@ const KNOWN_FORMATS: &[&str] = &["qcow2", "qcow", "raw", "vhd", "vhdx", "vmdk", 
 pub(crate) fn register_image(
     emu_toml: &Path,
     candidate: &ImageCandidate,
-    qemu_img: &Path,
+    qemu_img: Option<&Path>,
 ) -> Result<String> {
+    let arch = candidate
+        .arch
+        .known_arch()
+        .ok_or_else(|| anyhow!("arch unconfirmed"))?;
     let path = candidate.path.to_str().ok_or_else(|| {
         anyhow!(
             "image path is not valid UTF-8: {}",
             candidate.path.display()
         )
     })?;
-    let output = Command::new(qemu_img)
-        .args(["info", "--output=json", path])
-        .output()
-        .with_context(|| format!("failed to run {}", qemu_img.display()))?;
-    if !output.status.success() {
-        return Err(anyhow!(
-            "qemu-img info failed for {}: {}",
-            candidate.path.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+    if candidate.media.requires_qemu_img() {
+        let qemu_img = qemu_img.context("missing qemu-img")?;
+        let output = Command::new(qemu_img)
+            .args(["info", "--output=json", path])
+            .output()
+            .with_context(|| format!("failed to run {}", qemu_img.display()))?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "qemu-img info failed for {}: {}",
+                candidate.path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let _info = parse_qemu_img_info(&stdout)?;
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let _info = parse_qemu_img_info(&stdout)?;
-    write_image_entry(emu_toml, candidate)
+    write_image_entry(emu_toml, candidate, arch)
 }
 
 fn canonical_or_self(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn write_image_entry(emu_toml: &Path, candidate: &ImageCandidate) -> Result<String> {
+fn write_image_entry(
+    emu_toml: &Path,
+    candidate: &ImageCandidate,
+    arch: GuestArch,
+) -> Result<String> {
     let existing = match std::fs::read_to_string(emu_toml) {
         Ok(content) => content,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -69,7 +81,7 @@ fn write_image_entry(emu_toml: &Path, candidate: &ImageCandidate) -> Result<Stri
         .with_context(|| format!("failed to parse {}", emu_toml.display()))?;
     let mut table = Table::new();
     table.insert("path", value(candidate.path.to_string_lossy().into_owned()));
-    table.insert("arch", value(candidate.arch.as_str()));
+    table.insert("arch", value(arch.as_str()));
     table.insert("firmware", value(candidate.firmware.as_str()));
     let images = document
         .entry("images")
@@ -132,7 +144,7 @@ mod tests {
         );
     }
 
-    use crate::commands::emu::arch::GuestArch;
+    use crate::commands::emu::arch::{ArchGuess, GuestArch};
     use crate::commands::emu::discovery::Firmware;
     use crate::commands::emu::discovery::ImageCandidate;
     use crate::commands::emu::BootMedia;
@@ -151,8 +163,7 @@ mod tests {
             id: "win11".to_string(),
             path,
             display_name: "Win11".to_string(),
-            arch,
-            arch_inferred: true,
+            arch: ArchGuess::known(arch),
             firmware: fw,
             media,
         }
@@ -168,7 +179,7 @@ mod tests {
         )
         .unwrap();
         let cand = candidate(dir.path(), "win11.qcow2", GuestArch::X86_64, Firmware::Uefi);
-        let id = write_image_entry(&emu_toml, &cand).unwrap();
+        let id = write_image_entry(&emu_toml, &cand, GuestArch::X86_64).unwrap();
         assert_eq!(id, "win11");
         let written = std::fs::read_to_string(&emu_toml).unwrap();
         assert!(written.contains("# my emus"), "comment dropped: {written}");
@@ -191,6 +202,30 @@ mod tests {
     }
 
     #[test]
+    fn register_image_refuses_assumed_arch_before_writing() {
+        let dir = tempdir().unwrap();
+        let emu_toml = dir.path().join("emu.toml");
+        let path = dir.path().join("installer.iso");
+        std::fs::write(&path, b"iso").unwrap();
+        let candidate = ImageCandidate {
+            id: "installer".to_string(),
+            path,
+            display_name: "Installer".to_string(),
+            arch: ArchGuess::assumed(GuestArch::X86_64),
+            firmware: Firmware::Bios,
+            media: BootMedia::Iso,
+        };
+
+        let error = register_image(&emu_toml, &candidate, None).unwrap_err();
+
+        assert!(
+            error.to_string().contains("arch unconfirmed"),
+            "error: {error}"
+        );
+        assert!(!emu_toml.exists(), "refusal must not create emu.toml");
+    }
+
+    #[test]
     fn skips_when_id_already_registered_by_canonical_path() {
         let dir = tempdir().unwrap();
         let emu_toml = dir.path().join("emu.toml");
@@ -202,7 +237,7 @@ mod tests {
         )
         .unwrap();
         let before = std::fs::read_to_string(&emu_toml).unwrap();
-        let id = write_image_entry(&emu_toml, &cand).unwrap();
+        let id = write_image_entry(&emu_toml, &cand, GuestArch::X86_64).unwrap();
         assert_eq!(id, "win11");
         let after = std::fs::read_to_string(&emu_toml).unwrap();
         assert_eq!(before, after, "must not append a duplicate entry");
@@ -214,7 +249,7 @@ mod tests {
         let emu_toml = dir.path().join("emu.toml");
         std::fs::write(&emu_toml, "this is = = not valid toml\n").unwrap();
         let cand = candidate(dir.path(), "win11.qcow2", GuestArch::X86_64, Firmware::Bios);
-        let error = write_image_entry(&emu_toml, &cand).unwrap_err();
+        let error = write_image_entry(&emu_toml, &cand, GuestArch::X86_64).unwrap_err();
         assert!(
             error.to_string().contains("emu.toml") || error.to_string().contains("parse"),
             "error: {error}"
@@ -240,7 +275,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let id = write_image_entry(&emu_toml, &cand).unwrap();
+        let id = write_image_entry(&emu_toml, &cand, GuestArch::X86_64).unwrap();
         assert_eq!(id, "win11");
         let after = std::fs::read_to_string(&emu_toml).unwrap();
         assert!(

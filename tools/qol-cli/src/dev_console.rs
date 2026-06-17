@@ -452,7 +452,7 @@ struct Dash {
     filtering: bool,
     copy_count: String,
     copying: bool,
-    copy_ack: Option<(Instant, String)>,
+    notice: Option<(Instant, String)>,
     armed: bool,
     reload: Reload,
     pokes: Pokes,
@@ -493,7 +493,7 @@ impl Dash {
             filtering: false,
             copy_count: String::new(),
             copying: false,
-            copy_ack: None,
+            notice: None,
             armed: false,
             reload: Reload::Idle,
             pokes: Pokes::default(),
@@ -731,7 +731,7 @@ fn finish_copy(dash: &mut Dash) {
         Ok(()) => format!("copied {} lines to clipboard", text.lines().count()),
         Err(error) => format!("copy failed: {error}"),
     };
-    dash.copy_ack = Some((Instant::now(), message));
+    dash.notice = Some((Instant::now(), message));
 }
 
 fn newest_lines(dash: &Dash, count: usize) -> String {
@@ -885,9 +885,14 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
         }
         Action::ToggleArch => {
             if dash.view == View::Emu {
-                if let Some(candidate) = selected_candidate_mut(dash) {
+                let notice = selected_candidate_mut(dash).map(|candidate| {
                     candidate.arch = candidate.arch.toggled();
-                    candidate.arch_inferred = true;
+                    candidate.firmware =
+                        crate::commands::emu::Firmware::for_arch(candidate.arch.arch());
+                    format!("{} arch {}", candidate.id, candidate.arch.as_str())
+                });
+                if let Some(notice) = notice {
+                    dash.notice = Some((Instant::now(), notice));
                 }
             }
         }
@@ -1155,18 +1160,29 @@ fn open_emu_dir() {
 }
 
 fn confirm_selected_candidate(dash: &mut Dash) {
-    let Some(qemu_img) = crate::commands::emu::find_on_path("qemu-img") else {
-        return;
-    };
     let Some(emu_toml) = emu_config_path() else {
         return;
     };
-    let Some(candidate) = selected_candidate_mut(dash).map(|candidate| candidate.clone()) else {
+    let Some(candidate) = selected_candidate(dash).cloned() else {
         return;
     };
-    if crate::commands::emu::register_image(&emu_toml, &candidate, &qemu_img).is_ok() {
-        dash.pokes.emu = true;
+    let qemu_img = crate::commands::emu::find_on_path("qemu-img");
+    match crate::commands::emu::register_image(&emu_toml, &candidate, qemu_img.as_deref()) {
+        Ok(id) => {
+            dash.notice = Some((Instant::now(), format!("registered {id}")));
+            dash.pokes.emu = true;
+        }
+        Err(error) => {
+            dash.notice = Some((Instant::now(), candidate_register_error(&error.to_string())));
+        }
     }
+}
+
+fn candidate_register_error(message: &str) -> String {
+    if message == "arch unconfirmed" {
+        return "arch unconfirmed · press t to set arch, then a".to_string();
+    }
+    message.to_string()
 }
 
 fn drain_emu_runs(dash: &mut Dash) {
@@ -1198,21 +1214,32 @@ fn stop_emu_runs(dash: &mut Dash) {
 }
 
 fn open_emu_detail(dash: &mut Dash) {
-    let Some(status) = selected_emu_status(dash).cloned() else {
+    if let Some(status) = selected_emu_status(dash).cloned() {
+        let detail = newest_run_detail(&status.id);
+        let info = emu_info_lines(&status, detail.as_ref());
+        set_emu_detail(dash, status.id, info, detail);
+        return;
+    }
+    let Some(candidate) = selected_candidate(dash).cloned() else {
         return;
     };
-    let detail = newest_run_detail(&status.id);
-    let info = emu_info_lines(&status, detail.as_ref());
-    let replay = if dash.active_runs.contains_key(&status.id) {
+    let detail = newest_run_detail(&candidate.id);
+    let info = candidate_info_lines(&candidate, detail.as_ref());
+    set_emu_detail(dash, candidate.id, info, detail);
+}
+
+fn set_emu_detail(
+    dash: &mut Dash,
+    id: String,
+    info: Vec<Line<'static>>,
+    detail: Option<RunDetail>,
+) {
+    let replay = if dash.active_runs.contains_key(&id) {
         None
     } else {
         detail.as_ref().map(|d| LogPane::replay(&d.run_log()))
     };
-    dash.emu_detail = Some(EmuDetail {
-        id: status.id,
-        info,
-        replay,
-    });
+    dash.emu_detail = Some(EmuDetail { id, info, replay });
     dash.view = View::EmuDetail;
     dash.scroll_offset = 0;
     dash.filter.clear();
@@ -1274,6 +1301,44 @@ fn emu_info_lines(status: &EnvironmentStatus, detail: Option<&RunDetail>) -> Vec
             lines.push(info_row("run dir", &detail.run_dir.display().to_string()));
         }
         None => lines.push(Line::from("  no runs yet".fg(Color::DarkGray))),
+    }
+    lines
+}
+
+fn candidate_info_lines(
+    candidate: &ImageCandidate,
+    detail: Option<&RunDetail>,
+) -> Vec<Line<'static>> {
+    let mut head = vec![
+        "○ ".fg(Color::Green).bold(),
+        "ready".fg(Color::Green).bold(),
+        " · candidate".fg(Color::DarkGray),
+    ];
+    if let Some(detail) = detail {
+        head.push(format!(" · {}", detail.arch).fg(Color::DarkGray));
+    }
+    let mut lines = vec![Line::from(head)];
+    match candidate.arch {
+        crate::commands::emu::ArchGuess::Known(arch) => {
+            lines.push(info_row("arch", arch.as_str()));
+        }
+        crate::commands::emu::ArchGuess::Assumed(arch) => {
+            lines.push(info_row("arch", &format!("assumed {}", arch.as_str())));
+            lines.push(Line::from(
+                "  press t to set arch, then a to add".fg(Color::DarkGray),
+            ));
+        }
+    }
+    match detail {
+        Some(detail) => {
+            lines.push(info_row("image", &detail.image_path));
+            lines.push(info_row("accel", &detail.acceleration));
+            lines.push(info_row("run dir", &detail.run_dir.display().to_string()));
+        }
+        None => {
+            lines.push(info_row("image", &candidate.path.display().to_string()));
+            lines.push(Line::from("  no runs yet".fg(Color::DarkGray)));
+        }
     }
     lines
 }
@@ -1500,7 +1565,7 @@ fn keys_legend(view: View) -> Vec<(&'static str, &'static str)> {
             ("→", "detail · log"),
             ("space", "arm: checks"),
             ("o", "open emu dir"),
-            ("t", "toggle arch"),
+            ("t", "set arch"),
             ("a", "add image"),
             ("←", "back"),
         ],
@@ -1645,7 +1710,7 @@ fn status_line(dash: &Dash) -> String {
     if dash.armed {
         return armed_status(dash);
     }
-    if let Some((at, message)) = &dash.copy_ack {
+    if let Some((at, message)) = &dash.notice {
         if at.elapsed() < ACK_TTL {
             return format!(" {message}");
         }
@@ -1670,6 +1735,9 @@ fn status_line(dash: &Dash) -> String {
             match selected_id {
                 Some(id) if is_running(dash, &id) => {
                     format!(" {id} running · enter stop · → log")
+                }
+                Some(_) if selected_candidate(dash).is_some() => {
+                    " enter boot · a add · t set arch".to_string()
                 }
                 _ => " enter boots the selected emu · → detail".to_string(),
             }
@@ -2035,15 +2103,11 @@ fn emu_empty_lines(config: &str) -> Vec<Line<'static>> {
     ]
 }
 
-fn candidate_row_label(arch: crate::commands::emu::GuestArch, arch_inferred: bool) -> String {
-    if arch_inferred {
-        format!("needs arch · {}", arch.as_str())
-    } else {
-        format!("needs arch · {} (host default)", arch.as_str())
-    }
-}
-
-fn candidate_line(candidate: &ImageCandidate, selected: bool) -> Line<'static> {
+fn candidate_line(
+    candidate: &ImageCandidate,
+    selected: bool,
+    live_verb: Option<String>,
+) -> Line<'static> {
     let caret: Span<'static> = if selected {
         "▸ ".fg(Color::Green).bold()
     } else {
@@ -2054,16 +2118,20 @@ fn candidate_line(candidate: &ImageCandidate, selected: bool) -> Line<'static> {
     } else {
         candidate.id.clone().fg(Color::White)
     };
-    Line::from(vec![
-        caret,
-        "○ ".fg(Color::DarkGray),
-        id_span,
-        format!(
-            "  {}",
-            candidate_row_label(candidate.arch, candidate.arch_inferred)
-        )
-        .fg(Color::DarkGray),
-    ])
+    let mut spans = vec![caret, "○ ".fg(Color::DarkGray), id_span];
+    match live_verb {
+        Some(verb) => {
+            spans.push(format!("  {verb}").fg(Color::Yellow).bold());
+            spans.push(" · → log".fg(Color::DarkGray));
+        }
+        None => {
+            spans.push("  ready".fg(Color::Green));
+            if let crate::commands::emu::ArchGuess::Assumed(arch) = candidate.arch {
+                spans.push(format!(" · arch assumed {}", arch.as_str()).fg(Color::DarkGray));
+            }
+        }
+    }
+    Line::from(spans)
 }
 
 fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
@@ -2126,6 +2194,7 @@ fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         lines.push(candidate_line(
             candidate,
             env_count + index == dash.emu_cursor,
+            live_verb(dash, &candidate.id),
         ));
     }
     let total = lines.len();
@@ -3049,16 +3118,22 @@ mod tests {
     }
 
     fn emu_candidate(id: &str) -> ImageCandidate {
-        use crate::commands::emu::{BootMedia, Firmware, GuestArch};
+        use crate::commands::emu::{ArchGuess, BootMedia, Firmware, GuestArch};
         ImageCandidate {
             id: id.to_string(),
             path: std::path::PathBuf::from(format!("/a/b/{id}.qcow2")),
             display_name: id.to_string(),
-            arch: GuestArch::X86_64,
-            arch_inferred: true,
+            arch: ArchGuess::assumed(GuestArch::X86_64),
             firmware: Firmware::Uefi,
             media: BootMedia::Disk,
         }
+    }
+
+    fn known_emu_candidate(id: &str) -> ImageCandidate {
+        use crate::commands::emu::{ArchGuess, GuestArch};
+        let mut candidate = emu_candidate(id);
+        candidate.arch = ArchGuess::known(GuestArch::X86_64);
+        candidate
     }
 
     #[test]
@@ -3083,29 +3158,24 @@ mod tests {
     }
 
     #[test]
-    fn candidate_row_label_marks_inferred_and_host_default() {
-        use crate::commands::emu::GuestArch;
-        let cases = [
-            (GuestArch::X86_64, true, "needs arch · x86_64"),
-            (GuestArch::Aarch64, true, "needs arch · aarch64"),
-            (
-                GuestArch::X86_64,
-                false,
-                "needs arch · x86_64 (host default)",
-            ),
-            (
-                GuestArch::Aarch64,
-                false,
-                "needs arch · aarch64 (host default)",
-            ),
-        ];
-        for (arch, inferred, expected) in cases {
-            assert_eq!(
-                candidate_row_label(arch, inferred),
-                expected,
-                "arch: {arch:?} inferred: {inferred}"
-            );
-        }
+    fn candidate_line_uses_plain_ready_label() {
+        let line = candidate_line(&known_emu_candidate("plain"), false, None);
+        assert_eq!(span_text(&line.spans), "  ○ plain  ready");
+    }
+
+    #[test]
+    fn candidate_line_marks_assumed_arch() {
+        let line = candidate_line(&emu_candidate("plain"), false, None);
+        assert_eq!(
+            span_text(&line.spans),
+            "  ○ plain  ready · arch assumed x86_64"
+        );
+    }
+
+    #[test]
+    fn candidate_line_marks_live_run_with_log_hint() {
+        let line = candidate_line(&emu_candidate("plain"), true, Some("boot".to_string()));
+        assert_eq!(span_text(&line.spans), "▸ ○ plain  boot · → log");
     }
 
     #[test]
@@ -3126,7 +3196,7 @@ mod tests {
 
     #[test]
     fn toggle_arch_flips_selected_candidate_only() {
-        use crate::commands::emu::GuestArch;
+        use crate::commands::emu::{ArchGuess, Firmware, GuestArch};
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Emu;
         dash.emu = EmuState::Done(vec![
@@ -3142,21 +3212,47 @@ mod tests {
                 .iter()
                 .map(|candidate| candidate.arch)
                 .collect::<Vec<_>>(),
-            vec![GuestArch::X86_64, GuestArch::X86_64],
+            vec![
+                ArchGuess::assumed(GuestArch::X86_64),
+                ArchGuess::assumed(GuestArch::X86_64)
+            ],
             "cursor on an env row must not mutate any candidate"
         );
 
         dash.emu_cursor = 3;
         apply_action(&mut dash, Action::ToggleArch, false);
-        assert_eq!(dash.emu_candidates[0].arch, GuestArch::X86_64, "untouched");
+        assert_eq!(
+            dash.emu_candidates[0].arch,
+            ArchGuess::assumed(GuestArch::X86_64),
+            "untouched"
+        );
         assert_eq!(
             dash.emu_candidates[1].arch,
-            GuestArch::Aarch64,
-            "selected candidate flips"
+            ArchGuess::known(GuestArch::Aarch64),
+            "selected candidate becomes known"
         );
-        assert!(
-            dash.emu_candidates[1].arch_inferred,
-            "toggle sets arch_inferred"
+        assert_eq!(
+            dash.emu_candidates[1].firmware,
+            Firmware::Uefi,
+            "toggle refreshes firmware for the selected arch"
+        );
+    }
+
+    #[test]
+    fn confirm_refuses_assumed_candidate_without_refreshing_emu_list() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Emu;
+        dash.emu = EmuState::Done(vec![emu_env("foo", ResolveState::Ready)]);
+        dash.emu_candidates = vec![emu_candidate("tokenless")];
+        dash.emu_cursor = 1;
+
+        apply_action(&mut dash, Action::Confirm, false);
+
+        assert!(!dash.pokes.emu, "refusal must not refresh registered envs");
+        let notice = dash.notice.as_ref().map(|(_, message)| message.as_str());
+        assert_eq!(
+            notice,
+            Some("arch unconfirmed · press t to set arch, then a")
         );
     }
 
@@ -3198,6 +3294,33 @@ mod tests {
         apply_action(&mut dash, Action::Back, false);
         assert!(matches!(dash.view, View::Emu), "back returns to the list");
         assert!(dash.emu_detail.is_none(), "back clears the detail");
+    }
+
+    #[test]
+    fn diving_into_candidate_opens_its_live_log() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Emu;
+        dash.emu = EmuState::Done(vec![emu_env("foo", ResolveState::Ready)]);
+        dash.emu_candidates = vec![emu_candidate("linuxmint")];
+        dash.emu_cursor = 1;
+        dash.active_runs.insert(
+            "linuxmint".to_string(),
+            live_pane("  boot     linuxmint · qmp"),
+        );
+
+        apply_action(&mut dash, Action::Dive, false);
+
+        assert!(matches!(dash.view, View::EmuDetail));
+        assert_eq!(
+            dash.emu_detail.as_ref().map(|detail| detail.id.as_str()),
+            Some("linuxmint")
+        );
+        assert_eq!(
+            emu_detail_ring(&dash)
+                .and_then(|ring| ring.lines.back())
+                .map(String::as_str),
+            Some("  boot     linuxmint · qmp")
+        );
     }
 
     #[test]
@@ -3316,7 +3439,7 @@ mod tests {
             assert!(text.contains("reload qol dev"), "missing globals");
             assert!(text.contains("keys · k"), "missing toggle badge");
             if matches!(view, View::Emu) {
-                assert!(text.contains("toggle arch"), "missing emu o/t/a keys");
+                assert!(text.contains("set arch"), "missing emu o/t/a keys");
             }
         }
     }

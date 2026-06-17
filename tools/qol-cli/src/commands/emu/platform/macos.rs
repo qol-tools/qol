@@ -7,7 +7,7 @@ pub(crate) fn hypervisor_available() -> bool {
 }
 
 pub(crate) fn display() -> &'static str {
-    "cocoa"
+    "cocoa,zoom-to-fit=on"
 }
 
 pub(crate) fn libvirt_uris() -> &'static [&'static str] {

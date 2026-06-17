@@ -57,6 +57,43 @@ impl GuestArch {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ArchGuess {
+    Known(GuestArch),
+    Assumed(GuestArch),
+}
+
+impl ArchGuess {
+    pub(crate) fn known(arch: GuestArch) -> Self {
+        Self::Known(arch)
+    }
+
+    pub(crate) fn assumed(arch: GuestArch) -> Self {
+        Self::Assumed(arch)
+    }
+
+    pub(crate) fn arch(self) -> GuestArch {
+        match self {
+            Self::Known(arch) | Self::Assumed(arch) => arch,
+        }
+    }
+
+    pub(crate) fn known_arch(self) -> Option<GuestArch> {
+        match self {
+            Self::Known(arch) => Some(arch),
+            Self::Assumed(_) => None,
+        }
+    }
+
+    pub(crate) fn toggled(self) -> Self {
+        Self::Known(self.arch().toggled())
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        self.arch().as_str()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Firmware {
     Bios,
     Uefi,
@@ -147,6 +184,18 @@ mod tests {
         for (arch, expected) in cases {
             assert_eq!(arch.toggled(), expected, "arch: {arch:?}");
         }
+    }
+
+    #[test]
+    fn arch_guess_tracks_persistence_readiness() {
+        let known = ArchGuess::known(GuestArch::Aarch64);
+        let assumed = ArchGuess::assumed(GuestArch::X86_64);
+
+        assert_eq!(known.arch(), GuestArch::Aarch64);
+        assert_eq!(known.known_arch(), Some(GuestArch::Aarch64));
+        assert_eq!(assumed.arch(), GuestArch::X86_64);
+        assert_eq!(assumed.known_arch(), None);
+        assert_eq!(assumed.toggled(), ArchGuess::known(GuestArch::Aarch64));
     }
 
     #[test]
