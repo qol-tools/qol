@@ -96,10 +96,9 @@ fn move_monitor(delta: i32) -> Result<(), String> {
         return Ok(());
     }
 
-    let from_idx = screens
-        .iter()
-        .position(|s| cx >= s.x && cx < s.x + s.w && cy >= s.y && cy < s.y + s.h)
-        .unwrap_or(0);
+    let Some(from_idx) = screen_index_at(&screens, cx, cy) else {
+        return Ok(());
+    };
 
     let to_idx = ((from_idx as i32 + delta).rem_euclid(screens.len() as i32)) as usize;
     let from = &screens[from_idx];
@@ -119,4 +118,38 @@ fn move_monitor(delta: i32) -> Result<(), String> {
             h: (h_ratio * to.h).round(),
         },
     )
+}
+
+fn screen_index_at(screens: &[Rect], cx: f64, cy: f64) -> Option<usize> {
+    screens
+        .iter()
+        .position(|s| cx >= s.x && cx < s.x + s.w && cy >= s.y && cy < s.y + s.h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
+        Rect { x, y, w, h }
+    }
+
+    #[test]
+    fn screen_index_at_locates_point_and_rejects_off_screen() {
+        let screens = [rect(0.0, 0.0, 100.0, 100.0), rect(120.0, 0.0, 100.0, 100.0)];
+        let cases = [
+            (50.0, 50.0, Some(0)),
+            (160.0, 50.0, Some(1)),
+            (110.0, 50.0, None),
+            (50.0, 200.0, None),
+            (-5.0, 50.0, None),
+        ];
+        for (cx, cy, expected) in cases {
+            assert_eq!(
+                screen_index_at(&screens, cx, cy),
+                expected,
+                "point ({cx},{cy})"
+            );
+        }
+    }
 }
