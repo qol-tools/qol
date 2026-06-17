@@ -28,7 +28,7 @@ jobs:
       macos_test: ${{ steps.affected.outputs.macos_test }}
       macos_skip: ${{ steps.affected.outputs.macos_skip }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
 
@@ -56,7 +56,7 @@ jobs:
             skip: ${{ needs.plan.outputs.macos_skip }}
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         if: matrix.skip != 'true'
 
       - name: Free disk space
