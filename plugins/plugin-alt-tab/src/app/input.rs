@@ -14,6 +14,17 @@ pub(crate) fn handle_key_down(
         "[alt-tab/input] key_down: key={:?} alt={} shift={}",
         event.keystroke.key, event.keystroke.modifiers.alt, event.keystroke.modifiers.shift,
     );
+    // A missing KEY_RECV while the picker is open and cannot cycle means keys
+    // never reached us: the window is visible but not the key window (the
+    // activation race left a sibling app frontmost), not an input-logic bug.
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "KEY_RECV",
+        "key={:?} shift={} selected={:?}",
+        event.keystroke.key,
+        event.keystroke.modifiers.shift,
+        this.delegate.read(cx).selected_index,
+    );
     match event.keystroke.key.as_str() {
         "escape" | "esc" => this.dismiss("key/escape", window, cx),
         "enter" => on_activate(this, window, cx),
