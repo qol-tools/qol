@@ -155,6 +155,7 @@ fn build_shortcut_script(entry: &LauncherEntry) -> Option<String> {
             browser_override.as_ref(),
         ))),
         ShortcutAction::LaunchApp { app } => Some(build_open_script(open_app_args(app))),
+        ShortcutAction::PluginAction { .. } => None,
     }
 }
 
@@ -385,6 +386,22 @@ mod tests {
         let script = build_script(
             Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-tray"),
             &fallback_entry(),
+        );
+
+        assert_eq!(
+            script,
+            "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-tray' 'exec' 'shortcut' 'browser'\n"
+        );
+    }
+
+    #[test]
+    fn build_script_falls_back_to_qol_tray_exec_for_plugin_action_shortcuts() {
+        let script = build_script(
+            Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-tray"),
+            &shortcut_entry(ShortcutAction::PluginAction {
+                plugin_id: "plugin-claude-sessions".to_string(),
+                action: "open".to_string(),
+            }),
         );
 
         assert_eq!(

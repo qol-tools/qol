@@ -14,7 +14,19 @@ pub struct Shortcut {
     pub enabled: bool,
     #[serde(default)]
     pub export_to_launcher: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ShortcutSource>,
     pub action: ShortcutAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ShortcutSource {
+    #[serde(rename = "plugin_manifest")]
+    PluginManifest {
+        plugin_id: String,
+        shortcut_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +40,18 @@ pub enum ShortcutAction {
     },
     #[serde(rename = "launch_app")]
     LaunchApp { app: AppRef },
+    #[serde(rename = "plugin_action")]
+    PluginAction { plugin_id: String, action: String },
+}
+
+impl ShortcutAction {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ShortcutAction::OpenUrl { .. } => "open_url",
+            ShortcutAction::LaunchApp { .. } => "launch_app",
+            ShortcutAction::PluginAction { .. } => "plugin_action",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +138,51 @@ mod tests {
     }
 
     #[test]
+    fn plugin_action_round_trips() {
+        let action = ShortcutAction::PluginAction {
+            plugin_id: "plugin-claude-sessions".into(),
+            action: "open".into(),
+        };
+        let json = serde_json::to_value(&action).unwrap();
+        assert_eq!(json["type"], "plugin_action");
+        assert_eq!(json["plugin_id"], "plugin-claude-sessions");
+        assert_eq!(json["action"], "open");
+        let parsed: ShortcutAction = serde_json::from_value(json).unwrap();
+        match parsed {
+            ShortcutAction::PluginAction { plugin_id, action } => {
+                assert_eq!(plugin_id, "plugin-claude-sessions");
+                assert_eq!(action, "open");
+            }
+            _ => panic!("variant lost"),
+        }
+    }
+
+    #[test]
+    fn plugin_manifest_source_round_trips() {
+        let shortcut = Shortcut {
+            id: "plugin-claude-sessions-open".into(),
+            name: "Claude Sessions".into(),
+            enabled: true,
+            export_to_launcher: true,
+            source: Some(ShortcutSource::PluginManifest {
+                plugin_id: "plugin-claude-sessions".into(),
+                shortcut_id: "open".into(),
+            }),
+            action: ShortcutAction::PluginAction {
+                plugin_id: "plugin-claude-sessions".into(),
+                action: "open".into(),
+            },
+        };
+        let json = serde_json::to_value(&shortcut).unwrap();
+        assert_eq!(json["source"]["type"], "plugin_manifest");
+        let parsed: Shortcut = serde_json::from_value(json).unwrap();
+        assert!(matches!(
+            parsed.source,
+            Some(ShortcutSource::PluginManifest { .. })
+        ));
+    }
+
+    #[test]
     fn shortcut_enabled_defaults_to_true_when_field_omitted() {
         let json = serde_json::json!({
             "id": "x",
@@ -129,6 +198,7 @@ mod tests {
             !parsed.export_to_launcher,
             "export_to_launcher default false"
         );
+        assert!(parsed.source.is_none(), "source default must be none");
     }
 
     #[test]

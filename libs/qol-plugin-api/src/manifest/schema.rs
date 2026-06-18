@@ -96,6 +96,8 @@ pub struct PluginManifest {
     pub traits: Option<serde_json::Value>,
     #[serde(default)]
     pub config: ConfigDeclarations,
+    #[serde(default)]
+    pub shortcuts: Vec<ShortcutDeclaration>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -137,6 +139,26 @@ pub struct RuntimeConfig {
     pub command: String,
     #[serde(default)]
     pub actions: Option<HashMap<String, Vec<String>>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ShortcutDeclaration {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub export_to_launcher: bool,
+    #[serde(default = "default_shortcut_action")]
+    pub action: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_shortcut_action() -> String {
+    "open".to_string()
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

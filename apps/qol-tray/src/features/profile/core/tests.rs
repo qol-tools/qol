@@ -728,6 +728,7 @@ fn test_plugin(
             capabilities: Capabilities::default(),
             build: Default::default(),
             traits: None,
+            shortcuts: Vec::new(),
             config: Default::default(),
         },
         PathBuf::from(format!("/tmp/{id}")),

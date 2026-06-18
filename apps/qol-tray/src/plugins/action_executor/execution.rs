@@ -1,7 +1,7 @@
 use super::resolution::ResolvedAction;
 use super::tracking::{
     clear_runtime_spawn_reservation, reserve_runtime_spawn, track_action_process,
-    untrack_action_process,
+    track_unreserved_action_process, untrack_action_process,
 };
 use super::ActionExecutionError;
 use crate::plugins::action_transport::DaemonActionDispatch;
@@ -69,7 +69,9 @@ fn daemon_dispatch_error(
 
 fn execute_via_runtime(resolved: &ResolvedAction) -> Result<(), ActionExecutionError> {
     let command_path = runtime_command_path(resolved)?;
-    if !reserve_runtime_spawn(resolved.plugin_id.as_str(), &resolved.action_id) {
+    if resolved.dedupe_runtime_spawn
+        && !reserve_runtime_spawn(resolved.plugin_id.as_str(), &resolved.action_id)
+    {
         return Ok(());
     }
 
@@ -80,7 +82,11 @@ fn execute_via_runtime(resolved: &ResolvedAction) -> Result<(), ActionExecutionE
     );
     let child = spawn_runtime_command(resolved, command_path)?;
     let pid = child.id();
-    track_action_process(resolved.plugin_id.as_str(), &resolved.action_id, pid);
+    if resolved.dedupe_runtime_spawn {
+        track_action_process(resolved.plugin_id.as_str(), &resolved.action_id, pid);
+    } else {
+        track_unreserved_action_process(resolved.plugin_id.as_str(), pid);
+    }
     spawn_wait_untracker(resolved, child, pid);
     log::info!("Runtime action started (pid: {})", pid);
     Ok(())
@@ -103,7 +109,9 @@ fn spawn_runtime_command(
     runtime_command(resolved, command_path)
         .spawn()
         .map_err(|error| {
-            clear_runtime_spawn_reservation(resolved.plugin_id.as_str(), &resolved.action_id);
+            if resolved.dedupe_runtime_spawn {
+                clear_runtime_spawn_reservation(resolved.plugin_id.as_str(), &resolved.action_id);
+            }
             ActionExecutionError::SpawnFailed(error.to_string())
         })
 }

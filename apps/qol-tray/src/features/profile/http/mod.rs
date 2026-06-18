@@ -72,7 +72,7 @@ fn reload_after_profile_apply(state: &ProfileHttpState) {
         }
     };
     if plugins_changed {
-        crate::features::launcher_apps::trigger_full_sync();
+        crate::features::launcher_apps::trigger_full_sync_with_plugins(manager.plugins());
     }
     drop(manager);
     crate::hotkeys::trigger_reload();

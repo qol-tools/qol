@@ -6,6 +6,7 @@ import { useModalKeyboard } from '../../lib/hooks/useModalKeyboard.js';
 import { diveViaSelector } from '../../lib/world-navigation-singleton.js';
 import { isShortcutValid } from './validation.js';
 import { deriveShortcutId } from './derive-id.js';
+import { actionSearchText, isManagedPluginShortcut } from './action.js';
 
 const AUTO_SAVE_DEBOUNCE_MS = 400;
 
@@ -45,7 +46,7 @@ function useShortcutsData(searchQuery) {
 
     const filtered = useMemo(
         () => searchQuery
-            ? shortcuts.filter(s => matchesQuery([s.name, s.id, s.action.url], searchQuery))
+            ? shortcuts.filter(s => matchesQuery([s.name, s.id, actionSearchText(s.action)], searchQuery))
             : shortcuts,
         [shortcuts, searchQuery]
     );
@@ -105,6 +106,7 @@ function useModalActions(d) {
 
     const openEditModal = useCallback((shortcut = null, opts = {}) => {
         cancelPending();
+        if (isManagedPluginShortcut(shortcut)) return;
         d.setEditModal({
             editing: opts.editing ?? !!shortcut,
             shortcut: shortcut ? { ...shortcut } : emptyShortcut()
@@ -158,6 +160,8 @@ function useModalActions(d) {
 function useListActions(d) {
     const deleteById = useCallback(async (id) => {
         if (!id) return;
+        const shortcut = d.shortcuts.find(s => s.id === id);
+        if (isManagedPluginShortcut(shortcut)) return;
         try {
             const config = await deleteShortcut(id);
             d.setShortcuts(config.shortcuts || []);

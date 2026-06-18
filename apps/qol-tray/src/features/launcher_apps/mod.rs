@@ -1,9 +1,10 @@
 mod platform;
 
+use crate::plugins::{Plugin, PluginManager};
 use crate::shortcuts::model::{Shortcut, ShortcutAction};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 static SYNC_LOCK: Mutex<()> = Mutex::new(());
 static SYNC_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -52,7 +53,32 @@ pub fn sync_entries(entries: &[LauncherEntry], binary_path: &Path) {
     }
 }
 
-pub fn trigger_full_sync() {
+pub fn trigger_full_sync_with_plugins<'a>(plugins: impl IntoIterator<Item = &'a Plugin>) {
+    reconcile_plugin_shortcuts(plugins);
+    sync_launcher_entries();
+}
+
+pub fn trigger_full_sync_with_manager(plugin_manager: &Arc<Mutex<PluginManager>>) {
+    match plugin_manager.lock() {
+        Ok(manager) => reconcile_plugin_shortcuts(manager.plugins()),
+        Err(error) => log::error!(
+            "plugin manager lock poisoned during launcher sync: {}",
+            error
+        ),
+    }
+    sync_launcher_entries();
+}
+
+fn reconcile_plugin_shortcuts<'a>(plugins: impl IntoIterator<Item = &'a Plugin>) {
+    if let Err(error) = crate::shortcuts::store::reconcile_plugin_shortcuts(plugins) {
+        log::warn!(
+            "launcher sync: failed to reconcile plugin shortcuts: {}",
+            error
+        );
+    }
+}
+
+fn sync_launcher_entries() {
     let shortcut_config = match crate::shortcuts::store::load() {
         Ok(c) => c,
         Err(e) => {
@@ -102,6 +128,7 @@ mod tests {
             name: format!("Shortcut {}", id),
             enabled,
             export_to_launcher,
+            source: None,
             action: ShortcutAction::OpenUrl {
                 url: url.to_string(),
                 browser_override: None,
@@ -120,6 +147,7 @@ mod tests {
                 name: "Shortcut delta".to_string(),
                 enabled: true,
                 export_to_launcher: true,
+                source: None,
                 action: ShortcutAction::LaunchApp {
                     app: AppRef::BundleId {
                         id: "com.apple.Safari".to_string(),

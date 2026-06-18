@@ -105,8 +105,8 @@ fn run_inner(id: &str) -> HttpResult<Response> {
     Ok((StatusCode::OK, "Shortcut executed").into_response())
 }
 
-fn trigger_launcher_sync(_state: &AppState) {
-    crate::features::launcher_apps::trigger_full_sync();
+fn trigger_launcher_sync(state: &AppState) {
+    crate::features::launcher_apps::trigger_full_sync_with_manager(&state.plugin_manager);
 }
 
 fn load_failed() -> Response {

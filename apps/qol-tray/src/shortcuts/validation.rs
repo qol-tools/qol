@@ -1,4 +1,4 @@
-use super::model::{AppRef, Shortcut, ShortcutAction};
+use super::model::{AppRef, Shortcut, ShortcutAction, ShortcutSource};
 
 const MAX_NAME_LEN: usize = 128;
 const MAX_URL_LEN: usize = 2048;
@@ -7,6 +7,7 @@ const MAX_PATH_LEN: usize = 1024;
 pub fn validate_shortcut(shortcut: &Shortcut) -> Result<(), String> {
     validate_id(&shortcut.id)?;
     validate_name(&shortcut.name)?;
+    validate_source(shortcut.source.as_ref())?;
     validate_action(&shortcut.action)
 }
 
@@ -52,7 +53,42 @@ fn validate_action(action: &ShortcutAction) -> Result<(), String> {
             Ok(())
         }
         ShortcutAction::LaunchApp { app } => validate_app_ref(app, "app"),
+        ShortcutAction::PluginAction { plugin_id, action } => {
+            validate_plugin_id(plugin_id)?;
+            validate_plugin_action(action)
+        }
     }
+}
+
+fn validate_source(source: Option<&ShortcutSource>) -> Result<(), String> {
+    let Some(source) = source else {
+        return Ok(());
+    };
+    match source {
+        ShortcutSource::PluginManifest {
+            plugin_id,
+            shortcut_id,
+        } => {
+            validate_plugin_id(plugin_id)?;
+            validate_id(shortcut_id)
+        }
+    }
+}
+
+fn validate_plugin_id(plugin_id: &str) -> Result<(), String> {
+    if crate::plugins::manifest::is_valid_plugin_id(plugin_id) {
+        return Ok(());
+    }
+
+    Err("plugin_id must only contain [A-Za-z0-9_-]".into())
+}
+
+fn validate_plugin_action(action: &str) -> Result<(), String> {
+    if crate::plugins::manifest::is_valid_action_id(action) {
+        return Ok(());
+    }
+
+    Err("action must only contain [A-Za-z0-9_-]".into())
 }
 
 fn validate_url(url: &str) -> Result<(), String> {
@@ -123,6 +159,7 @@ mod tests {
             name: name.to_string(),
             enabled: true,
             export_to_launcher: false,
+            source: None,
             action,
         }
     }
@@ -298,6 +335,37 @@ mod tests {
             r.is_err(),
             "browser_override must be validated, not just url"
         );
+    }
+
+    #[test]
+    fn validate_plugin_action_accepts_safe_plugin_and_action_ids() {
+        let r = validate_shortcut(&shortcut(
+            "ok",
+            "Open Plugin",
+            ShortcutAction::PluginAction {
+                plugin_id: "plugin-claude-sessions".into(),
+                action: "open".into(),
+            },
+        ));
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn validate_plugin_action_rejects_unsafe_ids() {
+        let cases = [
+            ShortcutAction::PluginAction {
+                plugin_id: "bad plugin".into(),
+                action: "open".into(),
+            },
+            ShortcutAction::PluginAction {
+                plugin_id: "plugin-ok".into(),
+                action: "../open".into(),
+            },
+        ];
+        for action in cases {
+            let r = validate_shortcut(&shortcut("ok", "Open Plugin", action));
+            assert!(r.is_err());
+        }
     }
 
     proptest! {

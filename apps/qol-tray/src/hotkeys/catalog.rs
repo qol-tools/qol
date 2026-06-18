@@ -109,6 +109,7 @@ mod tests {
             capabilities: Capabilities::default(),
             build: BuildInfo::default(),
             traits: None,
+            shortcuts: Vec::new(),
             config: Default::default(),
         }
     }

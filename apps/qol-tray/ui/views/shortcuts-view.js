@@ -79,7 +79,8 @@ export function ShortcutsView() {
             subtitle="User-defined launcher shortcuts for URLs and apps"
             aside=${html`<${KeyLegend} bindings=${bindings} />`}>
             <${ShortcutsList} shortcuts=${sc.filtered}
-                selectedIndex=${sc.selectedIndex} onSelect=${sc.setSelectedId} onEdit=${sc.openEditModal} />
+                selectedIndex=${sc.selectedIndex} onSelect=${sc.setSelectedId}
+                onEdit=${sc.openEditModal} onRun=${sc.runById} />
         <//>
     `;
 }

@@ -556,7 +556,10 @@ async fn async_init_inner(
             }
         });
     }
-    tokio::task::spawn_blocking(sync_launcher_apps);
+    {
+        let plugin_manager = plugin_manager.clone();
+        tokio::task::spawn_blocking(move || sync_launcher_apps(plugin_manager));
+    }
     Ok(InitResult {
         shutdown_tx,
         shutdown_rx,
@@ -567,8 +570,8 @@ async fn async_init_inner(
     })
 }
 
-fn sync_launcher_apps() {
-    features::launcher_apps::trigger_full_sync();
+fn sync_launcher_apps(plugin_manager: Arc<Mutex<PluginManager>>) {
+    features::launcher_apps::trigger_full_sync_with_manager(&plugin_manager);
 }
 
 fn build_startup_info(

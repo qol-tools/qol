@@ -10,6 +10,7 @@ impl PluginManifest {
             self.runtime.as_ref(),
             &action_ids.executable,
         )?;
+        super::shortcut_rules::validate_shortcuts(&self.shortcuts, &action_ids.executable)?;
         super::command_rules::validate_optional_daemon_config(self.daemon.as_ref())?;
         super::dependency_rules::validate_optional_dependencies(self.dependencies.as_ref())?;
         Ok(())

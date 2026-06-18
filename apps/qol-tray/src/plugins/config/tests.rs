@@ -520,6 +520,7 @@ mod scoped_io {
             capabilities: Capabilities::default(),
             build: Default::default(),
             traits: None,
+            shortcuts: Vec::new(),
             config,
         }
     }

@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use super::model::{Shortcut, ShortcutsConfig};
+use super::plugin_manifest;
 use super::validation;
 
 pub fn load() -> Result<ShortcutsConfig> {
@@ -66,7 +67,7 @@ pub fn add(config: &mut ShortcutsConfig, shortcut: Shortcut) -> Result<(), Strin
     log::info!(
         "Shortcut added: id={} action={}",
         shortcut.id,
-        shortcut_action_kind(&shortcut.action)
+        shortcut.action.kind()
     );
     config.shortcuts.push(shortcut);
     Ok(())
@@ -81,7 +82,7 @@ pub fn update(config: &mut ShortcutsConfig, shortcut: Shortcut) -> Result<(), St
     log::info!(
         "Shortcut updated: id={} action={} enabled={}",
         shortcut.id,
-        shortcut_action_kind(&shortcut.action),
+        shortcut.action.kind(),
         shortcut.enabled
     );
     *existing = shortcut;
@@ -98,11 +99,15 @@ pub fn remove(config: &mut ShortcutsConfig, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn shortcut_action_kind(action: &super::model::ShortcutAction) -> &'static str {
-    match action {
-        super::model::ShortcutAction::OpenUrl { .. } => "open_url",
-        super::model::ShortcutAction::LaunchApp { .. } => "launch_app",
+pub fn reconcile_plugin_shortcuts<'a>(
+    plugins: impl IntoIterator<Item = &'a crate::plugins::Plugin>,
+) -> Result<bool> {
+    let mut config = load()?;
+    let changed = plugin_manifest::reconcile(&mut config, plugins);
+    if changed {
+        save(&config)?;
     }
+    Ok(changed)
 }
 
 #[cfg(test)]
@@ -116,6 +121,7 @@ mod tests {
             name: name.to_string(),
             enabled: true,
             export_to_launcher: false,
+            source: None,
             action: ShortcutAction::OpenUrl {
                 url: url.to_string(),
                 browser_override: None,

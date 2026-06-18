@@ -199,6 +199,7 @@ fn parse_minimal_manifest() {
     assert!(manifest.daemon.is_none());
     assert!(!manifest.capabilities.serial);
     assert!(manifest.menu.items.is_empty());
+    assert!(manifest.shortcuts.is_empty());
 }
 
 #[test]
@@ -249,6 +250,46 @@ fn parse_forward_compat_unknown_capability() {
     let manifest: PluginManifest = toml::from_str(toml).unwrap();
     assert!(manifest.capabilities.serial);
     assert!(manifest.capabilities.extras.contains_key("restore-rule"));
+}
+
+#[test]
+fn parse_shortcut_declarations() {
+    let toml = r#"
+        [plugin]
+        id = "test-plugin"
+        name = "P"
+        description = ""
+        version = "0.0.1"
+
+        [menu]
+        label = "M"
+        items = [
+            { type = "action", id = "open", label = "Open", action = "run" }
+        ]
+
+        [[shortcuts]]
+        id = "open"
+        name = "Open Test"
+
+        [[shortcuts]]
+        id = "cleanup"
+        name = "Cleanup Test"
+        action = "open"
+        enabled = false
+        export_to_launcher = false
+    "#;
+
+    let manifest: PluginManifest = toml::from_str(toml).unwrap();
+    assert_eq!(manifest.shortcuts.len(), 2);
+    assert_eq!(manifest.shortcuts[0].id, "open");
+    assert_eq!(manifest.shortcuts[0].name, "Open Test");
+    assert_eq!(manifest.shortcuts[0].action, "open");
+    assert!(manifest.shortcuts[0].enabled);
+    assert!(manifest.shortcuts[0].export_to_launcher);
+    assert_eq!(manifest.shortcuts[1].id, "cleanup");
+    assert_eq!(manifest.shortcuts[1].action, "open");
+    assert!(!manifest.shortcuts[1].enabled);
+    assert!(!manifest.shortcuts[1].export_to_launcher);
 }
 
 #[test]

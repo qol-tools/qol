@@ -10,6 +10,7 @@ pub(super) struct ResolvedAction {
     pub(super) command_path: Option<PathBuf>,
     pub(super) args: Vec<String>,
     pub(super) runtime_fallback_allowed: bool,
+    pub(super) dedupe_runtime_spawn: bool,
 }
 
 pub(super) fn resolve_action(
@@ -21,6 +22,7 @@ pub(super) fn resolve_action(
     let (command_path, args) = resolve_runtime_target(plugin, action_id)?;
     let runtime_fallback_allowed =
         allow_runtime_fallback(plugin, daemon_socket.as_ref(), command_path.as_ref());
+    let dedupe_runtime_spawn = should_dedupe_runtime_spawn(action_id, daemon_socket.as_ref());
     ensure_execution_target(plugin, action_id, &daemon_socket, &command_path)?;
     Ok(ResolvedAction {
         plugin_id: plugin.id.clone(),
@@ -30,6 +32,7 @@ pub(super) fn resolve_action(
         command_path,
         args,
         runtime_fallback_allowed,
+        dedupe_runtime_spawn,
     })
 }
 
@@ -94,6 +97,12 @@ fn allow_runtime_fallback(
     }
 
     daemon_socket.is_some_and(|socket_path| !is_daemon_socket_reachable(socket_path))
+}
+
+fn should_dedupe_runtime_spawn(action_id: &str, daemon_socket: Option<&PathBuf>) -> bool {
+    // Runtime-only `open` actions are activation requests. A long-lived app can
+    // use a second short-lived invocation to focus its existing window.
+    !(daemon_socket.is_none() && action_id == "open")
 }
 
 fn daemon_command_path(plugin: &Plugin) -> Option<PathBuf> {

@@ -9,7 +9,7 @@ mod validation_tests;
 pub use schema::{
     ActionType, BinaryDependency, BuildInfo, Capabilities, ConfigDeclarations, ConfigScope,
     DaemonConfig, Dependencies, MenuConfig, MenuItem, PluginId, PluginInfo, PluginManifest,
-    RuntimeConfig,
+    RuntimeConfig, ShortcutDeclaration,
 };
 pub use validation::{is_valid_action_id, is_valid_command_basename, is_valid_plugin_id};
 

@@ -9,7 +9,7 @@ pub fn execute(shortcut: &Shortcut) -> Result<()> {
         qol_runtime::probe!("SHORTCUT_SKIP", "id={} reason=disabled", shortcut.id);
         return Err(anyhow!("shortcut '{}' is disabled", shortcut.id));
     }
-    let action = shortcut_action_kind(&shortcut.action);
+    let action = shortcut.action.kind();
     log::info!("Shortcut executing: id={} action={}", shortcut.id, action);
     qol_runtime::probe!("SHORTCUT_EXEC", "id={} action={action}", shortcut.id);
 
@@ -19,6 +19,7 @@ pub fn execute(shortcut: &Shortcut) -> Result<()> {
             browser_override,
         } => open_url(url, browser_override.as_ref()),
         ShortcutAction::LaunchApp { app } => launch_app(app),
+        ShortcutAction::PluginAction { plugin_id, action } => run_plugin_action(plugin_id, action),
     };
 
     match &result {
@@ -65,10 +66,15 @@ fn launch_app(app: &AppRef) -> Result<()> {
     platform::launch_app(app)
 }
 
-fn shortcut_action_kind(action: &ShortcutAction) -> &'static str {
-    match action {
-        ShortcutAction::OpenUrl { .. } => "open_url",
-        ShortcutAction::LaunchApp { .. } => "launch_app",
+fn run_plugin_action(plugin_id: &str, action: &str) -> Result<()> {
+    let path = format!("/api/plugins/{plugin_id}/actions/{action}");
+    match crate::local_http::post_to_daemon(&path, "") {
+        Ok((status, _)) if (200..300).contains(&status) => Ok(()),
+        Ok((status, body)) if body.is_empty() => {
+            Err(anyhow!("plugin action request failed with HTTP {}", status))
+        }
+        Ok((_, body)) => Err(anyhow!(body)),
+        Err(_) => Err(anyhow!("qol-tray is not running")),
     }
 }
 

@@ -32,6 +32,7 @@ fn base_manifest() -> PluginManifest {
         build: BuildInfo::default(),
         traits: None,
         config: ConfigDeclarations::default(),
+        shortcuts: Vec::new(),
     }
 }
 
@@ -360,5 +361,86 @@ mod dependency_rules {
         };
 
         assert!(manifest.validate().is_ok());
+    }
+}
+
+mod shortcut_rules {
+    use super::*;
+
+    #[test]
+    fn validate_accepts_shortcut_for_executable_menu_action() {
+        let manifest = PluginManifest {
+            menu: MenuConfig {
+                label: "M".to_string(),
+                icon: None,
+                items: vec![MenuItem::Action {
+                    id: "open".to_string(),
+                    label: "Open".to_string(),
+                    action: ActionType::Run,
+                    config_key: None,
+                }],
+            },
+            shortcuts: vec![ShortcutDeclaration {
+                id: "open".to_string(),
+                name: "Open Plugin".to_string(),
+                enabled: true,
+                export_to_launcher: true,
+                action: "open".to_string(),
+            }],
+            ..base_manifest()
+        };
+
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_shortcut_for_unknown_action() {
+        let manifest = PluginManifest {
+            shortcuts: vec![ShortcutDeclaration {
+                id: "open".to_string(),
+                name: "Open Plugin".to_string(),
+                enabled: true,
+                export_to_launcher: true,
+                action: "missing".to_string(),
+            }],
+            ..base_manifest()
+        };
+
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_shortcut_ids() {
+        let manifest = PluginManifest {
+            menu: MenuConfig {
+                label: "M".to_string(),
+                icon: None,
+                items: vec![MenuItem::Action {
+                    id: "open".to_string(),
+                    label: "Open".to_string(),
+                    action: ActionType::Run,
+                    config_key: None,
+                }],
+            },
+            shortcuts: vec![
+                ShortcutDeclaration {
+                    id: "open".to_string(),
+                    name: "Open".to_string(),
+                    enabled: true,
+                    export_to_launcher: true,
+                    action: "open".to_string(),
+                },
+                ShortcutDeclaration {
+                    id: "open".to_string(),
+                    name: "Open Again".to_string(),
+                    enabled: true,
+                    export_to_launcher: true,
+                    action: "open".to_string(),
+                },
+            ],
+            ..base_manifest()
+        };
+
+        assert!(manifest.validate().is_err());
     }
 }

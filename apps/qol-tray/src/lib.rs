@@ -11,6 +11,7 @@ pub(crate) mod file_io;
 pub mod hotkeys;
 pub mod housekeeping;
 pub mod installer;
+pub mod local_http;
 pub mod logging;
 pub mod menu;
 pub mod migrations_startup;
