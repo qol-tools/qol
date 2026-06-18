@@ -15,10 +15,17 @@ use windows as imp;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 compile_error!("plugin-alt-tab actions: unsupported target OS");
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CloseWindowResult {
+    ClosedWindow,
+    QuitApp,
+    Unsupported,
+}
+
 pub fn activate_window(window_id: u32) {
     imp::activate_window(window_id)
 }
-pub fn close_window(window_id: u32) {
+pub fn close_window(window_id: u32) -> CloseWindowResult {
     imp::close_window(window_id)
 }
 pub fn quit_app(window_id: u32) {

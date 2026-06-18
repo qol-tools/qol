@@ -1,10 +1,12 @@
 mod platform;
 
+pub use platform::CloseWindowResult;
+
 pub fn activate_window(window_id: u32) {
     platform::activate_window(window_id)
 }
 
-pub fn close_window(window_id: u32) {
+pub fn close_window(window_id: u32) -> CloseWindowResult {
     platform::close_window(window_id)
 }
 

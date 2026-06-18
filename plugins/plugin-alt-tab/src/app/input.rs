@@ -56,9 +56,26 @@ fn on_close(this: &mut AltTabApp, window: &mut Window, cx: &mut Context<AltTabAp
     let Some(win_id) = selected_window_id(this, cx) else {
         return;
     };
-    actions::close_window(win_id);
-    this.delegate
-        .update(cx, |s, ctx| s.remove_window(win_id, ctx, Some(window)));
+    let app_name = this
+        .delegate
+        .read(cx)
+        .windows
+        .iter()
+        .find(|w| w.id == win_id)
+        .map(|w| w.app_name.clone());
+    match actions::close_window(win_id) {
+        actions::CloseWindowResult::ClosedWindow => {
+            this.delegate
+                .update(cx, |s, ctx| s.remove_window(win_id, ctx, Some(window)));
+        }
+        actions::CloseWindowResult::QuitApp => {
+            if let Some(name) = app_name {
+                this.delegate
+                    .update(cx, |s, ctx| s.remove_app_windows(&name, ctx, Some(window)));
+            }
+        }
+        actions::CloseWindowResult::Unsupported => {}
+    }
     cx.notify();
 }
 

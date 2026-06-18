@@ -186,7 +186,7 @@ mod tests {
     #[test]
     fn reconcile_adds_declared_plugin_shortcut() {
         let plugins = vec![plugin(
-            "plugin-claude-sessions",
+            "plugin-cli-sessions",
             vec![declaration("open", "Claude")],
         )];
         let mut config = ShortcutsConfig::default();
@@ -195,7 +195,7 @@ mod tests {
 
         assert_eq!(config.shortcuts.len(), 1);
         let shortcut = &config.shortcuts[0];
-        assert_eq!(shortcut.id, "plugin-claude-sessions-open");
+        assert_eq!(shortcut.id, "plugin-cli-sessions-open");
         assert_eq!(shortcut.name, "Claude");
         assert!(shortcut.export_to_launcher);
         assert!(matches!(
@@ -207,21 +207,21 @@ mod tests {
     #[test]
     fn reconcile_preserves_user_disabled_state_for_existing_managed_shortcut() {
         let plugins = vec![plugin(
-            "plugin-claude-sessions",
+            "plugin-cli-sessions",
             vec![declaration("open", "Claude Sessions")],
         )];
         let mut config = ShortcutsConfig {
             shortcuts: vec![Shortcut {
-                id: "plugin-claude-sessions-open".to_string(),
+                id: "plugin-cli-sessions-open".to_string(),
                 name: "Old".to_string(),
                 enabled: false,
                 export_to_launcher: false,
                 source: Some(ShortcutSource::PluginManifest {
-                    plugin_id: "plugin-claude-sessions".to_string(),
+                    plugin_id: "plugin-cli-sessions".to_string(),
                     shortcut_id: "open".to_string(),
                 }),
                 action: ShortcutAction::PluginAction {
-                    plugin_id: "plugin-claude-sessions".to_string(),
+                    plugin_id: "plugin-cli-sessions".to_string(),
                     action: "open".to_string(),
                 },
             }],

@@ -149,14 +149,15 @@ fn probe_server_time(conn: &impl Connection, root: u32) -> Option<(u32, Instant)
     Some((time, Instant::now()))
 }
 
-pub fn close_window(window_id: u32) {
+pub fn close_window(window_id: u32) -> super::CloseWindowResult {
     let Some((conn, root)) = connect() else {
-        return;
+        return super::CloseWindowResult::Unsupported;
     };
     let Some(atom) = intern(&conn, b"_NET_CLOSE_WINDOW") else {
-        return;
+        return super::CloseWindowResult::Unsupported;
     };
     send_to_root(&conn, root, window_id, atom, [0, 2, 0, 0, 0]);
+    super::CloseWindowResult::ClosedWindow
 }
 
 pub fn quit_app(window_id: u32) {

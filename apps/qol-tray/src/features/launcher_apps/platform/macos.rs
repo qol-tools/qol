@@ -399,7 +399,7 @@ mod tests {
         let script = build_script(
             Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-tray"),
             &shortcut_entry(ShortcutAction::PluginAction {
-                plugin_id: "plugin-claude-sessions".to_string(),
+                plugin_id: "plugin-cli-sessions".to_string(),
                 action: "open".to_string(),
             }),
         );

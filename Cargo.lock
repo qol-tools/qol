@@ -68,7 +68,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alt-tab"
-version = "0.19.1"
+version = "0.19.0"
 dependencies = [
  "gpui",
  "image",
@@ -3929,7 +3929,7 @@ checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
 name = "launcher"
-version = "1.10.2"
+version = "1.10.1"
 dependencies = [
  "gpui",
  "notify",
@@ -5331,6 +5331,24 @@ name = "pkg-config"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
+
+[[package]]
+name = "plugin-cli-sessions"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "libc",
+ "qol-config",
+ "qol-gpui",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-runtime",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "toml 0.9.12+spec-1.1.0",
+]
 
 [[package]]
 name = "plugin-lights"
@@ -8884,7 +8902,7 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "window-actions"
-version = "2.3.2"
+version = "2.3.1"
 dependencies = [
  "proptest",
  "qol-config",

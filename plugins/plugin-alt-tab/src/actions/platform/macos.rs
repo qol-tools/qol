@@ -1,3 +1,4 @@
+use super::CloseWindowResult;
 use crate::discovery::macos::ax::{ax_find_window, ax_find_window_brute_force};
 use crate::discovery::macos::ffi;
 use crate::discovery::macos::ffi::{
@@ -260,23 +261,64 @@ fn front_before_other_apps(window_id: u32, pid: i32, stack: &[(u32, i32)]) -> bo
     false
 }
 
-pub fn close_window(window_id: u32) {
-    let Some((pid, title)) = cg_window_pid_and_title(window_id) else {
-        return;
+pub fn close_window(window_id: u32) -> CloseWindowResult {
+    let Some(info) = cg_window_info(window_id) else {
+        qol_runtime::probe!(
+            "CLOSE_WINDOW",
+            "wid={window_id} result=unsupported reason=missing"
+        );
+        return CloseWindowResult::Unsupported;
     };
-    let win = unsafe { ax_find_window(pid, window_id, &title) };
+    let win = unsafe { ax_find_window(info.pid, window_id, &info.title) };
     if win.is_null() {
-        return;
+        qol_runtime::probe!(
+            "CLOSE_WINDOW",
+            "wid={window_id} pid={} layer={} result=unsupported reason=no_ax_window",
+            info.pid,
+            info.layer,
+        );
+        return CloseWindowResult::Unsupported;
     }
-    unsafe { ax_press_button(win, b"AXCloseButton") };
+    let close_pressed = unsafe { ax_press_button(win, b"AXCloseButton") };
     unsafe { CFRelease(win) };
+    if close_pressed {
+        qol_runtime::probe!(
+            "CLOSE_WINDOW",
+            "wid={window_id} pid={} layer={} result=closed",
+            info.pid,
+            info.layer,
+        );
+        return CloseWindowResult::ClosedWindow;
+    }
+
+    let has_normal_window = pid_has_on_screen_normal_window(info.pid);
+    if should_quit_on_close_fallback(info.layer, has_normal_window) {
+        let terminated = ns_terminate_app(info.pid);
+        qol_runtime::probe!(
+            "CLOSE_WINDOW",
+            "wid={window_id} pid={} layer={} result=quit_fallback terminated={terminated}",
+            info.pid,
+            info.layer,
+        );
+        if terminated {
+            return CloseWindowResult::QuitApp;
+        }
+    }
+
+    qol_runtime::probe!(
+        "CLOSE_WINDOW",
+        "wid={window_id} pid={} layer={} result=unsupported reason=no_close_button has_normal={has_normal_window}",
+        info.pid,
+        info.layer,
+    );
+    CloseWindowResult::Unsupported
 }
 
 pub fn quit_app(window_id: u32) {
     let Some((pid, _)) = cg_window_pid_and_title(window_id) else {
         return;
     };
-    ns_terminate_app(pid);
+    let _ = ns_terminate_app(pid);
 }
 
 pub fn minimize_window_by_id(window_id: u32) {
@@ -391,14 +433,14 @@ unsafe fn make_key_window(sl: &SkyLight, psn: &ProcessSerialNumber, wid: u32) {
     (sl.post_event)(psn, bytes2.as_ptr());
 }
 
-fn ns_terminate_app(pid: i32) {
+fn ns_terminate_app(pid: i32) -> bool {
     objc2::rc::autoreleasepool(|_| {
         use objc2_app_kit::NSRunningApplication;
         let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
-            return;
+            return false;
         };
-        let _ = app.terminate();
-    });
+        app.terminate()
+    })
 }
 
 unsafe fn ax_unminimize(win: *const c_void) {
@@ -416,17 +458,19 @@ unsafe fn ax_make_main(win: *const c_void) {
     ax_set_bool_attr(win, b"AXFocused", kCFBooleanTrue);
 }
 
-unsafe fn ax_press_button(win: *const c_void, button_attr: &[u8]) {
+unsafe fn ax_press_button(win: *const c_void, button_attr: &[u8]) -> bool {
     let attr = ffi::cfstr(button_attr);
     let action = ffi::cfstr(b"AXPress");
     let mut button: *const c_void = std::ptr::null();
     let err = AXUIElementCopyAttributeValue(win, attr, &mut button);
+    let mut pressed = false;
     if err == 0 && !button.is_null() {
-        let _ = AXUIElementPerformAction(button, action);
+        pressed = AXUIElementPerformAction(button, action) == 0;
         CFRelease(button);
     }
     CFRelease(attr);
     CFRelease(action);
+    pressed
 }
 
 unsafe fn ax_set_bool_attr(win: *const c_void, name: &[u8], val: *const c_void) {
@@ -436,6 +480,16 @@ unsafe fn ax_set_bool_attr(win: *const c_void, name: &[u8], val: *const c_void) 
 }
 
 fn cg_window_pid_and_title(window_id: u32) -> Option<(i32, String)> {
+    cg_window_info(window_id).map(|info| (info.pid, info.title))
+}
+
+struct WindowActionInfo {
+    pid: i32,
+    title: String,
+    layer: i32,
+}
+
+fn cg_window_info(window_id: u32) -> Option<WindowActionInfo> {
     let list = copy_window_list_timed(
         K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
         K_CG_NULL_WINDOW_ID,
@@ -449,10 +503,11 @@ fn cg_window_pid_and_title(window_id: u32) -> Option<(i32, String)> {
     result
 }
 
-fn find_window_in_list(list: ffi::CFArrayRef, window_id: u32) -> Option<(i32, String)> {
+fn find_window_in_list(list: ffi::CFArrayRef, window_id: u32) -> Option<WindowActionInfo> {
     let key_pid = ffi::cfstr(b"kCGWindowOwnerPID");
     let key_num = ffi::cfstr(b"kCGWindowNumber");
     let key_name = ffi::cfstr(b"kCGWindowName");
+    let key_layer = ffi::cfstr(b"kCGWindowLayer");
 
     let mut result = None;
     let count = unsafe { CFArrayGetCount(list) };
@@ -467,11 +522,15 @@ fn find_window_in_list(list: ffi::CFArrayRef, window_id: u32) -> Option<(i32, St
         if num as u32 != window_id {
             continue;
         }
-        if let Some(pid) = ffi::dict_get_i32(dict, key_pid) {
-            result = Some((
+        if let (Some(pid), Some(layer)) = (
+            ffi::dict_get_i32(dict, key_pid),
+            ffi::dict_get_i32(dict, key_layer),
+        ) {
+            result = Some(WindowActionInfo {
                 pid,
-                ffi::dict_get_string(dict, key_name).unwrap_or_default(),
-            ));
+                title: ffi::dict_get_string(dict, key_name).unwrap_or_default(),
+                layer,
+            });
         }
         break;
     }
@@ -480,15 +539,72 @@ fn find_window_in_list(list: ffi::CFArrayRef, window_id: u32) -> Option<(i32, St
         CFRelease(key_pid);
         CFRelease(key_num);
         CFRelease(key_name);
+        CFRelease(key_layer);
     }
     result
 }
 
+fn should_quit_on_close_fallback(layer: i32, has_on_screen_normal_window: bool) -> bool {
+    layer != K_CG_WINDOW_LAYER_NORMAL && !has_on_screen_normal_window
+}
+
+fn pid_has_on_screen_normal_window(pid: i32) -> bool {
+    let list = copy_window_list_timed(
+        K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
+        K_CG_NULL_WINDOW_ID,
+        "close_fallback_lookup",
+    );
+    if list.is_null() {
+        return true;
+    }
+    let key_pid = ffi::cfstr(b"kCGWindowOwnerPID");
+    let key_layer = ffi::cfstr(b"kCGWindowLayer");
+
+    let mut found = false;
+    let count = unsafe { CFArrayGetCount(list) };
+    for i in 0..count {
+        let dict = unsafe { CFArrayGetValueAtIndex(list, i) } as CFDictionaryRef;
+        if dict.is_null() {
+            continue;
+        }
+        if ffi::dict_get_i32(dict, key_pid) == Some(pid)
+            && ffi::dict_get_i32(dict, key_layer) == Some(K_CG_WINDOW_LAYER_NORMAL)
+        {
+            found = true;
+            break;
+        }
+    }
+
+    unsafe {
+        CFRelease(key_pid);
+        CFRelease(key_layer);
+        CFRelease(list);
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
-    use super::front_before_other_apps;
+    use super::{front_before_other_apps, should_quit_on_close_fallback};
+    use crate::discovery::macos::ffi::K_CG_WINDOW_LAYER_NORMAL;
 
     type Case = (&'static str, u32, i32, &'static [(u32, i32)], bool);
+
+    #[test]
+    fn close_fallback_only_quits_panel_only_processes() {
+        assert!(should_quit_on_close_fallback(
+            K_CG_WINDOW_LAYER_NORMAL + 101,
+            false,
+        ));
+        assert!(!should_quit_on_close_fallback(
+            K_CG_WINDOW_LAYER_NORMAL + 101,
+            true,
+        ));
+        assert!(!should_quit_on_close_fallback(
+            K_CG_WINDOW_LAYER_NORMAL,
+            false,
+        ));
+    }
 
     #[test]
     fn settle_skips_same_app_siblings_but_not_other_apps() {

@@ -140,17 +140,17 @@ mod tests {
     #[test]
     fn plugin_action_round_trips() {
         let action = ShortcutAction::PluginAction {
-            plugin_id: "plugin-claude-sessions".into(),
+            plugin_id: "plugin-cli-sessions".into(),
             action: "open".into(),
         };
         let json = serde_json::to_value(&action).unwrap();
         assert_eq!(json["type"], "plugin_action");
-        assert_eq!(json["plugin_id"], "plugin-claude-sessions");
+        assert_eq!(json["plugin_id"], "plugin-cli-sessions");
         assert_eq!(json["action"], "open");
         let parsed: ShortcutAction = serde_json::from_value(json).unwrap();
         match parsed {
             ShortcutAction::PluginAction { plugin_id, action } => {
-                assert_eq!(plugin_id, "plugin-claude-sessions");
+                assert_eq!(plugin_id, "plugin-cli-sessions");
                 assert_eq!(action, "open");
             }
             _ => panic!("variant lost"),
@@ -160,16 +160,16 @@ mod tests {
     #[test]
     fn plugin_manifest_source_round_trips() {
         let shortcut = Shortcut {
-            id: "plugin-claude-sessions-open".into(),
+            id: "plugin-cli-sessions-open".into(),
             name: "Claude Sessions".into(),
             enabled: true,
             export_to_launcher: true,
             source: Some(ShortcutSource::PluginManifest {
-                plugin_id: "plugin-claude-sessions".into(),
+                plugin_id: "plugin-cli-sessions".into(),
                 shortcut_id: "open".into(),
             }),
             action: ShortcutAction::PluginAction {
-                plugin_id: "plugin-claude-sessions".into(),
+                plugin_id: "plugin-cli-sessions".into(),
                 action: "open".into(),
             },
         };

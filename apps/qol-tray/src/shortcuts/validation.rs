@@ -343,7 +343,7 @@ mod tests {
             "ok",
             "Open Plugin",
             ShortcutAction::PluginAction {
-                plugin_id: "plugin-claude-sessions".into(),
+                plugin_id: "plugin-cli-sessions".into(),
                 action: "open".into(),
             },
         ));
