@@ -78,6 +78,7 @@ pub fn activate_window(window_id: u32) {
         commit_gen,
         &[60u64, 40, 50, 100, 150, 250, 400],
         {
+            let mut seen_on_screen = false;
             let mut settled_logged = false;
             #[cfg(debug_assertions)]
             let mut stack_stuck_logged = false;
@@ -86,8 +87,11 @@ pub fn activate_window(window_id: u32) {
             #[cfg(debug_assertions)]
             let mut key_focus_sampled = false;
             move || {
-                let active = target_effectively_front(window_id, pid);
-                if active && !settled_logged {
+                let state = target_front_state(window_id, pid);
+                if !matches!(state, FrontState::Gone) {
+                    seen_on_screen = true;
+                }
+                if matches!(state, FrontState::Front) && !settled_logged {
                     settled_logged = true;
                     qol_runtime::probe!(
                         "ACTIVATE_SETTLED",
@@ -101,8 +105,18 @@ pub fn activate_window(window_id: u32) {
                         stack_snapshot(),
                     );
                 }
+                if matches!(state, FrontState::Gone) && seen_on_screen {
+                    qol_runtime::probe!(
+                        "ACTIVATE_ABANDON",
+                        "wid={window_id} elapsed_ms={} reason=offscreen",
+                        started.elapsed().as_millis(),
+                    );
+                }
                 #[cfg(debug_assertions)]
-                if !active && !stack_stuck_logged && started.elapsed().as_millis() >= 250 {
+                if matches!(state, FrontState::Behind)
+                    && !stack_stuck_logged
+                    && started.elapsed().as_millis() >= 250
+                {
                     stack_stuck_logged = true;
                     qol_runtime::probe!(
                         "ACTIVATE_STACK",
@@ -112,7 +126,7 @@ pub fn activate_window(window_id: u32) {
                     );
                 }
                 #[cfg(debug_assertions)]
-                {
+                if !matches!(state, FrontState::Gone) {
                     let focused = unsafe { crate::discovery::macos::ax::ax_focused_window_id(pid) };
                     if !key_focus_sampled {
                         key_focus_sampled = true;
@@ -131,7 +145,7 @@ pub fn activate_window(window_id: u32) {
                         );
                     }
                 }
-                active
+                state.step(seen_on_screen)
             }
         },
         move || {
@@ -208,32 +222,64 @@ fn stack_snapshot() -> String {
     entries.join(" ")
 }
 
-fn target_effectively_front(window_id: u32, pid: i32) -> bool {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FrontState {
+    Front,
+    Behind,
+    Gone,
+}
+
+impl FrontState {
+    fn step(self, seen_on_screen: bool) -> qol_gpui::platform::ReassertStep {
+        use qol_gpui::platform::ReassertStep;
+        match self {
+            FrontState::Front => ReassertStep::Settled,
+            FrontState::Behind => ReassertStep::Reassert,
+            FrontState::Gone if seen_on_screen => ReassertStep::Stop,
+            FrontState::Gone => ReassertStep::Reassert,
+        }
+    }
+}
+
+fn classify_front_state(present_on_screen: bool, front_among_normal: bool) -> FrontState {
+    match (present_on_screen, front_among_normal) {
+        (false, false) => FrontState::Gone,
+        (false, true) => FrontState::Gone,
+        (true, true) => FrontState::Front,
+        (true, false) => FrontState::Behind,
+    }
+}
+
+fn target_front_state(window_id: u32, pid: i32) -> FrontState {
     let list = copy_window_list_timed(
         K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
         K_CG_NULL_WINDOW_ID,
         "settle_check",
     );
     if list.is_null() {
-        return false;
+        return FrontState::Behind;
     }
     let key_num = ffi::cfstr(b"kCGWindowNumber");
     let key_layer = ffi::cfstr(b"kCGWindowLayer");
     let key_pid = ffi::cfstr(b"kCGWindowOwnerPID");
 
     let mut stack = Vec::new();
+    let mut present = false;
     let count = unsafe { CFArrayGetCount(list) };
     for i in 0..count {
         let dict = unsafe { CFArrayGetValueAtIndex(list, i) } as CFDictionaryRef;
         if dict.is_null() {
             continue;
         }
-        if ffi::dict_get_i32(dict, key_layer) != Some(K_CG_WINDOW_LAYER_NORMAL) {
-            continue;
-        }
         let Some(wid) = ffi::dict_get_i32(dict, key_num) else {
             continue;
         };
+        if wid as u32 == window_id {
+            present = true;
+        }
+        if ffi::dict_get_i32(dict, key_layer) != Some(K_CG_WINDOW_LAYER_NORMAL) {
+            continue;
+        }
         let Some(owner) = ffi::dict_get_i32(dict, key_pid) else {
             continue;
         };
@@ -246,7 +292,7 @@ fn target_effectively_front(window_id: u32, pid: i32) -> bool {
         CFRelease(key_pid);
         CFRelease(list);
     }
-    front_before_other_apps(window_id, pid, &stack)
+    classify_front_state(present, front_before_other_apps(window_id, pid, &stack))
 }
 
 fn front_before_other_apps(window_id: u32, pid: i32, stack: &[(u32, i32)]) -> bool {
@@ -585,10 +631,69 @@ fn pid_has_on_screen_normal_window(pid: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{front_before_other_apps, should_quit_on_close_fallback};
+    use super::{
+        classify_front_state, front_before_other_apps, should_quit_on_close_fallback, FrontState,
+    };
     use crate::discovery::macos::ffi::K_CG_WINDOW_LAYER_NORMAL;
+    use qol_gpui::platform::ReassertStep;
 
     type Case = (&'static str, u32, i32, &'static [(u32, i32)], bool);
+
+    #[test]
+    fn minimized_target_leaves_screen_and_stops_reassert() {
+        let cases = [
+            (
+                "minimized: gone from on-screen list",
+                false,
+                false,
+                FrontState::Gone,
+            ),
+            (
+                "closed while front flag stale",
+                false,
+                true,
+                FrontState::Gone,
+            ),
+            (
+                "present and frontmost normal window",
+                true,
+                true,
+                FrontState::Front,
+            ),
+            (
+                "present but behind another app",
+                true,
+                false,
+                FrontState::Behind,
+            ),
+        ];
+        for (name, present, front, expected) in cases {
+            assert_eq!(
+                classify_front_state(present, front),
+                expected,
+                "case: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn front_state_drives_reassert_loop_control() {
+        let cases = [
+            (FrontState::Front, true, ReassertStep::Settled),
+            (FrontState::Front, false, ReassertStep::Settled),
+            (FrontState::Behind, true, ReassertStep::Reassert),
+            (FrontState::Behind, false, ReassertStep::Reassert),
+            (FrontState::Gone, true, ReassertStep::Stop),
+            (FrontState::Gone, false, ReassertStep::Reassert),
+        ];
+        for (state, seen_on_screen, expected) in cases {
+            assert_eq!(
+                state.step(seen_on_screen),
+                expected,
+                "state: {state:?} seen_on_screen: {seen_on_screen}"
+            );
+        }
+    }
 
     #[test]
     fn close_fallback_only_quits_panel_only_processes() {

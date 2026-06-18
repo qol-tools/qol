@@ -44,14 +44,21 @@ pub fn has_process_focus() -> bool {
     imp::has_process_focus()
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ReassertStep {
+    Settled,
+    Reassert,
+    Stop,
+}
+
 pub fn spawn_reassert_driver<F, G>(
     gen: &'static std::sync::atomic::AtomicU64,
     commit_gen: u64,
     steps_ms: &[u64],
-    mut is_active: F,
+    mut poll: F,
     mut reassert: G,
 ) where
-    F: FnMut() -> bool + Send + 'static,
+    F: FnMut() -> ReassertStep + Send + 'static,
     G: FnMut() + Send + 'static,
 {
     let steps = steps_ms.to_vec();
@@ -61,12 +68,11 @@ pub fn spawn_reassert_driver<F, G>(
             if gen.load(std::sync::atomic::Ordering::SeqCst) != commit_gen {
                 return;
             }
-            if is_active() {
-                continue;
+            match poll() {
+                ReassertStep::Settled => continue,
+                ReassertStep::Stop => return,
+                ReassertStep::Reassert => {}
             }
-            // is_active can take several ms (OS roundtrip); a newer activation
-            // may have committed meanwhile. Re-check so a stale driver never
-            // reasserts over it.
             if gen.load(std::sync::atomic::Ordering::SeqCst) != commit_gen {
                 return;
             }
