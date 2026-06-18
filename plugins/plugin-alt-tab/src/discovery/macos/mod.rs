@@ -1,8 +1,8 @@
 use super::{DiscoveryError, WindowDiscovery, WindowInfo};
 use ffi::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryRef, CFRelease,
-    CGWindowListCopyWindowInfo, K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LAYER_NORMAL,
-    K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
+    CGWindowListCopyWindowInfo, K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
+    K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
 use std::collections::HashSet;
 use std::ffi::c_void;
@@ -28,6 +28,7 @@ impl WindowDiscovery for Platform {
 pub(super) struct CgWindow {
     pub id: u32,
     pub pid: i32,
+    pub layer: i32,
     pub app_name: String,
     pub title: String,
     pub has_title: bool,
@@ -147,9 +148,6 @@ fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<
         return None;
     }
     let layer = ffi::dict_get_i32(dict, keys.layer)?;
-    if layer != K_CG_WINDOW_LAYER_NORMAL {
-        return None;
-    }
     let pid = ffi::dict_get_i32(dict, keys.pid)?;
     if pid == own_pid {
         return None;
@@ -180,6 +178,7 @@ fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<
     Some(CgWindow {
         id: id as u32,
         pid,
+        layer,
         app_name,
         title: display_title,
         has_title,

@@ -1,4 +1,5 @@
 use super::ax::{AxCache, AxWindowMeta};
+use super::ffi::K_CG_WINDOW_LAYER_NORMAL;
 use super::process::{
     cached_process_identity, is_app_hidden, is_switchable_app, known_window_ids_by_identity,
     ProcessIdentity,
@@ -128,13 +129,44 @@ pub(super) fn collect_on_screen_windows(
         );
     }
     let deduped = ax::dedup_by_ax(filtered, ax_cache);
-    let deduped = stabilize_on_screen_order(deduped, tracker);
+    let deduped = stabilize_on_screen_order(move_true_focus_to_front(deduped), tracker);
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/enum] post-dedup: {} windows", deduped.len());
     for window in deduped {
         tracker.remember_window(window.pid, window.id);
         state.push_on_screen(window);
     }
+}
+
+fn move_true_focus_to_front(mut windows: Vec<CgWindow>) -> Vec<CgWindow> {
+    let Some(index) = true_focus_index(&windows, frontmost_app_pid()).filter(|index| *index != 0)
+    else {
+        return windows;
+    };
+    windows[..=index].rotate_right(1);
+    windows
+}
+
+fn true_focus_index(windows: &[CgWindow], frontmost_pid: Option<i32>) -> Option<usize> {
+    windows
+        .iter()
+        .position(|window| {
+            window.layer != K_CG_WINDOW_LAYER_NORMAL && frontmost_pid == Some(window.pid)
+        })
+        .or_else(|| {
+            windows
+                .iter()
+                .position(|window| window.layer == K_CG_WINDOW_LAYER_NORMAL)
+        })
+}
+
+fn frontmost_app_pid() -> Option<i32> {
+    objc2::rc::autoreleasepool(|_| {
+        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+        workspace
+            .frontmostApplication()
+            .map(|app| app.processIdentifier())
+    })
 }
 
 fn stabilize_on_screen_order(
@@ -818,6 +850,7 @@ mod tests {
         CgWindow {
             id,
             pid,
+            layer: 0,
             app_name: "foo".to_string(),
             title: "bar".to_string(),
             has_title: true,
@@ -1055,5 +1088,30 @@ mod tests {
         let c1 = key(30, 3, 301);
 
         assert!(!use_current_window_order(Some(a1), &[a1, b1, c1]));
+    }
+
+    fn cg_panel(id: u32, pid: i32) -> CgWindow {
+        CgWindow {
+            layer: K_CG_WINDOW_LAYER_NORMAL + 1,
+            ..cg(id, pid)
+        }
+    }
+
+    #[test]
+    fn true_focus_index_prefers_panel_of_frontmost_app_then_first_normal_window() {
+        let cases: [(Vec<CgWindow>, Option<i32>, Option<usize>); 5] = [
+            (vec![], Some(1), None),
+            (vec![cg(10, 1), cg(20, 2)], Some(2), Some(0)),
+            (vec![cg(10, 1), cg_panel(20, 2)], Some(2), Some(1)),
+            (vec![cg(10, 1), cg_panel(20, 2)], Some(1), Some(0)),
+            (vec![cg_panel(10, 1)], Some(2), None),
+        ];
+        for (windows, frontmost_pid, expected) in cases {
+            assert_eq!(
+                true_focus_index(&windows, frontmost_pid),
+                expected,
+                "frontmost_pid: {frontmost_pid:?}"
+            );
+        }
     }
 }
