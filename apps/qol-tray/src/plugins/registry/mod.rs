@@ -88,7 +88,7 @@ pub fn record_release_install(
     plugin_id: &str,
     plugin_root: PathBuf,
 ) -> Result<(), String> {
-    let mut registry = load_registry(config_dir).unwrap_or_default();
+    let mut registry = load_registry(config_dir)?;
     let new_slot = Slot {
         path: plugin_root,
         source: SlotSource::ReleaseAsset,
@@ -116,7 +116,7 @@ pub fn record_dev_link_create(
     plugin_id: &str,
     dev_source: PathBuf,
 ) -> Result<(), String> {
-    let mut registry = load_registry(config_dir).unwrap_or_default();
+    let mut registry = load_registry(config_dir)?;
     let new_active = Slot {
         path: dev_source.clone(),
         source: SlotSource::DevLink {
@@ -140,7 +140,7 @@ pub fn record_dev_link_create(
 }
 
 pub fn record_dev_link_remove(config_dir: &Path, plugin_id: &str) -> Result<(), String> {
-    let mut registry = load_registry(config_dir).unwrap_or_default();
+    let mut registry = load_registry(config_dir)?;
     let Some(idx) = registry.entries.iter().position(|e| e.id == plugin_id) else {
         return Ok(());
     };
@@ -157,7 +157,7 @@ pub fn record_dev_link_remove(config_dir: &Path, plugin_id: &str) -> Result<(), 
 }
 
 pub fn record_release_uninstall(config_dir: &Path, plugin_id: &str) -> Result<(), String> {
-    let mut registry = load_registry(config_dir).unwrap_or_default();
+    let mut registry = load_registry(config_dir)?;
     let Some(idx) = registry.entries.iter().position(|e| e.id == plugin_id) else {
         return Ok(());
     };
@@ -540,5 +540,48 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("Downgrade"));
+    }
+
+    #[test]
+    fn mutations_refuse_to_clobber_a_newer_version_registry() {
+        type Mutation = Box<dyn Fn(&Path) -> Result<(), String>>;
+        let mutations: [(&str, Mutation); 4] = [
+            (
+                "record_release_install",
+                Box::new(|d| record_release_install(d, "plugin-foo", PathBuf::from("/p/foo"))),
+            ),
+            (
+                "record_dev_link_create",
+                Box::new(|d| record_dev_link_create(d, "plugin-foo", PathBuf::from("/dev/src"))),
+            ),
+            (
+                "record_dev_link_remove",
+                Box::new(|d| record_dev_link_remove(d, "plugin-foo")),
+            ),
+            (
+                "record_release_uninstall",
+                Box::new(|d| record_release_uninstall(d, "plugin-foo")),
+            ),
+        ];
+        for (name, mutate) in mutations {
+            let tmp = TempDir::new().unwrap();
+            let newer = Registry {
+                version: CURRENT_REGISTRY_VERSION + 1,
+                entries: vec![sample_entry()],
+            };
+            let content = serde_json::to_string_pretty(&newer).unwrap();
+            std::fs::write(registry_path(tmp.path()), &content).unwrap();
+
+            let result = mutate(tmp.path());
+            assert!(
+                result.is_err(),
+                "{name}: must refuse a newer-version registry"
+            );
+            let on_disk = std::fs::read_to_string(registry_path(tmp.path())).unwrap();
+            assert_eq!(
+                on_disk, content,
+                "{name}: newer-version registry must be left untouched"
+            );
+        }
     }
 }
