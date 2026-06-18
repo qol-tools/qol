@@ -30,9 +30,8 @@ pub(super) fn save_plugin_config(
         PluginConfigManager::new().map_err(|_| Box::new(save_config_failed_response()))?;
     let existing = manager
         .get_config(plugin_id)
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+        .map_err(|_| Box::new(save_config_failed_response()))?
+        .unwrap_or_else(empty_config);
     let merged = merge_config(existing, config);
     manager
         .set_config(plugin_id, merged)
