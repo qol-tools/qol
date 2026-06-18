@@ -19,7 +19,7 @@ pub use control::{
 pub use control::upsert_core_control;
 
 #[cfg(feature = "dev")]
-pub use filter::CoreControlsHandle;
+pub use filter::{is_valid_core_section, CoreControlsHandle, CORE_LOG_SECTION_IDS};
 
 fn rust_log_targets() -> tracing_subscriber::filter::Targets {
     use tracing_subscriber::filter::{LevelFilter, Targets};
@@ -41,9 +41,7 @@ pub fn init_logger() -> CoreControlsHandle {
     let dev_controls = handle.clone();
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_filter(rust_log_targets())
-        .with_filter(tracing_subscriber::filter::filter_fn(move |metadata| {
-            !filter::is_suppressed(&dev_controls, metadata.target(), "")
-        }));
+        .with_filter(filter::CoreLogFilter::new(dev_controls));
 
     tracing_subscriber::registry()
         .with(stderr_layer)

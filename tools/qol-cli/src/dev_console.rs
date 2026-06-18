@@ -35,6 +35,10 @@ const ENDPOINTS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const STOP_GRACE: Duration = Duration::from_secs(5);
 const CRASH_TAIL: usize = 40;
 const ACK_TTL: Duration = Duration::from_secs(6);
+const FILTER_PANEL_MIN_WIDTH: u16 = 32;
+const FILTER_PANEL_MAX_WIDTH: u16 = 78;
+const FILTER_BRICK_GAP: usize = 1;
+const FILTER_BRICK_CHROME: usize = 4;
 
 pub(crate) enum SessionEnd {
     ChildExited(ExitStatus),
@@ -108,6 +112,94 @@ fn preserves_arm(action: Action) -> bool {
             | Action::ToggleKeys
             | Action::Follow
     )
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum FilterStrategy {
+    Include,
+    Exclude,
+}
+
+impl FilterStrategy {
+    fn symbol(self) -> &'static str {
+        match self {
+            Self::Include => "+",
+            Self::Exclude => "-",
+        }
+    }
+
+    fn color(self) -> Color {
+        match self {
+            Self::Include => Color::Green,
+            Self::Exclude => Color::Red,
+        }
+    }
+
+    fn cycle(self) -> Self {
+        match self {
+            Self::Include => Self::Exclude,
+            Self::Exclude => Self::Include,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+struct LogFilter {
+    strategy: FilterStrategy,
+    text: String,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+struct FilterBrick {
+    index: usize,
+    row: usize,
+    x: usize,
+    width: usize,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum FilterMove {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+fn line_matches_filters(line: &str, filters: &[LogFilter]) -> bool {
+    let mut has_include = false;
+    let mut included = false;
+    for filter in filters {
+        if filter.text.is_empty() {
+            continue;
+        }
+        let matched = line.contains(&filter.text);
+        match filter.strategy {
+            FilterStrategy::Exclude if matched => return false,
+            FilterStrategy::Include => {
+                has_include = true;
+                included |= matched;
+            }
+            FilterStrategy::Exclude => {}
+        }
+    }
+    !has_include || included
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FilterState {
+    Closed,
+    Managing,
+    Editing {
+        index: Option<usize>,
+        draft: String,
+        strategy: FilterStrategy,
+    },
+}
+
+impl FilterState {
+    fn is_active(&self) -> bool {
+        !matches!(self, Self::Closed)
+    }
 }
 
 struct LogRing {
@@ -411,11 +503,7 @@ enum RebuildState {
 
 enum Reload {
     Idle,
-    Running {
-        child: Child,
-        rx: Receiver<String>,
-        since: Instant,
-    },
+    Running { child: Child, rx: Receiver<String> },
 }
 
 enum ReloadOutcome {
@@ -446,8 +534,10 @@ struct Dash {
     trace_unavailable: bool,
     boot_rx: Option<Receiver<String>>,
     keys_hidden: bool,
-    filter: String,
-    filtering: bool,
+    filters: Vec<LogFilter>,
+    filter_index: usize,
+    filter_layout_width: usize,
+    filter_state: FilterState,
     copy_count: String,
     copying: bool,
     notice: Option<(Instant, String)>,
@@ -487,8 +577,10 @@ impl Dash {
             trace_unavailable: false,
             boot_rx: None,
             keys_hidden: false,
-            filter: String::new(),
-            filtering: false,
+            filters: Vec::new(),
+            filter_index: 0,
+            filter_layout_width: default_filter_layout_width(),
+            filter_state: FilterState::Closed,
             copy_count: String::new(),
             copying: false,
             notice: None,
@@ -505,6 +597,126 @@ impl Dash {
 
     fn start_doctor(&mut self, mode: DoctorMode) {
         self.doctor.manual = Some((mode, spawn_doctor(mode)));
+    }
+
+    fn clear_filters(&mut self) {
+        self.filters.clear();
+        self.filter_index = 0;
+        self.filter_state = FilterState::Closed;
+    }
+
+    fn open_filter_manager(&mut self) {
+        self.filter_state = FilterState::Managing;
+        self.filter_index = self.filter_index.min(self.filters.len().saturating_sub(1));
+    }
+
+    fn select_filter(&mut self, delta: isize) {
+        if self.filters.is_empty() {
+            self.filter_index = 0;
+            return;
+        }
+        let len = self.filters.len() as isize;
+        self.filter_index = (self.filter_index as isize + delta).rem_euclid(len) as usize;
+    }
+
+    fn move_filter(&mut self, direction: FilterMove) {
+        match direction {
+            FilterMove::Left => self.select_filter(-1),
+            FilterMove::Right => self.select_filter(1),
+            FilterMove::Up | FilterMove::Down => self.move_filter_vertical(direction),
+        }
+    }
+
+    fn move_filter_vertical(&mut self, direction: FilterMove) {
+        if self.filters.is_empty() {
+            self.filter_index = 0;
+            return;
+        }
+        let layout = filter_brick_layout(&self.filters, self.filter_layout_width);
+        let Some(current) = layout.iter().find(|brick| brick.index == self.filter_index) else {
+            self.filter_index = 0;
+            return;
+        };
+        let Some(max_row) = layout.iter().map(|brick| brick.row).max() else {
+            return;
+        };
+        let target_row = match direction {
+            FilterMove::Up if current.row == 0 => max_row,
+            FilterMove::Up => current.row - 1,
+            FilterMove::Down if current.row == max_row => 0,
+            FilterMove::Down => current.row + 1,
+            FilterMove::Left | FilterMove::Right => current.row,
+        };
+        let center = brick_center(current);
+        let Some(target) = layout
+            .iter()
+            .filter(|brick| brick.row == target_row)
+            .min_by_key(|brick| {
+                (
+                    brick_center(brick).abs_diff(center),
+                    brick.index.abs_diff(current.index),
+                )
+            })
+        else {
+            return;
+        };
+        self.filter_index = target.index;
+    }
+
+    fn start_filter_add(&mut self) {
+        self.filter_state = FilterState::Editing {
+            index: None,
+            draft: String::new(),
+            strategy: FilterStrategy::Include,
+        };
+    }
+
+    fn start_filter_edit(&mut self) {
+        let Some(filter) = self.filters.get(self.filter_index) else {
+            return;
+        };
+        self.filter_state = FilterState::Editing {
+            index: Some(self.filter_index),
+            draft: filter.text.clone(),
+            strategy: filter.strategy,
+        };
+    }
+
+    fn save_filter_draft(&mut self) {
+        let FilterState::Editing {
+            index,
+            draft,
+            strategy,
+        } = &self.filter_state
+        else {
+            return;
+        };
+        let text = draft.trim();
+        if text.is_empty() {
+            return;
+        }
+        let filter = LogFilter {
+            strategy: *strategy,
+            text: text.to_string(),
+        };
+        if let Some(index) = index {
+            if let Some(slot) = self.filters.get_mut(*index) {
+                *slot = filter;
+                self.filter_index = *index;
+            }
+        } else {
+            self.filters.push(filter);
+            self.filter_index = self.filters.len().saturating_sub(1);
+        }
+        self.filter_state = FilterState::Managing;
+    }
+
+    fn delete_selected_filter(&mut self) {
+        if self.filters.is_empty() {
+            return;
+        }
+        self.filters.remove(self.filter_index);
+        self.filter_index = self.filter_index.min(self.filters.len().saturating_sub(1));
     }
 }
 
@@ -645,8 +857,8 @@ fn tui_session(
         flush_pokes(dash, probes);
         terminal.draw(|frame| draw(frame, dash))?;
         if let Some((code, mods)) = poll_key()? {
-            if dash.filtering {
-                edit_filter(dash, code);
+            if dash.filter_state.is_active() {
+                edit_filters(dash, code);
             } else if dash.copying {
                 edit_copy(dash, code);
             } else if code == KeyCode::Char(' ') {
@@ -691,17 +903,32 @@ fn drain_boot(dash: &mut Dash) {
     }
 }
 
-fn edit_filter(dash: &mut Dash, code: KeyCode) {
+fn edit_filters(dash: &mut Dash, code: KeyCode) {
+    if let FilterState::Editing {
+        draft, strategy, ..
+    } = &mut dash.filter_state
+    {
+        match code {
+            KeyCode::Char(c) => draft.push(c),
+            KeyCode::Backspace => {
+                draft.pop();
+            }
+            KeyCode::Up | KeyCode::Down => *strategy = (*strategy).cycle(),
+            KeyCode::Enter => dash.save_filter_draft(),
+            KeyCode::Esc => dash.filter_state = FilterState::Managing,
+            _ => {}
+        }
+        return;
+    }
     match code {
-        KeyCode::Char(c) => dash.filter.push(c),
-        KeyCode::Backspace => {
-            dash.filter.pop();
-        }
-        KeyCode::Enter => dash.filtering = false,
-        KeyCode::Esc => {
-            dash.filter.clear();
-            dash.filtering = false;
-        }
+        KeyCode::Left => dash.move_filter(FilterMove::Left),
+        KeyCode::Right => dash.move_filter(FilterMove::Right),
+        KeyCode::Up => dash.move_filter(FilterMove::Up),
+        KeyCode::Down => dash.move_filter(FilterMove::Down),
+        KeyCode::Enter => dash.start_filter_add(),
+        KeyCode::Char('e') | KeyCode::Char('E') => dash.start_filter_edit(),
+        KeyCode::Char('d') | KeyCode::Char('D') => dash.delete_selected_filter(),
+        KeyCode::Esc => dash.filter_state = FilterState::Closed,
         _ => {}
     }
 }
@@ -753,7 +980,7 @@ fn newest_lines(dash: &Dash, count: usize) -> String {
     let filtered: Vec<&String> = ring
         .lines
         .iter()
-        .filter(|line| dash.filter.is_empty() || line.contains(&dash.filter))
+        .filter(|line| line_matches_filters(line, &dash.filters))
         .collect();
     let start = filtered.len().saturating_sub(count);
     filtered[start..]
@@ -803,7 +1030,7 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
                 _ => View::Logs,
             };
             dash.scroll_offset = 0;
-            dash.filter.clear();
+            dash.clear_filters();
         }
         Action::ToggleKeys => dash.keys_hidden = !dash.keys_hidden,
         Action::Rebuild => {
@@ -839,8 +1066,7 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             };
             dash.emu_detail = None;
             dash.scroll_offset = 0;
-            dash.filter.clear();
-            dash.filtering = false;
+            dash.clear_filters();
         }
         Action::ScrollUp => match dash.view {
             View::Dashboard => dash.cursor = dash.cursor.saturating_sub(1),
@@ -869,12 +1095,12 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
         Action::PageDown => dash.scroll_offset = dash.scroll_offset.saturating_sub(page),
         Action::Follow => dash.scroll_offset = 0,
         Action::Filter => {
-            if matches!(dash.view, View::Logs | View::Trace | View::EmuDetail) {
-                dash.filtering = true;
+            if filterable_view(dash.view) {
+                dash.open_filter_manager();
             }
         }
         Action::Copy => {
-            if matches!(dash.view, View::Logs | View::Trace | View::EmuDetail) {
+            if filterable_view(dash.view) {
                 dash.copying = true;
                 dash.copy_count.clear();
                 dash.scroll_offset = 0;
@@ -1244,7 +1470,7 @@ fn set_emu_detail(
     dash.emu_detail = Some(EmuDetail { id, info, replay });
     dash.view = View::EmuDetail;
     dash.scroll_offset = 0;
-    dash.filter.clear();
+    dash.clear_filters();
 }
 
 fn emu_detail_ring(dash: &Dash) -> Option<&LogRing> {
@@ -1359,11 +1585,7 @@ fn start_reload(dash: &mut Dash) {
     match spawn_reload() {
         Some((child, rx)) => {
             dash.logs.push("[qol dev] reloading: qol setup".to_string());
-            dash.reload = Reload::Running {
-                child,
-                rx,
-                since: Instant::now(),
-            };
+            dash.reload = Reload::Running { child, rx };
         }
         None => dash
             .logs
@@ -1445,11 +1667,9 @@ fn open_doctor(dash: &mut Dash) {
 }
 
 fn draw(frame: &mut Frame, dash: &mut Dash) {
-    let [main, footer] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
     let accent = frame_accent(dash);
     let [_, body] =
-        Layout::vertical([Constraint::Length(TITLE_CAP), Constraint::Min(0)]).areas(main);
+        Layout::vertical([Constraint::Length(TITLE_CAP), Constraint::Min(0)]).areas(frame.area());
     let block = Block::bordered()
         .border_style(Style::new().fg(accent))
         .padding(PANEL_PADDING);
@@ -1466,21 +1686,11 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         View::Trace => draw_trace(frame, dash, content),
         View::Endpoints => draw_endpoints(frame, dash, content),
     }
+    draw_filter_panel(frame, dash, inner, accent);
     Sign {
         content: breadcrumb(dash, accent),
     }
     .render(frame, body, accent);
-    let status_style = if dash.is_reloading() {
-        Style::new().fg(Color::Red).bold()
-    } else if dash.armed || dash.filtering || dash.copying {
-        Style::new().fg(Color::Yellow).bold()
-    } else {
-        Style::new().dim()
-    };
-    frame.render_widget(
-        Paragraph::new(status_line(dash)).style(status_style),
-        footer,
-    );
     draw_keys_hud(frame, dash, inner);
 }
 
@@ -1509,6 +1719,14 @@ fn page_description(view: View) -> Option<&'static str> {
         View::Endpoints => Some("local service endpoints"),
         View::Dashboard | View::EmuDetail => None,
     }
+}
+
+fn filterable_view(view: View) -> bool {
+    matches!(view, View::Logs | View::Trace | View::EmuDetail)
+}
+
+fn filters_visible(dash: &Dash) -> bool {
+    filterable_view(dash.view) && !dash.filters.is_empty()
 }
 
 fn breadcrumb(dash: &Dash, accent: Color) -> Line<'static> {
@@ -1544,6 +1762,9 @@ fn breadcrumb(dash: &Dash, accent: Color) -> Line<'static> {
             }
         }
     }
+    if filters_visible(dash) {
+        spans.push(" · FILTERED".fg(Color::Yellow).bold());
+    }
     if dash.is_reloading() {
         spans.push(" · RELOADING".fg(Color::Red).bold());
     } else if dash.armed {
@@ -1554,8 +1775,35 @@ fn breadcrumb(dash: &Dash, accent: Color) -> Line<'static> {
 
 const KEYS_HUD_WIDTH: u16 = 34;
 
-fn context_keys(view: View) -> Vec<(&'static str, &'static str)> {
-    let keys: &[(&'static str, &'static str)] = match view {
+fn context_keys(dash: &Dash) -> Vec<(&'static str, &'static str)> {
+    if dash.copying {
+        return vec![
+            ("digits", "line count"),
+            ("enter", "copy"),
+            ("esc", "cancel"),
+        ];
+    }
+    match &dash.filter_state {
+        FilterState::Managing => {
+            return vec![
+                ("←↑↓→", "select filter"),
+                ("enter", "add"),
+                ("e", "edit"),
+                ("d", "delete"),
+                ("esc", "close"),
+            ];
+        }
+        FilterState::Editing { .. } => {
+            return vec![
+                ("type", "filter text"),
+                ("↑/↓", "strategy + / -"),
+                ("enter", "save"),
+                ("esc", "cancel"),
+            ];
+        }
+        FilterState::Closed => {}
+    }
+    let keys: &[(&'static str, &'static str)] = match dash.view {
         View::Dashboard => &[
             ("↑/↓", "move"),
             ("enter", "act on row"),
@@ -1615,15 +1863,15 @@ fn section_label(label: &'static str) -> Line<'static> {
     Line::from(format!(" {label}").fg(Color::Green).bold())
 }
 
-fn keys_rows(view: View, armed: bool) -> Vec<Line<'static>> {
+fn keys_rows(dash: &Dash) -> Vec<Line<'static>> {
     let mut rows = vec![section_label("global")];
     rows.push(Line::from(""));
-    rows.extend(key_lines(&global_keys(armed)));
+    rows.extend(key_lines(&global_keys(dash.armed)));
     rows.push(Line::from(""));
     rows.push(Line::from(""));
     rows.push(section_label("context"));
     rows.push(Line::from(""));
-    rows.extend(key_lines(&context_keys(view)));
+    rows.extend(key_lines(&context_keys(dash)));
     rows
 }
 
@@ -1631,7 +1879,7 @@ fn draw_keys_hud(frame: &mut Frame, dash: &Dash, area: Rect) {
     if dash.keys_hidden {
         return;
     }
-    let rows = keys_rows(dash.view, dash.armed);
+    let rows = keys_rows(dash);
     let height = (rows.len() as u16 + SignBox::CHROME_ROWS).min(area.height);
     if height == 0 {
         return;
@@ -1648,6 +1896,172 @@ fn draw_keys_hud(frame: &mut Frame, dash: &Dash, area: Rect) {
         rows,
     }
     .render(frame, rect, frame_accent(dash));
+}
+
+fn draw_filter_panel(frame: &mut Frame, dash: &mut Dash, area: Rect, accent: Color) {
+    if !dash.filter_state.is_active() {
+        return;
+    }
+    let width = if area.width <= FILTER_PANEL_MIN_WIDTH {
+        area.width
+    } else {
+        area.width
+            .saturating_sub(4)
+            .clamp(FILTER_PANEL_MIN_WIDTH, FILTER_PANEL_MAX_WIDTH)
+    };
+    dash.filter_layout_width = width.saturating_sub(2) as usize;
+    let mut rows = filter_panel_rows(dash);
+    let height = (rows.len() as u16 + SignBox::CHROME_ROWS).min(area.height);
+    if width == 0 || height == 0 {
+        return;
+    }
+    rows.truncate(SignBox::capacity(height));
+    let rect = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + area.height.saturating_sub(height + 1),
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    SignBox {
+        title: "filters",
+        rows,
+    }
+    .render(frame, rect, accent);
+}
+
+fn filter_panel_rows(dash: &Dash) -> Vec<Line<'static>> {
+    match &dash.filter_state {
+        FilterState::Closed => Vec::new(),
+        FilterState::Managing if dash.filters.is_empty() => vec![
+            Line::from(" no filters".fg(Color::DarkGray)),
+            Line::from(" enter add".fg(Color::DarkGray)),
+        ],
+        FilterState::Managing => {
+            filter_brick_rows(&dash.filters, dash.filter_index, dash.filter_layout_width)
+        }
+        FilterState::Editing {
+            index,
+            draft,
+            strategy,
+        } => {
+            let label = if index.is_some() { " edit" } else { " add" };
+            vec![Line::from(vec![
+                label.fg(Color::DarkGray),
+                " ".into(),
+                strategy.symbol().fg(strategy.color()).bold(),
+                " ".into(),
+                format!("{draft}_").fg(Color::White),
+            ])]
+        }
+    }
+}
+
+fn filter_brick_rows(
+    filters: &[LogFilter],
+    selected_index: usize,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let layout = filter_brick_layout(filters, width);
+    let Some(max_row) = layout.iter().map(|brick| brick.row).max() else {
+        return Vec::new();
+    };
+    (0..=max_row)
+        .map(|row| filter_brick_row(filters, selected_index, &layout, row))
+        .collect()
+}
+
+fn filter_brick_row(
+    filters: &[LogFilter],
+    selected_index: usize,
+    layout: &[FilterBrick],
+    row: usize,
+) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut x = 0;
+    for brick in layout.iter().filter(|brick| brick.row == row) {
+        if brick.x > x {
+            spans.push(Span::raw(" ".repeat(brick.x - x)));
+        }
+        let filter = &filters[brick.index];
+        spans.extend(filter_brick_spans(
+            filter,
+            brick.index == selected_index,
+            brick.width,
+        ));
+        x = brick.x + brick.width;
+    }
+    Line::from(spans)
+}
+
+fn filter_brick_layout(filters: &[LogFilter], width: usize) -> Vec<FilterBrick> {
+    let width = width.max(1);
+    let mut row = 0;
+    let mut x = 0;
+    let mut layout = Vec::with_capacity(filters.len());
+    for (index, filter) in filters.iter().enumerate() {
+        let brick_width = filter_brick_width(filter, width);
+        if x > 0 && x + FILTER_BRICK_GAP + brick_width > width {
+            row += 1;
+            x = 0;
+        }
+        let gap = if x == 0 { 0 } else { FILTER_BRICK_GAP };
+        let brick_x = x + gap;
+        layout.push(FilterBrick {
+            index,
+            row,
+            x: brick_x,
+            width: brick_width,
+        });
+        x = brick_x + brick_width;
+    }
+    layout
+}
+
+fn filter_brick_width(filter: &LogFilter, row_width: usize) -> usize {
+    let max_text_width = filter_text_width(row_width);
+    FILTER_BRICK_CHROME + filter_text(&filter.text, max_text_width).chars().count()
+}
+
+fn filter_brick_spans(filter: &LogFilter, selected: bool, width: usize) -> Vec<Span<'static>> {
+    let text = filter_text(&filter.text, filter_text_width(width));
+    let text_style = if selected {
+        Style::new().fg(Color::White).bg(Color::Rgb(38, 44, 74))
+    } else {
+        Style::new().fg(Color::DarkGray)
+    };
+    let symbol_style = if selected {
+        Style::new()
+            .fg(filter.strategy.color())
+            .bg(Color::Rgb(38, 44, 74))
+            .bold()
+    } else {
+        Style::new().fg(filter.strategy.color()).bold()
+    };
+    let edge = if selected { ("[", "]") } else { (" ", " ") };
+    vec![
+        Span::styled(edge.0.to_string(), text_style),
+        Span::styled(filter.strategy.symbol().to_string(), symbol_style),
+        Span::styled(" ".to_string(), text_style),
+        Span::styled(text, text_style),
+        Span::styled(edge.1.to_string(), text_style),
+    ]
+}
+
+fn filter_text(raw: &str, max_width: usize) -> String {
+    raw.chars().take(max_width.max(1)).collect()
+}
+
+fn filter_text_width(row_width: usize) -> usize {
+    row_width.saturating_sub(FILTER_BRICK_CHROME).max(1)
+}
+
+fn brick_center(brick: &FilterBrick) -> usize {
+    brick.x.saturating_mul(2) + brick.width
+}
+
+fn default_filter_layout_width() -> usize {
+    FILTER_PANEL_MAX_WIDTH.saturating_sub(2) as usize
 }
 
 struct SignBox<'a> {
@@ -1711,92 +2125,6 @@ fn list_capacity(height: u16) -> usize {
 
 fn view_content(frame: &mut Frame, area: Rect, lines: Vec<Line>) {
     frame.render_widget(Paragraph::new(space_rows(lines, ITEM_GAP)), area);
-}
-
-fn status_line(dash: &Dash) -> String {
-    if let Reload::Running { since, .. } = &dash.reload {
-        return format!(
-            " RELOADING qol dev · rebuilding · {}",
-            format_duration(since.elapsed())
-        );
-    }
-    if dash.copying {
-        return format!(
-            " copy last N: {}_ · enter copy · esc cancel",
-            dash.copy_count
-        );
-    }
-    if dash.filtering {
-        return format!(" filter: {}_ · enter apply · esc cancel", dash.filter);
-    }
-    if dash.armed {
-        return armed_status(dash);
-    }
-    if let Some((at, message)) = &dash.notice {
-        if at.elapsed() < ACK_TTL {
-            return format!(" {message}");
-        }
-    }
-    match dash.view {
-        View::Dashboard => {
-            let hints = match ROWS[dash.cursor] {
-                Row::Tray => "enter rebuild tray",
-                Row::Web => "enter open site · → endpoints",
-                Row::Plugins => "enter reload · → list",
-                Row::Emu => "enter open · → open",
-                Row::Doctor => "enter run · → steps",
-                Row::Logs => "→ open",
-                Row::Trace => "→ open",
-            };
-            format!(" {hints}")
-        }
-        View::Emu => {
-            let selected_id = selected_emu_status(dash)
-                .map(|status| status.id.clone())
-                .or_else(|| selected_candidate(dash).map(|candidate| candidate.id.clone()));
-            match selected_id {
-                Some(id) if is_running(dash, &id) => {
-                    format!(" {id} running · enter stop · → log")
-                }
-                Some(_) if selected_candidate(dash).is_some() => {
-                    " enter boot · a add · t set arch".to_string()
-                }
-                _ => " enter boots the selected emu · → detail".to_string(),
-            }
-        }
-        View::EmuDetail => match (dash.emu_detail.as_ref(), dash.filter.is_empty()) {
-            (Some(detail), true) => format!(" {}", detail.id),
-            (Some(detail), false) => format!(" {} · filter: {}", detail.id, dash.filter),
-            (None, _) => String::new(),
-        },
-        View::Logs | View::Trace => {
-            if dash.filter.is_empty() {
-                String::new()
-            } else {
-                format!(" filter: {}", dash.filter)
-            }
-        }
-        View::Doctor | View::Plugins | View::Endpoints => String::new(),
-    }
-}
-
-fn armed_status(dash: &Dash) -> String {
-    match dash.view {
-        View::Dashboard => {
-            let hint = match ROWS[dash.cursor] {
-                Row::Doctor => "enter fix",
-                Row::Tray | Row::Web | Row::Plugins | Row::Emu | Row::Logs | Row::Trace => {
-                    "no armed action"
-                }
-            };
-            format!(" ARMED · {hint} · space/esc cancel ")
-        }
-        View::Doctor => " RAW · space friendly · esc done ".to_string(),
-        View::Emu => " ARMED · enter check · space/esc cancel ".to_string(),
-        View::Logs | View::Trace | View::Plugins | View::Endpoints | View::EmuDetail => {
-            " ARMED · space/esc cancel ".to_string()
-        }
-    }
 }
 
 fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
@@ -2258,7 +2586,7 @@ fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) {
             frame,
             log_area,
             &pane.ring,
-            &dash.filter,
+            &dash.filters,
             &mut dash.scroll_offset,
             &mut dash.log_height,
             accent,
@@ -2275,7 +2603,7 @@ fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) {
             frame,
             log_area,
             &pane.ring,
-            &dash.filter,
+            &dash.filters,
             &mut dash.scroll_offset,
             &mut dash.log_height,
             accent,
@@ -2380,7 +2708,7 @@ fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let highlight = copy_highlight(dash);
     let (rows, _) = stream_rows(
         &dash.logs.ring,
-        &dash.filter,
+        &dash.filters,
         &mut dash.scroll_offset,
         &mut dash.log_height,
         area.height as usize,
@@ -2391,14 +2719,14 @@ fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
 }
 
 fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
-    if dash.trace.ring.lines.is_empty() && dash.filter.is_empty() {
+    if dash.trace.ring.lines.is_empty() && dash.filters.is_empty() {
         view_content(frame, area, vec![Line::from("  waiting for trace events")]);
         return;
     }
     let highlight = copy_highlight(dash);
     let (rows, _) = stream_rows(
         &dash.trace.ring,
-        &dash.filter,
+        &dash.filters,
         &mut dash.scroll_offset,
         &mut dash.log_height,
         area.height as usize,
@@ -2411,7 +2739,7 @@ fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
 #[allow(clippy::too_many_arguments)]
 fn stream_rows<'a>(
     ring: &'a LogRing,
-    filter: &str,
+    filters: &[LogFilter],
     scroll_offset: &mut usize,
     log_height: &mut usize,
     height: usize,
@@ -2422,7 +2750,7 @@ fn stream_rows<'a>(
     let filtered: Vec<&'a String> = ring
         .lines
         .iter()
-        .filter(|line| filter.is_empty() || line.contains(filter))
+        .filter(|line| line_matches_filters(line, filters))
         .collect();
     let total = filtered.len();
     *scroll_offset = clamp_offset(total, height, *scroll_offset);
@@ -2449,7 +2777,7 @@ fn draw_run_log(
     frame: &mut Frame,
     area: Rect,
     ring: &LogRing,
-    filter: &str,
+    filters: &[LogFilter],
     scroll_offset: &mut usize,
     log_height: &mut usize,
     accent: Color,
@@ -2459,7 +2787,7 @@ fn draw_run_log(
     let inner_width = area.width.saturating_sub(2) as usize;
     let (rows, total) = stream_rows(
         ring,
-        filter,
+        filters,
         scroll_offset,
         log_height,
         height,
@@ -2875,6 +3203,13 @@ mod tests {
         spans.iter().map(|span| span.content.as_ref()).collect()
     }
 
+    fn log_filter(strategy: FilterStrategy, text: &str) -> LogFilter {
+        LogFilter {
+            strategy,
+            text: text.to_string(),
+        }
+    }
+
     #[test]
     fn relative_age_gains_a_seconds_bucket() {
         let cases = [
@@ -3086,18 +3421,6 @@ mod tests {
         assert_eq!(dash.cursor, ROWS.len() - 1, "clamps at bottom");
         apply_action(&mut dash, Action::ScrollUp, false);
         assert_eq!(dash.cursor, ROWS.len() - 2);
-    }
-
-    #[test]
-    fn armed_status_offers_fix_only_on_doctor_row() {
-        let mut dash = Dash::new(Vec::new());
-        dash.armed = true;
-        let cases = [(4usize, "enter fix"), (0, "no armed action")];
-        for (cursor, expected) in cases {
-            dash.cursor = cursor;
-            let footer = armed_status(&dash);
-            assert!(footer.contains(expected), "cursor {cursor}: {footer}");
-        }
     }
 
     #[test]
@@ -3346,7 +3669,7 @@ mod tests {
     }
 
     #[test]
-    fn list_and_status_reflect_a_live_run() {
+    fn live_run_state_exposes_running_detail() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Emu;
         dash.emu = EmuState::Done(vec![emu_env("foo", ResolveState::Ready)]);
@@ -3354,7 +3677,6 @@ mod tests {
             .insert("foo".to_string(), live_pane("  boot     foo · qmp"));
         assert!(is_running(&dash, "foo"));
         assert_eq!(live_verb(&dash, "foo").as_deref(), Some("boot"));
-        assert_eq!(status_line(&dash), " foo running · enter stop · → log");
     }
 
     fn render_text(dash: &mut Dash) -> String {
@@ -3439,6 +3761,38 @@ mod tests {
     }
 
     #[test]
+    fn filterable_log_views_mark_saved_filters_in_the_breadcrumb() {
+        for view in [View::Logs, View::Trace, View::EmuDetail] {
+            let mut dash = Dash::new(Vec::new());
+            dash.view = view;
+            dash.filters = vec![log_filter(FilterStrategy::Include, "shortcut")];
+            if view == View::EmuDetail {
+                dash.emu_detail = Some(EmuDetail {
+                    id: "foo".to_string(),
+                    info: Vec::new(),
+                    replay: None,
+                });
+            }
+            let text = span_text(&breadcrumb(&dash, Color::Green).spans);
+            assert!(
+                text.contains("FILTERED"),
+                "filterable view should mark active filters: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_filtering_views_do_not_mark_filters_in_the_breadcrumb() {
+        let mut logs = Dash::new(Vec::new());
+        logs.view = View::Logs;
+        assert!(!span_text(&breadcrumb(&logs, Color::Green).spans).contains("FILTERED"));
+
+        let mut dashboard = Dash::new(Vec::new());
+        dashboard.filters = vec![log_filter(FilterStrategy::Include, "shortcut")];
+        assert!(!span_text(&breadcrumb(&dashboard, Color::Green).spans).contains("FILTERED"));
+    }
+
+    #[test]
     fn qol_dev_shell_sign_is_centered() {
         let mut dash = Dash::new(Vec::new());
         let rows = render_rows(&mut dash);
@@ -3519,7 +3873,8 @@ mod tests {
 
     #[test]
     fn keys_rows_space_sections() {
-        let rows: Vec<String> = keys_rows(View::Dashboard, false)
+        let dash = Dash::new(Vec::new());
+        let rows: Vec<String> = keys_rows(&dash)
             .into_iter()
             .map(|line| span_text(&line.spans))
             .collect();
@@ -3549,6 +3904,64 @@ mod tests {
     }
 
     #[test]
+    fn keys_hud_and_panel_follow_filter_state() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Logs;
+        dash.open_filter_manager();
+        dash.filter_layout_width = 24;
+        dash.filters = vec![
+            log_filter(FilterStrategy::Include, "shortcut"),
+            log_filter(FilterStrategy::Exclude, "success"),
+            log_filter(FilterStrategy::Include, "trace"),
+        ];
+
+        let text = render_text(&mut dash);
+        assert!(text.contains("select filter"), "manager keys missing");
+        assert!(text.contains("delete"), "delete key missing");
+        dash.filter_layout_width = 24;
+        let rows: Vec<String> = filter_panel_rows(&dash)
+            .into_iter()
+            .map(|line| span_text(&line.spans))
+            .collect();
+        assert_eq!(rows[0], "[+ shortcut]  - success ");
+        assert_eq!(rows[1], " + trace ");
+
+        dash.start_filter_add();
+        let text = render_text(&mut dash);
+        assert!(
+            text.contains("strategy + / -"),
+            "editing strategy key missing"
+        );
+        assert!(text.contains("save"), "editing save key missing");
+        let rows: Vec<String> = filter_panel_rows(&dash)
+            .into_iter()
+            .map(|line| span_text(&line.spans))
+            .collect();
+        assert_eq!(rows, vec![" add + _"]);
+    }
+
+    #[test]
+    fn filter_manager_arrows_follow_brick_rows() {
+        let mut dash = Dash::new(Vec::new());
+        dash.open_filter_manager();
+        dash.filter_layout_width = 24;
+        dash.filters = vec![
+            log_filter(FilterStrategy::Include, "shortcut"),
+            log_filter(FilterStrategy::Exclude, "success"),
+            log_filter(FilterStrategy::Include, "trace"),
+        ];
+
+        edit_filters(&mut dash, KeyCode::Right);
+        assert_eq!(dash.filter_index, 1, "right selects next brick");
+        edit_filters(&mut dash, KeyCode::Down);
+        assert_eq!(dash.filter_index, 2, "down selects nearest brick below");
+        edit_filters(&mut dash, KeyCode::Up);
+        assert_eq!(dash.filter_index, 0, "up selects nearest brick above");
+        edit_filters(&mut dash, KeyCode::Left);
+        assert_eq!(dash.filter_index, 2, "left wraps to previous row tail");
+    }
+
+    #[test]
     fn toggle_keys_hides_and_restores_the_hud() {
         let mut dash = Dash::new(Vec::new());
         apply_action(&mut dash, Action::ToggleKeys, false);
@@ -3569,27 +3982,28 @@ mod tests {
         let mut dash = Dash::new(Vec::new());
         let child = Command::new("true").spawn().unwrap();
         let (_tx, rx) = channel();
-        dash.reload = Reload::Running {
-            child,
-            rx,
-            since: Instant::now(),
-        };
+        dash.reload = Reload::Running { child, rx };
         assert!(dash.is_reloading());
         assert_eq!(frame_accent(&dash), Color::Red);
-        let status = status_line(&dash);
-        assert!(status.contains("RELOADING"), "{status}");
         if let Reload::Running { mut child, .. } = dash.reload {
             let _ = child.wait();
         }
     }
 
     #[test]
-    fn status_line_prompts_to_boot_when_no_emu_runs() {
+    fn shell_uses_last_terminal_row_after_footer_removal() {
         let mut dash = Dash::new(Vec::new());
-        dash.view = View::Emu;
-        assert_eq!(
-            status_line(&dash),
-            " enter boots the selected emu · → detail"
+        dash.view = View::Logs;
+        dash.open_filter_manager();
+        let rows = render_rows(&mut dash);
+        let last = rows.last().expect("render produced rows");
+        assert!(
+            last.contains('└') && last.contains('┘'),
+            "main panel should own the last terminal row: {last}"
+        );
+        assert!(
+            !last.contains("filter") && !last.contains("enter"),
+            "footer text leaked onto the last row: {last}"
         );
     }
 
@@ -3655,22 +4069,55 @@ mod tests {
     }
 
     #[test]
-    fn edit_filter_types_backspaces_applies_and_cancels() {
+    fn edit_filters_adds_cycles_edits_and_deletes() {
         let mut dash = Dash::new(Vec::new());
-        dash.filtering = true;
+        dash.open_filter_manager();
+        edit_filters(&mut dash, KeyCode::Enter);
         for c in "focus".chars() {
-            edit_filter(&mut dash, KeyCode::Char(c));
+            edit_filters(&mut dash, KeyCode::Char(c));
         }
-        assert_eq!(dash.filter, "focus");
-        edit_filter(&mut dash, KeyCode::Backspace);
-        assert_eq!(dash.filter, "focu", "backspace deletes last char");
-        edit_filter(&mut dash, KeyCode::Enter);
-        assert!(!dash.filtering, "enter exits typing mode");
-        assert_eq!(dash.filter, "focu", "enter keeps the applied query");
-        dash.filtering = true;
-        edit_filter(&mut dash, KeyCode::Esc);
-        assert!(dash.filter.is_empty(), "esc clears the query");
-        assert!(!dash.filtering, "esc exits typing mode");
+        edit_filters(&mut dash, KeyCode::Backspace);
+        edit_filters(&mut dash, KeyCode::Down);
+        edit_filters(&mut dash, KeyCode::Enter);
+        assert_eq!(
+            dash.filters,
+            vec![log_filter(FilterStrategy::Exclude, "focu")]
+        );
+        assert!(matches!(dash.filter_state, FilterState::Managing));
+
+        edit_filters(&mut dash, KeyCode::Char('e'));
+        edit_filters(&mut dash, KeyCode::Backspace);
+        edit_filters(&mut dash, KeyCode::Up);
+        edit_filters(&mut dash, KeyCode::Enter);
+        assert_eq!(
+            dash.filters,
+            vec![log_filter(FilterStrategy::Include, "foc")]
+        );
+
+        edit_filters(&mut dash, KeyCode::Char('d'));
+        assert!(dash.filters.is_empty(), "d deletes the selected filter");
+        edit_filters(&mut dash, KeyCode::Esc);
+        assert!(matches!(dash.filter_state, FilterState::Closed));
+    }
+
+    #[test]
+    fn line_matches_filters_combines_include_and_exclude_rules() {
+        let filters = vec![
+            log_filter(FilterStrategy::Include, "shortcut"),
+            log_filter(FilterStrategy::Include, "trace"),
+            log_filter(FilterStrategy::Exclude, "success"),
+        ];
+        assert!(line_matches_filters("shortcut failed", &filters));
+        assert!(line_matches_filters("trace emitted", &filters));
+        assert!(!line_matches_filters("profile synced", &filters));
+        assert!(!line_matches_filters("shortcut success", &filters));
+    }
+
+    #[test]
+    fn exclude_only_filters_keep_non_matching_lines() {
+        let filters = vec![log_filter(FilterStrategy::Exclude, "noise")];
+        assert!(line_matches_filters("important trace", &filters));
+        assert!(!line_matches_filters("noise trace", &filters));
     }
 
     #[test]
@@ -3700,13 +4147,13 @@ mod tests {
             "gamma\ndelta",
             "tail of N newest lines"
         );
-        dash.filter = "a".to_string();
+        dash.filters = vec![log_filter(FilterStrategy::Include, "a")];
         assert_eq!(
             newest_lines(&dash, 2),
             "gamma\ndelta",
             "filter keeps only matching lines before taking the tail"
         );
-        dash.filter = "beta".to_string();
+        dash.filters = vec![log_filter(FilterStrategy::Include, "beta")];
         assert_eq!(
             newest_lines(&dash, 5),
             "beta",

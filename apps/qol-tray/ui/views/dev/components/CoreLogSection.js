@@ -5,9 +5,20 @@ import { useListSelection } from '../../../lib/hooks/useListSelection.js';
 import { FRONTEND_LOG_SECTIONS } from '../frontend-log-sections.js';
 
 const CORE_BACKEND_SECTIONS = [
-    { id: 'runtime', name: 'Runtime', description: 'Socket, state, polling' },
+    { id: 'auth', name: 'Auth', description: 'GitHub auth, auth health' },
+    { id: 'desktop-state', name: 'Desktop State', description: 'Focus, monitors, windows' },
+    { id: 'features', name: 'Features', description: 'Built-in feature catch-all' },
+    { id: 'hotkeys', name: 'Hotkeys', description: 'Global hotkeys, capture, reloads' },
+    { id: 'launcher-apps', name: 'Launcher Apps', description: 'Exported launcher entries' },
+    { id: 'plugin-store', name: 'Plugin Store', description: 'Store, settings, dev server' },
     { id: 'plugins', name: 'Plugins', description: 'Daemon lifecycle, loading' },
-    { id: 'core', name: 'Core', description: 'Tray, hotkeys, menu, updates' }
+    { id: 'profile', name: 'Profile', description: 'Profile sync, import, backups' },
+    { id: 'runtime', name: 'Runtime', description: 'Socket, state, polling' },
+    { id: 'shortcuts', name: 'Shortcuts', description: 'Shortcut storage, execution' },
+    { id: 'task-runner', name: 'Task Runner', description: 'Task config, execution' },
+    { id: 'tray', name: 'Tray', description: 'Tray menu, platform shell' },
+    { id: 'updates', name: 'Updates', description: 'Update checks and install' },
+    { id: 'core', name: 'Core', description: 'Catch-all for qol-tray internals' }
 ];
 
 const CORE_SECTIONS = [

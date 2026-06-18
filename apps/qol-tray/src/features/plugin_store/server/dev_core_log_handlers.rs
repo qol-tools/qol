@@ -9,8 +9,6 @@ use axum::{
 use super::helpers::shared_config_dir_or_response;
 use super::types::{AppState, UpsertPluginLogControlRequest};
 
-const VALID_SECTIONS: &[&str] = &["runtime", "plugins", "core"];
-
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route("/dev/core-log-controls", get(get_core_log_controls))
@@ -36,10 +34,14 @@ async fn upsert_core_log_control(
     State(state): State<AppState>,
     Json(req): Json<UpsertPluginLogControlRequest>,
 ) -> impl IntoResponse {
-    if !VALID_SECTIONS.contains(&section.as_str()) {
+    if !crate::logging::is_valid_core_section(&section) {
         return (
             StatusCode::BAD_REQUEST,
-            format!("Invalid section: {}. Valid: {:?}", section, VALID_SECTIONS),
+            format!(
+                "Invalid section: {}. Valid: {:?}",
+                section,
+                crate::logging::CORE_LOG_SECTION_IDS
+            ),
         )
             .into_response();
     }

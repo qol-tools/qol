@@ -5,12 +5,53 @@ use super::validation;
 
 pub fn load() -> Result<ShortcutsConfig> {
     let path = crate::paths::shortcuts_path()?;
-    crate::file_io::load_json_or_default(&path)
+    if !path.exists() {
+        log::debug!(
+            "Shortcuts config missing; using default: {}",
+            path.display()
+        );
+        return Ok(ShortcutsConfig::default());
+    }
+    match crate::file_io::load_json_or_default::<ShortcutsConfig>(&path) {
+        Ok(config) => {
+            log::debug!(
+                "Shortcuts config loaded: count={} path={}",
+                config.shortcuts.len(),
+                path.display()
+            );
+            Ok(config)
+        }
+        Err(error) => {
+            log::error!(
+                "Shortcuts config load failed: path={} error={:#}",
+                path.display(),
+                error
+            );
+            Err(error)
+        }
+    }
 }
 
 pub fn save(config: &ShortcutsConfig) -> Result<()> {
     let path = crate::paths::shortcuts_path()?;
-    crate::file_io::write_pretty_json(&path, config)
+    match crate::file_io::write_pretty_json(&path, config) {
+        Ok(()) => {
+            log::info!(
+                "Shortcuts config saved: count={} path={}",
+                config.shortcuts.len(),
+                path.display()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            log::error!(
+                "Shortcuts config save failed: path={} error={:#}",
+                path.display(),
+                error
+            );
+            Err(error)
+        }
+    }
 }
 
 pub fn find_by_id(config: &ShortcutsConfig, id: &str) -> Option<Shortcut> {
@@ -22,6 +63,11 @@ pub fn add(config: &mut ShortcutsConfig, shortcut: Shortcut) -> Result<(), Strin
     if config.shortcuts.iter().any(|s| s.id == shortcut.id) {
         return Err(format!("shortcut with id '{}' already exists", shortcut.id));
     }
+    log::info!(
+        "Shortcut added: id={} action={}",
+        shortcut.id,
+        shortcut_action_kind(&shortcut.action)
+    );
     config.shortcuts.push(shortcut);
     Ok(())
 }
@@ -32,6 +78,12 @@ pub fn update(config: &mut ShortcutsConfig, shortcut: Shortcut) -> Result<(), St
         Some(e) => e,
         None => return Err(format!("shortcut '{}' not found", shortcut.id)),
     };
+    log::info!(
+        "Shortcut updated: id={} action={} enabled={}",
+        shortcut.id,
+        shortcut_action_kind(&shortcut.action),
+        shortcut.enabled
+    );
     *existing = shortcut;
     Ok(())
 }
@@ -42,7 +94,15 @@ pub fn remove(config: &mut ShortcutsConfig, id: &str) -> Result<(), String> {
     if config.shortcuts.len() == len_before {
         return Err(format!("shortcut '{}' not found", id));
     }
+    log::info!("Shortcut removed: id={}", id);
     Ok(())
+}
+
+fn shortcut_action_kind(action: &super::model::ShortcutAction) -> &'static str {
+    match action {
+        super::model::ShortcutAction::OpenUrl { .. } => "open_url",
+        super::model::ShortcutAction::LaunchApp { .. } => "launch_app",
+    }
 }
 
 #[cfg(test)]
