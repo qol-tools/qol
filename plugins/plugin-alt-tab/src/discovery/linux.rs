@@ -142,7 +142,7 @@ fn get_open_windows_with(session: &DiscoverySession) -> Vec<WindowInfo> {
         return Vec::new();
     }
     let filtered = filter_normal_windows(&session.conn, &ids, &session.atoms);
-    let mut windows = collect_window_info(&session.conn, &filtered, &session.atoms);
+    let mut windows = collect_window_info(&session.conn, session.root, &filtered, &session.atoms);
     promote_active_info(&session.conn, session.root, &session.atoms, &mut windows);
 
     #[cfg(debug_assertions)]
@@ -231,12 +231,17 @@ struct ResolvedProps {
     wm_name: Vec<Option<GetPropertyReply>>,
     wm_class: Vec<Option<GetPropertyReply>>,
     state: Vec<Option<GetPropertyReply>>,
-    geom: Vec<Option<x11rb::protocol::xproto::GetGeometryReply>>,
+    geom: Vec<Option<WindowGeometry>>,
 }
 
-fn collect_window_info(conn: &impl Connection, ids: &[u32], atoms: &AtomMap) -> Vec<WindowInfo> {
+fn collect_window_info(
+    conn: &impl Connection,
+    root: u32,
+    ids: &[u32],
+    atoms: &AtomMap,
+) -> Vec<WindowInfo> {
     let hidden_atom = atoms.get("_NET_WM_STATE_HIDDEN").copied().unwrap_or(0);
-    let mut props = pipeline_and_resolve(conn, ids, atoms);
+    let mut props = pipeline_and_resolve(conn, root, ids, atoms);
     let mut windows = Vec::with_capacity(ids.len());
 
     for (i, &id) in ids.iter().enumerate().rev() {
@@ -248,7 +253,12 @@ fn collect_window_info(conn: &impl Connection, ids: &[u32], atoms: &AtomMap) -> 
     windows
 }
 
-fn pipeline_and_resolve(conn: &impl Connection, ids: &[u32], atoms: &AtomMap) -> ResolvedProps {
+fn pipeline_and_resolve(
+    conn: &impl Connection,
+    root: u32,
+    ids: &[u32],
+    atoms: &AtomMap,
+) -> ResolvedProps {
     let state_atom = atoms.get("_NET_WM_STATE").copied();
     let net_name_atom = atoms.get("_NET_WM_NAME").copied();
     let wm_class_atom = atoms.get("WM_CLASS").copied().unwrap_or(0);
@@ -269,10 +279,19 @@ fn pipeline_and_resolve(conn: &impl Connection, ids: &[u32], atoms: &AtomMap) ->
                 .ok()
         }),
         geom: {
-            let cookies: Vec<_> = ids.iter().map(|&id| conn.get_geometry(id).ok()).collect();
-            cookies
+            let roots: Vec<_> = ids
+                .iter()
+                .map(|&id| conn.translate_coordinates(id, root, 0, 0).ok())
+                .collect();
+            let geometries: Vec<_> = ids.iter().map(|&id| conn.get_geometry(id).ok()).collect();
+            geometries
                 .into_iter()
-                .map(|c| c.and_then(|c| c.reply().ok()))
+                .zip(roots)
+                .map(|(geom, root)| {
+                    let geom = geom.and_then(|c| c.reply().ok())?;
+                    let root = root.and_then(|c| c.reply().ok());
+                    Some(WindowGeometry::from_replies(&geom, root.as_ref()))
+                })
                 .collect()
         },
     }
@@ -307,12 +326,51 @@ fn build_window_info(
         app_name,
         preview_path: None,
         icon: None,
-        x: props.geom[idx].as_ref().map_or(0.0, |r| r.x as f32),
-        y: props.geom[idx].as_ref().map_or(0.0, |r| r.y as f32),
-        width: props.geom[idx].as_ref().map_or(0.0, |r| r.width as f32),
-        height: props.geom[idx].as_ref().map_or(0.0, |r| r.height as f32),
+        x: props.geom[idx].as_ref().map_or(0.0, |r| r.x),
+        y: props.geom[idx].as_ref().map_or(0.0, |r| r.y),
+        width: props.geom[idx].as_ref().map_or(0.0, |r| r.width),
+        height: props.geom[idx].as_ref().map_or(0.0, |r| r.height),
         is_minimized: resolve_minimized(idx, props, hidden_atom),
     })
+}
+
+#[derive(Clone, Copy)]
+struct WindowGeometry {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+impl WindowGeometry {
+    fn from_replies(
+        geom: &x11rb::protocol::xproto::GetGeometryReply,
+        root: Option<&x11rb::protocol::xproto::TranslateCoordinatesReply>,
+    ) -> Self {
+        Self::from_parts(
+            geom.x,
+            geom.y,
+            geom.width,
+            geom.height,
+            root.map(|r| (r.dst_x, r.dst_y)),
+        )
+    }
+
+    fn from_parts(
+        local_x: i16,
+        local_y: i16,
+        width: u16,
+        height: u16,
+        root: Option<(i16, i16)>,
+    ) -> Self {
+        let (x, y) = root.unwrap_or((local_x, local_y));
+        Self {
+            x: x as f32,
+            y: y as f32,
+            width: width as f32,
+            height: height as f32,
+        }
+    }
 }
 
 fn hydrate_icons(conn: &impl Connection, atoms: &AtomMap, windows: &mut [WindowInfo]) {
@@ -530,5 +588,25 @@ mod tests {
         cache.store(1, "", icon(9));
 
         assert_icon(cache.get(1, ""), 9);
+    }
+
+    #[test]
+    fn root_translation_wins_over_parent_relative_geometry() {
+        let geom = WindowGeometry::from_parts(0, 0, 1920, 1080, Some((2560, 0)));
+
+        assert_eq!(geom.x, 2560.0);
+        assert_eq!(geom.y, 0.0);
+        assert_eq!(geom.width, 1920.0);
+        assert_eq!(geom.height, 1080.0);
+    }
+
+    #[test]
+    fn geometry_falls_back_to_local_position_without_translation() {
+        let geom = WindowGeometry::from_parts(12, 34, 800, 600, None);
+
+        assert_eq!(geom.x, 12.0);
+        assert_eq!(geom.y, 34.0);
+        assert_eq!(geom.width, 800.0);
+        assert_eq!(geom.height, 600.0);
     }
 }

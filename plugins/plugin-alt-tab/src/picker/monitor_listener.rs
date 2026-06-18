@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -15,6 +15,9 @@ use crate::{PickerWindowState, SharedIconCache};
 const DATA_REFRESH_DELAY_MS: u64 = 75;
 
 static DATA_REFRESH_TX: OnceLock<mpsc::Sender<RefreshRequest>> = OnceLock::new();
+static MONITOR_BOUNDS_UNKNOWN_LOGGED: AtomicBool = AtomicBool::new(false);
+
+type MonitorBoundsCache = Arc<Mutex<Option<Vec<qol_gpui::MonitorBounds>>>>;
 
 #[derive(Clone, Copy, Default)]
 struct RefreshRequest {
@@ -57,32 +60,43 @@ pub(crate) struct ListenerInputs {
     pub refresh_generation: Arc<AtomicUsize>,
 }
 
+#[derive(Clone)]
+struct ListenerState {
+    inputs: ListenerInputs,
+    monitor_bounds: MonitorBoundsCache,
+}
+
 pub(crate) fn spawn(cx: &mut App, inputs: ListenerInputs) {
     let (refresh_tx, refresh_rx) = mpsc::channel::<RefreshRequest>();
     let _ = DATA_REFRESH_TX.set(refresh_tx);
+    let state = ListenerState {
+        monitor_bounds: initial_monitor_bounds(&inputs.tracker),
+        inputs,
+    };
     spawn_data_refresh_listener_thread();
     qol_gpui::event_router::spawn_runtime_event_router(
         cx,
         vec![qol_gpui::protocol::RuntimeEventKind::ActiveMonitorChanged],
         {
-            let inputs = inputs.clone();
-            move |app_cx, event| reposition_ghost_only(&inputs, event, app_cx)
+            let state = state.clone();
+            move |app_cx, event| reposition_ghost_only(&state, event, app_cx)
         },
     );
     qol_gpui::event_router::spawn_runtime_event_router(
         cx,
         vec![qol_gpui::protocol::RuntimeEventKind::MonitorsChanged],
         {
-            let inputs = inputs.clone();
-            move |app_cx, event| rebuild_ghosts_for_topology(&inputs, event, app_cx)
+            let state = state.clone();
+            move |app_cx, event| rebuild_ghosts_for_topology(&state, event, app_cx)
         },
     );
-    spawn_active_window_warmer(cx, inputs.clone());
-    spawn_data_refresh_router(cx, refresh_rx, inputs);
+    spawn_active_window_warmer(cx, state.clone());
+    spawn_data_refresh_router(cx, refresh_rx, state.inputs);
 }
 
 const ACTIVE_WARM_INTERVAL_MS: u64 = 250;
 const WARM_IDLE_GRACE_S: f64 = 1.0;
+const FULLSCREEN_EDGE_TOLERANCE_PX: f32 = 8.0;
 
 // While the picker is hidden and the user is actively working, re-shoot the
 // active window (idx 0) on a light timer so the next show reveals a current
@@ -90,7 +104,7 @@ const WARM_IDLE_GRACE_S: f64 = 1.0;
 // fresh by the FocusChanged capture-on-leave, not here - it does not change
 // while it is in the background. Paused while the picker is visible and while
 // the user is idle, since nothing is changing in either case.
-fn spawn_active_window_warmer(cx: &mut App, inputs: ListenerInputs) {
+fn spawn_active_window_warmer(cx: &mut App, state: ListenerState) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         let executor = cx.background_executor().clone();
         loop {
@@ -101,7 +115,7 @@ fn spawn_active_window_warmer(cx: &mut App, inputs: ListenerInputs) {
                 continue;
             }
             if cx
-                .update(|app_cx| warm_active_window(&inputs, app_cx))
+                .update(|app_cx| warm_active_window(&state, app_cx))
                 .is_err()
             {
                 break;
@@ -111,11 +125,12 @@ fn spawn_active_window_warmer(cx: &mut App, inputs: ListenerInputs) {
     .detach();
 }
 
-fn warm_active_window(inputs: &ListenerInputs, app_cx: &mut App) {
+fn warm_active_window(state: &ListenerState, app_cx: &mut App) {
     if super::platform::seconds_since_last_input().is_some_and(|idle| idle > WARM_IDLE_GRACE_S) {
         return;
     }
-    let windows = inputs
+    let windows = state
+        .inputs
         .window_cache
         .lock()
         .map(|c| c.clone())
@@ -123,13 +138,140 @@ fn warm_active_window(inputs: &ListenerInputs, app_cx: &mut App) {
     if windows.is_empty() {
         return;
     }
+    match frontmost_window_fullscreen_guard(&windows, &state.monitor_bounds) {
+        FullscreenGuard::NotFullscreen => {}
+        FullscreenGuard::Fullscreen => {
+            qol_runtime::probe!(
+                "PREVIEW_WARM_SKIP",
+                "reason=fullscreen wid={}",
+                windows[0].id
+            );
+            return;
+        }
+        FullscreenGuard::UnknownMonitors => {
+            log_unknown_monitor_bounds_once();
+            qol_runtime::probe!(
+                "PREVIEW_WARM_SKIP",
+                "reason=unknown_monitors wid={}",
+                windows[0].id
+            );
+            return;
+        }
+    }
     super::gather::spawn_frontmost_warm(
         super::gather::FrontmostWarmRequest {
             windows,
-            preview_cache: inputs.preview_cache.clone(),
+            preview_cache: state.inputs.preview_cache.clone(),
         },
         app_cx,
     );
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FullscreenGuard {
+    NotFullscreen,
+    Fullscreen,
+    UnknownMonitors,
+}
+
+fn frontmost_window_fullscreen_guard(
+    windows: &[crate::discovery::WindowInfo],
+    monitor_bounds: &MonitorBoundsCache,
+) -> FullscreenGuard {
+    let Some(frontmost) = windows.first() else {
+        return FullscreenGuard::NotFullscreen;
+    };
+    let Some(monitors) = snapshot_monitor_bounds(monitor_bounds) else {
+        return FullscreenGuard::UnknownMonitors;
+    };
+    if window_covers_any_monitor(frontmost, &monitors) {
+        return FullscreenGuard::Fullscreen;
+    }
+    FullscreenGuard::NotFullscreen
+}
+
+fn initial_monitor_bounds(tracker: &MonitorTracker) -> MonitorBoundsCache {
+    let monitors = tracker
+        .all_monitors()
+        .into_iter()
+        .map(|monitor| {
+            let bounds = monitor.bounds();
+            qol_gpui::MonitorBounds {
+                x: bounds.origin.x.to_f64() as f32,
+                y: bounds.origin.y.to_f64() as f32,
+                width: bounds.size.width.to_f64() as f32,
+                height: bounds.size.height.to_f64() as f32,
+            }
+        })
+        .collect();
+    Arc::new(Mutex::new(known_monitor_bounds(monitors)))
+}
+
+fn update_monitor_bounds_from_event(cache: &MonitorBoundsCache, event: &RuntimeEvent) {
+    let RuntimeEvent::MonitorsChanged { monitors } = event else {
+        return;
+    };
+    write_monitor_bounds(cache, monitors.clone());
+}
+
+fn write_monitor_bounds(cache: &MonitorBoundsCache, monitors: Vec<qol_gpui::MonitorBounds>) {
+    let next = known_monitor_bounds(monitors);
+    if next.is_some() {
+        MONITOR_BOUNDS_UNKNOWN_LOGGED.store(false, Ordering::Release);
+    }
+    if let Ok(mut slot) = cache.lock() {
+        *slot = next;
+    }
+}
+
+fn known_monitor_bounds(
+    monitors: Vec<qol_gpui::MonitorBounds>,
+) -> Option<Vec<qol_gpui::MonitorBounds>> {
+    if monitors.is_empty() {
+        return None;
+    }
+    Some(monitors)
+}
+
+fn snapshot_monitor_bounds(cache: &MonitorBoundsCache) -> Option<Vec<qol_gpui::MonitorBounds>> {
+    cache.lock().ok().and_then(|slot| slot.clone())
+}
+
+fn log_unknown_monitor_bounds_once() {
+    if MONITOR_BOUNDS_UNKNOWN_LOGGED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    eprintln!("[alt-tab/warmer] skipping hidden preview warm: monitor bounds unavailable");
+}
+
+fn window_covers_any_monitor(
+    window: &crate::discovery::WindowInfo,
+    monitors: &[qol_gpui::MonitorBounds],
+) -> bool {
+    if window.is_minimized {
+        return false;
+    }
+    monitors
+        .iter()
+        .any(|monitor| window_covers_monitor(window, *monitor))
+}
+
+fn window_covers_monitor(
+    window: &crate::discovery::WindowInfo,
+    monitor: qol_gpui::MonitorBounds,
+) -> bool {
+    if window.width <= 0.0 || window.height <= 0.0 || monitor.width <= 0.0 || monitor.height <= 0.0
+    {
+        return false;
+    }
+    let window_right = window.x + window.width;
+    let window_bottom = window.y + window.height;
+    let monitor_right = monitor.x + monitor.width;
+    let monitor_bottom = monitor.y + monitor.height;
+    window.x <= monitor.x + FULLSCREEN_EDGE_TOLERANCE_PX
+        && window.y <= monitor.y + FULLSCREEN_EDGE_TOLERANCE_PX
+        && window_right >= monitor_right - FULLSCREEN_EDGE_TOLERANCE_PX
+        && window_bottom >= monitor_bottom - FULLSCREEN_EDGE_TOLERANCE_PX
 }
 
 pub(crate) fn request_data_refresh() {
@@ -217,7 +359,8 @@ fn drain(
     request
 }
 
-fn reposition_ghost_only(inputs: &ListenerInputs, event: &RuntimeEvent, app_cx: &mut App) {
+fn reposition_ghost_only(state: &ListenerState, event: &RuntimeEvent, app_cx: &mut App) {
+    let inputs = &state.inputs;
     #[cfg(debug_assertions)]
     if let RuntimeEvent::ActiveMonitorChanged { monitor_idx, .. } = event {
         qol_runtime::probe!("PLUGIN_RECV_AMC", "monitor_idx={:?}", monitor_idx);
@@ -286,7 +429,9 @@ fn recenter_single_ghost(inputs: &ListenerInputs, event: &RuntimeEvent, app_cx: 
     synced
 }
 
-fn rebuild_ghosts_for_topology(inputs: &ListenerInputs, event: &RuntimeEvent, app_cx: &mut App) {
+fn rebuild_ghosts_for_topology(state: &ListenerState, event: &RuntimeEvent, app_cx: &mut App) {
+    update_monitor_bounds_from_event(&state.monitor_bounds, event);
+    let inputs = &state.inputs;
     if PICKER_VISIBLE.load(Ordering::Relaxed) {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/listener] picker visible, skipping topology rebuild");
@@ -449,5 +594,123 @@ fn apply_view_windows(
         let _ = handle.update(app_cx, |view, window: &mut Window, cx| {
             view.apply_ghost_gathered(gathered, reset_selection, rest_forward, window, cx);
         });
+    }
+}
+
+#[cfg(test)]
+mod fullscreen_warm_policy_tests {
+    use super::{
+        frontmost_window_fullscreen_guard, known_monitor_bounds, window_covers_any_monitor,
+        FullscreenGuard, MonitorBoundsCache,
+    };
+    use crate::discovery::WindowInfo;
+    use qol_gpui::MonitorBounds;
+    use std::sync::{Arc, Mutex};
+
+    fn window(x: f32, y: f32, width: f32, height: f32) -> WindowInfo {
+        WindowInfo {
+            id: 1,
+            title: String::new(),
+            app_name: String::new(),
+            preview_path: None,
+            icon: None,
+            x,
+            y,
+            width,
+            height,
+            is_minimized: false,
+        }
+    }
+
+    fn monitor(x: f32, y: f32, width: f32, height: f32) -> MonitorBounds {
+        MonitorBounds {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn cache(monitors: Vec<MonitorBounds>) -> MonitorBoundsCache {
+        Arc::new(Mutex::new(known_monitor_bounds(monitors)))
+    }
+
+    #[test]
+    fn exact_monitor_cover_is_fullscreen() {
+        let win = window(0.0, 0.0, 1920.0, 1080.0);
+        let monitors = [monitor(0.0, 0.0, 1920.0, 1080.0)];
+        assert!(window_covers_any_monitor(&win, &monitors));
+    }
+
+    #[test]
+    fn edge_tolerance_allows_borderless_jitter() {
+        let win = window(-4.0, 3.0, 1927.0, 1074.0);
+        let monitors = [monitor(0.0, 0.0, 1920.0, 1080.0)];
+        assert!(window_covers_any_monitor(&win, &monitors));
+    }
+
+    #[test]
+    fn maximized_under_menu_bar_is_not_fullscreen() {
+        let win = window(0.0, 24.0, 1920.0, 1056.0);
+        let monitors = [monitor(0.0, 0.0, 1920.0, 1080.0)];
+        assert!(!window_covers_any_monitor(&win, &monitors));
+    }
+
+    #[test]
+    fn minimized_window_is_not_fullscreen() {
+        let mut win = window(0.0, 0.0, 1920.0, 1080.0);
+        win.is_minimized = true;
+        let monitors = [monitor(0.0, 0.0, 1920.0, 1080.0)];
+        assert!(!window_covers_any_monitor(&win, &monitors));
+    }
+
+    #[test]
+    fn negative_coordinate_monitor_can_match() {
+        let win = window(-1440.0, 0.0, 1440.0, 900.0);
+        let monitors = [
+            monitor(0.0, 0.0, 1920.0, 1080.0),
+            monitor(-1440.0, 0.0, 1440.0, 900.0),
+        ];
+        assert!(window_covers_any_monitor(&win, &monitors));
+    }
+
+    #[test]
+    fn secondary_monitor_root_coordinates_match() {
+        let win = window(2560.0, 0.0, 1920.0, 1080.0);
+        let monitors = [
+            monitor(0.0, 0.0, 2560.0, 1440.0),
+            monitor(2560.0, 0.0, 1920.0, 1080.0),
+        ];
+        assert!(window_covers_any_monitor(&win, &monitors));
+    }
+
+    #[test]
+    fn unknown_monitor_bounds_skip_warm() {
+        let cache = Arc::new(Mutex::new(None));
+        let windows = [window(0.0, 0.0, 1920.0, 1080.0)];
+        assert_eq!(
+            frontmost_window_fullscreen_guard(&windows, &cache),
+            FullscreenGuard::UnknownMonitors
+        );
+    }
+
+    #[test]
+    fn empty_monitor_bounds_skip_warm() {
+        let cache = cache(Vec::new());
+        let windows = [window(0.0, 0.0, 1920.0, 1080.0)];
+        assert_eq!(
+            frontmost_window_fullscreen_guard(&windows, &cache),
+            FullscreenGuard::UnknownMonitors
+        );
+    }
+
+    #[test]
+    fn known_non_fullscreen_bounds_allow_warm() {
+        let cache = cache(vec![monitor(0.0, 0.0, 1920.0, 1080.0)]);
+        let windows = [window(0.0, 24.0, 1920.0, 1056.0)];
+        assert_eq!(
+            frontmost_window_fullscreen_guard(&windows, &cache),
+            FullscreenGuard::NotFullscreen
+        );
     }
 }
