@@ -1,5 +1,7 @@
 mod autostart_target;
 #[cfg(feature = "dev")]
+mod cargo_target_cache;
+#[cfg(feature = "dev")]
 mod dev_link_paths;
 #[cfg(feature = "dev")]
 mod fingerprint_health;
@@ -34,6 +36,7 @@ pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
     ];
     #[cfg(feature = "dev")]
     {
+        checks.push(Box::new(cargo_target_cache::CargoTargetCacheCheck));
         checks.push(Box::new(plugin_staleness::PluginStalenessCheck));
         checks.push(Box::new(dev_link_paths::DevLinkPathsCheck));
         checks.push(Box::new(fingerprint_health::FingerprintHealthCheck));

@@ -254,6 +254,10 @@ fn log_applied(action: &FixAction) {
             log::info!("doctor: ran cargo fmt in {}", workspace.display());
         }
         #[cfg(feature = "dev")]
+        FixAction::PruneCargoIncrementalCache { path } => {
+            log::info!("doctor: pruned cargo incremental cache {}", path.display());
+        }
+        #[cfg(feature = "dev")]
         FixAction::HealDevLinkedPlugins { rebuild_ids } => {
             log::info!(
                 "doctor: healed dev-linked plugin(s) (rebuilt: {}; restarted stale daemons)",
@@ -458,6 +462,10 @@ mod tests {
         );
         #[cfg(feature = "dev")]
         {
+            assert!(
+                dev_loop_ids.contains(&"cargo_target_cache"),
+                "cargo_target_cache must be in dev-loop group, got {dev_loop_ids:?}"
+            );
             assert!(
                 dev_loop_ids.contains(&"plugin_staleness"),
                 "plugin_staleness must be in dev-loop group, got {dev_loop_ids:?}"

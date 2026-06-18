@@ -54,6 +54,10 @@ pub(super) enum FixAction {
         workspace: PathBuf,
     },
     #[cfg(feature = "dev")]
+    PruneCargoIncrementalCache {
+        path: PathBuf,
+    },
+    #[cfg(feature = "dev")]
     HealDevLinkedPlugins {
         rebuild_ids: Vec<String>,
     },
@@ -84,6 +88,7 @@ impl FixAction {
             | FixAction::PruneOrphanFingerprints { .. }
             | FixAction::PruneReservedPlugins { .. }
             | FixAction::FormatRustSources { .. }
+            | FixAction::PruneCargoIncrementalCache { .. }
             | FixAction::HealDevLinkedPlugins { .. } => FixApplicability::SafeAutomatic,
         }
     }
@@ -134,7 +139,18 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         #[cfg(feature = "dev")]
         FixAction::FormatRustSources { workspace } => format_rust_sources(workspace),
         #[cfg(feature = "dev")]
+        FixAction::PruneCargoIncrementalCache { path } => prune_cargo_incremental_cache(path),
+        #[cfg(feature = "dev")]
         FixAction::HealDevLinkedPlugins { rebuild_ids } => heal_dev_linked_plugins(rebuild_ids),
+    }
+}
+
+#[cfg(feature = "dev")]
+fn prune_cargo_incremental_cache(path: &std::path::Path) -> Result<()> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
     }
 }
 
@@ -515,6 +531,31 @@ mod tests {
             workspace: PathBuf::from("/ws"),
         };
         assert_eq!(action.applicability(), FixApplicability::SafeAutomatic);
+    }
+
+    #[cfg(feature = "dev")]
+    #[test]
+    fn prune_cargo_incremental_cache_is_safe_automatic() {
+        let action = FixAction::PruneCargoIncrementalCache {
+            path: PathBuf::from("/ws/target/debug/incremental"),
+        };
+        assert_eq!(action.applicability(), FixApplicability::SafeAutomatic);
+    }
+
+    #[cfg(feature = "dev")]
+    #[test]
+    fn prune_cargo_incremental_cache_removes_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = dir.path().join("target").join("debug").join("incremental");
+        std::fs::create_dir_all(&cache).expect("cache dir");
+        std::fs::write(cache.join("dep-graph.bin"), b"x").expect("cache file");
+
+        apply_fix(&FixAction::PruneCargoIncrementalCache {
+            path: cache.clone(),
+        })
+        .expect("prune cache");
+
+        assert!(!cache.exists());
     }
 
     #[test]
