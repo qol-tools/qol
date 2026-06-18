@@ -73,22 +73,108 @@ pub fn default_store_path(plugin_name: &str) -> PathBuf {
 }
 
 pub fn load(path: &Path) -> FrequencyData {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|contents| serde_json::from_str(&contents).ok())
-        .unwrap_or_default()
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return FrequencyData::default(),
+        Err(e) => {
+            eprintln!("[frecency] failed to read {}: {}", path.display(), e);
+            return FrequencyData::default();
+        }
+    };
+    match serde_json::from_str(&contents) {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("[frecency] discarding corrupt {}: {}", path.display(), e);
+            FrequencyData::default()
+        }
+    }
 }
 
 pub fn save(path: &Path, data: &FrequencyData) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    match serde_json::to_string_pretty(data) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(path, json) {
-                eprintln!("[frecency] failed to write {}: {}", path.display(), e);
-            }
+    let json = match serde_json::to_string_pretty(data) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("[frecency] failed to serialize: {}", e);
+            return;
         }
-        Err(e) => eprintln!("[frecency] failed to serialize: {}", e),
+    };
+    let tmp = tmp_path(path);
+    if let Err(e) = std::fs::write(&tmp, &json) {
+        eprintln!("[frecency] failed to write {}: {}", tmp.display(), e);
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        eprintln!("[frecency] failed to finalize {}: {}", path.display(), e);
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+fn tmp_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(".new");
+    path.with_file_name(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn save_then_load_round_trips() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("foo-frequency.json");
+        let mut data = FrequencyData::default();
+        record(&mut data, "alpha".to_string(), 100);
+        record(&mut data, "alpha".to_string(), 200);
+        record(&mut data, "beta".to_string(), 300);
+
+        save(&path, &data);
+        let loaded = load(&path);
+
+        assert_eq!(loaded.entries.len(), 2);
+        assert_eq!(loaded.entries["alpha"].count, 2);
+        assert_eq!(loaded.entries["alpha"].last_accessed, 200);
+        assert_eq!(loaded.entries["beta"].count, 1);
+    }
+
+    #[test]
+    fn load_missing_file_returns_empty() {
+        let tmp = TempDir::new().unwrap();
+        let loaded = load(&tmp.path().join("absent.json"));
+        assert!(loaded.entries.is_empty());
+    }
+
+    #[test]
+    fn load_corrupt_file_returns_empty() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("corrupt-frequency.json");
+        std::fs::write(&path, "{ this is not valid json").unwrap();
+        let loaded = load(&path);
+        assert!(loaded.entries.is_empty());
+    }
+
+    #[test]
+    fn save_leaves_no_temp_file_behind() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("foo-frequency.json");
+        let mut data = FrequencyData::default();
+        record(&mut data, "alpha".to_string(), 100);
+        save(&path, &data);
+
+        let leftovers: Vec<String> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".new"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left: {:?}", leftovers);
+        assert!(path.exists());
     }
 }
