@@ -283,9 +283,9 @@ fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
                 ],
             ),
         ],
-        View::Logs => stream_view_bindings(false, true),
-        View::Trace => stream_view_bindings(true, true),
-        View::EmuDetail => stream_view_bindings(false, false),
+        View::Logs => stream_view_bindings(false, true, dash.armed),
+        View::Trace => stream_view_bindings(true, true, dash.armed),
+        View::EmuDetail => stream_view_bindings(false, false, dash.armed),
         View::Doctor => vec![
             char_binding("d", "refresh checks", Action::Doctor, 'd'),
             binding(
@@ -342,7 +342,7 @@ fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
     }
 }
 
-fn stream_view_bindings(trace: bool, log_resource: bool) -> Vec<KeyBinding> {
+fn stream_view_bindings(trace: bool, log_resource: bool, armed: bool) -> Vec<KeyBinding> {
     let mut bindings = vec![
         binding(
             "↑/↓",
@@ -387,15 +387,32 @@ fn stream_view_bindings(trace: bool, log_resource: bool) -> Vec<KeyBinding> {
         char_binding("c", "copy last N", Action::Copy, 'c'),
     ];
     if log_resource {
+        if trace {
+            bindings.push(binding(
+                "space",
+                "arm: raw",
+                Action::ToggleArm,
+                vec![KeyStroke::plain(KeyCode::Char(' '))],
+            ));
+        }
         bindings.push(char_binding(
             "o",
             "open folder",
             Action::OpenCurrentLogFolder,
             'o',
         ));
+        let editor_desc = if trace {
+            if armed {
+                "open raw"
+            } else {
+                "open pretty"
+            }
+        } else {
+            "open editor"
+        };
         bindings.push(char_binding(
             "e",
-            "edit file",
+            editor_desc,
             Action::OpenCurrentLogEditor,
             'e',
         ));
@@ -1625,7 +1642,7 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             }
         }
         Action::OpenCurrentLogFolder => open_current_log_folder(dash),
-        Action::OpenCurrentLogEditor => open_current_log_editor(dash),
+        Action::OpenCurrentLogEditor => open_current_log_editor(dash, modified),
         Action::OpenEmuDir => {
             if dash.view == View::Emu {
                 open_emu_dir();
@@ -1930,11 +1947,11 @@ fn open_current_log_folder(dash: &mut Dash) {
     ));
 }
 
-fn open_current_log_editor(dash: &mut Dash) {
+fn open_current_log_editor(dash: &mut Dash, raw: bool) {
     let Some(source) = current_log_source(dash) else {
         return;
     };
-    let Some(file) = source.file else {
+    let Some(ref file) = source.file else {
         dash.notice = Some((
             Instant::now(),
             format!(
@@ -1949,11 +1966,95 @@ fn open_current_log_editor(dash: &mut Dash) {
         dash.notice = Some((Instant::now(), format!("{} does not exist", file.display())));
         return;
     }
-    if open_in_default_editor(&file) {
-        dash.notice = Some((Instant::now(), format!("opened {}", file.display())));
+    let target = match editor_target_for_source(dash, &source, file, raw) {
+        Ok(target) => target,
+        Err(error) => {
+            dash.notice = Some((Instant::now(), error));
+            return;
+        }
+    };
+    if open_in_default_editor(&target) {
+        dash.notice = Some((Instant::now(), format!("opened {}", target.display())));
     } else {
-        dash.notice = Some((Instant::now(), format!("could not open {}", file.display())));
+        dash.notice = Some((
+            Instant::now(),
+            format!("could not open {}", target.display()),
+        ));
     }
+}
+
+fn editor_target_for_source(
+    dash: &Dash,
+    source: &LogSourceInfo,
+    file: &Path,
+    raw: bool,
+) -> Result<PathBuf, String> {
+    if source.kind != "trace" || raw {
+        return Ok(file.to_path_buf());
+    }
+    render_pretty_trace_snapshot(file, dash.trace_renderer(), dash.trace_details_enabled())
+}
+
+fn render_pretty_trace_snapshot(
+    file: &Path,
+    renderer: TraceRenderer,
+    details: bool,
+) -> Result<PathBuf, String> {
+    let root = crate::workspace::repo_root().map_err(|error| error.to_string())?;
+    let pretty = pretty_trace_file(file);
+    let mut cmd = trace_command(renderer, &root)
+        .ok_or_else(|| format!("could not create {} trace renderer", renderer.name()))?;
+    cmd.arg("--replay").env("QOL_TRACE_LOG_FILE", file);
+    if details {
+        cmd.arg("--details");
+    }
+    let output = cmd
+        .current_dir(&root)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("could not render pretty trace: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr.trim();
+        let suffix = if detail.is_empty() {
+            String::new()
+        } else {
+            format!(": {detail}")
+        };
+        return Err(format!("pretty trace failed{suffix}"));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    fs::write(&pretty, strip_ansi_codes(&text))
+        .map_err(|error| format!("could not write {}: {error}", pretty.display()))?;
+    Ok(pretty)
+}
+
+fn pretty_trace_file(file: &Path) -> PathBuf {
+    let folder = file.parent().unwrap_or_else(|| Path::new("."));
+    let stem = file
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("trace");
+    folder.join(format!("{stem}.pretty.log"))
+}
+
+fn strip_ansi_codes(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for code in chars.by_ref() {
+                if ('@'..='~').contains(&code) {
+                    break;
+                }
+            }
+            continue;
+        }
+        output.push(ch);
+    }
+    output
 }
 
 fn configured_editor_label() -> Option<String> {
@@ -3689,7 +3790,7 @@ fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
 }
 
 fn join_header_rows<'a>(header: Vec<Line<'static>>, body: Vec<Line<'a>>) -> Vec<Line<'a>> {
-    header.into_iter().map(Line::from).chain(body).collect()
+    header.into_iter().chain(body).collect()
 }
 
 fn log_source_header(dash: &Dash) -> Vec<Line<'static>> {
@@ -4405,6 +4506,11 @@ mod tests {
             Action::OpenCurrentLogEditor,
             "e opens trace file in the trace view"
         );
+        assert_eq!(
+            action_for(&dash, KeyCode::Char(' '), none),
+            Action::ToggleArm,
+            "space arms the trace raw-open action"
+        );
         for (code, expected) in [
             (KeyCode::PageUp, Action::PageUp),
             (KeyCode::PageDown, Action::PageDown),
@@ -4940,13 +5046,37 @@ mod tests {
             text.contains(" o         open folder "),
             "missing open folder key"
         );
+        assert!(text.contains(" space     arm: raw "), "missing raw arm key");
         assert!(
-            text.contains(" e         edit file "),
-            "missing edit file key"
+            text.contains(" e         open pretty "),
+            "missing pretty open key"
         );
         assert!(
             !text.contains("refresh checks"),
             "trace context must not show doctor binding"
+        );
+
+        dash.armed = true;
+        let armed_text = keys_rows(&dash)
+            .into_iter()
+            .map(|line| span_text(&line.spans))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            armed_text.contains(" e         open raw "),
+            "armed trace context should expose raw open"
+        );
+    }
+
+    #[test]
+    fn trace_pretty_snapshot_helpers_keep_utf8_and_strip_ansi() {
+        assert_eq!(
+            pretty_trace_file(Path::new("/tmp/qol-altmon.log")),
+            PathBuf::from("/tmp/qol-altmon.pretty.log")
+        );
+        assert_eq!(
+            strip_ansi_codes("\x1b[2m[08:00]\x1b[0m ┌── \x1b[1;32mok\x1b[0m\n"),
+            "[08:00] ┌── ok\n"
         );
     }
 
