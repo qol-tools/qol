@@ -52,6 +52,7 @@ enum Action {
     ToggleView,
     ToggleKeys,
     ToggleArm,
+    FeatureFlags,
     Rebuild,
     Doctor,
     ToggleTraceDetails,
@@ -179,6 +180,12 @@ fn global_action_bindings(armed: bool) -> Vec<KeyBinding> {
         ),
         char_binding("l", "logs", Action::ToggleView, 'l'),
         char_binding("k", "keys", Action::ToggleKeys, 'k'),
+        binding(
+            "ctrl+f",
+            "feature flags",
+            Action::FeatureFlags,
+            vec![KeyStroke::ctrl('f')],
+        ),
         binding(
             "q / ctrl+c",
             "quit",
@@ -472,7 +479,7 @@ struct LogFilter {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-struct FilterBrick {
+struct PickerBrick {
     index: usize,
     row: usize,
     x: usize,
@@ -480,7 +487,7 @@ struct FilterBrick {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum FilterMove {
+enum PickerMove {
     Left,
     Right,
     Up,
@@ -521,6 +528,63 @@ enum FilterState {
 impl FilterState {
     fn is_active(&self) -> bool {
         !matches!(self, Self::Closed)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum FeatureFlag {
+    TraceDetails,
+}
+
+struct FeatureFlagDef {
+    flag: FeatureFlag,
+    id: &'static str,
+    label: &'static str,
+}
+
+const FEATURE_FLAGS: &[FeatureFlagDef] = &[FeatureFlagDef {
+    flag: FeatureFlag::TraceDetails,
+    id: "trace.details",
+    label: "Trace details",
+}];
+
+#[derive(Debug, PartialEq, Eq, Default)]
+struct FeatureFlags {
+    enabled: Vec<FeatureFlag>,
+}
+
+impl FeatureFlags {
+    fn enabled(&self, flag: FeatureFlag) -> bool {
+        self.enabled.contains(&flag)
+    }
+
+    fn toggle(&mut self, flag: FeatureFlag) -> bool {
+        if let Some(index) = self.enabled.iter().position(|item| *item == flag) {
+            self.enabled.remove(index);
+            return false;
+        }
+        self.enabled.push(flag);
+        true
+    }
+
+    fn set(&mut self, flag: FeatureFlag, enabled: bool) {
+        if self.enabled(flag) == enabled {
+            return;
+        }
+        self.toggle(flag);
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Default)]
+struct FeatureFlagPanel {
+    open: bool,
+    selected: usize,
+    layout_width: usize,
+}
+
+impl FeatureFlagPanel {
+    fn is_active(&self) -> bool {
+        self.open
     }
 }
 
@@ -926,7 +990,8 @@ struct Dash {
     doctor: DoctorPanel,
     trace: LogPane,
     trace_unavailable: bool,
-    trace_details: bool,
+    features: FeatureFlags,
+    feature_panel: FeatureFlagPanel,
     boot_rx: Option<Receiver<String>>,
     keys_hidden: bool,
     filters: Vec<LogFilter>,
@@ -971,7 +1036,11 @@ impl Dash {
             },
             trace: LogPane::new(),
             trace_unavailable: false,
-            trace_details: false,
+            features: FeatureFlags::default(),
+            feature_panel: FeatureFlagPanel {
+                layout_width: default_filter_layout_width(),
+                ..FeatureFlagPanel::default()
+            },
             boot_rx: None,
             keys_hidden: false,
             filters: Vec::new(),
@@ -1019,57 +1088,14 @@ impl Dash {
         self.filter_index = self.filter_index.min(self.filters.len().saturating_sub(1));
     }
 
-    fn select_filter(&mut self, delta: isize) {
-        if self.filters.is_empty() {
-            self.filter_index = 0;
-            return;
-        }
-        let len = self.filters.len() as isize;
-        self.filter_index = (self.filter_index as isize + delta).rem_euclid(len) as usize;
-    }
-
-    fn move_filter(&mut self, direction: FilterMove) {
-        match direction {
-            FilterMove::Left => self.select_filter(-1),
-            FilterMove::Right => self.select_filter(1),
-            FilterMove::Up | FilterMove::Down => self.move_filter_vertical(direction),
-        }
-    }
-
-    fn move_filter_vertical(&mut self, direction: FilterMove) {
-        if self.filters.is_empty() {
-            self.filter_index = 0;
-            return;
-        }
+    fn move_filter(&mut self, direction: PickerMove) {
         let layout = filter_brick_layout(&self.filters, self.filter_layout_width);
-        let Some(current) = layout.iter().find(|brick| brick.index == self.filter_index) else {
-            self.filter_index = 0;
-            return;
-        };
-        let Some(max_row) = layout.iter().map(|brick| brick.row).max() else {
-            return;
-        };
-        let target_row = match direction {
-            FilterMove::Up if current.row == 0 => max_row,
-            FilterMove::Up => current.row - 1,
-            FilterMove::Down if current.row == max_row => 0,
-            FilterMove::Down => current.row + 1,
-            FilterMove::Left | FilterMove::Right => current.row,
-        };
-        let center = brick_center(current);
-        let Some(target) = layout
-            .iter()
-            .filter(|brick| brick.row == target_row)
-            .min_by_key(|brick| {
-                (
-                    brick_center(brick).abs_diff(center),
-                    brick.index.abs_diff(current.index),
-                )
-            })
-        else {
-            return;
-        };
-        self.filter_index = target.index;
+        move_picker_selection(
+            &mut self.filter_index,
+            self.filters.len(),
+            direction,
+            &layout,
+        );
     }
 
     fn start_filter_add(&mut self) {
@@ -1126,6 +1152,42 @@ impl Dash {
         }
         self.filters.remove(self.filter_index);
         self.filter_index = self.filter_index.min(self.filters.len().saturating_sub(1));
+    }
+
+    fn trace_details_enabled(&self) -> bool {
+        self.features.enabled(FeatureFlag::TraceDetails)
+    }
+
+    fn toggle_feature_flags_panel(&mut self) {
+        if self.feature_panel.is_active() {
+            self.feature_panel.open = false;
+            return;
+        }
+        self.filter_state = FilterState::Closed;
+        self.copying = false;
+        self.armed = false;
+        self.feature_panel.open = true;
+        self.feature_panel.selected = self
+            .feature_panel
+            .selected
+            .min(FEATURE_FLAGS.len().saturating_sub(1));
+    }
+
+    fn move_feature_flag(&mut self, direction: PickerMove) {
+        let layout = feature_flag_brick_layout(self.feature_panel.layout_width);
+        move_picker_selection(
+            &mut self.feature_panel.selected,
+            FEATURE_FLAGS.len(),
+            direction,
+            &layout,
+        );
+    }
+
+    fn toggle_selected_feature_flag(&mut self) {
+        let Some(def) = FEATURE_FLAGS.get(self.feature_panel.selected) else {
+            return;
+        };
+        toggle_feature_flag(self, def.flag);
     }
 }
 
@@ -1267,7 +1329,11 @@ fn tui_session(
         flush_pokes(dash, probes);
         terminal.draw(|frame| draw(frame, dash))?;
         if let Some((code, mods)) = poll_key()? {
-            if dash.filter_state.is_active() {
+            if is_feature_flags_shortcut(code, mods) {
+                dash.toggle_feature_flags_panel();
+            } else if dash.feature_panel.is_active() {
+                edit_feature_flags(dash, code);
+            } else if dash.filter_state.is_active() {
                 edit_filters(dash, code);
             } else if dash.copying {
                 edit_copy(dash, code);
@@ -1311,6 +1377,22 @@ fn drain_boot(dash: &mut Dash) {
     }
 }
 
+fn is_feature_flags_shortcut(code: KeyCode, mods: KeyModifiers) -> bool {
+    KeyStroke::ctrl('f').matches(code, mods)
+}
+
+fn edit_feature_flags(dash: &mut Dash, code: KeyCode) {
+    match code {
+        KeyCode::Left => dash.move_feature_flag(PickerMove::Left),
+        KeyCode::Right => dash.move_feature_flag(PickerMove::Right),
+        KeyCode::Up => dash.move_feature_flag(PickerMove::Up),
+        KeyCode::Down => dash.move_feature_flag(PickerMove::Down),
+        KeyCode::Enter | KeyCode::Char(' ') => dash.toggle_selected_feature_flag(),
+        KeyCode::Esc => dash.feature_panel.open = false,
+        _ => {}
+    }
+}
+
 fn edit_filters(dash: &mut Dash, code: KeyCode) {
     if let FilterState::Editing {
         draft, strategy, ..
@@ -1329,10 +1411,10 @@ fn edit_filters(dash: &mut Dash, code: KeyCode) {
         return;
     }
     match code {
-        KeyCode::Left => dash.move_filter(FilterMove::Left),
-        KeyCode::Right => dash.move_filter(FilterMove::Right),
-        KeyCode::Up => dash.move_filter(FilterMove::Up),
-        KeyCode::Down => dash.move_filter(FilterMove::Down),
+        KeyCode::Left => dash.move_filter(PickerMove::Left),
+        KeyCode::Right => dash.move_filter(PickerMove::Right),
+        KeyCode::Up => dash.move_filter(PickerMove::Up),
+        KeyCode::Down => dash.move_filter(PickerMove::Down),
         KeyCode::Enter => dash.start_filter_add(),
         KeyCode::Char('e') | KeyCode::Char('E') => dash.start_filter_edit(),
         KeyCode::Char('d') | KeyCode::Char('D') => dash.delete_selected_filter(),
@@ -1442,6 +1524,7 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
         }
         Action::ToggleKeys => dash.keys_hidden = !dash.keys_hidden,
         Action::ToggleArm => dash.armed = !dash.armed,
+        Action::FeatureFlags => dash.toggle_feature_flags_panel(),
         Action::Rebuild => {
             trigger_rebuild(dash);
             trigger_reload(dash);
@@ -1648,7 +1731,7 @@ fn start_trace(dash: &mut Dash) {
     if dash.trace.is_live() {
         return;
     }
-    match spawn_trace(dash.trace_details) {
+    match spawn_trace(dash.trace_details_enabled()) {
         Some((child, rx, stdin)) => {
             dash.trace.attach_with_stdin(child, rx, stdin);
             dash.trace_unavailable = false;
@@ -1696,10 +1779,23 @@ fn stop_trace(dash: &mut Dash) {
 }
 
 fn toggle_trace_details(dash: &mut Dash) {
-    if dash.view != View::Trace {
+    set_trace_details(dash, !dash.trace_details_enabled());
+}
+
+fn toggle_feature_flag(dash: &mut Dash, flag: FeatureFlag) {
+    match flag {
+        FeatureFlag::TraceDetails => toggle_trace_details(dash),
+    }
+}
+
+fn set_trace_details(dash: &mut Dash, enabled: bool) {
+    if dash.trace_details_enabled() == enabled {
         return;
     }
-    dash.trace_details = !dash.trace_details;
+    dash.features.set(FeatureFlag::TraceDetails, enabled);
+    if !dash.trace.is_live() {
+        return;
+    }
     if dash.trace.write_control("d") {
         return;
     }
@@ -2270,6 +2366,7 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         View::Endpoints => draw_endpoints(frame, dash, content),
     }
     draw_filter_panel(frame, dash, inner, accent);
+    draw_feature_flags_panel(frame, dash, inner, accent);
     Sign {
         content: breadcrumb(dash, accent),
     }
@@ -2372,6 +2469,26 @@ fn context_keys(dash: &Dash) -> Vec<KeyHint> {
             KeyHint {
                 key: "esc",
                 desc: "cancel",
+            },
+        ];
+    }
+    if dash.feature_panel.is_active() {
+        return vec![
+            KeyHint {
+                key: "←↑↓→",
+                desc: "select flag",
+            },
+            KeyHint {
+                key: "space",
+                desc: "toggle",
+            },
+            KeyHint {
+                key: "enter",
+                desc: "toggle",
+            },
+            KeyHint {
+                key: "esc",
+                desc: "close",
             },
         ];
     }
@@ -2511,6 +2628,38 @@ fn draw_filter_panel(frame: &mut Frame, dash: &mut Dash, area: Rect, accent: Col
     .render(frame, rect, accent);
 }
 
+fn draw_feature_flags_panel(frame: &mut Frame, dash: &mut Dash, area: Rect, accent: Color) {
+    if !dash.feature_panel.is_active() {
+        return;
+    }
+    let width = if area.width <= FILTER_PANEL_MIN_WIDTH {
+        area.width
+    } else {
+        area.width
+            .saturating_sub(4)
+            .clamp(FILTER_PANEL_MIN_WIDTH, FILTER_PANEL_MAX_WIDTH)
+    };
+    dash.feature_panel.layout_width = width.saturating_sub(2) as usize;
+    let mut rows = feature_flag_panel_rows(dash);
+    let height = (rows.len() as u16 + SignBox::CHROME_ROWS).min(area.height);
+    if width == 0 || height == 0 {
+        return;
+    }
+    rows.truncate(SignBox::capacity(height));
+    let rect = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + area.height.saturating_sub(height + 1),
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    SignBox {
+        title: "feature flags",
+        rows,
+    }
+    .render(frame, rect, accent);
+}
+
 fn filter_panel_rows(dash: &Dash) -> Vec<Line<'static>> {
     match &dash.filter_state {
         FilterState::Closed => Vec::new(),
@@ -2538,6 +2687,57 @@ fn filter_panel_rows(dash: &Dash) -> Vec<Line<'static>> {
     }
 }
 
+fn feature_flag_panel_rows(dash: &Dash) -> Vec<Line<'static>> {
+    if FEATURE_FLAGS.is_empty() {
+        return vec![Line::from(" no feature flags".fg(Color::DarkGray))];
+    }
+    let mut rows = feature_flag_brick_rows(dash);
+    if let Some(def) = FEATURE_FLAGS.get(dash.feature_panel.selected) {
+        let state = if dash.features.enabled(def.flag) {
+            "on"
+        } else {
+            "off"
+        };
+        rows.push(Line::from(""));
+        rows.push(Line::from(vec![
+            format!(" {state:<3} ")
+                .fg(feature_flag_color(dash, def))
+                .bold(),
+            def.label.fg(Color::White),
+        ]));
+    }
+    rows
+}
+
+fn feature_flag_brick_rows(dash: &Dash) -> Vec<Line<'static>> {
+    let layout = feature_flag_brick_layout(dash.feature_panel.layout_width);
+    let Some(max_row) = layout.iter().map(|brick| brick.row).max() else {
+        return Vec::new();
+    };
+    (0..=max_row)
+        .map(|row| feature_flag_brick_row(dash, &layout, row))
+        .collect()
+}
+
+fn feature_flag_brick_row(dash: &Dash, layout: &[PickerBrick], row: usize) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut x = 0;
+    for brick in layout.iter().filter(|brick| brick.row == row) {
+        if brick.x > x {
+            spans.push(Span::raw(" ".repeat(brick.x - x)));
+        }
+        let def = &FEATURE_FLAGS[brick.index];
+        spans.extend(feature_flag_brick_spans(
+            dash,
+            def,
+            brick.index == dash.feature_panel.selected,
+            brick.width,
+        ));
+        x = brick.x + brick.width;
+    }
+    Line::from(spans)
+}
+
 fn filter_brick_rows(
     filters: &[LogFilter],
     selected_index: usize,
@@ -2555,7 +2755,7 @@ fn filter_brick_rows(
 fn filter_brick_row(
     filters: &[LogFilter],
     selected_index: usize,
-    layout: &[FilterBrick],
+    layout: &[PickerBrick],
     row: usize,
 ) -> Line<'static> {
     let mut spans = Vec::new();
@@ -2575,20 +2775,32 @@ fn filter_brick_row(
     Line::from(spans)
 }
 
-fn filter_brick_layout(filters: &[LogFilter], width: usize) -> Vec<FilterBrick> {
+fn filter_brick_layout(filters: &[LogFilter], width: usize) -> Vec<PickerBrick> {
+    picker_brick_layout(filters, width, filter_brick_width)
+}
+
+fn feature_flag_brick_layout(width: usize) -> Vec<PickerBrick> {
+    picker_brick_layout(FEATURE_FLAGS, width, feature_flag_brick_width)
+}
+
+fn picker_brick_layout<T>(
+    items: &[T],
+    width: usize,
+    mut item_width: impl FnMut(&T, usize) -> usize,
+) -> Vec<PickerBrick> {
     let width = width.max(1);
     let mut row = 0;
     let mut x = 0;
-    let mut layout = Vec::with_capacity(filters.len());
-    for (index, filter) in filters.iter().enumerate() {
-        let brick_width = filter_brick_width(filter, width);
+    let mut layout = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let brick_width = item_width(item, width);
         if x > 0 && x + FILTER_BRICK_GAP + brick_width > width {
             row += 1;
             x = 0;
         }
         let gap = if x == 0 { 0 } else { FILTER_BRICK_GAP };
         let brick_x = x + gap;
-        layout.push(FilterBrick {
+        layout.push(PickerBrick {
             index,
             row,
             x: brick_x,
@@ -2599,9 +2811,106 @@ fn filter_brick_layout(filters: &[LogFilter], width: usize) -> Vec<FilterBrick> 
     layout
 }
 
+fn move_picker_selection(
+    selected: &mut usize,
+    item_count: usize,
+    direction: PickerMove,
+    layout: &[PickerBrick],
+) {
+    if item_count == 0 {
+        *selected = 0;
+        return;
+    }
+    if matches!(direction, PickerMove::Left | PickerMove::Right) {
+        let len = item_count as isize;
+        let delta = if matches!(direction, PickerMove::Left) {
+            -1
+        } else {
+            1
+        };
+        *selected = (*selected as isize + delta).rem_euclid(len) as usize;
+        return;
+    }
+    let Some(current) = layout.iter().find(|brick| brick.index == *selected) else {
+        *selected = 0;
+        return;
+    };
+    let Some(max_row) = layout.iter().map(|brick| brick.row).max() else {
+        return;
+    };
+    let target_row = match direction {
+        PickerMove::Up if current.row == 0 => max_row,
+        PickerMove::Up => current.row - 1,
+        PickerMove::Down if current.row == max_row => 0,
+        PickerMove::Down => current.row + 1,
+        PickerMove::Left | PickerMove::Right => current.row,
+    };
+    let center = brick_center(current);
+    let Some(target) = layout
+        .iter()
+        .filter(|brick| brick.row == target_row)
+        .min_by_key(|brick| {
+            (
+                brick_center(brick).abs_diff(center),
+                brick.index.abs_diff(current.index),
+            )
+        })
+    else {
+        return;
+    };
+    *selected = target.index;
+}
+
 fn filter_brick_width(filter: &LogFilter, row_width: usize) -> usize {
     let max_text_width = filter_text_width(row_width);
     FILTER_BRICK_CHROME + filter_text(&filter.text, max_text_width).chars().count()
+}
+
+fn feature_flag_brick_width(flag: &FeatureFlagDef, row_width: usize) -> usize {
+    let max_text_width = filter_text_width(row_width);
+    FILTER_BRICK_CHROME + filter_text(flag.id, max_text_width).chars().count()
+}
+
+fn feature_flag_brick_spans(
+    dash: &Dash,
+    flag: &FeatureFlagDef,
+    selected: bool,
+    width: usize,
+) -> Vec<Span<'static>> {
+    let text = filter_text(flag.id, filter_text_width(width));
+    let enabled = dash.features.enabled(flag.flag);
+    let text_style = if selected {
+        Style::new().fg(Color::White).bg(Color::Rgb(38, 44, 74))
+    } else if enabled {
+        Style::new().fg(Color::White)
+    } else {
+        Style::new().fg(Color::DarkGray)
+    };
+    let symbol_style = if selected {
+        Style::new()
+            .fg(feature_flag_color(dash, flag))
+            .bg(Color::Rgb(38, 44, 74))
+            .bold()
+    } else {
+        Style::new().fg(feature_flag_color(dash, flag)).bold()
+    };
+    let edge = if selected { ("[", "]") } else { (" ", " ") };
+    let symbol = if enabled { "*" } else { "." };
+    vec![
+        Span::styled(edge.0.to_string(), text_style),
+        Span::styled(symbol.to_string(), symbol_style),
+        Span::styled(" ".to_string(), text_style),
+        Span::styled(text, text_style),
+        Span::styled(edge.1.to_string(), text_style),
+    ]
+}
+
+fn feature_flag_color(dash: &Dash, flag: &FeatureFlagDef) -> Color {
+    if dash.features.enabled(flag.flag) {
+        Color::Green
+    } else {
+        Color::DarkGray
+    }
 }
 
 fn filter_brick_spans(filter: &LogFilter, selected: bool, width: usize) -> Vec<Span<'static>> {
@@ -2637,7 +2946,7 @@ fn filter_text_width(row_width: usize) -> usize {
     row_width.saturating_sub(FILTER_BRICK_CHROME).max(1)
 }
 
-fn brick_center(brick: &FilterBrick) -> usize {
+fn brick_center(brick: &PickerBrick) -> usize {
     brick.x.saturating_mul(2) + brick.width
 }
 
@@ -4006,6 +4315,7 @@ mod tests {
             (KeyCode::Enter, none, Action::Activate),
             (KeyCode::Right, none, Action::Dive),
             (KeyCode::Char('r'), ctrl, Action::Rebuild),
+            (KeyCode::Char('f'), ctrl, Action::FeatureFlags),
             (KeyCode::Char('p'), ctrl, Action::Ignore),
             (KeyCode::Char('u'), ctrl, Action::Ignore),
             (KeyCode::Char('c'), ctrl, Action::Quit),
@@ -4548,12 +4858,13 @@ mod tests {
         assert_eq!(rows[2], " ctrl+r    rebuild tray+plugins ");
         assert_eq!(rows[3], " l         logs ");
         assert_eq!(rows[4], " k         keys ");
-        assert_eq!(rows[5], " q / ctrl+c quit ");
-        assert_eq!(rows[6], "");
+        assert_eq!(rows[5], " ctrl+f    feature flags ");
+        assert_eq!(rows[6], " q / ctrl+c quit ");
         assert_eq!(rows[7], "");
-        assert_eq!(rows[8], " context");
-        assert_eq!(rows[9], "");
-        assert_eq!(rows[10], " ↑/↓       move ");
+        assert_eq!(rows[8], "");
+        assert_eq!(rows[9], " context");
+        assert_eq!(rows[10], "");
+        assert_eq!(rows[11], " ↑/↓       move ");
     }
 
     #[test]
@@ -4664,6 +4975,31 @@ mod tests {
             .map(|line| span_text(&line.spans))
             .collect();
         assert_eq!(rows, vec![" add + _"]);
+    }
+
+    #[test]
+    fn feature_flags_panel_reuses_picker_controls() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Logs;
+        dash.open_filter_manager();
+        dash.toggle_feature_flags_panel();
+
+        assert!(dash.feature_panel.is_active());
+        assert!(
+            matches!(dash.filter_state, FilterState::Closed),
+            "feature flags supersede filter modal"
+        );
+        let text = render_text(&mut dash);
+        assert!(text.contains("feature flags"), "missing feature panel");
+        assert!(text.contains("select flag"), "missing feature keys");
+        assert!(text.contains("trace.details"), "missing trace details flag");
+
+        edit_feature_flags(&mut dash, KeyCode::Enter);
+        assert!(dash.trace_details_enabled(), "enter toggles flag on");
+        edit_feature_flags(&mut dash, KeyCode::Char(' '));
+        assert!(!dash.trace_details_enabled(), "space toggles flag off");
+        edit_feature_flags(&mut dash, KeyCode::Esc);
+        assert!(!dash.feature_panel.is_active(), "esc closes feature panel");
     }
 
     #[test]
