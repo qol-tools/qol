@@ -1,4 +1,4 @@
-use super::CloseWindowResult;
+use super::CloseOutcome;
 use crate::discovery::macos::ax::{ax_find_window, ax_find_window_brute_force};
 use crate::discovery::macos::ffi;
 use crate::discovery::macos::ffi::{
@@ -307,13 +307,13 @@ fn front_before_other_apps(window_id: u32, pid: i32, stack: &[(u32, i32)]) -> bo
     false
 }
 
-pub fn close_window(window_id: u32) -> CloseWindowResult {
+pub fn close_window(window_id: u32) -> CloseOutcome {
     let Some(info) = cg_window_info(window_id) else {
         qol_runtime::probe!(
             "CLOSE_WINDOW",
             "wid={window_id} result=unsupported reason=missing"
         );
-        return CloseWindowResult::Unsupported;
+        return CloseOutcome::Unsupported;
     };
     let win = unsafe { ax_find_window(info.pid, window_id, &info.title) };
     if win.is_null() {
@@ -323,7 +323,7 @@ pub fn close_window(window_id: u32) -> CloseWindowResult {
             info.pid,
             info.layer,
         );
-        return CloseWindowResult::Unsupported;
+        return CloseOutcome::Unsupported;
     }
     let close_pressed = unsafe { ax_press_button(win, b"AXCloseButton") };
     unsafe { CFRelease(win) };
@@ -334,7 +334,7 @@ pub fn close_window(window_id: u32) -> CloseWindowResult {
             info.pid,
             info.layer,
         );
-        return CloseWindowResult::ClosedWindow;
+        return CloseOutcome::Closed { quit_app: false };
     }
 
     let has_normal_window = pid_has_on_screen_normal_window(info.pid);
@@ -347,7 +347,7 @@ pub fn close_window(window_id: u32) -> CloseWindowResult {
             info.layer,
         );
         if terminated {
-            return CloseWindowResult::QuitApp;
+            return CloseOutcome::Closed { quit_app: true };
         }
     }
 
@@ -357,7 +357,7 @@ pub fn close_window(window_id: u32) -> CloseWindowResult {
         info.pid,
         info.layer,
     );
-    CloseWindowResult::Unsupported
+    CloseOutcome::Unsupported
 }
 
 pub fn quit_app(window_id: u32) {
