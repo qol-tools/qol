@@ -4,7 +4,7 @@ import os
 import sys
 import re
 
-LOG_FILE = "/tmp/qol-altmon.log"
+LOG_FILE = os.environ.get("QOL_TRACE_LOG_FILE", "/tmp/qol-altmon.log")
 
 # ANSI Terminal Colors
 COLOR_RESET = "\033[0m"
@@ -105,8 +105,10 @@ parser.add_argument("--mark", help="Inject a custom marker label into the log an
 parser.add_argument("--stats", action="store_true", help="Accumulate focus/latency stats and print a summary on exit")
 parser.add_argument("--replay", action="store_true", help="Process the whole existing log from the start, then exit (pairs with --stats)")
 parser.add_argument("--anomalies", action="store_true", help="Show only anomalies: misdirects, timeouts, supersedes, divergences")
+parser.add_argument("-d", "--details", action="store_true", help="Start with expanded detail lines visible")
 
 args = parser.parse_args(sys_args)
+details_enabled = args.details
 
 if args.focus_only:
     args.topic = "focus"
@@ -1149,6 +1151,41 @@ def process_line(ts_raw, pid, tag, msg):
         event_buffer.append((int(ts_raw), ts, tag, proc_name, text))
         last_event_real_time = time.time()
 
+def detail_suffix(hidden_count):
+    if hidden_count <= 0:
+        return ""
+    noun = "detail" if hidden_count == 1 else "details"
+    return f" {COLOR_DIM}(+{hidden_count} {noun}){COLOR_RESET}"
+
+def render_group(unique_events):
+    t_root_ms, ts_root, _, source_root, text_root = unique_events[0]
+    t_last_ms = unique_events[-1][0]
+    span_ms = t_last_ms - t_root_ms
+    latency_str = f" {COLOR_TIME}(span: {span_ms}ms){COLOR_RESET}" if span_ms > 0 else ""
+
+    n = len(unique_events)
+    src_color = hash_color(source_root)
+    src_tag = f"{src_color}[{source_root}]{COLOR_RESET} "
+
+    if n == 1:
+        print(f"{COLOR_TIME}[{ts_root}]{COLOR_RESET} ── {src_tag}{text_root}{latency_str}")
+        return
+
+    if not details_enabled:
+        print(
+            f"{COLOR_TIME}[{ts_root}]{COLOR_RESET} ── "
+            f"{src_tag}{text_root}{latency_str}{detail_suffix(n - 1)}"
+        )
+        return
+
+    print(f"{COLOR_TIME}[{ts_root}]{COLOR_RESET} ┌── {src_tag}{text_root}{latency_str}")
+    for idx in range(1, n):
+        _, ts, _, source, text = unique_events[idx]
+        connector = "└── " if idx == n - 1 else "├── "
+        c_color = hash_color(source)
+        c_tag = f"{c_color}[{source}]{COLOR_RESET} "
+        print(f"{COLOR_TIME}[{ts}]{COLOR_RESET} │   {connector}{c_tag}{text}")
+
 def flush_buffer():
     global event_buffer, last_printed_state_summary
     if not event_buffer:
@@ -1174,27 +1211,8 @@ def flush_buffer():
     if not unique_events:
         event_buffer = []
         return
-        
-    t_root_ms, ts_root, _, source_root, text_root = unique_events[0]
-    
-    t_last_ms = unique_events[-1][0]
-    span_ms = t_last_ms - t_root_ms
-    latency_str = f" {COLOR_TIME}(span: {span_ms}ms){COLOR_RESET}" if span_ms > 0 else ""
-    
-    n = len(unique_events)
-    src_color = hash_color(source_root)
-    src_tag = f"{src_color}[{source_root}]{COLOR_RESET} "
-    
-    if n == 1:
-        print(f"{COLOR_TIME}[{ts_root}]{COLOR_RESET} ── {src_tag}{text_root}{latency_str}")
-    else:
-        print(f"{COLOR_TIME}[{ts_root}]{COLOR_RESET} ┌── {src_tag}{text_root}{latency_str}")
-        for idx in range(1, n):
-            _, ts, _, source, text = unique_events[idx]
-            connector = "└── " if idx == n - 1 else "├── "
-            c_color = hash_color(source)
-            c_tag = f"{c_color}[{source}]{COLOR_RESET} "
-            print(f"{COLOR_TIME}[{ts}]{COLOR_RESET} │   {connector}{c_tag}{text}")
+
+    render_group(unique_events)
             
     print()
     event_buffer = []
@@ -1226,6 +1244,62 @@ def replay_log(f, start_ts):
         process_line(ts, pid, tag, msg)
         prev_ts = int(ts)
 
+class DetailToggleInput:
+    def __init__(self):
+        self.fd = None
+        self.old_attrs = None
+        self.select = None
+        self.termios = None
+        self.closed = False
+
+    def __enter__(self):
+        if args.replay:
+            return self
+        try:
+            import select
+
+            self.fd = sys.stdin.fileno()
+            self.select = select
+            if sys.stdin.isatty():
+                import termios
+                import tty
+
+                self.old_attrs = termios.tcgetattr(self.fd)
+                tty.setcbreak(self.fd)
+                self.termios = termios
+        except Exception:
+            self.fd = None
+            self.old_attrs = None
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb):
+        if self.fd is not None and self.old_attrs is not None and self.termios is not None:
+            self.termios.tcsetattr(self.fd, self.termios.TCSADRAIN, self.old_attrs)
+
+    def poll(self):
+        if self.closed or self.fd is None or self.select is None:
+            return
+        try:
+            readable, _, _ = self.select.select([sys.stdin], [], [], 0)
+        except Exception:
+            self.closed = True
+            return
+        if not readable:
+            return
+        ch = sys.stdin.read(1)
+        if ch == "":
+            self.closed = True
+            return
+        if ch in ("d", "D"):
+            toggle_details()
+
+def toggle_details():
+    global details_enabled
+    details_enabled = not details_enabled
+    state = "expanded" if details_enabled else "collapsed"
+    print(f"{COLOR_HEADER}Trace details: {state}{COLOR_RESET}\n")
+    flush_buffer()
+
 def main():
     global last_event_real_time, pending_activation
     if args.mark:
@@ -1246,12 +1320,20 @@ def main():
         
     if args.focus_only:
         filter_str = f" for {COLOR_OK}{filter_plugin}{COLOR_HEADER}" if filter_plugin else ""
-        print(f"{COLOR_HEADER}Tailing /tmp/qol-altmon.log (focus-only mode{filter_str})...{COLOR_RESET}")
+        print(f"{COLOR_HEADER}Tailing {LOG_FILE} (focus-only mode{filter_str})...{COLOR_RESET}")
     elif filter_plugin:
-        print(f"{COLOR_HEADER}Tailing /tmp/qol-altmon.log filtering for {COLOR_OK}{filter_plugin}{COLOR_HEADER}...{COLOR_RESET}")
+        print(f"{COLOR_HEADER}Tailing {LOG_FILE} filtering for {COLOR_OK}{filter_plugin}{COLOR_HEADER}...{COLOR_RESET}")
     else:
-        print(f"{COLOR_HEADER}Tailing /tmp/qol-altmon.log (system runtime trace)...{COLOR_RESET}")
-    print(f"{COLOR_DIM}Aggregating transitions into beautiful call tree structures with latencies.{COLOR_RESET}\n")
+        print(f"{COLOR_HEADER}Tailing {LOG_FILE} (system runtime trace)...{COLOR_RESET}")
+    detail_hint = "expanded" if details_enabled else "collapsed"
+    control_hint = os.environ.get("QOL_TRACE_CONTROL_HINT")
+    if control_hint:
+        toggle_hint = control_hint
+    elif not args.replay and sys.stdin.isatty():
+        toggle_hint = "press d to toggle"
+    else:
+        toggle_hint = "details enabled" if details_enabled else "use --details to expand"
+    print(f"{COLOR_DIM}Aggregating transitions into {detail_hint} trace groups ({toggle_hint}).{COLOR_RESET}\n")
     
     query_initial_monitors()
     
@@ -1280,37 +1362,40 @@ def main():
         f.seek(0, os.SEEK_END)
 
     try:
-        while True:
-            # Check timeout for pending activation in real-time
-            if pending_activation:
-                cur_ms = int(time.time() * 1000)
-                if cur_ms - pending_activation["ts_raw"] > 600:
-                    if not filter_plugin or pending_activation.get("source") == filter_plugin:
-                        target = pending_activation["title"]
-                        wid = pending_activation["wid"]
-                        resolved_ts = pending_activation["ts_raw"] + 600
-                        resolved_ts_str = format_timestamp(str(resolved_ts))
-                        if pending_activation.get("confirmed_front"):
-                            text = f"{COLOR_SUCCESS}✔ FOCUS OK{COLOR_RESET}: \"{target}\" (wid: {wid}) confirmed front; no WM focus-change event."
-                            event_buffer.append((resolved_ts, resolved_ts_str, "FOCUS", "host", text))
-                        else:
-                            text = f"{COLOR_FAIL}✖ FOCUS FAILURE{COLOR_RESET}: Timed out focusing \"{target}\" (wid: {wid}). WM ignored request."
-                            event_buffer.append((resolved_ts, resolved_ts_str, "FOCUS_WARN", "host", text))
-                        last_event_real_time = time.time()
-                    pending_activation = None
+        with DetailToggleInput() as input_toggle:
+            while True:
+                input_toggle.poll()
 
-            if event_buffer and (time.time() - last_event_real_time > 0.08):
-                flush_buffer()
-                
-            line = f.readline()
-            if not line:
-                time.sleep(0.01)
-                continue
-            ts, pid, tag, msg = parse_line(line.strip())
-            if ts and pid and tag and msg:
-                if start_ts > 0 and int(ts) < start_ts:
+                # Check timeout for pending activation in real-time
+                if pending_activation:
+                    cur_ms = int(time.time() * 1000)
+                    if cur_ms - pending_activation["ts_raw"] > 600:
+                        if not filter_plugin or pending_activation.get("source") == filter_plugin:
+                            target = pending_activation["title"]
+                            wid = pending_activation["wid"]
+                            resolved_ts = pending_activation["ts_raw"] + 600
+                            resolved_ts_str = format_timestamp(str(resolved_ts))
+                            if pending_activation.get("confirmed_front"):
+                                text = f"{COLOR_SUCCESS}✔ FOCUS OK{COLOR_RESET}: \"{target}\" (wid: {wid}) confirmed front; no WM focus-change event."
+                                event_buffer.append((resolved_ts, resolved_ts_str, "FOCUS", "host", text))
+                            else:
+                                text = f"{COLOR_FAIL}✖ FOCUS FAILURE{COLOR_RESET}: Timed out focusing \"{target}\" (wid: {wid}). WM ignored request."
+                                event_buffer.append((resolved_ts, resolved_ts_str, "FOCUS_WARN", "host", text))
+                            last_event_real_time = time.time()
+                        pending_activation = None
+
+                if event_buffer and (time.time() - last_event_real_time > 0.08):
+                    flush_buffer()
+
+                line = f.readline()
+                if not line:
+                    time.sleep(0.01)
                     continue
-                process_line(ts, pid, tag, msg)
+                ts, pid, tag, msg = parse_line(line.strip())
+                if ts and pid and tag and msg:
+                    if start_ts > 0 and int(ts) < start_ts:
+                        continue
+                    process_line(ts, pid, tag, msg)
     except KeyboardInterrupt:
         flush_buffer()
         print_stats()

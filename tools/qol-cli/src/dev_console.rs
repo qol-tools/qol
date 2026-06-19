@@ -1,7 +1,8 @@
 use std::collections::{HashMap, VecDeque};
-use std::io::{BufRead, BufReader, IsTerminal, Read};
-use std::path::Path;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, BufWriter, IsTerminal, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -50,8 +51,10 @@ pub(crate) enum SessionEnd {
 enum Action {
     ToggleView,
     ToggleKeys,
+    ToggleArm,
     Rebuild,
     Doctor,
+    ToggleTraceDetails,
     Back,
     Activate,
     Dive,
@@ -64,39 +67,11 @@ enum Action {
     Filter,
     Copy,
     OpenEmuDir,
+    OpenCurrentLogFolder,
+    OpenCurrentLogEditor,
     ToggleArch,
     Confirm,
     Ignore,
-}
-
-fn action_for(code: KeyCode, mods: KeyModifiers) -> Action {
-    if mods.contains(KeyModifiers::CONTROL) {
-        return match code {
-            KeyCode::Char('r') => Action::Rebuild,
-            KeyCode::Char('c') => Action::Quit,
-            _ => Action::Ignore,
-        };
-    }
-    match code {
-        KeyCode::Char('l') | KeyCode::Char('L') => Action::ToggleView,
-        KeyCode::Char('k') | KeyCode::Char('K') => Action::ToggleKeys,
-        KeyCode::Char('d') | KeyCode::Char('D') => Action::Doctor,
-        KeyCode::Esc | KeyCode::Left => Action::Back,
-        KeyCode::Enter => Action::Activate,
-        KeyCode::Right => Action::Dive,
-        KeyCode::Char('q') => Action::Quit,
-        KeyCode::Up => Action::ScrollUp,
-        KeyCode::Down => Action::ScrollDown,
-        KeyCode::PageUp => Action::PageUp,
-        KeyCode::PageDown => Action::PageDown,
-        KeyCode::End | KeyCode::Char('f') => Action::Follow,
-        KeyCode::Char('/') => Action::Filter,
-        KeyCode::Char('c') | KeyCode::Char('C') => Action::Copy,
-        KeyCode::Char('o') | KeyCode::Char('O') => Action::OpenEmuDir,
-        KeyCode::Char('t') | KeyCode::Char('T') => Action::ToggleArch,
-        KeyCode::Char('a') | KeyCode::Char('A') => Action::Confirm,
-        _ => Action::Ignore,
-    }
 }
 
 fn preserves_arm(action: Action) -> bool {
@@ -112,6 +87,353 @@ fn preserves_arm(action: Action) -> bool {
             | Action::ToggleKeys
             | Action::Follow
     )
+}
+
+#[derive(Clone, Copy)]
+struct KeyHint {
+    key: &'static str,
+    desc: &'static str,
+}
+
+#[derive(Clone, Copy)]
+struct KeyStroke {
+    code: KeyCode,
+    mods: KeyModifiers,
+}
+
+impl KeyStroke {
+    fn plain(code: KeyCode) -> Self {
+        Self {
+            code,
+            mods: KeyModifiers::NONE,
+        }
+    }
+
+    fn ctrl(c: char) -> Self {
+        Self {
+            code: KeyCode::Char(c),
+            mods: KeyModifiers::CONTROL,
+        }
+    }
+
+    fn matches(self, code: KeyCode, mods: KeyModifiers) -> bool {
+        if self.code != code {
+            return false;
+        }
+        normalized_mods(mods) == self.mods
+    }
+}
+
+#[derive(Clone)]
+struct KeyBinding {
+    hint: KeyHint,
+    action: Action,
+    strokes: Vec<KeyStroke>,
+}
+
+impl KeyBinding {
+    fn matches(&self, code: KeyCode, mods: KeyModifiers) -> bool {
+        self.strokes.iter().any(|stroke| stroke.matches(code, mods))
+    }
+}
+
+fn normalized_mods(mut mods: KeyModifiers) -> KeyModifiers {
+    mods.remove(KeyModifiers::SHIFT);
+    mods
+}
+
+fn binding(
+    key: &'static str,
+    desc: &'static str,
+    action: Action,
+    strokes: Vec<KeyStroke>,
+) -> KeyBinding {
+    KeyBinding {
+        hint: KeyHint { key, desc },
+        action,
+        strokes,
+    }
+}
+
+fn char_binding(key: &'static str, desc: &'static str, action: Action, c: char) -> KeyBinding {
+    let mut strokes = vec![KeyStroke::plain(KeyCode::Char(c))];
+    let upper = c.to_ascii_uppercase();
+    if upper != c {
+        strokes.push(KeyStroke::plain(KeyCode::Char(upper)));
+    }
+    binding(key, desc, action, strokes)
+}
+
+fn global_action_bindings(armed: bool) -> Vec<KeyBinding> {
+    let ctrl_r_desc = if armed {
+        "reload qol dev"
+    } else {
+        "rebuild tray+plugins"
+    };
+    vec![
+        binding(
+            "ctrl+r",
+            ctrl_r_desc,
+            Action::Rebuild,
+            vec![KeyStroke::ctrl('r')],
+        ),
+        char_binding("l", "logs", Action::ToggleView, 'l'),
+        char_binding("k", "keys", Action::ToggleKeys, 'k'),
+        binding(
+            "q / ctrl+c",
+            "quit",
+            Action::Quit,
+            vec![KeyStroke::plain(KeyCode::Char('q')), KeyStroke::ctrl('c')],
+        ),
+    ]
+}
+
+fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
+    match dash.view {
+        View::Dashboard => vec![
+            binding(
+                "↑/↓",
+                "move",
+                Action::ScrollUp,
+                vec![KeyStroke::plain(KeyCode::Up)],
+            ),
+            binding(
+                "↑/↓",
+                "move",
+                Action::ScrollDown,
+                vec![KeyStroke::plain(KeyCode::Down)],
+            ),
+            binding(
+                "enter",
+                "act on row",
+                Action::Activate,
+                vec![KeyStroke::plain(KeyCode::Enter)],
+            ),
+            binding(
+                "→ / ←",
+                "dive · back",
+                Action::Dive,
+                vec![KeyStroke::plain(KeyCode::Right)],
+            ),
+            binding(
+                "→ / ←",
+                "dive · back",
+                Action::Back,
+                vec![
+                    KeyStroke::plain(KeyCode::Left),
+                    KeyStroke::plain(KeyCode::Esc),
+                ],
+            ),
+            binding(
+                "space",
+                "arm, then enter",
+                Action::ToggleArm,
+                vec![KeyStroke::plain(KeyCode::Char(' '))],
+            ),
+            char_binding("d", "doctor", Action::Doctor, 'd'),
+        ],
+        View::Emu => vec![
+            binding(
+                "↑/↓",
+                "select emu",
+                Action::ScrollUp,
+                vec![KeyStroke::plain(KeyCode::Up)],
+            ),
+            binding(
+                "↑/↓",
+                "select emu",
+                Action::ScrollDown,
+                vec![KeyStroke::plain(KeyCode::Down)],
+            ),
+            binding(
+                "enter",
+                "boot · stop",
+                Action::Activate,
+                vec![KeyStroke::plain(KeyCode::Enter)],
+            ),
+            binding(
+                "→",
+                "detail · log",
+                Action::Dive,
+                vec![KeyStroke::plain(KeyCode::Right)],
+            ),
+            binding(
+                "space",
+                "arm: checks",
+                Action::ToggleArm,
+                vec![KeyStroke::plain(KeyCode::Char(' '))],
+            ),
+            char_binding("o", "open emu dir", Action::OpenEmuDir, 'o'),
+            char_binding("t", "set arch", Action::ToggleArch, 't'),
+            char_binding("a", "add image", Action::Confirm, 'a'),
+            binding(
+                "←",
+                "back",
+                Action::Back,
+                vec![
+                    KeyStroke::plain(KeyCode::Left),
+                    KeyStroke::plain(KeyCode::Esc),
+                ],
+            ),
+        ],
+        View::Logs => stream_view_bindings(false, true),
+        View::Trace => stream_view_bindings(true, true),
+        View::EmuDetail => stream_view_bindings(false, false),
+        View::Doctor => vec![
+            char_binding("d", "refresh checks", Action::Doctor, 'd'),
+            binding(
+                "space",
+                "raw output",
+                Action::ToggleArm,
+                vec![KeyStroke::plain(KeyCode::Char(' '))],
+            ),
+            binding(
+                "↑/↓",
+                "scroll",
+                Action::ScrollUp,
+                vec![KeyStroke::plain(KeyCode::Up)],
+            ),
+            binding(
+                "↑/↓",
+                "scroll",
+                Action::ScrollDown,
+                vec![KeyStroke::plain(KeyCode::Down)],
+            ),
+            binding(
+                "←",
+                "back",
+                Action::Back,
+                vec![
+                    KeyStroke::plain(KeyCode::Left),
+                    KeyStroke::plain(KeyCode::Esc),
+                ],
+            ),
+        ],
+        View::Plugins | View::Endpoints => vec![
+            binding(
+                "↑/↓",
+                "scroll",
+                Action::ScrollUp,
+                vec![KeyStroke::plain(KeyCode::Up)],
+            ),
+            binding(
+                "↑/↓",
+                "scroll",
+                Action::ScrollDown,
+                vec![KeyStroke::plain(KeyCode::Down)],
+            ),
+            binding(
+                "←",
+                "back",
+                Action::Back,
+                vec![
+                    KeyStroke::plain(KeyCode::Left),
+                    KeyStroke::plain(KeyCode::Esc),
+                ],
+            ),
+        ],
+    }
+}
+
+fn stream_view_bindings(trace: bool, log_resource: bool) -> Vec<KeyBinding> {
+    let mut bindings = vec![
+        binding(
+            "↑/↓",
+            "scroll",
+            Action::ScrollUp,
+            vec![KeyStroke::plain(KeyCode::Up)],
+        ),
+        binding(
+            "↑/↓",
+            "scroll",
+            Action::ScrollDown,
+            vec![KeyStroke::plain(KeyCode::Down)],
+        ),
+        binding(
+            "pgup/pgdn",
+            "page",
+            Action::PageUp,
+            vec![KeyStroke::plain(KeyCode::PageUp)],
+        ),
+        binding(
+            "pgup/pgdn",
+            "page",
+            Action::PageDown,
+            vec![KeyStroke::plain(KeyCode::PageDown)],
+        ),
+        binding(
+            "f / end",
+            "follow tail",
+            Action::Follow,
+            vec![
+                KeyStroke::plain(KeyCode::Char('f')),
+                KeyStroke::plain(KeyCode::Char('F')),
+                KeyStroke::plain(KeyCode::End),
+            ],
+        ),
+        binding(
+            "/",
+            "filter",
+            Action::Filter,
+            vec![KeyStroke::plain(KeyCode::Char('/'))],
+        ),
+        char_binding("c", "copy last N", Action::Copy, 'c'),
+    ];
+    if log_resource {
+        bindings.push(char_binding(
+            "o",
+            "open folder",
+            Action::OpenCurrentLogFolder,
+            'o',
+        ));
+        bindings.push(char_binding(
+            "e",
+            "edit file",
+            Action::OpenCurrentLogEditor,
+            'e',
+        ));
+    }
+    if trace {
+        bindings.push(char_binding(
+            "d",
+            "details",
+            Action::ToggleTraceDetails,
+            'd',
+        ));
+    }
+    bindings.push(binding(
+        "←",
+        "back",
+        Action::Back,
+        vec![
+            KeyStroke::plain(KeyCode::Left),
+            KeyStroke::plain(KeyCode::Esc),
+        ],
+    ));
+    bindings
+}
+
+fn action_for(dash: &Dash, code: KeyCode, mods: KeyModifiers) -> Action {
+    global_action_bindings(dash.armed)
+        .into_iter()
+        .chain(context_action_bindings(dash))
+        .find(|binding| binding.matches(code, mods))
+        .map(|binding| binding.action)
+        .unwrap_or(Action::Ignore)
+}
+
+fn unique_hints(bindings: Vec<KeyBinding>) -> Vec<KeyHint> {
+    let mut hints = Vec::new();
+    for binding in bindings {
+        if hints
+            .iter()
+            .any(|hint: &KeyHint| hint.key == binding.hint.key && hint.desc == binding.hint.desc)
+        {
+            continue;
+        }
+        hints.push(binding.hint);
+    }
+    hints
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -236,6 +558,7 @@ fn clamp_offset(len: usize, height: usize, offset: usize) -> usize {
 struct OwnedSource {
     child: Child,
     rx: Receiver<String>,
+    stdin: Option<ChildStdin>,
 }
 
 struct LogPane {
@@ -252,7 +575,11 @@ impl LogPane {
     }
 
     fn attach(&mut self, child: Child, rx: Receiver<String>) {
-        self.source = Some(OwnedSource { child, rx });
+        self.attach_with_stdin(child, rx, None);
+    }
+
+    fn attach_with_stdin(&mut self, child: Child, rx: Receiver<String>, stdin: Option<ChildStdin>) {
+        self.source = Some(OwnedSource { child, rx, stdin });
     }
 
     fn is_live(&self) -> bool {
@@ -280,6 +607,17 @@ impl LogPane {
                 self.ring.push(line);
             }
         }
+    }
+
+    fn write_control(&mut self, text: &str) -> bool {
+        let Some(stdin) = self
+            .source
+            .as_mut()
+            .and_then(|source| source.stdin.as_mut())
+        else {
+            return false;
+        };
+        stdin.write_all(text.as_bytes()).is_ok()
     }
 
     fn stop(&mut self) {
@@ -342,6 +680,61 @@ impl LogPane {
         let _ = source.child.kill();
         let _ = source.child.wait();
     }
+}
+
+struct DevLogFile {
+    path: PathBuf,
+    writer: Option<BufWriter<File>>,
+}
+
+impl DevLogFile {
+    fn create() -> Option<Self> {
+        let primary = dev_log_dir();
+        create_dev_log_file_in(&primary).or_else(|| {
+            let fallback = std::env::temp_dir().join("qol-tray/logs");
+            create_dev_log_file_in(&fallback)
+        })
+    }
+
+    #[cfg(test)]
+    fn path_only(path: PathBuf) -> Self {
+        Self { path, writer: None }
+    }
+
+    fn write_line(&mut self, line: &str) {
+        let Some(writer) = self.writer.as_mut() else {
+            return;
+        };
+        let _ = writeln!(writer, "{line}");
+        let _ = writer.flush();
+    }
+}
+
+fn dev_log_dir() -> PathBuf {
+    core_log_dir()
+}
+
+fn create_dev_log_file_in(dir: &Path) -> Option<DevLogFile> {
+    fs::create_dir_all(dir).ok()?;
+    let path = dir.join(dev_log_file_name());
+    let writer = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()
+        .map(BufWriter::new)?;
+    Some(DevLogFile {
+        path,
+        writer: Some(writer),
+    })
+}
+
+fn dev_log_file_name() -> String {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    format!("qol-dev-{ts}-{}.log", std::process::id())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -514,6 +907,7 @@ enum ReloadOutcome {
 struct Dash {
     view: View,
     logs: LogPane,
+    log_file: Option<DevLogFile>,
     scroll_offset: usize,
     health: Health,
     web: Health,
@@ -532,6 +926,7 @@ struct Dash {
     doctor: DoctorPanel,
     trace: LogPane,
     trace_unavailable: bool,
+    trace_details: bool,
     boot_rx: Option<Receiver<String>>,
     keys_hidden: bool,
     filters: Vec<LogFilter>,
@@ -552,6 +947,7 @@ impl Dash {
         Self {
             view: View::Dashboard,
             logs: LogPane::new(),
+            log_file: None,
             scroll_offset: 0,
             health: Health::Checking,
             web: Health::Checking,
@@ -575,6 +971,7 @@ impl Dash {
             },
             trace: LogPane::new(),
             trace_unavailable: false,
+            trace_details: false,
             boot_rx: None,
             keys_hidden: false,
             filters: Vec::new(),
@@ -589,6 +986,18 @@ impl Dash {
             pokes: Pokes::default(),
             links: LinksState::Unknown,
         }
+    }
+
+    fn start_log_file(&mut self) {
+        self.log_file = DevLogFile::create();
+    }
+
+    fn push_log(&mut self, line: impl Into<String>) {
+        let line = line.into();
+        if let Some(log_file) = self.log_file.as_mut() {
+            log_file.write_line(&line);
+        }
+        self.logs.push(line);
     }
 
     fn is_reloading(&self) -> bool {
@@ -732,6 +1141,7 @@ pub(crate) fn run_session(
     }
     let mut probes = Probes::spawn();
     let mut dash = Dash::new(plugins);
+    dash.start_log_file();
     dash.boot_rx = boot;
     start_trace(&mut dash);
     let mut terminal = ratatui::init();
@@ -791,7 +1201,7 @@ fn tui_session(
 ) -> Result<SessionEnd> {
     loop {
         while let Ok(line) = lines.try_recv() {
-            dash.logs.push(line);
+            dash.push_log(line);
         }
         if let Some(snapshot) = probes.health.latest() {
             apply_health(dash, snapshot);
@@ -848,7 +1258,7 @@ fn tui_session(
         }
         if let Some(status) = try_wait(child)? {
             while let Ok(line) = lines.try_recv() {
-                dash.logs.push(line);
+                dash.push_log(line);
             }
             stop_trace(dash);
             stop_emu_runs(dash);
@@ -861,13 +1271,11 @@ fn tui_session(
                 edit_filters(dash, code);
             } else if dash.copying {
                 edit_copy(dash, code);
-            } else if code == KeyCode::Char(' ') {
-                dash.armed = !dash.armed;
             } else if dash.armed && code == KeyCode::Esc {
                 dash.armed = false;
             } else {
                 let modified = dash.armed;
-                let action = action_for(code, mods);
+                let action = action_for(dash, code, mods);
                 match action {
                     Action::Quit => {
                         stop_trace(dash);
@@ -899,7 +1307,7 @@ fn drain_boot(dash: &mut Dash) {
         }
     }
     for line in received {
-        dash.logs.push(line);
+        dash.push_log(line);
     }
 }
 
@@ -1033,11 +1441,13 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             dash.clear_filters();
         }
         Action::ToggleKeys => dash.keys_hidden = !dash.keys_hidden,
+        Action::ToggleArm => dash.armed = !dash.armed,
         Action::Rebuild => {
             trigger_rebuild(dash);
             trigger_reload(dash);
         }
         Action::Doctor => open_doctor(dash),
+        Action::ToggleTraceDetails => toggle_trace_details(dash),
         Action::Activate => match dash.view {
             View::Dashboard => act_row(dash, modified),
             View::Emu => act_emu(dash, modified),
@@ -1106,6 +1516,8 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
                 dash.scroll_offset = 0;
             }
         }
+        Action::OpenCurrentLogFolder => open_current_log_folder(dash),
+        Action::OpenCurrentLogEditor => open_current_log_editor(dash),
         Action::OpenEmuDir => {
             if dash.view == View::Emu {
                 open_emu_dir();
@@ -1236,9 +1648,9 @@ fn start_trace(dash: &mut Dash) {
     if dash.trace.is_live() {
         return;
     }
-    match spawn_trace() {
-        Some((child, rx)) => {
-            dash.trace.attach(child, rx);
+    match spawn_trace(dash.trace_details) {
+        Some((child, rx, stdin)) => {
+            dash.trace.attach_with_stdin(child, rx, stdin);
             dash.trace_unavailable = false;
         }
         None => {
@@ -1259,23 +1671,197 @@ fn open_trace(dash: &mut Dash) {
     start_trace(dash);
 }
 
-fn spawn_trace() -> Option<(Child, Receiver<String>)> {
+fn spawn_trace(details: bool) -> Option<(Child, Receiver<String>, Option<ChildStdin>)> {
     let root = crate::workspace::repo_root().ok()?;
-    let mut child = Command::new("python3")
-        .arg("-u")
-        .arg(root.join("tools/compact_trace.py"))
+    let mut cmd = Command::new("python3");
+    cmd.arg("-u").arg(root.join("tools/compact_trace.py"));
+    if details {
+        cmd.arg("--details");
+    }
+    let mut child = cmd
         .current_dir(&root)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .env("QOL_TRACE_CONTROL_HINT", "press d to toggle")
         .spawn()
         .ok()?;
+    let stdin = child.stdin.take();
     let rx = spawn_forwarders(&mut child);
-    Some((child, rx))
+    Some((child, rx, stdin))
 }
 
 fn stop_trace(dash: &mut Dash) {
     dash.trace.stop();
+}
+
+fn toggle_trace_details(dash: &mut Dash) {
+    if dash.view != View::Trace {
+        return;
+    }
+    dash.trace_details = !dash.trace_details;
+    if dash.trace.write_control("d") {
+        return;
+    }
+    stop_trace(dash);
+    start_trace(dash);
+}
+
+const DEFAULT_TRACE_LOG_FILE: &str = "/tmp/qol-altmon.log";
+
+struct LogSourceInfo {
+    kind: &'static str,
+    file: Option<PathBuf>,
+    folder: PathBuf,
+    stream_note: &'static str,
+}
+
+fn current_log_source(dash: &Dash) -> Option<LogSourceInfo> {
+    match dash.view {
+        View::Trace => {
+            let path = trace_log_file();
+            Some(LogSourceInfo {
+                kind: "trace",
+                folder: path
+                    .parent()
+                    .unwrap_or_else(|| Path::new("/tmp"))
+                    .to_path_buf(),
+                file: Some(path),
+                stream_note: "raw probe file",
+            })
+        }
+        View::Logs => {
+            let file = dash.log_file.as_ref().map(|log_file| log_file.path.clone());
+            let folder = file
+                .as_ref()
+                .and_then(|path| path.parent().map(Path::to_path_buf))
+                .unwrap_or_else(dev_log_dir);
+            Some(LogSourceInfo {
+                kind: "log",
+                file,
+                folder,
+                stream_note: "qol dev stdout/stderr tee",
+            })
+        }
+        _ => None,
+    }
+}
+
+fn trace_log_file() -> PathBuf {
+    std::env::var_os("QOL_TRACE_LOG_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_TRACE_LOG_FILE))
+}
+
+fn core_log_dir() -> PathBuf {
+    match crate::host_facade::os_name() {
+        "macos" => dirs::home_dir()
+            .map(|home| home.join("Library/Logs/qol-tray"))
+            .unwrap_or_else(|| PathBuf::from("/tmp/qol-tray/logs")),
+        "windows" => dirs::data_local_dir()
+            .map(|dir| dir.join("qol-tray/logs"))
+            .unwrap_or_else(|| PathBuf::from("C:/Temp/qol-tray/logs")),
+        _ => qol_config::data_dir()
+            .map(|dir| dir.join("logs"))
+            .unwrap_or_else(|| PathBuf::from("/tmp/qol-tray/logs")),
+    }
+}
+
+fn open_current_log_folder(dash: &mut Dash) {
+    let Some(source) = current_log_source(dash) else {
+        return;
+    };
+    crate::host_facade::open_path(&source.folder);
+    dash.notice = Some((
+        Instant::now(),
+        format!("opened {} folder {}", source.kind, source.folder.display()),
+    ));
+}
+
+fn open_current_log_editor(dash: &mut Dash) {
+    let Some(source) = current_log_source(dash) else {
+        return;
+    };
+    let Some(file) = source.file else {
+        dash.notice = Some((
+            Instant::now(),
+            format!(
+                "no persisted {} file yet in {}",
+                source.kind,
+                source.folder.display()
+            ),
+        ));
+        return;
+    };
+    if !file.exists() {
+        dash.notice = Some((Instant::now(), format!("{} does not exist", file.display())));
+        return;
+    }
+    if open_in_default_editor(&file) {
+        dash.notice = Some((Instant::now(), format!("opened {}", file.display())));
+    } else {
+        dash.notice = Some((Instant::now(), format!("could not open {}", file.display())));
+    }
+}
+
+fn configured_editor_label() -> Option<String> {
+    env_editor().map(|(key, value)| format!("{key}={value}"))
+}
+
+fn env_editor() -> Option<(&'static str, String)> {
+    std::env::var("VISUAL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| ("VISUAL", value))
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| ("EDITOR", value))
+        })
+}
+
+fn open_in_default_editor(path: &Path) -> bool {
+    if let Some((_, editor)) = env_editor() {
+        return spawn_editor_command(&editor, path);
+    }
+    match crate::host_facade::os_name() {
+        "macos" => Command::new("open")
+            .arg("-t")
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok(),
+        "windows" => Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(path)
+            .spawn()
+            .is_ok(),
+        _ => Command::new("xdg-open")
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok(),
+    }
+}
+
+fn spawn_editor_command(editor: &str, path: &Path) -> bool {
+    let mut parts = editor.split_whitespace();
+    let Some(program) = parts.next() else {
+        return false;
+    };
+    Command::new(program)
+        .args(parts)
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .is_ok()
 }
 
 fn emu_env_count(dash: &Dash) -> usize {
@@ -1584,12 +2170,10 @@ fn start_reload(dash: &mut Dash) {
     }
     match spawn_reload() {
         Some((child, rx)) => {
-            dash.logs.push("[qol dev] reloading: qol setup".to_string());
+            dash.push_log("[qol dev] reloading: qol setup");
             dash.reload = Reload::Running { child, rx };
         }
-        None => dash
-            .logs
-            .push("[qol dev] reload failed to start".to_string()),
+        None => dash.push_log("[qol dev] reload failed to start"),
     }
 }
 
@@ -1620,7 +2204,7 @@ fn poll_reload(dash: &mut Dash) -> ReloadOutcome {
                 Ok(Some(status)) => status,
                 _ => {
                     for line in drained {
-                        dash.logs.push(line);
+                        dash.push_log(line);
                     }
                     return ReloadOutcome::Pending;
                 }
@@ -1628,14 +2212,13 @@ fn poll_reload(dash: &mut Dash) -> ReloadOutcome {
         }
     };
     for line in drained {
-        dash.logs.push(line);
+        dash.push_log(line);
     }
     dash.reload = Reload::Idle;
     if status.success() {
         return ReloadOutcome::Ready;
     }
-    dash.logs
-        .push(format!("[qol dev] reload aborted: qol setup {status}"));
+    dash.push_log(format!("[qol dev] reload aborted: qol setup {status}"));
     ReloadOutcome::Pending
 }
 
@@ -1775,85 +2358,83 @@ fn breadcrumb(dash: &Dash, accent: Color) -> Line<'static> {
 
 const KEYS_HUD_WIDTH: u16 = 34;
 
-fn context_keys(dash: &Dash) -> Vec<(&'static str, &'static str)> {
+fn context_keys(dash: &Dash) -> Vec<KeyHint> {
     if dash.copying {
         return vec![
-            ("digits", "line count"),
-            ("enter", "copy"),
-            ("esc", "cancel"),
+            KeyHint {
+                key: "digits",
+                desc: "line count",
+            },
+            KeyHint {
+                key: "enter",
+                desc: "copy",
+            },
+            KeyHint {
+                key: "esc",
+                desc: "cancel",
+            },
         ];
     }
     match &dash.filter_state {
         FilterState::Managing => {
             return vec![
-                ("←↑↓→", "select filter"),
-                ("enter", "add"),
-                ("e", "edit"),
-                ("d", "delete"),
-                ("esc", "close"),
+                KeyHint {
+                    key: "←↑↓→",
+                    desc: "select filter",
+                },
+                KeyHint {
+                    key: "enter",
+                    desc: "add",
+                },
+                KeyHint {
+                    key: "e",
+                    desc: "edit",
+                },
+                KeyHint {
+                    key: "d",
+                    desc: "delete",
+                },
+                KeyHint {
+                    key: "esc",
+                    desc: "close",
+                },
             ];
         }
         FilterState::Editing { .. } => {
             return vec![
-                ("type", "filter text"),
-                ("↑/↓", "strategy + / -"),
-                ("enter", "save"),
-                ("esc", "cancel"),
+                KeyHint {
+                    key: "type",
+                    desc: "filter text",
+                },
+                KeyHint {
+                    key: "↑/↓",
+                    desc: "strategy + / -",
+                },
+                KeyHint {
+                    key: "enter",
+                    desc: "save",
+                },
+                KeyHint {
+                    key: "esc",
+                    desc: "cancel",
+                },
             ];
         }
         FilterState::Closed => {}
     }
-    let keys: &[(&'static str, &'static str)] = match dash.view {
-        View::Dashboard => &[
-            ("↑/↓", "move"),
-            ("enter", "act on row"),
-            ("→ / ←", "dive · back"),
-            ("space", "arm, then enter"),
-            ("l · d", "logs · doctor"),
-        ],
-        View::Emu => &[
-            ("↑/↓", "select emu"),
-            ("enter", "boot · stop"),
-            ("→", "detail · log"),
-            ("space", "arm: checks"),
-            ("o", "open emu dir"),
-            ("t", "set arch"),
-            ("a", "add image"),
-            ("←", "back"),
-        ],
-        View::Logs | View::Trace | View::EmuDetail => &[
-            ("↑/↓", "scroll"),
-            ("f / end", "follow tail"),
-            ("/", "filter"),
-            ("c", "copy last N"),
-            ("←", "back"),
-        ],
-        View::Doctor => &[
-            ("d", "refresh checks"),
-            ("space", "arm: raw output"),
-            ("↑/↓", "scroll"),
-            ("←", "back"),
-        ],
-        View::Plugins | View::Endpoints => &[("↑/↓", "scroll"), ("←", "back")],
-    };
-    keys.to_vec()
+    unique_hints(context_action_bindings(dash))
 }
 
-fn global_keys(armed: bool) -> Vec<(&'static str, &'static str)> {
-    let ctrl_r = if armed {
-        ("ctrl+r", "reload qol dev")
-    } else {
-        ("ctrl+r", "rebuild tray+plugins")
-    };
-    vec![ctrl_r, ("q", "quit")]
+fn global_keys(armed: bool) -> Vec<KeyHint> {
+    unique_hints(global_action_bindings(armed))
 }
 
-fn key_lines(keys: &[(&'static str, &'static str)]) -> Vec<Line<'static>> {
+fn key_lines(keys: &[KeyHint]) -> Vec<Line<'static>> {
     keys.iter()
-        .map(|(key, desc)| {
+        .map(|hint| {
             Line::from(vec![
-                format!(" {key:<9} ").fg(Color::White).bold(),
-                format!("{desc} ").fg(Color::DarkGray),
+                format!(" {:<9} ", hint.key).fg(Color::White).bold(),
+                format!("{} ", hint.desc).fg(Color::DarkGray),
             ])
         })
         .collect()
@@ -2706,34 +3287,74 @@ fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Span<'static>>
 
 fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let highlight = copy_highlight(dash);
+    let header = log_source_header(dash);
+    let body_height = area.height.saturating_sub(header.len() as u16) as usize;
     let (rows, _) = stream_rows(
         &dash.logs.ring,
         &dash.filters,
         &mut dash.scroll_offset,
         &mut dash.log_height,
-        area.height as usize,
+        body_height,
         highlight,
         area.width as usize,
     );
-    frame.render_widget(Paragraph::new(rows), area);
+    frame.render_widget(Paragraph::new(join_header_rows(header, rows)), area);
 }
 
 fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
-    if dash.trace.ring.lines.is_empty() && dash.filters.is_empty() {
-        view_content(frame, area, vec![Line::from("  waiting for trace events")]);
-        return;
-    }
+    let header = log_source_header(dash);
+    let body_height = area.height.saturating_sub(header.len() as u16) as usize;
     let highlight = copy_highlight(dash);
-    let (rows, _) = stream_rows(
-        &dash.trace.ring,
-        &dash.filters,
-        &mut dash.scroll_offset,
-        &mut dash.log_height,
-        area.height as usize,
-        highlight,
-        area.width as usize,
-    );
-    frame.render_widget(Paragraph::new(rows), area);
+    let rows = if dash.trace.ring.lines.is_empty() && dash.filters.is_empty() {
+        dash.log_height = body_height;
+        vec![Line::from("  waiting for trace events")]
+    } else {
+        stream_rows(
+            &dash.trace.ring,
+            &dash.filters,
+            &mut dash.scroll_offset,
+            &mut dash.log_height,
+            body_height,
+            highlight,
+            area.width as usize,
+        )
+        .0
+    };
+    frame.render_widget(Paragraph::new(join_header_rows(header, rows)), area);
+}
+
+fn join_header_rows<'a>(header: Vec<Line<'static>>, body: Vec<Line<'a>>) -> Vec<Line<'a>> {
+    header.into_iter().map(Line::from).chain(body).collect()
+}
+
+fn log_source_header(dash: &Dash) -> Vec<Line<'static>> {
+    let Some(source) = current_log_source(dash) else {
+        return Vec::new();
+    };
+    let file = source
+        .file
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "(none yet)".to_string());
+    let mut meta = vec![
+        "  folder ".fg(Color::DarkGray),
+        source.folder.display().to_string().fg(Color::White),
+    ];
+    if let Some(editor) = configured_editor_label() {
+        meta.push(" · editor ".fg(Color::DarkGray));
+        meta.push(editor.fg(Color::White));
+    }
+    meta.push(" · ".fg(Color::DarkGray));
+    meta.push(source.stream_note.fg(Color::DarkGray));
+
+    vec![
+        Line::from(vec![
+            format!("  {} file ", source.kind).fg(Color::DarkGray),
+            file.fg(Color::White),
+        ]),
+        Line::from(meta),
+        Line::from(""),
+    ]
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3374,6 +3995,7 @@ mod tests {
     fn action_for_maps_keys() {
         let none = KeyModifiers::NONE;
         let ctrl = KeyModifiers::CONTROL;
+        let mut dash = Dash::new(Vec::new());
         let cases = [
             (KeyCode::Char('l'), none, Action::ToggleView),
             (KeyCode::Char('L'), none, Action::ToggleView),
@@ -3390,23 +4012,64 @@ mod tests {
             (KeyCode::Char('q'), none, Action::Quit),
             (KeyCode::Up, none, Action::ScrollUp),
             (KeyCode::Down, none, Action::ScrollDown),
-            (KeyCode::PageUp, none, Action::PageUp),
-            (KeyCode::PageDown, none, Action::PageDown),
-            (KeyCode::End, none, Action::Follow),
-            (KeyCode::Char('f'), none, Action::Follow),
-            (KeyCode::Char('/'), none, Action::Filter),
-            (KeyCode::Char('c'), none, Action::Copy),
-            (KeyCode::Char('C'), none, Action::Copy),
             (KeyCode::Char('k'), none, Action::ToggleKeys),
             (KeyCode::Char('K'), none, Action::ToggleKeys),
+            (KeyCode::Char(' '), none, Action::ToggleArm),
             (KeyCode::Char('r'), none, Action::Ignore),
             (KeyCode::Char('p'), none, Action::Ignore),
             (KeyCode::Char('x'), none, Action::Ignore),
             (KeyCode::Char('u'), none, Action::Ignore),
         ];
         for (code, mods, expected) in cases {
-            assert_eq!(action_for(code, mods), expected, "{code:?} {mods:?}");
+            assert_eq!(action_for(&dash, code, mods), expected, "{code:?} {mods:?}");
         }
+        dash.view = View::Trace;
+        assert_eq!(
+            action_for(&dash, KeyCode::Char('d'), none),
+            Action::ToggleTraceDetails,
+            "d toggles trace details in the trace view"
+        );
+        assert_eq!(
+            action_for(&dash, KeyCode::Char('o'), none),
+            Action::OpenCurrentLogFolder,
+            "o opens trace folder in the trace view"
+        );
+        assert_eq!(
+            action_for(&dash, KeyCode::Char('e'), none),
+            Action::OpenCurrentLogEditor,
+            "e opens trace file in the trace view"
+        );
+        for (code, expected) in [
+            (KeyCode::PageUp, Action::PageUp),
+            (KeyCode::PageDown, Action::PageDown),
+            (KeyCode::End, Action::Follow),
+            (KeyCode::Char('f'), Action::Follow),
+            (KeyCode::Char('/'), Action::Filter),
+            (KeyCode::Char('c'), Action::Copy),
+            (KeyCode::Char('C'), Action::Copy),
+        ] {
+            assert_eq!(
+                action_for(&dash, code, none),
+                expected,
+                "stream key: {code:?}"
+            );
+        }
+        dash.view = View::Logs;
+        assert_eq!(
+            action_for(&dash, KeyCode::Char('d'), none),
+            Action::Ignore,
+            "d is not doctor outside its owning contexts"
+        );
+        assert_eq!(
+            action_for(&dash, KeyCode::Char('o'), none),
+            Action::OpenCurrentLogFolder,
+            "o opens log folder in the logs view"
+        );
+        assert_eq!(
+            action_for(&dash, KeyCode::Char('e'), none),
+            Action::OpenCurrentLogEditor,
+            "e opens log file in the logs view"
+        );
     }
 
     #[test]
@@ -3525,6 +4188,8 @@ mod tests {
 
     #[test]
     fn emu_keys_map_open_toggle_and_confirm() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Emu;
         let cases = [
             (KeyCode::Char('o'), Action::OpenEmuDir),
             (KeyCode::Char('t'), Action::ToggleArch),
@@ -3532,7 +4197,7 @@ mod tests {
         ];
         for (code, expected) in cases {
             assert_eq!(
-                action_for(code, KeyModifiers::NONE),
+                action_for(&dash, code, KeyModifiers::NONE),
                 expected,
                 "code: {code:?}"
             );
@@ -3881,12 +4546,73 @@ mod tests {
         assert_eq!(rows[0], " global");
         assert_eq!(rows[1], "");
         assert_eq!(rows[2], " ctrl+r    rebuild tray+plugins ");
-        assert_eq!(rows[3], " q         quit ");
-        assert_eq!(rows[4], "");
-        assert_eq!(rows[5], "");
-        assert_eq!(rows[6], " context");
+        assert_eq!(rows[3], " l         logs ");
+        assert_eq!(rows[4], " k         keys ");
+        assert_eq!(rows[5], " q / ctrl+c quit ");
+        assert_eq!(rows[6], "");
         assert_eq!(rows[7], "");
-        assert_eq!(rows[8], " ↑/↓       move ");
+        assert_eq!(rows[8], " context");
+        assert_eq!(rows[9], "");
+        assert_eq!(rows[10], " ↑/↓       move ");
+    }
+
+    #[test]
+    fn trace_keys_include_detail_toggle_not_doctor() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Trace;
+        let rows: Vec<String> = keys_rows(&dash)
+            .into_iter()
+            .map(|line| span_text(&line.spans))
+            .collect();
+        let text = rows.join("\n");
+        assert!(
+            text.contains(" d         details "),
+            "missing trace detail key"
+        );
+        assert!(
+            text.contains(" o         open folder "),
+            "missing open folder key"
+        );
+        assert!(
+            text.contains(" e         edit file "),
+            "missing edit file key"
+        );
+        assert!(
+            !text.contains("refresh checks"),
+            "trace context must not show doctor binding"
+        );
+    }
+
+    #[test]
+    fn logs_and_trace_render_source_metadata() {
+        let mut trace = Dash::new(Vec::new());
+        trace.view = View::Trace;
+        let trace_text = render_text(&mut trace);
+        assert!(
+            trace_text.contains(DEFAULT_TRACE_LOG_FILE),
+            "trace pane should show trace file path"
+        );
+        assert!(
+            !trace_text.contains("open -t"),
+            "trace pane should not expose macOS opener fallback"
+        );
+
+        let mut logs = Dash::new(Vec::new());
+        logs.view = View::Logs;
+        logs.log_file = Some(DevLogFile::path_only(PathBuf::from(
+            "/tmp/qol-dev-test.log",
+        )));
+        let source = current_log_source(&logs).expect("logs source");
+        assert_eq!(source.stream_note, "qol dev stdout/stderr tee");
+        let logs_text = render_text(&mut logs);
+        assert!(
+            logs_text.contains("qol-dev-test.log"),
+            "logs pane should show the current session log file"
+        );
+        assert!(
+            !logs_text.contains("open -t"),
+            "logs pane should not expose macOS opener fallback"
+        );
     }
 
     #[test]
