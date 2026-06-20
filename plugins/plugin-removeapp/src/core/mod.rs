@@ -71,7 +71,7 @@ pub fn is_protected(app: &InstalledApp) -> bool {
 }
 
 pub fn search(query: &str) -> Result<Vec<InstalledApp>> {
-    Ok(rank(installed_apps()?, query))
+    Ok(filter(&installed_apps()?, query))
 }
 
 pub fn resolve_unique(query: &str) -> Result<InstalledApp> {
@@ -82,20 +82,24 @@ pub fn remove(plan: &RemovalPlan, how: Disposal) -> Result<RemovalOutcome> {
     remove_with(&platform(), plan, how)
 }
 
-fn rank(mut apps: Vec<InstalledApp>, query: &str) -> Vec<InstalledApp> {
+pub fn filter(apps: &[InstalledApp], query: &str) -> Vec<InstalledApp> {
     let q = query.to_lowercase();
-    apps.retain(|a| {
-        a.name.to_lowercase().contains(&q)
-            || a.bundle_id
-                .as_deref()
-                .is_some_and(|b| b.to_lowercase().contains(&q))
-    });
-    apps.sort_by_key(|a| a.name.to_lowercase());
-    apps
+    let mut out: Vec<InstalledApp> = apps
+        .iter()
+        .filter(|a| {
+            a.name.to_lowercase().contains(&q)
+                || a.bundle_id
+                    .as_deref()
+                    .is_some_and(|b| b.to_lowercase().contains(&q))
+        })
+        .cloned()
+        .collect();
+    out.sort_by_key(|a| a.name.to_lowercase());
+    out
 }
 
 fn pick_unique(apps: Vec<InstalledApp>, query: &str) -> Result<InstalledApp> {
-    let mut matches = rank(apps, query);
+    let mut matches = filter(&apps, query);
     let exact_count = matches
         .iter()
         .filter(|a| a.name.eq_ignore_ascii_case(query))

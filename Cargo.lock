@@ -5383,8 +5383,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
+ "gpui",
  "libc",
  "plist",
+ "qol-gpui",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "serde",
