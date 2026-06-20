@@ -15,7 +15,17 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json.workspace = true
+qol-plugin-daemon.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+dirs = "5"
+plist = "1"
+libc = "0.2"
+trash = "5"
 
 [dev-dependencies]
 qol-plugin-api.workspace = true
 toml = "0.9"
+tempfile = "3"

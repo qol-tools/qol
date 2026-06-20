@@ -1,3 +1,14 @@
+use std::path::PathBuf;
+
+use crate::core::{Disposal, InstalledApp, RemovalOutcome, RemovalPlan};
+
+pub trait AppPlatform {
+    fn installed_apps(&self) -> anyhow::Result<Vec<InstalledApp>>;
+    fn scan(&self, app: &InstalledApp) -> anyhow::Result<RemovalPlan>;
+    fn remove_paths(&self, paths: &[PathBuf], how: Disposal) -> anyhow::Result<RemovalOutcome>;
+    fn is_protected(&self, app: &InstalledApp) -> bool;
+}
+
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
