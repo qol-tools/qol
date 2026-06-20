@@ -9,7 +9,7 @@ config, Linux, and host pid-tracking paths.
 
 Alt-tab is a keyboard-first window switcher, but it hard-drops every window
 that is not on the normal window layer. Always-on-top companion panels (the
-`plugin-claude-sessions` panel, and any future qol panel pinned above other
+`cli-sessions` panel, and any future qol panel pinned above other
 windows) therefore can never be reached from the keyboard - only with the
 mouse, which defeats the point. We want a way to let a *curated, user-owned*
 set of such windows into the switcher without re-admitting the flood of system
@@ -17,20 +17,20 @@ chrome that the layer filter exists to block.
 
 ## Ground truth (macOS, measured)
 
-The claude-sessions plugin process (one pid) presents three windows to
+The cli-sessions plugin process (one pid) presents three windows to
 `CGWindowListCopyWindowInfo`:
 
 | layer | owner | what it is |
 |------|-------|-----------|
-| 0   | `plugin-claude-sessions` | keepalive window (tiny; dropped by the 100px min-dimension filter) |
-| 101 | `plugin-claude-sessions` | the visible panel (~360x400, alpha 1) |
-| 101 | `plugin-claude-sessions` | hidden keepalive PopUp (alpha 0) |
+| 0   | `cli-sessions` | keepalive window (tiny; dropped by the 100px min-dimension filter) |
+| 101 | `cli-sessions` | the visible panel (~360x400, alpha 1) |
+| 101 | `cli-sessions` | hidden keepalive PopUp (alpha 0) |
 
 `101` = `NSPopUpMenuWindowLevel`, set by
 `qol_gpui::popup_window::configure_popup_window`
 (`libs/qol-gpui/src/popup_window/platform/macos.rs:188`) so the panel stays
 always-on-top. CGWindow's `kCGWindowOwnerName` is the executable basename
-(`plugin-claude-sessions`), available without Screen Recording permission.
+(`cli-sessions`), available without Screen Recording permission.
 
 ## The single blocking filter
 
@@ -97,10 +97,10 @@ A user opt-in then looks like:
 {
   "switchable_popups": {
     "macos": [
-      { "owner": "plugin-claude-sessions", "title": "claude-sessions-panel" }
+      { "owner": "cli-sessions", "title": "cli-sessions-panel" }
     ],
     "linux": [
-      { "wm_class": "plugin-claude-sessions", "title": "claude-sessions-panel" }
+      { "wm_class": "plugin-cli-sessions", "title": "cli-sessions-panel" }
     ]
   }
 }
@@ -130,7 +130,7 @@ Rule semantics should be deliberately narrow:
 Why this is not coupling: alt-tab ships zero entries and no special cases. It
 only exposes a generic user-editable predicate. The user, a setup script, or a
 future plugin install step can add an entry; alt-tab itself never names
-`plugin-claude-sessions`.
+`cli-sessions`.
 
 ### Tier 1 plumbing
 
@@ -371,7 +371,7 @@ it would create a selectable item that cannot actually be reached.
 
 ### Live activation test
 
-Use `plugin-claude-sessions` specifically because it is the measured failure
+Use `cli-sessions` specifically because it is the measured failure
 case: one accessory process, one visible layer-101 panel, one hidden layer-101
 keepalive, and one tiny layer-0 keepalive.
 
