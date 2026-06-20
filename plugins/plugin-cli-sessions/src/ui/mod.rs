@@ -90,6 +90,13 @@ impl SessionsView {
             self.acknowledge(row.window_id);
         }
     }
+
+    pub fn jump_to_next_attention(&mut self, cx: &mut Context<Self>) {
+        let statuses: Vec<crate::status::Status> = self.rows().iter().map(|r| r.status).collect();
+        if let Some(i) = crate::nav::next_attention(&statuses, self.selected) {
+            self.jump_to(i, "next-attention", cx);
+        }
+    }
 }
 
 impl Focusable for SessionsView {

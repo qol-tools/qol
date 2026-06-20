@@ -2,6 +2,8 @@ pub mod config;
 pub mod daemon;
 pub mod git;
 pub mod host;
+pub mod nav;
+pub mod notify;
 pub mod paths;
 pub mod persist;
 pub mod placement;

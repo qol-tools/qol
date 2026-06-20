@@ -7,3 +7,9 @@ pub enum Status {
     Unknown,
     Acknowledged,
 }
+
+impl Status {
+    pub fn is_attention(self) -> bool {
+        matches!(self, Status::NeedsYou | Status::YourTurn)
+    }
+}

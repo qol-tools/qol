@@ -8,7 +8,7 @@ platforms = ["linux", "macos"]
 
 [runtime]
 command = "cli-sessions"
-actions = { open = ["open"] }
+actions = { open = ["open"], next = ["next"] }
 
 [capabilities]
 gpui = true
@@ -17,12 +17,19 @@ gpui = true
 label = "CLI Sessions"
 items = [
     { type = "action", id = "open", label = "Open Overview", action = "run" },
+    { type = "action", id = "next", label = "Jump to Next Alert", action = "run" },
 ]
 
 [[shortcuts]]
 id = "open"
 name = "CLI Sessions"
 action = "open"
+export_to_launcher = true
+
+[[shortcuts]]
+id = "next"
+name = "CLI Sessions: Next Alert"
+action = "next"
 export_to_launcher = true
 
 [[dependencies.binaries]]

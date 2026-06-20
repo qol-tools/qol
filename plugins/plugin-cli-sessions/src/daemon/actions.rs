@@ -11,6 +11,7 @@ pub const CONFIG: DaemonConfig = DaemonConfig {
 #[derive(Debug)]
 pub enum Command {
     Open,
+    NextAttention,
     Kill,
 }
 
@@ -18,6 +19,7 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
     match cmd {
         "ping" => ReadResult::Handled,
         "open" | "show" => ReadResult::Command(Command::Open),
+        "next" => ReadResult::Command(Command::NextAttention),
         "kill" => ReadResult::Command(Command::Kill),
         _ => ReadResult::Fallback,
     }

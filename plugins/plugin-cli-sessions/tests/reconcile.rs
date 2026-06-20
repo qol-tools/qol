@@ -143,6 +143,35 @@ fn tick_codex_your_turn_when_answer_ends_in_numbered_list() {
 }
 
 #[test]
+fn tick_returns_attention_notice_for_new_needs_you() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = FakeHost {
+        panes: vec![pane(40, "qol-monorepo", false, &["zsh", "codex"], "codex")],
+        screen: SELECTION.into(),
+    };
+    let notices = tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
+    assert_eq!(
+        notices.len(),
+        1,
+        "a fresh session that needs you emits one notice"
+    );
+    assert_eq!(notices[0].body, "Codex \u{00B7} needs you");
+}
+
+#[test]
+fn tick_does_not_repeat_notice_while_status_holds() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = FakeHost {
+        panes: vec![pane(41, "qol-monorepo", false, &["zsh", "codex"], "codex")],
+        screen: SELECTION.into(),
+    };
+    let first = tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
+    assert_eq!(first.len(), 1, "first transition into needs-you notifies");
+    let second = tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 101);
+    assert!(second.is_empty(), "staying needs-you must not re-notify");
+}
+
+#[test]
 fn tick_generic_listening_reads_service() {
     let reg = Arc::new(Mutex::new(Registry::default()));
     let host = FakeHost {

@@ -151,7 +151,10 @@ fn spawn_reconcile_timer(
         let now = now_secs();
         cx.background_spawn(async move {
             let probe = SystemServiceProbe::snapshot(sc.to_vec());
-            reconcile::tick(&reg, h.as_ref(), &DiskCodexStore, &probe, now);
+            let notices = reconcile::tick(&reg, h.as_ref(), &DiskCodexStore, &probe, now);
+            for notice in &notices {
+                crate::notify::send(notice);
+            }
         })
         .await;
         if let Some(handle) = &view_handle {
@@ -187,6 +190,19 @@ fn spawn_command_poll(
                                 cx.notify();
                             });
                             cx.activate(true);
+                        }
+                    });
+                    LoopFlow::Continue
+                }
+                Command::NextAttention => {
+                    #[cfg(debug_assertions)]
+                    qol_runtime::probe!("CLI_SESSIONS_CMD", "cmd=next");
+                    let _ = cx.update(move |cx| {
+                        if let Some(handle) = &view_handle {
+                            let _ = handle.update(cx, |view, _window, cx| {
+                                view.jump_to_next_attention(cx);
+                                cx.notify();
+                            });
                         }
                     });
                     LoopFlow::Continue

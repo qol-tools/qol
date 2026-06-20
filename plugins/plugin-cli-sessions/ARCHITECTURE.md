@@ -148,6 +148,27 @@ first): NeedsYou -> YourTurn -> Working -> Service -> Unknown -> Acknowledged.
 reads as uptime; it sinks below live agent work so background servers do not hog
 the top rows.
 
+## Notifications and navigation
+
+A transition *into* an attention status (`NeedsYou`/`YourTurn`) is an event the
+panel cannot convey when you are not looking at it. `tick` returns the `Notice`s
+those transitions produced (`notify::announces_attention` decides; edge-triggered,
+so a status that merely persists never re-fires), and the *caller* fires them via
+`notify::send` (a best-effort `osascript`/`notify-send` shellout). Keeping the I/O
+in the caller leaves `tick` pure-ish and lets the startup populate pass drop its
+batch, so launching the panel is quiet rather than a notification storm.
+
+Jumping to the next session that wants you must work when the panel is *not*
+focused (you are in an editor or another terminal), so it is not an in-view key -
+it is a qol-tray-bound action. The manifest declares a `next` action (menu item +
+`runtime.actions` mapping + a bindable `[[shortcuts]]` entry); a hotkey fires
+`cli-sessions next`, which forwards to the running daemon over its socket
+(`Command::NextAttention`). The daemon focuses the next attention session's
+terminal window via the host and advances its selection cursor, so repeated
+presses cycle through just the rows that want you (`nav::next_attention`, pure and
+ordered with attention on top), skipping calm ones - from anywhere, no panel
+focus required.
+
 ## Known gaps
 
 The `host` and `poll_secs` config fields are declared in `qol-config.toml` but
