@@ -7,8 +7,10 @@ use gpui::{
 };
 
 use crate::core::{self, Disposal, InstalledApp, RemovalOutcome, RemovalPlan};
+use qol_gpui::scroll_list::ScrollList;
 
 pub const WINDOW_TITLE: &str = "removeapp";
+const MAX_VISIBLE: usize = 12;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
@@ -21,7 +23,7 @@ pub struct RemoveAppView {
     apps: Vec<InstalledApp>,
     query: String,
     matches: Vec<InstalledApp>,
-    selected: usize,
+    list: ScrollList,
     mode: Mode,
     disposal: Disposal,
     plan: Option<RemovalPlan>,
@@ -37,7 +39,7 @@ impl RemoveAppView {
             apps,
             query: String::new(),
             matches,
-            selected: 0,
+            list: ScrollList::new(MAX_VISIBLE),
             mode: Mode::Picking,
             disposal: Disposal::Trash,
             plan: None,
@@ -48,20 +50,11 @@ impl RemoveAppView {
 
     fn refilter(&mut self) {
         self.matches = core::filter(&self.apps, &self.query);
-        self.selected = 0;
-    }
-
-    fn move_selection(&mut self, delta: isize) {
-        let len = self.matches.len();
-        if len == 0 {
-            return;
-        }
-        let next = (self.selected as isize + delta).clamp(0, len as isize - 1);
-        self.selected = next as usize;
+        self.list.reset();
     }
 
     fn enter_confirm(&mut self) {
-        let Some(app) = self.matches.get(self.selected) else {
+        let Some(app) = self.matches.get(self.list.selected) else {
             return;
         };
         if core::is_protected(app) {
@@ -94,11 +87,11 @@ impl RemoveAppView {
             Mode::Picking => match key {
                 "escape" => cx.quit(),
                 "down" => {
-                    self.move_selection(1);
+                    self.list.move_down(self.matches.len());
                     cx.notify();
                 }
                 "up" => {
-                    self.move_selection(-1);
+                    self.list.move_up();
                     cx.notify();
                 }
                 "enter" => {
@@ -151,26 +144,22 @@ impl RemoveAppView {
     }
 
     fn render_picking(&self) -> AnyElement {
-        let rows: Vec<_> = self
-            .matches
+        let range = self.list.visible_range(self.matches.len());
+        let selected = self.list.selected;
+        let rows: Vec<_> = self.matches[range.clone()]
             .iter()
             .enumerate()
-            .map(|(i, app)| app_row(app, i == self.selected, core::is_protected(app)))
+            .map(|(offset, app)| {
+                let index = range.start + offset;
+                app_row(app, index == selected, core::is_protected(app))
+            })
             .collect();
         div()
             .flex()
             .flex_col()
             .size_full()
             .child(self.search_box())
-            .child(
-                div()
-                    .id("removeapp-list")
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .overflow_y_scroll()
-                    .children(rows),
-            )
+            .child(div().flex_1().min_h_0().w_full().children(rows))
             .child(footer(&[
                 ("\u{2191}\u{2193}", "move"),
                 ("\u{23CE}", "select"),
@@ -342,11 +331,7 @@ impl Focusable for RemoveAppView {
 
 impl Render for RemoveAppView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.matches.is_empty() {
-            self.selected = 0;
-        } else {
-            self.selected = self.selected.min(self.matches.len() - 1);
-        }
+        self.list.sync(self.matches.len());
         div()
             .id("removeapp")
             .track_focus(&self.focus_handle)

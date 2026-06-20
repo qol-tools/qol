@@ -160,25 +160,12 @@ impl LauncherState {
     }
 
     pub fn sync_result_window(&mut self, result_count: usize) {
-        if result_count == 0 {
-            self.selected = 0;
-            self.scroll_offset = 0;
-            return;
-        }
-
-        self.selected = self.selected.min(result_count.saturating_sub(1));
-        let max_offset = result_count.saturating_sub(MAX_VISIBLE);
-        self.scroll_offset = self.scroll_offset.min(max_offset);
-
-        if self.selected < self.scroll_offset {
-            self.scroll_offset = self.selected;
-            return;
-        }
-
-        let bottom = self.scroll_offset + MAX_VISIBLE.saturating_sub(1);
-        if self.selected > bottom {
-            self.scroll_offset = self.selected + 1 - MAX_VISIBLE;
-        }
+        qol_gpui::scroll_list::clamp_into_view(
+            &mut self.selected,
+            &mut self.scroll_offset,
+            result_count,
+            MAX_VISIBLE,
+        );
     }
 
     pub fn take_edge_hit(&mut self) -> Option<EdgeHit> {

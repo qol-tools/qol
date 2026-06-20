@@ -8,6 +8,7 @@ pub mod platform;
 pub mod popup_window;
 pub mod probe;
 pub mod runtime_config;
+pub mod scroll_list;
 pub mod window;
 
 pub use qol_runtime::protocol;
