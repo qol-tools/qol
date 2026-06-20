@@ -3,7 +3,7 @@ id = "plugin-lights"
 name = "Lights"
 description = "Control lights through backend adapters"
 version = "1.6.0"
-author = ""
+author = "KMRH47"
 platforms = ["linux", "macos"]
 
 [runtime]

@@ -7,13 +7,7 @@ An always-on-top overview of live CLI sessions (Claude Code, Codex, any command)
 
 ## Quick start
 
-Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store, or build from source:
-
-```bash
-git clone https://github.com/qol-tools/plugin-cli-sessions
-cd plugin-cli-sessions
-make build
-```
+Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store.
 
 ## License
 

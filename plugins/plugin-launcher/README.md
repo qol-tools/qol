@@ -7,13 +7,7 @@ A keyboard-driven application and file launcher for [QoL Tray](https://github.co
 
 ## Quick start
 
-Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store, or build from source:
-
-```bash
-git clone https://github.com/qol-tools/plugin-launcher
-cd plugin-launcher
-make build
-```
+Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store.
 
 ## License
 

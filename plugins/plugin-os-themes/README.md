@@ -7,13 +7,7 @@ A [QoL Tray](https://github.com/qol-tools/qol-tray) plugin for OS-wide theming â
 
 ## Quick start
 
-Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store, or build from source:
-
-```bash
-git clone https://github.com/qol-tools/plugin-os-themes
-cd plugin-os-themes
-make build
-```
+Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store.
 
 ## About
 

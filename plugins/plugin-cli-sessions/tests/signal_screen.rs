@@ -58,7 +58,7 @@ fn prompt_markers_detect_structured_choices() {
         "Enter your name: ",
         "Continue?",
         "    1.9G    /home/user/.cache/github-copilot",
-        "   53G    /home/user/repos/private/qol-monorepo/target",
+        "   53G    /home/user/repos/project/target",
         "v2.3.1 released",
         "",
     ];
