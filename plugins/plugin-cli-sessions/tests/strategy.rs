@@ -125,6 +125,17 @@ fn cli_default_phase_from_lifecycle() {
 }
 
 #[test]
+fn claude_choice_picker_without_caret_is_blocked() {
+    let p = pane(false, "claude", "\u{2733} uninstaller");
+    let screen = "How should the uninstaller be invoked?\n\n1. gpui popup picker\n2. Keep terminal CLI\n3. Both: popup + CLI\n\nEnter to select \u{00B7} \u{2191}/\u{2193} to navigate \u{00B7} n to add notes \u{00B7} Esc to cancel";
+    assert_eq!(
+        Claude.read(&ctx(&p, Some(screen), false, None, 0)).phase,
+        Phase::Blocked,
+        "an on-screen choice picker is needs-you even when the caret glyph is absent"
+    );
+}
+
+#[test]
 fn claude_phase_from_screen() {
     let p = pane(false, "claude", "\u{2733} Topic");
     let cases = [

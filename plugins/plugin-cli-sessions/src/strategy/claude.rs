@@ -1,4 +1,6 @@
-use crate::signal::screen::{claude_awaiting_choice, claude_done, claude_working};
+use crate::signal::screen::{
+    claude_awaiting_choice, claude_done, claude_working, has_numbered_choice_prompt,
+};
 use crate::signal::title::title_working;
 use crate::strategy::{Ctx, Phase, Reading, Strategy};
 
@@ -17,7 +19,7 @@ impl Strategy for Claude {
         let screen = ctx.screen.unwrap_or("");
         let phase = if claude_working(screen) || title_working(&ctx.pane.title) {
             Phase::Busy
-        } else if claude_awaiting_choice(screen) {
+        } else if claude_awaiting_choice(screen) || has_numbered_choice_prompt(screen) {
             Phase::Blocked
         } else if claude_done(screen) {
             Phase::Done

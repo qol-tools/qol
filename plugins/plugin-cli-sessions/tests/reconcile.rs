@@ -51,6 +51,7 @@ fn pane(window_id: u64, title: &str, at_prompt: bool, fg: &[&str], cmd: &str) ->
 }
 
 const SELECTION: &str = "\u{276F} 1. Yes\n  2. No\n  enter to confirm";
+const CLAUDE_PICKER: &str = "How should the uninstaller be invoked?\n\n1. gpui popup picker\n2. Keep terminal CLI\n3. Both: popup + CLI\n\nEnter to select \u{00B7} \u{2191}/\u{2193} to navigate \u{00B7} n to add notes \u{00B7} Esc to cancel";
 const CLAUDE_WORKING: &str = "\u{273B} Processing\u{2026} (5s \u{00B7} \u{2193} 1k tokens)";
 const CLAUDE_DONE: &str = "\u{273B} Brewed for 1m";
 
@@ -68,6 +69,27 @@ fn tick_classifies_codex_blocked_from_screen() {
         rows[0].status,
         Status::NeedsYou,
         "a selection box on screen => blocked => red"
+    );
+}
+
+#[test]
+fn tick_claude_blocked_when_choice_picker_on_screen() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = FakeHost {
+        panes: vec![pane(
+            15,
+            "\u{2733} uninstaller",
+            false,
+            &["zsh", "claude"],
+            "claude",
+        )],
+        screen: CLAUDE_PICKER.into(),
+    };
+    tick(&reg, &host, &NoCodexStore, 100);
+    assert_eq!(
+        reg.lock().unwrap().sorted()[0].status,
+        Status::NeedsYou,
+        "a claude session showing a choice picker must read needs-you, not idle"
     );
 }
 

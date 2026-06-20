@@ -94,22 +94,35 @@ pub fn has_input_request(text: &str) -> bool {
     }
 }
 
+pub fn has_numbered_choice_prompt(text: &str) -> bool {
+    let tail: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .rev()
+        .take(8)
+        .collect();
+    let numbered = tail.iter().any(|l| numbered_option(l.trim()));
+    let affordance = tail.iter().any(|l| is_choice_affordance(l));
+    numbered && affordance
+}
+
 fn is_selection(line: &str) -> bool {
     let t = line.trim();
     if t.is_empty() {
         return false;
     }
+    numbered_option(t) || is_choice_affordance(line)
+}
+
+fn is_choice_affordance(line: &str) -> bool {
+    let t = line.trim();
     if t.starts_with("[x]") || t.starts_with("[ ]") {
         return true;
     }
-    if numbered_option(t) {
-        return true;
-    }
     let lower = t.to_lowercase();
-    if lower.contains("[y/n]") || lower.contains("(y/n)") {
-        return true;
-    }
-    KEY_HINTS.iter().any(|h| lower.contains(h))
+    lower.contains("[y/n]")
+        || lower.contains("(y/n)")
+        || KEY_HINTS.iter().any(|h| lower.contains(h))
 }
 
 fn numbered_option(t: &str) -> bool {

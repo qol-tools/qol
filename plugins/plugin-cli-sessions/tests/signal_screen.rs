@@ -1,5 +1,5 @@
 use plugin_cli_sessions::signal::screen::{
-    claude_working, has_input_request, has_prompt_markers, screen_hash,
+    claude_working, has_input_request, has_numbered_choice_prompt, has_prompt_markers, screen_hash,
 };
 
 #[test]
@@ -64,6 +64,31 @@ fn prompt_markers_detect_structured_choices() {
     ];
     for t in negatives {
         assert!(!has_prompt_markers(t), "caret/prose is not a choice: {t:?}");
+    }
+}
+
+#[test]
+fn numbered_choice_prompt_needs_numbers_and_an_affordance() {
+    let picker = "How should the uninstaller be invoked?\n\n1. gpui popup picker\n2. Keep terminal CLI\n3. Both: popup + CLI\n\nEnter to select \u{00B7} \u{2191}/\u{2193} to navigate \u{00B7} n to add notes \u{00B7} Esc to cancel";
+    let search_browser = "Discover plugins (1/221)\n\u{276F} o code-review\n  o github\n  Type to search \u{00B7} Space to toggle \u{00B7} Enter to view";
+    let cases = [
+        (picker, true),
+        ("  \u{276F} 1. Yes\n    2. No\n  enter to confirm", true),
+        // a search/discovery browser has affordances but no numbered options
+        (search_browser, false),
+        // a prose numbered list has numbers but no selection affordance
+        ("Here are the steps:\n1. clone\n2. build\n3. run", false),
+        ("Overwrite file? [y/N]", false),
+        ("\u{2733} Brewed for 2m 32s", false),
+        ("Welcome to Claude Code\n\u{276F} ", false),
+        ("", false),
+    ];
+    for (text, expected) in cases {
+        assert_eq!(
+            has_numbered_choice_prompt(text),
+            expected,
+            "numbered_choice_prompt: {text:?}"
+        );
     }
 }
 
