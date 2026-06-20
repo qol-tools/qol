@@ -166,8 +166,8 @@ mod tests {
         let entry = command
             .get_envs()
             .find(|(key, _)| *key == OsStr::new("QOL_TRAY_STATE_SOCKET"));
-        let (_, value) = entry
-            .expect("action spawns must set QOL_TRAY_STATE_SOCKET so the watchdog arms");
+        let (_, value) =
+            entry.expect("action spawns must set QOL_TRAY_STATE_SOCKET so the watchdog arms");
         assert_eq!(
             value,
             Some(OsStr::new(crate::paths::STATE_SOCKET_PATH)),
