@@ -16,6 +16,7 @@ use crate::paths;
 use crate::persist;
 use crate::placement::{corner_bounds, Corner};
 use crate::registry::Registry;
+use crate::service::SystemServiceProbe;
 use crate::strategy::codex::DiskCodexStore;
 use crate::ui::{trace, SessionsView, WINDOW_TITLE};
 use qol_gpui::command_loop::LoopFlow;
@@ -41,7 +42,18 @@ pub fn run() -> anyhow::Result<()> {
         anyhow::bail!("action listener failed to bind");
     }
 
-    reconcile::tick(&registry, host.as_ref(), &DiskCodexStore, now_secs());
+    let cfg = config::load();
+    let corner = cfg.corner();
+    let service_commands: Arc<[String]> = Arc::from(cfg.service_commands);
+
+    let probe = SystemServiceProbe::snapshot(service_commands.to_vec());
+    reconcile::tick(
+        &registry,
+        host.as_ref(),
+        &DiskCodexStore,
+        &probe,
+        now_secs(),
+    );
 
     let reg_for_app = registry.clone();
     let host_for_app = host.clone();
@@ -49,9 +61,14 @@ pub fn run() -> anyhow::Result<()> {
         qol_gpui::keepalive::open_keepalive(cx, Some(APP_ID));
         qol_gpui::platform::set_accessory_policy();
 
-        let corner = config::load().corner();
         let view_handle = open_panel(reg_for_app.clone(), host_for_app.clone(), corner, cx);
-        spawn_reconcile_timer(reg_for_app.clone(), host_for_app.clone(), view_handle, cx);
+        spawn_reconcile_timer(
+            reg_for_app.clone(),
+            host_for_app.clone(),
+            service_commands.clone(),
+            view_handle,
+            cx,
+        );
         spawn_command_poll(cmd_rx, view_handle, cx);
     });
     Ok(())
@@ -122,6 +139,7 @@ fn open_panel(
 fn spawn_reconcile_timer(
     registry: Arc<Mutex<Registry>>,
     host: Arc<dyn TerminalHost + Send + Sync>,
+    service_commands: Arc<[String]>,
     view_handle: Option<gpui::WindowHandle<SessionsView>>,
     cx: &mut gpui::App,
 ) {
@@ -129,9 +147,11 @@ fn spawn_reconcile_timer(
         cx.background_executor().timer(Duration::from_secs(3)).await;
         let reg = registry.clone();
         let h = host.clone();
+        let sc = service_commands.clone();
         let now = now_secs();
         cx.background_spawn(async move {
-            reconcile::tick(&reg, h.as_ref(), &DiskCodexStore, now);
+            let probe = SystemServiceProbe::snapshot(sc.to_vec());
+            reconcile::tick(&reg, h.as_ref(), &DiskCodexStore, &probe, now);
         })
         .await;
         if let Some(handle) = &view_handle {

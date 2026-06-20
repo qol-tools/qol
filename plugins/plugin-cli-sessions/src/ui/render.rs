@@ -36,6 +36,7 @@ fn status_color(status: Status) -> u32 {
         Status::NeedsYou => 0xf85149,
         Status::YourTurn => 0xd29922,
         Status::Working => 0x3fb950,
+        Status::Service => 0x58a6ff,
         Status::Unknown => 0x6e7681,
         Status::Acknowledged => 0x6e7681,
     }
@@ -46,6 +47,7 @@ fn tint_color(status: Status) -> u32 {
         Status::NeedsYou => 0xf8514922,
         Status::YourTurn => 0xd2992222,
         Status::Working => 0x3fb9501e,
+        Status::Service => 0x58a6ff14,
         Status::Unknown => 0x00000000,
         Status::Acknowledged => 0x00000000,
     }
@@ -60,6 +62,7 @@ fn status_glyph(status: Status) -> &'static str {
     match status {
         Status::NeedsYou => "!",
         Status::Working => SPINNER_FRAMES[0],
+        Status::Service => "\u{25CF}",
         Status::Unknown | Status::Acknowledged => "\u{00B7}",
         Status::YourTurn => "",
     }
@@ -82,17 +85,37 @@ fn spinner(index: usize, color: u32) -> impl IntoElement {
         )
 }
 
+fn pulse(index: usize, color: u32) -> impl IntoElement {
+    div()
+        .flex_none()
+        .w(px(11.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(div().w(px(7.0)).h(px(7.0)).rounded_full().with_animation(
+            ("pulse", index),
+            Animation::new(Duration::from_millis(1800)).repeat(),
+            move |el, delta| {
+                let wave = (delta * std::f32::consts::TAU).sin() * 0.5 + 0.5;
+                let alpha = (0.4 + 0.6 * wave).clamp(0.0, 1.0);
+                let a = (alpha * 255.0) as u32;
+                el.bg(rgba((color << 8) | a))
+            },
+        ))
+}
+
 fn summary_groups(rows: &[SessionState]) -> Vec<(u32, usize)> {
-    let mut counts = [0usize; 4];
+    let mut counts = [0usize; 5];
     for r in rows {
         match r.status {
             Status::NeedsYou => counts[0] += 1,
             Status::YourTurn => counts[1] += 1,
             Status::Working => counts[2] += 1,
-            Status::Unknown | Status::Acknowledged => counts[3] += 1,
+            Status::Service => counts[3] += 1,
+            Status::Unknown | Status::Acknowledged => counts[4] += 1,
         }
     }
-    let colors = [0xf85149u32, 0xd29922, 0x3fb950, 0x6e7681];
+    let colors = [0xf85149u32, 0xd29922, 0x3fb950, 0x58a6ff, 0x6e7681];
     colors
         .into_iter()
         .zip(counts)
@@ -101,7 +124,7 @@ fn summary_groups(rows: &[SessionState]) -> Vec<(u32, usize)> {
 }
 
 fn meta_value(s: &SessionState) -> String {
-    let since = if s.status == Status::Working {
+    let since = if matches!(s.status, Status::Working | Status::Service) {
         s.running_since.unwrap_or(s.last_activity)
     } else {
         s.last_activity
@@ -309,6 +332,8 @@ fn summary_cell(
     }
     let indicator: AnyElement = if status == Status::Working {
         spinner(index, accent).into_any_element()
+    } else if status == Status::Service {
+        pulse(index, accent).into_any_element()
     } else {
         div()
             .flex_none()

@@ -11,6 +11,7 @@ const DONE_THRESHOLD_SECS: u64 = 5;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Busy,
+    Service,
     Blocked,
     Done,
     Idle,
@@ -28,6 +29,7 @@ pub struct Ctx<'a> {
     pub screen_changed: bool,
     pub prev: Option<Prev>,
     pub now: u64,
+    pub is_service: bool,
 }
 
 pub struct Reading {
@@ -58,6 +60,8 @@ pub trait Strategy {
             }
         } else if blocked(ctx) {
             Phase::Blocked
+        } else if ctx.is_service {
+            Phase::Service
         } else {
             Phase::Busy
         };
@@ -70,7 +74,7 @@ pub trait Strategy {
 
 pub fn running_since_for(prev_running: Option<u64>, phase: Phase, now: u64) -> Option<u64> {
     match phase {
-        Phase::Busy => Some(prev_running.unwrap_or(now)),
+        Phase::Busy | Phase::Service => Some(prev_running.unwrap_or(now)),
         Phase::Blocked | Phase::Done | Phase::Idle => None,
     }
 }
@@ -86,6 +90,7 @@ pub fn status_for(prev: Status, phase: Phase) -> Status {
     match phase {
         Phase::Blocked => Status::NeedsYou,
         Phase::Busy => Status::Working,
+        Phase::Service => Status::Service,
         Phase::Done => {
             if prev == Status::Acknowledged {
                 Status::Acknowledged

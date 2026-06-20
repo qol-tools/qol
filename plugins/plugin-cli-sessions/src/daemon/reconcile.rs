@@ -6,6 +6,7 @@ use crate::host::{project_of, Pane, TerminalHost};
 use crate::paths;
 use crate::persist;
 use crate::registry::{summary_for, Registry, SessionState};
+use crate::service::ServiceProbe;
 use crate::signal::screen::screen_hash;
 use crate::status::Status;
 use crate::strategy::codex::CodexStore;
@@ -20,6 +21,7 @@ pub fn tick(
     registry: &Arc<Mutex<Registry>>,
     host: &dyn TerminalHost,
     codex_store: &dyn CodexStore,
+    service_probe: &dyn ServiceProbe,
     now: u64,
 ) {
     let panes = host.discover();
@@ -49,12 +51,15 @@ pub fn tick(
             (None, _) => false,
         };
 
+        let is_service = tool == Tool::Generic && !pane.at_prompt && service_probe.is_service(pane);
+
         let reading = strategy.read(&Ctx {
             pane,
             screen: screen.as_deref(),
             screen_changed,
             prev,
             now,
+            is_service,
         });
 
         #[cfg(debug_assertions)]

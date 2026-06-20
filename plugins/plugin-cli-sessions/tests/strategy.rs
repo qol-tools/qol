@@ -32,6 +32,7 @@ fn ctx<'a>(
         screen_changed: changed,
         prev,
         now,
+        is_service: false,
     }
 }
 
@@ -63,6 +64,7 @@ fn status_for_maps_every_phase_with_ack_carry() {
         (Status::Unknown, Phase::Blocked, Status::NeedsYou),
         (Status::Working, Phase::Done, Status::YourTurn),
         (Status::Unknown, Phase::Idle, Status::Unknown),
+        (Status::Unknown, Phase::Service, Status::Service),
         (Status::Acknowledged, Phase::Done, Status::Acknowledged),
         (Status::Acknowledged, Phase::Idle, Status::Acknowledged),
         (Status::Acknowledged, Phase::Busy, Status::Working),
@@ -77,6 +79,8 @@ fn running_since_tracks_busy_phase_only() {
     let cases = [
         (None, Phase::Busy, 100, Some(100)),
         (Some(50), Phase::Busy, 100, Some(50)),
+        (None, Phase::Service, 100, Some(100)),
+        (Some(50), Phase::Service, 100, Some(50)),
         (Some(50), Phase::Blocked, 100, None),
         (Some(50), Phase::Done, 100, None),
         (Some(50), Phase::Idle, 100, None),
@@ -88,6 +92,27 @@ fn running_since_tracks_busy_phase_only() {
             "{prev:?}+{phase:?}"
         );
     }
+}
+
+#[test]
+fn cli_service_flag_reads_live_unless_at_prompt() {
+    let running = pane(false, "qol dev", "qol dev");
+    let mut live = ctx(&running, Some("compiling assets"), true, None, 100);
+    live.is_service = true;
+    assert_eq!(
+        Cli.read(&live).phase,
+        Phase::Service,
+        "a running generic process flagged as a service reads live"
+    );
+
+    let at_prompt = pane(true, "qol dev", "qol dev");
+    let mut idle = ctx(&at_prompt, None, false, None, 100);
+    idle.is_service = true;
+    assert_eq!(
+        Cli.read(&idle).phase,
+        Phase::Idle,
+        "an at-prompt pane is never live even when flagged"
+    );
 }
 
 #[test]

@@ -7,6 +7,7 @@ use crate::placement::Corner;
 #[serde(default)]
 pub struct CliSessionsConfig {
     pub corner: Option<String>,
+    pub service_commands: Vec<String>,
 }
 
 impl CliSessionsConfig {

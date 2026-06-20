@@ -38,6 +38,7 @@ pub fn summary_for(status: Status, tool: Tool) -> String {
             Tool::Generic => "running",
             Tool::Claude | Tool::Codex => "working",
         },
+        Status::Service => "live",
         Status::YourTurn => "your turn",
         Status::NeedsYou => "needs you",
         Status::Unknown => "idle",
@@ -99,7 +100,8 @@ fn rank(status: Status) -> u8 {
         Status::NeedsYou => 0,
         Status::YourTurn => 1,
         Status::Working => 2,
-        Status::Unknown => 3,
-        Status::Acknowledged => 4,
+        Status::Service => 3,
+        Status::Unknown => 4,
+        Status::Acknowledged => 5,
     }
 }

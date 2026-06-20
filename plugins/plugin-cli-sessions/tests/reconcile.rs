@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use plugin_cli_sessions::daemon::reconcile::tick;
 use plugin_cli_sessions::host::{Pane, TerminalHost};
 use plugin_cli_sessions::registry::Registry;
+use plugin_cli_sessions::service::{NoServiceProbe, ServiceProbe};
 use plugin_cli_sessions::status::Status;
 use plugin_cli_sessions::strategy::codex::{CodexSession, CodexStore, NoCodexStore};
 
@@ -20,6 +21,14 @@ impl TerminalHost for FakeHost {
     }
     fn focus(&self, _window_id: u64) -> anyhow::Result<()> {
         Ok(())
+    }
+}
+
+struct YesService;
+
+impl ServiceProbe for YesService {
+    fn is_service(&self, _pane: &Pane) -> bool {
+        true
     }
 }
 
@@ -62,7 +71,7 @@ fn tick_classifies_codex_blocked_from_screen() {
         panes: vec![pane(11, "qol-monorepo", false, &["zsh", "codex"], "codex")],
         screen: SELECTION.into(),
     };
-    tick(&reg, &host, &NoCodexStore, 100);
+    tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
     let rows = reg.lock().unwrap().sorted();
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -85,7 +94,7 @@ fn tick_claude_blocked_when_choice_picker_on_screen() {
         )],
         screen: CLAUDE_PICKER.into(),
     };
-    tick(&reg, &host, &NoCodexStore, 100);
+    tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
         Status::NeedsYou,
@@ -104,7 +113,7 @@ fn tick_codex_idle_when_no_turn_taken() {
         panes: vec![pane(12, "qol-monorepo", false, &["zsh", "codex"], "codex")],
         screen: String::new(),
     };
-    tick(&reg, &host, &store, 100);
+    tick(&reg, &host, &store, &NoServiceProbe, 100);
     let rows = reg.lock().unwrap().sorted();
     assert_eq!(
         rows[0].status,
@@ -125,11 +134,47 @@ fn tick_codex_your_turn_when_answer_ends_in_numbered_list() {
         panes: vec![pane(16, "qol-monorepo", false, &["zsh", "codex"], "codex")],
         screen: "What remains:\n1. Add golden parity tests\n2. Decide when to remove trace-py\n3. Remove the fallback flag\n4. Rename the WIP commit".into(),
     };
-    tick(&reg, &host, &NoCodexStore, 100);
+    tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
         Status::YourTurn,
         "a codex answer ending in a numbered list is your-turn, not needs-you"
+    );
+}
+
+#[test]
+fn tick_generic_listening_reads_service() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = FakeHost {
+        panes: vec![pane(30, "qol dev", false, &["zsh", "qol"], "qol dev")],
+        screen: String::new(),
+    };
+    tick(&reg, &host, &NoCodexStore, &YesService, 100);
+    assert_eq!(
+        reg.lock().unwrap().sorted()[0].status,
+        Status::Service,
+        "a generic process holding a listener reads live, not working"
+    );
+}
+
+#[test]
+fn tick_agent_never_reads_service() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = FakeHost {
+        panes: vec![pane(
+            31,
+            "\u{2733} proj",
+            false,
+            &["zsh", "claude"],
+            "claude",
+        )],
+        screen: "Welcome to Claude Code\n\u{276F} ".into(),
+    };
+    tick(&reg, &host, &NoCodexStore, &YesService, 100);
+    assert_eq!(
+        reg.lock().unwrap().sorted()[0].status,
+        Status::Unknown,
+        "an agent is never demoted to live even when the probe says yes"
     );
 }
 
@@ -144,7 +189,7 @@ fn tick_codex_your_turn_when_turn_taken() {
         panes: vec![pane(13, "qol-monorepo", false, &["zsh", "codex"], "codex")],
         screen: String::new(),
     };
-    tick(&reg, &host, &store, 100);
+    tick(&reg, &host, &store, &NoServiceProbe, 100);
     assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::YourTurn);
 }
 
@@ -161,7 +206,7 @@ fn tick_marks_claude_your_turn_then_keeps_ack() {
         )],
         screen: CLAUDE_WORKING.into(),
     };
-    tick(&reg, &working, &NoCodexStore, 100);
+    tick(&reg, &working, &NoCodexStore, &NoServiceProbe, 100);
     assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Working);
 
     let parked = FakeHost {
@@ -174,7 +219,7 @@ fn tick_marks_claude_your_turn_then_keeps_ack() {
         )],
         screen: CLAUDE_DONE.into(),
     };
-    tick(&reg, &parked, &NoCodexStore, 200);
+    tick(&reg, &parked, &NoCodexStore, &NoServiceProbe, 200);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
         Status::YourTurn,
@@ -182,7 +227,7 @@ fn tick_marks_claude_your_turn_then_keeps_ack() {
     );
 
     reg.lock().unwrap().get_mut(10).unwrap().acknowledge();
-    tick(&reg, &parked, &NoCodexStore, 300);
+    tick(&reg, &parked, &NoCodexStore, &NoServiceProbe, 300);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
         Status::Acknowledged,
@@ -203,7 +248,7 @@ fn tick_claude_fresh_is_idle() {
         )],
         screen: "Welcome to Claude Code\n\u{276F} ".into(),
     };
-    tick(&reg, &host, &NoCodexStore, 100);
+    tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
         Status::Unknown,
@@ -224,7 +269,7 @@ fn tick_labels_claude_from_title_not_launch_alias() {
         )],
         screen: String::new(),
     };
-    tick(&reg, &host, &NoCodexStore, 100);
+    tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].name.as_deref(),
         Some("Improve logging"),
@@ -239,7 +284,7 @@ fn tick_labels_generic_from_command() {
         panes: vec![pane(21, "qol dev", false, &["zsh", "qol"], "qol dev")],
         screen: String::new(),
     };
-    tick(&reg, &host, &NoCodexStore, 100);
+    tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
     let rows = reg.lock().unwrap().sorted();
     assert_eq!(rows[0].name.as_deref(), Some("qol dev"));
     assert_eq!(rows[0].status, Status::Working, "running generic => green");
@@ -258,14 +303,14 @@ fn tick_drops_panes_that_disappear() {
         )],
         screen: String::new(),
     };
-    tick(&reg, &present, &NoCodexStore, 100);
+    tick(&reg, &present, &NoCodexStore, &NoServiceProbe, 100);
     assert_eq!(reg.lock().unwrap().sorted().len(), 1);
 
     let gone = FakeHost {
         panes: vec![],
         screen: String::new(),
     };
-    tick(&reg, &gone, &NoCodexStore, 200);
+    tick(&reg, &gone, &NoCodexStore, &NoServiceProbe, 200);
     assert_eq!(
         reg.lock().unwrap().sorted().len(),
         0,

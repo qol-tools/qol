@@ -23,14 +23,16 @@ Codex.
                               |
         tool::classify(pane) -> Tool           (which CLI is in the foreground)
                               |
+        service_probe.is_service(pane)         (deterministic: does it hold a listener?)
+                              |  -> Ctx.is_service (generic panes only)
         for_tool(tool).read(Ctx) -> Reading    (Strategy: the "what")
                               |  Reading { phase, label }
                               v
-        Phase { Busy, Blocked, Done, Idle }    universal terminal vocabulary
+        Phase { Busy, Service, Blocked, Done, Idle }   universal terminal vocabulary
                               |
         status_for(prev, phase) -> Status      folds in memory (ack stickiness)
                               |
-        Status { Working, YourTurn, NeedsYou, Unknown, Acknowledged }
+        Status { Working, Service, YourTurn, NeedsYou, Unknown, Acknowledged }
                               |
         registry (sorted by attention) -> SessionsView (panel)
 ```
@@ -66,7 +68,12 @@ previous reading + now) into a `Reading { phase, label }`. The default impl
 
 - at a shell prompt -> `Idle`, or `Done` if a command had been running a while
 - not at a prompt -> `Busy`, or `Blocked` if the screen shows a selection / input
-  prompt that hasn't changed
+  prompt that hasn't changed, or `Service` if it is a long-running service (see
+  "Deterministic service detection")
+
+Only the generic `Cli` strategy can reach `Service`. Agents (`Claude`, `Codex`)
+override `read` and never consult `is_service`, so a thinking agent always keeps
+its `Working` spinner - its busy -> your-turn lifecycle is the whole point.
 
 `Claude` and `Codex` override `read`/`label`/`wants_screen` to detect the *same*
 four phases from their own tells instead of the generic prompt heuristics:
@@ -93,6 +100,27 @@ re-implement screen parsing.
    row title, `wants_screen` if you need the scrollback).
 3. Register it in `strategy::for_tool`.
 
+## Deterministic service detection (`src/service`)
+
+A dev server, watcher, or `qol dev` is "busy" forever and never hands a turn
+back to you, so the `Working` spinner lies. `ServiceProbe` answers one question
+without guessing from command-name substrings: **is this pane a long-running
+service?** Two deterministic arms, OR'd:
+
+- **OS fact** - a server is a process holding a listening socket. The probe
+  snapshots all `LISTEN` pids (`lsof`) and the process tree (`ps`) once per tick,
+  then walks the pane's subtree (root + foreground pids and their descendants).
+  A match means it listens, so it is live. The listener is usually a child
+  (`qol` -> `node`), which is why the walk follows the subtree, not just the top
+  pid.
+- **Explicit declaration** - the `service_commands` config list, matched exactly
+  against the reported command or a foreground basename. This covers portless
+  long-runners (`cargo watch`, `tail -f`) that hold no socket.
+
+The probe is injected (`reconcile::tick` takes `&dyn ServiceProbe`), so tests use
+`NoServiceProbe` / a fake and never shell out. The reconciler only consults it
+for generic, non-`at_prompt` panes; everything else short-circuits to `false`.
+
 ## The Phase -> Status seam
 
 `Phase` is what the terminal is *doing*; `Status` is what it *means to you*.
@@ -103,6 +131,7 @@ again, so a finished agent you've already seen doesn't keep nagging.
 | prev          | phase   | -> Status      |
 |---------------|---------|----------------|
 | any           | Busy    | Working        |
+| any           | Service | Service        |
 | any           | Blocked | NeedsYou       |
 | Acknowledged  | Done    | Acknowledged   |
 | other         | Done    | YourTurn       |
@@ -114,10 +143,16 @@ the phase at this seam, in the reconciler (`running_since_for`), so it is tracke
 uniformly for every tool rather than per-strategy.
 
 `Status` drives both the row color and the sort order (most attention-worthy
-first): NeedsYou -> YourTurn -> Working -> Unknown -> Acknowledged.
+first): NeedsYou -> YourTurn -> Working -> Service -> Unknown -> Acknowledged.
+`Service` renders blue with a slow pulse (calm, not the spinner) and its counter
+reads as uptime; it sinks below live agent work so background servers do not hog
+the top rows.
 
 ## Known gaps
 
 The `host` and `poll_secs` config fields are declared in `qol-config.toml` but
 not yet consumed - the host is always kitty and the poll interval is a constant.
 The `corner` field is honored (the panel parks in the configured screen corner).
+`service_commands` (the explicit-declaration arm of service detection) is read
+from the plugin config, but it has no `qol-config.toml` editor field yet - it is
+a config-file-only knob, since the UI has no editable string-list type.
