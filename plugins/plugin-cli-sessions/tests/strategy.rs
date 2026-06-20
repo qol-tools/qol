@@ -2,7 +2,9 @@ use plugin_cli_sessions::host::Pane;
 use plugin_cli_sessions::status::Status;
 use plugin_cli_sessions::strategy::claude::Claude;
 use plugin_cli_sessions::strategy::codex::{Codex, CodexSession, CodexStore, NoCodexStore};
-use plugin_cli_sessions::strategy::{status_for, Cli, Ctx, Phase, Prev, Strategy};
+use plugin_cli_sessions::strategy::{
+    running_since_for, status_for, Cli, Ctx, Phase, Prev, Strategy,
+};
 
 fn pane(at_prompt: bool, cmd: &str, title: &str) -> Pane {
     Pane {
@@ -71,11 +73,28 @@ fn status_for_maps_every_phase_with_ack_carry() {
 }
 
 #[test]
+fn running_since_tracks_busy_phase_only() {
+    let cases = [
+        (None, Phase::Busy, 100, Some(100)),
+        (Some(50), Phase::Busy, 100, Some(50)),
+        (Some(50), Phase::Blocked, 100, None),
+        (Some(50), Phase::Done, 100, None),
+        (Some(50), Phase::Idle, 100, None),
+    ];
+    for (prev, phase, now, expected) in cases {
+        assert_eq!(
+            running_since_for(prev, phase, now),
+            expected,
+            "{prev:?}+{phase:?}"
+        );
+    }
+}
+
+#[test]
 fn cli_default_phase_from_lifecycle() {
     let running = pane(false, "npm i", "x");
     let r = Cli.read(&ctx(&running, Some("compiling"), true, None, 100));
     assert_eq!(r.phase, Phase::Busy);
-    assert_eq!(r.running_since, Some(100));
 
     let blocked = Cli.read(&ctx(
         &running,

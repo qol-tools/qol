@@ -27,7 +27,6 @@ impl Strategy for Claude {
         Reading {
             phase,
             label: self.label(ctx),
-            running_since: None,
         }
     }
 }

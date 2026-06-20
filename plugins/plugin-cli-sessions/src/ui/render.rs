@@ -5,6 +5,7 @@ use gpui::{
 
 use crate::registry::SessionState;
 use crate::status::Status;
+use crate::tool::Tool;
 use crate::ui::SessionsView;
 
 fn now_secs() -> u64 {
@@ -14,8 +15,8 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-fn format_elapsed(last_activity: u64) -> String {
-    let secs = now_secs().saturating_sub(last_activity);
+fn format_elapsed(since: u64) -> String {
+    let secs = now_secs().saturating_sub(since);
     if secs < 5 {
         "now".to_string()
     } else if secs < 60 {
@@ -47,7 +48,43 @@ fn tint_color(status: Status) -> u32 {
     }
 }
 
-fn header(count: usize) -> impl IntoElement {
+fn status_glyph(status: Status) -> Option<&'static str> {
+    match status {
+        Status::NeedsYou => Some("!"),
+        Status::Working => Some("\u{25D0}"),
+        Status::Unknown | Status::Acknowledged => Some("\u{00B7}"),
+        Status::YourTurn => None,
+    }
+}
+
+fn summary_groups(rows: &[SessionState]) -> Vec<(u32, usize)> {
+    let mut counts = [0usize; 4];
+    for r in rows {
+        match r.status {
+            Status::NeedsYou => counts[0] += 1,
+            Status::YourTurn => counts[1] += 1,
+            Status::Working => counts[2] += 1,
+            Status::Unknown | Status::Acknowledged => counts[3] += 1,
+        }
+    }
+    let colors = [0xf85149u32, 0xd29922, 0x3fb950, 0x6e7681];
+    colors
+        .into_iter()
+        .zip(counts)
+        .filter(|(_, n)| *n > 0)
+        .collect()
+}
+
+fn meta_value(s: &SessionState) -> String {
+    if s.status == Status::Working {
+        if let Some(start) = s.running_since {
+            return format!("running {}", format_elapsed(start));
+        }
+    }
+    format_elapsed(s.last_activity)
+}
+
+fn header(rows: &[SessionState]) -> impl IntoElement {
     div()
         .h(px(34.0))
         .w_full()
@@ -65,12 +102,21 @@ fn header(count: usize) -> impl IntoElement {
                 .font_weight(FontWeight::SEMIBOLD)
                 .child("CLI SESSIONS"),
         )
-        .child(
-            div()
-                .text_color(rgb(0x6e7681u32))
-                .text_size(px(11.0))
-                .child(format!("{count}")),
-        )
+        .child(div().flex().items_center().gap(px(9.0)).children(
+            summary_groups(rows).into_iter().map(|(color, count)| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(div().w(px(7.0)).h(px(7.0)).rounded_full().bg(rgb(color)))
+                    .child(
+                        div()
+                            .text_color(rgb(0x8b949eu32))
+                            .text_size(px(11.0))
+                            .child(format!("{count}")),
+                    )
+            }),
+        ))
 }
 
 fn empty_state() -> impl IntoElement {
@@ -94,6 +140,118 @@ fn empty_state() -> impl IntoElement {
                 .text_size(px(11.0))
                 .child("Open a CLI in kitty, then open this panel again."),
         )
+}
+
+fn key_hint(key: &'static str, label: &'static str) -> impl IntoElement {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(5.0))
+        .text_color(rgb(0x6e7681u32))
+        .text_size(px(10.0))
+        .child(
+            div()
+                .text_color(rgb(0xc9d1d9u32))
+                .text_size(px(9.0))
+                .bg(rgba(0xffffff0fu32))
+                .border_1()
+                .border_color(rgb(0x30363du32))
+                .rounded(px(4.0))
+                .px(px(5.0))
+                .py(px(1.0))
+                .child(key),
+        )
+        .child(label)
+}
+
+fn footer() -> impl IntoElement {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(10.0))
+        .w_full()
+        .px(px(11.0))
+        .py(px(7.0))
+        .bg(rgb(0x0d1117u32))
+        .border_t_1()
+        .border_color(rgb(0x21262du32))
+        .child(key_hint("\u{2191}\u{2193}", "move"))
+        .child(key_hint("\u{23CE}", "jump"))
+        .child(key_hint("a", "ack"))
+        .child(key_hint("esc", "close"))
+}
+
+fn gutter(index: usize, selected: bool) -> impl IntoElement {
+    let num = if index < 9 {
+        (index + 1).to_string()
+    } else {
+        String::new()
+    };
+    div()
+        .flex_none()
+        .w(px(22.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .border_r_1()
+        .border_color(rgb(0x21262du32))
+        .text_size(px(11.0))
+        .text_color(rgb(if selected { 0x58a6ffu32 } else { 0x6e7681u32 }))
+        .child(num)
+}
+
+fn identity_line(s: &SessionState) -> impl IntoElement {
+    let branch = s.branch.clone().unwrap_or_default();
+    let label = s.name.clone().unwrap_or_else(|| s.project.clone());
+    let (tool_tag, tool_color) = match s.tool {
+        Tool::Claude => ("Claude", 0xd97757u32),
+        Tool::Codex => ("Codex", 0x10a37fu32),
+        Tool::Generic => ("", 0x6e7681u32),
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .w_full()
+        .overflow_hidden()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .flex_1()
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .min_w(px(0.0))
+                        .overflow_hidden()
+                        .truncate()
+                        .text_color(rgb(0xe6edf3u32))
+                        .text_size(px(13.0))
+                        .child(label),
+                )
+                .when(!branch.is_empty(), |d| {
+                    d.child(
+                        div()
+                            .flex_none()
+                            .text_color(rgb(0x8b949eu32))
+                            .text_size(px(11.0))
+                            .child(branch),
+                    )
+                }),
+        )
+        .when(!tool_tag.is_empty(), |d| {
+            d.child(
+                div()
+                    .flex_none()
+                    .text_color(rgb(tool_color))
+                    .text_size(px(10.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(tool_tag),
+            )
+        })
 }
 
 fn summary_cell(
@@ -125,13 +283,49 @@ fn summary_cell(
             .into_any_element();
     }
     div()
+        .flex()
+        .items_center()
+        .gap(px(5.0))
         .min_w(px(0.0))
         .overflow_hidden()
-        .truncate()
-        .text_color(rgb(accent))
-        .text_size(px(11.0))
-        .child(summary.to_string())
+        .when_some(status_glyph(status), |d, g| {
+            d.child(
+                div()
+                    .flex_none()
+                    .w(px(11.0))
+                    .text_color(rgb(accent))
+                    .text_size(px(10.0))
+                    .child(g),
+            )
+        })
+        .child(
+            div()
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .truncate()
+                .text_color(rgb(accent))
+                .text_size(px(11.0))
+                .child(summary.to_string()),
+        )
         .into_any_element()
+}
+
+fn status_line(s: &SessionState, index: usize, cx: &mut Context<SessionsView>) -> impl IntoElement {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(8.0))
+        .w_full()
+        .overflow_hidden()
+        .child(summary_cell(s.status, &s.summary, s.window_id, index, cx))
+        .child(
+            div()
+                .flex_none()
+                .text_color(rgb(0x6e7681u32))
+                .text_size(px(11.0))
+                .child(meta_value(s)),
+        )
 }
 
 fn session_row(
@@ -140,16 +334,7 @@ fn session_row(
     index: usize,
     cx: &mut Context<SessionsView>,
 ) -> impl IntoElement {
-    let branch = s.branch.clone().unwrap_or_default();
-    let label = s.name.clone().unwrap_or_else(|| s.project.clone());
     let tint = tint_color(s.status);
-    let window_id = s.window_id;
-    let (tool_tag, tool_color) = match s.tool {
-        crate::tool::Tool::Claude => ("Claude", 0xd97757u32),
-        crate::tool::Tool::Codex => ("Codex", 0x10a37fu32),
-        crate::tool::Tool::Generic => ("", 0x6e7681u32),
-    };
-
     div()
         .id(("session-row", index))
         .w_full()
@@ -166,66 +351,22 @@ fn session_row(
         .child(
             div()
                 .flex()
-                .flex_col()
-                .gap(px(3.0))
                 .w_full()
-                .px(px(11.0))
-                .py(px(9.0))
                 .bg(rgba(tint))
                 .border_b_1()
                 .border_color(rgb(0x21262du32))
+                .child(gutter(index, selected))
                 .child(
                     div()
+                        .flex_1()
+                        .min_w(px(0.0))
                         .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .w_full()
-                        .overflow_hidden()
-                        .child(
-                            div()
-                                .min_w(px(0.0))
-                                .overflow_hidden()
-                                .truncate()
-                                .text_color(rgb(0xe6edf3u32))
-                                .text_size(px(13.0))
-                                .child(label),
-                        )
-                        .when(!branch.is_empty(), |d| {
-                            d.child(
-                                div()
-                                    .flex_none()
-                                    .text_color(rgb(0x8b949eu32))
-                                    .text_size(px(11.0))
-                                    .child(branch),
-                            )
-                        })
-                        .when(!tool_tag.is_empty(), |d| {
-                            d.child(
-                                div()
-                                    .flex_none()
-                                    .text_color(rgb(tool_color))
-                                    .text_size(px(10.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(tool_tag),
-                            )
-                        }),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap(px(8.0))
-                        .w_full()
-                        .overflow_hidden()
-                        .child(summary_cell(s.status, &s.summary, window_id, index, cx))
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_color(rgb(0x6e7681u32))
-                                .text_size(px(11.0))
-                                .child(format_elapsed(s.last_activity)),
-                        ),
+                        .flex_col()
+                        .gap(px(3.0))
+                        .px(px(10.0))
+                        .py(px(9.0))
+                        .child(identity_line(s))
+                        .child(status_line(s, index, cx)),
                 ),
         )
 }
@@ -240,7 +381,6 @@ impl Render for SessionsView {
         }
         let selected = self.selected;
         let is_empty = rows.is_empty();
-        let count = rows.len();
         let row_els: Vec<_> = rows
             .iter()
             .enumerate()
@@ -292,7 +432,7 @@ impl Render for SessionsView {
                     _ => {}
                 }
             }))
-            .child(header(count))
+            .child(header(&rows))
             .child(
                 div()
                     .id("cli-sessions-list")
@@ -303,5 +443,6 @@ impl Render for SessionsView {
                     .when(is_empty, |d| d.child(empty_state()))
                     .children(row_els),
             )
+            .child(footer())
     }
 }

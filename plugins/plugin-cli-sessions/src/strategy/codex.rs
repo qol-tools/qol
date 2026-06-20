@@ -57,11 +57,7 @@ impl Strategy for Codex<'_> {
         let label = session
             .and_then(|s| s.name)
             .or_else(|| Some(project_of(&ctx.pane.cwd)));
-        Reading {
-            phase,
-            label,
-            running_since: None,
-        }
+        Reading { phase, label }
     }
 }
 

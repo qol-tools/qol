@@ -33,7 +33,6 @@ pub struct Ctx<'a> {
 pub struct Reading {
     pub phase: Phase,
     pub label: Option<String>,
-    pub running_since: Option<u64>,
 }
 
 pub trait Strategy {
@@ -47,30 +46,32 @@ pub trait Strategy {
 
     fn read(&self, ctx: &Ctx) -> Reading {
         let pane = ctx.pane;
-        let prev_running = ctx.prev.and_then(|p| p.running_since);
-        let (phase, running_since) = if pane.at_prompt {
+        let phase = if pane.at_prompt {
+            let prev_running = ctx.prev.and_then(|p| p.running_since);
             let finished_long = prev_running
                 .map(|start| ctx.now.saturating_sub(start) > DONE_THRESHOLD_SECS)
                 .unwrap_or(false);
-            let phase = if finished_long {
+            if finished_long {
                 Phase::Done
             } else {
                 Phase::Idle
-            };
-            (phase, None)
+            }
+        } else if blocked(ctx) {
+            Phase::Blocked
         } else {
-            let phase = if blocked(ctx) {
-                Phase::Blocked
-            } else {
-                Phase::Busy
-            };
-            (phase, Some(prev_running.unwrap_or(ctx.now)))
+            Phase::Busy
         };
         Reading {
             phase,
             label: self.label(ctx),
-            running_since,
         }
+    }
+}
+
+pub fn running_since_for(prev_running: Option<u64>, phase: Phase, now: u64) -> Option<u64> {
+    match phase {
+        Phase::Busy => Some(prev_running.unwrap_or(now)),
+        Phase::Blocked | Phase::Done | Phase::Idle => None,
     }
 }
 

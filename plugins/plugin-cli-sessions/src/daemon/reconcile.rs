@@ -9,7 +9,7 @@ use crate::registry::{summary_for, Registry, SessionState};
 use crate::signal::screen::screen_hash;
 use crate::status::Status;
 use crate::strategy::codex::CodexStore;
-use crate::strategy::{for_tool, status_for, Ctx, Prev, Reading};
+use crate::strategy::{for_tool, running_since_for, status_for, Ctx, Prev, Reading};
 use crate::tool::{classify, Tool};
 
 fn pid_alive(pid: i32) -> bool {
@@ -139,11 +139,12 @@ fn apply(
     now: u64,
 ) {
     let branch = git::branch(&pane.cwd);
-    let prev_status = reg
-        .get(pane.window_id)
-        .map(|s| s.status)
-        .unwrap_or(Status::Unknown);
+    let (prev_status, prev_running) = match reg.get(pane.window_id) {
+        Some(s) => (s.status, s.running_since),
+        None => (Status::Unknown, None),
+    };
     let status = status_for(prev_status, reading.phase);
+    let running_since = running_since_for(prev_running, reading.phase, now);
     let summary = summary_for(status, tool);
 
     #[cfg(debug_assertions)]
@@ -168,7 +169,7 @@ fn apply(
         s.summary = summary;
         s.branch = branch;
         s.name = reading.label;
-        s.running_since = reading.running_since;
+        s.running_since = running_since;
         if let Some(h) = new_hash {
             s.screen_hash = Some(h);
         }
@@ -186,6 +187,6 @@ fn apply(
         summary,
         last_activity: now,
         screen_hash: new_hash,
-        running_since: reading.running_since,
+        running_since,
     });
 }
