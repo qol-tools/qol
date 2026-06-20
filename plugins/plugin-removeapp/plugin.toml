@@ -1,0 +1,31 @@
+[plugin]
+id = "plugin-removeapp"
+name = "Remove App"
+description = "Uninstall an app and its leftovers"
+version = "0.1.0"
+author = "KMRH47"
+platforms = ["macos"]
+
+[runtime]
+command = "removeapp"
+actions = { open = ["open"] }
+
+[capabilities]
+gpui = true
+
+[menu]
+label = "Remove App"
+items = [
+    { type = "action", id = "open", label = "Open", action = "run" },
+]
+
+[[shortcuts]]
+id = "open"
+name = "Remove App"
+action = "open"
+export_to_launcher = true
+
+[[dependencies.binaries]]
+name = "removeapp"
+repo = "qol-tools/plugin-removeapp"
+pattern = "removeapp-{os}-{arch}"
