@@ -1,13 +1,16 @@
 use super::super::binding::{Binding, Mod};
+use super::super::{OnFire, RebuildBindings};
 use anyhow::{bail, Result};
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
     CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
     CGEventType, CallbackResult, EventField,
 };
+use crossbeam_channel::Receiver;
 use qol_runtime::keyremap_marker::{self, KeyRemapMarker};
 use std::collections::BTreeSet;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,12 +21,11 @@ struct MacCombo {
 
 pub(crate) fn install(
     bindings: Vec<Binding>,
-    on_fire: Box<dyn Fn(&Binding) + Send + Sync>,
+    on_fire: OnFire,
+    reload_rx: Receiver<()>,
+    rebuild: RebuildBindings,
 ) -> Result<()> {
-    let matcher = MacBindingMatcher::new(bindings);
-    if matcher.is_empty() {
-        bail!("no macOS-compatible hotkeys configured")
-    }
+    let matcher = Arc::new(RwLock::new(MacBindingMatcher::new(bindings)));
     let (fire_tx, fire_rx) = mpsc::channel::<Binding>();
     std::thread::Builder::new()
         .name("hotkey-capture-macos-actions".into())
@@ -33,10 +35,13 @@ pub(crate) fn install(
             }
         })?;
 
+    spawn_reload_thread(matcher.clone(), reload_rx, rebuild);
+
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
+    let tap_matcher = matcher.clone();
     std::thread::Builder::new()
         .name("hotkey-capture-macos".into())
-        .spawn(move || run_tap(matcher, fire_tx, ready_tx))?;
+        .spawn(move || run_tap(tap_matcher, fire_tx, ready_tx))?;
 
     match ready_rx.recv_timeout(Duration::from_secs(2)) {
         Ok(Ok(())) => Ok(()),
@@ -50,8 +55,40 @@ pub(crate) fn install(
     }
 }
 
+fn spawn_reload_thread(
+    matcher: Arc<RwLock<MacBindingMatcher>>,
+    reload_rx: Receiver<()>,
+    rebuild: RebuildBindings,
+) {
+    let _ = std::thread::Builder::new()
+        .name("hotkey-capture-macos-reload".into())
+        .spawn(move || {
+            while reload_rx.recv().is_ok() {
+                drain_pending(&reload_rx);
+                let next = MacBindingMatcher::new(rebuild());
+                match matcher.write() {
+                    Ok(mut guard) => {
+                        *guard = next;
+                        log::info!("macOS hotkey capture: bindings reloaded");
+                    }
+                    Err(poisoned) => {
+                        log::error!(
+                            "macOS hotkey matcher lock poisoned during reload; recovering: {poisoned}"
+                        );
+                        let mut guard = poisoned.into_inner();
+                        *guard = next;
+                    }
+                }
+            }
+        });
+}
+
+fn drain_pending(reload_rx: &Receiver<()>) {
+    while reload_rx.try_recv().is_ok() {}
+}
+
 fn run_tap(
-    matcher: MacBindingMatcher,
+    matcher: Arc<RwLock<MacBindingMatcher>>,
     fire_tx: Sender<Binding>,
     ready_tx: Sender<Result<(), String>>,
 ) {
@@ -69,10 +106,14 @@ fn run_tap(
                 return CallbackResult::Keep;
             }
             let observed = observed_combo(event);
-            let Some(binding) = matcher.match_combo(&observed) else {
+            let fired = match matcher.read() {
+                Ok(guard) => guard.match_combo(&observed).cloned(),
+                Err(poisoned) => poisoned.into_inner().match_combo(&observed).cloned(),
+            };
+            let Some(binding) = fired else {
                 return CallbackResult::Keep;
             };
-            let _ = fire_tx.send(binding.clone());
+            let _ = fire_tx.send(binding);
             CallbackResult::Drop
         },
     );
@@ -116,10 +157,6 @@ impl MacBindingMatcher {
                 .filter_map(|binding| parse_mac_combo(&binding).map(|combo| (combo, binding)))
                 .collect(),
         }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.bindings.is_empty()
     }
 
     fn match_combo(&self, observed: &MacCombo) -> Option<&Binding> {
@@ -306,6 +343,19 @@ mod tests {
         }
     }
 
+    fn binding_for(key: &str, plugin: &str, action: &str) -> Binding {
+        Binding {
+            combo: parse_combo(key),
+            plugin_id: plugin.into(),
+            action: action.into(),
+            raw_key: key.into(),
+        }
+    }
+
+    fn combo_for(key: &str) -> MacCombo {
+        parse_mac_combo(&binding(key)).expect("combo")
+    }
+
     #[test]
     fn parses_shift_super_r_as_macos_keycode() {
         let combo = parse_mac_combo(&binding("Shift+Super+R")).expect("combo");
@@ -336,5 +386,104 @@ mod tests {
     #[test]
     fn rejects_unknown_key() {
         assert!(parse_mac_combo(&binding("Super+Nope")).is_none());
+    }
+
+    #[test]
+    fn rebuilt_matcher_reflects_newly_added_binding() {
+        let matcher = Arc::new(RwLock::new(MacBindingMatcher::new(vec![binding_for(
+            "Super+R", "first", "open",
+        )])));
+
+        let added = combo_for("Shift+Super+J");
+        assert!(
+            matcher.read().unwrap().match_combo(&added).is_none(),
+            "binding must not match before reload"
+        );
+
+        let next = MacBindingMatcher::new(vec![
+            binding_for("Super+R", "first", "open"),
+            binding_for("Shift+Super+J", "launcher", "show"),
+        ]);
+        *matcher.write().unwrap() = next;
+
+        let hit = matcher
+            .read()
+            .unwrap()
+            .match_combo(&added)
+            .cloned()
+            .expect("newly added binding must match after swap");
+        assert_eq!(hit.plugin_id, "launcher");
+        assert_eq!(hit.action, "show");
+    }
+
+    #[test]
+    fn rebuilt_matcher_drops_removed_binding() {
+        let matcher = Arc::new(RwLock::new(MacBindingMatcher::new(vec![
+            binding_for("Super+R", "first", "open"),
+            binding_for("Shift+Super+J", "launcher", "show"),
+        ])));
+
+        let removed = combo_for("Shift+Super+J");
+        assert!(
+            matcher.read().unwrap().match_combo(&removed).is_some(),
+            "binding must match before reload"
+        );
+
+        let next = MacBindingMatcher::new(vec![binding_for("Super+R", "first", "open")]);
+        *matcher.write().unwrap() = next;
+
+        assert!(
+            matcher.read().unwrap().match_combo(&removed).is_none(),
+            "removed binding must no longer match after swap"
+        );
+    }
+
+    #[test]
+    fn rebuilt_matcher_honors_disabled_filter() {
+        let matcher = Arc::new(RwLock::new(MacBindingMatcher::new(vec![binding_for(
+            "Super+R", "first", "open",
+        )])));
+
+        let disabled = combo_for("Super+R");
+        assert!(matcher.read().unwrap().match_combo(&disabled).is_some());
+
+        let next = MacBindingMatcher::new(vec![]);
+        *matcher.write().unwrap() = next;
+
+        assert!(
+            matcher.read().unwrap().match_combo(&disabled).is_none(),
+            "disabled (filtered-out) binding must no longer match after swap"
+        );
+    }
+
+    #[test]
+    fn cases_for_combo_rebuild_contract() {
+        type BindingTuple = (&'static str, &'static str, &'static str);
+        type ExpectedHit = Option<(&'static str, &'static str)>;
+        type Case = (&'static [BindingTuple], &'static str, ExpectedHit);
+
+        let cases: &[Case] = &[
+            (&[("Super+R", "p", "a")], "Super+R", Some(("p", "a"))),
+            (
+                &[("Super+R", "p", "a"), ("Shift+Super+J", "q", "b")],
+                "Shift+Super+J",
+                Some(("q", "b")),
+            ),
+            (&[("Super+R", "p", "a")], "Shift+Super+J", None),
+            (&[], "Super+R", None),
+        ];
+
+        for (initial, lookup, expected) in cases {
+            let bindings: Vec<Binding> = initial
+                .iter()
+                .map(|(k, p, a)| binding_for(k, p, a))
+                .collect();
+            let m = MacBindingMatcher::new(bindings);
+            let observed = combo_for(lookup);
+            let actual = m
+                .match_combo(&observed)
+                .map(|b| (b.plugin_id.as_str(), b.action.as_str()));
+            assert_eq!(actual, *expected, "initial={:?} lookup={}", initial, lookup);
+        }
     }
 }

@@ -1,6 +1,8 @@
 use super::super::super::Binding;
+use super::super::super::{OnFire, RebuildBindings};
 use super::matcher::{keycodes, BindingMatcher, CaptureDecision};
 use anyhow::{Context, Result};
+use crossbeam_channel::Receiver;
 use evdev::{uinput::VirtualDevice, AttributeSet, Device, EventSummary, InputEvent, KeyCode};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once};
@@ -30,7 +32,9 @@ fn install_panic_safety_hook() {
 /// dies (which closes the fd and releases EVIOCGRAB).
 pub(super) fn install(
     bindings: Vec<Binding>,
-    on_fire: Box<dyn Fn(&Binding) + Send + Sync>,
+    on_fire: OnFire,
+    reload_rx: Receiver<()>,
+    rebuild: RebuildBindings,
 ) -> Result<()> {
     install_panic_safety_hook();
 
@@ -71,7 +75,41 @@ pub(super) fn install(
         );
     }
 
+    spawn_reload_thread(matcher, reload_rx, rebuild);
+
     Ok(())
+}
+
+fn spawn_reload_thread(
+    matcher: Arc<Mutex<BindingMatcher>>,
+    reload_rx: Receiver<()>,
+    rebuild: RebuildBindings,
+) {
+    std::thread::Builder::new()
+        .name("hotkey-capture-linux-reload".into())
+        .spawn(move || {
+            while reload_rx.recv().is_ok() {
+                while reload_rx.try_recv().is_ok() {}
+                let next = BindingMatcher::new(rebuild());
+                match matcher.lock() {
+                    Ok(mut guard) => {
+                        *guard = next;
+                        log::info!("linux evdev hotkey capture: bindings reloaded");
+                    }
+                    Err(poisoned) => {
+                        log::error!(
+                            "linux evdev matcher lock poisoned during reload; recovering: {poisoned}"
+                        );
+                        let mut guard = poisoned.into_inner();
+                        *guard = next;
+                    }
+                }
+            }
+        })
+        .map(|_| ())
+        .unwrap_or_else(|error| {
+            log::error!("failed to spawn evdev hotkey reload thread: {error}");
+        });
 }
 
 fn run_reader(

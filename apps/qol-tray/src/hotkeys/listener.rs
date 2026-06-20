@@ -1,26 +1,20 @@
 use super::catalog::load_available_actions;
+use super::reload;
 use super::HotkeyManager;
 use crate::plugins::PluginManager;
 use anyhow::{anyhow, Result};
-use crossbeam_channel::{select, Receiver, Sender};
+use crossbeam_channel::{select, Receiver};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyEventReceiver, HotKeyState};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-static RELOAD_SENDER: OnceLock<Sender<()>> = OnceLock::new();
 const INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 type SharedPluginManager = Arc<Mutex<PluginManager>>;
 
-pub fn trigger_reload() {
-    if let Some(sender) = RELOAD_SENDER.get() {
-        let _ = sender.send(());
-    }
-}
-
 pub fn start_hotkey_listener(plugin_manager: Arc<Mutex<PluginManager>>) -> Result<()> {
-    let reload_rx = install_reload_channel();
+    let reload_rx = reload::subscribe();
     std::thread::spawn(move || {
         run_supervised(
             &mut |reload_rx| run_listener_once(&plugin_manager, reload_rx),
@@ -170,12 +164,6 @@ impl<'a> HotkeyListenerLoop<'a> {
         );
     }
 }
-fn install_reload_channel() -> Receiver<()> {
-    let (reload_tx, reload_rx) = crossbeam_channel::unbounded::<()>();
-    let _ = RELOAD_SENDER.set(reload_tx);
-    reload_rx
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
