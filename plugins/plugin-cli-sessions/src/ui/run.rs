@@ -3,23 +3,28 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui::{
-    AppContext, Application, AsyncApp, Bounds, Focusable, WindowBackgroundAppearance, WindowBounds,
-    WindowOptions,
+    px, size, AppContext, Application, AsyncApp, Bounds, Focusable, Pixels,
+    WindowBackgroundAppearance, WindowBounds, WindowOptions,
 };
 
+use crate::config;
 use crate::daemon::actions::{self, Command};
 use crate::daemon::reconcile;
 use crate::host::kitty::Kitty;
 use crate::host::TerminalHost;
 use crate::paths;
 use crate::persist;
+use crate::placement::{corner_bounds, Corner};
 use crate::registry::Registry;
 use crate::strategy::codex::DiskCodexStore;
 use crate::ui::{trace, SessionsView, WINDOW_TITLE};
 use qol_gpui::command_loop::LoopFlow;
+use qol_gpui::monitor::MonitorTracker;
 
 const APP_ID: &str = paths::PLUGIN_ID;
 const WINDOW_WIDTH: f32 = 360.0;
+const WINDOW_HEIGHT: f32 = 400.0;
+const CORNER_MARGIN: f32 = 16.0;
 
 pub fn run() -> anyhow::Result<()> {
     let registry: Arc<Mutex<Registry>> = Arc::new(Mutex::new(Registry::default()));
@@ -44,7 +49,8 @@ pub fn run() -> anyhow::Result<()> {
         qol_gpui::keepalive::open_keepalive(cx, Some(APP_ID));
         qol_gpui::platform::set_accessory_policy();
 
-        let view_handle = open_panel(reg_for_app.clone(), host_for_app.clone(), cx);
+        let corner = config::load().corner();
+        let view_handle = open_panel(reg_for_app.clone(), host_for_app.clone(), corner, cx);
         spawn_reconcile_timer(reg_for_app.clone(), host_for_app.clone(), view_handle, cx);
         spawn_command_poll(cmd_rx, view_handle, cx);
     });
@@ -58,9 +64,16 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-fn panel_window_options(cx: &mut gpui::App) -> WindowOptions {
-    let win_size = gpui::size(gpui::px(WINDOW_WIDTH), gpui::px(400.0));
-    let bounds = Bounds::centered(None, win_size, cx);
+fn panel_bounds(corner: Corner, cx: &mut gpui::App) -> Bounds<Pixels> {
+    let win_size = size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT));
+    match MonitorTracker::start(cx).snapshot_monitor() {
+        Some(monitor) => corner_bounds(monitor.bounds(), win_size, corner, CORNER_MARGIN),
+        None => Bounds::centered(None, win_size, cx),
+    }
+}
+
+fn panel_window_options(corner: Corner, cx: &mut gpui::App) -> WindowOptions {
+    let bounds = panel_bounds(corner, cx);
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: None,
@@ -77,9 +90,10 @@ fn panel_window_options(cx: &mut gpui::App) -> WindowOptions {
 fn open_panel(
     registry: Arc<Mutex<Registry>>,
     host: Arc<dyn TerminalHost + Send + Sync>,
+    corner: Corner,
     cx: &mut gpui::App,
 ) -> Option<gpui::WindowHandle<SessionsView>> {
-    let options = panel_window_options(cx);
+    let options = panel_window_options(corner, cx);
     let title = WINDOW_TITLE.to_string();
     let result = qol_gpui::window::open_window_with_focus(cx, options, move |window, cx| {
         window.set_window_title(WINDOW_TITLE);

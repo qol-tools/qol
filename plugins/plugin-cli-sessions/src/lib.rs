@@ -1,8 +1,10 @@
+pub mod config;
 pub mod daemon;
 pub mod git;
 pub mod host;
 pub mod paths;
 pub mod persist;
+pub mod placement;
 pub mod registry;
 pub mod signal;
 pub mod status;
