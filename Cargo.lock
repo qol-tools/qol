@@ -5658,6 +5658,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "dirs 6.0.0",
+ "libc",
  "qol-config",
  "ratatui",
  "serde",

@@ -549,9 +549,7 @@ impl FilterState {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum FeatureFlag {
-    RustTraceRenderer,
-}
+enum FeatureFlag {}
 
 struct FeatureFlagDef {
     flag: FeatureFlag,
@@ -559,29 +557,22 @@ struct FeatureFlagDef {
     label: &'static str,
 }
 
-const FEATURE_FLAGS: &[FeatureFlagDef] = &[FeatureFlagDef {
-    flag: FeatureFlag::RustTraceRenderer,
-    id: "trace.rust_renderer",
-    label: "Rust trace renderer",
-}];
+const FEATURE_FLAGS: &[FeatureFlagDef] = &[];
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum TraceRenderer {
-    Python,
     Rust,
 }
 
 impl TraceRenderer {
     fn name(self) -> &'static str {
         match self {
-            Self::Python => "Python",
             Self::Rust => "Rust",
         }
     }
 
     fn missing_hint(self) -> &'static str {
         match self {
-            Self::Python => "need python3 + tools/compact_trace.py",
             Self::Rust => "could not exec current qol binary",
         }
     }
@@ -595,15 +586,6 @@ struct FeatureFlags {
 impl FeatureFlags {
     fn enabled(&self, flag: FeatureFlag) -> bool {
         self.enabled.contains(&flag)
-    }
-
-    fn toggle(&mut self, flag: FeatureFlag) -> bool {
-        if let Some(index) = self.enabled.iter().position(|item| *item == flag) {
-            self.enabled.remove(index);
-            return false;
-        }
-        self.enabled.push(flag);
-        true
     }
 }
 
@@ -1193,11 +1175,7 @@ impl Dash {
     }
 
     fn trace_renderer(&self) -> TraceRenderer {
-        if self.features.enabled(FeatureFlag::RustTraceRenderer) {
-            TraceRenderer::Rust
-        } else {
-            TraceRenderer::Python
-        }
+        TraceRenderer::Rust
     }
 
     fn toggle_feature_flags_panel(&mut self) {
@@ -1229,7 +1207,7 @@ impl Dash {
         let Some(def) = FEATURE_FLAGS.get(self.feature_panel.selected) else {
             return;
         };
-        toggle_feature_flag(self, def.flag);
+        toggle_feature_flag(def.flag);
     }
 }
 
@@ -1821,12 +1799,8 @@ fn spawn_trace(
 }
 
 fn trace_command(renderer: TraceRenderer, root: &Path) -> Option<Command> {
+    let _ = root;
     Some(match renderer {
-        TraceRenderer::Python => {
-            let mut cmd = Command::new("python3");
-            cmd.arg("-u").arg(root.join("tools/compact_trace.py"));
-            cmd
-        }
         TraceRenderer::Rust => {
             let mut cmd = Command::new(std::env::current_exe().ok()?);
             cmd.arg("trace-rs");
@@ -1843,10 +1817,8 @@ fn toggle_trace_details(dash: &mut Dash) {
     set_trace_details(dash, !dash.trace_details_enabled());
 }
 
-fn toggle_feature_flag(dash: &mut Dash, flag: FeatureFlag) {
-    match flag {
-        FeatureFlag::RustTraceRenderer => toggle_trace_renderer(dash),
-    }
+fn toggle_feature_flag(flag: FeatureFlag) {
+    match flag {}
 }
 
 fn set_trace_details(dash: &mut Dash, enabled: bool) {
@@ -1857,23 +1829,11 @@ fn set_trace_details(dash: &mut Dash, enabled: bool) {
     if !dash.trace.is_live() {
         return;
     }
-    if dash.trace_renderer() == TraceRenderer::Python && dash.trace.write_control("d") {
+    if dash.trace.write_control("d") {
         return;
     }
     stop_trace(dash);
     start_trace(dash);
-}
-
-fn toggle_trace_renderer(dash: &mut Dash) {
-    dash.features.toggle(FeatureFlag::RustTraceRenderer);
-    if dash.trace.is_live() {
-        stop_trace(dash);
-        start_trace(dash);
-        return;
-    }
-    if dash.trace_unavailable || dash.view == View::Trace {
-        start_trace(dash);
-    }
 }
 
 const DEFAULT_TRACE_LOG_FILE: &str = "/tmp/qol-altmon.log";
@@ -5178,32 +5138,21 @@ mod tests {
         let text = render_text(&mut dash);
         assert!(text.contains("feature flags"), "missing feature panel");
         assert!(text.contains("select flag"), "missing feature keys");
-        assert!(
-            text.contains("trace.rust_renderer"),
-            "missing rust renderer flag"
-        );
-        assert_eq!(dash.trace_renderer(), TraceRenderer::Python);
+        assert!(text.contains("no feature flags"), "missing empty state");
+        assert_eq!(dash.trace_renderer(), TraceRenderer::Rust);
         assert!(
             !dash.trace_details_enabled(),
             "details are not a feature flag"
         );
 
         edit_feature_flags(&mut dash, KeyCode::Enter);
-        assert_eq!(
-            dash.trace_renderer(),
-            TraceRenderer::Rust,
-            "enter toggles rust renderer on"
-        );
+        assert_eq!(dash.trace_renderer(), TraceRenderer::Rust);
         assert!(
             !dash.trace_details_enabled(),
             "renderer flag must not toggle details"
         );
         edit_feature_flags(&mut dash, KeyCode::Char(' '));
-        assert_eq!(
-            dash.trace_renderer(),
-            TraceRenderer::Python,
-            "space toggles rust renderer off"
-        );
+        assert_eq!(dash.trace_renderer(), TraceRenderer::Rust);
         edit_feature_flags(&mut dash, KeyCode::Esc);
         assert!(!dash.feature_panel.is_active(), "esc closes feature panel");
     }

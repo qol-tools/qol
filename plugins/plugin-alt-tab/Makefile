@@ -18,4 +18,4 @@ test:
 	cargo test --tests
 
 trace:
-	python3 tools/compact_trace.py
+	qol trace alt-tab
