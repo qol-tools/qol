@@ -1,6 +1,9 @@
+use std::time::Duration;
+
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, rgba, AnyElement, Context, FontWeight, KeyDownEvent, SharedString, Window,
+    div, px, rgb, rgba, Animation, AnimationExt, AnyElement, Context, FontWeight, KeyDownEvent,
+    SharedString, Window,
 };
 
 use crate::registry::SessionState;
@@ -48,13 +51,35 @@ fn tint_color(status: Status) -> u32 {
     }
 }
 
-fn status_glyph(status: Status) -> Option<&'static str> {
+const SPINNER_FRAMES: [&str; 10] = [
+    "\u{280B}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283C}", "\u{2834}", "\u{2826}", "\u{2827}",
+    "\u{2807}", "\u{280F}",
+];
+
+fn status_glyph(status: Status) -> &'static str {
     match status {
-        Status::NeedsYou => Some("!"),
-        Status::Working => Some("\u{25D0}"),
-        Status::Unknown | Status::Acknowledged => Some("\u{00B7}"),
-        Status::YourTurn => None,
+        Status::NeedsYou => "!",
+        Status::Working => SPINNER_FRAMES[0],
+        Status::Unknown | Status::Acknowledged => "\u{00B7}",
+        Status::YourTurn => "",
     }
+}
+
+fn spinner(index: usize, color: u32) -> impl IntoElement {
+    div()
+        .flex_none()
+        .w(px(11.0))
+        .text_color(rgb(color))
+        .text_size(px(10.0))
+        .with_animation(
+            ("spinner", index),
+            Animation::new(Duration::from_millis(800)).repeat(),
+            |el, delta| {
+                let i =
+                    ((delta * SPINNER_FRAMES.len() as f32) as usize).min(SPINNER_FRAMES.len() - 1);
+                el.child(SPINNER_FRAMES[i])
+            },
+        )
 }
 
 fn summary_groups(rows: &[SessionState]) -> Vec<(u32, usize)> {
@@ -76,12 +101,12 @@ fn summary_groups(rows: &[SessionState]) -> Vec<(u32, usize)> {
 }
 
 fn meta_value(s: &SessionState) -> String {
-    if s.status == Status::Working {
-        if let Some(start) = s.running_since {
-            return format!("running {}", format_elapsed(start));
-        }
-    }
-    format_elapsed(s.last_activity)
+    let since = if s.status == Status::Working {
+        s.running_since.unwrap_or(s.last_activity)
+    } else {
+        s.last_activity
+    };
+    format_elapsed(since)
 }
 
 fn header(rows: &[SessionState]) -> impl IntoElement {
@@ -282,22 +307,24 @@ fn summary_cell(
             }))
             .into_any_element();
     }
+    let indicator: AnyElement = if status == Status::Working {
+        spinner(index, accent).into_any_element()
+    } else {
+        div()
+            .flex_none()
+            .w(px(11.0))
+            .text_color(rgb(accent))
+            .text_size(px(10.0))
+            .child(status_glyph(status))
+            .into_any_element()
+    };
     div()
         .flex()
         .items_center()
         .gap(px(5.0))
         .min_w(px(0.0))
         .overflow_hidden()
-        .when_some(status_glyph(status), |d, g| {
-            d.child(
-                div()
-                    .flex_none()
-                    .w(px(11.0))
-                    .text_color(rgb(accent))
-                    .text_size(px(10.0))
-                    .child(g),
-            )
-        })
+        .child(indicator)
         .child(
             div()
                 .min_w(px(0.0))
