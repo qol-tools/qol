@@ -123,7 +123,8 @@ fn runtime_command(resolved: &ResolvedAction, command_path: &Path) -> std::proce
         .current_dir(&resolved.plugin_dir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::inherit())
-        .env("QOL_TRAY_PLUGIN_ID", resolved.plugin_id.as_str());
+        .env("QOL_TRAY_PLUGIN_ID", resolved.plugin_id.as_str())
+        .env("QOL_TRAY_STATE_SOCKET", crate::paths::STATE_SOCKET_PATH);
     if let Some(socket_path) = &resolved.daemon_socket {
         command.env("QOL_TRAY_DAEMON_SOCKET", socket_path);
     }
@@ -137,4 +138,40 @@ fn spawn_wait_untracker(resolved: &ResolvedAction, mut child: std::process::Chil
         let _ = child.wait();
         untrack_action_process(&plugin_id, &action_id, pid);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qol_plugin_api::manifest::PluginId;
+    use std::ffi::OsStr;
+    use std::path::PathBuf;
+
+    fn resolved() -> ResolvedAction {
+        ResolvedAction {
+            plugin_id: PluginId::new("plugin-cli-sessions"),
+            action_id: "open".to_string(),
+            plugin_dir: PathBuf::from("/tmp"),
+            daemon_socket: None,
+            command_path: Some(PathBuf::from("/bin/true")),
+            args: vec!["open".to_string()],
+            runtime_fallback_allowed: true,
+            dedupe_runtime_spawn: false,
+        }
+    }
+
+    #[test]
+    fn runtime_command_arms_host_death_watchdog_via_state_socket() {
+        let command = runtime_command(&resolved(), Path::new("/bin/true"));
+        let entry = command
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new("QOL_TRAY_STATE_SOCKET"));
+        let (_, value) = entry
+            .expect("action spawns must set QOL_TRAY_STATE_SOCKET so the watchdog arms");
+        assert_eq!(
+            value,
+            Some(OsStr::new(crate::paths::STATE_SOCKET_PATH)),
+            "watchdog lifeline must point at the host state socket",
+        );
+    }
 }
