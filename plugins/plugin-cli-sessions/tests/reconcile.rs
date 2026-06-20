@@ -119,6 +119,21 @@ fn tick_codex_idle_when_no_turn_taken() {
 }
 
 #[test]
+fn tick_codex_your_turn_when_answer_ends_in_numbered_list() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = FakeHost {
+        panes: vec![pane(16, "qol-monorepo", false, &["zsh", "codex"], "codex")],
+        screen: "What remains:\n1. Add golden parity tests\n2. Decide when to remove trace-py\n3. Remove the fallback flag\n4. Rename the WIP commit".into(),
+    };
+    tick(&reg, &host, &NoCodexStore, 100);
+    assert_eq!(
+        reg.lock().unwrap().sorted()[0].status,
+        Status::YourTurn,
+        "a codex answer ending in a numbered list is your-turn, not needs-you"
+    );
+}
+
+#[test]
 fn tick_codex_your_turn_when_turn_taken() {
     let reg = Arc::new(Mutex::new(Registry::default()));
     let store = FakeCodex {

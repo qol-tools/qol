@@ -209,6 +209,23 @@ fn claude_label_strips_status_glyph() {
 }
 
 #[test]
+fn codex_answer_ending_in_numbered_list_is_your_turn_not_blocked() {
+    let p = pane(false, "codex", "qol-monorepo");
+    let answer = "What remains:\n1. Add committed golden parity tests\n2. Decide when to remove trace-py\n3. Remove the fallback flag once done\n4. Rename the WIP commit";
+    let used = FakeCodex {
+        name: Some("Topic".into()),
+        touched: true,
+    };
+    assert_eq!(
+        Codex::new(&used)
+            .read(&ctx(&p, Some(answer), false, None, 0))
+            .phase,
+        Phase::Done,
+        "a finished turn whose answer ends in a numbered list is your-turn, not a blocking prompt"
+    );
+}
+
+#[test]
 fn codex_phase_and_label_from_store() {
     let p = pane(false, "codex", "qol-monorepo");
 

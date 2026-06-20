@@ -6,7 +6,7 @@ use std::process::Command;
 use serde_json::Value;
 
 use crate::host::{project_of, Pane};
-use crate::signal::screen::{codex_banner, codex_working, has_prompt_markers};
+use crate::signal::screen::{codex_banner, codex_working, has_numbered_choice_prompt};
 use crate::signal::title::title_working;
 use crate::strategy::{Ctx, Phase, Reading, Strategy};
 
@@ -47,7 +47,7 @@ impl Strategy for Codex<'_> {
         let session = self.store.session(ctx.pane);
         let phase = if title_working(&ctx.pane.title) || codex_working(screen) {
             Phase::Busy
-        } else if has_prompt_markers(screen) {
+        } else if has_numbered_choice_prompt(screen) {
             Phase::Blocked
         } else if turn_taken(&session, screen) {
             Phase::Done
