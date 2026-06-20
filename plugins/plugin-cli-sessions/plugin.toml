@@ -3,7 +3,7 @@ id = "plugin-cli-sessions"
 name = "CLI Sessions"
 description = "Always-on-top overview of live CLI sessions (Claude Code, Codex, any command)"
 version = "0.1.0"
-author = ""
+author = "KMRH47"
 platforms = ["linux", "macos"]
 
 [runtime]
