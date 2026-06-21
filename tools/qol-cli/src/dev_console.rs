@@ -19,8 +19,9 @@ use crate::commands::emu::{
     LastRun, ResolveState, RunDetail,
 };
 use crate::dev_server::{
-    fetch_dev_links, health_ok, post_recompile_current, post_reload_plugins, probe_endpoints,
-    web_ok, DevLink, EndpointStatus, WEBSITE_URL,
+    fetch_workspace_plugins, health_ok, post_recompile_current, post_reload_plugins,
+    probe_endpoints, toggle_dev_link, web_ok, EndpointStatus, LinkToggle, WorkspacePlugin,
+    WEBSITE_URL,
 };
 use crate::host_facade;
 use crate::poller::Poller;
@@ -316,7 +317,36 @@ fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
                 ],
             ),
         ],
-        View::Plugins | View::Endpoints => vec![
+        View::Plugins => vec![
+            binding(
+                "↑/↓",
+                "move",
+                Action::ScrollUp,
+                vec![KeyStroke::plain(KeyCode::Up)],
+            ),
+            binding(
+                "↑/↓",
+                "move",
+                Action::ScrollDown,
+                vec![KeyStroke::plain(KeyCode::Down)],
+            ),
+            binding(
+                "enter",
+                "link/unlink",
+                Action::Activate,
+                vec![KeyStroke::plain(KeyCode::Enter)],
+            ),
+            binding(
+                "←",
+                "back",
+                Action::Back,
+                vec![
+                    KeyStroke::plain(KeyCode::Left),
+                    KeyStroke::plain(KeyCode::Esc),
+                ],
+            ),
+        ],
+        View::Endpoints => vec![
             binding(
                 "↑/↓",
                 "scroll",
@@ -865,7 +895,7 @@ type EmuScanResult = Result<(Vec<EnvironmentStatus>, Vec<ImageCandidate>), Strin
 struct Probes {
     health: Poller<HealthSnapshot>,
     emu: Poller<EmuScanResult>,
-    links: Poller<Result<Vec<DevLink>, String>>,
+    links: Poller<Result<Vec<WorkspacePlugin>, String>>,
     doctor: Poller<Result<DoctorRun, String>>,
     endpoints: Option<Poller<Vec<EndpointStatus>>>,
 }
@@ -881,7 +911,7 @@ impl Probes {
                 emu_scan().map_err(|error| format!("{error:#}"))
             }),
             links: Poller::spawn(LINKS_REFRESH_INTERVAL, || {
-                fetch_dev_links().map_err(|error| format!("{error:#}"))
+                fetch_workspace_plugins().map_err(|error| format!("{error:#}"))
             }),
             doctor: spawn_doctor_probe(),
             endpoints: None,
@@ -929,7 +959,7 @@ enum EmuState {
 
 enum LinksState {
     Unknown,
-    Live(Vec<DevLink>),
+    Live(Vec<WorkspacePlugin>),
     Unreachable,
 }
 
@@ -1001,6 +1031,7 @@ struct Dash {
     emu_candidates: Vec<ImageCandidate>,
     log_height: usize,
     cursor: usize,
+    plugin_cursor: usize,
     doctor: DoctorPanel,
     trace: LogPane,
     trace_unavailable: bool,
@@ -1043,6 +1074,7 @@ impl Dash {
             emu_candidates: Vec::new(),
             log_height: 0,
             cursor: 0,
+            plugin_cursor: 0,
             doctor: DoctorPanel {
                 last: None,
                 last_at_ms: None,
@@ -1554,12 +1586,8 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
         Action::Activate => match dash.view {
             View::Dashboard => act_row(dash, modified),
             View::Emu => act_emu(dash, modified),
-            View::Logs
-            | View::Doctor
-            | View::Plugins
-            | View::Trace
-            | View::Endpoints
-            | View::EmuDetail => {}
+            View::Plugins => act_plugin(dash),
+            View::Logs | View::Doctor | View::Trace | View::Endpoints | View::EmuDetail => {}
         },
         Action::Dive => match dash.view {
             View::Dashboard => dive_row(dash),
@@ -1584,12 +1612,10 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
         Action::ScrollUp => match dash.view {
             View::Dashboard => dash.cursor = dash.cursor.saturating_sub(1),
             View::Emu => dash.emu_cursor = dash.emu_cursor.saturating_sub(1),
-            View::Logs
-            | View::Doctor
-            | View::Plugins
-            | View::Trace
-            | View::Endpoints
-            | View::EmuDetail => dash.scroll_offset = dash.scroll_offset.saturating_add(1),
+            View::Plugins => dash.plugin_cursor = dash.plugin_cursor.saturating_sub(1),
+            View::Logs | View::Doctor | View::Trace | View::Endpoints | View::EmuDetail => {
+                dash.scroll_offset = dash.scroll_offset.saturating_add(1)
+            }
         },
         Action::ScrollDown => match dash.view {
             View::Dashboard => dash.cursor = (dash.cursor + 1).min(ROWS.len() - 1),
@@ -1597,12 +1623,13 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
                 let total = emu_env_count(dash) + dash.emu_candidates.len();
                 dash.emu_cursor = (dash.emu_cursor + 1).min(total.saturating_sub(1));
             }
-            View::Logs
-            | View::Doctor
-            | View::Plugins
-            | View::Trace
-            | View::Endpoints
-            | View::EmuDetail => dash.scroll_offset = dash.scroll_offset.saturating_sub(1),
+            View::Plugins => {
+                let total = plugin_row_count(dash);
+                dash.plugin_cursor = (dash.plugin_cursor + 1).min(total.saturating_sub(1));
+            }
+            View::Logs | View::Doctor | View::Trace | View::Endpoints | View::EmuDetail => {
+                dash.scroll_offset = dash.scroll_offset.saturating_sub(1)
+            }
         },
         Action::PageUp => dash.scroll_offset = dash.scroll_offset.saturating_add(page),
         Action::PageDown => dash.scroll_offset = dash.scroll_offset.saturating_sub(page),
@@ -1696,6 +1723,8 @@ fn dive_row(dash: &mut Dash) {
         Row::Plugins => {
             dash.view = View::Plugins;
             dash.scroll_offset = 0;
+            dash.plugin_cursor = 0;
+            dash.pokes.links = true;
         }
         Row::Emu => open_emu(dash),
         Row::Doctor => open_doctor(dash),
@@ -2511,7 +2540,7 @@ fn page_description(view: View) -> Option<&'static str> {
         View::Logs => Some("live daemon logs"),
         View::Trace => Some("runtime trace events"),
         View::Doctor => Some("install health checks"),
-        View::Plugins => Some("dev-linked plugins"),
+        View::Plugins => Some("workspace plugins · enter to link/unlink"),
         View::Emu => Some("clean-os test envs"),
         View::Endpoints => Some("local service endpoints"),
         View::Dashboard | View::EmuDetail => None,
@@ -3284,20 +3313,24 @@ fn plugins_status(
     links: &LinksState,
 ) -> (Color, Vec<Span<'static>>) {
     let (live_color, mut value) = match links {
-        LinksState::Live(links) => {
-            let stale = links.iter().filter(|link| link.needs_rebuild).count();
+        LinksState::Live(plugins) => {
+            let linked = plugins.iter().filter(|plugin| plugin.linked).count();
+            let stale = plugins
+                .iter()
+                .filter(|plugin| plugin.linked && plugin.needs_rebuild)
+                .count();
             if stale > 0 {
                 (
                     Color::Yellow,
                     vec![
-                        format!("{} linked", links.len()).fg(Color::Green),
+                        format!("{linked} linked").fg(Color::Green),
                         format!(" · {stale} stale").fg(Color::Yellow).bold(),
                     ],
                 )
             } else {
                 (
                     Color::Green,
-                    vec![format!("{} linked", links.len()).fg(Color::Green)],
+                    vec![format!("{linked} linked").fg(Color::Green)],
                 )
             }
         }
@@ -3402,53 +3435,105 @@ fn emu_status(state: &EmuState) -> (Color, Vec<Span<'static>>) {
     )
 }
 
+fn plugin_row_count(dash: &Dash) -> usize {
+    match &dash.links {
+        LinksState::Live(rows) => rows.len(),
+        LinksState::Unknown | LinksState::Unreachable => 0,
+    }
+}
+
 fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
-    let entries = plugin_view_lines(dash);
-    if entries.is_empty() {
-        view_content(frame, area, vec![Line::from("  no dev-linked plugins")]);
+    let height = list_capacity(area.height);
+    dash.log_height = height;
+    let total = plugin_row_count(dash);
+    if total == 0 {
+        let message = match &dash.links {
+            LinksState::Unreachable => "  api down",
+            LinksState::Unknown => "  loading plugins…",
+            LinksState::Live(_) => "  no workspace plugins found",
+        };
+        view_content(frame, area, vec![Line::from(message.fg(Color::DarkGray))]);
         return;
     }
-    let total = entries.len();
-    let (start, height) = list_window(dash, area, total);
-    let visible: Vec<Line> = entries.into_iter().skip(start).take(height).collect();
-    view_content(frame, area, visible);
-}
-
-fn plugin_view_lines(dash: &Dash) -> Vec<Line<'static>> {
-    match &dash.links {
-        LinksState::Live(links) => links.iter().map(plugin_link_line).collect(),
-        LinksState::Unknown | LinksState::Unreachable => dash
-            .plugin_names
-            .iter()
-            .map(|name| {
-                Line::from(vec![
-                    "  ".into(),
-                    "●".fg(Color::DarkGray).bold(),
-                    format!(" {name}").fg(Color::White),
-                    " · link state unknown".fg(Color::DarkGray),
-                ])
-            })
-            .collect(),
+    if dash.plugin_cursor >= total {
+        dash.plugin_cursor = total - 1;
     }
-}
-
-fn plugin_link_line(link: &DevLink) -> Line<'static> {
-    let dot = if link.needs_rebuild {
-        "●".fg(Color::Yellow).bold()
-    } else {
-        "●".fg(Color::Green).bold()
+    let cursor = dash.plugin_cursor;
+    let start = cursor_window_start(total, height, cursor);
+    let LinksState::Live(rows) = &dash.links else {
+        return;
     };
-    let mut spans = vec!["  ".into(), dot, format!(" {}", link.name).fg(Color::White)];
-    if !link.version.is_empty() {
-        spans.push(format!(" v{}", link.version).fg(Color::DarkGray));
+    let lines: Vec<Line> = rows
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(height)
+        .map(|(index, row)| plugin_row_line(row, index == cursor))
+        .collect();
+    view_content(frame, area, lines);
+}
+
+fn cursor_window_start(total: usize, height: usize, cursor: usize) -> usize {
+    if height == 0 || total <= height {
+        return 0;
     }
-    if link.needs_rebuild {
-        spans.push(" · stale · ".fg(Color::Yellow));
-        spans.push(link.rebuild_reason.clone().fg(Color::DarkGray));
+    let max_start = total - height;
+    if cursor >= height {
+        (cursor + 1 - height).min(max_start)
     } else {
-        spans.push(" · dev-linked".fg(Color::DarkGray));
+        0
+    }
+}
+
+fn plugin_row_line(row: &WorkspacePlugin, selected: bool) -> Line<'static> {
+    let caret: Span<'static> = if selected {
+        "▸ ".fg(Color::Green).bold()
+    } else {
+        "  ".into()
+    };
+    let (dot, status) = if !row.linked {
+        (
+            "○".fg(Color::DarkGray).bold(),
+            " · linkable".fg(Color::DarkGray),
+        )
+    } else if row.needs_rebuild {
+        ("●".fg(Color::Yellow).bold(), " · stale".fg(Color::Yellow))
+    } else {
+        ("●".fg(Color::Green).bold(), " · linked".fg(Color::DarkGray))
+    };
+    let name = format!(" {}", row.name);
+    let name_span = if selected {
+        name.fg(Color::White).bold()
+    } else {
+        name.fg(Color::White)
+    };
+    let mut spans = vec![caret, dot, name_span];
+    if !row.version.is_empty() {
+        spans.push(format!(" v{}", row.version).fg(Color::DarkGray));
+    }
+    spans.push(status);
+    if row.linked && row.needs_rebuild && !row.rebuild_reason.is_empty() {
+        spans.push(" · ".fg(Color::Yellow));
+        spans.push(row.rebuild_reason.clone().fg(Color::DarkGray));
     }
     Line::from(spans)
+}
+
+fn act_plugin(dash: &mut Dash) {
+    let selected = match &dash.links {
+        LinksState::Live(rows) => rows.get(dash.plugin_cursor).cloned(),
+        LinksState::Unknown | LinksState::Unreachable => None,
+    };
+    let Some(plugin) = selected else {
+        return;
+    };
+    let message = match toggle_dev_link(&plugin) {
+        Ok(LinkToggle::Linked) => format!("linked {}", plugin.name),
+        Ok(LinkToggle::Unlinked) => format!("unlinked {}", plugin.name),
+        Err(error) => format!("link failed · {error:#}"),
+    };
+    dash.notice = Some((Instant::now(), message));
+    dash.pokes.links = true;
 }
 
 fn emu_empty_lines(config: &str) -> Vec<Line<'static>> {
@@ -4357,28 +4442,31 @@ mod tests {
         }
     }
 
+    fn workspace_plugin(name: &str, linked: bool, needs_rebuild: bool) -> WorkspacePlugin {
+        WorkspacePlugin {
+            id: name.to_string(),
+            name: name.to_string(),
+            version: if linked { "1.0.0" } else { "" }.to_string(),
+            path: format!("/ws/{name}"),
+            linked,
+            needs_rebuild,
+            rebuild_reason: if needs_rebuild { "Source changed" } else { "" }.to_string(),
+        }
+    }
+
     #[test]
-    fn plugins_status_reflects_link_state() {
-        let fresh = DevLink {
-            name: "foo".to_string(),
-            version: "1.0.0".to_string(),
-            needs_rebuild: false,
-            rebuild_reason: "Up to date".to_string(),
-        };
-        let stale = DevLink {
-            name: "bar".to_string(),
-            version: "1.0.0".to_string(),
-            needs_rebuild: true,
-            rebuild_reason: "Source changed".to_string(),
-        };
+    fn plugins_status_counts_only_linked_among_workspace_plugins() {
+        let fresh = workspace_plugin("foo", true, false);
+        let stale = workspace_plugin("bar", true, true);
+        let linkable = workspace_plugin("baz", false, false);
         let cases = [
             (
-                LinksState::Live(vec![fresh.clone(), stale.clone()]),
+                LinksState::Live(vec![fresh.clone(), stale.clone(), linkable.clone()]),
                 Color::Yellow,
                 "2 linked · 1 stale",
             ),
             (
-                LinksState::Live(vec![fresh.clone()]),
+                LinksState::Live(vec![fresh.clone(), linkable.clone()]),
                 Color::Green,
                 "1 linked",
             ),
@@ -4397,36 +4485,51 @@ mod tests {
     }
 
     #[test]
-    fn plugin_link_line_shows_version_for_fresh_and_stale() {
-        let cases = [false, true];
-        for needs_rebuild in cases {
-            let link = DevLink {
-                name: "launcher".to_string(),
-                version: "1.2.0".to_string(),
-                needs_rebuild,
-                rebuild_reason: "Source changed".to_string(),
-            };
-            let text = span_text(&plugin_link_line(&link).spans);
+    fn plugin_row_line_marks_linked_and_linkable_states() {
+        let cases = [
+            (workspace_plugin("a", true, false), "● a v1.0.0 · linked"),
+            (workspace_plugin("b", false, false), "○ b · linkable"),
+        ];
+        for (row, expected) in cases {
+            let text = span_text(&plugin_row_line(&row, false).spans);
             assert!(
-                text.contains("v1.2.0"),
-                "dev-linked plugin line must show its version (needs_rebuild={needs_rebuild}): {text}"
+                text.contains(expected),
+                "row line must show {expected:?}, got {text:?}"
             );
         }
     }
 
     #[test]
-    fn plugin_link_line_omits_version_when_absent() {
-        let link = DevLink {
-            name: "launcher".to_string(),
-            version: String::new(),
-            needs_rebuild: false,
-            rebuild_reason: String::new(),
-        };
-        let text = span_text(&plugin_link_line(&link).spans);
+    fn plugin_row_line_carets_the_selected_row() {
+        let row = workspace_plugin("a", true, false);
+        let selected = span_text(&plugin_row_line(&row, true).spans);
+        let unselected = span_text(&plugin_row_line(&row, false).spans);
         assert!(
-            !text.contains(" v"),
-            "no version segment when version is empty: {text}"
+            selected.starts_with("▸"),
+            "selected row gets a caret: {selected:?}"
         );
+        assert!(
+            !unselected.starts_with("▸"),
+            "unselected row has no caret: {unselected:?}"
+        );
+    }
+
+    #[test]
+    fn cursor_window_keeps_selection_visible() {
+        let cases = [
+            (10, 4, 0, 0),
+            (10, 4, 2, 0),
+            (10, 4, 4, 1),
+            (10, 4, 9, 6),
+            (3, 5, 2, 0),
+        ];
+        for (total, height, cursor, expected) in cases {
+            assert_eq!(
+                cursor_window_start(total, height, cursor),
+                expected,
+                "total={total} height={height} cursor={cursor}"
+            );
+        }
     }
 
     #[test]

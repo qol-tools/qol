@@ -10,6 +10,7 @@ const DEV_HEALTH_URL: &str = "http://127.0.0.1:42700/api/dev/worktrees";
 const DEV_RECOMPILE_URL: &str = "http://127.0.0.1:42700/api/dev/recompile-self";
 const DEV_RELOAD_URL: &str = "http://127.0.0.1:42700/api/dev/reload";
 const DEV_LINKS_URL: &str = "http://127.0.0.1:42700/api/dev/links";
+const DEV_DISCOVERY_URL: &str = "http://127.0.0.1:42700/api/dev/discovery-state";
 const AUTH_HEALTH_URL: &str = "http://127.0.0.1:42700/api/auth/health";
 const LOGS_HEALTH_URL: &str = "http://127.0.0.1:42700/api/logs/entries";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -24,11 +25,45 @@ pub(crate) enum DevLinkOutcome {
 
 #[derive(Clone, PartialEq, serde::Deserialize)]
 pub(crate) struct DevLink {
+    #[serde(default)]
+    pub(crate) id: String,
     pub(crate) name: String,
     #[serde(default)]
     pub(crate) version: String,
+    #[serde(default)]
+    pub(crate) source: String,
     pub(crate) needs_rebuild: bool,
     pub(crate) rebuild_reason: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub(crate) struct DiscoveredPlugin {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) path: String,
+}
+
+#[derive(serde::Deserialize)]
+struct DiscoveryStatePayload {
+    #[serde(default)]
+    plugins: Vec<DiscoveredPlugin>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct WorkspacePlugin {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) version: String,
+    pub(crate) path: String,
+    pub(crate) linked: bool,
+    pub(crate) needs_rebuild: bool,
+    pub(crate) rebuild_reason: String,
+}
+
+pub(crate) enum LinkToggle {
+    Linked,
+    Unlinked,
 }
 
 pub(crate) fn fetch_dev_links() -> Result<Vec<DevLink>> {
@@ -37,6 +72,96 @@ pub(crate) fn fetch_dev_links() -> Result<Vec<DevLink>> {
         bail!("GET {DEV_LINKS_URL} returned {status}");
     }
     serde_json::from_str(&body).context("invalid dev links payload")
+}
+
+pub(crate) fn fetch_discovered_plugins() -> Result<Vec<DiscoveredPlugin>> {
+    let (status, body) = http_exchange("GET", DEV_DISCOVERY_URL, None)?;
+    if status != 200 {
+        bail!("GET {DEV_DISCOVERY_URL} returned {status}");
+    }
+    let payload: DiscoveryStatePayload =
+        serde_json::from_str(&body).context("invalid discovery payload")?;
+    Ok(payload.plugins)
+}
+
+pub(crate) fn fetch_workspace_plugins() -> Result<Vec<WorkspacePlugin>> {
+    let links = fetch_dev_links()?;
+    let discovered = fetch_discovered_plugins().unwrap_or_default();
+    Ok(merge_workspace_plugins(&links, &discovered))
+}
+
+pub(crate) fn merge_workspace_plugins(
+    links: &[DevLink],
+    discovered: &[DiscoveredPlugin],
+) -> Vec<WorkspacePlugin> {
+    let mut by_id: std::collections::HashMap<String, WorkspacePlugin> =
+        std::collections::HashMap::new();
+    for plugin in discovered {
+        by_id.insert(
+            plugin.id.clone(),
+            WorkspacePlugin {
+                id: plugin.id.clone(),
+                name: plugin.name.clone(),
+                version: String::new(),
+                path: plugin.path.clone(),
+                linked: false,
+                needs_rebuild: false,
+                rebuild_reason: String::new(),
+            },
+        );
+    }
+    for link in links {
+        match by_id.get_mut(&link.id) {
+            Some(existing) => {
+                existing.version = link.version.clone();
+                if !link.source.is_empty() {
+                    existing.path = link.source.clone();
+                }
+                existing.linked = true;
+                existing.needs_rebuild = link.needs_rebuild;
+                existing.rebuild_reason = link.rebuild_reason.clone();
+            }
+            None => {
+                by_id.insert(
+                    link.id.clone(),
+                    WorkspacePlugin {
+                        id: link.id.clone(),
+                        name: link.name.clone(),
+                        version: link.version.clone(),
+                        path: link.source.clone(),
+                        linked: true,
+                        needs_rebuild: link.needs_rebuild,
+                        rebuild_reason: link.rebuild_reason.clone(),
+                    },
+                );
+            }
+        }
+    }
+    let mut rows: Vec<WorkspacePlugin> = by_id.into_values().collect();
+    rows.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+    rows
+}
+
+pub(crate) fn toggle_dev_link(plugin: &WorkspacePlugin) -> Result<LinkToggle> {
+    if plugin.linked {
+        delete_dev_link(&plugin.id)?;
+        Ok(LinkToggle::Unlinked)
+    } else {
+        if plugin.path.is_empty() {
+            bail!("no source path known for {}", plugin.id);
+        }
+        post_dev_link(std::path::Path::new(&plugin.path))?;
+        Ok(LinkToggle::Linked)
+    }
+}
+
+pub(crate) fn delete_dev_link(id: &str) -> Result<()> {
+    let url = format!("{DEV_LINKS_URL}/{id}");
+    let status = http_request("DELETE", &url, None)?;
+    if status / 100 == 2 {
+        return Ok(());
+    }
+    bail!("unlink request failed with HTTP {status}")
 }
 
 pub(crate) fn wait_for_health() -> Result<()> {
@@ -242,6 +367,69 @@ mod tests {
         assert_eq!(links[0].name, "foo");
         assert!(links[0].needs_rebuild, "needs_rebuild carried through");
         assert_eq!(links[0].rebuild_reason, "Source changed");
+    }
+
+    fn discovered(id: &str, name: &str, path: &str) -> DiscoveredPlugin {
+        DiscoveredPlugin {
+            id: id.into(),
+            name: name.into(),
+            path: path.into(),
+        }
+    }
+
+    fn link(id: &str, name: &str, source: &str, needs_rebuild: bool) -> DevLink {
+        DevLink {
+            id: id.into(),
+            name: name.into(),
+            version: "1.0.0".into(),
+            source: source.into(),
+            needs_rebuild,
+            rebuild_reason: if needs_rebuild { "Source changed" } else { "" }.into(),
+        }
+    }
+
+    #[test]
+    fn merge_marks_unlinked_and_lets_links_override_path() {
+        let discovered = [
+            discovered("b", "Beta", "/ws/b"),
+            discovered("a", "Alpha", "/clone/a"),
+        ];
+        let links = [link("a", "Alpha", "/ws/a", true)];
+        let rows = merge_workspace_plugins(&links, &discovered);
+        assert_eq!(rows.len(), 2, "one row per id");
+        // sorted by name: Alpha, Beta
+        assert_eq!(rows[0].id, "a");
+        assert!(rows[0].linked, "a is linked");
+        assert_eq!(
+            rows[0].path, "/ws/a",
+            "linked source overrides discovered path"
+        );
+        assert_eq!(rows[0].version, "1.0.0");
+        assert!(rows[0].needs_rebuild);
+        assert_eq!(rows[1].id, "b");
+        assert!(!rows[1].linked, "b only discovered → linkable");
+        assert_eq!(rows[1].path, "/ws/b");
+    }
+
+    #[test]
+    fn merge_dedupes_duplicate_discovered_last_path_wins() {
+        let discovered = [
+            discovered("a", "A", "/first/a"),
+            discovered("a", "A", "/second/a"),
+        ];
+        let rows = merge_workspace_plugins(&[], &discovered);
+        assert_eq!(rows.len(), 1, "duplicate ids collapse");
+        assert!(!rows[0].linked);
+        assert_eq!(rows[0].path, "/second/a", "last discovered path wins");
+    }
+
+    #[test]
+    fn merge_includes_links_absent_from_discovery() {
+        let links = [link("x", "X", "/ws/x", false)];
+        let rows = merge_workspace_plugins(&links, &[]);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].linked);
+        assert_eq!(rows[0].path, "/ws/x");
     }
 
     #[test]
