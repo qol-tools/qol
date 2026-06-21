@@ -8,6 +8,12 @@ use crate::core::{AppPlatform, Disposal, InstalledApp, RemovalOutcome, RemovalPl
 #[derive(Default)]
 pub struct Platform;
 
+impl Platform {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
 const UNSUPPORTED: &str = "removeapp: not implemented on this platform yet";
 
 impl AppPlatform for Platform {

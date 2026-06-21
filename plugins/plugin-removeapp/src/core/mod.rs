@@ -139,7 +139,7 @@ pub enum Disposal {
 }
 
 fn platform() -> Platform {
-    Platform::default()
+    Platform::new()
 }
 
 pub fn installed_apps() -> Result<Vec<InstalledApp>> {

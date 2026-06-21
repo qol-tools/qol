@@ -32,6 +32,10 @@ impl Default for Platform {
 }
 
 impl Platform {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn with_roots(home: PathBuf, app_dirs: Vec<PathBuf>) -> Self {
         Self {
             home,
