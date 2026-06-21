@@ -81,7 +81,7 @@ fn brew_uninstall(&self, token: &str) -> Result<()>;
 ```
 
 - **Running:** `is_running` matches `NSWorkspace.runningApplications` by bundle id (objc2); `quit` calls `NSRunningApplication.terminate()` - graceful Cmd-Q, never force in v1.
-- **Homebrew:** `cask_token` is best-effort - if `brew` is on `PATH`, map the app to its Caskroom token; **return `None` whenever detection is uncertain** so there are no false warnings. `brew_uninstall` shells `brew uninstall --cask <token>`.
+- **Homebrew:** `cask_token` is **deterministic**, not best-effort. Build a basename->token map from `brew info --cask --json=v2 --installed` (each cask's `app` artifact filename), then test the target's actual `path` basename against it. This is **appdir-independent** - it does not assume `/Applications`, so a cask installed to `~/Applications` (brew's fallback when `/Applications` is not writable) still matches against the path `installed_apps` already discovered. `brew` absent -> empty map -> correctly no nudge. `brew_uninstall` shells `brew uninstall --cask <token>`.
 
 `core` exposes `fn guards(plat, app) -> Guards` computed before the Confirm screen.
 
@@ -106,7 +106,7 @@ picker (search over Spotlight+dir-walk apps) -> on select: `scan` (enumerate+cla
 - `mdfind` missing/empty -> fall back to dir-walk, no error.
 - `quit` fails (app refuses) -> banner shows "couldn't quit <app>"; user retries or `[T]`.
 - `brew_uninstall` non-zero -> show stderr tail; app left in place; user can `[T]`.
-- `cask_token` uncertain -> `None` -> no brew banner.
+- `brew` absent or no artifact-basename match -> empty map -> no brew banner.
 - Missing Library dir during enumeration -> skip (as today).
 - Protected target -> existing refusal, unchanged.
 
@@ -116,11 +116,12 @@ picker (search over Spotlight+dir-walk apps) -> on select: `scan` (enumerate+cla
 - **Classification (tempdir fixtures):** create `Foo.app` + sibling `Bar.app` (`com.acme.foo.bar`) and seed leftovers; assert Foo's plan includes `com.acme.foo.helper`, excludes `com.acme.foobar` and `com.acme.foo.bar.*`.
 - **Guards (table-driven over FakePlat flags):** `(running?, cask?)` -> expected `Guards`.
 - **Removal:** extend FakePlat tests for the brew path (bundle skipped, remaining paths trashed).
-- **Not unit-tested (per no-test-for-thin-wrappers):** NSWorkspace, `mdfind`, and `brew` shells - they are thin platform wrappers.
+- **Cask map (pure, table-driven):** parse a fixture `brew info --json=v2` payload into the basename->token map and assert membership for matched / unmatched / appdir-relocated apps.
+- **Not unit-tested (per no-test-for-thin-wrappers):** NSWorkspace, `mdfind`, and the `brew` subprocess invocation itself - thin platform wrappers. The JSON parse above is the testable part.
 
 ## Open risks
 
-- **Brew token<->app mapping reliability** - mitigated by staying silent when uncertain.
+- **Brew filename collision** - a non-brew app sharing a cask artifact's exact basename would get a brew nudge. Negligible in practice, and `[T] trash anyway` covers it. (Detection itself is deterministic; the appdir trap is handled by matching the discovered path's basename, not a hardcoded `/Applications`.)
 - **NSWorkspace objc2 FFI** - graceful terminate only; no force-kill path in v1.
 - **Spotlight disabled** - mitigated by dir-walk fallback.
 - **Name-keyed dir collisions** - mitigated by keeping name matching exact (no prefixing).
