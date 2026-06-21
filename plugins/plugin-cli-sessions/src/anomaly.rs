@@ -117,21 +117,48 @@ pub fn dump(dir: &Path, anomaly: &Anomaly) -> std::io::Result<PathBuf> {
     Ok(target)
 }
 
-static RECORDER: OnceLock<Option<Mutex<AnomalyRecorder>>> = OnceLock::new();
+struct Recorder {
+    dir: PathBuf,
+    machine: Mutex<AnomalyRecorder>,
+}
 
-fn enabled_dir() -> Option<PathBuf> {
-    let flag = std::env::var("CLI_SESSIONS_RECORD_ANOMALIES").unwrap_or_default();
-    if !matches!(flag.as_str(), "1" | "true" | "yes") {
-        return None;
+impl Recorder {
+    fn at(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            machine: Mutex::new(AnomalyRecorder::new(RING_CAP, FLAP_SECS)),
+        }
     }
+}
+
+static RECORDER: OnceLock<Option<Recorder>> = OnceLock::new();
+
+fn dir_override() -> Option<PathBuf> {
     match std::env::var("CLI_SESSIONS_ANOMALY_DIR") {
         Ok(d) if !d.is_empty() => Some(PathBuf::from(d)),
         _ => crate::paths::anomalies_dir(),
     }
 }
 
-/// Observe one frame on the process-wide recorder. A no-op unless
-/// `CLI_SESSIONS_RECORD_ANOMALIES` is set, so normal runs pay nothing.
+/// Recording when the env flag is set - the lazy default for release builds.
+fn from_env() -> Option<Recorder> {
+    let flag = std::env::var("CLI_SESSIONS_RECORD_ANOMALIES").unwrap_or_default();
+    matches!(flag.as_str(), "1" | "true" | "yes")
+        .then(dir_override)
+        .flatten()
+        .map(Recorder::at)
+}
+
+/// Turn recording on. The daemon calls this once at startup in dev builds, so
+/// the launcher-started dev build records with no flag to set. Must run before
+/// the first [`observe`]; a no-op afterwards.
+pub fn enable() {
+    let _ = RECORDER.set(dir_override().map(Recorder::at));
+}
+
+/// Observe one frame on the process-wide recorder. A no-op unless recording was
+/// turned on (dev build, or `CLI_SESSIONS_RECORD_ANOMALIES`), so a release run
+/// pays nothing.
 pub fn observe(
     window_id: u64,
     ts: u64,
@@ -140,13 +167,10 @@ pub fn observe(
     phase: Phase,
     status: Status,
 ) {
-    let slot = RECORDER.get_or_init(|| {
-        enabled_dir().map(|_| Mutex::new(AnomalyRecorder::new(RING_CAP, FLAP_SECS)))
-    });
-    let Some(recorder) = slot else {
+    let Some(recorder) = RECORDER.get_or_init(from_env).as_ref() else {
         return;
     };
-    let Ok(mut recorder) = recorder.lock() else {
+    let Ok(mut machine) = recorder.machine.lock() else {
         return;
     };
     let frame = Frame {
@@ -156,14 +180,13 @@ pub fn observe(
         phase,
         status,
     };
-    if let Some(anomaly) = recorder.note(window_id, frame) {
-        report(&anomaly);
+    if let Some(anomaly) = machine.note(window_id, frame) {
+        report(&recorder.dir, &anomaly);
     }
 }
 
-fn report(anomaly: &Anomaly) {
-    let Some(dir) = enabled_dir() else { return };
-    match dump(&dir, anomaly) {
+fn report(dir: &Path, anomaly: &Anomaly) {
+    match dump(dir, anomaly) {
         Ok(path) => eprintln!(
             "[cli-sessions] recorded {} on win{} (dwell {}s) -> {}",
             anomaly.kind,

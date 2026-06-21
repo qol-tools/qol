@@ -180,10 +180,16 @@ a misread. On a flap the recorder dumps a small ring buffer of the surrounding
 frames (screen text, title, phase, status) to `paths::anomalies_dir`, so the
 review has the transition, not just one frame.
 
-It is off unless `CLI_SESSIONS_RECORD_ANOMALIES=1`, so a normal run does no work
-and writes nothing (host left as found); `CLI_SESSIONS_ANOMALY_DIR` overrides the
-location. The state machine (`AnomalyRecorder::note`) is pure and unit-tested; the
-disk dump is a separate `dump` so the decision is testable without I/O.
+Recording is on automatically in the dev (debug) build - the daemon calls
+`anomaly::enable()` at startup under `cfg(debug_assertions)`, so a
+launcher-started dev build records with nothing to set. The release build (the
+portable one) stays off and writes nothing, host left as found, unless
+`CLI_SESSIONS_RECORD_ANOMALIES=1` opts in; `CLI_SESSIONS_ANOMALY_DIR` overrides
+the location either way. The gating lives in the *binary* (`ui::run`), not the
+library, so the recorder is off by default for the test build too - the
+reconcile tests drive `tick` directly and never enable it. The state machine
+(`AnomalyRecorder::note`) is pure and unit-tested; the disk dump is a separate
+`dump` so the decision is testable without I/O.
 
 `tools/heal-from-anomalies.mjs` closes the loop: it replays each captured frame
 through the real classifier (the `classify` example, the same code the daemon

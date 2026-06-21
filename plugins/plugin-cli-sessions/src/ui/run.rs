@@ -28,6 +28,9 @@ const WINDOW_HEIGHT: f32 = 400.0;
 const CORNER_MARGIN: f32 = 16.0;
 
 pub fn run() -> anyhow::Result<()> {
+    #[cfg(debug_assertions)]
+    crate::anomaly::enable();
+
     let registry: Arc<Mutex<Registry>> = Arc::new(Mutex::new(Registry::default()));
     let host: Arc<dyn TerminalHost + Send + Sync> = Arc::new(Kitty);
 
