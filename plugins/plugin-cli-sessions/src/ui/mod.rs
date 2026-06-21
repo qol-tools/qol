@@ -15,6 +15,7 @@ pub struct SessionsView {
     pub registry: Arc<Mutex<Registry>>,
     pub host: Arc<dyn TerminalHost + Send + Sync>,
     pub selected: usize,
+    last_jumped: Option<u64>,
     pub focus_handle: FocusHandle,
 }
 
@@ -28,6 +29,7 @@ impl SessionsView {
             registry,
             host,
             selected: 0,
+            last_jumped: None,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -57,6 +59,7 @@ impl SessionsView {
 
         self.selected = index;
         let window_id = row.window_id;
+        self.last_jumped = Some(window_id);
         trace::jump_target(reason, index, rows.len(), row);
         self.focus_window_async(window_id, reason, cx);
     }
@@ -92,8 +95,12 @@ impl SessionsView {
     }
 
     pub fn jump_to_next_attention(&mut self, cx: &mut Context<Self>) {
-        let statuses: Vec<crate::status::Status> = self.rows().iter().map(|r| r.status).collect();
-        if let Some(i) = crate::nav::next_attention(&statuses, self.selected) {
+        let rows = self.rows();
+        let statuses: Vec<crate::status::Status> = rows.iter().map(|r| r.status).collect();
+        let current = self
+            .last_jumped
+            .and_then(|wid| rows.iter().position(|r| r.window_id == wid));
+        if let Some(i) = crate::nav::next_attention(&statuses, current) {
             self.jump_to(i, "next-attention", cx);
         }
     }
