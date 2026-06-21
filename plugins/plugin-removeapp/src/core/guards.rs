@@ -176,10 +176,10 @@ mod tests {
             "target: resolved"
         );
         assert!(
-            map.get("Code - Insiders.app").is_none(),
+            !map.contains_key("Code - Insiders.app"),
             "source name not keyed when target present"
         );
-        assert!(map.get("X.otf").is_none(), "non-app artifact skipped");
+        assert!(!map.contains_key("X.otf"), "non-app artifact skipped");
         assert!(
             matches!(map.get("Same.app"), Some(BasenameOwner::Many)),
             "two casks collide"
