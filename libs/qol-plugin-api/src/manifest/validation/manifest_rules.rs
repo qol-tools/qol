@@ -5,12 +5,20 @@ impl PluginManifest {
     pub fn validate(&self) -> Result<()> {
         self.validate_version()?;
         self.plugin.validate_identity()?;
-        let action_ids = super::menu_rules::collect_menu_action_ids(&self.menu.items)?;
+        let menu_action_ids = super::menu_rules::collect_menu_action_ids(&self.menu.items)?;
+        let catalog_executable_action_ids =
+            super::action_rules::validate_action_catalog(&self.actions)?;
+        let executable_action_ids = if self.actions.is_empty() {
+            &menu_action_ids.executable
+        } else {
+            &catalog_executable_action_ids
+        };
         super::runtime_rules::validate_optional_runtime_config(
             self.runtime.as_ref(),
-            &action_ids.executable,
+            executable_action_ids,
+            !self.actions.is_empty(),
         )?;
-        super::shortcut_rules::validate_shortcuts(&self.shortcuts, &action_ids.executable)?;
+        super::shortcut_rules::validate_shortcuts(&self.shortcuts, executable_action_ids)?;
         super::command_rules::validate_optional_daemon_config(self.daemon.as_ref())?;
         super::dependency_rules::validate_optional_dependencies(self.dependencies.as_ref())?;
         Ok(())

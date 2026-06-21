@@ -28,6 +28,7 @@ fn base_manifest() -> PluginManifest {
         daemon: None,
         dependencies: None,
         runtime: None,
+        actions: Default::default(),
         capabilities: Capabilities::default(),
         build: BuildInfo::default(),
         traits: None,
@@ -293,7 +294,7 @@ mod runtime_rules {
             ]
 
             [runtime]
-            command = "screen-recorder"
+            command = "qol-shot"
             actions = { record = ["record"] }
         "#;
 
@@ -325,6 +326,106 @@ mod runtime_rules {
         };
 
         assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_action_catalog_without_runtime_action_map() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "launcher"
+
+            [action.open]
+            label = "Open"
+            args = ["open"]
+
+            [action.settings]
+            label = "Settings"
+            kind = "settings"
+            args = ["settings"]
+        "#;
+
+        assert!(validate_toml(toml).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_runtime_action_map_that_duplicates_catalog_entry() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "launcher"
+            actions = { open = ["show"] }
+
+            [action.open]
+            label = "Open"
+            args = ["open"]
+        "#;
+
+        assert!(validate_toml(toml).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_non_catalog_runtime_action_map_when_catalog_is_declared() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "launcher"
+            actions = { hidden = ["hidden"] }
+
+            [action.open]
+            label = "Open"
+            args = ["open"]
+        "#;
+
+        assert!(validate_toml(toml).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_toggle_config_catalog_entry_without_config_key() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [action.audio]
+            label = "Audio"
+            kind = "toggle-config"
+        "#;
+
+        assert!(validate_toml(toml).is_err());
     }
 }
 
@@ -380,6 +481,34 @@ mod shortcut_rules {
                     config_key: None,
                 }],
             },
+            shortcuts: vec![ShortcutDeclaration {
+                id: "open".to_string(),
+                name: "Open Plugin".to_string(),
+                enabled: true,
+                export_to_launcher: true,
+                action: "open".to_string(),
+            }],
+            ..base_manifest()
+        };
+
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_shortcut_for_catalog_action() {
+        let manifest = PluginManifest {
+            actions: [(
+                "open".to_string(),
+                ActionDeclaration {
+                    label: "Open".to_string(),
+                    kind: ActionType::Run,
+                    args: Some(vec!["open".to_string()]),
+                    config_key: None,
+                    checked: false,
+                },
+            )]
+            .into_iter()
+            .collect(),
             shortcuts: vec![ShortcutDeclaration {
                 id: "open".to_string(),
                 name: "Open Plugin".to_string(),

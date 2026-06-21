@@ -5791,6 +5791,7 @@ name = "qol-plugin-api"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "indexmap",
  "proptest",
  "qol-runtime",
  "serde",

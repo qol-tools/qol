@@ -98,6 +98,7 @@ mod tests {
             daemon: None,
             dependencies: None,
             runtime: None,
+            actions: Default::default(),
             capabilities: Capabilities::default(),
             build: BuildInfo::default(),
             traits: None,

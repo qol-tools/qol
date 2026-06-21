@@ -517,6 +517,7 @@ mod scoped_io {
             daemon: None,
             dependencies: None,
             runtime: None,
+            actions: Default::default(),
             capabilities: Capabilities::default(),
             build: Default::default(),
             traits: None,

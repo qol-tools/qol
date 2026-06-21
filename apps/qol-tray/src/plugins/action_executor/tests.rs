@@ -5,8 +5,8 @@ use super::tracking::{
 };
 use super::*;
 use crate::plugins::manifest::{
-    ActionType, BuildInfo, Capabilities, DaemonConfig, MenuConfig, MenuItem, PluginInfo,
-    PluginManifest, RuntimeConfig, CURRENT_MANIFEST_VERSION,
+    ActionDeclaration, ActionType, BuildInfo, Capabilities, DaemonConfig, MenuConfig, MenuItem,
+    PluginInfo, PluginManifest, RuntimeConfig, CURRENT_MANIFEST_VERSION,
 };
 use crate::plugins::{Plugin, PluginId};
 use std::collections::HashMap;
@@ -53,6 +53,7 @@ fn make_plugin(
         daemon,
         dependencies: None,
         runtime,
+        actions: Default::default(),
         capabilities: Capabilities::default(),
         build: BuildInfo::default(),
         traits: None,
@@ -65,6 +66,26 @@ fn make_plugin(
         manifest,
         dir.path().to_path_buf(),
     )
+}
+
+fn make_catalog_plugin(
+    dir: &TempDir,
+    action_id: &str,
+    args: Vec<String>,
+    runtime: Option<RuntimeConfig>,
+) -> Plugin {
+    let mut plugin = make_plugin(dir, action_id, runtime, None);
+    plugin.manifest.actions.insert(
+        action_id.to_string(),
+        ActionDeclaration {
+            label: "Action".to_string(),
+            kind: ActionType::Run,
+            args: Some(args),
+            config_key: None,
+            checked: false,
+        },
+    );
+    plugin
 }
 
 #[test]
@@ -135,6 +156,53 @@ fn resolve_action_uses_passthrough_args_without_runtime_map() {
     let resolved = resolve_action(&plugin, "open").unwrap();
     assert_eq!(resolved.command_path, Some(binary));
     assert_eq!(resolved.args, vec!["open".to_string()]);
+}
+
+#[test]
+fn resolve_action_uses_catalog_args_without_runtime_action_map() {
+    let dir = TempDir::new().unwrap();
+    let binary = dir.path().join("launcher");
+    fs::write(&binary, "").unwrap();
+
+    let plugin = make_catalog_plugin(
+        &dir,
+        "open",
+        vec!["show".to_string(), "--foreground".to_string()],
+        Some(RuntimeConfig {
+            command: "launcher".to_string(),
+            actions: None,
+        }),
+    );
+
+    let resolved = resolve_action(&plugin, "open").unwrap();
+
+    assert_eq!(resolved.command_path, Some(binary));
+    assert_eq!(resolved.args, vec!["show", "--foreground"]);
+}
+
+#[test]
+fn resolve_action_rejects_non_catalog_runtime_action_when_catalog_exists() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("launcher"), "").unwrap();
+
+    let mut actions = HashMap::new();
+    actions.insert("hidden".to_string(), vec!["hidden".to_string()]);
+
+    let plugin = make_catalog_plugin(
+        &dir,
+        "open",
+        vec!["open".to_string()],
+        Some(RuntimeConfig {
+            command: "launcher".to_string(),
+            actions: Some(actions),
+        }),
+    );
+
+    let err = resolve_action(&plugin, "hidden").err().unwrap();
+    assert!(matches!(
+        err,
+        ActionExecutionError::MissingActionMapping { .. }
+    ));
 }
 
 #[test]

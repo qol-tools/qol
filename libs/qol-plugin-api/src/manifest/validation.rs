@@ -1,3 +1,4 @@
+mod action_rules;
 mod command_rules;
 mod dependency_rules;
 mod identity_rules;

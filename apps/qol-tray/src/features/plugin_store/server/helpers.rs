@@ -1,5 +1,5 @@
 use crate::daemon::ConfigKind;
-use crate::plugins::{MenuItem, PluginLoader, PluginManifest};
+use crate::plugins::{PluginLoader, PluginManifest};
 
 use super::types::{AppState, PluginAction};
 
@@ -156,20 +156,16 @@ fn emit_resolution_events(
     }
 }
 
-pub(super) fn extract_actions(items: &[MenuItem]) -> Vec<PluginAction> {
-    let mut actions = Vec::new();
-    let mut collect = |item: &MenuItem| match item {
-        MenuItem::Action {
-            id, label, action, ..
-        } => actions.push(PluginAction {
-            id: id.clone(),
-            label: label.clone(),
-            kind: *action,
-        }),
-        MenuItem::Checkbox { .. } | MenuItem::Separator | MenuItem::Submenu { .. } => {}
-    };
-    crate::plugins::manifest::walk_menu_items(items, &mut collect);
-    actions
+pub(super) fn extract_actions(manifest: &PluginManifest) -> Vec<PluginAction> {
+    manifest
+        .executable_actions()
+        .into_iter()
+        .map(|action| PluginAction {
+            id: action.id,
+            label: action.label,
+            kind: action.kind,
+        })
+        .collect()
 }
 
 pub(super) fn is_newer_version(available: &str, installed: &str) -> bool {

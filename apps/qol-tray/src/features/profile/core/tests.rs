@@ -725,6 +725,7 @@ fn test_plugin(
             daemon: None,
             dependencies: None,
             runtime: None,
+            actions: Default::default(),
             capabilities: Capabilities::default(),
             build: Default::default(),
             traits: None,

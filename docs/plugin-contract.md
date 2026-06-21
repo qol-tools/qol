@@ -71,8 +71,8 @@ Three independent files, three independent validators, plus one cross-validator
 ### 2.1 `plugin.toml` (required) - discovery, menu, shortcuts, runtime, daemon
 
 Schema structs in `libs/qol-plugin-api/src/manifest/schema.rs`
-(`PluginManifest`, `PluginInfo`, `MenuConfig`, `MenuItem`, `ActionType`,
-`RuntimeConfig`, `DaemonConfig`, `Capabilities`, `Dependencies`,
+(`PluginManifest`, `PluginInfo`, `ActionDeclaration`, `MenuConfig`, `MenuItem`,
+`ActionType`, `RuntimeConfig`, `DaemonConfig`, `Capabilities`, `Dependencies`,
 `ShortcutDeclaration`, `ConfigDeclarations`). Current manifest version is 3
 (`mod.rs`); the accepted range 1..=3 is enforced in `validation/manifest_rules.rs`.
 
@@ -86,9 +86,15 @@ Sections:
   `std::env::consts::OS` ("linux"/"macos"/"windows"); `"LINUX"`, `" linux"`,
   `"linux "` silently match nothing, and `[]` means supported nowhere.
 - `[runtime]` (`RuntimeConfig`): `command` (binary basename, same charset as id -
-  **no paths, no `.sh`**) and optional `actions: { <action-id> = [argv...] }`. If
-  the `actions` table is present it must be non-empty and must cover **every
-  executable menu action id** (see invariants).
+  **no paths, no `.sh`**) and legacy optional
+  `actions: { <action-id> = [argv...] }`.
+- `[action.<id>]` (`ActionDeclaration`): canonical activation-surface action
+  catalog. `label` is required. `kind` defaults to `run` and may be `run`,
+  `settings`, or `toggle-config`. `args` supplies runtime argv for `run` and
+  `settings` actions; omit it to use `[id]`. `toggle-config` entries require
+  `config_key` and are not executable/hotkey-bindable. Dashboard actions,
+  hotkey choices, shortcut validation, and runtime argv resolution use this
+  catalog first.
 - `[menu]` (`MenuConfig`): `label`, optional `icon`, and `items` (may be `[]`).
   `MenuItem` is tagged on `type`: `action {id,label,action,config_key?}`,
   `checkbox {id,label,checked?,action,config_key?}`, `separator`,
@@ -97,7 +103,8 @@ Sections:
   TOML spelling `"toggle-config"`).
 - `[[shortcuts]]` (`ShortcutDeclaration`): `id`, `name`, `enabled` (default true),
   `export_to_launcher` (default true), `action` (default `"open"`). `action` must
-  reference an existing executable menu action id.
+  reference an existing executable `[action.<id>]` entry when the catalog is
+  present, otherwise an existing executable menu action id.
 - `[daemon]` (`DaemonConfig`): `enabled`, `command`, optional `socket` (must be an
   **absolute** path, no `..`). Presence with `enabled=true` flips the plugin to the
   host-owned daemon model (section 5).
@@ -113,20 +120,30 @@ Sections:
 `PluginManifest::validate()` (`validation/manifest_rules.rs`) runs in order:
 version, identity, menu, runtime, shortcuts, daemon, dependencies.
 
+- **Prefer `[action.<id>]` for every new plugin.** It is the one-stop declaration
+  for plugin actions exposed to the dashboard, hotkeys, shortcuts, and runtime
+  spawning. `[menu].items` is legacy action metadata plus config-toggle layout;
+  `[runtime.actions]` is legacy argv mapping.
 - **Menu action id vs `ActionType` are different things.** The `runtime.actions`
   keys, `shortcut.action`, and runtime coverage all key off the menu item `id`,
   never off the `ActionType`. Dozens of items can all have `action = "run"`; that
-  does not mean you write `actions = { run = [...] }`.
-- **`runtime.actions` coverage is all-or-nothing.** Declaring the table at all
+  does not mean you write `actions = { run = [...] }`. This rule only matters for
+  legacy menu-derived actions.
+- **`runtime.actions` coverage is all-or-nothing for legacy menu actions.** Declaring the table at all
   means every `type="action"` menu item id must have a mapping, or validation
   fails. Checkbox ids are exempt (checkboxes are not "executable"). Omit the table
   entirely and the default argv for an action becomes `[action_id]`.
+- **Catalog actions replace `[runtime.actions]`.** If any `[action.<id>]` entry
+  exists, `[runtime.actions]` must be absent. Put every executable action's argv
+  in `[action.<id>].args`; non-catalog runtime mappings are rejected so they
+  cannot become hidden direct-execution actions.
 - **An empty `[runtime.actions]` table is an error** (omit it instead).
 - **Duplicate menu action/checkbox ids are rejected** across the whole tree
   (submenus recurse). Submenu container ids are not tracked, so they are not
   deduplicated.
-- **`shortcut.action` must reference an executable (action-type) menu id**;
-  unknown reference fails, duplicate shortcut ids fail.
+- **`shortcut.action` must reference an executable action id** from the catalog
+  when present, otherwise an executable menu action id. Unknown references fail;
+  duplicate shortcut ids fail.
 
 Minimal `plugin.toml`:
 
@@ -140,14 +157,19 @@ platforms = ["linux", "macos"]
 
 [runtime]
 command = "plugin-template"
-actions = { run = ["run"], settings = ["settings"] }
+
+[action.run]
+label = "Run"
+args = ["run"]
+
+[action.settings]
+label = "Settings"
+kind = "settings"
+args = ["settings"]
 
 [menu]
 label = "My Plugin"
-items = [
-    { type = "action", id = "run", label = "Run", action = "run" },
-    { type = "action", id = "settings", label = "Settings", action = "settings" },
-]
+items = []
 
 [[dependencies.binaries]]
 name = "plugin-template"
@@ -268,10 +290,12 @@ Three entry points converge on one executor:
 ### 4.1 What is bindable, and who owns the key
 
 - The hotkey catalog (`apps/qol-tray/src/hotkeys/catalog.rs`) collects bindable
-  actions from `manifest.menu.items` - only `Action` and `Checkbox` ids (recursing
-  into submenus). On the fallback path an uncatalogued binding is dropped at plan
-  time (logged); on the kernel-capture path it is installed and simply fails to
-  resolve an action at dispatch.
+  actions from `manifest.executable_action_ids()`: executable `[action.<id>]`
+  entries when the catalog is present, otherwise legacy executable menu actions
+  (recursing into submenus). Checkbox/toggle-config ids are config controls, not
+  executable hotkey targets. On the fallback path an uncatalogued binding is
+  dropped at plan time (logged); on the kernel-capture path it is installed and
+  fails to resolve an action at dispatch.
 - Bindings live in `hotkeys.json`, **OS-scoped** in the profile
   (`os/<platform>/hotkeys.json`). Key syntax `MOD+MOD+KEY`, case-insensitive; mods
   `ctrl`/`alt`/`shift`/`super` (+ aliases) plus a non-modifier key (zero keys is
@@ -289,8 +313,11 @@ Three entry points converge on one executor:
 `action_executor/resolution.rs` builds a `ResolvedAction`:
 
 - `daemon_socket` is `Some` only if `[daemon].enabled` and `socket` are set.
-- `args` come from `runtime.actions[action_id]`, or `[action_id]` if no `actions`
-  table, or error (`MissingActionMapping`) if the table exists without this id.
+- If an action catalog is present, `action_id` must be an executable catalog id
+  and `args` come from `[action.<id>].args`, defaulting to `[id]`.
+- Without an action catalog, legacy `args` come from
+  `runtime.actions[action_id]`, or `[action_id]` if no `actions` table, or error
+  (`MissingActionMapping`) if the table exists without this id.
 - The runtime command must stay inside the plugin dir (no absolute path, no `..`).
 
 `action_executor/execution.rs` then chooses:
@@ -316,10 +343,9 @@ The same transport carries config **queries**.
 - The **native tray menu does NOT list plugin actions** - it shows "Open Dashboard",
   the Mode (dev/prod) toggle, an Update item when one is available, and Quit. Plugin
   actions live in the web dashboard.
-- `ActionType::Settings` and `ActionType::ToggleConfig` are declared in the schema
-  but **not branched on anywhere** in dispatch; every action id dispatches
-  identically today. Checkbox `checked` is the manifest-declared initial value, not
-  live config.
+- `ActionType::Run` and `ActionType::Settings` are executable and dispatch the
+  same way today. `ActionType::ToggleConfig` is not executable/hotkey-bindable;
+  checkbox `checked` is the manifest-declared initial value, not live config.
 - Launcher export (`export_to_launcher`) is a third concept, orthogonal to hotkeys
   and to shortcuts: it writes a macOS `.app` / Linux `.desktop` that runs
   `qol-tray exec shortcut <id>` (Windows no-op, honoring "leave host as found").
@@ -517,10 +543,16 @@ Set when spawning daemon and/or runtime processes (`daemon_lifecycle/spawn.rs`,
 - Config is JSON on disk (`config.json`); the editor schema is TOML
   (`qol-config.toml`). Two different files.
 - A bad/missing `config.json` silently yields `T::default()`, not an error.
-- `runtime.actions`, `shortcut.action`, and runtime coverage key off the menu item
-  `id`, not the `ActionType`. Coverage is all-or-nothing once the table exists.
-- `[runtime.actions]` present but empty is an error; omit it to get `[action_id]`
-  default argv.
+- New plugins should use `[action.<id>]` as the one-stop executable action
+  catalog. Dashboard actions, hotkeys, shortcuts, and runtime argv resolution all
+  use it.
+- `[runtime.actions]` is legacy-only. If an action catalog exists, the table is an
+  error even for non-catalog ids; put argv in `[action.<id>].args`.
+- For legacy menu-derived actions, `runtime.actions`, `shortcut.action`, and
+  runtime coverage key off the menu item `id`, not the `ActionType`. Coverage is
+  all-or-nothing once the table exists.
+- `[runtime.actions]` present but empty is an error; legacy plugins can omit it to
+  get `[action_id]` default argv.
 - `platforms` is exact-string matched; capitalization/whitespace makes a plugin
   unsupported everywhere.
 - A plugin leaks unless the watchdog is armed, which requires `QOL_TRAY_STATE_SOCKET`
@@ -528,7 +560,8 @@ Set when spawning daemon and/or runtime processes (`daemon_lifecycle/spawn.rs`,
   `qol_plugin_daemon::start_listener`).
 - The state socket is host-to-plugin; plugins cannot push notifications/status to
   the tray. Shell out for OS notifications.
-- `ActionType::Settings`/`ToggleConfig` are inert in dispatch today.
+- `ActionType::Run`/`Settings` are executable; `ToggleConfig` is not a direct
+  dispatch target.
 - The native tray menu does not surface plugin actions; the dashboard does.
 - `config_key` defaults to the field id - renaming an id moves storage silently.
 - `action`/`list`/`status`/`qr_code` config fields must omit `default` and need a
@@ -544,11 +577,12 @@ Set when spawning daemon and/or runtime processes (`daemon_lifecycle/spawn.rs`,
 The exact "basics" that get re-learned. To add an action `foo` that a user can bind
 a global hotkey to:
 
-1. **Manifest** (`plugin.toml`) - all three must stay consistent or validation fails:
-   - `[menu]` add `{ type = "action", id = "foo", label = "Do Foo", action = "run" }`.
-   - `[runtime] actions` add `foo = ["foo"]` (and keep every other executable menu
-     id mapped).
+1. **Manifest** (`plugin.toml`) - declare the executable action once:
+   - `[action.foo]` with `label = "Do Foo"` and `args = ["foo"]` (omit `args` only
+     when the runtime argv should be `["foo"]`).
    - `[[shortcuts]]` add `{ id = "foo", name = "My Plugin: Foo", action = "foo" }`.
+   - Keep `[runtime] command = "plugin-binary"`; do not add `[runtime.actions]`
+     when the catalog exists.
 2. **Receive it.** In your daemon's `parse_command`, map `"foo"` to a `Command`
    variant; handle that variant in your command loop.
 3. **Forward it (self-daemonizing plugins).** In `main`, add a `Some("foo")` arm

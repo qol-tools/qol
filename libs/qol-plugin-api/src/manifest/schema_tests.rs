@@ -138,6 +138,85 @@ fn parse_action_type_cases() {
 }
 
 #[test]
+fn parse_action_catalog_entries() {
+    let toml = r#"
+        [plugin]
+        id = "test-plugin"
+        name = "Catalog"
+        description = ""
+        version = "0.0.1"
+
+        [menu]
+        label = "M"
+        items = []
+
+        [runtime]
+        command = "catalog"
+
+        [action.record]
+        label = "Record"
+        args = ["record"]
+
+        [action.settings]
+        label = "Settings"
+        kind = "settings"
+        args = ["settings"]
+
+        [action.audio_enable]
+        label = "Enable Audio"
+        kind = "toggle-config"
+        config_key = "audio.enabled"
+        checked = true
+    "#;
+
+    let manifest: PluginManifest = toml::from_str(toml).unwrap();
+    assert_eq!(manifest.actions.len(), 3);
+    assert_eq!(manifest.actions["record"].kind, ActionType::Run);
+    assert_eq!(
+        manifest.actions["record"].args,
+        Some(vec!["record".to_string()])
+    );
+    assert_eq!(manifest.actions["settings"].kind, ActionType::Settings);
+    assert_eq!(
+        manifest.actions["audio_enable"].config_key.as_deref(),
+        Some("audio.enabled")
+    );
+    assert!(manifest.actions["audio_enable"].checked);
+}
+
+#[test]
+fn executable_actions_prefer_action_catalog_over_menu_items() {
+    let toml = r#"
+        [plugin]
+        id = "test-plugin"
+        name = "Catalog"
+        description = ""
+        version = "0.0.1"
+
+        [menu]
+        label = "M"
+        items = [
+            { type = "action", id = "legacy", label = "Legacy", action = "run" },
+            { type = "checkbox", id = "audio", label = "Audio", action = "toggle-config", config_key = "audio.enabled" }
+        ]
+
+        [action.open]
+        label = "Open"
+
+        [action.settings]
+        label = "Settings"
+        kind = "settings"
+    "#;
+
+    let manifest: PluginManifest = toml::from_str(toml).unwrap();
+    let actions = manifest.executable_actions();
+
+    assert_eq!(actions.len(), 2);
+    assert_eq!(actions[0].id, "open");
+    assert_eq!(actions[1].id, "settings");
+}
+
+#[test]
 fn parse_full_manifest() {
     let toml = r#"
         [plugin]

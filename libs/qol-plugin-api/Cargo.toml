@@ -7,6 +7,7 @@ description = "Plugin manifest and restore-claim wire contract for qol-tray plug
 
 [dependencies]
 anyhow = "1.0"
+indexmap = { version = "2.12", features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

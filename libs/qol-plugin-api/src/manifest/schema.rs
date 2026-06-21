@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+
+pub type ActionCatalog = indexmap::IndexMap<String, ActionDeclaration>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
@@ -88,6 +90,8 @@ pub struct PluginManifest {
     pub dependencies: Option<Dependencies>,
     #[serde(default)]
     pub runtime: Option<RuntimeConfig>,
+    #[serde(default, rename = "action")]
+    pub actions: ActionCatalog,
     #[serde(default)]
     pub capabilities: Capabilities,
     #[serde(default)]
@@ -98,6 +102,62 @@ pub struct PluginManifest {
     pub config: ConfigDeclarations,
     #[serde(default)]
     pub shortcuts: Vec<ShortcutDeclaration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredAction {
+    pub id: String,
+    pub label: String,
+    pub kind: ActionType,
+}
+
+impl PluginManifest {
+    pub fn executable_actions(&self) -> Vec<DeclaredAction> {
+        if !self.actions.is_empty() {
+            return self.catalog_executable_actions();
+        }
+
+        self.legacy_menu_executable_actions()
+    }
+
+    pub fn executable_action_ids(&self) -> BTreeSet<String> {
+        self.executable_actions()
+            .into_iter()
+            .map(|action| action.id)
+            .collect()
+    }
+
+    pub fn catalog_runtime_args(&self, action_id: &str) -> Option<Vec<String>> {
+        let action = self.actions.get(action_id)?;
+        if !action.kind.is_executable() {
+            return None;
+        }
+
+        Some(
+            action
+                .args
+                .clone()
+                .unwrap_or_else(|| vec![action_id.to_string()]),
+        )
+    }
+
+    fn catalog_executable_actions(&self) -> Vec<DeclaredAction> {
+        self.actions
+            .iter()
+            .filter(|(_, action)| action.kind.is_executable())
+            .map(|(id, action)| DeclaredAction {
+                id: id.clone(),
+                label: action.label.clone(),
+                kind: action.kind,
+            })
+            .collect()
+    }
+
+    fn legacy_menu_executable_actions(&self) -> Vec<DeclaredAction> {
+        let mut actions = Vec::new();
+        collect_legacy_menu_executable_actions(&self.menu.items, &mut actions);
+        actions
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -139,6 +199,23 @@ pub struct RuntimeConfig {
     pub command: String,
     #[serde(default)]
     pub actions: Option<HashMap<String, Vec<String>>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ActionDeclaration {
+    pub label: String,
+    #[serde(default = "default_action_kind")]
+    pub kind: ActionType,
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    #[serde(default)]
+    pub config_key: Option<String>,
+    #[serde(default)]
+    pub checked: bool,
+}
+
+fn default_action_kind() -> ActionType {
+    ActionType::Run
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -228,13 +305,19 @@ pub enum MenuItem {
     },
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ActionType {
     Run,
     Settings,
     #[serde(rename = "toggle-config")]
     ToggleConfig,
+}
+
+impl ActionType {
+    pub fn is_executable(self) -> bool {
+        matches!(self, Self::Run | Self::Settings)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -253,4 +336,22 @@ pub struct Capabilities {
     pub gpui: bool,
     #[serde(flatten)]
     pub extras: HashMap<String, toml::Value>,
+}
+
+fn collect_legacy_menu_executable_actions(items: &[MenuItem], actions: &mut Vec<DeclaredAction>) {
+    for item in items {
+        match item {
+            MenuItem::Action {
+                id, label, action, ..
+            } => actions.push(DeclaredAction {
+                id: id.clone(),
+                label: label.clone(),
+                kind: *action,
+            }),
+            MenuItem::Submenu { items, .. } => {
+                collect_legacy_menu_executable_actions(items, actions);
+            }
+            MenuItem::Checkbox { .. } | MenuItem::Separator => {}
+        }
+    }
 }

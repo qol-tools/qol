@@ -18,6 +18,7 @@ pub(super) fn resolve_action(
     action_id: &str,
 ) -> Result<ResolvedAction, ActionExecutionError> {
     validate_action_id(action_id)?;
+    validate_catalog_action_membership(plugin, action_id)?;
     let daemon_socket = daemon_socket(plugin);
     let (command_path, args) = resolve_runtime_target(plugin, action_id)?;
     let runtime_fallback_allowed =
@@ -42,6 +43,24 @@ fn validate_action_id(action_id: &str) -> Result<(), ActionExecutionError> {
     }
 
     Err(ActionExecutionError::InvalidActionId(action_id.to_string()))
+}
+
+fn validate_catalog_action_membership(
+    plugin: &Plugin,
+    action_id: &str,
+) -> Result<(), ActionExecutionError> {
+    if plugin.manifest.actions.is_empty() {
+        return Ok(());
+    }
+
+    if plugin.manifest.executable_action_ids().contains(action_id) {
+        return Ok(());
+    }
+
+    Err(ActionExecutionError::MissingActionMapping {
+        plugin_id: plugin.id.clone(),
+        action_id: action_id.to_string(),
+    })
 }
 
 fn daemon_socket(plugin: &Plugin) -> Option<PathBuf> {
@@ -187,6 +206,10 @@ fn runtime_args(
     action_id: &str,
     runtime: &crate::plugins::manifest::RuntimeConfig,
 ) -> Result<Vec<String>, ActionExecutionError> {
+    if let Some(args) = plugin.manifest.catalog_runtime_args(action_id) {
+        return Ok(args);
+    }
+
     let Some(actions) = runtime.actions.as_ref() else {
         return Ok(vec![action_id.to_string()]);
     };

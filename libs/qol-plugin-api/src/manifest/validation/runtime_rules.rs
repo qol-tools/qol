@@ -13,12 +13,18 @@ impl RuntimeConfig {
 pub(super) fn validate_optional_runtime_config(
     runtime: Option<&RuntimeConfig>,
     executable_action_ids: &BTreeSet<String>,
+    catalog_declared: bool,
 ) -> Result<()> {
     let Some(runtime) = runtime else {
         return Ok(());
     };
 
     runtime.validate()?;
+    if catalog_declared {
+        validate_runtime_actions_absent_for_catalog(runtime.actions.as_ref())?;
+        return Ok(());
+    }
+
     validate_runtime_action_coverage(runtime.actions.as_ref(), executable_action_ids)
 }
 
@@ -73,4 +79,16 @@ fn validate_runtime_action_coverage(
     }
 
     Ok(())
+}
+
+fn validate_runtime_actions_absent_for_catalog(
+    actions: Option<&HashMap<String, Vec<String>>>,
+) -> Result<()> {
+    if actions.is_none() {
+        return Ok(());
+    }
+
+    bail!(
+        "runtime.actions cannot be used when an action catalog is declared; put argv in [action.<id>].args"
+    )
 }

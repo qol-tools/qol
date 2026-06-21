@@ -129,7 +129,7 @@ fn loaded_plugin_info(
         has_config: plugin_paths::has_config(&plugin.path),
         available_version,
         update_available,
-        actions: extract_actions(&plugin.manifest.menu.items),
+        actions: extract_actions(&plugin.manifest),
         source: resolution.map(|r| source_label(&r.source)),
         resolved_from: resolution.map(|r| origin_label(r.resolved_from)),
         active_failure_reason: resolution
@@ -281,7 +281,7 @@ fn unloaded_plugin_details(
         manifest.plugin.name.clone(),
         manifest.plugin.description.clone(),
         manifest.plugin.version.clone(),
-        extract_actions(&manifest.menu.items),
+        extract_actions(manifest),
     )
 }
 

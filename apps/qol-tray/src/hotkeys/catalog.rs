@@ -1,8 +1,8 @@
-use crate::plugins::{manifest::walk_menu_items, MenuItem, Plugin, PluginId, PluginManager};
-use std::collections::{HashMap, HashSet};
+use crate::plugins::{Plugin, PluginId, PluginManager};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
-pub(super) type AvailableActions = HashMap<PluginId, HashSet<String>>;
+pub(super) type AvailableActions = HashMap<PluginId, BTreeSet<String>>;
 
 pub(super) fn load_available_actions(
     plugin_manager: &Arc<Mutex<PluginManager>>,
@@ -23,26 +23,8 @@ where
 {
     plugins
         .into_iter()
-        .map(|plugin| {
-            (
-                plugin.id.clone(),
-                collect_action_ids(&plugin.manifest.menu.items),
-            )
-        })
+        .map(|plugin| (plugin.id.clone(), plugin.manifest.executable_action_ids()))
         .collect()
-}
-
-fn collect_action_ids(items: &[MenuItem]) -> HashSet<String> {
-    let mut action_ids = HashSet::new();
-    let mut collect = |item: &MenuItem| match item {
-        MenuItem::Action { id, .. } | MenuItem::Checkbox { id, .. } => {
-            action_ids.insert(id.clone());
-        }
-        MenuItem::Separator | MenuItem::Submenu { .. } => {}
-    };
-
-    walk_menu_items(items, &mut collect);
-    action_ids
 }
 
 #[cfg(test)]
@@ -51,7 +33,7 @@ mod tests {
     use crate::plugins::manifest::{
         ActionType, BuildInfo, Capabilities, DaemonConfig, MenuConfig, PluginInfo, PluginManifest,
     };
-    use crate::plugins::{Plugin, PluginId, PluginSource};
+    use crate::plugins::{MenuItem, Plugin, PluginId, PluginSource};
     use std::path::PathBuf;
 
     fn run_action(id: &str) -> MenuItem {
@@ -81,10 +63,8 @@ mod tests {
         }
     }
 
-    fn sorted(ids: HashSet<String>) -> Vec<String> {
-        let mut out: Vec<_> = ids.into_iter().collect();
-        out.sort();
-        out
+    fn sorted_set(ids: BTreeSet<String>) -> Vec<String> {
+        ids.into_iter().collect()
     }
 
     fn manifest(daemon: Option<DaemonConfig>, items: Vec<MenuItem>) -> PluginManifest {
@@ -106,6 +86,7 @@ mod tests {
             daemon,
             dependencies: None,
             runtime: None,
+            actions: Default::default(),
             capabilities: Capabilities::default(),
             build: BuildInfo::default(),
             traits: None,
@@ -124,7 +105,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_action_ids_extracts_top_level_actions() {
+    fn executable_action_ids_extracts_top_level_actions() {
         let items = vec![
             run_action("alpha"),
             MenuItem::Separator,
@@ -132,13 +113,13 @@ mod tests {
             checkbox("gamma"),
         ];
         assert_eq!(
-            sorted(collect_action_ids(&items)),
-            vec!["alpha", "beta", "gamma"]
+            sorted_set(manifest(None, items).executable_action_ids()),
+            vec!["alpha", "beta"]
         );
     }
 
     #[test]
-    fn collect_action_ids_descends_into_submenus() {
+    fn executable_action_ids_descends_into_submenus() {
         let items = vec![submenu(
             "top",
             vec![
@@ -146,7 +127,10 @@ mod tests {
                 submenu("deeper", vec![run_action("deepest")]),
             ],
         )];
-        assert_eq!(sorted(collect_action_ids(&items)), vec!["deepest", "inner"]);
+        assert_eq!(
+            sorted_set(manifest(None, items).executable_action_ids()),
+            vec!["deepest", "inner"]
+        );
     }
 
     #[test]
@@ -195,11 +179,11 @@ mod tests {
         let catalog = catalog_for_plugins(plugins.iter());
 
         assert_eq!(
-            sorted(catalog.get("plugin-no-daemon").unwrap().clone()),
+            sorted_set(catalog.get("plugin-no-daemon").unwrap().clone()),
             vec!["alpha", "beta"]
         );
         assert_eq!(
-            sorted(catalog.get("plugin-disabled-daemon").unwrap().clone()),
+            sorted_set(catalog.get("plugin-disabled-daemon").unwrap().clone()),
             vec!["gamma"]
         );
     }
