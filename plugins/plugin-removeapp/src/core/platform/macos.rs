@@ -193,6 +193,7 @@ fn brew_path() -> Option<PathBuf> {
 }
 
 fn run_brew(brew: &Path, args: &[&str]) -> Result<std::process::Output> {
+    use std::io::Read;
     use wait_timeout::ChildExt;
     let mut child = Command::new(brew)
         .args(args)
@@ -200,13 +201,30 @@ fn run_brew(brew: &Path, args: &[&str]) -> Result<std::process::Output> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
-    match child.wait_timeout(BREW_TIMEOUT)? {
-        Some(_) => Ok(child.wait_with_output()?),
+    let mut out_pipe = child.stdout.take().expect("piped stdout");
+    let mut err_pipe = child.stderr.take().expect("piped stderr");
+    let out_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = out_pipe.read_to_end(&mut buf);
+        buf
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = err_pipe.read_to_end(&mut buf);
+        buf
+    });
+    let status = match child.wait_timeout(BREW_TIMEOUT)? {
+        Some(status) => status,
         None => {
             let _ = child.kill();
             anyhow::bail!("brew timed out")
         }
-    }
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: out_reader.join().unwrap_or_default(),
+        stderr: err_reader.join().unwrap_or_default(),
+    })
 }
 
 fn mdfind_app_paths() -> Vec<PathBuf> {
