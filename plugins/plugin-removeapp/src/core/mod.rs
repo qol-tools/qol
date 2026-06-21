@@ -17,7 +17,7 @@ pub struct InstalledApp {
     pub path: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum LeftoverKind {
     AppBundle,
     ApplicationSupport,
@@ -40,11 +40,16 @@ pub struct Leftover {
     pub match_kind: MatchKind,
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct IdentitySnapshot;
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RemovalPlan {
     pub app: InstalledApp,
     pub items: Vec<Leftover>,
     pub total_bytes: u64,
+    #[serde(skip)]
+    pub snapshots: Vec<IdentitySnapshot>,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -68,24 +73,44 @@ pub fn installed_apps() -> Result<Vec<InstalledApp>> {
     platform().installed_apps()
 }
 
-pub fn plan(app: &InstalledApp) -> Result<RemovalPlan> {
-    platform().scan(app)
+pub fn plan(app: &InstalledApp, inventory: &[InstalledApp]) -> Result<RemovalPlan> {
+    platform().scan(app, inventory)
 }
 
 pub fn is_protected(app: &InstalledApp) -> bool {
     platform().is_protected(app)
 }
 
+pub fn guards(app: &InstalledApp, inventory: &[InstalledApp]) -> Guards {
+    let plat = platform();
+    Guards {
+        running: plat.is_running(app),
+        cask: plat.cask_status(app, inventory),
+    }
+}
+
+pub fn quit_app(app: &InstalledApp) -> Result<()> {
+    platform().quit(app)
+}
+
+pub fn brew_uninstall(token: &CaskToken) -> Result<()> {
+    platform().brew_uninstall(token)
+}
+
 pub fn search(query: &str) -> Result<Vec<InstalledApp>> {
     Ok(filter(&installed_apps()?, query))
 }
 
-pub fn resolve_unique(query: &str) -> Result<InstalledApp> {
-    pick_unique(installed_apps()?, query)
+pub fn resolve_unique(inventory: &[InstalledApp], query: &str) -> Result<InstalledApp> {
+    pick_unique(inventory.to_vec(), query)
 }
 
-pub fn remove(plan: &RemovalPlan, how: Disposal) -> Result<RemovalOutcome> {
-    remove_with(&platform(), plan, how)
+pub fn remove(
+    plan: &RemovalPlan,
+    requested: Disposal,
+    cask: &CaskStatus,
+) -> Result<RemovalOutcome> {
+    remove_with(&platform(), plan, requested, cask)
 }
 
 pub fn filter(apps: &[InstalledApp], query: &str) -> Vec<InstalledApp> {
@@ -130,7 +155,8 @@ fn pick_unique(apps: Vec<InstalledApp>, query: &str) -> Result<InstalledApp> {
 fn remove_with(
     plat: &impl AppPlatform,
     plan: &RemovalPlan,
-    how: Disposal,
+    requested: Disposal,
+    cask: &CaskStatus,
 ) -> Result<RemovalOutcome> {
     if plat.is_protected(&plan.app) {
         anyhow::bail!(
@@ -138,8 +164,46 @@ fn remove_with(
             plan.app.name
         );
     }
-    let paths: Vec<PathBuf> = plan.items.iter().map(|l| l.path.clone()).collect();
-    plat.remove_paths(&paths, how)
+    let cask_unavailable = matches!(cask, CaskStatus::Unavailable(_));
+    let disposal_for = |item: &Leftover| {
+        let bundle_override = item.kind == LeftoverKind::AppBundle && cask_unavailable;
+        classify::effective_disposal(item.match_kind, requested, bundle_override)
+    };
+
+    let (bundle, rest): (Vec<&Leftover>, Vec<&Leftover>) = plan
+        .items
+        .iter()
+        .partition(|i| i.kind == LeftoverKind::AppBundle);
+
+    let mut outcome = RemovalOutcome::default();
+    for item in &bundle {
+        let res = plat.remove_items(&[(item.path.clone(), disposal_for(item))])?;
+        absorb(&mut outcome, res, plan);
+        if !outcome.failed.is_empty() {
+            return Ok(outcome);
+        }
+    }
+    let rest_items: Vec<(PathBuf, Disposal)> = rest
+        .iter()
+        .map(|i| (i.path.clone(), disposal_for(i)))
+        .collect();
+    let res = plat.remove_items(&rest_items)?;
+    absorb(&mut outcome, res, plan);
+    Ok(outcome)
+}
+
+fn absorb(acc: &mut RemovalOutcome, res: RemovalOutcome, plan: &RemovalPlan) {
+    for p in res.removed {
+        let size = plan
+            .items
+            .iter()
+            .find(|i| i.path == p)
+            .map(|i| i.size_bytes)
+            .unwrap_or(0);
+        acc.freed_bytes += size;
+        acc.removed.push(p);
+    }
+    acc.failed.extend(res.failed);
 }
 
 #[cfg(test)]
@@ -155,42 +219,70 @@ mod tests {
         }
     }
 
-    fn plan_for(a: InstalledApp) -> RemovalPlan {
+    fn leftover(path: &str, kind: LeftoverKind, mk: MatchKind) -> Leftover {
+        Leftover {
+            path: PathBuf::from(path),
+            kind,
+            size_bytes: 10,
+            match_kind: mk,
+        }
+    }
+
+    fn plan_with(a: InstalledApp, leftovers: Vec<Leftover>) -> RemovalPlan {
+        let mut items = vec![leftover(
+            a.path.to_str().unwrap(),
+            LeftoverKind::AppBundle,
+            MatchKind::Exact,
+        )];
+        items.extend(leftovers);
         RemovalPlan {
-            items: vec![Leftover {
-                path: a.path.clone(),
-                kind: LeftoverKind::AppBundle,
-                size_bytes: 0,
-                match_kind: MatchKind::Exact,
-            }],
             app: a,
+            items,
             total_bytes: 0,
+            snapshots: vec![],
         }
     }
 
     #[derive(Default)]
     struct FakePlat {
         protected: bool,
-        removed: RefCell<Vec<PathBuf>>,
+        fail_bundle: bool,
+        removed: RefCell<Vec<(PathBuf, Disposal)>>,
     }
 
     impl AppPlatform for FakePlat {
         fn installed_apps(&self) -> Result<Vec<InstalledApp>> {
             Ok(vec![])
         }
-        fn scan(&self, app: &InstalledApp) -> Result<RemovalPlan> {
-            Ok(plan_for(app.clone()))
+        fn scan(&self, app: &InstalledApp, _inv: &[InstalledApp]) -> Result<RemovalPlan> {
+            Ok(plan_with(app.clone(), vec![]))
         }
-        fn remove_paths(&self, paths: &[PathBuf], _how: Disposal) -> Result<RemovalOutcome> {
-            self.removed.borrow_mut().extend_from_slice(paths);
-            Ok(RemovalOutcome {
-                removed: paths.to_vec(),
-                failed: vec![],
-                freed_bytes: 0,
-            })
+        fn remove_items(&self, items: &[(PathBuf, Disposal)]) -> Result<RemovalOutcome> {
+            let mut out = RemovalOutcome::default();
+            for (p, d) in items {
+                self.removed.borrow_mut().push((p.clone(), *d));
+                if self.fail_bundle && p.to_string_lossy().ends_with(".app") {
+                    out.failed.push((p.clone(), "boom".into()));
+                } else {
+                    out.removed.push(p.clone());
+                }
+            }
+            Ok(out)
         }
         fn is_protected(&self, _app: &InstalledApp) -> bool {
             self.protected
+        }
+        fn is_running(&self, _app: &InstalledApp) -> bool {
+            false
+        }
+        fn quit(&self, _app: &InstalledApp) -> Result<()> {
+            Ok(())
+        }
+        fn cask_status(&self, _app: &InstalledApp, _inv: &[InstalledApp]) -> CaskStatus {
+            CaskStatus::NotManaged
+        }
+        fn brew_uninstall(&self, _token: &CaskToken) -> Result<()> {
+            Ok(())
         }
     }
 
@@ -219,17 +311,40 @@ mod tests {
             protected: true,
             ..Default::default()
         };
-        let p = plan_for(app("Defender", "com.microsoft.wdav"));
-        assert!(remove_with(&fake, &p, Disposal::Trash).is_err());
+        let p = plan_with(app("Defender", "com.microsoft.wdav"), vec![]);
+        assert!(remove_with(&fake, &p, Disposal::Trash, &CaskStatus::NotManaged).is_err());
         assert!(fake.removed.borrow().is_empty(), "no paths touched");
     }
 
     #[test]
-    fn remove_unprotected_removes_paths() {
+    fn two_phase_aborts_leftovers_when_bundle_removal_fails() {
+        let fake = FakePlat {
+            fail_bundle: true,
+            ..Default::default()
+        };
+        let p = plan_with(
+            app("Foo", "com.acme.foo"),
+            vec![leftover("/x/cache", LeftoverKind::Caches, MatchKind::Exact)],
+        );
+        let out = remove_with(&fake, &p, Disposal::Trash, &CaskStatus::NotManaged).unwrap();
+        assert_eq!(out.removed.len(), 0, "nothing removed");
+        assert_eq!(
+            fake.removed.borrow().len(),
+            1,
+            "only the bundle was attempted, leftovers untouched"
+        );
+    }
+
+    #[test]
+    fn fuzzy_leftover_is_trashed_even_when_delete_requested() {
         let fake = FakePlat::default();
-        let p = plan_for(app("Foo", "com.acme.foo"));
-        let out = remove_with(&fake, &p, Disposal::Delete).unwrap();
-        assert_eq!(out.removed.len(), 1);
-        assert!(!fake.removed.borrow().is_empty());
+        let p = plan_with(
+            app("Foo", "com.acme.foo"),
+            vec![leftover("/x/fuzzy", LeftoverKind::Caches, MatchKind::Fuzzy)],
+        );
+        remove_with(&fake, &p, Disposal::Delete, &CaskStatus::NotManaged).unwrap();
+        let recorded = fake.removed.borrow();
+        let fuzzy = recorded.iter().find(|(p, _)| p.ends_with("fuzzy")).unwrap();
+        assert_eq!(fuzzy.1, Disposal::Trash, "fuzzy forced to Trash");
     }
 }

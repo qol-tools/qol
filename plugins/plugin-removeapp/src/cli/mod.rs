@@ -62,8 +62,9 @@ pub fn scan(args: &[String]) -> ExitCode {
 }
 
 fn run_scan(flags: &Flags) -> Result<()> {
-    let app = core::resolve_unique(require_query(flags)?)?;
-    println!("{}", plan_json(&core::plan(&app)?));
+    let inventory = core::installed_apps()?;
+    let app = core::resolve_unique(&inventory, require_query(flags)?)?;
+    println!("{}", plan_json(&core::plan(&app, &inventory)?));
     Ok(())
 }
 
@@ -78,8 +79,9 @@ pub fn remove(args: &[String]) -> ExitCode {
 }
 
 fn run_remove(flags: &Flags) -> Result<ExitCode> {
-    let app = core::resolve_unique(require_query(flags)?)?;
-    let plan = core::plan(&app)?;
+    let inventory = core::installed_apps()?;
+    let app = core::resolve_unique(&inventory, require_query(flags)?)?;
+    let plan = core::plan(&app, &inventory)?;
     println!("{}", plan_json(&plan));
     if flags.dry_run {
         return Ok(ExitCode::SUCCESS);
@@ -88,7 +90,8 @@ fn run_remove(flags: &Flags) -> Result<ExitCode> {
         eprintln!("removeapp: aborted");
         return Ok(ExitCode::from(1));
     }
-    let outcome = core::remove(&plan, disposal_from_flags(flags.force))?;
+    let guards = core::guards(&app, &inventory);
+    let outcome = core::remove(&plan, disposal_from_flags(flags.force), &guards.cask)?;
     println!(
         "{}",
         serde_json::to_string_pretty(&outcome).unwrap_or_default()
@@ -139,6 +142,7 @@ mod tests {
             }],
             app,
             total_bytes: 1234,
+            snapshots: vec![],
         }
     }
 

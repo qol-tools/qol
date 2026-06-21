@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+use crate::core::guards::{CaskStatus, CaskToken};
 use crate::core::{
     AppPlatform, Disposal, InstalledApp, Leftover, LeftoverKind, MatchKind, RemovalOutcome,
     RemovalPlan,
@@ -170,7 +171,7 @@ impl AppPlatform for Platform {
         Ok(apps)
     }
 
-    fn scan(&self, app: &InstalledApp) -> Result<RemovalPlan> {
+    fn scan(&self, app: &InstalledApp, _inventory: &[InstalledApp]) -> Result<RemovalPlan> {
         let mut items = vec![Leftover {
             path: app.path.clone(),
             kind: LeftoverKind::AppBundle,
@@ -193,12 +194,13 @@ impl AppPlatform for Platform {
             app: app.clone(),
             items,
             total_bytes,
+            snapshots: vec![],
         })
     }
 
-    fn remove_paths(&self, paths: &[PathBuf], how: Disposal) -> Result<RemovalOutcome> {
+    fn remove_items(&self, items: &[(PathBuf, Disposal)]) -> Result<RemovalOutcome> {
         let mut outcome = RemovalOutcome::default();
-        for path in paths {
+        for (path, how) in items {
             let result = match how {
                 Disposal::Trash => trash_path(path),
                 Disposal::Delete => delete_path(path),
@@ -209,6 +211,22 @@ impl AppPlatform for Platform {
             }
         }
         Ok(outcome)
+    }
+
+    fn is_running(&self, _app: &InstalledApp) -> bool {
+        false
+    }
+
+    fn quit(&self, _app: &InstalledApp) -> Result<()> {
+        anyhow::bail!("removeapp: quit not yet implemented")
+    }
+
+    fn cask_status(&self, _app: &InstalledApp, _inventory: &[InstalledApp]) -> CaskStatus {
+        CaskStatus::NotManaged
+    }
+
+    fn brew_uninstall(&self, _token: &CaskToken) -> Result<()> {
+        anyhow::bail!("removeapp: brew_uninstall not yet implemented")
     }
 
     fn is_protected(&self, app: &InstalledApp) -> bool {
@@ -259,7 +277,7 @@ mod tests {
             .expect("Foo discovered");
         assert_eq!(app.bundle_id.as_deref(), Some("com.acme.foo"));
 
-        let plan = plat.scan(&app).unwrap();
+        let plan = plat.scan(&app, &[]).unwrap();
         let paths: Vec<PathBuf> = plan.items.iter().map(|l| l.path.clone()).collect();
         let cases = [
             (bundle.clone(), true, "bundle"),
@@ -314,7 +332,7 @@ mod tests {
         fs::create_dir_all(tmp.path().join("a/b")).unwrap();
         let plat = Platform::with_roots(tmp.path().to_path_buf(), vec![]);
         let out = plat
-            .remove_paths(&[tmp.path().join("a")], Disposal::Delete)
+            .remove_items(&[(tmp.path().join("a"), Disposal::Delete)])
             .unwrap();
         assert!(!tmp.path().join("a").exists(), "source deleted");
         assert_eq!(out.removed, vec![tmp.path().join("a")]);

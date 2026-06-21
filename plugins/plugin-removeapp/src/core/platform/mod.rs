@@ -1,12 +1,17 @@
 use std::path::PathBuf;
 
+use crate::core::guards::{CaskStatus, CaskToken};
 use crate::core::{Disposal, InstalledApp, RemovalOutcome, RemovalPlan};
 
 pub trait AppPlatform {
     fn installed_apps(&self) -> anyhow::Result<Vec<InstalledApp>>;
-    fn scan(&self, app: &InstalledApp) -> anyhow::Result<RemovalPlan>;
-    fn remove_paths(&self, paths: &[PathBuf], how: Disposal) -> anyhow::Result<RemovalOutcome>;
+    fn scan(&self, app: &InstalledApp, inventory: &[InstalledApp]) -> anyhow::Result<RemovalPlan>;
+    fn remove_items(&self, items: &[(PathBuf, Disposal)]) -> anyhow::Result<RemovalOutcome>;
     fn is_protected(&self, app: &InstalledApp) -> bool;
+    fn is_running(&self, app: &InstalledApp) -> bool;
+    fn quit(&self, app: &InstalledApp) -> anyhow::Result<()>;
+    fn cask_status(&self, app: &InstalledApp, inventory: &[InstalledApp]) -> CaskStatus;
+    fn brew_uninstall(&self, token: &CaskToken) -> anyhow::Result<()>;
 }
 
 #[cfg(target_os = "linux")]

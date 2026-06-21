@@ -60,7 +60,7 @@ impl RemoveAppView {
         if core::is_protected(app) {
             return;
         }
-        if let Ok(plan) = core::plan(app) {
+        if let Ok(plan) = core::plan(app, &self.apps) {
             self.plan = Some(plan);
             self.mode = Mode::Confirming;
         }
@@ -77,7 +77,8 @@ impl RemoveAppView {
         let Some(plan) = self.plan.clone() else {
             return;
         };
-        self.outcome = Some(core::remove(&plan, self.disposal).unwrap_or_default());
+        let guards = core::guards(&plan.app, &self.apps);
+        self.outcome = Some(core::remove(&plan, self.disposal, &guards.cask).unwrap_or_default());
         self.mode = Mode::Done;
     }
 
