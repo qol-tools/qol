@@ -237,6 +237,12 @@ fn resolve(
         };
     }
 
+    if let Some(successor_id) = disk_successor(plugin_id, dev_root, manifest_probe) {
+        return Resolution::RemoveStaleRenamed {
+            successor_id: successor_id.to_string(),
+        };
+    }
+
     if let Some(root) = dev_root {
         let monorepo = root.join(plugin_id);
         if matches!(manifest_probe(&monorepo), ManifestStatus::WithId(ref id) if id == plugin_id) {
@@ -274,6 +280,24 @@ fn registered_successor(
             continue;
         }
         if matches!(manifest_probe(&entry.active.path), ManifestStatus::WithId(ref id) if id == successor)
+        {
+            return Some(*successor);
+        }
+    }
+    None
+}
+
+fn disk_successor(
+    plugin_id: &str,
+    dev_root: Option<&Path>,
+    manifest_probe: &dyn Fn(&Path) -> ManifestStatus,
+) -> Option<&'static str> {
+    let root = dev_root?;
+    for (legacy, successor) in RENAMED_PLUGINS {
+        if *legacy != plugin_id {
+            continue;
+        }
+        if matches!(manifest_probe(&root.join(successor)), ManifestStatus::WithId(ref id) if id == successor)
         {
             return Some(*successor);
         }
@@ -549,6 +573,79 @@ mod tests {
                 ids: vec!["plugin-screen-recorder".into()],
             })
         );
+    }
+
+    #[test]
+    fn missing_legacy_screen_recorder_is_removed_when_qol_shot_present_on_disk_unregistered() {
+        let registry = registry_with(vec![devlink(
+            "plugin-screen-recorder",
+            "/mono/plugins/plugin-screen-recorder",
+        )]);
+        let mut probe = HashMap::new();
+        probe.insert(
+            PathBuf::from("/mono/plugins/plugin-screen-recorder"),
+            ManifestStatus::Missing,
+        );
+        probe.insert(
+            PathBuf::from("/mono/plugins/qol-shot"),
+            ManifestStatus::WithId("qol-shot".into()),
+        );
+        let dev_root = PathBuf::from("/mono/plugins");
+
+        let findings = collect_findings(
+            &registry,
+            Some(&dev_root),
+            &map_probe(probe),
+            &empty_subprobe(),
+        );
+
+        assert_eq!(
+            findings,
+            vec![Finding::Missing {
+                plugin_id: "plugin-screen-recorder".into(),
+                path: PathBuf::from("/mono/plugins/plugin-screen-recorder"),
+                resolution: Resolution::RemoveStaleRenamed {
+                    successor_id: "qol-shot".into(),
+                },
+            }]
+        );
+        assert_eq!(
+            findings[0].fix_action(),
+            Some(FixAction::RemoveDevLinkEntries {
+                ids: vec!["plugin-screen-recorder".into()],
+            })
+        );
+    }
+
+    #[test]
+    fn missing_legacy_screen_recorder_no_fix_when_qol_shot_absent_everywhere() {
+        let registry = registry_with(vec![devlink(
+            "plugin-screen-recorder",
+            "/mono/plugins/plugin-screen-recorder",
+        )]);
+        let mut probe = HashMap::new();
+        probe.insert(
+            PathBuf::from("/mono/plugins/plugin-screen-recorder"),
+            ManifestStatus::Missing,
+        );
+        let dev_root = PathBuf::from("/mono/plugins");
+
+        let findings = collect_findings(
+            &registry,
+            Some(&dev_root),
+            &map_probe(probe),
+            &empty_subprobe(),
+        );
+
+        assert_eq!(
+            findings,
+            vec![Finding::Missing {
+                plugin_id: "plugin-screen-recorder".into(),
+                path: PathBuf::from("/mono/plugins/plugin-screen-recorder"),
+                resolution: Resolution::NoMatch,
+            }]
+        );
+        assert!(findings[0].fix_action().is_none());
     }
 
     #[test]
