@@ -1,9 +1,11 @@
+pub mod classify;
 pub mod platform;
 
 use std::path::PathBuf;
 
 use anyhow::Result;
 
+pub use classify::MatchKind;
 pub use platform::{AppPlatform, Platform};
 
 #[derive(Debug, Clone, serde::Serialize)]
