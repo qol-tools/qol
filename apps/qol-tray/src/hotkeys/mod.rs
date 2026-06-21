@@ -37,7 +37,12 @@ pub fn start_capture(
 ) -> anyhow::Result<()> {
     use crate::plugins::action_executor;
 
-    let bindings = load_bindings_for_capture()?;
+    let bindings = load_bindings_for_capture().unwrap_or_else(|error| {
+        log::error!(
+            "hotkey config failed to load at startup; installing with no hotkeys until corrected: {error:#}"
+        );
+        Vec::new()
+    });
 
     let plugin_manager_for_fire = plugin_manager.clone();
     let on_fire: capture::OnFire = Box::new(move |binding| {
@@ -49,19 +54,13 @@ pub fn start_capture(
     });
 
     let reload_rx = reload::subscribe();
-    let rebuild: capture::RebuildBindings =
-        Box::new(|| load_bindings_for_capture().unwrap_or_default());
+    let rebuild: capture::RebuildBindings = Box::new(load_bindings_for_capture);
 
     capture::install(bindings, on_fire, reload_rx, rebuild)
 }
 
 fn load_bindings_for_capture() -> anyhow::Result<Vec<capture::Binding>> {
     let manager = HotkeyManager::new()?;
-    let config = manager.load_config().unwrap_or_else(|error| {
-        log::error!(
-            "hotkey config failed to load; starting with no hotkeys until corrected: {error:#}"
-        );
-        HotkeyConfig::default()
-    });
+    let config = manager.load_config()?;
     Ok(build_capture_bindings(config))
 }

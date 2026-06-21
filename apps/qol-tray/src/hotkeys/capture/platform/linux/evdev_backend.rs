@@ -90,7 +90,15 @@ fn spawn_reload_thread(
         .spawn(move || {
             while reload_rx.recv().is_ok() {
                 while reload_rx.try_recv().is_ok() {}
-                let next = BindingMatcher::new(rebuild());
+                let next = match rebuild() {
+                    Ok(bindings) => BindingMatcher::new(bindings),
+                    Err(error) => {
+                        log::error!(
+                            "linux evdev hotkey reload skipped; keeping current bindings: {error:#}"
+                        );
+                        continue;
+                    }
+                };
                 match matcher.lock() {
                     Ok(mut guard) => {
                         *guard = next;

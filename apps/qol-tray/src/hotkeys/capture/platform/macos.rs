@@ -65,7 +65,15 @@ fn spawn_reload_thread(
         .spawn(move || {
             while reload_rx.recv().is_ok() {
                 drain_pending(&reload_rx);
-                let next = MacBindingMatcher::new(rebuild());
+                let next = match rebuild() {
+                    Ok(bindings) => MacBindingMatcher::new(bindings),
+                    Err(error) => {
+                        log::error!(
+                            "macOS hotkey reload skipped; keeping current bindings: {error:#}"
+                        );
+                        continue;
+                    }
+                };
                 match matcher.write() {
                     Ok(mut guard) => {
                         *guard = next;
@@ -414,6 +422,47 @@ mod tests {
             .expect("newly added binding must match after swap");
         assert_eq!(hit.plugin_id, "launcher");
         assert_eq!(hit.action, "show");
+    }
+
+    #[test]
+    fn reload_keeps_current_bindings_when_rebuild_fails() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        let matcher = Arc::new(RwLock::new(MacBindingMatcher::new(vec![binding_for(
+            "Super+R", "first", "open",
+        )])));
+        let (tx, rx) = crossbeam_channel::unbounded::<()>();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_in_rebuild = attempts.clone();
+        let rebuild: RebuildBindings = Box::new(move || -> anyhow::Result<Vec<Binding>> {
+            attempts_in_rebuild.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("simulated corrupt config")
+        });
+
+        spawn_reload_thread(matcher.clone(), rx, rebuild);
+        tx.send(()).unwrap();
+
+        for _ in 0..200 {
+            if attempts.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            attempts.load(Ordering::SeqCst) > 0,
+            "the reload thread must have attempted a rebuild"
+        );
+        std::thread::sleep(Duration::from_millis(30));
+
+        assert!(
+            matcher
+                .read()
+                .unwrap()
+                .match_combo(&combo_for("Super+R"))
+                .is_some(),
+            "a failed rebuild must keep the previous bindings, not wipe them"
+        );
     }
 
     #[test]
