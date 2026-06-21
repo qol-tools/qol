@@ -77,15 +77,11 @@ fn is_duration_token(tok: &str) -> bool {
 }
 
 pub fn claude_awaiting_choice(text: &str) -> bool {
-    text.lines()
-        .rev()
-        .filter(|l| !l.trim().is_empty())
-        .take(12)
-        .any(|l| {
-            let mut chars = l.trim_start().chars();
-            matches!(chars.next(), Some('\u{276F}') | Some('\u{203A}'))
-                && numbered_option(chars.as_str().trim_start())
-        })
+    text.lines().any(|l| {
+        let mut chars = l.trim_start().chars();
+        matches!(chars.next(), Some('\u{276F}') | Some('\u{203A}'))
+            && numbered_option(chars.as_str().trim_start())
+    })
 }
 
 pub fn has_input_request(text: &str) -> bool {

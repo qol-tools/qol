@@ -1,0 +1,6 @@
+{
+  "title": "✳ Claude Sessions Plugin",
+  "at_prompt": false,
+  "foreground_basenames": ["claude"],
+  "expect": "NeedsYou"
+}

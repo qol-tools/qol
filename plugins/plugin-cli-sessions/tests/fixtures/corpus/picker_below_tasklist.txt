@@ -1,0 +1,39 @@
+
+  The crux of "deeper discovery" is a safety tension: aggressive matching is exactly how an uninstaller nukes the wrong app's data
+  (com.acme.foo prefix-matching com.acme.foobar). So the first decision shapes the whole engine:
+
+⏺ User answered Claude's questions:
+  ⎿  · How should fuzzy leftover matching trade reclaim against safety? → Owner-aware boundary
+
+⏺ Owner-aware it is - skips com.acme.foobar (different app) and anything a sibling app claims. That same index doubles as the orphan
+  finder later.
+
+  Now the safety guards - the real fork is how much they do for you:
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Guard action 
+
+When a guard trips (app is running, or it's brew-managed), what should Remove App do?
+
+❯ 1. Warn + one-key act           ┌────────────────────────────────────────────────────────┐
+  2. Warn-only (block)            │ "Slack" is running.                                    │
+  3. Auto-handle silently         │   [Q] quit & continue   [esc] cancel                   │
+                                  │                                                        │
+                                  │ "Rectangle" is Homebrew-managed.                       │
+                                  │   [B] brew uninstall --cask   [T] trash anyway   [esc] │
+                                  └────────────────────────────────────────────────────────┘
+
+                                  Notes: press n to add notes
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Chat about this
+
+Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel
+
+  8 tasks (7 done, 1 in progress, 0 open)
+  ◼ Task 8: qol-tray integration + verify
+  ✔ Task 1: Scaffold the crate
+  ✔ Task 2: Domain types + macOS scan
+  ✔ Task 3: Protection guardrails
+  ✔ Task 4: Removal (trash + delete)
+   … +3 completed
