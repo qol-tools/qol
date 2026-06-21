@@ -1,7 +1,7 @@
 # Remove App - Smarter, Safer Per-App Removal (Spec 1)
 
 **Date:** 2026-06-21
-**Status:** Design, revised after a 4-reviewer code-review board (verdict block -> addressed); pending implementation plan
+**Status:** Design, revised after two code-review board rounds (block -> addressed); pending a fresh implementation plan
 **Plugin:** `plugins/plugin-removeapp`
 
 ## Goal
@@ -106,9 +106,12 @@ New `AppPlatform` methods (stubbed on non-macOS):
 ```rust
 fn is_running(&self, app: &InstalledApp) -> bool;
 fn quit(&self, app: &InstalledApp) -> Result<()>;
-fn cask_status(&self, app: &InstalledApp) -> CaskStatus;
+fn scan(&self, app: &InstalledApp, inventory: &[InstalledApp]) -> Result<RemovalPlan>;
+fn cask_status(&self, app: &InstalledApp, inventory: &[InstalledApp]) -> CaskStatus;
 fn brew_uninstall(&self, token: &CaskToken) -> Result<()>;
 ```
+
+`scan` and `cask_status` take the same one-shot `inventory` (the deduped Spotlight+dir-walk app set), discovered once per query/selection and threaded through - no rediscovery inside platform code. This is what makes sibling-safe `owner_of(...)` and the "`>1` installed app shares the basename -> `Unavailable`" rule implementable (high-2, medium-4).
 
 - **Running:** `is_running` matches `NSWorkspace.runningApplications` by bundle id (objc2); `quit` calls `NSRunningApplication.terminate()` - graceful Cmd-Q, never force in v1.
 - **Homebrew (`cask_status`):** deterministic and fallible.
@@ -119,7 +122,7 @@ fn brew_uninstall(&self, token: &CaskToken) -> Result<()>;
 
 **Determinism (validated on 27 installed casks).** Basename is brew's *own* key: the install receipt records each cask's app by basename + zap globs and **never an `/Applications` path** (`installed_as: n/a`), so there is no stricter path oracle to prefer. Empirical result: 1:1 token map, zero basename collisions, zero multi-path ambiguity; 16/16 apps that exist in an appdir matched their cask; 7 no-`.app` casks (fonts/pkg/CLI) skipped with no false guard. The only non-matches were 4 stale, Caskroom-only cask records whose bundle exists nowhere on disk - un-pickable, so the guard never fires for them. Residual: two distinct apps sharing an identical bundle filename now resolve to `Unavailable` (no `[B]`, normal trash flow), so a wrong `brew uninstall` is impossible.
 
-`core` exposes `fn guards(plat, app) -> Guards` computed before the Confirm screen.
+`core` exposes `fn guards(plat, app, inventory) -> Guards` computed before the Confirm screen (same `inventory` as `scan`).
 
 ### 4. UI changes
 
@@ -128,7 +131,7 @@ fn brew_uninstall(&self, token: &CaskToken) -> Result<()>;
   - `Managed` cask -> `[B] brew uninstall` (removes the bundle via brew, **then trashes the remaining leftover paths** so brew stays consistent *and* user-library cruft is cleaned),
   - `Unavailable` cask -> non-blocking advisory line ("couldn't confirm Homebrew - check manually"); falls through to the normal path,
   - `[T] trash anyway` is the **only** waive (forces Trash), `esc` back. `[enter]` is **rejected** while any guard is unresolved.
-- **Done screen** adds "Freed N GB". **Freed bytes** = sum of pre-removal sizes of paths *actually* removed; a brew-handled bundle counts only after `brew uninstall` succeeds; partial failures report `freed = sum(removed)` with failures listed. JSON: `{ removed, failed, freed_bytes, brew: <token|null> }`.
+- **Done screen** adds "Freed N GB". **Freed bytes** = sum of pre-removal sizes of paths *actually* removed; a brew-handled bundle counts only after `brew uninstall` succeeds; partial failures report `freed = sum(removed)` with failures listed. JSON output contract (medium-2): `{ "removed": [path], "failed": [{ "path": path, "error": string }], "freed_bytes": u64, "brew": token|null, "dry_run": bool, "guard_refused": reason|null }`. The brew-handled bundle does **not** appear in `removed` (brew owns it); it contributes to `freed_bytes` only on `brew uninstall` success. `--dry-run` sets `dry_run: true`, lists planned items, mutates nothing.
 
 ### 5. Headless CLI changes
 
@@ -145,6 +148,20 @@ The terminal path must enforce the same guard contract as the picker. `removeapp
 
 ### 6. Removal contract and guard state machine
 
+**Per-item disposal model (blocker-1).** `Leftover` gains provenance so the data model *enforces* the fuzzy-Trash-only guarantee instead of only promising it in prose:
+
+```rust
+pub enum MatchKind { Exact, Fuzzy } // Exact = app bundle + exact bundle-id/name; Fuzzy = dot-boundary
+pub struct Leftover { pub path: PathBuf, pub kind: LeftoverKind, pub size_bytes: u64, pub match_kind: MatchKind }
+```
+
+Removal computes an **effective disposal per item** from the requested disposal:
+- `Exact` + requested `Delete` -> `Delete`; `Exact` + `Trash` -> `Trash`.
+- `Fuzzy` -> **always `Trash`** (never `Delete`, even under `--force`).
+- The app bundle is `Exact`, but when `cask == Unavailable` it downgrades to `Trash` even under `--force` (brew ownership cannot be ruled out).
+
+So `--force` hard-deletes the bundle and exact leftovers while fuzzy leftovers still go to Trash - per-item, not a whole-removal downgrade (open-Q1). `remove` maps each `Leftover` to `(canonical_path, effective_disposal)`; the platform applies them per item. Symlink *leftovers* are moved to Trash as the symlink itself (never followed), so only the app *bundle* being a symlink is refused (open-Q3).
+
 **Two-phase normal removal (blocker-1).** `remove_paths` today continues after a per-path failure, so a failed app-bundle removal alongside successful leftover removal would strand a half-uninstalled app with its data gone. Normal removal is two-phase:
 1. Remove the **app bundle** first. If it fails, **abort** - touch no leftover, surface the error.
 2. Only on bundle success, remove the leftovers (collecting per-path failures as today).
@@ -156,23 +173,34 @@ The brew path keeps the inverse invariant: brew owns the bundle; if `brew uninst
 - UI: while any guard is **unresolved**, `[enter]` is a no-op with a hint. `[Q]` resolves running; `[B]` resolves a `Managed` cask; `[T] trash anyway` is the **only** key that intentionally waives unresolved guards and forces Trash (never hard delete).
 - CLI mirrors this: unresolved guards require the explicit `--quit` / `--brew` / `--trash-anyway`; `--yes` waives only the ordinary prompt.
 
-**Execution-boundary recheck (high-6, medium-6).** Immediately before mutation (UI and CLI), re-evaluate `is_running` and re-`lstat` each planned path - verifying its root, name, and classification are unchanged and no ancestor became a symlink. If running flipped or any path's identity changed, return to guard resolution instead of mutating. This closes the confirm->execute TOCTOU window (a mitigation, not a same-user race guarantee - see Risks).
+**Combined guard transitions (high-4).** When both guards apply, running must clear before any brew action - otherwise `[B]` would brew-uninstall a live app:
+
+| running | cask | `[enter]`/proceed | `[B]`/`--brew` | `[T]`/`--trash-anyway` |
+|---|---|---|---|---|
+| true | any | rejected | **rejected** (`[Q]`/`--quit` first) | trash-only, proceeds |
+| false | `Managed` | rejected | brew uninstall + trash rest | trash-only, proceeds |
+| false | `NotManaged` | proceeds | - | trash-only, proceeds |
+| false | `Unavailable` | proceeds (advisory) | - | trash-only, proceeds |
+
+Terminal guard states are named explicitly (medium-5): `RunningUnresolved`, `ManagedUnresolved`, `UnavailableAdvisory`, `NotManagedClear`, `WaivedTrashOnly`.
+
+**Execution-boundary recheck (high-5, high-6, medium-6).** Each planned path stores an **identity snapshot** at plan time: file type, `dev`/`inode` (where available), final-component name, classification (`LeftoverKind`/`MatchKind`), and whether any ancestor is a symlink. Immediately before mutation (UI and CLI), re-evaluate `is_running` and re-`lstat` each path, comparing against its snapshot. If running flipped or any snapshot differs, return to guard resolution instead of mutating. This closes the confirm->execute TOCTOU window (a mitigation, not a same-user race guarantee - see Risks).
 
 ### 7. Architecture (qol-arch-code)
 
-Pure matching (`belongs_to`, `owner_of`, `guards` assembly) lives in `core`. Everything OS-specific (NSWorkspace, `mdfind`, `brew`, Library dir list) stays behind `AppPlatform` + `platform/macos.rs`. `platform/linux.rs` and `platform/windows.rs` get typed stubs: `is_running` -> `false`, `quit`/`brew_uninstall` -> typed `Err`, `cask_token` -> `None`. No `#[cfg]` in business logic; no `compile_error!`.
+Pure matching (`belongs_to`, `owner_of`, `guards` assembly) lives in `core`. Everything OS-specific (NSWorkspace, `mdfind`, `brew`, Library dir list) stays behind `AppPlatform` + `platform/macos.rs`. `platform/linux.rs` and `platform/windows.rs` get typed stubs: `is_running` -> `false`, `quit`/`brew_uninstall` -> typed `Err`, `cask_status` -> `NotManaged`, `scan` -> exact-only plan. No `#[cfg]` in business logic; no `compile_error!`.
 
 ## Data flow
 
-picker or CLI (search over Spotlight+dir-walk apps) -> on select/query: `scan` (enumerate+classify -> `RemovalPlan`) **and** `guards` -> user resolves guards via UI keys or explicit CLI flags -> `remove_paths` (brew path: bundle handled by brew, rest by trash) -> Done / JSON output with freed bytes.
+Discover the inventory once (Spotlight+dir-walk, deduped, canonical paths) -> on select/query thread that one inventory into `scan` (enumerate+classify -> `RemovalPlan` with per-item `MatchKind` + identity snapshots) **and** `guards` -> user resolves guards via UI keys or explicit CLI flags -> execution-boundary recheck -> per-item-disposal removal (brew path: bundle handled by brew, rest trashed) -> Done / JSON output.
 
 ## Error handling
 
 - `mdfind` missing/empty -> fall back to dir-walk, no error.
 - `quit` fails (app refuses) -> banner shows "couldn't quit <app>"; user retries or `[T]`.
 - `brew_uninstall` non-zero -> show stderr tail; app left in place; user can `[T]`.
-- Subprocess hygiene (medium-7): `brew`/`mdfind` run with a timeout; stdout and stderr captured separately (structured JSON stays stdout-only); displayed stderr is byte-capped and ANSI/control-stripped; `mdfind` output parsed line-wise, non-`.app` lines ignored.
-- `brew` absent or no artifact-basename match -> empty map -> no brew banner.
+- Subprocess hygiene (medium-7): `brew`/`mdfind` run with a timeout (**5s**); stdout and stderr captured separately (structured JSON stays stdout-only); displayed stderr is byte-capped (**4 KiB**) and ANSI/control-stripped; `mdfind` output parsed line-wise, non-`.app` lines ignored. The stderr sanitizer and `mdfind` parser are pure and unit-tested.
+- Cask resolution (high-1): valid brew JSON with no artifact match -> `NotManaged` (silent, no banner); brew missing / non-zero / timeout / malformed JSON / ambiguous basename -> `Unavailable(reason)` (visible advisory). A failure never collapses to `NotManaged`.
 - CLI guard refusal exits non-zero with an actionable stderr message naming the required explicit flag.
 - Missing Library dir during enumeration -> skip (as today).
 - Protected target -> existing refusal, unchanged.
@@ -188,6 +216,8 @@ picker or CLI (search over Spotlight+dir-walk apps) -> on select/query: `scan` (
 - **Cask tri-state (high-3/4):** fixture `brew info --json=v2` -> `Managed` (unique), `NotManaged` (no match), `Unavailable` (missing brew, malformed JSON, basename maps to >1 cask, >1 installed app shares the basename); `CaskToken` parsing rejects `-`-leading / illegal tokens.
 - **Canonical/protection (high-5):** symlinked app bundle is refused for destructive action; canonicalization failure is treated as protected.
 - **Fuzzy is Trash-only (blocker-2):** non-exact leftovers are never hard-deleted even with `--force`.
+- **Per-item disposal (blocker-1):** a plan with mixed `Exact`+`Fuzzy` leftovers under `--force` Deletes exact items and Trashes fuzzy items; `Unavailable` cask downgrades the bundle to Trash under `--force`.
+- **Execution-boundary recheck (high-5):** fake-platform/tempdir cases - running flips true, leaf `dev`/`inode` changes, root/name/classification changes, ancestor symlink replacement - each aborts with zero filesystem mutation.
 - **Headless CLI guards:** table-test `remove` behavior for running only, cask only, both guards, `--yes`, `--dry-run`, `--force`, `--quit`, `--brew`, `--trash-anyway`, quit failure, and brew failure.
 - **Cask map (pure, table-driven):** parse a fixture `brew info --json=v2` payload into the basename->token map and assert membership for matched / unmatched / appdir-relocated apps, including a cask with multiple `.app` artifacts.
 - **Not unit-tested (per no-test-for-thin-wrappers):** NSWorkspace, `mdfind`, and the `brew` subprocess invocation itself - thin platform wrappers. The JSON parse above is the testable part.
