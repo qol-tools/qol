@@ -84,7 +84,7 @@ fn set_hotkeys_inner(state: &AppState, body: axum::body::Bytes) -> HttpResult<Re
     manager
         .save_config(&config)
         .map_err(|_| Box::new(save_failed_response()))?;
-    state.daemon.events.config_changed(ConfigKind::Hotkeys);
+    state.daemon.config.config_changed(ConfigKind::Hotkeys);
     Ok(hotkeys_saved_response())
 }
 

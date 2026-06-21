@@ -69,7 +69,7 @@ fn reload_after_profile_apply(state: &ProfileHttpState) {
     drop(manager);
     state
         .daemon
-        .events
+        .config
         .config_changed(crate::daemon::ConfigKind::Profile);
     state.daemon.events.send_plugins_changed();
 }

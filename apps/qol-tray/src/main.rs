@@ -560,7 +560,7 @@ async fn async_init_inner(
         let plugin_manager = plugin_manager.clone();
         tokio::task::spawn_blocking(move || sync_launcher_apps(plugin_manager));
     }
-    spawn_config_reconcilers(&daemon.events, &plugin_manager);
+    spawn_config_reconcilers(&daemon.config, &plugin_manager);
     Ok(InitResult {
         shutdown_tx,
         shutdown_rx,
@@ -576,14 +576,14 @@ fn sync_launcher_apps(plugin_manager: Arc<Mutex<PluginManager>>) {
 }
 
 fn spawn_config_reconcilers(
-    events: &qol_tray::daemon::EventBus,
+    config: &qol_tray::daemon::ConfigBus,
     plugin_manager: &Arc<Mutex<PluginManager>>,
 ) {
     use qol_tray::daemon::ConfigKind;
     use qol_tray::reconcile::spawn_reconciler;
 
     spawn_reconciler(
-        events,
+        config,
         &[
             ConfigKind::Hotkeys,
             ConfigKind::Plugins,
@@ -594,7 +594,7 @@ fn spawn_config_reconcilers(
 
     let pm_for_launcher = plugin_manager.clone();
     spawn_reconciler(
-        events,
+        config,
         &[
             ConfigKind::Shortcuts,
             ConfigKind::Plugins,

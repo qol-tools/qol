@@ -1,28 +1,29 @@
 use std::sync::Arc;
 
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+use tokio::sync::broadcast::Receiver;
 
-use crate::daemon::{ConfigKind, DaemonEvent, EventBus};
+use crate::daemon::{ConfigBus, ConfigKind};
 
-pub fn spawn_reconciler<F>(events: &EventBus, interests: &[ConfigKind], reconcile: F)
+pub fn spawn_reconciler<F>(config: &ConfigBus, interests: &[ConfigKind], reconcile: F)
 where
     F: Fn() + Send + Sync + 'static,
 {
     let interests: Arc<[ConfigKind]> = Arc::from(interests);
-    let mut rx = events.subscribe();
+    let mut rx = config.subscribe();
     let reconcile = Arc::new(reconcile);
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(event) => {
-                    if !matches_interest(&event, &interests) {
+                Ok(kind) => {
+                    if !interests.contains(&kind) {
                         continue;
                     }
-                    drain_pending(&mut rx, &interests);
+                    drain_pending(&mut rx);
                     run_blocking(&reconcile).await;
                 }
                 Err(RecvError::Lagged(_)) => {
-                    drain_pending(&mut rx, &interests);
+                    drain_pending(&mut rx);
                     run_blocking(&reconcile).await;
                 }
                 Err(RecvError::Closed) => return,
@@ -41,41 +42,11 @@ where
     }
 }
 
-fn matches_interest(event: &DaemonEvent, interests: &[ConfigKind]) -> bool {
-    match event {
-        DaemonEvent::ConfigChanged { kind } => interests.contains(kind),
-        DaemonEvent::PluginsChanged { .. }
-        | DaemonEvent::PluginManifestInvalid { .. }
-        | DaemonEvent::PluginResolvedFromFallback { .. }
-        | DaemonEvent::PluginUnavailable { .. }
-        | DaemonEvent::UpdateProgress { .. }
-        | DaemonEvent::UpdateComplete
-        | DaemonEvent::UpdateFailed { .. }
-        | DaemonEvent::Navigate { .. } => false,
-        #[cfg(feature = "dev")]
-        DaemonEvent::DiscoveryStarted
-        | DaemonEvent::DiscoveryComplete { .. }
-        | DaemonEvent::BuildStarted
-        | DaemonEvent::BuildPluginProgress { .. }
-        | DaemonEvent::BuildComplete { .. }
-        | DaemonEvent::PluginCpuSnapshot { .. }
-        | DaemonEvent::SelfRecompileProgress { .. }
-        | DaemonEvent::SelfRecompileComplete
-        | DaemonEvent::SelfRecompileFailed { .. }
-        | DaemonEvent::BootTargetHealed { .. } => false,
-    }
-}
-
-fn drain_pending(rx: &mut tokio::sync::broadcast::Receiver<DaemonEvent>, interests: &[ConfigKind]) {
+fn drain_pending(rx: &mut Receiver<ConfigKind>) {
     loop {
         match rx.try_recv() {
-            Ok(event) => {
-                if matches_interest(&event, interests) {
-                    continue;
-                }
-            }
-            Err(TryRecvError::Empty | TryRecvError::Lagged(_)) => return,
-            Err(TryRecvError::Closed) => return,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty | TryRecvError::Lagged(_) | TryRecvError::Closed) => return,
         }
     }
 }
@@ -109,7 +80,7 @@ mod tests {
 
     #[tokio::test]
     async fn matching_interest_runs_reconciler() {
-        let bus = EventBus::new();
+        let bus = ConfigBus::new();
         let counter = Arc::new(AtomicUsize::new(0));
         spawn_reconciler(
             &bus,
@@ -123,7 +94,7 @@ mod tests {
 
     #[tokio::test]
     async fn non_matching_interest_is_ignored() {
-        let bus = EventBus::new();
+        let bus = ConfigBus::new();
         let counter = Arc::new(AtomicUsize::new(0));
         spawn_reconciler(
             &bus,
@@ -134,18 +105,17 @@ mod tests {
         bus.config_changed(ConfigKind::Shortcuts);
         bus.config_changed(ConfigKind::Plugins);
         bus.config_changed(ConfigKind::Profile);
-        bus.send_plugins_changed();
         sleep(Duration::from_millis(60)).await;
         assert_eq!(
             counter.load(Ordering::SeqCst),
             0,
-            "reconciler must not fire for non-matching kinds or other events"
+            "reconciler must not fire for non-matching config kinds"
         );
     }
 
     #[tokio::test]
     async fn burst_of_matching_events_coalesces_into_single_reconcile() {
-        let bus = EventBus::new();
+        let bus = ConfigBus::new();
         let counter = Arc::new(AtomicUsize::new(0));
         spawn_reconciler(
             &bus,
@@ -167,7 +137,7 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_interests_each_trigger() {
-        let bus = EventBus::new();
+        let bus = ConfigBus::new();
         let counter = Arc::new(AtomicUsize::new(0));
         spawn_reconciler(
             &bus,
@@ -186,7 +156,7 @@ mod tests {
     async fn blocking_reconcile_does_not_stall_async_tasks() {
         use std::time::Instant;
 
-        let bus = EventBus::new();
+        let bus = ConfigBus::new();
         let started = Arc::new(AtomicUsize::new(0));
         let started_in_reconcile = Arc::clone(&started);
         spawn_reconciler(&bus, &[ConfigKind::Plugins], move || {

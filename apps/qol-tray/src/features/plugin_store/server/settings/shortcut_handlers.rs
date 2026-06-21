@@ -67,7 +67,7 @@ fn create_inner(state: &AppState, body: axum::body::Bytes) -> HttpResult<Respons
     let mut config = store::load().map_err(|_| Box::new(load_failed()))?;
     store::add(&mut config, shortcut).map_err(|e| Box::new(bad_request(&e)))?;
     store::save(&config).map_err(|_| Box::new(save_failed()))?;
-    state.daemon.events.config_changed(ConfigKind::Shortcuts);
+    state.daemon.config.config_changed(ConfigKind::Shortcuts);
     let json = http_json::encode_json(&config, "Failed to serialize shortcuts")?;
     Ok(http_json::json_response(json))
 }
@@ -82,7 +82,7 @@ fn update_inner(state: &AppState, id: &str, body: axum::body::Bytes) -> HttpResu
     let mut config = store::load().map_err(|_| Box::new(load_failed()))?;
     store::update(&mut config, shortcut).map_err(|e| Box::new(bad_request(&e)))?;
     store::save(&config).map_err(|_| Box::new(save_failed()))?;
-    state.daemon.events.config_changed(ConfigKind::Shortcuts);
+    state.daemon.config.config_changed(ConfigKind::Shortcuts);
     let json = http_json::encode_json(&config, "Failed to serialize shortcuts")?;
     Ok(http_json::json_response(json))
 }
@@ -92,7 +92,7 @@ fn delete_inner(state: &AppState, id: &str) -> HttpResult<Response> {
     let mut config = store::load().map_err(|_| Box::new(load_failed()))?;
     store::remove(&mut config, id).map_err(|e| Box::new(not_found(&e)))?;
     store::save(&config).map_err(|_| Box::new(save_failed()))?;
-    state.daemon.events.config_changed(ConfigKind::Shortcuts);
+    state.daemon.config.config_changed(ConfigKind::Shortcuts);
     let json = http_json::encode_json(&config, "Failed to serialize shortcuts")?;
     Ok(http_json::json_response(json))
 }

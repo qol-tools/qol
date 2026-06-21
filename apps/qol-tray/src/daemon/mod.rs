@@ -1,5 +1,7 @@
+mod config_bus;
 mod events;
 
+pub use config_bus::ConfigBus;
 pub use events::EventBus;
 
 use std::sync::Arc;
@@ -18,12 +20,14 @@ pub enum ConfigKind {
 #[derive(Clone)]
 pub struct Daemon {
     pub events: Arc<EventBus>,
+    pub config: Arc<ConfigBus>,
 }
 
 impl Daemon {
     pub fn new() -> Self {
         Self {
             events: Arc::new(EventBus::new()),
+            config: Arc::new(ConfigBus::new()),
         }
     }
 }
@@ -102,9 +106,6 @@ pub enum DaemonEvent {
     },
     Navigate {
         route: String,
-    },
-    ConfigChanged {
-        kind: ConfigKind,
     },
     #[cfg(feature = "dev")]
     BootTargetHealed {

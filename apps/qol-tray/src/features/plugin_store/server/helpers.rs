@@ -123,7 +123,7 @@ fn reload_manager_and_notify_inner(state: &AppState, sync_profile: bool) {
     }
     let report = reload_ok.then(|| manager.last_resolution_report().clone());
     drop(manager);
-    state.daemon.events.config_changed(ConfigKind::Plugins);
+    state.daemon.config.config_changed(ConfigKind::Plugins);
     if let Some(report) = report {
         emit_resolution_events(&state.daemon.events, &report);
     }

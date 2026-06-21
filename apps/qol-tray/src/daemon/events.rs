@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::broadcast;
 
-use super::{ConfigKind, DaemonEvent};
+use super::DaemonEvent;
 
 const CHANNEL_CAPACITY: usize = 64;
 
@@ -32,10 +32,6 @@ impl EventBus {
         let revision = self.plugins_revision.fetch_add(1, Ordering::SeqCst) + 1;
         self.send(DaemonEvent::PluginsChanged { revision });
         revision
-    }
-
-    pub fn config_changed(&self, kind: ConfigKind) {
-        self.send(DaemonEvent::ConfigChanged { kind });
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<DaemonEvent> {

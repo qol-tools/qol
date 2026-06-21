@@ -636,7 +636,7 @@ mod autostart_re_runnable_via_reload {
 }
 
 mod spawn_reconciler_drives_subscribers_on_config_changed {
-    use qol_tray::daemon::{ConfigKind, EventBus};
+    use qol_tray::daemon::{ConfigBus, ConfigKind};
     use qol_tray::reconcile::spawn_reconciler;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -667,7 +667,7 @@ mod spawn_reconciler_drives_subscribers_on_config_changed {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn matching_interest_fires_reconciler_and_non_matching_does_not() {
-        let bus = EventBus::new();
+        let bus = ConfigBus::new();
         let (count, work) = counter();
         spawn_reconciler(&bus, &[ConfigKind::Hotkeys], work);
         sleep(Duration::from_millis(20)).await;
@@ -675,13 +675,11 @@ mod spawn_reconciler_drives_subscribers_on_config_changed {
         bus.config_changed(ConfigKind::Shortcuts);
         bus.config_changed(ConfigKind::Plugins);
         bus.config_changed(ConfigKind::Profile);
-        bus.send_plugins_changed();
         sleep(Duration::from_millis(50)).await;
         assert_eq!(
             count.load(Ordering::SeqCst),
             0,
-            "non-matching ConfigChanged kinds and other DaemonEvents must not fire the \
-             reconciler"
+            "non-matching config kinds must not fire the reconciler"
         );
 
         bus.config_changed(ConfigKind::Hotkeys);
@@ -690,7 +688,7 @@ mod spawn_reconciler_drives_subscribers_on_config_changed {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn burst_of_matching_signals_coalesces_into_fewer_reconciles() {
-        let bus = EventBus::new();
+        let bus = ConfigBus::new();
         let (count, work) = counter();
         spawn_reconciler(&bus, &[ConfigKind::Plugins], work);
         sleep(Duration::from_millis(20)).await;
@@ -705,6 +703,25 @@ mod spawn_reconciler_drives_subscribers_on_config_changed {
             observed < 10,
             "burst of 10 matching events must coalesce into fewer reconciles; observed {}",
             observed
+        );
+    }
+}
+
+mod config_signal_is_isolated_from_the_ui_bus {
+    use qol_tray::daemon::{ConfigKind, Daemon};
+    use std::time::Duration;
+    use tokio::sync::broadcast::error::TryRecvError;
+    use tokio::time::sleep;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn config_signal_does_not_reach_the_ui_event_bus() {
+        let daemon = Daemon::new();
+        let mut ui = daemon.events.subscribe();
+        daemon.config.config_changed(ConfigKind::Hotkeys);
+        sleep(Duration::from_millis(20)).await;
+        assert!(
+            matches!(ui.try_recv(), Err(TryRecvError::Empty)),
+            "config reconcile signals must not leak onto the UI event/SSE bus"
         );
     }
 }
