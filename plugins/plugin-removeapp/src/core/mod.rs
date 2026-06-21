@@ -214,12 +214,6 @@ fn remove_with(
             plan.app.name
         );
     }
-    if plat.is_running(&plan.app) {
-        anyhow::bail!(
-            "removeapp: {} started running; resolve the guard again",
-            plan.app.name
-        );
-    }
     if plan.snapshots.len() == plan.items.len() {
         for (item, snap) in plan.items.iter().zip(&plan.snapshots) {
             if !snap.matches(&item.path) {

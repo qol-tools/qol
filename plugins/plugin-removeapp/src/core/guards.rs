@@ -20,14 +20,14 @@ impl CaskToken {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CaskStatus {
     Managed(CaskToken),
     NotManaged,
     Unavailable(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Guards {
     pub running: bool,
     pub cask: CaskStatus,

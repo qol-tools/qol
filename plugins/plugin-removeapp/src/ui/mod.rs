@@ -6,7 +6,7 @@ use gpui::{
     SharedString, Window,
 };
 
-use crate::core::{self, Disposal, InstalledApp, RemovalOutcome, RemovalPlan};
+use crate::core::{self, CaskStatus, Disposal, Guards, InstalledApp, RemovalOutcome, RemovalPlan};
 use qol_gpui::scroll_list::ScrollList;
 
 pub const WINDOW_TITLE: &str = "removeapp";
@@ -28,6 +28,8 @@ pub struct RemoveAppView {
     disposal: Disposal,
     plan: Option<RemovalPlan>,
     outcome: Option<RemovalOutcome>,
+    guards: Option<Guards>,
+    quit_failed: bool,
     focus_handle: FocusHandle,
 }
 
@@ -44,6 +46,8 @@ impl RemoveAppView {
             disposal: Disposal::Trash,
             plan: None,
             outcome: None,
+            guards: None,
+            quit_failed: false,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -60,10 +64,13 @@ impl RemoveAppView {
         if core::is_protected(app) {
             return;
         }
-        if let Ok(plan) = core::plan(app, &self.apps) {
-            self.plan = Some(plan);
-            self.mode = Mode::Confirming;
-        }
+        let Ok(plan) = core::plan(app, &self.apps) else {
+            return;
+        };
+        self.guards = Some(core::guards(&plan.app, &self.apps));
+        self.plan = Some(plan);
+        self.quit_failed = false;
+        self.mode = Mode::Confirming;
     }
 
     fn toggle_disposal(&mut self) {
@@ -73,12 +80,53 @@ impl RemoveAppView {
         };
     }
 
-    fn execute(&mut self) {
+    fn unresolved(&self) -> bool {
+        matches!(&self.guards, Some(g) if g.running || matches!(g.cask, CaskStatus::Managed(_)))
+    }
+
+    fn try_quit(&mut self) {
+        let Some(plan) = &self.plan else {
+            return;
+        };
+        match core::quit_app(&plan.app) {
+            Ok(()) => {
+                if let Some(g) = self.guards.as_mut() {
+                    g.running = false;
+                }
+                self.quit_failed = false;
+            }
+            Err(_) => self.quit_failed = true,
+        }
+    }
+
+    fn try_brew(&mut self) {
         let Some(plan) = self.plan.clone() else {
             return;
         };
-        let guards = core::guards(&plan.app, &self.apps);
-        self.outcome = Some(core::remove(&plan, self.disposal, &guards.cask).unwrap_or_default());
+        let token = match &self.guards {
+            Some(g) if !g.running => match &g.cask {
+                CaskStatus::Managed(t) => t.clone(),
+                _ => return,
+            },
+            _ => return,
+        };
+        if core::brew_uninstall(&token).is_ok() {
+            let cask = CaskStatus::Managed(token);
+            self.outcome = Some(
+                core::remove_after_brew(&plan, self.disposal, &cask, true).unwrap_or_default(),
+            );
+            self.mode = Mode::Done;
+        }
+    }
+
+    fn execute(&mut self, disposal: Disposal) {
+        let (Some(plan), Some(cask)) = (
+            self.plan.clone(),
+            self.guards.as_ref().map(|g| g.cask.clone()),
+        ) else {
+            return;
+        };
+        self.outcome = Some(core::remove(&plan, disposal, &cask).unwrap_or_default());
         self.mode = Mode::Done;
     }
 
@@ -120,14 +168,31 @@ impl RemoveAppView {
                 "escape" => {
                     self.mode = Mode::Picking;
                     self.plan = None;
+                    self.guards = None;
+                    cx.notify();
+                }
+                "q" => {
+                    self.try_quit();
+                    cx.notify();
+                }
+                "b" => {
+                    self.try_brew();
+                    cx.notify();
+                }
+                "t" => {
+                    self.execute(Disposal::Trash);
                     cx.notify();
                 }
                 "enter" => {
-                    self.execute();
+                    if !self.unresolved() {
+                        self.execute(self.disposal);
+                    }
                     cx.notify();
                 }
                 "d" | "tab" => {
-                    self.toggle_disposal();
+                    if !self.unresolved() {
+                        self.toggle_disposal();
+                    }
                     cx.notify();
                 }
                 _ => {}
@@ -238,11 +303,27 @@ impl RemoveAppView {
             Disposal::Trash => ("Move to Trash", 0x3fb950u32),
             Disposal::Delete => ("PERMANENTLY DELETE", 0xf85149u32),
         };
+        let mut hints: Vec<(&str, &str)> = Vec::new();
+        if let Some(g) = &self.guards {
+            if g.running {
+                hints.push(("Q", "quit & continue"));
+            }
+            if matches!(g.cask, CaskStatus::Managed(_)) {
+                hints.push(("B", "brew uninstall"));
+            }
+        }
+        if !self.unresolved() {
+            hints.push(("\u{23CE}", "confirm"));
+            hints.push(("d", "trash/delete"));
+        }
+        hints.push(("T", "trash anyway"));
+        hints.push(("esc", "back"));
         div()
             .flex()
             .flex_col()
             .size_full()
             .child(section_header(&plan.app.name))
+            .children(self.guard_banner())
             .child(
                 div()
                     .id("removeapp-items")
@@ -278,12 +359,49 @@ impl RemoveAppView {
                             )),
                     ),
             )
-            .child(footer(&[
-                ("\u{23CE}", "confirm"),
-                ("d", "trash/delete"),
-                ("esc", "back"),
-            ]))
+            .child(footer(&hints))
             .into_any_element()
+    }
+
+    fn guard_banner(&self) -> Option<AnyElement> {
+        let g = self.guards.as_ref()?;
+        let mut lines: Vec<AnyElement> = Vec::new();
+        if g.running {
+            let text = if self.quit_failed {
+                "still running - couldn't quit; press Q to retry"
+            } else {
+                "is running - press Q to quit & continue"
+            };
+            lines.push(banner_line(0xf0883eu32, text).into_any_element());
+        }
+        match &g.cask {
+            CaskStatus::Managed(_) => lines.push(
+                banner_line(0x58a6ffu32, "Homebrew-managed - press B to brew uninstall")
+                    .into_any_element(),
+            ),
+            CaskStatus::Unavailable(_) => lines.push(
+                banner_line(0x6e7681u32, "couldn't confirm Homebrew - check manually")
+                    .into_any_element(),
+            ),
+            CaskStatus::NotManaged => {}
+        }
+        if lines.is_empty() {
+            return None;
+        }
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .w_full()
+                .px(px(12.0))
+                .py(px(6.0))
+                .gap(px(3.0))
+                .bg(rgba(0xf0883e1au32))
+                .border_b_1()
+                .border_color(rgb(0x21262du32))
+                .children(lines)
+                .into_any_element(),
+        )
     }
 
     fn render_done(&self) -> AnyElement {
@@ -305,6 +423,12 @@ impl RemoveAppView {
                     .text_size(px(15.0))
                     .text_color(rgb(0x3fb950u32))
                     .child(format!("Removed {removed} item(s)")),
+            )
+            .child(
+                div()
+                    .text_color(rgb(0x8b949eu32))
+                    .text_size(px(12.0))
+                    .child(format!("Freed {}", format_size(outcome.freed_bytes))),
             )
             .when(failed > 0, |d| {
                 d.child(
@@ -447,6 +571,13 @@ fn footer(hints: &[(&str, &str)]) -> impl IntoElement {
                 )
                 .child(label.to_string())
         }))
+}
+
+fn banner_line(color: u32, text: &str) -> impl IntoElement {
+    div()
+        .text_size(px(11.0))
+        .text_color(rgb(color))
+        .child(text.to_string())
 }
 
 fn format_size(bytes: u64) -> String {
