@@ -12,7 +12,12 @@ use crate::core::{
 use qol_gpui::scroll_list::ScrollList;
 
 pub const WINDOW_TITLE: &str = "removeapp";
-const MAX_VISIBLE: usize = 12;
+pub const WINDOW_WIDTH: f32 = 460.0;
+pub const WINDOW_HEIGHT: f32 = 540.0;
+const SEARCH_H: f32 = 40.0;
+const FOOTER_H: f32 = 34.0;
+const ROW_H: f32 = 38.0;
+const MAX_VISIBLE: usize = ((WINDOW_HEIGHT - SEARCH_H - FOOTER_H) / ROW_H) as usize;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
@@ -515,11 +520,12 @@ fn is_typed_char(key: &str) -> bool {
 fn app_row(app: &InstalledApp, selected: bool, protected: bool) -> impl IntoElement {
     div()
         .w_full()
+        .h(px(ROW_H))
+        .flex_none()
         .flex()
         .items_center()
         .gap(px(8.0))
         .px(px(12.0))
-        .py(px(8.0))
         .border_l_2()
         .border_color(if selected {
             rgb(0x58a6ffu32)
@@ -575,11 +581,12 @@ fn section_header(title: &str) -> impl IntoElement {
 fn footer(hints: &[(&str, &str)]) -> impl IntoElement {
     div()
         .flex()
+        .flex_none()
+        .h(px(FOOTER_H))
         .items_center()
         .gap(px(10.0))
         .w_full()
         .px(px(11.0))
-        .py(px(7.0))
         .bg(rgb(0x0d1117u32))
         .border_t_1()
         .border_color(rgb(0x21262du32))
@@ -640,5 +647,25 @@ fn format_size(bytes: u64) -> String {
         format!("{:.0} KB", bytes as f64 / KB as f64)
     } else {
         format!("{bytes} B")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visible_rows_fit_window_and_are_maximal() {
+        let chrome = SEARCH_H + FOOTER_H;
+        let fits = chrome + MAX_VISIBLE as f32 * ROW_H;
+        let one_more = chrome + (MAX_VISIBLE + 1) as f32 * ROW_H;
+        assert!(
+            fits <= WINDOW_HEIGHT,
+            "all {MAX_VISIBLE} rows fit: {fits} <= {WINDOW_HEIGHT}"
+        );
+        assert!(
+            one_more > WINDOW_HEIGHT,
+            "MAX_VISIBLE is the most that fit: {one_more} > {WINDOW_HEIGHT}"
+        );
     }
 }

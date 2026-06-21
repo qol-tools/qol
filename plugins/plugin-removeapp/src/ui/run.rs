@@ -8,11 +8,9 @@ use gpui::{
 use qol_gpui::command_loop::LoopFlow;
 
 use crate::daemon::actions::{self, Command};
-use crate::ui::{RemoveAppView, WINDOW_TITLE};
+use crate::ui::{RemoveAppView, WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
 
 const APP_ID: &str = "plugin-removeapp";
-const WINDOW_WIDTH: f32 = 460.0;
-const WINDOW_HEIGHT: f32 = 540.0;
 
 pub fn run() -> anyhow::Result<()> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
