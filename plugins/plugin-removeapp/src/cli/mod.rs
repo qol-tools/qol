@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, Result};
 
-use crate::core::{self, Disposal, RemovalPlan};
+use crate::core::{self, CaskStatus, Disposal, Guards, RemovalOutcome, RemovalPlan};
 
 pub fn disposal_from_flags(force: bool) -> Disposal {
     if force {
@@ -20,6 +20,9 @@ struct Flags {
     dry_run: bool,
     yes: bool,
     force: bool,
+    quit: bool,
+    brew: bool,
+    trash_anyway: bool,
     query: Option<String>,
 }
 
@@ -28,6 +31,9 @@ fn parse_flags(args: &[String]) -> Flags {
         dry_run: false,
         yes: false,
         force: false,
+        quit: false,
+        brew: false,
+        trash_anyway: false,
         query: None,
     };
     for arg in args {
@@ -35,6 +41,9 @@ fn parse_flags(args: &[String]) -> Flags {
             "--dry-run" => flags.dry_run = true,
             "--yes" | "-y" => flags.yes = true,
             "--force" => flags.force = true,
+            "--quit" => flags.quit = true,
+            "--brew" => flags.brew = true,
+            "--trash-anyway" => flags.trash_anyway = true,
             other if !other.starts_with('-') && flags.query.is_none() => {
                 flags.query = Some(other.to_string());
             }
@@ -42,6 +51,58 @@ fn parse_flags(args: &[String]) -> Flags {
         }
     }
     flags
+}
+
+fn guard_refusal(running: bool, cask: &CaskStatus, flags: &Flags) -> Option<String> {
+    if running && !flags.quit && !flags.trash_anyway {
+        return Some("app is running; pass --quit or --trash-anyway".into());
+    }
+    if matches!(cask, CaskStatus::Managed(_)) && !flags.brew && !flags.trash_anyway {
+        return Some("Homebrew-managed; pass --brew or --trash-anyway".into());
+    }
+    None
+}
+
+fn cask_json(cask: &CaskStatus) -> serde_json::Value {
+    match cask {
+        CaskStatus::Managed(t) => serde_json::json!({ "state": "managed", "token": t.as_str() }),
+        CaskStatus::NotManaged => serde_json::json!({ "state": "not_managed" }),
+        CaskStatus::Unavailable(reason) => {
+            serde_json::json!({ "state": "unavailable", "reason": reason })
+        }
+    }
+}
+
+fn output_json(
+    plan: &RemovalPlan,
+    guards: &Guards,
+    outcome: Option<&RemovalOutcome>,
+    dry_run: bool,
+    brew: Option<&str>,
+) -> String {
+    let removed: Vec<String> = outcome
+        .map(|o| o.removed.iter().map(|p| p.display().to_string()).collect())
+        .unwrap_or_default();
+    let failed: Vec<serde_json::Value> = outcome
+        .map(|o| {
+            o.failed
+                .iter()
+                .map(|(p, e)| serde_json::json!({ "path": p.display().to_string(), "error": e }))
+                .collect()
+        })
+        .unwrap_or_default();
+    serde_json::json!({
+        "app": plan.app.name,
+        "plan": plan,
+        "running": guards.running,
+        "cask": cask_json(&guards.cask),
+        "removed": removed,
+        "failed": failed,
+        "freed_bytes": outcome.map(|o| o.freed_bytes).unwrap_or(0),
+        "brew": brew,
+        "dry_run": dry_run,
+    })
+    .to_string()
 }
 
 fn require_query(flags: &Flags) -> Result<&str> {
@@ -82,19 +143,42 @@ fn run_remove(flags: &Flags) -> Result<ExitCode> {
     let inventory = core::installed_apps()?;
     let app = core::resolve_unique(&inventory, require_query(flags)?)?;
     let plan = core::plan(&app, &inventory)?;
-    println!("{}", plan_json(&plan));
+    let guards = core::guards(&app, &inventory);
+
     if flags.dry_run {
+        println!("{}", output_json(&plan, &guards, None, true, None));
         return Ok(ExitCode::SUCCESS);
     }
-    if !flags.yes && !confirm(&plan, flags.force)? {
+    if let Some(reason) = guard_refusal(guards.running, &guards.cask, flags) {
+        eprintln!("removeapp: {reason}");
+        return Ok(ExitCode::from(2));
+    }
+
+    let requested = if flags.trash_anyway {
+        Disposal::Trash
+    } else {
+        disposal_from_flags(flags.force)
+    };
+    if !flags.yes && !confirm(&plan, requested == Disposal::Delete)? {
         eprintln!("removeapp: aborted");
         return Ok(ExitCode::from(1));
     }
-    let guards = core::guards(&app, &inventory);
-    let outcome = core::remove(&plan, disposal_from_flags(flags.force), &guards.cask)?;
+
+    if guards.running && flags.quit {
+        core::quit_app(&app)?;
+    }
+    let mut brew_token = None;
+    if let CaskStatus::Managed(token) = &guards.cask {
+        if flags.brew && !flags.trash_anyway {
+            core::brew_uninstall(token)?;
+            brew_token = Some(token.as_str().to_string());
+        }
+    }
+
+    let outcome = core::remove_after_brew(&plan, requested, &guards.cask, brew_token.is_some())?;
     println!(
         "{}",
-        serde_json::to_string_pretty(&outcome).unwrap_or_default()
+        output_json(&plan, &guards, Some(&outcome), false, brew_token.as_deref())
     );
     Ok(if outcome.failed.is_empty() {
         ExitCode::SUCCESS
@@ -169,5 +253,33 @@ mod tests {
         ]);
         assert_eq!(f.query.as_deref(), Some("Foo"));
         assert!(f.force && f.yes && !f.dry_run);
+    }
+
+    #[test]
+    fn parse_flags_reads_guard_switches() {
+        let f = parse_flags(&[
+            "Foo".into(),
+            "--quit".into(),
+            "--brew".into(),
+            "--trash-anyway".into(),
+        ]);
+        assert!(f.quit && f.brew && f.trash_anyway);
+        assert_eq!(f.query.as_deref(), Some("Foo"));
+    }
+
+    #[test]
+    fn guard_refusal_running_names_required_flag() {
+        let flags = parse_flags(&["Foo".into(), "--yes".into()]);
+        let text = guard_refusal(true, &CaskStatus::NotManaged, &flags).expect("should refuse");
+        assert!(
+            text.contains("--quit") || text.contains("--trash-anyway"),
+            "names a flag: {text}"
+        );
+    }
+
+    #[test]
+    fn guard_refusal_clears_when_flag_present() {
+        let flags = parse_flags(&["Foo".into(), "--trash-anyway".into()]);
+        assert!(guard_refusal(true, &CaskStatus::NotManaged, &flags).is_none());
     }
 }

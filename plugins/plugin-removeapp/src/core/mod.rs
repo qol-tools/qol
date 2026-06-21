@@ -132,6 +132,37 @@ pub fn remove(
     remove_with(&platform(), plan, requested, cask)
 }
 
+pub fn remove_after_brew(
+    plan: &RemovalPlan,
+    requested: Disposal,
+    cask: &CaskStatus,
+    brew_handled_bundle: bool,
+) -> Result<RemovalOutcome> {
+    if !brew_handled_bundle {
+        return remove_with(&platform(), plan, requested, cask);
+    }
+    let aligned = plan.snapshots.len() == plan.items.len();
+    let mut items = Vec::new();
+    let mut snapshots = Vec::new();
+    for (idx, item) in plan.items.iter().enumerate() {
+        if item.kind == LeftoverKind::AppBundle {
+            continue;
+        }
+        items.push(item.clone());
+        if aligned {
+            snapshots.push(plan.snapshots[idx].clone());
+        }
+    }
+    let total_bytes = items.iter().map(|l| l.size_bytes).sum();
+    let sub = RemovalPlan {
+        app: plan.app.clone(),
+        items,
+        total_bytes,
+        snapshots,
+    };
+    remove_with(&platform(), &sub, requested, cask)
+}
+
 pub fn filter(apps: &[InstalledApp], query: &str) -> Vec<InstalledApp> {
     let q = query.to_lowercase();
     let mut out: Vec<InstalledApp> = apps
