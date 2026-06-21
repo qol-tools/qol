@@ -216,6 +216,40 @@ pub fn show_window_by_title(title: &str) -> bool {
     true
 }
 
+pub fn configure_overlay_window(title: &str) -> bool {
+    let Ok((conn, screen_num)) = x11rb::connect(None) else {
+        return false;
+    };
+    let root = conn.setup().roots[screen_num].root;
+    let list_atom = intern(&conn, b"_NET_CLIENT_LIST");
+    let name_atom = intern(&conn, b"_NET_WM_NAME");
+    let utf8_atom = intern(&conn, b"UTF8_STRING");
+    let (Some(list_atom), Some(name_atom), Some(utf8_atom)) = (list_atom, name_atom, utf8_atom)
+    else {
+        return false;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        return false;
+    };
+
+    set_window_manager_decorations(&conn, wid, false);
+    set_window_manager_state(&conn, wid);
+    let _ = conn.flush();
+    activate_window(&conn, root, wid);
+    let _ = conn.flush();
+    true
+}
+
+fn activate_window(conn: &impl Connection, root: u32, wid: u32) -> bool {
+    let Some(active_atom) = intern(conn, b"_NET_ACTIVE_WINDOW") else {
+        return false;
+    };
+    const SOURCE_APPLICATION: u32 = 1;
+    let event = ClientMessageEvent::new(32, wid, active_atom, [SOURCE_APPLICATION, 0, 0, 0, 0]);
+    let mask = EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT;
+    conn.send_event(false, root, mask, event).is_ok()
+}
+
 pub fn disable_window_shadow(_title: &str) -> bool {
     true
 }

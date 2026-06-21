@@ -155,7 +155,7 @@ fn open_panel(
             return None;
         }
     };
-    qol_gpui::popup_window::configure_popup_window(&title);
+    qol_gpui::popup_window::configure_overlay_window(&title);
     #[cfg(debug_assertions)]
     qol_runtime::probe!("CLI_SESSIONS_OPENPANEL", "opened=true title={title}");
     let _ = handle.update(cx, |view, window, cx| {

@@ -1304,6 +1304,52 @@ fn plain_session(
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum KeyOutcome {
+    Quit,
+    Reload,
+    Handled,
+}
+
+fn handle_key(dash: &mut Dash, code: KeyCode, mods: KeyModifiers) -> KeyOutcome {
+    if is_feature_flags_shortcut(code, mods) {
+        dash.toggle_feature_flags_panel();
+        return KeyOutcome::Handled;
+    }
+    if dash.feature_panel.is_active() {
+        edit_feature_flags(dash, code);
+        return KeyOutcome::Handled;
+    }
+    if dash.filter_state.is_active() {
+        edit_filters(dash, code);
+        return KeyOutcome::Handled;
+    }
+    if dash.copying {
+        edit_copy(dash, code);
+        return KeyOutcome::Handled;
+    }
+    if dash.armed && code == KeyCode::Esc {
+        dash.armed = false;
+        return KeyOutcome::Handled;
+    }
+    let modified = dash.armed;
+    let action = action_for(dash, code, mods);
+    match action {
+        Action::Quit => KeyOutcome::Quit,
+        Action::Rebuild if modified => {
+            dash.armed = false;
+            KeyOutcome::Reload
+        }
+        action => {
+            apply_action(dash, action, modified);
+            if modified && !preserves_arm(action) {
+                dash.armed = false;
+            }
+            KeyOutcome::Handled
+        }
+    }
+}
+
 fn tui_session(
     terminal: &mut DefaultTerminal,
     child: &mut Child,
@@ -1379,37 +1425,15 @@ fn tui_session(
         flush_pokes(dash, probes);
         terminal.draw(|frame| draw(frame, dash))?;
         if let Some((code, mods)) = poll_key()? {
-            if is_feature_flags_shortcut(code, mods) {
-                dash.toggle_feature_flags_panel();
-            } else if dash.feature_panel.is_active() {
-                edit_feature_flags(dash, code);
-            } else if dash.filter_state.is_active() {
-                edit_filters(dash, code);
-            } else if dash.copying {
-                edit_copy(dash, code);
-            } else if dash.armed && code == KeyCode::Esc {
-                dash.armed = false;
-            } else {
-                let modified = dash.armed;
-                let action = action_for(dash, code, mods);
-                match action {
-                    Action::Quit => {
-                        stop_trace(dash);
-                        stop_emu_runs(dash);
-                        stop_child(child)?;
-                        return Ok(SessionEnd::UserQuit);
-                    }
-                    Action::Rebuild if modified => {
-                        start_reload(dash);
-                        dash.armed = false;
-                    }
-                    action => {
-                        apply_action(dash, action, modified);
-                        if modified && !preserves_arm(action) {
-                            dash.armed = false;
-                        }
-                    }
+            match handle_key(dash, code, mods) {
+                KeyOutcome::Quit => {
+                    stop_trace(dash);
+                    stop_emu_runs(dash);
+                    stop_child(child)?;
+                    return Ok(SessionEnd::UserQuit);
                 }
+                KeyOutcome::Reload => start_reload(dash),
+                KeyOutcome::Handled => {}
             }
         }
     }
@@ -5123,6 +5147,58 @@ mod tests {
             !text.contains("refresh checks"),
             "trace context must not show doctor binding"
         );
+    }
+
+    #[test]
+    fn armed_ctrl_r_requests_reload_from_dashboard() {
+        let mut dash = Dash::new(Vec::new());
+        assert!(
+            dash.view == View::Dashboard,
+            "dashboard is the landing view"
+        );
+
+        assert_eq!(
+            handle_key(&mut dash, KeyCode::Char(' '), KeyModifiers::NONE),
+            KeyOutcome::Handled
+        );
+        assert!(dash.armed, "space arms in the dashboard");
+
+        assert_eq!(
+            handle_key(&mut dash, KeyCode::Char('r'), KeyModifiers::CONTROL),
+            KeyOutcome::Reload,
+            "armed ctrl+r reloads instead of rebuilding"
+        );
+        assert!(!dash.armed, "reload consumes the armed state");
+    }
+
+    #[test]
+    fn armed_ctrl_r_requests_reload_from_trace() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Trace;
+
+        assert_eq!(
+            handle_key(&mut dash, KeyCode::Char(' '), KeyModifiers::NONE),
+            KeyOutcome::Handled
+        );
+        assert!(dash.armed, "space arms in the trace view");
+
+        assert_eq!(
+            handle_key(&mut dash, KeyCode::Char('r'), KeyModifiers::CONTROL),
+            KeyOutcome::Reload,
+            "armed ctrl+r reloads from the trace view too"
+        );
+        assert!(!dash.armed, "reload consumes the armed state");
+    }
+
+    #[test]
+    fn esc_disarms_without_quitting() {
+        let mut dash = Dash::new(Vec::new());
+        dash.armed = true;
+        assert_eq!(
+            handle_key(&mut dash, KeyCode::Esc, KeyModifiers::NONE),
+            KeyOutcome::Handled
+        );
+        assert!(!dash.armed, "esc clears the armed state");
     }
 
     #[test]
