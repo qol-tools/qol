@@ -1,4 +1,5 @@
 pub mod classify;
+pub mod guards;
 pub mod platform;
 
 use std::path::PathBuf;
@@ -6,6 +7,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 pub use classify::MatchKind;
+pub use guards::{CaskStatus, CaskToken, Guards};
 pub use platform::{AppPlatform, Platform};
 
 #[derive(Debug, Clone, serde::Serialize)]
