@@ -26,6 +26,10 @@ dirs = "5"
 plist = "1"
 libc = "0.2"
 trash = "5"
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = ["NSString", "NSArray"] }
+objc2-app-kit = { workspace = true, features = ["NSWorkspace", "NSRunningApplication"] }
+wait-timeout = "0.2"
 
 [dev-dependencies]
 qol-plugin-api.workspace = true

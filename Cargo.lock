@@ -5385,6 +5385,9 @@ dependencies = [
  "dirs 5.0.1",
  "gpui",
  "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "plist",
  "qol-gpui",
  "qol-plugin-api",
@@ -5394,6 +5397,7 @@ dependencies = [
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "trash",
+ "wait-timeout",
 ]
 
 [[package]]
