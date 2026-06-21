@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -17,6 +18,7 @@ use crate::persist;
 use crate::placement::{corner_bounds, Corner};
 use crate::registry::Registry;
 use crate::service::SystemServiceProbe;
+use crate::status::Status;
 use crate::strategy::codex::DiskCodexStore;
 use crate::ui::{trace, SessionsView, WINDOW_TITLE};
 use qol_gpui::command_loop::LoopFlow;
@@ -72,7 +74,13 @@ pub fn run() -> anyhow::Result<()> {
             view_handle,
             cx,
         );
-        spawn_command_poll(cmd_rx, view_handle, cx);
+        spawn_command_poll(
+            cmd_rx,
+            view_handle,
+            reg_for_app.clone(),
+            host_for_app.clone(),
+            cx,
+        );
     });
     Ok(())
 }
@@ -82,6 +90,25 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn snapshot_now(host: &Arc<dyn TerminalHost + Send + Sync>, registry: &Arc<Mutex<Registry>>) {
+    let Some(dir) = paths::snapshots_dir() else {
+        eprintln!("[cli-sessions] snapshot: no data dir");
+        return;
+    };
+    let panel: HashMap<u64, Status> = match registry.lock() {
+        Ok(reg) => reg
+            .sorted()
+            .into_iter()
+            .map(|s| (s.window_id, s.status))
+            .collect(),
+        Err(_) => HashMap::new(),
+    };
+    match crate::snapshot::capture_all(host.as_ref(), &panel, &dir, now_secs()) {
+        Ok(path) => eprintln!("[cli-sessions] snapshot -> {}", path.display()),
+        Err(e) => eprintln!("[cli-sessions] snapshot failed: {e}"),
+    }
 }
 
 fn panel_bounds(corner: Corner, cx: &mut gpui::App) -> Bounds<Pixels> {
@@ -172,10 +199,14 @@ fn spawn_reconcile_timer(
 fn spawn_command_poll(
     cmd_rx: mpsc::Receiver<Command>,
     view_handle: Option<gpui::WindowHandle<SessionsView>>,
+    registry: Arc<Mutex<Registry>>,
+    host: Arc<dyn TerminalHost + Send + Sync>,
     cx: &mut gpui::App,
 ) {
     qol_gpui::command_loop::spawn_command_loop(cx, cmd_rx, move |cx, cmd| {
         let view_handle = view_handle;
+        let registry = registry.clone();
+        let host = host.clone();
         async move {
             match cmd {
                 Command::Open => {
@@ -208,6 +239,13 @@ fn spawn_command_poll(
                             });
                         }
                     });
+                    LoopFlow::Continue
+                }
+                Command::Snapshot => {
+                    #[cfg(debug_assertions)]
+                    qol_runtime::probe!("CLI_SESSIONS_CMD", "cmd=snapshot");
+                    cx.background_spawn(async move { snapshot_now(&host, &registry) })
+                        .await;
                     LoopFlow::Continue
                 }
                 Command::Kill => {

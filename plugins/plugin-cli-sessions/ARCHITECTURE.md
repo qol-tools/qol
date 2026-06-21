@@ -169,6 +169,9 @@ presses cycle through just the rows that want you (`nav::next_attention`, pure a
 ordered with attention on top), skipping calm ones - from anywhere, no panel
 focus required.
 
+A third action, `snapshot`, is bound the same way (menu item + `runtime.actions`
++ a `[[shortcuts]]` entry). It is the user-as-oracle capture: see "Self-healing".
+
 ## Self-healing: anomaly capture (`src/anomaly`)
 
 A misread status (a false `NeedsYou`, say) is rare and content-specific, so it is
@@ -200,6 +203,18 @@ false-positive is moved into `tests/fixtures/corpus` with an expected status,
 turning the once-live misread into a permanent regression test. The corpus and
 the `examples/classify` harness let you pin behavior against real captured CC
 screens instead of hand-written strings.
+
+The flap recorder only sees one direction: a *false positive* (a NeedsYou that
+self-clears). A *false negative* - a session that genuinely wants you but reads
+idle/working - has no temporal tell, so the daemon, whose own classification is
+the thing that is wrong, cannot detect it. Only you can. The `snapshot` action
+(`cli-sessions snapshot`, bindable to a hotkey) is that escape hatch: one press
+dumps every live session's frame in the moment - screen, title, and the status
+the panel is currently showing - to `paths::snapshots_dir` in the same
+corpus-fixture shape (`snapshot::capture_all`). When the panel is wrong in any
+direction, you snap, then promote the offending frame into the corpus with the
+right `expect`. It always records (user intent, not autonomous), independent of
+the dev-build recorder gating.
 
 ## Known gaps
 

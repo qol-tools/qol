@@ -11,6 +11,10 @@ fn main() -> ExitCode {
             core_daemon::send_action(&CONFIG, "next", false);
             ExitCode::SUCCESS
         }
+        Some("snapshot") => {
+            core_daemon::send_action(&CONFIG, "snapshot", false);
+            ExitCode::SUCCESS
+        }
         Some(other) => {
             eprintln!("plugin-cli-sessions: unknown subcommand {other:?}");
             ExitCode::from(2)

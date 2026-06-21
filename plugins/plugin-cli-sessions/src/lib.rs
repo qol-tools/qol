@@ -11,6 +11,7 @@ pub mod placement;
 pub mod registry;
 pub mod service;
 pub mod signal;
+pub mod snapshot;
 pub mod status;
 pub mod strategy;
 pub mod tool;

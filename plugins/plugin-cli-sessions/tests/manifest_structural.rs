@@ -20,6 +20,10 @@ fn manifest_declares_on_demand_actions_and_one_binary() {
         actions.contains_key("next"),
         "the jump-to-next-attention hotkey resolves to a runtime action"
     );
+    assert!(
+        actions.contains_key("snapshot"),
+        "the snapshot-all hotkey resolves to a runtime action"
+    );
 
     assert!(
         m.daemon.is_none(),
@@ -29,8 +33,8 @@ fn manifest_declares_on_demand_actions_and_one_binary() {
     let shortcut_actions: Vec<&str> = m.shortcuts.iter().map(|s| s.action.as_str()).collect();
     assert_eq!(
         shortcut_actions,
-        ["open", "next"],
-        "both the open and next-alert actions are bindable shortcuts"
+        ["open", "next", "snapshot"],
+        "open, next-alert, and snapshot-all are bindable shortcuts"
     );
     assert!(m.shortcuts.iter().all(|s| s.export_to_launcher));
 

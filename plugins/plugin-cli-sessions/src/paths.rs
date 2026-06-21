@@ -8,6 +8,10 @@ pub fn anomalies_dir() -> Option<std::path::PathBuf> {
     Some(plugin_data_dir()?.join("anomalies"))
 }
 
+pub fn snapshots_dir() -> Option<std::path::PathBuf> {
+    Some(plugin_data_dir()?.join("snapshots"))
+}
+
 fn plugin_data_dir() -> Option<std::path::PathBuf> {
     let id = qol_config::plugin_id_from_env(PLUGIN_ID);
     Some(qol_config::data_dir()?.join("plugins").join(id))
