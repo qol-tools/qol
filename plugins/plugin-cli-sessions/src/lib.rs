@@ -1,3 +1,4 @@
+pub mod anomaly;
 pub mod config;
 pub mod daemon;
 pub mod git;

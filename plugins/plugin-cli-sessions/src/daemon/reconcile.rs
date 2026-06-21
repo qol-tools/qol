@@ -76,10 +76,21 @@ pub fn tick(
             short(&pane.title)
         );
 
+        let phase = reading.phase;
         if let Ok(mut reg) = registry.lock() {
-            if let Some(notice) = apply(&mut reg, pane, tool, reading, new_hash, now) {
+            let (notice, status) = apply(&mut reg, pane, tool, reading, new_hash, now);
+            if let Some(notice) = notice {
                 notices.push(notice);
             }
+            drop(reg);
+            crate::anomaly::observe(
+                pane.window_id,
+                now,
+                &pane.title,
+                screen.as_deref(),
+                phase,
+                status,
+            );
         }
     }
 
@@ -161,7 +172,7 @@ fn apply(
     reading: Reading,
     new_hash: Option<u64>,
     now: u64,
-) -> Option<Notice> {
+) -> (Option<Notice>, Status) {
     let branch = git::branch(&pane.cwd);
     let (prev_status, prev_running) = match reg.get(pane.window_id) {
         Some(s) => (s.status, s.running_since),
@@ -205,7 +216,7 @@ fn apply(
         if let Some(h) = new_hash {
             s.screen_hash = Some(h);
         }
-        return notice;
+        return (notice, status);
     }
     reg.upsert(SessionState {
         window_id: pane.window_id,
@@ -221,5 +232,5 @@ fn apply(
         screen_hash: new_hash,
         running_since,
     });
-    notice
+    (notice, status)
 }

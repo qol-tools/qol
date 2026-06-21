@@ -1,11 +1,14 @@
 pub const PLUGIN_ID: &str = "plugin-cli-sessions";
 
 pub fn state_path() -> Option<std::path::PathBuf> {
+    Some(plugin_data_dir()?.join("sessions.json"))
+}
+
+pub fn anomalies_dir() -> Option<std::path::PathBuf> {
+    Some(plugin_data_dir()?.join("anomalies"))
+}
+
+fn plugin_data_dir() -> Option<std::path::PathBuf> {
     let id = qol_config::plugin_id_from_env(PLUGIN_ID);
-    Some(
-        qol_config::data_dir()?
-            .join("plugins")
-            .join(id)
-            .join("sessions.json"),
-    )
+    Some(qol_config::data_dir()?.join("plugins").join(id))
 }
