@@ -52,7 +52,14 @@ fn write_desktop_file(dir: &Path, entry: &LauncherEntry, binary_path: &Path) -> 
     );
 
     let path = dir.join(desktop_filename(entry));
-    std::fs::write(&path, content)?;
+    write_executable(&path, &content)?;
+    Ok(())
+}
+
+fn write_executable(path: &Path, content: &str) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, content)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
     Ok(())
 }
 
@@ -118,5 +125,27 @@ mod tests {
         assert!(content.lines().any(|line| {
             line == "Exec=\"/tmp/qol tray/qol-tray\" \"exec\" \"shortcut id\" \"path%%to%%tool\""
         }));
+    }
+
+    #[test]
+    fn desktop_file_is_executable_so_cinnamon_runs_it_instead_of_opening_nemo() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+
+        write_desktop_file(
+            tmp.path(),
+            &entry(&["exec", "shortcut", "id"]),
+            Path::new("/tmp/qol-tray"),
+        )
+        .unwrap();
+
+        let mode = std::fs::metadata(tmp.path().join("qol-shortcut-space.desktop"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert!(
+            mode & 0o111 != 0,
+            "desktop entry must be executable, mode={mode:o}"
+        );
     }
 }

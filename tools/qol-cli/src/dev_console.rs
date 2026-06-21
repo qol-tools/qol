@@ -71,6 +71,7 @@ enum Action {
     OpenEmuDir,
     OpenCurrentLogFolder,
     OpenCurrentLogEditor,
+    OpenCurrentLogRaw,
     ToggleArch,
     Confirm,
     Ignore,
@@ -284,9 +285,9 @@ fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
                 ],
             ),
         ],
-        View::Logs => stream_view_bindings(false, true, dash.armed),
-        View::Trace => stream_view_bindings(true, true, dash.armed),
-        View::EmuDetail => stream_view_bindings(false, false, dash.armed),
+        View::Logs => stream_view_bindings(false, true),
+        View::Trace => stream_view_bindings(true, true),
+        View::EmuDetail => stream_view_bindings(false, false),
         View::Doctor => vec![
             char_binding("d", "refresh checks", Action::Doctor, 'd'),
             binding(
@@ -372,7 +373,7 @@ fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
     }
 }
 
-fn stream_view_bindings(trace: bool, log_resource: bool, armed: bool) -> Vec<KeyBinding> {
+fn stream_view_bindings(trace: bool, log_resource: bool) -> Vec<KeyBinding> {
     let mut bindings = vec![
         binding(
             "↑/↓",
@@ -417,33 +418,34 @@ fn stream_view_bindings(trace: bool, log_resource: bool, armed: bool) -> Vec<Key
         char_binding("c", "copy last N", Action::Copy, 'c'),
     ];
     if log_resource {
-        if trace {
-            bindings.push(binding(
-                "space",
-                "arm: raw",
-                Action::ToggleArm,
-                vec![KeyStroke::plain(KeyCode::Char(' '))],
-            ));
-        }
         bindings.push(char_binding(
             "o",
             "open folder",
             Action::OpenCurrentLogFolder,
             'o',
         ));
-        let editor_desc = if trace && armed {
-            "open raw"
-        } else {
-            "open in editor"
-        };
         bindings.push(char_binding(
             "e",
-            editor_desc,
+            "open in editor",
             Action::OpenCurrentLogEditor,
             'e',
         ));
+        if trace {
+            bindings.push(char_binding(
+                "r",
+                "open raw",
+                Action::OpenCurrentLogRaw,
+                'r',
+            ));
+        }
     }
     if trace {
+        bindings.push(binding(
+            "space",
+            "arm: reload",
+            Action::ToggleArm,
+            vec![KeyStroke::plain(KeyCode::Char(' '))],
+        ));
         bindings.push(char_binding(
             "d",
             "details",
@@ -1643,7 +1645,8 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             }
         }
         Action::OpenCurrentLogFolder => open_current_log_folder(dash),
-        Action::OpenCurrentLogEditor => open_current_log_editor(dash, modified),
+        Action::OpenCurrentLogEditor => open_current_log_editor(dash, false),
+        Action::OpenCurrentLogRaw => open_current_log_editor(dash, true),
         Action::OpenEmuDir => {
             if dash.view == View::Emu {
                 open_emu_dir();
@@ -4553,12 +4556,17 @@ mod tests {
         assert_eq!(
             action_for(&dash, KeyCode::Char('e'), none),
             Action::OpenCurrentLogEditor,
-            "e opens trace file in the trace view"
+            "e opens the prettified trace in the trace view"
+        );
+        assert_eq!(
+            action_for(&dash, KeyCode::Char('r'), none),
+            Action::OpenCurrentLogRaw,
+            "r opens the raw trace file in the trace view"
         );
         assert_eq!(
             action_for(&dash, KeyCode::Char(' '), none),
             Action::ToggleArm,
-            "space arms the trace raw-open action"
+            "space arms the reload in the trace view"
         );
         for (code, expected) in [
             (KeyCode::PageUp, Action::PageUp),
@@ -5095,25 +5103,25 @@ mod tests {
             text.contains(" o         open folder "),
             "missing open folder key"
         );
-        assert!(text.contains(" space     arm: raw "), "missing raw arm key");
         assert!(
             text.contains(" e         open in editor "),
             "missing editor open key"
         );
         assert!(
+            text.contains(" r         open raw "),
+            "missing raw open key"
+        );
+        assert!(
+            text.contains(" space     arm: reload "),
+            "missing reload arm key"
+        );
+        assert!(
+            !text.contains("arm: raw"),
+            "trace context must not show the legacy raw arm key"
+        );
+        assert!(
             !text.contains("refresh checks"),
             "trace context must not show doctor binding"
-        );
-
-        dash.armed = true;
-        let armed_text = keys_rows(&dash)
-            .into_iter()
-            .map(|line| span_text(&line.spans))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            armed_text.contains(" e         open raw "),
-            "armed trace context should expose raw open"
         );
     }
 
