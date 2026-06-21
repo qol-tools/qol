@@ -1,0 +1,39 @@
+   modified:   libs/qol-gpui/src/scroll_list.rs                                                                                         
+                                                                                                                                        
+                                                                                                                                        
+is this not committed?                                                                                                                  
+
+⏺ I'll first answer your direct question with real git facts, then run the review board. Let me check the actual state.
+
+  Ran 4 shell commands 
+
+⏺ The feature is committed. Here's the precise picture:
+  
+  - 09d1ffcb contains the whole feature - all 4 files (scroll_list.rs new, lib.rs, launcher state.rs, removeapp ui/mod.rs).
+  - What git status shows as modified: libs/qol-gpui/src/scroll_list.rs is a separate, trivial uncommitted delta on top: one test
+  assertion got line-wrapped (single line → 3 lines). Zero behavior change - it's a pure formatting reflow of assert!(...) in the test
+  module.
+
+  So nothing of the feature is lost or uncommitted; there's just a cosmetic fmt tweak sitting unstaged. Let me confirm the fmt
+  provenance and read the review adapter before spawning the board.
+
+⏺ Searching for 1 pattern, reading 1 file, running 1 shell command…
+  ⎿  $ cargo fmt -p qol-gpui -- --check 2>&1 | head -20; echo "EXIT=$?"
+
+✽ Integrating and verifying… (1m 32s · ↓ 4.6k tokens · thinking some more with xhigh effort)
+  ⎿  ◼ Task 8: qol-tray integration + verify
+     ✔ Task 1: Scaffold the crate
+     ✔ Task 2: Domain types + macOS scan
+     ✔ Task 3: Protection guardrails
+     ✔ Task 4: Removal (trash + delete)
+      … +3 completed
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ~/repos/private/qol-monorepo · Opus 4.8 xhigh · ctx ░░░░░ 9% · ⧗ 5h 27% ↻3h · ⧗ wk 19% ↻2d
+  └─ main · 1 modified · 1 untracked
+  └─ as dev <dev@example.com> · global: dev <dev@example.com>
+  └─ ⟳ 1 stale: stale-branch
+
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

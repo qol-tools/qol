@@ -22,14 +22,18 @@ pub fn has_prompt_markers(text: &str) -> bool {
 }
 
 pub fn claude_working(text: &str) -> bool {
-    text.lines()
-        .rev()
-        .filter(|l| !l.trim().is_empty())
-        .take(12)
-        .any(|l| {
-            let t = l.trim();
-            t.contains("esc to interrupt") || (t.contains("\u{2026} (") && t.ends_with(')'))
-        })
+    text.lines().any(|l| {
+        let t = l.trim();
+        t.contains("esc to interrupt") || is_live_spinner(t)
+    })
+}
+
+fn is_live_spinner(t: &str) -> bool {
+    starts_with_spinner_glyph(t) && t.contains("\u{2026} (") && t.ends_with(')')
+}
+
+fn starts_with_spinner_glyph(t: &str) -> bool {
+    matches!(t.chars().next(), Some(c) if (0x2722..=0x273F).contains(&(c as u32)))
 }
 
 pub fn claude_done(text: &str) -> bool {
