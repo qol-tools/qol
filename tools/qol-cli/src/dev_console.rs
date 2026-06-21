@@ -3433,21 +3433,22 @@ fn plugin_view_lines(dash: &Dash) -> Vec<Line<'static>> {
 }
 
 fn plugin_link_line(link: &DevLink) -> Line<'static> {
-    if link.needs_rebuild {
-        return Line::from(vec![
-            "  ".into(),
-            "●".fg(Color::Yellow).bold(),
-            format!(" {}", link.name).fg(Color::White),
-            " · stale · ".fg(Color::Yellow),
-            link.rebuild_reason.clone().fg(Color::DarkGray),
-        ]);
+    let dot = if link.needs_rebuild {
+        "●".fg(Color::Yellow).bold()
+    } else {
+        "●".fg(Color::Green).bold()
+    };
+    let mut spans = vec!["  ".into(), dot, format!(" {}", link.name).fg(Color::White)];
+    if !link.version.is_empty() {
+        spans.push(format!(" v{}", link.version).fg(Color::DarkGray));
     }
-    Line::from(vec![
-        "  ".into(),
-        "●".fg(Color::Green).bold(),
-        format!(" {}", link.name).fg(Color::White),
-        " · dev-linked".fg(Color::DarkGray),
-    ])
+    if link.needs_rebuild {
+        spans.push(" · stale · ".fg(Color::Yellow));
+        spans.push(link.rebuild_reason.clone().fg(Color::DarkGray));
+    } else {
+        spans.push(" · dev-linked".fg(Color::DarkGray));
+    }
+    Line::from(spans)
 }
 
 fn emu_empty_lines(config: &str) -> Vec<Line<'static>> {
@@ -4360,11 +4361,13 @@ mod tests {
     fn plugins_status_reflects_link_state() {
         let fresh = DevLink {
             name: "foo".to_string(),
+            version: "1.0.0".to_string(),
             needs_rebuild: false,
             rebuild_reason: "Up to date".to_string(),
         };
         let stale = DevLink {
             name: "bar".to_string(),
+            version: "1.0.0".to_string(),
             needs_rebuild: true,
             rebuild_reason: "Source changed".to_string(),
         };
@@ -4391,6 +4394,39 @@ mod tests {
             assert_eq!(color, expected_color, "text: {expected_text}");
             assert_eq!(span_text(&spans), expected_text);
         }
+    }
+
+    #[test]
+    fn plugin_link_line_shows_version_for_fresh_and_stale() {
+        let cases = [false, true];
+        for needs_rebuild in cases {
+            let link = DevLink {
+                name: "launcher".to_string(),
+                version: "1.2.0".to_string(),
+                needs_rebuild,
+                rebuild_reason: "Source changed".to_string(),
+            };
+            let text = span_text(&plugin_link_line(&link).spans);
+            assert!(
+                text.contains("v1.2.0"),
+                "dev-linked plugin line must show its version (needs_rebuild={needs_rebuild}): {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_link_line_omits_version_when_absent() {
+        let link = DevLink {
+            name: "launcher".to_string(),
+            version: String::new(),
+            needs_rebuild: false,
+            rebuild_reason: String::new(),
+        };
+        let text = span_text(&plugin_link_line(&link).spans);
+        assert!(
+            !text.contains(" v"),
+            "no version segment when version is empty: {text}"
+        );
     }
 
     #[test]

@@ -25,6 +25,8 @@ pub(crate) enum DevLinkOutcome {
 #[derive(Clone, PartialEq, serde::Deserialize)]
 pub(crate) struct DevLink {
     pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) version: String,
     pub(crate) needs_rebuild: bool,
     pub(crate) rebuild_reason: String,
 }
