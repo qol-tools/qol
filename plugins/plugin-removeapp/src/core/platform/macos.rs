@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+use crate::core::classify::{normalize_entry, owner_of};
 use crate::core::guards::{CaskStatus, CaskToken};
 use crate::core::{
     AppPlatform, Disposal, InstalledApp, Leftover, LeftoverKind, MatchKind, RemovalOutcome,
@@ -30,49 +31,56 @@ impl Platform {
     fn library(&self) -> PathBuf {
         self.home.join("Library")
     }
+}
 
-    fn leftover_candidates(&self, app: &InstalledApp) -> Vec<(LeftoverKind, PathBuf)> {
-        let lib = self.library();
-        let mut out: Vec<(LeftoverKind, PathBuf)> = Vec::new();
+enum KeyMode {
+    Bundle,
+    Hybrid,
+    SharedExact,
+}
 
-        let mut keys: Vec<&str> = vec![app.name.as_str()];
-        if let Some(bid) = &app.bundle_id {
-            keys.push(bid.as_str());
+fn library_dirs() -> Vec<(LeftoverKind, &'static str, KeyMode)> {
+    use LeftoverKind::*;
+    vec![
+        (Preferences, "Preferences", KeyMode::Bundle),
+        (Containers, "Containers", KeyMode::Bundle),
+        (HttpStorages, "HTTPStorages", KeyMode::Bundle),
+        (WebKit, "WebKit", KeyMode::Bundle),
+        (SavedState, "Saved Application State", KeyMode::Bundle),
+        (LaunchAgent, "LaunchAgents", KeyMode::Bundle),
+        (ApplicationSupport, "Application Support", KeyMode::Hybrid),
+        (Caches, "Caches", KeyMode::Hybrid),
+        (Logs, "Logs", KeyMode::Hybrid),
+        (GroupContainers, "Group Containers", KeyMode::SharedExact),
+    ]
+}
+
+fn classify_entry(
+    entry: &str,
+    app: &InstalledApp,
+    all_bids: &[String],
+    mode: &KeyMode,
+) -> Option<MatchKind> {
+    let name_hit = entry.eq_ignore_ascii_case(&app.name);
+    let bid_hit = app.bundle_id.as_deref().and_then(|bid| {
+        let owner = owner_of(entry, all_bids)?;
+        if owner != bid {
+            return None;
         }
-        for key in &keys {
-            out.push((
-                LeftoverKind::ApplicationSupport,
-                lib.join("Application Support").join(key),
-            ));
-            out.push((LeftoverKind::Caches, lib.join("Caches").join(key)));
-            out.push((LeftoverKind::Logs, lib.join("Logs").join(key)));
-        }
-        if let Some(bid) = &app.bundle_id {
-            out.push((
-                LeftoverKind::Preferences,
-                lib.join("Preferences").join(format!("{bid}.plist")),
-            ));
-            out.push((LeftoverKind::Containers, lib.join("Containers").join(bid)));
-            out.push((
-                LeftoverKind::GroupContainers,
-                lib.join("Group Containers").join(bid),
-            ));
-            out.push((
-                LeftoverKind::SavedState,
-                lib.join("Saved Application State")
-                    .join(format!("{bid}.savedState")),
-            ));
-            out.push((
-                LeftoverKind::HttpStorages,
-                lib.join("HTTPStorages").join(bid),
-            ));
-            out.push((LeftoverKind::WebKit, lib.join("WebKit").join(bid)));
-            out.push((
-                LeftoverKind::LaunchAgent,
-                lib.join("LaunchAgents").join(format!("{bid}.plist")),
-            ));
-        }
-        out
+        Some(if normalize_entry(entry) == bid {
+            MatchKind::Exact
+        } else {
+            MatchKind::Fuzzy
+        })
+    });
+    match mode {
+        KeyMode::Bundle => bid_hit,
+        KeyMode::Hybrid => bid_hit.or(name_hit.then_some(MatchKind::Exact)),
+        KeyMode::SharedExact => app
+            .bundle_id
+            .as_deref()
+            .filter(|bid| normalize_entry(entry) == *bid)
+            .map(|_| MatchKind::Exact),
     }
 }
 
@@ -171,24 +179,47 @@ impl AppPlatform for Platform {
         Ok(apps)
     }
 
-    fn scan(&self, app: &InstalledApp, _inventory: &[InstalledApp]) -> Result<RemovalPlan> {
+    fn scan(&self, app: &InstalledApp, inventory: &[InstalledApp]) -> Result<RemovalPlan> {
+        let mut all_bids: Vec<String> = inventory
+            .iter()
+            .filter_map(|a| a.bundle_id.clone())
+            .collect();
+        if let Some(bid) = &app.bundle_id {
+            if !all_bids.iter().any(|b| b == bid) {
+                all_bids.push(bid.clone());
+            }
+        }
+
         let mut items = vec![Leftover {
             path: app.path.clone(),
             kind: LeftoverKind::AppBundle,
             size_bytes: path_size(&app.path),
             match_kind: MatchKind::Exact,
         }];
-        for (kind, path) in self.leftover_candidates(app) {
-            if path.exists() {
-                let size_bytes = path_size(&path);
-                items.push(Leftover {
-                    path,
-                    kind,
-                    size_bytes,
-                    match_kind: MatchKind::Exact,
-                });
+
+        let lib = self.library();
+        for (kind, subdir, mode) in library_dirs() {
+            let Ok(entries) = fs::read_dir(lib.join(subdir)) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let file_name = entry.file_name();
+                let Some(name) = file_name.to_str() else {
+                    continue;
+                };
+                if let Some(match_kind) = classify_entry(name, app, &all_bids, &mode) {
+                    let path = entry.path();
+                    let size_bytes = path_size(&path);
+                    items.push(Leftover {
+                        path,
+                        kind,
+                        size_bytes,
+                        match_kind,
+                    });
+                }
             }
         }
+
         let total_bytes = items.iter().map(|l| l.size_bytes).sum();
         Ok(RemovalPlan {
             app: app.clone(),
@@ -269,15 +300,15 @@ mod tests {
         write(&home.join("Library/Preferences/com.acme.foo.plist"), "yy");
 
         let plat = Platform::with_roots(home.clone(), vec![apps.clone()]);
-        let app = plat
-            .installed_apps()
-            .unwrap()
-            .into_iter()
+        let inventory = plat.installed_apps().unwrap();
+        let app = inventory
+            .iter()
             .find(|a| a.name == "Foo")
-            .expect("Foo discovered");
+            .expect("Foo discovered")
+            .clone();
         assert_eq!(app.bundle_id.as_deref(), Some("com.acme.foo"));
 
-        let plan = plat.scan(&app, &[]).unwrap();
+        let plan = plat.scan(&app, &inventory).unwrap();
         let paths: Vec<PathBuf> = plan.items.iter().map(|l| l.path.clone()).collect();
         let cases = [
             (bundle.clone(), true, "bundle"),
@@ -293,6 +324,47 @@ mod tests {
             assert_eq!(paths.contains(&path), expected, "{label}");
         }
         assert!(plan.total_bytes > 0, "total size computed");
+    }
+
+    #[test]
+    fn scan_includes_helper_excludes_sibling_and_foobar() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let apps = tmp.path().join("Applications");
+        write(&apps.join("Foo.app/Contents/Info.plist"), INFO_PLIST_FOO);
+        let bar = r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.acme.foo.bar</string>
+<key>CFBundleName</key><string>Bar</string>
+</dict></plist>"#;
+        write(&apps.join("Bar.app/Contents/Info.plist"), bar);
+        write(&home.join("Library/Caches/com.acme.foo.helper/x"), "x");
+        write(&home.join("Library/Caches/com.acme.foo.bar/y"), "y");
+        write(&home.join("Library/Caches/com.acme.foobar/z"), "z");
+
+        let plat = Platform::with_roots(home.clone(), vec![apps.clone()]);
+        let inventory = plat.installed_apps().unwrap();
+        let foo = inventory
+            .iter()
+            .find(|a| a.name == "Foo")
+            .expect("Foo discovered")
+            .clone();
+        let plan = plat.scan(&foo, &inventory).unwrap();
+        let ends = |suffix: &str| {
+            plan.items
+                .iter()
+                .any(|l| l.path.to_string_lossy().ends_with(suffix))
+        };
+
+        assert!(ends("Caches/com.acme.foo.helper"), "helper kept");
+        assert!(!ends("Caches/com.acme.foo.bar"), "sibling excluded");
+        assert!(!ends("Caches/com.acme.foobar"), "foobar excluded");
+        let helper = plan
+            .items
+            .iter()
+            .find(|l| l.path.to_string_lossy().ends_with("foo.helper"))
+            .expect("helper present");
+        assert_eq!(helper.match_kind, MatchKind::Fuzzy, "non-exact is fuzzy");
     }
 
     #[test]
