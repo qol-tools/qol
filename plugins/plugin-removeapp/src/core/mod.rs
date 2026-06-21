@@ -3,6 +3,7 @@ pub mod guards;
 pub mod platform;
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Result;
 
@@ -42,24 +43,77 @@ pub struct Leftover {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct IdentitySnapshot {
+    pub exists: bool,
     pub is_symlink: bool,
     pub is_dir: bool,
+    pub is_file: bool,
+    pub dev: Option<u64>,
+    pub ino: Option<u64>,
+    pub file_name: Option<String>,
+    pub canonical_parent: Option<PathBuf>,
+    pub ancestor_symlink: bool,
 }
 
 impl IdentitySnapshot {
     pub fn capture(path: &std::path::Path) -> IdentitySnapshot {
+        let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+        let canonical_parent = path.parent().and_then(|p| std::fs::canonicalize(p).ok());
+        let ancestor_symlink = ancestor_has_symlink(path);
         match std::fs::symlink_metadata(path) {
             Ok(m) => IdentitySnapshot {
+                exists: true,
                 is_symlink: m.file_type().is_symlink(),
                 is_dir: m.is_dir(),
+                is_file: m.is_file(),
+                dev: metadata_dev(&m),
+                ino: metadata_ino(&m),
+                file_name,
+                canonical_parent,
+                ancestor_symlink,
             },
-            Err(_) => IdentitySnapshot::default(),
+            Err(_) => IdentitySnapshot {
+                file_name,
+                canonical_parent,
+                ancestor_symlink,
+                ..IdentitySnapshot::default()
+            },
         }
     }
 
     pub fn matches(&self, path: &std::path::Path) -> bool {
         *self == IdentitySnapshot::capture(path)
     }
+}
+
+#[cfg(unix)]
+fn metadata_dev(meta: &std::fs::Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(meta.dev())
+}
+
+#[cfg(not(unix))]
+fn metadata_dev(_meta: &std::fs::Metadata) -> Option<u64> {
+    None
+}
+
+#[cfg(unix)]
+fn metadata_ino(meta: &std::fs::Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(meta.ino())
+}
+
+#[cfg(not(unix))]
+fn metadata_ino(_meta: &std::fs::Metadata) -> Option<u64> {
+    None
+}
+
+fn ancestor_has_symlink(path: &Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    parent.ancestors().any(|ancestor| {
+        std::fs::symlink_metadata(ancestor).is_ok_and(|m| m.file_type().is_symlink())
+    })
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -129,6 +183,33 @@ pub fn quit_app(app: &InstalledApp) -> Result<()> {
     platform().quit(app)
 }
 
+pub fn quit_and_wait(app: &InstalledApp) -> Result<()> {
+    let plat = platform();
+    quit_and_wait_with(&plat, app, 25, Duration::from_millis(100))
+}
+
+fn quit_and_wait_with(
+    plat: &impl AppPlatform,
+    app: &InstalledApp,
+    attempts: usize,
+    delay: Duration,
+) -> Result<()> {
+    plat.quit(app)?;
+    for _ in 0..attempts {
+        if !plat.is_running(app) {
+            return Ok(());
+        }
+        if !delay.is_zero() {
+            std::thread::sleep(delay);
+        }
+    }
+    anyhow::bail!("removeapp: {} is still running", app.name)
+}
+
+pub fn is_running(app: &InstalledApp) -> bool {
+    platform().is_running(app)
+}
+
 pub fn brew_uninstall(token: &CaskToken) -> Result<()> {
     platform().brew_uninstall(token)
 }
@@ -155,20 +236,28 @@ pub fn remove_after_brew(
     cask: &CaskStatus,
     brew_handled_bundle: bool,
 ) -> Result<RemovalOutcome> {
+    remove_after_brew_with(&platform(), plan, requested, cask, brew_handled_bundle)
+}
+
+fn remove_after_brew_with(
+    plat: &impl AppPlatform,
+    plan: &RemovalPlan,
+    requested: Disposal,
+    cask: &CaskStatus,
+    brew_handled_bundle: bool,
+) -> Result<RemovalOutcome> {
     if !brew_handled_bundle {
-        return remove_with(&platform(), plan, requested, cask);
+        return remove_with(plat, plan, requested, cask);
     }
-    let aligned = plan.snapshots.len() == plan.items.len();
+    ensure_snapshot_alignment(plan)?;
     let mut items = Vec::new();
     let mut snapshots = Vec::new();
-    for (idx, item) in plan.items.iter().enumerate() {
+    for (item, snapshot) in plan.items.iter().zip(&plan.snapshots) {
         if item.kind == LeftoverKind::AppBundle {
             continue;
         }
         items.push(item.clone());
-        if aligned {
-            snapshots.push(plan.snapshots[idx].clone());
-        }
+        snapshots.push(snapshot.clone());
     }
     let total_bytes = items.iter().map(|l| l.size_bytes).sum();
     let sub = RemovalPlan {
@@ -177,7 +266,7 @@ pub fn remove_after_brew(
         total_bytes,
         snapshots,
     };
-    remove_with(&platform(), &sub, requested, cask)
+    remove_with(plat, &sub, Disposal::Trash, cask)
 }
 
 pub fn filter(apps: &[InstalledApp], query: &str) -> Vec<InstalledApp> {
@@ -231,14 +320,13 @@ fn remove_with(
             plan.app.name
         );
     }
-    if plan.snapshots.len() == plan.items.len() {
-        for (item, snap) in plan.items.iter().zip(&plan.snapshots) {
-            if !snap.matches(&item.path) {
-                anyhow::bail!(
-                    "removeapp: {} changed on disk; aborting",
-                    item.path.display()
-                );
-            }
+    ensure_snapshot_alignment(plan)?;
+    for (item, snap) in plan.items.iter().zip(&plan.snapshots) {
+        if !snap.matches(&item.path) {
+            anyhow::bail!(
+                "removeapp: {} changed on disk; aborting",
+                item.path.display()
+            );
         }
     }
     let cask_unavailable = matches!(cask, CaskStatus::Unavailable(_));
@@ -267,6 +355,13 @@ fn remove_with(
     let res = plat.remove_items(&rest_items)?;
     absorb(&mut outcome, res, plan);
     Ok(outcome)
+}
+
+fn ensure_snapshot_alignment(plan: &RemovalPlan) -> Result<()> {
+    if plan.snapshots.len() == plan.items.len() {
+        return Ok(());
+    }
+    anyhow::bail!("removeapp: stale plan missing identity snapshots")
 }
 
 fn absorb(acc: &mut RemovalOutcome, res: RemovalOutcome, plan: &RemovalPlan) {
@@ -312,11 +407,15 @@ mod tests {
             MatchKind::Exact,
         )];
         items.extend(leftovers);
+        let snapshots = items
+            .iter()
+            .map(|item| IdentitySnapshot::capture(&item.path))
+            .collect();
         RemovalPlan {
             app: a,
             items,
             total_bytes: 0,
-            snapshots: vec![],
+            snapshots,
         }
     }
 
@@ -324,6 +423,7 @@ mod tests {
     struct FakePlat {
         protected: bool,
         fail_bundle: bool,
+        running: RefCell<Vec<bool>>,
         removed: RefCell<Vec<(PathBuf, Disposal)>>,
     }
 
@@ -350,7 +450,7 @@ mod tests {
             self.protected
         }
         fn is_running(&self, _app: &InstalledApp) -> bool {
-            false
+            self.running.borrow_mut().pop().unwrap_or(false)
         }
         fn quit(&self, _app: &InstalledApp) -> Result<()> {
             Ok(())
@@ -457,5 +557,94 @@ mod tests {
             "aborts on identity change"
         );
         assert!(fake.removed.borrow().is_empty(), "no mutation");
+    }
+
+    #[test]
+    fn recheck_aborts_when_directory_is_replaced_by_another_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bundle = tmp.path().join("Foo.app");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join("old"), "old").unwrap();
+        let target = InstalledApp {
+            name: "Foo".into(),
+            bundle_id: Some("com.acme.foo".into()),
+            path: bundle.clone(),
+        };
+        let plan = RemovalPlan {
+            items: vec![Leftover {
+                path: bundle.clone(),
+                kind: LeftoverKind::AppBundle,
+                size_bytes: 0,
+                match_kind: MatchKind::Exact,
+            }],
+            app: target,
+            total_bytes: 0,
+            snapshots: vec![IdentitySnapshot::capture(&bundle)],
+        };
+        std::fs::remove_dir_all(&bundle).unwrap();
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join("new"), "new").unwrap();
+
+        let fake = FakePlat::default();
+        let err = remove_with(&fake, &plan, Disposal::Trash, &CaskStatus::NotManaged).unwrap_err();
+        assert!(
+            err.to_string().contains("changed"),
+            "aborts on same-kind identity change"
+        );
+        assert!(fake.removed.borrow().is_empty(), "no mutation");
+    }
+
+    #[test]
+    fn remove_refuses_plans_without_complete_snapshots() {
+        let fake = FakePlat::default();
+        let mut p = plan_with(
+            app("Foo", "com.acme.foo"),
+            vec![leftover("/x/cache", LeftoverKind::Caches, MatchKind::Exact)],
+        );
+        p.snapshots.pop();
+
+        let err = remove_with(&fake, &p, Disposal::Trash, &CaskStatus::NotManaged).unwrap_err();
+        assert!(err.to_string().contains("stale plan"));
+        assert!(fake.removed.borrow().is_empty(), "no mutation");
+    }
+
+    #[test]
+    fn remove_after_brew_trashes_remaining_leftovers_even_when_delete_requested() {
+        let fake = FakePlat::default();
+        let p = plan_with(
+            app("Foo", "com.acme.foo"),
+            vec![leftover("/x/cache", LeftoverKind::Caches, MatchKind::Exact)],
+        );
+        remove_after_brew_with(
+            &fake,
+            &p,
+            Disposal::Delete,
+            &CaskStatus::Managed(CaskToken::parse("foo").unwrap()),
+            true,
+        )
+        .unwrap();
+        let recorded = fake.removed.borrow();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].1, Disposal::Trash);
+    }
+
+    #[test]
+    fn quit_and_wait_refuses_when_app_keeps_running() {
+        let fake = FakePlat {
+            running: RefCell::new(vec![true, true, true]),
+            ..Default::default()
+        };
+        let err =
+            quit_and_wait_with(&fake, &app("Foo", "com.acme.foo"), 3, Duration::ZERO).unwrap_err();
+        assert!(err.to_string().contains("still running"));
+    }
+
+    #[test]
+    fn quit_and_wait_accepts_after_running_clears() {
+        let fake = FakePlat {
+            running: RefCell::new(vec![false, true]),
+            ..Default::default()
+        };
+        quit_and_wait_with(&fake, &app("Foo", "com.acme.foo"), 3, Duration::ZERO).unwrap();
     }
 }

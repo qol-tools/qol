@@ -133,19 +133,25 @@ fn location_rank(path: &Path, app_dirs: &[PathBuf]) -> usize {
 }
 
 fn dedup_inventory(candidates: Vec<PathBuf>, app_dirs: &[PathBuf]) -> Vec<InstalledApp> {
-    let mut best: HashMap<String, (usize, InstalledApp)> = HashMap::new();
+    let mut best: HashMap<PathBuf, (usize, InstalledApp)> = HashMap::new();
     for path in candidates {
         if !is_app_bundle(&path) {
             continue;
         }
+        let identity = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         let rank = location_rank(&path, app_dirs);
         let app = read_installed_app(path);
-        if best.get(&app.name).is_none_or(|(seen, _)| rank < *seen) {
-            best.insert(app.name.clone(), (rank, app));
+        if best.get(&identity).is_none_or(|(seen, _)| rank < *seen) {
+            best.insert(identity, (rank, app));
         }
     }
     let mut apps: Vec<InstalledApp> = best.into_values().map(|(_, app)| app).collect();
-    apps.sort_by_key(|a| a.name.to_lowercase());
+    apps.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.path.cmp(&right.path))
+    });
     apps
 }
 
@@ -600,15 +606,12 @@ mod tests {
     }
 
     #[test]
-    fn installed_apps_dedupes_same_name_preferring_canonical_root() {
+    fn installed_apps_dedupes_same_path_but_preserves_same_name_apps() {
         let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
         let primary = tmp.path().join("Applications");
-        let secondary = home.join("Applications");
-        write(
-            &primary.join("Dupe.app/Contents/Info.plist"),
-            &plist_named("Dupe"),
-        );
+        let secondary = tmp.path().join("home/Applications");
+        let dupe = primary.join("Dupe.app");
+        write(&dupe.join("Contents/Info.plist"), &plist_named("Dupe"));
         write(
             &secondary.join("Other.app/Contents/Info.plist"),
             &plist_named("Dupe"),
@@ -619,16 +622,27 @@ mod tests {
         );
         fs::create_dir_all(primary.join("ghost.app")).unwrap();
 
-        let plat = Platform::with_roots(home, vec![primary.clone(), secondary]);
-        let inv = plat.installed_apps().unwrap();
+        let inv = dedup_inventory(
+            vec![
+                dupe.clone(),
+                dupe.clone(),
+                secondary.join("Other.app"),
+                primary.join("Solo.app"),
+                primary.join("ghost.app"),
+            ],
+            &[primary.clone(), secondary.clone()],
+        );
 
         assert_eq!(
             inv.iter().filter(|a| a.name == "Dupe").count(),
-            1,
-            "duplicate display name collapses to one"
+            2,
+            "same display name does not collapse distinct bundles"
         );
-        let dupe = inv.iter().find(|a| a.name == "Dupe").unwrap();
-        assert!(dupe.path.starts_with(&primary), "keeps canonical-root copy");
+        assert_eq!(
+            inv.iter().filter(|a| a.path == dupe).count(),
+            1,
+            "duplicate discovery of the same path collapses"
+        );
         assert!(inv.iter().any(|a| a.name == "Solo"), "unique app kept");
         assert!(inv.iter().all(|a| a.name != "ghost"), "non-bundle dropped");
     }

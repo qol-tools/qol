@@ -16,6 +16,7 @@ fn plan_json(plan: &RemovalPlan) -> String {
     serde_json::to_string_pretty(plan).unwrap_or_else(|_| "{}".to_string())
 }
 
+#[derive(Debug)]
 struct Flags {
     dry_run: bool,
     yes: bool,
@@ -26,7 +27,7 @@ struct Flags {
     query: Option<String>,
 }
 
-fn parse_flags(args: &[String]) -> Flags {
+fn parse_flags(args: &[String]) -> Result<Flags> {
     let mut flags = Flags {
         dry_run: false,
         yes: false,
@@ -47,10 +48,15 @@ fn parse_flags(args: &[String]) -> Flags {
             other if !other.starts_with('-') && flags.query.is_none() => {
                 flags.query = Some(other.to_string());
             }
-            _ => {}
+            other if other.starts_with('-') => {
+                anyhow::bail!("removeapp: unknown flag {other:?}");
+            }
+            other => {
+                anyhow::bail!("removeapp: unexpected argument {other:?}");
+            }
         }
     }
-    flags
+    Ok(flags)
 }
 
 fn guard_refusal(running: bool, cask: &CaskStatus, flags: &Flags) -> Option<String> {
@@ -113,7 +119,14 @@ fn require_query(flags: &Flags) -> Result<&str> {
 }
 
 pub fn scan(args: &[String]) -> ExitCode {
-    match run_scan(&parse_flags(args)) {
+    let flags = match parse_flags(args) {
+        Ok(flags) => flags,
+        Err(e) => {
+            eprintln!("{e:#}");
+            return ExitCode::from(2);
+        }
+    };
+    match run_scan(&flags) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("{e:#}");
@@ -130,7 +143,14 @@ fn run_scan(flags: &Flags) -> Result<()> {
 }
 
 pub fn remove(args: &[String]) -> ExitCode {
-    match run_remove(&parse_flags(args)) {
+    let flags = match parse_flags(args) {
+        Ok(flags) => flags,
+        Err(e) => {
+            eprintln!("{e:#}");
+            return ExitCode::from(2);
+        }
+    };
+    match run_remove(&flags) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("{e:#}");
@@ -165,7 +185,13 @@ fn run_remove(flags: &Flags) -> Result<ExitCode> {
     }
 
     if guards.running && flags.quit {
-        core::quit_app(&app)?;
+        core::quit_and_wait(&app)?;
+    }
+    if !flags.trash_anyway && core::is_running(&app) {
+        anyhow::bail!(
+            "removeapp: {} is still running; pass --trash-anyway to move to Trash anyway",
+            app.name
+        );
     }
     let mut brew_token = None;
     if let CaskStatus::Managed(token) = &guards.cask {
@@ -250,7 +276,8 @@ mod tests {
             "Foo".to_string(),
             "--force".to_string(),
             "--yes".to_string(),
-        ]);
+        ])
+        .unwrap();
         assert_eq!(f.query.as_deref(), Some("Foo"));
         assert!(f.force && f.yes && !f.dry_run);
     }
@@ -262,14 +289,15 @@ mod tests {
             "--quit".into(),
             "--brew".into(),
             "--trash-anyway".into(),
-        ]);
+        ])
+        .unwrap();
         assert!(f.quit && f.brew && f.trash_anyway);
         assert_eq!(f.query.as_deref(), Some("Foo"));
     }
 
     #[test]
     fn guard_refusal_running_names_required_flag() {
-        let flags = parse_flags(&["Foo".into(), "--yes".into()]);
+        let flags = parse_flags(&["Foo".into(), "--yes".into()]).unwrap();
         let text = guard_refusal(true, &CaskStatus::NotManaged, &flags).expect("should refuse");
         assert!(
             text.contains("--quit") || text.contains("--trash-anyway"),
@@ -279,7 +307,27 @@ mod tests {
 
     #[test]
     fn guard_refusal_clears_when_flag_present() {
-        let flags = parse_flags(&["Foo".into(), "--trash-anyway".into()]);
+        let flags = parse_flags(&["Foo".into(), "--trash-anyway".into()]).unwrap();
         assert!(guard_refusal(true, &CaskStatus::NotManaged, &flags).is_none());
+    }
+
+    #[test]
+    fn parse_flags_rejects_unknown_flags_before_planning() {
+        let err = parse_flags(&["Foo".into(), "--dryrun".into(), "--yes".into()]).unwrap_err();
+        assert!(err.to_string().contains("unknown flag"));
+    }
+
+    #[test]
+    fn parse_flags_rejects_extra_positionals() {
+        let err = parse_flags(&["Google".into(), "Chrome".into(), "--yes".into()]).unwrap_err();
+        assert!(err.to_string().contains("unexpected argument"));
+    }
+
+    #[test]
+    fn remove_returns_usage_code_for_parse_errors() {
+        assert_eq!(
+            remove(&["Foo".into(), "--dryrun".into(), "--yes".into()]),
+            ExitCode::from(2)
+        );
     }
 }
