@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -108,6 +109,44 @@ fn read_installed_app(path: PathBuf) -> InstalledApp {
         bundle_id,
         path,
     }
+}
+
+fn is_app_bundle(path: &Path) -> bool {
+    if path.extension().and_then(|e| e.to_str()) != Some("app") {
+        return false;
+    }
+    for ancestor in path.ancestors().skip(1) {
+        if ancestor.extension().and_then(|e| e.to_str()) == Some("app")
+            || ancestor.file_name().is_some_and(|n| n == "Contents")
+        {
+            return false;
+        }
+    }
+    path.join("Contents/Info.plist").is_file()
+}
+
+fn location_rank(path: &Path, app_dirs: &[PathBuf]) -> usize {
+    app_dirs
+        .iter()
+        .position(|dir| path.parent() == Some(dir.as_path()))
+        .unwrap_or(app_dirs.len())
+}
+
+fn dedup_inventory(candidates: Vec<PathBuf>, app_dirs: &[PathBuf]) -> Vec<InstalledApp> {
+    let mut best: HashMap<String, (usize, InstalledApp)> = HashMap::new();
+    for path in candidates {
+        if !is_app_bundle(&path) {
+            continue;
+        }
+        let rank = location_rank(&path, app_dirs);
+        let app = read_installed_app(path);
+        if best.get(&app.name).is_none_or(|(seen, _)| rank < *seen) {
+            best.insert(app.name.clone(), (rank, app));
+        }
+    }
+    let mut apps: Vec<InstalledApp> = best.into_values().map(|(_, app)| app).collect();
+    apps.sort_by_key(|a| a.name.to_lowercase());
+    apps
 }
 
 fn read_bundle_info(app_path: &Path) -> (Option<String>, Option<String>) {
@@ -269,30 +308,16 @@ fn terminate_bundle_id(bid: &str) -> bool {
 
 impl AppPlatform for Platform {
     fn installed_apps(&self) -> Result<Vec<InstalledApp>> {
-        let mut apps = Vec::new();
-        let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        let mut candidates: Vec<PathBuf> = Vec::new();
         for dir in &self.app_dirs {
-            let Ok(entries) = fs::read_dir(dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("app") {
-                    continue;
-                }
-                if seen.insert(path.clone()) {
-                    apps.push(read_installed_app(path));
-                }
+            if let Ok(entries) = fs::read_dir(dir) {
+                candidates.extend(entries.flatten().map(|e| e.path()));
             }
         }
         if self.spotlight {
-            for path in mdfind_app_paths() {
-                if seen.insert(path.clone()) {
-                    apps.push(read_installed_app(path));
-                }
-            }
+            candidates.extend(mdfind_app_paths());
         }
-        Ok(apps)
+        Ok(dedup_inventory(candidates, &self.app_dirs))
     }
 
     fn scan(&self, app: &InstalledApp, inventory: &[InstalledApp]) -> Result<RemovalPlan> {
@@ -538,6 +563,74 @@ mod tests {
             .find(|l| l.path.to_string_lossy().ends_with("foo.helper"))
             .expect("helper present");
         assert_eq!(helper.match_kind, MatchKind::Fuzzy, "non-exact is fuzzy");
+    }
+
+    fn plist_named(name: &str) -> String {
+        format!(
+            "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict>\
+             <key>CFBundleName</key><string>{name}</string></dict></plist>"
+        )
+    }
+
+    #[test]
+    fn is_app_bundle_requires_real_top_level_bundle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(&root.join("Real.app/Contents/Info.plist"), INFO_PLIST_FOO);
+        write(
+            &root.join("Real.app/Contents/Helpers/Helper.app/Contents/Info.plist"),
+            INFO_PLIST_FOO,
+        );
+        fs::create_dir_all(root.join("ghost.app")).unwrap();
+        fs::create_dir_all(root.join("folder")).unwrap();
+
+        let cases = [
+            (root.join("Real.app"), true, "real bundle"),
+            (
+                root.join("Real.app/Contents/Helpers/Helper.app"),
+                false,
+                "nested helper",
+            ),
+            (root.join("ghost.app"), false, "no Info.plist"),
+            (root.join("folder"), false, "not an app"),
+        ];
+        for (path, expected, label) in cases {
+            assert_eq!(is_app_bundle(&path), expected, "{label}");
+        }
+    }
+
+    #[test]
+    fn installed_apps_dedupes_same_name_preferring_canonical_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let primary = tmp.path().join("Applications");
+        let secondary = home.join("Applications");
+        write(
+            &primary.join("Dupe.app/Contents/Info.plist"),
+            &plist_named("Dupe"),
+        );
+        write(
+            &secondary.join("Other.app/Contents/Info.plist"),
+            &plist_named("Dupe"),
+        );
+        write(
+            &primary.join("Solo.app/Contents/Info.plist"),
+            &plist_named("Solo"),
+        );
+        fs::create_dir_all(primary.join("ghost.app")).unwrap();
+
+        let plat = Platform::with_roots(home, vec![primary.clone(), secondary]);
+        let inv = plat.installed_apps().unwrap();
+
+        assert_eq!(
+            inv.iter().filter(|a| a.name == "Dupe").count(),
+            1,
+            "duplicate display name collapses to one"
+        );
+        let dupe = inv.iter().find(|a| a.name == "Dupe").unwrap();
+        assert!(dupe.path.starts_with(&primary), "keeps canonical-root copy");
+        assert!(inv.iter().any(|a| a.name == "Solo"), "unique app kept");
+        assert!(inv.iter().all(|a| a.name != "ghost"), "non-bundle dropped");
     }
 
     #[test]
