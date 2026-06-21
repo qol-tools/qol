@@ -6,9 +6,7 @@ use std::time::Duration;
 use anyhow::Result;
 
 use crate::core::classify::{normalize_entry, owner_of};
-use crate::core::guards::{
-    cask_status_for, parse_cask_map, sanitize_stderr, CaskStatus, CaskToken,
-};
+use crate::core::guards::{parse_cask_map, sanitize_stderr, CaskIndex, CaskToken};
 use crate::core::{
     AppPlatform, Disposal, IdentitySnapshot, InstalledApp, Leftover, LeftoverKind, MatchKind,
     RemovalOutcome, RemovalPlan,
@@ -391,26 +389,19 @@ impl AppPlatform for Platform {
         }
     }
 
-    fn cask_status(&self, app: &InstalledApp, inventory: &[InstalledApp]) -> CaskStatus {
+    fn cask_index(&self) -> CaskIndex {
         let Some(brew) = brew_path() else {
-            return CaskStatus::NotManaged;
+            return CaskIndex::absent();
         };
         let output = match run_brew(&brew, &["info", "--cask", "--json=v2", "--installed"]) {
             Ok(o) if o.status.success() => o,
-            Ok(o) => return CaskStatus::Unavailable(sanitize_stderr(&o.stderr, STDERR_CAP)),
-            Err(e) => return CaskStatus::Unavailable(e.to_string()),
+            Ok(o) => return CaskIndex::unavailable(sanitize_stderr(&o.stderr, STDERR_CAP)),
+            Err(e) => return CaskIndex::unavailable(e.to_string()),
         };
-        let map = match parse_cask_map(&String::from_utf8_lossy(&output.stdout)) {
-            Ok(m) => m,
-            Err(e) => return CaskStatus::Unavailable(format!("brew json: {e}")),
-        };
-        let base = |p: &Path| {
-            p.file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        };
-        let inv: Vec<String> = inventory.iter().map(|a| base(&a.path)).collect();
-        cask_status_for(&base(&app.path), &map, &inv)
+        match parse_cask_map(&String::from_utf8_lossy(&output.stdout)) {
+            Ok(m) => CaskIndex::from_map(m),
+            Err(e) => CaskIndex::unavailable(format!("brew json: {e}")),
+        }
     }
 
     fn brew_uninstall(&self, token: &CaskToken) -> Result<()> {

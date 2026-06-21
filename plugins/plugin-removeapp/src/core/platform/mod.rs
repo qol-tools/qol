@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::core::guards::{CaskStatus, CaskToken};
+use crate::core::guards::{CaskIndex, CaskToken};
 use crate::core::{Disposal, InstalledApp, RemovalOutcome, RemovalPlan};
 
 pub trait AppPlatform {
@@ -10,7 +10,7 @@ pub trait AppPlatform {
     fn is_protected(&self, app: &InstalledApp) -> bool;
     fn is_running(&self, app: &InstalledApp) -> bool;
     fn quit(&self, app: &InstalledApp) -> anyhow::Result<()>;
-    fn cask_status(&self, app: &InstalledApp, inventory: &[InstalledApp]) -> CaskStatus;
+    fn cask_index(&self) -> CaskIndex;
     fn brew_uninstall(&self, token: &CaskToken) -> anyhow::Result<()>;
 }
 

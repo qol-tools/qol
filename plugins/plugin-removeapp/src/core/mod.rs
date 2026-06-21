@@ -2,12 +2,12 @@ pub mod classify;
 pub mod guards;
 pub mod platform;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
 pub use classify::MatchKind;
-pub use guards::{CaskStatus, CaskToken, Guards};
+pub use guards::{CaskIndex, CaskStatus, CaskToken, Guards};
 pub use platform::{AppPlatform, Platform};
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -100,12 +100,29 @@ pub fn is_protected(app: &InstalledApp) -> bool {
     platform().is_protected(app)
 }
 
+pub fn cask_index() -> CaskIndex {
+    platform().cask_index()
+}
+
 pub fn guards(app: &InstalledApp, inventory: &[InstalledApp]) -> Guards {
-    let plat = platform();
+    guards_with(app, inventory, &cask_index())
+}
+
+pub fn guards_with(app: &InstalledApp, inventory: &[InstalledApp], index: &CaskIndex) -> Guards {
     Guards {
-        running: plat.is_running(app),
-        cask: plat.cask_status(app, inventory),
+        running: platform().is_running(app),
+        cask: classify_cask(app, inventory, index),
     }
+}
+
+fn classify_cask(app: &InstalledApp, inventory: &[InstalledApp], index: &CaskIndex) -> CaskStatus {
+    let base = |p: &Path| {
+        p.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    let inv: Vec<String> = inventory.iter().map(|a| base(&a.path)).collect();
+    index.classify(&base(&app.path), &inv)
 }
 
 pub fn quit_app(app: &InstalledApp) -> Result<()> {
@@ -338,8 +355,8 @@ mod tests {
         fn quit(&self, _app: &InstalledApp) -> Result<()> {
             Ok(())
         }
-        fn cask_status(&self, _app: &InstalledApp, _inv: &[InstalledApp]) -> CaskStatus {
-            CaskStatus::NotManaged
+        fn cask_index(&self) -> CaskIndex {
+            CaskIndex::absent()
         }
         fn brew_uninstall(&self, _token: &CaskToken) -> Result<()> {
             Ok(())

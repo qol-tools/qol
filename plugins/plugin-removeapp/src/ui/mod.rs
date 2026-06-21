@@ -2,11 +2,13 @@ pub mod run;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, rgba, AnyElement, App, Context, FocusHandle, Focusable, FontWeight, KeyDownEvent,
-    SharedString, Window,
+    div, px, rgb, rgba, AnyElement, App, AsyncApp, Context, FocusHandle, Focusable, FontWeight,
+    KeyDownEvent, SharedString, WeakEntity, Window,
 };
 
-use crate::core::{self, CaskStatus, Disposal, Guards, InstalledApp, RemovalOutcome, RemovalPlan};
+use crate::core::{
+    self, CaskIndex, CaskStatus, Disposal, Guards, InstalledApp, RemovalOutcome, RemovalPlan,
+};
 use qol_gpui::scroll_list::ScrollList;
 
 pub const WINDOW_TITLE: &str = "removeapp";
@@ -29,6 +31,7 @@ pub struct RemoveAppView {
     plan: Option<RemovalPlan>,
     outcome: Option<RemovalOutcome>,
     guards: Option<Guards>,
+    cask_index: Option<CaskIndex>,
     quit_failed: bool,
     focus_handle: FocusHandle,
 }
@@ -37,6 +40,7 @@ impl RemoveAppView {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let apps = core::installed_apps().unwrap_or_default();
         let matches = core::filter(&apps, "");
+        Self::spawn_cask_prewarm(cx);
         Self {
             apps,
             query: String::new(),
@@ -47,9 +51,30 @@ impl RemoveAppView {
             plan: None,
             outcome: None,
             guards: None,
+            cask_index: None,
             quit_failed: false,
             focus_handle: cx.focus_handle(),
         }
+    }
+
+    fn spawn_cask_prewarm(cx: &mut Context<Self>) {
+        cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                let index = async_cx
+                    .background_spawn(async { core::cask_index() })
+                    .await;
+                this.update(&mut async_cx, |view, cx| {
+                    view.cask_index = Some(index);
+                    if view.mode == Mode::Confirming && view.guards.is_none() {
+                        view.refresh_guards();
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
     }
 
     fn refilter(&mut self) {
@@ -58,19 +83,29 @@ impl RemoveAppView {
     }
 
     fn enter_confirm(&mut self) {
-        let Some(app) = self.matches.get(self.list.selected) else {
+        let Some(app) = self.matches.get(self.list.selected).cloned() else {
             return;
         };
-        if core::is_protected(app) {
+        if core::is_protected(&app) {
             return;
         }
-        let Ok(plan) = core::plan(app, &self.apps) else {
+        let Ok(plan) = core::plan(&app, &self.apps) else {
             return;
         };
-        self.guards = Some(core::guards(&plan.app, &self.apps));
         self.plan = Some(plan);
         self.quit_failed = false;
         self.mode = Mode::Confirming;
+        self.refresh_guards();
+    }
+
+    fn refresh_guards(&mut self) {
+        let Some(plan) = &self.plan else {
+            return;
+        };
+        self.guards = self
+            .cask_index
+            .as_ref()
+            .map(|index| core::guards_with(&plan.app, &self.apps, index));
     }
 
     fn toggle_disposal(&mut self) {
@@ -81,7 +116,10 @@ impl RemoveAppView {
     }
 
     fn unresolved(&self) -> bool {
-        matches!(&self.guards, Some(g) if g.running || matches!(g.cask, CaskStatus::Managed(_)))
+        match &self.guards {
+            None => true,
+            Some(g) => g.running || matches!(g.cask, CaskStatus::Managed(_)),
+        }
     }
 
     fn try_quit(&mut self) {
@@ -120,12 +158,14 @@ impl RemoveAppView {
     }
 
     fn execute(&mut self, disposal: Disposal) {
-        let (Some(plan), Some(cask)) = (
-            self.plan.clone(),
-            self.guards.as_ref().map(|g| g.cask.clone()),
-        ) else {
+        let Some(plan) = self.plan.clone() else {
             return;
         };
+        let cask = self
+            .guards
+            .as_ref()
+            .map(|g| g.cask.clone())
+            .unwrap_or(CaskStatus::NotManaged);
         self.outcome = Some(core::remove(&plan, disposal, &cask).unwrap_or_default());
         self.mode = Mode::Done;
     }
@@ -364,7 +404,13 @@ impl RemoveAppView {
     }
 
     fn guard_banner(&self) -> Option<AnyElement> {
-        let g = self.guards.as_ref()?;
+        let Some(g) = self.guards.as_ref() else {
+            return Some(banner_container(vec![banner_line(
+                0x6e7681u32,
+                "Checking Homebrew\u{2026}",
+            )
+            .into_any_element()]));
+        };
         let mut lines: Vec<AnyElement> = Vec::new();
         if g.running {
             let text = if self.quit_failed {
@@ -388,20 +434,7 @@ impl RemoveAppView {
         if lines.is_empty() {
             return None;
         }
-        Some(
-            div()
-                .flex()
-                .flex_col()
-                .w_full()
-                .px(px(12.0))
-                .py(px(6.0))
-                .gap(px(3.0))
-                .bg(rgba(0xf0883e1au32))
-                .border_b_1()
-                .border_color(rgb(0x21262du32))
-                .children(lines)
-                .into_any_element(),
-        )
+        Some(banner_container(lines))
     }
 
     fn render_done(&self) -> AnyElement {
@@ -571,6 +604,21 @@ fn footer(hints: &[(&str, &str)]) -> impl IntoElement {
                 )
                 .child(label.to_string())
         }))
+}
+
+fn banner_container(lines: Vec<AnyElement>) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .px(px(12.0))
+        .py(px(6.0))
+        .gap(px(3.0))
+        .bg(rgba(0xf0883e1au32))
+        .border_b_1()
+        .border_color(rgb(0x21262du32))
+        .children(lines)
+        .into_any_element()
 }
 
 fn banner_line(color: u32, text: &str) -> impl IntoElement {

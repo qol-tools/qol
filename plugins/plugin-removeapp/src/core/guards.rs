@@ -33,7 +33,7 @@ pub struct Guards {
     pub cask: CaskStatus,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BasenameOwner {
     One(CaskToken),
     Many,
@@ -113,6 +113,35 @@ pub fn cask_status_for(
             } else {
                 CaskStatus::Managed(token.clone())
             }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum CaskIndex {
+    Map(BTreeMap<String, BasenameOwner>),
+    Unavailable(String),
+    Absent,
+}
+
+impl CaskIndex {
+    pub fn absent() -> CaskIndex {
+        CaskIndex::Absent
+    }
+
+    pub fn unavailable(reason: impl Into<String>) -> CaskIndex {
+        CaskIndex::Unavailable(reason.into())
+    }
+
+    pub fn from_map(map: BTreeMap<String, BasenameOwner>) -> CaskIndex {
+        CaskIndex::Map(map)
+    }
+
+    pub fn classify(&self, target_basename: &str, inventory_basenames: &[String]) -> CaskStatus {
+        match self {
+            CaskIndex::Absent => CaskStatus::NotManaged,
+            CaskIndex::Unavailable(reason) => CaskStatus::Unavailable(reason.clone()),
+            CaskIndex::Map(map) => cask_status_for(target_basename, map, inventory_basenames),
         }
     }
 }
@@ -208,6 +237,28 @@ mod tests {
             CaskStatus::Unavailable(_)
         ));
         assert!(parse_cask_map("not json").is_err());
+    }
+
+    #[test]
+    fn cask_index_classifies_via_map_and_short_circuits() {
+        let idx = CaskIndex::from_map(parse_cask_map(FIXTURE).unwrap());
+        let one = vec!["Discord.app".to_string()];
+        assert!(matches!(
+            idx.classify("Discord.app", &one),
+            CaskStatus::Managed(_)
+        ));
+        assert!(matches!(
+            idx.classify("Firefox.app", &one),
+            CaskStatus::NotManaged
+        ));
+        assert!(matches!(
+            CaskIndex::absent().classify("Discord.app", &one),
+            CaskStatus::NotManaged
+        ));
+        assert!(matches!(
+            CaskIndex::unavailable("brew exploded").classify("Discord.app", &one),
+            CaskStatus::Unavailable(_)
+        ));
     }
 
     #[test]
