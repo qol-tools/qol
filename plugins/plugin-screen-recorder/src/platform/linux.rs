@@ -6,6 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::platform::CaptureSession;
 use crate::{Config, Monitor, Rect};
 
 pub fn select_region() -> Result<Option<Rect>> {
@@ -83,7 +84,7 @@ pub fn full_screen_bounds() -> Result<Monitor> {
     Ok(Monitor { x: 0, y: 0, w, h })
 }
 
-pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<u32> {
+pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
     let mut args = vec![
         "-thread_queue_size".to_string(),
         "512".to_string(),
@@ -182,34 +183,33 @@ pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result
         .spawn()
         .context("failed to start ffmpeg")?;
 
-    Ok(child.id())
+    Ok(CaptureSession::single(
+        child.id(),
+        *rect,
+        output_file.to_path_buf(),
+        output_file.to_path_buf(),
+    ))
 }
 
 pub fn recording_format(format: &str) -> String {
     format.to_string()
 }
 
-pub fn capture_file_path(output_file: &Path) -> std::path::PathBuf {
-    output_file.to_path_buf()
-}
-
 pub fn recording_started() {
     show_notification("Recording started", "Press your hotkey to stop", 1200);
 }
 
-pub fn recording_stopped(
-    _output_file: Option<&Path>,
-    _capture_file: Option<&Path>,
-    _config: &Config,
-) {
+pub fn recording_stopped(_session: &CaptureSession, _config: &Config) {
     show_notification("Recording stopped", "Saved to ~/Videos", 2000);
 }
 
-pub fn stop_capture(pid: u32) -> Result<()> {
-    Command::new("kill")
-        .args(["-INT", &pid.to_string()])
-        .status()
-        .context("failed to send SIGINT to ffmpeg")?;
+pub fn stop_capture(session: &CaptureSession) -> Result<()> {
+    for process in &session.processes {
+        Command::new("kill")
+            .args(["-INT", &process.pid.to_string()])
+            .status()
+            .context("failed to send SIGINT to ffmpeg")?;
+    }
     Ok(())
 }
 

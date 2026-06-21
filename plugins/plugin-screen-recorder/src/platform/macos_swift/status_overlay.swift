@@ -31,6 +31,16 @@ final class StatusView: NSView {
     }
 }
 
+final class StatusWindow: NSPanel {
+    override var canBecomeKey: Bool {
+        false
+    }
+
+    override var canBecomeMain: Bool {
+        false
+    }
+}
+
 struct StatusCommand {
     let title: String
     let subtitle: String?
@@ -48,23 +58,69 @@ let exitAfterHide = environment["QOL_STATUS_EXIT_AFTER_HIDE"] == "1"
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 
-guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+func displayBounds(for screen: NSScreen) -> CGRect {
+    let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? CGMainDisplayID()
+    return CGDisplayBounds(displayID)
+}
+
+func activeMonitorBoundsFromEnvironment() -> CGRect? {
+    guard
+        let rawX = environment["QOL_ACTIVE_MONITOR_X"],
+        let rawY = environment["QOL_ACTIVE_MONITOR_Y"],
+        let rawWidth = environment["QOL_ACTIVE_MONITOR_WIDTH"],
+        let rawHeight = environment["QOL_ACTIVE_MONITOR_HEIGHT"],
+        let x = Double(rawX),
+        let y = Double(rawY),
+        let width = Double(rawWidth),
+        let height = Double(rawHeight)
+    else {
+        return nil
+    }
+
+    return CGRect(x: x, y: y, width: width, height: height)
+}
+
+func approximatelyEqual(_ left: CGFloat, _ right: CGFloat) -> Bool {
+    abs(left - right) < 2
+}
+
+func displayBoundsMatch(_ left: CGRect, _ right: CGRect) -> Bool {
+    approximatelyEqual(left.origin.x, right.origin.x)
+        && approximatelyEqual(left.origin.y, right.origin.y)
+        && approximatelyEqual(left.width, right.width)
+        && approximatelyEqual(left.height, right.height)
+}
+
+func preferredScreen() -> NSScreen? {
+    if let active = activeMonitorBoundsFromEnvironment(),
+       let screen = NSScreen.screens.first(where: { displayBoundsMatch(displayBounds(for: $0), active) }) {
+        return screen
+    }
+
+    let mouse = NSEvent.mouseLocation
+    return NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main ?? NSScreen.screens.first
+}
+
+guard let screen = preferredScreen() else {
     exit(0)
 }
 
-let window = NSWindow(
+let window = StatusWindow(
     contentRect: screen.frame,
-    styleMask: [.borderless],
+    styleMask: [.borderless, .nonactivatingPanel],
     backing: .buffered,
     defer: false,
     screen: screen
 )
 window.level = .screenSaver
+window.isFloatingPanel = true
+window.hidesOnDeactivate = false
+window.canHide = false
 window.backgroundColor = .clear
 window.isOpaque = false
 window.hasShadow = false
 window.ignoresMouseEvents = true
-window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 let statusView = StatusView(frame: screen.frame, title: title, subtitle: subtitle)
 window.contentView = statusView
 

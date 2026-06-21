@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, Copy)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Monitor {
     pub x: i32,
     pub y: i32,
@@ -6,7 +8,7 @@ pub struct Monitor {
     pub h: i32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Rect {
     pub x: i32,
     pub y: i32,
@@ -21,7 +23,7 @@ pub(crate) fn prepare_recording_rect(
     monitors: &[Monitor],
     fallback_bounds: Monitor,
 ) -> Rect {
-    let bounds = monitor_for_selection(rect, monitors).unwrap_or(fallback_bounds);
+    let bounds = bounds_for_selection(rect, monitors).unwrap_or(fallback_bounds);
     rect = clamp_to_bounds(rect, bounds);
     snap_to_bottom(rect, bounds.y + bounds.h)
 }
@@ -44,6 +46,51 @@ pub(crate) fn monitor_for_selection(rect: Rect, monitors: &[Monitor]) -> Option<
             && center_x < monitor.x + monitor.w
             && center_y >= monitor.y
             && center_y < monitor.y + monitor.h
+    })
+}
+
+fn bounds_for_selection(rect: Rect, monitors: &[Monitor]) -> Option<Monitor> {
+    let intersected = monitors
+        .iter()
+        .copied()
+        .filter(|monitor| rects_intersect(rect, *monitor))
+        .collect::<Vec<_>>();
+
+    match intersected.as_slice() {
+        [] => monitor_for_selection(rect, monitors),
+        [monitor] => Some(*monitor),
+        monitors => union_bounds(monitors),
+    }
+}
+
+fn rects_intersect(left: Rect, right: Monitor) -> bool {
+    let left_right = left.x + left.w;
+    let left_bottom = left.y + left.h;
+    let right_right = right.x + right.w;
+    let right_bottom = right.y + right.h;
+
+    left.x < right_right && left_right > right.x && left.y < right_bottom && left_bottom > right.y
+}
+
+fn union_bounds(monitors: &[Monitor]) -> Option<Monitor> {
+    let first = monitors.first().copied()?;
+    let mut left = first.x;
+    let mut top = first.y;
+    let mut right = first.x + first.w;
+    let mut bottom = first.y + first.h;
+
+    for monitor in monitors.iter().skip(1) {
+        left = left.min(monitor.x);
+        top = top.min(monitor.y);
+        right = right.max(monitor.x + monitor.w);
+        bottom = bottom.max(monitor.y + monitor.h);
+    }
+
+    Some(Monitor {
+        x: left,
+        y: top,
+        w: right - left,
+        h: bottom - top,
     })
 }
 
@@ -96,6 +143,66 @@ mod tests {
         assert_eq!(prepared.y, 10);
         assert_eq!(prepared.w, 310);
         assert_eq!(prepared.h, 230);
+    }
+
+    #[test]
+    fn prepare_preserves_selection_across_adjacent_monitors() {
+        let rect = Rect {
+            x: 1800,
+            y: 100,
+            w: 500,
+            h: 400,
+        };
+        let monitors = [
+            Monitor {
+                x: 0,
+                y: 0,
+                w: 1920,
+                h: 1080,
+            },
+            Monitor {
+                x: 1920,
+                y: 0,
+                w: 1920,
+                h: 1080,
+            },
+        ];
+
+        let prepared = prepare_recording_rect(rect, &monitors, monitors[0]);
+        assert_eq!(prepared.x, 1800);
+        assert_eq!(prepared.y, 100);
+        assert_eq!(prepared.w, 500);
+        assert_eq!(prepared.h, 400);
+    }
+
+    #[test]
+    fn prepare_preserves_selection_across_vertical_monitors() {
+        let rect = Rect {
+            x: 100,
+            y: 900,
+            w: 700,
+            h: 500,
+        };
+        let monitors = [
+            Monitor {
+                x: 0,
+                y: 0,
+                w: 1440,
+                h: 1000,
+            },
+            Monitor {
+                x: 0,
+                y: 1000,
+                w: 1440,
+                h: 1000,
+            },
+        ];
+
+        let prepared = prepare_recording_rect(rect, &monitors, monitors[0]);
+        assert_eq!(prepared.x, 100);
+        assert_eq!(prepared.y, 900);
+        assert_eq!(prepared.w, 700);
+        assert_eq!(prepared.h, 500);
     }
 
     #[test]

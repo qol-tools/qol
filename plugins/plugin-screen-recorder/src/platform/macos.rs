@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::platform::{CaptureProcess, CaptureSegment, CaptureSession};
 use crate::{Config, Monitor, Rect};
 
 const MAX_DISPLAYS: u32 = 16;
@@ -60,6 +61,24 @@ extern "C" {
     fn getuid() -> u32;
 }
 
+extern "C" {
+    fn CGMainDisplayID() -> CGDirectDisplayID;
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DisplayInfo {
+    display_index: u32,
+    bounds: Monitor,
+}
+
+#[derive(Debug, Clone)]
+struct DisplayCaptureSegment {
+    display_index: u32,
+    rect: Rect,
+    offset_x: i32,
+    offset_y: i32,
+}
+
 pub fn select_region() -> Result<Option<Rect>> {
     select_region_with_overlay()
 }
@@ -73,30 +92,32 @@ pub fn full_screen_bounds() -> Result<Monitor> {
     union_bounds(&monitors)
 }
 
-pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<u32> {
-    let log_file =
-        File::create(super::CAPTURE_LOG).context("failed to create recording log file")?;
-    let stdout_log = log_file
-        .try_clone()
-        .context("failed to clone recording log file")?;
+pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
+    let capture_file = native_capture_file_path(output_file);
+    let segments = capture_segments(rect)?;
 
-    let mut command = Command::new("screencapture");
-    let region = format!("{},{},{},{}", rect.x, rect.y, rect.w, rect.h);
-    command.args(["-v", "-R", region.as_str(), "-k", "-x"]);
-
-    if config.audio.enabled {
-        command.arg("-g");
+    if segments.len() > 1 && resolve_command("ffmpeg").is_none() {
+        show_notification(
+            "Recording failed",
+            "Install ffmpeg to record across multiple displays",
+            2400,
+        );
+        return Err(anyhow!(
+            "ffmpeg is required to compose multi-display recordings"
+        ));
     }
 
-    let child = command
-        .arg(output_file)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout_log))
-        .stderr(Stdio::from(log_file))
-        .spawn()
-        .context("failed to start screencapture")?;
+    if segments.len() <= 1 {
+        let pid = start_single_display_capture(rect, config, &capture_file, segments.first())?;
+        return Ok(CaptureSession::single(
+            pid,
+            *rect,
+            output_file.to_path_buf(),
+            capture_file,
+        ));
+    }
 
-    Ok(child.id())
+    start_multi_display_capture(*rect, config, output_file, &capture_file, &segments)
 }
 
 pub fn recording_format(format: &str) -> String {
@@ -106,7 +127,7 @@ pub fn recording_format(format: &str) -> String {
     }
 }
 
-pub fn capture_file_path(output_file: &Path) -> PathBuf {
+fn native_capture_file_path(output_file: &Path) -> PathBuf {
     if path_extension_is(output_file, "mov") {
         return output_file.to_path_buf();
     }
@@ -118,17 +139,17 @@ pub fn recording_started() {
     prewarm_recording_helpers();
 }
 
-pub fn recording_stopped(output_file: Option<&Path>, capture_file: Option<&Path>, config: &Config) {
-    if let Some(output_file) = output_file {
-        let capture_file = capture_file.unwrap_or(output_file);
+pub fn recording_stopped(session: &CaptureSession, config: &Config) {
+    if let Some(output_file) = session.output_file.as_deref() {
+        let capture_file = session.capture_file.as_deref().unwrap_or(output_file);
         let conversion_needed = !paths_match(output_file, capture_file);
         show_recording_ended(output_file, conversion_needed);
-        let reveal_file = match finalize_recording(output_file, capture_file, config) {
+        let reveal_file = match finalize_recording(session, output_file, capture_file, config) {
             Ok(reveal_file) => {
                 show_recording_saved(&reveal_file, conversion_needed);
                 reveal_file
             }
-            Err(error) => conversion_fallback(error, capture_file),
+            Err(error) => finalization_fallback(error, session, capture_file),
         };
         if reveal_recording(&reveal_file) {
             return;
@@ -146,23 +167,22 @@ pub fn recording_stopped(output_file: Option<&Path>, capture_file: Option<&Path>
     }
 }
 
-pub fn stop_capture(pid: u32) -> Result<()> {
-    signal_capture_process(pid, "INT")?;
-    if wait_for_process_exit(pid, Duration::from_secs(8)) {
+pub fn stop_capture(session: &CaptureSession) -> Result<()> {
+    let mut failures = Vec::new();
+    for process in &session.processes {
+        if let Err(error) = stop_capture_process(process.pid) {
+            failures.push(format!("{}: {error:#}", process.pid));
+        }
+    }
+
+    if failures.is_empty() {
         return Ok(());
     }
 
-    signal_capture_process(pid, "TERM")?;
-    if wait_for_process_exit(pid, Duration::from_secs(2)) {
-        return Ok(());
-    }
-
-    signal_capture_process(pid, "KILL")?;
-    if wait_for_process_exit(pid, Duration::from_secs(2)) {
-        return Ok(());
-    }
-
-    Err(anyhow!("capture process pid {} did not stop", pid))
+    Err(anyhow!(
+        "failed to stop capture processes: {}",
+        failures.join("; ")
+    ))
 }
 
 pub fn process_alive(pid: u32) -> bool {
@@ -227,26 +247,33 @@ pub fn required_binaries_check() -> DoctorCheckResult {
     if resolve_command("ffmpeg").is_none() && resolve_command("avconvert").is_none() {
         return DoctorCheckResult::warn(
             "required_binaries",
-            "Native MOV recording is available, but ffmpeg is missing for non-MOV conversion.",
+            "Native MOV single-display recording is available, but ffmpeg is missing for multi-display recording and non-MOV conversion.",
         )
-        .with_fix("Install ffmpeg for MP4, MKV, or WebM output.");
+        .with_fix("Install ffmpeg for multi-display recording, MP4, MKV, or WebM output.");
     }
 
     if resolve_command("ffmpeg").is_none() {
         return DoctorCheckResult::warn(
             "required_binaries",
-            "Native MOV recording is available; MP4 conversion can use avconvert, but WebM/MKV require ffmpeg.",
+            "Native MOV single-display recording and MP4 conversion through avconvert are available, but multi-display recording and WebM/MKV require ffmpeg.",
         )
-        .with_fix("Install ffmpeg for WebM or MKV output.");
+        .with_fix("Install ffmpeg for multi-display recording, WebM, or MKV output.");
     }
 
     DoctorCheckResult::ok(
         "required_binaries",
-        "Required macOS capture and conversion tools are available.",
+        "Required macOS capture, composition, and conversion tools are available.",
     )
 }
 
 fn active_display_bounds() -> Result<Vec<Monitor>> {
+    Ok(active_displays()?
+        .into_iter()
+        .map(|display| display.bounds)
+        .collect())
+}
+
+fn active_displays() -> Result<Vec<DisplayInfo>> {
     let mut displays = [0u32; MAX_DISPLAYS as usize];
     let mut count = 0u32;
     let result = unsafe { CGGetActiveDisplayList(MAX_DISPLAYS, displays.as_mut_ptr(), &mut count) };
@@ -255,20 +282,39 @@ fn active_display_bounds() -> Result<Vec<Monitor>> {
         return Err(anyhow!("CGGetActiveDisplayList failed: {}", result));
     }
 
-    let monitors = displays
-        .iter()
-        .take(count as usize)
-        .map(|display| {
-            let bounds = unsafe { CGDisplayBounds(*display) };
-            monitor_from_cg_bounds(bounds)
-        })
-        .collect::<Vec<_>>();
-
-    if monitors.is_empty() {
+    if count == 0 {
         return Err(anyhow!("no active displays found"));
     }
 
-    Ok(monitors)
+    let display_ids = screencapture_display_order(&displays[..count as usize]);
+    Ok(display_ids
+        .into_iter()
+        .enumerate()
+        .map(|(index, display_id)| {
+            let bounds = unsafe { CGDisplayBounds(display_id) };
+            DisplayInfo {
+                display_index: index as u32 + 1,
+                bounds: monitor_from_cg_bounds(bounds),
+            }
+        })
+        .collect())
+}
+
+fn screencapture_display_order(display_ids: &[CGDirectDisplayID]) -> Vec<CGDirectDisplayID> {
+    let main = unsafe { CGMainDisplayID() };
+    let mut ordered = Vec::with_capacity(display_ids.len());
+
+    if display_ids.contains(&main) {
+        ordered.push(main);
+    }
+
+    ordered.extend(
+        display_ids
+            .iter()
+            .copied()
+            .filter(|display| *display != main),
+    );
+    ordered
 }
 
 fn union_bounds(monitors: &[Monitor]) -> Result<Monitor> {
@@ -310,6 +356,181 @@ fn round_i32(value: f64) -> i32 {
     value.round() as i32
 }
 
+fn capture_segments(rect: &Rect) -> Result<Vec<DisplayCaptureSegment>> {
+    let segments = active_displays()?
+        .into_iter()
+        .filter_map(|display| {
+            rect_intersection(*rect, display.bounds).map(|intersection| DisplayCaptureSegment {
+                display_index: display.display_index,
+                rect: intersection,
+                offset_x: intersection.x - rect.x,
+                offset_y: intersection.y - rect.y,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if segments.is_empty() {
+        return Err(anyhow!(
+            "selected recording area does not intersect an active display"
+        ));
+    }
+
+    Ok(segments)
+}
+
+fn rect_intersection(left: Rect, right: Monitor) -> Option<Rect> {
+    let x = left.x.max(right.x);
+    let y = left.y.max(right.y);
+    let right_edge = (left.x + left.w).min(right.x + right.w);
+    let bottom_edge = (left.y + left.h).min(right.y + right.h);
+    let w = right_edge - x;
+    let h = bottom_edge - y;
+
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+
+    Some(Rect { x, y, w, h })
+}
+
+fn start_single_display_capture(
+    rect: &Rect,
+    config: &Config,
+    capture_file: &Path,
+    segment: Option<&DisplayCaptureSegment>,
+) -> Result<u32> {
+    spawn_screencapture(
+        segment.map(|segment| segment.rect).unwrap_or(*rect),
+        segment.map(|segment| segment.display_index),
+        config.audio.enabled,
+        capture_file,
+        CaptureLogMode::Truncate,
+    )
+}
+
+fn start_multi_display_capture(
+    canvas: Rect,
+    config: &Config,
+    output_file: &Path,
+    capture_file: &Path,
+    segments: &[DisplayCaptureSegment],
+) -> Result<CaptureSession> {
+    let mut processes = Vec::new();
+    let mut capture_segments = Vec::new();
+
+    for (index, segment) in segments.iter().enumerate() {
+        let segment_file = segment_capture_file(capture_file, index);
+        let log_mode = if index == 0 {
+            CaptureLogMode::Truncate
+        } else {
+            CaptureLogMode::Append
+        };
+        let pid = match spawn_screencapture(
+            segment.rect,
+            Some(segment.display_index),
+            config.audio.enabled && index == 0,
+            &segment_file,
+            log_mode,
+        ) {
+            Ok(pid) => pid,
+            Err(error) => {
+                stop_spawned_processes(&processes);
+                cleanup_segment_files(&capture_segments);
+                return Err(error);
+            }
+        };
+
+        processes.push(CaptureProcess { pid });
+        capture_segments.push(CaptureSegment {
+            file: segment_file,
+            rect: segment.rect,
+            offset_x: segment.offset_x,
+            offset_y: segment.offset_y,
+        });
+    }
+
+    Ok(CaptureSession {
+        output_file: Some(output_file.to_path_buf()),
+        capture_file: Some(capture_file.to_path_buf()),
+        canvas: Some(canvas),
+        processes,
+        segments: capture_segments,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum CaptureLogMode {
+    Truncate,
+    Append,
+}
+
+fn spawn_screencapture(
+    rect: Rect,
+    display_index: Option<u32>,
+    include_audio: bool,
+    output_file: &Path,
+    log_mode: CaptureLogMode,
+) -> Result<u32> {
+    let (stdout_log, stderr_log) = capture_log_files(log_mode)?;
+
+    let mut command = Command::new("screencapture");
+    let region = format!("{},{},{},{}", rect.x, rect.y, rect.w, rect.h);
+    command.arg("-v");
+    if let Some(display_index) = display_index {
+        command.arg("-D").arg(display_index.to_string());
+    }
+    command.args(["-R", region.as_str(), "-k", "-x"]);
+
+    if include_audio {
+        command.arg("-g");
+    }
+
+    let child = command
+        .arg(output_file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_log))
+        .stderr(Stdio::from(stderr_log))
+        .spawn()
+        .context("failed to start screencapture")?;
+
+    Ok(child.id())
+}
+
+fn capture_log_files(mode: CaptureLogMode) -> Result<(File, File)> {
+    let log_file = match mode {
+        CaptureLogMode::Truncate => File::create(super::CAPTURE_LOG),
+        CaptureLogMode::Append => OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(super::CAPTURE_LOG),
+    }
+    .context("failed to open recording log file")?;
+    let stdout_log = log_file
+        .try_clone()
+        .context("failed to clone recording log file")?;
+    Ok((stdout_log, log_file))
+}
+
+fn segment_capture_file(capture_file: &Path, index: usize) -> PathBuf {
+    let stem = capture_file
+        .file_stem()
+        .map(|stem| stem.to_string_lossy())
+        .unwrap_or_else(|| "recording".into());
+    capture_file.with_file_name(format!("{stem}.segment-{:02}.mov", index + 1))
+}
+
+fn stop_spawned_processes(processes: &[CaptureProcess]) {
+    for process in processes {
+        let _ = stop_capture_process(process.pid);
+    }
+}
+
+fn cleanup_segment_files(segments: &[CaptureSegment]) {
+    for segment in segments {
+        let _ = fs::remove_file(&segment.file);
+    }
+}
+
 fn select_region_with_overlay() -> Result<Option<Rect>> {
     let output = run_region_selector().context("failed to run macOS region selector")?;
 
@@ -343,7 +564,9 @@ fn run_region_selector() -> Result<Output> {
 }
 
 fn run_compiled_region_selector(helper: &Path) -> Result<Output> {
-    Command::new(helper)
+    let mut command = Command::new(helper);
+    configure_active_monitor_env(&mut command);
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -373,8 +596,13 @@ fn parse_selection_geometry(raw: &str) -> Result<Rect> {
     })
 }
 
-fn finalize_recording(output_file: &Path, capture_file: &Path, config: &Config) -> Result<PathBuf> {
-    wait_for_stable_file(capture_file)?;
+fn finalize_recording(
+    session: &CaptureSession,
+    output_file: &Path,
+    capture_file: &Path,
+    config: &Config,
+) -> Result<PathBuf> {
+    prepare_native_capture_file(session, capture_file, config)?;
     if paths_match(output_file, capture_file) {
         return Ok(output_file.to_path_buf());
     }
@@ -384,19 +612,142 @@ fn finalize_recording(output_file: &Path, capture_file: &Path, config: &Config) 
     Ok(output_file.to_path_buf())
 }
 
-fn conversion_fallback(error: anyhow::Error, capture_file: &Path) -> PathBuf {
+fn prepare_native_capture_file(
+    session: &CaptureSession,
+    capture_file: &Path,
+    config: &Config,
+) -> Result<()> {
+    if session.segments.len() <= 1 {
+        return wait_for_stable_file(capture_file);
+    }
+
+    compose_segment_recordings(session, capture_file, config)
+}
+
+fn compose_segment_recordings(
+    session: &CaptureSession,
+    capture_file: &Path,
+    config: &Config,
+) -> Result<()> {
+    let canvas = session
+        .canvas
+        .ok_or_else(|| anyhow!("multi-display capture session is missing canvas bounds"))?;
+
+    for segment in &session.segments {
+        wait_for_stable_file(&segment.file)?;
+    }
+
+    let mut command = Command::new(resolve_command("ffmpeg").unwrap_or_else(|| "ffmpeg".into()));
+    command.args(segment_composition_args(
+        session,
+        canvas,
+        capture_file,
+        config,
+    ));
+    run_conversion_command(&mut command, "ffmpeg composition")?;
+    cleanup_segment_files(&session.segments);
+    Ok(())
+}
+
+fn segment_composition_args(
+    session: &CaptureSession,
+    canvas: Rect,
+    capture_file: &Path,
+    config: &Config,
+) -> Vec<String> {
+    let mut args = vec![
+        "-hide_banner".to_string(),
+        "-loglevel".to_string(),
+        "error".to_string(),
+        "-y".to_string(),
+    ];
+
+    for segment in &session.segments {
+        args.extend(["-i".to_string(), segment.file.to_string_lossy().to_string()]);
+    }
+
+    args.extend([
+        "-filter_complex".to_string(),
+        segment_composition_filter(session, canvas),
+        "-map".to_string(),
+        "[v]".to_string(),
+        "-map".to_string(),
+        "0:a?".to_string(),
+        "-c:v".to_string(),
+        "libx264".to_string(),
+        "-crf".to_string(),
+        clamped_crf(config.video.crf).to_string(),
+        "-preset".to_string(),
+        normalized_h264_preset(&config.video.preset).to_string(),
+        "-pix_fmt".to_string(),
+        "yuv420p".to_string(),
+        "-c:a".to_string(),
+        "copy".to_string(),
+        "-shortest".to_string(),
+        capture_file.to_string_lossy().to_string(),
+    ]);
+
+    args
+}
+
+fn segment_composition_filter(session: &CaptureSession, canvas: Rect) -> String {
+    let mut filters = Vec::new();
+    let mut inputs = String::new();
+
+    for index in 0..session.segments.len() {
+        filters.push(format!("[{index}:v]setpts=PTS-STARTPTS[v{index}]"));
+        inputs.push_str(&format!("[v{index}]"));
+    }
+
+    let layout = session
+        .segments
+        .iter()
+        .map(|segment| format!("{}_{}", segment.offset_x, segment.offset_y))
+        .collect::<Vec<_>>()
+        .join("|");
+    filters.push(format!(
+        "{inputs}xstack=inputs={}:layout={layout}:fill=black:shortest=1[stacked]",
+        session.segments.len()
+    ));
+    filters.push(format!(
+        "[stacked]pad={}:{}:0:0:color=black,crop={}:{}:0:0[v]",
+        canvas.w, canvas.h, canvas.w, canvas.h
+    ));
+
+    filters.join(";")
+}
+
+fn finalization_fallback(
+    error: anyhow::Error,
+    session: &CaptureSession,
+    capture_file: &Path,
+) -> PathBuf {
+    let fallback_file = fallback_recording_file(session, capture_file);
     show_status_overlay(
         "Conversion failed",
-        "Saved native MOV instead",
+        "Saved native recording instead",
         3000,
         StatusOverlayLifecycle::ExitAfterHide,
     );
     show_notification(
         "Recording conversion failed",
-        &format!("Saved native MOV instead. {}", error),
+        &format!("Saved native recording instead. {}", error),
         2500,
     );
-    capture_file.to_path_buf()
+    fallback_file
+}
+
+fn fallback_recording_file(session: &CaptureSession, capture_file: &Path) -> PathBuf {
+    if capture_file.symlink_metadata().is_ok() {
+        return capture_file.to_path_buf();
+    }
+
+    session
+        .segments
+        .iter()
+        .find(|segment| segment.file.symlink_metadata().is_ok())
+        .map(|segment| segment.file.clone())
+        .unwrap_or_else(|| capture_file.to_path_buf())
 }
 
 fn show_recording_ended(output_file: &Path, conversion_needed: bool) {
@@ -544,6 +895,22 @@ fn configure_status_overlay(
                 "0"
             },
         );
+    configure_active_monitor_env(command);
+}
+
+fn configure_active_monitor_env(command: &mut Command) {
+    let Some(monitor) = qol_runtime::PlatformStateClient::from_env()
+        .get_state()
+        .and_then(|state| state.active_monitor())
+    else {
+        return;
+    };
+
+    command
+        .env("QOL_ACTIVE_MONITOR_X", monitor.x.to_string())
+        .env("QOL_ACTIVE_MONITOR_Y", monitor.y.to_string())
+        .env("QOL_ACTIVE_MONITOR_WIDTH", monitor.width.to_string())
+        .env("QOL_ACTIVE_MONITOR_HEIGHT", monitor.height.to_string());
 }
 
 fn dismiss_status_overlay() {
@@ -879,8 +1246,23 @@ fn wait_for_stable_file(output_file: &Path) -> Result<()> {
     ))
 }
 
-fn signal_capture_process(pid: u32, signal: &str) -> Result<()> {
-    signal_process(pid, signal)
+fn stop_capture_process(pid: u32) -> Result<()> {
+    signal_process(pid, "INT")?;
+    if wait_for_process_exit(pid, Duration::from_secs(8)) {
+        return Ok(());
+    }
+
+    signal_process(pid, "TERM")?;
+    if wait_for_process_exit(pid, Duration::from_secs(2)) {
+        return Ok(());
+    }
+
+    signal_process(pid, "KILL")?;
+    if wait_for_process_exit(pid, Duration::from_secs(2)) {
+        return Ok(());
+    }
+
+    Err(anyhow!("capture process pid {} did not stop", pid))
 }
 
 fn signal_process(pid: u32, signal: &str) -> Result<()> {
@@ -1014,7 +1396,7 @@ mod tests {
     fn non_mov_formats_capture_to_temporary_mov() {
         let output = Path::new("/tmp/recording.webm");
         assert_eq!(
-            capture_file_path(output),
+            native_capture_file_path(output),
             PathBuf::from("/tmp/recording.mov")
         );
     }
@@ -1022,7 +1404,7 @@ mod tests {
     #[test]
     fn mov_format_captures_directly_to_output() {
         let output = Path::new("/tmp/recording.mov");
-        assert_eq!(capture_file_path(output), output);
+        assert_eq!(native_capture_file_path(output), output);
     }
 
     #[test]
@@ -1032,6 +1414,84 @@ mod tests {
         assert_eq!(rect.y, 20);
         assert_eq!(rect.w, 300);
         assert_eq!(rect.h, 200);
+    }
+
+    #[test]
+    fn rect_intersection_returns_overlap() {
+        let rect = Rect {
+            x: 1800,
+            y: 100,
+            w: 500,
+            h: 400,
+        };
+        let monitor = Monitor {
+            x: 1920,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        };
+
+        assert_eq!(
+            rect_intersection(rect, monitor),
+            Some(Rect {
+                x: 1920,
+                y: 100,
+                w: 380,
+                h: 400,
+            })
+        );
+    }
+
+    #[test]
+    fn segment_composition_filter_preserves_canvas_offsets() {
+        let session = CaptureSession {
+            output_file: Some(PathBuf::from("/tmp/final.mov")),
+            capture_file: Some(PathBuf::from("/tmp/final.mov")),
+            canvas: Some(Rect {
+                x: 1800,
+                y: 100,
+                w: 500,
+                h: 400,
+            }),
+            processes: Vec::new(),
+            segments: vec![
+                CaptureSegment {
+                    file: PathBuf::from("/tmp/left.mov"),
+                    rect: Rect {
+                        x: 1800,
+                        y: 100,
+                        w: 120,
+                        h: 400,
+                    },
+                    offset_x: 0,
+                    offset_y: 0,
+                },
+                CaptureSegment {
+                    file: PathBuf::from("/tmp/right.mov"),
+                    rect: Rect {
+                        x: 1920,
+                        y: 100,
+                        w: 380,
+                        h: 400,
+                    },
+                    offset_x: 120,
+                    offset_y: 0,
+                },
+            ],
+        };
+
+        let filter = segment_composition_filter(
+            &session,
+            Rect {
+                x: 1800,
+                y: 100,
+                w: 500,
+                h: 400,
+            },
+        );
+
+        assert!(filter.contains("layout=0_0|120_0"));
+        assert!(filter.contains("pad=500:400:0:0:color=black,crop=500:400:0:0[v]"));
     }
 
     #[test]
