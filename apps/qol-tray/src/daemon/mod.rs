@@ -6,6 +6,15 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigKind {
+    Hotkeys,
+    Shortcuts,
+    Plugins,
+    Profile,
+}
+
 #[derive(Clone)]
 pub struct Daemon {
     pub events: Arc<EventBus>,
@@ -93,6 +102,9 @@ pub enum DaemonEvent {
     },
     Navigate {
         route: String,
+    },
+    ConfigChanged {
+        kind: ConfigKind,
     },
     #[cfg(feature = "dev")]
     BootTargetHealed {

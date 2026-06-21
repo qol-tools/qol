@@ -1,4 +1,4 @@
-use crate::hotkeys::trigger_reload;
+use crate::daemon::ConfigKind;
 use crate::plugins::{MenuItem, PluginLoader, PluginManifest};
 
 use super::types::{AppState, PluginAction};
@@ -114,19 +114,16 @@ fn reload_manager_and_notify_inner(state: &AppState, sync_profile: bool) {
             false
         }
     };
-    if reload_ok {
-        if sync_profile {
-            if let Err(error) =
-                crate::features::profile::core::sync_plugins_lock_from_plugins(manager.plugins())
-            {
-                log::error!("Failed to sync profile plugins lock: {}", error);
-            }
+    if reload_ok && sync_profile {
+        if let Err(error) =
+            crate::features::profile::core::sync_plugins_lock_from_plugins(manager.plugins())
+        {
+            log::error!("Failed to sync profile plugins lock: {}", error);
         }
-        crate::features::launcher_apps::trigger_full_sync_with_plugins(manager.plugins());
     }
     let report = reload_ok.then(|| manager.last_resolution_report().clone());
     drop(manager);
-    trigger_reload();
+    state.daemon.events.config_changed(ConfigKind::Plugins);
     if let Some(report) = report {
         emit_resolution_events(&state.daemon.events, &report);
     }

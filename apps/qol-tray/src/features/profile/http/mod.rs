@@ -63,19 +63,14 @@ fn reload_after_profile_apply(state: &ProfileHttpState) {
             return;
         }
     };
-    let outcome = manager.reload_plugins_if_changed();
-    let plugins_changed = match outcome {
-        Ok(changed) => changed,
-        Err(error) => {
-            log::error!("Failed to reload plugins: {}", error);
-            false
-        }
-    };
-    if plugins_changed {
-        crate::features::launcher_apps::trigger_full_sync_with_plugins(manager.plugins());
+    if let Err(error) = manager.reload_plugins_if_changed() {
+        log::error!("Failed to reload plugins: {}", error);
     }
     drop(manager);
-    crate::hotkeys::trigger_reload();
+    state
+        .daemon
+        .events
+        .config_changed(crate::daemon::ConfigKind::Profile);
     state.daemon.events.send_plugins_changed();
 }
 

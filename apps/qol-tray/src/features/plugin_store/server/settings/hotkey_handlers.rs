@@ -1,11 +1,13 @@
 use axum::{
+    extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 
-use crate::hotkeys::{get_registration_errors, trigger_reload, HotkeyConfig, HotkeyManager};
+use crate::daemon::ConfigKind;
+use crate::hotkeys::{get_registration_errors, HotkeyConfig, HotkeyManager};
 
-use super::super::types::MAX_CONFIG_SIZE;
+use super::super::types::{AppState, MAX_CONFIG_SIZE};
 use super::http_json;
 
 type HttpResult<T> = Result<T, Box<Response>>;
@@ -14,8 +16,11 @@ pub(in super::super) async fn get_hotkeys() -> impl IntoResponse {
     blocking(get_hotkeys_inner).await
 }
 
-pub(in super::super) async fn set_hotkeys(body: axum::body::Bytes) -> impl IntoResponse {
-    blocking(move || set_hotkeys_inner(body)).await
+pub(in super::super) async fn set_hotkeys(
+    State(state): State<AppState>,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    blocking(move || set_hotkeys_inner(&state, body)).await
 }
 
 pub(in super::super) async fn open_hotkeys_file() -> impl IntoResponse {
@@ -73,13 +78,13 @@ fn get_hotkeys_inner() -> HttpResult<Response> {
     Ok(hotkeys_json_response(&config))
 }
 
-fn set_hotkeys_inner(body: axum::body::Bytes) -> HttpResult<Response> {
+fn set_hotkeys_inner(state: &AppState, body: axum::body::Bytes) -> HttpResult<Response> {
     let config = parse_hotkeys(body)?;
     let manager = hotkey_manager()?;
     manager
         .save_config(&config)
         .map_err(|_| Box::new(save_failed_response()))?;
-    trigger_reload();
+    state.daemon.events.config_changed(ConfigKind::Hotkeys);
     Ok(hotkeys_saved_response())
 }
 

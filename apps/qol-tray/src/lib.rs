@@ -22,6 +22,7 @@ pub mod plugins;
 pub mod probe;
 pub mod process_utils;
 pub mod profile;
+pub mod reconcile;
 #[cfg(unix)]
 pub mod runtime;
 pub mod shortcuts;

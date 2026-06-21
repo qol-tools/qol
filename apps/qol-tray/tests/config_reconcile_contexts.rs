@@ -302,42 +302,44 @@ mod write_point_dispatch_contracts {
     use super::read_src;
 
     #[test]
-    fn hotkey_save_handler_calls_trigger_reload() {
+    fn hotkey_save_handler_emits_config_changed_after_save_and_does_not_drive_backend_directly() {
         let src = read_src("features/plugin_store/server/settings/hotkey_handlers.rs");
-        assert!(
-            src.contains("trigger_reload()"),
-            "set_hotkeys_inner must call hotkeys::trigger_reload() so live capture rebuilds; \
-             missing in hotkey_handlers.rs"
-        );
-        assert!(
-            src.contains(".save_config(&config)"),
-            "set_hotkeys_inner must persist before triggering reload"
-        );
         let save_at = src
             .find(".save_config(&config)")
-            .expect("save_config call present");
-        let reload_at = src
-            .find("trigger_reload()")
-            .expect("trigger_reload call present");
+            .expect("set_hotkeys_inner must persist via save_config before signaling");
+        let signal_at = src.find("config_changed(ConfigKind::Hotkeys)").expect(
+            "set_hotkeys_inner must emit ConfigChanged{Hotkeys} after save so the \
+                 reconciler re-derives the live capture matcher",
+        );
         assert!(
-            save_at < reload_at,
-            "trigger_reload() must follow save_config so persisted bindings are what gets \
-             re-derived; reversing would race a stale config into the matcher"
+            save_at < signal_at,
+            "ConfigChanged{{Hotkeys}} must follow save_config so persisted bindings are what \
+             gets re-derived; reversing would race a stale config into the matcher"
+        );
+        assert!(
+            !src.contains("trigger_reload()"),
+            "set_hotkeys_inner must NOT drive hotkeys::trigger_reload() directly anymore - \
+             reconcile is now an independent subscriber of ConfigChanged{{Hotkeys}}"
         );
     }
 
     #[test]
-    fn shortcut_handlers_trigger_launcher_sync_on_every_mutation() {
+    fn shortcut_handlers_emit_config_changed_shortcuts_on_every_mutation() {
         let src = read_src("features/plugin_store/server/settings/shortcut_handlers.rs");
         assert_eq!(
-            src.matches("trigger_launcher_sync(state)").count(),
+            src.matches("config_changed(ConfigKind::Shortcuts)").count(),
             3,
-            "create, update and delete handlers must each call trigger_launcher_sync; \
+            "create, update and delete handlers must each emit ConfigChanged{{Shortcuts}}; \
              count drift signals a missing reconcile path"
         );
         assert!(
-            src.contains("trigger_full_sync_with_manager"),
-            "shortcut handlers must drive the full launcher sync, not just a partial reconcile"
+            !src.contains("trigger_launcher_sync"),
+            "shortcut handlers must NOT drive launcher sync directly anymore - reconcile is \
+             now an independent subscriber of ConfigChanged{{Shortcuts}}"
+        );
+        assert!(
+            !src.contains("trigger_full_sync_with_manager"),
+            "shortcut handlers must NOT reach into launcher_apps directly"
         );
     }
 
@@ -359,21 +361,29 @@ mod write_point_dispatch_contracts {
     }
 
     #[test]
-    fn reload_manager_and_notify_dispatches_all_three_reconcile_signals() {
+    fn reload_manager_and_notify_emits_one_plugins_signal_keeps_plugins_changed_and_runs_reload() {
         let src = read_src("features/plugin_store/server/helpers.rs");
         let helper_signals = [
             "manager.reload_plugins()",
-            "trigger_full_sync_with_plugins(manager.plugins())",
-            "trigger_reload()",
+            "config_changed(ConfigKind::Plugins)",
             "state.daemon.events.send_plugins_changed()",
         ];
         for signal in helper_signals {
             assert!(
                 src.contains(signal),
-                "reload_manager_and_notify must invoke `{signal}` so every materializer \
-                 (plugins, launcher entries, hotkeys, SSE subscribers) reconciles"
+                "reload_manager_and_notify must invoke `{signal}` so plugin set + UI both \
+                 reconcile after the operation"
             );
         }
+        assert!(
+            !src.contains("trigger_full_sync_with_plugins"),
+            "helpers.rs must NOT drive launcher sync directly; reconciler subscribes instead"
+        );
+        assert!(
+            !src.contains("trigger_reload()"),
+            "helpers.rs must NOT drive hotkeys::trigger_reload() directly; reconciler \
+             subscribes instead"
+        );
     }
 
     #[test]
@@ -396,6 +406,11 @@ mod write_point_dispatch_contracts {
              config edits can change exported shortcut surface"
         );
         assert!(
+            !handler.contains("config_changed("),
+            "set_plugin_config_inner does NOT emit a host-level ConfigChanged signal today; \
+             plugin config edits route to the owning daemon only"
+        );
+        assert!(
             !handler.contains("send_plugins_changed"),
             "set_plugin_config_inner does NOT broadcast PluginsChanged today; flip this when \
              the menu or store UI must rebuild on config edits"
@@ -414,25 +429,73 @@ mod write_point_dispatch_contracts {
     }
 }
 
-mod profile_apply_reconciles_all_three_materializers {
+mod profile_apply_reconciles_via_config_changed_signal {
     use super::read_src;
 
     #[test]
-    fn reload_after_profile_apply_calls_plugins_launcher_hotkeys_and_event_bus() {
+    fn reload_after_profile_apply_emits_profile_signal_and_keeps_plugins_changed() {
         let src = read_src("features/profile/http/mod.rs");
         let expected_signals = [
             "manager.reload_plugins_if_changed()",
-            "trigger_full_sync_with_plugins(manager.plugins())",
-            "crate::hotkeys::trigger_reload()",
+            "config_changed(crate::daemon::ConfigKind::Profile)",
             "state.daemon.events.send_plugins_changed()",
         ];
         for signal in expected_signals {
             assert!(
                 src.contains(signal),
                 "reload_after_profile_apply must invoke `{signal}` so profile import / pull / \
-                 switch fans out to every materializer"
+                 switch fans out via the ConfigChanged{{Profile}} signal + UI broadcast"
             );
         }
+        assert!(
+            !src.contains("trigger_full_sync_with_plugins"),
+            "profile apply must NOT drive launcher sync directly anymore - reconciler \
+             subscribes to ConfigChanged{{Profile}}"
+        );
+        assert!(
+            !src.contains("crate::hotkeys::trigger_reload()"),
+            "profile apply must NOT drive hotkeys reload directly anymore - reconciler \
+             subscribes to ConfigChanged{{Profile}}"
+        );
+    }
+}
+
+mod boot_wires_independent_reconcilers {
+    use super::read_src;
+
+    #[test]
+    fn main_spawns_one_reconciler_for_hotkeys_and_one_for_launcher_apps() {
+        let src = read_src("main.rs");
+        assert!(
+            src.contains("spawn_config_reconcilers"),
+            "app_init_inner must spawn the config reconcilers at boot via \
+             spawn_config_reconcilers"
+        );
+        let body = src
+            .split_once("fn spawn_config_reconcilers")
+            .map(|(_, rest)| rest)
+            .expect("spawn_config_reconcilers must be defined in main.rs");
+        assert!(
+            body.contains("ConfigKind::Hotkeys")
+                && body.contains("ConfigKind::Plugins")
+                && body.contains("ConfigKind::Profile"),
+            "the hotkeys reconciler must subscribe to Hotkeys + Plugins + Profile so \
+             hotkeys reload after a config save, a plugin set change, or a profile apply"
+        );
+        assert!(
+            body.contains("hotkeys::trigger_reload"),
+            "the hotkeys reconciler must drive hotkeys::trigger_reload() to preserve the \
+             211e7fc2 fix (live capture thread drains a crossbeam channel)"
+        );
+        assert!(
+            body.contains("ConfigKind::Shortcuts"),
+            "the launcher reconciler must subscribe to Shortcuts so shortcut mutations \
+             refresh launcher entries"
+        );
+        assert!(
+            body.contains("trigger_full_sync_with_manager"),
+            "the launcher reconciler must drive launcher_apps::trigger_full_sync_with_manager"
+        );
     }
 }
 
@@ -568,6 +631,80 @@ mod autostart_re_runnable_via_reload {
         assert!(
             manager.contains("pub fn reload_plugins"),
             "reload_plugins must be pub so HTTP handlers can drive a full reconcile"
+        );
+    }
+}
+
+mod spawn_reconciler_drives_subscribers_on_config_changed {
+    use qol_tray::daemon::{ConfigKind, EventBus};
+    use qol_tray::reconcile::spawn_reconciler;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::time::sleep;
+
+    fn counter() -> (Arc<AtomicUsize>, impl Fn() + Send + Sync + 'static) {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let cloned = Arc::clone(&counter);
+        (counter, move || {
+            cloned.fetch_add(1, Ordering::SeqCst);
+        })
+    }
+
+    async fn wait_at_least(counter: &AtomicUsize, expected: usize) {
+        for _ in 0..100 {
+            if counter.load(Ordering::SeqCst) >= expected {
+                return;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+        panic!(
+            "timed out waiting for reconciler count {} (observed {})",
+            expected,
+            counter.load(Ordering::SeqCst)
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn matching_interest_fires_reconciler_and_non_matching_does_not() {
+        let bus = EventBus::new();
+        let (count, work) = counter();
+        spawn_reconciler(&bus, &[ConfigKind::Hotkeys], work);
+        sleep(Duration::from_millis(20)).await;
+
+        bus.config_changed(ConfigKind::Shortcuts);
+        bus.config_changed(ConfigKind::Plugins);
+        bus.config_changed(ConfigKind::Profile);
+        bus.send_plugins_changed();
+        sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            0,
+            "non-matching ConfigChanged kinds and other DaemonEvents must not fire the \
+             reconciler"
+        );
+
+        bus.config_changed(ConfigKind::Hotkeys);
+        wait_at_least(&count, 1).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn burst_of_matching_signals_coalesces_into_fewer_reconciles() {
+        let bus = EventBus::new();
+        let (count, work) = counter();
+        spawn_reconciler(&bus, &[ConfigKind::Plugins], work);
+        sleep(Duration::from_millis(20)).await;
+
+        for _ in 0..10 {
+            bus.config_changed(ConfigKind::Plugins);
+        }
+        wait_at_least(&count, 1).await;
+        sleep(Duration::from_millis(60)).await;
+        let observed = count.load(Ordering::SeqCst);
+        assert!(
+            observed < 10,
+            "burst of 10 matching events must coalesce into fewer reconciles; observed {}",
+            observed
         );
     }
 }

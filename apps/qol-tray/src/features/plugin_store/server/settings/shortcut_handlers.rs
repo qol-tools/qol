@@ -4,6 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
+use crate::daemon::ConfigKind;
 use crate::shortcuts::{executor, store, validation};
 
 use super::super::types::{AppState, MAX_CONFIG_SIZE};
@@ -66,7 +67,7 @@ fn create_inner(state: &AppState, body: axum::body::Bytes) -> HttpResult<Respons
     let mut config = store::load().map_err(|_| Box::new(load_failed()))?;
     store::add(&mut config, shortcut).map_err(|e| Box::new(bad_request(&e)))?;
     store::save(&config).map_err(|_| Box::new(save_failed()))?;
-    trigger_launcher_sync(state);
+    state.daemon.events.config_changed(ConfigKind::Shortcuts);
     let json = http_json::encode_json(&config, "Failed to serialize shortcuts")?;
     Ok(http_json::json_response(json))
 }
@@ -81,7 +82,7 @@ fn update_inner(state: &AppState, id: &str, body: axum::body::Bytes) -> HttpResu
     let mut config = store::load().map_err(|_| Box::new(load_failed()))?;
     store::update(&mut config, shortcut).map_err(|e| Box::new(bad_request(&e)))?;
     store::save(&config).map_err(|_| Box::new(save_failed()))?;
-    trigger_launcher_sync(state);
+    state.daemon.events.config_changed(ConfigKind::Shortcuts);
     let json = http_json::encode_json(&config, "Failed to serialize shortcuts")?;
     Ok(http_json::json_response(json))
 }
@@ -91,7 +92,7 @@ fn delete_inner(state: &AppState, id: &str) -> HttpResult<Response> {
     let mut config = store::load().map_err(|_| Box::new(load_failed()))?;
     store::remove(&mut config, id).map_err(|e| Box::new(not_found(&e)))?;
     store::save(&config).map_err(|_| Box::new(save_failed()))?;
-    trigger_launcher_sync(state);
+    state.daemon.events.config_changed(ConfigKind::Shortcuts);
     let json = http_json::encode_json(&config, "Failed to serialize shortcuts")?;
     Ok(http_json::json_response(json))
 }
@@ -103,10 +104,6 @@ fn run_inner(id: &str) -> HttpResult<Response> {
         .ok_or_else(|| Box::new(not_found(&format!("shortcut '{}' not found", id))))?;
     executor::execute(&shortcut).map_err(|e| Box::new(server_error(&e.to_string())))?;
     Ok((StatusCode::OK, "Shortcut executed").into_response())
-}
-
-fn trigger_launcher_sync(state: &AppState) {
-    crate::features::launcher_apps::trigger_full_sync_with_manager(&state.plugin_manager);
 }
 
 fn load_failed() -> Response {

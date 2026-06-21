@@ -560,6 +560,7 @@ async fn async_init_inner(
         let plugin_manager = plugin_manager.clone();
         tokio::task::spawn_blocking(move || sync_launcher_apps(plugin_manager));
     }
+    spawn_config_reconcilers(&daemon.events, &plugin_manager);
     Ok(InitResult {
         shutdown_tx,
         shutdown_rx,
@@ -572,6 +573,37 @@ async fn async_init_inner(
 
 fn sync_launcher_apps(plugin_manager: Arc<Mutex<PluginManager>>) {
     features::launcher_apps::trigger_full_sync_with_manager(&plugin_manager);
+}
+
+fn spawn_config_reconcilers(
+    events: &qol_tray::daemon::EventBus,
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+) {
+    use qol_tray::daemon::ConfigKind;
+    use qol_tray::reconcile::spawn_reconciler;
+
+    spawn_reconciler(
+        events,
+        &[
+            ConfigKind::Hotkeys,
+            ConfigKind::Plugins,
+            ConfigKind::Profile,
+        ],
+        qol_tray::hotkeys::trigger_reload,
+    );
+
+    let pm_for_launcher = plugin_manager.clone();
+    spawn_reconciler(
+        events,
+        &[
+            ConfigKind::Shortcuts,
+            ConfigKind::Plugins,
+            ConfigKind::Profile,
+        ],
+        move || {
+            features::launcher_apps::trigger_full_sync_with_manager(&pm_for_launcher);
+        },
+    );
 }
 
 fn build_startup_info(
