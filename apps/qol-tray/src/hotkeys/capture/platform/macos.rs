@@ -1,6 +1,8 @@
 use super::super::binding::{Binding, Mod};
 use super::super::{OnFire, RebuildBindings};
 use anyhow::{bail, Result};
+use core_foundation::base::TCFType;
+use core_foundation::mach_port::CFMachPortRef;
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
     CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
@@ -10,7 +12,7 @@ use crossbeam_channel::Receiver;
 use qol_runtime::keyremap_marker::{self, KeyRemapMarker};
 use std::collections::BTreeSet;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,11 +97,29 @@ fn drain_pending(reload_rx: &Receiver<()>) {
     while reload_rx.try_recv().is_ok() {}
 }
 
+fn requires_reenable(event_type: CGEventType) -> bool {
+    matches!(
+        event_type,
+        CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput
+    )
+}
+
+struct ReenablePort(CFMachPortRef);
+
+unsafe impl Send for ReenablePort {}
+unsafe impl Sync for ReenablePort {}
+
+extern "C" {
+    fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+}
+
 fn run_tap(
     matcher: Arc<RwLock<MacBindingMatcher>>,
     fire_tx: Sender<Binding>,
     ready_tx: Sender<Result<(), String>>,
 ) {
+    let reenable: Arc<OnceLock<ReenablePort>> = Arc::new(OnceLock::new());
+    let cb_reenable = Arc::clone(&reenable);
     let events = vec![CGEventType::KeyDown];
     let tap = CGEventTap::new(
         CGEventTapLocation::HID,
@@ -107,6 +127,13 @@ fn run_tap(
         CGEventTapOptions::Default,
         events,
         move |_proxy, event_type, event| {
+            if requires_reenable(event_type) {
+                if let Some(port) = cb_reenable.get() {
+                    log::warn!("macOS hotkey tap disabled by OS; re-enabling");
+                    unsafe { CGEventTapEnable(port.0, true) };
+                }
+                return CallbackResult::Keep;
+            }
             if !matches!(event_type, CGEventType::KeyDown) {
                 return CallbackResult::Keep;
             }
@@ -136,6 +163,7 @@ fn run_tap(
             return;
         }
     };
+    let _ = reenable.set(ReenablePort(tap.mach_port().as_concrete_TypeRef()));
 
     let loop_source = match tap.mach_port().create_runloop_source(0) {
         Ok(loop_source) => loop_source,
@@ -362,6 +390,24 @@ mod tests {
 
     fn combo_for(key: &str) -> MacCombo {
         parse_mac_combo(&binding(key)).expect("combo")
+    }
+
+    #[test]
+    fn os_disabled_tap_events_require_reenable_others_do_not() {
+        let cases = [
+            (CGEventType::TapDisabledByTimeout, true),
+            (CGEventType::TapDisabledByUserInput, true),
+            (CGEventType::KeyDown, false),
+            (CGEventType::FlagsChanged, false),
+            (CGEventType::Null, false),
+        ];
+        for (event_type, expected) in cases {
+            assert_eq!(
+                requires_reenable(event_type),
+                expected,
+                "event_type: {event_type:?}"
+            );
+        }
     }
 
     #[test]
