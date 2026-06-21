@@ -10,8 +10,8 @@ use crate::core::guards::{
     cask_status_for, parse_cask_map, sanitize_stderr, CaskStatus, CaskToken,
 };
 use crate::core::{
-    AppPlatform, Disposal, InstalledApp, Leftover, LeftoverKind, MatchKind, RemovalOutcome,
-    RemovalPlan,
+    AppPlatform, Disposal, IdentitySnapshot, InstalledApp, Leftover, LeftoverKind, MatchKind,
+    RemovalOutcome, RemovalPlan,
 };
 
 pub struct Platform {
@@ -280,6 +280,13 @@ impl AppPlatform for Platform {
     }
 
     fn scan(&self, app: &InstalledApp, inventory: &[InstalledApp]) -> Result<RemovalPlan> {
+        if fs::symlink_metadata(&app.path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            anyhow::bail!("removeapp: {} is a symlink; refusing", app.name);
+        }
+
         let mut all_bids: Vec<String> = inventory
             .iter()
             .filter_map(|a| a.bundle_id.clone())
@@ -320,12 +327,16 @@ impl AppPlatform for Platform {
             }
         }
 
+        let snapshots = items
+            .iter()
+            .map(|l| IdentitySnapshot::capture(&l.path))
+            .collect();
         let total_bytes = items.iter().map(|l| l.size_bytes).sum();
         Ok(RemovalPlan {
             app: app.clone(),
             items,
             total_bytes,
-            snapshots: vec![],
+            snapshots,
         })
     }
 
@@ -397,7 +408,11 @@ impl AppPlatform for Platform {
     }
 
     fn is_protected(&self, app: &InstalledApp) -> bool {
-        let path = &app.path;
+        let path = match fs::canonicalize(&app.path) {
+            Ok(canonical) => canonical,
+            Err(_) if !app.path.exists() => app.path.clone(),
+            Err(_) => return true,
+        };
         if path.starts_with("/System") || path.starts_with("/Library/Apple") {
             return true;
         }
@@ -406,7 +421,7 @@ impl AppPlatform for Platform {
                 return true;
             }
         }
-        path.exists() && !is_writable(path)
+        path.exists() && !is_writable(&path)
     }
 }
 

@@ -40,8 +40,27 @@ pub struct Leftover {
     pub match_kind: MatchKind,
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize)]
-pub struct IdentitySnapshot;
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct IdentitySnapshot {
+    pub is_symlink: bool,
+    pub is_dir: bool,
+}
+
+impl IdentitySnapshot {
+    pub fn capture(path: &std::path::Path) -> IdentitySnapshot {
+        match std::fs::symlink_metadata(path) {
+            Ok(m) => IdentitySnapshot {
+                is_symlink: m.file_type().is_symlink(),
+                is_dir: m.is_dir(),
+            },
+            Err(_) => IdentitySnapshot::default(),
+        }
+    }
+
+    pub fn matches(&self, path: &std::path::Path) -> bool {
+        *self == IdentitySnapshot::capture(path)
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RemovalPlan {
@@ -163,6 +182,22 @@ fn remove_with(
             "removeapp: {} is protected and cannot be removed",
             plan.app.name
         );
+    }
+    if plat.is_running(&plan.app) {
+        anyhow::bail!(
+            "removeapp: {} started running; resolve the guard again",
+            plan.app.name
+        );
+    }
+    if plan.snapshots.len() == plan.items.len() {
+        for (item, snap) in plan.items.iter().zip(&plan.snapshots) {
+            if !snap.matches(&item.path) {
+                anyhow::bail!(
+                    "removeapp: {} changed on disk; aborting",
+                    item.path.display()
+                );
+            }
+        }
     }
     let cask_unavailable = matches!(cask, CaskStatus::Unavailable(_));
     let disposal_for = |item: &Leftover| {
@@ -346,5 +381,39 @@ mod tests {
         let recorded = fake.removed.borrow();
         let fuzzy = recorded.iter().find(|(p, _)| p.ends_with("fuzzy")).unwrap();
         assert_eq!(fuzzy.1, Disposal::Trash, "fuzzy forced to Trash");
+    }
+
+    #[test]
+    fn recheck_aborts_when_a_planned_path_identity_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bundle = tmp.path().join("Foo.app");
+        std::fs::create_dir_all(&bundle).unwrap();
+        let target = InstalledApp {
+            name: "Foo".into(),
+            bundle_id: Some("com.acme.foo".into()),
+            path: bundle.clone(),
+        };
+        let snap = IdentitySnapshot::capture(&bundle);
+        let plan = RemovalPlan {
+            items: vec![Leftover {
+                path: bundle.clone(),
+                kind: LeftoverKind::AppBundle,
+                size_bytes: 0,
+                match_kind: MatchKind::Exact,
+            }],
+            app: target,
+            total_bytes: 0,
+            snapshots: vec![snap],
+        };
+        std::fs::remove_dir_all(&bundle).unwrap();
+        std::fs::write(&bundle, "now a file").unwrap();
+
+        let fake = FakePlat::default();
+        let err = remove_with(&fake, &plan, Disposal::Trash, &CaskStatus::NotManaged).unwrap_err();
+        assert!(
+            err.to_string().contains("changed"),
+            "aborts on identity change"
+        );
+        assert!(fake.removed.borrow().is_empty(), "no mutation");
     }
 }
