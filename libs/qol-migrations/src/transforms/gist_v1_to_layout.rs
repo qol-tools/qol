@@ -145,7 +145,7 @@ mod tests {
                 "plugin-lights": { "bridge": "zigbee2mqtt" },
                 "plugin-window-actions": { "snap": true },
                 "plugin-os-themes": { "dark": true },
-                "plugin-screen-recorder": { "fps": 30 },
+                "qol-shot": { "fps": 30 },
             },
             "plugins": [
                 {
@@ -178,7 +178,7 @@ mod tests {
             "core/plugin-configs/plugin-lights.json",
             "core/plugin-configs/plugin-window-actions.json",
             "core/plugin-configs/plugin-os-themes.json",
-            "core/plugin-configs/plugin-screen-recorder.json",
+            "core/plugin-configs/qol-shot.json",
         ]
         .iter()
         .map(PathBuf::from)

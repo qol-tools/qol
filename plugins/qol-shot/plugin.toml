@@ -1,5 +1,5 @@
 [plugin]
-id = "plugin-screen-recorder"
+id = "qol-shot"
 name = "QoL Shot"
 description = "Capture screenshots and record screen regions"
 version = "1.7.1"
@@ -8,21 +8,29 @@ platforms = ["linux", "macos"]
 
 [runtime]
 command = "qol-shot"
-actions = { record = ["record"], screenshot = ["screenshot"], settings = ["settings"] }
+
+[action.record]
+label = "Start/Stop Recording"
+args = ["record"]
+
+[action.screenshot]
+label = "Screenshot"
+args = ["screenshot"]
+
+[action.settings]
+label = "Settings..."
+kind = "settings"
+args = ["settings"]
 
 [menu]
 label = "QoL Shot"
 items = [
-    { type = "action", id = "record", label = "Start/Stop Recording", action = "run" },
-    { type = "action", id = "screenshot", label = "Screenshot", action = "run" },
-    { type = "separator" },
     { type = "checkbox", id = "audio-enable", label = "Enable Audio", checked = true, action = "toggle-config", config_key = "audio.enabled" },
-    { type = "action", id = "settings", label = "Settings...", action = "settings" },
 ]
 
 # No background daemon needed for this plugin
 
 [[dependencies.binaries]]
 name = "qol-shot"
-repo = "qol-tools/plugin-screen-recorder"
+repo = "qol-tools/qol-shot"
 pattern = "qol-shot-{os}-{arch}"

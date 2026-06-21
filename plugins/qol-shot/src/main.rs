@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    screen_recorder::cli::exit_code(std::env::args().skip(1))
+    qol_shot::cli::exit_code(std::env::args().skip(1))
 }
 
 #[cfg(test)]

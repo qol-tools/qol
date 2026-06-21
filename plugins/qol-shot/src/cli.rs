@@ -8,17 +8,10 @@ use std::process::ExitCode;
 
 use crate::{platform, recording, screenshot, settings, Config, PLUGIN_ID};
 
-const COMPAT_BINARY_NAME: &str = "screen-recorder";
+const BINARY_NAME: &str = "qol-shot";
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
-    exit_code_for_binary(COMPAT_BINARY_NAME, args)
-}
-
-pub fn exit_code_for_binary(
-    binary_name: &'static str,
-    args: impl IntoIterator<Item = String>,
-) -> ExitCode {
-    app(binary_name).run(args)
+    app(BINARY_NAME).run(args)
 }
 
 fn app(binary_name: &'static str) -> HeadlessApp {
@@ -33,7 +26,6 @@ fn app(binary_name: &'static str) -> HeadlessApp {
 
 fn record_command(binary_name: &'static str) -> Command {
     Command::new("record")
-        .alias("toggle")
         .about("Toggle screen region recording.")
         .usage(format!("{binary_name} record"))
         .detail("When idle, opens region selection and starts capture.")
@@ -49,7 +41,6 @@ fn record_command(binary_name: &'static str) -> Command {
 
 fn screenshot_command(binary_name: &'static str) -> Command {
     Command::new("screenshot")
-        .alias("shot")
         .about("Capture a selected screenshot.")
         .usage(format!("{binary_name} screenshot"))
         .detail("Opens region selection, captures the selected area, and saves a PNG.")
@@ -79,7 +70,7 @@ fn doctor_checks() -> Vec<DoctorCheck> {
     vec![
         DoctorCheck::new(
             "platform_supported",
-            "Verify the current OS has a screen-recorder backend.",
+            "Verify the current OS has a qol-shot backend.",
             || Ok(platform::platform_supported_check()),
         ),
         DoctorCheck::new(
@@ -256,6 +247,14 @@ mod tests {
     }
 
     #[test]
+    fn legacy_command_aliases_are_not_registered() {
+        for command in ["shot", "toggle"] {
+            let execution = app("qol-shot").execute(vec![command.to_string()]);
+            assert_eq!(execution.exit_code, EXIT_USAGE, "{command} should fail");
+        }
+    }
+
+    #[test]
     fn settings_json_is_rejected_by_shared_gate() {
         let execution = app("qol-shot").execute(vec!["settings".to_string(), "--json".to_string()]);
         assert_eq!(execution.exit_code, EXIT_USAGE);
@@ -266,9 +265,7 @@ mod tests {
     fn doctor_json_is_registered() {
         let execution = app("qol-shot").execute(vec!["doctor".to_string(), "--json".to_string()]);
         assert_eq!(execution.exit_code, EXIT_SUCCESS);
-        assert!(execution
-            .stdout
-            .contains("\"plugin_id\":\"plugin-screen-recorder\""));
+        assert!(execution.stdout.contains("\"plugin_id\":\"qol-shot\""));
     }
 
     #[test]

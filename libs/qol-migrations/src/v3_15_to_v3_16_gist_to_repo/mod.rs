@@ -210,7 +210,7 @@ mod tests {
                 "plugin-lights": {"bridge": "zigbee2mqtt"},
                 "plugin-window-actions": {"snap": true},
                 "plugin-os-themes": {"dark": true},
-                "plugin-screen-recorder": {"fps": 30},
+                "qol-shot": {"fps": 30},
             },
             "plugins": [
                 {"id": "plugin-alt-tab", "repo_url": "https://example.test/alt-tab", "version": "1.2.3", "platforms": ["linux"]},
@@ -366,7 +366,7 @@ mod tests {
             "core/plugin-configs/plugin-lights.json".to_string(),
             "core/plugin-configs/plugin-window-actions.json".to_string(),
             "core/plugin-configs/plugin-os-themes.json".to_string(),
-            "core/plugin-configs/plugin-screen-recorder.json".to_string(),
+            "core/plugin-configs/qol-shot.json".to_string(),
         ];
         for path in &cases {
             assert!(

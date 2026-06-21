@@ -1,5 +1,5 @@
 schema_version = 1
-title = "Screen Recorder"
+title = "QoL Shot"
 description = "Audio and video capture defaults for screen recordings."
 
 [section.audio]

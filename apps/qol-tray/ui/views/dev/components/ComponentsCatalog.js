@@ -586,7 +586,7 @@ function StoreCardShowcase() {
                 <//>
                 <${States}>
                     <${StateLabel}>not installed<//>
-                    <${StoreCardGrid}><${StoreCard} name="Screen Recorder" version=${{ current: '0.3.0' }} description="Record screen" /><//>
+                    <${StoreCardGrid}><${StoreCard} name="QoL Shot" version=${{ current: '0.3.0' }} description="Record screen" /><//>
                     <${StateLabel}>installing<//>
                     <${StoreCardGrid}><${StoreCard} name="Window Actions" version=${{ current: '1.0.0' }} description="Minimize, restore" installing=${true} /><//>
                     <${StateLabel}>installed<//>

@@ -11,4 +11,4 @@ mod settings;
 pub use config::{AudioConfig, Config, VideoConfig};
 pub use geometry::{Monitor, Rect};
 
-pub const PLUGIN_ID: &str = "plugin-screen-recorder";
+pub const PLUGIN_ID: &str = "qol-shot";

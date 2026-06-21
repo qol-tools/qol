@@ -14,7 +14,7 @@ use crate::platform::{CaptureProcess, CaptureSegment, CaptureSession};
 use crate::{Config, Monitor, Rect};
 
 const MAX_DISPLAYS: u32 = 16;
-const SWIFT_HELPER_CACHE_DIR: &str = "qol-screen-recorder-swift";
+const SWIFT_HELPER_CACHE_DIR: &str = "qol-shot-swift";
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 static STATUS_OVERLAY_PID: Mutex<Option<u32>> = Mutex::new(None);

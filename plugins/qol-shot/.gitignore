@@ -1,0 +1,4 @@
+/target/
+/qol-shot
+/qol-shot.new
+.cargo/config.toml
