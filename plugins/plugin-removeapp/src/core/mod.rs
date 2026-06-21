@@ -581,9 +581,11 @@ mod tests {
             total_bytes: 0,
             snapshots: vec![IdentitySnapshot::capture(&bundle)],
         };
+        let replacement = tmp.path().join("Foo.app.replacement");
+        std::fs::create_dir_all(&replacement).unwrap();
+        std::fs::write(replacement.join("new"), "new").unwrap();
         std::fs::remove_dir_all(&bundle).unwrap();
-        std::fs::create_dir_all(&bundle).unwrap();
-        std::fs::write(bundle.join("new"), "new").unwrap();
+        std::fs::rename(&replacement, &bundle).unwrap();
 
         let fake = FakePlat::default();
         let err = remove_with(&fake, &plan, Disposal::Trash, &CaskStatus::NotManaged).unwrap_err();
