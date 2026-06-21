@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 const LEGACY_DEV_LINKS_RELPATH: &str = "dev/links.json";
+#[cfg(feature = "dev")]
 const LEGACY_DEV_LINKS_CORRUPT_PREFIX: &str = "dev/links.json.corrupt.";
 
 pub fn ensure_registry_initialized(
@@ -57,6 +58,21 @@ fn build_from_legacy_state(config_dir: &Path, plugins_dir: &Path) -> Registry {
         );
     }
 
+    merge_legacy_dev_links(&mut by_id, config_dir);
+
+    let mut entries: Vec<Entry> = by_id.into_values().collect();
+    entries.sort_by(|a, b| a.id.cmp(&b.id));
+    Registry {
+        version: 1,
+        entries,
+    }
+}
+
+#[cfg(not(feature = "dev"))]
+fn merge_legacy_dev_links(_by_id: &mut HashMap<String, Entry>, _config_dir: &Path) {}
+
+#[cfg(feature = "dev")]
+fn merge_legacy_dev_links(by_id: &mut HashMap<String, Entry>, config_dir: &Path) {
     match read_legacy_dev_links(config_dir) {
         LegacyDevLinks::Parsed(links) => {
             for (id, path) in links {
@@ -68,7 +84,7 @@ fn build_from_legacy_state(config_dir: &Path, plugins_dir: &Path) -> Registry {
                     );
                     continue;
                 }
-                merge_dev_link_into(&mut by_id, id, path);
+                merge_dev_link_into(by_id, id, path);
             }
         }
         LegacyDevLinks::Corrupt(reason) => {
@@ -79,21 +95,16 @@ fn build_from_legacy_state(config_dir: &Path, plugins_dir: &Path) -> Registry {
         }
         LegacyDevLinks::Absent => {}
     }
-
-    let mut entries: Vec<Entry> = by_id.into_values().collect();
-    entries.sort_by(|a, b| a.id.cmp(&b.id));
-    Registry {
-        version: 1,
-        entries,
-    }
 }
 
+#[cfg(feature = "dev")]
 enum LegacyDevLinks {
     Parsed(HashMap<String, PathBuf>),
     Corrupt(String),
     Absent,
 }
 
+#[cfg(feature = "dev")]
 fn read_legacy_dev_links(config_dir: &Path) -> LegacyDevLinks {
     let path = config_dir.join(LEGACY_DEV_LINKS_RELPATH);
     let content = match std::fs::read_to_string(&path) {
@@ -114,6 +125,7 @@ fn read_legacy_dev_links(config_dir: &Path) -> LegacyDevLinks {
     }
 }
 
+#[cfg(feature = "dev")]
 fn is_valid_dev_link_target(path: &Path) -> bool {
     if !path.is_dir() {
         return false;
@@ -122,6 +134,7 @@ fn is_valid_dev_link_target(path: &Path) -> bool {
     manifest.exists() && manifest_parses_and_version_valid(&manifest)
 }
 
+#[cfg(feature = "dev")]
 fn back_up_corrupt_dev_links(config_dir: &Path, original: &Path) {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -195,6 +208,7 @@ fn declared_or_folder_id(manifest_path: &Path, folder: &str) -> Option<String> {
     }
 }
 
+#[cfg(feature = "dev")]
 fn manifest_parses_and_version_valid(manifest_path: &Path) -> bool {
     let Ok(content) = std::fs::read_to_string(manifest_path) else {
         return false;
@@ -205,6 +219,7 @@ fn manifest_parses_and_version_valid(manifest_path: &Path) -> bool {
     manifest.validate_version().is_ok()
 }
 
+#[cfg(feature = "dev")]
 fn merge_dev_link_into(by_id: &mut HashMap<String, Entry>, id: String, path: PathBuf) {
     let dev_slot = Slot {
         path: path.clone(),
@@ -275,6 +290,7 @@ mod tests {
         assert!(registry.entries.iter().all(|e| e.fallback.is_none()));
     }
 
+    #[cfg(feature = "dev")]
     #[test]
     fn pairs_dev_link_with_installed_as_fallback() {
         let tmp = TempDir::new().unwrap();
@@ -302,6 +318,7 @@ mod tests {
         assert_eq!(fallback.path, installed);
     }
 
+    #[cfg(feature = "dev")]
     #[test]
     fn dev_link_without_install_has_no_fallback() {
         let tmp = TempDir::new().unwrap();
@@ -322,6 +339,41 @@ mod tests {
 
         assert!(matches!(entry.active.source, SlotSource::DevLink { .. }));
         assert!(entry.fallback.is_none());
+    }
+
+    #[cfg(not(feature = "dev"))]
+    #[test]
+    fn prod_never_migrates_legacy_dev_links() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+        let installed = make_plugin_dir(&plugins_dir, "plugin-foo");
+        let dev_src = make_plugin_dir(tmp.path(), "dev-src");
+
+        let mut links = HashMap::new();
+        links.insert("plugin-foo".to_string(), dev_src);
+        write_legacy_dev_links(tmp.path(), &links);
+
+        let registry = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+
+        assert!(
+            registry
+                .entries
+                .iter()
+                .all(|e| matches!(e.active.source, SlotSource::ReleaseAsset)),
+            "prod must never write a DevLink slot, even from a leftover dev/links.json"
+        );
+        let foo = registry
+            .entries
+            .iter()
+            .find(|e| e.id == "plugin-foo")
+            .unwrap();
+        assert_eq!(foo.active.path, installed);
+        assert!(foo.fallback.is_none());
+        assert!(
+            !tmp.path().join(LEGACY_DEV_LINKS_RELPATH).exists(),
+            "prod must still remove the leftover legacy file"
+        );
     }
 
     #[test]
@@ -408,6 +460,7 @@ mod tests {
         assert!(entry.fallback.is_none());
     }
 
+    #[cfg(feature = "dev")]
     #[test]
     fn corrupt_dev_links_are_backed_up_and_migration_continues() {
         let tmp = TempDir::new().unwrap();
