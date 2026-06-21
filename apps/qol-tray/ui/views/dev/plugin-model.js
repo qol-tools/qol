@@ -13,6 +13,7 @@ function localEntry(plugin, control) {
     return {
         id: plugin.id,
         name: plugin.name,
+        version: plugin.version || '',
         path: plugin.path,
         status: 'local',
         has_cargo: false,
@@ -30,6 +31,7 @@ function linkedEntry(plugin, logsMuted, suppressedPatterns) {
     return {
         id: plugin.id,
         name: plugin.name,
+        version: plugin.version || '',
         path: plugin.source,
         status: 'linked',
         has_cargo: !!plugin.has_cargo,
@@ -45,6 +47,7 @@ function linkedEntry(plugin, logsMuted, suppressedPatterns) {
 
 function applyLinked(existing, plugin, logsMuted, suppressedPatterns) {
     existing.status = 'linked';
+    existing.version = plugin.version || existing.version || '';
     existing.path = plugin.source || existing.path;
     existing.has_cargo = !!plugin.has_cargo;
     existing.supports_platform = plugin.supports_platform !== false;

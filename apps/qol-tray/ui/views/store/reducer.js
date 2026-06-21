@@ -1,4 +1,5 @@
 import { clampIndex, sortByName, matchesQuery } from '../../utils/collections.js';
+import { resolvePluginVersion } from '../../utils/plugin-version.js';
 
 export function createStoreState() {
     return {
@@ -66,8 +67,5 @@ export function isStoreDevLinked(plugin) {
 }
 
 export function displayedStoreVersion(plugin) {
-    if (plugin?.installed) {
-        return plugin.running_version ?? plugin.installed_version ?? plugin.version ?? null;
-    }
-    return plugin?.version ?? null;
+    return resolvePluginVersion(plugin);
 }

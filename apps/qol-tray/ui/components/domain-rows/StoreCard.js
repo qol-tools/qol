@@ -1,5 +1,6 @@
 import { html } from '../../lib/html.js';
 import { Card, CardGrid } from '../../lib/components/Card.js';
+import { formatPluginVersionLabel } from '../../utils/plugin-version.js';
 
 export function StoreCardGrid({ className, onDeselect, children, ...rest }) {
     const cls = ['plugin-grid-store card-grid--zoom', className].filter(Boolean).join(' ');
@@ -8,7 +9,7 @@ export function StoreCardGrid({ className, onDeselect, children, ...rest }) {
 
 export function StoreCard({ name, version, description, installed, installing, hasUpdate, devLinked, index, selected, onSelect, onActivate, ...rest }) {
     const cls = ['plugin-card', installed && 'installed', installing && 'installing', hasUpdate && 'has-update'].filter(Boolean).join(' ');
-    const versionDisplay = storeVersionLabel(version, hasUpdate);
+    const versionDisplay = formatPluginVersionLabel(version, hasUpdate);
     return html`
         <${Card} className=${cls} index=${index} selected=${selected} onSelect=${onSelect} onActivate=${onActivate} ...${rest}>
             <h3 data-selected-text="">${name}</h3>
@@ -19,12 +20,6 @@ export function StoreCard({ name, version, description, installed, installing, h
             </div>
         <//>
     `;
-}
-
-function storeVersionLabel(version, hasUpdate) {
-    if (hasUpdate) return `v${version.from} -> v${version.to}`;
-    const current = version?.current || version;
-    return current ? `v${current}` : '';
 }
 
 function storeCardAction({ installing, devLinked, hasUpdate, installed }) {

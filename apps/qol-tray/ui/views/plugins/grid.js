@@ -2,6 +2,7 @@ import { html } from '../../lib/html.js';
 import { useState } from 'preact/hooks';
 import { Card, CardGrid } from '../../lib/components/Card.js';
 import { useModifierState } from '../../lib/hooks/modifier-state-context.js';
+import { PluginVersion } from '../../components/PluginVersion.js';
 
 const brokenCovers = new Set();
 
@@ -58,6 +59,7 @@ function PluginCard({ plugin, index, selected, updating, onCardClick, onSelect, 
                        </div>`}
             <div class="plugin-name" data-selected-text="">
                 <span class="plugin-name-text">${plugin.name}</span>
+                <${PluginVersion} plugin=${plugin} />
                 ${chip && html`<span class="plugin-status-chip ${chip.className}" title=${chip.tooltip}>${chip.label}</span>`}
             </div>
             ${plugin.loaded === false && html`<div class="plugin-load-state" data-selected-text="">Not loaded</div>`}

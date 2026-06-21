@@ -1,5 +1,5 @@
 import { html } from '../../lib/html.js';
-import { useCallback, useEffect, useRef } from 'preact/hooks';
+import { useCallback, useEffect, useMemo, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from './context.js';
 import {
     buildBranchOwnerMap,
@@ -13,6 +13,8 @@ import { renderField, fieldSurfaceAttrs } from './field-map.js';
 import { dissolveIn, DISSOLVE_PRESETS } from '../../fx/dissolve/index.js';
 import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
 import { PageShell } from '../../components/PageShell.js';
+import { PluginVersion } from '../../components/PluginVersion.js';
+import { findPluginById, readInstalledCache } from '../plugins/data.js';
 
 function useEscapeFallback(onClose, active) {
     useEffect(() => {
@@ -66,13 +68,15 @@ export function PluginConfigView({ onClose }) {
 
 export function PluginConfigSectionView({ pluginId, sectionId, onClose }) {
     const ctx = usePluginConfigContext();
+    const plugin = useMemo(() => findPluginById(readInstalledCache()?.plugins ?? [], pluginId), [pluginId]);
     if (!ctx || ctx.pluginId !== pluginId) return null;
     if (ctx.loading || !ctx.sections) return null;
     const section = ctx.sections.find(s => s.id === sectionId);
     if (!section) return null;
     const subtitle = section.id !== '_root' ? (section.description || '') : '';
+    const badge = html`<${PluginVersion} plugin=${plugin} />`;
     return html`
-        <${PageShell} subtitle=${subtitle} frameClassName="plugin-config-detail">
+        <${PageShell} subtitle=${subtitle} badge=${badge} frameClassName="plugin-config-detail">
             <div class="config-detail-content">
                 <${ConfigSection} fields=${section.fields} />
             </div>

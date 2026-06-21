@@ -23,6 +23,7 @@ export function PluginRow({ plugin, index, ctrl }) {
         <${DevPluginRow}
             name=${plugin.name || plugin.id || 'Unknown plugin'}
             path=${plugin.path || ''}
+            version=${plugin.version || ''}
             status=${statusToken}
             pluginId=${plugin.id}
             index=${index}

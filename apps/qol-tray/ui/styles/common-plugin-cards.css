@@ -453,6 +453,20 @@
     pointer-events: auto;
 }
 
+.plugin-version {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    line-height: var(--lh-snug);
+    letter-spacing: var(--ls-md);
+    white-space: nowrap;
+}
+
+.plugin-version.has-update {
+    color: var(--accent);
+}
+
 .plugin-status-chip.chip-dev {
     color: var(--accent);
     background: rgba(var(--accent-rgb), 0.18);
