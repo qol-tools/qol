@@ -8,16 +8,17 @@ platforms = ["macos"]
 
 [runtime]
 command = "removeapp"
-actions = { open = ["open"] }
+
+[action.open]
+label = "Open"
+args = ["open"]
 
 [capabilities]
 gpui = true
 
 [menu]
 label = "Remove App"
-items = [
-    { type = "action", id = "open", label = "Open", action = "run" },
-]
+items = []
 
 [[shortcuts]]
 id = "open"

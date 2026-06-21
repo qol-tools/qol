@@ -8,7 +8,10 @@ platforms = ["macos"]
 
 [runtime]
 command = "keyremap"
-actions = { reload = ["--reload"] }
+
+[action.reload]
+label = "Reload Config"
+args = ["--reload"]
 
 [daemon]
 enabled = true
@@ -17,9 +20,7 @@ socket = "/tmp/qol-keyremap.sock"
 
 [menu]
 label = "Key Remap"
-items = [
-    { type = "action", id = "reload", label = "Reload Config", action = "run" },
-]
+items = []
 
 [[dependencies.binaries]]
 name = "keyremap"

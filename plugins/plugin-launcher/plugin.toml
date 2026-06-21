@@ -8,7 +8,10 @@ platforms = ["linux", "macos"]
 
 [runtime]
 command = "launcher"
-actions = { open = ["--show"] }
+
+[action.open]
+label = "Open Launcher"
+args = ["--show"]
 
 [daemon]
 enabled = true
@@ -20,9 +23,7 @@ gpui = true
 
 [menu]
 label = "Launcher"
-items = [
-    { type = "action", id = "open", label = "Open Launcher", action = "run" },
-]
+items = []
 
 [[dependencies.binaries]]
 name = "launcher"

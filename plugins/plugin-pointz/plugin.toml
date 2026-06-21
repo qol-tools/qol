@@ -8,13 +8,15 @@ platforms = ["linux", "macos"]
 
 [runtime]
 command = "pointzerver"
-actions = { settings = ["--action", "settings"] }
+
+[action.settings]
+label = "Settings"
+kind = "settings"
+args = ["--action", "settings"]
 
 [menu]
 label = "PointZ"
-items = [
-    { type = "action", id = "settings", label = "Settings", action = "settings" },
-]
+items = []
 
 [daemon]
 enabled = true

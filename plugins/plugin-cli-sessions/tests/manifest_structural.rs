@@ -12,17 +12,30 @@ fn manifest_declares_on_demand_actions_and_one_binary() {
         Some(["linux".to_string(), "macos".to_string()].as_slice())
     );
 
-    let runtime = m.runtime.expect("runtime");
+    let runtime = m.runtime.as_ref().expect("runtime");
     assert_eq!(runtime.command, "cli-sessions");
-    let actions = runtime.actions.expect("actions");
-    assert!(actions.contains_key("open"));
+    assert!(runtime.actions.is_none());
+    let actions = m.executable_action_ids();
+    assert!(actions.contains("open"));
     assert!(
-        actions.contains_key("next"),
-        "the jump-to-next-attention hotkey resolves to a runtime action"
+        actions.contains("next"),
+        "the jump-to-next-attention hotkey resolves to a catalog action"
     );
     assert!(
-        actions.contains_key("snapshot"),
-        "the snapshot-all hotkey resolves to a runtime action"
+        actions.contains("snapshot"),
+        "the snapshot-all hotkey resolves to a catalog action"
+    );
+    assert_eq!(
+        m.catalog_runtime_args("open"),
+        Some(vec!["open".to_string()])
+    );
+    assert_eq!(
+        m.catalog_runtime_args("next"),
+        Some(vec!["next".to_string()])
+    );
+    assert_eq!(
+        m.catalog_runtime_args("snapshot"),
+        Some(vec!["snapshot".to_string()])
     );
 
     assert!(

@@ -8,7 +8,15 @@ platforms = ["linux"]
 
 [runtime]
 command = "plugin-os-themes"
-actions = { run = ["run"], settings = ["settings"] }
+
+[action.run]
+label = "Cursor Grow"
+args = ["run"]
+
+[action.settings]
+label = "Settings"
+kind = "settings"
+args = ["settings"]
 
 [daemon]
 enabled = true
@@ -17,10 +25,7 @@ socket = "/tmp/qol-os-themes.sock"
 
 [menu]
 label = "OS Themes"
-items = [
-    { type = "action", id = "run", label = "Cursor Grow", action = "run" },
-    { type = "action", id = "settings", label = "Settings", action = "settings" },
-]
+items = []
 
 [[dependencies.binaries]]
 name = "plugin-os-themes"

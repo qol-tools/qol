@@ -8,18 +8,25 @@ platforms = ["linux", "macos"]
 
 [runtime]
 command = "cli-sessions"
-actions = { open = ["open"], next = ["next"], snapshot = ["snapshot"] }
+
+[action.open]
+label = "Open Overview"
+args = ["open"]
+
+[action.next]
+label = "Jump to Next Alert"
+args = ["next"]
+
+[action.snapshot]
+label = "Snapshot All Sessions"
+args = ["snapshot"]
 
 [capabilities]
 gpui = true
 
 [menu]
 label = "CLI Sessions"
-items = [
-    { type = "action", id = "open", label = "Open Overview", action = "run" },
-    { type = "action", id = "next", label = "Jump to Next Alert", action = "run" },
-    { type = "action", id = "snapshot", label = "Snapshot All Sessions", action = "run" },
-]
+items = []
 
 [[shortcuts]]
 id = "open"

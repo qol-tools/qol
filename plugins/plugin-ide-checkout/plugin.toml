@@ -8,13 +8,14 @@ platforms = ["macos", "linux"]
 
 [runtime]
 command = "task-runner"
-actions = { status = ["status"] }
+
+[action.status]
+label = "Status"
+args = ["status"]
 
 [menu]
 label = "Task Runner"
-items = [
-    { type = "action", id = "status", label = "Status", action = "run" }
-]
+items = []
 
 [daemon]
 enabled = true

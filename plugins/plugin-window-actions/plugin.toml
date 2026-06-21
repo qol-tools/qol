@@ -9,30 +9,45 @@ platforms = ["linux", "macos"]
 [runtime]
 command = "window-actions"
 
-[runtime.actions]
-snap-left = ["snap-left"]
-snap-right = ["snap-right"]
-snap-bottom = ["snap-bottom"]
-maximize = ["maximize"]
-minimize = ["minimize"]
-restore = ["restore"]
-center = ["center"]
-move-monitor-left = ["move-monitor-left"]
-move-monitor-right = ["move-monitor-right"]
+[action.snap-left]
+label = "Snap Left"
+args = ["snap-left"]
+
+[action.snap-right]
+label = "Snap Right"
+args = ["snap-right"]
+
+[action.snap-bottom]
+label = "Snap Bottom"
+args = ["snap-bottom"]
+
+[action.maximize]
+label = "Maximize"
+args = ["maximize"]
+
+[action.minimize]
+label = "Minimize"
+args = ["minimize"]
+
+[action.restore]
+label = "Restore"
+args = ["restore"]
+
+[action.center]
+label = "Center"
+args = ["center"]
+
+[action.move-monitor-left]
+label = "Move to Left Monitor"
+args = ["move-monitor-left"]
+
+[action.move-monitor-right]
+label = "Move to Right Monitor"
+args = ["move-monitor-right"]
 
 [menu]
 label = "Window Actions"
-items = [
-    { type = "action", id = "snap-left", label = "Snap Left", action = "run" },
-    { type = "action", id = "snap-right", label = "Snap Right", action = "run" },
-    { type = "action", id = "snap-bottom", label = "Snap Bottom", action = "run" },
-    { type = "action", id = "maximize", label = "Maximize", action = "run" },
-    { type = "action", id = "minimize", label = "Minimize", action = "run" },
-    { type = "action", id = "restore", label = "Restore", action = "run" },
-    { type = "action", id = "center", label = "Center", action = "run" },
-    { type = "action", id = "move-monitor-left", label = "Move to Left Monitor", action = "run" },
-    { type = "action", id = "move-monitor-right", label = "Move to Right Monitor", action = "run" },
-]
+items = []
 
 [[dependencies.binaries]]
 name = "window-actions"

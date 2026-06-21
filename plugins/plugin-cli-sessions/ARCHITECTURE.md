@@ -160,8 +160,8 @@ batch, so launching the panel is quiet rather than a notification storm.
 
 Jumping to the next session that wants you must work when the panel is *not*
 focused (you are in an editor or another terminal), so it is not an in-view key -
-it is a qol-tray-bound action. The manifest declares a `next` action (menu item +
-`runtime.actions` mapping + a bindable `[[shortcuts]]` entry); a hotkey fires
+it is a qol-tray-bound action. The manifest declares a `next` catalog action plus
+a bindable `[[shortcuts]]` entry; a hotkey fires
 `cli-sessions next`, which forwards to the running daemon over its socket
 (`Command::NextAttention`). The daemon focuses the next attention session's
 terminal window via the host and advances its selection cursor, so repeated
@@ -169,8 +169,8 @@ presses cycle through just the rows that want you (`nav::next_attention`, pure a
 ordered with attention on top), skipping calm ones - from anywhere, no panel
 focus required.
 
-A third action, `snapshot`, is bound the same way (menu item + `runtime.actions`
-+ a `[[shortcuts]]` entry). It is the user-as-oracle capture: see "Self-healing".
+A third action, `snapshot`, is bound the same way with a catalog action plus a
+`[[shortcuts]]` entry. It is the user-as-oracle capture: see "Self-healing".
 
 ## Self-healing: anomaly capture (`src/anomaly`)
 
