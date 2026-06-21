@@ -18,6 +18,7 @@ pub fn active_dev_links(
 pub struct LinkedPlugin {
     pub id: String,
     pub name: String,
+    pub version: String,
     pub source: String,
     pub has_cargo: bool,
     pub supports_platform: bool,
@@ -135,6 +136,7 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, "foo");
         assert_eq!(listed[0].name, "Fancy Plugin");
+        assert_eq!(listed[0].version, "1.0.0");
         assert_eq!(listed[0].source, source.to_string_lossy());
         assert!(!listed[0].has_cargo);
         assert_eq!(listed[0].rebuild_reason, "Cargo.toml missing");

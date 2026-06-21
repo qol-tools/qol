@@ -224,6 +224,7 @@ mod tests {
         dev::LinkedPlugin {
             id: id.into(),
             name: id.into(),
+            version: "1.0.0".into(),
             source: format!("/src/{id}"),
             has_cargo: true,
             supports_platform: true,

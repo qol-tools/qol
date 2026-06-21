@@ -20,9 +20,10 @@ pub fn list_linked_plugins(config_dir: &Path) -> Result<Vec<LinkedPlugin>, Strin
     let mut plugins: Vec<LinkedPlugin> = links
         .iter()
         .map(|(id, path)| {
-            let name = read_plugin_name(&path.join("plugin.toml")).unwrap_or_else(|| id.clone());
+            let (name, version) = read_plugin_meta(&path.join("plugin.toml"))
+                .unwrap_or_else(|| (id.clone(), String::new()));
             let log_control = log_controls.get(id).cloned().unwrap_or_default();
-            build_plugin_entry(id, path, plans_by_id.get(id), name, log_control)
+            build_plugin_entry(id, path, plans_by_id.get(id), name, version, log_control)
         })
         .collect();
     plugins.sort_by(|a, b| a.name.cmp(&b.name));
@@ -34,11 +35,13 @@ fn build_plugin_entry(
     path: &Path,
     plan: Option<&crate::dev::build::PluginBuildPlan>,
     name: String,
+    version: String,
     log_control: crate::logging::LogControl,
 ) -> LinkedPlugin {
     LinkedPlugin {
         id: id.to_string(),
         name,
+        version,
         source: path.to_string_lossy().into_owned(),
         has_cargo: plan.map(|p| p.has_cargo).unwrap_or(false),
         supports_platform: plan.map(|p| p.supports_platform).unwrap_or(true),
@@ -53,8 +56,8 @@ fn build_plugin_entry(
     }
 }
 
-fn read_plugin_name(toml_path: &Path) -> Option<String> {
+fn read_plugin_meta(toml_path: &Path) -> Option<(String, String)> {
     let content = std::fs::read_to_string(toml_path).ok()?;
     let manifest: crate::plugins::PluginManifest = toml::from_str(&content).ok()?;
-    Some(manifest.plugin.name)
+    Some((manifest.plugin.name, manifest.plugin.version))
 }
