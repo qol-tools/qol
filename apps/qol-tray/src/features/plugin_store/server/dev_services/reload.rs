@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::daemon::ConfigKind;
 use crate::dev;
 
 use super::super::dev_runtime::DevRuntimeService;
@@ -43,6 +44,7 @@ pub(super) fn queue_reload_single(state: &AppState, plugin_id: String) -> Result
 struct ReloadTask {
     runtime: Arc<DevRuntimeService>,
     plugin_manager: std::sync::Arc<std::sync::Mutex<crate::plugins::PluginManager>>,
+    config: std::sync::Arc<crate::daemon::ConfigBus>,
     events: std::sync::Arc<crate::daemon::EventBus>,
     config_dir: Option<std::path::PathBuf>,
     plugin_filter: Option<String>,
@@ -68,6 +70,7 @@ fn reload_task(
     ReloadTask {
         runtime,
         plugin_manager: state.plugin_manager.clone(),
+        config: state.daemon.config.clone(),
         events: state.daemon.events.clone(),
         config_dir: shared_config_dir().ok(),
         plugin_filter,
@@ -80,7 +83,7 @@ fn run_reload(task: ReloadTask) {
         runtime: task.runtime.clone(),
     };
     run_build(&task);
-    reload_plugins(task.plugin_manager, task.events);
+    reload_plugins(task.plugin_manager, task.config, task.events);
 }
 
 fn run_build(task: &ReloadTask) {
@@ -109,6 +112,7 @@ fn run_build(task: &ReloadTask) {
 
 fn reload_plugins(
     plugin_manager: std::sync::Arc<std::sync::Mutex<crate::plugins::PluginManager>>,
+    config: std::sync::Arc<crate::daemon::ConfigBus>,
     events: std::sync::Arc<crate::daemon::EventBus>,
 ) {
     let mut manager = match plugin_manager.lock() {
@@ -123,10 +127,9 @@ fn reload_plugins(
         log::error!("Failed to reload plugins: {}", error);
         return;
     }
-
-    crate::features::launcher_apps::trigger_full_sync_with_plugins(manager.plugins());
     drop(manager);
+
     log::info!("Plugins reloaded successfully");
-    crate::hotkeys::trigger_reload();
+    config.config_changed(ConfigKind::Plugins);
     events.send_plugins_changed();
 }

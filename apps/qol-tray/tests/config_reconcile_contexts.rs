@@ -429,6 +429,37 @@ mod write_point_dispatch_contracts {
     }
 }
 
+mod dev_reload_reconciles_via_config_changed_signal {
+    use super::read_src;
+
+    #[test]
+    fn dev_reload_emits_plugins_signal_and_keeps_plugins_changed() {
+        let src = read_src("features/plugin_store/server/dev_services/reload.rs");
+        let expected_signals = [
+            "manager.reload_plugins()",
+            "config_changed(ConfigKind::Plugins)",
+            "send_plugins_changed()",
+        ];
+        for signal in expected_signals {
+            assert!(
+                src.contains(signal),
+                "dev reload must invoke `{signal}` so a dev recompile reconciles through the \
+                 same ConfigChanged{{Plugins}} bus as production plugin operations"
+            );
+        }
+        assert!(
+            !src.contains("trigger_full_sync_with_plugins"),
+            "dev reload must NOT drive launcher sync directly anymore - the launcher \
+             reconciler subscribes to ConfigChanged{{Plugins}}"
+        );
+        assert!(
+            !src.contains("trigger_reload()"),
+            "dev reload must NOT drive hotkeys::trigger_reload() directly anymore - the \
+             hotkeys reconciler subscribes to ConfigChanged{{Plugins}}"
+        );
+    }
+}
+
 mod profile_apply_reconciles_via_config_changed_signal {
     use super::read_src;
 
