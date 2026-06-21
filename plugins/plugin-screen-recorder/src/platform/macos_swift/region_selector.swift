@@ -242,7 +242,7 @@ final class SelectionView: NSView {
     }
 
     private func drawGuide() {
-        let title = coordinator.isSelecting ? "Release mouse to start recording" : "Drag to select recording area"
+        let title = coordinator.isSelecting ? "Release mouse to capture" : "Drag to select capture area"
         let width = min(bounds.width - 48, 520)
         let panel = NSRect(x: bounds.midX - width / 2, y: bounds.maxY - 126, width: width, height: 78)
         OverlayText(title: title, subtitle: "Press Esc to cancel", titleSize: 22, subtitleSize: 14)
@@ -255,7 +255,7 @@ final class SelectionView: NSView {
         }
 
         let labelRect = NSRect(x: rect.minX + 12, y: rect.midY - 13, width: rect.width - 24, height: 26)
-        OverlayText(title: "Recording area", subtitle: nil, titleSize: 18, subtitleSize: 14)
+        OverlayText(title: "Capture area", subtitle: nil, titleSize: 18, subtitleSize: 14)
             .drawLabel(in: labelRect)
     }
 }

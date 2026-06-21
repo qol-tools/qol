@@ -113,6 +113,29 @@ impl OutputSink for BufferedOutputSink {
     }
 }
 
+struct LiveOutputSink<'a, Stdout, Stderr>
+where
+    Stdout: Write,
+    Stderr: Write,
+{
+    stdout: &'a mut Stdout,
+    stderr: &'a mut Stderr,
+}
+
+impl<Stdout, Stderr> OutputSink for LiveOutputSink<'_, Stdout, Stderr>
+where
+    Stdout: Write,
+    Stderr: Write,
+{
+    fn stdout(&mut self, text: &str) {
+        write_and_flush_stream(&mut *self.stdout, text.as_bytes());
+    }
+
+    fn stderr(&mut self, text: &str) {
+        write_and_flush_stream(&mut *self.stderr, text.as_bytes());
+    }
+}
+
 pub struct Command {
     name: String,
     aliases: Vec<String>,
@@ -279,9 +302,9 @@ impl Execution {
     }
 
     pub fn emit(self) -> ExitCode {
-        write_stream(io::stdout(), self.stdout.as_bytes());
-        write_stream(io::stderr(), self.stderr.as_bytes());
-        self.as_exit_code()
+        let mut stdout = io::stdout();
+        let mut stderr = io::stderr();
+        ExitCode::from(emit_execution(self, &mut stdout, &mut stderr))
     }
 }
 
@@ -339,14 +362,29 @@ impl HeadlessApp {
     }
 
     pub fn run(&self, args: impl IntoIterator<Item = String>) -> ExitCode {
-        self.execute(args).emit()
+        let mut stdout = io::stdout();
+        let mut stderr = io::stderr();
+        ExitCode::from(self.run_with_writers(args, &mut stdout, &mut stderr))
     }
 
     pub fn execute(&self, args: impl IntoIterator<Item = String>) -> Execution {
         match self.try_execute(args.into_iter().collect()) {
             Ok(execution) => execution,
-            Err(DispatchError::Usage(message)) => Execution::usage(message),
-            Err(DispatchError::Runtime(error)) => Execution::runtime_error(format!("{error:#}")),
+            Err(error) => execution_from_dispatch_error(error),
+        }
+    }
+
+    fn run_with_writers(
+        &self,
+        args: impl IntoIterator<Item = String>,
+        stdout: &mut impl Write,
+        stderr: &mut impl Write,
+    ) -> u8 {
+        let args = args.into_iter().collect::<Vec<_>>();
+        match self.try_run_streaming(&args, stdout, stderr) {
+            Ok(Some(exit_code)) => exit_code,
+            Ok(None) => emit_execution(self.execute(args), stdout, stderr),
+            Err(error) => emit_execution(execution_from_dispatch_error(error), stdout, stderr),
         }
     }
 
@@ -423,6 +461,58 @@ impl HeadlessApp {
                 Ok(Execution::success(stdout))
             }
         }
+    }
+
+    fn try_run_streaming(
+        &self,
+        args: &[String],
+        stdout: &mut impl Write,
+        stderr: &mut impl Write,
+    ) -> std::result::Result<Option<u8>, DispatchError> {
+        let (output_format, tokens) = split_output_format(args.to_vec());
+        if extract_help_path(&tokens)?.is_some() {
+            return Ok(None);
+        }
+
+        let tokens = match (tokens.is_empty(), &self.default_command) {
+            (true, Some(default_command)) => default_command.clone(),
+            (true, None) => {
+                return Err(DispatchError::Usage(format!(
+                    "No command supplied. Run `{}` help`.",
+                    self.binary_name
+                )))
+            }
+            (false, _) => tokens,
+        };
+
+        if tokens.first().map(String::as_str) == Some("doctor") {
+            return Ok(None);
+        }
+
+        let resolved = self.resolve_command_path(&tokens).ok_or_else(|| {
+            DispatchError::Usage(format!(
+                "Unknown command `{}`. Run `{}` help`.",
+                tokens.join(" "),
+                self.binary_name
+            ))
+        })?;
+
+        if output_format == OutputFormat::Json || resolved.command.result_handler.is_some() {
+            return Ok(None);
+        }
+
+        let Some(handler) = resolved.command.streaming_handler.as_ref() else {
+            return Ok(None);
+        };
+
+        let context = CommandContext {
+            command_path: resolved.path.clone(),
+            args: tokens[resolved.consumed..].to_vec(),
+            output_format,
+        };
+        let mut sink = LiveOutputSink { stdout, stderr };
+        let exit_code = handler(&context, &mut sink).map_err(DispatchError::Runtime)?;
+        Ok(Some(exit_code))
     }
 
     fn resolve_command_path(&self, tokens: &[String]) -> Option<ResolvedCommand<'_>> {
@@ -952,8 +1042,27 @@ fn ensure_trailing_newline(mut text: String) -> String {
     text
 }
 
-fn write_stream(mut stream: impl Write, bytes: &[u8]) {
+fn execution_from_dispatch_error(error: DispatchError) -> Execution {
+    match error {
+        DispatchError::Usage(message) => Execution::usage(message),
+        DispatchError::Runtime(error) => Execution::runtime_error(format!("{error:#}")),
+    }
+}
+
+fn emit_execution(execution: Execution, stdout: &mut impl Write, stderr: &mut impl Write) -> u8 {
+    let exit_code = execution.exit_code;
+    write_stream(stdout, execution.stdout.as_bytes());
+    write_stream(stderr, execution.stderr.as_bytes());
+    exit_code
+}
+
+fn write_stream(stream: &mut impl Write, bytes: &[u8]) {
     let _ = stream.write_all(bytes);
+}
+
+fn write_and_flush_stream(stream: &mut impl Write, bytes: &[u8]) {
+    write_stream(stream, bytes);
+    let _ = stream.flush();
 }
 
 #[cfg(test)]
@@ -1078,6 +1187,21 @@ mod tests {
         assert_eq!(execution.exit_code, 9);
         assert_eq!(execution.stdout, "stream stdout 1\nstream stdout 2\n");
         assert_eq!(execution.stderr, "stream stderr\n");
+    }
+
+    #[test]
+    fn run_streaming_handler_writes_to_supplied_streams() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit_code =
+            app().run_with_writers(vec!["stream".to_string()], &mut stdout, &mut stderr);
+
+        assert_eq!(exit_code, 9);
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "stream stdout 1\nstream stdout 2\n"
+        );
+        assert_eq!(String::from_utf8(stderr).unwrap(), "stream stderr\n");
     }
 
     #[test]

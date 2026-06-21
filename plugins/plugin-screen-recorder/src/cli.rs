@@ -155,44 +155,85 @@ fn plugin_config_paths() -> Result<Vec<PathBuf>> {
 }
 
 fn runtime_dirs_check() -> Result<DoctorCheckResult> {
-    let videos = videos_dir().ok_or_else(|| anyhow!("HOME is not set"))?;
-    if videos.symlink_metadata().is_err() {
+    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME is not set"))?;
+    check_runtime_dirs(&runtime_dirs_for_home(Path::new(&home)))
+}
+
+struct RuntimeDir {
+    label: &'static str,
+    path: PathBuf,
+}
+
+fn runtime_dirs_for_home(home: &Path) -> Vec<RuntimeDir> {
+    vec![
+        RuntimeDir {
+            label: "Videos",
+            path: home.join("Videos"),
+        },
+        RuntimeDir {
+            label: "Pictures",
+            path: home.join("Pictures"),
+        },
+    ]
+}
+
+fn check_runtime_dirs(dirs: &[RuntimeDir]) -> Result<DoctorCheckResult> {
+    let mut missing = Vec::new();
+    let mut failures = Vec::new();
+
+    for dir in dirs {
+        let Ok(metadata) = dir.path.symlink_metadata() else {
+            missing.push(dir);
+            continue;
+        };
+
+        if !metadata.file_type().is_dir() {
+            failures.push(format!(
+                "{} exists but is not a directory.",
+                dir.path.display()
+            ));
+            continue;
+        }
+
+        if metadata.permissions().readonly() {
+            failures.push(format!("{} is read-only.", dir.path.display()));
+        }
+    }
+
+    if !failures.is_empty() {
+        return Ok(DoctorCheckResult::fail("runtime_dirs", failures.join("; "))
+            .with_fix("Make the Videos and Pictures directories writable."));
+    }
+
+    if !missing.is_empty() {
+        let labels = missing
+            .iter()
+            .map(|dir| dir.label)
+            .collect::<Vec<_>>()
+            .join(" and ");
+        let paths = missing
+            .iter()
+            .map(|dir| dir.path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" and ");
+        let (noun, verb, pronoun) = if missing.len() == 1 {
+            ("directory", "does", "it")
+        } else {
+            ("directories", "do", "they")
+        };
         return Ok(DoctorCheckResult::warn(
             "runtime_dirs",
             format!(
-                "{} does not exist; recording will create it on first use.",
-                videos.display()
+                "{labels} output {noun} {verb} not exist; {pronoun} will be created on first use."
             ),
         )
-        .with_fix(format!("Create {}", videos.display())));
-    }
-
-    let metadata = videos.symlink_metadata()?;
-    if !metadata.file_type().is_dir() {
-        return Ok(DoctorCheckResult::fail(
-            "runtime_dirs",
-            format!("{} exists but is not a directory.", videos.display()),
-        ));
-    }
-
-    if metadata.permissions().readonly() {
-        return Ok(DoctorCheckResult::fail(
-            "runtime_dirs",
-            format!("{} is read-only.", videos.display()),
-        )
-        .with_fix("Make the Videos directory writable."));
+        .with_fix(format!("Create {paths}")));
     }
 
     Ok(DoctorCheckResult::ok(
         "runtime_dirs",
-        format!("{} is available.", videos.display()),
+        "Videos and Pictures output directories are available.",
     ))
-}
-
-fn videos_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| home.join("Videos"))
 }
 
 #[cfg(test)]
@@ -228,5 +269,30 @@ mod tests {
         assert!(execution
             .stdout
             .contains("\"plugin_id\":\"plugin-screen-recorder\""));
+    }
+
+    #[test]
+    fn runtime_dirs_check_fails_when_pictures_is_not_a_directory() {
+        let root = test_runtime_root("pictures-file");
+        fs::create_dir(root.join("Videos")).unwrap();
+        fs::write(root.join("Pictures"), "").unwrap();
+
+        let result = check_runtime_dirs(&runtime_dirs_for_home(&root)).unwrap();
+
+        assert_eq!(result.status, qol_headless::DoctorStatus::Fail);
+        assert!(result.message.contains("Pictures"));
+        assert!(result.message.contains("not a directory"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn test_runtime_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "qol-shot-runtime-dirs-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
     }
 }
