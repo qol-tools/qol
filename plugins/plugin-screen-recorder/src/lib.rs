@@ -5,6 +5,7 @@ mod geometry;
 mod output;
 pub(crate) mod platform;
 pub mod recording;
+pub mod screenshot;
 mod settings;
 
 pub use config::{AudioConfig, Config, VideoConfig};

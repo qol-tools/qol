@@ -120,6 +120,27 @@ pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result
     start_multi_display_capture(*rect, config, output_file, &capture_file, &segments)
 }
 
+pub fn capture_screenshot(rect: &Rect, output_file: &Path) -> Result<()> {
+    let (stdout_log, stderr_log) = capture_log_files(CaptureLogMode::Truncate)?;
+    let region = format!("{},{},{},{}", rect.x, rect.y, rect.w, rect.h);
+    let status = Command::new("screencapture")
+        .args(["-R", region.as_str(), "-x"])
+        .arg(output_file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_log))
+        .stderr(Stdio::from(stderr_log))
+        .status()
+        .context("failed to run screencapture screenshot capture")?;
+
+    if status.success() {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "screencapture screenshot capture exited with {status}"
+    ))
+}
+
 pub fn recording_format(format: &str) -> String {
     match format.to_ascii_lowercase().as_str() {
         "mkv" | "mp4" | "mov" | "webm" => format.to_ascii_lowercase(),

@@ -1,31 +1,41 @@
 use anyhow::{anyhow, Result};
-use qol_headless::{Command, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTextOutput};
+use qol_headless::{
+    Command, CommandResult, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTextOutput,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use crate::{platform, recording, settings, Config, PLUGIN_ID};
+use crate::{platform, recording, screenshot, settings, Config, PLUGIN_ID};
 
-const BINARY_NAME: &str = "screen-recorder";
+const COMPAT_BINARY_NAME: &str = "screen-recorder";
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
-    app().run(args)
+    exit_code_for_binary(COMPAT_BINARY_NAME, args)
 }
 
-fn app() -> HeadlessApp {
-    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
-        .about("Record screen regions with optional audio support.")
+pub fn exit_code_for_binary(
+    binary_name: &'static str,
+    args: impl IntoIterator<Item = String>,
+) -> ExitCode {
+    app(binary_name).run(args)
+}
+
+fn app(binary_name: &'static str) -> HeadlessApp {
+    HeadlessApp::new(PLUGIN_ID, binary_name)
+        .about("Capture screenshots and record screen regions.")
         .default_command(["record"])
-        .command(record_command())
-        .command(settings_command())
+        .command(record_command(binary_name))
+        .command(screenshot_command(binary_name))
+        .command(settings_command(binary_name))
         .doctor_checks(doctor_checks())
 }
 
-fn record_command() -> Command {
+fn record_command(binary_name: &'static str) -> Command {
     Command::new("record")
         .alias("toggle")
         .about("Toggle screen region recording.")
-        .usage("screen-recorder record")
+        .usage(format!("{binary_name} record"))
         .detail("When idle, opens region selection and starts capture.")
         .detail("When capture is active, stops the recorder and finalizes the output file.")
         .output("No stdout on success; user-facing progress is delivered through platform UI.")
@@ -37,10 +47,26 @@ fn record_command() -> Command {
         })
 }
 
-fn settings_command() -> Command {
+fn screenshot_command(binary_name: &'static str) -> Command {
+    Command::new("screenshot")
+        .alias("shot")
+        .about("Capture a selected screenshot.")
+        .usage(format!("{binary_name} screenshot"))
+        .detail("Opens region selection, captures the selected area, and saves a PNG.")
+        .output("Prints the saved image path on success; prints nothing if selection is cancelled.")
+        .exit_behavior("Exits 0 when the screenshot is saved or selection is cancelled.")
+        .run_result(|_| {
+            let Some(path) = screenshot::capture_screenshot()? else {
+                return Ok(CommandResult::success(""));
+            };
+            Ok(CommandResult::success(format!("{}\n", path.display())))
+        })
+}
+
+fn settings_command(binary_name: &'static str) -> Command {
     Command::new("settings")
         .about("Open the plugin settings page in qol-tray.")
-        .usage("screen-recorder settings")
+        .usage(format!("{binary_name} settings"))
         .output("No stdout on success; opens the settings URL through the platform launcher.")
         .exit_behavior("Exits non-zero if the platform cannot open the settings URL.")
         .run_plain_text(|_| {
@@ -176,21 +202,28 @@ mod tests {
 
     #[test]
     fn no_args_default_to_record_help_topic() {
-        let execution = app().execute(vec!["help".to_string(), "record".to_string()]);
+        let execution = app("qol-shot").execute(vec!["help".to_string(), "record".to_string()]);
         assert_eq!(execution.exit_code, EXIT_SUCCESS);
-        assert!(execution.stdout.contains("screen-recorder record"));
+        assert!(execution.stdout.contains("qol-shot record"));
+    }
+
+    #[test]
+    fn screenshot_help_uses_selected_binary_name() {
+        let execution = app("qol-shot").execute(vec!["help".to_string(), "screenshot".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert!(execution.stdout.contains("qol-shot screenshot"));
     }
 
     #[test]
     fn settings_json_is_rejected_by_shared_gate() {
-        let execution = app().execute(vec!["settings".to_string(), "--json".to_string()]);
+        let execution = app("qol-shot").execute(vec!["settings".to_string(), "--json".to_string()]);
         assert_eq!(execution.exit_code, EXIT_USAGE);
         assert!(execution.stderr.contains("does not support --json"));
     }
 
     #[test]
     fn doctor_json_is_registered() {
-        let execution = app().execute(vec!["doctor".to_string(), "--json".to_string()]);
+        let execution = app("qol-shot").execute(vec!["doctor".to_string(), "--json".to_string()]);
         assert_eq!(execution.exit_code, EXIT_SUCCESS);
         assert!(execution
             .stdout

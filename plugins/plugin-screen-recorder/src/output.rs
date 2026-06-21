@@ -13,3 +13,13 @@ pub(crate) fn recording_output_file_path(format: &str) -> Result<PathBuf> {
     videos.push(format!("recording-{}.{}", timestamp, format));
     Ok(videos)
 }
+
+pub(crate) fn screenshot_output_file_path() -> Result<PathBuf> {
+    let home = env::var("HOME").context("HOME is not set")?;
+    let mut pictures = PathBuf::from(home);
+    pictures.push("Pictures");
+    fs::create_dir_all(&pictures).context("failed to create screenshot output directory")?;
+    let timestamp = Local::now().format("%F_%H-%M-%S").to_string();
+    pictures.push(format!("screenshot-{timestamp}.png"));
+    Ok(pictures)
+}

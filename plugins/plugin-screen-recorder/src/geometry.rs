@@ -28,6 +28,16 @@ pub(crate) fn prepare_recording_rect(
     snap_to_bottom(rect, bounds.y + bounds.h)
 }
 
+pub(crate) fn prepare_screenshot_rect(
+    mut rect: Rect,
+    monitors: &[Monitor],
+    fallback_bounds: Monitor,
+) -> Rect {
+    let bounds = bounds_for_selection(rect, monitors).unwrap_or(fallback_bounds);
+    rect = clamp_to_bounds(rect, bounds);
+    rect
+}
+
 pub(crate) fn even_dimensions(mut rect: Rect) -> Rect {
     if rect.w % 2 != 0 {
         rect.w -= 1;
@@ -215,5 +225,26 @@ mod tests {
         });
         assert_eq!(rect.w, 100);
         assert_eq!(rect.h, 98);
+    }
+
+    #[test]
+    fn prepare_screenshot_rect_does_not_snap_bottom_edge() {
+        let bounds = Monitor {
+            x: 0,
+            y: 0,
+            w: 320,
+            h: 240,
+        };
+        let rect = prepare_screenshot_rect(
+            Rect {
+                x: 10,
+                y: 10,
+                w: 100,
+                h: 200,
+            },
+            &[bounds],
+            bounds,
+        );
+        assert_eq!(rect.h, 200);
     }
 }

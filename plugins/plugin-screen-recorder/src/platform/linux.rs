@@ -191,6 +191,39 @@ pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result
     ))
 }
 
+pub fn capture_screenshot(rect: &Rect, output_file: &Path) -> Result<()> {
+    let log_file = File::create(super::CAPTURE_LOG).context("failed to create capture log file")?;
+    let stdout_log = log_file
+        .try_clone()
+        .context("failed to clone capture log file")?;
+    let video_size = format!("{}x{}", rect.w, rect.h);
+    let input = format!(":0.0+{},{}", rect.x, rect.y);
+    let status = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-f",
+            "x11grab",
+            "-video_size",
+            video_size.as_str(),
+            "-i",
+            input.as_str(),
+            "-frames:v",
+            "1",
+        ])
+        .arg(output_file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_log))
+        .stderr(Stdio::from(log_file))
+        .status()
+        .context("failed to run ffmpeg screenshot capture")?;
+
+    if status.success() {
+        return Ok(());
+    }
+
+    Err(anyhow!("ffmpeg screenshot capture exited with {status}"))
+}
+
 pub fn recording_format(format: &str) -> String {
     format.to_string()
 }

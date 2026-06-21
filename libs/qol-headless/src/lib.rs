@@ -77,7 +77,41 @@ impl CommandContext {
 }
 
 type PlainTextHandler = Box<dyn Fn(&CommandContext) -> Result<PlainTextOutput> + Send + Sync>;
+type ResultHandler = Box<dyn Fn(&CommandContext) -> Result<CommandResult> + Send + Sync>;
+type StreamingHandler =
+    Box<dyn Fn(&CommandContext, &mut dyn OutputSink) -> Result<u8> + Send + Sync>;
 type JsonHandler = Box<dyn Fn(&CommandContext) -> Result<Value> + Send + Sync>;
+
+pub trait OutputSink {
+    fn stdout(&mut self, text: &str);
+    fn stderr(&mut self, text: &str);
+}
+
+#[derive(Debug, Default)]
+struct BufferedOutputSink {
+    stdout: String,
+    stderr: String,
+}
+
+impl BufferedOutputSink {
+    fn into_execution(self, exit_code: u8) -> Execution {
+        Execution {
+            stdout: self.stdout,
+            stderr: self.stderr,
+            exit_code,
+        }
+    }
+}
+
+impl OutputSink for BufferedOutputSink {
+    fn stdout(&mut self, text: &str) {
+        self.stdout.push_str(text);
+    }
+
+    fn stderr(&mut self, text: &str) {
+        self.stderr.push_str(text);
+    }
+}
 
 pub struct Command {
     name: String,
@@ -88,6 +122,8 @@ pub struct Command {
     output: Option<String>,
     exit_behavior: Option<String>,
     plain_text_handler: Option<PlainTextHandler>,
+    result_handler: Option<ResultHandler>,
+    streaming_handler: Option<StreamingHandler>,
     json_handler: Option<JsonHandler>,
     subcommands: Vec<Command>,
 }
@@ -103,6 +139,8 @@ impl Command {
             output: None,
             exit_behavior: None,
             plain_text_handler: None,
+            result_handler: None,
+            streaming_handler: None,
             json_handler: None,
             subcommands: Vec::new(),
         }
@@ -146,6 +184,22 @@ impl Command {
         self
     }
 
+    pub fn run_result<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(&CommandContext) -> Result<CommandResult> + Send + Sync + 'static,
+    {
+        self.result_handler = Some(Box::new(handler));
+        self
+    }
+
+    pub fn run_streaming<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(&CommandContext, &mut dyn OutputSink) -> Result<u8> + Send + Sync + 'static,
+    {
+        self.streaming_handler = Some(Box::new(handler));
+        self
+    }
+
     pub fn run_json<F>(mut self, handler: F) -> Self
     where
         F: Fn(&CommandContext) -> Result<Value> + Send + Sync + 'static,
@@ -185,7 +239,17 @@ pub struct Execution {
     pub exit_code: u8,
 }
 
+pub type CommandResult = Execution;
+
 impl Execution {
+    pub fn new(stdout: impl Into<String>, stderr: impl Into<String>, exit_code: u8) -> Self {
+        Self {
+            stdout: stdout.into(),
+            stderr: stderr.into(),
+            exit_code,
+        }
+    }
+
     pub fn success(stdout: impl Into<String>) -> Self {
         Self {
             stdout: stdout.into(),
@@ -327,6 +391,14 @@ impl HeadlessApp {
 
         match output_format {
             OutputFormat::PlainText => {
+                if let Some(handler) = resolved.command.result_handler.as_ref() {
+                    return handler(&context).map_err(DispatchError::Runtime);
+                }
+                if let Some(handler) = resolved.command.streaming_handler.as_ref() {
+                    let mut sink = BufferedOutputSink::default();
+                    let exit_code = handler(&context, &mut sink).map_err(DispatchError::Runtime)?;
+                    return Ok(sink.into_execution(exit_code));
+                }
                 let handler = resolved
                     .command
                     .plain_text_handler
@@ -904,6 +976,27 @@ mod tests {
                     .run_plain_text(|_| Ok(PlainTextOutput::text("running")))
                     .run_json(|_| Ok(json!({ "status": "running" }))),
             )
+            .command(
+                Command::new("bounded")
+                    .about("Return a command result.")
+                    .run_result(|_| {
+                        Ok(CommandResult::new(
+                            "bounded stdout\n",
+                            "bounded stderr\n",
+                            7,
+                        ))
+                    }),
+            )
+            .command(
+                Command::new("stream")
+                    .about("Write through an output sink.")
+                    .run_streaming(|_, sink| {
+                        sink.stdout("stream stdout 1\n");
+                        sink.stderr("stream stderr\n");
+                        sink.stdout("stream stdout 2\n");
+                        Ok(9)
+                    }),
+            )
             .doctor_check(DoctorCheck::new(
                 "required_binaries",
                 "Check binaries.",
@@ -969,6 +1062,30 @@ mod tests {
         let execution = app().execute(vec!["status".to_string(), "--json".to_string()]);
         assert_eq!(execution.exit_code, EXIT_SUCCESS);
         assert_eq!(execution.stdout, "{\"status\":\"running\"}\n");
+    }
+
+    #[test]
+    fn command_result_handler_can_return_stdout_stderr_and_nonzero_exit() {
+        let execution = app().execute(vec!["bounded".to_string()]);
+        assert_eq!(execution.exit_code, 7);
+        assert_eq!(execution.stdout, "bounded stdout\n");
+        assert_eq!(execution.stderr, "bounded stderr\n");
+    }
+
+    #[test]
+    fn streaming_handler_writes_to_sink_and_returns_exit_code() {
+        let execution = app().execute(vec!["stream".to_string()]);
+        assert_eq!(execution.exit_code, 9);
+        assert_eq!(execution.stdout, "stream stdout 1\nstream stdout 2\n");
+        assert_eq!(execution.stderr, "stream stderr\n");
+    }
+
+    #[test]
+    fn streaming_handler_json_is_rejected_by_shared_gate() {
+        let execution = app().execute(vec!["stream".to_string(), "--json".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_USAGE);
+        assert!(execution.stdout.is_empty());
+        assert!(execution.stderr.contains("does not support --json"));
     }
 
     #[test]

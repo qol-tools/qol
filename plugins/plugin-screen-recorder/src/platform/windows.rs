@@ -33,6 +33,12 @@ pub fn start_capture(
     ))
 }
 
+pub fn capture_screenshot(_rect: &Rect, _output_file: &Path) -> Result<()> {
+    Err(anyhow!(
+        "plugin-screen-recorder: screenshot capture is not implemented on Windows"
+    ))
+}
+
 pub fn recording_format(format: &str) -> String {
     format.to_string()
 }
