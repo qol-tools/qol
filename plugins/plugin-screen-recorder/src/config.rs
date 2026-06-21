@@ -1,0 +1,132 @@
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct Config {
+    #[serde(default)]
+    pub audio: AudioConfig,
+    #[serde(default)]
+    pub video: VideoConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AudioConfig {
+    #[serde(default = "default_true")]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        allow(
+            dead_code,
+            reason = "audio capture is not implemented on this platform"
+        )
+    )]
+    pub enabled: bool,
+    #[serde(default = "default_audio_inputs")]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(
+            dead_code,
+            reason = "explicit audio inputs are supported by linux only"
+        )
+    )]
+    pub inputs: Vec<String>,
+    #[serde(default = "default_string_default")]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(
+            dead_code,
+            reason = "explicit audio devices are supported by linux only"
+        )
+    )]
+    pub mic_device: String,
+    #[serde(default = "default_string_default")]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(
+            dead_code,
+            reason = "explicit audio devices are supported by linux only"
+        )
+    )]
+    pub system_device: String,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            inputs: default_audio_inputs(),
+            mic_device: default_string_default(),
+            system_device: default_string_default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VideoConfig {
+    #[serde(default = "default_crf")]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        allow(
+            dead_code,
+            reason = "video encoding is not implemented on this platform"
+        )
+    )]
+    pub crf: i32,
+    #[serde(default = "default_preset")]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        allow(
+            dead_code,
+            reason = "video encoding is not implemented on this platform"
+        )
+    )]
+    pub preset: String,
+    #[serde(default = "default_framerate")]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(
+            dead_code,
+            reason = "framerate is controlled by linux ffmpeg capture only"
+        )
+    )]
+    pub framerate: u32,
+    #[serde(default = "default_format")]
+    pub format: String,
+}
+
+impl Default for VideoConfig {
+    fn default() -> Self {
+        Self {
+            crf: default_crf(),
+            preset: default_preset(),
+            framerate: default_framerate(),
+            format: default_format(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_audio_inputs() -> Vec<String> {
+    vec!["mic".to_string()]
+}
+
+fn default_string_default() -> String {
+    "default".to_string()
+}
+
+fn default_crf() -> i32 {
+    18
+}
+
+fn default_preset() -> String {
+    "veryfast".to_string()
+}
+
+fn default_framerate() -> u32 {
+    60
+}
+
+fn default_format() -> String {
+    "mov".to_string()
+}

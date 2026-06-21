@@ -1,0 +1,990 @@
+use anyhow::Result;
+use serde::Serialize;
+use serde_json::Value;
+use std::io::{self, Write};
+use std::process::ExitCode;
+
+pub const EXIT_SUCCESS: u8 = 0;
+pub const EXIT_RUNTIME_ERROR: u8 = 1;
+pub const EXIT_USAGE: u8 = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    PlainText,
+    Json,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlainTextOutput {
+    Empty,
+    Text(String),
+}
+
+impl PlainTextOutput {
+    pub fn empty() -> Self {
+        Self::Empty
+    }
+
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::Text(text.into())
+    }
+
+    fn into_stdout(self) -> String {
+        match self {
+            Self::Empty => String::new(),
+            Self::Text(text) => ensure_trailing_newline(text),
+        }
+    }
+}
+
+impl From<()> for PlainTextOutput {
+    fn from(_: ()) -> Self {
+        Self::Empty
+    }
+}
+
+impl From<String> for PlainTextOutput {
+    fn from(value: String) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<&str> for PlainTextOutput {
+    fn from(value: &str) -> Self {
+        Self::Text(value.to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandContext {
+    command_path: Vec<String>,
+    args: Vec<String>,
+    output_format: OutputFormat,
+}
+
+impl CommandContext {
+    pub fn command_path(&self) -> &[String] {
+        &self.command_path
+    }
+
+    pub fn args(&self) -> &[String] {
+        &self.args
+    }
+
+    pub fn output_format(&self) -> OutputFormat {
+        self.output_format
+    }
+}
+
+type PlainTextHandler = Box<dyn Fn(&CommandContext) -> Result<PlainTextOutput> + Send + Sync>;
+type JsonHandler = Box<dyn Fn(&CommandContext) -> Result<Value> + Send + Sync>;
+
+pub struct Command {
+    name: String,
+    aliases: Vec<String>,
+    about: String,
+    usage: Option<String>,
+    details: Vec<String>,
+    output: Option<String>,
+    exit_behavior: Option<String>,
+    plain_text_handler: Option<PlainTextHandler>,
+    json_handler: Option<JsonHandler>,
+    subcommands: Vec<Command>,
+}
+
+impl Command {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            aliases: Vec::new(),
+            about: String::new(),
+            usage: None,
+            details: Vec::new(),
+            output: None,
+            exit_behavior: None,
+            plain_text_handler: None,
+            json_handler: None,
+            subcommands: Vec::new(),
+        }
+    }
+
+    pub fn alias(mut self, alias: impl Into<String>) -> Self {
+        self.aliases.push(alias.into());
+        self
+    }
+
+    pub fn about(mut self, about: impl Into<String>) -> Self {
+        self.about = about.into();
+        self
+    }
+
+    pub fn usage(mut self, usage: impl Into<String>) -> Self {
+        self.usage = Some(usage.into());
+        self
+    }
+
+    pub fn detail(mut self, detail: impl Into<String>) -> Self {
+        self.details.push(detail.into());
+        self
+    }
+
+    pub fn output(mut self, output: impl Into<String>) -> Self {
+        self.output = Some(output.into());
+        self
+    }
+
+    pub fn exit_behavior(mut self, exit_behavior: impl Into<String>) -> Self {
+        self.exit_behavior = Some(exit_behavior.into());
+        self
+    }
+
+    pub fn run_plain_text<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(&CommandContext) -> Result<PlainTextOutput> + Send + Sync + 'static,
+    {
+        self.plain_text_handler = Some(Box::new(handler));
+        self
+    }
+
+    pub fn run_json<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(&CommandContext) -> Result<Value> + Send + Sync + 'static,
+    {
+        self.json_handler = Some(Box::new(handler));
+        self
+    }
+
+    pub fn subcommand(mut self, command: Command) -> Self {
+        self.subcommands.push(command);
+        self
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn supports_json(&self) -> bool {
+        self.json_handler.is_some()
+    }
+
+    fn matches(&self, token: &str) -> bool {
+        self.name == token || self.aliases.iter().any(|alias| alias == token)
+    }
+
+    fn find_subcommand(&self, token: &str) -> Option<&Command> {
+        self.subcommands
+            .iter()
+            .find(|command| command.matches(token))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Execution {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: u8,
+}
+
+impl Execution {
+    pub fn success(stdout: impl Into<String>) -> Self {
+        Self {
+            stdout: stdout.into(),
+            stderr: String::new(),
+            exit_code: EXIT_SUCCESS,
+        }
+    }
+
+    pub fn usage(stderr: impl Into<String>) -> Self {
+        Self {
+            stdout: String::new(),
+            stderr: ensure_trailing_newline(stderr.into()),
+            exit_code: EXIT_USAGE,
+        }
+    }
+
+    pub fn runtime_error(stderr: impl Into<String>) -> Self {
+        Self {
+            stdout: String::new(),
+            stderr: ensure_trailing_newline(stderr.into()),
+            exit_code: EXIT_RUNTIME_ERROR,
+        }
+    }
+
+    pub fn as_exit_code(&self) -> ExitCode {
+        ExitCode::from(self.exit_code)
+    }
+
+    pub fn emit(self) -> ExitCode {
+        write_stream(io::stdout(), self.stdout.as_bytes());
+        write_stream(io::stderr(), self.stderr.as_bytes());
+        self.as_exit_code()
+    }
+}
+
+pub struct HeadlessApp {
+    app_id: String,
+    binary_name: String,
+    about: String,
+    default_command: Option<Vec<String>>,
+    commands: Vec<Command>,
+    doctor_checks: Vec<DoctorCheck>,
+}
+
+impl HeadlessApp {
+    pub fn new(app_id: impl Into<String>, binary_name: impl Into<String>) -> Self {
+        Self {
+            app_id: app_id.into(),
+            binary_name: binary_name.into(),
+            about: String::new(),
+            default_command: None,
+            commands: Vec::new(),
+            doctor_checks: Vec::new(),
+        }
+    }
+
+    pub fn about(mut self, about: impl Into<String>) -> Self {
+        self.about = about.into();
+        self
+    }
+
+    pub fn default_command<I, S>(mut self, path: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.default_command = Some(path.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn command(mut self, command: Command) -> Self {
+        self.commands.push(command);
+        self
+    }
+
+    pub fn doctor_check(mut self, check: DoctorCheck) -> Self {
+        self.doctor_checks.push(check);
+        self
+    }
+
+    pub fn doctor_checks<I>(mut self, checks: I) -> Self
+    where
+        I: IntoIterator<Item = DoctorCheck>,
+    {
+        self.doctor_checks.extend(checks);
+        self
+    }
+
+    pub fn run(&self, args: impl IntoIterator<Item = String>) -> ExitCode {
+        self.execute(args).emit()
+    }
+
+    pub fn execute(&self, args: impl IntoIterator<Item = String>) -> Execution {
+        match self.try_execute(args.into_iter().collect()) {
+            Ok(execution) => execution,
+            Err(DispatchError::Usage(message)) => Execution::usage(message),
+            Err(DispatchError::Runtime(error)) => Execution::runtime_error(format!("{error:#}")),
+        }
+    }
+
+    fn try_execute(&self, args: Vec<String>) -> std::result::Result<Execution, DispatchError> {
+        let (output_format, tokens) = split_output_format(args);
+        if let Some(help_path) = extract_help_path(&tokens)? {
+            if output_format == OutputFormat::Json {
+                return Err(DispatchError::unsupported_json("help"));
+            }
+            return self.help_for(&help_path).map(Execution::success);
+        }
+
+        let tokens = match (tokens.is_empty(), &self.default_command) {
+            (true, Some(default_command)) => default_command.clone(),
+            (true, None) => {
+                return Err(DispatchError::Usage(format!(
+                    "No command supplied. Run `{}` help`.",
+                    self.binary_name
+                )))
+            }
+            (false, _) => tokens,
+        };
+
+        if tokens.first().map(String::as_str) == Some("doctor") {
+            return self.execute_doctor(&tokens[1..], output_format);
+        }
+
+        let resolved = self.resolve_command_path(&tokens).ok_or_else(|| {
+            DispatchError::Usage(format!(
+                "Unknown command `{}`. Run `{}` help`.",
+                tokens.join(" "),
+                self.binary_name
+            ))
+        })?;
+
+        let args = tokens[resolved.consumed..].to_vec();
+        let context = CommandContext {
+            command_path: resolved.path.clone(),
+            args,
+            output_format,
+        };
+
+        match output_format {
+            OutputFormat::PlainText => {
+                let handler = resolved
+                    .command
+                    .plain_text_handler
+                    .as_ref()
+                    .ok_or_else(|| {
+                        DispatchError::Usage(format!(
+                            "Command `{}` is not directly runnable.",
+                            resolved.path.join(" ")
+                        ))
+                    })?;
+                let output = handler(&context).map_err(DispatchError::Runtime)?;
+                Ok(Execution::success(output.into_stdout()))
+            }
+            OutputFormat::Json => {
+                let handler = resolved
+                    .command
+                    .json_handler
+                    .as_ref()
+                    .ok_or_else(|| DispatchError::unsupported_json(&resolved.path.join(" ")))?;
+                let value = handler(&context).map_err(DispatchError::Runtime)?;
+                let stdout = json_stdout(&value).map_err(DispatchError::Runtime)?;
+                Ok(Execution::success(stdout))
+            }
+        }
+    }
+
+    fn resolve_command_path(&self, tokens: &[String]) -> Option<ResolvedCommand<'_>> {
+        let first = tokens.first()?;
+        let mut command = self
+            .commands
+            .iter()
+            .find(|command| command.matches(first))?;
+        let mut path = vec![command.name.clone()];
+        let mut consumed = 1;
+
+        for token in tokens.iter().skip(1) {
+            let Some(subcommand) = command.find_subcommand(token) else {
+                break;
+            };
+            command = subcommand;
+            path.push(command.name.clone());
+            consumed += 1;
+        }
+
+        Some(ResolvedCommand {
+            command,
+            path,
+            consumed,
+        })
+    }
+
+    fn help_for(&self, path: &[String]) -> std::result::Result<String, DispatchError> {
+        if path.is_empty() {
+            return Ok(self.general_help());
+        }
+
+        if path.first().map(String::as_str) == Some("doctor") {
+            return self.doctor_help(&path[1..]);
+        }
+
+        let resolved = self.resolve_command_path(path).ok_or_else(|| {
+            DispatchError::Usage(format!(
+                "Unknown help topic `{}`. Run `{}` help`.",
+                path.join(" "),
+                self.binary_name
+            ))
+        })?;
+
+        if resolved.consumed != path.len() {
+            return Err(DispatchError::Usage(format!(
+                "Unknown help topic `{}`. Run `{}` help`.",
+                path.join(" "),
+                self.binary_name
+            )));
+        }
+
+        Ok(self.command_help(resolved.command, &resolved.path))
+    }
+
+    fn general_help(&self) -> String {
+        let mut lines = vec![self.binary_name.clone()];
+        if !self.about.is_empty() {
+            lines.extend(["".to_string(), self.about.clone()]);
+        }
+
+        lines.extend([
+            "".to_string(),
+            "Usage:".to_string(),
+            format!("  {} <command> [args]", self.binary_name),
+            format!("  {} help <command>", self.binary_name),
+            format!("  {} <command> help", self.binary_name),
+        ]);
+
+        if let Some(default_command) = &self.default_command {
+            lines.push(format!(
+                "  {}  # {}",
+                self.binary_name,
+                default_command.join(" ")
+            ));
+        }
+
+        let mut command_rows = self
+            .commands
+            .iter()
+            .map(|command| (command.name.as_str(), command.about.as_str()))
+            .collect::<Vec<_>>();
+        if !self.doctor_checks.is_empty() {
+            command_rows.push(("doctor", "Run read-only health checks."));
+        }
+        command_rows.sort_by(|left, right| left.0.cmp(right.0));
+
+        if !command_rows.is_empty() {
+            lines.extend(["".to_string(), "Commands:".to_string()]);
+            for (name, about) in command_rows {
+                lines.push(format_command_row(name, about));
+            }
+        }
+
+        lines.extend([
+            "".to_string(),
+            "Global flags:".to_string(),
+            "  --json  Request structured JSON output from commands that support it.".to_string(),
+        ]);
+
+        ensure_trailing_newline(lines.join("\n"))
+    }
+
+    fn command_help(&self, command: &Command, path: &[String]) -> String {
+        let command_path = path.join(" ");
+        let mut lines = vec![format!("{} {}", self.binary_name, command_path)];
+
+        if !command.about.is_empty() {
+            lines.extend(["".to_string(), command.about.clone()]);
+        }
+
+        lines.extend([
+            "".to_string(),
+            "Usage:".to_string(),
+            format!(
+                "  {}",
+                command
+                    .usage
+                    .clone()
+                    .unwrap_or_else(|| format!("{} {}", self.binary_name, command_path))
+            ),
+            format!("  {} {} help", self.binary_name, command_path),
+            format!("  {} help {}", self.binary_name, command_path),
+        ]);
+
+        if !command.details.is_empty() {
+            lines.extend(["".to_string(), "Details:".to_string()]);
+            lines.extend(command.details.iter().map(|detail| format!("  {detail}")));
+        }
+
+        lines.extend(["".to_string(), "Output:".to_string()]);
+        if let Some(output) = &command.output {
+            lines.push(format!("  {output}"));
+        } else {
+            lines.push("  Plain-text stdout; diagnostics on stderr.".to_string());
+        }
+        lines.push(if command.supports_json() {
+            "  Supports --json.".to_string()
+        } else {
+            "  Does not support --json.".to_string()
+        });
+
+        if let Some(exit_behavior) = &command.exit_behavior {
+            lines.extend([
+                "".to_string(),
+                "Exit:".to_string(),
+                format!("  {exit_behavior}"),
+            ]);
+        }
+
+        if !command.subcommands.is_empty() {
+            lines.extend(["".to_string(), "Subcommands:".to_string()]);
+            for subcommand in &command.subcommands {
+                lines.push(format_command_row(&subcommand.name, &subcommand.about));
+            }
+        }
+
+        ensure_trailing_newline(lines.join("\n"))
+    }
+
+    fn doctor_help(&self, path: &[String]) -> std::result::Result<String, DispatchError> {
+        if self.doctor_checks.is_empty() {
+            return Err(DispatchError::Usage(format!(
+                "`{}` does not register doctor checks.",
+                self.binary_name
+            )));
+        }
+
+        if path.is_empty() {
+            return Ok(self.doctor_command_help());
+        }
+
+        if path.len() != 1 {
+            return Err(DispatchError::Usage(format!(
+                "Unknown doctor help topic `{}`.",
+                path.join(" ")
+            )));
+        }
+
+        let check = self
+            .doctor_checks
+            .iter()
+            .find(|check| check.id == path[0])
+            .ok_or_else(|| DispatchError::Usage(format!("Unknown doctor check `{}`.", path[0])))?;
+
+        let lines = [
+            format!("{} doctor {}", self.binary_name, check.id),
+            String::new(),
+            check.about.clone(),
+            String::new(),
+            "Usage:".to_string(),
+            format!("  {} doctor {}", self.binary_name, check.id),
+            format!("  {} --json doctor {}", self.binary_name, check.id),
+            format!("  {} doctor {} help", self.binary_name, check.id),
+            String::new(),
+            "Output:".to_string(),
+            "  Plain-text check result by default.".to_string(),
+            "  Supports --json and returns the standard doctor report shape.".to_string(),
+            String::new(),
+            "Exit:".to_string(),
+            "  Exits 0 when the check runs; inspect the report status for ok, warn, or fail."
+                .to_string(),
+        ];
+
+        Ok(ensure_trailing_newline(lines.join("\n")))
+    }
+
+    fn doctor_command_help(&self) -> String {
+        let mut lines = vec![
+            format!("{} doctor", self.binary_name),
+            String::new(),
+            "Run read-only health checks.".to_string(),
+            String::new(),
+            "Usage:".to_string(),
+            format!("  {} doctor", self.binary_name),
+            format!("  {} --json doctor", self.binary_name),
+            format!("  {} doctor --json", self.binary_name),
+            format!("  {} doctor <check-id>", self.binary_name),
+            format!("  {} doctor help", self.binary_name),
+            String::new(),
+            "Checks:".to_string(),
+        ];
+
+        for check in &self.doctor_checks {
+            lines.push(format_command_row(&check.id, &check.about));
+        }
+
+        lines.extend([
+            String::new(),
+            "Output:".to_string(),
+            "  Plain-text report by default.".to_string(),
+            "  Supports --json and returns plugin_id, status, and checks.".to_string(),
+            String::new(),
+            "Exit:".to_string(),
+            "  Exits 0 when checks run; inspect the report status for ok, warn, or fail."
+                .to_string(),
+        ]);
+
+        ensure_trailing_newline(lines.join("\n"))
+    }
+
+    fn execute_doctor(
+        &self,
+        args: &[String],
+        output_format: OutputFormat,
+    ) -> std::result::Result<Execution, DispatchError> {
+        if self.doctor_checks.is_empty() {
+            return Err(DispatchError::Usage(format!(
+                "`{}` does not register doctor checks.",
+                self.binary_name
+            )));
+        }
+
+        if args.len() > 1 {
+            return Err(DispatchError::Usage(format!(
+                "Unknown doctor command `{}`. Run `{} doctor help`.",
+                args.join(" "),
+                self.binary_name
+            )));
+        }
+
+        let selected = args.first().map(String::as_str);
+        let checks = self.selected_doctor_checks(selected)?;
+        let report = DoctorReport::from_results(
+            self.app_id.clone(),
+            checks.into_iter().map(DoctorCheck::run_check).collect(),
+        );
+
+        match output_format {
+            OutputFormat::PlainText => {
+                Ok(Execution::success(self.doctor_plain_text_output(&report)))
+            }
+            OutputFormat::Json => {
+                let stdout = json_stdout(&report).map_err(DispatchError::Runtime)?;
+                Ok(Execution::success(stdout))
+            }
+        }
+    }
+
+    fn selected_doctor_checks(
+        &self,
+        selected: Option<&str>,
+    ) -> std::result::Result<Vec<&DoctorCheck>, DispatchError> {
+        let Some(selected) = selected else {
+            return Ok(self.doctor_checks.iter().collect());
+        };
+
+        self.doctor_checks
+            .iter()
+            .find(|check| check.id == selected)
+            .map(|check| vec![check])
+            .ok_or_else(|| DispatchError::Usage(format!("Unknown doctor check `{selected}`.")))
+    }
+
+    fn doctor_plain_text_output(&self, report: &DoctorReport) -> String {
+        let mut lines = vec![format!(
+            "{} doctor: {}",
+            report.plugin_id,
+            report.status.as_str()
+        )];
+
+        for check in &report.checks {
+            lines.push(format!(
+                "[{}] {} - {}",
+                check.status.as_str(),
+                check.id,
+                check.message
+            ));
+            if let Some(fix) = &check.fix {
+                lines.push(format!("  fix: {fix}"));
+            }
+        }
+
+        ensure_trailing_newline(lines.join("\n"))
+    }
+}
+
+struct ResolvedCommand<'a> {
+    command: &'a Command,
+    path: Vec<String>,
+    consumed: usize,
+}
+
+#[derive(Debug)]
+enum DispatchError {
+    Usage(String),
+    Runtime(anyhow::Error),
+}
+
+impl DispatchError {
+    fn unsupported_json(command_path: &str) -> Self {
+        Self::Usage(format!("Command `{command_path}` does not support --json."))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DoctorStatus {
+    Ok,
+    Warn,
+    Fail,
+}
+
+impl DoctorStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Warn => "warn",
+            Self::Fail => "fail",
+        }
+    }
+
+    fn aggregate(results: &[DoctorCheckResult]) -> Self {
+        if results
+            .iter()
+            .any(|result| result.status == DoctorStatus::Fail)
+        {
+            return Self::Fail;
+        }
+        if results
+            .iter()
+            .any(|result| result.status == DoctorStatus::Warn)
+        {
+            return Self::Warn;
+        }
+        Self::Ok
+    }
+}
+
+pub struct DoctorCheck {
+    id: String,
+    about: String,
+    handler: Box<dyn Fn() -> Result<DoctorCheckResult> + Send + Sync>,
+}
+
+impl DoctorCheck {
+    pub fn new<F>(id: impl Into<String>, about: impl Into<String>, handler: F) -> Self
+    where
+        F: Fn() -> Result<DoctorCheckResult> + Send + Sync + 'static,
+    {
+        Self {
+            id: id.into(),
+            about: about.into(),
+            handler: Box::new(handler),
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn about(&self) -> &str {
+        &self.about
+    }
+
+    fn run_check(&self) -> DoctorCheckResult {
+        match (self.handler)() {
+            Ok(mut result) => {
+                if result.id.is_empty() {
+                    result.id = self.id.clone();
+                }
+                result
+            }
+            Err(error) => DoctorCheckResult::fail(
+                self.id.clone(),
+                format!("{} failed: {error:#}", self.about),
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct DoctorReport {
+    pub plugin_id: String,
+    pub status: DoctorStatus,
+    pub checks: Vec<DoctorCheckResult>,
+}
+
+impl DoctorReport {
+    pub fn from_results(plugin_id: impl Into<String>, checks: Vec<DoctorCheckResult>) -> Self {
+        let status = DoctorStatus::aggregate(&checks);
+        Self {
+            plugin_id: plugin_id.into(),
+            status,
+            checks,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct DoctorCheckResult {
+    pub id: String,
+    pub status: DoctorStatus,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
+}
+
+impl DoctorCheckResult {
+    pub fn ok(id: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::new(id, DoctorStatus::Ok, message)
+    }
+
+    pub fn warn(id: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::new(id, DoctorStatus::Warn, message)
+    }
+
+    pub fn fail(id: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::new(id, DoctorStatus::Fail, message)
+    }
+
+    pub fn with_fix(mut self, fix: impl Into<String>) -> Self {
+        self.fix = Some(fix.into());
+        self
+    }
+
+    pub fn with_details(mut self, details: Value) -> Self {
+        self.details = Some(details);
+        self
+    }
+
+    fn new(id: impl Into<String>, status: DoctorStatus, message: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            status,
+            message: message.into(),
+            fix: None,
+            details: None,
+        }
+    }
+}
+
+fn split_output_format(args: Vec<String>) -> (OutputFormat, Vec<String>) {
+    let mut output_format = OutputFormat::PlainText;
+    let mut tokens = Vec::new();
+
+    for arg in args {
+        match arg.as_str() {
+            "--json" => output_format = OutputFormat::Json,
+            "--help" => tokens.push("help".to_string()),
+            _ => tokens.push(arg),
+        }
+    }
+
+    (output_format, tokens)
+}
+
+fn extract_help_path(tokens: &[String]) -> std::result::Result<Option<Vec<String>>, DispatchError> {
+    let help_positions = tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, token)| (token == "help").then_some(index))
+        .collect::<Vec<_>>();
+
+    match help_positions.as_slice() {
+        [] => Ok(None),
+        [0] => Ok(Some(tokens[1..].to_vec())),
+        [position] if *position == tokens.len() - 1 => Ok(Some(tokens[..*position].to_vec())),
+        [_] => Err(DispatchError::Usage(
+            "`help` must be the first token or final token.".to_string(),
+        )),
+        _ => Err(DispatchError::Usage(
+            "`help` may appear only once in a command.".to_string(),
+        )),
+    }
+}
+
+fn json_stdout(value: &impl Serialize) -> Result<String> {
+    let mut stdout = serde_json::to_string(value)?;
+    stdout.push('\n');
+    Ok(stdout)
+}
+
+fn format_command_row(name: &str, about: &str) -> String {
+    if about.is_empty() {
+        return format!("  {name}");
+    }
+    format!("  {name:<18} {about}")
+}
+
+fn ensure_trailing_newline(mut text: String) -> String {
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
+fn write_stream(mut stream: impl Write, bytes: &[u8]) {
+    let _ = stream.write_all(bytes);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn app() -> HeadlessApp {
+        HeadlessApp::new("plugin-test", "test-bin")
+            .about("Test app.")
+            .default_command(["toggle"])
+            .command(
+                Command::new("toggle")
+                    .about("Toggle something.")
+                    .run_plain_text(|_| Ok(PlainTextOutput::text("toggled"))),
+            )
+            .command(
+                Command::new("status")
+                    .about("Show status.")
+                    .run_plain_text(|_| Ok(PlainTextOutput::text("running")))
+                    .run_json(|_| Ok(json!({ "status": "running" }))),
+            )
+            .doctor_check(DoctorCheck::new(
+                "required_binaries",
+                "Check binaries.",
+                || {
+                    Ok(DoctorCheckResult::warn(
+                        "required_binaries",
+                        "ffmpeg is missing",
+                    ))
+                },
+            ))
+    }
+
+    #[test]
+    fn no_args_run_default_command() {
+        let execution = app().execute(Vec::new());
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert_eq!(execution.stdout, "toggled\n");
+    }
+
+    #[test]
+    fn help_first_and_final_are_equivalent() {
+        let first = app().execute(vec!["help".to_string(), "status".to_string()]);
+        let final_token = app().execute(vec!["status".to_string(), "help".to_string()]);
+        assert_eq!(first.exit_code, EXIT_SUCCESS);
+        assert_eq!(first.stdout, final_token.stdout);
+        assert!(first.stdout.contains("Supports --json"));
+    }
+
+    #[test]
+    fn help_in_middle_is_rejected() {
+        let execution = app().execute(vec![
+            "status".to_string(),
+            "help".to_string(),
+            "extra".to_string(),
+        ]);
+        assert_eq!(execution.exit_code, EXIT_USAGE);
+        assert!(execution.stderr.contains("first token or final token"));
+    }
+
+    #[test]
+    fn json_before_and_after_doctor_are_equivalent() {
+        let before = app().execute(vec!["--json".to_string(), "doctor".to_string()]);
+        let after = app().execute(vec!["doctor".to_string(), "--json".to_string()]);
+        assert_eq!(before.exit_code, EXIT_SUCCESS);
+        assert_eq!(before.stdout, after.stdout);
+
+        let value: Value = serde_json::from_str(&before.stdout).unwrap();
+        assert_eq!(value["plugin_id"], "plugin-test");
+        assert_eq!(value["status"], "warn");
+        assert_eq!(value["checks"][0]["id"], "required_binaries");
+    }
+
+    #[test]
+    fn unsupported_json_is_rejected_before_handler_runs() {
+        let execution = app().execute(vec!["--json".to_string(), "toggle".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_USAGE);
+        assert!(execution.stdout.is_empty());
+        assert!(execution.stderr.contains("does not support --json"));
+    }
+
+    #[test]
+    fn command_json_handler_runs_when_registered() {
+        let execution = app().execute(vec!["status".to_string(), "--json".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert_eq!(execution.stdout, "{\"status\":\"running\"}\n");
+    }
+
+    #[test]
+    fn contextual_doctor_check_help_is_supported() {
+        let first = app().execute(vec![
+            "help".to_string(),
+            "doctor".to_string(),
+            "required_binaries".to_string(),
+        ]);
+        let final_token = app().execute(vec![
+            "doctor".to_string(),
+            "required_binaries".to_string(),
+            "help".to_string(),
+        ]);
+        assert_eq!(first.exit_code, EXIT_SUCCESS);
+        assert_eq!(first.stdout, final_token.stdout);
+        assert!(first.stdout.contains("test-bin doctor required_binaries"));
+    }
+}

@@ -5752,6 +5752,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-headless"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "qol-migrations"
 version = "0.1.0"
 dependencies = [
@@ -6704,9 +6713,11 @@ dependencies = [
  "anyhow",
  "chrono",
  "qol-config",
+ "qol-headless",
  "qol-plugin-api",
  "qol-runtime",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

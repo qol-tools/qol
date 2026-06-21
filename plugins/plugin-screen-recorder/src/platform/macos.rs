@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use qol_headless::DoctorCheckResult;
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -11,7 +12,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::{Config, Monitor, Rect};
 
-const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-screen-recorder/";
 const MAX_DISPLAYS: u32 = 16;
 const SWIFT_HELPER_CACHE_DIR: &str = "qol-screen-recorder-swift";
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
@@ -190,15 +190,60 @@ pub fn show_notification(title: &str, message: &str, _timeout_ms: u32) {
         .status();
 }
 
-pub fn open_settings() -> Result<()> {
+pub fn open_url(url: &str) -> Result<()> {
     Command::new("open")
-        .arg(SETTINGS_URL)
+        .arg(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .context("failed to open settings URL")?;
+        .context("failed to open URL")?;
     Ok(())
+}
+
+pub fn platform_supported_check() -> DoctorCheckResult {
+    DoctorCheckResult::ok(
+        "platform_supported",
+        "macOS capture is supported through screencapture.",
+    )
+}
+
+pub fn required_binaries_check() -> DoctorCheckResult {
+    let required = ["screencapture", "open", "osascript"];
+    let missing = required
+        .iter()
+        .copied()
+        .filter(|name| resolve_command(name).is_none())
+        .collect::<Vec<_>>();
+
+    if !missing.is_empty() {
+        return DoctorCheckResult::fail(
+            "required_binaries",
+            format!("Missing required binaries: {}.", missing.join(", ")),
+        )
+        .with_fix("Restore the missing macOS command line tools.");
+    }
+
+    if resolve_command("ffmpeg").is_none() && resolve_command("avconvert").is_none() {
+        return DoctorCheckResult::warn(
+            "required_binaries",
+            "Native MOV recording is available, but ffmpeg is missing for non-MOV conversion.",
+        )
+        .with_fix("Install ffmpeg for MP4, MKV, or WebM output.");
+    }
+
+    if resolve_command("ffmpeg").is_none() {
+        return DoctorCheckResult::warn(
+            "required_binaries",
+            "Native MOV recording is available; MP4 conversion can use avconvert, but WebM/MKV require ffmpeg.",
+        )
+        .with_fix("Install ffmpeg for WebM or MKV output.");
+    }
+
+    DoctorCheckResult::ok(
+        "required_binaries",
+        "Required macOS capture and conversion tools are available.",
+    )
 }
 
 fn active_display_bounds() -> Result<Vec<Monitor>> {
@@ -951,6 +996,7 @@ fn resolve_command(command: &str) -> Option<PathBuf> {
         .unwrap_or_default();
     dirs.extend([
         PathBuf::from("/usr/bin"),
+        PathBuf::from("/usr/sbin"),
         PathBuf::from("/bin"),
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),

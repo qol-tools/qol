@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use qol_headless::DoctorCheckResult;
 use std::path::Path;
 
 use crate::{Config, Monitor, Rect};
@@ -61,8 +62,23 @@ pub fn show_notification(_title: &str, _message: &str, _timeout_ms: u32) {
     // Notifications are fire-and-forget UX; silently no-op on Windows.
 }
 
-pub fn open_settings() -> Result<()> {
+pub fn open_url(_url: &str) -> Result<()> {
     Err(anyhow!(
-        "plugin-screen-recorder: settings launcher is not implemented on Windows"
+        "plugin-screen-recorder: URL launcher is not implemented on Windows"
     ))
+}
+
+pub fn platform_supported_check() -> DoctorCheckResult {
+    DoctorCheckResult::fail(
+        "platform_supported",
+        "Windows capture is not implemented for plugin-screen-recorder.",
+    )
+    .with_fix("Use the Linux or macOS backend until a Windows recorder is added.")
+}
+
+pub fn required_binaries_check() -> DoctorCheckResult {
+    DoctorCheckResult::warn(
+        "required_binaries",
+        "Windows capture is not implemented, so recorder binaries were not checked.",
+    )
 }

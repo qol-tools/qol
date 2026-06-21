@@ -1,11 +1,12 @@
 use anyhow::{anyhow, Context, Result};
+use qol_headless::DoctorCheckResult;
+use std::env;
 use std::fs::File;
-use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::{Config, Monitor, Rect};
-
-const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-screen-recorder/";
 
 pub fn select_region() -> Result<Option<Rect>> {
     let output = Command::new("slop")
@@ -229,15 +230,44 @@ pub fn show_notification(title: &str, message: &str, timeout_ms: u32) {
         .status();
 }
 
-pub fn open_settings() -> Result<()> {
+pub fn open_url(url: &str) -> Result<()> {
     Command::new("xdg-open")
-        .arg(SETTINGS_URL)
+        .arg(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .context("failed to open settings URL")?;
+        .context("failed to open URL")?;
     Ok(())
+}
+
+pub fn platform_supported_check() -> DoctorCheckResult {
+    DoctorCheckResult::ok(
+        "platform_supported",
+        "Linux capture is supported through ffmpeg/x11grab.",
+    )
+}
+
+pub fn required_binaries_check() -> DoctorCheckResult {
+    let required = ["ffmpeg", "slop", "xrandr", "xdpyinfo"];
+    let missing = required
+        .iter()
+        .copied()
+        .filter(|name| resolve_command(name).is_none())
+        .collect::<Vec<_>>();
+
+    if missing.is_empty() {
+        return DoctorCheckResult::ok(
+            "required_binaries",
+            "Required Linux capture tools are available.",
+        );
+    }
+
+    DoctorCheckResult::fail(
+        "required_binaries",
+        format!("Missing required binaries: {}.", missing.join(", ")),
+    )
+    .with_fix("Install ffmpeg, slop, xrandr, and xdpyinfo.")
 }
 
 fn parse_selection_geometry(raw: &str) -> Result<Rect> {
@@ -268,4 +298,30 @@ fn monitor_from_xrandr(monitor: qol_runtime::xrandr::XrandrMonitor) -> Monitor {
         w: monitor.bounds.width as i32,
         h: monitor.bounds.height as i32,
     }
+}
+
+fn resolve_command(command: &str) -> Option<PathBuf> {
+    command_search_dirs()
+        .into_iter()
+        .map(|dir| dir.join(command))
+        .find(|path| is_executable_file(path))
+}
+
+fn command_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = env::var_os("PATH")
+        .map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .unwrap_or_default();
+    dirs.extend([
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ]);
+    dirs
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
 }

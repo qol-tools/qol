@@ -1,0 +1,11 @@
+[package]
+name = "qol-headless"
+version = "0.1.0"
+edition = "2021"
+description = "Headless CLI contract helpers for qol-tools applications and plugins"
+license = "PolyForm-Noncommercial-1.0.0"
+
+[dependencies]
+anyhow = "1"
+serde.workspace = true
+serde_json.workspace = true
