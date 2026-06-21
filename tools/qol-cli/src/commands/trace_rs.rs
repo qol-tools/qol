@@ -7,13 +7,15 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, IsTerminal, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, IsTerminal, Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::mem::MaybeUninit;
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_LOG_FILE: &str = "/tmp/qol-altmon.log";
@@ -327,6 +329,7 @@ fn detail_control_hint(replay: bool, details: bool) -> &'static str {
 
 struct DetailToggleInput {
     enabled: bool,
+    pipe_flag: Option<Arc<AtomicBool>>,
     #[cfg(unix)]
     _guard: Option<CbreakGuard>,
 }
@@ -339,21 +342,54 @@ enum TailControl {
 
 impl DetailToggleInput {
     fn new() -> Self {
-        #[cfg(unix)]
-        {
-            let guard = CbreakGuard::new();
-            Self {
-                enabled: guard.is_some(),
-                _guard: guard,
-            }
+        if !std::io::stdin().is_terminal() {
+            return Self::piped();
         }
+        #[cfg(unix)]
+        let guard = CbreakGuard::new();
+        #[cfg(unix)]
+        let enabled = guard.is_some();
         #[cfg(not(unix))]
-        {
-            Self { enabled: false }
+        let enabled = false;
+        Self {
+            enabled,
+            pipe_flag: None,
+            #[cfg(unix)]
+            _guard: guard,
+        }
+    }
+
+    fn piped() -> Self {
+        let flag = Arc::new(AtomicBool::new(false));
+        let writer = Arc::clone(&flag);
+        std::thread::spawn(move || {
+            let mut byte = [0u8; 1];
+            let mut stdin = std::io::stdin().lock();
+            while let Ok(read) = stdin.read(&mut byte) {
+                if read == 0 {
+                    break;
+                }
+                if matches!(byte[0], b'd' | b'D') {
+                    writer.store(true, Ordering::SeqCst);
+                }
+            }
+        });
+        Self {
+            enabled: false,
+            pipe_flag: Some(flag),
+            #[cfg(unix)]
+            _guard: None,
         }
     }
 
     fn poll(&mut self, runner: &mut TraceRunner) -> TailControl {
+        if let Some(flag) = self.pipe_flag.as_ref() {
+            if flag.swap(false, Ordering::SeqCst) {
+                println!("{}\n", runner.toggle_details());
+                runner.flush();
+            }
+            return TailControl::Continue;
+        }
         if !self.enabled {
             return TailControl::Continue;
         }
