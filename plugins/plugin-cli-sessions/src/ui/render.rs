@@ -229,25 +229,6 @@ fn footer() -> impl IntoElement {
         .child(key_hint("esc", "close"))
 }
 
-fn gutter(index: usize, selected: bool) -> impl IntoElement {
-    let num = if index < 9 {
-        (index + 1).to_string()
-    } else {
-        String::new()
-    };
-    div()
-        .flex_none()
-        .w(px(22.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .border_r_1()
-        .border_color(rgb(0x21262du32))
-        .text_size(px(11.0))
-        .text_color(rgb(if selected { 0x58a6ffu32 } else { 0x6e7681u32 }))
-        .child(num)
-}
-
 fn identity_line(s: &SessionState) -> impl IntoElement {
     let branch = s.branch.clone().unwrap_or_default();
     let label = s.name.clone().unwrap_or_else(|| s.project.clone());
@@ -402,24 +383,17 @@ fn session_row(
         }))
         .child(
             div()
-                .flex()
                 .w_full()
                 .bg(rgba(tint))
                 .border_b_1()
                 .border_color(rgb(0x21262du32))
-                .child(gutter(index, selected))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .flex()
-                        .flex_col()
-                        .gap(px(3.0))
-                        .px(px(10.0))
-                        .py(px(9.0))
-                        .child(identity_line(s))
-                        .child(status_line(s, index, cx)),
-                ),
+                .flex()
+                .flex_col()
+                .gap(px(3.0))
+                .px(px(10.0))
+                .py(px(9.0))
+                .child(identity_line(s))
+                .child(status_line(s, index, cx)),
         )
 }
 
@@ -473,13 +447,6 @@ impl Render for SessionsView {
                     }
                     "escape" => {
                         this.dismiss_with_reason("escape");
-                    }
-                    d if d.len() == 1 && matches!(d.chars().next(), Some('1'..='9')) => {
-                        let idx = d.parse::<usize>().unwrap_or(0).saturating_sub(1);
-                        if idx < len {
-                            this.jump_to(idx, "number", cx);
-                            cx.notify();
-                        }
                     }
                     _ => {}
                 }
