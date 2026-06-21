@@ -1,7 +1,21 @@
+use crate::core::Disposal;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum MatchKind {
     Exact,
     Fuzzy,
+}
+
+pub fn effective_disposal(
+    match_kind: MatchKind,
+    requested: Disposal,
+    bundle_trash_override: bool,
+) -> Disposal {
+    match (match_kind, bundle_trash_override) {
+        (MatchKind::Fuzzy, _) => Disposal::Trash,
+        (MatchKind::Exact, true) => Disposal::Trash,
+        (MatchKind::Exact, false) => requested,
+    }
 }
 
 pub fn normalize_entry(entry: &str) -> &str {
@@ -52,6 +66,24 @@ mod tests {
         ];
         for (entry, expected) in cases {
             assert_eq!(owner_of(entry, &bids), expected, "entry={entry}");
+        }
+    }
+
+    #[test]
+    fn effective_disposal_keeps_fuzzy_in_trash_always() {
+        let cases = [
+            (MatchKind::Exact, Disposal::Delete, false, Disposal::Delete),
+            (MatchKind::Exact, Disposal::Trash, false, Disposal::Trash),
+            (MatchKind::Exact, Disposal::Delete, true, Disposal::Trash),
+            (MatchKind::Fuzzy, Disposal::Delete, false, Disposal::Trash),
+            (MatchKind::Fuzzy, Disposal::Delete, true, Disposal::Trash),
+        ];
+        for (mk, req, override_trash, expected) in cases {
+            assert_eq!(
+                effective_disposal(mk, req, override_trash),
+                expected,
+                "mk={mk:?} req={req:?} override={override_trash}"
+            );
         }
     }
 }

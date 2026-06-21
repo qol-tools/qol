@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::core::{
-    AppPlatform, Disposal, InstalledApp, Leftover, LeftoverKind, RemovalOutcome, RemovalPlan,
+    AppPlatform, Disposal, InstalledApp, Leftover, LeftoverKind, MatchKind, RemovalOutcome,
+    RemovalPlan,
 };
 
 pub struct Platform {
@@ -174,6 +175,7 @@ impl AppPlatform for Platform {
             path: app.path.clone(),
             kind: LeftoverKind::AppBundle,
             size_bytes: path_size(&app.path),
+            match_kind: MatchKind::Exact,
         }];
         for (kind, path) in self.leftover_candidates(app) {
             if path.exists() {
@@ -182,6 +184,7 @@ impl AppPlatform for Platform {
                     path,
                     kind,
                     size_bytes,
+                    match_kind: MatchKind::Exact,
                 });
             }
         }

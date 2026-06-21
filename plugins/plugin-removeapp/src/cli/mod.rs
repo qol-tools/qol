@@ -121,7 +121,7 @@ fn confirm(plan: &RemovalPlan, force: bool) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{InstalledApp, Leftover, LeftoverKind};
+    use crate::core::{InstalledApp, Leftover, LeftoverKind, MatchKind};
     use std::path::PathBuf;
 
     fn sample_plan() -> RemovalPlan {
@@ -135,6 +135,7 @@ mod tests {
                 path: app.path.clone(),
                 kind: LeftoverKind::AppBundle,
                 size_bytes: 1234,
+                match_kind: MatchKind::Exact,
             }],
             app,
             total_bytes: 1234,

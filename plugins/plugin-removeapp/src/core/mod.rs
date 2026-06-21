@@ -35,6 +35,7 @@ pub struct Leftover {
     pub path: PathBuf,
     pub kind: LeftoverKind,
     pub size_bytes: u64,
+    pub match_kind: MatchKind,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -48,6 +49,7 @@ pub struct RemovalPlan {
 pub struct RemovalOutcome {
     pub removed: Vec<PathBuf>,
     pub failed: Vec<(PathBuf, String)>,
+    pub freed_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +159,7 @@ mod tests {
                 path: a.path.clone(),
                 kind: LeftoverKind::AppBundle,
                 size_bytes: 0,
+                match_kind: MatchKind::Exact,
             }],
             app: a,
             total_bytes: 0,
@@ -181,6 +184,7 @@ mod tests {
             Ok(RemovalOutcome {
                 removed: paths.to_vec(),
                 failed: vec![],
+                freed_bytes: 0,
             })
         }
         fn is_protected(&self, _app: &InstalledApp) -> bool {
