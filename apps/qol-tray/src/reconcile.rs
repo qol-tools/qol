@@ -19,16 +19,26 @@ where
                         continue;
                     }
                     drain_pending(&mut rx, &interests);
-                    reconcile();
+                    run_blocking(&reconcile).await;
                 }
                 Err(RecvError::Lagged(_)) => {
                     drain_pending(&mut rx, &interests);
-                    reconcile();
+                    run_blocking(&reconcile).await;
                 }
                 Err(RecvError::Closed) => return,
             }
         }
     });
+}
+
+async fn run_blocking<F>(reconcile: &Arc<F>)
+where
+    F: Fn() + Send + Sync + 'static,
+{
+    let reconcile = Arc::clone(reconcile);
+    if let Err(error) = tokio::task::spawn_blocking(move || reconcile()).await {
+        log::error!("reconcile task failed to complete: {error}");
+    }
 }
 
 fn matches_interest(event: &DaemonEvent, interests: &[ConfigKind]) -> bool {
@@ -170,5 +180,36 @@ mod tests {
         sleep(Duration::from_millis(40)).await;
         bus.config_changed(ConfigKind::Profile);
         wait_for(&counter, 2).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn blocking_reconcile_does_not_stall_async_tasks() {
+        use std::time::Instant;
+
+        let bus = EventBus::new();
+        let started = Arc::new(AtomicUsize::new(0));
+        let started_in_reconcile = Arc::clone(&started);
+        spawn_reconciler(&bus, &[ConfigKind::Plugins], move || {
+            started_in_reconcile.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(300));
+        });
+        sleep(Duration::from_millis(20)).await;
+        bus.config_changed(ConfigKind::Plugins);
+
+        let start = Instant::now();
+        for _ in 0..15 {
+            sleep(Duration::from_millis(10)).await;
+        }
+        let elapsed = start.elapsed();
+
+        assert!(
+            started.load(Ordering::SeqCst) > 0,
+            "the reconcile closure must have run"
+        );
+        assert!(
+            elapsed < Duration::from_millis(280),
+            "async tasks must progress while a blocking reconcile runs; \
+             150ms of async work took {elapsed:?}"
+        );
     }
 }
