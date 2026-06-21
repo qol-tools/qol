@@ -1,7 +1,7 @@
 use qol_plugin_api::manifest::PluginManifest;
 
 #[test]
-fn manifest_declares_on_demand_actions_and_one_binary() {
+fn manifest_prewarms_daemon_and_declares_actions() {
     let toml = include_str!("../plugin.toml");
     let m: PluginManifest = toml::from_str(toml).expect("parse plugin.toml");
     m.validate().expect("valid plugin.toml");
@@ -38,10 +38,13 @@ fn manifest_declares_on_demand_actions_and_one_binary() {
         Some(vec!["snapshot".to_string()])
     );
 
-    assert!(
-        m.daemon.is_none(),
-        "CLI Sessions is opened on demand through runtime actions, not autostarted"
+    let daemon = m.daemon.as_ref().expect(
+        "CLI Sessions pre-warms a hidden daemon so opening it is instant and focuses before \
+         keystrokes can leak to the terminal underneath (Linux gpui cold-start race)",
     );
+    assert!(daemon.enabled);
+    assert_eq!(daemon.command, "cli-sessions");
+    assert_eq!(daemon.socket.as_deref(), Some("/tmp/qol-cli-sessions.sock"));
 
     let shortcut_actions: Vec<&str> = m.shortcuts.iter().map(|s| s.action.as_str()).collect();
     assert_eq!(

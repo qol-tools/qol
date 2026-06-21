@@ -6,7 +6,8 @@ use qol_plugin_daemon::daemon as core_daemon;
 
 fn main() -> ExitCode {
     match env::args().nth(1).as_deref() {
-        None | Some("open") | Some("run") | Some("daemon") => open_or_run(),
+        None | Some("daemon") => run_daemon(false),
+        Some("open") | Some("run") => open_or_show(),
         Some("next") => {
             core_daemon::send_action(&CONFIG, "next", false);
             ExitCode::SUCCESS
@@ -22,11 +23,15 @@ fn main() -> ExitCode {
     }
 }
 
-fn open_or_run() -> ExitCode {
+fn open_or_show() -> ExitCode {
     if core_daemon::send_action(&CONFIG, "open", false) {
         return ExitCode::SUCCESS;
     }
-    match plugin_cli_sessions::daemon::run() {
+    run_daemon(true)
+}
+
+fn run_daemon(visible: bool) -> ExitCode {
+    match plugin_cli_sessions::daemon::run(visible) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("plugin-cli-sessions: {e:#}");

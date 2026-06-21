@@ -233,19 +233,55 @@ pub fn configure_overlay_window(title: &str) -> bool {
     };
 
     set_window_manager_decorations(&conn, wid, false);
-    set_window_manager_state(&conn, wid);
+    lock_window_size(&conn, wid);
+    add_window_state(&conn, root, wid);
     let _ = conn.flush();
     activate_window(&conn, root, wid);
     let _ = conn.flush();
     true
 }
 
+fn lock_window_size(conn: &impl Connection, wid: u32) {
+    let Ok(cookie) = conn.get_geometry(wid) else {
+        return;
+    };
+    let Ok(geometry) = cookie.reply() else {
+        return;
+    };
+    let size = (geometry.width as i32, geometry.height as i32);
+    let hints = x11rb::properties::WmSizeHints {
+        min_size: Some(size),
+        max_size: Some(size),
+        ..Default::default()
+    };
+    let _ = hints.set(conn, wid, AtomEnum::WM_NORMAL_HINTS);
+}
+
+fn add_window_state(conn: &impl Connection, root: u32, wid: u32) {
+    let Some(state_atom) = intern(conn, b"_NET_WM_STATE") else {
+        return;
+    };
+    const ADD: u32 = 1;
+    const SOURCE_APPLICATION: u32 = 1;
+    let states = [
+        intern(conn, b"_NET_WM_STATE_ABOVE"),
+        intern(conn, b"_NET_WM_STATE_SKIP_TASKBAR"),
+        intern(conn, b"_NET_WM_STATE_SKIP_PAGER"),
+    ];
+    let mask = EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT;
+    for atom in states.into_iter().flatten() {
+        let event =
+            ClientMessageEvent::new(32, wid, state_atom, [ADD, atom, 0, SOURCE_APPLICATION, 0]);
+        let _ = conn.send_event(false, root, mask, event);
+    }
+}
+
 fn activate_window(conn: &impl Connection, root: u32, wid: u32) -> bool {
     let Some(active_atom) = intern(conn, b"_NET_ACTIVE_WINDOW") else {
         return false;
     };
-    const SOURCE_APPLICATION: u32 = 1;
-    let event = ClientMessageEvent::new(32, wid, active_atom, [SOURCE_APPLICATION, 0, 0, 0, 0]);
+    const SOURCE_PAGER: u32 = 2;
+    let event = ClientMessageEvent::new(32, wid, active_atom, [SOURCE_PAGER, 0, 0, 0, 0]);
     let mask = EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT;
     conn.send_event(false, root, mask, event).is_ok()
 }

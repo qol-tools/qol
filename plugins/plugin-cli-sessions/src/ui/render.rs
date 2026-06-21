@@ -3,7 +3,7 @@ use std::time::Duration;
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, Animation, AnimationExt, AnyElement, Context, FontWeight, KeyDownEvent,
-    SharedString, Window,
+    MouseButton, SharedString, Window,
 };
 
 use crate::registry::SessionState;
@@ -186,7 +186,7 @@ fn empty_state() -> impl IntoElement {
             div()
                 .text_color(rgb(0x7d8590u32))
                 .text_size(px(11.0))
-                .child("Open a CLI in kitty, then open this panel again."),
+                .child("Needs kitty remote control: allow_remote_control + listen_on"),
         )
 }
 
@@ -451,7 +451,17 @@ impl Render for SessionsView {
                     _ => {}
                 }
             }))
-            .child(header(&rows))
+            .child(
+                div()
+                    .id("cli-sessions-titlebar")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_this, _event, window, _cx| {
+                            window.start_window_move();
+                        }),
+                    )
+                    .child(header(&rows)),
+            )
             .child(
                 div()
                     .id("cli-sessions-list")

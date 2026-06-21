@@ -29,7 +29,7 @@ const WINDOW_WIDTH: f32 = 360.0;
 const WINDOW_HEIGHT: f32 = 400.0;
 const CORNER_MARGIN: f32 = 16.0;
 
-pub fn run() -> anyhow::Result<()> {
+pub fn run(visible: bool) -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
     crate::anomaly::enable();
 
@@ -66,7 +66,13 @@ pub fn run() -> anyhow::Result<()> {
         qol_gpui::keepalive::open_keepalive(cx, Some(APP_ID));
         qol_gpui::platform::set_accessory_policy();
 
-        let view_handle = open_panel(reg_for_app.clone(), host_for_app.clone(), corner, cx);
+        let view_handle = open_panel(
+            reg_for_app.clone(),
+            host_for_app.clone(),
+            corner,
+            visible,
+            cx,
+        );
         spawn_reconcile_timer(
             reg_for_app.clone(),
             host_for_app.clone(),
@@ -119,14 +125,14 @@ fn panel_bounds(corner: Corner, cx: &mut gpui::App) -> Bounds<Pixels> {
     }
 }
 
-fn panel_window_options(corner: Corner, cx: &mut gpui::App) -> WindowOptions {
+fn panel_window_options(corner: Corner, visible: bool, cx: &mut gpui::App) -> WindowOptions {
     let bounds = panel_bounds(corner, cx);
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: None,
         window_decorations: Some(qol_gpui::platform::ghost_window_decorations(false)),
-        kind: qol_gpui::platform::ghost_window_kind(),
-        focus: true,
+        kind: gpui::WindowKind::Normal,
+        focus: visible,
         is_movable: true,
         window_background: WindowBackgroundAppearance::Opaque,
         app_id: Some(APP_ID.to_string()),
@@ -138,14 +144,22 @@ fn open_panel(
     registry: Arc<Mutex<Registry>>,
     host: Arc<dyn TerminalHost + Send + Sync>,
     corner: Corner,
+    visible: bool,
     cx: &mut gpui::App,
 ) -> Option<gpui::WindowHandle<SessionsView>> {
-    let options = panel_window_options(corner, cx);
+    let options = panel_window_options(corner, visible, cx);
     let title = WINDOW_TITLE.to_string();
-    let result = qol_gpui::window::open_window_with_focus(cx, options, move |window, cx| {
-        window.set_window_title(WINDOW_TITLE);
-        SessionsView::new(registry, host, cx)
-    });
+    let result = if visible {
+        qol_gpui::window::open_window_with_focus(cx, options, move |window, cx| {
+            window.set_window_title(WINDOW_TITLE);
+            SessionsView::new(registry, host, cx)
+        })
+    } else {
+        cx.open_window(options, move |window, cx| {
+            window.set_window_title(WINDOW_TITLE);
+            cx.new(move |cx| SessionsView::new(registry, host, cx))
+        })
+    };
     let handle = match result {
         Ok(h) => h,
         Err(e) => {
@@ -155,15 +169,30 @@ fn open_panel(
             return None;
         }
     };
-    qol_gpui::popup_window::configure_overlay_window(&title);
     #[cfg(debug_assertions)]
-    qol_runtime::probe!("CLI_SESSIONS_OPENPANEL", "opened=true title={title}");
+    qol_runtime::probe!(
+        "CLI_SESSIONS_OPENPANEL",
+        "opened=true visible={visible} title={title}"
+    );
+    if visible {
+        show_panel(&handle, &title, cx);
+    } else {
+        qol_gpui::popup_window::hide_invisible(&title);
+    }
+    Some(handle)
+}
+
+fn show_panel(handle: &gpui::WindowHandle<SessionsView>, title: &str, cx: &mut gpui::App) {
+    let _reason = qol_gpui::popup_window::reason_scope("open-command");
+    let shown = qol_gpui::popup_window::show_window_by_title(title);
+    qol_gpui::popup_window::configure_overlay_window(title);
+    trace::open_command(shown);
     let _ = handle.update(cx, |view, window, cx| {
         window.activate_window();
         window.focus(&view.focus_handle(cx));
+        cx.notify();
     });
     cx.activate(true);
-    Some(handle)
 }
 
 fn spawn_reconcile_timer(
@@ -214,16 +243,7 @@ fn spawn_command_poll(
                     qol_runtime::probe!("CLI_SESSIONS_CMD", "cmd=open");
                     let _ = cx.update(move |cx| {
                         if let Some(handle) = &view_handle {
-                            let _ = handle.update(cx, |view, window, cx| {
-                                let _reason = qol_gpui::popup_window::reason_scope("open-command");
-                                let shown =
-                                    qol_gpui::popup_window::show_window_by_title(WINDOW_TITLE);
-                                trace::open_command(shown);
-                                window.activate_window();
-                                window.focus(&view.focus_handle(cx));
-                                cx.notify();
-                            });
-                            cx.activate(true);
+                            show_panel(handle, WINDOW_TITLE, cx);
                         }
                     });
                     LoopFlow::Continue
