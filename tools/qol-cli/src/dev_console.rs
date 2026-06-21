@@ -431,14 +431,10 @@ fn stream_view_bindings(trace: bool, log_resource: bool, armed: bool) -> Vec<Key
             Action::OpenCurrentLogFolder,
             'o',
         ));
-        let editor_desc = if trace {
-            if armed {
-                "open raw"
-            } else {
-                "open pretty"
-            }
+        let editor_desc = if trace && armed {
+            "open raw"
         } else {
-            "open editor"
+            "open in editor"
         };
         bindings.push(char_binding(
             "e",
@@ -1962,14 +1958,12 @@ fn open_current_log_editor(dash: &mut Dash, raw: bool) {
             return;
         }
     };
-    if open_in_default_editor(&target) {
-        dash.notice = Some((Instant::now(), format!("opened {}", target.display())));
+    let message = if open_with_os_default(&target) {
+        format!("opened {}", target.display())
     } else {
-        dash.notice = Some((
-            Instant::now(),
-            format!("could not open {}", target.display()),
-        ));
-    }
+        format!("could not open {}", target.display())
+    };
+    dash.notice = Some((Instant::now(), message));
 }
 
 fn editor_target_for_source(
@@ -1981,22 +1975,17 @@ fn editor_target_for_source(
     if source.kind != "trace" || raw {
         return Ok(file.to_path_buf());
     }
-    render_pretty_trace_snapshot(file, dash.trace_renderer(), dash.trace_details_enabled())
+    render_pretty_trace_snapshot(file, dash.trace_renderer())
 }
 
-fn render_pretty_trace_snapshot(
-    file: &Path,
-    renderer: TraceRenderer,
-    details: bool,
-) -> Result<PathBuf, String> {
+fn render_pretty_trace_snapshot(file: &Path, renderer: TraceRenderer) -> Result<PathBuf, String> {
     let root = crate::workspace::repo_root().map_err(|error| error.to_string())?;
     let pretty = pretty_trace_file(file);
     let mut cmd = trace_command(renderer, &root)
         .ok_or_else(|| format!("could not create {} trace renderer", renderer.name()))?;
-    cmd.arg("--replay").env("QOL_TRACE_LOG_FILE", file);
-    if details {
-        cmd.arg("--details");
-    }
+    cmd.arg("--replay")
+        .arg("--details")
+        .env("QOL_TRACE_LOG_FILE", file);
     let output = cmd
         .current_dir(&root)
         .stdin(Stdio::null())
@@ -2046,27 +2035,7 @@ fn strip_ansi_codes(input: &str) -> String {
     output
 }
 
-fn configured_editor_label() -> Option<String> {
-    env_editor().map(|(key, value)| format!("{key}={value}"))
-}
-
-fn env_editor() -> Option<(&'static str, String)> {
-    std::env::var("VISUAL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| ("VISUAL", value))
-        .or_else(|| {
-            std::env::var("EDITOR")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .map(|value| ("EDITOR", value))
-        })
-}
-
-fn open_in_default_editor(path: &Path) -> bool {
-    if let Some((_, editor)) = env_editor() {
-        return spawn_editor_command(&editor, path);
-    }
+fn open_with_os_default(path: &Path) -> bool {
     match crate::host_facade::os_name() {
         "macos" => Command::new("open")
             .arg("-t")
@@ -2089,21 +2058,6 @@ fn open_in_default_editor(path: &Path) -> bool {
             .spawn()
             .is_ok(),
     }
-}
-
-fn spawn_editor_command(editor: &str, path: &Path) -> bool {
-    let mut parts = editor.split_whitespace();
-    let Some(program) = parts.next() else {
-        return false;
-    };
-    Command::new(program)
-        .args(parts)
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .is_ok()
 }
 
 fn emu_env_count(dash: &Dash) -> usize {
@@ -3852,10 +3806,6 @@ fn log_source_header(dash: &Dash) -> Vec<Line<'static>> {
         "  folder ".fg(Color::DarkGray),
         source.folder.display().to_string().fg(Color::White),
     ];
-    if let Some(editor) = configured_editor_label() {
-        meta.push(" · editor ".fg(Color::DarkGray));
-        meta.push(editor.fg(Color::White));
-    }
     meta.push(" · ".fg(Color::DarkGray));
     meta.push(source.stream_note.fg(Color::DarkGray));
 
@@ -5147,8 +5097,8 @@ mod tests {
         );
         assert!(text.contains(" space     arm: raw "), "missing raw arm key");
         assert!(
-            text.contains(" e         open pretty "),
-            "missing pretty open key"
+            text.contains(" e         open in editor "),
+            "missing editor open key"
         );
         assert!(
             !text.contains("refresh checks"),
