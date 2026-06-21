@@ -101,6 +101,17 @@ mod tests {
     }
 
     #[test]
+    fn bottom_follow_scrolls_offset_to_reveal_selection() {
+        let (mut selected, mut offset) = (7usize, 0usize);
+        clamp_into_view(&mut selected, &mut offset, 20, 5);
+        assert_eq!(
+            (selected, offset),
+            (7, 3),
+            "offset follows the selection past the window bottom"
+        );
+    }
+
+    #[test]
     fn navigating_down_scrolls_the_window_to_follow() {
         let mut list = ScrollList::new(5);
         let count = 20;
