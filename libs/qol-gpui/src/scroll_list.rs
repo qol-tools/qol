@@ -109,7 +109,10 @@ mod tests {
             list.sync(count);
         }
         assert_eq!(list.selected, 12, "selection advanced");
-        assert!(list.visible_range(count).contains(&list.selected), "selection visible");
+        assert!(
+            list.visible_range(count).contains(&list.selected),
+            "selection visible"
+        );
     }
 
     #[test]
