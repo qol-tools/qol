@@ -250,6 +250,14 @@ fn log_applied(action: &FixAction) {
             );
         }
         #[cfg(feature = "dev")]
+        FixAction::RemoveDevLinkEntries { ids } => {
+            log::info!(
+                "doctor: removed {} stale dev-link registry entries: {}",
+                ids.len(),
+                ids.join(", ")
+            );
+        }
+        #[cfg(feature = "dev")]
         FixAction::FormatRustSources { workspace } => {
             log::info!("doctor: ran cargo fmt in {}", workspace.display());
         }

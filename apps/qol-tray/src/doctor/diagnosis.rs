@@ -50,6 +50,10 @@ pub(super) enum FixAction {
         ids: Vec<String>,
     },
     #[cfg(feature = "dev")]
+    RemoveDevLinkEntries {
+        ids: Vec<String>,
+    },
+    #[cfg(feature = "dev")]
     FormatRustSources {
         workspace: PathBuf,
     },
@@ -87,6 +91,7 @@ impl FixAction {
             FixAction::RelocateDevLink { .. }
             | FixAction::PruneOrphanFingerprints { .. }
             | FixAction::PruneReservedPlugins { .. }
+            | FixAction::RemoveDevLinkEntries { .. }
             | FixAction::FormatRustSources { .. }
             | FixAction::PruneCargoIncrementalCache { .. }
             | FixAction::HealDevLinkedPlugins { .. } => FixApplicability::SafeAutomatic,
@@ -136,6 +141,8 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         FixAction::PruneOrphanFingerprints { ids } => prune_orphan_fingerprints(ids),
         #[cfg(feature = "dev")]
         FixAction::PruneReservedPlugins { ids } => prune_reserved_plugins(ids),
+        #[cfg(feature = "dev")]
+        FixAction::RemoveDevLinkEntries { ids } => remove_dev_link_entries(ids),
         #[cfg(feature = "dev")]
         FixAction::FormatRustSources { workspace } => format_rust_sources(workspace),
         #[cfg(feature = "dev")]
@@ -257,6 +264,16 @@ fn format_rust_sources(workspace: &std::path::Path) -> Result<()> {
 
 #[cfg(feature = "dev")]
 fn prune_reserved_plugins(ids: &[String]) -> Result<()> {
+    remove_registry_entries(ids)
+}
+
+#[cfg(feature = "dev")]
+fn remove_dev_link_entries(ids: &[String]) -> Result<()> {
+    remove_registry_entries(ids)
+}
+
+#[cfg(feature = "dev")]
+fn remove_registry_entries(ids: &[String]) -> Result<()> {
     let config_dir = crate::paths::shared_config_dir()?;
     let mut registry = crate::plugins::registry::load_registry(&config_dir)
         .map_err(|error| anyhow!("failed to load registry: {error}"))?;

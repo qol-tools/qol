@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const ID: &str = "dev_link_paths";
+const RENAMED_PLUGINS: &[(&str, &str)] = &[("plugin-screen-recorder", "qol-shot")];
 
 pub(super) struct DevLinkPathsCheck;
 
@@ -107,6 +108,7 @@ pub(crate) enum Finding {
 pub(crate) enum Resolution {
     Relocate(PathBuf),
     Ambiguous(Vec<PathBuf>),
+    RemoveStaleRenamed { successor_id: String },
     NoMatch,
 }
 
@@ -125,6 +127,18 @@ impl Finding {
             } => Some(FixAction::RelocateDevLink {
                 plugin_id: plugin_id.clone(),
                 to: to.clone(),
+            }),
+            Finding::NoManifest {
+                plugin_id,
+                resolution: Resolution::RemoveStaleRenamed { .. },
+                ..
+            }
+            | Finding::Missing {
+                plugin_id,
+                resolution: Resolution::RemoveStaleRenamed { .. },
+                ..
+            } => Some(FixAction::RemoveDevLinkEntries {
+                ids: vec![plugin_id.clone()],
             }),
             _ => None,
         }
@@ -152,6 +166,7 @@ pub(crate) fn collect_findings(
                 return None;
             }
             classify(
+                registry,
                 &entry.id,
                 &entry.active.path,
                 dev_root,
@@ -163,6 +178,7 @@ pub(crate) fn collect_findings(
 }
 
 fn classify(
+    registry: &Registry,
     plugin_id: &str,
     path: &Path,
     dev_root: Option<&Path>,
@@ -173,7 +189,14 @@ fn classify(
         ManifestStatus::Missing => Some(Finding::Missing {
             plugin_id: plugin_id.to_string(),
             path: path.to_path_buf(),
-            resolution: resolve(plugin_id, path, dev_root, manifest_probe, subplugins_probe),
+            resolution: resolve(
+                registry,
+                plugin_id,
+                path,
+                dev_root,
+                manifest_probe,
+                subplugins_probe,
+            ),
         }),
         ManifestStatus::WithId(found) if found == plugin_id => None,
         ManifestStatus::WithId(found) => Some(Finding::IdMismatch {
@@ -188,18 +211,32 @@ fn classify(
         ManifestStatus::NoManifest => Some(Finding::NoManifest {
             plugin_id: plugin_id.to_string(),
             path: path.to_path_buf(),
-            resolution: resolve(plugin_id, path, dev_root, manifest_probe, subplugins_probe),
+            resolution: resolve(
+                registry,
+                plugin_id,
+                path,
+                dev_root,
+                manifest_probe,
+                subplugins_probe,
+            ),
         }),
     }
 }
 
 fn resolve(
+    registry: &Registry,
     plugin_id: &str,
     path: &Path,
     dev_root: Option<&Path>,
     manifest_probe: &dyn Fn(&Path) -> ManifestStatus,
     subplugins_probe: &dyn Fn(&Path) -> Vec<(String, PathBuf)>,
 ) -> Resolution {
+    if let Some(successor_id) = registered_successor(registry, plugin_id, manifest_probe) {
+        return Resolution::RemoveStaleRenamed {
+            successor_id: successor_id.to_string(),
+        };
+    }
+
     if let Some(root) = dev_root {
         let monorepo = root.join(plugin_id);
         if matches!(manifest_probe(&monorepo), ManifestStatus::WithId(ref id) if id == plugin_id) {
@@ -219,6 +256,29 @@ fn resolve(
         1 => Resolution::Relocate(matches.into_iter().next().expect("len checked")),
         _ => Resolution::Ambiguous(matches),
     }
+}
+
+fn registered_successor(
+    registry: &Registry,
+    plugin_id: &str,
+    manifest_probe: &dyn Fn(&Path) -> ManifestStatus,
+) -> Option<&'static str> {
+    for (legacy, successor) in RENAMED_PLUGINS {
+        if *legacy != plugin_id {
+            continue;
+        }
+        let Some(entry) = registry.entries.iter().find(|entry| entry.id == *successor) else {
+            continue;
+        };
+        if !is_live_source(&entry.active.source) {
+            continue;
+        }
+        if matches!(manifest_probe(&entry.active.path), ManifestStatus::WithId(ref id) if id == successor)
+        {
+            return Some(*successor);
+        }
+    }
+    None
 }
 
 fn fs_manifest_probe(path: &Path) -> ManifestStatus {
@@ -297,6 +357,10 @@ fn format_message(findings: &[Finding]) -> String {
                     ),
                     Resolution::NoMatch => format!(
                         "{plugin_id} ({}: no matching plugin subdir found)",
+                        path.display()
+                    ),
+                    Resolution::RemoveStaleRenamed { successor_id } => format!(
+                        "{plugin_id} ({}: successor {successor_id} already registered)",
                         path.display()
                     ),
                 };
@@ -441,6 +505,50 @@ mod tests {
             }]
         );
         assert!(findings[0].fix_action().is_none());
+    }
+
+    #[test]
+    fn missing_legacy_screen_recorder_is_removed_when_qol_shot_is_registered() {
+        let registry = registry_with(vec![
+            devlink(
+                "plugin-screen-recorder",
+                "/Users/kaho/repos/private/qol-monorepo/plugins/plugin-screen-recorder",
+            ),
+            devlink(
+                "qol-shot",
+                "/Users/kaho/repos/private/qol-monorepo/plugins/qol-shot",
+            ),
+        ]);
+        let mut probe = HashMap::new();
+        probe.insert(
+            PathBuf::from("/Users/kaho/repos/private/qol-monorepo/plugins/plugin-screen-recorder"),
+            ManifestStatus::Missing,
+        );
+        probe.insert(
+            PathBuf::from("/Users/kaho/repos/private/qol-monorepo/plugins/qol-shot"),
+            ManifestStatus::WithId("qol-shot".into()),
+        );
+
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
+
+        assert_eq!(
+            findings,
+            vec![Finding::Missing {
+                plugin_id: "plugin-screen-recorder".into(),
+                path: PathBuf::from(
+                    "/Users/kaho/repos/private/qol-monorepo/plugins/plugin-screen-recorder"
+                ),
+                resolution: Resolution::RemoveStaleRenamed {
+                    successor_id: "qol-shot".into(),
+                },
+            }]
+        );
+        assert_eq!(
+            findings[0].fix_action(),
+            Some(FixAction::RemoveDevLinkEntries {
+                ids: vec!["plugin-screen-recorder".into()],
+            })
+        );
     }
 
     #[test]
