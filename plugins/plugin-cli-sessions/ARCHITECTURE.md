@@ -169,6 +169,32 @@ presses cycle through just the rows that want you (`nav::next_attention`, pure a
 ordered with attention on top), skipping calm ones - from anywhere, no panel
 focus required.
 
+## Self-healing: anomaly capture (`src/anomaly`)
+
+A misread status (a false `NeedsYou`, say) is rare and content-specific, so it is
+caught in the act rather than guessed at. The reconciler feeds every observed
+frame to an env-gated recorder. The tell it watches for is a *flap*: a session
+that enters `NeedsYou` and releases it on its own within a few seconds. A real
+prompt persists until you answer it; one that clears itself was almost certainly
+a misread. On a flap the recorder dumps a small ring buffer of the surrounding
+frames (screen text, title, phase, status) to `paths::anomalies_dir`, so the
+review has the transition, not just one frame.
+
+It is off unless `CLI_SESSIONS_RECORD_ANOMALIES=1`, so a normal run does no work
+and writes nothing (host left as found); `CLI_SESSIONS_ANOMALY_DIR` overrides the
+location. The state machine (`AnomalyRecorder::note`) is pure and unit-tested; the
+disk dump is a separate `dump` so the decision is testable without I/O.
+
+`tools/heal-from-anomalies.mjs` closes the loop: it replays each captured frame
+through the real classifier (the `classify` example, the same code the daemon
+runs) and stages the frames that still read `NeedsYou` as candidate fixtures under
+`tests/fixtures/candidates` (git-ignored). The true label stays human-gated - a
+real prompt answered within the flap window also flaps - so a confirmed
+false-positive is moved into `tests/fixtures/corpus` with an expected status,
+turning the once-live misread into a permanent regression test. The corpus and
+the `examples/classify` harness let you pin behavior against real captured CC
+screens instead of hand-written strings.
+
 ## Known gaps
 
 The `host` and `poll_secs` config fields are declared in `qol-config.toml` but
