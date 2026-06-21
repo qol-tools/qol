@@ -1,0 +1,39 @@
+     ...
+      59    writeFileSync(`${dir}/${label}.txt`, frame.screen);
+      60    writeFileSync(
+      61      `${dir}/${label}.meta.json`,
+      61 -    JSON.stringify({ title: w.title, at_prompt: w.at_prompt, foreground_basenames: w.foreground_basenames }, null, 2)  
+      62 +    JSON.stringify({ title: w.title, at_prompt: w.at_prompt, foreground_basenames: w.foreground_basenames, expect }, nu
+         +ll, 2)                                                                                                                 
+      63    );
+      63 -  console.log(`saved ${label} (${frame.screen.split("\n").length} lines) -> ${classify(frame)}`);                      
+      64 +  console.log(`saved ${label} (${frame.screen.split("\n").length} lines) expect=${expect} -> ${classify(frame)}`);     
+      65  } else if (mode === "watch") {
+      66    const seconds = Number(process.argv[3] || 600);
+      67    const dir = `${REPO}/plugins/plugin-cli-sessions/tests/fixtures/suspects`;
+
+⏺ Let me check the watcher's early output before capturing more.
+
+  Read 1 file 
+
+⏺ Watcher is idle so far (statuses stable). Let me capture correctly-classified real frames as regression anchors while sessions are in
+  known states.
+
+⏺ Running 1 shell command… 
+  ⎿  $ cd /Users/dev/repos/private/qol-monorepo
+     node plugins/plugin-cli-sessions/tools/capture-classify.mjs snapshot 4 working_me Working
+     node plugins/plugin-cli-sessions/tools/capture-classify.mjs snapshot 1 done_session YourTurn
+     node plugins/plugin-cli-sessions/tools/capture-classify.mjs snapshot 6 c…
+
+✻ Fermenting… (10m 48s · ↓ 41.4k tokens)
+  ⎿  Tip: Connect Claude to your IDE · /ide
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────── Claude Sessions Improvements ──
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ~/repos/private/qol-monorepo · Opus 4.8 xhigh · ctx ▓░░░░ 13% · ⧗ 5h 37% ↻3h · ⧗ wk 20% ↻2d
+  └─ main · 1 modified · 5 untracked
+  └─ as dev <dev@example.com> · global: dev <dev@example.com>
+  └─ ⟳ 1 stale: stale-branch
+
+  ⏵⏵ bypass permissions on · 1 shell

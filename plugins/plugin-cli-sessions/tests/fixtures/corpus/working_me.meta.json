@@ -1,0 +1,15 @@
+{
+  "title": "⠂ Claude Sessions Improvements",
+  "at_prompt": false,
+  "foreground_basenames": [
+    "caffeinate",
+    "node",
+    "node",
+    "mcp@latest",
+    "context7-mcp",
+    "node",
+    "node",
+    "claude"
+  ],
+  "expect": "Working"
+}

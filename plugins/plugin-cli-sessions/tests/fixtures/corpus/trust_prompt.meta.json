@@ -1,0 +1,8 @@
+{
+  "title": "claude",
+  "at_prompt": false,
+  "foreground_basenames": [
+    "claude"
+  ],
+  "expect": "NeedsYou"
+}

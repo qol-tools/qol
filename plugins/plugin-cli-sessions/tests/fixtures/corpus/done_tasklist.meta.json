@@ -1,0 +1,15 @@
+{
+  "title": "\u2733 Claude Sessions Plugin",
+  "at_prompt": false,
+  "foreground_basenames": [
+    "caffeinate",
+    "node",
+    "node",
+    "mcp@latest",
+    "context7-mcp",
+    "node",
+    "node",
+    "claude"
+  ],
+  "expect": "YourTurn"
+}
