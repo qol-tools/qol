@@ -15,6 +15,7 @@ pub struct SessionsView {
     pub registry: Arc<Mutex<Registry>>,
     pub host: Arc<dyn TerminalHost + Send + Sync>,
     pub selected: usize,
+    is_showing: bool,
     last_jumped: Option<u64>,
     pub focus_handle: FocusHandle,
 }
@@ -29,6 +30,7 @@ impl SessionsView {
             registry,
             host,
             selected: 0,
+            is_showing: true,
             last_jumped: None,
             focus_handle: cx.focus_handle(),
         }
@@ -38,13 +40,22 @@ impl SessionsView {
         self.registry.lock().map(|r| r.sorted()).unwrap_or_default()
     }
 
-    pub fn dismiss(&self) -> bool {
+    pub fn is_showing(&self) -> bool {
+        self.is_showing
+    }
+
+    pub fn set_showing(&mut self, showing: bool) {
+        self.is_showing = showing;
+    }
+
+    pub fn dismiss(&mut self) -> bool {
         self.dismiss_with_reason("dismiss")
     }
 
-    pub fn dismiss_with_reason(&self, reason: &'static str) -> bool {
+    pub fn dismiss_with_reason(&mut self, reason: &'static str) -> bool {
         let _scope = qol_gpui::popup_window::reason_scope(reason);
         let hidden = qol_gpui::popup_window::hide_window_by_title(WINDOW_TITLE);
+        self.is_showing = false;
         trace::dismiss(reason, hidden);
         hidden
     }

@@ -1,7 +1,7 @@
 use qol_plugin_api::manifest::PluginManifest;
 
 #[test]
-fn manifest_prewarms_daemon_and_declares_actions() {
+fn manifest_declares_on_demand_actions_and_one_binary() {
     let toml = include_str!("../plugin.toml");
     let m: PluginManifest = toml::from_str(toml).expect("parse plugin.toml");
     m.validate().expect("valid plugin.toml");
@@ -38,13 +38,21 @@ fn manifest_prewarms_daemon_and_declares_actions() {
         Some(vec!["snapshot".to_string()])
     );
 
-    let daemon = m.daemon.as_ref().expect(
-        "CLI Sessions pre-warms a hidden daemon so opening it is instant and focuses before \
-         keystrokes can leak to the terminal underneath (Linux gpui cold-start race)",
+    let daemon = m.daemon.as_ref().expect("daemon");
+    assert!(
+        daemon.enabled,
+        "CLI Sessions must be tray-owned and pid-tracked"
     );
-    assert!(daemon.enabled);
     assert_eq!(daemon.command, "cli-sessions");
     assert_eq!(daemon.socket.as_deref(), Some("/tmp/qol-cli-sessions.sock"));
+    assert!(
+        std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.qol-tray-dev-autostart"
+        ))
+        .is_file(),
+        "dev mode must autostart the daemon so doctor can track its pid"
+    );
 
     let shortcut_actions: Vec<&str> = m.shortcuts.iter().map(|s| s.action.as_str()).collect();
     assert_eq!(

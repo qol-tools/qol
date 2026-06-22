@@ -26,6 +26,11 @@ args = ["next"]
 label = "Snapshot All Sessions"
 args = ["snapshot"]
 
+[daemon]
+enabled = true
+command = "cli-sessions"
+socket = "/tmp/qol-cli-sessions.sock"
+
 [capabilities]
 gpui = true
 
