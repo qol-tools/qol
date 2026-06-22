@@ -3,8 +3,8 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
-pub(crate) struct SerialClient {
-    stream: TcpStream,
+pub(crate) struct SerialClient<S = TcpStream> {
+    stream: S,
     buffer: String,
 }
 
@@ -33,7 +33,20 @@ pub(crate) fn connect(port: u16, timeout: Duration) -> Result<SerialClient> {
     }
 }
 
-impl SerialClient {
+impl<S: Read + Write> SerialClient<S> {
+    #[cfg(test)]
+    fn from_transport(stream: S) -> Self {
+        Self {
+            stream,
+            buffer: String::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn transport(&self) -> &S {
+        &self.stream
+    }
+
     pub(crate) fn send_line(&mut self, line: &str) -> Result<()> {
         self.stream
             .write_all(format!("{line}\n").as_bytes())
@@ -102,85 +115,81 @@ impl SerialClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufRead, BufReader};
-    use std::net::TcpListener;
+    use std::collections::VecDeque;
+    use std::io;
 
-    fn streaming_server(chunks: Vec<(&'static str, u64)>) -> (std::thread::JoinHandle<()>, u16) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let handle = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            for (chunk, delay_ms) in chunks {
-                std::thread::sleep(Duration::from_millis(delay_ms));
-                stream.write_all(chunk.as_bytes()).unwrap();
-            }
-        });
-        (handle, port)
+    struct MockStream {
+        reads: VecDeque<Vec<u8>>,
+        written: Vec<u8>,
     }
 
-    fn echoing_server(
-        replies: Vec<&'static str>,
-        assert_lines: fn(usize, &str),
-    ) -> (std::thread::JoinHandle<()>, u16) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let handle = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut stream = stream;
-            for (index, reply) in replies.into_iter().enumerate() {
-                let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
-                assert_lines(index, &line);
-                stream.write_all(line.as_bytes()).unwrap();
-                stream.write_all(reply.as_bytes()).unwrap();
+    impl MockStream {
+        fn new(reads: &[&str]) -> Self {
+            Self {
+                reads: reads.iter().map(|s| s.as_bytes().to_vec()).collect(),
+                written: Vec::new(),
             }
-        });
-        (handle, port)
+        }
     }
+
+    impl Read for MockStream {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let Some(mut chunk) = self.reads.pop_front() else {
+                return Ok(0);
+            };
+            let n = chunk.len().min(buf.len());
+            buf[..n].copy_from_slice(&chunk[..n]);
+            if n < chunk.len() {
+                self.reads.push_front(chunk.split_off(n));
+            }
+            Ok(n)
+        }
+    }
+
+    impl Write for MockStream {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.written.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn client(reads: &[&str]) -> SerialClient<MockStream> {
+        SerialClient::from_transport(MockStream::new(reads))
+    }
+
+    const TIMEOUT: Duration = Duration::from_secs(1);
 
     #[test]
     fn wait_for_finds_marker_split_across_reads() {
-        let (server, port) = streaming_server(vec![("hello wor", 0), ("ld!\nmore", 50)]);
-        let mut client = connect(port, Duration::from_secs(2)).unwrap();
-        let consumed = client.wait_for("world", Duration::from_secs(2)).unwrap();
+        let mut client = client(&["hello wor", "ld!\nmore"]);
+        let consumed = client.wait_for("world", TIMEOUT).unwrap();
         assert_eq!(consumed, "hello world");
-        server.join().unwrap();
     }
 
     #[test]
     fn wait_for_any_reports_which_marker_matched() {
-        let (server, port) = streaming_server(vec![("boot noise\nlogin: ", 0)]);
-        let mut client = connect(port, Duration::from_secs(2)).unwrap();
-        let (index, consumed) = client
-            .wait_for_any(&[":~#", "login:"], Duration::from_secs(2))
-            .unwrap();
+        let mut client = client(&["boot noise\nlogin: "]);
+        let (index, consumed) = client.wait_for_any(&[":~#", "login:"], TIMEOUT).unwrap();
         assert_eq!(index, 1, "consumed: {consumed}");
         assert!(consumed.ends_with("login:"), "consumed: {consumed}");
-        server.join().unwrap();
     }
 
     #[test]
     fn run_command_ignores_echo_and_checks_exit_code() {
-        let (server, port) = echoing_server(vec!["file-a\nQOL-RC-0\n"], |_, line| {
-            assert_eq!(line, "ls /tmp; echo QOL-\"RC\"-$?\n");
-        });
-        let mut client = connect(port, Duration::from_secs(2)).unwrap();
-        let output = client
-            .run_command("ls /tmp", Duration::from_secs(2))
-            .unwrap();
+        let mut client = client(&["ls /tmp; echo QOL-\"RC\"-$?\n", "file-a\nQOL-RC-0\n"]);
+        let output = client.run_command("ls /tmp", TIMEOUT).unwrap();
         assert!(output.contains("file-a"), "output: {output}");
-        server.join().unwrap();
+        assert_eq!(client.transport().written, b"ls /tmp; echo QOL-\"RC\"-$?\n");
     }
 
     #[test]
     fn run_command_fails_on_nonzero_exit() {
-        let (server, port) = echoing_server(vec!["QOL-RC-1\n"], |_, _| {});
-        let mut client = connect(port, Duration::from_secs(2)).unwrap();
-        let error = client
-            .run_command("false", Duration::from_secs(2))
-            .unwrap_err();
+        let mut client = client(&["false; echo QOL-\"RC\"-$?\n", "QOL-RC-1\n"]);
+        let error = client.run_command("false", TIMEOUT).unwrap_err();
         assert!(error.to_string().contains("exited 1"), "error: {error}");
-        server.join().unwrap();
     }
 }
