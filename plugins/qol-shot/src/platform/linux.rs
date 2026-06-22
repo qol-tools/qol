@@ -224,6 +224,49 @@ pub fn capture_screenshot(rect: &Rect, output_file: &Path) -> Result<()> {
     Err(anyhow!("ffmpeg screenshot capture exited with {status}"))
 }
 
+pub fn copy_image_to_clipboard(path: &Path) -> Result<()> {
+    let wl_copy_error = match copy_image_with("wl-copy", &["--type", "image/png"], path) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    let xclip_error = match copy_image_with(
+        "xclip",
+        &["-selection", "clipboard", "-t", "image/png", "-i"],
+        path,
+    ) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+
+    Err(anyhow!(
+        "failed to copy image to clipboard; wl-copy: {wl_copy_error:#}; xclip: {xclip_error:#}"
+    ))
+}
+
+fn copy_image_with(program: &str, args: &[&str], path: &Path) -> Result<()> {
+    let file = File::open(path).with_context(|| {
+        format!(
+            "failed to open screenshot for clipboard: {}",
+            path.display()
+        )
+    })?;
+    let status = Command::new(program)
+        .args(args)
+        .stdin(Stdio::from(file))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| format!("failed to run {program}"))?;
+
+    if status.success() {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "{program} image clipboard copy exited with {status}"
+    ))
+}
+
 pub fn recording_format(format: &str) -> String {
     format.to_string()
 }

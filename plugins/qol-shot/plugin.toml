@@ -26,6 +26,7 @@ args = ["settings"]
 label = "QoL Shot"
 items = [
     { type = "checkbox", id = "audio-enable", label = "Enable Audio", checked = true, action = "toggle-config", config_key = "audio.enabled" },
+    { type = "checkbox", id = "screenshot-auto-copy", label = "Copy Screenshot to Clipboard", checked = true, action = "toggle-config", config_key = "screenshot.auto_copy" },
 ]
 
 # No background daemon needed for this plugin

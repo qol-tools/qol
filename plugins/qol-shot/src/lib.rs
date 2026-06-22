@@ -8,7 +8,7 @@ pub mod recording;
 pub mod screenshot;
 mod settings;
 
-pub use config::{AudioConfig, Config, VideoConfig};
+pub use config::{AudioConfig, Config, ScreenshotConfig, VideoConfig};
 pub use geometry::{Monitor, Rect};
 
 pub const PLUGIN_ID: &str = "qol-shot";

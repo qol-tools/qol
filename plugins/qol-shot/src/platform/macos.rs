@@ -21,8 +21,11 @@ static STATUS_OVERLAY_PID: Mutex<Option<u32>> = Mutex::new(None);
 const SWIFT_PRELUDE: &str = include_str!("macos_swift/prelude.swift");
 const REGION_SELECTOR_SWIFT: &str = include_str!("macos_swift/region_selector.swift");
 const STATUS_OVERLAY_SWIFT: &str = include_str!("macos_swift/status_overlay.swift");
+const CLIPBOARD_WRITER_SWIFT: &str = include_str!("macos_swift/clipboard_writer.swift");
 const REGION_SELECTOR_HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/region-selector"));
 const STATUS_OVERLAY_HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/status-overlay"));
+const CLIPBOARD_WRITER_HELPER: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/clipboard-writer"));
 
 type CGDirectDisplayID = u32;
 
@@ -138,6 +141,37 @@ pub fn capture_screenshot(rect: &Rect, output_file: &Path) -> Result<()> {
 
     Err(anyhow!(
         "screencapture screenshot capture exited with {status}"
+    ))
+}
+
+pub fn copy_image_to_clipboard(path: &Path) -> Result<()> {
+    let helper = ensure_swift_helper(
+        "clipboard-writer",
+        CLIPBOARD_WRITER_SWIFT,
+        CLIPBOARD_WRITER_HELPER,
+    )
+    .context("failed to install embedded clipboard writer helper")?;
+
+    let output = Command::new(&helper)
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .inspect_err(|_| {
+            let _ = fs::remove_file(&helper);
+        })
+        .context("failed to start compiled macOS clipboard writer")?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(anyhow!(
+        "macOS clipboard writer exited with {}: {}",
+        output.status,
+        stderr.trim()
     ))
 }
 

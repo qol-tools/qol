@@ -1,17 +1,28 @@
 use anyhow::{anyhow, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::{geometry, platform, Rect};
+use crate::{geometry, platform, Config, Rect};
 
-pub fn capture_screenshot() -> Result<Option<PathBuf>> {
+pub fn capture_screenshot(config: &Config) -> Result<Option<PathBuf>> {
     let Some(rect) = select_screenshot_rect()? else {
         return Ok(None);
     };
 
     let output_file = crate::output::screenshot_output_file_path()?;
     platform::capture_screenshot(&rect, &output_file)?;
+    copy_screenshot_if_enabled(config, &output_file);
     platform::show_notification("Screenshot saved", &output_file.display().to_string(), 1800);
     Ok(Some(output_file))
+}
+
+fn copy_screenshot_if_enabled(config: &Config, output_file: &Path) {
+    if !config.screenshot.auto_copy {
+        return;
+    }
+
+    if let Err(error) = platform::copy_image_to_clipboard(output_file) {
+        eprintln!("[qol-shot] failed to copy screenshot to clipboard: {error:#}");
+    }
 }
 
 fn select_screenshot_rect() -> Result<Option<Rect>> {

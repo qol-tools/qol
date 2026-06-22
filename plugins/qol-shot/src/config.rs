@@ -6,6 +6,8 @@ pub struct Config {
     pub audio: AudioConfig,
     #[serde(default)]
     pub video: VideoConfig,
+    #[serde(default)]
+    pub screenshot: ScreenshotConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -103,6 +105,18 @@ impl Default for VideoConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScreenshotConfig {
+    #[serde(default = "default_true")]
+    pub auto_copy: bool,
+}
+
+impl Default for ScreenshotConfig {
+    fn default() -> Self {
+        Self { auto_copy: true }
+    }
+}
+
 fn default_true() -> bool {
     true
 }
@@ -129,4 +143,23 @@ fn default_framerate() -> u32 {
 
 fn default_format() -> String {
     "mov".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screenshot_auto_copy_defaults_true() {
+        let config: Config = serde_json::from_str("{}").unwrap();
+
+        assert!(config.screenshot.auto_copy);
+    }
+
+    #[test]
+    fn screenshot_auto_copy_can_be_disabled() {
+        let config: Config = serde_json::from_str(r#"{"screenshot":{"auto_copy":false}}"#).unwrap();
+
+        assert!(!config.screenshot.auto_copy);
+    }
 }

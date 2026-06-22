@@ -7,9 +7,10 @@ use std::process::Command;
 const PRELUDE: &str = "src/platform/macos_swift/prelude.swift";
 const REGION_SELECTOR: &str = "src/platform/macos_swift/region_selector.swift";
 const STATUS_OVERLAY: &str = "src/platform/macos_swift/status_overlay.swift";
+const CLIPBOARD_WRITER: &str = "src/platform/macos_swift/clipboard_writer.swift";
 
 fn main() -> Result<(), Box<dyn Error>> {
-    for path in [PRELUDE, REGION_SELECTOR, STATUS_OVERLAY] {
+    for path in [PRELUDE, REGION_SELECTOR, STATUS_OVERLAY, CLIPBOARD_WRITER] {
         println!("cargo:rerun-if-changed={path}");
     }
 
@@ -22,6 +23,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let swift_target = swift_target(&target)?;
     compile_helper(&out_dir, "region-selector", REGION_SELECTOR, swift_target)?;
     compile_helper(&out_dir, "status-overlay", STATUS_OVERLAY, swift_target)?;
+    compile_helper(&out_dir, "clipboard-writer", CLIPBOARD_WRITER, swift_target)?;
     Ok(())
 }
 
