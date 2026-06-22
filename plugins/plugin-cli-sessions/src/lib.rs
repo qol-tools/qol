@@ -9,6 +9,7 @@ pub mod paths;
 pub mod persist;
 pub mod placement;
 pub mod registry;
+pub mod selection;
 pub mod service;
 pub mod signal;
 pub mod snapshot;

@@ -1,16 +1,5 @@
 use crate::registry::SessionState;
 
-pub(super) fn jump_requested(reason: &'static str, index: usize, row_count: usize) {
-    #[cfg(debug_assertions)]
-    qol_runtime::probe!(
-        "CLI_SESSIONS_JUMP",
-        "phase=request reason={reason} index={index} rows={row_count}"
-    );
-
-    #[cfg(not(debug_assertions))]
-    let _ = (reason, index, row_count);
-}
-
 pub(super) fn jump_missing(reason: &'static str, index: usize, row_count: usize) {
     #[cfg(debug_assertions)]
     qol_runtime::probe!(

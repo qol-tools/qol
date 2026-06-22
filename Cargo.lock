@@ -68,7 +68,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alt-tab"
-version = "0.22.1"
+version = "0.22.0"
 dependencies = [
  "gpui",
  "image",
@@ -3917,10 +3917,14 @@ checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
 name = "launcher"
-version = "1.12.1"
+version = "1.12.0"
 dependencies = [
+ "block2",
  "gpui",
  "notify",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "proptest",
  "qol-config",
  "qol-frecency",
@@ -5334,6 +5338,7 @@ dependencies = [
  "anyhow",
  "gpui",
  "libc",
+ "proptest",
  "qol-config",
  "qol-gpui",
  "qol-plugin-api",
