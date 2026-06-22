@@ -88,7 +88,6 @@ impl Registry {
         out.sort_by(|a, b| {
             rank(a.status)
                 .cmp(&rank(b.status))
-                .then(b.last_activity.cmp(&a.last_activity))
                 .then(a.window_id.cmp(&b.window_id))
         });
         out

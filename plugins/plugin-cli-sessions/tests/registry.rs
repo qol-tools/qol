@@ -58,17 +58,38 @@ fn sorted_orders_red_yellow_green_unknown_ack() {
 }
 
 #[test]
-fn within_a_tier_more_recent_sorts_first() {
+fn within_a_tier_orders_by_window_id_not_recency() {
     let mut r = Registry::default();
-    r.upsert(state(1, Status::NeedsYou, 5));
     r.upsert(state(2, Status::NeedsYou, 9));
+    r.upsert(state(1, Status::NeedsYou, 5));
     r.upsert(state(3, Status::YourTurn, 20));
     let ids: Vec<_> = r.sorted().into_iter().map(|s| s.window_id).collect();
     assert_eq!(
         ids,
-        vec![2, 1, 3],
-        "needs-you before your-turn; within needs-you the most recent comes first"
+        vec![1, 2, 3],
+        "needs-you before your-turn; within a tier, stable by window_id (not last_activity)"
     );
+}
+
+#[test]
+fn same_tier_order_is_stable_when_activity_changes() {
+    let order = |a_last: u64, b_last: u64| {
+        let mut r = Registry::default();
+        r.upsert(state(7, Status::YourTurn, a_last));
+        r.upsert(state(4, Status::YourTurn, b_last));
+        r.sorted()
+            .into_iter()
+            .map(|s| s.window_id)
+            .collect::<Vec<_>>()
+    };
+    let cases = [(1, 100), (100, 1), (50, 50)];
+    for (a, b) in cases {
+        assert_eq!(
+            order(a, b),
+            vec![4, 7],
+            "rows must not reshuffle as last_activity ticks (a={a}, b={b})"
+        );
+    }
 }
 
 #[test]
