@@ -156,7 +156,25 @@ pub fn dismiss_to_ghost_with(
     ));
 }
 
+fn trace_dismiss_decision(
+    label: &'static str,
+    event: &str,
+    showing: bool,
+    active: &str,
+    guard: std::time::Instant,
+    decision: &str,
+) {
+    qol_runtime::probe!(
+        "GHOST_DISMISS",
+        "label={label} event={event} showing={showing} active={active} guard_ms={} decision={decision}",
+        guard
+            .saturating_duration_since(std::time::Instant::now())
+            .as_millis(),
+    );
+}
+
 pub fn track_dismiss<V: gpui::Focusable + 'static>(
+    label: &'static str,
     focus_handle: &gpui::FocusHandle,
     window: &mut gpui::Window,
     get_blur_guard: impl Fn(&V) -> std::time::Instant + 'static,
@@ -177,12 +195,17 @@ pub fn track_dismiss<V: gpui::Focusable + 'static>(
     let is_showing_1 = is_showing.clone();
     let on_dismiss_1 = on_dismiss_cell.clone();
     let blur_sub = cx.on_blur(focus_handle, window, move |view, window, cx| {
-        if !is_showing_1(view) {
+        let showing = is_showing_1(view);
+        let guard = get_blur_guard_1(view);
+        if !showing {
+            trace_dismiss_decision(label, "blur", showing, "na", guard, "skip_hidden");
             return;
         }
-        if std::time::Instant::now() < get_blur_guard_1(view) {
+        if std::time::Instant::now() < guard {
+            trace_dismiss_decision(label, "blur", showing, "na", guard, "skip_guard");
             return;
         }
+        trace_dismiss_decision(label, "blur", showing, "na", guard, "dismiss");
         (*on_dismiss_1.borrow_mut())(view, window, cx);
     });
 
@@ -190,19 +213,26 @@ pub fn track_dismiss<V: gpui::Focusable + 'static>(
     let is_showing_2 = is_showing.clone();
     let on_dismiss_2 = on_dismiss_cell.clone();
     let active_sub = cx.observe_window_activation(window, move |view, window, cx| {
-        if !is_showing_2(view) {
-            return;
-        }
-        if window.is_window_active() {
-            return;
-        }
+        let showing = is_showing_2(view);
+        let active = window.is_window_active();
         let guard = get_blur_guard_2(view);
+        if !showing {
+            let active = if active { "true" } else { "false" };
+            trace_dismiss_decision(label, "activation", showing, active, guard, "skip_hidden");
+            return;
+        }
+        if active {
+            trace_dismiss_decision(label, "activation", showing, "true", guard, "skip_active");
+            return;
+        }
         if std::time::Instant::now() >= guard {
+            trace_dismiss_decision(label, "activation", showing, "false", guard, "dismiss");
             (*on_dismiss_2.borrow_mut())(view, window, cx);
             return;
         }
         let wait = guard.saturating_duration_since(std::time::Instant::now())
             + std::time::Duration::from_millis(20);
+        trace_dismiss_decision(label, "activation", showing, "false", guard, "defer");
         let get_blur_guard = get_blur_guard_2.clone();
         let is_showing = is_showing_2.clone();
         let on_dismiss = on_dismiss_2.clone();
@@ -212,18 +242,52 @@ pub fn track_dismiss<V: gpui::Focusable + 'static>(
                 cx.background_executor().timer(wait).await;
                 let _ = cx.update_window(window_handle, move |_, window, cx| {
                     if window.is_window_active() {
+                        trace_dismiss_decision(
+                            label,
+                            "activation_wait",
+                            true,
+                            "true",
+                            std::time::Instant::now(),
+                            "skip_active",
+                        );
                         return;
                     }
                     let Some(view_handle) = view_handle.upgrade() else {
                         return;
                     };
                     view_handle.update(cx, |view, cx| {
-                        if !is_showing(view) {
+                        let showing = is_showing(view);
+                        let guard = get_blur_guard(view);
+                        if !showing {
+                            trace_dismiss_decision(
+                                label,
+                                "activation_wait",
+                                showing,
+                                "false",
+                                guard,
+                                "skip_hidden",
+                            );
                             return;
                         }
-                        if std::time::Instant::now() < get_blur_guard(view) {
+                        if std::time::Instant::now() < guard {
+                            trace_dismiss_decision(
+                                label,
+                                "activation_wait",
+                                showing,
+                                "false",
+                                guard,
+                                "skip_guard",
+                            );
                             return;
                         }
+                        trace_dismiss_decision(
+                            label,
+                            "activation_wait",
+                            showing,
+                            "false",
+                            guard,
+                            "dismiss",
+                        );
                         (*on_dismiss.borrow_mut())(view, window, cx);
                     });
                 });
@@ -275,6 +339,14 @@ pub fn track_dismiss<V: gpui::Focusable + 'static>(
                         if has_focus {
                             continue;
                         }
+                        trace_dismiss_decision(
+                            label,
+                            "poll",
+                            true,
+                            "false",
+                            std::time::Instant::now(),
+                            "dismiss",
+                        );
                         let view_handle_clone = view_handle.clone();
                         let on_dismiss_clone = on_dismiss_3.clone();
                         let _ = cx.update_window(window_handle, move |_, window, cx| {

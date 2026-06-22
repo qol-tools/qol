@@ -32,6 +32,7 @@ impl Render for LauncherView {
 
         if self.dismiss_sub.is_none() {
             self.dismiss_sub = Some(qol_gpui::ghost::track_dismiss(
+                "launcher",
                 &self.focus_handle,
                 window,
                 |this: &Self| this.blur_guard_until,

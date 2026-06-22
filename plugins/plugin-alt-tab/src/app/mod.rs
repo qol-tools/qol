@@ -106,6 +106,7 @@ impl AltTabApp {
         );
 
         let dismiss_sub = qol_gpui::ghost::track_dismiss(
+            "alt-tab",
             &focus_handle,
             window,
             |this: &Self| this.blur_guard_until,
