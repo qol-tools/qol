@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -48,9 +48,8 @@ fn greeting_version(value: &Value) -> String {
     format!("{}.{}.{}", part("major"), part("minor"), part("micro"))
 }
 
-pub(crate) struct QmpClient {
-    stream: TcpStream,
-    reader: BufReader<TcpStream>,
+pub(crate) struct QmpClient<S = TcpStream> {
+    reader: BufReader<S>,
     pending_events: Vec<String>,
     pub(crate) qemu_version: String,
 }
@@ -60,7 +59,12 @@ pub(crate) fn connect(port: u16, timeout: Duration) -> Result<QmpClient> {
     let address = format!("127.0.0.1:{port}");
     loop {
         match TcpStream::connect(&address) {
-            Ok(stream) => return QmpClient::handshake(stream),
+            Ok(stream) => {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .context("failed to set qmp read timeout")?;
+                return QmpClient::handshake(stream);
+            }
             Err(error) => {
                 if Instant::now() >= deadline {
                     return Err(error)
@@ -72,15 +76,10 @@ pub(crate) fn connect(port: u16, timeout: Duration) -> Result<QmpClient> {
     }
 }
 
-impl QmpClient {
-    fn handshake(stream: TcpStream) -> Result<Self> {
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .context("failed to set qmp read timeout")?;
-        let reader = BufReader::new(stream.try_clone().context("failed to clone qmp stream")?);
+impl<S: Read + Write> QmpClient<S> {
+    fn handshake(stream: S) -> Result<Self> {
         let mut client = Self {
-            stream,
-            reader,
+            reader: BufReader::new(stream),
             pending_events: Vec::new(),
             qemu_version: String::new(),
         };
@@ -100,7 +99,7 @@ impl QmpClient {
         if let Some(arguments) = arguments {
             request["arguments"] = arguments;
         }
-        writeln!(self.stream, "{request}")
+        writeln!(self.reader.get_mut(), "{request}")
             .with_context(|| format!("failed to send qmp command {command}"))?;
         loop {
             let line = self.read_line()?;
@@ -115,7 +114,7 @@ impl QmpClient {
 
     pub(crate) fn fire(&mut self, command: &str) -> Result<()> {
         let request = serde_json::json!({ "execute": command });
-        writeln!(self.stream, "{request}")
+        writeln!(self.reader.get_mut(), "{request}")
             .with_context(|| format!("failed to send qmp command {command}"))
     }
 
@@ -225,141 +224,144 @@ impl QmpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::TcpListener;
+    use std::io;
 
-    fn fake_server(
-        replies: Vec<&'static str>,
-        assert_lines: fn(usize, &str),
-    ) -> (std::thread::JoinHandle<()>, u16) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let handle = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut stream = stream;
-            writeln!(
-                stream,
-                r#"{{"QMP":{{"version":{{"qemu":{{"major":9,"minor":2,"micro":0}}}},"capabilities":[]}}}}"#
-            )
-            .unwrap();
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            writeln!(stream, r#"{{"return":{{}}}}"#).unwrap();
-            for (index, reply) in replies.into_iter().enumerate() {
-                line.clear();
-                reader.read_line(&mut line).unwrap();
-                assert_lines(index, &line);
-                writeln!(stream, "{reply}").unwrap();
-            }
-        });
-        (handle, port)
+    const GREETING: &str =
+        r#"{"QMP":{"version":{"qemu":{"major":9,"minor":2,"micro":0}},"capabilities":[]}}"#;
+
+    struct MockStream {
+        reads: Vec<u8>,
+        pos: usize,
+        written: Vec<u8>,
+    }
+
+    impl Read for MockStream {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let n = (self.reads.len() - self.pos).min(buf.len());
+            buf[..n].copy_from_slice(&self.reads[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    impl Write for MockStream {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.written.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn client(replies: &[&str]) -> QmpClient<MockStream> {
+        let mut script = String::new();
+        script.push_str(GREETING);
+        script.push('\n');
+        script.push_str(r#"{"return":{}}"#);
+        script.push('\n');
+        for reply in replies {
+            script.push_str(reply);
+            script.push('\n');
+        }
+        QmpClient::handshake(MockStream {
+            reads: script.into_bytes(),
+            pos: 0,
+            written: Vec::new(),
+        })
+        .unwrap()
+    }
+
+    fn requests(client: &QmpClient<MockStream>) -> Vec<Value> {
+        String::from_utf8(client.reader.get_ref().written.clone())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
     }
 
     #[test]
     fn send_keys_builds_qcode_chord() {
-        let (server, port) = fake_server(vec![r#"{"return":{}}"#], |_, line| {
-            let request: serde_json::Value = serde_json::from_str(line).unwrap();
-            assert_eq!(request["execute"], "send-key", "line: {line}");
-            let chord: Vec<(&str, &str)> = request["arguments"]["keys"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|key| (key["type"].as_str().unwrap(), key["data"].as_str().unwrap()))
-                .collect();
-            assert_eq!(chord, [("qcode", "ctrl"), ("qcode", "c")], "line: {line}");
-        });
-        let mut client = connect(port, Duration::from_secs(2)).unwrap();
+        let mut client = client(&[r#"{"return":{}}"#]);
         client
             .send_keys(&["ctrl".to_string(), "c".to_string()])
             .unwrap();
-        server.join().unwrap();
+        let request = &requests(&client)[1];
+        assert_eq!(request["execute"], "send-key");
+        let chord: Vec<(&str, &str)> = request["arguments"]["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|key| (key["type"].as_str().unwrap(), key["data"].as_str().unwrap()))
+            .collect();
+        assert_eq!(chord, [("qcode", "ctrl"), ("qcode", "c")]);
     }
 
     #[test]
     fn screendump_sends_filename() {
-        let (server, port) = fake_server(vec![r#"{"return":{}}"#], |_, line| {
-            assert!(line.contains(r#""execute":"screendump""#), "line: {line}");
-            assert!(line.contains("shot.ppm"), "line: {line}");
-        });
-        let mut client = connect(port, Duration::from_secs(2)).unwrap();
+        let mut client = client(&[r#"{"return":{}}"#]);
         client.screendump(Path::new("/a/b/shot.ppm")).unwrap();
-        server.join().unwrap();
+        let request = &requests(&client)[1];
+        assert_eq!(request["execute"], "screendump");
+        assert_eq!(request["arguments"]["filename"], "/a/b/shot.ppm");
     }
 
     #[test]
     fn attach_usb_stick_adds_blockdev_then_device() {
-        let (server, port) = fake_server(
-            vec![r#"{"return":{}}"#, r#"{"return":{}}"#],
-            |index, line| match index {
-                0 => {
-                    assert!(line.contains(r#""execute":"blockdev-add""#), "line: {line}");
-                    assert!(line.contains(r#""node-name":"qolusb""#), "line: {line}");
-                    assert!(line.contains("usb-stick.raw"), "line: {line}");
-                }
-                1 => {
-                    assert!(line.contains(r#""execute":"device_add""#), "line: {line}");
-                    assert!(line.contains(r#""driver":"usb-storage""#), "line: {line}");
-                    assert!(line.contains(r#""bus":"xhci.0""#), "line: {line}");
-                }
-                other => panic!("unexpected command index {other}: {line}"),
-            },
-        );
-        let mut client = connect(port, Duration::from_secs(2)).unwrap();
+        let mut client = client(&[r#"{"return":{}}"#, r#"{"return":{}}"#]);
         client
             .attach_usb_stick(Path::new("/a/b/usb-stick.raw"))
             .unwrap();
-        server.join().unwrap();
+        let reqs = requests(&client);
+        assert_eq!(reqs[1]["execute"], "blockdev-add");
+        assert_eq!(reqs[1]["arguments"]["node-name"], "qolusb");
+        assert_eq!(
+            reqs[1]["arguments"]["file"]["filename"],
+            "/a/b/usb-stick.raw"
+        );
+        assert_eq!(reqs[2]["execute"], "device_add");
+        assert_eq!(reqs[2]["arguments"]["driver"], "usb-storage");
+        assert_eq!(reqs[2]["arguments"]["bus"], "xhci.0");
     }
 
     #[test]
     fn detach_usb_stick_deletes_device_waits_then_drops_blockdev() {
-        let (server, port) = fake_server(
-            vec![
-                "{\"event\":\"DEVICE_DELETED\",\"data\":{\"device\":\"qolusbdev\"},\"timestamp\":{\"seconds\":0,\"microseconds\":0}}\n{\"return\":{}}",
-                r#"{"return":{}}"#,
-            ],
-            |index, line| match index {
-                0 => assert!(line.contains(r#""execute":"device_del""#), "line: {line}"),
-                1 => assert!(line.contains(r#""execute":"blockdev-del""#), "line: {line}"),
-                other => panic!("unexpected command index {other}: {line}"),
-            },
-        );
-        let mut client = connect(port, Duration::from_secs(2)).unwrap();
+        let mut client = client(&[
+            "{\"event\":\"DEVICE_DELETED\",\"data\":{\"device\":\"qolusbdev\"},\"timestamp\":{\"seconds\":0,\"microseconds\":0}}\n{\"return\":{}}",
+            r#"{"return":{}}"#,
+        ]);
         client.detach_usb_stick().unwrap();
-        server.join().unwrap();
+        let reqs = requests(&client);
+        assert_eq!(reqs[1]["execute"], "device_del");
+        assert_eq!(reqs[2]["execute"], "blockdev-del");
     }
 
     #[test]
     fn wait_event_skips_unrelated_lines_until_match() {
-        let (server, port) = fake_server(
-            vec![
-                "{\"return\":{}}\n{\"event\":\"NIC_RX_FILTER_CHANGED\",\"timestamp\":{\"seconds\":0,\"microseconds\":0}}\n{\"event\":\"DEVICE_DELETED\",\"data\":{\"device\":\"qolusbdev\"},\"timestamp\":{\"seconds\":0,\"microseconds\":0}}",
-            ],
-            |_, line| assert!(line.contains(r#""execute":"query-status""#), "line: {line}"),
-        );
-        let mut client = connect(port, Duration::from_secs(2)).unwrap();
+        let mut client = client(&[
+            "{\"return\":{}}\n{\"event\":\"NIC_RX_FILTER_CHANGED\",\"timestamp\":{\"seconds\":0,\"microseconds\":0}}\n{\"event\":\"DEVICE_DELETED\",\"data\":{\"device\":\"qolusbdev\"},\"timestamp\":{\"seconds\":0,\"microseconds\":0}}",
+        ]);
         client.execute("query-status", None).unwrap();
         client
             .wait_event("DEVICE_DELETED", Duration::from_secs(2))
             .unwrap();
-        server.join().unwrap();
+        assert_eq!(requests(&client)[1]["execute"], "query-status");
     }
 
     #[test]
     fn disk_snapshot_targets_qoldisk() {
-        let (server, port) = fake_server(vec![r#"{"return":{}}"#], |_, line| {
-            assert!(
-                line.contains(r#""execute":"blockdev-snapshot-sync""#),
-                "line: {line}"
-            );
-            assert!(line.contains(r#""device":"qoldisk""#), "line: {line}");
-            assert!(line.contains("overlay-snap"), "line: {line}");
-        });
-        let mut client = connect(port, Duration::from_secs(2)).unwrap();
+        let mut client = client(&[r#"{"return":{}}"#]);
         client
             .disk_snapshot(Path::new("/a/b/overlay-snap-1.qcow2"))
             .unwrap();
-        server.join().unwrap();
+        let request = &requests(&client)[1];
+        assert_eq!(request["execute"], "blockdev-snapshot-sync");
+        assert_eq!(request["arguments"]["device"], "qoldisk");
+        assert_eq!(
+            request["arguments"]["snapshot-file"],
+            "/a/b/overlay-snap-1.qcow2"
+        );
     }
 
     #[test]
@@ -399,73 +401,28 @@ mod tests {
 
     #[test]
     fn connects_negotiates_and_queries_status() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut stream = stream;
-            writeln!(
-                stream,
-                r#"{{"QMP":{{"version":{{"qemu":{{"major":9,"minor":2,"micro":0}}}},"capabilities":[]}}}}"#
-            )
-            .unwrap();
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            assert!(line.contains("qmp_capabilities"), "first command: {line}");
-            writeln!(stream, r#"{{"return":{{}}}}"#).unwrap();
-            line.clear();
-            reader.read_line(&mut line).unwrap();
-            assert!(line.contains("query-status"), "second command: {line}");
-            writeln!(
-                stream,
-                r#"{{"event":"NIC_RX_FILTER_CHANGED","timestamp":{{"seconds":0,"microseconds":0}}}}"#
-            )
-            .unwrap();
-            writeln!(
-                stream,
-                r#"{{"return":{{"status":"running","running":true}}}}"#
-            )
-            .unwrap();
-        });
-        let mut client = connect(port, Duration::from_secs(2)).unwrap();
+        let mut client = client(&[
+            r#"{"event":"NIC_RX_FILTER_CHANGED","timestamp":{"seconds":0,"microseconds":0}}"#,
+            r#"{"return":{"status":"running","running":true}}"#,
+        ]);
         assert_eq!(client.qemu_version, "9.2.0");
         assert_eq!(client.query_status().unwrap(), "running");
-        server.join().unwrap();
+        let reqs = requests(&client);
+        assert_eq!(reqs[0]["execute"], "qmp_capabilities");
+        assert_eq!(reqs[1]["execute"], "query-status");
     }
 
     #[test]
     fn execute_sends_arguments_payload() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut stream = stream;
-            writeln!(
-                stream,
-                r#"{{"QMP":{{"version":{{"qemu":{{"major":9,"minor":2,"micro":0}}}},"capabilities":[]}}}}"#
-            )
-            .unwrap();
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            writeln!(stream, r#"{{"return":{{}}}}"#).unwrap();
-            line.clear();
-            reader.read_line(&mut line).unwrap();
-            assert!(line.contains(r#""execute":"screendump""#), "line: {line}");
-            assert!(
-                line.contains(r#""filename":"/a/b/shot.ppm""#),
-                "line: {line}"
-            );
-            writeln!(stream, r#"{{"return":{{}}}}"#).unwrap();
-        });
-        let mut client = connect(port, Duration::from_secs(2)).unwrap();
+        let mut client = client(&[r#"{"return":{}}"#]);
         client
             .execute(
                 "screendump",
                 Some(serde_json::json!({"filename": "/a/b/shot.ppm"})),
             )
             .unwrap();
-        server.join().unwrap();
+        let request = &requests(&client)[1];
+        assert_eq!(request["execute"], "screendump");
+        assert_eq!(request["arguments"]["filename"], "/a/b/shot.ppm");
     }
 }
