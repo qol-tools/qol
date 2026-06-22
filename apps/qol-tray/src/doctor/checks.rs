@@ -7,6 +7,7 @@ mod dev_link_paths;
 mod fingerprint_health;
 mod hotkey_shadows;
 mod install_identity;
+mod plugin_config_shadows;
 mod plugin_process_leaks;
 #[cfg(feature = "dev")]
 mod plugin_staleness;
@@ -31,6 +32,7 @@ pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
         Box::new(autostart_target::AutostartTargetCheck),
         Box::new(runtime_prereqs::PluginsDirCheck),
         Box::new(plugin_process_leaks::PluginProcessLeaksCheck),
+        Box::new(plugin_config_shadows::PluginConfigShadowsCheck),
         Box::new(shell_hook_present::ShellHookPresentCheck),
         Box::new(hotkey_shadows::HotkeyShadowsCheck),
     ];

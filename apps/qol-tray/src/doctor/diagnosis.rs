@@ -19,6 +19,10 @@ pub(super) enum FixAction {
     EnsurePluginsDir {
         path: PathBuf,
     },
+    ArchivePluginConfigShadow {
+        path: PathBuf,
+        backup_path: PathBuf,
+    },
     KillPluginProcessLeaks {
         processes: Vec<ManagedProcess>,
     },
@@ -82,6 +86,7 @@ impl FixAction {
             | FixAction::WriteInstallMarker { .. }
             | FixAction::WriteAutostartEntry { .. }
             | FixAction::EnsurePluginsDir { .. }
+            | FixAction::ArchivePluginConfigShadow { .. }
             | FixAction::KillPluginProcessLeaks { .. }
             | FixAction::InstallShellHook => FixApplicability::SafeAutomatic,
             FixAction::UnshadowDeBinding { .. }
@@ -113,6 +118,9 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         }
         FixAction::EnsurePluginsDir { path } => {
             fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))
+        }
+        FixAction::ArchivePluginConfigShadow { path, backup_path } => {
+            archive_plugin_config_shadow(path, backup_path)
         }
         FixAction::KillPluginProcessLeaks { processes } => {
             crate::plugins::daemon_tracker::kill_managed_processes(processes);
@@ -150,6 +158,39 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         #[cfg(feature = "dev")]
         FixAction::HealDevLinkedPlugins { rebuild_ids } => heal_dev_linked_plugins(rebuild_ids),
     }
+}
+
+fn archive_plugin_config_shadow(
+    path: &std::path::Path,
+    backup_path: &std::path::Path,
+) -> Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to inspect {}", path.display()))
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(anyhow!(
+            "refusing to archive non-regular file {}",
+            path.display()
+        ));
+    }
+    if backup_path.exists() {
+        return Err(anyhow!("backup already exists: {}", backup_path.display()));
+    }
+    if let Some(parent) = backup_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::rename(path, backup_path).with_context(|| {
+        format!(
+            "failed to archive {} to {}",
+            path.display(),
+            backup_path.display()
+        )
+    })
 }
 
 #[cfg(feature = "dev")]
@@ -602,6 +643,13 @@ mod tests {
                 FixApplicability::SafeAutomatic,
             ),
             (
+                FixAction::ArchivePluginConfigShadow {
+                    path: PathBuf::from("/tmp/config.json"),
+                    backup_path: PathBuf::from("/tmp/config.json.qol-tray-shadow.bak"),
+                },
+                FixApplicability::SafeAutomatic,
+            ),
+            (
                 FixAction::KillPluginProcessLeaks {
                     processes: Vec::new(),
                 },
@@ -639,6 +687,26 @@ mod tests {
                 std::mem::discriminant(&action)
             );
         }
+    }
+
+    #[test]
+    fn archive_plugin_config_shadow_moves_file_to_backup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.json");
+        let backup_path = dir.path().join("config.json.qol-tray-shadow.bak");
+        std::fs::write(&path, b"{\"char_rules\":[]}").expect("write shadow");
+
+        apply_fix(&FixAction::ArchivePluginConfigShadow {
+            path: path.clone(),
+            backup_path: backup_path.clone(),
+        })
+        .expect("archive shadow");
+
+        assert!(!path.exists());
+        assert_eq!(
+            std::fs::read_to_string(&backup_path).expect("backup"),
+            "{\"char_rules\":[]}"
+        );
     }
 
     struct StubSymbolicWriter {
