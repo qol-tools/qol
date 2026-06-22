@@ -219,13 +219,6 @@ fn log_applied(action: &FixAction) {
                 qol_combo
             );
         }
-        FixAction::ArchivePluginConfigShadow { path, backup_path } => {
-            log::info!(
-                "doctor: archived plugin config shadow {} to {}",
-                path.display(),
-                backup_path.display()
-            );
-        }
         FixAction::SetActiveInstallId(_)
         | FixAction::WriteInstallMarker { .. }
         | FixAction::WriteAutostartEntry { .. }
