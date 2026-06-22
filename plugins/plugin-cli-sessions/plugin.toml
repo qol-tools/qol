@@ -9,11 +9,6 @@ platforms = ["linux", "macos"]
 [runtime]
 command = "cli-sessions"
 
-[daemon]
-enabled = true
-command = "cli-sessions"
-socket = "/tmp/qol-cli-sessions.sock"
-
 [action.open]
 label = "Open Overview"
 args = ["open"]
