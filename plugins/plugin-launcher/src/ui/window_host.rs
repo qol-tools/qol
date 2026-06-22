@@ -11,7 +11,7 @@ use super::layout::{window_height_for_rows, WINDOW_WIDTH};
 use super::{trace, LauncherView, LAUNCHER_APP_ID, LAUNCHER_WINDOW_TITLE};
 
 use qol_gpui::popup_window;
-use qol_gpui::window::{centered_window_placement, ActiveWindows, WindowPlacement};
+use qol_gpui::window::{centered_window_placement, ActiveWindows, MonitorKey, WindowPlacement};
 
 pub(crate) type ActiveLaunchers = ActiveWindows<LauncherView>;
 
@@ -145,6 +145,41 @@ pub(crate) fn activate_or_open_launcher(
     create_and_show_ghost(entries, active, monitor_snapshot.as_ref(), cx);
 }
 
+fn non_target_keys(keys: &[MonitorKey], target: MonitorKey) -> Vec<MonitorKey> {
+    keys.iter().copied().filter(|&key| key != target).collect()
+}
+
+fn mark_non_target_hidden(active: &Rc<RefCell<ActiveLaunchers>>, target: MonitorKey, cx: &mut App) {
+    let keys: Vec<MonitorKey> = active
+        .borrow()
+        .iter()
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect();
+    let mut stale = Vec::new();
+
+    for key in non_target_keys(&keys, target) {
+        let Some(handle) = active.borrow().existing(key) else {
+            continue;
+        };
+        if handle
+            .update(cx, |view, _window, _cx| view.set_showing(false))
+            .is_err()
+        {
+            stale.push(key);
+        }
+    }
+
+    if stale.is_empty() {
+        return;
+    }
+
+    let mut active = active.borrow_mut();
+    for key in stale {
+        active.remove(key);
+    }
+}
+
 fn show_ghost(
     active: Rc<RefCell<ActiveLaunchers>>,
     monitor_snapshot: Option<&monitor::ActiveMonitor>,
@@ -158,6 +193,8 @@ fn show_ghost(
         return false;
     };
     let title = qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, target);
+
+    mark_non_target_hidden(&active, target, cx);
     let all_titles = active.borrow().titles(LAUNCHER_WINDOW_TITLE);
 
     let prepared = handle
@@ -198,13 +235,18 @@ fn create_and_show_ghost(
     let placement = centered_window_placement(monitor_snapshot, header_size(), cx);
     let target = placement.target;
     let title = qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, target);
+
+    mark_non_target_hidden(&active, target, cx);
     let Some(handle) = open_visible_ghost(cx, entries, &placement, &title) else {
         eprintln!("[launcher] open failed");
         return;
     };
     active.borrow_mut().insert(target, handle);
+    let all_titles = active.borrow().titles(LAUNCHER_WINDOW_TITLE);
     popup_window::configure_popup_window(&title);
     let _ = handle.update(cx, |view, window, cx| {
+        view.set_showing(true);
+        qol_gpui::ghost::show_ghost_window(&title, &all_titles);
         window.activate_window();
         window.focus(&view.focus_handle(cx));
         cx.notify();
@@ -271,5 +313,61 @@ fn ghost_window_options(placement: &WindowPlacement, focus: bool) -> WindowOptio
         window_background: WindowBackgroundAppearance::Transparent,
         app_id: Some(LAUNCHER_APP_ID.to_string()),
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{non_target_keys, MonitorKey};
+    use proptest::prelude::*;
+
+    fn key(x: i32) -> MonitorKey {
+        MonitorKey {
+            x,
+            y: 0,
+            width: 100,
+            height: 100,
+        }
+    }
+
+    #[test]
+    fn hides_every_ghost_except_the_target() {
+        let keys = [key(0), key(1), key(2)];
+        assert_eq!(non_target_keys(&keys, key(1)), vec![key(0), key(2)]);
+    }
+
+    #[test]
+    fn a_lone_target_hides_nothing() {
+        assert!(non_target_keys(&[key(5)], key(5)).is_empty());
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        #[test]
+        fn open_leaves_exactly_the_target_showing(
+            xs in prop::collection::hash_set(any::<i32>(), 1..8),
+            pick in any::<prop::sample::Index>(),
+        ) {
+            let keys: Vec<MonitorKey> = xs.into_iter().map(key).collect();
+            let target = keys[pick.index(keys.len())];
+
+            let hidden = non_target_keys(&keys, target);
+
+            prop_assert!(!hidden.contains(&target));
+            let showing: Vec<MonitorKey> =
+                keys.iter().copied().filter(|k| !hidden.contains(k)).collect();
+            prop_assert_eq!(showing, vec![target]);
+        }
+
+        #[test]
+        fn opening_a_fresh_monitor_hides_all_existing(
+            xs in prop::collection::hash_set(any::<i32>(), 0..8),
+            target_x in any::<i32>(),
+        ) {
+            prop_assume!(!xs.contains(&target_x));
+            let keys: Vec<MonitorKey> = xs.into_iter().map(key).collect();
+            prop_assert_eq!(non_target_keys(&keys, key(target_x)).len(), keys.len());
+        }
     }
 }
