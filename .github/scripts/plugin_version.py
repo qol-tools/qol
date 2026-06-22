@@ -31,7 +31,7 @@ GLOBAL_FILES_AFFECT_ALL = {
     "rust-toolchain.toml",
 }
 GLOBAL_PREFIXES_AFFECT_ALL = (".cargo/",)
-AUTO_EXCLUDED_PLUGIN_IDS = {"template"}
+AUTO_EXCLUDED_PLUGIN_IDS = {"plugin-template"}
 
 
 @dataclass(frozen=True)
@@ -497,37 +497,32 @@ def existing_tags(root: Path, prefix: str) -> list[str]:
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 
-def normalize_plugin_id(value: str) -> str:
-    value = value.strip()
-    if value.startswith("plugin-"):
-        value = value[len("plugin-") :]
-    if not PLUGIN_ID_RE.match(value):
-        raise RuntimeError(f"Invalid plugin id: {value}")
-    return value
+def selection_matches(plugin_id: str, selected: str) -> bool:
+    return plugin_id == selected or plugin_id.removeprefix("plugin-") == selected.removeprefix(
+        "plugin-"
+    )
 
 
 def discover_plugins(root: Path, packages: dict[str, Package], selected: str | None) -> list[Plugin]:
-    plugin_dirs = sorted((root / "plugins").glob("plugin-*"))
-    selected_id = normalize_plugin_id(selected) if selected else None
+    selected = selected.strip() if selected else None
     plugins: list[Plugin] = []
-    for directory in plugin_dirs:
-        plugin_id = directory.name.removeprefix("plugin-")
-        if not PLUGIN_ID_RE.match(plugin_id):
-            raise RuntimeError(f"Invalid plugin directory id: {plugin_id}")
-        if selected_id is None and plugin_id in AUTO_EXCLUDED_PLUGIN_IDS:
-            continue
-        if selected_id and plugin_id != selected_id:
-            continue
+    for directory in sorted((root / "plugins").iterdir()):
         cargo_manifest = directory / "Cargo.toml"
         plugin_manifest = directory / "plugin.toml"
-        if not cargo_manifest.exists() or not plugin_manifest.exists():
+        if not directory.is_dir() or not cargo_manifest.exists() or not plugin_manifest.exists():
             continue
-        plugin_data = toml_at(plugin_manifest)["plugin"]
-        manifest_id = str(plugin_data["id"])
-        if manifest_id != f"plugin-{plugin_id}":
+        plugin_id = str(toml_at(plugin_manifest)["plugin"]["id"])
+        if not PLUGIN_ID_RE.match(plugin_id):
+            raise RuntimeError(f"Invalid plugin id in {plugin_manifest}: {plugin_id!r}")
+        if directory.name != plugin_id:
             raise RuntimeError(
-                f"Plugin id mismatch in {plugin_manifest}: expected plugin-{plugin_id}, got {manifest_id}"
+                f"Plugin dir/id mismatch: directory {directory.name!r} declares id {plugin_id!r}; "
+                f"a plugin.toml id must equal its directory name"
             )
+        if selected is None and plugin_id in AUTO_EXCLUDED_PLUGIN_IDS:
+            continue
+        if selected is not None and not selection_matches(plugin_id, selected):
+            continue
         package_name = str(toml_at(cargo_manifest)["package"]["name"])
         if package_name not in packages:
             raise RuntimeError(f"{package_name} is not a workspace package")
@@ -542,7 +537,7 @@ def discover_plugins(root: Path, packages: dict[str, Package], selected: str | N
                 plugin_version=plugin_version(plugin_manifest),
             )
         )
-    if selected_id and not plugins:
+    if selected is not None and not plugins:
         raise RuntimeError(f"Unknown plugin: {selected}")
     return plugins
 
@@ -579,6 +574,18 @@ def relevant_commits(
     return relevant
 
 
+def initial_release_plan(plugin: Plugin) -> ReleasePlan:
+    version = plugin.cargo_version
+    return ReleasePlan(
+        plugin=plugin,
+        old_version=version,
+        new_version=version,
+        tag=f"{plugin.plugin_id}-v{version}",
+        bump="initial",
+        commit_count=0,
+    )
+
+
 def compute_plans(root: Path, selected: str | None) -> list[ReleasePlan]:
     packages = load_packages(root)
     plugins = discover_plugins(root, packages, selected)
@@ -590,23 +597,22 @@ def compute_plans(root: Path, selected: str | None) -> list[ReleasePlan]:
     plans: list[ReleasePlan] = []
 
     for plugin in plugins:
-        prefix = f"plugin-{plugin.plugin_id}-v"
-        tag = last_tag(root, prefix)
-        if tag is None and selected is None:
-            continue
         if plugin.cargo_version != plugin.plugin_version:
             raise RuntimeError(
                 f"Manifest versions differ for {plugin.plugin_id}: "
                 f"cargo={plugin.cargo_version} plugin={plugin.plugin_version}"
             )
 
-        base_version = plugin.cargo_version
-        rev_range = "HEAD"
-        if tag:
-            base_version = tag_version(prefix, tag)
-            rev_range = f"{tag}..HEAD"
-            if run_git(["rev-list", rev_range, "--count"], root).strip() == "0":
-                continue
+        prefix = f"{plugin.plugin_id}-v"
+        tag = last_tag(root, prefix)
+        if tag is None:
+            plans.append(initial_release_plan(plugin))
+            continue
+
+        base_version = tag_version(prefix, tag)
+        rev_range = f"{tag}..HEAD"
+        if run_git(["rev-list", rev_range, "--count"], root).strip() == "0":
+            continue
 
         if rev_range not in commits_by_range:
             commits_by_range[rev_range] = load_commits(root, rev_range)

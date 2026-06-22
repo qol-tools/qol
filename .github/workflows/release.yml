@@ -10,7 +10,8 @@ on:
         type: string
   push:
     tags:
-      - 'plugin-*-v*.*.*'
+      - '*-v*.*.*'
+      - '!qol-tray-v*.*.*'
 
 permissions:
   contents: read
@@ -42,20 +43,20 @@ jobs:
         shell: bash
         run: |
           tag="${RELEASE_TAG}"
-          if [[ ! "$tag" =~ ^plugin-([a-z0-9][a-z0-9-]*)-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            echo "::error::tag '$tag' must match plugin-<id>-vX.Y.Z"
+          if [[ ! "$tag" =~ ^([a-z0-9][a-z0-9-]*)-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::tag '$tag' must match <plugin-id>-vX.Y.Z"
             exit 1
           fi
           plugin_id="${BASH_REMATCH[1]}"
           tag_version="${BASH_REMATCH[2]}"
-          crate_dir="plugins/plugin-${plugin_id}"
+          crate_dir="plugins/${plugin_id}"
           if [[ ! -f "$crate_dir/plugin.toml" ]]; then
             echo "::error::no plugin.toml at $crate_dir"
             exit 1
           fi
           manifest_id="$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["plugin"]["id"])' "$crate_dir/plugin.toml")"
-          if [[ "$manifest_id" != "plugin-${plugin_id}" ]]; then
-            echo "::error::tag $tag expects manifest id plugin-${plugin_id}, got $manifest_id"
+          if [[ "$manifest_id" != "${plugin_id}" ]]; then
+            echo "::error::tag $tag expects manifest id ${plugin_id}, got $manifest_id"
             exit 1
           fi
           cargo_version="$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["version"])' "$crate_dir/Cargo.toml")"
