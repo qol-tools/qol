@@ -1,3 +1,4 @@
+mod click_away;
 mod controller;
 mod input;
 pub(crate) mod keepalive;
@@ -9,7 +10,7 @@ mod trace;
 mod view;
 mod window_host;
 
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use gpui::*;
@@ -37,6 +38,9 @@ pub(crate) struct LauncherView {
     trail_decay_task_running: bool,
     entry_watch_running: bool,
     pub(super) dismiss_requested: bool,
+    dismiss_requested_from: &'static str,
+    click_away_monitor: Option<click_away::Monitor>,
+    click_away_arm: click_away::ArmState,
     pub(crate) is_showing: bool,
     pub(crate) showing_flag: Arc<std::sync::atomic::AtomicBool>,
     blur_guard_until: Instant,
@@ -62,6 +66,9 @@ impl LauncherView {
             trail_decay_task_running: false,
             entry_watch_running: false,
             dismiss_requested: false,
+            dismiss_requested_from: "requested",
+            click_away_monitor: None,
+            click_away_arm: click_away::ArmState::default(),
             is_showing: true,
             showing_flag: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
@@ -76,6 +83,9 @@ impl LauncherView {
         self.is_showing = showing;
         self.showing_flag
             .store(showing, std::sync::atomic::Ordering::Relaxed);
+        if !showing {
+            self.stop_click_away_monitor();
+        }
     }
 
     pub(crate) fn hide_to_ghost(&mut self, _from: &'static str, window: &mut Window) {
@@ -83,6 +93,11 @@ impl LauncherView {
         self.set_showing(false);
         qol_gpui::ghost::dismiss_to_ghost(LAUNCHER_WINDOW_TITLE, &self.window_title);
         self.shrink_hidden_ghost(window);
+    }
+
+    fn request_dismiss(&mut self, from: &'static str) {
+        self.dismiss_requested = true;
+        self.dismiss_requested_from = from;
     }
 
     pub(super) fn schedule_query_render(&mut self, cx: &mut Context<Self>) {
@@ -108,6 +123,7 @@ impl LauncherView {
         self.state = LauncherState::new();
         self.trail_decay_task_running = false;
         self.dismiss_requested = false;
+        self.dismiss_requested_from = "requested";
         self.set_showing(true);
         self.blur_guard_until = Instant::now() + Duration::from_millis(BLUR_GUARD_MS);
         #[cfg(debug_assertions)]
@@ -130,6 +146,66 @@ impl LauncherView {
         self.store
             .replace_entries(fresh.app_entries.clone(), fresh.file_entries.clone());
         true
+    }
+
+    fn ensure_click_away_monitor(&mut self, cx: &mut Context<Self>) {
+        if !self.click_away_arm.should_start(self.is_showing) {
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel();
+        let monitor = click_away::start(self.window_title.clone(), tx);
+        let started = monitor.is_some();
+        self.click_away_arm = self.click_away_arm.started(started);
+        self.click_away_monitor = monitor;
+        trace::click_away(
+            &self.window_title,
+            if started { "armed" } else { "unsupported" },
+        );
+        if started {
+            self.spawn_click_away_task(rx, cx);
+        }
+    }
+
+    fn spawn_click_away_task(&mut self, rx: mpsc::Receiver<()>, cx: &mut Context<Self>) {
+        cx.spawn(move |this: WeakEntity<LauncherView>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                let mut rx = rx;
+                loop {
+                    let (returned, received) = async_cx
+                        .background_spawn(async move {
+                            let received = rx.recv().is_ok();
+                            (rx, received)
+                        })
+                        .await;
+                    rx = returned;
+                    if !received {
+                        break;
+                    }
+                    let keep = this.update(&mut async_cx, |view, cx| {
+                        if view.is_showing {
+                            view.request_dismiss("click-away");
+                            trace::click_away(&view.window_title, "fired");
+                            cx.notify();
+                        }
+                        view.is_showing
+                    });
+                    if !matches!(keep, Ok(true)) {
+                        break;
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn stop_click_away_monitor(&mut self) {
+        if self.click_away_monitor.is_some() {
+            trace::click_away(&self.window_title, "stopped");
+        }
+        self.click_away_monitor = None;
+        self.click_away_arm = self.click_away_arm.stopped();
     }
 
     fn start_entry_watch(&mut self, cx: &mut Context<Self>) {

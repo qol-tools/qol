@@ -26,8 +26,10 @@ impl Focusable for LauncherView {
 impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.dismiss_requested {
+            let from = self.dismiss_requested_from;
             self.dismiss_requested = false;
-            self.hide_to_ghost("requested", window);
+            self.dismiss_requested_from = "requested";
+            self.hide_to_ghost(from, window);
         }
 
         if self.dismiss_sub.is_none() {
@@ -108,6 +110,7 @@ impl Render for LauncherView {
         }
 
         if self.is_showing {
+            self.ensure_click_away_monitor(cx);
             self.sync_entries_from_shared();
             if !self.entry_watch_running {
                 self.start_entry_watch(cx);

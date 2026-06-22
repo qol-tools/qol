@@ -119,6 +119,18 @@ pub(super) fn dismiss(view: &LauncherView, from: &'static str) {
     let _ = (view, from);
 }
 
+pub(super) fn click_away(window_title: &str, state: &str) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "LAUNCHER_CLICKAWAY",
+        "title={} state={state}",
+        token(window_title),
+    );
+
+    #[cfg(not(debug_assertions))]
+    let _ = (window_title, state);
+}
+
 #[cfg(debug_assertions)]
 pub(super) fn render(view: &mut LauncherView, window: &Window, sample: RenderSample) {
     let bounds = window.window_bounds().get_bounds();
