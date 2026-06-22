@@ -144,9 +144,9 @@ pub fn show_window_by_title(title: &str) -> bool {
     };
     window.setLevel(NSPopUpMenuWindowLevel);
     window.setBackgroundColor(Some(&NSColor::clearColor()));
+    window.setAlphaValue(1.0);
     window.setIgnoresMouseEvents(false);
     window.makeKeyAndOrderFront(None);
-    window.setAlphaValue(1.0);
     qol_runtime::probe!(
         "SHOW_WIN",
         "title={title} reason={}",

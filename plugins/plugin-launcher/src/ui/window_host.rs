@@ -173,8 +173,9 @@ fn show_ghost(
                 placement.bounds.origin,
                 header_size(),
             );
-            window.focus(&view.focus_handle(cx));
+            qol_gpui::ghost::show_ghost_window(&title, &all_titles);
             window.activate_window();
+            window.focus(&view.focus_handle(cx));
             cx.notify();
         })
         .is_ok();
@@ -183,7 +184,6 @@ fn show_ghost(
         return false;
     }
     trace::show("reuse", &title, &placement);
-    qol_gpui::ghost::show_ghost_window(&title, &all_titles);
     cx.activate(true);
     true
 }
@@ -204,6 +204,11 @@ fn create_and_show_ghost(
     };
     active.borrow_mut().insert(target, handle);
     popup_window::configure_popup_window(&title);
+    let _ = handle.update(cx, |view, window, cx| {
+        window.activate_window();
+        window.focus(&view.focus_handle(cx));
+        cx.notify();
+    });
     trace::show("create", &title, &placement);
     cx.activate(true);
 }
