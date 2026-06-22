@@ -1,9 +1,6 @@
-use std::time::Duration;
-
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, rgba, Animation, AnimationExt, AnyElement, Context, FontWeight, KeyDownEvent,
-    MouseButton, SharedString, Window,
+    div, px, rgb, rgba, AnyElement, Context, FontWeight, KeyDownEvent, SharedString, Window,
 };
 
 use crate::registry::SessionState;
@@ -53,55 +50,14 @@ fn tint_color(status: Status) -> u32 {
     }
 }
 
-const SPINNER_FRAMES: [&str; 10] = [
-    "\u{280B}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283C}", "\u{2834}", "\u{2826}", "\u{2827}",
-    "\u{2807}", "\u{280F}",
-];
-
 fn status_glyph(status: Status) -> &'static str {
     match status {
         Status::NeedsYou => "!",
-        Status::Working => SPINNER_FRAMES[0],
+        Status::Working => "\u{25CF}",
         Status::Service => "\u{25CF}",
         Status::Unknown | Status::Acknowledged => "\u{00B7}",
         Status::YourTurn => "",
     }
-}
-
-fn spinner(index: usize, color: u32) -> impl IntoElement {
-    div()
-        .flex_none()
-        .w(px(11.0))
-        .text_color(rgb(color))
-        .text_size(px(10.0))
-        .with_animation(
-            ("spinner", index),
-            Animation::new(Duration::from_millis(800)).repeat(),
-            |el, delta| {
-                let i =
-                    ((delta * SPINNER_FRAMES.len() as f32) as usize).min(SPINNER_FRAMES.len() - 1);
-                el.child(SPINNER_FRAMES[i])
-            },
-        )
-}
-
-fn pulse(index: usize, color: u32) -> impl IntoElement {
-    div()
-        .flex_none()
-        .w(px(11.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(div().w(px(7.0)).h(px(7.0)).rounded_full().with_animation(
-            ("pulse", index),
-            Animation::new(Duration::from_millis(1800)).repeat(),
-            move |el, delta| {
-                let wave = (delta * std::f32::consts::TAU).sin() * 0.5 + 0.5;
-                let alpha = (0.4 + 0.6 * wave).clamp(0.0, 1.0);
-                let a = (alpha * 255.0) as u32;
-                el.bg(rgba((color << 8) | a))
-            },
-        ))
 }
 
 fn summary_groups(rows: &[SessionState]) -> Vec<(u32, usize)> {
@@ -186,7 +142,7 @@ fn empty_state() -> impl IntoElement {
             div()
                 .text_color(rgb(0x7d8590u32))
                 .text_size(px(11.0))
-                .child("Needs kitty remote control: allow_remote_control + listen_on"),
+                .child("Open a CLI in kitty, then open this panel again."),
         )
 }
 
@@ -311,19 +267,12 @@ fn summary_cell(
             }))
             .into_any_element();
     }
-    let indicator: AnyElement = if status == Status::Working {
-        spinner(index, accent).into_any_element()
-    } else if status == Status::Service {
-        pulse(index, accent).into_any_element()
-    } else {
-        div()
-            .flex_none()
-            .w(px(11.0))
-            .text_color(rgb(accent))
-            .text_size(px(10.0))
-            .child(status_glyph(status))
-            .into_any_element()
-    };
+    let indicator = div()
+        .flex_none()
+        .w(px(11.0))
+        .text_color(rgb(accent))
+        .text_size(px(10.0))
+        .child(status_glyph(status));
     div()
         .flex()
         .items_center()
@@ -368,6 +317,7 @@ fn session_row(
     cx: &mut Context<SessionsView>,
 ) -> impl IntoElement {
     let tint = tint_color(s.status);
+    let window_id = s.window_id;
     div()
         .id(("session-row", index))
         .w_full()
@@ -378,7 +328,7 @@ fn session_row(
             rgba(0x00000000u32)
         })
         .on_click(cx.listener(move |this, _, _, cx| {
-            this.jump_to(index, "row-click", cx);
+            this.jump_to_window(window_id, "row-click", cx);
             cx.notify();
         }))
         .child(
@@ -400,17 +350,13 @@ fn session_row(
 impl Render for SessionsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self.rows();
-        if rows.is_empty() {
-            self.selected = 0;
-        } else {
-            self.selected = self.selected.min(rows.len() - 1);
-        }
-        let selected = self.selected;
+        let order: Vec<u64> = rows.iter().map(|s| s.window_id).collect();
+        let highlight = self.selection().highlight_index(&order);
         let is_empty = rows.is_empty();
         let row_els: Vec<_> = rows
             .iter()
             .enumerate()
-            .map(|(i, s)| session_row(s, i == selected, i, cx))
+            .map(|(i, s)| session_row(s, highlight == Some(i), i, cx))
             .collect();
 
         div()
@@ -426,19 +372,17 @@ impl Render for SessionsView {
             .bg(rgb(0x161b22u32))
             .font_family(SharedString::from("Menlo"))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| {
-                let len = this.rows().len();
                 match ev.keystroke.key.as_str() {
                     "down" | "j" => {
-                        this.selected = (this.selected + 1).min(len.saturating_sub(1));
+                        this.move_selection_down();
                         cx.notify();
                     }
                     "up" | "k" => {
-                        this.selected = this.selected.saturating_sub(1);
+                        this.move_selection_up();
                         cx.notify();
                     }
                     "enter" => {
-                        let i = this.selected;
-                        this.jump_to(i, "enter", cx);
+                        this.focus_selected(cx);
                         cx.notify();
                     }
                     "a" => {
@@ -451,17 +395,7 @@ impl Render for SessionsView {
                     _ => {}
                 }
             }))
-            .child(
-                div()
-                    .id("cli-sessions-titlebar")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|_this, _event, window, _cx| {
-                            window.start_window_move();
-                        }),
-                    )
-                    .child(header(&rows)),
-            )
+            .child(header(&rows))
             .child(
                 div()
                     .id("cli-sessions-list")
