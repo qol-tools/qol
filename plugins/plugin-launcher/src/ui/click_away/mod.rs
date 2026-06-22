@@ -3,12 +3,14 @@ mod platform;
 pub(crate) use platform::{start, Monitor};
 
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub(crate) struct ScreenPoint {
     pub x: f64,
     pub y: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub(crate) struct ScreenFrame {
     pub x: f64,
     pub y: f64,
@@ -16,6 +18,7 @@ pub(crate) struct ScreenFrame {
     pub height: f64,
 }
 
+#[allow(dead_code)]
 fn contains_point(frame: ScreenFrame, point: ScreenPoint) -> bool {
     point.x >= frame.x
         && point.x <= frame.x + frame.width
@@ -23,6 +26,7 @@ fn contains_point(frame: ScreenFrame, point: ScreenPoint) -> bool {
         && point.y <= frame.y + frame.height
 }
 
+#[allow(dead_code)]
 pub(crate) fn click_is_outside(frame: ScreenFrame, point: ScreenPoint) -> bool {
     !contains_point(frame, point)
 }
