@@ -7,7 +7,7 @@ import { useRegisterViewKeyboard } from '../../../app/view-keyboard-context.js';
 import { usePaletteContext } from '../../../palette/context.js';
 import { useRegisterCommands } from '../../../palette/useRegisterCommands.js';
 import { useResolver } from './use-resolver.js';
-import { conflictKey, formatValue, leafKey, relativeTime } from './lib.js';
+import { conflictKey, fieldDiff, formatValue, formatValueShort, leafKey, relativeTime } from './lib.js';
 
 const VIEW_ID = 'profile-sync-conflicts';
 
@@ -119,37 +119,23 @@ function StepperCard({ resolver, searchQuery }) {
     const subtitle = `Conflict ${index + 1} / ${total} - pick a side for each setting`;
     const choice = picks[index];
     const leaf = leafKey(current.key_path);
+    const showPlugin = current.plugin && current.plugin !== leaf;
 
     return html`
         <${PageShell} subtitle=${subtitle} frameClassName="profile-conflicts-frame">
             <div class="profile-conflicts">
                 <${ProgressDots} total=${total} index=${index} picks=${picks} />
                 <div class="profile-conflicts-fieldhead">
-                    ${current.plugin && html`<span class="profile-conflicts-plugin">${current.plugin}</span>`}
-                    ${current.plugin && html`<span class="profile-conflicts-divider">${'·'}</span>`}
+                    ${showPlugin && html`<span class="profile-conflicts-plugin">${current.plugin}</span>`}
+                    ${showPlugin && html`<span class="profile-conflicts-divider">${'·'}</span>`}
                     <span class="profile-conflicts-key">${leaf}</span>
                 </div>
-                <p class="profile-conflicts-sub">Both this Mac and remote changed this since the last sync.</p>
+                <p class="profile-conflicts-file">${current.file}</p>
                 <div class="profile-conflicts-sides">
-                    <${SideCard}
-                        side="mine"
-                        label="This Mac"
-                        value=${current.local}
-                        editedAt=${current.local_edited}
-                        selected=${choice === 'mine'}
-                        onActivate=${() => resolver.pick('mine')}
-                    />
-                    <${SideCard}
-                        side="remote"
-                        label="Remote"
-                        value=${current.remote}
-                        editedAt=${current.remote_edited}
-                        selected=${choice === 'remote'}
-                        onActivate=${() => resolver.pick('remote')}
-                    />
+                    <${SideCard} side="mine" label="This Mac" conflict=${current} editedAt=${current.local_edited} selected=${choice === 'mine'} onActivate=${() => resolver.pick('mine')} />
+                    <${SideCard} side="remote" label="Remote" conflict=${current} editedAt=${current.remote_edited} selected=${choice === 'remote'} onActivate=${() => resolver.pick('remote')} />
                 </div>
                 <p class="profile-conflicts-vs">- pick the value to keep -</p>
-                <${DiffBlock} conflict=${current} choice=${choice} />
                 <div class="profile-conflicts-footer">
                     <p class="profile-conflicts-summ">${summary.keptMine + summary.tookRemote} of ${total} resolved ${'·'} backup taken on apply</p>
                     <div class="profile-conflicts-nav">
@@ -189,7 +175,7 @@ function ProgressDots({ total, index, picks }) {
     return html`<div class="profile-conflicts-dots">${dots}</div>`;
 }
 
-function SideCard({ side, label, value, editedAt, selected, onActivate }) {
+function SideCard({ side, label, conflict, editedAt, selected, onActivate }) {
     return html`
         <${Surface} as="button"
             className=${`profile-conflicts-side profile-conflicts-side-${side}`}
@@ -200,44 +186,26 @@ function SideCard({ side, label, value, editedAt, selected, onActivate }) {
         >
             <span class="profile-conflicts-side-pin" aria-hidden="true"></span>
             <span class="profile-conflicts-side-who">${label}</span>
-            <span class="profile-conflicts-side-value">${formatValue(value)}</span>
+            <${SideValue} conflict=${conflict} side=${side} />
             <span class="profile-conflicts-side-meta">${relativeTime(editedAt)}</span>
         <//>
     `;
 }
 
-function DiffBlock({ conflict, choice }) {
-    const leaf = leafKey(conflict.key_path);
-    const fileLabel = conflict.file;
+function SideValue({ conflict, side }) {
+    const rows = fieldDiff(conflict.local, conflict.remote);
+    if (!rows) {
+        const value = side === 'mine' ? conflict.local : conflict.remote;
+        return html`<span class="profile-conflicts-side-value">${formatValueShort(value, 64)}</span>`;
+    }
     return html`
-        <div class="profile-conflicts-diff-label">
-            <span class="profile-conflicts-diff-title">${fileLabel}</span>
-            <span class="profile-conflicts-diff-legend">
-                <span class="profile-conflicts-diff-tag profile-conflicts-diff-tag-del">- this Mac</span>
-                <span class="profile-conflicts-diff-tag profile-conflicts-diff-tag-add">+ remote</span>
-            </span>
-        </div>
-        <div class="profile-conflicts-diff">
-            <div class="profile-conflicts-diff-line profile-conflicts-diff-ctx">
-                <span class="profile-conflicts-diff-gut"> </span><span>{</span>
-            </div>
-            <div class=${`profile-conflicts-diff-line profile-conflicts-diff-del${choice === 'mine' ? ' is-keeping' : ''}`}>
-                <span class="profile-conflicts-diff-gut">-</span>
-                <span>  "${leaf}": ${formatValue(conflict.local)}</span>
-                ${choice === 'mine' && html`<span class="profile-conflicts-diff-mark">◄ keeping</span>`}
-            </div>
-            <div class=${`profile-conflicts-diff-line profile-conflicts-diff-add${choice === 'remote' ? ' is-keeping' : ''}`}>
-                <span class="profile-conflicts-diff-gut">+</span>
-                <span>  "${leaf}": ${formatValue(conflict.remote)}</span>
-                ${choice === 'remote' && html`<span class="profile-conflicts-diff-mark">◄ keeping</span>`}
-            </div>
-            <div class="profile-conflicts-diff-line profile-conflicts-diff-merged">
-                <span class="profile-conflicts-diff-gut">+</span>
-                <span>  /* other settings auto-merged */</span>
-            </div>
-            <div class="profile-conflicts-diff-line profile-conflicts-diff-ctx">
-                <span class="profile-conflicts-diff-gut"> </span><span>}</span>
-            </div>
+        <div class="profile-conflicts-side-fields">
+            ${rows.map(row => html`
+                <div class="profile-conflicts-field-row" key=${row.key}>
+                    <span class="profile-conflicts-field-key">${row.key}</span>
+                    <span class="profile-conflicts-field-val">${formatValueShort(side === 'mine' ? row.mine : row.remote)}</span>
+                </div>
+            `)}
         </div>
     `;
 }

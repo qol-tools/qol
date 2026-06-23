@@ -27,6 +27,24 @@ export function formatValue(value) {
     }
 }
 
+export function formatValueShort(value, max = 44) {
+    if (value === undefined) return '—';
+    const text = formatValue(value);
+    return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+export function fieldDiff(local, remote) {
+    const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+    if (!isObject(local) || !isObject(remote)) return null;
+    const keys = [...new Set([...Object.keys(local), ...Object.keys(remote)])];
+    const rows = [];
+    for (const key of keys) {
+        if (JSON.stringify(local[key]) === JSON.stringify(remote[key])) continue;
+        rows.push({ key, mine: local[key], remote: remote[key] });
+    }
+    return rows.length ? rows : null;
+}
+
 export function relativeTime(isoString, now = Date.now()) {
     if (!isoString) return 'unknown time';
     const ts = Date.parse(isoString);
