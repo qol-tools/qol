@@ -2,8 +2,7 @@ import { useEffect, useCallback } from 'preact/hooks';
 import { useStateRef } from '../../lib/hooks/useStateRef.js';
 import { usePersistedIndex } from '../../lib/hooks/usePersistedIndex.js';
 import { useSSEDebounce } from '../../hooks/useSSEDebounce.js';
-import { useListKeyboard } from '../../lib/hooks/useListKeyboard.js';
-import { useModalKeyboard } from '../../lib/hooks/useModalKeyboard.js';
+import { useListEditorKeyboard } from '../../lib/hooks/useListEditorKeyboard.js';
 import { diveViaSelector } from '../../lib/world-navigation-singleton.js';
 
 const HOTKEYS_EDITOR_DIVE_SELECTOR = '[data-view-id="hotkeys"]';
@@ -147,36 +146,19 @@ function useListActions(d) {
 }
 
 function useKeyboard(d, m, deleteSelected, recorder) {
-    const modalNav = useModalKeyboard({
-        onSave: m.saveHotkey,
-        onClose: m.closeModal,
-    });
-
     const onAdd = useCallback(() => {
         m.openEditModal();
         diveViaSelector(HOTKEYS_EDITOR_DIVE_SELECTOR);
     }, [m.openEditModal]);
 
-    const listHandler = useListKeyboard({
+    return useListEditorKeyboard({
+        editModalRef: d.editModalRef,
+        onModalSave: m.saveHotkey,
+        onModalClose: m.closeModal,
         itemCount: d.hotkeys.length,
         selectedIndex: d.selectedIndex,
         onAdd,
         onDelete: deleteSelected,
+        preIntercept: recorder.handleKey,
     });
-
-    const handleKey = useCallback((e) => {
-        if (recorder.handleKey(e)) return;
-        const modal = d.editModalRef.current;
-        if (modal) {
-            modalNav.handleKey(e);
-            return;
-        }
-        listHandler(e);
-    }, [listHandler, modalNav.handleKey, recorder.handleKey]);
-
-    return {
-        handleKey,
-        isBlocking: useCallback(() => d.editModalRef.current !== null, []),
-        modalNav,
-    };
 }

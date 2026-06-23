@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'preact/hooks';
 import { useStateRef } from '../../lib/hooks/useStateRef.js';
 import { usePersistedId } from '../../lib/hooks/usePersistedIndex.js';
-import { useListKeyboard } from '../../lib/hooks/useListKeyboard.js';
-import { useModalKeyboard } from '../../lib/hooks/useModalKeyboard.js';
+import { useListEditorKeyboard } from '../../lib/hooks/useListEditorKeyboard.js';
 import { diveViaSelector } from '../../lib/world-navigation-singleton.js';
 import { isShortcutValid } from './validation.js';
 import { deriveShortcutId } from './derive-id.js';
@@ -178,48 +177,34 @@ function useListActions(d) {
 }
 
 function useKeyboard(d, m, deleteById, runById) {
-    const { filtered, selectedIndex, setSelectedId } = d;
-
-    const setSelectedIndex = useCallback((idxOrFn) => {
-        const idx = typeof idxOrFn === 'function' ? idxOrFn(d.selectedIndex) : idxOrFn;
-        const item = filtered[idx];
-        if (item) setSelectedId(item.id);
-    }, [filtered, d.selectedIndex, setSelectedId]);
-
+    const { filtered, selectedIndex } = d;
     const selected = filtered[selectedIndex];
-
-    const modalNav = useModalKeyboard({
-        onSave: m.save,
-        onClose: m.closeModal,
-    });
 
     const onAdd = useCallback(() => {
         m.openEditModal();
         diveViaSelector(SHORTCUTS_EDITOR_DIVE_SELECTOR);
     }, [m.openEditModal]);
 
-    const listHandler = useListKeyboard({
+    const onDelete = useCallback(() => {
+        if (selected) deleteById(selected.id);
+    }, [selected, deleteById]);
+
+    const listIntercept = useCallback((e) => {
+        if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            if (selected) { e.preventDefault(); runById(selected.id); }
+            return true;
+        }
+        return false;
+    }, [selected, runById]);
+
+    return useListEditorKeyboard({
+        editModalRef: d.editModalRef,
+        onModalSave: m.save,
+        onModalClose: m.closeModal,
         itemCount: filtered.length,
         selectedIndex,
         onAdd,
-        onDelete: useCallback(() => { if (selected) deleteById(selected.id); }, [selected, deleteById]),
+        onDelete,
+        listIntercept,
     });
-
-    const handleKey = useCallback((e) => {
-        if (d.editModalRef.current) {
-            modalNav.handleKey(e);
-            return;
-        }
-        if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey) {
-            if (selected) { e.preventDefault(); runById(selected.id); }
-            return;
-        }
-        listHandler(e);
-    }, [listHandler, modalNav.handleKey, selected, runById]);
-
-    return {
-        handleKey,
-        isBlocking: useCallback(() => d.editModalRef.current !== null, []),
-        modalNav,
-    };
 }
