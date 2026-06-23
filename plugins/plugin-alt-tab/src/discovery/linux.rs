@@ -64,22 +64,72 @@ fn connect_session() -> Option<DiscoverySession> {
     Some(DiscoverySession { conn, root, atoms })
 }
 
-fn promote_active_info(
-    conn: &impl Connection,
-    root: u32,
-    atoms: &AtomMap,
-    windows: &mut Vec<WindowInfo>,
-) {
-    let Some(active) = read_active_window(conn, root, atoms) else {
-        return;
-    };
-    let Some(pos) = windows.iter().position(|w| w.id == active) else {
-        return;
-    };
-    if pos > 0 {
-        let w = windows.remove(pos);
-        windows.insert(0, w);
+fn focused_window_id(ids: &[u32], focused: &[bool], active: Option<u32>) -> Option<u32> {
+    focused
+        .iter()
+        .position(|&f| f)
+        .map(|i| ids[i])
+        .or_else(|| active.filter(|a| ids.contains(a)))
+}
+
+fn next_mru(prev: &[u32], live_ids: &[u32], focused: Option<u32>) -> Vec<u32> {
+    let mut mru: Vec<u32> = prev.to_vec();
+    if let Some(f) = focused {
+        mru.retain(|&x| x != f);
+        mru.insert(0, f);
     }
+    mru.retain(|x| live_ids.contains(x));
+    mru
+}
+
+fn mru_order(ids: &[u32], above: &[bool], mru: &[u32]) -> Vec<usize> {
+    let n = ids.len();
+    let mut used = vec![false; n];
+    let mut order = Vec::with_capacity(n);
+    for &mid in mru {
+        if let Some(i) = (0..n).find(|&i| !used[i] && ids[i] == mid) {
+            used[i] = true;
+            order.push(i);
+        }
+    }
+    for i in 0..n {
+        if !used[i] && !above[i] {
+            used[i] = true;
+            order.push(i);
+        }
+    }
+    for (i, &was_used) in used.iter().enumerate() {
+        if !was_used {
+            order.push(i);
+        }
+    }
+    order
+}
+
+fn mru_state() -> &'static Mutex<Vec<u32>> {
+    static MRU: OnceLock<Mutex<Vec<u32>>> = OnceLock::new();
+    MRU.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn order_picker(
+    windows: &mut Vec<WindowInfo>,
+    above: &[bool],
+    focused: &[bool],
+    active: Option<u32>,
+) {
+    if windows.len() <= 1 {
+        return;
+    }
+    let ids: Vec<u32> = windows.iter().map(|w| w.id).collect();
+    let focused_id = focused_window_id(&ids, focused, active);
+    let mru = {
+        let mut guard = mru_state().lock().unwrap_or_else(|e| e.into_inner());
+        *guard = next_mru(&guard, &ids, focused_id);
+        guard.clone()
+    };
+    let order = mru_order(&ids, above, &mru);
+    let mut slots: Vec<Option<WindowInfo>> = windows.drain(..).map(Some).collect();
+    *windows = order.into_iter().filter_map(|i| slots[i].take()).collect();
 }
 
 fn read_active_window(conn: &impl Connection, root: u32, atoms: &AtomMap) -> Option<u32> {
@@ -110,6 +160,8 @@ const ATOM_NAMES: &[&str] = &[
     "_NET_WM_WINDOW_TYPE_NORMAL",
     "_NET_WM_STATE",
     "_NET_WM_STATE_HIDDEN",
+    "_NET_WM_STATE_ABOVE",
+    "_NET_WM_STATE_FOCUSED",
     "WM_CLASS",
     "_NET_WM_ICON",
     "_NET_ACTIVE_WINDOW",
@@ -142,8 +194,10 @@ fn get_open_windows_with(session: &DiscoverySession) -> Vec<WindowInfo> {
         return Vec::new();
     }
     let filtered = filter_normal_windows(&session.conn, &ids, &session.atoms);
-    let mut windows = collect_window_info(&session.conn, session.root, &filtered, &session.atoms);
-    promote_active_info(&session.conn, session.root, &session.atoms, &mut windows);
+    let (mut windows, above, focused) =
+        collect_window_info(&session.conn, session.root, &filtered, &session.atoms);
+    let active = read_active_window(&session.conn, session.root, &session.atoms);
+    order_picker(&mut windows, &above, &focused, active);
 
     #[cfg(debug_assertions)]
     eprintln!("[x11] get_open_windows total results: {}", windows.len());
@@ -239,18 +293,27 @@ fn collect_window_info(
     root: u32,
     ids: &[u32],
     atoms: &AtomMap,
-) -> Vec<WindowInfo> {
+) -> (Vec<WindowInfo>, Vec<bool>, Vec<bool>) {
     let hidden_atom = atoms.get("_NET_WM_STATE_HIDDEN").copied().unwrap_or(0);
+    let above_atom = atoms.get("_NET_WM_STATE_ABOVE").copied().unwrap_or(0);
+    let focused_atom = atoms.get("_NET_WM_STATE_FOCUSED").copied().unwrap_or(0);
     let mut props = pipeline_and_resolve(conn, root, ids, atoms);
     let mut windows = Vec::with_capacity(ids.len());
+    let mut above = Vec::with_capacity(ids.len());
+    let mut focused = Vec::with_capacity(ids.len());
 
     for (i, &id) in ids.iter().enumerate().rev() {
-        let info = build_window_info(id, i, &mut props, hidden_atom);
-        let Some(info) = info else { continue };
+        let Some((info, is_above, is_focused)) =
+            build_window_info(id, i, &mut props, hidden_atom, above_atom, focused_atom)
+        else {
+            continue;
+        };
         windows.push(info);
+        above.push(is_above);
+        focused.push(is_focused);
     }
     hydrate_icons(conn, atoms, &mut windows);
-    windows
+    (windows, above, focused)
 }
 
 fn pipeline_and_resolve(
@@ -314,24 +377,32 @@ fn build_window_info(
     idx: usize,
     props: &mut ResolvedProps,
     hidden_atom: u32,
-) -> Option<WindowInfo> {
+    above_atom: u32,
+    focused_atom: u32,
+) -> Option<(WindowInfo, bool, bool)> {
     let title = resolve_title(idx, props);
     if title.is_empty() || title == "Desktop" {
         return None;
     }
     let app_name = resolve_app_name(idx, props);
-    Some(WindowInfo {
-        id,
-        title,
-        app_name,
-        preview_path: None,
-        icon: None,
-        x: props.geom[idx].as_ref().map_or(0.0, |r| r.x),
-        y: props.geom[idx].as_ref().map_or(0.0, |r| r.y),
-        width: props.geom[idx].as_ref().map_or(0.0, |r| r.width),
-        height: props.geom[idx].as_ref().map_or(0.0, |r| r.height),
-        is_minimized: resolve_minimized(idx, props, hidden_atom),
-    })
+    let (is_minimized, is_above, is_focused) =
+        resolve_states(idx, props, hidden_atom, above_atom, focused_atom);
+    Some((
+        WindowInfo {
+            id,
+            title,
+            app_name,
+            preview_path: None,
+            icon: None,
+            x: props.geom[idx].as_ref().map_or(0.0, |r| r.x),
+            y: props.geom[idx].as_ref().map_or(0.0, |r| r.y),
+            width: props.geom[idx].as_ref().map_or(0.0, |r| r.width),
+            height: props.geom[idx].as_ref().map_or(0.0, |r| r.height),
+            is_minimized,
+        },
+        is_above,
+        is_focused,
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -474,14 +545,21 @@ fn resolve_app_name(idx: usize, props: &mut ResolvedProps) -> String {
     parts.first().map(|s| s.to_string()).unwrap_or_default()
 }
 
-fn resolve_minimized(idx: usize, props: &mut ResolvedProps, hidden_atom: u32) -> bool {
-    props.state[idx]
+fn resolve_states(
+    idx: usize,
+    props: &mut ResolvedProps,
+    hidden_atom: u32,
+    above_atom: u32,
+    focused_atom: u32,
+) -> (bool, bool, bool) {
+    let atoms: Vec<u32> = props.state[idx]
         .take()
-        .and_then(|r| {
-            r.value32()
-                .map(|atoms| atoms.into_iter().any(|a| a == hidden_atom))
-        })
-        .unwrap_or(false)
+        .and_then(|r| r.value32().map(|it| it.collect()))
+        .unwrap_or_default();
+    let is_minimized = atoms.contains(&hidden_atom);
+    let is_above = above_atom != 0 && atoms.contains(&above_atom);
+    let is_focused = focused_atom != 0 && atoms.contains(&focused_atom);
+    (is_minimized, is_above, is_focused)
 }
 
 fn extract_x11_icon(reply: &GetPropertyReply) -> Option<RgbaImage> {
@@ -598,6 +676,120 @@ mod tests {
         assert_eq!(geom.y, 0.0);
         assert_eq!(geom.width, 1920.0);
         assert_eq!(geom.height, 1080.0);
+    }
+
+    type NextMruCase = (
+        &'static str,
+        &'static [u32],
+        &'static [u32],
+        Option<u32>,
+        &'static [u32],
+    );
+
+    #[test]
+    fn next_mru_table() {
+        let cases: &[NextMruCase] = &[
+            (
+                "focused promotes front, dedup keeps tail",
+                &[10, 20],
+                &[10, 20, 30],
+                Some(30),
+                &[30, 10, 20],
+            ),
+            ("no focus, dead ids pruned", &[10, 20], &[20], None, &[20]),
+            (
+                "focused moves from tail to front",
+                &[20, 10],
+                &[10, 20],
+                Some(10),
+                &[10, 20],
+            ),
+            (
+                "empty prev, focused seeds front",
+                &[],
+                &[10, 20],
+                Some(10),
+                &[10],
+            ),
+            (
+                "no focus, no death, unchanged",
+                &[10, 20],
+                &[10, 20],
+                None,
+                &[10, 20],
+            ),
+        ];
+        for (label, prev, live, focused, expected) in cases {
+            let got = next_mru(prev, live, *focused);
+            assert_eq!(got.as_slice(), *expected, "case: {label}");
+        }
+    }
+
+    type MruOrderCase = (
+        &'static str,
+        &'static [u32],
+        &'static [bool],
+        &'static [u32],
+        &'static [usize],
+    );
+
+    #[test]
+    fn mru_order_table() {
+        const PANEL: u32 = 0x4c00004;
+        const EDITOR: u32 = 0x660000b;
+        const FIREFOX: u32 = 0x6c00004;
+        let cases: &[MruOrderCase] = &[
+            (
+                "panel just-left, editor focused",
+                &[PANEL, EDITOR, FIREFOX],
+                &[true, false, false],
+                &[EDITOR, PANEL],
+                &[1, 0, 2],
+            ),
+            (
+                "panel focused, panel slot 0",
+                &[PANEL, EDITOR, FIREFOX],
+                &[true, false, false],
+                &[PANEL],
+                &[0, 1, 2],
+            ),
+            (
+                "empty mru, panel sinks last",
+                &[PANEL, EDITOR, FIREFOX],
+                &[true, false, false],
+                &[],
+                &[1, 2, 0],
+            ),
+            (
+                "mru has dead id, live ones still order",
+                &[10, 20],
+                &[false, false],
+                &[999, 20],
+                &[1, 0],
+            ),
+            (
+                "all normal, mru orders them",
+                &[10, 20, 30],
+                &[false, false, false],
+                &[30, 10],
+                &[2, 0, 1],
+            ),
+        ];
+        for (label, ids, above, mru, expected) in cases {
+            let got = mru_order(ids, above, mru);
+            assert_eq!(got.as_slice(), *expected, "case: {label}");
+        }
+    }
+
+    #[test]
+    #[ignore = "connects to the live X server; run with --ignored --nocapture"]
+    fn live_picker_order() {
+        let windows = super::get_open_windows();
+        eprintln!("[live] {} windows", windows.len());
+        for (i, w) in windows.iter().enumerate() {
+            eprintln!("[live] slot {i}: {:?} id={:#x}", w.title, w.id);
+        }
+        assert!(!windows.is_empty(), "expected at least one live window");
     }
 
     #[test]
