@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "plugins": [
+    { "uid": "a7f48ac7-3cd5-4402-a1fe-d517fbce0fd6", "id": "plugin-alt-tab", "repo_url": "https://example/alt-tab", "version": "1.0.0" },
+    { "uid": "e8208e3e-58b3-4f8c-ad4b-ddbecafa3375", "id": "qol-shot", "repo_url": "https://example/qol-shot", "version": "1.2.0" },
+    { "uid": "plugin-unknown", "id": "plugin-unknown", "repo_url": "https://example/unknown", "version": "1.0.0" }
+  ]
+}

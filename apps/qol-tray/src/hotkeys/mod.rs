@@ -25,7 +25,7 @@ pub(crate) fn build_capture_bindings(config: HotkeyConfig) -> Vec<capture::Bindi
         .filter(|h| h.enabled)
         .map(|h| capture::Binding {
             combo: capture::parse_combo(&h.key),
-            plugin_id: h.plugin_id,
+            plugin_uid: h.plugin_uid,
             action: h.action,
             raw_key: h.key,
         })
@@ -46,11 +46,24 @@ pub fn start_capture(
 
     let plugin_manager_for_fire = plugin_manager.clone();
     let on_fire: capture::OnFire = Box::new(move |binding| {
-        action_executor::execute_action(
-            &plugin_manager_for_fire,
-            &binding.plugin_id,
-            &binding.action,
-        );
+        let plugin_id = match plugin_manager_for_fire.lock() {
+            Ok(manager) => manager
+                .identity_index()
+                .display_for(&binding.plugin_uid)
+                .map(|d| d.id.as_str().to_owned()),
+            Err(_) => {
+                log::error!("hotkey capture: plugin manager lock failed");
+                return;
+            }
+        };
+        let Some(plugin_id) = plugin_id else {
+            log::warn!(
+                "hotkey capture: no plugin found for uid {}",
+                binding.plugin_uid.as_str()
+            );
+            return;
+        };
+        action_executor::execute_action(&plugin_manager_for_fire, &plugin_id, &binding.action);
     });
 
     let reload_rx = reload::subscribe();

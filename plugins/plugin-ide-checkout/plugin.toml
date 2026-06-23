@@ -1,5 +1,6 @@
 [plugin]
 id = "plugin-ide-checkout"
+uid = "b61195c4-a0a8-4be5-a507-9aeb45edb060"
 name = "Task Runner"
 description = "Generic HTTP API for browser extensions to execute local tasks (git checkout, open apps, run scripts)"
 version = "1.3.3"

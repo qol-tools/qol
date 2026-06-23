@@ -373,7 +373,7 @@ mod tests {
     fn binding(key: &str) -> Binding {
         Binding {
             combo: parse_combo(key),
-            plugin_id: "plugin".into(),
+            plugin_uid: crate::plugins::PluginUid::new("plugin"),
             action: "open".into(),
             raw_key: key.into(),
         }
@@ -382,7 +382,7 @@ mod tests {
     fn binding_for(key: &str, plugin: &str, action: &str) -> Binding {
         Binding {
             combo: parse_combo(key),
-            plugin_id: plugin.into(),
+            plugin_uid: crate::plugins::PluginUid::new(plugin),
             action: action.into(),
             raw_key: key.into(),
         }
@@ -466,7 +466,7 @@ mod tests {
             .match_combo(&added)
             .cloned()
             .expect("newly added binding must match after swap");
-        assert_eq!(hit.plugin_id, "launcher");
+        assert_eq!(hit.plugin_uid.as_str(), "launcher");
         assert_eq!(hit.action, "show");
     }
 
@@ -577,7 +577,7 @@ mod tests {
             let observed = combo_for(lookup);
             let actual = m
                 .match_combo(&observed)
-                .map(|b| (b.plugin_id.as_str(), b.action.as_str()));
+                .map(|b| (b.plugin_uid.as_str(), b.action.as_str()));
             assert_eq!(actual, *expected, "initial={:?} lookup={}", initial, lookup);
         }
     }

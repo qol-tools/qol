@@ -39,7 +39,7 @@ fn plan_binding(
 
 fn binding_available(available_actions: &AvailableActions, binding: &HotkeyBinding) -> bool {
     available_actions
-        .get(binding.plugin_id.as_str())
+        .get(&binding.plugin_uid)
         .is_some_and(|actions| actions.contains(&binding.action))
 }
 
@@ -55,7 +55,7 @@ fn warn_unavailable_binding(binding: &HotkeyBinding) {
     log::warn!(
         "Skipping hotkey {} -> {}::{} (plugin/action unavailable)",
         binding.key,
-        binding.plugin_id,
+        binding.plugin_uid.as_str(),
         binding.action
     );
 }
@@ -70,7 +70,7 @@ impl PlannedRegistration {
             binding_key: binding.key.clone(),
             hotkey,
             action: HotkeyAction {
-                plugin_id: binding.plugin_id.clone(),
+                plugin_uid: binding.plugin_uid.clone(),
                 action: binding.action.clone(),
             },
         }

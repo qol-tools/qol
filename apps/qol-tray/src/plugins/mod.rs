@@ -8,6 +8,7 @@ pub mod daemon_tracker;
 mod execution_contract;
 #[cfg(test)]
 mod execution_contract_tests;
+pub mod identity_index;
 pub mod loader;
 pub mod manager;
 pub mod manifest;
@@ -17,9 +18,10 @@ mod reserved;
 pub mod resolver;
 
 pub use config::PluginConfigManager;
+pub use identity_index::{PluginDisplay, PluginIdentityIndex};
 pub use loader::PluginLoader;
 pub use manager::PluginManager;
-pub use manifest::{ActionType, MenuItem, PluginId, PluginManifest};
+pub use manifest::{ActionType, MenuItem, PluginId, PluginManifest, PluginUid};
 pub use reserved::is_reserved_plugin_id;
 pub use resolver::PluginSource;
 
@@ -61,6 +63,13 @@ impl Plugin {
         }
     }
 
+    pub fn uid(&self) -> PluginUid {
+        match &self.manifest.plugin.uid {
+            Some(uid) => uid.clone(),
+            None => PluginUid::new(self.id.as_str()),
+        }
+    }
+
     pub fn start_daemon(&mut self) -> Result<()> {
         daemon_lifecycle::start_daemon(self)
     }
@@ -77,5 +86,54 @@ impl Plugin {
 impl Drop for Plugin {
     fn drop(&mut self) {
         let _ = self.stop_daemon();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugins::manifest::{MenuConfig, PluginInfo};
+
+    fn minimal_plugin(id: &str, uid: Option<&str>) -> Plugin {
+        let plugin_info = PluginInfo {
+            id: Some(PluginId::new(id)),
+            uid: uid.map(PluginUid::new),
+            name: "Test Plugin".to_string(),
+            description: String::new(),
+            version: "1.0.0".to_string(),
+            author: None,
+            platforms: None,
+        };
+        let manifest = PluginManifest {
+            manifest_version: 1,
+            plugin: plugin_info,
+            menu: MenuConfig {
+                label: String::new(),
+                icon: None,
+                items: vec![],
+            },
+            daemon: None,
+            dependencies: None,
+            runtime: None,
+            actions: Default::default(),
+            capabilities: Default::default(),
+            build: Default::default(),
+            traits: None,
+            config: Default::default(),
+            shortcuts: vec![],
+        };
+        Plugin::new(PluginId::new(id), manifest, std::path::PathBuf::new())
+    }
+
+    #[test]
+    fn uid_returns_manifest_uid_when_present() {
+        let plugin = minimal_plugin("plugin-foo", Some("uid-abc123"));
+        assert_eq!(plugin.uid().as_str(), "uid-abc123");
+    }
+
+    #[test]
+    fn uid_falls_back_to_id_when_manifest_uid_absent() {
+        let plugin = minimal_plugin("plugin-foo", None);
+        assert_eq!(plugin.uid().as_str(), "plugin-foo");
     }
 }

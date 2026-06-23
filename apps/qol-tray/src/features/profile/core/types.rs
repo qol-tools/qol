@@ -1,3 +1,4 @@
+use crate::plugins::PluginUid;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -10,14 +11,40 @@ pub struct ProfileManifest {
     pub version: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PluginLockEntry {
+    pub uid: PluginUid,
     pub id: String,
     pub repo_url: String,
-    #[serde(default)]
     pub version: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platforms: Option<Vec<String>>,
+}
+
+impl<'de> Deserialize<'de> for PluginLockEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            uid: Option<PluginUid>,
+            id: String,
+            repo_url: String,
+            #[serde(default)]
+            version: String,
+            #[serde(default)]
+            platforms: Option<Vec<String>>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let uid = raw.uid.unwrap_or_else(|| PluginUid::new(raw.id.as_str()));
+        Ok(PluginLockEntry {
+            uid,
+            id: raw.id,
+            repo_url: raw.repo_url,
+            version: raw.version,
+            platforms: raw.platforms,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

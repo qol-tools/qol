@@ -119,7 +119,15 @@ fn finalize_load(manager: &mut PluginManager, loaded: LoadedPlugins) {
 }
 
 fn register_plugins(manager: &mut PluginManager, plugins: Vec<Plugin>) {
+    use crate::plugins::PluginIdentityIndex;
+    let mut index = PluginIdentityIndex::default();
     for plugin in plugins {
+        index.insert(
+            plugin.uid(),
+            plugin.id.clone(),
+            plugin.manifest.plugin.name.clone(),
+        );
         manager.plugins.insert(plugin.id.clone(), plugin);
     }
+    manager.identity_index = index;
 }

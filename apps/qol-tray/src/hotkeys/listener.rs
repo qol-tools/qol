@@ -155,11 +155,34 @@ impl<'a> HotkeyListenerLoop<'a> {
             return;
         };
 
-        log::info!("Hotkey triggered: {}::{}", action.plugin_id, action.action);
+        log::info!(
+            "Hotkey triggered: {}::{}",
+            action.plugin_uid.as_str(),
+            action.action
+        );
+
+        let plugin_id = match self.plugin_manager.lock() {
+            Ok(manager) => manager
+                .identity_index()
+                .display_for(&action.plugin_uid)
+                .map(|d| d.id.as_str().to_owned()),
+            Err(_) => {
+                log::error!("hotkey dispatch: plugin manager lock failed");
+                return;
+            }
+        };
+
+        let Some(plugin_id) = plugin_id else {
+            log::warn!(
+                "hotkey dispatch: no plugin found for uid {}",
+                action.plugin_uid.as_str()
+            );
+            return;
+        };
 
         crate::plugins::action_executor::execute_action(
             &self.plugin_manager,
-            &action.plugin_id,
+            &plugin_id,
             &action.action,
         );
     }

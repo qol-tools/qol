@@ -1,0 +1,7 @@
+{
+  "hotkeys": [
+    { "id": "hk-1", "key": "Super+Tab", "plugin_uid": "a7f48ac7-3cd5-4402-a1fe-d517fbce0fd6", "action": "open", "enabled": true },
+    { "id": "hk-2", "key": "Super+Shift+S", "plugin_uid": "e8208e3e-58b3-4f8c-ad4b-ddbecafa3375", "action": "capture", "enabled": true },
+    { "id": "hk-3", "key": "Super+U", "plugin_uid": "plugin-unknown", "action": "open", "enabled": false }
+  ]
+}

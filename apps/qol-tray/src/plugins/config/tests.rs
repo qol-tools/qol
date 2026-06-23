@@ -480,6 +480,7 @@ mod scoped_io {
 
     fn lock_entry(id: &str, platforms: Option<Vec<&str>>) -> PluginLockEntry {
         PluginLockEntry {
+            uid: crate::plugins::PluginUid::new(id),
             id: id.to_string(),
             repo_url: "https://example/repo.git".to_string(),
             version: "1.0.0".to_string(),
@@ -503,6 +504,7 @@ mod scoped_io {
             manifest_version: 1,
             plugin: PluginInfo {
                 id: Some("test-plugin".into()),
+                uid: None,
                 name: "p".to_string(),
                 description: String::new(),
                 version: "1.0.0".to_string(),
@@ -540,10 +542,11 @@ mod scoped_io {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
         let store = store_at(profile, "linux");
+        let uid = crate::plugins::PluginUid::new("plugin-x");
         let config = json!({ "presets": ["a"] });
 
-        save_plugin_config_split(&store, "plugin-x", &config, None, None).unwrap();
-        let merged = load_plugin_config_merged(&store, "plugin-x", None, None).unwrap();
+        save_plugin_config_split(&store, &uid, &config, None, None).unwrap();
+        let merged = load_plugin_config_merged(&store, &uid, None, None).unwrap();
         assert_eq!(merged, config);
         assert!(profile.join("core/plugin-configs/plugin-x.json").is_file());
         assert!(!profile
@@ -557,6 +560,7 @@ mod scoped_io {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
         let store = store_at(profile, "linux");
+        let uid = crate::plugins::PluginUid::new("plugin-x");
         pre_seed(
             &profile.join("core/plugin-configs/plugin-x.json"),
             json!({ "k": "from-core", "shared": "core" }),
@@ -570,7 +574,7 @@ mod scoped_io {
             json!({ "k": "from-device", "device_only": 42 }),
         );
 
-        let merged = load_plugin_config_merged(&store, "plugin-x", None, None).unwrap();
+        let merged = load_plugin_config_merged(&store, &uid, None, None).unwrap();
         assert_eq!(merged["k"], json!("from-device"), "device wins for k");
         assert_eq!(merged["shared"], json!("core"));
         assert_eq!(merged["os_only"], json!(true));
@@ -587,14 +591,7 @@ mod scoped_io {
         let manifest = manifest_with(Some(vec!["macos"]), None, &[("rules", ConfigScope::Os)]);
         let config = json!({ "rules": ["caps_to_ctrl"], "enabled": true });
 
-        save_plugin_config_split(
-            &store,
-            "plugin-keyremap",
-            &config,
-            Some(&lock),
-            Some(&manifest),
-        )
-        .unwrap();
+        save_plugin_config_split(&store, &lock.uid, &config, Some(&lock), Some(&manifest)).unwrap();
 
         let os_macos = profile.join("os/macos/plugin-configs/plugin-keyremap.json");
         assert!(
@@ -617,10 +614,11 @@ mod scoped_io {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
         let store = store_at(profile, "linux");
+        let uid = crate::plugins::PluginUid::new("plugin-x");
         let manifest = manifest_with(None, None, &[("broker_url", ConfigScope::Device)]);
         let config = json!({ "broker_url": "10.0.0.1", "presets": ["a"] });
 
-        save_plugin_config_split(&store, "plugin-x", &config, None, Some(&manifest)).unwrap();
+        save_plugin_config_split(&store, &uid, &config, None, Some(&manifest)).unwrap();
 
         let device = profile.join("device/plugin-configs/plugin-x.json");
         assert_eq!(read_json(&device), json!({ "broker_url": "10.0.0.1" }));
@@ -633,6 +631,7 @@ mod scoped_io {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
         let store = store_at(profile, "linux");
+        let uid = crate::plugins::PluginUid::new("plugin-x");
         pre_seed(
             &profile.join("core/plugin-configs/plugin-other.json"),
             json!({ "untouched": "core" }),
@@ -646,7 +645,7 @@ mod scoped_io {
             json!({ "untouched": "device" }),
         );
 
-        save_plugin_config_split(&store, "plugin-x", &json!({ "x": 1 }), None, None).unwrap();
+        save_plugin_config_split(&store, &uid, &json!({ "x": 1 }), None, None).unwrap();
 
         assert_eq!(
             read_json(&profile.join("core/plugin-configs/plugin-other.json")),
@@ -667,12 +666,13 @@ mod scoped_io {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
         let store = store_at(profile, "linux");
+        let uid = crate::plugins::PluginUid::new("plugin-unknown");
         pre_seed(
             &profile.join("core/plugin-configs/plugin-unknown.json"),
             json!({ "legacy_field": "preserved" }),
         );
 
-        let merged = load_plugin_config_merged(&store, "plugin-unknown", None, None).unwrap();
+        let merged = load_plugin_config_merged(&store, &uid, None, None).unwrap();
         assert_eq!(
             merged,
             json!({ "legacy_field": "preserved" }),
@@ -685,11 +685,12 @@ mod scoped_io {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
         let store = store_at(profile, "linux");
+        let uid = crate::plugins::PluginUid::new("plugin-x");
         let manifest = manifest_with(None, None, &[("broker_url", ConfigScope::Device)]);
 
         save_plugin_config_split(
             &store,
-            "plugin-x",
+            &uid,
             &json!({ "broker_url": "10.0.0.1", "presets": ["a"] }),
             None,
             Some(&manifest),
@@ -700,7 +701,7 @@ mod scoped_io {
 
         save_plugin_config_split(
             &store,
-            "plugin-x",
+            &uid,
             &json!({ "presets": ["b"] }),
             None,
             Some(&manifest),
@@ -721,11 +722,12 @@ mod scoped_io {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
         let store = store_at(profile, "macos");
+        let uid = crate::plugins::PluginUid::new("plugin-x");
         let manifest = manifest_with(None, Some(ConfigScope::Os), &[]);
 
         save_plugin_config_split(
             &store,
-            "plugin-x",
+            &uid,
             &json!({ "a": 1, "b": 2 }),
             None,
             Some(&manifest),
@@ -758,8 +760,9 @@ mod scoped_io {
             "deep": { "nested": true }
         });
 
-        save_plugin_config_split(&store, "p", &config, Some(&lock), Some(&manifest)).unwrap();
-        let merged = load_plugin_config_merged(&store, "p", Some(&lock), Some(&manifest)).unwrap();
+        save_plugin_config_split(&store, &lock.uid, &config, Some(&lock), Some(&manifest)).unwrap();
+        let merged =
+            load_plugin_config_merged(&store, &lock.uid, Some(&lock), Some(&manifest)).unwrap();
         assert_eq!(merged, config, "round trip must preserve every field");
     }
 }

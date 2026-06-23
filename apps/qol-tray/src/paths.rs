@@ -214,10 +214,6 @@ pub fn profile_plugin_configs_dir() -> Result<PathBuf> {
     active_scope_store().map(|s| s.core_plugin_configs_dir())
 }
 
-pub fn profile_plugin_config_path(plugin_id: &str) -> Result<PathBuf> {
-    active_scope_store()?.core_plugin_config_path(plugin_id)
-}
-
 pub fn hotkeys_path() -> Result<PathBuf> {
     active_scope_store().map(|s| s.hotkeys_path())
 }

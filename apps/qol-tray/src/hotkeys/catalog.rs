@@ -1,8 +1,8 @@
-use crate::plugins::{Plugin, PluginId, PluginManager};
+use crate::plugins::{Plugin, PluginManager, PluginUid};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
-pub(super) type AvailableActions = HashMap<PluginId, BTreeSet<String>>;
+pub(super) type AvailableActions = HashMap<PluginUid, BTreeSet<String>>;
 
 pub(super) fn load_available_actions(
     plugin_manager: &Arc<Mutex<PluginManager>>,
@@ -23,7 +23,7 @@ where
 {
     plugins
         .into_iter()
-        .map(|plugin| (plugin.id.clone(), plugin.manifest.executable_action_ids()))
+        .map(|plugin| (plugin.uid(), plugin.manifest.executable_action_ids()))
         .collect()
 }
 
@@ -33,7 +33,7 @@ mod tests {
     use crate::plugins::manifest::{
         ActionType, BuildInfo, Capabilities, DaemonConfig, MenuConfig, PluginInfo, PluginManifest,
     };
-    use crate::plugins::{MenuItem, Plugin, PluginId, PluginSource};
+    use crate::plugins::{MenuItem, Plugin, PluginId, PluginSource, PluginUid};
     use std::path::PathBuf;
 
     fn run_action(id: &str) -> MenuItem {
@@ -72,6 +72,7 @@ mod tests {
             manifest_version: 1,
             plugin: PluginInfo {
                 id: Some("test-plugin".into()),
+                uid: None,
                 name: "Plugin Foo".to_string(),
                 description: "test".to_string(),
                 version: "0.0.0".to_string(),
@@ -148,7 +149,7 @@ mod tests {
         let catalog = catalog_for_plugins(std::iter::once(&plugin));
 
         let actions = catalog
-            .get("plugin-foo")
+            .get(&PluginUid::new("plugin-foo"))
             .expect("daemon-backed plugin must be in the catalog");
         assert!(
             actions.contains("toggle"),
@@ -179,11 +180,21 @@ mod tests {
         let catalog = catalog_for_plugins(plugins.iter());
 
         assert_eq!(
-            sorted_set(catalog.get("plugin-no-daemon").unwrap().clone()),
+            sorted_set(
+                catalog
+                    .get(&PluginUid::new("plugin-no-daemon"))
+                    .unwrap()
+                    .clone()
+            ),
             vec!["alpha", "beta"]
         );
         assert_eq!(
-            sorted_set(catalog.get("plugin-disabled-daemon").unwrap().clone()),
+            sorted_set(
+                catalog
+                    .get(&PluginUid::new("plugin-disabled-daemon"))
+                    .unwrap()
+                    .clone()
+            ),
             vec!["gamma"]
         );
     }
@@ -194,7 +205,9 @@ mod tests {
         let catalog = catalog_for_plugins(std::iter::once(&plugin));
 
         assert_eq!(
-            catalog.get("plugin-empty").map(|s| s.is_empty()),
+            catalog
+                .get(&PluginUid::new("plugin-empty"))
+                .map(|s| s.is_empty()),
             Some(true),
             "plugin with no menu actions appears with an empty action set"
         );

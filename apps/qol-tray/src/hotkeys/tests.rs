@@ -1,6 +1,10 @@
 use super::parser::{parse_hotkey, parse_key_code};
+use super::planning::plan_registrations;
+use super::types::{HotkeyBinding, HotkeyConfig};
 use crate::plugins::manifest::is_valid_action_id;
+use crate::plugins::PluginUid;
 use global_hotkey::hotkey::{Code, Modifiers};
+use std::collections::{BTreeSet, HashMap};
 
 #[test]
 fn parse_key_code_letters() {
@@ -242,4 +246,116 @@ fn is_valid_action_id_rejects_invalid() {
         assert!(!is_valid_action_id(input), "input: {:?}", input);
     }
     assert!(!is_valid_action_id(&"a".repeat(65)), "max length + 1");
+}
+
+fn make_available(uid: &str, actions: &[&str]) -> super::catalog::AvailableActions {
+    let mut map = HashMap::new();
+    map.insert(
+        PluginUid::new(uid),
+        actions
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<BTreeSet<_>>(),
+    );
+    map
+}
+
+fn binding(uid: &str, action: &str, key: &str, enabled: bool) -> HotkeyBinding {
+    HotkeyBinding {
+        id: format!("{uid}-{action}"),
+        key: key.to_string(),
+        plugin_uid: PluginUid::new(uid),
+        action: action.to_string(),
+        enabled,
+    }
+}
+
+#[test]
+fn plan_registrations_includes_binding_when_uid_and_action_match() {
+    let available = make_available("uid-foo", &["run"]);
+    let config = HotkeyConfig {
+        hotkeys: vec![binding("uid-foo", "run", "Ctrl+R", true)],
+    };
+    let plan = plan_registrations(&config, &available);
+    assert_eq!(
+        plan.len(),
+        1,
+        "matching uid+action must produce one registration"
+    );
+    assert_eq!(plan[0].action.plugin_uid.as_str(), "uid-foo");
+    assert_eq!(plan[0].action.action, "run");
+}
+
+#[test]
+fn plan_registrations_skips_binding_when_uid_not_in_available_actions() {
+    let available = make_available("uid-foo", &["run"]);
+    let config = HotkeyConfig {
+        hotkeys: vec![binding("uid-ghost", "run", "Ctrl+R", true)],
+    };
+    let plan = plan_registrations(&config, &available);
+    assert!(
+        plan.is_empty(),
+        "binding with unknown uid must be skipped, not panicked; got {} registrations",
+        plan.len()
+    );
+}
+
+#[test]
+fn plan_registrations_skips_disabled_binding() {
+    let available = make_available("uid-foo", &["run"]);
+    let config = HotkeyConfig {
+        hotkeys: vec![binding("uid-foo", "run", "Ctrl+R", false)],
+    };
+    let plan = plan_registrations(&config, &available);
+    assert!(plan.is_empty(), "disabled binding must not be registered");
+}
+
+#[test]
+fn plan_registrations_skips_when_action_not_in_uid_entry() {
+    let available = make_available("uid-foo", &["run"]);
+    let config = HotkeyConfig {
+        hotkeys: vec![binding("uid-foo", "nonexistent-action", "Ctrl+R", true)],
+    };
+    let plan = plan_registrations(&config, &available);
+    assert!(
+        plan.is_empty(),
+        "binding with wrong action for the uid must be skipped"
+    );
+}
+
+#[test]
+fn hotkey_binding_deserializes_legacy_plugin_id_field_as_plugin_uid() {
+    let cases = [
+        (
+            r#"{"id":"hk-1","key":"Ctrl+A","plugin_id":"plugin-x","action":"run","enabled":true}"#,
+            "plugin-x",
+            "old-schema plugin_id field",
+        ),
+        (
+            r#"{"id":"hk-2","key":"Ctrl+B","plugin_uid":"plugin-y","action":"run","enabled":false}"#,
+            "plugin-y",
+            "new-schema plugin_uid field",
+        ),
+    ];
+    for (json, expected_uid, label) in cases {
+        let binding: HotkeyBinding = serde_json::from_str(json).unwrap();
+        assert_eq!(binding.plugin_uid.as_str(), expected_uid, "case: {label}");
+    }
+}
+
+#[test]
+fn hotkey_binding_serializes_as_plugin_uid_not_plugin_id() {
+    let binding = HotkeyBinding {
+        id: "hk-1".to_string(),
+        key: "Ctrl+A".to_string(),
+        plugin_uid: PluginUid::new("plugin-x"),
+        action: "run".to_string(),
+        enabled: true,
+    };
+    let value = serde_json::to_value(&binding).unwrap();
+    assert_eq!(
+        value["plugin_uid"], "plugin-x",
+        "must serialize as plugin_uid"
+    );
+    assert!(value.get("plugin_id").is_none(), "must not emit plugin_id");
 }

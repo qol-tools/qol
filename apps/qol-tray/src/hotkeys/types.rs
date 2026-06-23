@@ -1,3 +1,4 @@
+use crate::plugins::PluginUid;
 use global_hotkey::hotkey::Code;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -13,7 +14,8 @@ pub struct HotkeyConfig {
 pub struct HotkeyBinding {
     pub id: String,
     pub key: String,
-    pub plugin_id: String,
+    #[serde(alias = "plugin_id")]
+    pub plugin_uid: PluginUid,
     pub action: String,
     #[serde(default)]
     pub enabled: bool,
@@ -21,7 +23,7 @@ pub struct HotkeyBinding {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HotkeyAction {
-    pub plugin_id: String,
+    pub plugin_uid: PluginUid,
     pub action: String,
 }
 

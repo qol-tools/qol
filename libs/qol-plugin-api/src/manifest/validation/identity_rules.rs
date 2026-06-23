@@ -41,6 +41,7 @@ mod tests {
     fn plugin_info(id: Option<&str>) -> PluginInfo {
         PluginInfo {
             id: id.map(Into::into),
+            uid: None,
             name: "n".into(),
             description: String::new(),
             version: "1.0.0".into(),

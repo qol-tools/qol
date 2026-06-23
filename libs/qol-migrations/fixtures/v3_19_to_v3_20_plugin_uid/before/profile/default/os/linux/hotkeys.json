@@ -1,0 +1,7 @@
+{
+  "hotkeys": [
+    { "id": "hk-1", "key": "Super+Tab", "plugin_id": "plugin-alt-tab", "action": "open", "enabled": true },
+    { "id": "hk-2", "key": "Super+Shift+S", "plugin_id": "plugin-screen-recorder", "action": "capture", "enabled": true },
+    { "id": "hk-3", "key": "Super+U", "plugin_id": "plugin-unknown", "action": "open", "enabled": false }
+  ]
+}

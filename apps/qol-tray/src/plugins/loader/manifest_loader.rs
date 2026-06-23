@@ -17,6 +17,7 @@ fn load_plugin_with_source(locator: PluginId, path: &Path, source: PluginSource)
     let manifest_content = read_manifest(&manifest_path)?;
     let manifest = parse_manifest(&manifest_content)?;
     warn_on_locator_drift(&locator, manifest.plugin.id.as_ref(), path);
+    warn_on_missing_uid(&locator, &manifest);
     validate_manifest_contract(locator.as_str(), &manifest, path, &source)?;
     Ok(Plugin::new_with_source(
         locator,
@@ -41,6 +42,16 @@ fn warn_on_locator_drift(locator: &PluginId, declared: Option<&PluginId>, path: 
         locator.as_str(),
         declared.as_str()
     );
+}
+
+fn warn_on_missing_uid(locator: &PluginId, manifest: &PluginManifest) {
+    if manifest.plugin.uid.is_none() {
+        log::warn!(
+            "Plugin {:?} declares no frozen uid in plugin.toml; using transitional id-as-uid. \
+             Add a uid field to [plugin] in plugin.toml for stable identity across versions.",
+            locator.as_str()
+        );
+    }
 }
 
 fn manifest_path(path: &Path) -> std::path::PathBuf {

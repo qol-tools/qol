@@ -10,6 +10,7 @@ mod install_identity;
 mod plugin_process_leaks;
 #[cfg(feature = "dev")]
 mod plugin_staleness;
+mod plugin_uid_table;
 #[cfg(feature = "dev")]
 mod reserved_plugin_ids;
 mod runtime_prereqs;
@@ -33,6 +34,7 @@ pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
         Box::new(plugin_process_leaks::PluginProcessLeaksCheck),
         Box::new(shell_hook_present::ShellHookPresentCheck),
         Box::new(hotkey_shadows::HotkeyShadowsCheck),
+        Box::new(plugin_uid_table::PluginUidTableCheck),
     ];
     #[cfg(feature = "dev")]
     {

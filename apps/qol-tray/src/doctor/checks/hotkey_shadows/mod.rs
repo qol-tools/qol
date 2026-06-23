@@ -150,7 +150,7 @@ mod tests {
         HotkeyBinding {
             id: format!("hk-{key}"),
             key: key.to_string(),
-            plugin_id: "test-plugin".into(),
+            plugin_uid: crate::plugins::PluginUid::new("test-plugin"),
             action: "open".into(),
             enabled: true,
         }

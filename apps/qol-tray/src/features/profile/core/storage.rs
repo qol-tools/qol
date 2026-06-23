@@ -42,22 +42,6 @@ pub fn save_plugins_lock(lock: &PluginsLock) -> Result<()> {
     crate::file_io::write_pretty_json(&crate::paths::profile_plugins_lock_path()?, lock)
 }
 
-pub fn load_plugin_config(plugin_id: &str) -> Result<Option<Value>> {
-    let path = crate::paths::profile_plugin_config_path(plugin_id)?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    crate::file_io::read_json(&path).map(Some)
-}
-
-pub fn save_plugin_config(plugin_id: &str, config: &Value) -> Result<()> {
-    ensure_profile_dirs()?;
-    crate::file_io::write_pretty_json(
-        &crate::paths::profile_plugin_config_path(plugin_id)?,
-        config,
-    )
-}
-
 pub fn read_plugin_configs() -> Result<HashMap<String, Value>> {
     ensure_profile_dirs()?;
     let installed_configs_dir = crate::paths::plugins_dir()?;

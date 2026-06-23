@@ -164,7 +164,7 @@ fn process_event(
             log::info!(
                 "evdev: hotkey fired {} -> {}::{}",
                 binding.raw_key,
-                binding.plugin_id,
+                binding.plugin_uid.as_str(),
                 binding.action
             );
             on_fire(&binding);

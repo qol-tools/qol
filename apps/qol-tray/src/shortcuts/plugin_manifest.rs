@@ -148,6 +148,7 @@ mod tests {
                 manifest_version: CURRENT_MANIFEST_VERSION,
                 plugin: PluginInfo {
                     id: Some(id.into()),
+                    uid: None,
                     name: id.to_string(),
                     description: String::new(),
                     version: "1.0.0".to_string(),

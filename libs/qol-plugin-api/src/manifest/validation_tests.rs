@@ -14,6 +14,7 @@ fn base_manifest() -> PluginManifest {
         manifest_version: CURRENT_MANIFEST_VERSION,
         plugin: PluginInfo {
             id: Some("test-plugin".into()),
+            uid: None,
             name: "P".to_string(),
             description: "".to_string(),
             version: "0.0.1".to_string(),

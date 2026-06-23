@@ -84,6 +84,7 @@ mod tests {
             manifest_version: crate::plugins::manifest::CURRENT_MANIFEST_VERSION,
             plugin: PluginInfo {
                 id: Some("test-plugin".into()),
+                uid: None,
                 name: name.to_string(),
                 description: "Test plugin".to_string(),
                 version: version.to_string(),

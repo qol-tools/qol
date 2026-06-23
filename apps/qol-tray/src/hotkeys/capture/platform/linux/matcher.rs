@@ -230,7 +230,7 @@ mod matcher_tests {
     fn binding(key_str: &str, plugin: &str, action: &str) -> Binding {
         Binding {
             combo: parse_combo(key_str),
-            plugin_id: plugin.into(),
+            plugin_uid: crate::plugins::PluginUid::new(plugin),
             action: action.into(),
             raw_key: key_str.into(),
         }
@@ -252,7 +252,7 @@ mod matcher_tests {
         matcher.observe(keycodes::KEY_LEFTMETA, 1);
         match matcher.observe(keycodes::KEY_SPACE, 1) {
             CaptureDecision::Fire(b) => {
-                assert_eq!(b.plugin_id, "p");
+                assert_eq!(b.plugin_uid.as_str(), "p");
                 assert_eq!(b.action, "open");
             }
             other => panic!("expected Fire, got {other:?}"),

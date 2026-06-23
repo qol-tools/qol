@@ -171,7 +171,7 @@ fn log_registered_hotkey(binding_key: &str, action: &HotkeyAction) {
     log::info!(
         "Registered hotkey: {} -> {}::{}",
         binding_key,
-        action.plugin_id,
+        action.plugin_uid.as_str(),
         action.action
     );
 }

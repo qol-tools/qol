@@ -3,13 +3,14 @@ mod lifeline_facade;
 mod loading;
 mod runtime;
 
-use super::{Plugin, PluginId};
+use super::{Plugin, PluginId, PluginIdentityIndex};
 use crate::plugins::resolver::ResolutionReport;
 use anyhow::Result;
 use std::collections::HashMap;
 
 pub struct PluginManager {
     plugins: HashMap<PluginId, Plugin>,
+    pub(super) identity_index: PluginIdentityIndex,
     resolution_report: ResolutionReport,
     last_state_hash: Option<String>,
 }
@@ -18,6 +19,7 @@ impl PluginManager {
     pub fn new() -> Self {
         Self {
             plugins: HashMap::new(),
+            identity_index: PluginIdentityIndex::default(),
             resolution_report: ResolutionReport::default(),
             last_state_hash: None,
         }
@@ -58,6 +60,10 @@ impl PluginManager {
 
     pub fn plugins(&self) -> impl Iterator<Item = &Plugin> {
         self.plugins.values()
+    }
+
+    pub fn identity_index(&self) -> &PluginIdentityIndex {
+        &self.identity_index
     }
 
     pub fn last_resolution_report(&self) -> &ResolutionReport {

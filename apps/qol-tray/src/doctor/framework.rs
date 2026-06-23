@@ -197,6 +197,17 @@ impl DoctorContext {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn with_config_dir(config_dir: PathBuf) -> Self {
+        Self {
+            config_dir,
+            registry: OnceCell::new(),
+            fingerprints: OnceCell::new(),
+            #[cfg(feature = "dev")]
+            linked: OnceCell::new(),
+        }
+    }
+
     pub(super) fn config_dir(&self) -> &std::path::Path {
         &self.config_dir
     }

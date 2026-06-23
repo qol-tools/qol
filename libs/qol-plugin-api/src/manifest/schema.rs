@@ -251,10 +251,87 @@ pub struct BinaryDependency {
     pub pattern: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(transparent)]
+pub struct PluginUid(String);
+
+impl PluginUid {
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for PluginUid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl AsRef<str> for PluginUid {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for PluginUid {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for PluginUid {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for PluginUid {
+    fn from(s: &str) -> Self {
+        Self(s.to_owned())
+    }
+}
+
+impl PartialEq<str> for PluginUid {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for PluginUid {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl<'de> Deserialize<'de> for PluginUid {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = PluginUid;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a plugin uid string")
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<PluginUid, E> {
+                Ok(PluginUid(v.to_owned()))
+            }
+            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<PluginUid, E> {
+                Ok(PluginUid(v))
+            }
+        }
+        d.deserialize_string(Visitor)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PluginInfo {
     #[serde(default)]
     pub id: Option<PluginId>,
+    #[serde(default)]
+    pub uid: Option<PluginUid>,
     pub name: String,
     pub description: String,
     pub version: String,

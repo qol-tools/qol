@@ -130,6 +130,22 @@ fn read_live_plugin_config(env: &TestEnv, plugin_id: &str) -> Value {
     serde_json::from_slice(&fs::read(live_plugin_config_path(env, plugin_id)).unwrap()).unwrap()
 }
 
+fn write_profile_plugin_config(plugin_id: &str, value: &Value) {
+    let dir = paths::profile_plugin_configs_dir().unwrap();
+    fs::create_dir_all(&dir).unwrap();
+    write_json(&dir.join(format!("{plugin_id}.json")), value);
+}
+
+fn read_profile_plugin_config(plugin_id: &str) -> Option<Value> {
+    let path = paths::profile_plugin_configs_dir()
+        .unwrap()
+        .join(format!("{plugin_id}.json"));
+    if !path.exists() {
+        return None;
+    }
+    Some(serde_json::from_slice(&fs::read(&path).unwrap()).unwrap())
+}
+
 fn build_export_bundle(env: &TestEnv) -> ProfileExportBundle {
     let _ctx = env.enter();
     profile::build_export_bundle("2026-03-29T00:00:00+00:00".to_string(), Vec::new()).unwrap()
@@ -153,7 +169,7 @@ async fn profile_export_import_round_trip_preserves_effective_state() {
         write_task_runner(json!({ "actions": { "source": {} } }));
         write_live_plugin_config(&source, "plugin-live", &json!({ "source": "live" }));
         write_live_plugin_config(&source, "plugin-shared", &json!({ "source": "live" }));
-        profile::save_plugin_config("plugin-shared", &json!({ "source": "profile" })).unwrap();
+        write_profile_plugin_config("plugin-shared", &json!({ "source": "profile" }));
     }
 
     {
@@ -188,11 +204,11 @@ async fn profile_export_import_round_trip_preserves_effective_state() {
             json!({ "actions": { "source": {} } })
         );
         assert_eq!(
-            profile::load_plugin_config("plugin-live").unwrap(),
+            read_profile_plugin_config("plugin-live"),
             Some(json!({ "source": "live" }))
         );
         assert_eq!(
-            profile::load_plugin_config("plugin-shared").unwrap(),
+            read_profile_plugin_config("plugin-shared"),
             Some(json!({ "source": "profile" }))
         );
         assert_eq!(

@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "plugins": [
+    { "id": "plugin-alt-tab", "repo_url": "https://example/alt-tab", "version": "1.0.0" },
+    { "id": "plugin-screen-recorder", "repo_url": "https://example/old-shot", "version": "0.9.0", "platforms": ["linux"] },
+    { "id": "qol-shot", "repo_url": "https://example/qol-shot", "version": "1.2.0" },
+    { "id": "plugin-unknown", "repo_url": "https://example/unknown", "version": "1.0.0" }
+  ]
+}

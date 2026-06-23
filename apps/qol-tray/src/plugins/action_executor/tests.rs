@@ -34,6 +34,7 @@ fn make_plugin(
         manifest_version: CURRENT_MANIFEST_VERSION,
         plugin: PluginInfo {
             id: Some("test-plugin".into()),
+            uid: None,
             name: "Test".to_string(),
             description: "Test".to_string(),
             version: "1.0.0".to_string(),

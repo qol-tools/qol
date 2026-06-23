@@ -1,3 +1,4 @@
+use crate::plugins::PluginUid;
 use std::collections::BTreeSet;
 
 /// Linux evdev keycode constants used by the cross-platform combo parser.
@@ -43,7 +44,7 @@ pub(crate) struct Combo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Binding {
     pub(crate) combo: Option<Combo>,
-    pub(crate) plugin_id: String,
+    pub(crate) plugin_uid: PluginUid,
     pub(crate) action: String,
     pub(crate) raw_key: String,
 }

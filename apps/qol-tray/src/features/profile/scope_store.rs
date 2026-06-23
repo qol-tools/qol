@@ -5,7 +5,7 @@ use anyhow::{anyhow, Result};
 use crate::features::profile::core::PluginLockEntry;
 use crate::paths::{self, is_safe_path_component};
 use crate::plugins::config::{classify_os_bucket, resolve_plugin_config, PluginConfigResolution};
-use crate::plugins::manifest::{ConfigScope, PluginManifest};
+use crate::plugins::manifest::{ConfigScope, PluginManifest, PluginUid};
 
 pub(crate) const CORE_SUBDIR: &str = "core";
 pub(crate) const OS_SUBDIR: &str = "os";
@@ -136,36 +136,36 @@ impl ProfileScopeStore {
         self.core_dir().join(PLUGIN_CONFIGS_SUBDIR)
     }
 
-    pub fn core_plugin_config_path(&self, plugin_id: &str) -> Result<PathBuf> {
-        validate_plugin_id(plugin_id)?;
+    pub fn core_plugin_config_path(&self, uid: &PluginUid) -> Result<PathBuf> {
+        validate_plugin_uid(uid)?;
         Ok(self
             .core_plugin_configs_dir()
-            .join(format!("{}.json", plugin_id)))
+            .join(format!("{}.json", uid.as_str())))
     }
 
     pub fn device_plugin_configs_dir(&self) -> PathBuf {
         self.device_dir().join(PLUGIN_CONFIGS_SUBDIR)
     }
 
-    pub fn device_plugin_config_path(&self, plugin_id: &str) -> Result<PathBuf> {
-        validate_plugin_id(plugin_id)?;
+    pub fn device_plugin_config_path(&self, uid: &PluginUid) -> Result<PathBuf> {
+        validate_plugin_uid(uid)?;
         Ok(self
             .device_plugin_configs_dir()
-            .join(format!("{}.json", plugin_id)))
+            .join(format!("{}.json", uid.as_str())))
     }
 
     pub fn os_plugin_configs_dir_for(&self, bucket: &str) -> PathBuf {
         self.os_dir_for(bucket).join(PLUGIN_CONFIGS_SUBDIR)
     }
 
-    pub fn os_plugin_config_path_for(&self, plugin_id: &str, bucket: &str) -> Result<PathBuf> {
-        validate_plugin_id(plugin_id)?;
+    pub fn os_plugin_config_path_for(&self, uid: &PluginUid, bucket: &str) -> Result<PathBuf> {
+        validate_plugin_uid(uid)?;
         if !is_safe_path_component(bucket) {
             return Err(anyhow!("invalid os_bucket: {bucket}"));
         }
         Ok(self
             .os_plugin_configs_dir_for(bucket)
-            .join(format!("{}.json", plugin_id)))
+            .join(format!("{}.json", uid.as_str())))
     }
 
     pub fn hotkeys_path(&self) -> PathBuf {
@@ -206,34 +206,34 @@ impl ProfileScopeStore {
 
     pub fn plugin_config_target_path(
         &self,
-        plugin_id: &str,
+        uid: &PluginUid,
         lock_entry: Option<&PluginLockEntry>,
         manifest: Option<&PluginManifest>,
     ) -> Result<PathBuf> {
         let resolution = self.plugin_config_resolution(lock_entry, manifest)?;
         match resolution.scope {
-            ConfigScope::Core => self.core_plugin_config_path(plugin_id),
-            ConfigScope::Device => self.device_plugin_config_path(plugin_id),
+            ConfigScope::Core => self.core_plugin_config_path(uid),
+            ConfigScope::Device => self.device_plugin_config_path(uid),
             ConfigScope::Os => {
                 let bucket = resolution
                     .os_bucket
                     .ok_or_else(|| anyhow!("internal: Os scope resolved without an os_bucket"))?;
-                self.os_plugin_config_path_for(plugin_id, &bucket)
+                self.os_plugin_config_path_for(uid, &bucket)
             }
         }
     }
 
     pub fn plugin_config_slice_paths(
         &self,
-        plugin_id: &str,
+        uid: &PluginUid,
         lock_entry: Option<&PluginLockEntry>,
         manifest: Option<&PluginManifest>,
     ) -> Result<PluginConfigSlicePaths> {
         let os_bucket = classify_os_bucket(lock_entry, manifest, &self.os_bucket)?;
         Ok(PluginConfigSlicePaths {
-            core: self.core_plugin_config_path(plugin_id)?,
-            os: self.os_plugin_config_path_for(plugin_id, &os_bucket)?,
-            device: self.device_plugin_config_path(plugin_id)?,
+            core: self.core_plugin_config_path(uid)?,
+            os: self.os_plugin_config_path_for(uid, &os_bucket)?,
+            device: self.device_plugin_config_path(uid)?,
             os_bucket,
         })
     }
@@ -280,9 +280,9 @@ pub struct PluginConfigSlicePaths {
     pub os_bucket: String,
 }
 
-fn validate_plugin_id(plugin_id: &str) -> Result<()> {
-    if !is_safe_path_component(plugin_id) {
-        return Err(anyhow!("invalid plugin id: {plugin_id}"));
+fn validate_plugin_uid(uid: &PluginUid) -> Result<()> {
+    if !is_safe_path_component(uid.as_str()) {
+        return Err(anyhow!("invalid plugin uid: {}", uid.as_str()));
     }
     Ok(())
 }
@@ -341,12 +341,33 @@ mod tests {
     }
 
     #[test]
-    fn core_plugin_config_path_rejects_unsafe_id() {
+    fn config_path_helpers_key_by_uid_not_id() {
+        let (_tmp, s) = store("work", "macos");
+        let uid = crate::plugins::PluginUid::new("uid-abc123");
+        let active = s.dir();
+
+        assert_eq!(
+            s.core_plugin_config_path(&uid).unwrap(),
+            active.join("core/plugin-configs/uid-abc123.json")
+        );
+        assert_eq!(
+            s.device_plugin_config_path(&uid).unwrap(),
+            active.join("device/plugin-configs/uid-abc123.json")
+        );
+        assert_eq!(
+            s.os_plugin_config_path_for(&uid, "linux").unwrap(),
+            active.join("os/linux/plugin-configs/uid-abc123.json")
+        );
+    }
+
+    #[test]
+    fn core_plugin_config_path_rejects_unsafe_uid() {
         let (_tmp, s) = store("default", "linux");
         for evil in ["../etc/passwd", "with/slash", "", ".hidden", "-leading"] {
-            let err = s.core_plugin_config_path(evil).unwrap_err();
+            let uid = crate::plugins::PluginUid::new(evil);
+            let err = s.core_plugin_config_path(&uid).unwrap_err();
             assert!(
-                format!("{err:#}").contains("invalid plugin id"),
+                format!("{err:#}").contains("invalid plugin uid"),
                 "should reject {evil:?}: {err:#}"
             );
         }
@@ -441,7 +462,8 @@ mod tests {
     #[test]
     fn plugin_config_slice_paths_use_store_os_bucket_when_no_signals_provided() {
         let (_tmp, s) = store("default", "macos");
-        let paths = s.plugin_config_slice_paths("plugin-x", None, None).unwrap();
+        let uid = crate::plugins::PluginUid::new("plugin-x");
+        let paths = s.plugin_config_slice_paths(&uid, None, None).unwrap();
         let active = s.dir();
         assert_eq!(paths.os_bucket, "macos");
         assert_eq!(paths.core, active.join("core/plugin-configs/plugin-x.json"));
@@ -459,13 +481,14 @@ mod tests {
     fn plugin_config_slice_paths_use_lock_single_platform_even_from_another_os() {
         let (_tmp, s) = store("default", "linux");
         let lock = PluginLockEntry {
+            uid: crate::plugins::PluginUid::new("plugin-keyremap"),
             id: "plugin-keyremap".to_string(),
             repo_url: "https://example/r".to_string(),
             version: "1.0.0".to_string(),
             platforms: Some(vec!["macos".to_string()]),
         };
         let paths = s
-            .plugin_config_slice_paths("plugin-keyremap", Some(&lock), None)
+            .plugin_config_slice_paths(&lock.uid, Some(&lock), None)
             .unwrap();
         let active = s.dir();
         assert_eq!(paths.os_bucket, "macos");
@@ -479,7 +502,8 @@ mod tests {
     #[test]
     fn plugin_config_target_path_dispatches_on_resolution_scope() {
         let (_tmp, s) = store("default", "linux");
-        let target = s.plugin_config_target_path("plugin-x", None, None).unwrap();
+        let uid_x = crate::plugins::PluginUid::new("plugin-x");
+        let target = s.plugin_config_target_path(&uid_x, None, None).unwrap();
         assert_eq!(
             target,
             s.dir().join("core/plugin-configs/plugin-x.json"),
@@ -487,13 +511,14 @@ mod tests {
         );
 
         let mac_only_lock = PluginLockEntry {
+            uid: crate::plugins::PluginUid::new("plugin-keyremap"),
             id: "plugin-keyremap".to_string(),
             repo_url: "https://example/r".to_string(),
             version: "1.0.0".to_string(),
             platforms: Some(vec!["macos".to_string()]),
         };
         let target = s
-            .plugin_config_target_path("plugin-keyremap", Some(&mac_only_lock), None)
+            .plugin_config_target_path(&mac_only_lock.uid, Some(&mac_only_lock), None)
             .unwrap();
         assert_eq!(
             target,

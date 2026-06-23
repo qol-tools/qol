@@ -1,5 +1,6 @@
 [plugin]
 id = "plugin-pointz"
+uid = "9cb88d65-1d43-4fde-95b6-105761f0a14b"
 name = "PointZerver"
 description = "Control your PC from mobile devices"
 version = "1.6.0"

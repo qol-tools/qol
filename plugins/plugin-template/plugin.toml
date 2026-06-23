@@ -1,5 +1,6 @@
 [plugin]
 id = "plugin-template"
+# uid = "run: uuidgen | tr A-F a-f"   # frozen, mint once and never change
 name = "My Plugin"
 description = "A qol-tray plugin"
 

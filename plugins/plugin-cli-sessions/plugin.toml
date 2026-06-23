@@ -1,5 +1,6 @@
 [plugin]
 id = "plugin-cli-sessions"
+uid = "98f8b9fe-2115-4890-a8cc-89b6d4483d75"
 name = "CLI Sessions"
 description = "Always-on-top overview of live CLI sessions (Claude Code, Codex, any command)"
 version = "0.1.1"

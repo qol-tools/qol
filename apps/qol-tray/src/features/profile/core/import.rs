@@ -24,12 +24,12 @@ pub async fn apply_import_bundle(
     if let Some(plugin_configs) = &bundle.plugin_configs {
         super::replace_plugin_configs(plugin_configs)?;
     }
-    project_plugin_configs_to_dir(plugins_dir, bundle.plugin_configs.as_ref())?;
     super::plugins_lock::sync_plugins_lock_from_imported_state(
         plugins_dir,
         &previous_lock,
         &plugins,
     )?;
+    project_plugin_configs_to_dir(plugins_dir, bundle.plugin_configs.as_ref())?;
     let success = plugin_results
         .iter()
         .all(|result| result.status != "failed");

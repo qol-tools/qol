@@ -1,4 +1,5 @@
 use super::{PluginLockEntry, PluginsLock, ProfileImportBundle, CURRENT_PROFILE_VERSION};
+use crate::plugins::PluginUid;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
@@ -12,6 +13,7 @@ pub fn import_plugins(bundle: &ProfileImportBundle) -> Vec<PluginLockEntry> {
         .installed_plugins
         .iter()
         .map(|plugin_id| PluginLockEntry {
+            uid: PluginUid::new(plugin_id.as_str()),
             id: plugin_id.clone(),
             repo_url: default_repo_url(plugin_id),
             version: String::new(),
@@ -71,11 +73,12 @@ fn cached_repo_urls() -> HashMap<String, String> {
 }
 
 fn resolve_repo_url(
+    uid: &PluginUid,
     plugin_id: &str,
     existing_urls: &HashMap<String, String>,
     cached_urls: &HashMap<String, String>,
 ) -> String {
-    if let Some(repo_url) = existing_urls.get(plugin_id) {
+    if let Some(repo_url) = existing_urls.get(uid.as_str()) {
         return repo_url.clone();
     }
     if let Some(repo_url) = cached_urls.get(plugin_id) {
@@ -105,19 +108,22 @@ fn build_plugins_lock_with_options<'a>(
     let existing_urls = existing_repo_urls(existing);
     let mut next = plugins
         .into_iter()
-        .map(|plugin| PluginLockEntry {
-            id: plugin.id.to_string(),
-            repo_url: resolve_repo_url(plugin.id.as_str(), &existing_urls, cached_urls),
-            version: plugin.manifest.plugin.version.clone(),
-            platforms: plugin.manifest.plugin.platforms.clone(),
+        .map(|plugin| {
+            let uid = plugin.uid();
+            let repo_url = resolve_repo_url(&uid, plugin.id.as_str(), &existing_urls, cached_urls);
+            PluginLockEntry {
+                uid,
+                id: plugin.id.to_string(),
+                repo_url,
+                version: plugin.manifest.plugin.version.clone(),
+                platforms: plugin.manifest.plugin.platforms.clone(),
+            }
         })
         .collect::<Vec<_>>();
     if preserve_unsupported {
-        next.extend(
-            existing_urls
-                .keys()
-                .filter_map(|plugin_id| preserved_unsupported_entry(plugin_id.as_str(), existing)),
-        );
+        next.extend(existing_urls.keys().filter_map(|uid_str| {
+            preserved_unsupported_entry(&PluginUid::new(uid_str.as_str()), existing)
+        }));
     }
     sort_and_dedup_plugins(&mut next);
 
@@ -128,23 +134,20 @@ fn build_plugins_lock_with_options<'a>(
 }
 
 fn sort_and_dedup_plugins(plugins: &mut Vec<PluginLockEntry>) {
-    plugins.sort_by(|left, right| left.id.cmp(&right.id));
-    plugins.dedup_by(|left, right| left.id == right.id);
+    plugins.sort_by(|left, right| left.uid.as_str().cmp(right.uid.as_str()));
+    plugins.dedup_by(|left, right| left.uid == right.uid);
 }
 
 fn existing_repo_urls(existing: &PluginsLock) -> HashMap<String, String> {
     existing
         .plugins
         .iter()
-        .map(|entry| (entry.id.clone(), entry.repo_url.clone()))
+        .map(|entry| (entry.uid.as_str().to_owned(), entry.repo_url.clone()))
         .collect()
 }
 
-fn preserved_unsupported_entry(plugin_id: &str, existing: &PluginsLock) -> Option<PluginLockEntry> {
-    let entry = existing
-        .plugins
-        .iter()
-        .find(|entry| entry.id == plugin_id)?;
+fn preserved_unsupported_entry(uid: &PluginUid, existing: &PluginsLock) -> Option<PluginLockEntry> {
+    let entry = existing.plugins.iter().find(|entry| &entry.uid == uid)?;
     if crate::plugins::manifest::supports_current_platform(&entry.platforms) {
         return None;
     }
@@ -154,7 +157,10 @@ fn preserved_unsupported_entry(plugin_id: &str, existing: &PluginsLock) -> Optio
 fn merged_repo_url_lock(previous_lock: &PluginsLock, requested_lock: &PluginsLock) -> PluginsLock {
     let mut plugins = previous_lock.plugins.clone();
     for entry in &requested_lock.plugins {
-        let Some(existing) = plugins.iter_mut().find(|existing| existing.id == entry.id) else {
+        let Some(existing) = plugins
+            .iter_mut()
+            .find(|existing| existing.uid == entry.uid)
+        else {
             plugins.push(entry.clone());
             continue;
         };
@@ -176,7 +182,7 @@ fn preserve_import_unsupported_entries(
         source
             .plugins
             .iter()
-            .filter_map(|entry| preserved_unsupported_entry(entry.id.as_str(), source)),
+            .filter_map(|entry| preserved_unsupported_entry(&entry.uid, source)),
     );
     sort_and_dedup_plugins(&mut lock.plugins);
 }

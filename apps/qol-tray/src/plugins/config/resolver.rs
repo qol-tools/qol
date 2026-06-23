@@ -88,6 +88,7 @@ mod tests {
 
     fn entry(id: &str, platforms: Option<Vec<&str>>) -> PluginLockEntry {
         PluginLockEntry {
+            uid: crate::plugins::PluginUid::new(id),
             id: id.to_string(),
             repo_url: "https://example/repo.git".to_string(),
             version: "1.0.0".to_string(),
@@ -107,6 +108,7 @@ mod tests {
             manifest_version: 1,
             plugin: PluginInfo {
                 id: Some("test-plugin".into()),
+                uid: None,
                 name: "p".to_string(),
                 description: String::new(),
                 version: "1.0.0".to_string(),

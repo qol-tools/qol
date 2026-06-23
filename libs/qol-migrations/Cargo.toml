@@ -1,6 +1,6 @@
 [package]
 name = "qol-migrations"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "On-disk format migrations between qol-tray releases"
 license = "PolyForm-Noncommercial-1.0.0"

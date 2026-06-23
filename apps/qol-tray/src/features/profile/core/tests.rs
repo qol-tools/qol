@@ -6,7 +6,7 @@ use super::storage::{
 };
 use super::*;
 use crate::plugins::manifest::{Capabilities, MenuConfig, PluginInfo};
-use crate::plugins::{Plugin, PluginId, PluginManifest, PluginSource};
+use crate::plugins::{Plugin, PluginId, PluginManifest, PluginSource, PluginUid};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -110,6 +110,7 @@ async fn setup_profile_env() -> (
 fn import_plugins_prefers_explicit_lock_entries() {
     let bundle = ProfileImportBundle {
         plugins: vec![PluginLockEntry {
+            uid: PluginUid::new("plugin-test"),
             id: "plugin-test".to_string(),
             repo_url: "https://github.com/qol-tools/plugin-test".to_string(),
             version: "1.2.3".to_string(),
@@ -224,18 +225,21 @@ fn build_plugins_lock_preserves_unsupported_entries_and_resolves_repo_sources() 
         version: CURRENT_PROFILE_VERSION,
         plugins: vec![
             PluginLockEntry {
+                uid: PluginUid::new("plugin-existing"),
                 id: "plugin-existing".to_string(),
                 repo_url: "https://example.com/existing.git".to_string(),
                 version: "0.1.0".to_string(),
                 platforms: None,
             },
             PluginLockEntry {
+                uid: PluginUid::new("plugin-unsupported"),
                 id: "plugin-unsupported".to_string(),
                 repo_url: "https://example.com/unsupported.git".to_string(),
                 version: "9.9.9".to_string(),
                 platforms: Some(vec![other_platform().to_string()]),
             },
             PluginLockEntry {
+                uid: PluginUid::new("plugin-missing"),
                 id: "plugin-missing".to_string(),
                 repo_url: "https://example.com/missing.git".to_string(),
                 version: "4.5.6".to_string(),
@@ -526,7 +530,7 @@ default = 3
 "#,
     );
     write_installed_plugin_config(&plugins_dir, "plugin-test", &json!({"threshold": 7}));
-    save_plugin_config("plugin-test", &json!({"threshold": 7})).unwrap();
+    write_profile_plugin_config("plugin-test", &json!({"threshold": 7}));
     save_plugins_lock(&PluginsLock {
         version: CURRENT_PROFILE_VERSION,
         plugins: Vec::new(),
@@ -539,6 +543,7 @@ default = 3
         &ProfileImportBundle {
             task_runner: Some(json!({"actions": {"sync": {}}})),
             plugins: vec![PluginLockEntry {
+                uid: PluginUid::new("plugin-install"),
                 id: "plugin-install".to_string(),
                 repo_url: install_repo,
                 version: String::new(),
@@ -558,8 +563,8 @@ default = 3
     assert!(error.contains("value does not match field type number"));
     assert!(!plugins_dir.join("plugin-install").exists());
     assert_eq!(
-        load_plugin_config("plugin-test").unwrap(),
-        Some(json!({"threshold": 7}))
+        read_profile_plugin_config("plugin-test").unwrap(),
+        json!({"threshold": 7})
     );
     assert!(load_plugins_lock().unwrap().plugins.is_empty());
     assert_eq!(
@@ -607,6 +612,7 @@ default = 3
         &ProfileImportBundle {
             task_runner: Some(json!({"actions": {"sync": {}}})),
             plugins: vec![PluginLockEntry {
+                uid: PluginUid::new("plugin-install"),
                 id: "plugin-install".to_string(),
                 repo_url: source_repo.repo.clone(),
                 version: "0.0.1".to_string(),
@@ -646,6 +652,7 @@ async fn unsupported_profile_plugins_are_preserved_in_lock_and_sync_output() {
     let (_guard, _root, _env, plugins_dir) = setup_profile_env().await;
     let bundle = ProfileImportBundle {
         plugins: vec![PluginLockEntry {
+            uid: PluginUid::new("plugin-skip"),
             id: "plugin-skip".to_string(),
             repo_url: "https://github.com/qol-tools/plugin-skip.git".to_string(),
             version: "1.2.3".to_string(),
@@ -661,6 +668,7 @@ async fn unsupported_profile_plugins_are_preserved_in_lock_and_sync_output() {
     assert_eq!(
         lock.plugins,
         vec![PluginLockEntry {
+            uid: PluginUid::new("plugin-skip"),
             id: "plugin-skip".to_string(),
             repo_url: "https://github.com/qol-tools/plugin-skip.git".to_string(),
             version: "1.2.3".to_string(),
@@ -676,6 +684,7 @@ async fn apply_import_bundle_preserves_existing_repo_urls_for_unlisted_installed
     save_plugins_lock(&PluginsLock {
         version: CURRENT_PROFILE_VERSION,
         plugins: vec![PluginLockEntry {
+            uid: PluginUid::new("plugin-custom"),
             id: "plugin-custom".to_string(),
             repo_url: "https://example.com/custom.git".to_string(),
             version: "0.9.0".to_string(),
@@ -691,6 +700,7 @@ async fn apply_import_bundle_preserves_existing_repo_urls_for_unlisted_installed
     assert_eq!(
         load_plugins_lock().unwrap().plugins,
         vec![PluginLockEntry {
+            uid: PluginUid::new("plugin-custom"),
             id: "plugin-custom".to_string(),
             repo_url: "https://example.com/custom.git".to_string(),
             version: "1.0.0".to_string(),
@@ -711,6 +721,113 @@ fn test_plugin(
             manifest_version: crate::plugins::manifest::CURRENT_MANIFEST_VERSION,
             plugin: PluginInfo {
                 id: Some(id.into()),
+                uid: None,
+                name: id.to_string(),
+                description: String::new(),
+                version: version.to_string(),
+                author: None,
+                platforms,
+            },
+            menu: MenuConfig {
+                label: id.to_string(),
+                icon: None,
+                items: Vec::new(),
+            },
+            daemon: None,
+            dependencies: None,
+            runtime: None,
+            actions: Default::default(),
+            capabilities: Capabilities::default(),
+            build: Default::default(),
+            traits: None,
+            shortcuts: Vec::new(),
+            config: Default::default(),
+        },
+        PathBuf::from(format!("/tmp/{id}")),
+        source,
+    )
+}
+
+#[test]
+fn build_plugins_lock_coalesces_entries_sharing_same_uid() {
+    let shared_uid = "u-shared-0001";
+    let existing = PluginsLock {
+        version: CURRENT_PROFILE_VERSION,
+        plugins: vec![PluginLockEntry {
+            uid: PluginUid::new(shared_uid),
+            id: "plugin-old".to_string(),
+            repo_url: "https://example.com/old.git".to_string(),
+            version: "1.0.0".to_string(),
+            platforms: Some(vec![other_platform().to_string()]),
+        }],
+    };
+    let plugins = [test_plugin_with_uid(
+        "plugin-new",
+        shared_uid,
+        "2.0.0",
+        PluginSource::Installed,
+        None,
+    )];
+
+    let lock = build_plugins_lock(plugins.iter(), &existing, &HashMap::new());
+
+    let uids: Vec<&str> = lock.plugins.iter().map(|e| e.uid.as_str()).collect();
+    assert_eq!(
+        uids,
+        vec![shared_uid],
+        "expected exactly one entry for uid {shared_uid}"
+    );
+
+    let surviving_entry = lock.plugins.iter().find(|e| e.uid == shared_uid).unwrap();
+    assert_eq!(
+        surviving_entry.id, "plugin-new",
+        "surviving entry must keep loaded plugin id"
+    );
+    assert_eq!(
+        surviving_entry.version, "2.0.0",
+        "surviving entry must keep loaded plugin version"
+    );
+}
+
+#[test]
+fn build_plugins_lock_keeps_distinct_uids() {
+    let existing = PluginsLock {
+        version: CURRENT_PROFILE_VERSION,
+        plugins: vec![PluginLockEntry {
+            uid: PluginUid::new("u-alpha-0001"),
+            id: "plugin-alpha".to_string(),
+            repo_url: "https://example.com/alpha.git".to_string(),
+            version: "1.0.0".to_string(),
+            platforms: Some(vec![other_platform().to_string()]),
+        }],
+    };
+    let plugins = [test_plugin_with_uid(
+        "plugin-beta",
+        "u-beta-0001",
+        "2.0.0",
+        PluginSource::Installed,
+        None,
+    )];
+
+    let lock = build_plugins_lock(plugins.iter(), &existing, &HashMap::new());
+
+    assert_eq!(lock.plugins.len(), 2, "both distinct uids must be present");
+}
+
+fn test_plugin_with_uid(
+    id: &str,
+    uid: &str,
+    version: &str,
+    source: PluginSource,
+    platforms: Option<Vec<String>>,
+) -> Plugin {
+    Plugin::new_with_source(
+        PluginId::new(id),
+        PluginManifest {
+            manifest_version: crate::plugins::manifest::CURRENT_MANIFEST_VERSION,
+            plugin: PluginInfo {
+                id: Some(id.into()),
+                uid: Some(PluginUid::new(uid)),
                 name: id.to_string(),
                 description: String::new(),
                 version: version.to_string(),
@@ -751,6 +868,22 @@ fn version_for<'a>(lock: &'a PluginsLock, plugin_id: &str) -> &'a str {
         .find(|plugin| plugin.id == plugin_id)
         .map(|plugin| plugin.version.as_str())
         .unwrap()
+}
+
+fn write_profile_plugin_config(plugin_id: &str, config: &Value) {
+    let dir = crate::paths::profile_plugin_configs_dir().unwrap();
+    fs::create_dir_all(&dir).unwrap();
+    crate::file_io::write_pretty_json(&dir.join(format!("{plugin_id}.json")), config).unwrap();
+}
+
+fn read_profile_plugin_config(plugin_id: &str) -> Option<Value> {
+    let path = crate::paths::profile_plugin_configs_dir()
+        .unwrap()
+        .join(format!("{plugin_id}.json"));
+    if !path.exists() {
+        return None;
+    }
+    Some(crate::file_io::read_json(&path).unwrap())
 }
 
 fn write_installed_plugin_config(plugins_dir: &Path, plugin_id: &str, config: &Value) {
@@ -889,4 +1022,52 @@ fn other_platform() -> &'static str {
         .into_iter()
         .find(|platform| *platform != std::env::consts::OS)
         .unwrap()
+}
+
+#[test]
+fn plugin_lock_entry_deserializes_old_schema_without_uid_backfills_uid_from_id() {
+    let cases = [
+        (
+            r#"{"id":"plugin-a","repo_url":"https://example.com/a.git","version":"1.0.0"}"#,
+            "plugin-a",
+            "old-schema: uid absent, backfills uid=id",
+        ),
+        (
+            r#"{"uid":"u-real-0001","id":"plugin-a","repo_url":"https://example.com/a.git","version":"1.0.0"}"#,
+            "u-real-0001",
+            "new-schema: uid present, uses given uid",
+        ),
+    ];
+    for (json, expected_uid, label) in cases {
+        let entry: PluginLockEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.uid.as_str(), expected_uid, "case: {label}");
+    }
+}
+
+#[test]
+fn plugin_lock_entry_serializes_uid_field() {
+    let entry = PluginLockEntry {
+        uid: PluginUid::new("u-real-0001"),
+        id: "plugin-a".to_string(),
+        repo_url: "https://example.com/a.git".to_string(),
+        version: "1.0.0".to_string(),
+        platforms: None,
+    };
+    let value = serde_json::to_value(&entry).unwrap();
+    assert_eq!(value["uid"], "u-real-0001", "uid must be emitted");
+    assert_eq!(value["id"], "plugin-a");
+}
+
+#[test]
+fn plugin_lock_entry_round_trips_through_json() {
+    let original = PluginLockEntry {
+        uid: PluginUid::new("u-real-0001"),
+        id: "plugin-a".to_string(),
+        repo_url: "https://example.com/a.git".to_string(),
+        version: "2.3.4".to_string(),
+        platforms: Some(vec!["linux".to_string()]),
+    };
+    let serialized = serde_json::to_string(&original).unwrap();
+    let deserialized: PluginLockEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(original, deserialized);
 }

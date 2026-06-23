@@ -94,7 +94,7 @@ fn enabled_binding(id: &str, key: &str, plugin_id: &str, action: &str) -> Hotkey
     HotkeyBinding {
         id: id.to_string(),
         key: key.to_string(),
-        plugin_id: plugin_id.to_string(),
+        plugin_uid: qol_tray::plugins::PluginUid::new(plugin_id),
         action: action.to_string(),
         enabled: true,
     }
@@ -104,7 +104,7 @@ fn disabled_binding(id: &str, key: &str, plugin_id: &str, action: &str) -> Hotke
     HotkeyBinding {
         id: id.to_string(),
         key: key.to_string(),
-        plugin_id: plugin_id.to_string(),
+        plugin_uid: qol_tray::plugins::PluginUid::new(plugin_id),
         action: action.to_string(),
         enabled: false,
     }

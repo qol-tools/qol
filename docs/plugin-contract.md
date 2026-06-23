@@ -79,12 +79,14 @@ Schema structs in `libs/qol-plugin-api/src/manifest/schema.rs`
 Sections:
 
 - `[plugin]` (`PluginInfo`): `name`, `description`, `version` (free string, not
-  semver-checked), optional `id`, `author`, `platforms`. `id` charset is
+  semver-checked), optional `id`, `author`, `platforms`, `uid`. `id` charset is
   `[A-Za-z0-9_-]`, max 64, no leading `-`. `id` is parse-optional but **required
   at the install boundary** (`require_declared_id`), so a manifest can validate yet
-  fail on install. `platforms` matching is **exact string** against
-  `std::env::consts::OS` ("linux"/"macos"/"windows"); `"LINUX"`, `" linux"`,
-  `"linux "` silently match nothing, and `[]` means supported nowhere.
+  fail on install. `uid` is an opaque frozen identity (authored once, never changed)
+  used as the key for durable plugin state (lock, hotkeys, config files); parse-optional,
+  and when absent the host warns and uses a transitional uid equal to `id`. `platforms`
+  matching is **exact string** against `std::env::consts::OS` ("linux"/"macos"/"windows");
+  `"LINUX"`, `" linux"`, `"linux "` silently match nothing, and `[]` means supported nowhere.
 - `[runtime]` (`RuntimeConfig`): `command` (binary basename, same charset as id -
   **no paths, no `.sh`**) and legacy optional
   `actions: { <action-id> = [argv...] }`.

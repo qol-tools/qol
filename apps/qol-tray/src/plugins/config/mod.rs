@@ -12,6 +12,7 @@ use crate::features::profile::scope_store::PluginConfigSlicePaths;
 use crate::features::profile::ProfileScopeStore;
 use crate::paths;
 use crate::paths::is_safe_path_component;
+use crate::plugins::manifest::PluginUid;
 use crate::plugins::paths as plugin_paths;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -72,11 +73,12 @@ impl PluginConfigManager {
         lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
         manifest: Option<&crate::plugins::manifest::PluginManifest>,
     ) -> Result<Option<serde_json::Value>> {
+        let uid = uid_from_lock_or_id(lock_entry, plugin_id);
         let runtime_path = Self::plugin_config_path(plugin_id)?;
         if runtime_path.exists() {
             return store::load_plugin_config(&runtime_path).map(Some);
         }
-        let merged = load_plugin_config_merged(&self.scope_store, plugin_id, lock_entry, manifest)?;
+        let merged = load_plugin_config_merged(&self.scope_store, &uid, lock_entry, manifest)?;
         if merged.as_object().is_some_and(|m| m.is_empty()) {
             return Ok(None);
         }
@@ -98,9 +100,10 @@ impl PluginConfigManager {
         lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
         manifest: Option<&crate::plugins::manifest::PluginManifest>,
     ) -> Result<()> {
+        let uid = uid_from_lock_or_id(lock_entry, plugin_id);
         let runtime_path = Self::plugin_config_path(plugin_id)?;
         store::write_plugin_config(&runtime_path, &config)?;
-        save_plugin_config_split(&self.scope_store, plugin_id, &config, lock_entry, manifest)
+        save_plugin_config_split(&self.scope_store, &uid, &config, lock_entry, manifest)
     }
 }
 
@@ -118,28 +121,37 @@ fn try_load_plugin_manifest(plugin_id: &str) -> Option<crate::plugins::manifest:
 
 pub fn load_plugin_config_merged(
     scope_store: &ProfileScopeStore,
-    plugin_id: &str,
+    uid: &PluginUid,
     lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
     manifest: Option<&crate::plugins::manifest::PluginManifest>,
 ) -> Result<serde_json::Value> {
-    let paths = scope_store.plugin_config_slice_paths(plugin_id, lock_entry, manifest)?;
+    let paths = scope_store.plugin_config_slice_paths(uid, lock_entry, manifest)?;
     let slices = store::read_scoped_slices(&paths)?;
     Ok(merge_slices(&slices))
 }
 
 pub fn save_plugin_config_split(
     scope_store: &ProfileScopeStore,
-    plugin_id: &str,
+    uid: &PluginUid,
     config: &serde_json::Value,
     lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
     manifest: Option<&crate::plugins::manifest::PluginManifest>,
 ) -> Result<()> {
     let paths: PluginConfigSlicePaths =
-        scope_store.plugin_config_slice_paths(plugin_id, lock_entry, manifest)?;
+        scope_store.plugin_config_slice_paths(uid, lock_entry, manifest)?;
     let default_decl = crate::plugins::manifest::ConfigDeclarations::default();
     let decl = manifest.map(|m| &m.config).unwrap_or(&default_decl);
     let slices = split_by_declarations(config, decl);
     store::write_scoped_slices(&paths, &slices)
+}
+
+fn uid_from_lock_or_id(
+    lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
+    plugin_id: &str,
+) -> PluginUid {
+    lock_entry
+        .map(|e| e.uid.clone())
+        .unwrap_or_else(|| PluginUid::new(plugin_id))
 }
 
 pub(crate) fn load_config_contract(
