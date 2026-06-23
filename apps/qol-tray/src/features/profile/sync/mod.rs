@@ -2,6 +2,7 @@ pub mod git_repo;
 mod merge;
 pub(crate) mod platform;
 mod promote;
+mod reconcile;
 mod scope;
 mod service;
 mod state;
