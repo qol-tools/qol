@@ -29,6 +29,7 @@ use crate::poller::Poller;
 
 const LOG_CAP: usize = 2000;
 const TICK: Duration = Duration::from_millis(150);
+const RELAXED_TRACE_INTERVAL: Duration = Duration::from_millis(300);
 const HEALTH_PROBE_INTERVAL: Duration = Duration::from_secs(2);
 const EMU_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const LINKS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
@@ -58,6 +59,7 @@ enum Action {
     Rebuild,
     Doctor,
     ToggleTraceDetails,
+    ToggleTraceRate,
     Back,
     Activate,
     Dive,
@@ -286,9 +288,9 @@ fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
                 ],
             ),
         ],
-        View::Logs => stream_view_bindings(false, true),
-        View::Trace => stream_view_bindings(true, true),
-        View::EmuDetail => stream_view_bindings(false, false),
+        View::Logs => stream_view_bindings(false, true, false),
+        View::Trace => stream_view_bindings(true, true, dash.trace_rate.is_realtime()),
+        View::EmuDetail => stream_view_bindings(false, false, false),
         View::Doctor => vec![
             char_binding("d", "refresh checks", Action::Doctor, 'd'),
             binding(
@@ -374,7 +376,7 @@ fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
     }
 }
 
-fn stream_view_bindings(trace: bool, log_resource: bool) -> Vec<KeyBinding> {
+fn stream_view_bindings(trace: bool, log_resource: bool, trace_realtime: bool) -> Vec<KeyBinding> {
     let mut bindings = vec![
         binding(
             "↑/↓",
@@ -453,6 +455,16 @@ fn stream_view_bindings(trace: bool, log_resource: bool) -> Vec<KeyBinding> {
             Action::ToggleTraceDetails,
             'd',
         ));
+        bindings.push(char_binding(
+            "s",
+            if trace_realtime {
+                "rate (realtime)"
+            } else {
+                "rate (relaxed)"
+            },
+            Action::ToggleTraceRate,
+            's',
+        ));
     }
     bindings.push(binding(
         "←",
@@ -487,6 +499,34 @@ fn unique_hints(bindings: Vec<KeyBinding>) -> Vec<KeyHint> {
         hints.push(binding.hint);
     }
     hints
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum TraceRate {
+    #[default]
+    Relaxed,
+    Realtime,
+}
+
+impl TraceRate {
+    fn is_realtime(self) -> bool {
+        matches!(self, Self::Realtime)
+    }
+
+    fn toggled(self) -> Self {
+        match self {
+            Self::Relaxed => Self::Realtime,
+            Self::Realtime => Self::Relaxed,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Relaxed => "rate: relaxed",
+            Self::Realtime => "rate: realtime",
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
@@ -577,6 +617,8 @@ struct ConsoleState {
     filters: ViewFilters,
     #[serde(default)]
     trace_details: bool,
+    #[serde(default)]
+    trace_rate: TraceRate,
     #[serde(default)]
     keys_hidden: bool,
     #[serde(default)]
@@ -824,6 +866,8 @@ struct OwnedSource {
 struct LogPane {
     ring: LogRing,
     source: Option<OwnedSource>,
+    pending: Option<String>,
+    last_emit: Option<Instant>,
 }
 
 impl LogPane {
@@ -831,6 +875,8 @@ impl LogPane {
         Self {
             ring: LogRing::new(),
             source: None,
+            pending: None,
+            last_emit: None,
         }
     }
 
@@ -838,6 +884,8 @@ impl LogPane {
         Self {
             ring: LogRing::collapsing(),
             source: None,
+            pending: None,
+            last_emit: None,
         }
     }
 
@@ -857,7 +905,13 @@ impl LogPane {
         self.ring.len()
     }
 
-    fn drain(&mut self, keep: impl Fn(&str) -> bool) {
+    fn drain_rated(
+        &mut self,
+        keep: impl Fn(&str) -> bool,
+        realtime: bool,
+        now: Instant,
+        min_interval: Duration,
+    ) {
         let Some(source) = self.source.as_ref() else {
             return;
         };
@@ -865,9 +919,28 @@ impl LogPane {
         while let Ok(line) = source.rx.try_recv() {
             received.push(line);
         }
-        for line in received {
-            if keep(&line) {
+        if realtime {
+            if let Some(line) = self.pending.take() {
                 self.ring.push(line);
+            }
+            for line in received {
+                if keep(&line) {
+                    self.ring.push(line);
+                }
+            }
+            self.last_emit = Some(now);
+            return;
+        }
+        if let Some(latest) = received.into_iter().rev().find(|line| keep(line)) {
+            self.pending = Some(latest);
+        }
+        let due = self
+            .last_emit
+            .is_none_or(|last| now.duration_since(last) >= min_interval);
+        if due {
+            if let Some(line) = self.pending.take() {
+                self.ring.push(line);
+                self.last_emit = Some(now);
             }
         }
     }
@@ -886,7 +959,12 @@ impl LogPane {
                 ring.push(line.to_string());
             }
         }
-        Self { ring, source: None }
+        Self {
+            ring,
+            source: None,
+            pending: None,
+            last_emit: None,
+        }
     }
 
     fn poll_finished(&mut self, keep: impl Fn(&str) -> bool) -> bool {
@@ -1180,6 +1258,7 @@ struct Dash {
     trace: LogPane,
     trace_unavailable: bool,
     trace_details: bool,
+    trace_rate: TraceRate,
     features: FeatureFlags,
     feature_panel: FeatureFlagPanel,
     boot_rx: Option<Receiver<String>>,
@@ -1229,6 +1308,7 @@ impl Dash {
             trace: LogPane::collapsing(),
             trace_unavailable: false,
             trace_details: false,
+            trace_rate: TraceRate::default(),
             features: FeatureFlags::default(),
             feature_panel: FeatureFlagPanel {
                 layout_width: default_filter_layout_width(),
@@ -1282,6 +1362,7 @@ impl Dash {
     fn apply_state(&mut self, state: ConsoleState) {
         self.filters = state.filters;
         self.trace_details = state.trace_details;
+        self.trace_rate = state.trace_rate;
         self.keys_hidden = state.keys_hidden;
         self.features = FeatureFlags::from_ids(&state.feature_flags);
         self.state_dirty = false;
@@ -1291,6 +1372,7 @@ impl Dash {
         ConsoleState {
             filters: self.filters.clone(),
             trace_details: self.trace_details,
+            trace_rate: self.trace_rate,
             keys_hidden: self.keys_hidden,
             feature_flags: self.features.ids(),
         }
@@ -1590,7 +1672,12 @@ fn tui_session(
         } else {
             let _ = probes.doctor.latest();
         }
-        dash.trace.drain(|_| true);
+        dash.trace.drain_rated(
+            |_| true,
+            dash.trace_rate.is_realtime(),
+            Instant::now(),
+            RELAXED_TRACE_INTERVAL,
+        );
         drain_boot(dash);
         drain_emu_runs(dash);
         if let ReloadOutcome::Ready = poll_reload(dash) {
@@ -1803,6 +1890,7 @@ fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
         }
         Action::Doctor => open_doctor(dash),
         Action::ToggleTraceDetails => toggle_trace_details(dash),
+        Action::ToggleTraceRate => toggle_trace_rate(dash),
         Action::Activate => match dash.view {
             View::Dashboard => act_row(dash, modified),
             View::Emu => act_emu(dash, modified),
@@ -2069,6 +2157,12 @@ fn stop_trace(dash: &mut Dash) {
 
 fn toggle_trace_details(dash: &mut Dash) {
     set_trace_details(dash, !dash.trace_details_enabled());
+}
+
+fn toggle_trace_rate(dash: &mut Dash) {
+    dash.trace_rate = dash.trace_rate.toggled();
+    dash.mark_state_dirty();
+    dash.notice = Some((Instant::now(), format!("trace {}", dash.trace_rate.label())));
 }
 
 fn toggle_feature_flag(flag: FeatureFlag) {
@@ -5764,6 +5858,7 @@ mod tests {
                 emu: Vec::new(),
             },
             trace_details: true,
+            trace_rate: TraceRate::Realtime,
             keys_hidden: true,
             feature_flags: Vec::new(),
         };
@@ -5771,6 +5866,7 @@ mod tests {
         let back: ConsoleState = serde_json::from_str(&json).expect("deserialize console state");
         assert_eq!(back.filters, state.filters);
         assert!(back.trace_details);
+        assert_eq!(back.trace_rate, TraceRate::Realtime);
         assert!(back.keys_hidden);
     }
 
@@ -5780,6 +5876,7 @@ mod tests {
         assert!(state.filters.logs.is_empty());
         assert!(state.filters.trace.is_empty());
         assert!(!state.trace_details);
+        assert_eq!(state.trace_rate, TraceRate::Relaxed);
         assert!(!state.keys_hidden);
         assert!(state.feature_flags.is_empty());
     }
@@ -5794,6 +5891,7 @@ mod tests {
                 emu: Vec::new(),
             },
             trace_details: true,
+            trace_rate: TraceRate::Realtime,
             keys_hidden: true,
             feature_flags: Vec::new(),
         };
@@ -5804,6 +5902,7 @@ mod tests {
             vec![log_filter(FilterStrategy::Include, "focus")]
         );
         assert!(dash.trace_details);
+        assert_eq!(dash.trace_rate, TraceRate::Realtime);
         assert!(dash.keys_hidden);
         assert!(
             !dash.state_dirty,
@@ -5813,6 +5912,7 @@ mod tests {
         let exported = dash.to_state();
         assert_eq!(exported.filters.trace, dash.filters.trace);
         assert!(exported.trace_details);
+        assert_eq!(exported.trace_rate, TraceRate::Realtime);
         assert!(exported.keys_hidden);
     }
 
@@ -5835,6 +5935,80 @@ mod tests {
         let mut dash = Dash::new(Vec::new());
         apply_action(&mut dash, Action::ToggleKeys, false);
         assert!(dash.state_dirty, "toggling the keys HUD should mark dirty");
+    }
+
+    #[test]
+    fn trace_view_legend_exposes_the_rate_toggle() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Trace;
+        let hints = unique_hints(context_action_bindings(&dash));
+        let rate = hints
+            .iter()
+            .find(|h| h.key == "s")
+            .expect("trace legend must surface the rate toggle on 's'");
+        assert!(
+            rate.desc.contains("relaxed"),
+            "relaxed is the default, shown in the legend: {}",
+            rate.desc
+        );
+        assert_eq!(
+            action_for(&dash, KeyCode::Char('s'), KeyModifiers::NONE),
+            Action::ToggleTraceRate,
+            "'s' in the trace view toggles the reporting rate"
+        );
+    }
+
+    #[test]
+    fn rate_toggle_flips_relaxed_and_realtime_and_persists() {
+        let mut dash = Dash::new(Vec::new());
+        assert_eq!(dash.trace_rate, TraceRate::Relaxed, "relaxed by default");
+        apply_action(&mut dash, Action::ToggleTraceRate, false);
+        assert_eq!(dash.trace_rate, TraceRate::Realtime);
+        assert!(dash.state_dirty, "rate change must persist");
+        apply_action(&mut dash, Action::ToggleTraceRate, false);
+        assert_eq!(dash.trace_rate, TraceRate::Relaxed);
+    }
+
+    #[test]
+    fn relaxed_rate_throttles_ingestion_while_realtime_keeps_all() {
+        let interval = Duration::from_millis(300);
+        let t0 = Instant::now();
+
+        // realtime: every line lands immediately
+        let mut pane = LogPane::collapsing();
+        let child = Command::new("true").spawn().unwrap();
+        let (tx, rx) = channel::<String>();
+        pane.attach(child, rx);
+        for n in 0..5 {
+            tx.send(format!("[10:00:00.00{n}] AMC poll {n}")).unwrap();
+        }
+        pane.drain_rated(|_| true, true, t0, interval);
+        assert_eq!(pane.ring.len(), 5, "realtime keeps every distinct line");
+
+        // relaxed: a burst collapses to a single freshest line until the interval elapses
+        let mut pane = LogPane::collapsing();
+        let child = Command::new("true").spawn().unwrap();
+        let (tx, rx) = channel::<String>();
+        pane.attach(child, rx);
+        for n in 0..5 {
+            tx.send(format!("[10:00:00.00{n}] AMC poll {n}")).unwrap();
+        }
+        pane.drain_rated(|_| true, false, t0, interval);
+        assert_eq!(pane.ring.len(), 1, "relaxed shows one line per interval");
+        assert!(
+            strip_ansi(&pane.ring.lines[0]).contains("AMC poll 4"),
+            "relaxed keeps the freshest line of the burst"
+        );
+
+        // within the interval, more bursts do not add lines
+        tx.send("[10:00:00.010] AMC poll 9".to_string()).unwrap();
+        pane.drain_rated(|_| true, false, t0 + Duration::from_millis(100), interval);
+        assert_eq!(pane.ring.len(), 1, "still throttled inside the window");
+
+        // once the interval passes, the next freshest line is emitted
+        pane.drain_rated(|_| true, false, t0 + Duration::from_millis(350), interval);
+        assert_eq!(pane.ring.len(), 2, "a new line lands after the interval");
+        assert!(strip_ansi(&pane.ring.lines[1]).contains("AMC poll 9"));
     }
 
     #[test]
