@@ -39,7 +39,10 @@ where
         .route("/sync/push", post(sync::push_sync))
         .route("/sync/disconnect", post(sync::disconnect_sync))
         .route("/sync/conflicts", get(sync::get_sync_conflicts))
-        .route("/sync/conflicts/resolve", post(sync::resolve_sync_conflicts))
+        .route(
+            "/sync/conflicts/resolve",
+            post(sync::resolve_sync_conflicts),
+        )
         .route("/sync/backups", get(sync::list_sync_backups))
         .route("/sync/backups/open-dir", post(sync::open_sync_backups_dir))
         .route(

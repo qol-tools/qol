@@ -1,6 +1,4 @@
-use super::types::{
-    ResolvableConflict, SyncBackupEntry, SyncHealth, SyncIncident, SyncStatus,
-};
+use super::types::{ResolvableConflict, SyncBackupEntry, SyncHealth, SyncIncident, SyncStatus};
 use anyhow::Result;
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};

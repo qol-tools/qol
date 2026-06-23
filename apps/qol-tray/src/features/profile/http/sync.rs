@@ -75,7 +75,11 @@ pub(crate) async fn get_sync_conflicts(State(state): State<super::ProfileHttpSta
         Ok(conflicts) => Json(conflicts).into_response(),
         Err(error) => {
             log::error!("get_sync_conflicts join error: {}", error);
-            (StatusCode::INTERNAL_SERVER_ERROR, "sync conflicts join error").into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "sync conflicts join error",
+            )
+                .into_response()
         }
     }
 }

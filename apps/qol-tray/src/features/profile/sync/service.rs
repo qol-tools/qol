@@ -754,10 +754,16 @@ fn decorate_conflicts(
     let mut out = Vec::with_capacity(conflicts.len());
     for conflict in conflicts {
         let key = last_key(&conflict.key_path);
-        let local_edited =
-            local.and_then(|oid| repo.field_edited_at(oid, &conflict.file, key).ok().flatten());
-        let remote_edited =
-            remote.and_then(|oid| repo.field_edited_at(oid, &conflict.file, key).ok().flatten());
+        let local_edited = local.and_then(|oid| {
+            repo.field_edited_at(oid, &conflict.file, key)
+                .ok()
+                .flatten()
+        });
+        let remote_edited = remote.and_then(|oid| {
+            repo.field_edited_at(oid, &conflict.file, key)
+                .ok()
+                .flatten()
+        });
         out.push(ResolvableConflict {
             file: conflict.file,
             plugin: conflict.plugin,

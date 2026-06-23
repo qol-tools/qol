@@ -189,14 +189,24 @@ pub(crate) fn merge_profile_with(
         let l = local.files.get(file);
         let r = remote.files.get(file);
         if file.ends_with("plugins.lock.json") {
-            merged.insert(file.clone(), merge_lock(file, b, l, r, resolve, &mut conflicts));
+            merged.insert(
+                file.clone(),
+                merge_lock(file, b, l, r, resolve, &mut conflicts),
+            );
             continue;
         }
         match (l, r) {
             (Some(l), Some(r)) => {
                 let plugin = plugin_id_from_path(file);
                 let null = Value::Null;
-                match merge_json_resolved(file, plugin.as_deref(), b.unwrap_or(&null), l, r, resolve) {
+                match merge_json_resolved(
+                    file,
+                    plugin.as_deref(),
+                    b.unwrap_or(&null),
+                    l,
+                    r,
+                    resolve,
+                ) {
                     FileMerge::Clean(v) => {
                         merged.insert(file.clone(), v);
                     }
@@ -286,8 +296,7 @@ fn merge_lock(
 fn plugin_id_from_path(file: &str) -> Option<String> {
     let name = file.rsplit('/').next()?;
     let stem = name.strip_suffix(".json")?;
-    file.contains("plugin-configs/")
-        .then(|| stem.to_string())
+    file.contains("plugin-configs/").then(|| stem.to_string())
 }
 
 #[cfg(test)]
@@ -311,10 +320,34 @@ mod tests {
     #[test]
     fn three_way_buckets_resolve_without_conflict() {
         let cases = [
-            (json!({"a": 1}), json!({"a": 1}), json!({"a": 1}), json!({"a": 1}), 0),
-            (json!({"a": 1}), json!({"a": 2}), json!({"a": 1}), json!({"a": 2}), 0),
-            (json!({"a": 1}), json!({"a": 1}), json!({"a": 3}), json!({"a": 3}), 0),
-            (json!({"a": 1}), json!({"a": 2}), json!({"a": 2}), json!({"a": 2}), 0),
+            (
+                json!({"a": 1}),
+                json!({"a": 1}),
+                json!({"a": 1}),
+                json!({"a": 1}),
+                0,
+            ),
+            (
+                json!({"a": 1}),
+                json!({"a": 2}),
+                json!({"a": 1}),
+                json!({"a": 2}),
+                0,
+            ),
+            (
+                json!({"a": 1}),
+                json!({"a": 1}),
+                json!({"a": 3}),
+                json!({"a": 3}),
+                0,
+            ),
+            (
+                json!({"a": 1}),
+                json!({"a": 2}),
+                json!({"a": 2}),
+                json!({"a": 2}),
+                0,
+            ),
             (json!({}), json!({"a": 1}), json!({}), json!({"a": 1}), 0),
             (json!({"a": 1}), json!({}), json!({"a": 1}), json!({}), 0),
         ];
@@ -379,7 +412,10 @@ mod tests {
     #[test]
     fn merge_profile_unions_files_and_collects_conflicts_per_file() {
         let snap = |pairs: &[(&str, Value)]| ProfileSnapshot {
-            files: pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
+            files: pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
         };
         let base = snap(&[("core/plugin-configs/a.json", json!({"x": 1}))]);
         let local = snap(&[
@@ -417,7 +453,11 @@ mod tests {
         };
 
         let out = merge_profile(&base, &local, &remote);
-        assert_eq!(out.conflicts.len(), 0, "disjoint plugins are a union, not a clash");
+        assert_eq!(
+            out.conflicts.len(),
+            0,
+            "disjoint plugins are a union, not a clash"
+        );
         let lock = &out.merged["core/plugins.lock.json"];
         let ids: Vec<&str> = lock["plugins"]
             .as_array()
