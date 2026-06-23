@@ -70,11 +70,31 @@ pub(crate) async fn disconnect_sync(
     }
 }
 
-pub(crate) async fn acknowledge_sync(
+pub(crate) async fn get_sync_conflicts(State(state): State<super::ProfileHttpState>) -> Response {
+    match tokio::task::spawn_blocking(move || state.sync_service.list_conflicts()).await {
+        Ok(conflicts) => Json(conflicts).into_response(),
+        Err(error) => {
+            log::error!("get_sync_conflicts join error: {}", error);
+            (StatusCode::INTERNAL_SERVER_ERROR, "sync conflicts join error").into_response()
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ResolveConflictsRequest {
+    choices: Vec<crate::features::profile::sync::ConflictChoice>,
+}
+
+pub(crate) async fn resolve_sync_conflicts(
     State(state): State<super::ProfileHttpState>,
+    body: Bytes,
 ) -> impl IntoResponse {
-    match state.sync_service.acknowledge_incident().await {
-        Ok(result) => Json(result).into_response(),
+    let request = match super::parse_json_body::<ResolveConflictsRequest>(body) {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
+    match state.sync_service.resolve_conflicts(request.choices).await {
+        Ok(result) => sync_result_response(&state, result),
         Err(error) => sync_error_response(error),
     }
 }

@@ -181,19 +181,8 @@ impl SyncService {
         .context("join sync dirty-check")?
     }
 
-    pub async fn acknowledge_incident(&self) -> Result<SyncActionResult> {
-        let _operation = self.operation_lock.lock().await;
-        let mut state = self.state_mut();
-        state.incident = None;
-        state.last_error = None;
-        save_state_file(&state)?;
-        let cleared = state.clone();
-        drop(state);
-        Ok(SyncActionResult {
-            message: "Incident acknowledged".to_string(),
-            applied_remote: false,
-            status: self.build_status_with(&cleared, load_sync_target().ok().flatten().as_ref()),
-        })
+    pub fn list_conflicts(&self) -> Vec<ResolvableConflict> {
+        self.snapshot_state().conflicts
     }
 
     pub fn open_backups_dir(&self) -> Result<()> {
