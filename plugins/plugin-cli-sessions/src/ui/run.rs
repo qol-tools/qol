@@ -140,7 +140,7 @@ fn panel_window_options(corner: Corner, cx: &mut gpui::App) -> WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: None,
         window_decorations: Some(qol_gpui::platform::ghost_window_decorations(false)),
-        kind: qol_gpui::platform::ghost_window_kind(),
+        kind: gpui::WindowKind::Normal,
         focus: true,
         is_movable: true,
         window_background: WindowBackgroundAppearance::Opaque,
@@ -170,7 +170,7 @@ fn open_panel(
             return None;
         }
     };
-    qol_gpui::popup_window::configure_popup_window(&title);
+    qol_gpui::popup_window::configure_overlay_window(&title);
     #[cfg(debug_assertions)]
     qol_runtime::probe!("CLI_SESSIONS_OPENPANEL", "opened=true title={title}");
     let _ = handle.update(cx, |view, window, cx| {
