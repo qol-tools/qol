@@ -19,6 +19,7 @@ test('editorParentViewId returns null for ids without the -editor suffix', () =>
 test('editorParentViewId is intentionally narrow: non-editor dive sub-pages return null', () => {
     assert.equal(editorParentViewId('logs-detail'), null);
     assert.equal(editorParentViewId('profile-backup-detail'), null);
+    assert.equal(editorParentViewId('profile-sync-conflicts'), null);
     assert.equal(editorParentViewId('dev-log-filters'), null);
     assert.equal(editorParentViewId('dev-plugin-actions'), null);
     assert.equal(editorParentViewId('plugins-uninstall-confirm'), null);

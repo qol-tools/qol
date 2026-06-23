@@ -9,6 +9,7 @@ import { TaskRunnerView, ActionEditorSubPage, actionEditorSlot } from '../views/
 import { TestRunnerSubPage, testRunnerSlot } from '../views/task-runner/test-runner-subpage.js';
 import { ProfileView, BackupDetailSubPage, prodBackupDetailConfig } from '../views/profile/view.js';
 import { backupPreviewSlot } from '../views/profile/use-backups.js';
+import { ConflictResolverSubPage } from '../views/profile/conflict-resolver/view.js';
 import { DevView } from '../views/dev/view.js';
 import { LogsView, LogDetailSubPage, detailSlot as logDetailSlot } from '../views/logs-view.js';
 import { LogFiltersSubPage, logFiltersSlot } from '../views/dev/log-filters-subpage.js';
@@ -45,6 +46,7 @@ const WORLD_PAGES = [
     { id: 'task-runner-editor', render: () => html`<${ActionEditorSubPage} slot=${actionEditorSlot} />` },
     { id: 'task-runner-test-runner', render: () => html`<${TestRunnerSubPage} slot=${testRunnerSlot} />` },
     { id: 'profile-backup-detail', render: () => html`<${BackupDetailSubPage} slot=${backupPreviewSlot} config=${prodBackupDetailConfig} />` },
+    { id: 'profile-sync-conflicts', contentSized: true, render: (ctx) => html`<${ConflictResolverSubPage} active=${ctx.activeAnchorId === 'profile-sync-conflicts'} refreshSyncStatus=${ctx.refreshSyncStatus} />` },
     { id: 'dev-log-filters',   devOnly: true, render: () => html`<${LogFiltersSubPage} slot=${logFiltersSlot} />` },
     { id: 'dev-gpui',          devOnly: true, contentSized: true, render: () => html`<${GpuiSubPage} /> ` },
     { id: 'dev-gallery-log-row-detail', devOnly: true, render: () => html`<${GalleryLogRowDetailSubPage} />` },

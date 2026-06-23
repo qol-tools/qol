@@ -10,6 +10,7 @@
 @import "./styles/plugin-config.css";
 @import "./styles/logs.css";
 @import "./styles/profile.css";
+@import "./styles/profile-conflicts.css";
 @import "./styles/world.css";
 @import "./styles/peripheral-preview.css";
 @import "./fx/atmosphere/atmosphere.css";

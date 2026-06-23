@@ -50,6 +50,7 @@ test('resolveViewLabel does NOT return kebab id when entry has a label', () => {
         { id: 'task-runner-test-runner', label: 'Test Runner' },
         { id: 'task-runner-editor', label: 'Action Editor' },
         { id: 'profile-backup-detail', label: 'Backup Detail' },
+        { id: 'profile-sync-conflicts', label: 'Resolve Conflicts' },
         { id: 'plugin-lights-zigbee', label: 'Zigbee' },
         { id: 'plugin-foo-config', label: 'Settings' },
     ];

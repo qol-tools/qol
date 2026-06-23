@@ -5,6 +5,7 @@ export const VIEW_LABELS = {
     shortcuts: 'Shortcuts',
     'task-runner': 'Task Runner',
     profile: 'Profile',
+    'profile-sync-conflicts': 'Resolve Conflicts',
     logs: 'Logs',
     dev: { text: 'Developer', animation: 'scramble' },
     'dev-gpui': 'GPUI',

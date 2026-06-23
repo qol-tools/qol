@@ -109,6 +109,7 @@ function registerStaticDiveTargets(registry) {
         { parentId: 'task-runner', subId: 'task-runner-editor', label: 'Action Editor' },
         { parentId: 'task-runner', subId: 'task-runner-test-runner', label: 'Test Runner', sourceSelector: '[data-dive-source="task-runner-test-runner"]' },
         { parentId: 'profile', subId: 'profile-backup-detail', label: 'Backup Detail' },
+        { parentId: 'profile', subId: 'profile-sync-conflicts', label: 'Resolve Conflicts', sourceSelector: '[data-dive-source="profile-sync-conflicts"]' },
         { parentId: 'dev', subId: 'dev-log-filters', label: 'Edit Log Filters' },
         { parentId: 'dev', subId: 'dev-plugin-actions', label: 'Plugin Actions', sourceSelector: '[data-dive-source="dev-plugin-actions"]' },
         { parentId: 'dev', subId: 'dev-gpui', label: 'GPUI', sourceSelector: '[data-dive-source="dev-gpui"]' },
@@ -695,6 +696,7 @@ function AppShell() {
 
     const renderCtx = useMemo(() => ({
         activeViewId,
+        activeAnchorId,
         activePluginId,
         openPluginConfig,
         closePluginConfig,
@@ -704,7 +706,7 @@ function AppShell() {
         refreshSyncStatus,
         devEnabled,
         onJumpTo,
-    }), [activeViewId, activePluginId, openPluginConfig, closePluginConfig,
+    }), [activeViewId, activeAnchorId, activePluginId, openPluginConfig, closePluginConfig,
         syncStatus, syncProviders, setSyncStatus, refreshSyncStatus, devEnabled, onJumpTo]);
     const renderPage = useCallback((pageId) => renderPageContent(pageId, renderCtx), [renderCtx]);
 
