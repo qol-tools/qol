@@ -19,12 +19,26 @@ pub(crate) enum FileMerge {
     },
 }
 
+pub(crate) type ConflictResolver<'a> = dyn Fn(&str, &str) -> Option<bool> + 'a;
+
+#[cfg(test)]
 pub(crate) fn merge_json(
     file: &str,
     plugin: Option<&str>,
     base: &Value,
     local: &Value,
     remote: &Value,
+) -> FileMerge {
+    merge_json_resolved(file, plugin, base, local, remote, &|_, _| None)
+}
+
+pub(crate) fn merge_json_resolved(
+    file: &str,
+    plugin: Option<&str>,
+    base: &Value,
+    local: &Value,
+    remote: &Value,
+    resolve: &ConflictResolver<'_>,
 ) -> FileMerge {
     let mut conflicts = Vec::new();
     let merged = merge_node(
@@ -34,6 +48,7 @@ pub(crate) fn merge_json(
         Some(base),
         Some(local),
         Some(remote),
+        resolve,
         &mut conflicts,
     )
     .unwrap_or(Value::Null);
@@ -44,6 +59,7 @@ pub(crate) fn merge_json(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn merge_node(
     file: &str,
     plugin: Option<&str>,
@@ -51,6 +67,7 @@ fn merge_node(
     base: Option<&Value>,
     local: Option<&Value>,
     remote: Option<&Value>,
+    resolve: &ConflictResolver<'_>,
     conflicts: &mut Vec<FieldConflict>,
 ) -> Option<Value> {
     if all_objects(local, remote) {
@@ -68,6 +85,7 @@ fn merge_node(
                 base.and_then(Value::as_object).and_then(|m| m.get(&key)),
                 local.and_then(Value::as_object).and_then(|m| m.get(&key)),
                 remote.and_then(Value::as_object).and_then(|m| m.get(&key)),
+                resolve,
                 conflicts,
             );
             if let Some(value) = merged {
@@ -76,9 +94,10 @@ fn merge_node(
         }
         return Some(Value::Object(out));
     }
-    resolve_leaf(file, plugin, path, base, local, remote, conflicts)
+    resolve_leaf(file, plugin, path, base, local, remote, resolve, conflicts)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_leaf(
     file: &str,
     plugin: Option<&str>,
@@ -86,6 +105,7 @@ fn resolve_leaf(
     base: Option<&Value>,
     local: Option<&Value>,
     remote: Option<&Value>,
+    resolve: &ConflictResolver<'_>,
     conflicts: &mut Vec<FieldConflict>,
 ) -> Option<Value> {
     if local == remote {
@@ -96,6 +116,11 @@ fn resolve_leaf(
     }
     if base == remote {
         return local.cloned();
+    }
+    match resolve(file, path) {
+        Some(true) => return remote.cloned(),
+        Some(false) => return local.cloned(),
+        None => {}
     }
     conflicts.push(FieldConflict {
         file: file.to_string(),
@@ -139,6 +164,15 @@ pub(crate) fn merge_profile(
     local: &ProfileSnapshot,
     remote: &ProfileSnapshot,
 ) -> ProfileMerge {
+    merge_profile_with(base, local, remote, &|_, _| None)
+}
+
+pub(crate) fn merge_profile_with(
+    base: &ProfileSnapshot,
+    local: &ProfileSnapshot,
+    remote: &ProfileSnapshot,
+    resolve: &ConflictResolver<'_>,
+) -> ProfileMerge {
     let mut merged = BTreeMap::new();
     let mut conflicts = Vec::new();
     let mut files: Vec<&String> = base
@@ -155,14 +189,14 @@ pub(crate) fn merge_profile(
         let l = local.files.get(file);
         let r = remote.files.get(file);
         if file.ends_with("plugins.lock.json") {
-            merged.insert(file.clone(), merge_lock(file, b, l, r, &mut conflicts));
+            merged.insert(file.clone(), merge_lock(file, b, l, r, resolve, &mut conflicts));
             continue;
         }
         match (l, r) {
             (Some(l), Some(r)) => {
                 let plugin = plugin_id_from_path(file);
                 let null = Value::Null;
-                match merge_json(file, plugin.as_deref(), b.unwrap_or(&null), l, r) {
+                match merge_json_resolved(file, plugin.as_deref(), b.unwrap_or(&null), l, r, resolve) {
                     FileMerge::Clean(v) => {
                         merged.insert(file.clone(), v);
                     }
@@ -189,6 +223,7 @@ fn merge_lock(
     base: Option<&Value>,
     local: Option<&Value>,
     remote: Option<&Value>,
+    resolve: &ConflictResolver<'_>,
     conflicts: &mut Vec<FieldConflict>,
 ) -> Value {
     let by_id = |snapshot: Option<&Value>| -> BTreeMap<String, Value> {
@@ -224,16 +259,20 @@ fn merge_lock(
             (Some(l), Some(r)) if l == r => Some(l.clone()),
             (Some(l), Some(r)) if b == Some(l) => Some(r.clone()),
             (Some(l), Some(r)) if b == Some(r) => Some(l.clone()),
-            (Some(l), Some(r)) => {
-                conflicts.push(FieldConflict {
-                    file: file.to_string(),
-                    plugin: Some(id.clone()),
-                    key_path: format!("plugins.{id}"),
-                    local: l.clone(),
-                    remote: r.clone(),
-                });
-                Some(l.clone())
-            }
+            (Some(l), Some(r)) => match resolve(file, &format!("plugins.{id}")) {
+                Some(true) => Some(r.clone()),
+                Some(false) => Some(l.clone()),
+                None => {
+                    conflicts.push(FieldConflict {
+                        file: file.to_string(),
+                        plugin: Some(id.clone()),
+                        key_path: format!("plugins.{id}"),
+                        local: l.clone(),
+                        remote: r.clone(),
+                    });
+                    Some(l.clone())
+                }
+            },
             (Some(only), None) | (None, Some(only)) => Some(only.clone()),
             (None, None) => None,
         };

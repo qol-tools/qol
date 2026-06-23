@@ -233,6 +233,38 @@ impl GitRepo {
         Ok(out)
     }
 
+    pub fn blob_text_at(&self, oid: git2::Oid, file: &str) -> Result<Option<String>> {
+        let repo = self.open_repo()?;
+        let tree = repo.find_commit(oid)?.tree()?;
+        let Ok(entry) = tree.get_path(Path::new(file)) else {
+            return Ok(None);
+        };
+        let object = entry.to_object(&repo)?;
+        let Some(blob) = object.as_blob() else {
+            return Ok(None);
+        };
+        Ok(Some(String::from_utf8_lossy(blob.content()).into_owned()))
+    }
+
+    pub fn field_edited_at(&self, oid: git2::Oid, file: &str, key: &str) -> Result<Option<String>> {
+        let repo = self.open_repo()?;
+        let needle = format!("\"{key}\"");
+        let line_no = self.blob_text_at(oid, file)?.and_then(|text| {
+            text.lines()
+                .position(|line| line.trim_start().starts_with(&needle))
+        });
+        let mut opts = git2::BlameOptions::new();
+        opts.newest_commit(oid);
+        let when = match (line_no, repo.blame_file(Path::new(file), Some(&mut opts))) {
+            (Some(idx), Ok(blame)) => blame
+                .get_line(idx + 1)
+                .map(|hunk| hunk.final_signature().when()),
+            _ => None,
+        };
+        let when = when.or_else(|| repo.find_commit(oid).ok().map(|commit| commit.time()));
+        Ok(when.map(git_time_to_rfc3339))
+    }
+
     fn open_repo(&self) -> Result<Repository> {
         Repository::open(&self.repo_path)
             .with_context(|| format!("open git repo at {}", self.repo_path.display()))
@@ -252,6 +284,12 @@ fn remote_branch_oid(repo: &Repository) -> Result<git2::Oid> {
         .into_reference()
         .target()
         .ok_or_else(|| anyhow!("remote branch {name} has no target"))
+}
+
+fn git_time_to_rfc3339(time: git2::Time) -> String {
+    chrono::DateTime::from_timestamp(time.seconds(), 0)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone)]

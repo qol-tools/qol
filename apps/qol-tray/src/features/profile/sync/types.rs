@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct SyncConnectRequest {
@@ -63,6 +64,7 @@ pub struct SyncStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backups_dir: Option<String>,
     pub backup_count: usize,
+    pub conflict_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_backup_file: Option<String>,
 }
@@ -85,6 +87,34 @@ pub struct SyncActionResult {
     pub message: String,
     pub applied_remote: bool,
     pub status: SyncStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvableConflict {
+    pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
+    pub key_path: String,
+    pub local: Value,
+    pub remote: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_edited: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_edited: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    Mine,
+    Remote,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ConflictChoice {
+    pub file: String,
+    pub key_path: String,
+    pub side: Side,
 }
 
 pub(crate) fn default_true() -> bool {

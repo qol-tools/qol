@@ -1,4 +1,6 @@
-use super::types::{SyncBackupEntry, SyncHealth, SyncIncident, SyncIncidentKind, SyncStatus};
+use super::types::{
+    ResolvableConflict, SyncBackupEntry, SyncHealth, SyncIncident, SyncStatus,
+};
 use anyhow::Result;
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
@@ -16,6 +18,8 @@ pub(crate) struct SyncStateFile {
     pub(crate) incident: Option<SyncIncident>,
     #[serde(default)]
     pub(crate) last_error: Option<String>,
+    #[serde(default)]
+    pub(crate) conflicts: Vec<ResolvableConflict>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -31,21 +35,6 @@ impl Default for SyncToggles {
         Self {
             pull_on_launch: true,
             push_on_change: true,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PullMode {
-    Launch,
-    Manual,
-}
-
-impl PullMode {
-    pub(crate) fn incident_kind(self) -> SyncIncidentKind {
-        match self {
-            Self::Launch => SyncIncidentKind::LaunchPullReview,
-            Self::Manual => SyncIncidentKind::ManualPullReview,
         }
     }
 }
@@ -73,6 +62,7 @@ pub(crate) fn build_status(
         last_error: state.last_error.clone(),
         backups_dir: backups_dir.map(|path| path.display().to_string()),
         backup_count: backup_files.len(),
+        conflict_count: state.conflicts.len(),
         latest_backup_file: backup_files.first().map(|entry| entry.file_name.clone()),
     }
 }

@@ -5,18 +5,22 @@ use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 
 use super::git_repo::{GitRepo, PullOutcome, SignatureSpec};
+use super::merge::{merge_profile_with, FieldConflict, ProfileSnapshot};
+use super::reconcile::{mergeable_path, reconcile};
 use super::state::{
     backup_file_path, build_status, ensure_sync_dirs, filename_string, list_backup_entries,
-    load_state_file, load_toggles, now_rfc3339, save_state_file, save_toggles, PullMode,
-    SyncStateFile, SyncToggles,
+    load_state_file, load_toggles, now_rfc3339, save_state_file, save_toggles, SyncStateFile,
+    SyncToggles,
 };
 use super::types::{
-    SyncActionResult, SyncBackupEntry, SyncBackupPreview, SyncConnectRequest, SyncIncident,
-    SyncStatus,
+    ConflictChoice, ResolvableConflict, Side, SyncActionResult, SyncBackupEntry, SyncBackupPreview,
+    SyncConnectRequest, SyncIncident, SyncIncidentKind, SyncStatus,
 };
 use crate::features::profile::registry::{
     clear_sync_target, load_sync_target, save_sync_target, SyncTarget,
 };
+use serde_json::Value;
+use std::collections::BTreeMap;
 
 const AUTO_PUSH_INTERVAL_SECS: u64 = 10;
 const DEFAULT_REPO_NAME: &str = "qol-tray-profiles";
@@ -131,14 +135,14 @@ impl SyncService {
     }
 
     pub async fn manual_pull(&self) -> Result<SyncActionResult> {
-        self.do_pull(PullMode::Manual).await
+        self.do_pull().await
     }
 
     pub async fn pull_on_launch(&self) -> Result<SyncActionResult> {
         if !self.snapshot_toggles().pull_on_launch {
             return self.noop_result("Pull on launch disabled");
         }
-        self.do_pull(PullMode::Launch).await
+        self.do_pull().await
     }
 
     pub async fn manual_push(&self) -> Result<SyncActionResult> {
@@ -223,7 +227,7 @@ impl SyncService {
         })
     }
 
-    async fn do_pull(&self, mode: PullMode) -> Result<SyncActionResult> {
+    async fn do_pull(&self) -> Result<SyncActionResult> {
         let _operation = self.operation_lock.lock().await;
         let Some(target) = load_sync_target()? else {
             return self.noop_result("Sync not configured");
@@ -231,42 +235,74 @@ impl SyncService {
         let token = require_github_token()?;
         let repo_path = crate::paths::profile_dir()?;
         let repo_url = target.repo_url.clone();
-        let pulled =
-            tokio::task::spawn_blocking(move || -> Result<(PullOutcome, Option<String>)> {
-                let repo = match GitRepo::open(&repo_path) {
-                    Ok(repo) => repo,
-                    Err(_) => GitRepo::clone(&repo_url, &repo_path, Some(&token))?,
-                };
-                let outcome = repo.pull(Some(&token))?;
-                let head = repo.head_sha()?;
-                Ok((outcome, head))
+        let pulled = tokio::task::spawn_blocking(move || -> Result<PullTaskOutput> {
+            let repo = match GitRepo::open(&repo_path) {
+                Ok(repo) => repo,
+                Err(_) => GitRepo::clone(&repo_url, &repo_path, Some(&token))?,
+            };
+            let outcome = repo.pull(Some(&token))?;
+            let mut conflicts = Vec::new();
+            let mut auto_applied = false;
+            if matches!(outcome, PullOutcome::Diverged { .. }) {
+                let merge = reconcile(&repo)?;
+                if merge.conflicts.is_empty() {
+                    write_merged_profile(&repo_path, &merge.merged)?;
+                    repo.commit_all("merge remote changes", &SignatureSpec::default_for_app())?;
+                    repo.push(Some(&token))?;
+                    auto_applied = true;
+                } else {
+                    conflicts = decorate_conflicts(&repo, merge.conflicts)?;
+                }
+            }
+            let head = repo.head_sha()?;
+            Ok(PullTaskOutput {
+                outcome,
+                head,
+                conflicts,
+                auto_applied,
             })
-            .await
-            .context("join sync pull task")?;
-        let (outcome, head) = match pulled {
+        })
+        .await
+        .context("join sync pull task")?;
+        let output = match pulled {
             Ok(value) => value,
             Err(error) => return self.persisted_error(error, Some(&target)),
         };
-        let (message, applied) = match &outcome {
-            PullOutcome::AlreadyUpToDate => ("Already up to date".to_string(), false),
-            PullOutcome::FastForwarded { .. } => ("Pulled changes from remote".to_string(), true),
-            PullOutcome::Diverged { .. } => ("Local and remote diverged".to_string(), false),
+        let PullTaskOutput {
+            outcome,
+            head,
+            conflicts,
+            auto_applied,
+        } = output;
+        let message = match &outcome {
+            PullOutcome::AlreadyUpToDate => "Already up to date".to_string(),
+            PullOutcome::FastForwarded { .. } => "Pulled changes from remote".to_string(),
+            PullOutcome::Diverged { .. } if auto_applied => "Merged remote changes".to_string(),
+            PullOutcome::Diverged { .. } => format!("{} setting(s) need review", conflicts.len()),
         };
+        let applied = matches!(outcome, PullOutcome::FastForwarded { .. }) || auto_applied;
         let mut state = self.state_mut();
-        if let PullOutcome::Diverged { local, remote } = &outcome {
+        if conflicts.is_empty() {
+            state.incident = None;
+            state.last_error = None;
+            state.conflicts.clear();
+        } else {
+            let (local, remote) = match &outcome {
+                PullOutcome::Diverged { local, remote } => (local.clone(), remote.clone()),
+                _ => (String::new(), String::new()),
+            };
             state.incident = Some(SyncIncident {
-                kind: mode.incident_kind(),
+                kind: SyncIncidentKind::Conflict,
                 message: format!(
-                    "Local {} differs from remote {}",
-                    short_sha(local),
-                    short_sha(remote)
+                    "{} setting(s) differ (local {} vs remote {})",
+                    conflicts.len(),
+                    short_sha(&local),
+                    short_sha(&remote)
                 ),
                 backup_file: None,
                 created_at: now_rfc3339(),
             });
-        } else {
-            state.incident = None;
-            state.last_error = None;
+            state.conflicts = conflicts;
         }
         state.head_sha = head;
         state.last_sync_at = Some(now_rfc3339());
@@ -276,6 +312,68 @@ impl SyncService {
         Ok(SyncActionResult {
             message,
             applied_remote: applied,
+            status: self.build_status_with(&saved, Some(&target)),
+        })
+    }
+
+    pub async fn resolve_conflicts(
+        &self,
+        choices: Vec<ConflictChoice>,
+    ) -> Result<SyncActionResult> {
+        let _operation = self.operation_lock.lock().await;
+        let Some(target) = load_sync_target()? else {
+            return self.noop_result("Sync not configured");
+        };
+        let token = require_github_token()?;
+        let repo_path = crate::paths::profile_dir()?;
+        let resolved = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
+            let repo = GitRepo::open(&repo_path)?;
+            let local_oid = repo
+                .local_oid()?
+                .ok_or_else(|| anyhow::anyhow!("local branch has no commit"))?;
+            let remote_oid = repo.remote_oid()?;
+            let base: BTreeMap<String, Value> = match repo.merge_base_with_remote()? {
+                Some(oid) => repo.snapshot_json_at(oid, mergeable_path)?,
+                None => BTreeMap::new(),
+            };
+            let local = repo.snapshot_json_at(local_oid, mergeable_path)?;
+            let remote = repo.snapshot_json_at(remote_oid, mergeable_path)?;
+            write_conflict_backup(&serde_json::json!({ "local": local, "remote": remote }))?;
+            let resolve = |file: &str, key: &str| -> Option<bool> {
+                choices
+                    .iter()
+                    .find(|choice| choice.file == file && choice.key_path == key)
+                    .map(|choice| matches!(choice.side, Side::Remote))
+            };
+            let merged = merge_profile_with(
+                &ProfileSnapshot { files: base },
+                &ProfileSnapshot { files: local },
+                &ProfileSnapshot { files: remote },
+                &resolve,
+            );
+            write_merged_profile(&repo_path, &merged.merged)?;
+            repo.commit_all("resolve sync conflicts", &SignatureSpec::default_for_app())?;
+            repo.push(Some(&token))?;
+            repo.head_sha()
+        })
+        .await
+        .context("join resolve task")?;
+        let head = match resolved {
+            Ok(value) => value,
+            Err(error) => return self.persisted_error(error, Some(&target)),
+        };
+        let mut state = self.state_mut();
+        state.conflicts.clear();
+        state.incident = None;
+        state.last_error = None;
+        state.head_sha = head;
+        state.last_sync_at = Some(now_rfc3339());
+        save_state_file(&state)?;
+        let saved = state.clone();
+        drop(state);
+        Ok(SyncActionResult {
+            message: "Conflicts resolved".to_string(),
+            applied_remote: true,
             status: self.build_status_with(&saved, Some(&target)),
         })
     }
@@ -627,4 +725,63 @@ fn ensure_gitignore(repo_path: &Path) -> Result<()> {
 
 fn short_sha(sha: &str) -> String {
     sha.chars().take(7).collect()
+}
+
+struct PullTaskOutput {
+    outcome: PullOutcome,
+    head: Option<String>,
+    conflicts: Vec<ResolvableConflict>,
+    auto_applied: bool,
+}
+
+fn write_merged_profile(repo_path: &Path, merged: &BTreeMap<String, Value>) -> Result<()> {
+    for (rel, value) in merged {
+        let path = repo_path.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create dir {}", parent.display()))?;
+        }
+        let text = serde_json::to_string_pretty(value)?;
+        std::fs::write(&path, format!("{text}\n"))
+            .with_context(|| format!("write merged {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn write_conflict_backup(value: &Value) -> Result<String> {
+    ensure_sync_dirs()?;
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+    let name = format!("{stamp}-conflict.json");
+    crate::file_io::write_pretty_json(&crate::paths::sync_backups_dir()?.join(&name), value)?;
+    Ok(name)
+}
+
+fn decorate_conflicts(
+    repo: &GitRepo,
+    conflicts: Vec<FieldConflict>,
+) -> Result<Vec<ResolvableConflict>> {
+    let local = repo.local_oid()?;
+    let remote = repo.remote_oid().ok();
+    let mut out = Vec::with_capacity(conflicts.len());
+    for conflict in conflicts {
+        let key = last_key(&conflict.key_path);
+        let local_edited =
+            local.and_then(|oid| repo.field_edited_at(oid, &conflict.file, key).ok().flatten());
+        let remote_edited =
+            remote.and_then(|oid| repo.field_edited_at(oid, &conflict.file, key).ok().flatten());
+        out.push(ResolvableConflict {
+            file: conflict.file,
+            plugin: conflict.plugin,
+            key_path: conflict.key_path,
+            local: conflict.local,
+            remote: conflict.remote,
+            local_edited,
+            remote_edited,
+        });
+    }
+    Ok(out)
+}
+
+fn last_key(key_path: &str) -> &str {
+    key_path.rsplit('.').next().unwrap_or(key_path)
 }

@@ -11,6 +11,6 @@ mod types;
 pub(crate) use scope::SCOPE_REQUIREMENTS;
 pub use service::SyncService;
 pub use types::{
-    SyncActionResult, SyncBackupEntry, SyncBackupPreview, SyncConnectRequest, SyncHealth,
-    SyncIncident, SyncIncidentKind, SyncStatus,
+    ConflictChoice, ResolvableConflict, Side, SyncActionResult, SyncBackupEntry, SyncBackupPreview,
+    SyncConnectRequest, SyncHealth, SyncIncident, SyncIncidentKind, SyncStatus,
 };
