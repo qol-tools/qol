@@ -29,7 +29,6 @@ use crate::poller::Poller;
 
 const LOG_CAP: usize = 2000;
 const TICK: Duration = Duration::from_millis(150);
-const RELAXED_TRACE_INTERVAL: Duration = Duration::from_millis(300);
 const HEALTH_PROBE_INTERVAL: Duration = Duration::from_secs(2);
 const EMU_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const LINKS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
@@ -807,6 +806,12 @@ impl LogRing {
         }
     }
 
+    fn set_collapse(&mut self, on: bool) {
+        self.collapse = on;
+        self.last_key = None;
+        self.repeat = 0;
+    }
+
     fn push(&mut self, line: String) {
         if self.collapse && self.try_collapse(&line) {
             return;
@@ -866,8 +871,6 @@ struct OwnedSource {
 struct LogPane {
     ring: LogRing,
     source: Option<OwnedSource>,
-    pending: Option<String>,
-    last_emit: Option<Instant>,
 }
 
 impl LogPane {
@@ -875,8 +878,6 @@ impl LogPane {
         Self {
             ring: LogRing::new(),
             source: None,
-            pending: None,
-            last_emit: None,
         }
     }
 
@@ -884,9 +885,11 @@ impl LogPane {
         Self {
             ring: LogRing::collapsing(),
             source: None,
-            pending: None,
-            last_emit: None,
         }
+    }
+
+    fn set_collapse(&mut self, on: bool) {
+        self.ring.set_collapse(on);
     }
 
     fn attach(&mut self, child: Child, rx: Receiver<String>) {
@@ -905,13 +908,7 @@ impl LogPane {
         self.ring.len()
     }
 
-    fn drain_rated(
-        &mut self,
-        keep: impl Fn(&str) -> bool,
-        realtime: bool,
-        now: Instant,
-        min_interval: Duration,
-    ) {
+    fn drain(&mut self, keep: impl Fn(&str) -> bool) {
         let Some(source) = self.source.as_ref() else {
             return;
         };
@@ -919,28 +916,9 @@ impl LogPane {
         while let Ok(line) = source.rx.try_recv() {
             received.push(line);
         }
-        if realtime {
-            if let Some(line) = self.pending.take() {
+        for line in received {
+            if keep(&line) {
                 self.ring.push(line);
-            }
-            for line in received {
-                if keep(&line) {
-                    self.ring.push(line);
-                }
-            }
-            self.last_emit = Some(now);
-            return;
-        }
-        if let Some(latest) = received.into_iter().rev().find(|line| keep(line)) {
-            self.pending = Some(latest);
-        }
-        let due = self
-            .last_emit
-            .is_none_or(|last| now.duration_since(last) >= min_interval);
-        if due {
-            if let Some(line) = self.pending.take() {
-                self.ring.push(line);
-                self.last_emit = Some(now);
             }
         }
     }
@@ -959,12 +937,7 @@ impl LogPane {
                 ring.push(line.to_string());
             }
         }
-        Self {
-            ring,
-            source: None,
-            pending: None,
-            last_emit: None,
-        }
+        Self { ring, source: None }
     }
 
     fn poll_finished(&mut self, keep: impl Fn(&str) -> bool) -> bool {
@@ -1363,6 +1336,7 @@ impl Dash {
         self.filters = state.filters;
         self.trace_details = state.trace_details;
         self.trace_rate = state.trace_rate;
+        self.trace.set_collapse(!self.trace_rate.is_realtime());
         self.keys_hidden = state.keys_hidden;
         self.features = FeatureFlags::from_ids(&state.feature_flags);
         self.state_dirty = false;
@@ -1672,12 +1646,7 @@ fn tui_session(
         } else {
             let _ = probes.doctor.latest();
         }
-        dash.trace.drain_rated(
-            |_| true,
-            dash.trace_rate.is_realtime(),
-            Instant::now(),
-            RELAXED_TRACE_INTERVAL,
-        );
+        dash.trace.drain(|_| true);
         drain_boot(dash);
         drain_emu_runs(dash);
         if let ReloadOutcome::Ready = poll_reload(dash) {
@@ -2161,6 +2130,7 @@ fn toggle_trace_details(dash: &mut Dash) {
 
 fn toggle_trace_rate(dash: &mut Dash) {
     dash.trace_rate = dash.trace_rate.toggled();
+    dash.trace.set_collapse(!dash.trace_rate.is_realtime());
     dash.mark_state_dirty();
     dash.notice = Some((Instant::now(), format!("trace {}", dash.trace_rate.label())));
 }
@@ -5970,45 +5940,47 @@ mod tests {
     }
 
     #[test]
-    fn relaxed_rate_throttles_ingestion_while_realtime_keeps_all() {
-        let interval = Duration::from_millis(300);
-        let t0 = Instant::now();
-
-        // realtime: every line lands immediately
+    fn relaxed_folds_repeats_while_realtime_shows_every_event() {
+        // relaxed (collapse on): distinct events all show; identical repeats fold to one xN
         let mut pane = LogPane::collapsing();
-        let child = Command::new("true").spawn().unwrap();
-        let (tx, rx) = channel::<String>();
-        pane.attach(child, rx);
-        for n in 0..5 {
-            tx.send(format!("[10:00:00.00{n}] AMC poll {n}")).unwrap();
+        pane.push("[10:00:00.001] AMC poll".to_string());
+        pane.push("[10:00:00.002] FOCUS bar".to_string());
+        for ms in 3..=10 {
+            pane.push(format!("[10:00:00.0{ms:02}] AMC poll"));
         }
-        pane.drain_rated(|_| true, true, t0, interval);
-        assert_eq!(pane.ring.len(), 5, "realtime keeps every distinct line");
-
-        // relaxed: a burst collapses to a single freshest line until the interval elapses
-        let mut pane = LogPane::collapsing();
-        let child = Command::new("true").spawn().unwrap();
-        let (tx, rx) = channel::<String>();
-        pane.attach(child, rx);
-        for n in 0..5 {
-            tx.send(format!("[10:00:00.00{n}] AMC poll {n}")).unwrap();
-        }
-        pane.drain_rated(|_| true, false, t0, interval);
-        assert_eq!(pane.ring.len(), 1, "relaxed shows one line per interval");
-        assert!(
-            strip_ansi(&pane.ring.lines[0]).contains("AMC poll 4"),
-            "relaxed keeps the freshest line of the burst"
+        assert_eq!(
+            pane.ring.len(),
+            3,
+            "distinct lines stay; the trailing identical burst folds to one"
         );
+        assert!(strip_ansi(&pane.ring.lines[2]).contains("(\u{d7}8)"));
 
-        // within the interval, more bursts do not add lines
-        tx.send("[10:00:00.010] AMC poll 9".to_string()).unwrap();
-        pane.drain_rated(|_| true, false, t0 + Duration::from_millis(100), interval);
-        assert_eq!(pane.ring.len(), 1, "still throttled inside the window");
+        // realtime (collapse off): every individual event is shown
+        let mut pane = LogPane::new();
+        pane.set_collapse(false);
+        for ms in 1..=8 {
+            pane.push(format!("[10:00:00.0{ms:02}] AMC poll"));
+        }
+        assert_eq!(pane.ring.len(), 8, "realtime keeps every occurrence");
+    }
 
-        // once the interval passes, the next freshest line is emitted
-        pane.drain_rated(|_| true, false, t0 + Duration::from_millis(350), interval);
-        assert_eq!(pane.ring.len(), 2, "a new line lands after the interval");
-        assert!(strip_ansi(&pane.ring.lines[1]).contains("AMC poll 9"));
+    #[test]
+    fn rate_toggle_switches_collapse_and_resets_fold_tracking() {
+        let mut dash = Dash::new(Vec::new());
+        assert!(dash.trace.ring.collapse, "relaxed default folds repeats");
+        dash.trace.push("[10:00:00.001] AMC poll".to_string());
+        dash.trace.push("[10:00:00.002] AMC poll".to_string());
+        assert_eq!(dash.trace.ring.len(), 1, "repeats fold while relaxed");
+
+        apply_action(&mut dash, Action::ToggleTraceRate, false);
+        assert!(!dash.trace.ring.collapse, "realtime stops folding");
+        dash.trace.push("[10:00:00.003] AMC poll".to_string());
+        dash.trace.push("[10:00:00.004] AMC poll".to_string());
+        assert_eq!(
+            dash.trace.ring.len(),
+            3,
+            "each event becomes its own line in realtime"
+        );
     }
 
     #[test]
