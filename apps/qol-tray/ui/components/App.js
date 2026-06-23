@@ -554,6 +554,7 @@ function AppShell() {
             const selector = selectorFor(sourceSurface);
             if (sourcePageId && selector) navigation.setFocus(sourcePageId, selector);
         }
+        if (targetId && diveViaSelector(`[data-dive-source="${targetId}"]`)) return;
         const pluginId = sourceSurface?.dataset?.pluginId
             || sourceSurface?.closest?.('[data-plugin-id]')?.dataset?.pluginId;
         if (pluginId && diveViaSelector(`[data-plugin-id="${pluginId}"]`)) return;
