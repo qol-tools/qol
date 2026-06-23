@@ -1,4 +1,5 @@
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct FieldConflict {
@@ -124,6 +125,132 @@ fn union_keys(base: Option<&Value>, local: Option<&Value>, remote: Option<&Value
     keys
 }
 
+pub(crate) struct ProfileSnapshot {
+    pub(crate) files: BTreeMap<String, Value>,
+}
+
+pub(crate) struct ProfileMerge {
+    pub(crate) merged: BTreeMap<String, Value>,
+    pub(crate) conflicts: Vec<FieldConflict>,
+}
+
+pub(crate) fn merge_profile(
+    base: &ProfileSnapshot,
+    local: &ProfileSnapshot,
+    remote: &ProfileSnapshot,
+) -> ProfileMerge {
+    let mut merged = BTreeMap::new();
+    let mut conflicts = Vec::new();
+    let mut files: Vec<&String> = base
+        .files
+        .keys()
+        .chain(local.files.keys())
+        .chain(remote.files.keys())
+        .collect();
+    files.sort();
+    files.dedup();
+
+    for file in files {
+        let b = base.files.get(file);
+        let l = local.files.get(file);
+        let r = remote.files.get(file);
+        if file.ends_with("plugins.lock.json") {
+            merged.insert(file.clone(), merge_lock(file, b, l, r, &mut conflicts));
+            continue;
+        }
+        match (l, r) {
+            (Some(l), Some(r)) => {
+                let plugin = plugin_id_from_path(file);
+                let null = Value::Null;
+                match merge_json(file, plugin.as_deref(), b.unwrap_or(&null), l, r) {
+                    FileMerge::Clean(v) => {
+                        merged.insert(file.clone(), v);
+                    }
+                    FileMerge::Conflicted {
+                        merged: v,
+                        conflicts: c,
+                    } => {
+                        merged.insert(file.clone(), v);
+                        conflicts.extend(c);
+                    }
+                }
+            }
+            (Some(only), None) | (None, Some(only)) => {
+                merged.insert(file.clone(), only.clone());
+            }
+            (None, None) => {}
+        }
+    }
+    ProfileMerge { merged, conflicts }
+}
+
+fn merge_lock(
+    file: &str,
+    base: Option<&Value>,
+    local: Option<&Value>,
+    remote: Option<&Value>,
+    conflicts: &mut Vec<FieldConflict>,
+) -> Value {
+    let by_id = |snapshot: Option<&Value>| -> BTreeMap<String, Value> {
+        snapshot
+            .and_then(|v| v.get("plugins"))
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(|entry| {
+                        entry
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map(|id| (id.to_string(), entry.clone()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let base = by_id(base);
+    let local = by_id(local);
+    let remote = by_id(remote);
+
+    let mut ids: Vec<String> = local.keys().chain(remote.keys()).cloned().collect();
+    ids.sort();
+    ids.dedup();
+
+    let mut entries = Vec::new();
+    for id in ids {
+        let b = base.get(&id);
+        let l = local.get(&id);
+        let r = remote.get(&id);
+        let chosen = match (l, r) {
+            (Some(l), Some(r)) if l == r => Some(l.clone()),
+            (Some(l), Some(r)) if b == Some(l) => Some(r.clone()),
+            (Some(l), Some(r)) if b == Some(r) => Some(l.clone()),
+            (Some(l), Some(r)) => {
+                conflicts.push(FieldConflict {
+                    file: file.to_string(),
+                    plugin: Some(id.clone()),
+                    key_path: format!("plugins.{id}"),
+                    local: l.clone(),
+                    remote: r.clone(),
+                });
+                Some(l.clone())
+            }
+            (Some(only), None) | (None, Some(only)) => Some(only.clone()),
+            (None, None) => None,
+        };
+        if let Some(entry) = chosen {
+            entries.push(entry);
+        }
+    }
+    serde_json::json!({ "plugins": entries })
+}
+
+fn plugin_id_from_path(file: &str) -> Option<String> {
+    let name = file.rsplit('/').next()?;
+    let stem = name.strip_suffix(".json")?;
+    file.contains("plugin-configs/")
+        .then(|| stem.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,5 +335,60 @@ mod tests {
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].key_path, "order");
         assert_eq!(c[0].local, json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn merge_profile_unions_files_and_collects_conflicts_per_file() {
+        let snap = |pairs: &[(&str, Value)]| ProfileSnapshot {
+            files: pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
+        };
+        let base = snap(&[("core/plugin-configs/a.json", json!({"x": 1}))]);
+        let local = snap(&[
+            ("core/plugin-configs/a.json", json!({"x": 2})),
+            ("core/plugin-configs/b.json", json!({"y": 9})),
+        ]);
+        let remote = snap(&[("core/plugin-configs/a.json", json!({"x": 3}))]);
+
+        let out = merge_profile(&base, &local, &remote);
+        assert_eq!(out.conflicts.len(), 1, "x changed on both sides");
+        assert_eq!(out.conflicts[0].file, "core/plugin-configs/a.json");
+        assert_eq!(out.conflicts[0].key_path, "x");
+        assert!(
+            out.merged.contains_key("core/plugin-configs/b.json"),
+            "local-only file kept"
+        );
+    }
+
+    #[test]
+    fn plugins_lock_uses_union_not_generic_merge() {
+        let base = ProfileSnapshot {
+            files: BTreeMap::new(),
+        };
+        let local = ProfileSnapshot {
+            files: BTreeMap::from([(
+                "core/plugins.lock.json".to_string(),
+                json!({"plugins": [{"id": "p-mac", "platforms": ["macos"]}]}),
+            )]),
+        };
+        let remote = ProfileSnapshot {
+            files: BTreeMap::from([(
+                "core/plugins.lock.json".to_string(),
+                json!({"plugins": [{"id": "p-linux", "platforms": ["linux"]}]}),
+            )]),
+        };
+
+        let out = merge_profile(&base, &local, &remote);
+        assert_eq!(out.conflicts.len(), 0, "disjoint plugins are a union, not a clash");
+        let lock = &out.merged["core/plugins.lock.json"];
+        let ids: Vec<&str> = lock["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["id"].as_str().unwrap())
+            .collect();
+        assert!(
+            ids.contains(&"p-mac") && ids.contains(&"p-linux"),
+            "both platform plugins preserved, got {ids:?}"
+        );
     }
 }
