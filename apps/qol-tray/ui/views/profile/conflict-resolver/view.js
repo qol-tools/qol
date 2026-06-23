@@ -1,5 +1,5 @@
 import { html } from '../../../lib/html.js';
-import { useCallback, useEffect, useMemo } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'preact/hooks';
 import { PageShell } from '../../../components/PageShell.js';
 import { Surface } from '../../../lib/components/Surface.js';
 import { Button } from '../../../lib/components/Button.js';
@@ -97,6 +97,11 @@ export function ConflictResolverSubPage({ active, refreshSyncStatus }) {
 function StepperCard({ resolver, searchQuery }) {
     const { conflicts, current, index, picks, summary, total } = resolver;
     useSearchJump({ conflicts, index, moveTo: resolver.moveTo, searchQuery });
+    const frameRef = useRef(null);
+    useLayoutEffect(() => {
+        const first = frameRef.current?.querySelector('.profile-conflicts-side[data-pick="mine"]');
+        if (first instanceof HTMLElement) first.focus({ preventScroll: true });
+    }, [index]);
     if (!current) return null;
     const subtitle = `Conflict ${index + 1} / ${total} - pick a side for each setting`;
     const choice = picks[index];
@@ -104,7 +109,7 @@ function StepperCard({ resolver, searchQuery }) {
     const showPlugin = current.plugin && current.plugin !== leaf;
 
     return html`
-        <${PageShell} subtitle=${subtitle} frameClassName="profile-conflicts-frame">
+        <${PageShell} subtitle=${subtitle} frameClassName="profile-conflicts-frame" frameRef=${frameRef}>
             <div class="profile-conflicts">
                 <${ProgressDots} total=${total} index=${index} picks=${picks} />
                 <div class="profile-conflicts-fieldhead">
