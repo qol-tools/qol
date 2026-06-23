@@ -1,6 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, rgba, AnyElement, Context, FontWeight, KeyDownEvent, SharedString, Window,
+    div, px, rgb, rgba, AnyElement, Context, CursorStyle, FontWeight, KeyDownEvent, MouseButton,
+    SharedString, Window,
 };
 
 use crate::registry::SessionState;
@@ -99,6 +100,10 @@ fn header(rows: &[SessionState]) -> impl IntoElement {
         .bg(rgb(0x0d1117u32))
         .border_b_1()
         .border_color(rgb(0x21262du32))
+        .cursor(CursorStyle::OpenHand)
+        .on_mouse_down(MouseButton::Left, |_event, window, _cx| {
+            window.start_window_move();
+        })
         .child(
             div()
                 .text_color(rgb(0xc9d1d9u32))
