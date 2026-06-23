@@ -2,6 +2,35 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+## Status (2026-06-23) — detection/merge core landed, all green & warning-free on `main`
+
+Done (TDD, committed):
+- Task 1 `d6604fad` — field-level 3-way merge engine (`sync/merge.rs`)
+- Task 2 `5f5d969a` — full-document merge + plugin-lock union (`merge_lock`)
+- Task 3 `ebe469e5` — merge-base, tree-snapshot, oid git helpers (`sync/git_repo.rs`)
+- Task 5 (core) `2c640cf1` — reconcile orchestration `sync/reconcile.rs` (diverged repo → merged doc + `FieldConflict`s), with `mergeable_path` predicate
+
+**RESUME AT — Task 5 wiring:** call `reconcile(&repo)` from `do_pull`'s `Diverged`
+branch in `service.rs`; write merged files back via `repo_path.join(rel)`; persist
+`ResolvableConflict`s into `SyncStateFile.conflicts`; set incident `Conflict` /
+health `Attention`; when `conflicts.is_empty()` write+commit+push and go Healthy.
+Then: Task 4 (blame dates — `chrono::DateTime::from_timestamp(secs,0).to_rfc3339()`,
+fallback to tip-commit time), Task 6 `resolve_conflicts`, Task 7 routes (+delete
+`acknowledge`), Task 8 pull-before-push, Tasks 9-11 Preact resolver dive, Task 12
+e2e + full clippy stack.
+
+Facts discovered during execution (supersede plan draft where they differ):
+- Allowlist is `ProfileScopeStore::is_sync_allowlisted(rel)`; "mergeable" = that
+  AND `.json` AND no `sync/` component (excludes backups). See `reconcile::mergeable_path`.
+- On-disk paths carry the active-profile segment (`default/core/...`), not bare `core/`.
+- `chrono` is available; `now_rfc3339` lives in `sync/state.rs`.
+- No symmetric two-lock union existed; `merge.rs::merge_lock` is the new one.
+- `FieldConflict`/`FileMerge` derive `PartialEq` only (serde_json::Value isn't `Eq`).
+- Intermediate commits may carry `dead_code` until a symbol is consumed downstream;
+  `cargo test --lib` stays clean. Task 12's `clippy -D warnings` is the gate.
+
+---
+
 **Goal:** Give qol-tray a UI path out of profile-sync divergence: a field-level 3-way merge that auto-resolves non-conflicting changes and a keyboard-first resolver dive that walks the user through genuine clashes one field at a time.
 
 **Architecture:** A pure Rust merge engine (`merge.rs`) takes three profile snapshots (merge-base, local, remote) and returns a merged document plus a list of `FieldConflict`s. The sync service runs it on divergence: clean → write+commit+push; conflicts → persist them and surface a `profile-sync-conflicts` world-canvas dive that posts the user's per-field picks back. Both sides are snapshotted to a backup before any write.
