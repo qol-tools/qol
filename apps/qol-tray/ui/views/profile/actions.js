@@ -47,9 +47,13 @@ export async function disconnectProfileSync() {
     return result;
 }
 
-export async function acknowledgeProfileSync() {
-    const result = await apiJson('/api/sync/acknowledge', { method: 'POST' });
-    toast('success', result.message);
+export async function fetchConflicts() {
+    return apiJson('/api/sync/conflicts');
+}
+
+export async function resolveConflicts(choices) {
+    const result = await apiJson('/api/sync/conflicts/resolve', jsonRequest('POST', { choices }));
+    toast(syncToastKind(result.status?.health), result.message);
     return result;
 }
 
