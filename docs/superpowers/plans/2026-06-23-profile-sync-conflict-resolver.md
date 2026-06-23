@@ -4,20 +4,37 @@
 
 ## Status (2026-06-23) — detection/merge core landed, all green & warning-free on `main`
 
-Done (TDD, committed):
+Done (TDD, committed, all green + `clippy -D warnings` clean, `main` green throughout):
 - Task 1 `d6604fad` — field-level 3-way merge engine (`sync/merge.rs`)
 - Task 2 `5f5d969a` — full-document merge + plugin-lock union (`merge_lock`)
-- Task 3 `ebe469e5` — merge-base, tree-snapshot, oid git helpers (`sync/git_repo.rs`)
-- Task 5 (core) `2c640cf1` — reconcile orchestration `sync/reconcile.rs` (diverged repo → merged doc + `FieldConflict`s), with `mergeable_path` predicate
+- Task 3 `ebe469e5` — merge-base, tree-snapshot, oid git helpers
+- Task 5 core `2c640cf1` — reconcile orchestration `sync/reconcile.rs` + `mergeable_path`
+- Tasks 4+5+6 `9b9d2163` — `do_pull` self-heals (clean merge → commit+push) or surfaces
+  decorated `ResolvableConflict`s; `resolve_conflicts` applies picks via `merge_profile_with`
+  + both-sides backup; per-field blame dates (`field_edited_at`); `SyncStateFile.conflicts`
+  + `conflict_count`; removed `PullMode`
+- Task 7 `3996dbd2` — `GET /sync/conflicts`, `POST /sync/conflicts/resolve`; removed
+  `acknowledge` route + `acknowledge_incident`
 
-**RESUME AT — Task 5 wiring:** call `reconcile(&repo)` from `do_pull`'s `Diverged`
-branch in `service.rs`; write merged files back via `repo_path.join(rel)`; persist
-`ResolvableConflict`s into `SyncStateFile.conflicts`; set incident `Conflict` /
-health `Attention`; when `conflicts.is_empty()` write+commit+push and go Healthy.
-Then: Task 4 (blame dates — `chrono::DateTime::from_timestamp(secs,0).to_rfc3339()`,
-fallback to tip-commit time), Task 6 `resolve_conflicts`, Task 7 routes (+delete
-`acknowledge`), Task 8 pull-before-push, Tasks 9-11 Preact resolver dive, Task 12
-e2e + full clippy stack.
+Backend + HTTP API are functionally complete: the divergence dead-end is fixed at the API
+level — `pull` reconciles (auto-merges non-conflicting, surfaces only true clashes) instead
+of dead-ending, and resolve applies the user's per-field picks with a backup.
+
+**RESUME AT — frontend (Tasks 9-11). CAVEAT FIRST:** the UI still calls the now-removed
+`acknowledge` endpoint (`ui/views/profile/use-sync-actions.js`, `use-surface-nav.js`,
+`view.js`, `summary.js`, `actions.js`); these MUST be replaced with the resolver dive before
+the app is recompiled for use, or the Acknowledge button 404s.
+- Task 9 — `fetchConflicts`/`resolveConflicts` in `actions.js`. JSON is **snake_case**
+  (`key_path`, `local_edited`, `remote_edited`); a choice is `{file, key_path, side}` with
+  `side` = `"mine"|"remote"`. Status now carries `conflict_count`; incident `kind` = `conflict`.
+- Task 10 — resolver dive `ui/views/profile/conflict-resolver/` per the prototype
+  (`.superpowers/brainstorm/45908-1782236566/content/conflict-resolver.html`), rebuilt in
+  token CSS + `Surface`/`ListRow`, registered as a single-page dive (`qol-tray-page-creation`).
+- Task 11 — keyboard nav + entry when `incident.kind === 'conflict'`; remove the dead
+  Pull/Push/Acknowledge row for that state.
+
+Also remaining: Task 8 pull-before-push (deferred — prevention, not correctness), Task 12
+e2e flow test + full `make build && make test && cargo clippy` stack.
 
 Facts discovered during execution (supersede plan draft where they differ):
 - Allowlist is `ProfileScopeStore::is_sync_allowlisted(rel)`; "mergeable" = that
