@@ -127,6 +127,7 @@ struct Args {
     anomalies: bool,
     no_ghosts: bool,
     no_opacity: bool,
+    no_header: bool,
 }
 
 impl Args {
@@ -147,6 +148,7 @@ impl Args {
         let mut anomalies = false;
         let mut no_ghosts = false;
         let mut no_opacity = false;
+        let mut no_header = false;
         let mut focus_only = false;
 
         let mut iter = args.iter().peekable();
@@ -162,6 +164,7 @@ impl Args {
                 "-f" | "--focus-only" => focus_only = true,
                 "-g" | "--no-ghosts" => no_ghosts = true,
                 "-o" | "--no-opacity" => no_opacity = true,
+                "--no-header" => no_header = true,
                 "-d" | "--details" => details = true,
                 "--replay" => replay = true,
                 "--anomalies" => anomalies = true,
@@ -214,6 +217,7 @@ impl Args {
             anomalies,
             no_ghosts,
             no_opacity,
+            no_header,
         })
     }
 }
@@ -618,7 +622,9 @@ impl TraceRunner {
     }
 
     fn run(&mut self) -> Result<()> {
-        self.print_header();
+        if !self.args.no_header {
+            self.print_header();
+        }
         self.query_initial_monitors();
         let start_ts = self.start_ts();
         let file = File::open(&self.path)
@@ -2761,6 +2767,12 @@ mod tests {
         let args = Args::parse(&["--stats".into(), "--replay".into()]).unwrap();
         assert!(args.stats);
         assert!(args.replay);
+    }
+
+    #[test]
+    fn no_header_flag_suppresses_the_banner() {
+        assert!(Args::parse(&["--no-header".into()]).unwrap().no_header);
+        assert!(!Args::parse(&[]).unwrap().no_header);
     }
 
     #[test]
