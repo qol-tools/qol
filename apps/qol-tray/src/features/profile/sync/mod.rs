@@ -1,4 +1,5 @@
 pub mod git_repo;
+mod merge;
 pub(crate) mod platform;
 mod promote;
 mod scope;

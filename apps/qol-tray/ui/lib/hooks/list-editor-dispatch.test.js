@@ -2,112 +2,61 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { composeListEditorHandler } from './list-editor-dispatch.js';
 
-function fakeEvent(k, extra = {}) {
-    return {
-        key: k,
-        ctrlKey: false, metaKey: false, altKey: false, shiftKey: false,
-        ...extra,
-        preventDefault: () => {},
-    };
-}
-
-function makeHandler(overrides = {}) {
-    const calls = { modal: 0, list: 0 };
-    const h = composeListEditorHandler({
-        modalRef: { current: null },
+function run({ modalOpen, pre, list }) {
+    const calls = { modal: 0, list: 0, pre: 0, listIntercept: 0 };
+    composeListEditorHandler({
+        modalRef: { current: modalOpen ? {} : null },
         onModal: () => { calls.modal++; },
         onList: () => { calls.list++; },
-        ...overrides,
-    });
-    return { h, calls };
+        preIntercept: pre === undefined ? undefined : () => { calls.pre++; return pre; },
+        listIntercept: list === undefined ? undefined : () => { calls.listIntercept++; return list; },
+    })({});
+    return calls;
 }
 
-test('modal open: routes to onModal, not onList', () => {
-    const { h, calls } = makeHandler({ modalRef: { current: {} } });
-    h(fakeEvent('Enter'));
-    assert.equal(calls.modal, 1);
-    assert.equal(calls.list, 0);
-});
+const cases = [
+    ['modal open, no intercepts routes to onModal', { modalOpen: true }, { modal: 1, list: 0 }],
+    ['modal closed, no intercepts routes to onList', { modalOpen: false }, { modal: 0, list: 1 }],
+    ['preIntercept true stops before modal', { modalOpen: true, pre: true }, { modal: 0, list: 0, pre: 1 }],
+    ['preIntercept false continues to modal', { modalOpen: true, pre: false }, { modal: 1, list: 0, pre: 1 }],
+    ['listIntercept true stops before onList', { modalOpen: false, list: true }, { modal: 0, list: 0, listIntercept: 1 }],
+    ['listIntercept false falls through to onList', { modalOpen: false, list: false }, { modal: 0, list: 1, listIntercept: 1 }],
+    ['listIntercept skipped while modal open', { modalOpen: true, list: true }, { modal: 1, list: 0, listIntercept: 0 }],
+];
 
-test('modal closed: routes to onList', () => {
-    const { h, calls } = makeHandler();
-    h(fakeEvent('a'));
-    assert.equal(calls.list, 1);
-    assert.equal(calls.modal, 0);
-});
-
-test('preIntercept returning true stops before modal check', () => {
-    const { h, calls } = makeHandler({
-        modalRef: { current: {} },
-        preIntercept: () => true,
+for (const [desc, input, expected] of cases) {
+    test(`composeListEditorHandler: ${desc}`, () => {
+        const calls = run(input);
+        for (const [sink, want] of Object.entries(expected)) {
+            assert.equal(calls[sink], want, `${desc} (${sink})`);
+        }
     });
-    h(fakeEvent('x'));
-    assert.equal(calls.modal, 0, 'preIntercept should stop before modal');
-    assert.equal(calls.list, 0);
-});
+}
 
-test('preIntercept returning false continues to modal', () => {
-    const { h, calls } = makeHandler({
-        modalRef: { current: {} },
-        preIntercept: () => false,
-    });
-    h(fakeEvent('x'));
-    assert.equal(calls.modal, 1);
-});
-
-test('listIntercept returning true stops before onList', () => {
-    let intercepted = false;
-    const { h, calls } = makeHandler({
-        listIntercept: () => { intercepted = true; return true; },
-    });
-    h(fakeEvent('r'));
-    assert.ok(intercepted);
-    assert.equal(calls.list, 0);
-});
-
-test('listIntercept returning false falls through to onList', () => {
-    const { h, calls } = makeHandler({ listIntercept: () => false });
-    h(fakeEvent('a'));
-    assert.equal(calls.list, 1);
-});
-
-test('listIntercept is not called when modal is open', () => {
-    let intercepted = false;
-    const { h, calls } = makeHandler({
-        modalRef: { current: {} },
-        listIntercept: () => { intercepted = true; return true; },
-    });
-    h(fakeEvent('r'));
-    assert.ok(!intercepted, 'listIntercept must not run when modal is open');
-    assert.equal(calls.modal, 1);
-});
-
-test('modal ref flips: closed then open', () => {
+test('composeListEditorHandler: reads modalRef at call time, not compose time', () => {
     const modalRef = { current: null };
     const calls = { modal: 0, list: 0 };
-    const h = composeListEditorHandler({
+    const handler = composeListEditorHandler({
         modalRef,
         onModal: () => { calls.modal++; },
         onList: () => { calls.list++; },
     });
-    h(fakeEvent('a'));
-    assert.equal(calls.list, 1);
+    handler({});
+    assert.equal(calls.list, 1, 'closed routes to list');
     modalRef.current = {};
-    h(fakeEvent('Escape'));
-    assert.equal(calls.modal, 1);
-    assert.equal(calls.list, 1);
+    handler({});
+    assert.equal(calls.modal, 1, 'reopened routes to modal');
+    assert.equal(calls.list, 1, 'list not called again');
 });
 
-test('preIntercept is called before listIntercept and modal', () => {
+test('composeListEditorHandler: dispatch order is pre then listIntercept then onList', () => {
     const order = [];
-    const modalRef = { current: null };
-    const h = composeListEditorHandler({
-        modalRef,
-        onModal: () => { order.push('modal'); },
-        onList: () => { order.push('list'); },
-        preIntercept: (e) => { order.push('pre'); return false; },
-        listIntercept: (e) => { order.push('list-intercept'); return false; },
-    });
-    h(fakeEvent('a'));
+    composeListEditorHandler({
+        modalRef: { current: null },
+        onModal: () => order.push('modal'),
+        onList: () => order.push('list'),
+        preIntercept: () => { order.push('pre'); return false; },
+        listIntercept: () => { order.push('list-intercept'); return false; },
+    })({});
     assert.deepEqual(order, ['pre', 'list-intercept', 'list']);
 });
