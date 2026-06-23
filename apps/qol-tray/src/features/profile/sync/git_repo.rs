@@ -3,6 +3,8 @@ use git2::{
     build::RepoBuilder, BranchType, Cred, FetchOptions, PushOptions, RemoteCallbacks, Repository,
     Signature,
 };
+use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const DEFAULT_BRANCH: &str = "main";
@@ -85,17 +87,8 @@ impl GitRepo {
             .fetch(&[DEFAULT_BRANCH], Some(&mut fo), None)
             .context("fetch from remote")?;
 
-        let local_oid = repo
-            .find_branch(DEFAULT_BRANCH, BranchType::Local)
-            .ok()
-            .and_then(|branch| branch.into_reference().target());
-        let remote_ref_name = format!("{DEFAULT_REMOTE}/{DEFAULT_BRANCH}");
-        let remote_oid = repo
-            .find_branch(&remote_ref_name, BranchType::Remote)
-            .with_context(|| format!("find remote branch {remote_ref_name}"))?
-            .into_reference()
-            .target()
-            .ok_or_else(|| anyhow!("remote branch {remote_ref_name} has no target"))?;
+        let local_oid = local_branch_oid(&repo);
+        let remote_oid = remote_branch_oid(&repo)?;
 
         let Some(local_oid) = local_oid else {
             checkout_remote_into_local(&repo, remote_oid)?;
@@ -198,10 +191,67 @@ impl GitRepo {
         Ok(!statuses.is_empty())
     }
 
+    pub fn local_oid(&self) -> Result<Option<git2::Oid>> {
+        Ok(local_branch_oid(&self.open_repo()?))
+    }
+
+    pub fn remote_oid(&self) -> Result<git2::Oid> {
+        remote_branch_oid(&self.open_repo()?)
+    }
+
+    pub fn merge_base_with_remote(&self) -> Result<Option<git2::Oid>> {
+        let repo = self.open_repo()?;
+        let Some(local) = local_branch_oid(&repo) else {
+            return Ok(None);
+        };
+        let remote = remote_branch_oid(&repo)?;
+        Ok(repo.merge_base(local, remote).ok())
+    }
+
+    pub fn snapshot_json_at<F: Fn(&Path) -> bool>(
+        &self,
+        oid: git2::Oid,
+        accept: F,
+    ) -> Result<BTreeMap<String, Value>> {
+        let repo = self.open_repo()?;
+        let tree = repo.find_commit(oid)?.tree()?;
+        let mut out = BTreeMap::new();
+        tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+            let name = entry.name().unwrap_or("");
+            let path = format!("{dir}{name}");
+            if path.ends_with(".json") && accept(Path::new(&path)) {
+                if let Ok(object) = entry.to_object(&repo) {
+                    if let Some(blob) = object.as_blob() {
+                        if let Ok(value) = serde_json::from_slice::<Value>(blob.content()) {
+                            out.insert(path, value);
+                        }
+                    }
+                }
+            }
+            git2::TreeWalkResult::Ok
+        })?;
+        Ok(out)
+    }
+
     fn open_repo(&self) -> Result<Repository> {
         Repository::open(&self.repo_path)
             .with_context(|| format!("open git repo at {}", self.repo_path.display()))
     }
+}
+
+fn local_branch_oid(repo: &Repository) -> Option<git2::Oid> {
+    repo.find_branch(DEFAULT_BRANCH, BranchType::Local)
+        .ok()
+        .and_then(|branch| branch.into_reference().target())
+}
+
+fn remote_branch_oid(repo: &Repository) -> Result<git2::Oid> {
+    let name = format!("{DEFAULT_REMOTE}/{DEFAULT_BRANCH}");
+    repo.find_branch(&name, BranchType::Remote)
+        .with_context(|| format!("find remote branch {name}"))?
+        .into_reference()
+        .target()
+        .ok_or_else(|| anyhow!("remote branch {name} has no target"))
 }
 
 #[derive(Debug, Clone)]
@@ -383,5 +433,59 @@ mod tests {
 
         let outcome = local.pull(None).unwrap();
         assert_eq!(outcome, PullOutcome::AlreadyUpToDate);
+    }
+
+    #[test]
+    fn snapshot_json_at_reads_matching_json_from_a_commit() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path().join("local");
+        let repo = GitRepo::init(&repo_path, "https://example.invalid/r.git").unwrap();
+        write_file(&repo_path.join("core/plugin-configs/a.json"), "{\"x\": 1}");
+        write_file(&repo_path.join("note.txt"), "ignore me");
+        repo.commit_all("seed", &signature()).unwrap();
+
+        let oid = repo.local_oid().unwrap().unwrap();
+        let snap = repo
+            .snapshot_json_at(oid, |p| p.starts_with("core"))
+            .unwrap();
+        assert_eq!(
+            snap.get("core/plugin-configs/a.json"),
+            Some(&serde_json::json!({"x": 1}))
+        );
+        assert!(!snap.contains_key("note.txt"), "non-json is excluded");
+    }
+
+    #[test]
+    fn merge_base_and_remote_oid_resolve_after_fetch() {
+        let tmp = TempDir::new().unwrap();
+        let origin = tmp.path().join("origin.git");
+        let url = init_bare_origin(&origin);
+
+        let a_path = tmp.path().join("a");
+        let a = GitRepo::init(&a_path, &url).unwrap();
+        write_file(&a_path.join("core/x.json"), "{\"v\":1}");
+        a.commit_all("seed", &signature()).unwrap();
+        a.push(None).unwrap();
+
+        let b_path = tmp.path().join("b");
+        let b = GitRepo::clone(&url, &b_path, None).unwrap();
+
+        write_file(&a_path.join("core/x.json"), "{\"v\":2}");
+        a.commit_all("a2", &signature()).unwrap();
+        a.push(None).unwrap();
+
+        write_file(&b_path.join("core/y.json"), "{\"v\":1}");
+        b.commit_all("b2", &signature()).unwrap();
+
+        let outcome = b.pull(None).unwrap();
+        assert!(
+            matches!(outcome, PullOutcome::Diverged { .. }),
+            "expected divergence, got {outcome:?}"
+        );
+        assert!(
+            b.merge_base_with_remote().unwrap().is_some(),
+            "diverged history shares a merge base"
+        );
+        assert_ne!(b.remote_oid().unwrap(), b.local_oid().unwrap().unwrap());
     }
 }
