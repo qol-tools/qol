@@ -8,7 +8,7 @@ import {
     openProfileBackupsDir,
 } from './actions.js';
 
-export const backupPreviewSlot = createSharedSlot({ preview: null, incident: null, onAcknowledge: null });
+export const backupPreviewSlot = createSharedSlot({ preview: null, incident: null });
 
 export function useBackups({ incident, syncStatus }) {
     const [backups, setBackups] = useState([]);

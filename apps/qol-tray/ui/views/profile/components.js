@@ -35,8 +35,9 @@ export function ProfileActionButton({ id, ctrl }) {
     const sel = surfaceSel(ctrl, id);
     if (!s || !sel) return null;
     const cls = ['profile-action-btn', s.busy && 'is-busy'].filter(Boolean).join(' ');
+    const diveProps = s.diveTarget ? { 'data-dive-target': s.diveTarget, 'data-dive-source': '' } : {};
     return html`<${Button} variant=${s.variant || 'btn-ghost'} className=${cls}
-        ...${sel} onActivate=${s.run}>
+        ...${sel} ...${diveProps} onActivate=${s.run}>
         ${s.busy && html`<span class="profile-action-spinner" aria-hidden="true"></span>`}
         <span>${s.label}</span>
     <//>`;

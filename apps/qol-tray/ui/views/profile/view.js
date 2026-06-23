@@ -46,9 +46,8 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
         backupPreviewSlot.set({
             preview: ctrl.backupPreview,
             incident: ctrl.incident,
-            onAcknowledge: ctrl.handleAcknowledge,
         });
-    }, [ctrl.backupPreview, ctrl.incident, ctrl.handleAcknowledge]);
+    }, [ctrl.backupPreview, ctrl.incident]);
 
     const health = ctrl.syncStatus?.health || 'not_configured';
     const settingsSurface = ctrl.surfaceById.get('settings');
@@ -139,7 +138,7 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                             <${ProfileActionButton} id="pull" ctrl=${ctrl} />
                                             <${ProfileActionButton} id="push" ctrl=${ctrl} />
                                         `}
-                                        <${ProfileActionButton} id="acknowledge" ctrl=${ctrl} />
+                                        <${ProfileActionButton} id="resolve-conflicts" ctrl=${ctrl} />
                                         <span class="profile-actions-spacer"></span>
                                         <${ProfileActionButton} id="disconnect" ctrl=${ctrl} />
                                     </div>
@@ -247,14 +246,13 @@ export const prodBackupDetailConfig = {
     onRestore: (content) => importProfileText(content)
         .then(() => dispatchEscape())
         .catch((err) => toast('error', `Failed to restore backup: ${err.message}`)),
-    onAcknowledge: (slotAcknowledge) => { slotAcknowledge?.(); dispatchEscape(); },
 };
 
 export function BackupDetailSubPage({ slot, config }) {
     const [, bump] = useState(0);
     useEffect(() => slot.subscribe(() => bump(t => t + 1)), [slot]);
 
-    const { preview, incident, onAcknowledge } = slot.get();
+    const { preview, incident } = slot.get();
     if (!preview) {
         return html`<${PageShell} subtitle="Select a backup to view" frame=${false} />`;
     }
@@ -263,12 +261,10 @@ export function BackupDetailSubPage({ slot, config }) {
         <${PageShell} subtitle=${isIncidentBackup ? 'Backup awaiting review' : 'Backup preview'} frameClassName="backup-detail-frame">
             <${BackupDetailContent}
                 text=${config.formatText(preview.content)}
-                isIncidentBackup=${isIncidentBackup}
                 onClose=${config.onClose}
                 onOpenExternal=${() => config.onOpenExternal(preview.file_name)}
                 onCopy=${() => config.onCopy(preview.content)}
-                onRestore=${() => config.onRestore(preview.content)}
-                onAcknowledge=${() => config.onAcknowledge(onAcknowledge)} />
+                onRestore=${() => config.onRestore(preview.content)} />
         <//>
     `;
 }

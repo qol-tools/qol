@@ -7,10 +7,14 @@ const TABLE = [
     { id: 'pull', idle: 'Pull Now', busy: 'Pulling…' },
     { id: 'push', idle: 'Push Now', busy: 'Pushing…' },
     { id: 'disconnect', idle: 'Disconnect', busy: 'Disconnecting…' },
-    { id: 'acknowledge', idle: 'Acknowledge', busy: 'Acknowledging…' },
     { id: 'export', idle: 'Export', busy: 'Exporting…' },
     { id: 'import', idle: 'Import', busy: 'Importing…' },
 ];
+
+test('busyActionLabel acknowledge returns empty (removed action)', () => {
+    assert.equal(busyActionLabel('acknowledge', true), '');
+    assert.equal(busyActionLabel('acknowledge', false), '');
+});
 
 for (const { id, idle, busy } of TABLE) {
     test(`busyActionLabel ${id} idle returns idle label`, () => {

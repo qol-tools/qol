@@ -10,7 +10,6 @@ export function useSurfaceNav({
     busyAction,
     configured,
     form,
-    handleAcknowledge,
     handleConnect,
     handleDisconnect,
     handleExport,
@@ -33,12 +32,16 @@ export function useSurfaceNav({
         };
         const actionBusy = (id) => busyAction === id;
 
-        if (configured) {
+        if (configured && incident?.kind !== 'conflict') {
             add('pull', 'action', { label: busyActionLabel('pull', actionBusy('pull')), run: syncBusy ? null : handlePull, busy: actionBusy('pull') });
             add('push', 'action', { label: busyActionLabel('push', actionBusy('push')), run: syncBusy ? null : handlePush, busy: actionBusy('push') });
         }
-        if (incident) {
-            add('acknowledge', 'action', { label: busyActionLabel('acknowledge', actionBusy('acknowledge')), variant: 'btn-primary', run: syncBusy ? null : handleAcknowledge, busy: actionBusy('acknowledge') });
+        if (incident?.kind === 'conflict') {
+            add('resolve-conflicts', 'dive', {
+                label: 'Resolve conflicts',
+                variant: 'btn-primary',
+                diveTarget: 'profile-sync-conflicts',
+            });
         }
         if (configured) {
             add('disconnect', 'action', { label: busyActionLabel('disconnect', actionBusy('disconnect')), variant: 'btn-ghost', run: syncBusy ? null : handleDisconnect, busy: actionBusy('disconnect') });
@@ -67,7 +70,7 @@ export function useSurfaceNav({
     }, [
         advancedProviderFields, authPrompt, backups, basicProviderFields, busyAction, configured,
         form.pull_on_launch, form.push_on_change, form.provider,
-        handleAcknowledge, handleConnect, handleDisconnect, handleExport,
+        handleConnect, handleDisconnect, handleExport,
         handleImport, handleOpenBackups, handlePreviewBackup, handlePull, handlePush,
         importBusy, incident, syncBusy, updateForm,
     ]);
@@ -93,12 +96,9 @@ export function useSurfaceNav({
                 { id: 'profile:pull', label: 'Pull cloud sync', run: handlePull },
             );
         }
-        if (incident) {
-            next.unshift({ id: 'profile:acknowledge', label: 'Acknowledge sync review', run: handleAcknowledge });
-        }
         next.unshift({ id: 'profile:connect', label: connectActionLabel(configured, form.provider), run: handleConnect });
         return next;
-    }, [configured, handleAcknowledge, handleConnect, handleExport, handleImport, handleOpenBackups, handlePull, handlePush, incident, form.provider]);
+    }, [configured, handleConnect, handleExport, handleImport, handleOpenBackups, handlePull, handlePush, incident, form.provider]);
 
     return {
         commands,

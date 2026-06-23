@@ -90,7 +90,6 @@ const ACTION_BUSY_LABELS = {
     pull: { idle: 'Pull Now', busy: 'Pulling' },
     push: { idle: 'Push Now', busy: 'Pushing' },
     disconnect: { idle: 'Disconnect', busy: 'Disconnecting' },
-    acknowledge: { idle: 'Acknowledge', busy: 'Acknowledging' },
     export: { idle: 'Export', busy: 'Exporting' },
     import: { idle: 'Import', busy: 'Importing' },
 };

@@ -31,12 +31,10 @@ export function BackupRow({
 
 export function BackupDetailContent({
     text,
-    isIncidentBackup,
     onClose,
     onOpenExternal,
     onCopy,
     onRestore,
-    onAcknowledge,
 }) {
     return html`
         <${CodeBlock}
@@ -48,7 +46,6 @@ export function BackupDetailContent({
             <${Button} variant="btn-ghost" onActivate=${onOpenExternal}>Open in editor<//>
             <${Button} variant="btn-ghost" onActivate=${onCopy}>Copy<//>
             <${ConfirmButton} confirmWith="restore" onActivate=${onRestore}>Restore this backup<//>
-            ${isIncidentBackup && html`<${Button} variant="btn-ghost" onActivate=${onAcknowledge}>Looks Good<//>`}
         </div>
     `;
 }

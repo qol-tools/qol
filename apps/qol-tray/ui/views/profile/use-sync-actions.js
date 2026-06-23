@@ -2,7 +2,6 @@ import { useCallback, useState } from 'preact/hooks';
 import { toast } from '../../lib/toast.js';
 import { fetchGitHubAuthStatus, startGitHubAuth, waitForGitHubAuth } from '../../features/github-auth/actions.js';
 import {
-    acknowledgeProfileSync,
     bootstrapGitHubProfileSync,
     connectProfileSync,
     disconnectProfileSync,
@@ -149,21 +148,9 @@ export function useSyncActions({
         setBusyAction('');
     }, [applySyncStatus, refreshAuthHealth]);
 
-    const handleAcknowledge = useCallback(async () => {
-        setBusyAction('acknowledge');
-        try {
-            const result = await acknowledgeProfileSync();
-            applySyncStatus(result.status);
-        } catch (error) {
-            toast('error', `Failed to acknowledge cloud sync review: ${error.message}`);
-        }
-        setBusyAction('');
-    }, [applySyncStatus]);
-
     return {
         authPrompt,
         busyAction,
-        handleAcknowledge,
         handleConnect,
         handleDisconnect,
         handleExport,
@@ -189,8 +176,7 @@ function isSyncBusy(busyAction) {
     return busyAction === 'connect'
         || busyAction === 'pull'
         || busyAction === 'push'
-        || busyAction === 'disconnect'
-        || busyAction === 'acknowledge';
+        || busyAction === 'disconnect';
 }
 
 function isImportBusy(busyAction) {

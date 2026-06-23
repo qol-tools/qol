@@ -478,7 +478,6 @@ function BackupRowShowcase() {
                         onActivate=${() => galleryBackupRowSlot.set({
                             preview: { file_name: entry.fileName, content: entry.content },
                             incident: entry.review ? { backup_file: entry.fileName } : null,
-                            onAcknowledge: null,
                         })}
                         onSecondaryActivate=${() => toast('info', 'Open in editor (gallery sandbox)')} />
                 `)}

@@ -4,7 +4,7 @@ import { BackupDetailSubPage } from '../profile/view.js';
 import { toast } from '../../lib/toast.js';
 
 export const galleryBackupRowSlot = createSharedSlot({
-    preview: null, incident: null, onAcknowledge: null,
+    preview: null, incident: null,
 });
 
 function dispatchEscape() {
@@ -19,7 +19,6 @@ const sandboxConfig = {
     onOpenExternal: sandbox('Open in editor'),
     onCopy: sandbox('Copy'),
     onRestore: sandbox('Restore'),
-    onAcknowledge: () => { sandbox('Acknowledge')(); dispatchEscape(); },
 };
 
 export function GalleryBackupRowDetailSubPage() {
