@@ -128,12 +128,12 @@ fn boot_preflight(
     skip_plugins: bool,
     reload: bool,
 ) -> Result<Vec<BuildablePlugin>> {
-    if reload {
-        step_label("reload", StepKind::Info, "fast boot, preflight skipped");
-        return collect_buildable_plugins(root, skip_plugins);
-    }
     let buildable = collect_buildable_plugins(root, skip_plugins)?;
     build_plugins_batch(root, &buildable, verbose)?;
+    if reload {
+        step_label("reload", StepKind::Info, "fast boot, checks skipped");
+        return Ok(buildable);
+    }
     run_dev_hook(root, verbose)?;
     run_step(
         "check",

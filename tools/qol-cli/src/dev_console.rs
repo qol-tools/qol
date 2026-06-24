@@ -2698,8 +2698,6 @@ fn start_reload(dash: &mut Dash) {
     if dash.is_reloading() {
         return;
     }
-    trigger_rebuild(dash);
-    trigger_reload(dash);
     match spawn_reload() {
         Some((child, rx)) => {
             dash.push_log("[qol dev] reloading: qol setup");
