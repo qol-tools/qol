@@ -21,6 +21,8 @@ pub fn activate_window(window_id: u32) {
     let _ = ACTIVATOR.get_or_init(start_activator).send(window_id);
 }
 
+pub fn cancel_pending_activation() {}
+
 fn start_activator() -> Sender<u32> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || run_activator(rx));

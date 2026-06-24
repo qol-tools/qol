@@ -1,4 +1,5 @@
 pub fn activate_window(_window_id: u32) {}
+pub fn cancel_pending_activation() {}
 pub fn close_window(_window_id: u32) -> super::CloseOutcome {
     super::CloseOutcome::Unsupported
 }

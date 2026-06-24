@@ -33,6 +33,10 @@ extern "C" {
 
 static ACTIVATE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+pub fn cancel_pending_activation() {
+    ACTIVATE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
 pub fn activate_window(window_id: u32) {
     let commit_gen = ACTIVATE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     #[cfg(debug_assertions)]

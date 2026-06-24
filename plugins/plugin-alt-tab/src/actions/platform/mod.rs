@@ -30,6 +30,9 @@ pub(crate) enum CloseOutcome {
 pub fn activate_window(window_id: u32) {
     imp::activate_window(window_id)
 }
+pub fn cancel_pending_activation() {
+    imp::cancel_pending_activation()
+}
 pub fn close_window(window_id: u32) -> CloseWindowResult {
     match imp::close_window(window_id) {
         CloseOutcome::Closed { quit_app: true } => CloseWindowResult::QuitApp,
