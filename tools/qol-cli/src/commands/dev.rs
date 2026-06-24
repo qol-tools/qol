@@ -14,6 +14,16 @@ use std::sync::mpsc::{channel, Receiver};
 
 const RELOAD_ENV: &str = "QOL_DEV_RELOAD";
 
+const DEV_BUILD_ARGS: [&str; 7] = [
+    "build",
+    "--bin",
+    "qol-tray",
+    "--bin",
+    "qol-tray-doctor",
+    "--features",
+    "dev",
+];
+
 pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
     let branch = optional_single_arg(args, "qol dev [worktree]")?;
     let root = repo_root()?;
@@ -34,13 +44,9 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         "build",
         StepKind::Pending,
         "qol-tray dev",
-        Command::new("cargo").current_dir(&root).args([
-            "build",
-            "--bin",
-            "qol-tray",
-            "--features",
-            "dev",
-        ]),
+        Command::new("cargo")
+            .current_dir(&root)
+            .args(DEV_BUILD_ARGS),
         verbose,
     )?;
     step_label("run", StepKind::Pending, &binary.display().to_string());
@@ -299,6 +305,28 @@ mod tests {
         assert_eq!(
             parse_worktree_branches(input),
             vec!["main".to_string(), "feat/x".to_string()]
+        );
+    }
+
+    #[test]
+    fn dev_build_includes_dev_doctor_so_dashboard_runs_dev_checks() {
+        assert!(
+            DEV_BUILD_ARGS.contains(&"qol-tray-doctor"),
+            "startup must build qol-tray-doctor; otherwise the dashboard doctor poller runs a \
+             stale non-dev binary and reports divergences a manual check disproves"
+        );
+        assert!(
+            DEV_BUILD_ARGS.contains(&"qol-tray"),
+            "startup must still build the qol-tray binary it launches"
+        );
+        let features = DEV_BUILD_ARGS
+            .iter()
+            .position(|arg| *arg == "--features")
+            .and_then(|i| DEV_BUILD_ARGS.get(i + 1));
+        assert_eq!(
+            features,
+            Some(&"dev"),
+            "both bins must be built with the dev feature so dev-only checks are present"
         );
     }
 
