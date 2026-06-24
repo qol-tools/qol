@@ -23,6 +23,14 @@ fn execute_via_daemon(
 ) -> Result<(), ActionExecutionError> {
     let dispatch =
         crate::plugins::action_transport::dispatch_daemon_action(socket_path, &resolved.action_id);
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "ACTION_DISPATCH",
+        "plugin={} action={} outcome={}",
+        resolved.plugin_id,
+        resolved.action_id,
+        dispatch_outcome(&dispatch)
+    );
     if matches!(dispatch, DaemonActionDispatch::Handled { .. }) {
         log::info!(
             "Plugin action handled via daemon: {}::{}",
@@ -40,6 +48,16 @@ fn execute_via_daemon(
         "{} {}::{}",
         reason, resolved.plugin_id, resolved.action_id
     )))
+}
+
+#[cfg(debug_assertions)]
+fn dispatch_outcome(dispatch: &DaemonActionDispatch) -> &'static str {
+    match dispatch {
+        DaemonActionDispatch::Handled { .. } => "handled",
+        DaemonActionDispatch::Fallback => "fallback",
+        DaemonActionDispatch::Unavailable => "unavailable",
+        DaemonActionDispatch::Error(_) => "error",
+    }
 }
 
 fn daemon_failure_reason(
