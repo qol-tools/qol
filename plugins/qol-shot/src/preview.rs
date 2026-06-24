@@ -80,8 +80,12 @@ fn preview_bounds(window_size: Size<Pixels>, cx: &mut App) -> Bounds<Pixels> {
 #[cfg(target_os = "linux")]
 fn spawn_overlay_config(title: String) {
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(120));
-        let _ = qol_gpui::popup_window::configure_overlay_window(&title);
+        for _ in 0..30 {
+            if qol_gpui::popup_window::configure_overlay_window(&title) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
     });
 }
 
