@@ -272,6 +272,46 @@ fn get_config_restores_from_core_slice_when_runtime_missing() {
 }
 
 #[test]
+fn get_config_ignores_stale_runtime_cache_and_reflects_slices() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    let (manager, _temp_base, _temp_plugins) = setup_test_env();
+
+    let runtime = PluginConfigManager::plugin_config_path("test-plugin").unwrap();
+    fs::create_dir_all(runtime.parent().unwrap()).unwrap();
+    fs::write(
+        &runtime,
+        serde_json::to_string(&json!({"stale": true})).unwrap(),
+    )
+    .unwrap();
+
+    let fresh = json!({"fresh": true, "value": 7});
+    fs::create_dir_all(manager.store().core_plugin_configs_dir()).unwrap();
+    fs::write(
+        manager
+            .store()
+            .core_plugin_configs_dir()
+            .join("test-plugin.json"),
+        serde_json::to_string(&fresh).unwrap(),
+    )
+    .unwrap();
+
+    let result = manager.get_config_with("test-plugin", None, None).unwrap();
+    assert_eq!(
+        result,
+        Some(fresh.clone()),
+        "get_config must reflect current slices, not the stale runtime cache"
+    );
+
+    let cached: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&runtime).unwrap()).unwrap();
+    assert_eq!(
+        cached, fresh,
+        "runtime cache must be refreshed to match slices"
+    );
+}
+
+#[test]
 fn plugin_config_path_cases() {
     let valid = ["plugin-test", "my_plugin", "a"];
     for id in valid {

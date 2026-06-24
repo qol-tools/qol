@@ -74,16 +74,12 @@ impl PluginConfigManager {
         manifest: Option<&crate::plugins::manifest::PluginManifest>,
     ) -> Result<Option<serde_json::Value>> {
         let uid = uid_from_lock_or_id(lock_entry, plugin_id);
-        let runtime_path = Self::plugin_config_path(plugin_id)?;
-        if runtime_path.exists() {
-            return store::load_plugin_config(&runtime_path).map(Some);
-        }
         let merged = load_plugin_config_merged(&self.scope_store, &uid, lock_entry, manifest)?;
         if merged.as_object().is_some_and(|m| m.is_empty()) {
             return Ok(None);
         }
-        log::info!("Restoring config for plugin from scoped profile slices: {plugin_id}");
-        store::write_plugin_config(&runtime_path, &merged)?;
+        let runtime_path = Self::plugin_config_path(plugin_id)?;
+        refresh_runtime_cache(&runtime_path, &merged)?;
         Ok(Some(merged))
     }
 
@@ -105,6 +101,13 @@ impl PluginConfigManager {
         store::write_plugin_config(&runtime_path, &config)?;
         save_plugin_config_split(&self.scope_store, &uid, &config, lock_entry, manifest)
     }
+}
+
+fn refresh_runtime_cache(path: &std::path::Path, merged: &serde_json::Value) -> Result<()> {
+    if store::load_plugin_config(path).ok().as_ref() == Some(merged) {
+        return Ok(());
+    }
+    store::write_plugin_config(path, merged)
 }
 
 fn load_lock_entry_for(plugin_id: &str) -> Option<crate::features::profile::core::PluginLockEntry> {
