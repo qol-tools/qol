@@ -23,11 +23,11 @@ export function HotkeysList({ hotkeys, plugins, selectedIndex, onSelect, onEdit 
             <${TableCell}>Action<//>
         <//>
         ${hotkeys.map((hk, i) => {
-            const plugin = plugins.find(p => p.id === hk.plugin_id);
+            const plugin = plugins.find(p => p.uid === hk.plugin_uid);
             return html`
                 <${HotkeyRow} key=${hk.id}
                     shortcut=${hk.key}
-                    pluginName=${plugin?.name || hk.plugin_id}
+                    pluginName=${plugin?.name || hk.plugin_uid}
                     actionLabel=${getActionLabel(plugin, hk.action)}
                     status=${plugin?.status || 'installed'}
                     enabled=${hk.enabled !== false}

@@ -3,9 +3,9 @@ import { useMemo } from 'preact/hooks';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
 
 export function PluginSelect({ modal, plugins, onChange }) {
-    const options = useMemo(() => plugins.map(p => p.id), [plugins]);
-    const labels = useMemo(() => Object.fromEntries(plugins.map(p => [p.id, p.name])), [plugins]);
-    return html`<${CustomSelect} value=${modal.pluginId} options=${options} labels=${labels} onChange=${onChange} />`;
+    const options = useMemo(() => plugins.map(p => p.uid), [plugins]);
+    const labels = useMemo(() => Object.fromEntries(plugins.map(p => [p.uid, p.name])), [plugins]);
+    return html`<${CustomSelect} value=${modal.pluginUid} options=${options} labels=${labels} onChange=${onChange} />`;
 }
 
 export function ActionSelect({ modal, onChange, disabled }) {
@@ -38,11 +38,11 @@ export function KeyInput({ modal, recording, onStartRecording, disabled }) {
 }
 
 export function createEditModalState(hotkey, keepPlugin, getAvailableActions) {
-    const pluginId = keepPlugin || hotkey?.plugin_id || '';
-    const availableActions = pluginId ? getAvailableActions(pluginId, hotkey?.id) : [];
+    const pluginUid = keepPlugin || hotkey?.plugin_uid || '';
+    const availableActions = pluginUid ? getAvailableActions(pluginUid, hotkey?.id) : [];
     return {
         hotkey,
-        pluginId,
+        pluginUid,
         action: hotkey?.action || availableActions[0]?.id || '',
         key: hotkey?.key || '',
         enabled: hotkey?.enabled !== false,
@@ -50,12 +50,12 @@ export function createEditModalState(hotkey, keepPlugin, getAvailableActions) {
     };
 }
 
-export function changeEditModalPlugin(previous, pluginId, getAvailableActions) {
+export function changeEditModalPlugin(previous, pluginUid, getAvailableActions) {
     if (!previous) return previous;
-    const availableActions = getAvailableActions(pluginId, previous.hotkey?.id);
+    const availableActions = getAvailableActions(pluginUid, previous.hotkey?.id);
     return {
         ...previous,
-        pluginId,
+        pluginUid,
         action: availableActions[0]?.id || '',
         availableActions
     };

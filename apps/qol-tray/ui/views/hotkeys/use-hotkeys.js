@@ -102,7 +102,7 @@ function loadInitialData(setHotkeys, setPlugins, setSelectedIndex, markRestored)
 
 function useModalActions(d, recorder) {
     const getActions = useCallback(
-        (pluginId, editingId) => resolveAvailableActions(d.plugins, d.hotkeysRef.current, pluginId, editingId),
+        (pluginUid, editingId) => resolveAvailableActions(d.plugins, d.hotkeysRef.current, pluginUid, editingId),
         [d.plugins]
     );
     const openEditModal = useCallback((hotkey = null, keepPlugin = null) => {
@@ -110,7 +110,7 @@ function useModalActions(d, recorder) {
         d.setEditModal(createEditModalState(hotkey, keepPlugin, getActions));
     }, [getActions, recorder.cancel]);
     const saveHotkey = useCallback(() => executeSave(d, recorder), [recorder]);
-    const handlePluginChange = useCallback((id) => d.setEditModal(prev => changeEditModalPlugin(prev, id, getActions)), [getActions]);
+    const handlePluginChange = useCallback((uid) => d.setEditModal(prev => changeEditModalPlugin(prev, uid, getActions)), [getActions]);
     const handleActionChange = useCallback((action) => d.setEditModal(prev => prev ? { ...prev, action } : prev), []);
     const handleEnabledChange = useCallback((enabled) => d.setEditModal(prev => prev ? { ...prev, enabled } : prev), []);
     const startRecording = useCallback(() => recorder.start(''), [recorder.start]);
@@ -120,7 +120,7 @@ function useModalActions(d, recorder) {
 
 function executeSave(d, recorder) {
     const modal = d.editModalRef.current;
-    if (!modal?.key || !modal?.pluginId || !modal?.action) return false;
+    if (!modal?.key || !modal?.pluginUid || !modal?.action) return false;
     recorder.cancel();
     const nextHotkeys = buildSavedHotkeys(d.hotkeysRef.current, modal);
     d.setHotkeys(nextHotkeys);

@@ -28,14 +28,14 @@ export async function persistHotkeys(hotkeys) {
     await apiResponse('/api/hotkeys', jsonRequest('PUT', { hotkeys }));
 }
 
-export function getAvailableActions(plugins, hotkeys, pluginId, editingId) {
-    const plugin = plugins.find(p => p.id === pluginId);
+export function getAvailableActions(plugins, hotkeys, pluginUid, editingId) {
+    const plugin = plugins.find(p => p.uid === pluginUid);
     if (!plugin?.actions?.length) {
         return [DEFAULT_ACTION];
     }
 
     const assigned = hotkeys
-        .filter(h => h.plugin_id === pluginId && h.id !== editingId)
+        .filter(h => h.plugin_uid === pluginUid && h.id !== editingId)
         .map(h => h.action);
 
     return plugin.actions.filter(a => !assigned.includes(a.id));
@@ -62,7 +62,7 @@ function hotkeyEntry(modal) {
     return {
         id: modal.hotkey?.id || `hk-${Date.now()}`,
         key: modal.key,
-        plugin_id: modal.pluginId,
+        plugin_uid: modal.pluginUid,
         action: modal.action,
         enabled: modal.enabled !== false
     };

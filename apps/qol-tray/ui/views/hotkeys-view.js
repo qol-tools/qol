@@ -70,8 +70,8 @@ export function HotkeysView() {
     const filtered = useMemo(
         () => searchQuery
             ? hk.hotkeys.filter(h => {
-                const plugin = hk.plugins.find(p => p.id === h.plugin_id);
-                return matchesQuery([h.key, plugin?.name || h.plugin_id, h.action], searchQuery);
+                const plugin = hk.plugins.find(p => p.uid === h.plugin_uid);
+                return matchesQuery([h.key, plugin?.name || h.plugin_uid, h.action], searchQuery);
             })
             : hk.hotkeys,
         [hk.hotkeys, hk.plugins, searchQuery]
@@ -123,7 +123,7 @@ export function HotkeyEditorSubPage({ slot, viewId = 'hotkeys-editor' }) {
 
 function HotkeyEditorBody({ value }) {
     const { modal, plugins, recording, fieldProps, handlers } = value;
-    const canSave = !!(modal.key && modal.pluginId && modal.action);
+    const canSave = !!(modal.key && modal.pluginUid && modal.action);
     return html`
         <div class="edit-modal-content">
             <div class="form-group" ...${fieldProps(0)}>

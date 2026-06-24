@@ -177,6 +177,7 @@ pub(super) struct PluginAction {
 #[derive(Clone, Serialize)]
 pub(super) struct InstalledPlugin {
     pub(super) id: PluginId,
+    pub(super) uid: String,
     pub(super) name: String,
     pub(super) description: String,
     pub(super) version: String,

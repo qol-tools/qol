@@ -13,7 +13,7 @@ export function parseInstalledPlugins(payload) {
 }
 
 const PLUGIN_EQ_KEYS = [
-    'id', 'name', 'description', 'version', 'installed', 'installed_version',
+    'id', 'uid', 'name', 'description', 'version', 'installed', 'installed_version',
     'running_version', 'available_version', 'update_available', 'source',
     'loaded', 'unavailable', 'has_config', 'has_cover', 'resolved_from',
     'load_error', 'active_failure_reason'

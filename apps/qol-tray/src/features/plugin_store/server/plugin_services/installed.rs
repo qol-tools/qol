@@ -2,7 +2,7 @@ use crate::plugins::paths as plugin_paths;
 use crate::plugins::resolver::{
     PluginSource, PluginUnavailable, ResolutionOrigin, ResolutionReport, ResolvedPlugin,
 };
-use crate::plugins::PluginId;
+use crate::plugins::{PluginId, PluginManifest};
 use axum::http::StatusCode;
 use std::collections::HashMap;
 use std::path::Path;
@@ -107,6 +107,13 @@ fn find_resolved<'a>(report: &'a ResolutionReport, id: &PluginId) -> Option<&'a 
     report.plugins.iter().find(|p| p.id == *id)
 }
 
+fn manifest_uid(manifest: Option<&PluginManifest>, id: &PluginId) -> String {
+    manifest
+        .and_then(|m| m.plugin.uid.as_ref())
+        .map(|uid| uid.as_str().to_string())
+        .unwrap_or_else(|| id.as_str().to_string())
+}
+
 fn loaded_plugin_info(
     plugin: &crate::plugins::Plugin,
     resolution: Option<&ResolvedPlugin>,
@@ -119,6 +126,7 @@ fn loaded_plugin_info(
     );
     InstalledPlugin {
         id: plugin.id.clone(),
+        uid: plugin.uid().as_str().to_string(),
         name: plugin.manifest.plugin.name.clone(),
         description: plugin.manifest.plugin.description.clone(),
         version: plugin.manifest.plugin.version.clone(),
@@ -183,8 +191,10 @@ fn unloaded_plugin(
         check_update(cached_versions, id.as_str(), &version);
 
     let load_error = infer_load_error(id.as_str(), &plugin_dir, manifest.as_ref());
+    let uid = manifest_uid(manifest.as_ref(), &id);
     InstalledPlugin {
         id,
+        uid,
         name,
         description,
         version,
@@ -232,8 +242,10 @@ fn unavailable_plugin(
         unloaded_plugin_details(id.as_str(), manifest.as_ref());
     let (available_version, update_available) =
         check_update(cached_versions, id.as_str(), &version);
+    let uid = manifest_uid(manifest.as_ref(), &id);
     InstalledPlugin {
         id,
+        uid,
         name,
         description,
         version,
@@ -373,5 +385,33 @@ mod cache_tests {
         let hit = lookup(&cache, 5).unwrap();
         assert!(Arc::ptr_eq(&hit, &original));
         assert!(Arc::strong_count(&original) > original_strong_before);
+    }
+}
+
+#[cfg(test)]
+mod uid_tests {
+    use super::*;
+
+    fn manifest(toml: &str) -> PluginManifest {
+        toml::from_str(toml).unwrap()
+    }
+
+    #[test]
+    fn manifest_uid_prefers_authored_uid_then_falls_back_to_id() {
+        let with_uid = manifest(
+            "[plugin]\nid = \"plugin-x\"\nuid = \"u-123\"\nname = \"X\"\ndescription = \"\"\nversion = \"1.0.0\"\n[menu]\nlabel = \"\"\nitems = []\n",
+        );
+        let without_uid = manifest(
+            "[plugin]\nid = \"plugin-x\"\nname = \"X\"\ndescription = \"\"\nversion = \"1.0.0\"\n[menu]\nlabel = \"\"\nitems = []\n",
+        );
+        let id = PluginId::new("plugin-x");
+        let cases: [(Option<&PluginManifest>, &str); 3] = [
+            (Some(&with_uid), "u-123"),
+            (Some(&without_uid), "plugin-x"),
+            (None, "plugin-x"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(manifest_uid(input, &id), expected, "expected {expected}");
+        }
     }
 }
