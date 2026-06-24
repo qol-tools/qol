@@ -834,12 +834,6 @@ impl LogRing {
     fn len(&self) -> usize {
         self.lines.len()
     }
-
-    fn collapses_with(&self, line: &str) -> bool {
-        self.collapse
-            && self.repeat > 0
-            && self.last_key.as_deref() == Some(collapse_key(line).as_str())
-    }
 }
 
 fn repeat_badge(count: usize) -> String {
@@ -854,6 +848,30 @@ fn collapse_key(line: &str) -> String {
         .and_then(|rest| rest.split_once(']'))
         .map(|(_, tail)| tail.trim().to_string())
         .unwrap_or_else(|| trimmed.to_string())
+}
+
+fn shape_key(line: &str) -> String {
+    let plain = strip_ansi(line);
+    let trimmed = plain.trim();
+    let after_ts = trimmed
+        .strip_prefix('[')
+        .and_then(|rest| rest.split_once(']'))
+        .map(|(_, tail)| tail)
+        .unwrap_or(trimmed);
+    if let Some(open) = after_ts.find('[') {
+        if let Some((source, tail)) = after_ts[open + 1..].split_once(']') {
+            let tag = tail
+                .split([' ', '\t', ':'])
+                .find(|token| !token.is_empty())
+                .unwrap_or("");
+            return format!("[{source}] {tag}");
+        }
+    }
+    after_ts
+        .split_whitespace()
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn window_start(len: usize, height: usize, offset: usize) -> usize {
@@ -872,7 +890,7 @@ struct OwnedSource {
 struct LogPane {
     ring: LogRing,
     source: Option<OwnedSource>,
-    last_emit: Option<Instant>,
+    shape_last_emit: HashMap<String, Instant>,
 }
 
 impl LogPane {
@@ -880,7 +898,7 @@ impl LogPane {
         Self {
             ring: LogRing::new(),
             source: None,
-            last_emit: None,
+            shape_last_emit: HashMap::new(),
         }
     }
 
@@ -888,7 +906,7 @@ impl LogPane {
         Self {
             ring: LogRing::collapsing(),
             source: None,
-            last_emit: None,
+            shape_last_emit: HashMap::new(),
         }
     }
 
@@ -926,16 +944,18 @@ impl LogPane {
             if !keep(&line) {
                 continue;
             }
-            if !realtime
-                && self.ring.collapses_with(&line)
-                && self
-                    .last_emit
-                    .is_some_and(|last| now.duration_since(last) < min_interval)
-            {
-                continue;
+            if !realtime {
+                let shape = shape_key(&line);
+                let throttled = self
+                    .shape_last_emit
+                    .get(&shape)
+                    .is_some_and(|last| now.duration_since(*last) < min_interval);
+                if throttled {
+                    continue;
+                }
+                self.shape_last_emit.insert(shape, now);
             }
             self.ring.push(line);
-            self.last_emit = Some(now);
         }
     }
 
@@ -956,7 +976,7 @@ impl LogPane {
         Self {
             ring,
             source: None,
-            last_emit: None,
+            shape_last_emit: HashMap::new(),
         }
     }
 
@@ -5975,21 +5995,44 @@ mod tests {
 
     #[test]
     fn realtime_keeps_every_distinct_line() {
-        let lines: Vec<String> = (0..5).map(|n| format!("[10:00:00.00{n}] AMC poll {n}")).collect();
+        let lines: Vec<String> = (0..5)
+            .map(|n| format!("[10:00:00.00{n}] AMC poll {n}"))
+            .collect();
         let mut pane = attach_lines(&lines.iter().map(String::as_str).collect::<Vec<_>>());
         pane.drain_rated(|_| true, true, Instant::now(), RELAXED_TRACE_INTERVAL);
         assert_eq!(pane.ring.len(), 5, "realtime keeps every distinct line");
     }
 
     #[test]
-    fn relaxed_keeps_every_distinct_event() {
-        let lines: Vec<String> = (0..5).map(|n| format!("[10:00:00.00{n}] AMC poll {n}")).collect();
-        let mut pane = attach_lines(&lines.iter().map(String::as_str).collect::<Vec<_>>());
+    fn relaxed_keeps_one_line_per_distinct_shape() {
+        let lines = [
+            "[10:00:00.001] [alt-tab] SHOW_LIST: n=8",
+            "[10:00:00.002] [launcher] LAUNCHER_OPEN: q=\"\"",
+            "[10:00:00.003] [host] FOCUS: wid=44",
+            "[10:00:00.004] [cli-sessions] RECON: panes=9",
+        ];
+        let mut pane = attach_lines(&lines);
         pane.drain_rated(|_| true, false, Instant::now(), RELAXED_TRACE_INTERVAL);
         assert_eq!(
             pane.ring.len(),
-            5,
-            "relaxed must not drop distinct events, only throttle repeats"
+            4,
+            "relaxed keeps one line per distinct source+tag shape"
+        );
+    }
+
+    #[test]
+    fn relaxed_throttles_same_shape_with_varying_payload() {
+        let lines = [
+            "[10:00:00.001] [alt-tab] CAPTURE: targets=2 total=34ms",
+            "[10:00:00.002] [alt-tab] CAPTURE: targets=2 total=27ms",
+            "[10:00:00.003] [alt-tab] CAPTURE: targets=2 total=31ms",
+        ];
+        let mut pane = attach_lines(&lines);
+        pane.drain_rated(|_| true, false, Instant::now(), RELAXED_TRACE_INTERVAL);
+        assert_eq!(
+            pane.ring.len(),
+            1,
+            "same shape whose only difference is a changing number must throttle to one"
         );
     }
 
