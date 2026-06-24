@@ -1,5 +1,6 @@
 use crate::protocol::{
-    ArmedLifelinesResponse, RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck,
+    ArmedLifelinesResponse, PluginConfigResponse, RuntimeEvent, RuntimeEventKind, RuntimeRequest,
+    SubscribeAck,
 };
 use crate::PlatformState;
 use std::io::{BufRead, BufReader, Write};
@@ -61,6 +62,50 @@ impl PlatformStateClient {
         };
         payload.push('\n');
         let _ = stream.write_all(payload.as_bytes());
+    }
+
+    pub fn get_plugin_config(&self, plugin_id: &str) -> Option<serde_json::Value> {
+        let request = RuntimeRequest::GetPluginConfig {
+            plugin_id: plugin_id.to_string(),
+        };
+        match self.request_plugin_config(&request)? {
+            PluginConfigResponse::Ok { config } => Some(config),
+            PluginConfigResponse::Error { message } => {
+                eprintln!("[runtime/client] get_plugin_config({plugin_id}) failed: {message}");
+                None
+            }
+        }
+    }
+
+    pub fn set_plugin_config(&self, plugin_id: &str, config: &serde_json::Value) -> bool {
+        let request = RuntimeRequest::SetPluginConfig {
+            plugin_id: plugin_id.to_string(),
+            config: config.clone(),
+        };
+        match self.request_plugin_config(&request) {
+            Some(PluginConfigResponse::Ok { .. }) => true,
+            Some(PluginConfigResponse::Error { message }) => {
+                eprintln!("[runtime/client] set_plugin_config({plugin_id}) failed: {message}");
+                false
+            }
+            None => false,
+        }
+    }
+
+    fn request_plugin_config(&self, request: &RuntimeRequest) -> Option<PluginConfigResponse> {
+        let mut stream = UnixStream::connect(&self.socket_path).ok()?;
+        stream.set_read_timeout(Some(TIMEOUT)).ok()?;
+        stream.set_write_timeout(Some(TIMEOUT)).ok()?;
+
+        let mut payload = serde_json::to_string(request).ok()?;
+        payload.push('\n');
+        stream.write_all(payload.as_bytes()).ok()?;
+
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).ok()?;
+
+        serde_json::from_str(line.trim()).ok()
     }
 
     pub fn subscribe(&self, events: Vec<RuntimeEventKind>) -> Option<Subscription> {

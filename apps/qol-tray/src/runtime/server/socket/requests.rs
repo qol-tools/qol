@@ -4,7 +4,8 @@ use std::sync::mpsc as std_mpsc;
 use std::time::{Duration, Instant};
 
 use qol_runtime::protocol::{
-    ArmedLifelinesResponse, RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck,
+    ArmedLifelinesResponse, PluginConfigResponse, RuntimeEvent, RuntimeEventKind, RuntimeRequest,
+    SubscribeAck,
 };
 
 use super::super::shared::SharedState;
@@ -55,9 +56,51 @@ fn handle_json_request(request: &str, writer: &mut UnixStream, shared: &SharedSt
             };
             let _ = write_flushed_json_line(writer, &response);
         }
+        RuntimeRequest::GetPluginConfig { plugin_id } => {
+            let _ = write_flushed_json_line(writer, &load_plugin_config(&plugin_id));
+        }
+        RuntimeRequest::SetPluginConfig { plugin_id, config } => {
+            let _ = write_flushed_json_line(writer, &store_plugin_config(&plugin_id, config));
+        }
     }
 
     true
+}
+
+fn load_plugin_config(plugin_id: &str) -> PluginConfigResponse {
+    let manager = match crate::plugins::config::PluginConfigManager::new() {
+        Ok(manager) => manager,
+        Err(err) => {
+            return PluginConfigResponse::Error {
+                message: err.to_string(),
+            }
+        }
+    };
+    match manager.get_config(plugin_id) {
+        Ok(config) => PluginConfigResponse::Ok {
+            config: config.unwrap_or(serde_json::Value::Null),
+        },
+        Err(err) => PluginConfigResponse::Error {
+            message: err.to_string(),
+        },
+    }
+}
+
+fn store_plugin_config(plugin_id: &str, config: serde_json::Value) -> PluginConfigResponse {
+    let manager = match crate::plugins::config::PluginConfigManager::new() {
+        Ok(manager) => manager,
+        Err(err) => {
+            return PluginConfigResponse::Error {
+                message: err.to_string(),
+            }
+        }
+    };
+    match manager.set_config(plugin_id, config.clone()) {
+        Ok(()) => PluginConfigResponse::Ok { config },
+        Err(err) => PluginConfigResponse::Error {
+            message: err.to_string(),
+        },
+    }
 }
 
 fn handle_lifeline(writer: &mut UnixStream, shared: &SharedState, plugin_id: String) {
@@ -217,6 +260,7 @@ mod tests {
     use qol_runtime::MonitorBounds;
     use std::io::Read;
     use std::os::unix::net::UnixStream;
+    use tempfile::TempDir;
 
     fn mon(x: f32) -> MonitorBounds {
         MonitorBounds {
@@ -236,6 +280,39 @@ mod tests {
         let mut buf = [0u8; 4096];
         let n = stream.read(&mut buf).unwrap_or(0);
         String::from_utf8_lossy(&buf[..n]).into_owned()
+    }
+
+    #[test]
+    fn plugin_config_set_then_get_round_trips_over_socket() {
+        let tmp = TempDir::new().expect("tempdir");
+        let _guard = crate::paths::push_test_path_root(tmp.path());
+        let shared = SharedState::new(vec![mon(0.0)]);
+
+        let (mut writer, mut reader) = pair();
+        handle_request(
+            r#"{"cmd":"set_plugin_config","plugin_id":"plugin-test","config":{"hello":"world"}}"#,
+            &mut writer,
+            &shared,
+        );
+        drop(writer);
+        let set_response = read_to_string(&mut reader);
+        assert!(
+            set_response.contains("\"status\":\"ok\""),
+            "set ack: {set_response:?}",
+        );
+
+        let (mut writer, mut reader) = pair();
+        handle_request(
+            r#"{"cmd":"get_plugin_config","plugin_id":"plugin-test"}"#,
+            &mut writer,
+            &shared,
+        );
+        drop(writer);
+        let get_response = read_to_string(&mut reader);
+        assert!(
+            get_response.contains("\"hello\":\"world\""),
+            "get must return the config stored over the socket: {get_response:?}",
+        );
     }
 
     #[test]

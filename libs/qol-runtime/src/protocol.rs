@@ -43,6 +43,25 @@ pub enum RuntimeRequest {
         plugin_id: String,
     },
     ArmedLifelines,
+    GetPluginConfig {
+        plugin_id: String,
+    },
+    SetPluginConfig {
+        plugin_id: String,
+        config: serde_json::Value,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum PluginConfigResponse {
+    Ok {
+        #[serde(default)]
+        config: serde_json::Value,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -121,6 +140,50 @@ mod tests {
             panic!("variant mismatch");
         };
         assert_eq!(dir, PathBuf::new());
+    }
+
+    #[test]
+    fn plugin_config_request_round_trips() {
+        let request = RuntimeRequest::SetPluginConfig {
+            plugin_id: "plugin-foo".to_string(),
+            config: serde_json::json!({ "enabled": true }),
+        };
+        let wire = serde_json::to_string(&request).expect("serialize");
+        let RuntimeRequest::SetPluginConfig { plugin_id, config } =
+            serde_json::from_str(&wire).expect("deserialize")
+        else {
+            panic!("variant mismatch");
+        };
+        assert_eq!(plugin_id, "plugin-foo");
+        assert_eq!(config, serde_json::json!({ "enabled": true }));
+    }
+
+    #[test]
+    fn plugin_config_response_round_trips() {
+        let cases = [
+            (
+                PluginConfigResponse::Ok {
+                    config: serde_json::json!({ "n": 1 }),
+                },
+                "ok",
+            ),
+            (
+                PluginConfigResponse::Error {
+                    message: "boom".to_string(),
+                },
+                "error",
+            ),
+        ];
+        for (response, status) in cases {
+            let wire = serde_json::to_string(&response).expect("serialize");
+            assert!(wire.contains(status), "status {status} in {wire}");
+            let parsed: PluginConfigResponse = serde_json::from_str(&wire).expect("deserialize");
+            assert_eq!(
+                serde_json::to_string(&parsed).unwrap(),
+                wire,
+                "round trip for {status}"
+            );
+        }
     }
 
     #[test]
