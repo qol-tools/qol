@@ -138,6 +138,12 @@ fn warm_active_window(state: &ListenerState, app_cx: &mut App) {
     if windows.is_empty() {
         return;
     }
+    if snapshot_monitor_bounds(&state.monitor_bounds).is_none() {
+        write_monitor_bounds(
+            &state.monitor_bounds,
+            monitor_bounds_from_tracker(&state.inputs.tracker),
+        );
+    }
     match frontmost_window_fullscreen_guard(&windows, &state.monitor_bounds) {
         FullscreenGuard::NotFullscreen => {}
         FullscreenGuard::Fullscreen => {
@@ -149,12 +155,16 @@ fn warm_active_window(state: &ListenerState, app_cx: &mut App) {
             return;
         }
         FullscreenGuard::UnknownMonitors => {
-            log_unknown_monitor_bounds_once();
-            qol_runtime::probe!(
-                "PREVIEW_WARM_SKIP",
-                "reason=unknown_monitors wid={}",
-                windows[0].id
-            );
+            if !MONITOR_BOUNDS_UNKNOWN_LOGGED.swap(true, Ordering::AcqRel) {
+                eprintln!(
+                    "[alt-tab/warmer] skipping hidden preview warm: monitor bounds unavailable"
+                );
+                qol_runtime::probe!(
+                    "PREVIEW_WARM_SKIP",
+                    "reason=unknown_monitors wid={}",
+                    windows[0].id
+                );
+            }
             return;
         }
     }
@@ -190,8 +200,8 @@ fn frontmost_window_fullscreen_guard(
     FullscreenGuard::NotFullscreen
 }
 
-fn initial_monitor_bounds(tracker: &MonitorTracker) -> MonitorBoundsCache {
-    let monitors = tracker
+fn monitor_bounds_from_tracker(tracker: &MonitorTracker) -> Vec<qol_gpui::MonitorBounds> {
+    tracker
         .all_monitors()
         .into_iter()
         .map(|monitor| {
@@ -203,8 +213,13 @@ fn initial_monitor_bounds(tracker: &MonitorTracker) -> MonitorBoundsCache {
                 height: bounds.size.height.to_f64() as f32,
             }
         })
-        .collect();
-    Arc::new(Mutex::new(known_monitor_bounds(monitors)))
+        .collect()
+}
+
+fn initial_monitor_bounds(tracker: &MonitorTracker) -> MonitorBoundsCache {
+    Arc::new(Mutex::new(known_monitor_bounds(
+        monitor_bounds_from_tracker(tracker),
+    )))
 }
 
 fn update_monitor_bounds_from_event(cache: &MonitorBoundsCache, event: &RuntimeEvent) {
@@ -235,13 +250,6 @@ fn known_monitor_bounds(
 
 fn snapshot_monitor_bounds(cache: &MonitorBoundsCache) -> Option<Vec<qol_gpui::MonitorBounds>> {
     cache.lock().ok().and_then(|slot| slot.clone())
-}
-
-fn log_unknown_monitor_bounds_once() {
-    if MONITOR_BOUNDS_UNKNOWN_LOGGED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    eprintln!("[alt-tab/warmer] skipping hidden preview warm: monitor bounds unavailable");
 }
 
 fn window_covers_any_monitor(
