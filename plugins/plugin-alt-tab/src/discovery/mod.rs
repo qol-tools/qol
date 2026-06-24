@@ -8,9 +8,13 @@ pub struct WindowInfo {
     pub preview_path: Option<String>,
     #[allow(dead_code)] // read on Linux, not on macOS
     pub icon: Option<RgbaImage>,
+    #[allow(dead_code)] // discovery geometry; retained metadata, no current consumer
     pub x: f32,
+    #[allow(dead_code)]
     pub y: f32,
+    #[allow(dead_code)]
     pub width: f32,
+    #[allow(dead_code)]
     pub height: f32,
     pub is_minimized: bool,
 }

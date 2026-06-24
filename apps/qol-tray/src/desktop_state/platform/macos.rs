@@ -217,20 +217,9 @@ impl Platform for MacQueries {
 
     fn focused_window_bounds(&self) -> Option<MonitorBounds> {
         #[cfg(debug_assertions)]
-        let t = std::time::Instant::now();
-        #[cfg(debug_assertions)]
         focus_probe::log_focus_change(self.own_pid);
-        #[cfg(debug_assertions)]
-        let cg_ms = t.elapsed().as_millis();
-        let bounds = focused_window_bounds_ax(self.own_pid);
-        #[cfg(debug_assertions)]
-        {
-            let total_ms = t.elapsed().as_millis();
-            if total_ms >= 100 {
-                qol_runtime::probe!("FOCUS_POLL_SLOW", "cg={cg_ms}ms ax={}ms", total_ms - cg_ms);
-            }
-        }
-        bounds
+        focus_probe::frontmost_window_bounds(self.own_pid)
+            .or_else(|| focused_window_bounds_ax(self.own_pid))
     }
 
     fn physical_monitors(&self) -> Vec<MonitorBounds> {
@@ -276,13 +265,14 @@ impl Platform for MacQueries {
     }
 }
 
-#[cfg(debug_assertions)]
 mod focus_probe {
     use std::ffi::c_void;
+    #[cfg(debug_assertions)]
     use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
     use super::{
         ax_attr_str, CFArrayGetCount, CFArrayGetValueAtIndex, CGPoint, CGRect, CGSize, CfGuard,
+        MonitorBounds,
     };
 
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -306,9 +296,12 @@ mod focus_probe {
     const K_CF_NUMBER_SINT32: isize = 3;
     const UTF8: u32 = 0x0800_0100;
 
+    #[cfg(debug_assertions)]
     static LAST_FOCUS_WID: AtomicU32 = AtomicU32::new(0);
+    #[cfg(debug_assertions)]
     static LAST_POLL_TS: AtomicU64 = AtomicU64::new(0);
 
+    #[allow(dead_code)] // wid/title read only by the debug focus probe
     struct FrontWindow {
         wid: u32,
         pid: i32,
@@ -316,6 +309,7 @@ mod focus_probe {
         title: String,
     }
 
+    #[cfg(debug_assertions)]
     pub(super) fn log_focus_change(own_pid: i32) {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -353,6 +347,20 @@ mod focus_probe {
             winpos,
             win.title
         );
+    }
+
+    pub(super) fn frontmost_window_bounds(own_pid: i32) -> Option<MonitorBounds> {
+        let win = frontmost_normal_window()?;
+        if win.pid == own_pid || crate::desktop_state::is_ignored_pid(win.pid as u32) {
+            return None;
+        }
+        let rect = win.bounds?;
+        Some(MonitorBounds {
+            x: rect.origin.x as f32,
+            y: rect.origin.y as f32,
+            width: rect.size.width as f32,
+            height: rect.size.height as f32,
+        })
     }
 
     fn frontmost_normal_window() -> Option<FrontWindow> {

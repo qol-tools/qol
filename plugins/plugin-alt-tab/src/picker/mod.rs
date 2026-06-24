@@ -639,7 +639,6 @@ pub(crate) mod state {
                 ix, win.id, win.app_name, win.title
             );
             actions::activate_window(win.id);
-            push_focus_hint(win);
         }
 
         pub(crate) fn select_next(&mut self) {
@@ -697,41 +696,6 @@ pub(crate) mod state {
                 .min(total.saturating_sub(1));
             self.selected_index = Some(grid_move(current, direction, columns, total));
         }
-    }
-
-    pub(crate) fn push_focus_hint(win: &WindowInfo) {
-        let client = qol_gpui::PlatformStateClient::from_env();
-        let Some(state) = client.get_state() else {
-            return;
-        };
-        let win_cx = win.x + win.width / 2.0;
-        let win_cy = win.y + win.height / 2.0;
-        let Some(idx) = find_containing_monitor(&state.monitors, win_cx, win_cy) else {
-            return;
-        };
-        eprintln!(
-            "[alt-tab] SET_FOCUS idx={} (window {}x{} at {},{} → monitor {},{})",
-            idx,
-            win.width as i32,
-            win.height as i32,
-            win.x as i32,
-            win.y as i32,
-            state.monitors[idx].x as i32,
-            state.monitors[idx].y as i32,
-        );
-        client.set_focus(idx);
-    }
-
-    pub(crate) fn find_containing_monitor(
-        monitors: &[qol_gpui::MonitorBounds],
-        x: f32,
-        y: f32,
-    ) -> Option<usize> {
-        monitors
-            .iter()
-            .enumerate()
-            .find(|(_, m)| x >= m.x && x < m.x + m.width && y >= m.y && y < m.y + m.height)
-            .map(|(i, _)| i)
     }
 
     enum GridDirection {
