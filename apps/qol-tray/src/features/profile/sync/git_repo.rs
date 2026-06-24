@@ -173,6 +173,14 @@ impl GitRepo {
             .context("push to remote")
     }
 
+    pub fn reset_to_remote(&self) -> Result<()> {
+        let repo = self.open_repo()?;
+        let remote_oid = remote_branch_oid(&repo)?;
+        let object = repo.find_object(remote_oid, None)?;
+        repo.reset(&object, git2::ResetType::Hard, None)
+            .context("reset local branch to remote")
+    }
+
     pub fn head_sha(&self) -> Result<Option<String>> {
         let repo = self.open_repo()?;
         let sha = head_commit(&repo)?.map(|c| c.id().to_string());

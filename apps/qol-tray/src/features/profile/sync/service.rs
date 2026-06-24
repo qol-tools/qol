@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use qol_migrations::FileMigration;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -79,6 +80,7 @@ impl SyncService {
             repo
         };
 
+        commit_profile_schema_repair(&repo_path, &repo, Some(&token))?;
         save_sync_target(&target)?;
         let new_toggles = SyncToggles {
             pull_on_launch: request.pull_on_launch,
@@ -235,6 +237,7 @@ impl SyncService {
             if matches!(outcome, PullOutcome::Diverged { .. }) {
                 let merge = reconcile(&repo)?;
                 if merge.conflicts.is_empty() {
+                    repo.reset_to_remote()?;
                     write_merged_profile(&repo_path, &merge.merged)?;
                     repo.commit_all("merge remote changes", &SignatureSpec::default_for_app())?;
                     repo.push(Some(&token))?;
@@ -242,6 +245,9 @@ impl SyncService {
                 } else {
                     conflicts = decorate_conflicts(&repo, merge.conflicts)?;
                 }
+            }
+            if !matches!(outcome, PullOutcome::Diverged { .. }) {
+                commit_profile_schema_repair(&repo_path, &repo, Some(&token))?;
             }
             let head = repo.head_sha()?;
             Ok(PullTaskOutput {
@@ -340,6 +346,7 @@ impl SyncService {
                 &ProfileSnapshot { files: remote },
                 &resolve,
             );
+            repo.reset_to_remote()?;
             write_merged_profile(&repo_path, &merged.merged)?;
             repo.commit_all("resolve sync conflicts", &SignatureSpec::default_for_app())?;
             repo.push(Some(&token))?;
@@ -375,35 +382,47 @@ impl SyncService {
         let token = require_github_token()?;
         let repo_path = crate::paths::profile_dir()?;
         let reason_owned = reason.to_string();
-        let pushed = tokio::task::spawn_blocking(move || -> Result<(bool, Option<String>)> {
-            let repo = GitRepo::open(&repo_path)?;
-            ensure_gitignore(&repo_path)?;
-            let commit = repo.commit_all(&reason_owned, &SignatureSpec::default_for_app())?;
-            repo.push(Some(&token))?;
-            let head = repo.head_sha()?;
-            Ok((commit.is_some(), head))
+        let pushed = tokio::task::spawn_blocking(move || -> Result<PushTaskOutput> {
+            push_profile_changes(&repo_path, Some(&token), &reason_owned)
         })
         .await
         .context("join sync push task")?;
-        let (committed, head) = match pushed {
+        let output = match pushed {
             Ok(value) => value,
             Err(error) => return self.persisted_error(error, Some(&target)),
         };
-        let message = if committed {
+        let message = if !output.conflicts.is_empty() {
+            format!("{} setting(s) need review", output.conflicts.len())
+        } else if output.committed {
             "Pushed changes to remote".to_string()
+        } else if output.applied_remote {
+            "Pulled changes from remote".to_string()
         } else {
             "Nothing to push".to_string()
         };
         let mut state = self.state_mut();
-        state.head_sha = head;
+        if output.conflicts.is_empty() {
+            state.conflicts.clear();
+            state.incident = None;
+            state.last_error = None;
+        } else {
+            state.incident = Some(SyncIncident {
+                kind: SyncIncidentKind::Conflict,
+                message: format!("{} setting(s) need review", output.conflicts.len()),
+                backup_file: None,
+                created_at: now_rfc3339(),
+            });
+            state.conflicts = output.conflicts;
+            state.last_error = None;
+        }
+        state.head_sha = output.head;
         state.last_sync_at = Some(now_rfc3339());
-        state.last_error = None;
         save_state_file(&state)?;
         let saved = state.clone();
         drop(state);
         Ok(SyncActionResult {
             message,
-            applied_remote: false,
+            applied_remote: output.applied_remote,
             status: self.build_status_with(&saved, Some(&target)),
         })
     }
@@ -723,6 +742,53 @@ struct PullTaskOutput {
     auto_applied: bool,
 }
 
+struct PushTaskOutput {
+    committed: bool,
+    head: Option<String>,
+    conflicts: Vec<ResolvableConflict>,
+    applied_remote: bool,
+}
+
+fn push_profile_changes(
+    repo_path: &Path,
+    token: Option<&str>,
+    reason: &str,
+) -> Result<PushTaskOutput> {
+    let repo = GitRepo::open(repo_path)?;
+    ensure_gitignore(repo_path)?;
+    repair_profile_uid_schema(repo_path)?;
+    let local_commit = repo.commit_all(reason, &SignatureSpec::default_for_app())?;
+    let outcome = repo.pull(token)?;
+    let mut committed = local_commit.is_some();
+    let mut conflicts = Vec::new();
+    let mut applied_remote = matches!(outcome, PullOutcome::FastForwarded { .. });
+
+    if matches!(outcome, PullOutcome::Diverged { .. }) {
+        let merge = reconcile(&repo)?;
+        if merge.conflicts.is_empty() {
+            repo.reset_to_remote()?;
+            write_merged_profile(repo_path, &merge.merged)?;
+            let merge_commit =
+                repo.commit_all("merge remote changes", &SignatureSpec::default_for_app())?;
+            committed |= merge_commit.is_some();
+            applied_remote = true;
+        } else {
+            conflicts = decorate_conflicts(&repo, merge.conflicts)?;
+        }
+    }
+
+    if conflicts.is_empty() {
+        repo.push(token)?;
+    }
+    let head = repo.head_sha()?;
+    Ok(PushTaskOutput {
+        committed,
+        head,
+        conflicts,
+        applied_remote,
+    })
+}
+
 fn write_merged_profile(repo_path: &Path, merged: &BTreeMap<String, Value>) -> Result<()> {
     for (rel, value) in merged {
         let path = repo_path.join(rel);
@@ -734,7 +800,33 @@ fn write_merged_profile(repo_path: &Path, merged: &BTreeMap<String, Value>) -> R
         std::fs::write(&path, format!("{text}\n"))
             .with_context(|| format!("write merged {}", path.display()))?;
     }
+    repair_profile_uid_schema(repo_path)?;
     Ok(())
+}
+
+fn commit_profile_schema_repair(
+    repo_path: &Path,
+    repo: &GitRepo,
+    token: Option<&str>,
+) -> Result<()> {
+    repair_profile_uid_schema(repo_path)?;
+    let commit = repo.commit_all("repair profile schema", &SignatureSpec::default_for_app())?;
+    if commit.is_some() {
+        repo.push(token)?;
+    }
+    Ok(())
+}
+
+fn repair_profile_uid_schema(repo_path: &Path) -> Result<bool> {
+    let config_dir = repo_path.parent().ok_or_else(|| {
+        anyhow::anyhow!("profile repo {} has no config parent", repo_path.display())
+    })?;
+    let migration = qol_migrations::V3_19ToV3_20PluginUid::default_for_production();
+    if !migration.applies(config_dir)? {
+        return Ok(false);
+    }
+    migration.migrate(config_dir, config_dir)?;
+    Ok(true)
 }
 
 fn write_conflict_backup(value: &Value) -> Result<String> {
@@ -779,4 +871,175 @@ fn decorate_conflicts(
 
 fn last_key(key_path: &str) -> &str {
     key_path.rsplit('.').next().unwrap_or(key_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use git2::Repository;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    const ALT_TAB_UID: &str = "a7f48ac7-3cd5-4402-a1fe-d517fbce0fd6";
+
+    fn read_json(path: &std::path::Path) -> Value {
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    fn init_bare_origin(dir: &Path) -> String {
+        Repository::init_bare(dir).unwrap();
+        let normalized = dir.display().to_string().replace('\\', "/");
+        format!("file:///{}", normalized.trim_start_matches('/'))
+    }
+
+    fn write_file(path: &Path, value: &Value) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
+    }
+
+    fn sig() -> SignatureSpec {
+        SignatureSpec {
+            name: "Tester".to_string(),
+            email: "tester@example.com".to_string(),
+        }
+    }
+
+    fn seed_profile_repo(path: &Path, url: &str) -> GitRepo {
+        let repo = GitRepo::init(path, url).unwrap();
+        write_file(&path.join("default/manifest.json"), &json!({"version": 1}));
+        write_file(
+            &path.join("default/core/plugin-configs/plugin-a.json"),
+            &json!({"value": 1}),
+        );
+        repo.commit_all("seed", &sig()).unwrap();
+        repo.push(None).unwrap();
+        repo
+    }
+
+    #[test]
+    fn write_merged_profile_repairs_legacy_uid_schema() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path().join("profile");
+        let merged = BTreeMap::from([
+            ("default/manifest.json".to_string(), json!({"version": 1})),
+            (
+                "default/core/plugins.lock.json".to_string(),
+                json!({
+                    "plugins": [{
+                        "id": "plugin-alt-tab",
+                        "repo_url": "https://example.invalid/plugin-alt-tab.git",
+                        "version": "1.0.0",
+                        "platforms": ["macos"]
+                    }]
+                }),
+            ),
+            (
+                "default/os/macos/hotkeys.json".to_string(),
+                json!({
+                    "hotkeys": [{
+                        "id": "hk-alt-tab",
+                        "key": "Alt+Tab",
+                        "plugin_id": "plugin-alt-tab",
+                        "action": "open",
+                        "enabled": true
+                    }]
+                }),
+            ),
+            (
+                "default/core/plugin-configs/plugin-alt-tab.json".to_string(),
+                json!({"opacity": 0.8}),
+            ),
+        ]);
+
+        write_merged_profile(&repo_path, &merged).unwrap();
+
+        let lock = read_json(&repo_path.join("default/core/plugins.lock.json"));
+        assert_eq!(lock["plugins"][0]["uid"], ALT_TAB_UID);
+
+        let hotkeys = read_json(&repo_path.join("default/os/macos/hotkeys.json"));
+        let binding = hotkeys["hotkeys"][0].as_object().unwrap();
+        assert_eq!(binding["plugin_uid"], ALT_TAB_UID);
+        assert!(!binding.contains_key("plugin_id"));
+
+        assert!(!repo_path
+            .join("default/core/plugin-configs/plugin-alt-tab.json")
+            .exists());
+        assert!(repo_path
+            .join(format!("default/core/plugin-configs/{ALT_TAB_UID}.json"))
+            .is_file());
+    }
+
+    #[test]
+    fn pull_before_push_merges_independent_remote_changes() {
+        let tmp = TempDir::new().unwrap();
+        let url = init_bare_origin(&tmp.path().join("origin.git"));
+        let alice_path = tmp.path().join("alice/profile");
+        let alice = seed_profile_repo(&alice_path, &url);
+        let bob_path = tmp.path().join("bob/profile");
+        GitRepo::clone(&url, &bob_path, None).unwrap();
+
+        write_file(
+            &alice_path.join("default/core/plugin-configs/plugin-a.json"),
+            &json!({"value": 2}),
+        );
+        alice.commit_all("alice", &sig()).unwrap();
+        alice.push(None).unwrap();
+
+        write_file(
+            &bob_path.join("default/core/plugin-configs/plugin-b.json"),
+            &json!({"enabled": true}),
+        );
+        let output = push_profile_changes(&bob_path, None, "manual push").unwrap();
+
+        assert!(output.conflicts.is_empty());
+        assert!(output.committed);
+        assert!(output.applied_remote);
+
+        let verify_path = tmp.path().join("verify/profile");
+        GitRepo::clone(&url, &verify_path, None).unwrap();
+        assert_eq!(
+            read_json(&verify_path.join("default/core/plugin-configs/plugin-a.json")),
+            json!({"value": 2})
+        );
+        assert_eq!(
+            read_json(&verify_path.join("default/core/plugin-configs/plugin-b.json")),
+            json!({"enabled": true})
+        );
+    }
+
+    #[test]
+    fn pull_before_push_reports_conflicts_without_push_error() {
+        let tmp = TempDir::new().unwrap();
+        let url = init_bare_origin(&tmp.path().join("origin.git"));
+        let alice_path = tmp.path().join("alice/profile");
+        let alice = seed_profile_repo(&alice_path, &url);
+        let bob_path = tmp.path().join("bob/profile");
+        GitRepo::clone(&url, &bob_path, None).unwrap();
+
+        write_file(
+            &alice_path.join("default/core/plugin-configs/plugin-a.json"),
+            &json!({"value": 2}),
+        );
+        alice.commit_all("alice", &sig()).unwrap();
+        alice.push(None).unwrap();
+
+        write_file(
+            &bob_path.join("default/core/plugin-configs/plugin-a.json"),
+            &json!({"value": 3}),
+        );
+        let output = push_profile_changes(&bob_path, None, "manual push").unwrap();
+
+        assert_eq!(output.conflicts.len(), 1);
+        assert_eq!(output.conflicts[0].key_path, "value");
+        assert!(!output.applied_remote);
+
+        let verify_path = tmp.path().join("verify/profile");
+        GitRepo::clone(&url, &verify_path, None).unwrap();
+        assert_eq!(
+            read_json(&verify_path.join("default/core/plugin-configs/plugin-a.json")),
+            json!({"value": 2})
+        );
+    }
 }
