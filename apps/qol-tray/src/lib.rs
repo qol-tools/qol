@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod config_drain;
 pub mod credentials;
 pub mod daemon;
 #[cfg(unix)]

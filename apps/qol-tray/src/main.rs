@@ -71,6 +71,11 @@ fn main() -> Result<()> {
         }
     }
 
+    let drained = qol_tray::config_drain::drain_orphan_runtime_configs();
+    if drained > 0 {
+        log::info!("[config-drain] folded {drained} orphan plugin config(s) into the host store");
+    }
+
     #[cfg(feature = "dev")]
     {
         if let Ok(config_dir) = qol_tray::paths::shared_config_dir() {
