@@ -45,6 +45,12 @@ pub fn copy_image_to_clipboard(_path: &Path) -> Result<()> {
     ))
 }
 
+pub fn copy_path_to_clipboard(_path: &Path) -> Result<()> {
+    Err(anyhow!(
+        "qol-shot: path clipboard copy is not implemented on Windows"
+    ))
+}
+
 pub fn recording_format(format: &str) -> String {
     format.to_string()
 }

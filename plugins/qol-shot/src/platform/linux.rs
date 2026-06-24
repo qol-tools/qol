@@ -243,6 +243,52 @@ pub fn copy_image_to_clipboard(path: &Path) -> Result<()> {
     ))
 }
 
+pub fn copy_path_to_clipboard(path: &Path) -> Result<()> {
+    let text = path.to_string_lossy();
+    let wl_copy_error = match copy_text_with("wl-copy", &[], &text) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    let xclip_error = match copy_text_with("xclip", &["-selection", "clipboard"], &text) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+
+    Err(anyhow!(
+        "failed to copy path to clipboard; wl-copy: {wl_copy_error:#}; xclip: {xclip_error:#}"
+    ))
+}
+
+fn copy_text_with(program: &str, args: &[&str], text: &str) -> Result<()> {
+    use std::io::Write;
+
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("failed to run {program}"))?;
+
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("failed to open {program} stdin"))?
+        .write_all(text.as_bytes())
+        .with_context(|| format!("failed to write to {program}"))?;
+
+    let status = child
+        .wait()
+        .with_context(|| format!("failed to wait for {program}"))?;
+    if status.success() {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "{program} text clipboard copy exited with {status}"
+    ))
+}
+
 fn copy_image_with(program: &str, args: &[&str], path: &Path) -> Result<()> {
     let file = File::open(path).with_context(|| {
         format!(

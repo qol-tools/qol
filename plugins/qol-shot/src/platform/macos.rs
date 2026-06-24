@@ -175,6 +175,29 @@ pub fn copy_image_to_clipboard(path: &Path) -> Result<()> {
     ))
 }
 
+pub fn copy_path_to_clipboard(path: &Path) -> Result<()> {
+    let mut child = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to run pbcopy")?;
+
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("failed to open pbcopy stdin"))?
+        .write_all(path.to_string_lossy().as_bytes())
+        .context("failed to write to pbcopy")?;
+
+    let status = child.wait().context("failed to wait for pbcopy")?;
+    if status.success() {
+        return Ok(());
+    }
+
+    Err(anyhow!("pbcopy exited with {status}"))
+}
+
 pub fn recording_format(format: &str) -> String {
     match format.to_ascii_lowercase().as_str() {
         "mkv" | "mp4" | "mov" | "webm" => format.to_ascii_lowercase(),

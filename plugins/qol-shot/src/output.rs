@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::Local;
 use std::env;
 use std::fs;
@@ -15,9 +15,7 @@ pub(crate) fn recording_output_file_path(format: &str) -> Result<PathBuf> {
 }
 
 pub(crate) fn screenshot_output_file_path() -> Result<PathBuf> {
-    let home = env::var("HOME").context("HOME is not set")?;
-    let mut pictures = PathBuf::from(home);
-    pictures.push("Pictures");
+    let pictures = screenshot_dir()?;
     fs::create_dir_all(&pictures).context("failed to create screenshot output directory")?;
     let timestamp = Local::now().format("%F_%H-%M-%S_%9f").to_string();
     Ok(unique_screenshot_path(
@@ -25,6 +23,30 @@ pub(crate) fn screenshot_output_file_path() -> Result<PathBuf> {
         &timestamp,
         std::process::id(),
     ))
+}
+
+pub(crate) fn latest_screenshot() -> Result<PathBuf> {
+    let pictures = screenshot_dir()?;
+    fs::read_dir(&pictures)
+        .with_context(|| format!("failed to read {}", pictures.display()))?
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| is_screenshot_file(path))
+        .filter_map(|path| Some((path.metadata().ok()?.modified().ok()?, path)))
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+        .ok_or_else(|| anyhow!("no screenshots found in {}", pictures.display()))
+}
+
+fn screenshot_dir() -> Result<PathBuf> {
+    let home = env::var("HOME").context("HOME is not set")?;
+    Ok(PathBuf::from(home).join("Pictures"))
+}
+
+fn is_screenshot_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("screenshot-") && name.ends_with(".png"))
 }
 
 fn unique_screenshot_path(directory: &Path, timestamp: &str, process_id: u32) -> PathBuf {
@@ -58,5 +80,23 @@ mod tests {
 
         assert_eq!(first, "screenshot-2026-06-21_11-51-59_123456789-42.png");
         assert_eq!(second, "screenshot-2026-06-21_11-51-59_123456789-42-1.png");
+    }
+
+    #[test]
+    fn is_screenshot_file_matches_capture_naming() {
+        let cases = [
+            ("screenshot-2026-06-21_11-51-59_123-42.png", true),
+            ("screenshot-2026-06-21_11-51-59_123-42-1.png", true),
+            ("recording-2026-06-21.mov", false),
+            ("screenshot-foo.jpg", false),
+            ("note.png", false),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(
+                is_screenshot_file(Path::new(name)),
+                expected,
+                "name: {name}"
+            );
+        }
     }
 }

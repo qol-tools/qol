@@ -6,7 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use crate::{platform, recording, screenshot, settings, Config, PLUGIN_ID};
+use crate::actions::ShotAction;
+use crate::{actions, platform, recording, screenshot, settings, Config, PLUGIN_ID};
 
 const BINARY_NAME: &str = "qol-shot";
 
@@ -20,6 +21,8 @@ fn app(binary_name: &'static str) -> HeadlessApp {
         .default_command(["record"])
         .command(record_command(binary_name))
         .command(screenshot_command(binary_name))
+        .command(copy_command(binary_name))
+        .command(copy_path_command(binary_name))
         .command(settings_command(binary_name))
         .doctor_checks(doctor_checks())
 }
@@ -53,6 +56,32 @@ fn screenshot_command(binary_name: &'static str) -> Command {
             };
             Ok(CommandResult::success(format!("{}\n", path.display())))
         })
+}
+
+fn copy_command(binary_name: &'static str) -> Command {
+    Command::new("copy")
+        .about("Copy the latest screenshot image to the clipboard.")
+        .usage(format!("{binary_name} copy"))
+        .detail("Resolves the most recent screenshot in the output directory and copies the image.")
+        .output("Prints the copied image path on success.")
+        .exit_behavior("Exits non-zero if no screenshot exists or the clipboard copy fails.")
+        .run_result(|_| copy_latest(ShotAction::Copy))
+}
+
+fn copy_path_command(binary_name: &'static str) -> Command {
+    Command::new("copy-path")
+        .about("Copy the latest screenshot's file path to the clipboard.")
+        .usage(format!("{binary_name} copy-path"))
+        .detail("Resolves the most recent screenshot in the output directory and copies its path.")
+        .output("Prints the copied path on success.")
+        .exit_behavior("Exits non-zero if no screenshot exists or the clipboard copy fails.")
+        .run_result(|_| copy_latest(ShotAction::CopyPath))
+}
+
+fn copy_latest(action: ShotAction) -> Result<CommandResult> {
+    let path = actions::perform_on_latest(action)?;
+    platform::show_notification(action.done_message(), &path.display().to_string(), 1400);
+    Ok(CommandResult::success(format!("{}\n", path.display())))
 }
 
 fn settings_command(binary_name: &'static str) -> Command {
@@ -251,6 +280,23 @@ mod tests {
         assert!(execution
             .stdout
             .contains(&format!("{BINARY_NAME} screenshot")));
+    }
+
+    #[test]
+    fn copy_commands_are_registered() {
+        for command in ["copy", "copy-path"] {
+            let execution = app(BINARY_NAME).execute(vec!["help".to_string(), command.to_string()]);
+            assert_eq!(
+                execution.exit_code, EXIT_SUCCESS,
+                "{command} help should succeed"
+            );
+            assert!(
+                execution
+                    .stdout
+                    .contains(&format!("{BINARY_NAME} {command}")),
+                "{command} help should mention its usage"
+            );
+        }
     }
 
     #[test]

@@ -18,6 +18,14 @@ args = ["record"]
 label = "Screenshot"
 args = ["screenshot"]
 
+[action.copy]
+label = "Copy Screenshot"
+args = ["copy"]
+
+[action.copy-path]
+label = "Copy Screenshot Path"
+args = ["copy-path"]
+
 [action.settings]
 label = "Settings..."
 kind = "settings"

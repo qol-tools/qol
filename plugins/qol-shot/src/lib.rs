@@ -1,5 +1,6 @@
 pub mod cli;
 
+mod actions;
 mod config;
 mod geometry;
 mod output;
