@@ -67,17 +67,30 @@ fn apply_worktree_override(registry: &mut crate::plugins::registry::Registry, co
     let resolved = crate::dev::resolve_worktree_paths(&base_links, Some(&branch));
     for entry in &mut registry.entries {
         if let Some(new_path) = resolved.get(&entry.id) {
-            if *new_path != entry.active.path {
-                log::info!(
-                    "[worktree] overriding {} path: {} → {}",
-                    entry.id,
-                    entry.active.path.display(),
-                    new_path.display()
-                );
-                entry.active.path = new_path.clone();
-            }
+            override_entry_to_worktree(entry, new_path);
         }
     }
+}
+
+/// Repoint an entry's active slot at the worktree, making the pre-override slot
+/// the fallback so a plugin whose binary was not built in the worktree resolves
+/// to its main-clone build. The override only runs on dev-linked actives, so the
+/// pre-override slot is always the main-clone build; it replaces any stale
+/// installed-release fallback (which would be protocol-incompatible with a
+/// freshly built host).
+#[cfg(feature = "dev")]
+fn override_entry_to_worktree(entry: &mut crate::plugins::registry::Entry, new_path: &Path) {
+    if *new_path == entry.active.path {
+        return;
+    }
+    log::info!(
+        "[worktree] overriding {} path: {} → {}",
+        entry.id,
+        entry.active.path.display(),
+        new_path.display()
+    );
+    entry.fallback = Some(entry.active.clone());
+    entry.active.path = new_path.to_path_buf();
 }
 
 #[cfg(not(feature = "dev"))]
@@ -130,4 +143,73 @@ fn register_plugins(manager: &mut PluginManager, plugins: Vec<Plugin>) {
         manager.plugins.insert(plugin.id.clone(), plugin);
     }
     manager.identity_index = index;
+}
+
+#[cfg(all(test, feature = "dev"))]
+mod worktree_override_tests {
+    use super::override_entry_to_worktree;
+    use crate::plugins::registry::{Entry, Slot, SlotSource};
+    use std::path::PathBuf;
+
+    fn dev_linked(active: &str, fallback: Option<&str>) -> Entry {
+        Entry {
+            id: "plugin-foo".to_string(),
+            active: Slot {
+                path: PathBuf::from(active),
+                source: SlotSource::DevLink {
+                    origin_path: PathBuf::from(active),
+                },
+            },
+            fallback: fallback.map(|p| Slot {
+                path: PathBuf::from(p),
+                source: SlotSource::ReleaseAsset,
+            }),
+        }
+    }
+
+    #[test]
+    fn override_resolves_active_and_fallback() {
+        let cases = [
+            (
+                "missing fallback is filled from prior active",
+                None,
+                "/wt",
+                "/wt",
+                Some("/main"),
+            ),
+            (
+                "stale installed fallback is replaced by main clone",
+                Some("/rel"),
+                "/wt",
+                "/wt",
+                Some("/main"),
+            ),
+            ("no-op when path is unchanged", None, "/main", "/main", None),
+        ];
+        for (label, initial_fallback, new_path, want_active, want_fallback) in cases {
+            let mut entry = dev_linked("/main", initial_fallback);
+            override_entry_to_worktree(&mut entry, &PathBuf::from(new_path));
+            assert_eq!(
+                entry.active.path,
+                PathBuf::from(want_active),
+                "active path: {label}"
+            );
+            assert_eq!(
+                entry.fallback.as_ref().map(|s| s.path.clone()),
+                want_fallback.map(PathBuf::from),
+                "fallback path: {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn filled_fallback_is_the_original_main_clone_dev_link() {
+        let mut entry = dev_linked("/main", None);
+        override_entry_to_worktree(&mut entry, &PathBuf::from("/wt"));
+        let fallback = entry.fallback.expect("fallback populated");
+        assert!(
+            matches!(fallback.source, SlotSource::DevLink { .. }),
+            "fallback keeps the original dev-link source so resolution targets the main clone"
+        );
+    }
 }
