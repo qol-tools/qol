@@ -79,8 +79,7 @@ fn screenshot_command(binary_name: &'static str) -> Command {
         .output("Prints the saved image path on success; prints nothing if selection is cancelled.")
         .exit_behavior("Exits 0 when the screenshot is saved or selection is cancelled.")
         .run_result(|_| {
-            let config: Config = qol_config::load_plugin_config_from_env(PLUGIN_ID);
-            let Some(path) = screenshot::capture_screenshot(&config)? else {
+            let Some(path) = screenshot::capture_screenshot()? else {
                 return Ok(CommandResult::success(""));
             };
             Ok(CommandResult::success(format!("{}\n", path.display())))

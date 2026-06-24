@@ -1,28 +1,37 @@
 use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
 
-use crate::{geometry, platform, Config, Rect};
+use crate::{geometry, platform, Rect};
 
-pub fn capture_screenshot(config: &Config) -> Result<Option<PathBuf>> {
+pub fn capture_screenshot() -> Result<Option<PathBuf>> {
     let Some(rect) = select_screenshot_rect()? else {
         return Ok(None);
     };
 
     let output_file = crate::output::screenshot_output_file_path()?;
     platform::capture_screenshot(&rect, &output_file)?;
-    copy_screenshot_if_enabled(config, &output_file);
-    platform::show_notification("Screenshot saved", &output_file.display().to_string(), 1800);
+    present_capture(&output_file);
     Ok(Some(output_file))
 }
 
-fn copy_screenshot_if_enabled(config: &Config, output_file: &Path) {
-    if !config.screenshot.auto_copy {
-        return;
+fn present_capture(output_file: &Path) {
+    if let Err(error) = show_preview(output_file) {
+        eprintln!("[qol-shot] preview unavailable, copying instead: {error:#}");
+        if let Err(error) = platform::copy_image_to_clipboard(output_file) {
+            eprintln!("[qol-shot] failed to copy screenshot to clipboard: {error:#}");
+        }
+        platform::show_notification("Screenshot saved", &output_file.display().to_string(), 1800);
     }
+}
 
-    if let Err(error) = platform::copy_image_to_clipboard(output_file) {
-        eprintln!("[qol-shot] failed to copy screenshot to clipboard: {error:#}");
-    }
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn show_preview(output_file: &Path) -> Result<()> {
+    crate::preview::show(output_file)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn show_preview(_output_file: &Path) -> Result<()> {
+    Err(anyhow!("preview is not supported on this platform"))
 }
 
 fn select_screenshot_rect() -> Result<Option<Rect>> {
