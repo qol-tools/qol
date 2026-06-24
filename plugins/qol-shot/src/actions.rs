@@ -10,10 +10,33 @@ pub enum ShotAction {
 }
 
 impl ShotAction {
+    pub const ALL: &'static [ShotAction] = &[ShotAction::Copy, ShotAction::CopyPath];
+
     pub fn perform(self, path: &Path) -> Result<()> {
         match self {
             ShotAction::Copy => platform::copy_image_to_clipboard(path),
             ShotAction::CopyPath => platform::copy_path_to_clipboard(path),
+        }
+    }
+
+    pub fn glyph(self) -> &'static str {
+        match self {
+            ShotAction::Copy => "C",
+            ShotAction::CopyPath => "P",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ShotAction::Copy => "Copy",
+            ShotAction::CopyPath => "Copy Path",
+        }
+    }
+
+    pub fn accel(self) -> char {
+        match self {
+            ShotAction::Copy => 'c',
+            ShotAction::CopyPath => 'p',
         }
     }
 

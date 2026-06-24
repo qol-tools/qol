@@ -16,15 +16,43 @@ pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
 }
 
 fn app(binary_name: &'static str) -> HeadlessApp {
-    HeadlessApp::new(PLUGIN_ID, binary_name)
+    let app = HeadlessApp::new(PLUGIN_ID, binary_name)
         .about("Capture screenshots and record screen regions.")
         .default_command(["record"])
         .command(record_command(binary_name))
         .command(screenshot_command(binary_name))
         .command(copy_command(binary_name))
         .command(copy_path_command(binary_name))
-        .command(settings_command(binary_name))
-        .doctor_checks(doctor_checks())
+        .command(settings_command(binary_name));
+    with_preview_command(app, binary_name).doctor_checks(doctor_checks())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn with_preview_command(app: HeadlessApp, binary_name: &'static str) -> HeadlessApp {
+    app.command(preview_command(binary_name))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn with_preview_command(app: HeadlessApp, _binary_name: &'static str) -> HeadlessApp {
+    app
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn preview_command(binary_name: &'static str) -> Command {
+    Command::new("preview")
+        .about("Show the screenshot preview window for a PNG.")
+        .usage(format!("{binary_name} preview <png-path>"))
+        .detail("Opens the floating preview with copy / copy-path action circles.")
+        .output("No stdout on success.")
+        .exit_behavior("Exits non-zero if the path is missing or the image cannot be read.")
+        .run_plain_text(|ctx| {
+            let path = ctx
+                .args()
+                .first()
+                .ok_or_else(|| anyhow!("usage: preview <png-path>"))?;
+            crate::preview::show(Path::new(path))?;
+            Ok(PlainTextOutput::empty())
+        })
 }
 
 fn record_command(binary_name: &'static str) -> Command {

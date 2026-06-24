@@ -5,6 +5,8 @@ mod config;
 mod geometry;
 mod output;
 pub(crate) mod platform;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod preview;
 pub mod recording;
 pub mod screenshot;
 mod settings;
