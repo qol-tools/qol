@@ -1,7 +1,8 @@
 use anyhow::Result;
 
-const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/qol-shot/";
+use crate::PLUGIN_ID;
 
 pub(crate) fn open_qol_settings() -> Result<()> {
-    crate::platform::open_url(SETTINGS_URL)
+    let url = qol_conventions::settings_url(PLUGIN_ID);
+    crate::platform::open_url(&url)
 }

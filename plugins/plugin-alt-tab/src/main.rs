@@ -7,7 +7,7 @@ mod discovery;
 mod picker;
 mod shared;
 
-use crate::config::load_alt_tab_config;
+use crate::config::{load_alt_tab_config, PLUGIN_ID};
 use std::sync::mpsc;
 
 type PreviewMap = std::collections::HashMap<u32, std::sync::Arc<gpui::RenderImage>>;
@@ -16,13 +16,12 @@ type SharedIconCache = std::sync::Arc<std::sync::Mutex<IconMap>>;
 type PickerWindowState =
     std::rc::Rc<std::cell::RefCell<qol_gpui::window::ActiveWindows<app::AltTabApp>>>;
 
-const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-alt-tab/";
-
 fn maybe_open_settings(args: &[String]) -> bool {
     if !args.iter().any(|arg| arg == "--settings") {
         return false;
     }
-    if let Err(error) = open::that(SETTINGS_URL) {
+    let settings_url = qol_conventions::settings_url(PLUGIN_ID);
+    if let Err(error) = open::that(&settings_url) {
         eprintln!("Failed to open settings page: {}", error);
     }
     true

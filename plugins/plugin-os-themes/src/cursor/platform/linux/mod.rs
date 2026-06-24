@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 
+use crate::config::PLUGIN_ID;
 use crate::cursor::control::request_external_stop;
 use crate::cursor::CursorEffect;
 
@@ -25,8 +26,9 @@ impl CursorPlatform for Platform {
     }
 
     fn open_settings(&self) -> Result<()> {
-        Command::new(SETTINGS_URL)
-            .arg(PLUGIN_URL)
+        let url = qol_conventions::settings_url(PLUGIN_ID);
+        Command::new(OPENER)
+            .arg(&url)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -47,5 +49,4 @@ extern "C" fn handle_signal(_: libc::c_int) {
     request_external_stop();
 }
 
-const SETTINGS_URL: &str = "xdg-open";
-const PLUGIN_URL: &str = "http://127.0.0.1:42700/plugins/plugin-os-themes/";
+const OPENER: &str = "xdg-open";

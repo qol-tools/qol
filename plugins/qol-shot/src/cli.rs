@@ -132,11 +132,14 @@ fn read_config_file(path: &Path) -> Result<()> {
 }
 
 fn plugin_config_paths() -> Result<Vec<PathBuf>> {
-    let id = match std::env::var("QOL_TRAY_PLUGIN_ID") {
+    let id = match std::env::var(qol_conventions::ENV_PLUGIN_ID) {
         Ok(value) => {
             let trimmed = value.trim();
             if !qol_config::valid_install_id(trimmed) {
-                return Err(anyhow!("QOL_TRAY_PLUGIN_ID {value:?} is invalid"));
+                return Err(anyhow!(
+                    "{} {value:?} is invalid",
+                    qol_conventions::ENV_PLUGIN_ID
+                ));
             }
             trimmed.to_string()
         }
@@ -235,38 +238,44 @@ mod tests {
 
     #[test]
     fn no_args_default_to_record_help_topic() {
-        let execution = app("qol-shot").execute(vec!["help".to_string(), "record".to_string()]);
+        let execution = app(BINARY_NAME).execute(vec!["help".to_string(), "record".to_string()]);
         assert_eq!(execution.exit_code, EXIT_SUCCESS);
-        assert!(execution.stdout.contains("qol-shot record"));
+        assert!(execution.stdout.contains(&format!("{BINARY_NAME} record")));
     }
 
     #[test]
     fn screenshot_help_uses_selected_binary_name() {
-        let execution = app("qol-shot").execute(vec!["help".to_string(), "screenshot".to_string()]);
+        let execution =
+            app(BINARY_NAME).execute(vec!["help".to_string(), "screenshot".to_string()]);
         assert_eq!(execution.exit_code, EXIT_SUCCESS);
-        assert!(execution.stdout.contains("qol-shot screenshot"));
+        assert!(execution
+            .stdout
+            .contains(&format!("{BINARY_NAME} screenshot")));
     }
 
     #[test]
     fn legacy_command_aliases_are_not_registered() {
         for command in ["shot", "toggle"] {
-            let execution = app("qol-shot").execute(vec![command.to_string()]);
+            let execution = app(BINARY_NAME).execute(vec![command.to_string()]);
             assert_eq!(execution.exit_code, EXIT_USAGE, "{command} should fail");
         }
     }
 
     #[test]
     fn settings_json_is_rejected_by_shared_gate() {
-        let execution = app("qol-shot").execute(vec!["settings".to_string(), "--json".to_string()]);
+        let execution =
+            app(BINARY_NAME).execute(vec!["settings".to_string(), "--json".to_string()]);
         assert_eq!(execution.exit_code, EXIT_USAGE);
         assert!(execution.stderr.contains("does not support --json"));
     }
 
     #[test]
     fn doctor_json_is_registered() {
-        let execution = app("qol-shot").execute(vec!["doctor".to_string(), "--json".to_string()]);
+        let execution = app(BINARY_NAME).execute(vec!["doctor".to_string(), "--json".to_string()]);
         assert_eq!(execution.exit_code, EXIT_SUCCESS);
-        assert!(execution.stdout.contains("\"plugin_id\":\"qol-shot\""));
+        assert!(execution
+            .stdout
+            .contains(&format!("\"plugin_id\":\"{PLUGIN_ID}\"")));
     }
 
     #[test]

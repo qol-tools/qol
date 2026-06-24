@@ -83,7 +83,8 @@ mod tests {
     fn non_local_origins_are_rejected() {
         assert!(!is_allowed_local_origin("https://example.com"));
         assert!(!is_allowed_local_origin("http://127.0.0.1:80"));
-        assert!(!is_allowed_local_origin("http://evil.localhost:42700"));
+        let evil_with_our_port = format!("http://evil.localhost:{DEFAULT_UI_SERVER_PORT}");
+        assert!(!is_allowed_local_origin(&evil_with_our_port));
     }
 
     #[test]
@@ -141,11 +142,12 @@ mod tests {
             assert!(!has_untrusted_origin(&headers));
         }
 
+        let evil_with_our_port = format!("http://evil.localhost:{DEFAULT_UI_SERVER_PORT}");
         let blocked = vec![
             "https://example.com",
             "http://127.0.0.1:80",
             "http://localhost:9999",
-            "http://evil.localhost:42700",
+            evil_with_our_port.as_str(),
         ];
         for origin in blocked {
             let headers = headers_with(header::ORIGIN.as_str(), origin);

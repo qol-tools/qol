@@ -261,18 +261,18 @@ fn create_install_id() -> String {
 
 fn open_ui_after_start() {
     crate::net::wait_for_tcp_ready(
-        ([127, 0, 0, 1], 42700).into(),
+        ([127, 0, 0, 1], qol_conventions::DEFAULT_PORT).into(),
         100,
         std::time::Duration::from_millis(50),
     );
-    let url = "http://localhost:42700";
+    let url = format!("http://localhost:{}", qol_conventions::DEFAULT_PORT);
     #[cfg(target_os = "linux")]
-    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
     #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg(url).spawn();
+    let _ = std::process::Command::new("open").arg(&url).spawn();
     #[cfg(target_os = "windows")]
     let _ = std::process::Command::new("cmd")
-        .args(["/c", "start", url])
+        .args(["/c", "start", url.as_str()])
         .spawn();
 }
 

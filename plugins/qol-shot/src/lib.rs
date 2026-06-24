@@ -11,4 +11,4 @@ mod settings;
 pub use config::{AudioConfig, Config, ScreenshotConfig, VideoConfig};
 pub use geometry::{Monitor, Rect};
 
-pub const PLUGIN_ID: &str = "qol-shot";
+pub const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");

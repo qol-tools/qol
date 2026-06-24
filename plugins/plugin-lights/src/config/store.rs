@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use super::model::PluginConfig;
 
-const PLUGIN_ID: &str = "plugin-lights";
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 pub fn load() -> Result<PluginConfig> {
     let path = existing_config_path();
@@ -58,7 +58,7 @@ fn writable_config_path() -> Result<PathBuf> {
         qol_config::plugin_config_paths_from_env(PLUGIN_ID),
         legacy_config_path(),
     )
-    .context("plugin-lights could not resolve a writable config path")
+    .with_context(|| format!("{PLUGIN_ID} could not resolve a writable config path"))
 }
 
 fn config_paths() -> Vec<PathBuf> {
@@ -92,7 +92,7 @@ fn legacy_config_path() -> Option<PathBuf> {
             .join(".config")
             .join("qol-tray")
             .join("plugins")
-            .join("plugin-lights")
+            .join(PLUGIN_ID)
             .join("config.json"),
     )
 }

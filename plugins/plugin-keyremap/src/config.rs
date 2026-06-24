@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-const PLUGIN_ID: &str = "plugin-keyremap";
+const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]

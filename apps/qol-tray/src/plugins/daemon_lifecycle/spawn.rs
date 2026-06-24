@@ -63,7 +63,7 @@ fn daemon_path(plugin: &Plugin, daemon_config: &DaemonConfig) -> Result<PathBuf>
 fn daemon_command(plugin: &Plugin, daemon_config: &DaemonConfig, daemon_path: &Path) -> Command {
     let mut command = Command::new(daemon_path);
     command.current_dir(&plugin.path).stdin(Stdio::null());
-    command.env("QOL_TRAY_PLUGIN_ID", plugin.id.as_str());
+    command.env(qol_conventions::ENV_PLUGIN_ID, plugin.id.as_str());
     command.env("QOL_TRAY_PLUGIN_DIR", &plugin.path);
     apply_log_env(&mut command);
     apply_daemon_env(&mut command, daemon_config);
@@ -76,7 +76,10 @@ fn apply_daemon_env(command: &mut Command, daemon_config: &DaemonConfig) {
         command.env("QOL_TRAY_DAEMON_SOCKET", socket);
     }
     command.env("QOL_TRAY_DAEMON_REPLACE_EXISTING", "1");
-    command.env("QOL_TRAY_STATE_SOCKET", crate::paths::STATE_SOCKET_PATH);
+    command.env(
+        qol_conventions::ENV_STATE_SOCKET,
+        qol_conventions::STATE_SOCKET_PATH,
+    );
     command.env_remove("XMODIFIERS");
 }
 

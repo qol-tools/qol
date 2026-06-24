@@ -7,8 +7,8 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-const ENV_STATE_SOCKET: &str = "QOL_TRAY_STATE_SOCKET";
-const DEFAULT_SOCKET: &str = "/tmp/qol-tray-state.sock";
+use qol_conventions::{ENV_PLUGIN_ID, ENV_STATE_SOCKET, STATE_SOCKET_PATH};
+
 const TIMEOUT: Duration = Duration::from_millis(50);
 
 #[derive(Clone)]
@@ -22,7 +22,8 @@ pub struct Subscription {
 
 impl PlatformStateClient {
     pub fn from_env() -> Self {
-        let path = std::env::var(ENV_STATE_SOCKET).unwrap_or_else(|_| DEFAULT_SOCKET.to_string());
+        let path =
+            std::env::var(ENV_STATE_SOCKET).unwrap_or_else(|_| STATE_SOCKET_PATH.to_string());
         Self {
             socket_path: PathBuf::from(path),
         }
@@ -63,8 +64,7 @@ impl PlatformStateClient {
     }
 
     pub fn subscribe(&self, events: Vec<RuntimeEventKind>) -> Option<Subscription> {
-        let plugin_id =
-            std::env::var("QOL_TRAY_PLUGIN_ID").unwrap_or_else(|_| "unknown".to_string());
+        let plugin_id = std::env::var(ENV_PLUGIN_ID).unwrap_or_else(|_| "unknown".to_string());
         self.open_subscription(RuntimeRequest::Subscribe { plugin_id, events })
     }
 

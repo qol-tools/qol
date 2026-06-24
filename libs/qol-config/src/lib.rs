@@ -2,6 +2,7 @@ pub mod contract;
 pub mod normalized;
 pub mod validation;
 
+use qol_conventions::ENV_PLUGIN_ID;
 use serde::de::DeserializeOwned;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -84,8 +85,8 @@ pub fn plugin_config_paths(names: &[&str]) -> Vec<PathBuf> {
 
 /// Load a plugin's config using the identity the host injects at launch.
 ///
-/// The host sets `QOL_TRAY_PLUGIN_ID` on every plugin process it spawns, so a
-/// plugin never has to hardcode its own id. `fallback_id` is used only when the
+/// The host sets [`qol_conventions::ENV_PLUGIN_ID`] on every plugin process it
+/// spawns, so a plugin never has to hardcode its own id. `fallback_id` is used only when the
 /// plugin is run standalone, outside the host (no env var). A present-but-invalid
 /// injected id is a host bug and aborts loudly rather than silently loading
 /// defaults.
@@ -103,12 +104,12 @@ pub fn plugin_config_paths_from_env(fallback_id: &str) -> Vec<PathBuf> {
 /// The canonical plugin id the host injected at launch, or `fallback_id` when
 /// run standalone. Aborts loudly on a present-but-invalid injected id.
 pub fn plugin_id_from_env(fallback_id: &str) -> String {
-    match std::env::var("QOL_TRAY_PLUGIN_ID") {
+    match std::env::var(ENV_PLUGIN_ID) {
         Ok(value) => {
             let trimmed = value.trim();
             assert!(
                 valid_install_id(trimmed),
-                "QOL_TRAY_PLUGIN_ID {value:?} injected by the host is not a valid plugin id"
+                "{ENV_PLUGIN_ID} {value:?} injected by the host is not a valid plugin id"
             );
             trimmed.to_string()
         }

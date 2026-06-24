@@ -13,7 +13,7 @@ pub struct LauncherConfig {
     pub display: DisplayConfig,
 }
 
-const PLUGIN_ID: &str = "plugin-launcher";
+const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 pub fn load_launcher_config() -> LauncherConfig {
     qol_config::load_plugin_config_from_env(PLUGIN_ID)

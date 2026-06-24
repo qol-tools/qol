@@ -24,3 +24,6 @@ objc2-app-kit = { version = "0.3", features = [
 [dev-dependencies]
 proptest = "1.10.0"
 qol-plugin-api.workspace = true
+
+[build-dependencies]
+qol-conventions.workspace = true

@@ -10,7 +10,7 @@ pub const DEFAULT_PROFILE_NAME: &str = "default";
 #[cfg(any(test, debug_assertions))]
 const TEST_PATH_ROOT_ENV: &str = "QOL_TRAY_TEST_PATH_ROOT";
 
-pub const STATE_SOCKET_PATH: &str = "/tmp/qol-tray-state.sock";
+pub use qol_conventions::STATE_SOCKET_PATH;
 
 #[cfg(test)]
 thread_local! {

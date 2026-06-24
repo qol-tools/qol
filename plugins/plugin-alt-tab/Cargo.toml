@@ -13,10 +13,14 @@ serde = { version = "1.0", features = ["derive"] }
 smallvec = "1.13"
 qol-color.workspace = true
 qol-config.workspace = true
+qol-conventions.workspace = true
 qol-plugin-daemon.workspace = true
 qol-app-icon.workspace = true
 qol-gpui.workspace = true
 qol-runtime.workspace = true
+
+[build-dependencies]
+qol-conventions.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

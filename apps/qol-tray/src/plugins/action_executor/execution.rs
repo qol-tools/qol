@@ -123,8 +123,11 @@ fn runtime_command(resolved: &ResolvedAction, command_path: &Path) -> std::proce
         .current_dir(&resolved.plugin_dir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::inherit())
-        .env("QOL_TRAY_PLUGIN_ID", resolved.plugin_id.as_str())
-        .env("QOL_TRAY_STATE_SOCKET", crate::paths::STATE_SOCKET_PATH);
+        .env(qol_conventions::ENV_PLUGIN_ID, resolved.plugin_id.as_str())
+        .env(
+            qol_conventions::ENV_STATE_SOCKET,
+            qol_conventions::STATE_SOCKET_PATH,
+        );
     if let Some(socket_path) = &resolved.daemon_socket {
         command.env("QOL_TRAY_DAEMON_SOCKET", socket_path);
     }
@@ -165,9 +168,9 @@ mod tests {
         let command = runtime_command(&resolved(), Path::new("/bin/true"));
         let entry = command
             .get_envs()
-            .find(|(key, _)| *key == OsStr::new("QOL_TRAY_STATE_SOCKET"));
+            .find(|(key, _)| *key == OsStr::new(qol_conventions::ENV_STATE_SOCKET));
         let (_, value) =
-            entry.expect("action spawns must set QOL_TRAY_STATE_SOCKET so the watchdog arms");
+            entry.expect("action spawns must set the state-socket env var so the watchdog arms");
         assert_eq!(
             value,
             Some(OsStr::new(crate::paths::STATE_SOCKET_PATH)),

@@ -22,4 +22,8 @@ pub use other::*;
 #[cfg(target_os = "windows")]
 pub use windows::*;
 
-pub const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-pointz/";
+pub const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+
+pub fn settings_url() -> String {
+    qol_conventions::settings_url(PLUGIN_ID)
+}

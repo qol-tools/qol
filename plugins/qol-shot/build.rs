@@ -10,6 +10,8 @@ const STATUS_OVERLAY: &str = "src/platform/macos_swift/status_overlay.swift";
 const CLIPBOARD_WRITER: &str = "src/platform/macos_swift/clipboard_writer.swift";
 
 fn main() -> Result<(), Box<dyn Error>> {
+    qol_conventions::build::emit_plugin_id();
+
     for path in [PRELUDE, REGION_SELECTOR, STATUS_OVERLAY, CLIPBOARD_WRITER] {
         println!("cargo:rerun-if-changed={path}");
     }

@@ -65,22 +65,19 @@ mod tests {
 
     #[test]
     fn deeplink_url_builds_localhost_hash_route() {
+        let port = qol_conventions::DEFAULT_PORT;
         assert_eq!(
-            deeplink_url("shortcuts/add", 42700),
-            "http://localhost:42700/#shortcuts/add"
+            deeplink_url("shortcuts/add", port),
+            format!("http://localhost:{port}/#shortcuts/add")
         );
     }
 
     #[test]
     fn deeplink_url_strips_leading_hash_and_slash() {
-        assert_eq!(
-            deeplink_url("#shortcuts", 42700),
-            "http://localhost:42700/#shortcuts"
-        );
-        assert_eq!(
-            deeplink_url("/shortcuts", 42700),
-            "http://localhost:42700/#shortcuts"
-        );
+        let port = qol_conventions::DEFAULT_PORT;
+        let expected = format!("http://localhost:{port}/#shortcuts");
+        assert_eq!(deeplink_url("#shortcuts", port), expected);
+        assert_eq!(deeplink_url("/shortcuts", port), expected);
     }
 
     #[test]

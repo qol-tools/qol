@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
 use std::process::{Command, Stdio};
 
-const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-template/";
+const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 pub fn open_settings() -> Result<()> {
+    let settings_url = qol_conventions::settings_url(PLUGIN_ID);
     Command::new("xdg-open")
-        .arg(SETTINGS_URL)
+        .arg(&settings_url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

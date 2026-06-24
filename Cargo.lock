@@ -80,6 +80,7 @@ dependencies = [
  "qol-app-icon",
  "qol-color",
  "qol-config",
+ "qol-conventions",
  "qol-gpui",
  "qol-plugin-api",
  "qol-plugin-daemon",
@@ -3852,6 +3853,7 @@ dependencies = [
  "objc2-app-kit",
  "proptest",
  "qol-config",
+ "qol-conventions",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
@@ -3927,6 +3929,7 @@ dependencies = [
  "objc2-foundation",
  "proptest",
  "qol-config",
+ "qol-conventions",
  "qol-frecency",
  "qol-gpui",
  "qol-platform",
@@ -5340,6 +5343,7 @@ dependencies = [
  "libc",
  "proptest",
  "qol-config",
+ "qol-conventions",
  "qol-gpui",
  "qol-plugin-api",
  "qol-plugin-daemon",
@@ -5359,6 +5363,7 @@ dependencies = [
  "getrandom 0.2.17",
  "log",
  "qol-config",
+ "qol-conventions",
  "qol-plugin-api",
  "qol-runtime",
  "serde",
@@ -5374,6 +5379,7 @@ dependencies = [
  "anyhow",
  "libc",
  "qol-config",
+ "qol-conventions",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
@@ -5410,6 +5416,7 @@ name = "plugin-template"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "qol-conventions",
  "qol-plugin-api",
 ]
 
@@ -5449,6 +5456,7 @@ dependencies = [
  "hostname",
  "if-addrs",
  "log",
+ "qol-conventions",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "rdev",
@@ -5701,6 +5709,7 @@ dependencies = [
  "dirs 6.0.0",
  "libc",
  "qol-config",
+ "qol-conventions",
  "ratatui",
  "serde",
  "serde_json",
@@ -5730,10 +5739,15 @@ dependencies = [
  "dirs 6.0.0",
  "indexmap",
  "proptest",
+ "qol-conventions",
  "serde",
  "serde_json",
  "toml 0.9.12+spec-1.1.0",
 ]
+
+[[package]]
+name = "qol-conventions"
+version = "0.1.0"
 
 [[package]]
 name = "qol-frecency"
@@ -5825,6 +5839,7 @@ name = "qol-runtime"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "qol-conventions",
  "serde",
  "serde_json",
 ]
@@ -5843,6 +5858,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "qol-config",
+ "qol-conventions",
  "qol-headless",
  "qol-plugin-api",
  "qol-runtime",
@@ -5878,6 +5894,7 @@ dependencies = [
  "proptest",
  "qol-app-icon",
  "qol-config",
+ "qol-conventions",
  "qol-migrations",
  "qol-plugin-api",
  "qol-runtime",

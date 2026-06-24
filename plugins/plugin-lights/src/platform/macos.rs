@@ -2,11 +2,12 @@ use anyhow::{Context, Result};
 use serialport::SerialPortInfo;
 use std::process::{Command, Stdio};
 
-const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-lights/";
+use crate::config::store::PLUGIN_ID;
 
 pub fn open_settings() -> Result<()> {
+    let settings_url = qol_conventions::settings_url(PLUGIN_ID);
     Command::new("open")
-        .arg(SETTINGS_URL)
+        .arg(&settings_url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

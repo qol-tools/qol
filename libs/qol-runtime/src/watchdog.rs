@@ -1,13 +1,12 @@
 use std::time::Duration;
 
 use crate::client::PlatformStateClient;
+use qol_conventions::{ENV_PLUGIN_ID, ENV_STATE_SOCKET};
 
 const RECONNECT_BACKOFF: Duration = Duration::from_millis(250);
 
-const ENV_PLUGIN_ID: &str = "QOL_TRAY_PLUGIN_ID";
-
 pub fn spawn_host_death_watchdog() {
-    if std::env::var_os("QOL_TRAY_STATE_SOCKET").is_none() {
+    if std::env::var_os(ENV_STATE_SOCKET).is_none() {
         return;
     }
     let client = PlatformStateClient::from_env();

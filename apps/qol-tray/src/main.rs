@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
 
-const DEFAULT_PORT: u16 = 42700;
+use qol_conventions::DEFAULT_PORT;
 
 fn main() -> Result<()> {
     if let Some(code) = try_handle_cli_flag() {
@@ -648,13 +648,14 @@ fn show_first_run_welcome() {
     }
 
     #[cfg(target_os = "linux")]
-    let _ = std::process::Command::new("notify-send")
-        .args([
-            "--icon=qol-tray",
-            "QoL Tray",
-            "QoL Tray is running. Click the tray icon or visit http://localhost:42700 to get started.",
-        ])
-        .status();
+    {
+        let message = format!(
+            "QoL Tray is running. Click the tray icon or visit http://localhost:{DEFAULT_PORT} to get started."
+        );
+        let _ = std::process::Command::new("notify-send")
+            .args(["--icon=qol-tray", "QoL Tray", &message])
+            .status();
+    }
 
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("osascript")
@@ -666,14 +667,12 @@ fn show_first_run_welcome() {
 
     wait_for_server_ready();
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let url = format!("http://localhost:{DEFAULT_PORT}");
     #[cfg(target_os = "linux")]
-    let _ = std::process::Command::new("xdg-open")
-        .arg("http://localhost:42700")
-        .spawn();
+    let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
     #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open")
-        .arg("http://localhost:42700")
-        .spawn();
+    let _ = std::process::Command::new("open").arg(&url).spawn();
 }
 
 async fn check_for_updates() -> bool {

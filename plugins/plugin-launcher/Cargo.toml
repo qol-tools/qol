@@ -38,6 +38,9 @@ objc2-app-kit = { workspace = true, features = [
   "block2",
 ] }
 
+[build-dependencies]
+qol-conventions.workspace = true
+
 [dev-dependencies]
 proptest = "1.0"
 qol-plugin-api.workspace = true

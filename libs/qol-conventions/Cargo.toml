@@ -1,0 +1,8 @@
+[package]
+name = "qol-conventions"
+version = "0.1.0"
+edition = "2021"
+description = "Single source of truth for cross-process QoL Tray constants (port, sockets, env vars, URLs)"
+license = "PolyForm-Noncommercial-1.0.0"
+
+[dependencies]

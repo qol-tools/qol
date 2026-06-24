@@ -6,8 +6,8 @@
 
 pub fn open_settings() {
     log::warn!(
-        "plugin-pointz: open_settings is not implemented on this OS; \
-         visit {} manually",
-        super::SETTINGS_URL
+        "{}: open_settings is not implemented on this OS; visit {} manually",
+        super::PLUGIN_ID,
+        super::settings_url()
     );
 }

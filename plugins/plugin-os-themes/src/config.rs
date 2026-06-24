@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-const PLUGIN_ID: &str = "plugin-os-themes";
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]

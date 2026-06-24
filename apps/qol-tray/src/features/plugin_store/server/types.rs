@@ -20,7 +20,7 @@ use super::super::github::PluginCache;
 
 pub(super) type InstalledCache = Arc<Mutex<Option<(u64, Arc<InstalledPluginsResponse>)>>>;
 
-pub(super) const DEFAULT_UI_SERVER_PORT: u16 = 42700;
+pub(super) const DEFAULT_UI_SERVER_PORT: u16 = qol_conventions::DEFAULT_PORT;
 pub(super) const MAX_COVER_SIZE: usize = 5 * 1024 * 1024;
 pub(super) const MAX_CONFIG_SIZE: usize = 1024 * 1024;
 

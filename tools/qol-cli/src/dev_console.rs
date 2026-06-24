@@ -21,8 +21,8 @@ use crate::commands::emu::{
 };
 use crate::dev_server::{
     fetch_workspace_plugins, health_ok, post_recompile_current, post_reload_plugins,
-    probe_endpoints, toggle_dev_link, web_ok, EndpointStatus, LinkToggle, WorkspacePlugin,
-    WEBSITE_URL,
+    probe_endpoints, toggle_dev_link, web_ok, website_url, EndpointStatus, LinkToggle,
+    WorkspacePlugin,
 };
 use crate::host_facade;
 use crate::poller::Poller;
@@ -2014,7 +2014,7 @@ fn act_row(dash: &mut Dash, modified: bool) {
         }
         Row::Web => {
             if !modified {
-                host_facade::open_url(WEBSITE_URL);
+                host_facade::open_url(&website_url());
             }
         }
         Row::Plugins => {
@@ -3557,7 +3557,7 @@ fn web_status(web: Health) -> (Color, Vec<Span<'static>>) {
             Color::Green,
             vec![
                 "up".fg(Color::Green).bold(),
-                " · localhost:42700".fg(Color::DarkGray),
+                format!(" · localhost:{}", qol_conventions::DEFAULT_PORT).fg(Color::DarkGray),
             ],
         ),
         Health::Down => (Color::Red, vec!["down".fg(Color::Red).bold()]),

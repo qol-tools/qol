@@ -4,15 +4,37 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
-pub(crate) const WEBSITE_URL: &str = "http://localhost:42700";
-const WEB_HEALTH_URL: &str = "http://127.0.0.1:42700/";
-const DEV_HEALTH_URL: &str = "http://127.0.0.1:42700/api/dev/worktrees";
-const DEV_RECOMPILE_URL: &str = "http://127.0.0.1:42700/api/dev/recompile-self";
-const DEV_RELOAD_URL: &str = "http://127.0.0.1:42700/api/dev/reload";
-const DEV_LINKS_URL: &str = "http://127.0.0.1:42700/api/dev/links";
-const DEV_DISCOVERY_URL: &str = "http://127.0.0.1:42700/api/dev/discovery-state";
-const AUTH_HEALTH_URL: &str = "http://127.0.0.1:42700/api/auth/health";
-const LOGS_HEALTH_URL: &str = "http://127.0.0.1:42700/api/logs/entries";
+fn api_url(path: &str) -> String {
+    format!("{}{path}", qol_conventions::local_base_url())
+}
+
+pub(crate) fn website_url() -> String {
+    format!("http://localhost:{}", qol_conventions::DEFAULT_PORT)
+}
+fn web_health_url() -> String {
+    api_url("/")
+}
+fn dev_health_url() -> String {
+    api_url("/api/dev/worktrees")
+}
+fn dev_recompile_url() -> String {
+    api_url("/api/dev/recompile-self")
+}
+fn dev_reload_url() -> String {
+    api_url("/api/dev/reload")
+}
+fn dev_links_url() -> String {
+    api_url("/api/dev/links")
+}
+fn dev_discovery_url() -> String {
+    api_url("/api/dev/discovery-state")
+}
+fn auth_health_url() -> String {
+    api_url("/api/auth/health")
+}
+fn logs_health_url() -> String {
+    api_url("/api/logs/entries")
+}
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 const HEALTH_INTERVAL: Duration = Duration::from_millis(250);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(1);
@@ -67,17 +89,19 @@ pub(crate) enum LinkToggle {
 }
 
 pub(crate) fn fetch_dev_links() -> Result<Vec<DevLink>> {
-    let (status, body) = http_exchange("GET", DEV_LINKS_URL, None)?;
+    let url = dev_links_url();
+    let (status, body) = http_exchange("GET", &url, None)?;
     if status != 200 {
-        bail!("GET {DEV_LINKS_URL} returned {status}");
+        bail!("GET {url} returned {status}");
     }
     serde_json::from_str(&body).context("invalid dev links payload")
 }
 
 pub(crate) fn fetch_discovered_plugins() -> Result<Vec<DiscoveredPlugin>> {
-    let (status, body) = http_exchange("GET", DEV_DISCOVERY_URL, None)?;
+    let url = dev_discovery_url();
+    let (status, body) = http_exchange("GET", &url, None)?;
     if status != 200 {
-        bail!("GET {DEV_DISCOVERY_URL} returned {status}");
+        bail!("GET {url} returned {status}");
     }
     let payload: DiscoveryStatePayload =
         serde_json::from_str(&body).context("invalid discovery payload")?;
@@ -156,7 +180,7 @@ pub(crate) fn toggle_dev_link(plugin: &WorkspacePlugin) -> Result<LinkToggle> {
 }
 
 pub(crate) fn delete_dev_link(id: &str) -> Result<()> {
-    let url = format!("{DEV_LINKS_URL}/{id}");
+    let url = format!("{}/{id}", dev_links_url());
     let status = http_request("DELETE", &url, None)?;
     if status / 100 == 2 {
         return Ok(());
@@ -181,32 +205,32 @@ pub(crate) fn post_recompile(branch: &str) -> Result<()> {
 }
 
 pub(crate) fn health_ok() -> bool {
-    http_get_ok(DEV_HEALTH_URL).unwrap_or(false)
+    http_get_ok(&dev_health_url()).unwrap_or(false)
 }
 
 pub(crate) fn web_ok() -> bool {
-    http_get_ok(WEB_HEALTH_URL).unwrap_or(false)
+    http_get_ok(&web_health_url()).unwrap_or(false)
 }
 
 pub(crate) struct EndpointStatus {
     pub(crate) label: &'static str,
-    pub(crate) url: &'static str,
+    pub(crate) url: String,
     pub(crate) ok: bool,
 }
 
 pub(crate) fn probe_endpoints() -> Vec<EndpointStatus> {
-    const ENDPOINTS: [(&str, &str); 4] = [
-        ("website", WEB_HEALTH_URL),
-        ("dev api", DEV_HEALTH_URL),
-        ("github", AUTH_HEALTH_URL),
-        ("logs", LOGS_HEALTH_URL),
+    let endpoints: [(&'static str, String); 4] = [
+        ("website", web_health_url()),
+        ("dev api", dev_health_url()),
+        ("github", auth_health_url()),
+        ("logs", logs_health_url()),
     ];
-    ENDPOINTS
-        .iter()
+    endpoints
+        .into_iter()
         .map(|(label, url)| EndpointStatus {
             label,
+            ok: http_get_ok(&url).unwrap_or(false),
             url,
-            ok: http_get_ok(url).unwrap_or(false),
         })
         .collect()
 }
@@ -216,7 +240,7 @@ pub(crate) fn post_recompile_current() -> Result<()> {
 }
 
 pub(crate) fn post_reload_plugins() -> Result<()> {
-    let status = http_request("POST", DEV_RELOAD_URL, Some("{}"))?;
+    let status = http_request("POST", &dev_reload_url(), Some("{}"))?;
     if status / 100 == 2 {
         return Ok(());
     }
@@ -224,7 +248,7 @@ pub(crate) fn post_reload_plugins() -> Result<()> {
 }
 
 fn post_recompile_body(body: &str) -> Result<()> {
-    let status = http_request("POST", DEV_RECOMPILE_URL, Some(body))?;
+    let status = http_request("POST", &dev_recompile_url(), Some(body))?;
     if status / 100 == 2 {
         return Ok(());
     }
@@ -234,7 +258,7 @@ fn post_recompile_body(body: &str) -> Result<()> {
 pub(crate) fn post_dev_link(plugin_dir: &std::path::Path) -> Result<DevLinkOutcome> {
     let path = plugin_dir.to_string_lossy().to_string();
     let body = json!({ "path": path }).to_string();
-    let status = http_request("POST", DEV_LINKS_URL, Some(&body))?;
+    let status = http_request("POST", &dev_links_url(), Some(&body))?;
     classify_link_status(status)
 }
 

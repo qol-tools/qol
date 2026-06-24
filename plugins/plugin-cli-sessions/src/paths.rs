@@ -1,4 +1,4 @@
-pub const PLUGIN_ID: &str = "plugin-cli-sessions";
+pub const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 pub fn state_path() -> Option<std::path::PathBuf> {
     Some(plugin_data_dir()?.join("sessions.json"))

@@ -138,7 +138,7 @@ fn default_reset_selection_on_open() -> bool {
     true
 }
 
-const PLUGIN_ID: &str = "plugin-alt-tab";
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 pub fn load_alt_tab_config() -> AltTabConfig {
     let config: AltTabConfig = qol_config::load_plugin_config_from_env(PLUGIN_ID);
