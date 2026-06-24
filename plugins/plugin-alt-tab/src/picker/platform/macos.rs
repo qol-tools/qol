@@ -17,20 +17,6 @@ pub fn show_picker_window(target_title: &str, all_titles: &[String]) {
     qol_gpui::ghost::show_ghost_window(target_title, all_titles);
 }
 
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
-}
-
-pub fn seconds_since_last_input() -> Option<f64> {
-    const COMBINED_SESSION_STATE: i32 = 0;
-    const ANY_INPUT_EVENT_TYPE: u32 = u32::MAX;
-    let secs = unsafe {
-        CGEventSourceSecondsSinceLastEventType(COMBINED_SESSION_STATE, ANY_INPUT_EVENT_TYPE)
-    };
-    Some(secs)
-}
-
 pub fn reuse_hidden_picker_across_shows() -> bool {
     true
 }

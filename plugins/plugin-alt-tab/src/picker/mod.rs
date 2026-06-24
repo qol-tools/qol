@@ -54,17 +54,30 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
         return;
     }
 
-    let gathered = gather(
+    let mut gathered = gather(
         req.config,
         &req.icon_cache,
         &req.window_cache,
         &req.preview_cache,
     );
+    seed_frontmost_preview(req, &mut gathered, cx);
     if try_reuse_existing(req, &placement, &gathered, cx) {
         return;
     }
     destroy_non_target_windows(req, &placement, cx);
     create_from_request(req, placement, gathered, cx);
+}
+
+fn seed_frontmost_preview(req: &OpenPickerRequest, gathered: &mut GatheredWindows, cx: &mut App) {
+    let Some((wid, img)) = gather::capture_frontmost_now(&gathered.windows) else {
+        return;
+    };
+    gathered.previews.insert(wid, img.clone());
+    if let Ok(mut cache) = req.preview_cache.lock() {
+        let mut fresh = crate::PreviewMap::new();
+        fresh.insert(wid, img);
+        crate::shared::image_registry::extend_with(&mut *cache, fresh, cx, None);
+    }
 }
 
 fn resolve_placement(tracker: &MonitorTracker, is_visible: bool) -> PopupPlacement {

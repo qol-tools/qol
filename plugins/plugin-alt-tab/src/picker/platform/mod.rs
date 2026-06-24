@@ -63,9 +63,6 @@ pub fn disable_window_shadow(title: &str) {
 pub fn probe_picker_app_active(at: &'static str) {
     imp::probe_picker_app_active(at)
 }
-pub fn seconds_since_last_input() -> Option<f64> {
-    imp::seconds_since_last_input()
-}
 pub fn pre_create(
     config: &crate::config::AltTabConfig,
     current: &crate::PickerWindowState,
