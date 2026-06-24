@@ -834,6 +834,12 @@ impl LogRing {
     fn len(&self) -> usize {
         self.lines.len()
     }
+
+    fn collapses_with(&self, line: &str) -> bool {
+        self.collapse
+            && self.repeat > 0
+            && self.last_key.as_deref() == Some(collapse_key(line).as_str())
+    }
 }
 
 fn repeat_badge(count: usize) -> String {
@@ -866,7 +872,6 @@ struct OwnedSource {
 struct LogPane {
     ring: LogRing,
     source: Option<OwnedSource>,
-    pending: Option<String>,
     last_emit: Option<Instant>,
 }
 
@@ -875,7 +880,6 @@ impl LogPane {
         Self {
             ring: LogRing::new(),
             source: None,
-            pending: None,
             last_emit: None,
         }
     }
@@ -884,7 +888,6 @@ impl LogPane {
         Self {
             ring: LogRing::collapsing(),
             source: None,
-            pending: None,
             last_emit: None,
         }
     }
@@ -919,29 +922,20 @@ impl LogPane {
         while let Ok(line) = source.rx.try_recv() {
             received.push(line);
         }
-        if realtime {
-            if let Some(line) = self.pending.take() {
-                self.ring.push(line);
+        for line in received {
+            if !keep(&line) {
+                continue;
             }
-            for line in received {
-                if keep(&line) {
-                    self.ring.push(line);
-                }
+            if !realtime
+                && self.ring.collapses_with(&line)
+                && self
+                    .last_emit
+                    .is_some_and(|last| now.duration_since(last) < min_interval)
+            {
+                continue;
             }
+            self.ring.push(line);
             self.last_emit = Some(now);
-            return;
-        }
-        if let Some(latest) = received.into_iter().rev().find(|line| keep(line)) {
-            self.pending = Some(latest);
-        }
-        let due = self
-            .last_emit
-            .is_none_or(|last| now.duration_since(last) >= min_interval);
-        if due {
-            if let Some(line) = self.pending.take() {
-                self.ring.push(line);
-                self.last_emit = Some(now);
-            }
         }
     }
 
@@ -962,7 +956,6 @@ impl LogPane {
         Self {
             ring,
             source: None,
-            pending: None,
             last_emit: None,
         }
     }
@@ -5969,46 +5962,60 @@ mod tests {
         assert_eq!(dash.trace_rate, TraceRate::Relaxed);
     }
 
+    fn attach_lines(lines: &[&str]) -> LogPane {
+        let mut pane = LogPane::collapsing();
+        let child = Command::new("true").spawn().unwrap();
+        let (tx, rx) = channel::<String>();
+        for line in lines {
+            tx.send((*line).to_string()).unwrap();
+        }
+        pane.attach(child, rx);
+        pane
+    }
+
     #[test]
-    fn relaxed_rate_throttles_ingestion_while_realtime_keeps_all() {
-        let interval = Duration::from_millis(300);
-        let t0 = Instant::now();
-
-        // realtime: every line lands immediately
-        let mut pane = LogPane::collapsing();
-        let child = Command::new("true").spawn().unwrap();
-        let (tx, rx) = channel::<String>();
-        pane.attach(child, rx);
-        for n in 0..5 {
-            tx.send(format!("[10:00:00.00{n}] AMC poll {n}")).unwrap();
-        }
-        pane.drain_rated(|_| true, true, t0, interval);
+    fn realtime_keeps_every_distinct_line() {
+        let lines: Vec<String> = (0..5).map(|n| format!("[10:00:00.00{n}] AMC poll {n}")).collect();
+        let mut pane = attach_lines(&lines.iter().map(String::as_str).collect::<Vec<_>>());
+        pane.drain_rated(|_| true, true, Instant::now(), RELAXED_TRACE_INTERVAL);
         assert_eq!(pane.ring.len(), 5, "realtime keeps every distinct line");
+    }
 
-        // relaxed: a burst collapses to a single freshest line until the interval elapses
-        let mut pane = LogPane::collapsing();
-        let child = Command::new("true").spawn().unwrap();
-        let (tx, rx) = channel::<String>();
-        pane.attach(child, rx);
-        for n in 0..5 {
-            tx.send(format!("[10:00:00.00{n}] AMC poll {n}")).unwrap();
-        }
-        pane.drain_rated(|_| true, false, t0, interval);
-        assert_eq!(pane.ring.len(), 1, "relaxed shows one line per interval");
-        assert!(
-            strip_ansi(&pane.ring.lines[0]).contains("AMC poll 4"),
-            "relaxed keeps the freshest line of the burst"
+    #[test]
+    fn relaxed_keeps_every_distinct_event() {
+        let lines: Vec<String> = (0..5).map(|n| format!("[10:00:00.00{n}] AMC poll {n}")).collect();
+        let mut pane = attach_lines(&lines.iter().map(String::as_str).collect::<Vec<_>>());
+        pane.drain_rated(|_| true, false, Instant::now(), RELAXED_TRACE_INTERVAL);
+        assert_eq!(
+            pane.ring.len(),
+            5,
+            "relaxed must not drop distinct events, only throttle repeats"
         );
+    }
 
-        // within the interval, more bursts do not add lines
-        tx.send("[10:00:00.010] AMC poll 9".to_string()).unwrap();
-        pane.drain_rated(|_| true, false, t0 + Duration::from_millis(100), interval);
-        assert_eq!(pane.ring.len(), 1, "still throttled inside the window");
+    #[test]
+    fn relaxed_throttles_a_burst_of_identical_lines() {
+        let spam = "[10:00:00.000] [alt-tab] PREVIEW_WARM_SKIP: reason=unknown_monitors wid=44";
+        let mut pane = attach_lines(&[spam, spam, spam, spam, spam]);
+        pane.drain_rated(|_| true, false, Instant::now(), RELAXED_TRACE_INTERVAL);
+        assert_eq!(
+            pane.ring.len(),
+            1,
+            "a burst of identical lines throttles to one"
+        );
+    }
 
-        // once the interval passes, the next freshest line is emitted
-        pane.drain_rated(|_| true, false, t0 + Duration::from_millis(350), interval);
-        assert_eq!(pane.ring.len(), 2, "a new line lands after the interval");
-        assert!(strip_ansi(&pane.ring.lines[1]).contains("AMC poll 9"));
+    #[test]
+    fn relaxed_preserves_distinct_action_between_spam() {
+        let spam = "[12:36:10.081] [alt-tab] PREVIEW_WARM_SKIP: reason=unknown_monitors wid=44";
+        let action = "[12:36:10.160] [launcher] SHOW_LIST: items=42 query=\"\"";
+        let mut pane = attach_lines(&[spam, spam, action, spam, spam]);
+        pane.drain_rated(|_| true, false, Instant::now(), RELAXED_TRACE_INTERVAL);
+        let shown: Vec<String> = pane.ring.lines.iter().map(|l| strip_ansi(l)).collect();
+        assert!(
+            shown.iter().any(|l| l.contains("SHOW_LIST")),
+            "distinct launcher action must survive the rate limiter; shown={shown:?}"
+        );
     }
 
     #[test]
