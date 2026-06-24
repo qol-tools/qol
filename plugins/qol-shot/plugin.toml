@@ -15,8 +15,12 @@ label = "Start/Stop Recording"
 args = ["record"]
 
 [action.screenshot]
-label = "Screenshot"
+label = "Take Screenshot"
 args = ["screenshot"]
+
+[action.preview]
+label = "Preview Last Screenshot"
+args = ["preview"]
 
 [action.copy]
 label = "Copy Screenshot"

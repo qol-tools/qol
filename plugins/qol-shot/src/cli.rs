@@ -40,17 +40,18 @@ fn with_preview_command(app: HeadlessApp, _binary_name: &'static str) -> Headles
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn preview_command(binary_name: &'static str) -> Command {
     Command::new("preview")
-        .about("Show the screenshot preview window for a PNG.")
-        .usage(format!("{binary_name} preview <png-path>"))
+        .about("Open the screenshot preview window.")
+        .usage(format!("{binary_name} preview [png-path]"))
         .detail("Opens the floating preview with copy / copy-path action circles.")
+        .detail("Defaults to the most recent screenshot when no path is given.")
         .output("No stdout on success.")
-        .exit_behavior("Exits non-zero if the path is missing or the image cannot be read.")
+        .exit_behavior("Exits non-zero if no screenshot exists or the image cannot be read.")
         .run_plain_text(|ctx| {
-            let path = ctx
-                .args()
-                .first()
-                .ok_or_else(|| anyhow!("usage: preview <png-path>"))?;
-            crate::preview::show(Path::new(path))?;
+            let path = match ctx.args().first() {
+                Some(arg) => PathBuf::from(arg),
+                None => crate::output::latest_screenshot()?,
+            };
+            crate::preview::show(&path)?;
             Ok(PlainTextOutput::empty())
         })
 }
