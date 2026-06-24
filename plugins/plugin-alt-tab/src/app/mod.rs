@@ -27,7 +27,6 @@ pub(crate) struct AltTabApp {
     pub(crate) action_mode: ActionMode,
     pub(crate) alt_was_held: bool,
     pub(crate) blur_guard_until: Instant,
-    pub(crate) blur_guard_armed: bool,
     pub(crate) _alt_poll_task: Option<Task<()>>,
     _live_preview_task: Option<Task<()>>,
     _dismiss_sub: (Subscription, Subscription, Option<Task<()>>),
@@ -115,14 +114,9 @@ impl AltTabApp {
             |this, window, cx| match focus_out_decision(
                 PICKER_VISIBLE.load(Ordering::Relaxed),
                 &this.action_mode,
-                this.blur_guard_armed,
-                Instant::now() < this.blur_guard_until,
                 picker::is_modifier_held(),
             ) {
                 FocusOutDecision::IgnoreHidden => {}
-                FocusOutDecision::IgnoreBlurGuard => {
-                    this.blur_guard_armed = false;
-                }
                 FocusOutDecision::IgnoreAltHeld => {}
                 FocusOutDecision::Dismiss => this.dismiss("focus-lost", window, cx),
             },
@@ -138,7 +132,6 @@ impl AltTabApp {
             action_mode: action_mode.clone(),
             alt_was_held: true,
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
-            blur_guard_armed: true,
             _alt_poll_task: None,
             #[cfg(debug_assertions)]
             pending_cycle: None,
@@ -202,7 +195,6 @@ impl AltTabApp {
         self.action_mode = req.config.action_mode.clone();
         self.alt_was_held = true;
         self.blur_guard_until = Instant::now() + Duration::from_millis(BLUR_GUARD_MS);
-        self.blur_guard_armed = true;
         self.delegate.update(cx, |s, _| {
             s.apply_config(req.config, card_color, card_opacity, req.monitor_size)
         });
@@ -410,7 +402,6 @@ async fn alt_release_check(
 #[derive(Debug, PartialEq, Eq)]
 enum FocusOutDecision {
     IgnoreHidden,
-    IgnoreBlurGuard,
     IgnoreAltHeld,
     Dismiss,
 }
@@ -418,15 +409,10 @@ enum FocusOutDecision {
 fn focus_out_decision(
     picker_visible: bool,
     action_mode: &ActionMode,
-    blur_guard_armed: bool,
-    in_blur_guard: bool,
     modifier_held: bool,
 ) -> FocusOutDecision {
     if !picker_visible {
         return FocusOutDecision::IgnoreHidden;
-    }
-    if blur_guard_armed && in_blur_guard {
-        return FocusOutDecision::IgnoreBlurGuard;
     }
     if action_mode == &ActionMode::HoldToSwitch && modifier_held {
         return FocusOutDecision::IgnoreAltHeld;
@@ -445,7 +431,6 @@ impl AltTabApp {
         eprintln!("[alt-tab/dismiss] from={}", _source);
         qol_runtime::probe!("DISMISS", "from={_source} title={}", self.picker_title);
         self._alt_poll_task = None;
-        self.blur_guard_armed = false;
         PICKER_VISIBLE.store(false, Ordering::Relaxed);
         if let Ok(mut lock) = ACTIVE_PICKER_MONITOR.lock() {
             *lock = None;
@@ -472,35 +457,26 @@ mod focus_out_tests {
     use crate::config::ActionMode;
 
     #[test]
-    fn ghost_state_focus_out_is_ignored_regardless_of_other_signals() {
+    fn hidden_picker_ignores_focus_out_regardless_of_other_signals() {
         let cases = [
-            (ActionMode::HoldToSwitch, true, true, true),
-            (ActionMode::HoldToSwitch, false, false, true),
-            (ActionMode::HoldToSwitch, false, false, false),
-            (ActionMode::Sticky, false, false, true),
-            (ActionMode::Sticky, true, true, false),
+            (ActionMode::HoldToSwitch, true),
+            (ActionMode::HoldToSwitch, false),
+            (ActionMode::Sticky, true),
+            (ActionMode::Sticky, false),
         ];
-        for (mode, blur_armed, in_guard, modifier) in cases {
+        for (mode, modifier) in cases {
             assert_eq!(
-                focus_out_decision(false, &mode, blur_armed, in_guard, modifier),
+                focus_out_decision(false, &mode, modifier),
                 FocusOutDecision::IgnoreHidden,
-                "ghost state must win over mode={mode:?}",
+                "hidden picker must win over mode={mode:?} modifier={modifier}",
             );
         }
     }
 
     #[test]
-    fn blur_guard_absorbs_first_focus_out() {
-        assert_eq!(
-            focus_out_decision(true, &ActionMode::HoldToSwitch, true, true, true),
-            FocusOutDecision::IgnoreBlurGuard
-        );
-    }
-
-    #[test]
     fn hold_mode_ignores_focus_out_while_alt_is_held() {
         assert_eq!(
-            focus_out_decision(true, &ActionMode::HoldToSwitch, false, false, true),
+            focus_out_decision(true, &ActionMode::HoldToSwitch, true),
             FocusOutDecision::IgnoreAltHeld
         );
     }
@@ -508,7 +484,7 @@ mod focus_out_tests {
     #[test]
     fn hold_mode_dismisses_without_activating_on_click_outside() {
         assert_eq!(
-            focus_out_decision(true, &ActionMode::HoldToSwitch, false, false, false),
+            focus_out_decision(true, &ActionMode::HoldToSwitch, false),
             FocusOutDecision::Dismiss
         );
     }
@@ -516,7 +492,7 @@ mod focus_out_tests {
     #[test]
     fn sticky_mode_keeps_focus_out_as_plain_dismiss() {
         assert_eq!(
-            focus_out_decision(true, &ActionMode::Sticky, false, false, true),
+            focus_out_decision(true, &ActionMode::Sticky, true),
             FocusOutDecision::Dismiss
         );
     }

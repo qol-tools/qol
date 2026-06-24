@@ -173,6 +173,17 @@ fn trace_dismiss_decision(
     );
 }
 
+fn rearm_on_new_show(
+    armed_for: &std::cell::Cell<Option<std::time::Instant>>,
+    has_been_active: &std::cell::Cell<bool>,
+    guard: std::time::Instant,
+) {
+    if armed_for.get() != Some(guard) {
+        armed_for.set(Some(guard));
+        has_been_active.set(false);
+    }
+}
+
 pub fn track_dismiss<V: gpui::Focusable + 'static>(
     label: &'static str,
     focus_handle: &gpui::FocusHandle,
@@ -189,111 +200,68 @@ pub fn track_dismiss<V: gpui::Focusable + 'static>(
     let on_dismiss_cell = std::rc::Rc::new(std::cell::RefCell::new(on_dismiss));
     let get_blur_guard = std::rc::Rc::new(get_blur_guard);
     let is_showing = std::rc::Rc::new(is_showing);
+    let has_been_active = std::rc::Rc::new(std::cell::Cell::new(false));
+    let armed_for = std::rc::Rc::new(std::cell::Cell::new(None::<std::time::Instant>));
     let window_handle = window.to_async(cx).window_handle();
 
     let get_blur_guard_1 = get_blur_guard.clone();
     let is_showing_1 = is_showing.clone();
     let on_dismiss_1 = on_dismiss_cell.clone();
+    let has_been_active_1 = has_been_active.clone();
+    let armed_for_1 = armed_for.clone();
     let blur_sub = cx.on_blur(focus_handle, window, move |view, window, cx| {
         let showing = is_showing_1(view);
         let guard = get_blur_guard_1(view);
+        rearm_on_new_show(&armed_for_1, &has_been_active_1, guard);
         if !showing {
             trace_dismiss_decision(label, "blur", showing, "na", guard, "skip_hidden");
             return;
         }
-        if std::time::Instant::now() < guard {
-            trace_dismiss_decision(label, "blur", showing, "na", guard, "skip_guard");
+        if !has_been_active_1.get() {
+            trace_dismiss_decision(label, "blur", showing, "na", guard, "skip_settling");
             return;
         }
-        trace_dismiss_decision(label, "blur", showing, "na", guard, "dismiss");
+        if window.is_window_active() {
+            trace_dismiss_decision(label, "blur", showing, "true", guard, "skip_active");
+            return;
+        }
+        trace_dismiss_decision(label, "blur", showing, "false", guard, "dismiss");
         (*on_dismiss_1.borrow_mut())(view, window, cx);
     });
 
     let get_blur_guard_2 = get_blur_guard.clone();
     let is_showing_2 = is_showing.clone();
     let on_dismiss_2 = on_dismiss_cell.clone();
+    let has_been_active_2 = has_been_active.clone();
+    let armed_for_2 = armed_for.clone();
     let active_sub = cx.observe_window_activation(window, move |view, window, cx| {
         let showing = is_showing_2(view);
         let active = window.is_window_active();
         let guard = get_blur_guard_2(view);
+        rearm_on_new_show(&armed_for_2, &has_been_active_2, guard);
         if !showing {
             let active = if active { "true" } else { "false" };
             trace_dismiss_decision(label, "activation", showing, active, guard, "skip_hidden");
             return;
         }
         if active {
+            has_been_active_2.set(true);
             trace_dismiss_decision(label, "activation", showing, "true", guard, "skip_active");
             return;
         }
-        if std::time::Instant::now() >= guard {
-            trace_dismiss_decision(label, "activation", showing, "false", guard, "dismiss");
-            (*on_dismiss_2.borrow_mut())(view, window, cx);
+        if !has_been_active_2.get() {
+            trace_dismiss_decision(
+                label,
+                "activation",
+                showing,
+                "false",
+                guard,
+                "skip_settling",
+            );
             return;
         }
-        let wait = guard.saturating_duration_since(std::time::Instant::now())
-            + std::time::Duration::from_millis(20);
-        trace_dismiss_decision(label, "activation", showing, "false", guard, "defer");
-        let get_blur_guard = get_blur_guard_2.clone();
-        let is_showing = is_showing_2.clone();
-        let on_dismiss = on_dismiss_2.clone();
-        cx.spawn(move |view_handle: WeakEntity<V>, cx: &mut gpui::AsyncApp| {
-            let mut cx = cx.clone();
-            async move {
-                cx.background_executor().timer(wait).await;
-                let _ = cx.update_window(window_handle, move |_, window, cx| {
-                    if window.is_window_active() {
-                        trace_dismiss_decision(
-                            label,
-                            "activation_wait",
-                            true,
-                            "true",
-                            std::time::Instant::now(),
-                            "skip_active",
-                        );
-                        return;
-                    }
-                    let Some(view_handle) = view_handle.upgrade() else {
-                        return;
-                    };
-                    view_handle.update(cx, |view, cx| {
-                        let showing = is_showing(view);
-                        let guard = get_blur_guard(view);
-                        if !showing {
-                            trace_dismiss_decision(
-                                label,
-                                "activation_wait",
-                                showing,
-                                "false",
-                                guard,
-                                "skip_hidden",
-                            );
-                            return;
-                        }
-                        if std::time::Instant::now() < guard {
-                            trace_dismiss_decision(
-                                label,
-                                "activation_wait",
-                                showing,
-                                "false",
-                                guard,
-                                "skip_guard",
-                            );
-                            return;
-                        }
-                        trace_dismiss_decision(
-                            label,
-                            "activation_wait",
-                            showing,
-                            "false",
-                            guard,
-                            "dismiss",
-                        );
-                        (*on_dismiss.borrow_mut())(view, window, cx);
-                    });
-                });
-            }
-        })
-        .detach();
+        trace_dismiss_decision(label, "activation", showing, "false", guard, "dismiss");
+        (*on_dismiss_2.borrow_mut())(view, window, cx);
     });
 
     let mut poll_task = None;
