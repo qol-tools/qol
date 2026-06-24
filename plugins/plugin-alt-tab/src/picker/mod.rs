@@ -16,8 +16,9 @@ use crate::config::{
 use crate::{PickerWindowState, SharedIconCache};
 use gather::{gather, spawn_icon_fill, GatheredWindows, IconFillRequest};
 use gpui::*;
-use qol_gpui::monitor::MonitorTracker;
+use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::window::{MonitorKey, PopupPlacement};
+use qol_gpui::MonitorBounds;
 use run::{SharedPreviewCache, WindowCache};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -45,7 +46,7 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     eprintln!("[alt-tab/open] show request (reverse={})", req.reverse);
 
     let is_visible = PICKER_VISIBLE.load(Ordering::Relaxed);
-    let placement = resolve_placement(req.tracker, is_visible);
+    let placement = resolve_placement(req.tracker, req.current, is_visible);
 
     if req.reverse && req.current.borrow().is_empty() {
         return;
@@ -80,21 +81,66 @@ fn seed_frontmost_preview(req: &OpenPickerRequest, gathered: &mut GatheredWindow
     }
 }
 
-fn resolve_placement(tracker: &MonitorTracker, is_visible: bool) -> PopupPlacement {
+fn resolve_placement(
+    tracker: &MonitorTracker,
+    current: &PickerWindowState,
+    is_visible: bool,
+) -> PopupPlacement {
     let placement = PopupPlacement::from_tracker(tracker);
     if !is_visible {
+        let placement = stabilize_placement(placement, current, "hidden");
         *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap() = Some(placement.target());
         return placement;
     }
     let Some(active_target) = *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap() else {
-        return placement;
+        return stabilize_placement(placement, current, "visible-no-active-target");
     };
     tracker
         .all_monitors()
         .into_iter()
         .find(|m| MonitorKey::from_bounds(&m.bounds()) == active_target)
         .map(|monitor| PopupPlacement::from_monitor(Some(monitor)))
-        .unwrap_or(placement)
+        .or_else(|| placement_from_key(active_target, "visible-active-target"))
+        .unwrap_or_else(|| stabilize_placement(placement, current, "visible"))
+}
+
+fn stabilize_placement(
+    placement: PopupPlacement,
+    current: &PickerWindowState,
+    reason: &'static str,
+) -> PopupPlacement {
+    if placement.monitor_size().is_some() {
+        return placement;
+    }
+    if let Some((key, _)) = any_existing(current) {
+        if let Some(placement) = placement_from_key(key, reason) {
+            return placement;
+        }
+    }
+    qol_runtime::probe!("PLACEMENT_FALLBACK", "reason={reason} source=default");
+    placement
+}
+
+fn placement_from_key(key: MonitorKey, reason: &'static str) -> Option<PopupPlacement> {
+    if key.width <= 0 || key.height <= 0 {
+        return None;
+    }
+    qol_runtime::probe!(
+        "PLACEMENT_FALLBACK",
+        "reason={reason} source=existing target={},{},{}x{}",
+        key.x,
+        key.y,
+        key.width,
+        key.height,
+    );
+    Some(PopupPlacement::from_monitor(Some(
+        ActiveMonitor::from_bounds(MonitorBounds {
+            x: key.x as f32,
+            y: key.y as f32,
+            width: key.width as f32,
+            height: key.height as f32,
+        }),
+    )))
 }
 
 fn try_cycle_existing(
@@ -331,6 +377,39 @@ mod color_tests {
             ..Default::default()
         };
         assert_eq!(resolve_card_bg(&display), (0x202322, 0.0));
+    }
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::placement_from_key;
+    use qol_gpui::window::MonitorKey;
+
+    #[test]
+    fn placement_from_nonzero_key_preserves_monitor_size() {
+        let key = MonitorKey {
+            x: 0,
+            y: 0,
+            width: 1800,
+            height: 1169,
+        };
+
+        let placement = placement_from_key(key, "test").expect("valid monitor key");
+
+        assert_eq!(placement.target(), key);
+        assert_eq!(placement.monitor_size(), Some((1800.0, 1169.0)));
+    }
+
+    #[test]
+    fn placement_from_zero_key_is_not_a_real_monitor() {
+        let key = MonitorKey {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
+
+        assert!(placement_from_key(key, "test").is_none());
     }
 }
 
