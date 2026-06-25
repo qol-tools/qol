@@ -1,5 +1,6 @@
 use super::super::binding::{Binding, Mod};
 use super::super::{OnFire, RebuildBindings};
+use crate::hotkeys::grammar::{self, Key, NamedKey};
 use anyhow::{bail, Result};
 use core_foundation::base::TCFType;
 use core_foundation::mach_port::CFMachPortRef;
@@ -262,108 +263,50 @@ fn marker_mods(bits: u8) -> BTreeSet<Mod> {
 
 fn parse_mac_combo(binding: &Binding) -> Option<MacCombo> {
     let combo = binding.combo.as_ref()?;
-    let key = parse_combo_key(&binding.raw_key)?;
+    let key = key_to_mac(grammar::parse(&binding.raw_key)?.key)?;
     Some(MacCombo {
         mods: combo.mods.clone(),
         key,
     })
 }
 
-fn parse_combo_key(raw_key: &str) -> Option<u16> {
-    let mut key = None;
-    for raw in raw_key.split('+') {
-        let token = raw.trim().to_ascii_lowercase();
-        if is_modifier(&token) {
-            continue;
-        }
-        if key.is_some() {
-            return None;
-        }
-        key = mac_key_name_to_code(&token);
-    }
-    key
-}
-
-fn is_modifier(token: &str) -> bool {
-    matches!(
-        token,
-        "shift"
-            | "ctrl"
-            | "control"
-            | "alt"
-            | "option"
-            | "opt"
-            | "super"
-            | "meta"
-            | "win"
-            | "cmd"
-            | "command"
-    )
-}
-
-fn mac_key_name_to_code(name: &str) -> Option<u16> {
-    if let Some(code) = mac_letter_code(name) {
-        return Some(code);
-    }
-    if let Some(code) = mac_digit_code(name) {
-        return Some(code);
-    }
-    if let Some(code) = mac_function_key_code(name) {
-        return Some(code);
-    }
-    Some(match name {
-        "space" => 49,
-        "enter" | "return" => 36,
-        "escape" | "esc" => 53,
-        "tab" => 48,
-        "backspace" => 51,
-        "delete" | "del" => 117,
-        "home" => 115,
-        "end" => 119,
-        "pageup" | "pgup" => 116,
-        "pagedown" | "pgdn" => 121,
-        "up" => 126,
-        "down" => 125,
-        "left" => 123,
-        "right" => 124,
-        _ => return None,
+fn key_to_mac(key: Key) -> Option<u16> {
+    Some(match key {
+        Key::Letter(index) => LETTERS[index as usize],
+        Key::Digit(index) => DIGITS[index as usize],
+        Key::Function(number) => FUNCTION_KEYS[(number - 1) as usize],
+        Key::Named(named) => return named_to_mac(named),
     })
 }
 
-fn mac_letter_code(name: &str) -> Option<u16> {
-    if name.len() != 1 {
-        return None;
-    }
-    let c = name.chars().next()?;
-    if !c.is_ascii_lowercase() {
-        return None;
-    }
-    let index = (c as u8 - b'a') as usize;
-    const LETTERS: [u16; 26] = [
-        0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32, 9, 13, 7, 16,
-        6,
-    ];
-    Some(LETTERS[index])
+fn named_to_mac(named: NamedKey) -> Option<u16> {
+    Some(match named {
+        NamedKey::Space => 49,
+        NamedKey::Enter => 36,
+        NamedKey::Escape => 53,
+        NamedKey::Tab => 48,
+        NamedKey::Backspace => 51,
+        NamedKey::Delete => 117,
+        NamedKey::Home => 115,
+        NamedKey::End => 119,
+        NamedKey::PageUp => 116,
+        NamedKey::PageDown => 121,
+        NamedKey::Up => 126,
+        NamedKey::Down => 125,
+        NamedKey::Left => 123,
+        NamedKey::Right => 124,
+        // Mac keyboards lack these keys; treat them as unsupported.
+        NamedKey::Insert | NamedKey::PrintScreen | NamedKey::Pause => return None,
+    })
 }
 
-fn mac_digit_code(name: &str) -> Option<u16> {
-    if name.len() != 1 {
-        return None;
-    }
-    let c = name.chars().next()?;
-    if !c.is_ascii_digit() {
-        return None;
-    }
-    const DIGITS: [u16; 10] = [29, 18, 19, 20, 21, 23, 22, 26, 28, 25];
-    Some(DIGITS[(c as u8 - b'0') as usize])
-}
+const LETTERS: [u16; 26] = [
+    0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32, 9, 13, 7, 16, 6,
+];
 
-fn mac_function_key_code(name: &str) -> Option<u16> {
-    let rest = name.strip_prefix('f')?;
-    let num: usize = rest.parse().ok()?;
-    const FUNCTION_KEYS: [u16; 12] = [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111];
-    FUNCTION_KEYS.get(num.checked_sub(1)?).copied()
-}
+const DIGITS: [u16; 10] = [29, 18, 19, 20, 21, 23, 22, 26, 28, 25];
+
+const FUNCTION_KEYS: [u16; 12] = [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111];
 
 #[cfg(test)]
 mod tests {

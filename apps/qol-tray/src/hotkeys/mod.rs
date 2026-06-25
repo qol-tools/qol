@@ -1,5 +1,6 @@
 mod capture;
 mod catalog;
+mod grammar;
 mod listener;
 mod manager;
 mod parser;

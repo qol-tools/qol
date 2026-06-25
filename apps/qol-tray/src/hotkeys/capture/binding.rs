@@ -1,3 +1,4 @@
+use crate::hotkeys::grammar::{self, Key, Modifier, NamedKey};
 use crate::plugins::PluginUid;
 use std::collections::BTreeSet;
 
@@ -53,109 +54,68 @@ pub(crate) struct Binding {
 /// into a `Combo` of evdev keycodes. Returns `None` for unknown keys or
 /// modifier-only inputs.
 pub(crate) fn parse_combo(input: &str) -> Option<Combo> {
-    let mut mods = BTreeSet::new();
-    let mut key: Option<u16> = None;
-    for raw in input.split('+') {
-        let token = raw.trim().to_ascii_lowercase();
-        if let Some(m) = parse_modifier(&token) {
-            mods.insert(m);
-        } else if let Some(k) = key_name_to_code(&token) {
-            if key.is_some() {
-                return None;
+    let parsed = grammar::parse(input)?;
+    Some(Combo {
+        mods: parsed.mods.iter().map(|m| modifier_to_mod(*m)).collect(),
+        key: key_to_evdev(parsed.key),
+    })
+}
+
+fn modifier_to_mod(modifier: Modifier) -> Mod {
+    match modifier {
+        Modifier::Shift => Mod::Shift,
+        Modifier::Ctrl => Mod::Ctrl,
+        Modifier::Alt => Mod::Alt,
+        Modifier::Super => Mod::Super,
+    }
+}
+
+fn key_to_evdev(key: Key) -> u16 {
+    match key {
+        Key::Letter(index) => LETTERS[index as usize],
+        Key::Digit(index) => {
+            if index == 0 {
+                11
+            } else {
+                1 + index as u16
             }
-            key = Some(k);
-        } else {
-            return None;
         }
-    }
-    Some(Combo { mods, key: key? })
-}
-
-fn parse_modifier(token: &str) -> Option<Mod> {
-    match token {
-        "shift" => Some(Mod::Shift),
-        "ctrl" | "control" => Some(Mod::Ctrl),
-        "alt" => Some(Mod::Alt),
-        "super" | "meta" | "win" | "cmd" => Some(Mod::Super),
-        _ => None,
+        // F1..F10 are contiguous (59..=68); F11 and F12 are 87 and 88.
+        Key::Function(number) => match number {
+            11 => 87,
+            12 => keycodes::KEY_F12,
+            _ => keycodes::KEY_F1 + (number as u16 - 1),
+        },
+        Key::Named(named) => named_to_evdev(named),
     }
 }
 
-/// Map qol-tray's key names to evdev KEY_* codes. Mirrors the entries the
-/// existing `global_hotkey` parser supports.
-fn key_name_to_code(name: &str) -> Option<u16> {
-    if let Some(c) = letter_code(name) {
-        return Some(c);
+fn named_to_evdev(named: NamedKey) -> u16 {
+    match named {
+        NamedKey::Space => keycodes::KEY_SPACE,
+        NamedKey::Enter => keycodes::KEY_ENTER,
+        NamedKey::Escape => keycodes::KEY_ESC,
+        NamedKey::Tab => keycodes::KEY_TAB,
+        NamedKey::Backspace => keycodes::KEY_BACKSPACE,
+        NamedKey::Delete => keycodes::KEY_DELETE,
+        NamedKey::Insert => keycodes::KEY_INSERT,
+        NamedKey::Home => keycodes::KEY_HOME,
+        NamedKey::End => keycodes::KEY_END,
+        NamedKey::PageUp => keycodes::KEY_PAGEUP,
+        NamedKey::PageDown => keycodes::KEY_PAGEDOWN,
+        NamedKey::Up => keycodes::KEY_UP,
+        NamedKey::Down => keycodes::KEY_DOWN,
+        NamedKey::Left => keycodes::KEY_LEFT,
+        NamedKey::Right => keycodes::KEY_RIGHT,
+        NamedKey::PrintScreen => keycodes::KEY_PRINTSCREEN,
+        NamedKey::Pause => keycodes::KEY_PAUSE,
     }
-    if let Some(c) = digit_code(name) {
-        return Some(c);
-    }
-    if let Some(c) = function_key_code(name) {
-        return Some(c);
-    }
-    Some(match name {
-        "space" => keycodes::KEY_SPACE,
-        "enter" | "return" => keycodes::KEY_ENTER,
-        "escape" | "esc" => keycodes::KEY_ESC,
-        "tab" => keycodes::KEY_TAB,
-        "backspace" => keycodes::KEY_BACKSPACE,
-        "delete" | "del" => keycodes::KEY_DELETE,
-        "insert" | "ins" => keycodes::KEY_INSERT,
-        "home" => keycodes::KEY_HOME,
-        "end" => keycodes::KEY_END,
-        "pageup" | "pgup" => keycodes::KEY_PAGEUP,
-        "pagedown" | "pgdn" => keycodes::KEY_PAGEDOWN,
-        "up" => keycodes::KEY_UP,
-        "down" => keycodes::KEY_DOWN,
-        "left" => keycodes::KEY_LEFT,
-        "right" => keycodes::KEY_RIGHT,
-        "printscreen" | "print" | "prtsc" => keycodes::KEY_PRINTSCREEN,
-        "pause" => keycodes::KEY_PAUSE,
-        _ => return None,
-    })
 }
 
-fn letter_code(n: &str) -> Option<u16> {
-    if n.len() != 1 {
-        return None;
-    }
-    let c = n.chars().next()?;
-    if !c.is_ascii_lowercase() {
-        return None;
-    }
-    const LETTERS: &[u16] = &[
-        30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38, 50, 49, 24, 25, 16, 19, 31, 20, 22, 47, 17,
-        45, 21, 44,
-    ];
-    Some(LETTERS[(c as u8 - b'a') as usize])
-}
-
-fn digit_code(n: &str) -> Option<u16> {
-    if n.len() != 1 {
-        return None;
-    }
-    let c = n.chars().next()?;
-    if !c.is_ascii_digit() {
-        return None;
-    }
-    Some(if c == '0' {
-        11
-    } else {
-        2 + (c as u8 - b'1') as u16
-    })
-}
-
-fn function_key_code(n: &str) -> Option<u16> {
-    let rest = n.strip_prefix('f')?;
-    let num: u16 = rest.parse().ok()?;
-    // F1..F10 are contiguous (59..=68); F11 and F12 are 87 and 88.
-    match num {
-        1..=10 => Some(keycodes::KEY_F1 + (num - 1)),
-        11 => Some(87),
-        12 => Some(keycodes::KEY_F12),
-        _ => None,
-    }
-}
+const LETTERS: [u16; 26] = [
+    30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38, 50, 49, 24, 25, 16, 19, 31, 20, 22, 47, 17, 45,
+    21, 44,
+];
 
 #[cfg(test)]
 mod tests {
