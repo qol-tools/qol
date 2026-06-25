@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::mpsc;
 
@@ -17,6 +17,40 @@ const APP_ID: &str = "qol-tray-shot";
 struct State {
     windows: PreviewWindows,
     tracker: MonitorTracker,
+    flow: ShotFlowGate,
+}
+
+#[derive(Clone)]
+struct ShotFlowGate {
+    active: Rc<Cell<bool>>,
+}
+
+struct ShotFlowGuard {
+    active: Rc<Cell<bool>>,
+}
+
+impl ShotFlowGate {
+    fn new() -> Self {
+        Self {
+            active: Rc::new(Cell::new(false)),
+        }
+    }
+
+    fn try_begin(&self) -> Option<ShotFlowGuard> {
+        if self.active.get() {
+            return None;
+        }
+        self.active.set(true);
+        Some(ShotFlowGuard {
+            active: self.active.clone(),
+        })
+    }
+}
+
+impl Drop for ShotFlowGuard {
+    fn drop(&mut self) {
+        self.active.set(false);
+    }
 }
 
 pub fn run() {
@@ -32,6 +66,7 @@ pub fn run() {
         let state = State {
             windows: Rc::new(RefCell::new(ActiveWindows::default())),
             tracker: MonitorTracker::start(cx),
+            flow: ShotFlowGate::new(),
         };
         crate::preview::pre_create(&state.windows, &state.tracker, cx);
         spawn_screenshot_loop(rx, state, cx);
@@ -57,19 +92,27 @@ fn spawn_screenshot_loop(rx: mpsc::Receiver<daemon::Command>, state: State, cx: 
 
 async fn capture_and_preview(cx: &AsyncApp, state: &State) {
     qol_runtime::probe!("SHOT_RECV", "action=screenshot");
+    let Some(_flow) = begin_shot_flow(cx, state, "screenshot") else {
+        return;
+    };
     let windows = state.windows.clone();
     let _ = cx.update(|cx| crate::preview::park_idle(&windows, cx));
+    let Some(selected) = select_region(cx, state).await else {
+        return;
+    };
     let captured = cx
-        .background_spawn(async { crate::screenshot::capture_for_preview() })
+        .background_spawn(async move { crate::screenshot::capture_selected_for_preview(selected) })
         .await;
     match captured {
-        Ok(Some(capture)) => present(cx, state, capture),
-        Ok(None) => {}
+        Ok(capture) => present(cx, state, capture),
         Err(error) => eprintln!("[qol-shot] capture failed: {error:#}"),
     }
 }
 
 async fn preview_latest(cx: &AsyncApp, state: &State) {
+    let Some(_flow) = begin_shot_flow(cx, state, "preview") else {
+        return;
+    };
     match cx
         .background_spawn(async { crate::output::latest_screenshot() })
         .await
@@ -77,6 +120,22 @@ async fn preview_latest(cx: &AsyncApp, state: &State) {
         Ok(path) => present(cx, state, PreviewCapture { path, rgba: None }),
         Err(error) => eprintln!("[qol-shot] no screenshot to preview: {error:#}"),
     }
+}
+
+fn begin_shot_flow(cx: &AsyncApp, state: &State, action: &str) -> Option<ShotFlowGuard> {
+    let Some(flow) = state.flow.try_begin() else {
+        qol_runtime::probe!("SHOT_SKIP", "action={action} reason=busy");
+        return None;
+    };
+    let windows = state.windows.clone();
+    let showing = cx
+        .update(|cx| crate::preview::any_showing(&windows, cx))
+        .unwrap_or(false);
+    if showing {
+        qol_runtime::probe!("SHOT_SKIP", "action={action} reason=preview-showing");
+        return None;
+    }
+    Some(flow)
 }
 
 fn present(cx: &AsyncApp, state: &State, capture: PreviewCapture) {
@@ -87,6 +146,21 @@ fn present(cx: &AsyncApp, state: &State, capture: PreviewCapture) {
             eprintln!("[qol-shot] preview failed: {error:#}");
         }
     });
+}
+
+async fn select_region(cx: &AsyncApp, state: &State) -> Option<crate::Rect> {
+    let tracker = state.tracker.clone();
+    if let Some(rx) = cx
+        .update(move |cx| crate::platform::select_region_in_app(cx, tracker.snapshot_monitor()))
+        .ok()?
+    {
+        return cx
+            .background_spawn(async move { rx.recv().ok().flatten() })
+            .await;
+    }
+
+    cx.background_spawn(async { crate::platform::select_region().ok().flatten() })
+        .await
 }
 
 async fn run_cli(cx: &AsyncApp, action: String) {

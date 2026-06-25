@@ -97,6 +97,37 @@ pub fn park_idle(windows: &PreviewWindows, cx: &mut App) {
     }
 }
 
+pub fn any_showing(windows: &PreviewWindows, cx: &mut App) -> bool {
+    let keys: Vec<MonitorKey> = windows
+        .borrow()
+        .iter()
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect();
+    let mut stale = Vec::new();
+    let mut showing = false;
+
+    for key in keys {
+        let Some(handle) = windows.borrow().existing(key) else {
+            continue;
+        };
+        match handle.update(cx, |view, _window, _cx| view.is_showing) {
+            Ok(true) => showing = true,
+            Ok(false) => {}
+            Err(_) => stale.push(key),
+        }
+    }
+
+    if !stale.is_empty() {
+        let mut windows = windows.borrow_mut();
+        for key in stale {
+            windows.remove(key);
+        }
+    }
+
+    showing
+}
+
 fn park_ghost(title: &str, window: &mut Window, origin: Point<Pixels>) {
     sync_window_layout(title, window, origin, size(px(1.0), px(1.0)));
     hide_invisible(title);

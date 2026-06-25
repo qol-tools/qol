@@ -86,6 +86,13 @@ pub fn select_region() -> Result<Option<Rect>> {
     select_region_with_overlay()
 }
 
+pub fn select_region_in_app(
+    _cx: &mut gpui::App,
+    _monitor: Option<qol_gpui::monitor::ActiveMonitor>,
+) -> Option<std::sync::mpsc::Receiver<Option<Rect>>> {
+    None
+}
+
 pub fn get_monitors() -> Result<Vec<Monitor>> {
     active_display_bounds()
 }

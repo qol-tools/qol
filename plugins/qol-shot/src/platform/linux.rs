@@ -10,28 +10,14 @@ use crate::platform::CaptureSession;
 use crate::{Config, Monitor, Rect};
 
 pub fn select_region() -> Result<Option<Rect>> {
-    let output = Command::new("slop")
-        .args([
-            "--highlight",
-            "--color=1,0,0,0.65",
-            "-b",
-            "0",
-            "-f",
-            "%x,%y,%w,%h",
-        ])
-        .output()
-        .context("failed to run slop")?;
+    crate::linux_selector::select_region_blocking()
+}
 
-    if !output.status.success() {
-        return Ok(None);
-    }
-
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if raw.is_empty() {
-        return Ok(None);
-    }
-
-    parse_selection_geometry(&raw).map(Some)
+pub fn select_region_in_app(
+    cx: &mut gpui::App,
+    monitor: Option<qol_gpui::monitor::ActiveMonitor>,
+) -> Option<std::sync::mpsc::Receiver<Option<Rect>>> {
+    Some(crate::linux_selector::open_region_selector(cx, monitor))
 }
 
 pub fn get_monitors() -> Result<Vec<Monitor>> {
@@ -428,7 +414,7 @@ pub fn platform_supported_check() -> DoctorCheckResult {
 }
 
 pub fn required_binaries_check() -> DoctorCheckResult {
-    let required = ["ffmpeg", "slop", "xrandr", "xdpyinfo"];
+    let required = ["ffmpeg", "xrandr", "xdpyinfo"];
     let missing = required
         .iter()
         .copied()
@@ -446,28 +432,7 @@ pub fn required_binaries_check() -> DoctorCheckResult {
         "required_binaries",
         format!("Missing required binaries: {}.", missing.join(", ")),
     )
-    .with_fix("Install ffmpeg, slop, xrandr, and xdpyinfo.")
-}
-
-fn parse_selection_geometry(raw: &str) -> Result<Rect> {
-    let values: Vec<i32> = raw
-        .split(',')
-        .map(str::trim)
-        .map(str::parse::<i32>)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .context("invalid selection geometry")?;
-    if values.len() != 4 {
-        return Err(anyhow!(
-            "expected 4 values in geometry, got {}",
-            values.len()
-        ));
-    }
-    Ok(Rect {
-        x: values[0],
-        y: values[1],
-        w: values[2],
-        h: values[3],
-    })
+    .with_fix("Install ffmpeg, xrandr, and xdpyinfo.")
 }
 
 fn monitor_from_xrandr(monitor: qol_runtime::xrandr::XrandrMonitor) -> Monitor {
