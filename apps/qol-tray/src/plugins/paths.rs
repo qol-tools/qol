@@ -39,6 +39,18 @@ fn worktree_override_root(_dev_link: &Path) -> Option<PathBuf> {
     None
 }
 
+pub(crate) fn canonical_plugin_root(plugins_dir: &Path, plugin_id: &str) -> Option<PathBuf> {
+    let plugin_root = resolve_plugin_root_from_plugins_dir(plugins_dir, plugin_id);
+    let canonical = std::fs::canonicalize(&plugin_root).ok()?;
+    if crate::plugins::registry::current_active_path(plugin_id).is_some() {
+        return Some(canonical);
+    }
+    let canonical_plugins_dir = std::fs::canonicalize(plugins_dir).ok()?;
+    canonical
+        .starts_with(&canonical_plugins_dir)
+        .then_some(canonical)
+}
+
 pub(crate) fn config_path(plugin_root: &Path) -> PathBuf {
     plugin_root.join(CONFIG_FILE_NAME)
 }
@@ -116,5 +128,22 @@ initAutoConfigPage();
             runable_contract_path(root),
             Path::new("/tmp/plugin-foo/qol-runtime.toml")
         );
+    }
+
+    #[test]
+    fn canonical_plugin_root_rejects_ids_escaping_plugins_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugins_dir = dir.path().join("plugins");
+        std::fs::create_dir_all(plugins_dir.join("plugin-x")).unwrap();
+        std::fs::create_dir_all(dir.path().join("secret")).unwrap();
+
+        let cases = [("plugin-x", true), ("../secret", false)];
+        for (id, allowed) in cases {
+            assert_eq!(
+                canonical_plugin_root(&plugins_dir, id).is_some(),
+                allowed,
+                "id: {id}"
+            );
+        }
     }
 }

@@ -21,7 +21,7 @@ async fn serve_plugin_index(
     AxumPath(plugin_id): AxumPath<String>,
     axum::extract::State(plugins_dir): axum::extract::State<PathBuf>,
 ) -> Response {
-    let plugin_root = super::plugin_paths::resolve_plugin_root(&plugins_dir, &plugin_id);
+    let plugin_root = plugin_paths::resolve_plugin_root_from_plugins_dir(&plugins_dir, &plugin_id);
     if plugin_paths::has_custom_ui(&plugin_root) {
         return serve_file(&plugins_dir, &plugin_id, "index.html").await;
     }
@@ -124,20 +124,17 @@ async fn resolve_safe_ui_file(
         );
         return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
     }
-    let plugin_root = super::plugin_paths::resolve_plugin_root(plugins_dir, plugin_id);
+    let plugin_root = plugin_paths::resolve_plugin_root_from_plugins_dir(plugins_dir, plugin_id);
     let ui_root = plugin_root.join("ui");
     let ui_path = ui_root.join(file_path);
     validate_dir_entry(&plugin_root).await?;
     validate_dir_entry(&ui_root).await?;
     validate_file_entry(&ui_path).await?;
-    let Some(canonical_plugin_root) = verify_plugin_root_allowed(plugins_dir, plugin_id) else {
+    let Some(canonical_plugin_root) = plugin_paths::canonical_plugin_root(plugins_dir, plugin_id)
+    else {
         return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
     };
     verify_path_chain(&canonical_plugin_root, &ui_root, &ui_path).await
-}
-
-fn verify_plugin_root_allowed(plugins_dir: &Path, plugin_id: &str) -> Option<PathBuf> {
-    super::plugin_paths::canonical_plugin_root(plugins_dir, plugin_id)
 }
 
 fn is_safe_subpath(path: &str) -> bool {
