@@ -131,6 +131,7 @@ mod tests {
             enabled: true,
             command: "any".to_string(),
             socket: None,
+            port: None,
         }
     }
 

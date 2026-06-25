@@ -142,6 +142,7 @@ mod tests {
                 enabled: true,
                 command: "plugin-foo".to_string(),
                 socket: Some("qol-this-socket-does-not-exist.sock".to_string()),
+                port: None,
             }),
             vec![run_action("toggle")],
         );
@@ -172,6 +173,7 @@ mod tests {
                     enabled: false,
                     command: "plugin-disabled-daemon".to_string(),
                     socket: None,
+                    port: None,
                 }),
                 vec![run_action("gamma")],
             ),

@@ -137,6 +137,7 @@ mod command_rules {
                 enabled: true,
                 command: "pointzerver".to_string(),
                 socket: None,
+                port: None,
             }),
             runtime: Some(RuntimeConfig {
                 command: "window_actions_2".to_string(),

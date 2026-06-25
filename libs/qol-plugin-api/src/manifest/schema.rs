@@ -403,6 +403,8 @@ pub struct DaemonConfig {
     pub command: String,
     #[serde(default)]
     pub socket: Option<String>,
+    #[serde(default)]
+    pub port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

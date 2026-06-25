@@ -242,6 +242,7 @@ fn resolve_action_accepts_daemon_only_target() {
             enabled: true,
             command: "daemon".to_string(),
             socket: Some("/tmp/qol-test.sock".to_string()),
+            port: None,
         }),
     );
 
@@ -271,6 +272,7 @@ fn resolve_action_allows_runtime_fallback_when_daemon_and_runtime_share_binary_b
             enabled: true,
             command: "launcher".to_string(),
             socket: Some("/tmp/qol-test.sock".to_string()),
+            port: None,
         }),
     );
 
@@ -300,6 +302,7 @@ fn resolve_action_disables_runtime_fallback_when_daemon_and_runtime_share_binary
             enabled: true,
             command: "launcher".to_string(),
             socket: Some(socket_path.to_string_lossy().to_string()),
+            port: None,
         }),
     );
 
@@ -324,6 +327,7 @@ fn resolve_action_keeps_runtime_fallback_when_daemon_and_runtime_differ() {
             enabled: true,
             command: "launcher".to_string(),
             socket: Some("/tmp/qol-test.sock".to_string()),
+            port: None,
         }),
     );
 
