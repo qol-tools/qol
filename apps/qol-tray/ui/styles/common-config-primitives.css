@@ -37,7 +37,7 @@
 .meta-chip-label {
     color: var(--text-secondary);
     font-size: 0.7rem;
-    font-weight: 600;
+    font-weight: var(--fw-semibold);
     letter-spacing: 0.01em;
     text-transform: none;
 }
@@ -68,7 +68,7 @@
     padding: 0.64rem 0.92rem;
     font-size: 0.8rem;
     font-family: inherit;
-    font-weight: 600;
+    font-weight: var(--fw-semibold);
     line-height: 1.2;
     white-space: nowrap;
     cursor: pointer;
@@ -120,7 +120,7 @@
     border-radius: 0;
     color: var(--text-default);
     font-size: 0.68rem;
-    font-weight: 700;
+    font-weight: var(--fw-bold);
     letter-spacing: 0.04em;
 }
 

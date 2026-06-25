@@ -34,7 +34,7 @@
     font-family: var(--font-mono);
     font-size: 0.95rem;
     color: var(--accent);
-    font-weight: 500;
+    font-weight: var(--fw-medium);
 }
 
 .action-hints {
@@ -100,7 +100,7 @@
     align-items: center;
     font-size: 0.9rem;
     color: var(--text-primary);
-    font-weight: 500;
+    font-weight: var(--fw-medium);
     margin-bottom: 0.75rem;
 }
 
@@ -182,7 +182,7 @@
 }
 
 .test-result-status {
-    font-weight: 500;
+    font-weight: var(--fw-medium);
     margin-bottom: 0.5rem;
 }
 
@@ -235,7 +235,7 @@
     margin-bottom: 0.75rem;
     font-size: 0.95rem;
     color: var(--text-primary);
-    font-weight: 500;
+    font-weight: var(--fw-medium);
 }
 
 .api-usage-content code {

@@ -190,7 +190,7 @@
 .field-label {
     color: var(--plugin-config-label-color);
     font-size: 0.88rem;
-    font-weight: 500;
+    font-weight: var(--fw-medium);
     margin-bottom: 0.5rem;
     line-height: 1.25;
     display: block;
@@ -304,14 +304,14 @@
 
 .number-value {
     font-size: 1.05rem;
-    font-weight: 650;
+    font-weight: var(--fw-heavy);
     color: var(--accent);
     letter-spacing: -0.02em;
 }
 
 .number-unit {
     font-size: 0.72rem;
-    font-weight: 500;
+    font-weight: var(--fw-medium);
     color: var(--plugin-config-muted-color);
     margin-left: 0.1rem;
 }
@@ -324,7 +324,7 @@
     border-bottom: 2px solid var(--accent);
     color: var(--accent);
     font-size: 1.05rem;
-    font-weight: 650;
+    font-weight: var(--fw-heavy);
     font-family: inherit;
     text-align: center;
     outline: none;
@@ -465,7 +465,7 @@
 
 .custom-select-option.selected {
     color: var(--text-primary);
-    font-weight: 600;
+    font-weight: var(--fw-semibold);
 }
 
 .custom-select-option.selected.highlighted {
@@ -654,7 +654,7 @@
 .variant-selector-label {
     color: var(--plugin-config-label-color);
     font-size: 0.88rem;
-    font-weight: 500;
+    font-weight: var(--fw-medium);
 }
 
 .variant-option {
@@ -711,7 +711,7 @@
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    font-weight: 500;
+    font-weight: var(--fw-medium);
 }
 
 .hue-slider-value {
@@ -743,7 +743,7 @@
 
 .field-color-label {
     font-size: 0.85rem;
-    font-weight: 500;
+    font-weight: var(--fw-medium);
     color: var(--text-primary);
     margin-bottom: 4px;
 }

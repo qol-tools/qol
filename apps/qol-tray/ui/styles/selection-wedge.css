@@ -92,7 +92,7 @@
     align-items: center;
     justify-content: center;
     font-size: 8px;
-    font-weight: 700;
+    font-weight: var(--fw-bold);
     font-family: var(--font-mono, monospace);
     line-height: 1;
     color: var(--wedge-badge-color, rgb(var(--ink-rgb)));

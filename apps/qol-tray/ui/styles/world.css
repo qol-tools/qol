@@ -112,7 +112,7 @@ html.qol-bootstrapping-dive #app {
     align-items: center;
     justify-content: center;
     font-size: 9px;
-    font-weight: 700;
+    font-weight: var(--fw-bold);
     font-family: var(--font-mono, monospace);
     line-height: 1;
     color: rgb(var(--ink-rgb));
@@ -235,7 +235,7 @@ html.qol-bootstrapping-dive #app {
 
 .wsp-heading {
     font-size: var(--fs-caption-1);
-    font-weight: 600;
+    font-weight: var(--fw-semibold);
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--text-faint);
@@ -253,7 +253,7 @@ html.qol-bootstrapping-dive #app {
     color: var(--text-secondary);
     font-family: var(--font-mono);
     font-size: calc(var(--fs-caption-1) * 0.92);
-    font-weight: 500;
+    font-weight: var(--fw-medium);
     text-transform: none;
     letter-spacing: 0;
     max-width: 180px;
@@ -353,7 +353,7 @@ html.qol-bootstrapping-dive #app {
     background: var(--sw, var(--layer-paper-08));
     color: var(--text-faint);
     font-size: var(--fs-caption-1);
-    font-weight: 700;
+    font-weight: var(--fw-bold);
     line-height: 1;
     cursor: pointer;
     transition: transform var(--dur-fast), border-color var(--dur-fast), box-shadow var(--dur-fast);
