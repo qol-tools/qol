@@ -19,6 +19,6 @@ pub mod screenshot;
 mod settings;
 
 pub use config::{AudioConfig, Config, VideoConfig};
-pub use geometry::{Monitor, Rect};
+pub use geometry::{backdrop_regions, BackdropCorners, BackdropRegions, Monitor, Rect};
 
 pub const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");

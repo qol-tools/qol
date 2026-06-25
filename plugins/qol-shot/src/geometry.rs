@@ -73,13 +73,18 @@ fn bounds_for_selection(rect: Rect, monitors: &[Monitor]) -> Option<Monitor> {
     }
 }
 
-fn rects_intersect(left: Rect, right: Monitor) -> bool {
-    let left_right = left.x + left.w;
-    let left_bottom = left.y + left.h;
-    let right_right = right.x + right.w;
-    let right_bottom = right.y + right.h;
+pub(crate) fn rect_intersection(rect: Rect, bounds: Monitor) -> Option<Rect> {
+    let x = rect.x.max(bounds.x);
+    let y = rect.y.max(bounds.y);
+    let right = (rect.x + rect.w).min(bounds.x + bounds.w);
+    let bottom = (rect.y + rect.h).min(bounds.y + bounds.h);
+    let w = right - x;
+    let h = bottom - y;
+    (w > 0 && h > 0).then_some(Rect { x, y, w, h })
+}
 
-    left.x < right_right && left_right > right.x && left.y < right_bottom && left_bottom > right.y
+fn rects_intersect(left: Rect, right: Monitor) -> bool {
+    rect_intersection(left, right).is_some()
 }
 
 fn union_bounds(monitors: &[Monitor]) -> Option<Monitor> {
@@ -128,6 +133,69 @@ fn snap_to_bottom(mut rect: Rect, bottom: i32) -> Rect {
         rect.h = bottom - rect.y;
     }
     rect
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub struct BackdropCorners {
+    pub top_left: bool,
+    pub top_right: bool,
+    pub bottom_left: bool,
+    pub bottom_right: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct BackdropRegions {
+    pub hole: Rect,
+    pub top: Rect,
+    pub bottom: Rect,
+    pub left: Rect,
+    pub right: Rect,
+    pub corners: BackdropCorners,
+}
+
+pub fn backdrop_regions(capture: Rect, display: Monitor) -> Option<BackdropRegions> {
+    let hole = rect_intersection(capture, display)?;
+    let local_x = hole.x - display.x;
+    let local_y = hole.y - display.y;
+    Some(BackdropRegions {
+        hole: Rect {
+            x: local_x,
+            y: local_y,
+            w: hole.w,
+            h: hole.h,
+        },
+        top: Rect {
+            x: 0,
+            y: 0,
+            w: display.w,
+            h: local_y,
+        },
+        bottom: Rect {
+            x: 0,
+            y: local_y + hole.h,
+            w: display.w,
+            h: display.h - (local_y + hole.h),
+        },
+        left: Rect {
+            x: 0,
+            y: local_y,
+            w: local_x,
+            h: hole.h,
+        },
+        right: Rect {
+            x: local_x + hole.w,
+            y: local_y,
+            w: display.w - (local_x + hole.w),
+            h: hole.h,
+        },
+        corners: BackdropCorners {
+            top_left: hole.x == capture.x && hole.y == capture.y,
+            top_right: hole.x + hole.w == capture.x + capture.w && hole.y == capture.y,
+            bottom_left: hole.x == capture.x && hole.y + hole.h == capture.y + capture.h,
+            bottom_right: hole.x + hole.w == capture.x + capture.w
+                && hole.y + hole.h == capture.y + capture.h,
+        },
+    })
 }
 
 #[cfg(test)]
@@ -246,5 +314,244 @@ mod tests {
             bounds,
         );
         assert_eq!(rect.h, 200);
+    }
+
+    #[test]
+    fn rect_intersection_cases() {
+        let display = Monitor {
+            x: 0,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        };
+        let cases = [
+            (
+                "inside",
+                Rect {
+                    x: 100,
+                    y: 100,
+                    w: 200,
+                    h: 200,
+                },
+                Some(Rect {
+                    x: 100,
+                    y: 100,
+                    w: 200,
+                    h: 200,
+                }),
+            ),
+            (
+                "clipped-right",
+                Rect {
+                    x: 1800,
+                    y: 0,
+                    w: 400,
+                    h: 100,
+                },
+                Some(Rect {
+                    x: 1800,
+                    y: 0,
+                    w: 120,
+                    h: 100,
+                }),
+            ),
+            (
+                "disjoint",
+                Rect {
+                    x: 3000,
+                    y: 0,
+                    w: 100,
+                    h: 100,
+                },
+                None,
+            ),
+            (
+                "edge-touch",
+                Rect {
+                    x: 1920,
+                    y: 0,
+                    w: 100,
+                    h: 100,
+                },
+                None,
+            ),
+        ];
+        for (name, rect, expected) in cases {
+            assert_eq!(rect_intersection(rect, display), expected, "case: {name}");
+        }
+    }
+
+    #[test]
+    fn backdrop_none_when_capture_outside_display() {
+        let display = Monitor {
+            x: 0,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        };
+        let capture = Rect {
+            x: 2000,
+            y: 0,
+            w: 100,
+            h: 100,
+        };
+        assert_eq!(backdrop_regions(capture, display), None);
+    }
+
+    #[test]
+    fn backdrop_centered_capture_dims_all_sides_and_marks_all_corners() {
+        let display = Monitor {
+            x: 0,
+            y: 0,
+            w: 1000,
+            h: 800,
+        };
+        let capture = Rect {
+            x: 200,
+            y: 100,
+            w: 600,
+            h: 500,
+        };
+        let regions = backdrop_regions(capture, display).expect("intersects");
+        assert_eq!(
+            regions.hole,
+            Rect {
+                x: 200,
+                y: 100,
+                w: 600,
+                h: 500
+            }
+        );
+        assert_eq!(
+            regions.top,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 1000,
+                h: 100
+            }
+        );
+        assert_eq!(
+            regions.bottom,
+            Rect {
+                x: 0,
+                y: 600,
+                w: 1000,
+                h: 200
+            }
+        );
+        assert_eq!(
+            regions.left,
+            Rect {
+                x: 0,
+                y: 100,
+                w: 200,
+                h: 500
+            }
+        );
+        assert_eq!(
+            regions.right,
+            Rect {
+                x: 800,
+                y: 100,
+                w: 200,
+                h: 500
+            }
+        );
+        assert_eq!(
+            regions.corners,
+            BackdropCorners {
+                top_left: true,
+                top_right: true,
+                bottom_left: true,
+                bottom_right: true,
+            }
+        );
+    }
+
+    #[test]
+    fn backdrop_uses_display_local_coordinates_on_secondary_monitor() {
+        let display = Monitor {
+            x: 1920,
+            y: 0,
+            w: 1000,
+            h: 800,
+        };
+        let capture = Rect {
+            x: 2120,
+            y: 100,
+            w: 600,
+            h: 500,
+        };
+        let regions = backdrop_regions(capture, display).expect("intersects");
+        assert_eq!(
+            regions.hole,
+            Rect {
+                x: 200,
+                y: 100,
+                w: 600,
+                h: 500
+            },
+            "hole must be display-local"
+        );
+        assert_eq!(
+            regions.left,
+            Rect {
+                x: 0,
+                y: 100,
+                w: 200,
+                h: 500
+            }
+        );
+    }
+
+    #[test]
+    fn backdrop_across_two_displays_leaves_seam_undimmed() {
+        let left_display = Monitor {
+            x: 0,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        };
+        let right_display = Monitor {
+            x: 1920,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        };
+        let capture = Rect {
+            x: 1800,
+            y: 100,
+            w: 300,
+            h: 400,
+        };
+
+        let left = backdrop_regions(capture, left_display).expect("touches left display");
+        assert_eq!(
+            left.right.w, 0,
+            "seam side of the left display is not dimmed"
+        );
+        assert!(
+            left.corners.top_left && left.corners.bottom_left,
+            "outer corners on the left display are real capture corners"
+        );
+        assert!(
+            !left.corners.top_right && !left.corners.bottom_right,
+            "seam edge is not a capture corner"
+        );
+
+        let right = backdrop_regions(capture, right_display).expect("touches right display");
+        assert_eq!(
+            right.left.w, 0,
+            "seam side of the right display is not dimmed"
+        );
+        assert!(
+            right.corners.top_right && right.corners.bottom_right,
+            "outer corners on the right display are real capture corners"
+        );
+        assert!(
+            !right.corners.top_left && !right.corners.bottom_left,
+            "seam edge is not a capture corner"
+        );
     }
 }
