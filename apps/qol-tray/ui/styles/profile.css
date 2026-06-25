@@ -388,7 +388,7 @@
     cursor: pointer;
     padding: var(--space-2) var(--space-4);
     border-radius: var(--radius-md);
-    border: 1px dashed var(--border-default);
+    border: var(--border-w-1) dashed var(--border-default);
     user-select: all;
 }
 
@@ -411,7 +411,7 @@
     font-size: 0.9rem;
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-md, 6px);
-    border: 1px dashed var(--tui-line-soft);
+    border: var(--border-w-1) dashed var(--tui-line-soft);
     background: var(--tui-bg-screen);
     color: var(--text-secondary);
     user-select: all;
@@ -456,7 +456,7 @@
     width: 0.85em;
     height: 0.85em;
     margin-right: var(--space-2);
-    border: 2px solid rgba(var(--accent-rgb), 0.25);
+    border: var(--border-w-2) solid rgba(var(--accent-rgb), 0.25);
     border-top-color: var(--accent);
     border-radius: 50%;
     vertical-align: -2px;

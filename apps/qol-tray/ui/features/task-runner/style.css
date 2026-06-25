@@ -8,7 +8,7 @@
 
 .action-card {
     background: var(--tui-bg-card);
-    border: 1px solid var(--tui-line-soft);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
     padding: 1rem 1.25rem;
     transition: border-color var(--transition), background var(--transition);
@@ -86,7 +86,7 @@
 .test-panel {
     margin-top: 1rem;
     padding-top: 1rem;
-    border-top: 1px solid var(--tui-line-soft);
+    border-top: var(--border-w-1) solid var(--tui-line-soft);
     outline: none;
 }
 
@@ -143,7 +143,7 @@
 .test-param-input {
     flex: 1;
     padding: 0.4rem 0.6rem;
-    border: 1px solid var(--tui-line);
+    border: var(--border-w-1) solid var(--tui-line);
     border-radius: var(--radius-sm);
     background: var(--tui-bg-screen);
     color: var(--text-primary);
@@ -173,12 +173,12 @@
 
 .test-result.success {
     background: rgba(var(--success-rgb), 0.1);
-    border: 1px solid rgba(var(--success-rgb), 0.3);
+    border: var(--border-w-1) solid rgba(var(--success-rgb), 0.3);
 }
 
 .test-result.error {
     background: rgba(var(--danger-rgb), 0.1);
-    border: 1px solid rgba(var(--danger-rgb), 0.3);
+    border: var(--border-w-1) solid rgba(var(--danger-rgb), 0.3);
 }
 
 .test-result-status {
@@ -223,7 +223,7 @@
 
 .api-usage {
     background: var(--tui-bg-card);
-    border: 1px solid var(--tui-line-soft);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
     padding: 1rem 1.25rem;
 }

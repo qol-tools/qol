@@ -125,7 +125,7 @@ html.qol-bootstrapping-dive #app {
 .world-minimap {
     position: relative;
     background: rgba(var(--ink-rgb), 0.75);
-    border: 1px solid var(--border-default);
+    border: var(--border-w-1) solid var(--border-default);
     border-radius: var(--radius-lg);
     cursor: pointer;
     overflow: visible;
@@ -212,7 +212,7 @@ html.qol-bootstrapping-dive #app {
 
 .world-settings-panel {
     background: var(--tui-bg-panel);
-    border: 1px solid var(--tui-line);
+    border: var(--border-w-1) solid var(--tui-line);
     border-radius: var(--radius-md);
     padding: 0;
     width: 400px;
@@ -230,7 +230,7 @@ html.qol-bootstrapping-dive #app {
 }
 
 .wsp-section + .wsp-section {
-    border-top: 1px solid var(--tui-line-soft);
+    border-top: var(--border-w-1) solid var(--tui-line-soft);
 }
 
 .wsp-heading {
@@ -278,7 +278,7 @@ html.qol-bootstrapping-dive #app {
 }
 
 .wsp-range-row {
-    border: 1px solid transparent;
+    border: var(--border-w-1) solid transparent;
     border-radius: var(--radius-md);
     box-sizing: border-box;
     padding: 2px var(--space-1);
@@ -349,7 +349,7 @@ html.qol-bootstrapping-dive #app {
     height: 22px;
     padding: 0;
     border-radius: var(--radius-pill);
-    border: 1px solid var(--layer-paper-15);
+    border: var(--border-w-1) solid var(--layer-paper-15);
     background: var(--sw, var(--layer-paper-08));
     color: var(--text-faint);
     font-size: var(--fs-caption-1);
@@ -371,7 +371,7 @@ html.qol-bootstrapping-dive #app {
 
 .world-settings-panel select {
     background: var(--tui-bg-screen);
-    border: 1px solid var(--tui-line);
+    border: var(--border-w-1) solid var(--tui-line);
     border-radius: var(--radius-sm);
     color: var(--text-secondary);
     font-size: var(--fs-md);
@@ -403,7 +403,7 @@ html.qol-bootstrapping-dive #app {
     font-family: inherit;
     padding: var(--space-1-5) var(--space-4);
     border-radius: var(--radius-sm);
-    border: 1px solid var(--tui-line-soft);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     background: var(--tui-bg-card);
     color: var(--text-muted);
     cursor: pointer;
@@ -515,7 +515,7 @@ html.qol-bootstrapping-dive #app {
     padding: var(--space-2) var(--space-4);
     margin: 0;
     font-size: var(--fs-sm);
-    border-left: 2px solid transparent;
+    border-left: var(--border-w-2) solid transparent;
 }
 
 .palette-layer .command-palette .palette-item:hover,
@@ -526,7 +526,7 @@ html.qol-bootstrapping-dive #app {
 
 .app-container > .palette-hint {
     background: var(--tui-bg-panel);
-    border: 1px solid var(--tui-line-soft);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
     padding: var(--space-1-5) var(--space-3-5);
     width: auto;

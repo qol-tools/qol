@@ -94,7 +94,7 @@
     position: relative;
     overflow: hidden;
     background: var(--tui-bg-card);
-    border: 1px solid var(--tui-line-soft);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
     box-shadow: var(--elevation-crisp-1);
 }
@@ -115,7 +115,7 @@
 .peripheral-edge {
     width: 100%;
     height: 100%;
-    border: 1px dashed var(--border-subtle);
+    border: var(--border-w-1) dashed var(--border-subtle);
     border-radius: var(--radius-lg);
     background: transparent;
 }

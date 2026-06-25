@@ -82,7 +82,7 @@
     isolation: isolate;
     outline: 1px solid transparent;
     outline-offset: 0;
-    border: 1px solid rgba(var(--accent-rgb), 0.06);
+    border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.06);
     border-radius: var(--radius-md);
     transition:
         border-color var(--dur-sm) ease,
@@ -115,7 +115,7 @@
     gap: 0.85rem;
     padding: 0.65rem 0.85rem;
     background: rgba(var(--accent-rgb), 0.04);
-    border: 1px solid rgba(var(--accent-rgb), 0.08);
+    border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.08);
     border-radius: var(--radius-md);
     cursor: pointer;
     user-select: none;
@@ -222,7 +222,7 @@
     width: 100%;
     max-width: 100%;
     padding: 0.55rem 0.7rem;
-    border: 1px solid rgba(var(--accent-rgb), 0.06);
+    border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.06);
     border-radius: var(--radius-md);
     transition: border-color var(--dur-sm);
 }
@@ -281,7 +281,7 @@
     justify-content: center;
     gap: 0.15rem;
     padding: 0.35rem 0;
-    border-bottom: 1px solid rgba(var(--accent-rgb), 0.15);
+    border-bottom: var(--border-w-1) solid rgba(var(--accent-rgb), 0.15);
     cursor: text;
     user-select: none;
     width: 100%;
@@ -321,7 +321,7 @@
     padding: 0.3rem 0;
     background: none;
     border: none;
-    border-bottom: 2px solid var(--accent);
+    border-bottom: var(--border-w-2) solid var(--accent);
     color: var(--accent);
     font-size: 1.05rem;
     font-weight: var(--fw-heavy);
@@ -344,7 +344,7 @@
     width: 100%;
     padding: 0.5rem 0.7rem;
     background: rgba(var(--accent-rgb), 0.04);
-    border: 1px solid rgba(var(--accent-rgb), 0.12);
+    border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.12);
     border-radius: var(--radius-md);
     color: var(--plugin-config-value-color);
     font-family: inherit;
@@ -502,7 +502,7 @@
     gap: 0.6rem;
     padding: 0.55rem 0.75rem;
     background: rgba(var(--accent-rgb), 0.07);
-    border: 1px solid rgba(var(--accent-rgb), 0.18);
+    border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.18);
     border-radius: var(--radius-md);
     font-size: 0.86rem;
     color: var(--plugin-config-value-color);
@@ -593,7 +593,7 @@
     gap: 1rem;
     padding: 1.1rem 1.2rem;
     background: rgba(var(--accent-rgb), 0.05);
-    border: 1px solid rgba(var(--accent-rgb), 0.12);
+    border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.12);
     border-radius: var(--radius-md);
 }
 
@@ -644,7 +644,7 @@
 .variant-selector-card {
     padding: 0;
     background: var(--tui-bg-card);
-    border: 1px solid var(--tui-line-soft);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-md);
     width: fit-content;
     max-width: 100%;
@@ -757,7 +757,7 @@
 .field-action-row .refresh-btn {
     width: 1.2rem;
     height: 1.2rem;
-    border-width: 2px;
+    border-width: var(--border-w-2);
     min-width: 1.2rem;
     min-height: 1.2rem;
 }

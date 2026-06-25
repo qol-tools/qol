@@ -45,7 +45,7 @@
     margin: 0 var(--space-7) var(--space-3);
     padding: var(--space-3);
     background: rgba(var(--danger-rgb), 0.06);
-    border: 1px solid rgba(var(--danger-rgb), 0.2);
+    border: var(--border-w-1) solid rgba(var(--danger-rgb), 0.2);
     border-left: 3px solid rgba(var(--danger-rgb), 0.5);
     border-radius: var(--radius-md);
     font-size: var(--fs-xs);
@@ -117,7 +117,7 @@
 .form-group-children {
     margin-left: var(--space-5);
     padding-left: var(--space-5);
-    border-left: 2px solid var(--border-subtle);
+    border-left: var(--border-w-2) solid var(--border-subtle);
 }
 
 .form-group-children > .form-group:last-child {
@@ -126,7 +126,7 @@
 
 .form-group[data-selected-surface] {
     padding: var(--space-3) var(--space-4);
-    border: 1px solid transparent;
+    border: var(--border-w-1) solid transparent;
     border-radius: var(--radius-md);
     transition: border-color var(--dur-fast);
 }

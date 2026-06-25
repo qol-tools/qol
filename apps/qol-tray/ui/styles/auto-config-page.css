@@ -36,7 +36,7 @@ body {
     min-width: 210px;
     display: flex;
     flex-direction: column;
-    border-right: 1px solid var(--tui-line-soft);
+    border-right: var(--border-w-1) solid var(--tui-line-soft);
     overflow-y: auto;
 }
 
@@ -124,7 +124,7 @@ body {
 
 .card {
     background: var(--tui-bg-card);
-    border: 1px solid var(--tui-line-soft);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-sm);
     padding: 0.5rem 0;
 }
@@ -146,7 +146,7 @@ body {
 }
 
 .config-block + .config-block {
-    border-top: 1px solid var(--tui-line-soft);
+    border-top: var(--border-w-1) solid var(--tui-line-soft);
 }
 
 .config-block-compact {
@@ -203,7 +203,7 @@ body {
     margin-top: 0.75rem;
     padding: 0.85rem 0.95rem 0.3rem;
     background: var(--tui-bg-screen);
-    border: 1px solid var(--tui-line-soft);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-xl);
 }
 
@@ -277,7 +277,7 @@ body {
     gap: 0.75rem;
     padding: 0.55rem 0.75rem;
     background: rgba(var(--accent-rgb), 0.04);
-    border: 1px solid rgba(var(--accent-rgb), 0.08);
+    border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.08);
     border-radius: var(--radius-sm);
 }
 
@@ -332,7 +332,7 @@ body {
 .variant-selector-card {
     padding: 0;
     background: var(--tui-bg-card);
-    border: 1px solid var(--tui-line-soft);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-sm);
     width: fit-content;
     max-width: 100%;
@@ -354,7 +354,7 @@ body {
     gap: 0.9rem;
     padding: 1rem 1.1rem;
     background: rgba(var(--accent-rgb), 0.05);
-    border: 1px solid rgba(var(--accent-rgb), 0.12);
+    border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.12);
     border-radius: var(--radius-md);
 }
 
@@ -433,7 +433,7 @@ body {
 select.field-select {
     padding: var(--pad-input-compact);
     background: var(--cfg-input-bg);
-    border: 1px solid var(--cfg-input-border);
+    border: var(--border-w-1) solid var(--cfg-input-border);
     border-radius: var(--radius-md);
     color: var(--cfg-text-strong);
     font-family: inherit;
@@ -505,7 +505,7 @@ select.field-select:focus {
 .color-swatch {
     width: 32px;
     height: 32px;
-    border: 1px solid var(--cfg-input-border);
+    border: var(--border-w-1) solid var(--cfg-input-border);
     border-radius: var(--radius-md);
     cursor: pointer;
     padding: 0;
@@ -515,7 +515,7 @@ select.field-select:focus {
     width: 90px;
     padding: 0.35rem 0.5rem;
     background: var(--cfg-input-bg);
-    border: 1px solid var(--cfg-input-border);
+    border: var(--border-w-1) solid var(--cfg-input-border);
     border-radius: var(--radius-md);
     color: var(--cfg-text-strong);
     font-family: var(--font-mono);
@@ -535,7 +535,7 @@ select.field-select:focus {
     gap: 0.5rem;
     padding: 0.5rem 0.7rem;
     background: var(--cfg-chip-bg);
-    border: 1px solid var(--cfg-chip-border);
+    border: var(--border-w-1) solid var(--cfg-chip-border);
     border-radius: var(--radius-lg);
     font-size: 0.84rem;
     color: var(--cfg-text-strong);
