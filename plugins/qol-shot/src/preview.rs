@@ -403,7 +403,9 @@ fn read_thumb(path: &Path) -> Result<(f32, f32)> {
     Ok(thumbnail_size(width as f32, height as f32))
 }
 
-fn read_render_thumb(path: &Path) -> Result<((f32, f32), Option<Arc<RenderImage>>)> {
+type RenderThumb = ((f32, f32), Option<Arc<RenderImage>>);
+
+fn read_render_thumb(path: &Path) -> Result<RenderThumb> {
     let started = Instant::now();
     let image = image::open(path)
         .with_context(|| format!("failed to read preview image: {}", path.display()))?;
