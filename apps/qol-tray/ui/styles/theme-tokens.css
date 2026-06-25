@@ -304,6 +304,10 @@
     --lh-tight: 1;
     --lh-snug: 1.15;
     --lh-normal: 1.2;
+    --lh-sm: 1.25;
+    --lh-md: 1.35;
+    --lh-lg: 1.4;
+    --lh-xl: 1.5;
     --lh-relaxed: 1.6;
     --ls-tight: 0.01em;
     --ls-sm: 0.02em;

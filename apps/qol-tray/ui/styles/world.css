@@ -114,7 +114,7 @@ html.qol-bootstrapping-dive #app {
     font-size: 9px;
     font-weight: var(--fw-bold);
     font-family: var(--font-mono);
-    line-height: 1;
+    line-height: var(--lh-tight);
     color: rgb(var(--ink-rgb));
     background: hsl(var(--wedge-hue, 50) 80% 38% / 0.95);
     border-radius: var(--radius-pill);
@@ -354,7 +354,7 @@ html.qol-bootstrapping-dive #app {
     color: var(--text-faint);
     font-size: var(--fs-caption-1);
     font-weight: var(--fw-bold);
-    line-height: 1;
+    line-height: var(--lh-tight);
     cursor: pointer;
     transition: transform var(--dur-fast), border-color var(--dur-fast), box-shadow var(--dur-fast);
 }

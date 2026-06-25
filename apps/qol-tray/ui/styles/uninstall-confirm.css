@@ -9,7 +9,7 @@
 .uninstall-confirm-message {
     color: var(--text-muted);
     font-size: var(--fs-md);
-    line-height: 1.5;
+    line-height: var(--lh-xl);
     margin: 0;
 }
 

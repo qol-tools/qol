@@ -233,7 +233,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
 .btn-icon {
     flex-shrink: 0;
     font-size: 0.75em;
-    line-height: 1;
+    line-height: var(--lh-tight);
     opacity: 0.6;
     transition: transform var(--dur-fast) ease;
 }

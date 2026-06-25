@@ -15,7 +15,7 @@
 .log-filters-hint {
     color: var(--text-muted);
     font-size: var(--fs-sm);
-    line-height: 1.5;
+    line-height: var(--lh-xl);
     margin: 0;
 }
 

@@ -69,7 +69,7 @@
     font-size: 0.8rem;
     font-family: inherit;
     font-weight: var(--fw-semibold);
-    line-height: 1.2;
+    line-height: var(--lh-normal);
     white-space: nowrap;
     cursor: pointer;
     transition: background-color var(--transition), color var(--transition);
