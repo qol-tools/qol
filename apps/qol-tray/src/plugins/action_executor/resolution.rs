@@ -115,7 +115,7 @@ fn allow_runtime_fallback(
         return true;
     }
 
-    daemon_socket.is_some_and(|socket_path| !is_daemon_socket_reachable(socket_path))
+    false
 }
 
 fn should_dedupe_runtime_spawn(action_id: &str, daemon_socket: Option<&PathBuf>) -> bool {
@@ -141,16 +141,6 @@ fn paths_match(left: &Path, right: &Path) -> bool {
     let left = std::fs::canonicalize(left).unwrap_or_else(|_| left.to_path_buf());
     let right = std::fs::canonicalize(right).unwrap_or_else(|_| right.to_path_buf());
     left == right
-}
-
-#[cfg(unix)]
-fn is_daemon_socket_reachable(socket_path: &Path) -> bool {
-    std::os::unix::net::UnixStream::connect(socket_path).is_ok()
-}
-
-#[cfg(not(unix))]
-fn is_daemon_socket_reachable(_socket_path: &Path) -> bool {
-    false
 }
 
 fn resolve_runtime_target(

@@ -256,7 +256,7 @@ fn resolve_action_accepts_daemon_only_target() {
 }
 
 #[test]
-fn resolve_action_allows_runtime_fallback_when_daemon_and_runtime_share_binary_but_socket_unreachable(
+fn resolve_action_disables_runtime_fallback_when_daemon_and_runtime_share_binary_even_if_socket_unreachable(
 ) {
     let dir = TempDir::new().unwrap();
     fs::write(dir.path().join("launcher"), "").unwrap();
@@ -277,7 +277,7 @@ fn resolve_action_allows_runtime_fallback_when_daemon_and_runtime_share_binary_b
     );
 
     let resolved = resolve_action(&plugin, "open").unwrap();
-    assert!(resolved.runtime_fallback_allowed);
+    assert!(!resolved.runtime_fallback_allowed);
 }
 
 #[cfg(unix)]

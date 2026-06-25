@@ -1,7 +1,10 @@
 use super::manager::PluginManager;
+use crate::plugins::action_transport::DaemonActionDispatch;
 use crate::plugins::PluginId;
 use std::fmt::{Display, Formatter};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 mod execution;
 mod resolution;
@@ -11,6 +14,9 @@ mod tracking;
 mod tests;
 
 pub use tracking::kill_all_plugin_processes;
+
+const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(3);
+const DAEMON_READY_INTERVAL: Duration = Duration::from_millis(25);
 
 #[cfg(feature = "dev")]
 pub fn action_processes_snapshot() -> std::collections::HashMap<String, Vec<u32>> {
@@ -106,6 +112,7 @@ pub fn try_execute_action(
     action_id: &str,
 ) -> Result<(), ActionExecutionError> {
     let resolved = resolve_plugin_action(plugin_manager, plugin_id, action_id)?;
+    ensure_daemon_ready_for_action(plugin_manager, &resolved)?;
     execution::execute_resolved_action(&resolved)
 }
 
@@ -169,4 +176,55 @@ fn resolve_plugin_action(
         .get(plugin_id)
         .ok_or_else(|| ActionExecutionError::PluginNotFound(PluginId::new(plugin_id)))?;
     resolution::resolve_action(plugin, action_id)
+}
+
+fn ensure_daemon_ready_for_action(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    resolved: &resolution::ResolvedAction,
+) -> Result<(), ActionExecutionError> {
+    let Some(socket_path) = resolved.daemon_socket.as_deref() else {
+        return Ok(());
+    };
+
+    if daemon_socket_ready(socket_path) {
+        return Ok(());
+    }
+
+    {
+        let mut plugins = plugin_manager
+            .lock()
+            .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
+        plugins
+            .ensure_plugin_daemon_running(resolved.plugin_id.as_str())
+            .map_err(|error| ActionExecutionError::SpawnFailed(error.to_string()))?;
+    }
+
+    wait_for_daemon_socket(socket_path)
+        .then_some(())
+        .ok_or_else(|| {
+            ActionExecutionError::SpawnFailed(format!(
+                "daemon socket did not become ready for {}::{}",
+                resolved.plugin_id, resolved.action_id
+            ))
+        })
+}
+
+fn wait_for_daemon_socket(socket_path: &Path) -> bool {
+    let deadline = Instant::now() + DAEMON_READY_TIMEOUT;
+    loop {
+        if daemon_socket_ready(socket_path) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(DAEMON_READY_INTERVAL);
+    }
+}
+
+fn daemon_socket_ready(socket_path: &Path) -> bool {
+    matches!(
+        crate::plugins::action_transport::dispatch_daemon_action(socket_path, "ping"),
+        DaemonActionDispatch::Handled { .. }
+    )
 }
