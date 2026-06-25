@@ -317,7 +317,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     font-size: 0.75em;
     opacity: 0.4;
     padding: 1px 4px;
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
     background: rgba(var(--paper-rgb), 0.06);
 }
 

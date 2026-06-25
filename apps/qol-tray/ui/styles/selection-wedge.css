@@ -97,7 +97,7 @@
     line-height: 1;
     color: var(--wedge-badge-color, rgb(var(--ink-rgb)));
     background: hsl(var(--wedge-hue, 50) 80% 38% / 0.95);
-    border-radius: 99px;
+    border-radius: var(--radius-pill);
     pointer-events: none;
     z-index: var(--selection-wedge-z, 4);
 }

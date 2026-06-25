@@ -83,7 +83,7 @@
     outline: 1px solid transparent;
     outline-offset: 0;
     border: 1px solid rgba(var(--accent-rgb), 0.06);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     transition:
         border-color 0.12s ease,
         box-shadow 0.12s ease,
@@ -116,7 +116,7 @@
     padding: 0.65rem 0.85rem;
     background: rgba(var(--accent-rgb), 0.04);
     border: 1px solid rgba(var(--accent-rgb), 0.08);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     cursor: pointer;
     user-select: none;
 }
@@ -223,7 +223,7 @@
     max-width: 100%;
     padding: 0.55rem 0.7rem;
     border: 1px solid rgba(var(--accent-rgb), 0.06);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     transition: border-color 0.12s;
 }
 
@@ -345,7 +345,7 @@
     padding: 0.5rem 0.7rem;
     background: rgba(var(--accent-rgb), 0.04);
     border: 1px solid rgba(var(--accent-rgb), 0.12);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     color: var(--plugin-config-value-color);
     font-family: inherit;
     font-size: 0.88rem;
@@ -416,7 +416,7 @@
     top: 4px;
     left: 4px;
     right: 4px;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     background:
         linear-gradient(90deg,
             rgba(var(--warning-rgb), 0.2) 0%,
@@ -503,13 +503,13 @@
     padding: 0.55rem 0.75rem;
     background: rgba(var(--accent-rgb), 0.07);
     border: 1px solid rgba(var(--accent-rgb), 0.18);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     font-size: 0.86rem;
     color: var(--plugin-config-value-color);
 }
 
 .string-item span { flex: 1; }
-.app-icon { border-radius: 4px; flex-shrink: 0; }
+.app-icon { border-radius: var(--radius-sm); flex-shrink: 0; }
 
 .string-item:has(.btn-remove:focus-visible) {
     border-color: rgba(var(--warning-rgb), 0.42);
@@ -525,7 +525,7 @@
 }
 
 .add-row:focus-within {
-    border-radius: 6px;
+    border-radius: var(--radius-md);
 }
 
 .add-row .text-input { flex: 1; }
@@ -533,7 +533,7 @@
 .btn-remove:focus-visible,
 .btn-add:focus-visible {
     outline: none;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     box-shadow: 0 0 12px rgba(var(--warning-rgb), 0.08);
 }
 
@@ -594,7 +594,7 @@
     padding: 1.1rem 1.2rem;
     background: rgba(var(--accent-rgb), 0.05);
     border: 1px solid rgba(var(--accent-rgb), 0.12);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
 }
 
 .variant-panel .variant-selector { align-self: flex-start; }
@@ -645,7 +645,7 @@
     padding: 0;
     background: var(--tui-bg-card);
     border: 1px solid var(--tui-line-soft);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     width: fit-content;
     max-width: 100%;
     overflow: hidden;
@@ -722,7 +722,7 @@
 
 .hue-slider-track {
     height: 32px;
-    border-radius: 16px;
+    border-radius: var(--radius-2xl);
     position: relative;
     box-shadow: inset 0 2px 4px rgba(var(--ink-rgb), 0.5), 0 0 0 1px rgba(var(--paper-rgb), 0.05);
     cursor: pointer;
@@ -816,7 +816,7 @@
 .field-slider .slider-track {
     position: relative;
     height: 28px;
-    border-radius: 14px;
+    border-radius: var(--radius-pill);
     background: var(--tui-bg-screen);
     box-shadow: inset 0 2px 4px rgba(var(--ink-rgb), 0.3), 0 0 0 1px rgba(var(--paper-rgb), 0.05);
     cursor: pointer;
@@ -869,7 +869,7 @@
 
 .qr-canvas {
     display: block;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
 }
 
 .field-qr-link {

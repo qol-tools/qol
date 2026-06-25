@@ -105,7 +105,7 @@
     gap: 0;
     background: var(--tui-bg-screen);
     border: 1px solid var(--tui-line-soft);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     overflow: hidden;
 }
 
@@ -129,7 +129,7 @@
     padding: 0.2rem 0.45rem;
     background: var(--cfg-accent-bg);
     border: 1px solid var(--cfg-accent-border);
-    border-radius: 5px;
+    border-radius: var(--radius-chip);
     color: var(--cfg-text-bright);
     font-size: 0.75rem;
     font-family: var(--font-mono);
@@ -140,7 +140,7 @@
     padding: 0.2rem 0.45rem;
     background: var(--cfg-muted-bg);
     border: 1px solid var(--cfg-muted-border-soft);
-    border-radius: 5px;
+    border-radius: var(--radius-chip);
     color: var(--cfg-text-subtle);
     font-size: 0.75rem;
     font-family: var(--font-mono);
@@ -165,7 +165,7 @@
     padding: 0.15rem 0.4rem;
     background: var(--cfg-chip-bg);
     border: 1px solid var(--cfg-chip-border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     color: var(--cfg-text-strong);
     font-family: var(--font-mono);
     font-size: 0.8rem;
@@ -177,7 +177,7 @@
     font-size: 0.85rem;
     padding: 0.15rem 0.4rem;
     background: var(--cfg-muted-bg);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
 }
 
 .key-label-hint {
@@ -195,7 +195,7 @@
     padding: 0.15rem 0.4rem;
     background: var(--cfg-success-bg);
     border: 1px solid var(--cfg-success-border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     color: var(--cfg-success);
     font-size: 0.7rem;
     font-family: var(--font-mono);
@@ -224,7 +224,7 @@
     padding: 0.45rem 0.7rem;
     background: var(--cfg-chip-bg);
     border: 1px solid var(--cfg-chip-border);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     flex-wrap: wrap;
 }
 
@@ -255,7 +255,7 @@
     gap: 0.5rem;
     padding: 0.75rem;
     border: 1px solid var(--cfg-chip-border);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     background: var(--cfg-muted-bg-soft);
     margin-top: 0.3rem;
 }
@@ -284,7 +284,7 @@
     padding: 0.3rem 0.5rem;
     background: var(--cfg-input-bg);
     border: 1px solid var(--cfg-input-border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     color: var(--cfg-text-strong);
     font-family: var(--font-mono);
     font-size: 0.8rem;

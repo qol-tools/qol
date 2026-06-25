@@ -72,7 +72,7 @@ body {
     padding: 0.55rem 0.75rem;
     background: none;
     border: none;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     color: var(--cfg-text-bright);
     font-size: 0.92rem;
     font-weight: var(--fw-medium);
@@ -125,7 +125,7 @@ body {
 .card {
     background: var(--tui-bg-card);
     border: 1px solid var(--tui-line-soft);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     padding: 0.5rem 0;
 }
 
@@ -204,7 +204,7 @@ body {
     padding: 0.85rem 0.95rem 0.3rem;
     background: var(--tui-bg-screen);
     border: 1px solid var(--tui-line-soft);
-    border-radius: 12px;
+    border-radius: var(--radius-xl);
 }
 
 .config-section,
@@ -278,7 +278,7 @@ body {
     padding: 0.55rem 0.75rem;
     background: rgba(var(--accent-rgb), 0.04);
     border: 1px solid rgba(var(--accent-rgb), 0.08);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
 }
 
 .toggle-row label {
@@ -333,7 +333,7 @@ body {
     padding: 0;
     background: var(--tui-bg-card);
     border: 1px solid var(--tui-line-soft);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     width: fit-content;
     max-width: 100%;
     overflow: hidden;
@@ -355,7 +355,7 @@ body {
     padding: 1rem 1.1rem;
     background: rgba(var(--accent-rgb), 0.05);
     border: 1px solid rgba(var(--accent-rgb), 0.12);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
 }
 
 .variant-panel .variant-selector {
@@ -506,7 +506,7 @@ select.field-select:focus {
     width: 32px;
     height: 32px;
     border: 1px solid var(--cfg-input-border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     cursor: pointer;
     padding: 0;
 }
@@ -516,7 +516,7 @@ select.field-select:focus {
     padding: 0.35rem 0.5rem;
     background: var(--cfg-input-bg);
     border: 1px solid var(--cfg-input-border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     color: var(--cfg-text-strong);
     font-family: var(--font-mono);
     font-size: 0.85rem;
@@ -536,7 +536,7 @@ select.field-select:focus {
     padding: 0.5rem 0.7rem;
     background: var(--cfg-chip-bg);
     border: 1px solid var(--cfg-chip-border);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     font-size: 0.84rem;
     color: var(--cfg-text-strong);
 }
@@ -546,7 +546,7 @@ select.field-select:focus {
 }
 
 .app-icon {
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     flex-shrink: 0;
 }
 
