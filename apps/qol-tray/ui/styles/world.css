@@ -591,7 +591,7 @@ html.qol-bootstrapping-dive #app {
     border-radius: var(--radius-md);
     color: var(--accent);
     font-family: var(--font-mono);
-    font-size: 20px;
+    font-size: var(--fs-xl-plus);
     font-weight: var(--fw-bold);
     letter-spacing: var(--ls-3xl);
     text-transform: uppercase;

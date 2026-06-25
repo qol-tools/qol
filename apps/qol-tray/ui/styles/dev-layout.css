@@ -159,7 +159,7 @@
 
 .catalog-state-label {
     color: var(--text-faint);
-    font-size: 10px;
+    font-size: var(--fs-caption-2);
     font-weight: var(--fw-semibold);
     letter-spacing: var(--ls-md);
     text-transform: uppercase;
