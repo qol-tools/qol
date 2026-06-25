@@ -59,6 +59,10 @@ pub(super) enum FixAction {
         workspace: PathBuf,
     },
     #[cfg(feature = "dev")]
+    FixClippyLints {
+        workspace: PathBuf,
+    },
+    #[cfg(feature = "dev")]
     PruneCargoIncrementalCache {
         path: PathBuf,
     },
@@ -95,6 +99,7 @@ impl FixAction {
             | FixAction::PruneReservedPlugins { .. }
             | FixAction::RemoveDevLinkEntries { .. }
             | FixAction::FormatRustSources { .. }
+            | FixAction::FixClippyLints { .. }
             | FixAction::PruneCargoIncrementalCache { .. }
             | FixAction::HealDevLinkedPlugins { .. } => FixApplicability::SafeAutomatic,
         }
@@ -151,6 +156,8 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         FixAction::RemoveDevLinkEntries { ids } => remove_dev_link_entries(ids),
         #[cfg(feature = "dev")]
         FixAction::FormatRustSources { workspace } => format_rust_sources(workspace),
+        #[cfg(feature = "dev")]
+        FixAction::FixClippyLints { workspace } => fix_clippy_lints(workspace),
         #[cfg(feature = "dev")]
         FixAction::PruneCargoIncrementalCache { path } => prune_cargo_incremental_cache(path),
         #[cfg(feature = "dev")]
@@ -261,6 +268,36 @@ fn format_rust_sources(workspace: &std::path::Path) -> Result<()> {
     if !output.status.success() {
         return Err(anyhow!(
             "cargo fmt exited with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "dev")]
+fn fix_clippy_lints(workspace: &std::path::Path) -> Result<()> {
+    let output = Command::new("cargo")
+        .args([
+            "clippy",
+            "--fix",
+            "--workspace",
+            "--all-targets",
+            "--allow-dirty",
+            "--allow-staged",
+        ])
+        .env("CARGO_TERM_COLOR", "never")
+        .current_dir(workspace)
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to run cargo clippy --fix in {}",
+                workspace.display()
+            )
+        })?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "cargo clippy --fix exited with status {}: {}",
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         ));
@@ -551,6 +588,15 @@ mod tests {
     #[test]
     fn format_rust_sources_is_safe_automatic() {
         let action = FixAction::FormatRustSources {
+            workspace: PathBuf::from("/ws"),
+        };
+        assert_eq!(action.applicability(), FixApplicability::SafeAutomatic);
+    }
+
+    #[cfg(feature = "dev")]
+    #[test]
+    fn fix_clippy_lints_is_safe_automatic() {
+        let action = FixAction::FixClippyLints {
             workspace: PathBuf::from("/ws"),
         };
         assert_eq!(action.applicability(), FixApplicability::SafeAutomatic);

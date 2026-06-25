@@ -265,6 +265,13 @@ fn log_applied(action: &FixAction) {
             log::info!("doctor: ran cargo fmt in {}", workspace.display());
         }
         #[cfg(feature = "dev")]
+        FixAction::FixClippyLints { workspace } => {
+            log::info!(
+                "doctor: ran cargo clippy --fix in {} (machine-applicable lints only)",
+                workspace.display()
+            );
+        }
+        #[cfg(feature = "dev")]
         FixAction::PruneCargoIncrementalCache { path } => {
             log::info!("doctor: pruned cargo incremental cache {}", path.display());
         }

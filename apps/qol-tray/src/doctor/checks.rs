@@ -17,6 +17,8 @@ mod plugin_uid_table;
 mod reserved_plugin_ids;
 mod runtime_prereqs;
 #[cfg(feature = "dev")]
+mod rust_clippy;
+#[cfg(feature = "dev")]
 mod rust_formatting;
 mod shell_hook_present;
 
@@ -48,6 +50,7 @@ pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
         checks.push(Box::new(fingerprint_health::FingerprintHealthCheck));
         checks.push(Box::new(reserved_plugin_ids::ReservedPluginIdsCheck));
         checks.push(Box::new(rust_formatting::RustFormattingCheck));
+        checks.push(Box::new(rust_clippy::RustClippyCheck));
     }
     checks
 }
