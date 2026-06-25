@@ -48,7 +48,7 @@ body {
     font-size: 1.15rem;
     font-weight: var(--fw-heavy);
     color: var(--cfg-heading);
-    letter-spacing: 0.01em;
+    letter-spacing: var(--ls-tight);
 }
 
 .config-nav-header p {
@@ -112,7 +112,7 @@ body {
 }
 
 .hero h1 {
-    letter-spacing: 0.01em;
+    letter-spacing: var(--ls-tight);
     font-size: 2.2rem;
     font-weight: var(--fw-heavy);
 }
@@ -181,7 +181,7 @@ body {
     font-size: 1.18rem;
     font-weight: var(--fw-heavy);
     text-transform: none;
-    letter-spacing: 0.01em;
+    letter-spacing: var(--ls-tight);
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -256,7 +256,7 @@ body {
     font-size: 0.95rem;
     font-weight: var(--fw-semibold);
     text-transform: none;
-    letter-spacing: 0.02em;
+    letter-spacing: var(--ls-sm);
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -344,7 +344,7 @@ body {
     font-size: 0.88rem;
     font-weight: var(--fw-medium);
     text-transform: none;
-    letter-spacing: 0.01em;
+    letter-spacing: var(--ls-tight);
 }
 
 .variant-panel {

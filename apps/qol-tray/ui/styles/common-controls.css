@@ -60,7 +60,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus {
 .btn-confirm-input::placeholder {
     color: rgba(var(--paper-rgb), 0.55);
     font-weight: var(--fw-regular);
-    letter-spacing: 0.01em;
+    letter-spacing: var(--ls-tight);
 }
 
 @keyframes btn-confirm-shake {
@@ -92,7 +92,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     font-size: var(--fs-lg);
     font-weight: var(--fw-semibold);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: var(--ls-2xl);
     z-index: var(--z-control);
     pointer-events: none;
 }
@@ -643,7 +643,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
 
 .palette-hintkeys {
     color: var(--text-faint);
-    letter-spacing: 0.03em;
+    letter-spacing: var(--ls-md);
     text-transform: none;
 }
 

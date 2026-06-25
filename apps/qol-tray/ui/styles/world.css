@@ -237,7 +237,7 @@ html.qol-bootstrapping-dive #app {
     font-size: var(--fs-caption-1);
     font-weight: var(--fw-semibold);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: var(--ls-2xl);
     color: var(--text-faint);
     margin-bottom: 2px;
     display: flex;
@@ -495,7 +495,7 @@ html.qol-bootstrapping-dive #app {
 
 .palette-layer .command-palette .search-input {
     font-size: var(--fs-base);
-    letter-spacing: 0.01em;
+    letter-spacing: var(--ls-tight);
 }
 
 .palette-layer .command-palette .search-input::placeholder {
@@ -545,7 +545,7 @@ html.qol-bootstrapping-dive #app {
 
 .app-container > .palette-hint .palette-hint-text {
     font-size: var(--fs-xs);
-    letter-spacing: 0.02em;
+    letter-spacing: var(--ls-sm);
 }
 
 @keyframes dive-zoom-fade {

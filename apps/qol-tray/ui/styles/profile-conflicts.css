@@ -147,7 +147,7 @@
 .profile-conflicts-side-who {
     font-size: var(--fs-caption-1);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: var(--ls-xl);
     color: var(--text-muted);
 }
 
@@ -188,7 +188,7 @@
     font-size: var(--fs-xs);
     font-family: var(--font-mono);
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: var(--ls-lg);
     word-break: break-all;
 }
 

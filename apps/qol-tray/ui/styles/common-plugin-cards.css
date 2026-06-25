@@ -341,7 +341,7 @@
     font-size: var(--fs-lg);
     font-weight: var(--fw-semibold);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: var(--ls-2xl);
     z-index: var(--z-control);
     pointer-events: none;
 }
