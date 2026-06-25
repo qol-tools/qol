@@ -1,32 +1,7 @@
-use crate::hotkeys::grammar::{self, Key, Modifier, NamedKey};
 use crate::plugins::PluginUid;
+use qol_hotkeys::evdev;
+use qol_hotkeys::grammar::{self, Modifier};
 use std::collections::BTreeSet;
-
-/// Linux evdev keycode constants used by the cross-platform combo parser.
-/// Only non-modifier keys live here; modifier KEY_* constants and the
-/// `Mod -> [u16; 2]` mapping live with the Linux matcher
-/// (`super::platform::linux::matcher::keycodes`).
-mod keycodes {
-    pub(super) const KEY_ESC: u16 = 1;
-    pub(super) const KEY_BACKSPACE: u16 = 14;
-    pub(super) const KEY_TAB: u16 = 15;
-    pub(super) const KEY_ENTER: u16 = 28;
-    pub(super) const KEY_SPACE: u16 = 57;
-    pub(super) const KEY_F1: u16 = 59;
-    pub(super) const KEY_F12: u16 = 88;
-    pub(super) const KEY_PRINTSCREEN: u16 = 99;
-    pub(super) const KEY_HOME: u16 = 102;
-    pub(super) const KEY_UP: u16 = 103;
-    pub(super) const KEY_PAGEUP: u16 = 104;
-    pub(super) const KEY_LEFT: u16 = 105;
-    pub(super) const KEY_RIGHT: u16 = 106;
-    pub(super) const KEY_END: u16 = 107;
-    pub(super) const KEY_DOWN: u16 = 108;
-    pub(super) const KEY_PAGEDOWN: u16 = 109;
-    pub(super) const KEY_INSERT: u16 = 110;
-    pub(super) const KEY_DELETE: u16 = 111;
-    pub(super) const KEY_PAUSE: u16 = 119;
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Mod {
@@ -57,7 +32,7 @@ pub(crate) fn parse_combo(input: &str) -> Option<Combo> {
     let parsed = grammar::parse(input)?;
     Some(Combo {
         mods: parsed.mods.iter().map(|m| modifier_to_mod(*m)).collect(),
-        key: key_to_evdev(parsed.key),
+        key: evdev::key_to_keycode(parsed.key)?,
     })
 }
 
@@ -70,56 +45,10 @@ fn modifier_to_mod(modifier: Modifier) -> Mod {
     }
 }
 
-fn key_to_evdev(key: Key) -> u16 {
-    match key {
-        Key::Letter(index) => LETTERS[index as usize],
-        Key::Digit(index) => {
-            if index == 0 {
-                11
-            } else {
-                1 + index as u16
-            }
-        }
-        // F1..F10 are contiguous (59..=68); F11 and F12 are 87 and 88.
-        Key::Function(number) => match number {
-            11 => 87,
-            12 => keycodes::KEY_F12,
-            _ => keycodes::KEY_F1 + (number as u16 - 1),
-        },
-        Key::Named(named) => named_to_evdev(named),
-    }
-}
-
-fn named_to_evdev(named: NamedKey) -> u16 {
-    match named {
-        NamedKey::Space => keycodes::KEY_SPACE,
-        NamedKey::Enter => keycodes::KEY_ENTER,
-        NamedKey::Escape => keycodes::KEY_ESC,
-        NamedKey::Tab => keycodes::KEY_TAB,
-        NamedKey::Backspace => keycodes::KEY_BACKSPACE,
-        NamedKey::Delete => keycodes::KEY_DELETE,
-        NamedKey::Insert => keycodes::KEY_INSERT,
-        NamedKey::Home => keycodes::KEY_HOME,
-        NamedKey::End => keycodes::KEY_END,
-        NamedKey::PageUp => keycodes::KEY_PAGEUP,
-        NamedKey::PageDown => keycodes::KEY_PAGEDOWN,
-        NamedKey::Up => keycodes::KEY_UP,
-        NamedKey::Down => keycodes::KEY_DOWN,
-        NamedKey::Left => keycodes::KEY_LEFT,
-        NamedKey::Right => keycodes::KEY_RIGHT,
-        NamedKey::PrintScreen => keycodes::KEY_PRINTSCREEN,
-        NamedKey::Pause => keycodes::KEY_PAUSE,
-    }
-}
-
-const LETTERS: [u16; 26] = [
-    30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38, 50, 49, 24, 25, 16, 19, 31, 20, 22, 47, 17, 45,
-    21, 44,
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_hotkeys::evdev as keycodes;
 
     #[test]
     fn parses_super_space() {

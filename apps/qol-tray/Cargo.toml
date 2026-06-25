@@ -95,6 +95,7 @@ tar = "0.4"
 qol-runtime.workspace = true
 qol-apps.workspace = true
 qol-app-icon.workspace = true
+qol-hotkeys.workspace = true
 png = "0.17"
 qol-config.workspace = true
 qol-migrations.workspace = true

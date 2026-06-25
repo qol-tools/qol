@@ -3854,6 +3854,7 @@ dependencies = [
  "proptest",
  "qol-config",
  "qol-conventions",
+ "qol-hotkeys",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
@@ -5791,6 +5792,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-hotkeys"
+version = "1.0.0"
+
+[[package]]
 name = "qol-migrations"
 version = "0.2.0"
 dependencies = [
@@ -5910,6 +5915,7 @@ dependencies = [
  "qol-apps",
  "qol-config",
  "qol-conventions",
+ "qol-hotkeys",
  "qol-migrations",
  "qol-plugin-api",
  "qol-runtime",

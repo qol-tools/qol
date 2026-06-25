@@ -1,6 +1,5 @@
 use super::super::binding::{Binding, Mod};
 use super::super::{OnFire, RebuildBindings};
-use crate::hotkeys::grammar::{self, Key, NamedKey};
 use anyhow::{bail, Result};
 use core_foundation::base::TCFType;
 use core_foundation::mach_port::CFMachPortRef;
@@ -10,6 +9,8 @@ use core_graphics::event::{
     CGEventType, CallbackResult, EventField,
 };
 use crossbeam_channel::Receiver;
+use qol_hotkeys::grammar;
+use qol_hotkeys::macos_keycode;
 use qol_runtime::keyremap_marker::{self, KeyRemapMarker};
 use std::collections::BTreeSet;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -263,50 +264,12 @@ fn marker_mods(bits: u8) -> BTreeSet<Mod> {
 
 fn parse_mac_combo(binding: &Binding) -> Option<MacCombo> {
     let combo = binding.combo.as_ref()?;
-    let key = key_to_mac(grammar::parse(&binding.raw_key)?.key)?;
+    let key = macos_keycode::key_to_keycode(grammar::parse(&binding.raw_key)?.key)?;
     Some(MacCombo {
         mods: combo.mods.clone(),
         key,
     })
 }
-
-fn key_to_mac(key: Key) -> Option<u16> {
-    Some(match key {
-        Key::Letter(index) => LETTERS[index as usize],
-        Key::Digit(index) => DIGITS[index as usize],
-        Key::Function(number) => FUNCTION_KEYS[(number - 1) as usize],
-        Key::Named(named) => return named_to_mac(named),
-    })
-}
-
-fn named_to_mac(named: NamedKey) -> Option<u16> {
-    Some(match named {
-        NamedKey::Space => 49,
-        NamedKey::Enter => 36,
-        NamedKey::Escape => 53,
-        NamedKey::Tab => 48,
-        NamedKey::Backspace => 51,
-        NamedKey::Delete => 117,
-        NamedKey::Home => 115,
-        NamedKey::End => 119,
-        NamedKey::PageUp => 116,
-        NamedKey::PageDown => 121,
-        NamedKey::Up => 126,
-        NamedKey::Down => 125,
-        NamedKey::Left => 123,
-        NamedKey::Right => 124,
-        // Mac keyboards lack these keys; treat them as unsupported.
-        NamedKey::Insert | NamedKey::PrintScreen | NamedKey::Pause => return None,
-    })
-}
-
-const LETTERS: [u16; 26] = [
-    0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32, 9, 13, 7, 16, 6,
-];
-
-const DIGITS: [u16; 10] = [29, 18, 19, 20, 21, 23, 22, 26, 28, 25];
-
-const FUNCTION_KEYS: [u16; 12] = [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111];
 
 #[cfg(test)]
 mod tests {

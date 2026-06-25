@@ -1,5 +1,5 @@
-use super::grammar::{self, Key, Modifier, NamedKey};
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+use qol_hotkeys::grammar::{self, Key, Modifier, NamedKey};
 
 pub(super) fn parse_hotkey(s: &str) -> Option<HotKey> {
     let parsed = grammar::parse(s)?;

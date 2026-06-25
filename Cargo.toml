@@ -23,6 +23,7 @@ qol-apps = { path = "libs/qol-apps" }
 qol-app-icon = { path = "libs/qol-app-icon" }
 qol-gpui = { path = "libs/qol-gpui" }
 qol-headless = { path = "libs/qol-headless" }
+qol-hotkeys = { path = "libs/qol-hotkeys" }
 qol-plugin-api = { path = "libs/qol-plugin-api" }
 qol-plugin-daemon = { path = "libs/qol-plugin-daemon" }
 qol-tray = { path = "apps/qol-tray" }

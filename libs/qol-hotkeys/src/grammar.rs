@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum Modifier {
+pub enum Modifier {
     Ctrl,
     Alt,
     Shift,
@@ -9,7 +9,7 @@ pub(crate) enum Modifier {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum Key {
+pub enum Key {
     Letter(u8),
     Digit(u8),
     Function(u8),
@@ -17,7 +17,7 @@ pub(crate) enum Key {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum NamedKey {
+pub enum NamedKey {
     Space,
     Enter,
     Escape,
@@ -38,12 +38,12 @@ pub(crate) enum NamedKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Hotkey {
-    pub(crate) mods: BTreeSet<Modifier>,
-    pub(crate) key: Key,
+pub struct Hotkey {
+    pub mods: BTreeSet<Modifier>,
+    pub key: Key,
 }
 
-pub(crate) fn parse(input: &str) -> Option<Hotkey> {
+pub fn parse(input: &str) -> Option<Hotkey> {
     let mut mods = BTreeSet::new();
     let mut key: Option<Key> = None;
     for raw in input.split('+') {
@@ -65,7 +65,7 @@ pub(crate) fn parse(input: &str) -> Option<Hotkey> {
     Some(Hotkey { mods, key: key? })
 }
 
-pub(crate) fn parse_key(token: &str) -> Option<Key> {
+pub fn parse_key(token: &str) -> Option<Key> {
     if let Some(letter) = letter_index(token) {
         return Some(Key::Letter(letter));
     }

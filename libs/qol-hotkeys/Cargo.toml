@@ -1,0 +1,8 @@
+[package]
+name = "qol-hotkeys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared hotkey grammar and keycode adapters for qol-tools"
+
+[dependencies]
