@@ -73,8 +73,8 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus {
 
 .btn-confirm-shake {
     animation: btn-confirm-shake 0.35s;
-    border-color: var(--danger, #e26b6b) !important;
-    box-shadow: 0 0 0 2px rgba(var(--danger-rgb, 226, 107, 107), 0.35);
+    border-color: var(--danger) !important;
+    box-shadow: 0 0 0 2px rgba(var(--danger-rgb), 0.35);
 }
 
 body[data-shift-held] [data-selected-surface][data-secondary-label][data-selected="true"]::after,

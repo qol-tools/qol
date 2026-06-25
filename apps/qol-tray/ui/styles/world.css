@@ -679,8 +679,8 @@ html.qol-bootstrapping-dive #app {
 #world[data-page-mode="ghost"] .world-view-slot:hover,
 .peripheral-slot:hover {
     box-shadow:
-        0 0 0 calc(2px / var(--visual-scale, 1)) var(--accent, rgba(140, 200, 255, 0.6)),
-        0 calc(8px / var(--visual-scale, 1)) calc(32px / var(--visual-scale, 1)) rgba(0, 0, 0, 0.4);
-    border-radius: calc(var(--radius-lg, 8px) / var(--visual-scale, 1));
+        0 0 0 calc(2px / var(--visual-scale, 1)) var(--accent),
+        0 calc(8px / var(--visual-scale, 1)) calc(32px / var(--visual-scale, 1)) rgba(var(--ink-rgb), 0.4);
+    border-radius: calc(var(--radius-lg) / var(--visual-scale, 1));
     transition: box-shadow 200ms ease-out;
 }

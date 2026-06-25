@@ -387,8 +387,8 @@
     letter-spacing: 0.15em;
     cursor: pointer;
     padding: var(--space-2) var(--space-4);
-    border-radius: var(--radius-md, 6px);
-    border: 1px dashed var(--border-color, #555);
+    border-radius: var(--radius-md);
+    border: 1px dashed var(--border-default);
     user-select: all;
 }
 
