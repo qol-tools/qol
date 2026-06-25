@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use gpui::*;
 
-use crate::actions::ShotAction;
+use crate::{actions::ShotAction, platform};
 
 const MAX_THUMB_W: f32 = 360.0;
 const MAX_THUMB_H: f32 = 240.0;
@@ -14,24 +14,27 @@ const CIRCLE: f32 = 46.0;
 const CIRCLE_GAP: f32 = 14.0;
 const LABEL_H: f32 = 30.0;
 
-type Chosen = Arc<Mutex<Option<ShotAction>>>;
+type Completion = Arc<Mutex<Option<Result<()>>>>;
 
 pub fn show(path: &Path) -> Result<()> {
     let (width, height) = image::image_dimensions(path)
         .with_context(|| format!("failed to read image dimensions: {}", path.display()))?;
     let thumb = thumbnail_size(width as f32, height as f32);
-    let chosen: Chosen = Arc::new(Mutex::new(None));
+    let completion: Completion = Arc::new(Mutex::new(None));
 
-    run_app(path.to_path_buf(), thumb, chosen.clone());
+    run_app(path.to_path_buf(), thumb, completion.clone());
 
-    let action = chosen.lock().expect("preview choice mutex poisoned").take();
-    if let Some(action) = action {
-        action.perform(path)?;
+    if let Some(result) = completion
+        .lock()
+        .expect("preview completion mutex poisoned")
+        .take()
+    {
+        return result;
     }
     Ok(())
 }
 
-fn run_app(path: PathBuf, thumb: (f32, f32), chosen: Chosen) {
+fn run_app(path: PathBuf, thumb: (f32, f32), completion: Completion) {
     let (win_w, win_h) = window_dims(thumb.0, thumb.1, ShotAction::ALL.len());
     let window_size = size(px(win_w), px(win_h));
     let title = format!("qol-shot-preview-{}", std::process::id());
@@ -53,7 +56,7 @@ fn run_app(path: PathBuf, thumb: (f32, f32), chosen: Chosen) {
         let window_title = title.clone();
         let opened = cx.open_window(options, move |window, cx| {
             window.set_window_title(&window_title);
-            let view = cx.new(|cx| PreviewView::new(path.clone(), thumb, chosen.clone(), cx));
+            let view = cx.new(|cx| PreviewView::new(path.clone(), thumb, completion.clone(), cx));
             window.focus(&view.focus_handle(cx));
             window.activate_window();
             view
@@ -64,9 +67,7 @@ fn run_app(path: PathBuf, thumb: (f32, f32), chosen: Chosen) {
             return;
         }
         cx.activate(true);
-
-        #[cfg(target_os = "linux")]
-        spawn_overlay_config(title.clone());
+        platform::configure_preview_window(title.clone());
     });
 }
 
@@ -77,32 +78,25 @@ fn preview_bounds(window_size: Size<Pixels>, cx: &mut App) -> Bounds<Pixels> {
     Bounds::centered(None, window_size, cx)
 }
 
-#[cfg(target_os = "linux")]
-fn spawn_overlay_config(title: String) {
-    std::thread::spawn(move || {
-        for _ in 0..30 {
-            if qol_gpui::popup_window::configure_overlay_window(&title) {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(40));
-        }
-    });
-}
-
 struct PreviewView {
     path: PathBuf,
     thumb: (f32, f32),
-    chosen: Chosen,
+    completion: Completion,
     selected: usize,
     focus_handle: FocusHandle,
 }
 
 impl PreviewView {
-    fn new(path: PathBuf, thumb: (f32, f32), chosen: Chosen, cx: &mut Context<Self>) -> Self {
+    fn new(
+        path: PathBuf,
+        thumb: (f32, f32),
+        completion: Completion,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self {
             path,
             thumb,
-            chosen,
+            completion,
             selected: 0,
             focus_handle: cx.focus_handle(),
         }
@@ -115,7 +109,23 @@ impl PreviewView {
     }
 
     fn choose(&mut self, action: ShotAction, cx: &mut Context<Self>) {
-        *self.chosen.lock().expect("preview choice mutex poisoned") = Some(action);
+        if self
+            .completion
+            .lock()
+            .expect("preview completion mutex poisoned")
+            .is_some()
+        {
+            return;
+        }
+
+        let result = action.perform(&self.path);
+        if let Err(error) = &result {
+            eprintln!("[qol-shot] preview action failed: {error:#}");
+        }
+        *self
+            .completion
+            .lock()
+            .expect("preview completion mutex poisoned") = Some(result);
         cx.quit();
     }
 

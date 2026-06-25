@@ -299,6 +299,8 @@ pub fn open_url(url: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn configure_preview_window(_title: String) {}
+
 pub fn platform_supported_check() -> DoctorCheckResult {
     DoctorCheckResult::ok(
         "platform_supported",

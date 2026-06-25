@@ -83,6 +83,8 @@ pub fn open_url(_url: &str) -> Result<()> {
     ))
 }
 
+pub fn configure_preview_window(_title: String) {}
+
 pub fn platform_supported_check() -> DoctorCheckResult {
     DoctorCheckResult::fail(
         "platform_supported",

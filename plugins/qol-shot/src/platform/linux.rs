@@ -363,6 +363,17 @@ pub fn open_url(url: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn configure_preview_window(title: String) {
+    std::thread::spawn(move || {
+        for _ in 0..30 {
+            if qol_gpui::popup_window::configure_overlay_window(&title) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+    });
+}
+
 pub fn platform_supported_check() -> DoctorCheckResult {
     DoctorCheckResult::ok(
         "platform_supported",
