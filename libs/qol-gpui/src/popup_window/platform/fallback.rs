@@ -13,6 +13,18 @@ pub fn hide_invisible(title: &str) -> bool {
     hide_window_by_title(title)
 }
 
+pub fn hide_windows_by_title_prefix(_prefix: &str) -> usize {
+    0
+}
+
+pub fn visible_windows_by_title_prefix(_prefix: &str) -> usize {
+    0
+}
+
+pub fn hide_for_capture(_title: &str, _window: &mut gpui::Window) -> bool {
+    false
+}
+
 pub fn reposition_window_by_title(_title: &str, _gpui_x: f64, _gpui_y: f64) -> bool {
     false
 }

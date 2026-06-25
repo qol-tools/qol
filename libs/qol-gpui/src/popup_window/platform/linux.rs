@@ -135,6 +135,18 @@ pub fn hide_invisible(title: &str) -> bool {
     hide_window_with_opacity(title, 0.0)
 }
 
+pub fn hide_windows_by_title_prefix(_prefix: &str) -> usize {
+    0
+}
+
+pub fn visible_windows_by_title_prefix(_prefix: &str) -> usize {
+    0
+}
+
+pub fn hide_for_capture(title: &str, _window: &mut gpui::Window) -> bool {
+    hide_invisible(title)
+}
+
 fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
     #[cfg(debug_assertions)]
     let reason = crate::popup_window::change_reason();

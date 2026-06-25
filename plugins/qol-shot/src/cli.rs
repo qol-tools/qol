@@ -5,6 +5,8 @@ use qol_headless::{
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::time::Duration;
 
 use crate::actions::ShotAction;
 use crate::{actions, platform, recording, screenshot, settings, Config, PLUGIN_ID};
@@ -65,10 +67,30 @@ fn record_command(binary_name: &'static str) -> Command {
         .output("No stdout on success; user-facing progress is delivered through platform UI.")
         .exit_behavior("Exits 0 when recording starts, stops, or selection is cancelled.")
         .run_plain_text(|_| {
+            if forward_host_fallback_record_to_daemon() {
+                return Ok(PlainTextOutput::empty());
+            }
             let config: Config = qol_config::load_plugin_config_from_env(PLUGIN_ID);
             recording::toggle_recording(&config)?;
             Ok(PlainTextOutput::empty())
         })
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn forward_host_fallback_record_to_daemon() -> bool {
+    if std::env::var_os("QOL_TRAY_DAEMON_SOCKET").is_none()
+        || std::env::var_os("QOL_TRAY_DAEMON_REPLACE_EXISTING").is_some()
+    {
+        return false;
+    }
+
+    qol_runtime::probe!("SHOT_RECORD_FORWARD", "action=record reason=host-fallback");
+    crate::daemon::wait_and_send_action("record", Duration::from_millis(4_000))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn forward_host_fallback_record_to_daemon() -> bool {
+    false
 }
 
 fn screenshot_command(binary_name: &'static str) -> Command {

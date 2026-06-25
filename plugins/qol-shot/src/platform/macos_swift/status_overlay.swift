@@ -54,9 +54,23 @@ let rawSubtitle = environment["QOL_STATUS_SUBTITLE"] ?? ""
 let subtitle = rawSubtitle.isEmpty ? nil : rawSubtitle
 let durationMs = max(300, Int(environment["QOL_STATUS_DURATION_MS"] ?? "") ?? 1800)
 let exitAfterHide = environment["QOL_STATUS_EXIT_AFTER_HIDE"] == "1"
+let maxLifetimeMs = Int(environment["QOL_STATUS_MAX_LIFETIME_MS"] ?? "") ?? 0
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
+
+let terminateSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+let interruptSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+signal(SIGTERM, SIG_IGN)
+signal(SIGINT, SIG_IGN)
+terminateSource.setEventHandler {
+    NSApp.terminate(nil)
+}
+interruptSource.setEventHandler {
+    NSApp.terminate(nil)
+}
+terminateSource.resume()
+interruptSource.resume()
 
 func displayBounds(for screen: NSScreen) -> CGRect {
     let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? CGMainDisplayID()
@@ -148,5 +162,11 @@ showStatus(StatusCommand(
     durationMs: durationMs,
     exitAfterHide: exitAfterHide
 ))
+
+if maxLifetimeMs > 0 {
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(maxLifetimeMs)) {
+        NSApp.terminate(nil)
+    }
+}
 
 app.run()

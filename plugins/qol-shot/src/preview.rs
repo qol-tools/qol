@@ -180,7 +180,7 @@ impl GhostContent {
         });
         let (thumb, render_image) = match image {
             Some((render_image, w, h)) => (thumbnail_size(w as f32, h as f32), Some(render_image)),
-            None => (read_thumb(&capture.path)?, None),
+            None => read_render_thumb(&capture.path)?,
         };
         Ok(Self {
             path: capture.path,
@@ -401,6 +401,21 @@ fn read_thumb(path: &Path) -> Result<(f32, f32)> {
         started.elapsed().as_millis()
     );
     Ok(thumbnail_size(width as f32, height as f32))
+}
+
+fn read_render_thumb(path: &Path) -> Result<((f32, f32), Option<Arc<RenderImage>>)> {
+    let started = Instant::now();
+    let image = image::open(path)
+        .with_context(|| format!("failed to read preview image: {}", path.display()))?;
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    qol_runtime::probe!(
+        "SHOT_THUMB",
+        "ms={} dims={width}x{height} path=decoded",
+        started.elapsed().as_millis()
+    );
+    let render_image = rgba_to_render_image(rgba.into_raw(), width, height);
+    Ok((thumbnail_size(width as f32, height as f32), render_image))
 }
 
 pub struct PreviewView {

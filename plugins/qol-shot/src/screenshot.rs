@@ -12,6 +12,10 @@ pub fn capture_screenshot() -> Result<Option<PathBuf>> {
 }
 
 pub fn capture_to_file() -> Result<Option<PathBuf>> {
+    let Some(_capture) = crate::capture_gate::try_acquire("cli-screenshot") else {
+        qol_runtime::probe!("SHOT_SKIP", "action=screenshot reason=busy");
+        return Ok(None);
+    };
     let Some(selected) = platform::select_region()? else {
         return Ok(None);
     };
@@ -25,6 +29,10 @@ pub struct PreviewCapture {
 }
 
 pub fn capture_for_preview() -> Result<Option<PreviewCapture>> {
+    let Some(_capture) = crate::capture_gate::try_acquire("cli-preview-capture") else {
+        qol_runtime::probe!("SHOT_SKIP", "action=preview-capture reason=busy");
+        return Ok(None);
+    };
     let Some(selected) = platform::select_region()? else {
         return Ok(None);
     };

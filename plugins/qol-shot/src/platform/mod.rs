@@ -86,3 +86,50 @@ pub fn session_started(session: &CaptureSession) -> bool {
             .iter()
             .all(|process| process_alive(process.pid))
 }
+
+#[cfg(unix)]
+pub(crate) fn unix_process_alive(pid: u32) -> bool {
+    if reap_child(pid) {
+        return false;
+    }
+    let pid = pid as libc::pid_t;
+    pid > 0 && unsafe { libc::kill(pid, 0) == 0 }
+}
+
+#[cfg(unix)]
+pub(crate) fn unix_signal_process(pid: u32, signal: i32) -> anyhow::Result<()> {
+    let pid = pid as libc::pid_t;
+    if pid <= 0 {
+        return Err(anyhow::anyhow!("invalid process pid {}", pid));
+    }
+    if unsafe { libc::kill(pid, signal) } == 0 || !unix_process_alive(pid as u32) {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "failed to send signal {} to process pid {}",
+        signal,
+        pid
+    ))
+}
+
+#[cfg(unix)]
+fn reap_child(pid: u32) -> bool {
+    let pid = pid as libc::pid_t;
+    if pid <= 0 {
+        return false;
+    }
+    loop {
+        let mut status = 0;
+        let reaped = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if reaped == pid {
+            return true;
+        }
+        if reaped == 0 {
+            return false;
+        }
+        if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+            continue;
+        }
+        return false;
+    }
+}

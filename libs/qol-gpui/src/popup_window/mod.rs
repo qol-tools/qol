@@ -6,8 +6,9 @@ use crate::runtime_config::load_gpui_runtime_config;
 
 pub use platform::{
     configure_overlay_window, configure_popup_window, disable_window_shadow, dump_ghost_windows,
-    hide_invisible, hide_window_by_title, reposition_window_by_title, show_window_by_title,
-    sync_window_layout, window_backing_scale,
+    hide_for_capture, hide_invisible, hide_window_by_title, hide_windows_by_title_prefix,
+    reposition_window_by_title, show_window_by_title, sync_window_layout,
+    visible_windows_by_title_prefix, window_backing_scale,
 };
 
 const ENV_GHOST_OPACITY: &str = "QOL_TRAY_GHOST_OPACITY";

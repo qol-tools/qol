@@ -1,23 +1,74 @@
 use anyhow::{anyhow, Context, Result};
+use gpui::{Bounds, Pixels, WindowDecorations, WindowKind};
+use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_headless::DoctorCheckResult;
 use std::env;
 use std::fs::File;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 
 use crate::platform::CaptureSession;
 use crate::{Config, Monitor, Rect};
 
 pub fn select_region() -> Result<Option<Rect>> {
-    crate::linux_selector::select_region_blocking()
+    crate::region_selector::select_region_blocking_with(|tx, cx| {
+        let monitor = MonitorTracker::start(cx).snapshot_monitor();
+        open_region_selector_with_sender(tx, true, monitor, cx);
+    })
 }
 
 pub fn select_region_in_app(
     cx: &mut gpui::App,
-    monitor: Option<qol_gpui::monitor::ActiveMonitor>,
-) -> Option<std::sync::mpsc::Receiver<Option<Rect>>> {
-    Some(crate::linux_selector::open_region_selector(cx, monitor))
+    monitor: Option<ActiveMonitor>,
+    _monitors: Vec<ActiveMonitor>,
+) -> Option<mpsc::Receiver<Option<Rect>>> {
+    Some(open_region_selector(cx, monitor))
+}
+
+fn open_region_selector(
+    cx: &mut gpui::App,
+    monitor: Option<ActiveMonitor>,
+) -> mpsc::Receiver<Option<Rect>> {
+    let (tx, rx) = mpsc::channel();
+    open_region_selector_with_sender(tx, false, monitor, cx);
+    rx
+}
+
+fn open_region_selector_with_sender(
+    tx: mpsc::Sender<Option<Rect>>,
+    quit_on_finish: bool,
+    monitor: Option<ActiveMonitor>,
+    cx: &mut gpui::App,
+) {
+    let selector = selector_window(monitor);
+    let title = selector.title().to_string();
+    if crate::region_selector::open_all(tx, quit_on_finish, vec![selector], cx) {
+        configure_selector_window(title);
+        cx.activate(true);
+    }
+}
+
+fn selector_window(monitor: Option<ActiveMonitor>) -> crate::region_selector::SelectorWindow {
+    crate::region_selector::SelectorWindow::new(
+        selector_bounds(),
+        monitor.map(|monitor| monitor.bounds()),
+        crate::region_selector::SelectorWindowOptions {
+            display_id: None,
+            kind: WindowKind::PopUp,
+            decorations: WindowDecorations::Client,
+            focus: true,
+        },
+        crate::region_selector::identity_rect_mapper(),
+        None,
+    )
+}
+
+fn selector_bounds() -> Bounds<Pixels> {
+    full_screen_bounds()
+        .map(crate::region_selector::bounds_from_monitor)
+        .unwrap_or_else(|_| crate::region_selector::fallback_bounds())
 }
 
 pub fn get_monitors() -> Result<Vec<Monitor>> {
@@ -303,7 +354,7 @@ pub fn recording_format(format: &str) -> String {
     format.to_string()
 }
 
-pub fn recording_started() {
+pub fn recording_started(_session: &CaptureSession) {
     show_notification("Recording started", "Press your hotkey to stop", 1200);
 }
 
@@ -313,16 +364,14 @@ pub fn recording_stopped(_session: &CaptureSession, _config: &Config) {
 
 pub fn stop_capture(session: &CaptureSession) -> Result<()> {
     for process in &session.processes {
-        Command::new("kill")
-            .args(["-INT", &process.pid.to_string()])
-            .status()
+        super::unix_signal_process(process.pid, libc::SIGINT)
             .context("failed to send SIGINT to ffmpeg")?;
     }
     Ok(())
 }
 
 pub fn process_alive(pid: u32) -> bool {
-    Path::new(&format!("/proc/{pid}")).exists()
+    super::unix_process_alive(pid)
 }
 
 pub fn show_notification(title: &str, message: &str, timeout_ms: u32) {
@@ -385,12 +434,20 @@ pub fn grab_preview_rgba(rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {
 }
 
 pub fn configure_preview_window(title: String) {
+    configure_overlay_window_async(title, "SHOT_OVERLAY");
+}
+
+fn configure_selector_window(title: String) {
+    configure_overlay_window_async(title, "SHOT_SELECT_OVERLAY");
+}
+
+fn configure_overlay_window_async(title: String, probe: &'static str) {
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
         for attempt in 1..=30 {
             if qol_gpui::popup_window::configure_overlay_window(&title) {
                 qol_runtime::probe!(
-                    "SHOT_OVERLAY",
+                    probe,
                     "ms={} attempt={attempt} result=mapped",
                     started.elapsed().as_millis()
                 );
@@ -398,11 +455,7 @@ pub fn configure_preview_window(title: String) {
             }
             std::thread::sleep(std::time::Duration::from_millis(40));
         }
-        qol_runtime::probe!(
-            "SHOT_OVERLAY",
-            "ms={} result=timeout",
-            started.elapsed().as_millis()
-        );
+        qol_runtime::probe!(probe, "ms={} result=timeout", started.elapsed().as_millis());
     });
 }
 

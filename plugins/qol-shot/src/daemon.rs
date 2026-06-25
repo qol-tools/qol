@@ -1,4 +1,6 @@
 use std::sync::mpsc::Sender;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult};
 
@@ -16,15 +18,39 @@ pub enum Command {
 }
 
 pub fn start_listener(tx: Sender<Command>) -> bool {
-    core_daemon::start_listener(&CONFIG, tx, parse_command)
+    let started = core_daemon::start_listener(&CONFIG, tx, parse_command);
+    qol_runtime::probe!("SHOT_DAEMON_LISTEN", "started={started}");
+    started
 }
 
 pub fn cleanup() {
     core_daemon::cleanup(&CONFIG);
 }
 
+pub fn wait_and_send_action(action: &str, timeout: Duration) -> bool {
+    let started = Instant::now();
+    loop {
+        if core_daemon::send_action(&CONFIG, action, true) {
+            qol_runtime::probe!(
+                "SHOT_DAEMON_FORWARD",
+                "action={action} result=sent ms={}",
+                started.elapsed().as_millis()
+            );
+            return true;
+        }
+        if started.elapsed() >= timeout {
+            qol_runtime::probe!(
+                "SHOT_DAEMON_FORWARD",
+                "action={action} result=timeout ms={}",
+                started.elapsed().as_millis()
+            );
+            return false;
+        }
+        thread::sleep(Duration::from_millis(80));
+    }
+}
+
 fn parse_command(cmd: &str) -> ReadResult<Command> {
-    #[cfg(debug_assertions)]
     if cmd != "ping" {
         qol_runtime::probe!("CMD_RECV", "cmd={cmd}");
     }

@@ -1,12 +1,17 @@
 use anyhow::{anyhow, Context, Result};
+use gpui::{Bounds, Pixels};
+use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
+use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind};
+use qol_gpui::window::centered_window_placement;
 use qol_headless::DoctorCheckResult;
 use std::env;
+use std::ffi::c_void;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
-use std::sync::Mutex;
+use std::process::{Child, Command, Stdio};
+use std::sync::{mpsc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -15,19 +20,30 @@ use crate::{Config, Monitor, Rect};
 
 const MAX_DISPLAYS: u32 = 16;
 const SWIFT_HELPER_CACHE_DIR: &str = "qol-shot-swift";
+const STATUS_OVERLAY_PID_FILE_NAME: &str = "qol-shot-status-overlay.pid";
+const STATUS_OVERLAY_MAX_LIFETIME_MS: u32 = 120_000;
+const RECORDING_OVERLAY_PID_FILE_NAME: &str = "qol-shot-recording-overlay.pid";
+const RECORDING_OVERLAY_MAX_LIFETIME_MS: u32 = 43_200_000;
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 static STATUS_OVERLAY_PID: Mutex<Option<u32>> = Mutex::new(None);
+static RECORDING_OVERLAY_PID: Mutex<Option<u32>> = Mutex::new(None);
 const SWIFT_PRELUDE: &str = include_str!("macos_swift/prelude.swift");
-const REGION_SELECTOR_SWIFT: &str = include_str!("macos_swift/region_selector.swift");
 const STATUS_OVERLAY_SWIFT: &str = include_str!("macos_swift/status_overlay.swift");
+const RECORDING_OVERLAY_SWIFT: &str = include_str!("macos_swift/recording_overlay.swift");
 const CLIPBOARD_WRITER_SWIFT: &str = include_str!("macos_swift/clipboard_writer.swift");
-const REGION_SELECTOR_HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/region-selector"));
+const VIDEO_COMPOSER_SWIFT: &str = include_str!("macos_swift/video_composer.swift");
 const STATUS_OVERLAY_HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/status-overlay"));
+const RECORDING_OVERLAY_HELPER: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/recording-overlay"));
 const CLIPBOARD_WRITER_HELPER: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/clipboard-writer"));
+const VIDEO_COMPOSER_HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/video-composer"));
 
 type CGDirectDisplayID = u32;
+type CGEventRef = *const c_void;
+const CG_EVENT_SOURCE_STATE_HID_SYSTEM: i32 = 1;
+const CG_MOUSE_BUTTON_LEFT: i32 = 0;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -58,6 +74,14 @@ extern "C" {
         display_count: *mut u32,
     ) -> i32;
     fn CGDisplayBounds(display: CGDirectDisplayID) -> CGRect;
+    fn CGEventCreate(source: *const c_void) -> CGEventRef;
+    fn CGEventGetLocation(event: CGEventRef) -> CGPoint;
+    fn CGEventSourceButtonState(state_id: i32, button: i32) -> bool;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFRelease(cf: *const c_void);
 }
 
 extern "C" {
@@ -83,14 +107,243 @@ struct DisplayCaptureSegment {
 }
 
 pub fn select_region() -> Result<Option<Rect>> {
-    select_region_with_overlay()
+    crate::region_selector::select_region_blocking_with(|tx, cx| {
+        let tracker = MonitorTracker::start(cx);
+        let monitor = tracker.snapshot_monitor();
+        let monitors = selector_monitors(&tracker);
+        qol_runtime::probe!(
+            "SHOT_SELECT_PLATFORM",
+            "mode=blocking monitor={} monitors={}",
+            monitor.is_some(),
+            monitors.len()
+        );
+        open_region_selector_with_sender(tx, true, monitor, monitors, cx);
+    })
 }
 
 pub fn select_region_in_app(
-    _cx: &mut gpui::App,
-    _monitor: Option<qol_gpui::monitor::ActiveMonitor>,
-) -> Option<std::sync::mpsc::Receiver<Option<Rect>>> {
-    None
+    cx: &mut gpui::App,
+    monitor: Option<ActiveMonitor>,
+    monitors: Vec<ActiveMonitor>,
+) -> Option<mpsc::Receiver<Option<Rect>>> {
+    qol_runtime::probe!(
+        "SHOT_SELECT_PLATFORM",
+        "mode=in-app monitor={} monitors={}",
+        monitor.is_some(),
+        monitors.len()
+    );
+    Some(open_region_selector(cx, monitor, monitors))
+}
+
+fn open_region_selector(
+    cx: &mut gpui::App,
+    monitor: Option<ActiveMonitor>,
+    monitors: Vec<ActiveMonitor>,
+) -> mpsc::Receiver<Option<Rect>> {
+    let (tx, rx) = mpsc::channel();
+    open_region_selector_with_sender(tx, false, monitor, monitors, cx);
+    rx
+}
+
+fn open_region_selector_with_sender(
+    tx: mpsc::Sender<Option<Rect>>,
+    quit_on_finish: bool,
+    monitor: Option<ActiveMonitor>,
+    monitors: Vec<ActiveMonitor>,
+    cx: &mut gpui::App,
+) {
+    let selectors = selector_windows(monitor.as_ref(), monitors, cx);
+    let titles = selectors
+        .iter()
+        .map(|selector| selector.title().to_string())
+        .collect::<Vec<_>>();
+    qol_runtime::probe!(
+        "SHOT_SELECT_PLATFORM",
+        "mode=open selectors={} quit_on_finish={quit_on_finish}",
+        titles.len()
+    );
+    if crate::region_selector::open_all(tx, quit_on_finish, selectors, cx) {
+        for title in titles {
+            configure_selector_window(title, cx);
+        }
+        cx.activate(true);
+    }
+}
+
+fn selector_windows(
+    monitor: Option<&ActiveMonitor>,
+    monitors: Vec<ActiveMonitor>,
+    cx: &gpui::App,
+) -> Vec<crate::region_selector::SelectorWindow> {
+    let active_bounds = monitor.map(|monitor| monitor.bounds());
+    let map_rect = selector_rect_mapper();
+    let global_pointer: Option<crate::region_selector::GlobalPointerSource> =
+        Some(std::rc::Rc::new(MacPointerSource));
+    let monitors = if monitors.is_empty() {
+        monitor.cloned().into_iter().collect()
+    } else {
+        monitors
+    };
+    if monitors.is_empty() {
+        return vec![selector_window(
+            selector_fallback_bounds(),
+            active_bounds,
+            None,
+            true,
+            map_rect,
+            global_pointer,
+        )];
+    }
+    monitors
+        .into_iter()
+        .map(|monitor| {
+            let bounds = monitor.bounds();
+            let placement = centered_window_placement(Some(&monitor), bounds.size, cx);
+            selector_window(
+                bounds,
+                active_bounds,
+                placement.display_id,
+                selector_focus(bounds, active_bounds),
+                map_rect.clone(),
+                global_pointer.clone(),
+            )
+        })
+        .collect()
+}
+
+fn selector_window(
+    bounds: Bounds<Pixels>,
+    active_bounds: Option<Bounds<Pixels>>,
+    display_id: Option<gpui::DisplayId>,
+    focus: bool,
+    map_rect: crate::region_selector::RectMapper,
+    global_pointer: Option<crate::region_selector::GlobalPointerSource>,
+) -> crate::region_selector::SelectorWindow {
+    crate::region_selector::SelectorWindow::new(
+        bounds,
+        active_bounds,
+        crate::region_selector::SelectorWindowOptions {
+            display_id,
+            kind: ghost_window_kind(),
+            decorations: ghost_window_decorations(false),
+            focus,
+        },
+        map_rect,
+        global_pointer,
+    )
+}
+
+fn selector_focus(bounds: Bounds<Pixels>, active_bounds: Option<Bounds<Pixels>>) -> bool {
+    match active_bounds {
+        Some(active_bounds) => bounds == active_bounds,
+        None => true,
+    }
+}
+
+struct MacPointerSource;
+
+impl crate::region_selector::GlobalPointer for MacPointerSource {
+    fn position(&self) -> Option<gpui::Point<Pixels>> {
+        let event = CfGuard::new(unsafe { CGEventCreate(std::ptr::null()) })?;
+        let location = unsafe { CGEventGetLocation(event.as_ptr()) };
+        Some(gpui::point(
+            gpui::px(location.x as f32),
+            gpui::px(location.y as f32),
+        ))
+    }
+
+    fn primary_button_down(&self) -> bool {
+        unsafe { CGEventSourceButtonState(CG_EVENT_SOURCE_STATE_HID_SYSTEM, CG_MOUSE_BUTTON_LEFT) }
+    }
+}
+
+struct CfGuard(*const c_void);
+
+impl CfGuard {
+    fn new(ptr: *const c_void) -> Option<Self> {
+        if ptr.is_null() {
+            return None;
+        }
+        Some(Self(ptr))
+    }
+
+    fn as_ptr(&self) -> *const c_void {
+        self.0
+    }
+}
+
+impl Drop for CfGuard {
+    fn drop(&mut self) {
+        unsafe { CFRelease(self.0) }
+    }
+}
+
+fn selector_monitors(tracker: &MonitorTracker) -> Vec<ActiveMonitor> {
+    let monitors = tracker.all_monitors();
+    if !monitors.is_empty() {
+        return monitors;
+    }
+    tracker.snapshot_monitor().into_iter().collect()
+}
+
+fn selector_fallback_bounds() -> Bounds<Pixels> {
+    let displays = active_display_bounds()
+        .ok()
+        .filter(|displays| !displays.is_empty())
+        .and_then(|displays| displays.into_iter().next());
+    displays
+        .map(crate::region_selector::bounds_from_monitor)
+        .unwrap_or_else(crate::region_selector::fallback_bounds)
+}
+
+fn selector_rect_mapper() -> crate::region_selector::RectMapper {
+    let displays = active_display_bounds().unwrap_or_default();
+    std::rc::Rc::new(move |rect| map_selector_rect_to_capture(rect, &displays))
+}
+
+fn map_selector_rect_to_capture(rect: Rect, displays: &[Monitor]) -> Option<Rect> {
+    if displays.is_empty() {
+        return Some(rect);
+    }
+
+    displays
+        .iter()
+        .filter_map(|display| rect_intersection(rect, *display))
+        .reduce(union_rects)
+}
+
+fn union_rects(left: Rect, right: Rect) -> Rect {
+    let x = left.x.min(right.x);
+    let y = left.y.min(right.y);
+    let right_edge = (left.x + left.w).max(right.x + right.w);
+    let bottom_edge = (left.y + left.h).max(right.y + right.h);
+    Rect {
+        x,
+        y,
+        w: right_edge - x,
+        h: bottom_edge - y,
+    }
+}
+
+fn configure_selector_window(title: String, cx: &mut gpui::App) {
+    cx.defer(move |_| configure_selector_window_now(&title));
+}
+
+fn configure_selector_window_now(title: &str) {
+    let started = Instant::now();
+    if qol_gpui::popup_window::configure_overlay_window(title) {
+        qol_runtime::probe!(
+            "SHOT_SELECT_OVERLAY",
+            "ms={} result=mapped",
+            started.elapsed().as_millis()
+        );
+        return;
+    }
+    qol_runtime::probe!(
+        "SHOT_SELECT_OVERLAY",
+        "ms={} result=missing",
+        started.elapsed().as_millis()
+    );
 }
 
 pub fn get_monitors() -> Result<Vec<Monitor>> {
@@ -106,28 +359,37 @@ pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result
     let capture_file = native_capture_file_path(output_file);
     let segments = capture_segments(rect)?;
 
-    if segments.len() > 1 && resolve_command("ffmpeg").is_none() {
-        show_notification(
-            "Recording failed",
-            "Install ffmpeg to record across multiple displays",
-            2400,
-        );
-        return Err(anyhow!(
-            "ffmpeg is required to compose multi-display recordings"
-        ));
-    }
-
-    if segments.len() <= 1 {
-        let pid = start_single_display_capture(rect, config, &capture_file, segments.first())?;
-        return Ok(CaptureSession::single(
-            pid,
-            *rect,
-            output_file.to_path_buf(),
-            capture_file,
-        ));
-    }
+    qol_runtime::probe!(
+        "SHOT_RECORD_START_PLAN",
+        "plan=full-display-native-crop segments={} rect={} output={} capture={} same_file={} audio={}",
+        segments.len(),
+        rect_label(*rect),
+        path_label(output_file),
+        path_label(&capture_file),
+        paths_match(output_file, &capture_file),
+        config.audio.enabled,
+    );
 
     start_multi_display_capture(*rect, config, output_file, &capture_file, &segments)
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum CapturePlan {
+    SingleDisplay,
+    SegmentedFfmpeg,
+    SegmentedNative,
+}
+
+#[cfg(test)]
+fn capture_plan(segment_count: usize, ffmpeg_available: bool) -> CapturePlan {
+    if segment_count <= 1 {
+        return CapturePlan::SingleDisplay;
+    }
+    if ffmpeg_available {
+        return CapturePlan::SegmentedFfmpeg;
+    }
+    CapturePlan::SegmentedNative
 }
 
 pub fn capture_screenshot(rect: &Rect, output_file: &Path) -> Result<()> {
@@ -219,28 +481,61 @@ fn native_capture_file_path(output_file: &Path) -> PathBuf {
     output_file.with_extension("mov")
 }
 
-pub fn recording_started() {
+pub fn recording_started(session: &CaptureSession) {
+    qol_runtime::probe!("SHOT_RECORD_NOTIFY", "stage=started");
+    show_recording_region_overlay(session);
     show_notification("Recording started", "Press your hotkey to stop", 1200);
     prewarm_recording_helpers();
 }
 
 pub fn recording_stopped(session: &CaptureSession, config: &Config) {
+    dismiss_recording_region_overlay();
+    qol_runtime::probe!(
+        "SHOT_RECORD_FINALIZE",
+        "stage=stopped-entry pids={} segments={}",
+        session.pid_list(),
+        session.segments.len()
+    );
     if let Some(output_file) = session.output_file.as_deref() {
         let capture_file = session.capture_file.as_deref().unwrap_or(output_file);
         let conversion_needed = !paths_match(output_file, capture_file);
+        qol_runtime::probe!(
+            "SHOT_RECORD_FINALIZE",
+            "stage=begin output={} capture={} conversion_needed={} segments={}",
+            path_label(output_file),
+            path_label(capture_file),
+            conversion_needed,
+            session.segments.len()
+        );
         show_recording_ended(output_file, conversion_needed);
         let reveal_file = match finalize_recording(session, output_file, capture_file, config) {
             Ok(reveal_file) => {
+                qol_runtime::probe!(
+                    "SHOT_RECORD_FINALIZE",
+                    "stage=ok reveal={} converted={}",
+                    path_label(&reveal_file),
+                    conversion_needed
+                );
                 show_recording_saved(&reveal_file, conversion_needed);
                 reveal_file
             }
-            Err(error) => finalization_fallback(error, session, capture_file),
+            Err(error) => {
+                qol_runtime::probe!("SHOT_RECORD_FINALIZE", "stage=error result=fallback");
+                finalization_fallback(error, session, capture_file)
+            }
         };
-        if reveal_recording(&reveal_file) {
+        let revealed = reveal_recording(&reveal_file);
+        qol_runtime::probe!(
+            "SHOT_RECORD_FINALIZE",
+            "stage=reveal file={} result={revealed}",
+            path_label(&reveal_file)
+        );
+        if revealed {
             return;
         }
     }
 
+    qol_runtime::probe!("SHOT_RECORD_FINALIZE", "stage=open-videos");
     show_status_overlay(
         "Recording stopped",
         "Opening Videos...",
@@ -253,6 +548,14 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) {
 }
 
 pub fn stop_capture(session: &CaptureSession) -> Result<()> {
+    dismiss_recording_region_overlay();
+    qol_runtime::probe!(
+        "SHOT_RECORD_STOP_PLATFORM",
+        "pids={} count={} segments={}",
+        session.pid_list(),
+        session.processes.len(),
+        session.segments.len()
+    );
     let mut failures = Vec::new();
     for process in &session.processes {
         if let Err(error) = stop_capture_process(process.pid) {
@@ -261,9 +564,15 @@ pub fn stop_capture(session: &CaptureSession) -> Result<()> {
     }
 
     if failures.is_empty() {
+        qol_runtime::probe!("SHOT_RECORD_STOP_PLATFORM", "result=ok");
         return Ok(());
     }
 
+    qol_runtime::probe!(
+        "SHOT_RECORD_STOP_PLATFORM",
+        "result=error failures={}",
+        failures.len()
+    );
     Err(anyhow!(
         "failed to stop capture processes: {}",
         failures.join("; ")
@@ -271,12 +580,7 @@ pub fn stop_capture(session: &CaptureSession) -> Result<()> {
 }
 
 pub fn process_alive(pid: u32) -> bool {
-    let pid_arg = pid.to_string();
-    Command::new("kill")
-        .args(["-0", pid_arg.as_str()])
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    super::unix_process_alive(pid)
 }
 
 pub fn show_notification(title: &str, message: &str, _timeout_ms: u32) {
@@ -338,17 +642,17 @@ pub fn required_binaries_check() -> DoctorCheckResult {
     if resolve_command("ffmpeg").is_none() && resolve_command("avconvert").is_none() {
         return DoctorCheckResult::warn(
             "required_binaries",
-            "Native MOV single-display recording is available, but ffmpeg is missing for multi-display recording and non-MOV conversion.",
+            "Native MOV recording is available, including multi-display composition, but non-MOV conversion is limited without ffmpeg or avconvert.",
         )
-        .with_fix("Install ffmpeg for multi-display recording, MP4, MKV, or WebM output.");
+        .with_fix("Install ffmpeg for MP4, MKV, or WebM output, or avconvert for MP4 output.");
     }
 
     if resolve_command("ffmpeg").is_none() {
         return DoctorCheckResult::warn(
             "required_binaries",
-            "Native MOV single-display recording and MP4 conversion through avconvert are available, but multi-display recording and WebM/MKV require ffmpeg.",
+            "Native MOV recording and MP4 conversion through avconvert are available, including multi-display composition, but WebM/MKV require ffmpeg.",
         )
-        .with_fix("Install ffmpeg for multi-display recording, WebM, or MKV output.");
+        .with_fix("Install ffmpeg for WebM or MKV output.");
     }
 
     DoctorCheckResult::ok(
@@ -447,18 +751,90 @@ fn round_i32(value: f64) -> i32 {
     value.round() as i32
 }
 
+fn rect_label(rect: Rect) -> String {
+    format!("{}x{}+{},{}", rect.w, rect.h, rect.x, rect.y)
+}
+
+fn monitor_label(monitor: Monitor) -> String {
+    format!("{}x{}+{},{}", monitor.w, monitor.h, monitor.x, monitor.y)
+}
+
+fn path_label(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("none")
+        .to_string()
+}
+
+fn display_summary(displays: &[DisplayInfo]) -> (usize, String) {
+    (
+        displays.len(),
+        displays
+            .iter()
+            .map(|display| {
+                format!(
+                    "d{}:{}",
+                    display.display_index,
+                    monitor_label(display.bounds)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("|"),
+    )
+}
+
+fn segment_summary(segments: &[DisplayCaptureSegment]) -> String {
+    if segments.is_empty() {
+        return "none".to_string();
+    }
+
+    segments
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| {
+            format!(
+                "#{index}:d{}:{}@{},{}",
+                segment.display_index,
+                rect_label(segment.rect),
+                segment.offset_x,
+                segment.offset_y
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
 fn capture_segments(rect: &Rect) -> Result<Vec<DisplayCaptureSegment>> {
-    let segments = active_displays()?
+    let displays = active_displays()?;
+    let display_summary = display_summary(&displays);
+    let segments = displays
         .into_iter()
         .filter_map(|display| {
-            rect_intersection(*rect, display.bounds).map(|intersection| DisplayCaptureSegment {
-                display_index: display.display_index,
-                rect: intersection,
-                offset_x: intersection.x - rect.x,
-                offset_y: intersection.y - rect.y,
+            rect_intersection(*rect, display.bounds).map(|_intersection| {
+                let capture_rect = Rect {
+                    x: display.bounds.x,
+                    y: display.bounds.y,
+                    w: display.bounds.w,
+                    h: display.bounds.h,
+                };
+                DisplayCaptureSegment {
+                    display_index: display.display_index,
+                    rect: capture_rect,
+                    offset_x: capture_rect.x - rect.x,
+                    offset_y: capture_rect.y - rect.y,
+                }
             })
         })
         .collect::<Vec<_>>();
+    qol_runtime::probe!(
+        "SHOT_MAC_CAPTURE_SEGMENTS",
+        "rect={} displays={} display_bounds={} segments={} segment_bounds={}",
+        rect_label(*rect),
+        display_summary.0,
+        display_summary.1,
+        segments.len(),
+        segment_summary(&segments)
+    );
 
     if segments.is_empty() {
         return Err(anyhow!(
@@ -484,21 +860,6 @@ fn rect_intersection(left: Rect, right: Monitor) -> Option<Rect> {
     Some(Rect { x, y, w, h })
 }
 
-fn start_single_display_capture(
-    rect: &Rect,
-    config: &Config,
-    capture_file: &Path,
-    segment: Option<&DisplayCaptureSegment>,
-) -> Result<u32> {
-    spawn_screencapture(
-        segment.map(|segment| segment.rect).unwrap_or(*rect),
-        segment.map(|segment| segment.display_index),
-        config.audio.enabled,
-        capture_file,
-        CaptureLogMode::Truncate,
-    )
-}
-
 fn start_multi_display_capture(
     canvas: Rect,
     config: &Config,
@@ -508,6 +869,15 @@ fn start_multi_display_capture(
 ) -> Result<CaptureSession> {
     let mut processes = Vec::new();
     let mut capture_segments = Vec::new();
+    qol_runtime::probe!(
+        "SHOT_MAC_CAPTURE_MULTI",
+        "stage=begin canvas={} segments={} output={} capture={} audio={}",
+        rect_label(canvas),
+        segments.len(),
+        path_label(output_file),
+        path_label(capture_file),
+        config.audio.enabled
+    );
 
     for (index, segment) in segments.iter().enumerate() {
         let segment_file = segment_capture_file(capture_file, index);
@@ -516,8 +886,20 @@ fn start_multi_display_capture(
         } else {
             CaptureLogMode::Append
         };
+        qol_runtime::probe!(
+            "SHOT_MAC_CAPTURE_MULTI",
+            "stage=segment index={} display={} rect={} offset={},{} file={} audio={} log={}",
+            index,
+            segment.display_index,
+            rect_label(segment.rect),
+            segment.offset_x,
+            segment.offset_y,
+            path_label(&segment_file),
+            config.audio.enabled && index == 0,
+            log_mode.as_str()
+        );
         let pid = match spawn_screencapture(
-            segment.rect,
+            None,
             Some(segment.display_index),
             config.audio.enabled && index == 0,
             &segment_file,
@@ -525,6 +907,12 @@ fn start_multi_display_capture(
         ) {
             Ok(pid) => pid,
             Err(error) => {
+                qol_runtime::probe!(
+                    "SHOT_MAC_CAPTURE_MULTI",
+                    "stage=spawn-error index={} spawned={}",
+                    index,
+                    processes.len()
+                );
                 stop_spawned_processes(&processes);
                 cleanup_segment_files(&capture_segments);
                 return Err(error);
@@ -540,6 +928,16 @@ fn start_multi_display_capture(
         });
     }
 
+    qol_runtime::probe!(
+        "SHOT_MAC_CAPTURE_MULTI",
+        "stage=ok pids={} segments={}",
+        processes
+            .iter()
+            .map(|process| process.pid.to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+        capture_segments.len()
+    );
     Ok(CaptureSession {
         output_file: Some(output_file.to_path_buf()),
         capture_file: Some(capture_file.to_path_buf()),
@@ -555,8 +953,17 @@ enum CaptureLogMode {
     Append,
 }
 
+impl CaptureLogMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Truncate => "truncate",
+            Self::Append => "append",
+        }
+    }
+}
+
 fn spawn_screencapture(
-    rect: Rect,
+    rect: Option<Rect>,
     display_index: Option<u32>,
     include_audio: bool,
     output_file: &Path,
@@ -565,16 +972,18 @@ fn spawn_screencapture(
     let (stdout_log, stderr_log) = capture_log_files(log_mode)?;
 
     let mut command = Command::new("screencapture");
-    let region = format!("{},{},{},{}", rect.x, rect.y, rect.w, rect.h);
-    command.arg("-v");
-    if let Some(display_index) = display_index {
-        command.arg("-D").arg(display_index.to_string());
-    }
-    command.args(["-R", region.as_str(), "-k", "-x"]);
-
-    if include_audio {
-        command.arg("-g");
-    }
+    let args = screencapture_recording_args(rect, display_index, include_audio);
+    qol_runtime::probe!(
+        "SHOT_MAC_CAPTURE_SPAWN",
+        "display={:?} rect={} audio={include_audio} log={} output={} args={}",
+        display_index,
+        rect.map(rect_label)
+            .unwrap_or_else(|| "full-display".to_string()),
+        log_mode.as_str(),
+        path_label(output_file),
+        args.join(" ")
+    );
+    command.args(&args);
 
     let child = command
         .arg(output_file)
@@ -584,7 +993,38 @@ fn spawn_screencapture(
         .spawn()
         .context("failed to start screencapture")?;
 
+    qol_runtime::probe!(
+        "SHOT_MAC_CAPTURE_PID",
+        "pid={} display={:?} output={}",
+        child.id(),
+        display_index,
+        path_label(output_file)
+    );
     Ok(child.id())
+}
+
+fn screencapture_recording_args(
+    rect: Option<Rect>,
+    display_index: Option<u32>,
+    include_audio: bool,
+) -> Vec<String> {
+    let mut args = vec!["-v".to_string()];
+    if let Some(display_index) = display_index {
+        args.extend(["-D".to_string(), display_index.to_string()]);
+    }
+    if let Some(rect) = rect {
+        args.extend([
+            "-R".to_string(),
+            format!("{},{},{},{}", rect.x, rect.y, rect.w, rect.h),
+        ]);
+    }
+    args.push("-x".to_string());
+
+    if include_audio {
+        args.push("-g".to_string());
+    }
+
+    args
 }
 
 fn capture_log_files(mode: CaptureLogMode) -> Result<(File, File)> {
@@ -622,82 +1062,30 @@ fn cleanup_segment_files(segments: &[CaptureSegment]) {
     }
 }
 
-fn select_region_with_overlay() -> Result<Option<Rect>> {
-    let output = run_region_selector().context("failed to run macOS region selector")?;
-
-    if output.status.code() == Some(2) {
-        return Ok(None);
-    }
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("macOS region selector failed: {}", stderr.trim()));
-    }
-
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if raw.is_empty() {
-        return Ok(None);
-    }
-
-    parse_selection_geometry(&raw).map(Some)
-}
-
-fn run_region_selector() -> Result<Output> {
-    let helper = ensure_swift_helper(
-        "region-selector",
-        REGION_SELECTOR_SWIFT,
-        REGION_SELECTOR_HELPER,
-    )
-    .context("failed to install embedded region selector helper")?;
-
-    run_compiled_region_selector(&helper).inspect_err(|_| {
-        let _ = fs::remove_file(&helper);
-    })
-}
-
-fn run_compiled_region_selector(helper: &Path) -> Result<Output> {
-    let mut command = Command::new(helper);
-    configure_active_monitor_env(&mut command);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .context("failed to start compiled macOS region selector")
-}
-
-fn parse_selection_geometry(raw: &str) -> Result<Rect> {
-    let values = raw
-        .split(',')
-        .map(str::trim)
-        .map(str::parse::<i32>)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .context("invalid selection geometry")?;
-    if values.len() != 4 {
-        return Err(anyhow!(
-            "expected 4 values in geometry, got {}",
-            values.len()
-        ));
-    }
-
-    Ok(Rect {
-        x: values[0],
-        y: values[1],
-        w: values[2],
-        h: values[3],
-    })
-}
-
 fn finalize_recording(
     session: &CaptureSession,
     output_file: &Path,
     capture_file: &Path,
     config: &Config,
 ) -> Result<PathBuf> {
+    qol_runtime::probe!(
+        "SHOT_RECORD_FINALIZE",
+        "stage=prepare-native capture={} segments={}",
+        path_label(capture_file),
+        session.segments.len()
+    );
     prepare_native_capture_file(session, capture_file, config)?;
     if paths_match(output_file, capture_file) {
+        qol_runtime::probe!("SHOT_RECORD_FINALIZE", "stage=no-conversion");
         return Ok(output_file.to_path_buf());
     }
 
+    qol_runtime::probe!(
+        "SHOT_RECORD_FINALIZE",
+        "stage=convert capture={} output={}",
+        path_label(capture_file),
+        path_label(output_file)
+    );
     convert_recording(capture_file, output_file, config)?;
     let _ = std::fs::remove_file(capture_file);
     Ok(output_file.to_path_buf())
@@ -706,20 +1094,27 @@ fn finalize_recording(
 fn prepare_native_capture_file(
     session: &CaptureSession,
     capture_file: &Path,
-    config: &Config,
+    _config: &Config,
 ) -> Result<()> {
-    if session.segments.len() <= 1 {
+    if session.segments.is_empty() {
+        qol_runtime::probe!(
+            "SHOT_RECORD_NATIVE_FILE",
+            "mode=legacy-single capture={}",
+            path_label(capture_file)
+        );
         return wait_for_stable_file(capture_file);
     }
 
-    compose_segment_recordings(session, capture_file, config)
+    qol_runtime::probe!(
+        "SHOT_RECORD_NATIVE_FILE",
+        "mode=compose count={} capture={}",
+        session.segments.len(),
+        path_label(capture_file)
+    );
+    compose_segment_recordings(session, capture_file)
 }
 
-fn compose_segment_recordings(
-    session: &CaptureSession,
-    capture_file: &Path,
-    config: &Config,
-) -> Result<()> {
+fn compose_segment_recordings(session: &CaptureSession, capture_file: &Path) -> Result<()> {
     let canvas = session
         .canvas
         .ok_or_else(|| anyhow!("multi-display capture session is missing canvas bounds"))?;
@@ -728,59 +1123,60 @@ fn compose_segment_recordings(
         wait_for_stable_file(&segment.file)?;
     }
 
-    let mut command = Command::new(resolve_command("ffmpeg").unwrap_or_else(|| "ffmpeg".into()));
-    command.args(segment_composition_args(
-        session,
-        canvas,
-        capture_file,
-        config,
-    ));
-    run_conversion_command(&mut command, "ffmpeg composition")?;
+    qol_runtime::probe!(
+        "SHOT_RECORD_COMPOSE",
+        "tool=native segments={} capture={}",
+        session.segments.len(),
+        path_label(capture_file)
+    );
+    compose_segment_recordings_with_native_helper(session, canvas, capture_file)?;
     cleanup_segment_files(&session.segments);
     Ok(())
 }
 
-fn segment_composition_args(
+fn compose_segment_recordings_with_native_helper(
     session: &CaptureSession,
     canvas: Rect,
     capture_file: &Path,
-    config: &Config,
+) -> Result<()> {
+    let helper = ensure_swift_helper(
+        "video-composer",
+        VIDEO_COMPOSER_SWIFT,
+        VIDEO_COMPOSER_HELPER,
+    )
+    .context("failed to install embedded video composer helper")?;
+    let mut command = Command::new(&helper);
+    command.args(native_segment_composition_args(
+        session,
+        canvas,
+        capture_file,
+    ));
+    run_conversion_command(&mut command, "native segment composition")
+}
+
+fn native_segment_composition_args(
+    session: &CaptureSession,
+    canvas: Rect,
+    capture_file: &Path,
 ) -> Vec<String> {
     let mut args = vec![
-        "-hide_banner".to_string(),
-        "-loglevel".to_string(),
-        "error".to_string(),
-        "-y".to_string(),
+        canvas.w.to_string(),
+        canvas.h.to_string(),
+        capture_file.to_string_lossy().to_string(),
     ];
 
     for segment in &session.segments {
-        args.extend(["-i".to_string(), segment.file.to_string_lossy().to_string()]);
+        args.extend([
+            segment.offset_x.to_string(),
+            segment.offset_y.to_string(),
+            segment.file.to_string_lossy().to_string(),
+        ]);
     }
-
-    args.extend([
-        "-filter_complex".to_string(),
-        segment_composition_filter(session, canvas),
-        "-map".to_string(),
-        "[v]".to_string(),
-        "-map".to_string(),
-        "0:a?".to_string(),
-        "-c:v".to_string(),
-        "libx264".to_string(),
-        "-crf".to_string(),
-        clamped_crf(config.video.crf).to_string(),
-        "-preset".to_string(),
-        normalized_h264_preset(&config.video.preset).to_string(),
-        "-pix_fmt".to_string(),
-        "yuv420p".to_string(),
-        "-c:a".to_string(),
-        "copy".to_string(),
-        "-shortest".to_string(),
-        capture_file.to_string_lossy().to_string(),
-    ]);
 
     args
 }
 
+#[cfg(test)]
 fn segment_composition_filter(session: &CaptureSession, canvas: Rect) -> String {
     let mut filters = Vec::new();
     let mut inputs = String::new();
@@ -813,6 +1209,12 @@ fn finalization_fallback(
     session: &CaptureSession,
     capture_file: &Path,
 ) -> PathBuf {
+    qol_runtime::probe!(
+        "SHOT_RECORD_FINALIZE",
+        "stage=fallback capture={} segments={}",
+        path_label(capture_file),
+        session.segments.len()
+    );
     let fallback_file = fallback_recording_file(session, capture_file);
     show_status_overlay(
         "Conversion failed",
@@ -842,6 +1244,11 @@ fn fallback_recording_file(session: &CaptureSession, capture_file: &Path) -> Pat
 }
 
 fn show_recording_ended(output_file: &Path, conversion_needed: bool) {
+    qol_runtime::probe!(
+        "SHOT_RECORD_STATUS",
+        "stage=ended output={} conversion_needed={conversion_needed}",
+        path_label(output_file)
+    );
     if !conversion_needed {
         show_status_overlay(
             "Recording stopped",
@@ -864,6 +1271,11 @@ fn show_recording_ended(output_file: &Path, conversion_needed: bool) {
 }
 
 fn show_recording_saved(output_file: &Path, converted: bool) {
+    qol_runtime::probe!(
+        "SHOT_RECORD_STATUS",
+        "stage=saved output={} converted={converted}",
+        path_label(output_file)
+    );
     let format = output_format_label(output_file);
     let message = if converted {
         format!("Converted to {} in Videos", format)
@@ -889,6 +1301,13 @@ impl StatusOverlayLifecycle {
     fn exit_after_hide(self) -> bool {
         matches!(self, StatusOverlayLifecycle::ExitAfterHide)
     }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::KeepAlive => "keep-alive",
+            Self::ExitAfterHide => "exit-after-hide",
+        }
+    }
 }
 
 fn show_status_overlay(
@@ -897,11 +1316,18 @@ fn show_status_overlay(
     timeout_ms: u32,
     lifecycle: StatusOverlayLifecycle,
 ) {
+    qol_runtime::probe!(
+        "SHOT_STATUS_OVERLAY",
+        "event=show title={title:?} timeout_ms={timeout_ms} lifecycle={}",
+        lifecycle.as_str()
+    );
     dismiss_status_overlay();
     let Ok(child) = spawn_status_overlay(title, message, timeout_ms, lifecycle) else {
+        qol_runtime::probe!("SHOT_STATUS_OVERLAY", "event=spawn result=error");
         return;
     };
     let pid = child.id();
+    qol_runtime::probe!("SHOT_STATUS_OVERLAY", "event=spawn result=ok pid={pid}");
     write_status_overlay_pid(pid);
 
     thread::spawn(move || {
@@ -923,17 +1349,28 @@ fn spawn_status_overlay(
         STATUS_OVERLAY_HELPER,
     ) {
         Ok(helper) => {
+            qol_runtime::probe!("SHOT_STATUS_OVERLAY", "event=helper result=compiled");
             match spawn_compiled_status_overlay(&helper, title, message, timeout_ms, lifecycle) {
                 Ok(child) => Ok(child),
                 Err(error) => {
+                    qol_runtime::probe!(
+                        "SHOT_STATUS_OVERLAY",
+                        "event=compiled-spawn result=error fallback=source"
+                    );
                     let _ = fs::remove_file(&helper);
                     spawn_source_status_overlay(title, message, timeout_ms, lifecycle)
                         .with_context(|| format!("compiled status overlay failed first: {error:#}"))
                 }
             }
         }
-        Err(error) => spawn_source_status_overlay(title, message, timeout_ms, lifecycle)
-            .with_context(|| format!("failed to build status overlay helper: {error:#}")),
+        Err(error) => {
+            qol_runtime::probe!(
+                "SHOT_STATUS_OVERLAY",
+                "event=helper result=error fallback=source"
+            );
+            spawn_source_status_overlay(title, message, timeout_ms, lifecycle)
+                .with_context(|| format!("failed to build status overlay helper: {error:#}"))
+        }
     }
 }
 
@@ -979,6 +1416,14 @@ fn configure_status_overlay(
         .env("QOL_STATUS_SUBTITLE", message)
         .env("QOL_STATUS_DURATION_MS", timeout_ms.to_string())
         .env(
+            "QOL_STATUS_MAX_LIFETIME_MS",
+            if lifecycle.exit_after_hide() {
+                "0".to_string()
+            } else {
+                STATUS_OVERLAY_MAX_LIFETIME_MS.to_string()
+            },
+        )
+        .env(
             "QOL_STATUS_EXIT_AFTER_HIDE",
             if lifecycle.exit_after_hide() {
                 "1"
@@ -994,9 +1439,18 @@ fn configure_active_monitor_env(command: &mut Command) {
         .get_state()
         .and_then(|state| state.active_monitor())
     else {
+        qol_runtime::probe!("SHOT_STATUS_OVERLAY", "event=active-monitor result=none");
         return;
     };
 
+    qol_runtime::probe!(
+        "SHOT_STATUS_OVERLAY",
+        "event=active-monitor result=some rect={}x{}+{},{}",
+        monitor.width,
+        monitor.height,
+        monitor.x,
+        monitor.y
+    );
     command
         .env("QOL_ACTIVE_MONITOR_X", monitor.x.to_string())
         .env("QOL_ACTIVE_MONITOR_Y", monitor.y.to_string())
@@ -1005,31 +1459,287 @@ fn configure_active_monitor_env(command: &mut Command) {
 }
 
 fn dismiss_status_overlay() {
-    let Some(pid) = take_status_overlay_pid() else {
-        return;
-    };
-
-    let _ = signal_process(pid, "TERM");
+    let pids = take_status_overlay_pids();
+    qol_runtime::probe!("SHOT_STATUS_OVERLAY", "event=dismiss count={}", pids.len());
+    for entry in pids {
+        stop_status_overlay_pid(entry);
+    }
 }
 
 fn write_status_overlay_pid(pid: u32) {
     if let Ok(mut current_pid) = STATUS_OVERLAY_PID.lock() {
         *current_pid = Some(pid);
     }
+    let _ = fs::write(status_overlay_pid_file_path(), format!("{pid}\n"));
 }
 
 fn clear_status_overlay_pid(pid: u32) {
-    let Ok(mut current_pid) = STATUS_OVERLAY_PID.lock() else {
-        return;
-    };
-
-    if *current_pid == Some(pid) {
-        *current_pid = None;
+    if let Ok(mut current_pid) = STATUS_OVERLAY_PID.lock() {
+        if *current_pid == Some(pid) {
+            *current_pid = None;
+        }
+    }
+    if read_status_overlay_pid_file() == Some(pid) {
+        let _ = fs::remove_file(status_overlay_pid_file_path());
     }
 }
 
-fn take_status_overlay_pid() -> Option<u32> {
-    STATUS_OVERLAY_PID.lock().ok()?.take()
+fn take_status_overlay_pids() -> Vec<StatusOverlayPid> {
+    let mut pids = Vec::new();
+    if let Ok(mut current_pid) = STATUS_OVERLAY_PID.lock() {
+        if let Some(pid) = current_pid.take() {
+            pids.push(StatusOverlayPid { pid, trusted: true });
+        }
+    }
+
+    if let Some(pid) = read_status_overlay_pid_file() {
+        if pids.iter().all(|entry| entry.pid != pid) {
+            pids.push(StatusOverlayPid {
+                pid,
+                trusted: false,
+            });
+        }
+    }
+
+    let _ = fs::remove_file(status_overlay_pid_file_path());
+    pids
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StatusOverlayPid {
+    pid: u32,
+    trusted: bool,
+}
+
+fn read_status_overlay_pid_file() -> Option<u32> {
+    let content = fs::read_to_string(status_overlay_pid_file_path()).ok()?;
+    content.lines().next()?.trim().parse().ok()
+}
+
+fn status_overlay_pid_file_path() -> PathBuf {
+    env::temp_dir().join(STATUS_OVERLAY_PID_FILE_NAME)
+}
+
+fn stop_status_overlay_pid(entry: StatusOverlayPid) {
+    if !entry.trusted && !status_overlay_process_matches(entry.pid) {
+        qol_runtime::probe!("SHOT_STATUS_OVERLAY", "pid={} result=skip-stale", entry.pid);
+        return;
+    }
+    if !process_alive(entry.pid) {
+        return;
+    }
+
+    qol_runtime::probe!("SHOT_STATUS_OVERLAY", "pid={} signal=term", entry.pid);
+    let _ = signal_process(entry.pid, libc::SIGTERM);
+    if wait_for_process_exit(entry.pid, Duration::from_millis(500)) {
+        return;
+    }
+
+    qol_runtime::probe!("SHOT_STATUS_OVERLAY", "pid={} signal=kill", entry.pid);
+    let _ = signal_process(entry.pid, libc::SIGKILL);
+}
+
+fn status_overlay_process_matches(pid: u32) -> bool {
+    let pid_arg = pid.to_string();
+    let Ok(output) = Command::new("ps")
+        .args(["-p", pid_arg.as_str(), "-o", "command="])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let command = String::from_utf8_lossy(&output.stdout);
+    command.contains("/qol-shot-swift/status-overlay-")
+}
+
+fn show_recording_region_overlay(session: &CaptureSession) {
+    let Some(rect) = session.canvas else {
+        qol_runtime::probe!("SHOT_RECORD_OVERLAY", "event=show result=no-canvas");
+        return;
+    };
+
+    qol_runtime::probe!(
+        "SHOT_RECORD_OVERLAY",
+        "event=show rect={}",
+        rect_label(rect)
+    );
+    dismiss_recording_region_overlay();
+    let Ok(child) = spawn_recording_region_overlay(rect) else {
+        qol_runtime::probe!("SHOT_RECORD_OVERLAY", "event=spawn result=error");
+        return;
+    };
+
+    let pid = child.id();
+    qol_runtime::probe!("SHOT_RECORD_OVERLAY", "event=spawn result=ok pid={pid}");
+    write_recording_overlay_pid(pid);
+
+    thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+        clear_recording_overlay_pid(pid);
+    });
+}
+
+fn spawn_recording_region_overlay(rect: Rect) -> Result<Child> {
+    match ensure_swift_helper(
+        "recording-overlay",
+        RECORDING_OVERLAY_SWIFT,
+        RECORDING_OVERLAY_HELPER,
+    ) {
+        Ok(helper) => {
+            qol_runtime::probe!("SHOT_RECORD_OVERLAY", "event=helper result=compiled");
+            match spawn_compiled_recording_region_overlay(&helper, rect) {
+                Ok(child) => Ok(child),
+                Err(error) => {
+                    qol_runtime::probe!(
+                        "SHOT_RECORD_OVERLAY",
+                        "event=compiled-spawn result=error fallback=source"
+                    );
+                    let _ = fs::remove_file(&helper);
+                    spawn_source_recording_region_overlay(rect).with_context(|| {
+                        format!("compiled recording overlay failed first: {error:#}")
+                    })
+                }
+            }
+        }
+        Err(error) => {
+            qol_runtime::probe!(
+                "SHOT_RECORD_OVERLAY",
+                "event=helper result=error fallback=source"
+            );
+            spawn_source_recording_region_overlay(rect)
+                .with_context(|| format!("failed to build recording overlay helper: {error:#}"))
+        }
+    }
+}
+
+fn spawn_compiled_recording_region_overlay(helper: &Path, rect: Rect) -> Result<Child> {
+    let mut command = Command::new(helper);
+    configure_recording_region_overlay(&mut command, rect);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to start compiled macOS recording overlay")
+}
+
+fn spawn_source_recording_region_overlay(rect: Rect) -> Result<Child> {
+    spawn_source_swift(RECORDING_OVERLAY_SWIFT, |command| {
+        configure_recording_region_overlay(command, rect);
+        command.stdout(Stdio::null()).stderr(Stdio::null());
+    })
+    .context("failed to start source macOS recording overlay")
+}
+
+fn configure_recording_region_overlay(command: &mut Command, rect: Rect) {
+    command
+        .env("QOL_RECORDING_RECT_X", rect.x.to_string())
+        .env("QOL_RECORDING_RECT_Y", rect.y.to_string())
+        .env("QOL_RECORDING_RECT_WIDTH", rect.w.to_string())
+        .env("QOL_RECORDING_RECT_HEIGHT", rect.h.to_string())
+        .env(
+            "QOL_RECORDING_OVERLAY_MAX_LIFETIME_MS",
+            RECORDING_OVERLAY_MAX_LIFETIME_MS.to_string(),
+        );
+}
+
+fn dismiss_recording_region_overlay() {
+    let pids = take_recording_overlay_pids();
+    qol_runtime::probe!("SHOT_RECORD_OVERLAY", "event=dismiss count={}", pids.len());
+    for entry in pids {
+        stop_recording_overlay_pid(entry);
+    }
+}
+
+fn write_recording_overlay_pid(pid: u32) {
+    if let Ok(mut current_pid) = RECORDING_OVERLAY_PID.lock() {
+        *current_pid = Some(pid);
+    }
+    let _ = fs::write(recording_overlay_pid_file_path(), format!("{pid}\n"));
+}
+
+fn clear_recording_overlay_pid(pid: u32) {
+    if let Ok(mut current_pid) = RECORDING_OVERLAY_PID.lock() {
+        if *current_pid == Some(pid) {
+            *current_pid = None;
+        }
+    }
+    if read_recording_overlay_pid_file() == Some(pid) {
+        let _ = fs::remove_file(recording_overlay_pid_file_path());
+    }
+}
+
+fn take_recording_overlay_pids() -> Vec<RecordingOverlayPid> {
+    let mut pids = Vec::new();
+    if let Ok(mut current_pid) = RECORDING_OVERLAY_PID.lock() {
+        if let Some(pid) = current_pid.take() {
+            pids.push(RecordingOverlayPid { pid, trusted: true });
+        }
+    }
+
+    if let Some(pid) = read_recording_overlay_pid_file() {
+        if pids.iter().all(|entry| entry.pid != pid) {
+            pids.push(RecordingOverlayPid {
+                pid,
+                trusted: false,
+            });
+        }
+    }
+
+    let _ = fs::remove_file(recording_overlay_pid_file_path());
+    pids
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RecordingOverlayPid {
+    pid: u32,
+    trusted: bool,
+}
+
+fn read_recording_overlay_pid_file() -> Option<u32> {
+    let content = fs::read_to_string(recording_overlay_pid_file_path()).ok()?;
+    content.lines().next()?.trim().parse().ok()
+}
+
+fn recording_overlay_pid_file_path() -> PathBuf {
+    env::temp_dir().join(RECORDING_OVERLAY_PID_FILE_NAME)
+}
+
+fn stop_recording_overlay_pid(entry: RecordingOverlayPid) {
+    if !entry.trusted && !recording_overlay_process_matches(entry.pid) {
+        qol_runtime::probe!("SHOT_RECORD_OVERLAY", "pid={} result=skip-stale", entry.pid);
+        return;
+    }
+    if !process_alive(entry.pid) {
+        return;
+    }
+
+    qol_runtime::probe!("SHOT_RECORD_OVERLAY", "pid={} signal=term", entry.pid);
+    let _ = signal_process(entry.pid, libc::SIGTERM);
+    if wait_for_process_exit(entry.pid, Duration::from_millis(500)) {
+        return;
+    }
+
+    qol_runtime::probe!("SHOT_RECORD_OVERLAY", "pid={} signal=kill", entry.pid);
+    let _ = signal_process(entry.pid, libc::SIGKILL);
+}
+
+fn recording_overlay_process_matches(pid: u32) -> bool {
+    let pid_arg = pid.to_string();
+    let Ok(output) = Command::new("ps")
+        .args(["-p", pid_arg.as_str(), "-o", "command="])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let command = String::from_utf8_lossy(&output.stdout);
+    command.contains("/qol-shot-swift/recording-overlay-")
 }
 
 fn prewarm_recording_helpers() {
@@ -1039,9 +1749,14 @@ fn prewarm_recording_helpers() {
         STATUS_OVERLAY_HELPER,
     );
     prewarm_swift_helper(
-        "region-selector",
-        REGION_SELECTOR_SWIFT,
-        REGION_SELECTOR_HELPER,
+        "recording-overlay",
+        RECORDING_OVERLAY_SWIFT,
+        RECORDING_OVERLAY_HELPER,
+    );
+    prewarm_swift_helper(
+        "video-composer",
+        VIDEO_COMPOSER_SWIFT,
+        VIDEO_COMPOSER_HELPER,
     );
 }
 
@@ -1191,6 +1906,7 @@ fn convert_with_avconvert(capture_file: &Path, output_file: &Path) -> Result<()>
 }
 
 fn run_conversion_command(command: &mut Command, name: &str) -> Result<()> {
+    qol_runtime::probe!("SHOT_RECORD_CONVERT", "tool={name} stage=start");
     let log_file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -1208,9 +1924,14 @@ fn run_conversion_command(command: &mut Command, name: &str) -> Result<()> {
         .with_context(|| format!("failed to run {name} conversion"))?;
 
     if status.success() {
+        qol_runtime::probe!("SHOT_RECORD_CONVERT", "tool={name} stage=ok");
         return Ok(());
     }
 
+    qol_runtime::probe!(
+        "SHOT_RECORD_CONVERT",
+        "tool={name} stage=error status={status}"
+    );
     Err(anyhow!("{name} exited with {}", status))
 }
 
@@ -1311,6 +2032,11 @@ fn wait_for_file(output_file: &Path) {
 }
 
 fn wait_for_stable_file(output_file: &Path) -> Result<()> {
+    qol_runtime::probe!(
+        "SHOT_RECORD_FILE_STABLE",
+        "stage=wait file={}",
+        path_label(output_file)
+    );
     let deadline = Instant::now() + Duration::from_secs(12);
     let mut last_len = None;
     let mut stable_count = 0;
@@ -1321,6 +2047,12 @@ fn wait_for_stable_file(output_file: &Path) -> Result<()> {
             if len > 0 && Some(len) == last_len {
                 stable_count += 1;
                 if stable_count >= 3 {
+                    qol_runtime::probe!(
+                        "SHOT_RECORD_FILE_STABLE",
+                        "stage=ok file={} len={}",
+                        path_label(output_file),
+                        len
+                    );
                     return Ok(());
                 }
             } else {
@@ -1331,6 +2063,14 @@ fn wait_for_stable_file(output_file: &Path) -> Result<()> {
         thread::sleep(Duration::from_millis(200));
     }
 
+    qol_runtime::probe!(
+        "SHOT_RECORD_FILE_STABLE",
+        "stage=timeout file={} last_len={}",
+        path_label(output_file),
+        last_len
+            .map(|len| len.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
     Err(anyhow!(
         "recording file did not finish writing: {}",
         output_file.display()
@@ -1338,41 +2078,45 @@ fn wait_for_stable_file(output_file: &Path) -> Result<()> {
 }
 
 fn stop_capture_process(pid: u32) -> Result<()> {
-    signal_process(pid, "INT")?;
+    qol_runtime::probe!("SHOT_RECORD_STOP_PID", "pid={} signal=int", pid);
+    signal_process(pid, libc::SIGINT)?;
     if wait_for_process_exit(pid, Duration::from_secs(8)) {
+        qol_runtime::probe!(
+            "SHOT_RECORD_STOP_PID",
+            "pid={} result=stopped signal=int",
+            pid
+        );
         return Ok(());
     }
 
-    signal_process(pid, "TERM")?;
+    qol_runtime::probe!("SHOT_RECORD_STOP_PID", "pid={} signal=term", pid);
+    signal_process(pid, libc::SIGTERM)?;
     if wait_for_process_exit(pid, Duration::from_secs(2)) {
+        qol_runtime::probe!(
+            "SHOT_RECORD_STOP_PID",
+            "pid={} result=stopped signal=term",
+            pid
+        );
         return Ok(());
     }
 
-    signal_process(pid, "KILL")?;
+    qol_runtime::probe!("SHOT_RECORD_STOP_PID", "pid={} signal=kill", pid);
+    signal_process(pid, libc::SIGKILL)?;
     if wait_for_process_exit(pid, Duration::from_secs(2)) {
+        qol_runtime::probe!(
+            "SHOT_RECORD_STOP_PID",
+            "pid={} result=stopped signal=kill",
+            pid
+        );
         return Ok(());
     }
 
+    qol_runtime::probe!("SHOT_RECORD_STOP_PID", "pid={} result=still_alive", pid);
     Err(anyhow!("capture process pid {} did not stop", pid))
 }
 
-fn signal_process(pid: u32, signal: &str) -> Result<()> {
-    let signal_arg = format!("-{signal}");
-    let pid_arg = pid.to_string();
-    let status = Command::new("kill")
-        .args([signal_arg.as_str(), pid_arg.as_str()])
-        .status()
-        .with_context(|| format!("failed to send SIG{signal} to process"))?;
-
-    if status.success() || !process_alive(pid) {
-        return Ok(());
-    }
-
-    Err(anyhow!(
-        "failed to send SIG{} to process pid {}",
-        signal,
-        pid
-    ))
+fn signal_process(pid: u32, signal: i32) -> Result<()> {
+    super::unix_signal_process(pid, signal)
 }
 
 fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
@@ -1499,12 +2243,31 @@ mod tests {
     }
 
     #[test]
-    fn parses_overlay_selection_geometry() {
-        let rect = parse_selection_geometry("10,20,300,200").unwrap();
-        assert_eq!(rect.x, 10);
-        assert_eq!(rect.y, 20);
-        assert_eq!(rect.w, 300);
-        assert_eq!(rect.h, 200);
+    fn screencapture_recording_args_do_not_enable_click_spotlight() {
+        let args = screencapture_recording_args(
+            Some(Rect {
+                x: -1512,
+                y: 458,
+                w: 800,
+                h: 600,
+            }),
+            Some(2),
+            true,
+        );
+
+        assert_eq!(
+            args,
+            vec!["-v", "-D", "2", "-R", "-1512,458,800,600", "-x", "-g"]
+        );
+        assert!(!args.iter().any(|arg| arg == "-k"));
+    }
+
+    #[test]
+    fn screencapture_full_display_recording_args_avoid_area_selection() {
+        let args = screencapture_recording_args(None, Some(2), false);
+
+        assert_eq!(args, vec!["-v", "-D", "2", "-x"]);
+        assert!(!args.iter().any(|arg| arg == "-R"));
     }
 
     #[test]
@@ -1531,6 +2294,66 @@ mod tests {
                 h: 400,
             })
         );
+    }
+
+    #[test]
+    fn selector_rect_mapper_clips_to_active_displays() {
+        let rect = Rect {
+            x: 1800,
+            y: 100,
+            w: 500,
+            h: 400,
+        };
+        let displays = [
+            Monitor {
+                x: 0,
+                y: 0,
+                w: 1920,
+                h: 1080,
+            },
+            Monitor {
+                x: 1920,
+                y: 0,
+                w: 1920,
+                h: 1080,
+            },
+        ];
+
+        assert_eq!(map_selector_rect_to_capture(rect, &displays), Some(rect));
+    }
+
+    #[test]
+    fn selector_rect_mapper_rejects_off_display_selection() {
+        let rect = Rect {
+            x: 4000,
+            y: 100,
+            w: 100,
+            h: 100,
+        };
+        let displays = [Monitor {
+            x: 0,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        }];
+
+        assert_eq!(map_selector_rect_to_capture(rect, &displays), None);
+    }
+
+    #[test]
+    fn capture_plan_uses_single_display_for_single_segment() {
+        assert_eq!(capture_plan(1, false), CapturePlan::SingleDisplay);
+        assert_eq!(capture_plan(0, true), CapturePlan::SingleDisplay);
+    }
+
+    #[test]
+    fn capture_plan_uses_segmented_capture_when_ffmpeg_is_available() {
+        assert_eq!(capture_plan(2, true), CapturePlan::SegmentedFfmpeg);
+    }
+
+    #[test]
+    fn capture_plan_uses_segmented_native_composition_without_ffmpeg() {
+        assert_eq!(capture_plan(2, false), CapturePlan::SegmentedNative);
     }
 
     #[test]
@@ -1583,6 +2406,64 @@ mod tests {
 
         assert!(filter.contains("layout=0_0|120_0"));
         assert!(filter.contains("pad=500:400:0:0:color=black,crop=500:400:0:0[v]"));
+    }
+
+    #[test]
+    fn native_segment_composition_args_preserve_canvas_and_offsets() {
+        let session = CaptureSession {
+            output_file: Some(PathBuf::from("/tmp/final.mov")),
+            capture_file: Some(PathBuf::from("/tmp/final.mov")),
+            canvas: Some(Rect {
+                x: 1800,
+                y: 100,
+                w: 500,
+                h: 400,
+            }),
+            processes: Vec::new(),
+            segments: vec![
+                CaptureSegment {
+                    file: PathBuf::from("/tmp/left.mov"),
+                    rect: Rect {
+                        x: 1800,
+                        y: 100,
+                        w: 120,
+                        h: 400,
+                    },
+                    offset_x: 0,
+                    offset_y: 0,
+                },
+                CaptureSegment {
+                    file: PathBuf::from("/tmp/right.mov"),
+                    rect: Rect {
+                        x: 1920,
+                        y: 100,
+                        w: 380,
+                        h: 400,
+                    },
+                    offset_x: 120,
+                    offset_y: 0,
+                },
+            ],
+        };
+
+        assert_eq!(
+            native_segment_composition_args(
+                &session,
+                session.canvas.unwrap(),
+                Path::new("/tmp/final.mov")
+            ),
+            vec![
+                "500",
+                "400",
+                "/tmp/final.mov",
+                "0",
+                "0",
+                "/tmp/left.mov",
+                "120",
+                "0",
+                "/tmp/right.mov",
+            ]
+        );
     }
 
     #[test]
@@ -1642,18 +2523,18 @@ mod tests {
     #[test]
     fn swift_helper_hash_includes_prelude_and_body() {
         assert_eq!(
-            swift_source_hash(REGION_SELECTOR_SWIFT),
-            swift_source_hash_with_prelude(SWIFT_PRELUDE, REGION_SELECTOR_SWIFT),
+            swift_source_hash(STATUS_OVERLAY_SWIFT),
+            swift_source_hash_with_prelude(SWIFT_PRELUDE, STATUS_OVERLAY_SWIFT),
             "helper hash should use the shared Swift prelude"
         );
         assert_ne!(
-            swift_source_hash(REGION_SELECTOR_SWIFT),
             swift_source_hash(STATUS_OVERLAY_SWIFT),
+            swift_source_hash(CLIPBOARD_WRITER_SWIFT),
             "different helper bodies should use different cache keys"
         );
         assert_ne!(
-            swift_source_hash(REGION_SELECTOR_SWIFT),
-            swift_source_hash_with_prelude("changed prelude", REGION_SELECTOR_SWIFT),
+            swift_source_hash(STATUS_OVERLAY_SWIFT),
+            swift_source_hash_with_prelude("changed prelude", STATUS_OVERLAY_SWIFT),
             "prelude changes should invalidate cached helpers"
         );
     }

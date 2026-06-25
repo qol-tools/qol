@@ -1,8 +1,10 @@
 use objc2::rc::Retained;
 use objc2_app_kit::{
-    NSApplication, NSColor, NSPopUpMenuWindowLevel, NSScreen, NSWindow, NSWindowAnimationBehavior,
+    NSApplication, NSColor, NSPopUpMenuWindowLevel, NSScreen, NSView, NSWindow,
+    NSWindowAnimationBehavior,
 };
 use objc2_foundation::{MainThreadMarker, NSPoint};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -93,9 +95,80 @@ pub fn hide_invisible(title: &str) -> bool {
     window.setLevel(NSPopUpMenuWindowLevel);
     window.setAlphaValue(0.0);
     window.setIgnoresMouseEvents(true);
+    window.orderOut(None);
     qol_runtime::probe!(
         "HIDE_WIN",
-        "title={title} path=invisible reason={}",
+        "title={title} path=ordered_out reason={}",
+        crate::popup_window::change_reason()
+    );
+    true
+}
+
+pub fn hide_windows_by_title_prefix(prefix: &str) -> usize {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return 0;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    let mut hidden = 0;
+    for window in app.windows().iter() {
+        let title = window.title().to_string();
+        if !title.starts_with(prefix) {
+            continue;
+        }
+        window.setLevel(NSPopUpMenuWindowLevel);
+        window.setAlphaValue(0.0);
+        window.setIgnoresMouseEvents(true);
+        window.orderOut(None);
+        hidden += 1;
+        qol_runtime::probe!(
+            "HIDE_WIN_PREFIX",
+            "prefix={prefix} title={title} path=ordered_out reason={}",
+            crate::popup_window::change_reason()
+        );
+    }
+    hidden
+}
+
+pub fn visible_windows_by_title_prefix(prefix: &str) -> usize {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return 0;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    app.windows()
+        .iter()
+        .filter(|window| {
+            window.title().to_string().starts_with(prefix)
+                && window.isVisible()
+                && window.alphaValue() > 0.01
+        })
+        .count()
+}
+
+pub fn hide_for_capture(title: &str, window: &mut gpui::Window) -> bool {
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        qol_runtime::probe!("HIDE_WIN_CAPTURE", "title={title} result=handle_error");
+        return false;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        qol_runtime::probe!("HIDE_WIN_CAPTURE", "title={title} result=not_appkit");
+        return false;
+    };
+    let Some(view) = (unsafe { Retained::<NSView>::retain(handle.ns_view.as_ptr().cast()) }) else {
+        qol_runtime::probe!("HIDE_WIN_CAPTURE", "title={title} result=view_missing");
+        return false;
+    };
+    let Some(native_window) = view.window() else {
+        qol_runtime::probe!("HIDE_WIN_CAPTURE", "title={title} result=window_missing");
+        return false;
+    };
+    native_window.setAnimationBehavior(NSWindowAnimationBehavior::None);
+    native_window.setLevel(NSPopUpMenuWindowLevel);
+    native_window.setAlphaValue(0.0);
+    native_window.setIgnoresMouseEvents(true);
+    native_window.orderOut(None);
+    qol_runtime::probe!(
+        "HIDE_WIN_CAPTURE",
+        "title={title} result=ordered_out reason={}",
         crate::popup_window::change_reason()
     );
     true
