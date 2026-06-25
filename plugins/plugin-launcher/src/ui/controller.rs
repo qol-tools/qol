@@ -26,11 +26,14 @@ impl LauncherView {
         if self.handle_clipboard_shortcut(key, secondary, cx) {
             return;
         }
+        self.store
+            .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
         let result_count = self.store.result_count();
+        let selected_before = self.state.selected;
         let effect = self
             .state
             .apply_key(key, secondary, control, shift, alt, result_count);
-        trace::input(self, key, effect, result_count);
+        trace::input(self, key, effect, result_count, selected_before);
 
         if !matches!(effect, InputEffect::BoostUp | InputEffect::BoostDown) {
             self.state.boost_adjusting = false;
@@ -39,12 +42,7 @@ impl LauncherView {
         match effect {
             InputEffect::Ignore => {}
             InputEffect::Navigate => {
-                self.store.ensure_filtered(
-                    &self.state.query,
-                    self.state.mode,
-                    self.state.fuzziness,
-                );
-                self.state.sync_result_window(self.store.result_count());
+                self.state.sync_result_window(result_count);
                 cx.notify();
             }
             InputEffect::QueryChanged => {

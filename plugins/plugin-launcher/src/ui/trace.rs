@@ -67,7 +67,13 @@ pub(super) fn show(path: &'static str, title: &str, placement: &WindowPlacement)
     let _ = (path, title, placement);
 }
 
-pub(super) fn input(view: &LauncherView, key: &str, effect: InputEffect, result_count: usize) {
+pub(super) fn input(
+    view: &LauncherView,
+    key: &str,
+    effect: InputEffect,
+    result_count: usize,
+    selected_before: usize,
+) {
     #[cfg(debug_assertions)]
     {
         if matches!(effect, InputEffect::Ignore) {
@@ -76,7 +82,7 @@ pub(super) fn input(view: &LauncherView, key: &str, effect: InputEffect, result_
 
         qol_runtime::probe!(
             "LAUNCHER_INPUT",
-            "key={} effect={} title={} q=\"{}\" q_len={} cursor={} selection={} selected={} results_before={} mode={} fuzz={}",
+            "key={} effect={} title={} q=\"{}\" q_len={} cursor={} selection={} selected={}->{} results_before={} mode={} fuzz={}",
             token(key),
             effect_label(effect),
             token(&view.window_title),
@@ -84,6 +90,7 @@ pub(super) fn input(view: &LauncherView, key: &str, effect: InputEffect, result_
             view.state.query_len(),
             view.state.cursor,
             selection_label(view),
+            selected_before,
             view.state.selected,
             result_count,
             view.state.mode.label(),
@@ -92,7 +99,7 @@ pub(super) fn input(view: &LauncherView, key: &str, effect: InputEffect, result_
     }
 
     #[cfg(not(debug_assertions))]
-    let _ = (view, key, effect, result_count);
+    let _ = (view, key, effect, result_count, selected_before);
 }
 
 pub(super) fn dismiss(view: &LauncherView, from: &'static str) {

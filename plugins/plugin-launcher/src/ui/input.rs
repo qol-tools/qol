@@ -272,6 +272,52 @@ mod tests {
     }
 
     #[test]
+    fn down_uses_freshly_filtered_count_not_stale_store() {
+        use crate::discovery::entry_store::EntryStore;
+        use crate::discovery::search::SearchMode;
+        use crate::discovery::{AppEntry, FileEntry};
+        use std::sync::Arc;
+
+        let app = |name: &str| AppEntry {
+            name: name.to_string(),
+            exec: vec!["x".to_string()],
+            path: std::path::PathBuf::from("/a/b/c"),
+        };
+        let apps = Arc::new(vec![
+            app("Foobar"),
+            app("Foobar Nightly"),
+            app("Foobar Studio"),
+        ]);
+        let files: Arc<Vec<FileEntry>> = Arc::new(Vec::new());
+        let mut store = EntryStore::new(apps, files);
+
+        let mut state = LauncherState::new();
+        state.mode = SearchMode::Apps;
+        state.query = "foo".to_string();
+        state.cursor = 3;
+
+        assert_eq!(
+            store.result_count(),
+            0,
+            "store stays unfiltered until ensure_filtered runs for the current query"
+        );
+
+        store.ensure_filtered(&state.query, state.mode, state.fuzziness);
+        let result_count = store.result_count();
+        assert!(
+            result_count >= 2,
+            "query should match multiple apps, got {result_count}"
+        );
+
+        let effect = state.apply_key("down", false, false, false, false, result_count);
+        assert_eq!(effect, InputEffect::Navigate);
+        assert_eq!(
+            state.selected, 1,
+            "down advances once navigation reads the live count, not the stale 0"
+        );
+    }
+
+    #[test]
     fn secondary_shortcuts_still_work() {
         let mut state = LauncherState::new();
         state.query = "abc".to_string();
