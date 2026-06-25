@@ -149,6 +149,15 @@ impl LauncherState {
     }
 
     pub fn reset_results_position(&mut self) {
+        #[cfg(debug_assertions)]
+        if self.selected != 0 {
+            qol_runtime::probe!(
+                "LAUNCHER_SEL_RESET",
+                "reason=reset_position was={} q=\"{}\"",
+                self.selected,
+                self.query,
+            );
+        }
         self.selected = 0;
         self.previous_selected = None;
         self.edge_hit = None;
@@ -160,12 +169,25 @@ impl LauncherState {
     }
 
     pub fn sync_result_window(&mut self, result_count: usize) {
+        #[cfg(debug_assertions)]
+        let before = self.selected;
         qol_gpui::scroll_list::clamp_into_view(
             &mut self.selected,
             &mut self.scroll_offset,
             result_count,
             MAX_VISIBLE,
         );
+        #[cfg(debug_assertions)]
+        if before != self.selected {
+            qol_runtime::probe!(
+                "LAUNCHER_SEL_CLAMP",
+                "before={} after={} count={} q=\"{}\"",
+                before,
+                self.selected,
+                result_count,
+                self.query,
+            );
+        }
     }
 
     pub fn take_edge_hit(&mut self) -> Option<EdgeHit> {

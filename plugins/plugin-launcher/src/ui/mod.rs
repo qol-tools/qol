@@ -119,6 +119,16 @@ impl LauncherView {
     }
 
     pub(crate) fn reset_for_show(&mut self) -> bool {
+        #[cfg(debug_assertions)]
+        if self.state.selected != 0 || !self.state.query.is_empty() {
+            qol_runtime::probe!(
+                "LAUNCHER_SEL_RESET",
+                "reason=reset_for_show was={} q=\"{}\" title={}",
+                self.state.selected,
+                self.state.query,
+                self.window_title,
+            );
+        }
         let should_resize = (self.state.window_height - HEADER_HEIGHT).abs() > f32::EPSILON;
         self.state = LauncherState::new();
         self.trail_decay_task_running = false;
