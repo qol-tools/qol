@@ -131,7 +131,7 @@ fn kill_managed_process(process: &ManagedProcess, roots: &ManagedRoots) -> bool 
     if !roots.contains(&current_executable) {
         return false;
     }
-    crate::process_utils::terminate_pid(process.pid, std::time::Duration::from_millis(100));
+    crate::process_utils::terminate_group(process.pid, std::time::Duration::from_millis(100));
     true
 }
 

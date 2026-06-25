@@ -96,7 +96,7 @@ fn kill_pid_if_managed(line: &str, roots: &ManagedRoots) {
             exe.unwrap().display()
         );
     }
-    crate::process_utils::terminate_pid(pid, std::time::Duration::from_millis(100));
+    crate::process_utils::terminate_group(pid, std::time::Duration::from_millis(100));
     crate::process_utils::reap_children_nonblocking();
 }
 

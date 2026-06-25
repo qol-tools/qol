@@ -1,3 +1,4 @@
+use std::process::Child;
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -27,6 +28,26 @@ pub(super) fn terminate_pid(pid: i32, grace: Duration) {
 #[cfg(target_os = "windows")]
 pub(super) fn terminate_pid(pid: i32, grace: Duration) {
     windows::terminate_pid(pid, grace);
+}
+
+#[cfg(unix)]
+pub(super) fn terminate_group(pid: i32, grace: Duration) {
+    unix_common::terminate_group(pid, grace);
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn terminate_group(pid: i32, grace: Duration) {
+    windows::terminate_group(pid, grace);
+}
+
+#[cfg(unix)]
+pub(super) fn terminate_owned(child: &mut Child, grace: Duration) -> std::io::Result<()> {
+    unix_common::terminate_owned(child, grace)
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn terminate_owned(child: &mut Child, grace: Duration) -> std::io::Result<()> {
+    windows::terminate_owned(child, grace)
 }
 
 #[cfg(unix)]

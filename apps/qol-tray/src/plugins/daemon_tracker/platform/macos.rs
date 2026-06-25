@@ -94,7 +94,7 @@ fn terminate_process(pid: i32, exe: &Path) {
         return;
     }
     log::info!("Killing orphan plugin process: {} ({})", pid, exe.display());
-    crate::process_utils::terminate_pid(pid, std::time::Duration::from_millis(50));
+    crate::process_utils::terminate_group(pid, std::time::Duration::from_millis(50));
 }
 
 pub(super) fn clean_stale_sockets(plugins: &[Plugin]) {

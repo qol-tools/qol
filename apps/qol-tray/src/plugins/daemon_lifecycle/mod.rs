@@ -1,9 +1,11 @@
-mod readiness;
 mod spawn;
 
 use super::Plugin;
 use anyhow::Result;
 use std::process::Child;
+use std::time::Duration;
+
+const DAEMON_STOP_GRACE: Duration = Duration::from_secs(2);
 
 pub(super) fn start_daemon(plugin: &mut Plugin) -> Result<()> {
     let Some(daemon_config) = spawn::enabled_daemon(plugin) else {
@@ -23,8 +25,10 @@ pub(super) fn stop_daemon(plugin: &mut Plugin) -> Result<()> {
     log::info!("Stopping daemon for plugin: {}", plugin.id);
     #[cfg(unix)]
     crate::signal::unregister_daemon_pid(child.id());
-    readiness::terminate_daemon(&mut child);
-    readiness::wait_for_exit(plugin, &mut child)
+    if let Err(error) = crate::process_utils::terminate_owned(&mut child, DAEMON_STOP_GRACE) {
+        log::warn!("Error reaping daemon for {}: {}", plugin.id, error);
+    }
+    Ok(())
 }
 
 fn register_daemon(plugin: &mut Plugin, child: Child) {

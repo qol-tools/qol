@@ -1,3 +1,4 @@
+use std::process::Child;
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
@@ -44,6 +45,16 @@ pub(super) fn terminate_pid(pid: i32, grace: Duration) {
         let _ = WaitForSingleObject(handle, wait_ms);
         let _ = CloseHandle(handle);
     }
+}
+
+pub(super) fn terminate_group(pid: i32, grace: Duration) {
+    terminate_pid(pid, grace);
+}
+
+pub(super) fn terminate_owned(child: &mut Child, _grace: Duration) -> std::io::Result<()> {
+    child.kill()?;
+    child.wait()?;
+    Ok(())
 }
 
 pub(super) fn reap_children_nonblocking() {}
