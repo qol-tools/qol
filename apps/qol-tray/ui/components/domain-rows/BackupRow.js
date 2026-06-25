@@ -18,7 +18,7 @@ export function BackupRow({
             actions=${actions}
             ...${rest}>
             <${ListRowHeader}>
-                <span class="list-row-label" style="width:9rem">${time}</span>
+                <span class="list-row-label">${time}</span>
                 ${review && html`<${Badge} className="profile-badge profile-badge-skipped">Review backup<//>`}
                 <span class="list-row-meta">${size}</span>
             <//>

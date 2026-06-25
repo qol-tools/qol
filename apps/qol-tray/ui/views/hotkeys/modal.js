@@ -16,7 +16,7 @@ export function ActionSelect({ modal, onChange, disabled }) {
         return html`
             <div class="custom-select">
                 <button type="button" class="custom-select-trigger" disabled>
-                    <span class="custom-select-value" style="opacity: 0.5">All actions assigned</span>
+                    <span class="custom-select-value">All actions assigned</span>
                     <span class="custom-select-arrow">${'\u25BE'}</span>
                 </button>
             </div>

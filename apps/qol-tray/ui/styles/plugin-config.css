@@ -373,6 +373,10 @@
     text-align: left;
 }
 
+.custom-select-trigger:disabled {
+    opacity: 0.5;
+}
+
 .custom-select-arrow {
     color: var(--text-faint);
     font-size: 0.72rem;

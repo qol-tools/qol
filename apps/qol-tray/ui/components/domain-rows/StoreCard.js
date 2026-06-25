@@ -25,7 +25,7 @@ export function StoreCard({ name, version, description, installed, installing, h
 function storeCardAction({ installing, devLinked, hasUpdate, installed }) {
     if (installing) return html`<button class="refresh-btn spinning" disabled></button>`;
     if (devLinked) return html`<span class="installed-badge dev-linked-badge">Dev linked</span>`;
-    if (hasUpdate) return html`<button class="btn btn-primary update" style="width:100%">Update</button>`;
+    if (hasUpdate) return html`<button class="btn btn-primary update">Update</button>`;
     if (installed) return html`<span class="installed-badge">Installed</span>`;
-    return html`<button class="btn btn-primary install" style="width:100%">Install</button>`;
+    return html`<button class="btn btn-primary install">Install</button>`;
 }

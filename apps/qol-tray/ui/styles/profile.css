@@ -646,6 +646,10 @@
     gap: var(--space-3);
 }
 
+.profile-backup-row .list-row-label {
+    width: 9rem;
+}
+
 .profile-backup-time {
     color: var(--text-faint);
     white-space: nowrap;
