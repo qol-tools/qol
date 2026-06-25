@@ -46,22 +46,51 @@ pub fn toggle_recording(config: &Config) -> Result<()> {
     start_recording_from_selection(selected, config)
 }
 
+pub enum StopOutcome {
+    Idle,
+    Stopped(Box<FinalizeJob>),
+}
+
+pub struct FinalizeJob {
+    session: platform::CaptureSession,
+    config: Config,
+}
+
+impl FinalizeJob {
+    pub fn run(self) {
+        platform::recording_stopped(&self.session, &self.config);
+    }
+}
+
 pub fn stop_active_recording_if_any(config: &Config) -> Result<bool> {
+    match begin_stop_active_recording(config)? {
+        StopOutcome::Idle => Ok(false),
+        StopOutcome::Stopped(job) => {
+            job.run();
+            Ok(true)
+        }
+    }
+}
+
+pub fn begin_stop_active_recording(config: &Config) -> Result<StopOutcome> {
     let Some(state) = read_capture_state() else {
         qol_runtime::probe!("SHOT_RECORD_STATE", "read=none state=idle");
-        return Ok(false);
+        return Ok(StopOutcome::Idle);
     };
 
     trace_capture_session("read", &state);
     if platform::session_alive(&state) {
         qol_runtime::probe!("SHOT_RECORD_STOP", "pids={} state=active", state.pid_list());
-        stop_active_recording(&state, config)?;
-        return Ok(true);
+        stop_capture_processes(&state, config)?;
+        return Ok(StopOutcome::Stopped(Box::new(FinalizeJob {
+            session: state,
+            config: config.clone(),
+        })));
     }
 
     qol_runtime::probe!("SHOT_RECORD_STATE", "pids={} state=stale", state.pid_list());
     remove_state_file();
-    Ok(false)
+    Ok(StopOutcome::Idle)
 }
 
 pub fn start_recording_from_selection(selected: Rect, config: &Config) -> Result<()> {
@@ -152,7 +181,7 @@ fn prepare_recording_rect(selected: Rect) -> Result<Rect> {
     Ok(even)
 }
 
-fn stop_active_recording(state: &platform::CaptureSession, config: &Config) -> Result<()> {
+fn stop_capture_processes(state: &platform::CaptureSession, config: &Config) -> Result<()> {
     trace_record_config("stop", config);
     if let Err(error) = platform::stop_capture(state) {
         eprintln!(
@@ -167,7 +196,6 @@ fn stop_active_recording(state: &platform::CaptureSession, config: &Config) -> R
 
     remove_state_file();
     qol_runtime::probe!("SHOT_RECORD_STOPPED", "pids={}", state.pid_list());
-    platform::recording_stopped(state, config);
     Ok(())
 }
 

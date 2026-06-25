@@ -313,15 +313,18 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
     let stop_config = config.clone();
     match cx
         .background_spawn(
-            async move { crate::recording::stop_active_recording_if_any(&stop_config) },
+            async move { crate::recording::begin_stop_active_recording(&stop_config) },
         )
         .await
     {
-        Ok(true) => {
+        Ok(crate::recording::StopOutcome::Stopped(job)) => {
             qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon result=stopped");
+            cx.background_spawn(async move { job.run() }).detach();
             return;
         }
-        Ok(false) => qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon state=idle"),
+        Ok(crate::recording::StopOutcome::Idle) => {
+            qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon state=idle")
+        }
         Err(error) => {
             eprintln!("[qol-shot] recording stop failed: {error:#}");
             qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon result=stop-error");

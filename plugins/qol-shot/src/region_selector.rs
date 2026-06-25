@@ -166,6 +166,7 @@ fn open_window(
 ) -> Option<WindowHandle<RegionSelector>> {
     let options = selector.options();
     let focus = selector.focus;
+    let window_bounds = selector.bounds;
     let map_rect = selector.map_rect;
     let global_pointer = selector.global_pointer;
     let window_title = selector.title;
@@ -177,6 +178,7 @@ fn open_window(
                 state,
                 window_title.clone(),
                 quit_on_finish,
+                window_bounds,
                 map_rect,
                 global_pointer,
                 cx,
@@ -294,6 +296,7 @@ struct RegionSelector {
     handle: Option<WindowHandle<RegionSelector>>,
     title: String,
     quit_on_finish: bool,
+    window_bounds: Bounds<Pixels>,
     map_rect: RectMapper,
     global_pointer: Option<GlobalPointerSource>,
     focus_handle: FocusHandle,
@@ -304,6 +307,7 @@ impl RegionSelector {
         state: Rc<RefCell<SelectionState>>,
         title: String,
         quit_on_finish: bool,
+        window_bounds: Bounds<Pixels>,
         map_rect: RectMapper,
         global_pointer: Option<GlobalPointerSource>,
         cx: &mut Context<Self>,
@@ -314,6 +318,7 @@ impl RegionSelector {
             handle: None,
             title,
             quit_on_finish,
+            window_bounds,
             map_rect,
             global_pointer,
             focus_handle: cx.focus_handle(),
@@ -323,10 +328,15 @@ impl RegionSelector {
     fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let position = self.global_point(event.position, window);
+        let position = self.global_point(event.position);
+        let cg = self
+            .global_pointer
+            .as_ref()
+            .and_then(|pointer| pointer.position());
+        trace_drag_anchor(&self.title, event.position, position, cg);
         {
             let mut state = self.state.borrow_mut();
             state.drag_start = Some(position);
@@ -340,10 +350,10 @@ impl RegionSelector {
     fn on_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let position = self.global_point(event.position, window);
+        let position = self.global_point(event.position);
         let active_changed = self
             .state
             .borrow_mut()
@@ -362,7 +372,7 @@ impl RegionSelector {
     }
 
     fn on_mouse_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let end = self.global_point(event.position, window);
+        let end = self.global_point(event.position);
         {
             let mut state = self.state.borrow_mut();
             state.drag_current = Some(end);
@@ -518,9 +528,9 @@ impl RegionSelector {
     fn current_raw_rect(&self, end: Option<Point<Pixels>>) -> Option<Rect> {
         let state = self.state.borrow();
         let end = end.or(state.drag_current)?;
-        state
-            .drag_start
-            .and_then(|start| selected_rect(point(px(0.0), px(0.0)), start, end))
+        let start = state.drag_start?;
+        trace_drag_rect(start, end);
+        selected_rect(point(px(0.0), px(0.0)), start, end)
     }
 
     fn finish_from_global_pointer(&mut self, rect: Option<Rect>) -> GlobalDragResult {
@@ -610,7 +620,7 @@ impl RegionSelector {
         "Drag to select capture area"
     }
 
-    fn selection_bounds(&self, window: &Window) -> Option<Bounds<Pixels>> {
+    fn selection_bounds(&self) -> Option<Bounds<Pixels>> {
         let state = self.state.borrow();
         let start = state.drag_start?;
         let current = state.drag_current?;
@@ -619,7 +629,7 @@ impl RegionSelector {
         let right = start.x.max(current.x);
         let bottom = start.y.max(current.y);
         let selection = Bounds::new(point(left, top), size(right - left, bottom - top));
-        let window_bounds = window.bounds();
+        let window_bounds = self.window_bounds;
         let clipped = intersect_bounds(selection, window_bounds)?;
         Some(Bounds::new(
             point(
@@ -630,8 +640,8 @@ impl RegionSelector {
         ))
     }
 
-    fn guide_frame(&self, window: &Window) -> Option<(f32, f32, f32)> {
-        let window_bounds = window.bounds();
+    fn guide_frame(&self) -> Option<(f32, f32, f32)> {
+        let window_bounds = self.window_bounds;
         let bounds = self.state.borrow().active_bounds.unwrap_or(window_bounds);
         intersect_bounds(bounds, window_bounds)?;
         let local_x = f32::from(bounds.origin.x) - f32::from(window_bounds.origin.x);
@@ -642,8 +652,8 @@ impl RegionSelector {
         Some((guide_left, local_y + GUIDE_TOP, guide_width))
     }
 
-    fn global_point(&self, local: Point<Pixels>, window: &Window) -> Point<Pixels> {
-        let window_origin = window.bounds().origin;
+    fn global_point(&self, local: Point<Pixels>) -> Point<Pixels> {
+        let window_origin = self.window_bounds.origin;
         point(window_origin.x + local.x, window_origin.y + local.y)
     }
 
@@ -739,9 +749,9 @@ impl Focusable for RegionSelector {
 }
 
 impl Render for RegionSelector {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let guide_frame = self.guide_frame(window);
-        let selection = self.selection_bounds(window);
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let guide_frame = self.guide_frame();
+        let selection = self.selection_bounds();
         let mut root = div()
             .id("shot-region-selector")
             .track_focus(&self.focus_handle)
@@ -753,7 +763,7 @@ impl Render for RegionSelector {
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up));
 
-        for bounds in backdrop_segments(window.bounds().size, selection) {
+        for bounds in backdrop_segments(self.window_bounds.size, selection) {
             root = root.child(backdrop_segment(bounds));
         }
 
@@ -796,6 +806,43 @@ impl Render for RegionSelector {
 
         root
     }
+}
+
+#[cfg(debug_assertions)]
+fn fmt_pt(p: Point<Pixels>) -> String {
+    format!("{},{}", f32::from(p.x) as i32, f32::from(p.y) as i32)
+}
+
+fn trace_drag_anchor(
+    title: &str,
+    local: Point<Pixels>,
+    win_pt: Point<Pixels>,
+    cg: Option<Point<Pixels>>,
+) {
+    #[cfg(debug_assertions)]
+    {
+        let cg = cg.map(fmt_pt).unwrap_or_else(|| "none".to_string());
+        qol_runtime::probe!(
+            "SHOT_DRAG_ANCHOR",
+            "title={title} local={} win_pt={} cg_pt={cg}",
+            fmt_pt(local),
+            fmt_pt(win_pt)
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (title, local, win_pt, cg);
+}
+
+fn trace_drag_rect(start: Point<Pixels>, end: Point<Pixels>) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "SHOT_DRAG_RECT",
+        "start={} end={}",
+        fmt_pt(start),
+        fmt_pt(end)
+    );
+    #[cfg(not(debug_assertions))]
+    let _ = (start, end);
 }
 
 fn trace_selection_release(source: &'static str, raw: Option<Rect>, mapped: Option<Rect>) {
@@ -1112,6 +1159,36 @@ mod tests {
         assert_eq!(state.active_bounds, Some(external));
         assert!(!state.set_active_bounds_for_point(point(px(-800.0), px(200.0))));
         assert_eq!(state.active_bounds, Some(external));
+    }
+
+    #[test]
+    fn window_local_points_resolve_to_their_own_monitor() {
+        let laptop = Bounds::new(point(px(0.0), px(0.0)), size(px(2560.0), px(1440.0)));
+        let external = Bounds::new(point(px(-1512.0), px(746.0)), size(px(1512.0), px(982.0)));
+        let monitors = [laptop, external];
+        let local = point(px(200.0), px(100.0));
+
+        for owner in monitors {
+            let global = point(owner.origin.x + local.x, owner.origin.y + local.y);
+            assert_eq!(
+                monitor_bounds_for_point(&monitors, global),
+                Some(owner),
+                "unified window origin keeps a window-local point on its own monitor (origin {:?})",
+                owner.origin
+            );
+        }
+
+        let per_display_origin = point(px(0.0), px(34.0));
+        let per_display_point = point(
+            per_display_origin.x + local.x,
+            per_display_origin.y + local.y,
+        );
+        assert_eq!(
+            monitor_bounds_for_point(&monitors, per_display_point),
+            Some(laptop),
+            "regression guard: per-display window.bounds() origin lands the external \
+             window's point on the laptop, which flipped active_bounds every frame"
+        );
     }
 
     #[test]
