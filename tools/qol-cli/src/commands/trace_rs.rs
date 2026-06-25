@@ -55,6 +55,7 @@ enum Topic {
     Opacity,
     Ui,
     Preview,
+    Shot,
 }
 
 impl Topic {
@@ -67,6 +68,7 @@ impl Topic {
             "opacity" => Ok(Self::Opacity),
             "ui" => Ok(Self::Ui),
             "preview" => Ok(Self::Preview),
+            "shot" => Ok(Self::Shot),
             _ => bail!("unknown trace topic `{value}`"),
         }
     }
@@ -74,6 +76,7 @@ impl Topic {
     fn matches(self, tag: &str) -> bool {
         match self {
             Self::All => true,
+            Self::Shot => tag.starts_with("SHOT_"),
             Self::Ui => tag.starts_with("LAUNCHER_") || tag.starts_with("WORLD_"),
             Self::Preview => {
                 tag.starts_with("PREVIEW_")
@@ -261,7 +264,7 @@ fn print_help(command_name: &str) {
            -g, --no-ghosts         hide GHOSTDUMP/GHOSTWIN/SUMMARY rows\n\
            -o, --no-opacity        hide HIDE_WIN/SHOW_WIN rows\n\
            -d, --details           start with expanded detail lines\n\
-               --topic <name>      all, focus, monitor, boot, opacity, ui, preview\n\
+               --topic <name>      all, focus, monitor, boot, opacity, ui, preview, shot\n\
                --grep <text>       filter output by substring\n\
                --since <duration>  filter events since duration, e.g. 5s, 10m, 1h\n\
                --mark <text>       append a marker to the raw trace log and exit\n\

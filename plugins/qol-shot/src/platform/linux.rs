@@ -365,12 +365,23 @@ pub fn open_url(url: &str) -> Result<()> {
 
 pub fn configure_preview_window(title: String) {
     std::thread::spawn(move || {
-        for _ in 0..30 {
+        let started = std::time::Instant::now();
+        for attempt in 1..=30 {
             if qol_gpui::popup_window::configure_overlay_window(&title) {
+                qol_runtime::probe!(
+                    "SHOT_OVERLAY",
+                    "ms={} attempt={attempt} result=mapped",
+                    started.elapsed().as_millis()
+                );
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(40));
         }
+        qol_runtime::probe!(
+            "SHOT_OVERLAY",
+            "ms={} result=timeout",
+            started.elapsed().as_millis()
+        );
     });
 }
 

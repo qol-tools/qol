@@ -35,6 +35,7 @@ fn spawn_screenshot_loop(rx: mpsc::Receiver<daemon::Command>, cx: &mut App) {
 }
 
 async fn capture_and_preview(cx: &AsyncApp) {
+    qol_runtime::probe!("SHOT_RECV", "action=screenshot");
     let captured = cx
         .background_spawn(async { crate::screenshot::capture_to_file() })
         .await;

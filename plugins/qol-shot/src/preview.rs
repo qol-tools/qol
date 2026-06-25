@@ -33,7 +33,13 @@ pub fn show(path: &Path) -> Result<()> {
 
     Application::new().run(move |cx: &mut App| {
         qol_gpui::platform::set_accessory_policy();
-        if open_window(path.clone(), thumb, Dismiss::Quit, run_completion.clone(), cx) {
+        if open_window(
+            path.clone(),
+            thumb,
+            Dismiss::Quit,
+            run_completion.clone(),
+            cx,
+        ) {
             cx.activate(true);
         } else {
             cx.quit();
@@ -53,15 +59,27 @@ pub fn show(path: &Path) -> Result<()> {
 pub fn open_in_app(path: &Path, cx: &mut App) -> Result<()> {
     let thumb = read_thumb(path)?;
     let completion: Completion = Arc::new(Mutex::new(None));
-    if open_window(path.to_path_buf(), thumb, Dismiss::CloseWindow, completion, cx) {
+    if open_window(
+        path.to_path_buf(),
+        thumb,
+        Dismiss::CloseWindow,
+        completion,
+        cx,
+    ) {
         cx.activate(true);
     }
     Ok(())
 }
 
 fn read_thumb(path: &Path) -> Result<(f32, f32)> {
+    let started = std::time::Instant::now();
     let (width, height) = image::image_dimensions(path)
         .with_context(|| format!("failed to read image dimensions: {}", path.display()))?;
+    qol_runtime::probe!(
+        "SHOT_THUMB",
+        "ms={} dims={width}x{height}",
+        started.elapsed().as_millis()
+    );
     Ok(thumbnail_size(width as f32, height as f32))
 }
 
@@ -89,10 +107,11 @@ fn open_window(
     };
 
     let window_title = title.clone();
+    let opened_at = std::time::Instant::now();
     let opened = cx.open_window(options, move |window, cx| {
         window.set_window_title(&window_title);
-        let view =
-            cx.new(|cx| PreviewView::new(path.clone(), thumb, dismiss, completion.clone(), cx));
+        let view = cx
+            .new(|cx| PreviewView::new(path.clone(), thumb, dismiss, completion.clone(), seq, cx));
         window.focus(&view.focus_handle(cx));
         window.activate_window();
         view
@@ -101,6 +120,11 @@ fn open_window(
     if opened.is_err() {
         return false;
     }
+    qol_runtime::probe!(
+        "SHOT_WINDOW_OPEN",
+        "ms={} seq={seq}",
+        opened_at.elapsed().as_millis()
+    );
 
     platform::configure_preview_window(title);
     true
@@ -119,6 +143,8 @@ struct PreviewView {
     dismiss: Dismiss,
     completion: Completion,
     selected: usize,
+    seq: u64,
+    first_paint: bool,
     focus_handle: FocusHandle,
 }
 
@@ -128,6 +154,7 @@ impl PreviewView {
         thumb: (f32, f32),
         dismiss: Dismiss,
         completion: Completion,
+        seq: u64,
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
@@ -136,6 +163,8 @@ impl PreviewView {
             dismiss,
             completion,
             selected: 0,
+            seq,
+            first_paint: true,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -203,6 +232,10 @@ impl Focusable for PreviewView {
 
 impl Render for PreviewView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.first_paint {
+            self.first_paint = false;
+            qol_runtime::probe!("SHOT_RENDER", "seq={}", self.seq);
+        }
         let (thumb_w, thumb_h) = self.thumb;
         let (win_w, _) = window_dims(thumb_w, thumb_h, ShotAction::ALL.len());
         let circles_width = circles_total_width(ShotAction::ALL.len());

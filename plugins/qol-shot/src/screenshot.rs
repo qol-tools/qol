@@ -15,9 +15,18 @@ pub fn capture_to_file() -> Result<Option<PathBuf>> {
     let Some(rect) = select_screenshot_rect()? else {
         return Ok(None);
     };
+    qol_runtime::probe!("SHOT_SELECT_DONE", "rect={}x{}", rect.w, rect.h);
 
     let output_file = crate::output::screenshot_output_file_path()?;
+    let started = std::time::Instant::now();
     platform::capture_screenshot(&rect, &output_file)?;
+    qol_runtime::probe!(
+        "SHOT_CAPTURE",
+        "ms={} rect={}x{}",
+        started.elapsed().as_millis(),
+        rect.w,
+        rect.h
+    );
     Ok(Some(output_file))
 }
 
