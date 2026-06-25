@@ -1,3 +1,64 @@
+private struct RecordingOverlayGeometry {
+    let hole: NSRect
+    let corners: CaptureCorners
+
+    static func resolve(captureRect: CGRect, displayRect: CGRect, bounds: NSRect) -> RecordingOverlayGeometry? {
+        let intersection = captureRect.intersection(displayRect)
+        guard !intersection.isNull && !intersection.isEmpty else {
+            return nil
+        }
+
+        let x = intersection.minX - displayRect.minX
+        let yFromTop = intersection.minY - displayRect.minY
+        let y = bounds.height - yFromTop - intersection.height
+        let hole = NSRect(x: x, y: y, width: intersection.width, height: intersection.height)
+        let edges = CaptureEdges(
+            left: approximatelyEqual(intersection.minX, captureRect.minX),
+            right: approximatelyEqual(intersection.maxX, captureRect.maxX),
+            top: approximatelyEqual(intersection.minY, captureRect.minY),
+            bottom: approximatelyEqual(intersection.maxY, captureRect.maxY)
+        )
+        return RecordingOverlayGeometry(hole: hole, corners: CaptureCorners(edges: edges))
+    }
+}
+
+private struct CaptureEdges {
+    let left: Bool
+    let right: Bool
+    let top: Bool
+    let bottom: Bool
+}
+
+private struct CaptureCorners: OptionSet {
+    let rawValue: Int
+
+    static let topLeft = CaptureCorners(rawValue: 1 << 0)
+    static let topRight = CaptureCorners(rawValue: 1 << 1)
+    static let bottomLeft = CaptureCorners(rawValue: 1 << 2)
+    static let bottomRight = CaptureCorners(rawValue: 1 << 3)
+
+    init(rawValue: Int) {
+        self.rawValue = rawValue
+    }
+
+    init(edges: CaptureEdges) {
+        var corners = CaptureCorners()
+        if edges.left && edges.top {
+            corners.insert(.topLeft)
+        }
+        if edges.right && edges.top {
+            corners.insert(.topRight)
+        }
+        if edges.left && edges.bottom {
+            corners.insert(.bottomLeft)
+        }
+        if edges.right && edges.bottom {
+            corners.insert(.bottomRight)
+        }
+        self = corners
+    }
+}
+
 final class RecordingOverlayView: NSView {
     private let captureRect: CGRect
     private let displayRect: CGRect
@@ -14,34 +75,29 @@ final class RecordingOverlayView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let full = bounds
-        guard let hole = localCaptureRect() else {
+        guard let geometry = RecordingOverlayGeometry.resolve(
+            captureRect: captureRect,
+            displayRect: displayRect,
+            bounds: bounds
+        ) else {
             NSColor(calibratedRed: 0.18, green: 0.50, blue: 0.93, alpha: 0.13).setFill()
             full.fill()
             return
         }
 
+        drawBackdrop(in: full, excluding: geometry.hole)
+        drawOuterCorners(geometry.corners, around: geometry.hole)
+    }
+
+    private func drawBackdrop(in full: NSRect, excluding hole: NSRect) {
         NSColor(calibratedRed: 0.18, green: 0.50, blue: 0.93, alpha: 0.13).setFill()
         NSRect(x: full.minX, y: hole.maxY, width: full.width, height: full.maxY - hole.maxY).fill()
         NSRect(x: full.minX, y: full.minY, width: full.width, height: hole.minY - full.minY).fill()
         NSRect(x: full.minX, y: hole.minY, width: hole.minX - full.minX, height: hole.height).fill()
         NSRect(x: hole.maxX, y: hole.minY, width: full.maxX - hole.maxX, height: hole.height).fill()
-
-        drawOuterCorners(around: hole)
     }
 
-    private func localCaptureRect() -> NSRect? {
-        let intersection = captureRect.intersection(displayRect)
-        guard !intersection.isNull && !intersection.isEmpty else {
-            return nil
-        }
-
-        let x = intersection.minX - displayRect.minX
-        let yFromTop = intersection.minY - displayRect.minY
-        let y = bounds.height - yFromTop - intersection.height
-        return NSRect(x: x, y: y, width: intersection.width, height: intersection.height)
-    }
-
-    private func drawOuterCorners(around rect: NSRect) {
+    private func drawOuterCorners(_ corners: CaptureCorners, around rect: NSRect) {
         let length: CGFloat = 28
         let gap: CGFloat = 3
         let lineWidth: CGFloat = 2
@@ -55,14 +111,22 @@ final class RecordingOverlayView: NSView {
             path.stroke()
         }
 
-        stroke(NSPoint(x: rect.minX - gap - length, y: rect.maxY + gap), NSPoint(x: rect.minX - gap, y: rect.maxY + gap))
-        stroke(NSPoint(x: rect.minX - gap, y: rect.maxY + gap), NSPoint(x: rect.minX - gap, y: rect.maxY + gap + length))
-        stroke(NSPoint(x: rect.maxX + gap, y: rect.maxY + gap), NSPoint(x: rect.maxX + gap + length, y: rect.maxY + gap))
-        stroke(NSPoint(x: rect.maxX + gap, y: rect.maxY + gap), NSPoint(x: rect.maxX + gap, y: rect.maxY + gap + length))
-        stroke(NSPoint(x: rect.minX - gap - length, y: rect.minY - gap), NSPoint(x: rect.minX - gap, y: rect.minY - gap))
-        stroke(NSPoint(x: rect.minX - gap, y: rect.minY - gap), NSPoint(x: rect.minX - gap, y: rect.minY - gap - length))
-        stroke(NSPoint(x: rect.maxX + gap, y: rect.minY - gap), NSPoint(x: rect.maxX + gap + length, y: rect.minY - gap))
-        stroke(NSPoint(x: rect.maxX + gap, y: rect.minY - gap), NSPoint(x: rect.maxX + gap, y: rect.minY - gap - length))
+        if corners.contains(.topLeft) {
+            stroke(NSPoint(x: rect.minX - gap - length, y: rect.maxY + gap), NSPoint(x: rect.minX - gap, y: rect.maxY + gap))
+            stroke(NSPoint(x: rect.minX - gap, y: rect.maxY + gap), NSPoint(x: rect.minX - gap, y: rect.maxY + gap + length))
+        }
+        if corners.contains(.topRight) {
+            stroke(NSPoint(x: rect.maxX + gap, y: rect.maxY + gap), NSPoint(x: rect.maxX + gap + length, y: rect.maxY + gap))
+            stroke(NSPoint(x: rect.maxX + gap, y: rect.maxY + gap), NSPoint(x: rect.maxX + gap, y: rect.maxY + gap + length))
+        }
+        if corners.contains(.bottomLeft) {
+            stroke(NSPoint(x: rect.minX - gap - length, y: rect.minY - gap), NSPoint(x: rect.minX - gap, y: rect.minY - gap))
+            stroke(NSPoint(x: rect.minX - gap, y: rect.minY - gap), NSPoint(x: rect.minX - gap, y: rect.minY - gap - length))
+        }
+        if corners.contains(.bottomRight) {
+            stroke(NSPoint(x: rect.maxX + gap, y: rect.minY - gap), NSPoint(x: rect.maxX + gap + length, y: rect.minY - gap))
+            stroke(NSPoint(x: rect.maxX + gap, y: rect.minY - gap), NSPoint(x: rect.maxX + gap, y: rect.minY - gap - length))
+        }
     }
 }
 
@@ -190,6 +254,7 @@ for target in overlayTargets() {
     window.isOpaque = false
     window.hasShadow = false
     window.ignoresMouseEvents = true
+    excludeWindowFromScreenCapture(window)
     window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
     let view = RecordingOverlayView(frame: screen.frame, captureRect: captureRect, displayRect: displayRect)
     view.needsDisplay = true

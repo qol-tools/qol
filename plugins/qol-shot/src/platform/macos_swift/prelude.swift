@@ -5,6 +5,10 @@ import Darwin
 import Dispatch
 import Foundation
 
+func excludeWindowFromScreenCapture(_ window: NSWindow) {
+    window.sharingType = .none
+}
+
 struct OverlayText {
     let title: String
     let subtitle: String?

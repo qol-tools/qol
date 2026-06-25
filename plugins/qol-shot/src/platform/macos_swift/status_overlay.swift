@@ -134,6 +134,7 @@ window.backgroundColor = .clear
 window.isOpaque = false
 window.hasShadow = false
 window.ignoresMouseEvents = true
+excludeWindowFromScreenCapture(window)
 window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 let statusView = StatusView(frame: screen.frame, title: title, subtitle: subtitle)
 window.contentView = statusView
