@@ -32,6 +32,7 @@ GLOBAL_FILES_AFFECT_ALL = {
 }
 GLOBAL_PREFIXES_AFFECT_ALL = (".cargo/",)
 AUTO_EXCLUDED_PLUGIN_IDS = {"plugin-template"}
+HOST_RELEASE_UNITS = (("qol-tray", "apps/qol-tray"),)
 
 
 @dataclass(frozen=True)
@@ -52,19 +53,19 @@ class Package:
 
 
 @dataclass(frozen=True)
-class Plugin:
-    plugin_id: str
+class ReleaseUnit:
+    id: str
     directory: Path
     package_name: str
     cargo_manifest: Path
-    plugin_manifest: Path
     cargo_version: str
-    plugin_version: str
+    plugin_manifest: Path | None = None
+    plugin_version: str | None = None
 
 
 @dataclass(frozen=True)
 class ReleasePlan:
-    plugin: Plugin
+    unit: ReleaseUnit
     old_version: str
     new_version: str
     tag: str
@@ -503,9 +504,9 @@ def selection_matches(plugin_id: str, selected: str) -> bool:
     )
 
 
-def discover_plugins(root: Path, packages: dict[str, Package], selected: str | None) -> list[Plugin]:
+def discover_plugins(root: Path, packages: dict[str, Package], selected: str | None) -> list[ReleaseUnit]:
     selected = selected.strip() if selected else None
-    plugins: list[Plugin] = []
+    plugins: list[ReleaseUnit] = []
     for directory in sorted((root / "plugins").iterdir()):
         cargo_manifest = directory / "Cargo.toml"
         plugin_manifest = directory / "plugin.toml"
@@ -527,25 +528,59 @@ def discover_plugins(root: Path, packages: dict[str, Package], selected: str | N
         if package_name not in packages:
             raise RuntimeError(f"{package_name} is not a workspace package")
         plugins.append(
-            Plugin(
-                plugin_id=plugin_id,
+            ReleaseUnit(
+                id=plugin_id,
                 directory=directory,
                 package_name=package_name,
                 cargo_manifest=cargo_manifest,
-                plugin_manifest=plugin_manifest,
                 cargo_version=package_version(cargo_manifest),
+                plugin_manifest=plugin_manifest,
                 plugin_version=plugin_version(plugin_manifest),
             )
         )
-    if selected is not None and not plugins:
-        raise RuntimeError(f"Unknown plugin: {selected}")
     return plugins
+
+
+def discover_host_units(
+    root: Path, packages: dict[str, Package], selected: str | None
+) -> list[ReleaseUnit]:
+    selected = selected.strip() if selected else None
+    units: list[ReleaseUnit] = []
+    for unit_id, rel_dir in HOST_RELEASE_UNITS:
+        directory = root / rel_dir
+        cargo_manifest = directory / "Cargo.toml"
+        if not cargo_manifest.exists():
+            continue
+        if selected is not None and not selection_matches(unit_id, selected):
+            continue
+        package_name = str(toml_at(cargo_manifest)["package"]["name"])
+        if package_name not in packages:
+            raise RuntimeError(f"{package_name} is not a workspace package")
+        units.append(
+            ReleaseUnit(
+                id=unit_id,
+                directory=directory,
+                package_name=package_name,
+                cargo_manifest=cargo_manifest,
+                cargo_version=package_version(cargo_manifest),
+            )
+        )
+    return units
+
+
+def discover_release_units(
+    root: Path, packages: dict[str, Package], selected: str | None
+) -> list[ReleaseUnit]:
+    units = discover_plugins(root, packages, selected) + discover_host_units(root, packages, selected)
+    if selected and selected.strip() and not units:
+        raise RuntimeError(f"Unknown release unit: {selected.strip()}")
+    return units
 
 
 def relevant_commits(
     root: Path,
     commits: list[Commit],
-    plugin: Plugin,
+    unit: ReleaseUnit,
     packages: dict[str, Package],
     changed_paths_cache: dict[str, list[str]],
     closure_cache: dict[str, set[str]],
@@ -562,7 +597,7 @@ def relevant_commits(
                 root,
                 commit,
                 path,
-                plugin.package_name,
+                unit.package_name,
                 packages,
                 closure_cache,
                 root_manifest_cache,
@@ -574,13 +609,13 @@ def relevant_commits(
     return relevant
 
 
-def initial_release_plan(plugin: Plugin) -> ReleasePlan:
-    version = plugin.cargo_version
+def initial_release_plan(unit: ReleaseUnit) -> ReleasePlan:
+    version = unit.cargo_version
     return ReleasePlan(
-        plugin=plugin,
+        unit=unit,
         old_version=version,
         new_version=version,
-        tag=f"{plugin.plugin_id}-v{version}",
+        tag=f"{unit.id}-v{version}",
         bump="initial",
         commit_count=0,
     )
@@ -588,7 +623,7 @@ def initial_release_plan(plugin: Plugin) -> ReleasePlan:
 
 def compute_plans(root: Path, selected: str | None) -> list[ReleasePlan]:
     packages = load_packages(root)
-    plugins = discover_plugins(root, packages, selected)
+    units = discover_release_units(root, packages, selected)
     commits_by_range: dict[str, list[Commit]] = {}
     changed_paths_cache: dict[str, list[str]] = {}
     closure_cache: dict[str, set[str]] = {}
@@ -596,17 +631,17 @@ def compute_plans(root: Path, selected: str | None) -> list[ReleasePlan]:
     lockfile_cache: dict[str, frozenset[str]] = {}
     plans: list[ReleasePlan] = []
 
-    for plugin in plugins:
-        if plugin.cargo_version != plugin.plugin_version:
+    for unit in units:
+        if unit.plugin_version is not None and unit.cargo_version != unit.plugin_version:
             raise RuntimeError(
-                f"Manifest versions differ for {plugin.plugin_id}: "
-                f"cargo={plugin.cargo_version} plugin={plugin.plugin_version}"
+                f"Manifest versions differ for {unit.id}: "
+                f"cargo={unit.cargo_version} plugin={unit.plugin_version}"
             )
 
-        prefix = f"{plugin.plugin_id}-v"
+        prefix = f"{unit.id}-v"
         tag = last_tag(root, prefix)
         if tag is None:
-            plans.append(initial_release_plan(plugin))
+            plans.append(initial_release_plan(unit))
             continue
 
         base_version = tag_version(prefix, tag)
@@ -619,7 +654,7 @@ def compute_plans(root: Path, selected: str | None) -> list[ReleasePlan]:
         commits = relevant_commits(
             root,
             commits_by_range[rev_range],
-            plugin,
+            unit,
             packages,
             changed_paths_cache,
             closure_cache,
@@ -636,13 +671,13 @@ def compute_plans(root: Path, selected: str | None) -> list[ReleasePlan]:
             existing_tags(root, prefix),
             prefix,
         )
-        if version_greater(plugin.cargo_version, next_version):
-            next_version = next_available_version(plugin.cargo_version, existing_tags(root, prefix), prefix)
+        if version_greater(unit.cargo_version, next_version):
+            next_version = next_available_version(unit.cargo_version, existing_tags(root, prefix), prefix)
 
         plans.append(
             ReleasePlan(
-                plugin=plugin,
-                old_version=plugin.cargo_version,
+                unit=unit,
+                old_version=unit.cargo_version,
                 new_version=next_version,
                 tag=f"{prefix}{next_version}",
                 bump=bump,
@@ -659,9 +694,10 @@ def apply_plans(root: Path, plans: list[ReleasePlan]) -> bool:
     for plan in plans:
         if plan.old_version == plan.new_version:
             continue
-        update_table_version(plan.plugin.cargo_manifest, "package", plan.new_version)
-        update_table_version(plan.plugin.plugin_manifest, "plugin", plan.new_version)
-        update_lock_version(lockfile, plan.plugin.package_name, plan.old_version, plan.new_version)
+        update_table_version(plan.unit.cargo_manifest, "package", plan.new_version)
+        if plan.unit.plugin_manifest is not None:
+            update_table_version(plan.unit.plugin_manifest, "plugin", plan.new_version)
+        update_lock_version(lockfile, plan.unit.package_name, plan.old_version, plan.new_version)
         changed = True
     return changed
 
@@ -690,7 +726,7 @@ def main() -> int:
         Path(args.tag_file).write_text("\n".join(plan.tag for plan in plans) + ("\n" if plans else ""))
 
     summary = ", ".join(
-        f"{plan.plugin.plugin_id} {plan.old_version}->{plan.new_version} ({plan.bump})"
+        f"{plan.unit.id} {plan.old_version}->{plan.new_version} ({plan.bump})"
         for plan in plans
     )
     emit_github_output(
@@ -706,11 +742,11 @@ def main() -> int:
     if plans:
         for plan in plans:
             print(
-                f"{plan.plugin.plugin_id}: {plan.old_version} -> {plan.new_version} "
+                f"{plan.unit.id}: {plan.old_version} -> {plan.new_version} "
                 f"({plan.bump}, {plan.commit_count} commits, {plan.tag})"
             )
     else:
-        print("No plugin releases required")
+        print("No releases required")
     return 0
 
 
