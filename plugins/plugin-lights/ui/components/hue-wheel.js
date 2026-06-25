@@ -3,7 +3,7 @@ const DISC_THUMB_R = 9;
 
 export function createHueWheel(container, {
     onRelease,
-    wsUrl = 'ws://127.0.0.1:42710',
+    wsUrl = null,
     initialState = {},
 } = {}) {
     let hue = initialState.hue ?? 0;
@@ -35,7 +35,7 @@ export function createHueWheel(container, {
 
     drawDisc();
     syncBrightnessSlider();
-    connectWs();
+    if (wsUrl) connectWs();
 
     function connectWs() {
         try {

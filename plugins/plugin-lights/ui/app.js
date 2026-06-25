@@ -2,11 +2,13 @@ import { createHueWheel, hexToHueSat } from './components/hue-wheel.js';
 
 const PLUGIN_ID = window.location.pathname.split('/').filter(Boolean)[1];
 const CONFIG_URL = `/api/plugins/${PLUGIN_ID}/config`;
+const FORM_URL = `/api/plugins/${PLUGIN_ID}/config-form`;
 const PERMISSIONS_URL = `/api/plugins/${PLUGIN_ID}/permissions`;
 const REQUEST_PERMISSION_URL = `/api/permissions/serial/request`;
 const ACTION_URL = `/api/plugins/${PLUGIN_ID}/actions`;
 
 let config = null;
+let wsPort = null;
 let permissionStatus = { permissions: {} };
 let permissionsLoaded = false;
 let ensuringPermissions = false;
@@ -185,7 +187,17 @@ async function loadPermissions() {
     }
 }
 
+async function loadDaemonPort() {
+    try {
+        const res = await fetch(FORM_URL);
+        if (!res.ok) return;
+        const form = await res.json();
+        wsPort = form.daemonPort ?? null;
+    } catch (_) {}
+}
+
 async function refreshData() {
+    await loadDaemonPort();
     await Promise.all([
         loadPermissions(),
         loadConfig(),
@@ -708,6 +720,7 @@ function buildControls() {
     const { hue, saturation } = hexToHueSat(config.live_color_hex || 'ffffff');
 
     hueWheelInstance = createHueWheel(wheelContainer, {
+        wsUrl: wsPort ? `ws://127.0.0.1:${wsPort}` : null,
         onRelease({ hex, brightness: level }) {
             config.live_color_hex = hex;
             config.live_brightness = level;
