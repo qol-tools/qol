@@ -18,6 +18,9 @@ pub(crate) use platform::binary_filename;
 
 const INSTALL_ID_FILE: &str = "qol-tray.install-id";
 
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_BUNDLE_ID: &str = "com.qol-tools.qol-tray";
+
 pub fn autostart_path() -> Result<PathBuf> {
     platform::autostart_path()
 }

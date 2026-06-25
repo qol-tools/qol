@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use super::AutostartOps;
 
-const BUNDLE_ID: &str = "com.qol-tools.qol-tray";
+const BUNDLE_ID: &str = crate::installer::MACOS_BUNDLE_ID;
 
 pub(crate) struct Platform;
 

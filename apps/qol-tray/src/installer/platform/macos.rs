@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 const ICNS_DATA: &[u8] = include_bytes!("../../../assets/qol-tray.icns");
 const APP_NAME: &str = "QoL Tray";
-const BUNDLE_ID: &str = "com.qol-tools.qol-tray";
+const BUNDLE_ID: &str = crate::installer::MACOS_BUNDLE_ID;
 
 pub(super) fn install_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Could not determine home directory")?;
