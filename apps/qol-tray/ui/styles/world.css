@@ -141,7 +141,7 @@ html.qol-bootstrapping-dive #app {
     height: 0;
     pointer-events: none;
     opacity: 0.5;
-    transition: opacity 0.12s ease, filter 0.12s ease;
+    transition: opacity var(--dur-sm) ease, filter var(--dur-sm) ease;
     filter: drop-shadow(0 0 2px transparent);
 }
 .minimap-arrow.flash {
@@ -197,7 +197,7 @@ html.qol-bootstrapping-dive #app {
     align-items: center;
     justify-content: center;
     padding: 0;
-    transition: color 0.12s, background 0.12s;
+    transition: color var(--dur-sm), background var(--dur-sm);
 }
 
 .world-cog-btn:hover {
@@ -407,7 +407,7 @@ html.qol-bootstrapping-dive #app {
     background: var(--tui-bg-card);
     color: var(--text-muted);
     cursor: pointer;
-    transition: color 0.12s, border-color 0.12s, background 0.12s;
+    transition: color var(--dur-sm), border-color var(--dur-sm), background var(--dur-sm);
 }
 
 .wsp-version-btn:hover {
@@ -531,7 +531,7 @@ html.qol-bootstrapping-dive #app {
     padding: var(--space-1-5) var(--space-3-5);
     width: auto;
     backdrop-filter: blur(8px);
-    transition: opacity 0.15s ease;
+    transition: opacity var(--dur-fast) ease;
     /* Multiply the resting opacity by (1 - --hide) so the useOverlayHide-driven
        --hide:1 state actually reaches 0. Without this factor a leaked sliver
        sits in the corner when the translate doesn't fully clear the viewport. */

@@ -100,7 +100,7 @@ body {
     border-left: var(--border-w-3) solid var(--accent);
     padding-left: calc(var(--space-6) - var(--border-w-3));
     position: relative;
-    animation: slide-in 0.3s ease-out;
+    animation: slide-in var(--dur-slow) ease-out;
 }
 
 .version-item.has-update::before {
@@ -154,7 +154,7 @@ body {
     padding-left: calc(var(--space-6) - var(--border-w-3));
     position: relative;
     overflow: hidden;
-    animation: slide-in 0.3s ease-out;
+    animation: slide-in var(--dur-slow) ease-out;
 }
 
 .version-item.update-done .version-main {
@@ -183,7 +183,7 @@ body {
     position: absolute;
     inset: 0;
     background: linear-gradient(90deg, var(--layer-paper-15), transparent 60%);
-    animation: done-sweep 0.8s ease-out forwards;
+    animation: done-sweep var(--dur-spin) ease-out forwards;
     pointer-events: none;
 }
 
@@ -440,7 +440,7 @@ body {
     border-radius: inherit;
     pointer-events: none;
     opacity: 0;
-    transition: opacity 0.08s ease;
+    transition: opacity var(--dur-xs) ease;
 }
 
 [data-selected-surface][data-selected="true"] {

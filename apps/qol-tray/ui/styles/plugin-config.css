@@ -85,10 +85,10 @@
     border: 1px solid rgba(var(--accent-rgb), 0.06);
     border-radius: var(--radius-md);
     transition:
-        border-color 0.12s ease,
-        box-shadow 0.12s ease,
-        background 0.12s ease,
-        outline-color 0.12s ease;
+        border-color var(--dur-sm) ease,
+        box-shadow var(--dur-sm) ease,
+        background var(--dur-sm) ease,
+        outline-color var(--dur-sm) ease;
 }
 
 .variant-selector.is-selected[data-selection-surface] {
@@ -158,7 +158,7 @@
     box-shadow: inset 0 1px 2px var(--layer-ink-35);
     position: relative;
     flex-shrink: 0;
-    transition: background 0.15s;
+    transition: background var(--dur-fast);
 }
 
 .toggle-track.on {
@@ -174,7 +174,7 @@
     position: absolute;
     top: 2px;
     left: 2px;
-    transition: transform 0.15s;
+    transition: transform var(--dur-fast);
 }
 
 .toggle-track.on .toggle-thumb {
@@ -224,7 +224,7 @@
     padding: 0.55rem 0.7rem;
     border: 1px solid rgba(var(--accent-rgb), 0.06);
     border-radius: var(--radius-md);
-    transition: border-color 0.12s;
+    transition: border-color var(--dur-sm);
 }
 
 .field-group[data-field-align="center"] {
@@ -285,7 +285,7 @@
     cursor: text;
     user-select: none;
     width: 100%;
-    transition: border-color 0.12s;
+    transition: border-color var(--dur-sm);
 }
 
 .number-display:hover {
@@ -454,7 +454,7 @@
     border-radius: var(--radius-xs);
     cursor: pointer;
     user-select: none;
-    transition: background 0.12s ease, color 0.12s ease;
+    transition: background var(--dur-sm) ease, color var(--dur-sm) ease;
     z-index: var(--z-3);
 }
 

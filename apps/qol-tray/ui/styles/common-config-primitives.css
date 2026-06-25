@@ -146,7 +146,7 @@
     font-family: var(--font-mono);
     cursor: pointer;
     user-select: none;
-    transition: all 0.15s;
+    transition: all var(--dur-fast);
 }
 
 .mod-chip.active {

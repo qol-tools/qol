@@ -18,7 +18,7 @@
     height: 4px;
     border-radius: var(--radius-2xs);
     background: var(--bg-surface);
-    transition: background 0.15s;
+    transition: background var(--dur-fast);
 }
 
 .profile-conflicts-dot[data-state="done"] {
@@ -116,7 +116,7 @@
     background: var(--bg-surface);
     text-align: left;
     cursor: pointer;
-    transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
+    transition: border-color var(--dur-sm), background var(--dur-sm), box-shadow var(--dur-sm);
 }
 
 .profile-conflicts-side:hover {

@@ -313,6 +313,8 @@
     --ls-2xl: 0.08em;
     --ls-3xl: 0.11em;
 
+    --dur-xs: 0.08s;
+    --dur-sm: 0.12s;
     --dur-fast: 0.15s;
     --dur-slow: 0.3s;
     --dur-base: 0.2s;

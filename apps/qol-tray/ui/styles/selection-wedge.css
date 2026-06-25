@@ -35,7 +35,7 @@
     mask: var(--selection-wedge-svg) center / contain no-repeat;
     transform: translate(-0.16rem, -0.16rem) scaleX(-1) rotate(-45deg);
     transform-origin: center;
-    transition: opacity 0.08s ease, transform 0.08s ease;
+    transition: opacity var(--dur-xs) ease, transform var(--dur-xs) ease;
 }
 
 .selection-cursor-overlay .selection-wedge-icon {
@@ -74,7 +74,7 @@
     mask: var(--selection-wedge-svg) center / contain no-repeat;
     transform: translate(-0.16rem, -0.16rem) scaleX(-1) rotate(-45deg);
     transform-origin: center;
-    transition: opacity 0.08s ease, transform 0.08s ease;
+    transition: opacity var(--dur-xs) ease, transform var(--dur-xs) ease;
 }
 
 .selection-wedge-pseudo.selection-wedge-visible::after {
@@ -115,7 +115,7 @@
     left: 0 !important;
     transform: translate(-50%, -50%) scaleX(-1) rotate(90deg) scale(0.75);
     opacity: 0.6;
-    transition: transform 0.1s ease, opacity 0.1s ease;
+    transition: transform var(--dur-xs) ease, opacity var(--dur-xs) ease;
 }
 
 [data-ctrl-held] .selection-cursor-overlay > .selection-wedge-depth {
