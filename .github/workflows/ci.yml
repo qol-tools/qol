@@ -33,7 +33,7 @@ jobs:
           fetch-depth: 0
 
       - name: Single source guard
-        run: bash .githooks/single-source-guard.sh
+        run: node .githooks/single-source-guard.mjs
 
       - name: Test release scripts
         run: python3 -m unittest discover -s .github/scripts/tests -p 'test_*.py'
