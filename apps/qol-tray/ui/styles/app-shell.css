@@ -557,7 +557,7 @@ body {
     min-width: 1.3em;
     height: 1.3em;
     padding: 0 0.35em;
-    border-radius: var(--radius-pill, 99px);
+    border-radius: var(--radius-pill);
     background: rgba(var(--accent-rgb), 0.14);
     font-size: var(--fs-xs);
     font-weight: var(--fw-semibold);

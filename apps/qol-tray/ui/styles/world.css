@@ -248,7 +248,7 @@ html.qol-bootstrapping-dive #app {
 .wsp-pill {
     display: inline-block;
     padding: 1px 6px;
-    border-radius: var(--radius-sm, 4px);
+    border-radius: var(--radius-sm);
     background: rgba(var(--accent-rgb), 0.1);
     color: var(--text-secondary);
     font-family: var(--font-mono);

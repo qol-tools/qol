@@ -46,7 +46,7 @@
 }
 
 .profile-conflicts-key {
-    font-size: var(--fs-xl, 1.25rem);
+    font-size: var(--fs-xl-plus);
     font-weight: var(--fw-semibold);
     color: var(--text-primary);
     font-family: var(--font-mono);
@@ -61,7 +61,7 @@
 .profile-conflicts-file {
     color: var(--text-faint);
     font-family: var(--font-mono);
-    font-size: var(--fs-xs, 0.75rem);
+    font-size: var(--fs-xs);
     margin: 0 0 var(--space-3);
     word-break: break-all;
 }
@@ -95,7 +95,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text-primary);
-    font-weight: var(--fw-medium, 500);
+    font-weight: var(--fw-medium);
 }
 
 .profile-conflicts-sides {
@@ -112,7 +112,7 @@
     gap: var(--space-1);
     padding: var(--space-3);
     border: var(--border-w-1) solid var(--border-default);
-    border-radius: var(--radius-md, 8px);
+    border-radius: var(--radius-md);
     background: var(--bg-surface);
     text-align: left;
     cursor: pointer;
@@ -157,7 +157,7 @@
 
 .profile-conflicts-side-value {
     font-family: var(--font-mono);
-    font-size: var(--fs-lg, 1rem);
+    font-size: var(--fs-lg);
     font-weight: var(--fw-bold);
     color: var(--text-primary);
     word-break: break-all;
@@ -213,7 +213,7 @@
 .profile-conflicts-diff {
     background: var(--bg-base);
     border: var(--border-w-1) solid var(--border-subtle);
-    border-radius: var(--radius-md, 8px);
+    border-radius: var(--radius-md);
     padding: var(--space-2) 0;
     font-family: var(--font-mono);
     font-size: var(--fs-sm);
@@ -310,7 +310,7 @@
 }
 
 .profile-conflicts-confirm-title {
-    font-size: var(--fs-lg, 1rem);
+    font-size: var(--fs-lg);
     margin: 0;
     color: var(--text-primary);
 }
@@ -341,7 +341,7 @@
 
 .profile-conflicts-confirm-rows {
     border: var(--border-w-1) solid var(--border-subtle);
-    border-radius: var(--radius-md, 8px);
+    border-radius: var(--radius-md);
     overflow: hidden;
 }
 
@@ -400,7 +400,7 @@
     background: rgba(var(--success-rgb), 0.08);
     border: var(--border-w-1) solid rgba(var(--success-rgb), 0.25);
     color: var(--text-secondary);
-    border-radius: var(--radius-md, 8px);
+    border-radius: var(--radius-md);
     padding: var(--space-2) var(--space-3);
     font-size: var(--fs-sm);
     margin: 0;
