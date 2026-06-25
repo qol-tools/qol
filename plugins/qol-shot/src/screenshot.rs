@@ -30,6 +30,54 @@ pub fn capture_to_file() -> Result<Option<PathBuf>> {
     Ok(Some(output_file))
 }
 
+pub struct PreviewCapture {
+    pub path: PathBuf,
+    pub rgba: Option<(Vec<u8>, u32, u32)>,
+}
+
+pub fn capture_for_preview() -> Result<Option<PreviewCapture>> {
+    let Some(rect) = select_screenshot_rect()? else {
+        return Ok(None);
+    };
+    qol_runtime::probe!("SHOT_SELECT_DONE", "rect={}x{}", rect.w, rect.h);
+
+    let output_file = crate::output::screenshot_output_file_path()?;
+
+    let grabbed = std::time::Instant::now();
+    if let Some((rgba, w, h)) = platform::grab_preview_rgba(&rect) {
+        qol_runtime::probe!("SHOT_GRAB", "ms={} dims={w}x{h}", grabbed.elapsed().as_millis());
+        spawn_file_write(rect, output_file.clone());
+        return Ok(Some(PreviewCapture {
+            path: output_file,
+            rgba: Some((rgba, w, h)),
+        }));
+    }
+
+    let started = std::time::Instant::now();
+    platform::capture_screenshot(&rect, &output_file)?;
+    qol_runtime::probe!(
+        "SHOT_CAPTURE",
+        "ms={} rect={}x{}",
+        started.elapsed().as_millis(),
+        rect.w,
+        rect.h
+    );
+    Ok(Some(PreviewCapture {
+        path: output_file,
+        rgba: None,
+    }))
+}
+
+fn spawn_file_write(rect: Rect, path: PathBuf) {
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        match platform::capture_screenshot(&rect, &path) {
+            Ok(()) => qol_runtime::probe!("SHOT_FILE", "ms={}", started.elapsed().as_millis()),
+            Err(error) => eprintln!("[qol-shot] background screenshot file failed: {error:#}"),
+        }
+    });
+}
+
 fn present_capture(output_file: &Path) {
     if let Err(error) = show_preview(output_file) {
         eprintln!("[qol-shot] preview unavailable, copying instead: {error:#}");

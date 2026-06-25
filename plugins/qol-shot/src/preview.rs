@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use gpui::*;
 
+use crate::screenshot::PreviewCapture;
 use crate::{actions::ShotAction, platform};
 
 const MAX_THUMB_W: f32 = 360.0;
@@ -38,6 +39,7 @@ pub fn show(path: &Path) -> Result<()> {
             thumb,
             Dismiss::Quit,
             run_completion.clone(),
+            None,
             cx,
         ) {
             cx.activate(true);
@@ -57,18 +59,36 @@ pub fn show(path: &Path) -> Result<()> {
 }
 
 pub fn open_in_app(path: &Path, cx: &mut App) -> Result<()> {
-    let thumb = read_thumb(path)?;
+    open_preview(path.to_path_buf(), None, cx)
+}
+
+pub fn open_capture(capture: PreviewCapture, cx: &mut App) -> Result<()> {
+    let image = capture.rgba.and_then(|(data, w, h)| {
+        rgba_to_render_image(data, w, h).map(|render_image| (render_image, w, h))
+    });
+    open_preview(capture.path, image, cx)
+}
+
+fn open_preview(
+    path: PathBuf,
+    image: Option<(Arc<RenderImage>, u32, u32)>,
+    cx: &mut App,
+) -> Result<()> {
+    let (thumb, render_image) = match image {
+        Some((render_image, w, h)) => (thumbnail_size(w as f32, h as f32), Some(render_image)),
+        None => (read_thumb(&path)?, None),
+    };
     let completion: Completion = Arc::new(Mutex::new(None));
-    if open_window(
-        path.to_path_buf(),
-        thumb,
-        Dismiss::CloseWindow,
-        completion,
-        cx,
-    ) {
+    if open_window(path, thumb, Dismiss::CloseWindow, completion, render_image, cx) {
         cx.activate(true);
     }
     Ok(())
+}
+
+fn rgba_to_render_image(data: Vec<u8>, w: u32, h: u32) -> Option<Arc<RenderImage>> {
+    let buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(w, h, data)?;
+    let frame = image::Frame::new(buffer);
+    Some(Arc::new(RenderImage::new(smallvec::smallvec![frame])))
 }
 
 fn read_thumb(path: &Path) -> Result<(f32, f32)> {
@@ -88,6 +108,7 @@ fn open_window(
     thumb: (f32, f32),
     dismiss: Dismiss,
     completion: Completion,
+    image: Option<Arc<RenderImage>>,
     cx: &mut App,
 ) -> bool {
     let (win_w, win_h) = window_dims(thumb.0, thumb.1, ShotAction::ALL.len());
@@ -110,8 +131,9 @@ fn open_window(
     let opened_at = std::time::Instant::now();
     let opened = cx.open_window(options, move |window, cx| {
         window.set_window_title(&window_title);
-        let view = cx
-            .new(|cx| PreviewView::new(path.clone(), thumb, dismiss, completion.clone(), seq, cx));
+        let view = cx.new(|cx| {
+            PreviewView::new(path.clone(), thumb, dismiss, completion.clone(), image.clone(), seq, cx)
+        });
         window.focus(&view.focus_handle(cx));
         window.activate_window();
         view
@@ -142,6 +164,7 @@ struct PreviewView {
     thumb: (f32, f32),
     dismiss: Dismiss,
     completion: Completion,
+    image: Option<Arc<RenderImage>>,
     selected: usize,
     seq: u64,
     first_paint: bool,
@@ -154,6 +177,7 @@ impl PreviewView {
         thumb: (f32, f32),
         dismiss: Dismiss,
         completion: Completion,
+        image: Option<Arc<RenderImage>>,
         seq: u64,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -162,6 +186,7 @@ impl PreviewView {
             thumb,
             dismiss,
             completion,
+            image,
             selected: 0,
             seq,
             first_paint: true,
@@ -222,6 +247,13 @@ impl PreviewView {
             }
         }
     }
+
+    fn thumbnail(&self, thumb_w: f32, thumb_h: f32) -> Img {
+        match &self.image {
+            Some(render_image) => img(render_image.clone()).w(px(thumb_w)).h(px(thumb_h)),
+            None => img(self.path.clone()).w(px(thumb_w)).h(px(thumb_h)),
+        }
+    }
 }
 
 impl Focusable for PreviewView {
@@ -264,7 +296,7 @@ impl Render for PreviewView {
                     .overflow_hidden()
                     .border_1()
                     .border_color(rgb(0x2a2a3a))
-                    .child(img(self.path.clone()).w(px(thumb_w)).h(px(thumb_h))),
+                    .child(self.thumbnail(thumb_w, thumb_h)),
             )
             .child(
                 div()

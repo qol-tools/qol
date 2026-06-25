@@ -37,10 +37,16 @@ fn spawn_screenshot_loop(rx: mpsc::Receiver<daemon::Command>, cx: &mut App) {
 async fn capture_and_preview(cx: &AsyncApp) {
     qol_runtime::probe!("SHOT_RECV", "action=screenshot");
     let captured = cx
-        .background_spawn(async { crate::screenshot::capture_to_file() })
+        .background_spawn(async { crate::screenshot::capture_for_preview() })
         .await;
     match captured {
-        Ok(Some(path)) => open_preview(cx, path).await,
+        Ok(Some(capture)) => {
+            let _ = cx.update(|cx| {
+                if let Err(error) = crate::preview::open_capture(capture, cx) {
+                    eprintln!("[qol-shot] preview failed: {error:#}");
+                }
+            });
+        }
         Ok(None) => {}
         Err(error) => eprintln!("[qol-shot] capture failed: {error:#}"),
     }

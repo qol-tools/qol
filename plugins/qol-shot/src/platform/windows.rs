@@ -83,6 +83,10 @@ pub fn open_url(_url: &str) -> Result<()> {
     ))
 }
 
+pub fn grab_preview_rgba(_rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {
+    None
+}
+
 pub fn configure_preview_window(_title: String) {}
 
 pub fn platform_supported_check() -> DoctorCheckResult {
