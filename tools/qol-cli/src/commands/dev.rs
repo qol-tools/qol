@@ -203,7 +203,7 @@ fn request_plugin_reload() -> Result<()> {
 
 fn wait_for_dev_links_fresh() -> Result<()> {
     let started = Instant::now();
-    let mut last_state = String::from("waiting for dev-link status");
+    let mut last_state;
     loop {
         match fetch_dev_links() {
             Ok(links) => {
