@@ -498,6 +498,20 @@ def existing_tags(root: Path, prefix: str) -> list[str]:
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 
+def highest_version_tag(tags: list[str], prefix: str) -> str | None:
+    best: tuple[tuple[int, int, int], str] | None = None
+    for tag in tags:
+        if not tag.startswith(prefix):
+            continue
+        try:
+            version = parse_semver(tag.removeprefix(prefix))
+        except ValueError:
+            continue
+        if best is None or version > best[0]:
+            best = (version, tag)
+    return best[1] if best else None
+
+
 def selection_matches(plugin_id: str, selected: str) -> bool:
     return plugin_id == selected or plugin_id.removeprefix("plugin-") == selected.removeprefix(
         "plugin-"
@@ -639,7 +653,7 @@ def compute_plans(root: Path, selected: str | None) -> list[ReleasePlan]:
             )
 
         prefix = f"{unit.id}-v"
-        tag = last_tag(root, prefix)
+        tag = last_tag(root, prefix) or highest_version_tag(existing_tags(root, prefix), prefix)
         if tag is None:
             plans.append(initial_release_plan(unit))
             continue

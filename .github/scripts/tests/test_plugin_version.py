@@ -186,5 +186,18 @@ class ApplyHostPlanTests(unittest.TestCase):
         self.assertFalse((crate / "plugin.toml").exists(), "host release must not create a plugin.toml")
 
 
+class HighestVersionTagTests(unittest.TestCase):
+    def test_picks_highest_semver_for_prefix(self):
+        cases = [
+            (["qol-tray-v3.16.0"], "qol-tray-v", "qol-tray-v3.16.0"),
+            (["qol-tray-v3.9.0", "qol-tray-v3.16.0", "qol-tray-v3.10.1"], "qol-tray-v", "qol-tray-v3.16.0"),
+            ([], "qol-tray-v", None),
+            (["plugin-alt-tab-v1.0.0"], "qol-tray-v", None),
+            (["qol-tray-v3.16.0", "qol-tray-vbogus"], "qol-tray-v", "qol-tray-v3.16.0"),
+        ]
+        for tags, prefix, expected in cases:
+            self.assertEqual(pv.highest_version_tag(tags, prefix), expected, f"tags={tags}")
+
+
 if __name__ == "__main__":
     unittest.main()
