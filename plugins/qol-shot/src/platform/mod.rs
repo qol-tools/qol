@@ -43,16 +43,6 @@ pub struct CaptureSession {
 }
 
 impl CaptureSession {
-    pub fn single(pid: u32, canvas: Rect, output_file: PathBuf, capture_file: PathBuf) -> Self {
-        Self {
-            output_file: Some(output_file),
-            capture_file: Some(capture_file),
-            canvas: Some(canvas),
-            processes: vec![CaptureProcess { pid }],
-            segments: Vec::new(),
-        }
-    }
-
     pub fn legacy(pid: u32, output_file: Option<PathBuf>, capture_file: Option<PathBuf>) -> Self {
         Self {
             output_file,

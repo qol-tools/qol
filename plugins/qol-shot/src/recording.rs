@@ -298,17 +298,18 @@ mod tests {
 
     #[test]
     fn capture_state_round_trips_json_session() {
-        let session = crate::platform::CaptureSession::single(
-            123,
-            crate::Rect {
+        let session = crate::platform::CaptureSession {
+            output_file: Some(PathBuf::from("/a/final.webm")),
+            capture_file: Some(PathBuf::from("/a/native.mov")),
+            canvas: Some(crate::Rect {
                 x: 10,
                 y: 20,
                 w: 300,
                 h: 200,
-            },
-            PathBuf::from("/a/final.webm"),
-            PathBuf::from("/a/native.mov"),
-        );
+            }),
+            processes: vec![crate::platform::CaptureProcess { pid: 123 }],
+            segments: Vec::new(),
+        };
         let state = super::PersistedCaptureState {
             version: super::CAPTURE_STATE_VERSION,
             session: session.clone(),

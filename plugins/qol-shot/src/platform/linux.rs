@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 
-use crate::platform::CaptureSession;
+use crate::platform::{CaptureProcess, CaptureSession};
 use crate::{Config, Monitor, Rect};
 
 pub fn select_region() -> Result<Option<Rect>> {
@@ -220,12 +220,13 @@ pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result
         .spawn()
         .context("failed to start ffmpeg")?;
 
-    Ok(CaptureSession::single(
-        child.id(),
-        *rect,
-        output_file.to_path_buf(),
-        output_file.to_path_buf(),
-    ))
+    Ok(CaptureSession {
+        output_file: Some(output_file.to_path_buf()),
+        capture_file: Some(output_file.to_path_buf()),
+        canvas: Some(*rect),
+        processes: vec![CaptureProcess { pid: child.id() }],
+        segments: Vec::new(),
+    })
 }
 
 pub fn capture_screenshot(rect: &Rect, output_file: &Path) -> Result<()> {
