@@ -9,6 +9,7 @@ const NAV_MOTION_BASE: u8 = 3;
 const NAV_MOTION_MAX: u8 = 5;
 const NAV_TRAIL_FADE_OFFSET: u8 = 2;
 const FOCUS_GRAVITY_IDLE: Duration = Duration::from_millis(140);
+const PHANTOM_NAV_WINDOW: Duration = Duration::from_millis(60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EdgeHit {
@@ -192,6 +193,26 @@ impl LauncherState {
 
     pub fn take_edge_hit(&mut self) -> Option<EdgeHit> {
         self.edge_hit.take()
+    }
+
+    pub fn is_phantom_reversal(&self, direction: NavDirection) -> bool {
+        let (Some(last), Some(prev)) = (self.last_nav_at, self.nav_direction) else {
+            return false;
+        };
+        let elapsed = Instant::now().duration_since(last);
+        let phantom = prev != direction && elapsed < PHANTOM_NAV_WINDOW;
+        #[cfg(debug_assertions)]
+        if phantom {
+            qol_runtime::probe!(
+                "LAUNCHER_NAV_PHANTOM",
+                "dir={:?} prev={:?} elapsed_ms={} selected={}",
+                direction,
+                prev,
+                elapsed.as_millis(),
+                self.selected,
+            );
+        }
+        phantom
     }
 
     pub fn register_nav(&mut self, direction: NavDirection) {

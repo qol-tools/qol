@@ -67,10 +67,16 @@ impl LauncherState {
                 InputEffect::Navigate
             }
             "up" if !secondary => {
+                if self.is_phantom_reversal(NavDirection::Up) {
+                    return InputEffect::Ignore;
+                }
                 self.move_up();
                 InputEffect::Navigate
             }
             "down" if !secondary => {
+                if self.is_phantom_reversal(NavDirection::Down) {
+                    return InputEffect::Ignore;
+                }
                 self.move_down(result_count);
                 InputEffect::Navigate
             }
@@ -269,6 +275,55 @@ mod tests {
             state.apply_key("right", false, false, false, true, 0),
             InputEffect::BoostUp
         );
+    }
+
+    #[test]
+    fn fast_direction_reversal_is_ignored_as_phantom() {
+        let mut state = LauncherState::new();
+
+        assert_eq!(
+            state.apply_key("down", false, false, false, false, 7),
+            InputEffect::Navigate
+        );
+        assert_eq!(state.selected, 1);
+
+        assert_eq!(
+            state.apply_key("up", false, false, false, false, 7),
+            InputEffect::Ignore,
+            "an up arriving within the phantom window must not move"
+        );
+        assert_eq!(state.selected, 1, "selection holds against the phantom up");
+    }
+
+    #[test]
+    fn deliberate_reversal_after_delay_still_navigates() {
+        use std::time::{Duration, Instant};
+
+        let mut state = LauncherState::new();
+        state.apply_key("down", false, false, false, false, 7);
+        assert_eq!(state.selected, 1);
+
+        state.last_nav_at = Some(Instant::now() - Duration::from_millis(250));
+        assert_eq!(
+            state.apply_key("up", false, false, false, false, 7),
+            InputEffect::Navigate,
+            "a human-paced reversal is real navigation"
+        );
+        assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn repeated_same_direction_is_never_treated_as_phantom() {
+        let mut state = LauncherState::new();
+        let cases = [1usize, 2, 3, 4];
+        for expected in cases {
+            assert_eq!(
+                state.apply_key("down", false, false, false, false, 7),
+                InputEffect::Navigate,
+                "down #{expected} must navigate"
+            );
+            assert_eq!(state.selected, expected, "down #{expected} advances");
+        }
     }
 
     #[test]
