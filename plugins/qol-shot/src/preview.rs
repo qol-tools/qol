@@ -1,10 +1,19 @@
 use anyhow::Context as _;
 use anyhow::Result;
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use gpui::*;
+
+use qol_gpui::ghost::{ghost_window_title, show_ghost_window, sync_window_layout};
+use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
+use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind};
+use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
+use qol_gpui::window::{centered_window_placement, ActiveWindows, MonitorKey, WindowPlacement};
 
 use crate::screenshot::PreviewCapture;
 use crate::{actions::ShotAction, platform};
@@ -15,15 +24,21 @@ const MARGIN: f32 = 18.0;
 const CIRCLE: f32 = 46.0;
 const CIRCLE_GAP: f32 = 14.0;
 const LABEL_H: f32 = 30.0;
+const BLUR_GUARD: Duration = Duration::from_millis(400);
+const PREVIEW_TITLE: &str = "qol-shot-preview";
+const PREVIEW_APP_ID: &str = "qol-tray-shot";
 
 static PREVIEW_SEQ: AtomicU64 = AtomicU64::new(0);
 
 type Completion = Arc<Mutex<Option<Result<()>>>>;
+type DismissSub = (Subscription, Subscription, Option<Task<()>>);
 
-#[derive(Clone, Copy)]
-enum Dismiss {
+pub type PreviewWindows = Rc<RefCell<ActiveWindows<PreviewView>>>;
+
+#[derive(Clone, Copy, PartialEq)]
+enum DismissMode {
     Quit,
-    CloseWindow,
+    Ghost,
 }
 
 pub fn show(path: &Path) -> Result<()> {
@@ -34,14 +49,7 @@ pub fn show(path: &Path) -> Result<()> {
 
     Application::new().run(move |cx: &mut App| {
         qol_gpui::platform::set_accessory_policy();
-        if open_window(
-            path.clone(),
-            thumb,
-            Dismiss::Quit,
-            run_completion.clone(),
-            None,
-            cx,
-        ) {
+        if open_quit_window(path.clone(), thumb, run_completion.clone(), None, cx) {
             cx.activate(true);
         } else {
             cx.quit();
@@ -58,65 +66,248 @@ pub fn show(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn open_in_app(path: &Path, cx: &mut App) -> Result<()> {
-    open_preview(path.to_path_buf(), None, cx)
+pub fn pre_create(windows: &PreviewWindows, tracker: &MonitorTracker, cx: &mut App) {
+    let default = window_dims(MAX_THUMB_W, MAX_THUMB_H, ShotAction::ALL.len());
+    let default_size = size(px(default.0), px(default.1));
+    for monitor in monitors_or_snapshot(tracker) {
+        let placement = centered_window_placement(Some(&monitor), default_size, cx);
+        let target = placement.target;
+        let title = ghost_window_title(PREVIEW_TITLE, target);
+        let Some(handle) =
+            open_ghost_window(cx, GhostContent::empty(), 0, &title, &placement, false)
+        else {
+            continue;
+        };
+        windows.borrow_mut().insert(target, handle);
+        configure_popup_window(&title);
+        let _ = handle.update(cx, |view, window, _cx| {
+            view.set_showing(false);
+            park_ghost(&title, window, view.window_origin);
+        });
+    }
 }
 
-pub fn open_capture(capture: PreviewCapture, cx: &mut App) -> Result<()> {
-    let image = capture.rgba.and_then(|(data, w, h)| {
-        rgba_to_render_image(data, w, h).map(|render_image| (render_image, w, h))
-    });
-    open_preview(capture.path, image, cx)
+pub fn park_idle(windows: &PreviewWindows, cx: &mut App) {
+    for (key, handle) in windows.borrow().iter() {
+        let title = ghost_window_title(PREVIEW_TITLE, key);
+        let _ = handle.update(cx, |view, window, _cx| {
+            view.set_showing(false);
+            park_ghost(&title, window, view.window_origin);
+        });
+    }
 }
 
-fn open_preview(
-    path: PathBuf,
-    image: Option<(Arc<RenderImage>, u32, u32)>,
+fn park_ghost(title: &str, window: &mut Window, origin: Point<Pixels>) {
+    sync_window_layout(title, window, origin, size(px(1.0), px(1.0)));
+    hide_invisible(title);
+}
+
+pub fn show_capture(
+    windows: &PreviewWindows,
+    tracker: &MonitorTracker,
+    capture: PreviewCapture,
     cx: &mut App,
 ) -> Result<()> {
-    let (thumb, render_image) = match image {
-        Some((render_image, w, h)) => (thumbnail_size(w as f32, h as f32), Some(render_image)),
-        None => (read_thumb(&path)?, None),
-    };
-    let completion: Completion = Arc::new(Mutex::new(None));
-    if open_window(path, thumb, Dismiss::CloseWindow, completion, render_image, cx) {
-        cx.activate(true);
+    let content = GhostContent::from_capture(capture)?;
+    let (win_w, win_h) = window_dims(content.thumb.0, content.thumb.1, ShotAction::ALL.len());
+    let placement = centered_window_placement(
+        tracker.snapshot_monitor().as_ref(),
+        size(px(win_w), px(win_h)),
+        cx,
+    );
+    let target = placement.target;
+    let seq = PREVIEW_SEQ.fetch_add(1, Ordering::Relaxed);
+
+    mark_non_target_hidden(windows, target, cx);
+    if !reuse_existing(windows, target, &placement, content.clone(), seq, cx) {
+        create_and_show(windows, target, &placement, content, seq, cx);
     }
     Ok(())
 }
 
-fn rgba_to_render_image(data: Vec<u8>, w: u32, h: u32) -> Option<Arc<RenderImage>> {
-    let buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(w, h, data)?;
-    let frame = image::Frame::new(buffer);
-    Some(Arc::new(RenderImage::new(smallvec::smallvec![frame])))
-}
-
-fn read_thumb(path: &Path) -> Result<(f32, f32)> {
-    let started = std::time::Instant::now();
-    let (width, height) = image::image_dimensions(path)
-        .with_context(|| format!("failed to read image dimensions: {}", path.display()))?;
-    qol_runtime::probe!(
-        "SHOT_THUMB",
-        "ms={} dims={width}x{height}",
-        started.elapsed().as_millis()
-    );
-    Ok(thumbnail_size(width as f32, height as f32))
-}
-
-fn open_window(
+#[derive(Clone)]
+struct GhostContent {
     path: PathBuf,
     thumb: (f32, f32),
-    dismiss: Dismiss,
+    image: Option<Arc<RenderImage>>,
+    ready: bool,
+}
+
+impl GhostContent {
+    fn empty() -> Self {
+        Self {
+            path: PathBuf::new(),
+            thumb: window_thumb_default(),
+            image: None,
+            ready: false,
+        }
+    }
+
+    fn from_capture(capture: PreviewCapture) -> Result<Self> {
+        let image = capture.rgba.and_then(|(data, w, h)| {
+            rgba_to_render_image(data, w, h).map(|render_image| (render_image, w, h))
+        });
+        let (thumb, render_image) = match image {
+            Some((render_image, w, h)) => (thumbnail_size(w as f32, h as f32), Some(render_image)),
+            None => (read_thumb(&capture.path)?, None),
+        };
+        Ok(Self {
+            path: capture.path,
+            thumb,
+            image: render_image,
+            ready: true,
+        })
+    }
+}
+
+fn mark_non_target_hidden(windows: &PreviewWindows, target: MonitorKey, cx: &mut App) {
+    let keys: Vec<MonitorKey> = windows
+        .borrow()
+        .iter()
+        .into_iter()
+        .map(|(key, _)| key)
+        .filter(|key| *key != target)
+        .collect();
+    let mut stale = Vec::new();
+    for key in keys {
+        let Some(handle) = windows.borrow().existing(key) else {
+            continue;
+        };
+        if handle
+            .update(cx, |view, _window, _cx| view.set_showing(false))
+            .is_err()
+        {
+            stale.push(key);
+        }
+    }
+    if !stale.is_empty() {
+        let mut windows = windows.borrow_mut();
+        for key in stale {
+            windows.remove(key);
+        }
+    }
+}
+
+fn reuse_existing(
+    windows: &PreviewWindows,
+    target: MonitorKey,
+    placement: &WindowPlacement,
+    content: GhostContent,
+    seq: u64,
+    cx: &mut App,
+) -> bool {
+    let _reason = reason_scope("show");
+    let Some(handle) = windows.borrow().existing(target) else {
+        return false;
+    };
+    let title = ghost_window_title(PREVIEW_TITLE, target);
+    let all_titles = windows.borrow().titles(PREVIEW_TITLE);
+    let opened_at = Instant::now();
+    let bounds = placement.bounds;
+    let ok = handle
+        .update(cx, |view, window, cx| {
+            view.window_origin = bounds.origin;
+            view.reset_for_show(content, seq);
+            sync_window_layout(&title, window, bounds.origin, bounds.size);
+            show_ghost_window(&title, &all_titles);
+            window.activate_window();
+            window.focus(&view.focus_handle(cx));
+            cx.notify();
+        })
+        .is_ok();
+    if !ok {
+        windows.borrow_mut().remove(target);
+        return false;
+    }
+    qol_runtime::probe!(
+        "SHOT_WINDOW_OPEN",
+        "ms={} seq={seq} path=reuse",
+        opened_at.elapsed().as_millis()
+    );
+    cx.activate(true);
+    true
+}
+
+fn create_and_show(
+    windows: &PreviewWindows,
+    target: MonitorKey,
+    placement: &WindowPlacement,
+    content: GhostContent,
+    seq: u64,
+    cx: &mut App,
+) {
+    let _reason = reason_scope("create");
+    let title = ghost_window_title(PREVIEW_TITLE, target);
+    let opened_at = Instant::now();
+    let Some(handle) = open_ghost_window(cx, content, seq, &title, placement, true) else {
+        eprintln!("[qol-shot] preview window open failed");
+        return;
+    };
+    windows.borrow_mut().insert(target, handle);
+    let all_titles = windows.borrow().titles(PREVIEW_TITLE);
+    configure_popup_window(&title);
+    let _ = handle.update(cx, |view, window, cx| {
+        view.set_showing(true);
+        show_ghost_window(&title, &all_titles);
+        window.activate_window();
+        window.focus(&view.focus_handle(cx));
+        cx.notify();
+    });
+    qol_runtime::probe!(
+        "SHOT_WINDOW_OPEN",
+        "ms={} seq={seq} path=create",
+        opened_at.elapsed().as_millis()
+    );
+    cx.activate(true);
+}
+
+fn open_ghost_window(
+    cx: &mut App,
+    content: GhostContent,
+    seq: u64,
+    title: &str,
+    placement: &WindowPlacement,
+    focus: bool,
+) -> Option<WindowHandle<PreviewView>> {
+    let options = ghost_window_options(placement, focus);
+    let title = title.to_string();
+    let origin = placement.bounds.origin;
+    cx.open_window(options, move |window, cx| {
+        window.set_window_title(&title);
+        let view = cx.new(|cx| PreviewView::new_ghost(content, seq, title.clone(), origin, cx));
+        window.focus(&view.focus_handle(cx));
+        window.activate_window();
+        view
+    })
+    .ok()
+}
+
+fn ghost_window_options(placement: &WindowPlacement, focus: bool) -> WindowOptions {
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(placement.bounds)),
+        display_id: placement.display_id,
+        titlebar: None,
+        window_decorations: Some(ghost_window_decorations(false)),
+        kind: ghost_window_kind(),
+        focus,
+        is_movable: true,
+        window_background: WindowBackgroundAppearance::Transparent,
+        app_id: Some(PREVIEW_APP_ID.to_string()),
+        ..Default::default()
+    }
+}
+
+fn open_quit_window(
+    path: PathBuf,
+    thumb: (f32, f32),
     completion: Completion,
     image: Option<Arc<RenderImage>>,
     cx: &mut App,
 ) -> bool {
     let (win_w, win_h) = window_dims(thumb.0, thumb.1, ShotAction::ALL.len());
-    let window_size = size(px(win_w), px(win_h));
     let seq = PREVIEW_SEQ.fetch_add(1, Ordering::Relaxed);
     let title = format!("qol-shot-preview-{}-{seq}", std::process::id());
-
-    let bounds = preview_bounds(window_size, cx);
+    let bounds = preview_bounds(size(px(win_w), px(win_h)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: None,
@@ -127,70 +318,158 @@ fn open_window(
         ..Default::default()
     };
 
+    let content = GhostContent {
+        path,
+        thumb,
+        image,
+        ready: true,
+    };
     let window_title = title.clone();
-    let opened_at = std::time::Instant::now();
     let opened = cx.open_window(options, move |window, cx| {
         window.set_window_title(&window_title);
-        let view = cx.new(|cx| {
-            PreviewView::new(path.clone(), thumb, dismiss, completion.clone(), image.clone(), seq, cx)
-        });
+        let view = cx.new(|cx| PreviewView::new_quit(content, completion, seq, cx));
         window.focus(&view.focus_handle(cx));
         window.activate_window();
         view
     });
-
     if opened.is_err() {
         return false;
     }
-    qol_runtime::probe!(
-        "SHOT_WINDOW_OPEN",
-        "ms={} seq={seq}",
-        opened_at.elapsed().as_millis()
-    );
-
     platform::configure_preview_window(title);
     true
 }
 
 fn preview_bounds(window_size: Size<Pixels>, cx: &mut App) -> Bounds<Pixels> {
-    if let Some(monitor) = qol_gpui::monitor::MonitorTracker::start(cx).snapshot_monitor() {
+    if let Some(monitor) = MonitorTracker::start(cx).snapshot_monitor() {
         return monitor.centered_bounds(window_size);
     }
     Bounds::centered(None, window_size, cx)
 }
 
-struct PreviewView {
+fn monitors_or_snapshot(tracker: &MonitorTracker) -> Vec<ActiveMonitor> {
+    let monitors = tracker.all_monitors();
+    if !monitors.is_empty() {
+        return monitors;
+    }
+    tracker.snapshot_monitor().into_iter().collect()
+}
+
+fn rgba_to_render_image(data: Vec<u8>, w: u32, h: u32) -> Option<Arc<RenderImage>> {
+    let buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(w, h, data)?;
+    let frame = image::Frame::new(buffer);
+    Some(Arc::new(RenderImage::new(smallvec::smallvec![frame])))
+}
+
+fn read_thumb(path: &Path) -> Result<(f32, f32)> {
+    let started = Instant::now();
+    let (width, height) = image::image_dimensions(path)
+        .with_context(|| format!("failed to read image dimensions: {}", path.display()))?;
+    qol_runtime::probe!(
+        "SHOT_THUMB",
+        "ms={} dims={width}x{height}",
+        started.elapsed().as_millis()
+    );
+    Ok(thumbnail_size(width as f32, height as f32))
+}
+
+pub struct PreviewView {
     path: PathBuf,
     thumb: (f32, f32),
-    dismiss: Dismiss,
-    completion: Completion,
     image: Option<Arc<RenderImage>>,
+    ready: bool,
+    mode: DismissMode,
+    title: String,
+    completion: Completion,
     selected: usize,
     seq: u64,
     first_paint: bool,
+    is_showing: bool,
+    blur_guard_until: Instant,
+    window_origin: Point<Pixels>,
+    dismiss_sub: Option<DismissSub>,
     focus_handle: FocusHandle,
 }
 
 impl PreviewView {
-    fn new(
-        path: PathBuf,
-        thumb: (f32, f32),
-        dismiss: Dismiss,
+    fn new_ghost(
+        content: GhostContent,
+        seq: u64,
+        title: String,
+        origin: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new(
+            content,
+            DismissMode::Ghost,
+            title,
+            Arc::default(),
+            seq,
+            origin,
+            cx,
+        )
+    }
+
+    fn new_quit(
+        content: GhostContent,
         completion: Completion,
-        image: Option<Arc<RenderImage>>,
         seq: u64,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self {
-            path,
-            thumb,
-            dismiss,
+        Self::new(
+            content,
+            DismissMode::Quit,
+            String::new(),
             completion,
-            image,
+            seq,
+            point(px(0.0), px(0.0)),
+            cx,
+        )
+    }
+
+    fn new(
+        content: GhostContent,
+        mode: DismissMode,
+        title: String,
+        completion: Completion,
+        seq: u64,
+        origin: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self {
+            path: content.path,
+            thumb: content.thumb,
+            image: content.image,
+            ready: content.ready,
+            mode,
+            title,
+            completion,
             selected: 0,
             seq,
             first_paint: true,
+            is_showing: content.ready,
+            blur_guard_until: Instant::now() + BLUR_GUARD,
+            window_origin: origin,
+            dismiss_sub: None,
             focus_handle: cx.focus_handle(),
+        }
+    }
+
+    fn set_showing(&mut self, showing: bool) {
+        self.is_showing = showing;
+    }
+
+    fn reset_for_show(&mut self, content: GhostContent, seq: u64) {
+        self.path = content.path;
+        self.thumb = content.thumb;
+        self.image = content.image;
+        self.ready = content.ready;
+        self.selected = 0;
+        self.seq = seq;
+        self.first_paint = true;
+        self.is_showing = true;
+        self.blur_guard_until = Instant::now() + BLUR_GUARD;
+        if let Ok(mut slot) = self.completion.lock() {
+            *slot = None;
         }
     }
 
@@ -220,10 +499,15 @@ impl PreviewView {
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.dismiss {
-            Dismiss::Quit => cx.quit(),
-            Dismiss::CloseWindow => window.remove_window(),
+        match self.mode {
+            DismissMode::Quit => cx.quit(),
+            DismissMode::Ghost => self.hide_to_ghost(window),
         }
+    }
+
+    fn hide_to_ghost(&mut self, window: &mut Window) {
+        self.set_showing(false);
+        park_ghost(&self.title, window, self.window_origin);
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -254,6 +538,24 @@ impl PreviewView {
             None => img(self.path.clone()).w(px(thumb_w)).h(px(thumb_h)),
         }
     }
+
+    fn ensure_dismiss_tracking(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode != DismissMode::Ghost || self.dismiss_sub.is_some() {
+            return;
+        }
+        self.dismiss_sub = Some(qol_gpui::ghost::track_dismiss(
+            "qol-shot",
+            &self.focus_handle,
+            window,
+            |this: &Self| this.blur_guard_until,
+            |this: &Self| this.is_showing,
+            cx,
+            |this, window, _cx| this.hide_to_ghost(window),
+        ));
+        if !self.is_showing {
+            hide_invisible(&self.title);
+        }
+    }
 }
 
 impl Focusable for PreviewView {
@@ -263,11 +565,26 @@ impl Focusable for PreviewView {
 }
 
 impl Render for PreviewView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_dismiss_tracking(window, cx);
+
+        let mut root = div()
+            .id("shot-preview")
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(Self::on_key))
+            .size_full()
+            .relative()
+            .bg(rgb(0x14141c));
+
+        if !self.ready {
+            return root;
+        }
+
         if self.first_paint {
             self.first_paint = false;
             qol_runtime::probe!("SHOT_RENDER", "seq={}", self.seq);
         }
+
         let (thumb_w, thumb_h) = self.thumb;
         let (win_w, _) = window_dims(thumb_w, thumb_h, ShotAction::ALL.len());
         let circles_width = circles_total_width(ShotAction::ALL.len());
@@ -278,13 +595,7 @@ impl Render for PreviewView {
             .map(|action| action.label())
             .unwrap_or_default();
 
-        let mut root = div()
-            .id("shot-preview")
-            .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(Self::on_key))
-            .size_full()
-            .relative()
-            .bg(rgb(0x14141c))
+        root = root
             .child(
                 div()
                     .absolute()
@@ -346,6 +657,10 @@ impl Render for PreviewView {
 
         root
     }
+}
+
+fn window_thumb_default() -> (f32, f32) {
+    (MAX_THUMB_W, MAX_THUMB_H)
 }
 
 fn thumbnail_size(w: f32, h: f32) -> (f32, f32) {
