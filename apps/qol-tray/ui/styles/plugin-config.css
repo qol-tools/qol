@@ -427,7 +427,7 @@
         inset 0 0 0 2px rgba(var(--warning-rgb), 0.1),
         0 0 14px rgba(var(--warning-rgb), 0.16);
     pointer-events: none;
-    z-index: 1;
+    z-index: var(--z-1);
     opacity: 0;
     transform-origin: left top;
     will-change: transform, opacity;
@@ -455,7 +455,7 @@
     cursor: pointer;
     user-select: none;
     transition: background 0.12s ease, color 0.12s ease;
-    z-index: 3;
+    z-index: var(--z-3);
 }
 
 .custom-select-option.highlighted {

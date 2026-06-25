@@ -70,7 +70,7 @@
     inset: 0;
     pointer-events: none;
     background: var(--tui-scanline);
-    z-index: 1;
+    z-index: var(--z-1);
 }
 
 .plugin-cover-monogram {
@@ -83,7 +83,7 @@
     font-family: var(--font-mono);
     user-select: none;
     position: relative;
-    z-index: 2;
+    z-index: var(--z-2);
 }
 
 .plugin-name {

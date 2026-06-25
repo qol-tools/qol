@@ -181,7 +181,7 @@
     position: absolute;
     right: 0;
     top: calc(100% + 4px);
-    z-index: 10;
+    z-index: var(--z-selected);
     display: flex;
     flex-direction: column;
     min-width: 160px;
