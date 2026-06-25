@@ -16,6 +16,7 @@ chrono = "0.4"
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 gpui.workspace = true
 qol-gpui.workspace = true
+qol-plugin-daemon.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [build-dependencies]

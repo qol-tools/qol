@@ -41,7 +41,10 @@ items = [
     { type = "checkbox", id = "audio-enable", label = "Enable Audio", checked = true, action = "toggle-config", config_key = "audio.enabled" },
 ]
 
-# No background daemon needed for this plugin
+[daemon]
+enabled = true
+command = "qol-shot"
+socket = "/tmp/qol-shot.sock"
 
 [[dependencies.binaries]]
 name = "qol-shot"

@@ -1,6 +1,7 @@
 use anyhow::Context as _;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gpui::*;
@@ -14,15 +15,30 @@ const CIRCLE: f32 = 46.0;
 const CIRCLE_GAP: f32 = 14.0;
 const LABEL_H: f32 = 30.0;
 
+static PREVIEW_SEQ: AtomicU64 = AtomicU64::new(0);
+
 type Completion = Arc<Mutex<Option<Result<()>>>>;
 
-pub fn show(path: &Path) -> Result<()> {
-    let (width, height) = image::image_dimensions(path)
-        .with_context(|| format!("failed to read image dimensions: {}", path.display()))?;
-    let thumb = thumbnail_size(width as f32, height as f32);
-    let completion: Completion = Arc::new(Mutex::new(None));
+#[derive(Clone, Copy)]
+enum Dismiss {
+    Quit,
+    CloseWindow,
+}
 
-    run_app(path.to_path_buf(), thumb, completion.clone());
+pub fn show(path: &Path) -> Result<()> {
+    let thumb = read_thumb(path)?;
+    let path = path.to_path_buf();
+    let completion: Completion = Arc::new(Mutex::new(None));
+    let run_completion = completion.clone();
+
+    Application::new().run(move |cx: &mut App| {
+        qol_gpui::platform::set_accessory_policy();
+        if open_window(path.clone(), thumb, Dismiss::Quit, run_completion.clone(), cx) {
+            cx.activate(true);
+        } else {
+            cx.quit();
+        }
+    });
 
     if let Some(result) = completion
         .lock()
@@ -34,41 +50,60 @@ pub fn show(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn run_app(path: PathBuf, thumb: (f32, f32), completion: Completion) {
+pub fn open_in_app(path: &Path, cx: &mut App) -> Result<()> {
+    let thumb = read_thumb(path)?;
+    let completion: Completion = Arc::new(Mutex::new(None));
+    if open_window(path.to_path_buf(), thumb, Dismiss::CloseWindow, completion, cx) {
+        cx.activate(true);
+    }
+    Ok(())
+}
+
+fn read_thumb(path: &Path) -> Result<(f32, f32)> {
+    let (width, height) = image::image_dimensions(path)
+        .with_context(|| format!("failed to read image dimensions: {}", path.display()))?;
+    Ok(thumbnail_size(width as f32, height as f32))
+}
+
+fn open_window(
+    path: PathBuf,
+    thumb: (f32, f32),
+    dismiss: Dismiss,
+    completion: Completion,
+    cx: &mut App,
+) -> bool {
     let (win_w, win_h) = window_dims(thumb.0, thumb.1, ShotAction::ALL.len());
     let window_size = size(px(win_w), px(win_h));
-    let title = format!("qol-shot-preview-{}", std::process::id());
+    let seq = PREVIEW_SEQ.fetch_add(1, Ordering::Relaxed);
+    let title = format!("qol-shot-preview-{}-{seq}", std::process::id());
 
-    Application::new().run(move |cx: &mut App| {
-        qol_gpui::platform::set_accessory_policy();
+    let bounds = preview_bounds(window_size, cx);
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: None,
+        window_decorations: Some(WindowDecorations::Client),
+        kind: WindowKind::Normal,
+        focus: true,
+        window_background: WindowBackgroundAppearance::Opaque,
+        ..Default::default()
+    };
 
-        let bounds = preview_bounds(window_size, cx);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: None,
-            window_decorations: Some(WindowDecorations::Client),
-            kind: WindowKind::Normal,
-            focus: true,
-            window_background: WindowBackgroundAppearance::Opaque,
-            ..Default::default()
-        };
-
-        let window_title = title.clone();
-        let opened = cx.open_window(options, move |window, cx| {
-            window.set_window_title(&window_title);
-            let view = cx.new(|cx| PreviewView::new(path.clone(), thumb, completion.clone(), cx));
-            window.focus(&view.focus_handle(cx));
-            window.activate_window();
-            view
-        });
-
-        if opened.is_err() {
-            cx.quit();
-            return;
-        }
-        cx.activate(true);
-        platform::configure_preview_window(title.clone());
+    let window_title = title.clone();
+    let opened = cx.open_window(options, move |window, cx| {
+        window.set_window_title(&window_title);
+        let view =
+            cx.new(|cx| PreviewView::new(path.clone(), thumb, dismiss, completion.clone(), cx));
+        window.focus(&view.focus_handle(cx));
+        window.activate_window();
+        view
     });
+
+    if opened.is_err() {
+        return false;
+    }
+
+    platform::configure_preview_window(title);
+    true
 }
 
 fn preview_bounds(window_size: Size<Pixels>, cx: &mut App) -> Bounds<Pixels> {
@@ -81,6 +116,7 @@ fn preview_bounds(window_size: Size<Pixels>, cx: &mut App) -> Bounds<Pixels> {
 struct PreviewView {
     path: PathBuf,
     thumb: (f32, f32),
+    dismiss: Dismiss,
     completion: Completion,
     selected: usize,
     focus_handle: FocusHandle,
@@ -90,12 +126,14 @@ impl PreviewView {
     fn new(
         path: PathBuf,
         thumb: (f32, f32),
+        dismiss: Dismiss,
         completion: Completion,
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
             path,
             thumb,
+            dismiss,
             completion,
             selected: 0,
             focus_handle: cx.focus_handle(),
@@ -108,13 +146,12 @@ impl PreviewView {
         cx.notify();
     }
 
-    fn choose(&mut self, action: ShotAction, cx: &mut Context<Self>) {
-        if self
+    fn choose(&mut self, action: ShotAction, window: &mut Window, cx: &mut Context<Self>) {
+        let mut slot = self
             .completion
             .lock()
-            .expect("preview completion mutex poisoned")
-            .is_some()
-        {
+            .expect("preview completion mutex poisoned");
+        if slot.is_some() {
             return;
         }
 
@@ -122,21 +159,27 @@ impl PreviewView {
         if let Err(error) = &result {
             eprintln!("[qol-shot] preview action failed: {error:#}");
         }
-        *self
-            .completion
-            .lock()
-            .expect("preview completion mutex poisoned") = Some(result);
-        cx.quit();
+        *slot = Some(result);
+        drop(slot);
+
+        self.close(window, cx);
     }
 
-    fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.dismiss {
+            Dismiss::Quit => cx.quit(),
+            Dismiss::CloseWindow => window.remove_window(),
+        }
+    }
+
+    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event.keystroke.key.as_str() {
-            "escape" | "esc" => cx.quit(),
+            "escape" | "esc" => self.close(window, cx),
             "left" | "up" => self.move_selection(-1, cx),
             "right" | "down" | "tab" => self.move_selection(1, cx),
             "enter" | "return" | "space" => {
                 let action = ShotAction::ALL[self.selected];
-                self.choose(action, cx);
+                self.choose(action, window, cx);
             }
             other => {
                 let accel = other.chars().next();
@@ -145,7 +188,7 @@ impl PreviewView {
                     .copied()
                     .find(|a| Some(a.accel()) == accel)
                 {
-                    self.choose(action, cx);
+                    self.choose(action, window, cx);
                 }
             }
         }
@@ -230,8 +273,8 @@ impl Render for PreviewView {
                     })
                     .text_color(rgb(0xe8e8f4))
                     .child(action.glyph())
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                        this.choose(action, cx)
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.choose(action, window, cx)
                     })),
             );
         }

@@ -2,6 +2,10 @@ pub mod cli;
 
 mod actions;
 mod config;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod daemon;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod daemon_app;
 mod geometry;
 mod output;
 pub(crate) mod platform;

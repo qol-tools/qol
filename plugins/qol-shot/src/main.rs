@@ -1,7 +1,15 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    qol_shot::cli::exit_code(std::env::args().skip(1))
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if args.is_empty() {
+        qol_shot::daemon_app::run();
+        return ExitCode::SUCCESS;
+    }
+
+    qol_shot::cli::exit_code(args)
 }
 
 #[cfg(test)]

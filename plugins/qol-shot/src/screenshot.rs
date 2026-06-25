@@ -4,13 +4,20 @@ use std::path::{Path, PathBuf};
 use crate::{geometry, platform, Rect};
 
 pub fn capture_screenshot() -> Result<Option<PathBuf>> {
+    let Some(output_file) = capture_to_file()? else {
+        return Ok(None);
+    };
+    present_capture(&output_file);
+    Ok(Some(output_file))
+}
+
+pub fn capture_to_file() -> Result<Option<PathBuf>> {
     let Some(rect) = select_screenshot_rect()? else {
         return Ok(None);
     };
 
     let output_file = crate::output::screenshot_output_file_path()?;
     platform::capture_screenshot(&rect, &output_file)?;
-    present_capture(&output_file);
     Ok(Some(output_file))
 }
 
