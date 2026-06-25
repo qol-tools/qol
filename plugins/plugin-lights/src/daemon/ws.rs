@@ -10,7 +10,6 @@ use crate::backend::zigbee::ZigbeeBackend;
 use crate::domain::model::{LightCommand, LightTarget, RgbColor};
 use crate::service::light_service::LightService;
 
-const WS_PORT: u16 = 42710;
 const SEND_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Deserialize)]
@@ -36,14 +35,17 @@ pub fn start(
     service: Arc<Mutex<Option<LightService<ZigbeeBackend>>>>,
     target: LightTarget,
 ) {
-    let listener = match TcpListener::bind(format!("127.0.0.1:{}", WS_PORT)) {
+    let ws_port: u16 = env!("QOL_DAEMON_PORT")
+        .parse()
+        .expect("QOL_DAEMON_PORT must be a valid u16");
+    let listener = match TcpListener::bind(format!("127.0.0.1:{}", ws_port)) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("ws: failed to bind port {}: {}", WS_PORT, e);
+            eprintln!("ws: failed to bind port {}: {}", ws_port, e);
             return;
         }
     };
-    eprintln!("ws: listening on 127.0.0.1:{}", WS_PORT);
+    eprintln!("ws: listening on 127.0.0.1:{}", ws_port);
 
     start_send_loop(buffer.clone(), service, target);
 

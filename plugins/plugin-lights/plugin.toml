@@ -106,6 +106,7 @@ serial = true
 enabled = true
 command = "plugin-lights"
 socket = "/tmp/plugin-lights.sock"
+port = 42710
 
 [menu]
 label = "Lights"
