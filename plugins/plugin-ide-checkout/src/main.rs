@@ -5,7 +5,11 @@ use std::path::PathBuf;
 use std::process::{Command, ExitCode, Stdio};
 use std::time::Duration;
 
-const PORT: u16 = 42720;
+fn daemon_port() -> u16 {
+    env!("QOL_DAEMON_PORT")
+        .parse()
+        .expect("QOL_DAEMON_PORT must be a valid u16")
+}
 
 fn main() -> ExitCode {
     match env::args().nth(1).as_deref() {
@@ -27,7 +31,10 @@ fn run_daemon() -> ExitCode {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        let error = Command::new("python3").arg(&server_path).exec();
+        let error = Command::new("python3")
+            .env("QOL_DAEMON_PORT", env!("QOL_DAEMON_PORT"))
+            .arg(&server_path)
+            .exec();
         eprintln!("Failed to start daemon: {error}");
         ExitCode::from(1)
     }
@@ -35,6 +42,7 @@ fn run_daemon() -> ExitCode {
     #[cfg(not(unix))]
     {
         match Command::new("python3")
+            .env("QOL_DAEMON_PORT", env!("QOL_DAEMON_PORT"))
             .arg(&server_path)
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())
@@ -53,7 +61,7 @@ fn run_daemon() -> ExitCode {
 
 fn run_status() -> ExitCode {
     let message = if daemon_is_running() {
-        format!("Task Runner daemon is running on port {PORT}")
+        format!("Task Runner daemon is running on port {}", daemon_port())
     } else {
         "Task Runner daemon is NOT running".to_string()
     };
@@ -63,7 +71,7 @@ fn run_status() -> ExitCode {
 }
 
 fn daemon_is_running() -> bool {
-    let mut stream = match TcpStream::connect(("127.0.0.1", PORT)) {
+    let mut stream = match TcpStream::connect(("127.0.0.1", daemon_port())) {
         Ok(stream) => stream,
         Err(_) => return false,
     };

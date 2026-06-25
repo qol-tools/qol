@@ -15,7 +15,7 @@ import signal
 import urllib.request
 from pathlib import Path
 
-PORT = 42720
+PORT = int(os.environ['QOL_DAEMON_PORT'])
 REPLACE_EXISTING_ENV = 'QOL_TRAY_DAEMON_REPLACE_EXISTING'
 VERSION = "1.1.0"
 DEFAULT_TEMP_DIR = os.path.join(tempfile.gettempdir(), 'task-runner')

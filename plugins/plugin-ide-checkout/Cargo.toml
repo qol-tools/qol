@@ -3,6 +3,9 @@ name = "task-runner"
 version = "1.4.0"
 edition = "2021"
 
+[build-dependencies]
+qol-conventions.workspace = true
+
 [dev-dependencies]
 qol-plugin-api.workspace = true
 tempfile = "3.8"
