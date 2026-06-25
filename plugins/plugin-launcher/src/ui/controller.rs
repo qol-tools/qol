@@ -33,7 +33,15 @@ impl LauncherView {
         let effect = self
             .state
             .apply_key(key, secondary, control, shift, alt, result_count);
-        trace::input(self, key, effect, result_count, selected_before);
+        trace::input(
+            self,
+            key,
+            effect,
+            result_count,
+            selected_before,
+            event.is_held,
+            event.keystroke.key_char.as_deref(),
+        );
 
         if !matches!(effect, InputEffect::BoostUp | InputEffect::BoostDown) {
             self.state.boost_adjusting = false;

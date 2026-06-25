@@ -67,12 +67,15 @@ pub(super) fn show(path: &'static str, title: &str, placement: &WindowPlacement)
     let _ = (path, title, placement);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn input(
     view: &LauncherView,
     key: &str,
     effect: InputEffect,
     result_count: usize,
     selected_before: usize,
+    is_held: bool,
+    key_char: Option<&str>,
 ) {
     #[cfg(debug_assertions)]
     {
@@ -82,8 +85,10 @@ pub(super) fn input(
 
         qol_runtime::probe!(
             "LAUNCHER_INPUT",
-            "key={} effect={} title={} q=\"{}\" q_len={} cursor={} selection={} selected={}->{} results_before={} mode={} fuzz={}",
+            "key={} held={} key_char={} effect={} title={} q=\"{}\" q_len={} cursor={} selection={} selected={}->{} results_before={} mode={} fuzz={}",
             token(key),
+            is_held,
+            token(key_char.unwrap_or("none")),
             effect_label(effect),
             token(&view.window_title),
             quoted(&view.state.query),
@@ -99,7 +104,15 @@ pub(super) fn input(
     }
 
     #[cfg(not(debug_assertions))]
-    let _ = (view, key, effect, result_count, selected_before);
+    let _ = (
+        view,
+        key,
+        effect,
+        result_count,
+        selected_before,
+        is_held,
+        key_char,
+    );
 }
 
 pub(super) fn dismiss(view: &LauncherView, from: &'static str) {
