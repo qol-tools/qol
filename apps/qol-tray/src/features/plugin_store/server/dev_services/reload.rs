@@ -84,6 +84,20 @@ fn run_reload(task: ReloadTask) {
     };
     run_build(&task);
     reload_plugins(task.plugin_manager, task.config, task.events);
+    log_plugin_staleness();
+}
+
+fn log_plugin_staleness() {
+    let report = crate::doctor::check_single("plugin_staleness");
+    for outcome in report
+        .outcomes()
+        .filter(|outcome| !matches!(outcome.status, crate::doctor::OutcomeStatus::Ok))
+    {
+        log::warn!(
+            "Developer reload plugin staleness remains: {}",
+            outcome.message
+        );
+    }
 }
 
 fn run_build(task: &ReloadTask) {

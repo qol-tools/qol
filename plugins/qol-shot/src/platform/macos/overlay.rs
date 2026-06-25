@@ -25,6 +25,7 @@ const RECORDING_OVERLAY_MAX_LIFETIME_MS: u32 = 43_200_000;
 static STATUS_OVERLAY_PID: Mutex<Option<u32>> = Mutex::new(None);
 static RECORDING_OVERLAY_PIDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
+#[derive(Clone, Copy)]
 pub(super) enum StatusOverlayLifecycle {
     KeepAlive,
     ExitAfterHide,
@@ -345,7 +346,10 @@ struct RecordingOverlayTarget {
     display: Option<Rect>,
 }
 
-fn recording_overlay_targets(session: &CaptureSession, capture: Rect) -> Vec<RecordingOverlayTarget> {
+fn recording_overlay_targets(
+    session: &CaptureSession,
+    capture: Rect,
+) -> Vec<RecordingOverlayTarget> {
     let targets = session
         .segments
         .iter()

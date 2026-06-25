@@ -4563,12 +4563,28 @@ fn build_doctor(root: &std::path::Path) -> Result<(), String> {
 }
 
 fn doctor_lines(text: &str, mode: DoctorMode) -> Vec<String> {
-    let relevant = match mode {
-        DoctorMode::Check => text,
-        DoctorMode::Fix => text.rsplit("Doctor Check (After)").next().unwrap_or(text),
+    match mode {
+        DoctorMode::Check => bracket_lines(text),
+        DoctorMode::Fix => fix_doctor_lines(text),
+    }
+}
+
+fn fix_doctor_lines(text: &str) -> Vec<String> {
+    let Some((before_after, after)) = text.rsplit_once("Doctor Check (After)") else {
+        return bracket_lines(text);
     };
-    relevant
+
+    let mut lines = before_after
         .lines()
+        .filter(|line| line.trim_start().starts_with("[ERR]"))
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    lines.extend(bracket_lines(after));
+    lines
+}
+
+fn bracket_lines(text: &str) -> Vec<String> {
+    text.lines()
         .filter(|line| line.trim_start().starts_with('['))
         .map(|line| line.to_string())
         .collect()
@@ -5782,6 +5798,16 @@ mod tests {
             doctor_lines(text, DoctorMode::Fix),
             vec!["[OK] a: x".to_string()],
             "fix keeps only the after block"
+        );
+    }
+
+    #[test]
+    fn doctor_lines_fix_mode_keeps_fix_failures() {
+        let text = "Doctor Check (Before)\n[WARN] a: x\nSummary: ok=0\n\nFixes attempted=1, applied=0, skipped=0, failures=1\n[ERR] a: rebuild failed\n\nDoctor Check (After)\n[WARN] a: x\nSummary: ok=0\n";
+        assert_eq!(
+            doctor_lines(text, DoctorMode::Fix),
+            vec!["[ERR] a: rebuild failed", "[WARN] a: x"],
+            "fix failures must stay visible alongside the after block"
         );
     }
 

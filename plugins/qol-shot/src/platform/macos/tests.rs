@@ -97,7 +97,10 @@ fn selector_rect_mapper_clips_to_active_displays() {
         },
     ];
 
-    assert_eq!(selector::map_selector_rect_to_capture(rect, &displays), Some(rect));
+    assert_eq!(
+        selector::map_selector_rect_to_capture(rect, &displays),
+        Some(rect)
+    );
 }
 
 #[test]
@@ -115,9 +118,11 @@ fn selector_rect_mapper_rejects_off_display_selection() {
         h: 1080,
     }];
 
-    assert_eq!(selector::map_selector_rect_to_capture(rect, &displays), None);
+    assert_eq!(
+        selector::map_selector_rect_to_capture(rect, &displays),
+        None
+    );
 }
-
 
 #[test]
 fn native_segment_composition_args_preserve_canvas_and_offsets() {
@@ -201,7 +206,8 @@ fn ffmpeg_conversion_uses_configured_encoding_settings() {
 
     for (output, crf, preset, expected_crf, expected_preset) in cases {
         let config = config_with_encoding(crf, preset);
-        let args = conversion::conversion_args(Path::new("/tmp/native.mov"), Path::new(output), &config);
+        let args =
+            conversion::conversion_args(Path::new("/tmp/native.mov"), Path::new(output), &config);
         assert_arg_value(&args, "-crf", expected_crf);
         if !expected_preset.is_empty() {
             assert_arg_value(&args, "-preset", expected_preset);
@@ -228,7 +234,10 @@ fn webm_requires_ffmpeg() {
 
 #[test]
 fn format_label_uses_uppercase_extension() {
-    assert_eq!(system::output_format_label(Path::new("/tmp/out.mp4")), "MP4");
+    assert_eq!(
+        system::output_format_label(Path::new("/tmp/out.mp4")),
+        "MP4"
+    );
 }
 
 #[test]

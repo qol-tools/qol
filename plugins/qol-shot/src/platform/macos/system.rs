@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use qol_headless::DoctorCheckResult;
 use std::env;
 use std::path::{Path, PathBuf};

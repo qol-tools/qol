@@ -7,7 +7,11 @@ use crate::Config;
 
 use super::system::{output_extension, resolve_command};
 
-pub(super) fn convert_recording(capture_file: &Path, output_file: &Path, config: &Config) -> Result<()> {
+pub(super) fn convert_recording(
+    capture_file: &Path,
+    output_file: &Path,
+    config: &Config,
+) -> Result<()> {
     match converter_for(
         output_file,
         resolve_command("ffmpeg").is_some(),
@@ -69,7 +73,11 @@ pub(super) fn run_conversion_command(command: &mut Command, name: &str) -> Resul
     Err(anyhow!("{name} exited with {}", status))
 }
 
-pub(super) fn conversion_args(capture_file: &Path, output_file: &Path, config: &Config) -> Vec<String> {
+pub(super) fn conversion_args(
+    capture_file: &Path,
+    output_file: &Path,
+    config: &Config,
+) -> Vec<String> {
     let mut args = vec![
         "-hide_banner".to_string(),
         "-loglevel".to_string(),

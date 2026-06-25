@@ -1,6 +1,9 @@
 use crate::cli::optional_single_arg;
 use crate::dev_console;
-use crate::dev_server::{post_dev_link, post_recompile, wait_for_health, DevLinkOutcome};
+use crate::dev_server::{
+    fetch_dev_links, post_dev_link, post_recompile, post_reload_plugins, wait_for_health, DevLink,
+    DevLinkOutcome,
+};
 use crate::host_facade;
 use crate::progress::{print_hint, print_title, run_step, step_label, StepKind};
 use crate::workspace::{
@@ -10,9 +13,11 @@ use anyhow::{bail, Context, Result};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{channel, Receiver};
+use std::time::{Duration, Instant};
 
 const RELOAD_ENV: &str = "QOL_DEV_RELOAD";
+const PLUGIN_RELOAD_TIMEOUT: Duration = Duration::from_secs(120);
+const PLUGIN_RELOAD_INTERVAL: Duration = Duration::from_millis(500);
 
 const DEV_BUILD_ARGS: [&str; 7] = [
     "build",
@@ -60,13 +65,8 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         .context("failed to start qol-tray dev process")?;
 
     let plugin_names: Vec<String> = buildable.iter().map(|p| display_name(&p.dir)).collect();
-    let boot = if reload {
-        Some(spawn_post_boot(buildable, branch.map(str::to_string)))
-    } else {
-        finish_boot(&buildable, branch)?;
-        None
-    };
-    match dev_console::run_session(&mut child, verbose, plugin_names, boot)? {
+    finish_boot(&buildable, branch)?;
+    match dev_console::run_session(&mut child, verbose, plugin_names, None)? {
         dev_console::SessionEnd::UserQuit => Ok(()),
         dev_console::SessionEnd::ReloadRequested => reload_self(),
         dev_console::SessionEnd::ChildExited(status) if status.success() => Ok(()),
@@ -77,49 +77,21 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
 }
 
 fn finish_boot(buildable: &[BuildablePlugin], branch: Option<&str>) -> Result<()> {
+    if buildable.is_empty() && branch.is_none() {
+        return Ok(());
+    }
+
+    wait_for_health().context("dev server did not become healthy")?;
     if !buildable.is_empty() {
-        if let Err(error) = wait_for_health() {
-            eprintln!("qol dev: dev server did not become healthy: {error:#}");
-        } else {
-            register_dev_links(buildable);
+        register_dev_links(buildable);
+        if branch.is_none() {
+            request_plugin_reload()?;
         }
     }
     if let Some(branch) = branch {
-        wait_for_health()?;
         post_recompile(branch)?;
     }
     Ok(())
-}
-
-fn spawn_post_boot(plugins: Vec<BuildablePlugin>, branch: Option<String>) -> Receiver<String> {
-    let (tx, rx) = channel();
-    std::thread::spawn(move || {
-        if plugins.is_empty() && branch.is_none() {
-            return;
-        }
-        if let Err(error) = wait_for_health() {
-            let _ = tx.send(format!(
-                "[qol dev] dev server did not become healthy: {error:#}"
-            ));
-            return;
-        }
-        for plugin in &plugins {
-            let display = display_name(&plugin.dir);
-            let message = match post_dev_link(&plugin.dir) {
-                Ok(DevLinkOutcome::Created) => format!("[qol dev] linked {display}"),
-                Ok(DevLinkOutcome::AlreadyLinked) => format!("[qol dev] link kept {display}"),
-                Err(error) => format!("[qol dev] failed to link {display}: {error:#}"),
-            };
-            let _ = tx.send(message);
-        }
-        let Some(branch) = branch else { return };
-        if let Err(error) = post_recompile(&branch) {
-            let _ = tx.send(format!(
-                "[qol dev] failed to recompile worktree {branch}: {error:#}"
-            ));
-        }
-    });
-    rx
 }
 
 fn boot_preflight(
@@ -129,21 +101,13 @@ fn boot_preflight(
     reload: bool,
 ) -> Result<Vec<BuildablePlugin>> {
     let buildable = collect_buildable_plugins(root, skip_plugins)?;
+    fix_rustfmt(root, verbose)?;
     build_plugins_batch(root, &buildable, verbose)?;
     if reload {
-        step_label("reload", StepKind::Info, "fast boot, checks skipped");
+        step_label("reload", StepKind::Info, "self-reload, hook skipped");
         return Ok(buildable);
     }
     run_dev_hook(root, verbose)?;
-    run_step(
-        "check",
-        StepKind::Pending,
-        "rustfmt",
-        Command::new("cargo")
-            .current_dir(root)
-            .args(["fmt", "--all", "--check"]),
-        verbose,
-    )?;
     Ok(buildable)
 }
 
@@ -215,6 +179,63 @@ fn build_plugins_batch(root: &Path, plugins: &[BuildablePlugin], verbose: bool) 
         eprintln!("qol dev: continuing - recover via qol-tray GUI Recompile pane.");
     }
     Ok(())
+}
+
+fn fix_rustfmt(root: &Path, verbose: bool) -> Result<()> {
+    run_step(
+        "fix",
+        StepKind::Pending,
+        "rustfmt",
+        Command::new("cargo")
+            .current_dir(root)
+            .args(["fmt", "--all"]),
+        verbose,
+    )
+}
+
+fn request_plugin_reload() -> Result<()> {
+    post_reload_plugins().context("failed to queue plugin rebuild")?;
+    step_label("reload", StepKind::Info, "plugins queued");
+    wait_for_dev_links_fresh()?;
+    step_label("doctor", StepKind::Success, "dev-links fresh");
+    Ok(())
+}
+
+fn wait_for_dev_links_fresh() -> Result<()> {
+    let started = Instant::now();
+    let mut last_state = String::from("waiting for dev-link status");
+    loop {
+        match fetch_dev_links() {
+            Ok(links) => {
+                let stale = stale_dev_link_labels(&links);
+                if stale.is_empty() {
+                    return Ok(());
+                }
+                last_state = format!("stale dev links: {}", stale.join(", "));
+            }
+            Err(error) => {
+                last_state = format!("dev-link status unavailable: {error:#}");
+            }
+        }
+        if started.elapsed() >= PLUGIN_RELOAD_TIMEOUT {
+            bail!("{last_state}");
+        }
+        std::thread::sleep(PLUGIN_RELOAD_INTERVAL);
+    }
+}
+
+fn stale_dev_link_labels(links: &[DevLink]) -> Vec<String> {
+    links
+        .iter()
+        .filter(|link| link.needs_rebuild)
+        .map(|link| {
+            if link.rebuild_reason.is_empty() {
+                link.id.clone()
+            } else {
+                format!("{} ({})", link.id, link.rebuild_reason)
+            }
+        })
+        .collect()
 }
 
 fn register_dev_links(plugins: &[BuildablePlugin]) {
@@ -327,6 +348,33 @@ mod tests {
             features,
             Some(&"dev"),
             "both bins must be built with the dev feature so dev-only checks are present"
+        );
+    }
+
+    #[test]
+    fn stale_dev_link_labels_only_reports_rebuilds() {
+        let links = vec![
+            DevLink {
+                id: "qol-shot".to_string(),
+                name: "QoL Shot".to_string(),
+                version: "1.0.0".to_string(),
+                source: "/repo/plugins/qol-shot".to_string(),
+                needs_rebuild: true,
+                rebuild_reason: "Source changed".to_string(),
+            },
+            DevLink {
+                id: "plugin-launcher".to_string(),
+                name: "Launcher".to_string(),
+                version: "1.0.0".to_string(),
+                source: "/repo/plugins/plugin-launcher".to_string(),
+                needs_rebuild: false,
+                rebuild_reason: String::new(),
+            },
+        ];
+
+        assert_eq!(
+            stale_dev_link_labels(&links),
+            vec!["qol-shot (Source changed)".to_string()]
         );
     }
 

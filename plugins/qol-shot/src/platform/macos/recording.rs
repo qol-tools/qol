@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use crate::platform::{CaptureProcess, CaptureSegment, CaptureSession};
 use crate::{Config, Rect};
 
+use super::conversion::{convert_recording, run_conversion_command};
 use super::display::{active_displays, rect_intersection, DisplayInfo};
 use super::labels::{monitor_label, path_label, rect_label};
 use super::overlay::{
@@ -15,9 +16,9 @@ use super::overlay::{
     StatusOverlayLifecycle,
 };
 use super::swift::{
-    ensure_swift_helper, prewarm_swift_helper, VIDEO_COMPOSER_HELPER, VIDEO_COMPOSER_SWIFT,
+    ensure_swift_helper, prewarm_swift_helper, RECORDING_OVERLAY_HELPER, RECORDING_OVERLAY_SWIFT,
+    STATUS_OVERLAY_HELPER, STATUS_OVERLAY_SWIFT, VIDEO_COMPOSER_HELPER, VIDEO_COMPOSER_SWIFT,
 };
-use super::conversion::{convert_recording, run_conversion_command};
 use super::system::{
     open_path, output_format_label, path_extension_is, paths_match, reveal_path, show_notification,
     signal_process, videos_dir, wait_for_process_exit,

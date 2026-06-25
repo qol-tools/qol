@@ -14,27 +14,38 @@ const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 pub(super) const SWIFT_PRELUDE: &str = include_str!("../macos_swift/prelude.swift");
 pub(super) const STATUS_OVERLAY_SWIFT: &str = include_str!("../macos_swift/status_overlay.swift");
-pub(super) const RECORDING_OVERLAY_SWIFT: &str = include_str!("../macos_swift/recording_overlay.swift");
-pub(super) const CLIPBOARD_WRITER_SWIFT: &str = include_str!("../macos_swift/clipboard_writer.swift");
+pub(super) const RECORDING_OVERLAY_SWIFT: &str =
+    include_str!("../macos_swift/recording_overlay.swift");
+pub(super) const CLIPBOARD_WRITER_SWIFT: &str =
+    include_str!("../macos_swift/clipboard_writer.swift");
 pub(super) const VIDEO_COMPOSER_SWIFT: &str = include_str!("../macos_swift/video_composer.swift");
-pub(super) const STATUS_OVERLAY_HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/status-overlay"));
+pub(super) const STATUS_OVERLAY_HELPER: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/status-overlay"));
 pub(super) const RECORDING_OVERLAY_HELPER: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/recording-overlay"));
 pub(super) const CLIPBOARD_WRITER_HELPER: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/clipboard-writer"));
-pub(super) const VIDEO_COMPOSER_HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/video-composer"));
+pub(super) const VIDEO_COMPOSER_HELPER: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/video-composer"));
 
 extern "C" {
     fn getuid() -> u32;
 }
 
-pub(super) fn prewarm_swift_helper(name: &'static str, body: &'static str, embedded_helper: &'static [u8]) {
+pub(super) fn prewarm_swift_helper(
+    name: &'static str,
+    body: &'static str,
+    embedded_helper: &'static [u8],
+) {
     thread::spawn(move || {
         let _ = ensure_swift_helper(name, body, embedded_helper);
     });
 }
 
-pub(super) fn spawn_source_swift(body: &str, configure: impl FnOnce(&mut Command)) -> Result<Child> {
+pub(super) fn spawn_source_swift(
+    body: &str,
+    configure: impl FnOnce(&mut Command),
+) -> Result<Child> {
     let mut command = Command::new("swift");
     command.arg("-").stdin(Stdio::piped());
     configure(&mut command);
@@ -53,7 +64,11 @@ fn write_swift_source(mut writer: impl Write, body: &str) -> std::io::Result<()>
     writer.write_all(body.as_bytes())
 }
 
-pub(super) fn ensure_swift_helper(name: &str, body: &str, embedded_helper: &[u8]) -> Result<PathBuf> {
+pub(super) fn ensure_swift_helper(
+    name: &str,
+    body: &str,
+    embedded_helper: &[u8],
+) -> Result<PathBuf> {
     let helper = swift_helper_path(name, body);
     if is_usable_swift_helper(&helper) {
         return Ok(helper);
@@ -135,3 +150,8 @@ fn current_uid() -> u32 {
 }
 
 fn unix_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
+}
