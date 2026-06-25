@@ -42,7 +42,7 @@ html.qol-bootstrapping-dive #app {
     height: 100%;
     display: block;
     pointer-events: none;
-    z-index: 0;
+    z-index: var(--z-base);
 }
 
 .world-view-slot {
@@ -76,12 +76,12 @@ html.qol-bootstrapping-dive #app {
     border-radius: inherit;
     pointer-events: none;
     background: var(--tui-scanline);
-    z-index: 0;
+    z-index: var(--z-base);
 }
 
 .view-container.content-shell > * {
     position: relative;
-    z-index: 1;
+    z-index: var(--z-1);
 }
 
 .world-view-slot .view-body {
@@ -94,7 +94,7 @@ html.qol-bootstrapping-dive #app {
     position: fixed;
     bottom: var(--space-4);
     right: var(--space-4);
-    z-index: var(--z-overlay, 100);
+    z-index: var(--z-overlay);
     display: flex;
     flex-direction: column;
     align-items: flex-end;
@@ -119,7 +119,7 @@ html.qol-bootstrapping-dive #app {
     background: hsl(var(--wedge-hue, 50) 80% 38% / 0.95);
     border-radius: 99px;
     pointer-events: none;
-    z-index: 1;
+    z-index: var(--z-1);
 }
 
 .world-minimap {
@@ -178,7 +178,7 @@ html.qol-bootstrapping-dive #app {
     position: fixed;
     bottom: var(--space-4);
     left: var(--space-4);
-    z-index: var(--z-overlay, 100);
+    z-index: var(--z-overlay);
     display: flex;
     flex-direction: column-reverse;
     align-items: flex-start;
@@ -579,7 +579,7 @@ html.qol-bootstrapping-dive #app {
     inset: 0;
     pointer-events: none;
     overflow: hidden;
-    z-index: 5;
+    z-index: var(--z-canvas-overlay);
 }
 
 .world-region-label {
@@ -649,7 +649,7 @@ html.qol-bootstrapping-dive #app {
     margin: 0;
     cursor: pointer;
     pointer-events: none;
-    z-index: 2;
+    z-index: var(--z-2);
 }
 
 #world[data-page-mode="ghost"] .world-slot-jumper {

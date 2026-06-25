@@ -262,14 +262,17 @@
     --z-1: 1;
     --z-2: 2;
     --z-3: 3;
+    --z-canvas-overlay: 5;
     --z-selected: 10;
     --z-row-active: 12;
     --z-control: 20;
-    --z-selection-wedge: 101;
     --z-popover: 30;
     --z-menu: 35;
     --z-menu-trigger: 36;
     --z-modal: 100;
+    --z-overlay: 100;
+    --z-selection-wedge: 101;
+    --z-fx: 200;
 
     --font-mono: 'SF Mono', Monaco, 'Courier New', monospace;
     --fw-medium: 500;
