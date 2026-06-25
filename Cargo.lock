@@ -5860,7 +5860,7 @@ dependencies = [
 
 [[package]]
 name = "qol-shot"
-version = "1.11.3"
+version = "1.11.4"
 dependencies = [
  "anyhow",
  "chrono",
