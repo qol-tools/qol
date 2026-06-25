@@ -141,8 +141,8 @@ export function ColorField({ field }) {
 
     const onThumbFocus = useCallback(() => {
         setThumbActive(true);
-        if (hasStream) openColorStream();
-    }, [hasStream]);
+        if (hasStream) openColorStream(ctx.daemonPort);
+    }, [hasStream, ctx.daemonPort]);
 
     const onThumbBlur = useCallback(() => {
         setThumbActive(false);
@@ -176,9 +176,9 @@ export function ColorField({ field }) {
         if (Math.sqrt((e.clientX - rect.left - cx) ** 2 + (e.clientY - rect.top - cx) ** 2) > cx) return;
         trackingRef.current = 'disc';
         canvasRef.current.setPointerCapture(e.pointerId);
-        if (hasStream) openColorStream();
+        if (hasStream) openColorStream(ctx.daemonPort);
         onDiscPointer(e);
-    }, [onDiscPointer, hasStream]);
+    }, [onDiscPointer, hasStream, ctx.daemonPort]);
 
     const onDiscMove = useCallback((e) => {
         if (trackingRef.current !== 'disc') return;

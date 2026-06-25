@@ -1,17 +1,19 @@
-const WS_URL = 'ws://127.0.0.1:42710';
 let socket = null;
 let refCount = 0;
+let wsUrl = null;
 
 function ensureSocket() {
+    if (!wsUrl) return null;
     if (socket && socket.readyState === WebSocket.OPEN) return socket;
     if (socket && socket.readyState === WebSocket.CONNECTING) return socket;
-    socket = new WebSocket(WS_URL);
+    socket = new WebSocket(wsUrl);
     socket.onclose = () => { socket = null; };
     socket.onerror = () => { socket = null; };
     return socket;
 }
 
-export function openColorStream() {
+export function openColorStream(port) {
+    if (port) wsUrl = `ws://127.0.0.1:${port}`;
     refCount++;
     return ensureSocket();
 }

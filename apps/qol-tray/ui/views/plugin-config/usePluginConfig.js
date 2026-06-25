@@ -58,6 +58,7 @@ export function usePluginConfig(pluginId) {
         bumpRender,
         renderTick,
         runtime: form?.runtime || null,
+        daemonPort: form?.daemonPort || null,
         getFieldValue: (field) => getFieldValue(state, field),
         setFieldValue: (field, value) => setFieldValue(state, field, value),
         setConfigKey,

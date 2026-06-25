@@ -112,8 +112,8 @@ export function SliderField({ field }) {
 
     const onThumbFocus = useCallback(() => {
         setActive(true);
-        if (hasStream) openColorStream();
-    }, [hasStream]);
+        if (hasStream) openColorStream(ctx.daemonPort);
+    }, [hasStream, ctx.daemonPort]);
 
     const onThumbBlur = useCallback(() => {
         setActive(false);
@@ -135,9 +135,9 @@ export function SliderField({ field }) {
     const onPointerDown = useCallback((e) => {
         trackingRef.current = true;
         trackRef.current.setPointerCapture(e.pointerId);
-        if (hasStream) openColorStream();
+        if (hasStream) openColorStream(ctx.daemonPort);
         onPointer(e);
-    }, [onPointer, hasStream]);
+    }, [onPointer, hasStream, ctx.daemonPort]);
 
     const onPointerMove = useCallback((e) => {
         if (!trackingRef.current) return;
