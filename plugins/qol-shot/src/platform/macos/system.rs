@@ -1,0 +1,174 @@
+use anyhow::{anyhow, Context, Result};
+use qol_headless::DoctorCheckResult;
+use std::env;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use crate::Rect;
+
+pub fn process_alive(pid: u32) -> bool {
+    crate::platform::unix_process_alive(pid)
+}
+
+pub fn show_notification(title: &str, message: &str, _timeout_ms: u32) {
+    let script = format!(
+        "display notification \"{}\" with title \"{}\"",
+        escape_applescript(message),
+        escape_applescript(title)
+    );
+
+    let _ = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+pub fn open_url(url: &str) -> Result<()> {
+    Command::new("open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to open URL")?;
+    Ok(())
+}
+
+pub fn grab_preview_rgba(_rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {
+    None
+}
+
+pub fn configure_preview_window(_title: String) {}
+
+pub fn platform_supported_check() -> DoctorCheckResult {
+    DoctorCheckResult::ok(
+        "platform_supported",
+        "macOS capture is supported through screencapture.",
+    )
+}
+
+pub fn required_binaries_check() -> DoctorCheckResult {
+    let required = ["screencapture", "open", "osascript"];
+    let missing = required
+        .iter()
+        .copied()
+        .filter(|name| resolve_command(name).is_none())
+        .collect::<Vec<_>>();
+
+    if !missing.is_empty() {
+        return DoctorCheckResult::fail(
+            "required_binaries",
+            format!("Missing required binaries: {}.", missing.join(", ")),
+        )
+        .with_fix("Restore the missing macOS command line tools.");
+    }
+
+    if resolve_command("ffmpeg").is_none() && resolve_command("avconvert").is_none() {
+        return DoctorCheckResult::warn(
+            "required_binaries",
+            "Native MOV recording is available, including multi-display composition, but non-MOV conversion is limited without ffmpeg or avconvert.",
+        )
+        .with_fix("Install ffmpeg for MP4, MKV, or WebM output, or avconvert for MP4 output.");
+    }
+
+    if resolve_command("ffmpeg").is_none() {
+        return DoctorCheckResult::warn(
+            "required_binaries",
+            "Native MOV recording and MP4 conversion through avconvert are available, including multi-display composition, but WebM/MKV require ffmpeg.",
+        )
+        .with_fix("Install ffmpeg for WebM or MKV output.");
+    }
+
+    DoctorCheckResult::ok(
+        "required_binaries",
+        "Required macOS capture, composition, and conversion tools are available.",
+    )
+}
+
+pub(super) fn signal_process(pid: u32, signal: i32) -> Result<()> {
+    crate::platform::unix_signal_process(pid, signal)
+}
+
+pub(super) fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if !process_alive(pid) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(150));
+    }
+    !process_alive(pid)
+}
+
+pub(super) fn reveal_path(path: &Path) -> bool {
+    Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+pub(super) fn open_path(path: &Path) -> bool {
+    Command::new("open")
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+pub(super) fn videos_dir() -> Option<PathBuf> {
+    let home = env::var_os("HOME")?;
+    Some(PathBuf::from(home).join("Videos"))
+}
+
+pub(super) fn paths_match(left: &Path, right: &Path) -> bool {
+    left == right
+}
+
+pub(super) fn path_extension_is(path: &Path, expected: &str) -> bool {
+    output_extension(path).as_deref() == Some(expected)
+}
+
+pub(super) fn output_extension(path: &Path) -> Option<String> {
+    path.extension()?
+        .to_str()
+        .map(|ext| ext.to_ascii_lowercase())
+}
+
+pub(super) fn output_format_label(path: &Path) -> String {
+    output_extension(path)
+        .map(|ext| ext.to_ascii_uppercase())
+        .unwrap_or_else(|| "recording".to_string())
+}
+
+fn escape_applescript(input: &str) -> String {
+    input.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+pub(super) fn resolve_command(command: &str) -> Option<PathBuf> {
+    let mut dirs = env::var_os("PATH")
+        .map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .unwrap_or_default();
+    dirs.extend([
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/usr/sbin"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ]);
+    dirs.into_iter()
+        .map(|dir| dir.join(command))
+        .find(|path| path.is_file())
+}
