@@ -80,7 +80,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add Cargo.lock plugins/*/Cargo.toml plugins/*/plugin.toml
+          git add Cargo.lock plugins/*/Cargo.toml plugins/*/plugin.toml apps/qol-tray/Cargo.toml
           if ! git diff --cached --quiet; then
             git commit -m "chore(plugins): bump plugin versions"
             git push origin "HEAD:${GITHUB_REF_NAME}"
@@ -101,5 +101,9 @@ jobs:
           set -euo pipefail
           while IFS= read -r tag; do
             [[ -n "${tag}" ]] || continue
-            gh workflow run release.yml --ref main -f tag="${tag}"
+            if [[ "${tag}" == qol-tray-v* ]]; then
+              gh workflow run qol-tray-release.yml --ref main -f tag="${tag}"
+            else
+              gh workflow run release.yml --ref main -f tag="${tag}"
+            fi
           done < "${RUNNER_TEMP}/plugin-release-tags.txt"
