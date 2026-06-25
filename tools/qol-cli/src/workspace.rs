@@ -179,12 +179,6 @@ pub(crate) fn non_host_plugin_packages(root: &Path) -> Result<Vec<String>> {
     Ok(excluded)
 }
 
-const RESERVED_PLUGIN_IDS: &[&str] = &["plugin-template"];
-
-fn is_reserved_plugin_id(id: &str) -> bool {
-    RESERVED_PLUGIN_IDS.contains(&id)
-}
-
 fn manifest_plugin_id(manifest: &Value) -> Option<&str> {
     manifest
         .get("plugin")
@@ -209,7 +203,7 @@ impl PluginEligibility {
             .with_context(|| format!("failed to read {}", manifest_path.display()))?;
         let manifest: Value = toml::from_str(&content)
             .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
-        if manifest_plugin_id(&manifest).is_some_and(is_reserved_plugin_id) {
+        if manifest_plugin_id(&manifest).is_some_and(qol_conventions::is_reserved_plugin_id) {
             return Ok(Self::SkippedReserved);
         }
         if !supports_host(&manifest) {

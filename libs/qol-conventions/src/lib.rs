@@ -21,6 +21,12 @@ pub fn settings_url(plugin_id: &str) -> String {
     format!("http://{LOCAL_HOST}:{DEFAULT_PORT}/plugins/{plugin_id}/")
 }
 
+const RESERVED_PLUGIN_IDS: &[&str] = &["plugin-template"];
+
+pub fn is_reserved_plugin_id(id: &str) -> bool {
+    RESERVED_PLUGIN_IDS.contains(&id)
+}
+
 pub mod build;
 
 #[cfg(test)]
@@ -38,5 +44,18 @@ mod tests {
             settings_url("plugin-foo"),
             "http://127.0.0.1:42700/plugins/plugin-foo/"
         );
+    }
+
+    #[test]
+    fn only_template_is_a_reserved_plugin_id() {
+        let cases = [
+            ("plugin-template", true),
+            ("plugin-foo", false),
+            ("plugin-bar", false),
+            ("", false),
+        ];
+        for (id, expected) in cases {
+            assert_eq!(is_reserved_plugin_id(id), expected, "id: {id}");
+        }
     }
 }

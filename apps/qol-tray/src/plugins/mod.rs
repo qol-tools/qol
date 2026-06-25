@@ -14,7 +14,6 @@ pub mod manager;
 pub mod manifest;
 pub(crate) mod paths;
 pub mod registry;
-mod reserved;
 pub mod resolver;
 
 pub use config::PluginConfigManager;
@@ -22,7 +21,7 @@ pub use identity_index::{PluginDisplay, PluginIdentityIndex};
 pub use loader::PluginLoader;
 pub use manager::PluginManager;
 pub use manifest::{ActionType, MenuItem, PluginId, PluginManifest, PluginUid};
-pub use reserved::is_reserved_plugin_id;
+pub use qol_conventions::is_reserved_plugin_id;
 pub use resolver::PluginSource;
 
 use anyhow::Result;
