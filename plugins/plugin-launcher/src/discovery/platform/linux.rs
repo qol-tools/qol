@@ -1,53 +1,29 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::super::AppEntry;
 use super::AppRoot;
 
-const EXEC_FIELD_CODES: &[&str] = &[
-    "%u", "%U", "%f", "%F", "%i", "%c", "%k", "%d", "%D", "%n", "%N", "%v", "%m",
-];
-
-const XDG_ROOT_DEPTH: usize = 1;
-const LOOSE_ROOT_DEPTH: usize = 2;
-
 pub fn cache_dir() -> Option<PathBuf> {
-    std::env::var("XDG_CACHE_HOME")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .filter(|v| !v.trim().is_empty())
-                .map(|home| PathBuf::from(format!("{home}/.cache")))
-        })
+    qol_apps::desktop::xdg_cache_dir()
 }
 
 pub fn app_roots() -> Vec<AppRoot> {
-    let mut roots: Vec<AppRoot> = xdg_app_dirs()
+    qol_apps::desktop::linux_app_roots()
         .into_iter()
-        .map(|path| AppRoot {
-            path,
-            max_depth: XDG_ROOT_DEPTH,
+        .map(|root| AppRoot {
+            path: root.path,
+            max_depth: root.max_depth,
         })
-        .collect();
-
-    roots.extend(loose_install_dirs().into_iter().map(|path| AppRoot {
-        path,
-        max_depth: LOOSE_ROOT_DEPTH,
-    }));
-
-    roots.sort_by(|a, b| a.path.cmp(&b.path));
-    roots.dedup_by(|a, b| a.path == b.path);
-    roots.retain(|r| r.path.is_dir());
-    roots
+        .collect()
 }
 
 pub fn scan_root(root: &AppRoot) -> Vec<AppEntry> {
-    let mut out = Vec::new();
-    walk_for_desktop(&root.path, 0, root.max_depth, &mut out);
-    out
+    let root = qol_apps::AppRoot {
+        path: root.path.clone(),
+        max_depth: root.max_depth,
+    };
+    qol_apps::desktop::scan_desktop_root(&root)
 }
 
 pub fn file_watch_roots() -> Vec<PathBuf> {
@@ -68,104 +44,6 @@ pub fn file_watch_roots() -> Vec<PathBuf> {
     roots.sort();
     roots.dedup();
     roots
-}
-
-fn xdg_app_dirs() -> Vec<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let data_home = std::env::var("XDG_DATA_HOME")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| format!("{home}/.local/share"));
-
-    let mut dirs = vec![
-        PathBuf::from("/usr/share/applications"),
-        PathBuf::from("/usr/local/share/applications"),
-        PathBuf::from(format!("{data_home}/applications")),
-        PathBuf::from("/var/lib/flatpak/exports/share/applications"),
-        PathBuf::from("/var/lib/snapd/desktop/applications"),
-    ];
-
-    if let Ok(extra) = std::env::var("XDG_DATA_DIRS") {
-        for segment in extra.split(':') {
-            let trimmed = segment.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            dirs.push(PathBuf::from(format!("{trimmed}/applications")));
-        }
-    }
-
-    dirs
-}
-
-fn loose_install_dirs() -> Vec<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let mut dirs = vec![PathBuf::from("/opt")];
-    if !home.is_empty() {
-        dirs.push(PathBuf::from(format!("{home}/.local")));
-        dirs.push(PathBuf::from(format!("{home}/Applications")));
-    }
-    dirs
-}
-
-fn walk_for_desktop(dir: &Path, depth: usize, max_depth: usize, out: &mut Vec<AppEntry>) {
-    let Ok(read_dir) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in read_dir.flatten() {
-        let path = entry.path();
-        let file_type = match entry.file_type() {
-            Ok(ft) => ft,
-            Err(_) => continue,
-        };
-
-        if file_type.is_file() && path.extension().is_some_and(|ext| ext == "desktop") {
-            if let Some(parsed) = parse_desktop_entry(&path) {
-                out.push(parsed);
-            }
-            continue;
-        }
-
-        if !file_type.is_dir() || depth >= max_depth {
-            continue;
-        }
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if name.starts_with('.') || (depth == 0 && name == "share") {
-            continue;
-        }
-        walk_for_desktop(&path, depth + 1, max_depth, out);
-    }
-}
-
-fn parse_desktop_entry(path: &Path) -> Option<AppEntry> {
-    let content = fs::read_to_string(path).ok()?;
-
-    let field = |prefix: &str| {
-        content
-            .lines()
-            .find(|l| l.starts_with(prefix))
-            .map(|l| l[prefix.len()..].to_string())
-    };
-
-    if content
-        .lines()
-        .any(|l| l == "NoDisplay=true" || l == "Hidden=true")
-    {
-        return None;
-    }
-
-    let exec_raw = field("Exec=")?;
-    let exec = shell_words::split(&exec_raw)
-        .ok()?
-        .into_iter()
-        .filter(|token| !EXEC_FIELD_CODES.contains(&token.as_str()))
-        .collect();
-
-    Some(AppEntry {
-        name: field("Name=")?,
-        exec,
-        path: path.to_path_buf(),
-    })
 }
 
 fn xdg_config_root(home: &str) -> Option<PathBuf> {

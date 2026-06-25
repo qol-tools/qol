@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use notify::event::EventKind;
 use notify::{RecursiveMode, Watcher};
+pub use qol_apps::AppEntry;
 use qol_gpui::protocol::{RuntimeEvent, RuntimeEventKind};
 use qol_gpui::PlatformStateClient;
 
@@ -21,13 +22,6 @@ use platform::AppRoot;
 enum WatchSignal {
     FsEvent(notify::Result<notify::Event>),
     HostHint(PathBuf),
-}
-
-#[derive(Debug, Clone)]
-pub struct AppEntry {
-    pub name: String,
-    pub exec: Vec<String>,
-    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone)]

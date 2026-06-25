@@ -20,12 +20,10 @@ qol-gpui.workspace = true
 qol-runtime.workspace = true
 qol-search.workspace = true
 qol-frecency.workspace = true
+qol-apps.workspace = true
 qol-platform.workspace = true
 qol-config.workspace = true
 toml = "0.9"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-shell-words = "1.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"

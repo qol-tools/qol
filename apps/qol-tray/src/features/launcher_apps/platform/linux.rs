@@ -1,6 +1,6 @@
 use super::super::LauncherEntry;
-use crate::installer::platform::desktop_entry::{format_desktop_exec_command, DesktopExecArg};
 use anyhow::{Context, Result};
+use qol_apps::desktop::{escape_desktop_entry_value, format_desktop_exec_command, DesktopExecArg};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -36,8 +36,8 @@ fn write_desktop_file(dir: &Path, entry: &LauncherEntry, binary_path: &Path) -> 
         .map(|arg| DesktopExecArg::Literal(arg.as_str()))
         .collect::<Vec<_>>();
     let exec = format_desktop_exec_command(binary_path, &exec_args);
-    let name = desktop_entry_escape(&entry.display_name);
-    let comment = desktop_entry_escape(&entry.description);
+    let name = escape_desktop_entry_value(&entry.display_name);
+    let comment = escape_desktop_entry_value(&entry.description);
 
     let content = format!(
         "[Desktop Entry]\n\
@@ -83,13 +83,6 @@ fn clean_stale(dir: &Path, expected: &HashSet<String>) -> Result<()> {
         let _ = std::fs::remove_file(entry.path());
     }
     Ok(())
-}
-
-fn desktop_entry_escape(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('\n', "\\n")
-        .replace('\t', "\\t")
-        .replace('\r', "\\r")
 }
 
 #[cfg(test)]

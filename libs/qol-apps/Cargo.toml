@@ -1,0 +1,9 @@
+[package]
+name = "qol-apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared app inventory and desktop entry helpers for qol-tools"
+
+[dependencies]
+shell-words = "1.1"

@@ -19,6 +19,7 @@ qol-runtime = { path = "libs/qol-runtime" }
 qol-search = { path = "libs/qol-search" }
 qol-migrations = { path = "libs/qol-migrations" }
 qol-wasm = { path = "libs/qol-wasm" }
+qol-apps = { path = "libs/qol-apps" }
 qol-app-icon = { path = "libs/qol-app-icon" }
 qol-gpui = { path = "libs/qol-gpui" }
 qol-headless = { path = "libs/qol-headless" }

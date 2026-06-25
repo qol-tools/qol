@@ -3928,6 +3928,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "proptest",
+ "qol-apps",
  "qol-config",
  "qol-conventions",
  "qol-frecency",
@@ -3938,7 +3939,6 @@ dependencies = [
  "qol-runtime",
  "qol-search",
  "serde",
- "shell-words",
  "toml 0.9.12+spec-1.1.0",
 ]
 
@@ -5728,6 +5728,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-apps"
+version = "1.0.0"
+dependencies = [
+ "shell-words",
+]
+
+[[package]]
 name = "qol-color"
 version = "0.2.0"
 
@@ -5898,6 +5905,7 @@ dependencies = [
  "png 0.17.16",
  "proptest",
  "qol-app-icon",
+ "qol-apps",
  "qol-config",
  "qol-conventions",
  "qol-migrations",
