@@ -67,7 +67,7 @@ fn parse_fix_flags(rest: &[String]) -> Result<(Option<String>, FixPolicy)> {
         }
     }
     let policy = if host_fixes {
-        FixPolicy::startup()
+        FixPolicy::with_host_fixes()
     } else {
         FixPolicy::safe()
     };

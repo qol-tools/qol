@@ -234,23 +234,14 @@ pub(super) fn map_selector_rect_to_capture(rect: Rect, displays: &[Monitor]) -> 
         return Some(rect);
     }
 
-    displays
+    if displays
         .iter()
-        .filter_map(|display| rect_intersection(rect, *display))
-        .reduce(union_rects)
-}
-
-fn union_rects(left: Rect, right: Rect) -> Rect {
-    let x = left.x.min(right.x);
-    let y = left.y.min(right.y);
-    let right_edge = (left.x + left.w).max(right.x + right.w);
-    let bottom_edge = (left.y + left.h).max(right.y + right.h);
-    Rect {
-        x,
-        y,
-        w: right_edge - x,
-        h: bottom_edge - y,
+        .any(|display| rect_intersection(rect, *display).is_some())
+    {
+        return Some(rect);
     }
+
+    None
 }
 
 fn configure_selector_window(title: String, cx: &mut gpui::App) {

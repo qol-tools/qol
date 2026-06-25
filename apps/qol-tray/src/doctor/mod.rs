@@ -13,9 +13,19 @@ use diagnosis::{apply_fix, FixAction, FixApplicability};
 use framework::{run_check, DoctorCheckResult, DoctorContext, Selector};
 pub use report::{FixReport, Outcome, OutcomeStatus, Report};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FixPolicy {
     max_applicability: FixApplicability,
+    allow_workspace_fixes: bool,
+}
+
+impl Default for FixPolicy {
+    fn default() -> Self {
+        Self {
+            max_applicability: FixApplicability::SafeAutomatic,
+            allow_workspace_fixes: true,
+        }
+    }
 }
 
 impl FixPolicy {
@@ -26,10 +36,21 @@ impl FixPolicy {
     pub fn startup() -> Self {
         Self {
             max_applicability: FixApplicability::ReversibleHostMutation,
+            allow_workspace_fixes: false,
+        }
+    }
+
+    pub fn with_host_fixes() -> Self {
+        Self {
+            max_applicability: FixApplicability::ReversibleHostMutation,
+            allow_workspace_fixes: true,
         }
     }
 
     fn allows(&self, action: &FixAction) -> bool {
+        if !self.allow_workspace_fixes && action.requires_workspace_fix_window() {
+            return false;
+        }
         action.applicability() <= self.max_applicability
     }
 }
@@ -443,6 +464,38 @@ mod tests {
                 },
                 FixPolicy::startup(),
                 true,
+            ),
+            #[cfg(feature = "dev")]
+            (
+                FixAction::FixClippyLints {
+                    workspace: std::path::PathBuf::from("/tmp/never-used"),
+                },
+                FixPolicy::safe(),
+                true,
+            ),
+            #[cfg(feature = "dev")]
+            (
+                FixAction::FixClippyLints {
+                    workspace: std::path::PathBuf::from("/tmp/never-used"),
+                },
+                FixPolicy::with_host_fixes(),
+                true,
+            ),
+            #[cfg(feature = "dev")]
+            (
+                FixAction::FixClippyLints {
+                    workspace: std::path::PathBuf::from("/tmp/never-used"),
+                },
+                FixPolicy::startup(),
+                false,
+            ),
+            #[cfg(feature = "dev")]
+            (
+                FixAction::HealDevLinkedPlugins {
+                    rebuild_ids: vec!["qol-shot".into()],
+                },
+                FixPolicy::startup(),
+                false,
             ),
         ];
         for (action, policy, expected) in cases {

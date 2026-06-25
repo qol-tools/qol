@@ -1524,9 +1524,9 @@ pub(crate) fn run_session(
     child: &mut Child,
     verbose: bool,
     plugins: Vec<String>,
+    lines: Receiver<String>,
     boot: Option<Receiver<String>>,
 ) -> Result<SessionEnd> {
-    let lines = spawn_forwarders(child);
     if verbose || !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
         return plain_session(child, &lines, boot);
     }
@@ -4425,7 +4425,7 @@ fn stop_child(child: &mut Child) -> Result<()> {
     Ok(())
 }
 
-fn spawn_forwarders(child: &mut Child) -> Receiver<String> {
+pub(crate) fn spawn_forwarders(child: &mut Child) -> Receiver<String> {
     let (tx, rx) = channel();
     if let Some(stdout) = child.stdout.take() {
         spawn_forwarder(stdout, tx.clone());

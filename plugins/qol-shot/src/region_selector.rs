@@ -118,11 +118,20 @@ pub fn open_all(
 ) -> bool {
     let selector_count = selectors.len();
     let active_bounds = selectors.iter().find_map(|selector| selector.active_bounds);
+    let monitor_bounds = selectors
+        .iter()
+        .map(|selector| selector.bounds)
+        .collect::<Vec<_>>();
     let titles = selectors
         .iter()
         .map(|selector| selector.title.clone())
         .collect::<Vec<_>>();
-    let state = Rc::new(RefCell::new(SelectionState::new(tx, active_bounds, titles)));
+    let state = Rc::new(RefCell::new(SelectionState::new(
+        tx,
+        active_bounds,
+        monitor_bounds,
+        titles,
+    )));
     let mut handles = Vec::new();
     for selector in selectors {
         let Some(handle) = open_window(selector, state.clone(), quit_on_finish, cx) else {
@@ -156,7 +165,6 @@ fn open_window(
     cx: &mut App,
 ) -> Option<WindowHandle<RegionSelector>> {
     let options = selector.options();
-    let bounds = selector.bounds;
     let focus = selector.focus;
     let map_rect = selector.map_rect;
     let global_pointer = selector.global_pointer;
@@ -169,7 +177,6 @@ fn open_window(
                 state,
                 window_title.clone(),
                 quit_on_finish,
-                bounds.origin,
                 map_rect,
                 global_pointer,
                 cx,
@@ -208,6 +215,7 @@ fn selector_title() -> String {
 struct SelectionState {
     tx: Option<mpsc::Sender<Option<Rect>>>,
     active_bounds: Option<Bounds<Pixels>>,
+    monitor_bounds: Vec<Bounds<Pixels>>,
     titles: Vec<String>,
     drag_start: Option<Point<Pixels>>,
     drag_current: Option<Point<Pixels>>,
@@ -220,11 +228,13 @@ impl SelectionState {
     fn new(
         tx: mpsc::Sender<Option<Rect>>,
         active_bounds: Option<Bounds<Pixels>>,
+        monitor_bounds: Vec<Bounds<Pixels>>,
         titles: Vec<String>,
     ) -> Self {
         Self {
             tx: Some(tx),
             active_bounds,
+            monitor_bounds,
             titles,
             drag_start: None,
             drag_current: None,
@@ -240,6 +250,13 @@ impl SelectionState {
         }
         self.active_bounds = Some(bounds);
         true
+    }
+
+    fn set_active_bounds_for_point(&mut self, point: Point<Pixels>) -> bool {
+        let Some(bounds) = monitor_bounds_for_point(&self.monitor_bounds, point) else {
+            return false;
+        };
+        self.set_active_bounds(bounds)
     }
 }
 
@@ -277,7 +294,6 @@ struct RegionSelector {
     handle: Option<WindowHandle<RegionSelector>>,
     title: String,
     quit_on_finish: bool,
-    window_origin: Point<Pixels>,
     map_rect: RectMapper,
     global_pointer: Option<GlobalPointerSource>,
     focus_handle: FocusHandle,
@@ -288,7 +304,6 @@ impl RegionSelector {
         state: Rc<RefCell<SelectionState>>,
         title: String,
         quit_on_finish: bool,
-        window_origin: Point<Pixels>,
         map_rect: RectMapper,
         global_pointer: Option<GlobalPointerSource>,
         cx: &mut Context<Self>,
@@ -299,7 +314,6 @@ impl RegionSelector {
             handle: None,
             title,
             quit_on_finish,
-            window_origin,
             map_rect,
             global_pointer,
             focus_handle: cx.focus_handle(),
@@ -309,15 +323,15 @@ impl RegionSelector {
     fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.sync_active_bounds();
-        let position = self.drag_position(event.position);
+        let position = self.global_point(event.position, window);
         {
             let mut state = self.state.borrow_mut();
             state.drag_start = Some(position);
             state.drag_current = Some(position);
+            state.set_active_bounds_for_point(position);
         }
         self.notify_all(cx);
         self.start_global_drag(cx);
@@ -326,10 +340,14 @@ impl RegionSelector {
     fn on_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let active_changed = self.sync_active_bounds();
+        let position = self.global_point(event.position, window);
+        let active_changed = self
+            .state
+            .borrow_mut()
+            .set_active_bounds_for_point(position);
         if !event.dragging() {
             if active_changed {
                 self.notify_all(cx);
@@ -339,14 +357,17 @@ impl RegionSelector {
         if self.state.borrow().drag_start.is_none() {
             return;
         }
-        self.state.borrow_mut().drag_current = Some(self.drag_position(event.position));
+        self.state.borrow_mut().drag_current = Some(position);
         self.notify_all(cx);
     }
 
     fn on_mouse_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.sync_active_bounds();
-        let end = self.drag_position(event.position);
-        self.state.borrow_mut().drag_current = Some(end);
+        let end = self.global_point(event.position, window);
+        {
+            let mut state = self.state.borrow_mut();
+            state.drag_current = Some(end);
+            state.set_active_bounds_for_point(end);
+        }
         let raw = self.current_raw_rect(Some(end));
         let rect = raw.and_then(|rect| (self.map_rect)(rect));
         trace_selection_release("event", raw, rect);
@@ -454,7 +475,7 @@ impl RegionSelector {
             self.state.borrow_mut().active_monitor_polling = false;
             return false;
         }
-        if self.sync_active_bounds() {
+        if self.sync_active_bounds_for_render() {
             self.notify_all(cx);
         }
         true
@@ -474,9 +495,13 @@ impl RegionSelector {
             self.state.borrow_mut().polling = false;
             return GlobalDragResult::Stop;
         }
-        let active_changed = self.sync_active_bounds();
+        let active_changed = self.sync_active_bounds_for_render();
         if let Some(position) = position {
-            self.state.borrow_mut().drag_current = Some(position);
+            {
+                let mut state = self.state.borrow_mut();
+                state.drag_current = Some(position);
+                state.set_active_bounds_for_point(position);
+            }
             self.notify_all(cx);
         } else if active_changed {
             self.notify_all(cx);
@@ -594,44 +619,32 @@ impl RegionSelector {
         let right = start.x.max(current.x);
         let bottom = start.y.max(current.y);
         let selection = Bounds::new(point(left, top), size(right - left, bottom - top));
-        let window_bounds = Bounds::new(self.window_origin, window.bounds().size);
+        let window_bounds = window.bounds();
         let clipped = intersect_bounds(selection, window_bounds)?;
         Some(Bounds::new(
             point(
-                clipped.origin.x - self.window_origin.x,
-                clipped.origin.y - self.window_origin.y,
+                clipped.origin.x - window_bounds.origin.x,
+                clipped.origin.y - window_bounds.origin.y,
             ),
             clipped.size,
         ))
     }
 
-    fn guide_frame(&self, window: &Window) -> (f32, f32, f32) {
-        let fallback = window.bounds();
-        let bounds = self
-            .state
-            .borrow()
-            .active_bounds
-            .unwrap_or_else(|| Bounds::new(point(px(0.0), px(0.0)), fallback.size));
-        let local_x = f32::from(bounds.origin.x) - f32::from(self.window_origin.x);
-        let local_y = f32::from(bounds.origin.y) - f32::from(self.window_origin.y);
+    fn guide_frame(&self, window: &Window) -> Option<(f32, f32, f32)> {
+        let window_bounds = window.bounds();
+        let bounds = self.state.borrow().active_bounds.unwrap_or(window_bounds);
+        intersect_bounds(bounds, window_bounds)?;
+        let local_x = f32::from(bounds.origin.x) - f32::from(window_bounds.origin.x);
+        let local_y = f32::from(bounds.origin.y) - f32::from(window_bounds.origin.y);
         let monitor_width = f32::from(bounds.size.width);
         let guide_width = (monitor_width - GUIDE_MARGIN_X * 2.0).clamp(1.0, GUIDE_W);
         let guide_left = local_x + (monitor_width - guide_width) / 2.0;
-        (guide_left, local_y + GUIDE_TOP, guide_width)
+        Some((guide_left, local_y + GUIDE_TOP, guide_width))
     }
 
-    fn global_point(&self, local: Point<Pixels>) -> Point<Pixels> {
-        point(
-            self.window_origin.x + local.x,
-            self.window_origin.y + local.y,
-        )
-    }
-
-    fn drag_position(&self, local: Point<Pixels>) -> Point<Pixels> {
-        self.global_pointer
-            .as_ref()
-            .and_then(|pointer| pointer.position())
-            .unwrap_or_else(|| self.global_point(local))
+    fn global_point(&self, local: Point<Pixels>, window: &Window) -> Point<Pixels> {
+        let window_origin = window.bounds().origin;
+        point(window_origin.x + local.x, window_origin.y + local.y)
     }
 
     fn sync_active_bounds(&self) -> bool {
@@ -640,6 +653,14 @@ impl RegionSelector {
         };
         let bounds = monitor.bounds();
         self.state.borrow_mut().set_active_bounds(bounds)
+    }
+
+    fn sync_active_bounds_for_render(&self) -> bool {
+        let current = self.state.borrow().drag_current;
+        if let Some(current) = current {
+            return self.state.borrow_mut().set_active_bounds_for_point(current);
+        }
+        self.sync_active_bounds()
     }
 
     fn notify_all(&self, cx: &mut Context<Self>) {
@@ -719,7 +740,7 @@ impl Focusable for RegionSelector {
 
 impl Render for RegionSelector {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (guide_left, guide_top, guide_width) = self.guide_frame(window);
+        let guide_frame = self.guide_frame(window);
         let selection = self.selection_bounds(window);
         let mut root = div()
             .id("shot-region-selector")
@@ -736,19 +757,24 @@ impl Render for RegionSelector {
             root = root.child(backdrop_segment(bounds));
         }
 
-        root = root.child(
-            OverlayText {
-                title: self.guide_title(),
-                subtitle: Some("Press Esc to cancel"),
-                title_size: 22.0,
-                subtitle_size: 14.0,
-            }
-            .panel(guide_left, guide_top, guide_width, GUIDE_H),
-        );
+        if let Some((guide_left, guide_top, guide_width)) = guide_frame {
+            root = root.child(
+                OverlayText {
+                    title: self.guide_title(),
+                    subtitle: Some("Press Esc to cancel"),
+                    title_size: 22.0,
+                    subtitle_size: 14.0,
+                }
+                .panel(guide_left, guide_top, guide_width, GUIDE_H),
+            );
+        }
 
         if let Some(bounds) = selection {
             root = root.child(selection_frame(bounds));
-            if bounds.size.width >= px(LABEL_MIN_W) && bounds.size.height >= px(LABEL_MIN_H) {
+            if guide_frame.is_some()
+                && bounds.size.width >= px(LABEL_MIN_W)
+                && bounds.size.height >= px(LABEL_MIN_H)
+            {
                 let label_top =
                     f32::from(bounds.origin.y) + f32::from(bounds.size.height) / 2.0 - 13.0;
                 root = root.child(
@@ -987,11 +1013,32 @@ fn intersect_bounds(left: Bounds<Pixels>, right: Bounds<Pixels>) -> Option<Bound
     ))
 }
 
+fn monitor_bounds_for_point(
+    monitors: &[Bounds<Pixels>],
+    point: Point<Pixels>,
+) -> Option<Bounds<Pixels>> {
+    monitors
+        .iter()
+        .copied()
+        .find(|bounds| bounds_contains_point(*bounds, point))
+}
+
+fn bounds_contains_point(bounds: Bounds<Pixels>, point: Point<Pixels>) -> bool {
+    point.x >= bounds.origin.x
+        && point.x < bounds.origin.x + bounds.size.width
+        && point.y >= bounds.origin.y
+        && point.y < bounds.origin.y + bounds.size.height
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{backdrop_segments, intersect_bounds, selected_rect};
+    use super::{
+        backdrop_segments, intersect_bounds, monitor_bounds_for_point, selected_rect,
+        SelectionState,
+    };
     use crate::Rect;
     use gpui::{point, px, size, Bounds};
+    use std::sync::mpsc;
 
     #[test]
     fn selected_rect_adds_window_origin() {
@@ -1034,6 +1081,37 @@ mod tests {
                 size(px(60.0), px(50.0))
             ))
         );
+    }
+
+    #[test]
+    fn monitor_bounds_for_point_handles_vertically_offset_displays() {
+        let laptop = Bounds::new(point(px(0.0), px(0.0)), size(px(2560.0), px(1440.0)));
+        let external = Bounds::new(point(px(-1512.0), px(458.0)), size(px(1512.0), px(982.0)));
+        assert_eq!(
+            monitor_bounds_for_point(&[laptop, external], point(px(-800.0), px(700.0))),
+            Some(external)
+        );
+        assert_eq!(
+            monitor_bounds_for_point(&[laptop, external], point(px(800.0), px(700.0))),
+            Some(laptop)
+        );
+        assert_eq!(
+            monitor_bounds_for_point(&[laptop, external], point(px(-800.0), px(200.0))),
+            None
+        );
+    }
+
+    #[test]
+    fn active_bounds_follow_drag_pointer_monitor() {
+        let (tx, _rx) = mpsc::channel();
+        let laptop = Bounds::new(point(px(0.0), px(0.0)), size(px(2560.0), px(1440.0)));
+        let external = Bounds::new(point(px(-1512.0), px(458.0)), size(px(1512.0), px(982.0)));
+        let mut state = SelectionState::new(tx, Some(laptop), vec![laptop, external], Vec::new());
+
+        assert!(state.set_active_bounds_for_point(point(px(-800.0), px(700.0))));
+        assert_eq!(state.active_bounds, Some(external));
+        assert!(!state.set_active_bounds_for_point(point(px(-800.0), px(200.0))));
+        assert_eq!(state.active_bounds, Some(external));
     }
 
     #[test]

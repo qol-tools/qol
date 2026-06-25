@@ -104,6 +104,22 @@ impl FixAction {
             | FixAction::HealDevLinkedPlugins { .. } => FixApplicability::SafeAutomatic,
         }
     }
+
+    pub(super) fn requires_workspace_fix_window(&self) -> bool {
+        #[cfg(feature = "dev")]
+        {
+            if matches!(
+                self,
+                FixAction::FormatRustSources { .. }
+                    | FixAction::FixClippyLints { .. }
+                    | FixAction::PruneCargoIncrementalCache { .. }
+                    | FixAction::HealDevLinkedPlugins { .. }
+            ) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 pub(super) fn apply_fix(action: &FixAction) -> Result<()> {

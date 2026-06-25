@@ -75,7 +75,7 @@ fn rect_intersection_returns_overlap() {
 }
 
 #[test]
-fn selector_rect_mapper_clips_to_active_displays() {
+fn selector_rect_mapper_preserves_dragged_rect_touching_active_displays() {
     let rect = Rect {
         x: 1800,
         y: 100,
@@ -94,6 +94,35 @@ fn selector_rect_mapper_clips_to_active_displays() {
             y: 0,
             w: 1920,
             h: 1080,
+        },
+    ];
+
+    assert_eq!(
+        selector::map_selector_rect_to_capture(rect, &displays),
+        Some(rect)
+    );
+}
+
+#[test]
+fn selector_rect_mapper_preserves_canvas_across_vertically_offset_displays() {
+    let rect = Rect {
+        x: -1200,
+        y: 0,
+        w: 3200,
+        h: 1400,
+    };
+    let displays = [
+        Monitor {
+            x: 0,
+            y: 0,
+            w: 2000,
+            h: 1400,
+        },
+        Monitor {
+            x: -1512,
+            y: 458,
+            w: 1512,
+            h: 982,
         },
     ];
 

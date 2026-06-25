@@ -2,6 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::json;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::process::Child;
 use std::time::{Duration, Instant};
 
 fn api_url(path: &str) -> String {
@@ -15,7 +16,7 @@ fn web_health_url() -> String {
     api_url("/")
 }
 fn dev_health_url() -> String {
-    api_url("/api/dev/worktrees")
+    api_url("/api/dev/enabled")
 }
 fn dev_recompile_url() -> String {
     api_url("/api/dev/recompile-self")
@@ -37,6 +38,8 @@ fn logs_health_url() -> String {
 }
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 const HEALTH_INTERVAL: Duration = Duration::from_millis(250);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const SHUTDOWN_INTERVAL: Duration = Duration::from_millis(100);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug)]
@@ -188,11 +191,27 @@ pub(crate) fn delete_dev_link(id: &str) -> Result<()> {
     bail!("unlink request failed with HTTP {status}")
 }
 
-pub(crate) fn wait_for_health() -> Result<()> {
+pub(crate) fn wait_for_shutdown_best_effort() {
+    let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+    while Instant::now() < deadline {
+        if !api_port_open() {
+            return;
+        }
+        std::thread::sleep(SHUTDOWN_INTERVAL);
+    }
+}
+
+pub(crate) fn wait_for_health_or_exit(child: &mut Child) -> Result<()> {
     let deadline = Instant::now() + HEALTH_TIMEOUT;
     while Instant::now() < deadline {
         if health_ok() {
             return Ok(());
+        }
+        if let Some(status) = child
+            .try_wait()
+            .context("failed to inspect qol-tray dev process")?
+        {
+            bail!("qol-tray dev process exited before server became healthy: {status}");
         }
         std::thread::sleep(HEALTH_INTERVAL);
     }
@@ -205,7 +224,7 @@ pub(crate) fn post_recompile(branch: &str) -> Result<()> {
 }
 
 pub(crate) fn health_ok() -> bool {
-    http_get_ok(&dev_health_url()).unwrap_or(false)
+    http_get_bool(&dev_health_url()).unwrap_or(false)
 }
 
 pub(crate) fn web_ok() -> bool {
@@ -275,20 +294,18 @@ fn http_get_ok(url: &str) -> Result<bool> {
     Ok(status == 200)
 }
 
+fn http_get_bool(url: &str) -> Result<bool> {
+    let (status, body) = http_exchange("GET", url, None)?;
+    Ok(status == 200 && parse_json_bool(&body).unwrap_or(false))
+}
+
 fn http_request(method: &str, url: &str, body: Option<&str>) -> Result<u16> {
     Ok(http_exchange(method, url, body)?.0)
 }
 
 fn http_exchange(method: &str, url: &str, body: Option<&str>) -> Result<(u16, String)> {
     let target = HttpTarget::parse(url)?;
-    let mut addrs = (target.host.as_str(), target.port)
-        .to_socket_addrs()
-        .with_context(|| format!("failed to resolve {}", target.host))?;
-    let addr = addrs
-        .next()
-        .ok_or_else(|| anyhow!("no address for {}", target.host))?;
-    let mut stream = TcpStream::connect_timeout(&addr, HTTP_TIMEOUT)
-        .with_context(|| format!("failed to connect to {}", target.host))?;
+    let mut stream = connect_http_target(&target, HTTP_TIMEOUT)?;
     stream.set_read_timeout(Some(HTTP_TIMEOUT))?;
     stream.set_write_timeout(Some(HTTP_TIMEOUT))?;
     let body = body.unwrap_or("");
@@ -307,11 +324,40 @@ fn http_exchange(method: &str, url: &str, body: Option<&str>) -> Result<(u16, St
     Ok((status, response_body(&response)))
 }
 
+fn api_port_open() -> bool {
+    let target = HttpTarget {
+        host: "127.0.0.1".to_string(),
+        port: qol_conventions::DEFAULT_PORT,
+        path: "/".to_string(),
+    };
+    connect_http_target(&target, Duration::from_millis(100)).is_ok()
+}
+
+fn connect_http_target(target: &HttpTarget, timeout: Duration) -> Result<TcpStream> {
+    let mut addrs = (target.host.as_str(), target.port)
+        .to_socket_addrs()
+        .with_context(|| format!("failed to resolve {}", target.host))?;
+    let addr = addrs
+        .next()
+        .ok_or_else(|| anyhow!("no address for {}", target.host))?;
+    let stream = TcpStream::connect_timeout(&addr, timeout)
+        .with_context(|| format!("failed to connect to {}", target.host))?;
+    Ok(stream)
+}
+
 fn response_body(response: &str) -> String {
     response
         .split_once("\r\n\r\n")
         .map(|(_, body)| body.to_string())
         .unwrap_or_default()
+}
+
+fn parse_json_bool(body: &str) -> Option<bool> {
+    match body.trim() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
 }
 
 struct HttpTarget {
@@ -381,6 +427,21 @@ mod tests {
         for (response, expected) in cases {
             assert_eq!(response_body(response), expected, "response: {response:?}");
         }
+    }
+
+    #[test]
+    fn dev_health_probe_uses_dev_enabled_metadata() {
+        assert!(
+            dev_health_url().ends_with("/api/dev/enabled"),
+            "dev health must not depend on gated or heavy discovery endpoints"
+        );
+    }
+
+    #[test]
+    fn parses_json_bool_payload() {
+        assert_eq!(parse_json_bool("true"), Some(true));
+        assert_eq!(parse_json_bool(" false\n"), Some(false));
+        assert_eq!(parse_json_bool(r#"{"ok":true}"#), None);
     }
 
     #[test]

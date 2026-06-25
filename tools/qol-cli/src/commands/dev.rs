@@ -1,8 +1,8 @@
 use crate::cli::optional_single_arg;
 use crate::dev_console;
 use crate::dev_server::{
-    fetch_dev_links, post_dev_link, post_recompile, post_reload_plugins, wait_for_health, DevLink,
-    DevLinkOutcome,
+    fetch_dev_links, post_dev_link, post_recompile, post_reload_plugins, wait_for_health_or_exit,
+    wait_for_shutdown_best_effort, DevLink, DevLinkOutcome,
 };
 use crate::host_facade;
 use crate::progress::{print_hint, print_title, run_step, step_label, StepKind};
@@ -41,6 +41,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     }
     let buildable = boot_preflight(&root, verbose, skip_plugins, reload)?;
     host_facade::stop_qol_tray()?;
+    wait_for_shutdown_best_effort();
     let binary = root
         .join("target")
         .join("debug")
@@ -63,10 +64,11 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         .stderr(Stdio::piped())
         .spawn()
         .context("failed to start qol-tray dev process")?;
+    let lines = dev_console::spawn_forwarders(&mut child);
 
     let plugin_names: Vec<String> = buildable.iter().map(|p| display_name(&p.dir)).collect();
-    finish_boot(&buildable, branch)?;
-    match dev_console::run_session(&mut child, verbose, plugin_names, None)? {
+    finish_boot(&mut child, &buildable, branch)?;
+    match dev_console::run_session(&mut child, verbose, plugin_names, lines, None)? {
         dev_console::SessionEnd::UserQuit => Ok(()),
         dev_console::SessionEnd::ReloadRequested => reload_self(),
         dev_console::SessionEnd::ChildExited(status) if status.success() => Ok(()),
@@ -76,12 +78,12 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     }
 }
 
-fn finish_boot(buildable: &[BuildablePlugin], branch: Option<&str>) -> Result<()> {
-    if buildable.is_empty() && branch.is_none() {
-        return Ok(());
-    }
-
-    wait_for_health().context("dev server did not become healthy")?;
+fn finish_boot(
+    child: &mut std::process::Child,
+    buildable: &[BuildablePlugin],
+    branch: Option<&str>,
+) -> Result<()> {
+    wait_for_health_or_exit(child).context("dev server did not become healthy")?;
     if !buildable.is_empty() {
         register_dev_links(buildable);
         if branch.is_none() {
