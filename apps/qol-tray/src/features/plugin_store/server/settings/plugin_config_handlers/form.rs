@@ -8,12 +8,15 @@ pub(super) struct CombinedPluginForm {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<qol_config::contract::RuntimeSpec>,
     pub traits: serde_json::Value,
+    #[serde(rename = "daemonPort", skip_serializing_if = "Option::is_none")]
+    pub daemon_port: Option<u16>,
 }
 
 pub(super) fn load_plugin_config_form(
     plugin_id: &str,
 ) -> Result<CombinedPluginForm, Box<Response>> {
     let traits = crate::plugins::config::load_plugin_traits(plugin_id);
+    let daemon_port = crate::plugins::config::daemon_port(plugin_id);
     let combined = crate::plugins::config::load_combined_contracts(plugin_id)
         .map_err(|_| Box::new(contract_unavailable_response()))?;
     let Some((spec, runtime)) = combined else {
@@ -21,6 +24,7 @@ pub(super) fn load_plugin_config_form(
             form: empty_resolved_config(),
             runtime: None,
             traits,
+            daemon_port,
         });
     };
     let config = load_plugin_config_value(plugin_id)?;
@@ -30,6 +34,7 @@ pub(super) fn load_plugin_config_form(
         form,
         runtime,
         traits,
+        daemon_port,
     })
 }
 
@@ -266,6 +271,7 @@ default = 3
             form: empty_resolved(),
             runtime: None,
             traits: traits.clone(),
+            daemon_port: None,
         };
         assert_eq!(serialized_traits(&form), traits);
     }
@@ -277,6 +283,7 @@ default = 3
             form: empty_resolved(),
             runtime: None,
             traits: default_traits,
+            daemon_port: None,
         };
         assert_eq!(serialized_traits(&form), json!({ "confined": {} }));
     }
@@ -287,12 +294,37 @@ default = 3
             form: empty_resolved(),
             runtime: None,
             traits: crate::plugins::config::default_plugin_traits(),
+            daemon_port: None,
         };
         let value = serde_json::to_value(&form).unwrap();
         assert!(
             value.get("traits").is_some(),
             "traits must always be serialized, never skipped"
         );
+    }
+
+    #[test]
+    fn combined_plugin_form_serializes_daemon_port_as_camel_case() {
+        let form = super::CombinedPluginForm {
+            form: empty_resolved(),
+            runtime: None,
+            traits: crate::plugins::config::default_plugin_traits(),
+            daemon_port: Some(42710),
+        };
+        let value = serde_json::to_value(&form).unwrap();
+        assert_eq!(value["daemonPort"], json!(42710));
+    }
+
+    #[test]
+    fn combined_plugin_form_omits_daemon_port_when_absent() {
+        let form = super::CombinedPluginForm {
+            form: empty_resolved(),
+            runtime: None,
+            traits: crate::plugins::config::default_plugin_traits(),
+            daemon_port: None,
+        };
+        let value = serde_json::to_value(&form).unwrap();
+        assert!(value.get("daemonPort").is_none());
     }
 
     fn create_plugin_dir(plugin_id: &str) -> std::path::PathBuf {

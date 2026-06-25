@@ -122,6 +122,10 @@ fn try_load_plugin_manifest(plugin_id: &str) -> Option<crate::plugins::manifest:
     toml::from_str::<crate::plugins::manifest::PluginManifest>(&content).ok()
 }
 
+pub(crate) fn daemon_port(plugin_id: &str) -> Option<u16> {
+    try_load_plugin_manifest(plugin_id)?.daemon?.port
+}
+
 pub fn load_plugin_config_merged(
     scope_store: &ProfileScopeStore,
     uid: &PluginUid,
