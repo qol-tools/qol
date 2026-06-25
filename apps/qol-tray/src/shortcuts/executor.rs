@@ -86,6 +86,7 @@ fn app_ref_kind(app: &AppRef) -> &'static str {
     }
 }
 
+#[cfg(debug_assertions)]
 fn trace_error(error: &anyhow::Error) -> String {
     error
         .to_string()
