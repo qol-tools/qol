@@ -3,7 +3,7 @@
 }
 
 .dev-view-shell .page-header-main h1 {
-    font-family: monospace;
+    font-family: var(--font-mono);
 }
 
 .view-container.dev-view-shell {

@@ -10,7 +10,7 @@
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: var(--font-sans);
     background: var(--tui-desktop-bg);
     background-attachment: fixed;
     color: var(--text-secondary);
@@ -392,7 +392,7 @@ body {
 .wt-picker-option {
     padding: var(--space-2) var(--space-4);
     font-size: var(--fs-md);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     color: var(--text-secondary);
     cursor: pointer;
     white-space: nowrap;

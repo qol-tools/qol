@@ -113,7 +113,7 @@ html.qol-bootstrapping-dive #app {
     justify-content: center;
     font-size: 9px;
     font-weight: var(--fw-bold);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     line-height: 1;
     color: rgb(var(--ink-rgb));
     background: hsl(var(--wedge-hue, 50) 80% 38% / 0.95);

@@ -276,6 +276,7 @@
     --z-selection-wedge: 101;
     --z-fx: 200;
 
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'SF Pro Text', Roboto, sans-serif;
     --font-mono: 'SF Mono', Monaco, 'Courier New', monospace;
     --fw-medium: 500;
     --fw-semibold: 600;
