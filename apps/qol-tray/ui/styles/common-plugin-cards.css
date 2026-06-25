@@ -334,7 +334,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(0, 0, 0, 0.6);
+    background: rgba(var(--ink-rgb), 0.6);
     backdrop-filter: blur(2px);
     border-radius: inherit;
     color: var(--accent);

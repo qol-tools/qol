@@ -46,6 +46,7 @@
     --overlay-surface-rgb: 18, 22, 30;
     --overlay-deep-rgb: 17, 20, 25;
     --overlay-ink-rgb: 7, 10, 14;
+    --scrim-rgb: 4, 5, 8;
 
     --surface-canvas: #0c0e13;
     --surface-elevated: #14181f;

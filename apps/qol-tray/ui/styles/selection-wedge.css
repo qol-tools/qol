@@ -3,11 +3,13 @@
     --selection-wedge-default-size: 22px;
     --selection-wedge-default-top: -20px;
     --selection-wedge-default-left: -24px;
-    --selection-wedge-fill:
+    --wedge-sheen:
         linear-gradient(180deg,
-            rgba(255, 255, 255, 0.18) 0%,
-            rgba(255, 255, 255, 0.03) 38%,
-            rgba(0, 0, 0, 0.08) 100%),
+            rgba(var(--paper-rgb), 0.18) 0%,
+            rgba(var(--paper-rgb), 0.03) 38%,
+            rgba(var(--ink-rgb), 0.08) 100%);
+    --selection-wedge-fill:
+        var(--wedge-sheen),
         linear-gradient(90deg,
             rgba(var(--warning-rgb), 1) 0%,
             rgba(var(--warning-rgb), 0.92) 52%,
@@ -40,10 +42,7 @@
     opacity: 1;
     transform: scaleX(-1) rotate(-45deg);
     background:
-        linear-gradient(180deg,
-            rgba(255, 255, 255, 0.18) 0%,
-            rgba(255, 255, 255, 0.03) 38%,
-            rgba(0, 0, 0, 0.08) 100%),
+        var(--wedge-sheen),
         linear-gradient(90deg,
             hsl(var(--wedge-hue, 50) 85% 55%) 0%,
             hsl(var(--wedge-hue, 50) 85% 55% / 0.92) 52%,

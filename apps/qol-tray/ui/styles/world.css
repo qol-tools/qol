@@ -115,7 +115,7 @@ html.qol-bootstrapping-dive #app {
     font-weight: 700;
     font-family: var(--font-mono, monospace);
     line-height: 1;
-    color: #000;
+    color: rgb(var(--ink-rgb));
     background: hsl(var(--wedge-hue, 50) 80% 38% / 0.95);
     border-radius: 99px;
     pointer-events: none;
@@ -124,7 +124,7 @@ html.qol-bootstrapping-dive #app {
 
 .world-minimap {
     position: relative;
-    background: rgba(0, 0, 0, 0.75);
+    background: rgba(var(--ink-rgb), 0.75);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-lg);
     cursor: pointer;
@@ -191,7 +191,7 @@ html.qol-bootstrapping-dive #app {
     border-radius: var(--radius-xl);
     border: none;
     background: transparent;
-    color: rgba(255, 255, 255, 0.55);
+    color: rgba(var(--paper-rgb), 0.55);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -201,12 +201,12 @@ html.qol-bootstrapping-dive #app {
 }
 
 .world-cog-btn:hover {
-    color: rgba(255, 255, 255, 0.7);
+    color: rgba(var(--paper-rgb), 0.7);
     background: rgba(var(--accent-rgb), 0.1);
 }
 
 .world-cog-btn.is-open {
-    color: rgba(255, 255, 255, 0.8);
+    color: rgba(var(--paper-rgb), 0.8);
     background: rgba(var(--accent-rgb), 0.14);
 }
 
@@ -453,13 +453,13 @@ html.qol-bootstrapping-dive #app {
     position: absolute;
     inset: 0;
     pointer-events: none;
-    background: rgba(4, 5, 8, 0);
+    background: rgba(var(--scrim-rgb), 0);
     transition: background var(--dur-fast) ease, backdrop-filter var(--dur-fast) ease;
 }
 
 .palette-layer[data-mode="action"] .palette-scrim {
     pointer-events: auto;
-    background: rgba(4, 5, 8, 0.55);
+    background: rgba(var(--scrim-rgb), 0.55);
     backdrop-filter: blur(3px);
 }
 
