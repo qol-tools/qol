@@ -219,6 +219,9 @@ fn log_applied(action: &FixAction) {
                 qol_combo
             );
         }
+        FixAction::DrainOrphanPluginConfigs => {
+            log::info!("doctor: drained orphan plugin config files into the host store");
+        }
         FixAction::SetActiveInstallId(_)
         | FixAction::WriteInstallMarker { .. }
         | FixAction::WriteAutostartEntry { .. }

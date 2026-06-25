@@ -22,6 +22,7 @@ pub(super) enum FixAction {
     KillPluginProcessLeaks {
         processes: Vec<ManagedProcess>,
     },
+    DrainOrphanPluginConfigs,
     InstallShellHook,
     UnshadowDeBinding {
         schema: String,
@@ -83,6 +84,7 @@ impl FixAction {
             | FixAction::WriteAutostartEntry { .. }
             | FixAction::EnsurePluginsDir { .. }
             | FixAction::KillPluginProcessLeaks { .. }
+            | FixAction::DrainOrphanPluginConfigs
             | FixAction::InstallShellHook => FixApplicability::SafeAutomatic,
             FixAction::UnshadowDeBinding { .. }
             | FixAction::DisableSymbolicHotkey { .. }
@@ -116,6 +118,10 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         }
         FixAction::KillPluginProcessLeaks { processes } => {
             crate::plugins::daemon_tracker::kill_managed_processes(processes);
+            Ok(())
+        }
+        FixAction::DrainOrphanPluginConfigs => {
+            let _drained = crate::config_drain::drain_orphan_runtime_configs();
             Ok(())
         }
         FixAction::InstallShellHook => crate::installer::install_shell_hook(),
@@ -608,6 +614,10 @@ mod tests {
                 FixApplicability::SafeAutomatic,
             ),
             (FixAction::InstallShellHook, FixApplicability::SafeAutomatic),
+            (
+                FixAction::DrainOrphanPluginConfigs,
+                FixApplicability::SafeAutomatic,
+            ),
             (
                 FixAction::UnshadowDeBinding {
                     schema: "org.cinnamon.desktop.keybindings.wm".into(),

@@ -28,6 +28,19 @@ pub fn drain_orphan_runtime_configs() -> usize {
     drained
 }
 
+pub fn orphan_config_paths() -> Vec<(String, PathBuf)> {
+    let Ok(plugins_dir) = paths::plugins_dir() else {
+        return Vec::new();
+    };
+    let mut pairs = Vec::new();
+    for id in installed_ids(&plugins_dir) {
+        for orphan in orphan_paths(&id, &plugins_dir) {
+            pairs.push((id.clone(), orphan));
+        }
+    }
+    pairs
+}
+
 fn drain_one(manager: &PluginConfigManager, id: &str, orphan: &Path) -> bool {
     let Some(orphan_config) = read_object(orphan) else {
         return false;
@@ -62,9 +75,14 @@ fn installed_ids(plugins_dir: &Path) -> Vec<String> {
 }
 
 fn orphan_paths(id: &str, plugins_dir: &Path) -> Vec<PathBuf> {
-    qol_config::plugin_config_paths(&[id])
-        .into_iter()
+    classify_orphans(&qol_config::plugin_config_paths(&[id]), plugins_dir)
+}
+
+pub(crate) fn classify_orphans(candidates: &[PathBuf], plugins_dir: &Path) -> Vec<PathBuf> {
+    candidates
+        .iter()
         .filter(|path| !path.starts_with(plugins_dir) && path.is_file())
+        .cloned()
         .collect()
 }
 
