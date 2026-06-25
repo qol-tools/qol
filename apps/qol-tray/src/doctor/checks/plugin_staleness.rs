@@ -1,7 +1,8 @@
 use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use crate::dev;
-use crate::plugins::daemon_tracker::{list_tracked_pids, running_exe_path};
+use crate::plugins::daemon_tracker::registry::tracked_pids;
+use crate::plugins::daemon_tracker::running_exe_path;
 use crate::plugins::registry::{dev_linked_paths, Registry, SlotSource};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -77,7 +78,7 @@ pub(crate) fn stale_running_daemons(config_dir: &Path) -> Vec<(String, u32)> {
     }
     let pids_dir = crate::paths::runtime_pids_dir();
     let build_dir = dev_build_dir();
-    list_tracked_pids(&pids_dir)
+    tracked_pids(&pids_dir)
         .filter(|(id, _)| dev_ids.contains(id))
         .filter_map(|(id, pid)| {
             if !crate::process_utils::is_pid_alive(pid as i32) {

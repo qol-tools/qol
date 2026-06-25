@@ -23,8 +23,11 @@ pub(super) fn stop_daemon(plugin: &mut Plugin) -> Result<()> {
     };
 
     log::info!("Stopping daemon for plugin: {}", plugin.id);
-    #[cfg(unix)]
-    crate::signal::unregister_daemon_pid(child.id());
+    super::daemon_tracker::registry::unregister(
+        &crate::paths::runtime_pids_dir(),
+        plugin.id.as_str(),
+        child.id(),
+    );
     if let Err(error) = crate::process_utils::terminate_owned(&mut child, DAEMON_STOP_GRACE) {
         log::warn!("Error reaping daemon for {}: {}", plugin.id, error);
     }
@@ -36,7 +39,10 @@ fn register_daemon(plugin: &mut Plugin, child: Child) {
     plugin.daemon_process = Some(child);
     #[cfg(unix)]
     crate::desktop_state::add_ignore_pid(pid);
-    #[cfg(unix)]
-    crate::signal::register_daemon_pid(pid);
+    super::daemon_tracker::registry::register(
+        &crate::paths::runtime_pids_dir(),
+        plugin.id.as_str(),
+        pid,
+    );
     log::info!("Registered ignore pid {} for plugin {}", pid, plugin.id);
 }

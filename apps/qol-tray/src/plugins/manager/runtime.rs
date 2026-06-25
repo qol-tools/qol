@@ -66,7 +66,6 @@ pub(super) fn restart_running_plugin_daemon(
     plugin.stop_daemon()?;
     plugin.start_daemon()?;
     sync_ignore_pids(manager);
-    persist_daemon_pids(manager);
     Ok(())
 }
 
@@ -76,7 +75,6 @@ pub(super) fn ensure_plugin_daemon_running(
 ) -> Result<()> {
     start_plugin_daemon_if_needed(manager, plugin_id)?;
     sync_ignore_pids(manager);
-    persist_daemon_pids(manager);
     Ok(())
 }
 
@@ -95,7 +93,7 @@ fn stop_all_plugins(manager: &mut PluginManager) {
     kill_all_plugin_processes();
     stop_plugin_daemons(manager);
     manager.plugins.clear();
-    super::super::daemon_tracker::clear_all_pids(&crate::paths::runtime_pids_dir());
+    super::super::daemon_tracker::registry::clear_all(&crate::paths::runtime_pids_dir());
     super::super::daemon_tracker::kill_orphan_daemons();
 }
 
@@ -126,15 +124,6 @@ fn start_plugin_daemon_if_needed(manager: &mut PluginManager, plugin_id: &str) -
     }
 
     plugin.start_daemon()
-}
-
-pub(super) fn persist_daemon_pids(manager: &PluginManager) {
-    let pids_dir = crate::paths::runtime_pids_dir();
-    for plugin in manager.plugins.values() {
-        if let Some(pid) = plugin.daemon_pid() {
-            super::super::daemon_tracker::save_plugin_pid(&pids_dir, plugin.id.as_str(), pid);
-        }
-    }
 }
 
 fn plugin_mut<'a>(manager: &'a mut PluginManager, plugin_id: &str) -> Result<&'a mut Plugin> {

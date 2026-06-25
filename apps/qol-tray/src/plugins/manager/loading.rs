@@ -127,7 +127,6 @@ fn log_resolved_plugins(resolved: &[ResolvedPlugin]) {
 fn finalize_load(manager: &mut PluginManager, loaded: LoadedPlugins) {
     register_plugins(manager, loaded.plugins);
     manager.set_resolution_report(loaded.report);
-    runtime::persist_daemon_pids(manager);
     runtime::sync_ignore_pids(manager);
 }
 

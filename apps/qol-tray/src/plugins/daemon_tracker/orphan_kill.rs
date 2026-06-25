@@ -49,10 +49,10 @@ fn dev_link_dirs() -> Vec<PathBuf> {
 pub(crate) fn kill_from_pid_files() {
     let roots = ManagedRoots::load();
     let pids_dir = crate::paths::runtime_pids_dir();
-    for (_, pid) in super::list_tracked_pids(&pids_dir) {
+    for (_, pid) in super::registry::tracked_pids(&pids_dir) {
         kill_pid_if_managed(&(pid as i32).to_string(), &roots);
     }
-    super::clear_all_pids(&pids_dir);
+    super::registry::clear_all(&pids_dir);
 
     for path in legacy_pid_files() {
         if path.exists() {
