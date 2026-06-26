@@ -25,6 +25,20 @@ pub fn icon_for_pid(pid: i32, size: usize) -> Option<RgbaImage> {
     imp::icon_for_pid(pid, size)
 }
 
+#[cfg(target_os = "linux")]
+pub fn app_display_name(app_id: &str) -> Option<String> {
+    imp::app_display_name(app_id)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn app_display_name(app_id: &str) -> Option<String> {
+    if app_id.is_empty() {
+        None
+    } else {
+        Some(app_id.to_string())
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub fn parent_pid(pid: i32) -> Option<i32> {
     imp::parent_pid(pid)

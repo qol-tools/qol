@@ -545,8 +545,10 @@ fn render_label(
 }
 
 fn label_text(i: usize, win: &WindowInfo, snap: &RenderSnap, label_config: &LabelConfig) -> String {
-    let app = if label_config.show_app_name && !win.app_name.is_empty() {
-        Some(capitalize_first(&win.app_name))
+    let app = if label_config.show_app_name {
+        qol_app_icon::app_display_name(&win.app_name)
+            .filter(|name| !name.is_empty())
+            .map(|name| capitalize_first(&name))
     } else {
         None
     };
