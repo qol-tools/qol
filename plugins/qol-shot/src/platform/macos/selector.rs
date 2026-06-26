@@ -7,6 +7,7 @@ use std::ffi::c_void;
 use std::sync::mpsc;
 use std::time::Instant;
 
+use crate::space::CaptureKind;
 use crate::{Monitor, Rect};
 
 use super::display::{active_display_bounds, rect_intersection};
@@ -34,8 +35,8 @@ extern "C" {
     fn CFRelease(cf: *const c_void);
 }
 
-pub fn select_region() -> Result<Option<Rect>> {
-    crate::region_selector::select_region_blocking_with(|tx, cx| {
+pub fn select_region(kind: CaptureKind) -> Result<Option<Rect>> {
+    crate::region_selector::select_region_blocking_with(move |tx, cx| {
         let tracker = MonitorTracker::start(cx);
         let monitor = tracker.snapshot_monitor();
         let monitors = selector_monitors(&tracker);
@@ -45,12 +46,13 @@ pub fn select_region() -> Result<Option<Rect>> {
             monitor.is_some(),
             monitors.len()
         );
-        open_region_selector_with_sender(tx, true, monitor, monitors, cx);
+        open_region_selector_with_sender(tx, true, kind, monitor, monitors, cx);
     })
 }
 
 pub fn select_region_in_app(
     cx: &mut gpui::App,
+    kind: CaptureKind,
     monitor: Option<ActiveMonitor>,
     monitors: Vec<ActiveMonitor>,
 ) -> Option<mpsc::Receiver<Option<Rect>>> {
@@ -60,22 +62,24 @@ pub fn select_region_in_app(
         monitor.is_some(),
         monitors.len()
     );
-    Some(open_region_selector(cx, monitor, monitors))
+    Some(open_region_selector(cx, kind, monitor, monitors))
 }
 
 fn open_region_selector(
     cx: &mut gpui::App,
+    kind: CaptureKind,
     monitor: Option<ActiveMonitor>,
     monitors: Vec<ActiveMonitor>,
 ) -> mpsc::Receiver<Option<Rect>> {
     let (tx, rx) = mpsc::channel();
-    open_region_selector_with_sender(tx, false, monitor, monitors, cx);
+    open_region_selector_with_sender(tx, false, kind, monitor, monitors, cx);
     rx
 }
 
 fn open_region_selector_with_sender(
     tx: mpsc::Sender<Option<Rect>>,
     quit_on_finish: bool,
+    kind: CaptureKind,
     monitor: Option<ActiveMonitor>,
     monitors: Vec<ActiveMonitor>,
     cx: &mut gpui::App,
@@ -90,7 +94,7 @@ fn open_region_selector_with_sender(
         "mode=open selectors={} quit_on_finish={quit_on_finish}",
         titles.len()
     );
-    if crate::region_selector::open_all(tx, quit_on_finish, selectors, cx) {
+    if crate::region_selector::open_all(tx, quit_on_finish, selectors, kind, cx) {
         for title in titles {
             configure_selector_window(title, cx);
         }

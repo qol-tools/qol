@@ -3,9 +3,10 @@ use qol_headless::DoctorCheckResult;
 use std::path::Path;
 
 use crate::platform::CaptureSession;
+use crate::space::CaptureKind;
 use crate::{Config, Monitor, Rect};
 
-pub fn select_region() -> Result<Option<Rect>> {
+pub fn select_region(_kind: CaptureKind) -> Result<Option<Rect>> {
     Err(anyhow!(
         "qol-shot: region selection is not implemented on Windows"
     ))

@@ -10,41 +10,45 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 
 use crate::platform::{CaptureProcess, CaptureSession};
+use crate::space::CaptureKind;
 use crate::{Config, Monitor, Rect};
 
-pub fn select_region() -> Result<Option<Rect>> {
-    crate::region_selector::select_region_blocking_with(|tx, cx| {
+pub fn select_region(kind: CaptureKind) -> Result<Option<Rect>> {
+    crate::region_selector::select_region_blocking_with(move |tx, cx| {
         let monitor = MonitorTracker::start(cx).snapshot_monitor();
-        open_region_selector_with_sender(tx, true, monitor, cx);
+        open_region_selector_with_sender(tx, true, kind, monitor, cx);
     })
 }
 
 pub fn select_region_in_app(
     cx: &mut gpui::App,
+    kind: CaptureKind,
     monitor: Option<ActiveMonitor>,
     _monitors: Vec<ActiveMonitor>,
 ) -> Option<mpsc::Receiver<Option<Rect>>> {
-    Some(open_region_selector(cx, monitor))
+    Some(open_region_selector(cx, kind, monitor))
 }
 
 fn open_region_selector(
     cx: &mut gpui::App,
+    kind: CaptureKind,
     monitor: Option<ActiveMonitor>,
 ) -> mpsc::Receiver<Option<Rect>> {
     let (tx, rx) = mpsc::channel();
-    open_region_selector_with_sender(tx, false, monitor, cx);
+    open_region_selector_with_sender(tx, false, kind, monitor, cx);
     rx
 }
 
 fn open_region_selector_with_sender(
     tx: mpsc::Sender<Option<Rect>>,
     quit_on_finish: bool,
+    kind: CaptureKind,
     monitor: Option<ActiveMonitor>,
     cx: &mut gpui::App,
 ) {
     let selector = selector_window(monitor);
     let title = selector.title().to_string();
-    if crate::region_selector::open_all(tx, quit_on_finish, vec![selector], cx) {
+    if crate::region_selector::open_all(tx, quit_on_finish, vec![selector], kind, cx) {
         configure_selector_window(title);
         cx.activate(true);
     }

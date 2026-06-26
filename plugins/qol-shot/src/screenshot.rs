@@ -16,7 +16,7 @@ pub fn capture_to_file() -> Result<Option<PathBuf>> {
         qol_runtime::probe!("SHOT_SKIP", "action=screenshot reason=busy");
         return Ok(None);
     };
-    let Some(selected) = platform::select_region()? else {
+    let Some(selected) = platform::select_region(crate::space::CaptureKind::Screenshot)? else {
         return Ok(None);
     };
     let rect = prepare_screenshot_rect(selected)?;
@@ -33,7 +33,7 @@ pub fn capture_for_preview() -> Result<Option<PreviewCapture>> {
         qol_runtime::probe!("SHOT_SKIP", "action=preview-capture reason=busy");
         return Ok(None);
     };
-    let Some(selected) = platform::select_region()? else {
+    let Some(selected) = platform::select_region(crate::space::CaptureKind::Screenshot)? else {
         return Ok(None);
     };
     capture_selected_for_preview(selected).map(Some)

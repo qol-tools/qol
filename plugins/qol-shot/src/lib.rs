@@ -17,6 +17,7 @@ pub mod recording;
 mod region_selector;
 pub mod screenshot;
 mod settings;
+mod space;
 
 pub use config::{AudioConfig, Config, VideoConfig};
 pub use geometry::{backdrop_regions, BackdropCorners, BackdropRegions, Monitor, Rect};

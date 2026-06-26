@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
+use crate::space::{self, CaptureKind, Level};
 use crate::{Monitor, Rect};
 
 const SELECTOR_TITLE: &str = "qol-shot-selector";
@@ -22,6 +23,9 @@ const GUIDE_SUBTITLE_TOP: f32 = 46.0;
 const GUIDE_SUBTITLE_H: f32 = 20.0;
 const LABEL_MIN_W: f32 = 180.0;
 const LABEL_MIN_H: f32 = 80.0;
+const CHIP_W: f32 = 300.0;
+const CHIP_H: f32 = 30.0;
+const CHIP_TOP: f32 = 12.0;
 const BACKDROP_COLOR: u32 = 0x2f80ed24;
 const HIDE_BARRIER_CLEAR_SAMPLES: usize = 3;
 const HIDE_BARRIER_MAX_MS: u64 = 750;
@@ -114,6 +118,7 @@ pub fn open_all(
     tx: mpsc::Sender<Option<Rect>>,
     quit_on_finish: bool,
     selectors: Vec<SelectorWindow>,
+    kind: CaptureKind,
     cx: &mut App,
 ) -> bool {
     let selector_count = selectors.len();
@@ -131,6 +136,7 @@ pub fn open_all(
         active_bounds,
         monitor_bounds,
         titles,
+        kind,
     )));
     let mut handles = Vec::new();
     for selector in selectors {
@@ -173,6 +179,10 @@ fn open_window(
     cx.open_window(options, move |window, cx| {
         window.set_window_title(&window_title);
         qol_runtime::probe!("SHOT_SELECT_WINDOW", "title={window_title} state=open");
+        state.borrow_mut().record_display(
+            rect_from_bounds(window_bounds),
+            window.scale_factor() as f64,
+        );
         let view = cx.new(|cx| {
             RegionSelector::new(
                 state,
@@ -214,6 +224,42 @@ fn selector_title() -> String {
     format!("{}-{}-{seq}", SELECTOR_TITLE, std::process::id())
 }
 
+#[derive(Clone, Copy)]
+struct ChipModel {
+    kind: CaptureKind,
+    free_bytes: u64,
+    fps: u32,
+    audio: bool,
+    quality: space::Quality,
+}
+
+impl ChipModel {
+    fn load(kind: CaptureKind) -> Self {
+        let config: crate::Config = qol_config::load_plugin_config_from_env(crate::PLUGIN_ID);
+        let free_bytes = qol_platform::launch_working_dir()
+            .or_else(|| Some(std::env::temp_dir()))
+            .and_then(|dir| qol_platform::disk_space(&dir).ok())
+            .map(|space| space.available)
+            .unwrap_or(0);
+        Self {
+            kind,
+            free_bytes,
+            fps: config.video.framerate,
+            audio: config.audio.enabled,
+            quality: space::Quality::from_crf(config.video.crf),
+        }
+    }
+
+    fn estimate_for(&self, pixels: u64) -> space::Estimate {
+        space::estimate(&space::Capture::Video {
+            pixels,
+            fps: self.fps,
+            audio: self.audio,
+            quality: self.quality,
+        })
+    }
+}
+
 struct SelectionState {
     tx: Option<mpsc::Sender<Option<Rect>>>,
     active_bounds: Option<Bounds<Pixels>>,
@@ -224,6 +270,8 @@ struct SelectionState {
     handles: Vec<WindowHandle<RegionSelector>>,
     polling: bool,
     active_monitor_polling: bool,
+    chip: ChipModel,
+    displays: Vec<space::DisplayScale>,
 }
 
 impl SelectionState {
@@ -232,6 +280,7 @@ impl SelectionState {
         active_bounds: Option<Bounds<Pixels>>,
         monitor_bounds: Vec<Bounds<Pixels>>,
         titles: Vec<String>,
+        kind: CaptureKind,
     ) -> Self {
         Self {
             tx: Some(tx),
@@ -243,7 +292,16 @@ impl SelectionState {
             handles: Vec::new(),
             polling: false,
             active_monitor_polling: false,
+            chip: ChipModel::load(kind),
+            displays: Vec::new(),
         }
+    }
+
+    fn record_display(&mut self, bounds: Rect, scale: f64) {
+        if self.displays.iter().any(|display| display.bounds == bounds) {
+            return;
+        }
+        self.displays.push(space::DisplayScale { bounds, scale });
     }
 
     fn set_active_bounds(&mut self, bounds: Bounds<Pixels>) -> bool {
@@ -259,6 +317,16 @@ impl SelectionState {
             return false;
         };
         self.set_active_bounds(bounds)
+    }
+
+    fn resync_active_bounds(&mut self, pointer: Option<Point<Pixels>>) -> bool {
+        if let Some(current) = self.drag_current {
+            return self.set_active_bounds_for_point(current);
+        }
+        let Some(position) = pointer else {
+            return false;
+        };
+        self.set_active_bounds_for_point(position)
     }
 }
 
@@ -652,25 +720,35 @@ impl RegionSelector {
         Some((guide_left, local_y + GUIDE_TOP, guide_width))
     }
 
+    fn chip_frame(&self) -> Option<(f32, f32, f32)> {
+        chip_frame_in(self.state.borrow().active_bounds, self.window_bounds)
+    }
+
+    fn chip_status(&self) -> (String, Level) {
+        let state = self.state.borrow();
+        let chip = state.chip;
+        let label = kind_label(chip.kind);
+        let free = format_bytes(chip.free_bytes);
+        let estimate = capture_estimate(chip, selection_global_rect(&state), &state.displays);
+        let headroom = space::headroom(&estimate, chip.free_bytes);
+        let text = match headroom.seconds {
+            Some(seconds) => format!("{label} · {free} free · ~{}", format_duration(seconds)),
+            None => format!("{label} · {free} free"),
+        };
+        (text, headroom.level)
+    }
+
     fn global_point(&self, local: Point<Pixels>) -> Point<Pixels> {
         let window_origin = self.window_bounds.origin;
         point(window_origin.x + local.x, window_origin.y + local.y)
     }
 
-    fn sync_active_bounds(&self) -> bool {
-        let Some(monitor) = qol_gpui::ghost::resolve_active_monitor() else {
-            return false;
-        };
-        let bounds = monitor.bounds();
-        self.state.borrow_mut().set_active_bounds(bounds)
-    }
-
     fn sync_active_bounds_for_render(&self) -> bool {
-        let current = self.state.borrow().drag_current;
-        if let Some(current) = current {
-            return self.state.borrow_mut().set_active_bounds_for_point(current);
-        }
-        self.sync_active_bounds()
+        let pointer = self
+            .global_pointer
+            .as_ref()
+            .and_then(|pointer| pointer.position());
+        self.state.borrow_mut().resync_active_bounds(pointer)
     }
 
     fn notify_all(&self, cx: &mut Context<Self>) {
@@ -804,6 +882,11 @@ impl Render for RegionSelector {
             }
         }
 
+        if let Some((chip_left, chip_top, chip_width)) = self.chip_frame() {
+            let (text, level) = self.chip_status();
+            root = root.child(chip_element(chip_left, chip_top, chip_width, text, level));
+        }
+
         root
     }
 }
@@ -866,6 +949,113 @@ fn backdrop_segment(bounds: Bounds<Pixels>) -> Div {
         .w(bounds.size.width)
         .h(bounds.size.height)
         .bg(rgba(BACKDROP_COLOR))
+}
+
+fn rect_from_bounds(bounds: Bounds<Pixels>) -> Rect {
+    Rect {
+        x: f32::from(bounds.origin.x) as i32,
+        y: f32::from(bounds.origin.y) as i32,
+        w: f32::from(bounds.size.width) as i32,
+        h: f32::from(bounds.size.height) as i32,
+    }
+}
+
+fn selection_global_rect(state: &SelectionState) -> Option<Rect> {
+    let start = state.drag_start?;
+    let current = state.drag_current?;
+    selected_rect(point(px(0.0), px(0.0)), start, current)
+}
+
+fn capture_estimate(
+    chip: ChipModel,
+    selection: Option<Rect>,
+    displays: &[space::DisplayScale],
+) -> space::Estimate {
+    let zero = space::Estimate {
+        rate_bps: 0,
+        fixed: 0,
+    };
+    if chip.kind == CaptureKind::Screenshot {
+        return zero;
+    }
+    selection
+        .map(|rect| space::captured_pixels(rect, displays))
+        .filter(|pixels| *pixels > 0)
+        .map(|pixels| chip.estimate_for(pixels))
+        .unwrap_or(zero)
+}
+
+fn chip_frame_in(
+    active_bounds: Option<Bounds<Pixels>>,
+    window_bounds: Bounds<Pixels>,
+) -> Option<(f32, f32, f32)> {
+    let region = intersect_bounds(active_bounds?, window_bounds)?;
+    let local_x = f32::from(region.origin.x) - f32::from(window_bounds.origin.x);
+    let local_y = f32::from(region.origin.y) - f32::from(window_bounds.origin.y);
+    let region_width = f32::from(region.size.width);
+    let width = CHIP_W.min(region_width - GUIDE_MARGIN_X * 2.0).max(1.0);
+    let left = local_x + (region_width - width) / 2.0;
+    Some((left, local_y + CHIP_TOP, width))
+}
+
+fn chip_element(left: f32, top: f32, width: f32, text: String, level: Level) -> Div {
+    let (border, foreground) = chip_colors(level);
+    div()
+        .absolute()
+        .left(px(left))
+        .top(px(top))
+        .w(px(width))
+        .h(px(CHIP_H))
+        .rounded(px(CHIP_H / 2.0))
+        .border_1()
+        .border_color(rgba(border))
+        .bg(rgba(0x000000c7))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_center()
+        .text_size(px(13.0))
+        .line_height(px(CHIP_H))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgba(foreground))
+        .child(SharedString::from(text))
+}
+
+fn chip_colors(level: Level) -> (u32, u32) {
+    match level {
+        Level::Ok => (0xffffffdb, 0xffffffff),
+        Level::Low => (0xf5a623ff, 0xf7c66bff),
+        Level::Critical => (0xff4d4dff, 0xff9a9aff),
+    }
+}
+
+fn kind_label(kind: CaptureKind) -> &'static str {
+    match kind {
+        CaptureKind::Screenshot => "Picture",
+        CaptureKind::Recording => "Video",
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const GB: u64 = 1_000_000_000;
+    const MB: u64 = 1_000_000;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{} MB", bytes / MB)
+    } else {
+        format!("{} KB", bytes / 1_000)
+    }
+}
+
+fn format_duration(seconds: u64) -> String {
+    if seconds >= 3_600 {
+        format!("{} h {} min", seconds / 3_600, (seconds % 3_600) / 60)
+    } else if seconds >= 60 {
+        format!("{} min", seconds / 60)
+    } else {
+        format!("{} sec", seconds)
+    }
 }
 
 fn selection_frame(bounds: Bounds<Pixels>) -> Div {
@@ -1080,12 +1270,125 @@ fn bounds_contains_point(bounds: Bounds<Pixels>, point: Point<Pixels>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        backdrop_segments, intersect_bounds, monitor_bounds_for_point, selected_rect,
-        SelectionState,
+        backdrop_segments, capture_estimate, chip_frame_in, format_bytes, format_duration,
+        intersect_bounds, kind_label, monitor_bounds_for_point, selected_rect, ChipModel,
+        SelectionState, CHIP_TOP,
     };
+    use crate::space::{CaptureKind, DisplayScale, Quality};
     use crate::Rect;
     use gpui::{point, px, size, Bounds};
     use std::sync::mpsc;
+
+    fn chip(kind: CaptureKind) -> ChipModel {
+        ChipModel {
+            kind,
+            free_bytes: 10_000_000_000,
+            fps: 30,
+            audio: false,
+            quality: Quality::High,
+        }
+    }
+
+    #[test]
+    fn kind_label_names_the_capture_for_the_chip() {
+        let cases = [
+            (CaptureKind::Recording, "Video"),
+            (CaptureKind::Screenshot, "Picture"),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(kind_label(kind), expected, "kind: {kind:?}");
+        }
+    }
+
+    #[test]
+    fn capture_estimate_is_contextual_per_capture_kind() {
+        let displays = [DisplayScale {
+            bounds: Rect {
+                x: 0,
+                y: 0,
+                w: 1000,
+                h: 1000,
+            },
+            scale: 1.0,
+        }];
+        let selection = Some(Rect {
+            x: 0,
+            y: 0,
+            w: 200,
+            h: 200,
+        });
+
+        let shot = capture_estimate(chip(CaptureKind::Screenshot), selection, &displays);
+        assert_eq!(
+            shot.rate_bps, 0,
+            "a screenshot has no recording rate, so the chip shows no time headroom"
+        );
+
+        let recording = capture_estimate(chip(CaptureKind::Recording), selection, &displays);
+        assert!(
+            recording.rate_bps > 0,
+            "a recording scales its rate with the captured pixels"
+        );
+
+        let empty = capture_estimate(chip(CaptureKind::Recording), None, &displays);
+        assert_eq!(
+            empty.rate_bps, 0,
+            "no selection yet means no recording estimate"
+        );
+    }
+
+    #[test]
+    fn chip_frame_renders_only_on_the_active_monitor_window() {
+        let win_a = Bounds::new(point(px(0.0), px(0.0)), size(px(2560.0), px(1440.0)));
+        let win_b = Bounds::new(point(px(2560.0), px(0.0)), size(px(1512.0), px(982.0)));
+
+        assert_eq!(
+            chip_frame_in(Some(win_a), win_a),
+            Some((1130.0, CHIP_TOP, 300.0))
+        );
+        assert_eq!(chip_frame_in(Some(win_a), win_b), None);
+        assert!(chip_frame_in(Some(win_b), win_b).is_some());
+        assert_eq!(chip_frame_in(Some(win_b), win_a), None);
+        assert_eq!(chip_frame_in(None, win_a), None);
+    }
+
+    #[test]
+    fn chip_frame_centers_on_the_active_monitor_inside_a_spanning_window() {
+        let window = Bounds::new(point(px(0.0), px(0.0)), size(px(3000.0), px(1080.0)));
+        let monitor = Bounds::new(point(px(1512.0), px(0.0)), size(px(1488.0), px(1080.0)));
+        assert_eq!(
+            chip_frame_in(Some(monitor), window),
+            Some((2106.0, CHIP_TOP, 300.0))
+        );
+    }
+
+    #[test]
+    fn format_bytes_uses_decimal_gb_mb_kb() {
+        let cases = [
+            (84_600_000_000, "84.6 GB"),
+            (2_000_000_000, "2.0 GB"),
+            (512_000_000, "512 MB"),
+            (1_000_000, "1 MB"),
+            (4_096, "4 KB"),
+        ];
+        for (bytes, expected) in cases {
+            assert_eq!(format_bytes(bytes), expected, "bytes: {bytes}");
+        }
+    }
+
+    #[test]
+    fn format_duration_steps_through_sec_min_hours() {
+        let cases = [
+            (45, "45 sec"),
+            (60, "1 min"),
+            (540, "9 min"),
+            (3_600, "1 h 0 min"),
+            (15_135, "4 h 12 min"),
+        ];
+        for (seconds, expected) in cases {
+            assert_eq!(format_duration(seconds), expected, "seconds: {seconds}");
+        }
+    }
 
     #[test]
     fn selected_rect_adds_window_origin() {
@@ -1149,11 +1452,53 @@ mod tests {
     }
 
     #[test]
+    fn resync_prefers_drag_then_pointer_then_noop() {
+        let (tx, _rx) = mpsc::channel();
+        let laptop = Bounds::new(point(px(0.0), px(0.0)), size(px(2560.0), px(1440.0)));
+        let external = Bounds::new(point(px(-1512.0), px(458.0)), size(px(1512.0), px(982.0)));
+        let mut state = SelectionState::new(
+            tx,
+            Some(laptop),
+            vec![laptop, external],
+            Vec::new(),
+            CaptureKind::Recording,
+        );
+
+        state.drag_current = Some(point(px(-800.0), px(700.0)));
+        assert!(state.resync_active_bounds(Some(point(px(800.0), px(700.0)))));
+        assert_eq!(
+            state.active_bounds,
+            Some(external),
+            "an in-progress drag wins over the live pointer"
+        );
+
+        state.drag_current = None;
+        assert!(state.resync_active_bounds(Some(point(px(800.0), px(700.0)))));
+        assert_eq!(
+            state.active_bounds,
+            Some(laptop),
+            "with no drag the live pointer drives the active monitor"
+        );
+
+        assert!(
+            !state.resync_active_bounds(None),
+            "no drag and no pointer leaves the active monitor untouched"
+        );
+        assert_eq!(state.active_bounds, Some(laptop));
+    }
+
+    #[test]
     fn active_bounds_follow_drag_pointer_monitor() {
         let (tx, _rx) = mpsc::channel();
         let laptop = Bounds::new(point(px(0.0), px(0.0)), size(px(2560.0), px(1440.0)));
         let external = Bounds::new(point(px(-1512.0), px(458.0)), size(px(1512.0), px(982.0)));
-        let mut state = SelectionState::new(tx, Some(laptop), vec![laptop, external], Vec::new());
+        let mut state = SelectionState::new(
+            tx,
+            Some(laptop),
+            vec![laptop, external],
+            Vec::new(),
+            CaptureKind::Recording,
+        );
 
         assert!(state.set_active_bounds_for_point(point(px(-800.0), px(700.0))));
         assert_eq!(state.active_bounds, Some(external));

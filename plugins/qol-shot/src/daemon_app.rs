@@ -180,7 +180,8 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
         return;
     };
     park_preview(cx, state, "screenshot");
-    let Some(selected) = select_region(cx, state).await else {
+    let Some(selected) = select_region(cx, state, crate::space::CaptureKind::Screenshot).await
+    else {
         return;
     };
     let captured = cx
@@ -253,13 +254,18 @@ fn present(cx: &AsyncApp, state: &State, capture: PreviewCapture) {
     });
 }
 
-async fn select_region(cx: &AsyncApp, state: &State) -> Option<crate::Rect> {
+async fn select_region(
+    cx: &AsyncApp,
+    state: &State,
+    kind: crate::space::CaptureKind,
+) -> Option<crate::Rect> {
     let tracker = state.tracker.clone();
     qol_runtime::probe!("SHOT_SELECT_REQUEST", "source=daemon-app");
     if let Some(rx) = cx
         .update(move |cx| {
             crate::platform::select_region_in_app(
                 cx,
+                kind,
                 tracker.snapshot_monitor(),
                 tracker.all_monitors(),
             )
@@ -274,7 +280,7 @@ async fn select_region(cx: &AsyncApp, state: &State) -> Option<crate::Rect> {
     }
 
     let selected = cx
-        .background_spawn(async { crate::platform::select_region().ok().flatten() })
+        .background_spawn(async move { crate::platform::select_region(kind).ok().flatten() })
         .await;
     trace_selected("daemon-fallback", selected);
     selected
@@ -335,7 +341,8 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
     let Some(_flow) = begin_shot_flow(state, "record") else {
         return;
     };
-    let Some(selected) = select_region(cx, state).await else {
+    let Some(selected) = select_region(cx, state, crate::space::CaptureKind::Recording).await
+    else {
         qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon result=select-cancel");
         return;
     };
