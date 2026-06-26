@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use qol_headless::DoctorCheckResult;
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -131,6 +132,32 @@ pub(super) fn open_path(path: &Path) -> bool {
 pub(super) fn videos_dir() -> Option<PathBuf> {
     let home = env::var_os("HOME")?;
     Some(PathBuf::from(home).join("Videos"))
+}
+
+pub(super) fn capture_work_dir() -> PathBuf {
+    env::temp_dir().join("qol-shot")
+}
+
+pub(super) fn ensure_capture_work_dir() -> Result<PathBuf> {
+    let dir = capture_work_dir();
+    fs::create_dir_all(&dir).context("failed to create capture work directory")?;
+    Ok(dir)
+}
+
+pub(super) fn move_file(source: &Path, destination: &Path) -> Result<()> {
+    if fs::rename(source, destination).is_ok() {
+        return Ok(());
+    }
+
+    fs::copy(source, destination).with_context(|| {
+        format!(
+            "failed to move {} to {}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    let _ = fs::remove_file(source);
+    Ok(())
 }
 
 pub(super) fn paths_match(left: &Path, right: &Path) -> bool {

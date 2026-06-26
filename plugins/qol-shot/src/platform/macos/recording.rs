@@ -20,8 +20,9 @@ use super::swift::{
     STATUS_OVERLAY_HELPER, STATUS_OVERLAY_SWIFT, VIDEO_COMPOSER_HELPER, VIDEO_COMPOSER_SWIFT,
 };
 use super::system::{
-    open_path, output_format_label, path_extension_is, paths_match, reveal_path, show_notification,
-    signal_process, videos_dir, wait_for_process_exit,
+    capture_work_dir, ensure_capture_work_dir, move_file, open_path, output_format_label,
+    path_extension_is, paths_match, reveal_path, show_notification, signal_process, videos_dir,
+    wait_for_process_exit,
 };
 
 #[derive(Debug, Clone)]
@@ -34,6 +35,7 @@ struct DisplayCaptureSegment {
 
 pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
     let capture_file = native_capture_file_path(output_file);
+    ensure_capture_work_dir()?;
     let segments = capture_segments(rect)?;
 
     qol_runtime::probe!(
@@ -79,10 +81,25 @@ pub fn recording_format(format: &str) -> String {
 }
 
 pub(super) fn native_capture_file_path(output_file: &Path) -> PathBuf {
+    let stem = output_file
+        .file_stem()
+        .map(|stem| stem.to_string_lossy())
+        .unwrap_or_else(|| "recording".into());
+    capture_work_dir().join(format!("{stem}.mov"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Finalization {
+    MoveNative,
+    Reencode,
+}
+
+pub(super) fn finalization_for(output_file: &Path) -> Finalization {
     if path_extension_is(output_file, "mov") {
-        return output_file.to_path_buf();
+        Finalization::MoveNative
+    } else {
+        Finalization::Reencode
     }
-    output_file.with_extension("mov")
 }
 
 pub fn recording_started(session: &CaptureSession) {
@@ -102,30 +119,30 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) {
     );
     if let Some(output_file) = session.output_file.as_deref() {
         let capture_file = session.capture_file.as_deref().unwrap_or(output_file);
-        let conversion_needed = !paths_match(output_file, capture_file);
+        let reencode_needed = finalization_for(output_file) == Finalization::Reencode;
         qol_runtime::probe!(
             "SHOT_RECORD_FINALIZE",
-            "stage=begin output={} capture={} conversion_needed={} segments={}",
+            "stage=begin output={} capture={} reencode_needed={} segments={}",
             path_label(output_file),
             path_label(capture_file),
-            conversion_needed,
+            reencode_needed,
             session.segments.len()
         );
-        show_recording_ended(output_file, conversion_needed);
+        show_recording_ended(output_file, reencode_needed);
         let reveal_file = match finalize_recording(session, output_file, capture_file, config) {
             Ok(reveal_file) => {
                 qol_runtime::probe!(
                     "SHOT_RECORD_FINALIZE",
-                    "stage=ok reveal={} converted={}",
+                    "stage=ok reveal={} reencoded={}",
                     path_label(&reveal_file),
-                    conversion_needed
+                    reencode_needed
                 );
-                show_recording_saved(&reveal_file, conversion_needed);
+                show_recording_saved(&reveal_file, reencode_needed);
                 reveal_file
             }
             Err(error) => {
                 qol_runtime::probe!("SHOT_RECORD_FINALIZE", "stage=error result=fallback");
-                finalization_fallback(error, session, capture_file)
+                finalization_fallback(error, session, output_file, capture_file)
             }
         };
         let revealed = reveal_recording(&reveal_file);
@@ -477,19 +494,27 @@ fn finalize_recording(
         session.segments.len()
     );
     prepare_native_capture_file(session, capture_file, config)?;
-    if paths_match(output_file, capture_file) {
-        qol_runtime::probe!("SHOT_RECORD_FINALIZE", "stage=no-conversion");
-        return Ok(output_file.to_path_buf());
+    match finalization_for(output_file) {
+        Finalization::MoveNative => {
+            qol_runtime::probe!(
+                "SHOT_RECORD_FINALIZE",
+                "stage=move-native capture={} output={}",
+                path_label(capture_file),
+                path_label(output_file)
+            );
+            move_file(capture_file, output_file)?;
+        }
+        Finalization::Reencode => {
+            qol_runtime::probe!(
+                "SHOT_RECORD_FINALIZE",
+                "stage=reencode capture={} output={}",
+                path_label(capture_file),
+                path_label(output_file)
+            );
+            convert_recording(capture_file, output_file, config)?;
+            let _ = std::fs::remove_file(capture_file);
+        }
     }
-
-    qol_runtime::probe!(
-        "SHOT_RECORD_FINALIZE",
-        "stage=convert capture={} output={}",
-        path_label(capture_file),
-        path_label(output_file)
-    );
-    convert_recording(capture_file, output_file, config)?;
-    let _ = std::fs::remove_file(capture_file);
     Ok(output_file.to_path_buf())
 }
 
@@ -583,6 +608,7 @@ pub(super) fn native_segment_composition_args(
 fn finalization_fallback(
     error: anyhow::Error,
     session: &CaptureSession,
+    output_file: &Path,
     capture_file: &Path,
 ) -> PathBuf {
     qol_runtime::probe!(
@@ -591,7 +617,8 @@ fn finalization_fallback(
         path_label(capture_file),
         session.segments.len()
     );
-    let fallback_file = fallback_recording_file(session, capture_file);
+    let native_file = fallback_recording_file(session, capture_file);
+    let reveal_file = relocate_fallback_recording(&native_file, output_file);
     show_status_overlay(
         "Conversion failed",
         "Saved native recording instead",
@@ -603,7 +630,18 @@ fn finalization_fallback(
         &format!("Saved native recording instead. {}", error),
         2500,
     );
-    fallback_file
+    reveal_file
+}
+
+fn relocate_fallback_recording(native_file: &Path, output_file: &Path) -> PathBuf {
+    let destination = output_file.with_extension("mov");
+    if native_file == destination {
+        return destination;
+    }
+    match move_file(native_file, &destination) {
+        Ok(()) => destination,
+        Err(_) => native_file.to_path_buf(),
+    }
 }
 
 fn fallback_recording_file(session: &CaptureSession, capture_file: &Path) -> PathBuf {

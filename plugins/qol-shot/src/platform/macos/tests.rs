@@ -6,18 +6,79 @@ use crate::{Config, Monitor, Rect};
 use super::{conversion, display, recording, selector, swift, system};
 
 #[test]
-fn non_mov_formats_capture_to_temporary_mov() {
-    let output = Path::new("/tmp/recording.webm");
+fn capture_file_stages_every_format_in_the_work_directory() {
+    let work = system::capture_work_dir();
+    let cases = [
+        "/Users/x/Videos/recording-2026.webm",
+        "/Users/x/Videos/recording-2026.mp4",
+        "/Users/x/Videos/recording-2026.mov",
+    ];
+    for output in cases {
+        assert_eq!(
+            recording::native_capture_file_path(Path::new(output)),
+            work.join("recording-2026.mov"),
+            "output: {output}"
+        );
+    }
+}
+
+#[test]
+fn capture_work_dir_lives_under_the_system_temp_dir() {
+    let work = system::capture_work_dir();
+    assert_eq!(work.parent(), Some(std::env::temp_dir().as_path()));
     assert_eq!(
-        recording::native_capture_file_path(output),
-        PathBuf::from("/tmp/recording.mov")
+        work.file_name().and_then(|name| name.to_str()),
+        Some("qol-shot")
     );
 }
 
 #[test]
-fn mov_format_captures_directly_to_output() {
-    let output = Path::new("/tmp/recording.mov");
-    assert_eq!(recording::native_capture_file_path(output), output);
+fn finalization_moves_native_mov_and_reencodes_other_formats() {
+    let cases = [
+        (
+            "/Users/x/Videos/clip.mov",
+            recording::Finalization::MoveNative,
+        ),
+        (
+            "/Users/x/Videos/clip.MOV",
+            recording::Finalization::MoveNative,
+        ),
+        (
+            "/Users/x/Videos/clip.mp4",
+            recording::Finalization::Reencode,
+        ),
+        (
+            "/Users/x/Videos/clip.webm",
+            recording::Finalization::Reencode,
+        ),
+        (
+            "/Users/x/Videos/clip.mkv",
+            recording::Finalization::Reencode,
+        ),
+    ];
+    for (output, expected) in cases {
+        assert_eq!(
+            recording::finalization_for(Path::new(output)),
+            expected,
+            "output: {output}"
+        );
+    }
+}
+
+#[test]
+fn move_file_relocates_content_and_removes_the_source() {
+    let dir = std::env::temp_dir().join(format!("qol-shot-move-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("source.mov");
+    let destination = dir.join("nested/destination.mov");
+    std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    std::fs::write(&source, b"payload").unwrap();
+
+    system::move_file(&source, &destination).unwrap();
+
+    assert!(!source.exists(), "source should be gone");
+    assert_eq!(std::fs::read(&destination).unwrap(), b"payload");
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
