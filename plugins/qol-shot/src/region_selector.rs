@@ -330,6 +330,17 @@ impl SelectionState {
         };
         self.set_active_bounds_for_point(position)
     }
+
+    fn apply_gpui_drag(&mut self, position: Point<Pixels>) -> bool {
+        if self.polling {
+            return false;
+        }
+        if self.drag_start.is_none() {
+            return false;
+        }
+        self.drag_current = Some(position);
+        true
+    }
 }
 
 enum GlobalDragResult {
@@ -425,25 +436,23 @@ impl RegionSelector {
         cx: &mut Context<Self>,
     ) {
         let position = self.global_point(event.position);
-        let active_changed = self
-            .state
-            .borrow_mut()
-            .set_active_bounds_for_point(position);
-        if !event.dragging() {
-            if active_changed {
+        if event.dragging() {
+            if self.state.borrow_mut().apply_gpui_drag(position) {
                 self.notify_all(cx);
             }
             return;
         }
-        if self.state.borrow().drag_start.is_none() {
-            return;
+        if self
+            .state
+            .borrow_mut()
+            .set_active_bounds_for_point(position)
+        {
+            self.notify_all(cx);
         }
-        self.state.borrow_mut().drag_current = Some(position);
-        self.notify_all(cx);
     }
 
     fn on_mouse_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let end = self.global_point(event.position);
+        let end = self.release_point(event.position);
         {
             let mut state = self.state.borrow_mut();
             state.drag_current = Some(end);
@@ -599,6 +608,14 @@ impl RegionSelector {
 
     fn tracked_point(&self, global: Point<Pixels>) -> Point<Pixels> {
         local_from_global(global, self.state.borrow().pointer_offset)
+    }
+
+    fn release_point(&self, fallback_local: Point<Pixels>) -> Point<Pixels> {
+        self.global_pointer
+            .as_ref()
+            .and_then(|pointer| pointer.position())
+            .map(|cg| self.tracked_point(cg))
+            .unwrap_or_else(|| self.global_point(fallback_local))
     }
 
     fn capture_rect(&self, raw: Option<Rect>) -> Option<Rect> {
@@ -1558,6 +1575,42 @@ mod tests {
             "no drag and no pointer leaves the active monitor untouched"
         );
         assert_eq!(state.active_bounds, Some(laptop));
+    }
+
+    #[test]
+    fn gpui_drag_yields_to_the_active_global_pointer_poll() {
+        let (tx, _rx) = mpsc::channel();
+        let screen = Bounds::new(point(px(0.0), px(0.0)), size(px(2560.0), px(1440.0)));
+        let mut state = SelectionState::new(
+            tx,
+            Some(screen),
+            vec![screen],
+            Vec::new(),
+            CaptureKind::Recording,
+        );
+
+        assert!(
+            !state.apply_gpui_drag(point(px(10.0), px(10.0))),
+            "no drag in progress means there is nothing for a move event to update"
+        );
+
+        state.drag_start = Some(point(px(100.0), px(100.0)));
+        assert!(
+            state.apply_gpui_drag(point(px(140.0), px(160.0))),
+            "with no global-pointer poll the gpui move event drives the drag"
+        );
+        assert_eq!(state.drag_current, Some(point(px(140.0), px(160.0))));
+
+        state.polling = true;
+        assert!(
+            !state.apply_gpui_drag(point(px(900.0), px(900.0))),
+            "an active poll owns drag_current, so the gpui writer must yield"
+        );
+        assert_eq!(
+            state.drag_current,
+            Some(point(px(140.0), px(160.0))),
+            "two writers fighting over drag_current is what flickered the selection between sizes"
+        );
     }
 
     #[test]
