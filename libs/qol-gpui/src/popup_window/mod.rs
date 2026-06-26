@@ -4,6 +4,16 @@ use std::cell::Cell;
 
 use crate::runtime_config::load_gpui_runtime_config;
 
+#[cfg(target_os = "linux")]
+pub use platform::{force_composite_below, make_override_redirect};
+
+#[cfg(target_os = "linux")]
+pub fn restore_composite() {
+    platform::restore_composite()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn restore_composite() {}
 pub use platform::{
     configure_overlay_window, configure_popup_window, disable_window_shadow, dump_ghost_windows,
     hide_for_capture, hide_invisible, hide_window_by_title, hide_windows_by_title_prefix,

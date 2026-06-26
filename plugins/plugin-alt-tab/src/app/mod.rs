@@ -439,6 +439,7 @@ impl AltTabApp {
             &self.picker_title,
             picker::platform::picker_window_title,
         );
+        qol_gpui::popup_window::restore_composite();
         picker::platform::probe_picker_app_active("dismiss");
         picker::request_frontmost_preview_refresh();
         cx.notify();

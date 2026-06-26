@@ -326,6 +326,145 @@ pub fn configure_popup_window(title: &str) -> bool {
     true
 }
 
+pub fn make_override_redirect(title: &str) -> bool {
+    let Ok((conn, screen_num)) = x11rb::connect(None) else {
+        return false;
+    };
+    let root = conn.setup().roots[screen_num].root;
+    let list_atom = intern(&conn, b"_NET_CLIENT_LIST");
+    let name_atom = intern(&conn, b"_NET_WM_NAME");
+    let utf8_atom = intern(&conn, b"UTF8_STRING");
+    let (Some(list_atom), Some(name_atom), Some(utf8_atom)) = (list_atom, name_atom, utf8_atom)
+    else {
+        return false;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        return false;
+    };
+    let already = window_is_override_redirect(&conn, wid);
+    if !already {
+        let aux = ChangeWindowAttributesAux::new().override_redirect(1);
+        let _ = conn.unmap_window(wid);
+        let _ = conn.change_window_attributes(wid, &aux);
+        let _ = conn.map_window(wid);
+    }
+    let _ = conn.configure_window(wid, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE));
+    let _ = conn.flush();
+    if !already {
+        qol_runtime::probe!(
+            "PICKER_OVERLAY",
+            "title={title} wid={wid} override_redirect=1"
+        );
+    }
+    true
+}
+
+fn window_is_override_redirect(conn: &impl Connection, wid: u32) -> bool {
+    conn.get_window_attributes(wid)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|attrs| attrs.override_redirect)
+        .unwrap_or(false)
+}
+
+static FORCED_COMPOSITE: Mutex<Option<(u32, Option<u32>)>> = Mutex::new(None);
+
+const BYPASS_OFF: u32 = 2;
+
+pub fn force_composite_below() {
+    restore_composite();
+    let Ok((conn, screen_num)) = x11rb::connect(None) else {
+        return;
+    };
+    let root = conn.setup().roots[screen_num].root;
+    let Some(active) = active_window(&conn, root) else {
+        return;
+    };
+    if !window_is_fullscreen(&conn, active) {
+        return;
+    }
+    let original = read_bypass_compositor(&conn, active);
+    if original == Some(BYPASS_OFF) {
+        return;
+    }
+    set_bypass_compositor(&conn, active, BYPASS_OFF);
+    let _ = conn.flush();
+    if let Ok(mut slot) = FORCED_COMPOSITE.lock() {
+        *slot = Some((active, original));
+    }
+    qol_runtime::probe!("FORCE_COMPOSITE", "wid={active} was={original:?}");
+}
+
+pub fn restore_composite() {
+    let taken = FORCED_COMPOSITE
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take());
+    let Some((wid, original)) = taken else {
+        return;
+    };
+    let Ok((conn, _screen_num)) = x11rb::connect(None) else {
+        return;
+    };
+    match original {
+        Some(value) => set_bypass_compositor(&conn, wid, value),
+        None => clear_bypass_compositor(&conn, wid),
+    }
+    let _ = conn.flush();
+    qol_runtime::probe!("RESTORE_COMPOSITE", "wid={wid} to={original:?}");
+}
+
+fn active_window(conn: &impl Connection, root: u32) -> Option<u32> {
+    let atom = intern(conn, b"_NET_ACTIVE_WINDOW")?;
+    let reply = conn
+        .get_property(false, root, atom, AtomEnum::WINDOW, 0, 1)
+        .ok()?
+        .reply()
+        .ok()?;
+    let wid = reply.value32()?.next()?;
+    (wid != 0).then_some(wid)
+}
+
+fn window_is_fullscreen(conn: &impl Connection, wid: u32) -> bool {
+    let (Some(state_atom), Some(fullscreen_atom)) = (
+        intern(conn, b"_NET_WM_STATE"),
+        intern(conn, b"_NET_WM_STATE_FULLSCREEN"),
+    ) else {
+        return false;
+    };
+    let Ok(reply) = conn.get_property(false, wid, state_atom, AtomEnum::ATOM, 0, 64) else {
+        return false;
+    };
+    let Ok(prop) = reply.reply() else {
+        return false;
+    };
+    prop.value32()
+        .map(|mut atoms| atoms.any(|atom| atom == fullscreen_atom))
+        .unwrap_or(false)
+}
+
+fn read_bypass_compositor(conn: &impl Connection, wid: u32) -> Option<u32> {
+    let atom = intern(conn, b"_NET_WM_BYPASS_COMPOSITOR")?;
+    let reply = conn
+        .get_property(false, wid, atom, AtomEnum::CARDINAL, 0, 1)
+        .ok()?
+        .reply()
+        .ok()?;
+    reply.value32().and_then(|mut values| values.next())
+}
+
+fn set_bypass_compositor(conn: &impl Connection, wid: u32, value: u32) {
+    if let Some(atom) = intern(conn, b"_NET_WM_BYPASS_COMPOSITOR") {
+        let _ = conn.change_property32(PropMode::REPLACE, wid, atom, AtomEnum::CARDINAL, &[value]);
+    }
+}
+
+fn clear_bypass_compositor(conn: &impl Connection, wid: u32) {
+    if let Some(atom) = intern(conn, b"_NET_WM_BYPASS_COMPOSITOR") {
+        let _ = conn.delete_property(wid, atom);
+    }
+}
+
 pub fn set_ghost_debug(opacity: Option<f32>, _color_hex: Option<&str>) {
     GHOST_ALPHA.store(normalize_opacity(opacity).to_bits(), Ordering::Relaxed);
 }

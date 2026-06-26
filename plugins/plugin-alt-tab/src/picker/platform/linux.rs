@@ -17,6 +17,8 @@ pub fn configure_picker_window(title: &str) {
 }
 
 pub fn show_picker_window(target_title: &str, all_titles: &[String]) {
+    qol_gpui::popup_window::force_composite_below();
+    qol_gpui::popup_window::make_override_redirect(target_title);
     qol_gpui::ghost::show_ghost_window(target_title, all_titles);
 }
 
