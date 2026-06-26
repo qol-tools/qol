@@ -267,6 +267,7 @@ struct SelectionState {
     titles: Vec<String>,
     drag_start: Option<Point<Pixels>>,
     drag_current: Option<Point<Pixels>>,
+    pointer_offset: Option<Point<Pixels>>,
     handles: Vec<WindowHandle<RegionSelector>>,
     polling: bool,
     active_monitor_polling: bool,
@@ -289,6 +290,7 @@ impl SelectionState {
             titles,
             drag_start: None,
             drag_current: None,
+            pointer_offset: None,
             handles: Vec::new(),
             polling: false,
             active_monitor_polling: false,
@@ -409,6 +411,7 @@ impl RegionSelector {
             let mut state = self.state.borrow_mut();
             state.drag_start = Some(position);
             state.drag_current = Some(position);
+            state.pointer_offset = cg.map(|cg| point(cg.x - position.x, cg.y - position.y));
             state.set_active_bounds_for_point(position);
         }
         self.notify_all(cx);
@@ -447,7 +450,7 @@ impl RegionSelector {
             state.set_active_bounds_for_point(end);
         }
         let raw = self.current_raw_rect(Some(end));
-        let rect = raw.and_then(|rect| (self.map_rect)(rect));
+        let rect = self.capture_rect(raw);
         trace_selection_release("event", raw, rect);
         self.finish(rect, window, cx);
     }
@@ -573,12 +576,13 @@ impl RegionSelector {
             self.state.borrow_mut().polling = false;
             return GlobalDragResult::Stop;
         }
+        let tracked = position.map(|cg| self.tracked_point(cg));
         let active_changed = self.sync_active_bounds_for_render();
-        if let Some(position) = position {
+        if let Some(tracked) = tracked {
             {
                 let mut state = self.state.borrow_mut();
-                state.drag_current = Some(position);
-                state.set_active_bounds_for_point(position);
+                state.drag_current = Some(tracked);
+                state.set_active_bounds_for_point(tracked);
             }
             self.notify_all(cx);
         } else if active_changed {
@@ -587,10 +591,20 @@ impl RegionSelector {
         if pressed {
             return GlobalDragResult::Continue;
         }
-        let raw = self.current_raw_rect(position);
-        let rect = raw.and_then(|rect| (self.map_rect)(rect));
+        let raw = self.current_raw_rect(tracked);
+        let rect = self.capture_rect(raw);
         trace_selection_release("global", raw, rect);
         self.finish_from_global_pointer(rect)
+    }
+
+    fn tracked_point(&self, global: Point<Pixels>) -> Point<Pixels> {
+        local_from_global(global, self.state.borrow().pointer_offset)
+    }
+
+    fn capture_rect(&self, raw: Option<Rect>) -> Option<Rect> {
+        let offset = self.state.borrow().pointer_offset;
+        raw.map(|rect| shift_rect(rect, offset))
+            .and_then(|rect| (self.map_rect)(rect))
     }
 
     fn current_raw_rect(&self, end: Option<Point<Pixels>>) -> Option<Rect> {
@@ -747,7 +761,8 @@ impl RegionSelector {
         let pointer = self
             .global_pointer
             .as_ref()
-            .and_then(|pointer| pointer.position());
+            .and_then(|pointer| pointer.position())
+            .map(|cg| self.tracked_point(cg));
         self.state.borrow_mut().resync_active_bounds(pointer)
     }
 
@@ -964,6 +979,24 @@ fn selection_global_rect(state: &SelectionState) -> Option<Rect> {
     let start = state.drag_start?;
     let current = state.drag_current?;
     selected_rect(point(px(0.0), px(0.0)), start, current)
+}
+
+fn local_from_global(global: Point<Pixels>, offset: Option<Point<Pixels>>) -> Point<Pixels> {
+    let Some(offset) = offset else {
+        return global;
+    };
+    point(global.x - offset.x, global.y - offset.y)
+}
+
+fn shift_rect(rect: Rect, offset: Option<Point<Pixels>>) -> Rect {
+    let Some(offset) = offset else {
+        return rect;
+    };
+    Rect {
+        x: rect.x + f32::from(offset.x) as i32,
+        y: rect.y + f32::from(offset.y) as i32,
+        ..rect
+    }
 }
 
 fn capture_estimate(
@@ -1271,8 +1304,8 @@ fn bounds_contains_point(bounds: Bounds<Pixels>, point: Point<Pixels>) -> bool {
 mod tests {
     use super::{
         backdrop_segments, capture_estimate, chip_frame_in, format_bytes, format_duration,
-        intersect_bounds, kind_label, monitor_bounds_for_point, selected_rect, ChipModel,
-        SelectionState, CHIP_TOP,
+        intersect_bounds, kind_label, local_from_global, monitor_bounds_for_point, selected_rect,
+        shift_rect, ChipModel, SelectionState, CHIP_TOP,
     };
     use crate::space::{CaptureKind, DisplayScale, Quality};
     use crate::Rect;
@@ -1287,6 +1320,46 @@ mod tests {
             audio: false,
             quality: Quality::High,
         }
+    }
+
+    #[test]
+    fn drag_round_trips_between_global_tracking_and_capture_space() {
+        let offset = Some(point(px(1.0), px(32.0)));
+        let cg = point(px(2820.0), px(1062.0));
+        assert_eq!(
+            local_from_global(cg, offset),
+            point(px(2819.0), px(1030.0)),
+            "a CG pointer sample maps into the gpui tracking frame the drag started in"
+        );
+        let tracked = Rect {
+            x: 2819,
+            y: 1030,
+            w: 261,
+            h: 122,
+        };
+        assert_eq!(
+            shift_rect(tracked, offset),
+            Rect {
+                x: 2820,
+                y: 1062,
+                w: 261,
+                h: 122
+            },
+            "the tracked rect maps back to CG capture coordinates for screencapture"
+        );
+    }
+
+    #[test]
+    fn drag_coordinates_are_identity_without_a_global_pointer() {
+        let cg = point(px(100.0), px(200.0));
+        assert_eq!(local_from_global(cg, None), cg);
+        let rect = Rect {
+            x: 5,
+            y: 6,
+            w: 7,
+            h: 8,
+        };
+        assert_eq!(shift_rect(rect, None), rect);
     }
 
     #[test]
