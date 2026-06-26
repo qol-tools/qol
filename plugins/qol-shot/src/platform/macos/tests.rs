@@ -154,39 +154,39 @@ fn selector_rect_mapper_rejects_off_display_selection() {
 }
 
 #[test]
-fn native_segment_composition_args_preserve_canvas_and_offsets() {
+fn native_segment_composition_args_carry_offsets_and_destination_sizes() {
     let session = CaptureSession {
         output_file: Some(PathBuf::from("/tmp/final.mov")),
         capture_file: Some(PathBuf::from("/tmp/final.mov")),
         canvas: Some(Rect {
-            x: 1800,
-            y: 100,
-            w: 500,
-            h: 400,
+            x: -1261,
+            y: 685,
+            w: 3298,
+            h: 682,
         }),
         processes: Vec::new(),
         segments: vec![
             CaptureSegment {
-                file: PathBuf::from("/tmp/left.mov"),
+                file: PathBuf::from("/tmp/main.mov"),
                 rect: Rect {
-                    x: 1800,
-                    y: 100,
-                    w: 120,
-                    h: 400,
+                    x: 0,
+                    y: 0,
+                    w: 2560,
+                    h: 1440,
                 },
-                offset_x: 0,
-                offset_y: 0,
+                offset_x: 1261,
+                offset_y: -685,
             },
             CaptureSegment {
-                file: PathBuf::from("/tmp/right.mov"),
+                file: PathBuf::from("/tmp/laptop.mov"),
                 rect: Rect {
-                    x: 1920,
-                    y: 100,
-                    w: 380,
-                    h: 400,
+                    x: -1512,
+                    y: 645,
+                    w: 1512,
+                    h: 982,
                 },
-                offset_x: 120,
-                offset_y: 0,
+                offset_x: -251,
+                offset_y: -40,
             },
         ],
     };
@@ -198,15 +198,19 @@ fn native_segment_composition_args_preserve_canvas_and_offsets() {
             Path::new("/tmp/final.mov")
         ),
         vec![
-            "500",
-            "400",
+            "3298",
+            "682",
             "/tmp/final.mov",
-            "0",
-            "0",
-            "/tmp/left.mov",
-            "120",
-            "0",
-            "/tmp/right.mov",
+            "1261",
+            "-685",
+            "2560",
+            "1440",
+            "/tmp/main.mov",
+            "-251",
+            "-40",
+            "1512",
+            "982",
+            "/tmp/laptop.mov",
         ]
     );
 }

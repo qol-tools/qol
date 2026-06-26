@@ -571,6 +571,8 @@ pub(super) fn native_segment_composition_args(
         args.extend([
             segment.offset_x.to_string(),
             segment.offset_y.to_string(),
+            segment.rect.w.to_string(),
+            segment.rect.h.to_string(),
             segment.file.to_string_lossy().to_string(),
         ]);
     }
