@@ -155,6 +155,13 @@
     color: rgb(var(--success-rgb));
 }
 
+.profile-conflicts-side-platform {
+    display: block;
+    margin-top: 3px;
+    color: var(--text-faint);
+    font-size: var(--fs-xs);
+}
+
 .profile-conflicts-side-value {
     font-family: var(--font-mono);
     font-size: var(--fs-lg);

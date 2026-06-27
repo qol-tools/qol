@@ -55,10 +55,31 @@ struct AccentBoot {
     default_key: &'static str,
 }
 
+#[cfg(target_os = "macos")]
+const PLATFORM_LABEL: &str = "macOS";
+#[cfg(target_os = "linux")]
+const PLATFORM_LABEL: &str = "Linux";
+#[cfg(target_os = "windows")]
+const PLATFORM_LABEL: &str = "Windows";
+
+#[derive(Serialize)]
+struct DeviceBoot {
+    name: String,
+    platform: &'static str,
+}
+
+fn device_boot() -> DeviceBoot {
+    DeviceBoot {
+        name: gethostname::gethostname().to_string_lossy().into_owned(),
+        platform: PLATFORM_LABEL,
+    }
+}
+
 #[derive(Serialize)]
 struct BootState {
     dev: bool,
     accent: AccentBoot,
+    device: DeviceBoot,
 }
 
 pub(super) fn boot_json(dev: bool) -> String {
@@ -68,6 +89,7 @@ pub(super) fn boot_json(dev: bool) -> String {
             palette: PALETTE,
             default_key: if dev { DEV_DEFAULT } else { PROD_DEFAULT },
         },
+        device: device_boot(),
     };
     serde_json::to_string(&state).unwrap_or_else(|_| "null".to_string())
 }
@@ -111,6 +133,17 @@ mod tests {
             assert!(entry["rgb"].is_string());
             assert!(entry["hover"].is_string());
         }
+    }
+
+    #[test]
+    fn boot_json_carries_device_name_and_platform_label() {
+        let v: serde_json::Value = serde_json::from_str(&boot_json(false)).unwrap();
+        assert!(v["device"]["name"].is_string(), "device.name present");
+        let platform = v["device"]["platform"].as_str().unwrap();
+        assert!(
+            ["macOS", "Linux", "Windows"].contains(&platform),
+            "platform label is a known OS, got {platform}"
+        );
     }
 
     #[test]

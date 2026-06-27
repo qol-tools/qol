@@ -5819,6 +5819,7 @@ name = "qol-platform"
 version = "0.2.0"
 dependencies = [
  "dirs 6.0.0",
+ "libc",
 ]
 
 [[package]]
@@ -5876,6 +5877,7 @@ dependencies = [
  "qol-conventions",
  "qol-gpui",
  "qol-headless",
+ "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
@@ -5899,6 +5901,7 @@ dependencies = [
  "dirs 6.0.0",
  "evdev",
  "flate2",
+ "gethostname",
  "git2",
  "global-hotkey",
  "gtk",

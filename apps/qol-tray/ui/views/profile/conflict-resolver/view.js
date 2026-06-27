@@ -11,6 +11,10 @@ import { conflictKey, fieldDiff, formatValue, formatValueShort, leafKey, relativ
 
 const VIEW_ID = 'profile-sync-conflicts';
 
+const bootDevice = (typeof window !== 'undefined' && window.__QOL_BOOT__?.device) || null;
+const THIS_DEVICE_NAME = bootDevice?.name?.trim() || 'This device';
+const THIS_DEVICE_PLATFORM = bootDevice?.platform || '';
+
 function dispatchEscape() {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 }
@@ -26,7 +30,7 @@ export function ConflictResolverSubPage({ active, refreshSyncStatus }) {
     const commands = useMemo(() => {
         if (!active || resolver.phase !== 'ready') return [];
         return [
-            { id: 'profile-conflicts:keep-mine', label: 'Conflict: keep this Mac', run: () => resolver.pick('mine') },
+            { id: 'profile-conflicts:keep-mine', label: `Conflict: keep ${THIS_DEVICE_NAME}`, run: () => resolver.pick('mine') },
             { id: 'profile-conflicts:take-remote', label: 'Conflict: take remote', run: () => resolver.pick('remote') },
             { id: 'profile-conflicts:next', label: 'Conflict: next', run: resolver.next },
             { id: 'profile-conflicts:prev', label: 'Conflict: previous', run: resolver.prev },
@@ -119,7 +123,7 @@ function StepperCard({ resolver, searchQuery }) {
                 </div>
                 <p class="profile-conflicts-file">${current.file}</p>
                 <div class="profile-conflicts-sides">
-                    <${SideCard} side="mine" label="This Mac" conflict=${current} editedAt=${current.local_edited} picked=${choice === 'mine'} onActivate=${() => resolver.pick('mine')} />
+                    <${SideCard} side="mine" label=${THIS_DEVICE_NAME} sublabel=${THIS_DEVICE_PLATFORM} conflict=${current} editedAt=${current.local_edited} picked=${choice === 'mine'} onActivate=${() => resolver.pick('mine')} />
                     <${SideCard} side="remote" label="Remote" conflict=${current} editedAt=${current.remote_edited} picked=${choice === 'remote'} onActivate=${() => resolver.pick('remote')} />
                 </div>
                 <p class="profile-conflicts-vs">- pick the value to keep -</p>
@@ -162,7 +166,7 @@ function ProgressDots({ total, index, picks }) {
     return html`<div class="profile-conflicts-dots">${dots}</div>`;
 }
 
-function SideCard({ side, label, conflict, editedAt, picked, onActivate }) {
+function SideCard({ side, label, sublabel, conflict, editedAt, picked, onActivate }) {
     return html`
         <${Surface} as="button"
             className=${`profile-conflicts-side profile-conflicts-side-${side}`}
@@ -171,7 +175,10 @@ function SideCard({ side, label, conflict, editedAt, picked, onActivate }) {
             data-picked=${picked ? 'true' : 'false'}
         >
             <span class="profile-conflicts-side-pin" aria-hidden="true"></span>
-            <span class="profile-conflicts-side-who">${label}</span>
+            <span class="profile-conflicts-side-who">
+                ${label}
+                ${sublabel && html`<span class="profile-conflicts-side-platform">${sublabel}</span>`}
+            </span>
             <${SideValue} conflict=${conflict} side=${side} />
             <span class="profile-conflicts-side-meta">${relativeTime(editedAt)}</span>
         <//>
