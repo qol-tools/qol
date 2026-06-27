@@ -3,13 +3,21 @@ import assert from 'node:assert/strict';
 import { createNavigation } from './world-navigation.js';
 import { contains, createWorldRegistry } from './world-registry.js';
 import { createCamera } from './world-camera.js';
-import { filterSurfacesByConfinement } from './spatial-nav.js';
+import { filterSurfacesByConfinement, surfaceLabel } from './spatial-nav.js';
 import { PAGE_TOP_PAD_PX } from './world-geometry.js';
 
 test('filterSurfacesByConfinement returns all surfaces when confinement is null', () => {
     const surfaces = [{ tag: 'a' }, { tag: 'b' }];
     const result = filterSurfacesByConfinement(surfaces, null, null);
     assert.deepEqual(result, surfaces);
+});
+
+test('surfaceLabel prefers aria-label over descendant text', () => {
+    const el = {
+        childNodes: [{ nodeType: 3, textContent: '0.65' }],
+        getAttribute: (name) => name === 'aria-label' ? 'Brightness' : null,
+    };
+    assert.equal(surfaceLabel(el), 'Brightness');
 });
 
 test('filterSurfacesByConfinement returns empty when surfaces lack closest method', () => {

@@ -65,6 +65,8 @@ function spatialSearch(surfaces, current, direction, useCone) {
 }
 
 export function surfaceLabel(el) {
+    const ariaLabel = el.getAttribute?.('aria-label')?.trim();
+    if (ariaLabel) return ariaLabel.slice(0, 20);
     for (const node of el.childNodes) {
         if (node.nodeType === 3) { const t = node.textContent.trim(); if (t) return t.slice(0, 20); }
     }

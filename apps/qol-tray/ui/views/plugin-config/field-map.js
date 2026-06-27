@@ -108,6 +108,7 @@ function SelectField({ field }) {
 export function fieldLayoutAttrs(field) {
     const attrs = {
         'data-plugin-config-field-id': field.id,
+        'data-surface-focus-return': '',
     };
     if (field.align) attrs['data-field-align'] = field.align;
     if (field.span) attrs['data-field-span'] = String(field.span);

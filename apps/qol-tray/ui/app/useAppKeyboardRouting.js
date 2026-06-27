@@ -19,6 +19,7 @@ import { focusGridRows, nextFocusGridElement } from '../lib/focus-grid.js';
 import { getWorldSettings } from '../lib/world-settings.js';
 import { resolveViewKeyboard } from '../lib/view-keyboard-fallback.js';
 import { hasModalCapturingFocus } from '../lib/focus-retention.js';
+import { finishSurfaceFocusTarget } from '../lib/surface-focus-target.js';
 
 const log = createDebug('qol:nav');
 const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
@@ -252,6 +253,10 @@ function globalSurfaceNav(event) {
         return;
     }
     if (event.key === 'Enter' || event.key === ' ') {
+        if (finishSurfaceFocusTarget(document.activeElement)) {
+            event.preventDefault();
+            return;
+        }
         event.preventDefault();
         activateAndMaybeDescend(event);
     }

@@ -1,3 +1,5 @@
+import { focusSurfaceTarget } from '../surface-focus-target.js';
+
 const INTERACTIVE_DESCENDANT = 'input, textarea, select, label, [contenteditable="true"]';
 
 function runPrimary({ actions, onActivate }, event) {
@@ -39,5 +41,6 @@ export function handleSurfaceClick(handlers, event, { diveFromSurface } = {}) {
     }
     const ran = runPrimary({ actions, onActivate }, event);
     const dove = diveFromSurface ? diveIfRequested(event.currentTarget, diveFromSurface) : false;
-    if (ran || dove) event.stopPropagation?.();
+    const focused = !ran && !dove ? focusSurfaceTarget(event.currentTarget) : false;
+    if (ran || dove || focused) event.stopPropagation?.();
 }

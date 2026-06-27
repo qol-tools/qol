@@ -8,13 +8,25 @@ function makeEl({ tag = 'div', attrs = {}, children = [] } = {}) {
         _attrs: { ...attrs },
         _children: children,
         _parent: null,
+        focused: false,
         getAttribute(name) { return this._attrs[name] ?? null; },
         setAttribute(name, value) { this._attrs[name] = String(value); },
         hasAttribute(name) { return name in this._attrs; },
         closest(selector) { return matchesAny(this, selector) ? this : (this._parent?.closest?.(selector) ?? null); },
+        querySelector(selector) { return findDescendant(this, selector); },
+        focus() { this.focused = true; },
     };
     for (const child of children) child._parent = el;
     return el;
+}
+
+function findDescendant(el, selector) {
+    for (const child of el._children) {
+        if (matchesAny(child, selector)) return child;
+        const match = findDescendant(child, selector);
+        if (match) return match;
+    }
+    return null;
 }
 
 function matchesAny(el, selector) {
@@ -108,6 +120,15 @@ test('no-op surface (no onActivate, no actions, no dive) lets click bubble', () 
     const event = makeEvent({ target: inner, currentTarget: surface });
     handleSurfaceClick({}, event);
     assert.equal(event.propagationStopped, false);
+});
+
+test('no-op surface focuses a declared inner focus target and stops propagation', () => {
+    const target = makeEl({ tag: 'div', attrs: { 'data-surface-focus-target': '' } });
+    const surface = makeEl({ tag: 'div', children: [target] });
+    const event = makeEvent({ target: surface, currentTarget: surface });
+    handleSurfaceClick({}, event);
+    assert.equal(target.focused, true);
+    assert.equal(event.propagationStopped, true);
 });
 
 test('shift+click runs secondary and stops propagation', () => {

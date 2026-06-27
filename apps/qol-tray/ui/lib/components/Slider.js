@@ -1,6 +1,7 @@
 import { html } from '../html.js';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { useSurface } from './Surface.js';
+import { SURFACE_CONTROL_COMMIT, finishSurfaceFocusTarget } from '../surface-focus-target.js';
 
 const DEFAULT_MIN = 0;
 const DEFAULT_MAX = 100;
@@ -74,7 +75,11 @@ export function Slider({
             return;
         }
         thumb.addEventListener('slider-commit', commitLiveValue);
-        return () => thumb.removeEventListener('slider-commit', commitLiveValue);
+        thumb.addEventListener(SURFACE_CONTROL_COMMIT, commitLiveValue);
+        return () => {
+            thumb.removeEventListener('slider-commit', commitLiveValue);
+            thumb.removeEventListener(SURFACE_CONTROL_COMMIT, commitLiveValue);
+        };
     }, [commitLiveValue]);
 
     const updateFromPointer = useCallback((event) => {
@@ -129,6 +134,12 @@ export function Slider({
         if (disabled) {
             return;
         }
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            event.stopPropagation();
+            finishSurfaceFocusTarget(event.currentTarget);
+            return;
+        }
         const next = keyValue(event.key, event.shiftKey, liveValueRef.current, min, max, step);
         if (next == null) {
             return;
@@ -144,9 +155,11 @@ export function Slider({
     const cls = ['slider-control', disabled && 'is-disabled', className].filter(Boolean).join(' ');
     const trackClass = ['slider-track', dragging && 'is-dragging'].filter(Boolean).join(' ');
     const { attrs: thumbAttrs } = useSurface({ selected: active, priority: 10 });
+    const { attrs: controlAttrs } = useSurface();
+    const focusTargetAttrs = disabled ? {} : { 'data-surface-focus-target': '' };
 
     return html`
-        <div class=${cls}>
+        <div class=${cls} aria-label=${label || 'Slider'} ...${disabled ? {} : controlAttrs}>
             ${label && html`
                 <div class="slider-header">
                     <label class="slider-label">${label}</label>
@@ -162,6 +175,7 @@ export function Slider({
                 <div class="slider-fill"></div>
                 <div class="slider-thumb" style=${disabled ? 'opacity:0.4' : ''}></div>
                 <div ref=${thumbRef} class="slider-thumb-target" data-slider-thumb=""
+                    ...${focusTargetAttrs}
                     role="slider"
                     aria-label=${label || 'Slider'}
                     aria-valuemin=${min}
@@ -169,7 +183,7 @@ export function Slider({
                     aria-valuenow=${liveValue}
                     aria-valuetext=${`${display}${unit}`}
                     aria-disabled=${disabled ? 'true' : undefined}
-                    ...${thumbAttrs}
+                    ...${disabled ? {} : thumbAttrs}
                     onFocus=${onThumbFocus}
                     onBlur=${onThumbBlur}
                     onKeyDown=${onThumbKeyDown}></div>
