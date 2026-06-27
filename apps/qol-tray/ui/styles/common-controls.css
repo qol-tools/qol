@@ -11,8 +11,6 @@
     word-break: break-word;
     cursor: pointer;
     line-height: var(--lh-relaxed);
-    max-height: 70vh;
-    overflow: auto;
     outline: none;
 }
 
