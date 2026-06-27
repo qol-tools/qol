@@ -14,6 +14,8 @@ const ATTRIBUTES = ['data-selected', 'data-selected-surface', 'data-selected-sur
 const WEDGE_HUE_BASE = 50;
 const WEDGE_HUE_STEP = 45;
 const WEDGE_HUE_MAX = 275;
+const FOLLOW_SETTLE_FRAMES = 2;
+const FOLLOW_MAX_MS = 600;
 
 export function SelectionCursorOverlay({ camera }) {
     const [style, setStyle] = useState(hiddenStyle());
@@ -105,8 +107,38 @@ export function SelectionCursorOverlay({ camera }) {
             focusOutRaf = requestAnimationFrame(() => { focusOutRaf = 0; syncFrom('focusout'); });
         };
         const syncFromCamera = () => syncFrom('camera');
-        const syncFromMutation = () => syncFrom('mutation');
         const syncFromResize = () => syncFrom('resize');
+
+        let followRaf = 0;
+        let followStillFrames = 0;
+        let followPrev = null;
+        let followDeadline = 0;
+        const runFollowTick = () => {
+            followRaf = 0;
+            syncFrom('follow');
+            const rect = rectRef.current;
+            if (!rect) return;
+            const moved = !followPrev
+                || Math.abs(rect.left - followPrev.left) > 0.5
+                || Math.abs(rect.top - followPrev.top) > 0.5;
+            followPrev = { left: rect.left, top: rect.top };
+            followStillFrames = moved ? 0 : followStillFrames + 1;
+            if (followStillFrames < FOLLOW_SETTLE_FRAMES && performance.now() < followDeadline) {
+                followRaf = requestAnimationFrame(runFollowTick);
+            }
+        };
+        const startFollow = () => {
+            followStillFrames = 0;
+            followPrev = null;
+            followDeadline = performance.now() + FOLLOW_MAX_MS;
+            if (!followRaf) followRaf = requestAnimationFrame(runFollowTick);
+        };
+        const syncFromMutation = (mutations) => {
+            syncFrom('mutation');
+            if (mutations.some(m => m.attributeName === 'data-selected-surface-motion')) {
+                startFollow();
+            }
+        };
 
         let pointerActive = false;
         const setInputMode = (mode) => {
@@ -166,6 +198,7 @@ export function SelectionCursorOverlay({ camera }) {
             document.removeEventListener('wheel', onWheel, true);
             window.removeEventListener('resize', syncFromResize);
             if (focusOutRaf) cancelAnimationFrame(focusOutRaf);
+            if (followRaf) cancelAnimationFrame(followRaf);
             if (readyFrameRef.current) cancelAnimationFrame(readyFrameRef.current);
             if (!resizeObserverRef.current) return;
             resizeObserverRef.current.disconnect();
