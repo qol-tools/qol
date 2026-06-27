@@ -111,18 +111,31 @@ impl FakeDaemon {
         let handle = thread::Builder::new()
             .name("fake-daemon".into())
             .spawn(move || {
-                let Ok((mut stream, _)) = listener.accept() else {
+                for _ in 0..4 {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        return;
+                    };
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                    let mut reader =
+                        BufReader::new(stream.try_clone().expect("clone fake daemon stream"));
+                    let mut line = String::new();
+                    let Ok(_) = reader.read_line(&mut line) else {
+                        return;
+                    };
+                    if line.is_empty() {
+                        return;
+                    }
+
+                    if line.contains(r#""action":"ping""#) {
+                        let _ = stream.write_all(br#"{"status":"handled"}"#);
+                        let _ = stream.write_all(b"\n");
+                        continue;
+                    }
+
+                    let _ = stream.write_all(response_line.as_bytes());
+                    let _ = stream.write_all(b"\n");
                     return;
-                };
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                let mut reader =
-                    BufReader::new(stream.try_clone().expect("clone fake daemon stream"));
-                let mut line = String::new();
-                let _ = reader.read_line(&mut line);
-                let _ = stream.write_all(response_line.as_bytes());
-                let _ = stream.write_all(b"\n");
-                drop(reader);
-                drop(stream);
+                }
             })
             .expect("spawn fake daemon thread");
         Self {
