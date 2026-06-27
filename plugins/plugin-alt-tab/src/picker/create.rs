@@ -3,6 +3,7 @@ use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::{ActionMode, AltTabConfig, LabelConfig, PreviewIconPosition};
 use crate::discovery::WindowInfo;
 use crate::picker::run::SharedPreviewCache;
+use crate::rendering::RenderingFlow;
 use crate::shared::layout::*;
 use crate::{IconMap, PickerWindowState, PreviewMap, SharedIconCache};
 use gpui::*;
@@ -21,6 +22,7 @@ pub(super) struct CreateRequest<'a> {
     pub current: &'a PickerWindowState,
     pub has_shown_once: Arc<AtomicBool>,
     pub show_id: u64,
+    pub rendering: RenderingFlow,
 }
 
 pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mut App) {
@@ -48,6 +50,7 @@ pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mu
             title.clone(),
             true,
             req.placement.monitor_size(),
+            req.rendering,
         ),
         true,
         cx,
@@ -111,6 +114,7 @@ pub(crate) struct PickerInit {
     pub(crate) card_scale: f32,
     pub(crate) card_padding: f32,
     pub(crate) layout_budget: Option<(f32, f32)>,
+    pub(crate) rendering: RenderingFlow,
     pub(crate) preview_cache: SharedPreviewCache,
     pub(crate) windows: Vec<WindowInfo>,
     pub(crate) previews: PreviewMap,
@@ -125,6 +129,7 @@ impl PickerInit {
         picker_title: String,
         shown: bool,
         layout_budget: Option<(f32, f32)>,
+        rendering: RenderingFlow,
     ) -> Self {
         let (card_color, card_opacity) = super::resolve_card_bg(&config.display);
         Self {
@@ -143,6 +148,7 @@ impl PickerInit {
             card_scale: config.display.card_scale,
             card_padding: config.display.card_padding,
             layout_budget,
+            rendering,
             preview_cache,
             windows: gathered.windows,
             previews: gathered.previews,
@@ -230,6 +236,7 @@ pub(crate) fn pre_create_ghost(
         title.clone(),
         false,
         placement.monitor_size(),
+        RenderingFlow::current(),
     );
     let bounds = layout.bounds;
     let Some(handle) = open_picker_window(bounds, title.clone(), init, false, cx) else {
@@ -297,6 +304,10 @@ impl PostCreateData {
         );
         let reason = format!("show#{}", self.show_id);
         let _reason = qol_gpui::popup_window::reason_scope(reason);
+        let _ = handle.update(cx, |view, window, cx| {
+            view.focus_for_keys("create-after-show", Some(self.show_id), window);
+            view.sync_preview_plane(Some(self.show_id), window, cx);
+        });
         super::platform::show_picker_window(&self.title, std::slice::from_ref(&self.title));
         qol_runtime::probe!(
             "CREATE_SHOW_WINDOW",
@@ -304,9 +315,6 @@ impl PostCreateData {
             self.show_id,
             self.title
         );
-        let _ = handle.update(cx, |view, window, _| {
-            view.focus_for_keys("create-after-show", Some(self.show_id), window);
-        });
         cx.activate(true);
         super::probe_app_active_after_frame(handle, cx);
         if self.transparent_bg {

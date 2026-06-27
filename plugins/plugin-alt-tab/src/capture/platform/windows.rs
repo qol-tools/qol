@@ -9,6 +9,10 @@ pub fn capture_previews_cg(
     Vec::new()
 }
 
+pub fn capture_frontmost_preview(_wid: u32, _max_w: usize, _max_h: usize) -> Option<RgbaImage> {
+    None
+}
+
 pub fn get_app_icons(_windows: &[WindowInfo]) -> std::collections::HashMap<String, RgbaImage> {
     std::collections::HashMap::new()
 }

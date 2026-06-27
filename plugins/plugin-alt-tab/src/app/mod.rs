@@ -8,6 +8,9 @@ use crate::picker::create::PickerInit;
 use crate::picker::gather::GatheredWindows;
 use crate::picker::run::SharedPreviewCache;
 use crate::picker::state::PickerState;
+use crate::preview_plane::{PreviewPlaneItem, PreviewPlanePayload, PreviewPlaneRect};
+use crate::rendering::RenderingFlow;
+use crate::shared::layout::{picker_layout, preview_rect_for_card, CardMetrics};
 use crate::{IconMap, PreviewMap};
 use gpui::*;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,6 +27,7 @@ pub(crate) struct AltTabApp {
     pub(crate) delegate: Entity<PickerState>,
     preview_cache: SharedPreviewCache,
     pub(crate) focus_handle: FocusHandle,
+    pub(crate) rendering: RenderingFlow,
     pub(crate) action_mode: ActionMode,
     pub(crate) alt_was_held: bool,
     pub(crate) blur_guard_until: Instant,
@@ -57,6 +61,19 @@ pub(crate) fn clear_cycle_origin() {
 }
 
 impl AltTabApp {
+    pub(crate) fn is_active_visible(&self) -> bool {
+        if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+            return false;
+        }
+        let Ok(lock) = ACTIVE_PICKER_MONITOR.lock() else {
+            return false;
+        };
+        let Some(target) = *lock else {
+            return false;
+        };
+        picker::platform::picker_window_title(target) == self.picker_title
+    }
+
     pub(crate) fn focus_for_keys(&self, phase: &str, show_id: Option<u64>, window: &mut Window) {
         let show_id = show_id
             .map(|id| id.to_string())
@@ -96,6 +113,7 @@ impl AltTabApp {
         let action_mode = init.action_mode.clone();
         let picker_title = init.picker_title.clone();
         let shown = init.shown;
+        let rendering = init.rendering;
         let preview_cache = init.preview_cache.clone();
         let delegate: Entity<PickerState> = cx.new(|state_cx| {
             let state = PickerState::from_init(init);
@@ -125,10 +143,10 @@ impl AltTabApp {
             &focus_handle,
             window,
             |this: &Self| this.blur_guard_until,
-            |_this: &Self| PICKER_VISIBLE.load(Ordering::Relaxed),
+            |this: &Self| this.is_active_visible(),
             cx,
             |this, window, cx| {
-                let picker_visible = PICKER_VISIBLE.load(Ordering::Relaxed);
+                let picker_visible = this.is_active_visible();
                 let modifier_held = picker::is_modifier_held();
                 match focus_out_decision(picker_visible, &this.action_mode, modifier_held) {
                     FocusOutDecision::IgnoreHidden => {
@@ -164,6 +182,7 @@ impl AltTabApp {
             delegate,
             preview_cache,
             focus_handle,
+            rendering,
             action_mode: action_mode.clone(),
             alt_was_held: true,
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
@@ -227,6 +246,7 @@ impl AltTabApp {
             window.set_background_appearance(appearance);
         }
         let (card_color, card_opacity) = crate::picker::resolve_card_bg(&req.config.display);
+        self.rendering = req.rendering;
         self.action_mode = req.config.action_mode.clone();
         self.alt_was_held = true;
         self.blur_guard_until = Instant::now() + Duration::from_millis(BLUR_GUARD_MS);
@@ -374,6 +394,14 @@ impl AltTabApp {
     }
 
     pub(crate) fn ensure_live_preview(&mut self, cx: &mut Context<Self>) {
+        if !self.rendering.captures_live_selection() {
+            let backend = self.rendering.preview_plane_backend().unwrap_or("none");
+            qol_runtime::probe!(
+                "PREVIEW_LIVE",
+                "outcome=skipped reason=preview_plane backend={backend}"
+            );
+            return;
+        }
         if self._live_preview_task.is_some() {
             return;
         }
@@ -382,6 +410,106 @@ impl AltTabApp {
             self.preview_cache.clone(),
             cx,
         ));
+    }
+
+    pub(crate) fn sync_preview_plane(
+        &self,
+        show_id: Option<u64>,
+        window: &Window,
+        cx: &Context<Self>,
+    ) {
+        if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+            return;
+        }
+        if self.rendering.preview_plane_backend().is_none() {
+            return;
+        }
+
+        let state = self.delegate.read(cx);
+        let layout = picker_layout(
+            state.windows.len().max(1),
+            state.max_columns,
+            state.layout_budget,
+            state.show_hotkey_hints,
+            state.card_scale,
+            state.card_padding,
+        );
+        let metrics = CardMetrics::from_config(state.card_scale, state.card_padding);
+        let bounds = window.bounds();
+        let win_x = bounds.origin.x.to_f64() as f32;
+        let win_y = bounds.origin.y.to_f64() as f32;
+        let win_w = bounds.size.width.to_f64() as f32;
+        let win_h = bounds.size.height.to_f64() as f32;
+        let panel_x = win_x + ((win_w - layout.width) / 2.0).max(0.0);
+        let panel_y = win_y + ((win_h - layout.height) / 2.0).max(0.0);
+        let panel_right = panel_x + layout.width;
+        let panel_bottom = panel_y + layout.height;
+        let show_id = show_id
+            .map(|id| format!("show#{id}"))
+            .unwrap_or_else(|| "visible".to_string());
+
+        let mut skipped = 0usize;
+        let items: Vec<_> = state
+            .windows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, win)| {
+                if win.is_minimized {
+                    skipped += 1;
+                    return None;
+                }
+                let rect = preview_rect_for_card(
+                    index,
+                    layout.columns,
+                    (panel_x, panel_y),
+                    state.show_hotkey_hints,
+                    &metrics,
+                );
+                if rect.x < panel_x
+                    || rect.y < panel_y
+                    || rect.x + rect.w > panel_right
+                    || rect.y + rect.h > panel_bottom
+                {
+                    skipped += 1;
+                    return None;
+                }
+                Some(PreviewPlaneItem {
+                    wid: win.id,
+                    selected: state.selected_index == Some(index),
+                    title: win.title.clone(),
+                    rect: PreviewPlaneRect {
+                        x: rect.x,
+                        y: rect.y,
+                        w: rect.w,
+                        h: rect.h,
+                    },
+                })
+            })
+            .collect();
+
+        qol_runtime::probe!(
+            "PREVIEW_PLANE_LAYOUT",
+            "show_id={} items={} skipped={} cols={} window=({:.0},{:.0} {:.0}x{:.0}) panel=({:.0},{:.0} {:.0}x{:.0})",
+            show_id,
+            items.len(),
+            skipped,
+            layout.columns,
+            win_x,
+            win_y,
+            win_w,
+            win_h,
+            panel_x,
+            panel_y,
+            layout.width,
+            layout.height
+        );
+
+        if items.is_empty() {
+            crate::preview_plane::hide_async("empty");
+            return;
+        }
+
+        crate::preview_plane::show_async(PreviewPlanePayload::new(show_id, items));
     }
 
     pub(crate) fn start_alt_poll(
@@ -413,6 +541,10 @@ async fn alt_release_check(
             qol_gpui::probe::probe("ALT_POLL", "entity gone, NO dismiss");
             return;
         }
+        if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+            qol_gpui::probe::probe("ALT_POLL", "hidden before release -> no activate");
+            return;
+        }
         if !picker::is_modifier_held() {
             break;
         }
@@ -425,12 +557,22 @@ async fn alt_release_check(
     eprintln!("[alt-tab/hold] Alt released via poll — activating selection");
     let weak = this.clone();
     let updated = cx.update_window(window_handle, move |_, window, cx| {
+        if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+            qol_gpui::probe::probe("ALT_POLL", "hidden in update -> no activate");
+            return;
+        }
         if let Some(entity) = weak.upgrade() {
-            entity.update(cx, |app, cx| app.dismiss("alt-release/poll", window, cx));
+            entity.update(cx, |app, cx| {
+                if !app.is_active_visible() {
+                    qol_gpui::probe::probe("ALT_POLL", "inactive picker in update -> no activate");
+                    return;
+                }
+                app.dismiss("alt-release/poll", window, cx);
+                delegate.update(cx, |s, _| s.activate_selected_target());
+            });
         } else {
             qol_gpui::probe::probe("ALT_POLL", "weak gone in update, NO dismiss");
         }
-        delegate.update(cx, |s, _| s.activate_selected_target());
     });
     if updated.is_err() {
         qol_gpui::probe::probe("ALT_POLL", "update_window FAILED, NO dismiss");
@@ -467,7 +609,23 @@ impl AltTabApp {
     ) {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/dismiss] from={}", _source);
-        qol_runtime::probe!("DISMISS", "from={_source} title={}", self.picker_title);
+        let active = self.is_active_visible();
+        qol_runtime::probe!(
+            "DISMISS",
+            "from={_source} title={} active={active}",
+            self.picker_title
+        );
+        if self.rendering.preview_plane_backend().is_some() {
+            crate::preview_plane::hide_async(_source);
+        }
+        if !active {
+            qol_runtime::probe!(
+                "DISMISS",
+                "from={_source} title={} outcome=ignored_inactive",
+                self.picker_title
+            );
+            return;
+        }
         self._alt_poll_task = None;
         PICKER_VISIBLE.store(false, Ordering::Relaxed);
         if let Ok(mut lock) = ACTIVE_PICKER_MONITOR.lock() {

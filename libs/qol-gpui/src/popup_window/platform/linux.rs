@@ -1,11 +1,13 @@
 use x11rb::connection::Connection;
 use x11rb::protocol::shape;
 use x11rb::protocol::xproto::*;
+use x11rb::protocol::Event;
 use x11rb::wrapper::ConnectionExt as _;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 static GHOST_ALPHA: AtomicU32 = AtomicU32::new(0);
 
@@ -208,9 +210,6 @@ pub fn show_window_by_title(title: &str) -> bool {
         qol_runtime::probe!("SHOW_WIN", "title={title} wid=NONE reason={reason}");
         return false;
     };
-    let Some(active_atom) = intern(&conn, b"_NET_ACTIVE_WINDOW") else {
-        return false;
-    };
     let active_before = active_window(&conn, root);
     let before = show_window_state(&conn, root, wid, active_before);
     qol_runtime::probe!(
@@ -225,24 +224,22 @@ pub fn show_window_by_title(title: &str) -> bool {
         .ok()
         .and_then(|cookie| cookie.check().ok())
         .is_some();
-    const SOURCE_APPLICATION: u32 = 1;
-    let event = ClientMessageEvent::new(32, wid, active_atom, [SOURCE_APPLICATION, 0, 0, 0, 0]);
-    let mask = EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT;
-    let activate_ok = conn
-        .send_event(false, root, mask, event)
-        .ok()
-        .and_then(|cookie| cookie.check().ok())
-        .is_some();
+    add_window_state(&conn, root, wid);
+    let stack = raise_window(&conn, root, wid);
+    let (activate_ok, timestamp) = activate_window(&conn, root, wid);
     let flush_ok = conn.flush().is_ok();
     let active_after = active_window(&conn, root);
     let after = show_window_state(&conn, root, wid, active_after);
     qol_runtime::probe!(
         "SHOW_WIN_STATE",
-        "reason={reason} phase=after title={title} wid={wid} clear_opacity={clear_ok} input_passthrough_false={input_ok} map={map_ok} activate={activate_ok} flush={flush_ok} {after}",
+        "reason={reason} phase=after title={title} wid={wid} frame={} clear_opacity={clear_ok} input_passthrough_false={input_ok} map={map_ok} stack_client={} stack_frame={} activate={activate_ok} timestamp={timestamp} flush={flush_ok} {after}",
+        stack.frame,
+        stack.client,
+        stack.frame_ok,
     );
     qol_runtime::probe!(
         "SHOW_WIN",
-        "title={title} wid={wid} cleared_opacity={clear_ok} source={SOURCE_APPLICATION} timestamp=0 requester_active=0 reason={reason}",
+        "title={title} wid={wid} cleared_opacity={clear_ok} source=2 timestamp={timestamp} requester_active=0 reason={reason}",
     );
     true
 }
@@ -328,14 +325,21 @@ fn add_window_state(conn: &impl Connection, root: u32, wid: u32) {
     }
 }
 
-fn activate_window(conn: &impl Connection, root: u32, wid: u32) -> bool {
+fn activate_window(conn: &impl Connection, root: u32, wid: u32) -> (bool, u32) {
     let Some(active_atom) = intern(conn, b"_NET_ACTIVE_WINDOW") else {
-        return false;
+        return (false, 0);
     };
     const SOURCE_PAGER: u32 = 2;
-    let event = ClientMessageEvent::new(32, wid, active_atom, [SOURCE_PAGER, 0, 0, 0, 0]);
+    let timestamp = server_activation_time(conn, root);
+    let event = ClientMessageEvent::new(32, wid, active_atom, [SOURCE_PAGER, timestamp, 0, 0, 0]);
     let mask = EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT;
-    conn.send_event(false, root, mask, event).is_ok()
+    (
+        conn.send_event(false, root, mask, event)
+            .ok()
+            .and_then(|cookie| cookie.check().ok())
+            .is_some(),
+        timestamp,
+    )
 }
 
 pub fn disable_window_shadow(_title: &str) -> bool {
@@ -388,15 +392,46 @@ pub fn make_override_redirect(title: &str) -> bool {
         let _ = conn.change_window_attributes(wid, &aux);
         let _ = conn.map_window(wid);
     }
-    let _ = conn.configure_window(wid, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE));
+    let stack = raise_window(&conn, root, wid);
     let _ = conn.flush();
     if !already {
         qol_runtime::probe!(
             "PICKER_OVERLAY",
-            "title={title} wid={wid} override_redirect=1"
+            "title={title} wid={wid} override_redirect=1 frame={} stack_client={} stack_frame={}",
+            stack.frame,
+            stack.client,
+            stack.frame_ok
         );
     }
     true
+}
+
+struct RaiseResult {
+    frame: u32,
+    client: bool,
+    frame_ok: bool,
+}
+
+fn raise_window(conn: &impl Connection, root: u32, wid: u32) -> RaiseResult {
+    let frame = top_level_frame(conn, root, wid).unwrap_or(wid);
+    let client = configure_above(conn, wid);
+    let frame_ok = if frame == wid {
+        client
+    } else {
+        configure_above(conn, frame)
+    };
+    RaiseResult {
+        frame,
+        client,
+        frame_ok,
+    }
+}
+
+fn configure_above(conn: &impl Connection, wid: u32) -> bool {
+    conn.configure_window(wid, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE))
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some()
 }
 
 fn window_is_override_redirect(conn: &impl Connection, wid: u32) -> bool {
@@ -503,6 +538,84 @@ fn clear_bypass_compositor(conn: &impl Connection, wid: u32) {
     if let Some(atom) = intern(conn, b"_NET_WM_BYPASS_COMPOSITOR") {
         let _ = conn.delete_property(wid, atom);
     }
+}
+
+const SERVER_TIME_PROBE_BUDGET: Duration = Duration::from_millis(50);
+const SERVER_TIME_PROBE_COOLDOWN: Duration = Duration::from_secs(5);
+
+struct ServerTime {
+    anchor: Option<(u32, Instant)>,
+    cooldown_until: Option<Instant>,
+}
+
+static SERVER_TIME: Mutex<ServerTime> = Mutex::new(ServerTime {
+    anchor: None,
+    cooldown_until: None,
+});
+
+fn server_activation_time(conn: &impl Connection, root: u32) -> u32 {
+    let now = Instant::now();
+    let Ok(mut state) = SERVER_TIME.lock() else {
+        return 0;
+    };
+    if let Some((server_ms, at)) = state.anchor {
+        return server_ms.wrapping_add(now.saturating_duration_since(at).as_millis() as u32);
+    }
+    if state.cooldown_until.is_some_and(|until| now < until) {
+        return 0;
+    }
+    match probe_server_time(conn, root) {
+        Some(server_ms) => {
+            state.anchor = Some((server_ms, now));
+            server_ms
+        }
+        None => {
+            state.cooldown_until = Some(now + SERVER_TIME_PROBE_COOLDOWN);
+            0
+        }
+    }
+}
+
+fn probe_server_time(conn: &impl Connection, root: u32) -> Option<u32> {
+    let window = conn.generate_id().ok()?;
+    conn.create_window(
+        0,
+        window,
+        root,
+        -100,
+        -100,
+        1,
+        1,
+        0,
+        WindowClass::INPUT_ONLY,
+        x11rb::COPY_FROM_PARENT,
+        &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+    )
+    .ok()?;
+    let probe = intern(conn, b"_QOL_POPUP_TIME")?;
+    let empty: &[u8] = &[];
+    conn.change_property8(PropMode::APPEND, window, probe, AtomEnum::STRING, empty)
+        .ok()?;
+    conn.flush().ok()?;
+
+    let deadline = Instant::now() + SERVER_TIME_PROBE_BUDGET;
+    let time = loop {
+        if let Some(event) = conn.poll_for_event().ok()? {
+            if let Event::PropertyNotify(notify) = event {
+                if notify.window == window {
+                    break Some(notify.time);
+                }
+            }
+            continue;
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    let _ = conn.destroy_window(window);
+    let _ = conn.flush();
+    time
 }
 
 pub fn set_ghost_debug(opacity: Option<f32>, _color_hex: Option<&str>) {

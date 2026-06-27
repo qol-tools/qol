@@ -1,6 +1,7 @@
 use super::GatheredWindows;
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::AltTabConfig;
+use crate::rendering::RenderingFlow;
 use gpui::*;
 use qol_gpui::window::PopupPlacement;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,6 +22,7 @@ pub(crate) struct ReuseRequest<'a> {
     pub reverse: bool,
     pub monitor_size: Option<(f32, f32)>,
     pub show_id: u64,
+    pub rendering: RenderingFlow,
 }
 
 pub(super) struct LayoutInput<'a> {
@@ -73,6 +75,7 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
                 req.show_id,
                 title
             );
+            view.sync_preview_plane(Some(req.show_id), window, cx);
             super::platform::show_picker_window(&title, req.all_titles);
             qol_runtime::probe!(
                 "REUSE_SHOW_WINDOW",

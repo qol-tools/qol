@@ -101,6 +101,14 @@ pub struct PickerLayout {
     pub columns: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PreviewRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
 pub fn picker_layout(
     window_count: usize,
     max_columns: usize,
@@ -160,6 +168,35 @@ fn picker_height_for(window_count: usize, columns: usize, metrics: &CardMetrics)
     let cols = columns.max(1);
     let rows = count.div_ceil(cols);
     RENDER_PAD_Y + rows as f32 * metrics.card_height + rows.saturating_sub(1) as f32 * RENDER_GAP
+}
+
+pub fn preview_rect_for_card(
+    index: usize,
+    columns: usize,
+    panel_origin: (f32, f32),
+    show_hotkey_hints: bool,
+    metrics: &CardMetrics,
+) -> PreviewRect {
+    let columns = columns.max(1);
+    let row = index / columns;
+    let col = index % columns;
+    let header_h = if show_hotkey_hints {
+        HOTKEY_HINTS_HEIGHT
+    } else {
+        0.0
+    };
+    let card_x =
+        panel_origin.0 + RENDER_PAD_X / 2.0 + col as f32 * (metrics.card_width + RENDER_GAP);
+    let card_y = panel_origin.1
+        + header_h
+        + RENDER_PAD_Y / 2.0
+        + row as f32 * (metrics.card_height + RENDER_GAP);
+    PreviewRect {
+        x: card_x + metrics.card_padding,
+        y: card_y + metrics.card_padding,
+        w: metrics.preview_width,
+        h: metrics.preview_height,
+    }
 }
 
 #[cfg(test)]
@@ -275,6 +312,21 @@ mod tests {
                 exact
             );
         }
+    }
+
+    #[test]
+    fn preview_rect_matches_grid_padding_gap_and_card_padding() {
+        let metrics = CardMetrics::from_config(1.5, 4.0);
+        let rect = preview_rect_for_card(7, 6, (100.0, 200.0), true, &metrics);
+
+        assert_close(rect.x, 100.0 + 20.0 + 1.0 * (330.0 + 12.0) + 4.0, "x");
+        assert_close(
+            rect.y,
+            200.0 + HOTKEY_HINTS_HEIGHT + 16.0 + 1.0 * (215.375 + 12.0) + 4.0,
+            "y",
+        );
+        assert_close(rect.w, metrics.preview_width, "w");
+        assert_close(rect.h, metrics.preview_height, "h");
     }
 
     #[test]

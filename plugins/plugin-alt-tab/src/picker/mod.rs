@@ -13,6 +13,7 @@ use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::{
     parse_hex_color, ActionMode, AltTabConfig, DisplayConfig, DEFAULT_CARD_BACKGROUND_COLOR,
 };
+use crate::rendering::RenderingFlow;
 use crate::{PickerWindowState, SharedIconCache};
 use gather::{gather, spawn_icon_fill, GatheredWindows, IconFillRequest};
 use gpui::*;
@@ -53,6 +54,7 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     let is_visible = PICKER_VISIBLE.load(Ordering::Relaxed);
     let placement = resolve_placement(req.tracker, req.current, is_visible);
     let target = placement.target();
+    let rendering = RenderingFlow::current();
     qol_runtime::probe!(
         "OPEN_PICKER",
         "show_id={} reverse={} visible={} target={},{},{}x{}",
@@ -64,6 +66,7 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
         target.width,
         target.height,
     );
+    rendering.trace_show(req.show_id);
 
     if req.reverse && req.current.borrow().is_empty() {
         qol_runtime::probe!(
@@ -83,15 +86,29 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
         &req.window_cache,
         &req.preview_cache,
     );
-    seed_frontmost_preview(req, &mut gathered, cx);
-    if try_reuse_existing(req, &placement, &gathered, cx) {
+    seed_frontmost_preview(req, rendering, &mut gathered, cx);
+    if try_reuse_existing(req, rendering, &placement, &gathered, cx) {
         return;
     }
     destroy_non_target_windows(req, &placement, cx);
-    create_from_request(req, placement, gathered, cx);
+    create_from_request(req, rendering, placement, gathered, cx);
 }
 
-fn seed_frontmost_preview(req: &OpenPickerRequest, gathered: &mut GatheredWindows, cx: &mut App) {
+fn seed_frontmost_preview(
+    req: &OpenPickerRequest,
+    rendering: RenderingFlow,
+    gathered: &mut GatheredWindows,
+    cx: &mut App,
+) {
+    if !rendering.captures_on_open() {
+        let backend = rendering.preview_plane_backend().unwrap_or("none");
+        qol_runtime::probe!(
+            "PREVIEW_CAPTURE",
+            "show_id={} source=on_open outcome=skipped reason=preview_plane backend={backend}",
+            req.show_id
+        );
+        return;
+    }
     let Some((wid, img)) = gather::capture_frontmost_now(&gathered.windows, req.show_id) else {
         return;
     };
@@ -229,6 +246,7 @@ pub(super) fn try_cycle_visible(
 
 fn try_reuse_existing(
     req: &OpenPickerRequest,
+    rendering: RenderingFlow,
     placement: &PopupPlacement,
     gathered: &GatheredWindows,
     cx: &mut App,
@@ -267,6 +285,7 @@ fn try_reuse_existing(
         reverse: req.reverse,
         monitor_size: placement.monitor_size(),
         show_id: req.show_id,
+        rendering,
     };
     if reuse::try_reuse(&reuse_req, cx) {
         if source_key != target {
@@ -312,6 +331,7 @@ fn discard_old_window(
 
 fn create_from_request(
     req: &OpenPickerRequest,
+    rendering: RenderingFlow,
     placement: PopupPlacement,
     gathered: GatheredWindows,
     cx: &mut App,
@@ -325,6 +345,7 @@ fn create_from_request(
         current: req.current,
         has_shown_once: req.has_shown_once.clone(),
         show_id: req.show_id,
+        rendering,
     };
     create::create_new(&create_req, gathered, cx);
 }
@@ -906,6 +927,7 @@ pub(crate) mod state {
                 card_scale: 1.0,
                 card_padding: crate::shared::layout::DEFAULT_CARD_PADDING,
                 layout_budget: None,
+                rendering: crate::rendering::RenderingFlow::gpui_snapshots(),
                 preview_cache: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
                 previews: HashMap::new(),
                 icons: HashMap::new(),
@@ -1069,6 +1091,7 @@ pub(crate) mod state {
                 card_scale: 1.0,
                 card_padding: crate::shared::layout::DEFAULT_CARD_PADDING,
                 layout_budget: None,
+                rendering: crate::rendering::RenderingFlow::gpui_snapshots(),
                 preview_cache: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
                 previews: HashMap::new(),
                 icons: HashMap::new(),

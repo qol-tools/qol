@@ -10,6 +10,7 @@ gpui = "0.2"
 image = { version = "0.25", default-features = false }
 open = "5"
 serde = { version = "1.0", features = ["derive"] }
+serde_json.workspace = true
 smallvec = "1.13"
 qol-color.workspace = true
 qol-config.workspace = true

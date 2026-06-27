@@ -11,6 +11,10 @@ pub fn capture_previews_cg(
     platform::capture_previews_cg(targets, max_w, max_h)
 }
 
+pub fn capture_frontmost_preview(wid: u32, max_w: usize, max_h: usize) -> Option<RgbaImage> {
+    platform::capture_frontmost_preview(wid, max_w, max_h)
+}
+
 pub fn get_app_icons(windows: &[WindowInfo]) -> std::collections::HashMap<String, RgbaImage> {
     platform::get_app_icons(windows)
 }

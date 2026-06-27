@@ -42,6 +42,15 @@ async fn preview_loop(
         if !PICKER_VISIBLE.load(Ordering::Relaxed) {
             break;
         }
+        let rendering = crate::rendering::RenderingFlow::current();
+        if !rendering.captures_live_selection() {
+            let backend = rendering.preview_plane_backend().unwrap_or("none");
+            qol_runtime::probe!(
+                "PREVIEW_LIVE",
+                "outcome=stopped reason=preview_plane backend={backend}"
+            );
+            break;
+        }
         let snap = read_snapshot(&delegate, &cx);
         let Some(selected) = snap.selected_target() else {
             continue;

@@ -5,6 +5,8 @@ mod config;
 mod daemon;
 mod discovery;
 mod picker;
+mod preview_plane;
+mod rendering;
 mod shared;
 
 use crate::config::{load_alt_tab_config, PLUGIN_ID};

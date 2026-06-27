@@ -71,9 +71,7 @@ pub(super) fn capture_frontmost_now(
         return None;
     }
     let wid = front.id;
-    let captured = capture::capture_previews_cg(&[(0, wid)], PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT);
-    let (_, rgba) = captured.into_iter().next()?;
-    let rgba = rgba?;
+    let rgba = capture::capture_frontmost_preview(wid, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)?;
     let img = bgra_to_render_image(rgba.data, rgba.width, rgba.height)?;
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
@@ -213,6 +211,18 @@ pub(super) struct PreviewFillRequest {
 
 pub(super) fn spawn_preview_fill(req: PreviewFillRequest, cx: &mut App) {
     if req.windows.iter().all(|w| w.is_minimized) {
+        return;
+    }
+    let rendering = crate::rendering::RenderingFlow::current();
+    if !rendering.captures_preview_fill() {
+        let backend = rendering.preview_plane_backend().unwrap_or("none");
+        let visible = crate::app::PICKER_VISIBLE.load(Ordering::Relaxed);
+        qol_runtime::probe!(
+            "PREVIEW_CAPTURE",
+            "source=fill outcome=skipped reason=preview_plane backend={backend} visible={visible} refresh_frontmost={} refresh_previous_frontmost={}",
+            req.refresh_frontmost,
+            req.refresh_previous_frontmost
+        );
         return;
     }
     if PREVIEW_FILL_IN_FLIGHT

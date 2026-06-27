@@ -1,6 +1,7 @@
 use super::AltTabApp;
 use crate::config::{capitalize_first, ActionMode, LabelConfig, PreviewIconPosition};
 use crate::discovery::WindowInfo;
+use crate::rendering::RenderingFlow;
 use crate::shared::layout::{picker_layout, CardMetrics};
 use crate::{IconMap, PreviewMap};
 use gpui::prelude::FluentBuilder;
@@ -25,6 +26,7 @@ struct RenderSnap {
     show_debug_overlay: bool,
     show_hotkey_hints: bool,
     icon_position: PreviewIconPosition,
+    rendering: RenderingFlow,
     palette: SurfacePalette,
     metrics: CardMetrics,
 }
@@ -94,7 +96,7 @@ fn rgba_from_rgb(color: u32, opacity: f32) -> u32 {
 
 impl Render for AltTabApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let visible = crate::app::PICKER_VISIBLE.load(std::sync::atomic::Ordering::Relaxed);
+        let visible = self.is_active_visible();
         #[cfg(debug_assertions)]
         if let Some(p) = self.pending_cycle.take() {
             let d = self.delegate.read(cx);
@@ -146,6 +148,10 @@ impl Render for AltTabApp {
             if event.modifiers.alt {
                 return;
             }
+            if !this.is_active_visible() {
+                qol_gpui::probe::probe("MODS_UP", "inactive picker -> no activate");
+                return;
+            }
             qol_gpui::probe::probe("MODS_UP", "alt released -> activate+dismiss");
             #[cfg(debug_assertions)]
             eprintln!("[alt-tab/hold] Alt released via on_modifiers_changed");
@@ -162,12 +168,19 @@ impl Render for AltTabApp {
             show_debug_overlay: d.show_debug_overlay,
             show_hotkey_hints: d.show_hotkey_hints,
             icon_position: d.icon_position,
+            rendering: self.rendering,
             palette: SurfacePalette::from_card_color(d.card_bg_color, d.card_bg_opacity),
             metrics: CardMetrics::from_config(d.card_scale, d.card_padding),
         };
 
         #[cfg(debug_assertions)]
-        probe_rendered_front(&d.windows, &d.live_previews, d.selected_index, visible);
+        probe_rendered_front(
+            &d.windows,
+            &d.live_previews,
+            d.selected_index,
+            self.rendering,
+            visible,
+        );
 
         let layout = picker_layout(
             d.windows.len().max(1),
@@ -246,15 +259,17 @@ fn probe_rendered_front(
     windows: &[WindowInfo],
     live_previews: &PreviewMap,
     selected_index: Option<usize>,
+    rendering: RenderingFlow,
     visible: bool,
 ) {
     use std::sync::Mutex;
-    type RenderedSlot = Option<(u32, Option<gpui::ImageId>)>;
+    type RenderedSlot = Option<(u32, Option<gpui::ImageId>, bool)>;
     static LAST: Mutex<[RenderedSlot; 2]> = Mutex::new([None, None]);
 
     if !visible {
         return;
     }
+    let renders_gpui_preview = rendering.renders_gpui_preview_images();
     let stamp = |snap: Option<crate::shared::preview_trace::Snapshot>| {
         snap.map(|s| format!("{}:{}ms", s.source, s.age_ms))
             .unwrap_or_else(|| "none".to_string())
@@ -263,19 +278,26 @@ fn probe_rendered_front(
         let Some(win) = windows.get(pos) else {
             continue;
         };
-        let img_id = live_previews.get(&win.id).map(|i| i.id);
+        let img_id = if renders_gpui_preview && !win.is_minimized {
+            live_previews.get(&win.id).map(|i| i.id)
+        } else {
+            None
+        };
         {
             let mut last = LAST.lock().unwrap();
-            if last[pos] == Some((win.id, img_id)) {
+            if last[pos] == Some((win.id, img_id, renders_gpui_preview)) {
                 continue;
             }
-            last[pos] = Some((win.id, img_id));
+            last[pos] = Some((win.id, img_id, renders_gpui_preview));
         }
         qol_runtime::probe!(
             "PREVIEW_RENDER",
-            "pos={pos} selected={} wid={} has_preview={} img_id={:?} shared={} live={}",
+            "pos={pos} selected={} wid={} renderer={} backend={} gpui_preview_image={} has_preview={} img_id={:?} shared={} live={}",
             selected_index == Some(pos),
             win.id,
+            rendering.preview_renderer_name(),
+            rendering.backend_name(),
+            renders_gpui_preview,
             img_id.is_some(),
             img_id,
             stamp(crate::shared::preview_trace::shared_snapshot(win.id)),
@@ -375,15 +397,7 @@ fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> S
                 &snap.palette,
             )
         })
-        .child(render_preview(
-            win,
-            context.previews,
-            context.icons,
-            &snap.metrics,
-            &snap.palette,
-            snap.icon_position,
-            is_selected,
-        ))
+        .child(render_preview(win, context, is_selected))
         .child(render_label(
             i,
             win,
@@ -425,24 +439,20 @@ fn card_bg(
     })
 }
 
-fn render_preview(
-    win: &WindowInfo,
-    live_previews: &PreviewMap,
-    icon_cache: &IconMap,
-    metrics: &CardMetrics,
-    palette: &SurfacePalette,
-    icon_position: PreviewIconPosition,
-    selected: bool,
-) -> Div {
+fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, selected: bool) -> Div {
+    let snap = context.snap;
+    let metrics = &snap.metrics;
+    let palette = &snap.palette;
+    let render_gpui_preview = snap.rendering.renders_gpui_preview_images() || win.is_minimized;
     let minimized_icon = if win.is_minimized {
-        icon_cache.get(&win.app_name)
+        context.icons.get(&win.app_name)
     } else {
         None
     };
-    let overlay_icon = if win.is_minimized {
+    let overlay_icon = if win.is_minimized || !render_gpui_preview {
         None
     } else {
-        icon_cache.get(&win.app_name).cloned()
+        context.icons.get(&win.app_name).cloned()
     };
     let icon_px = (metrics.label_icon_px(1.0) * 1.46)
         .max(22.0)
@@ -461,12 +471,16 @@ fn render_preview(
         .flex_none()
         .rounded_md()
         .overflow_hidden()
-        .child(preview_tile(
-            live_previews.get(&win.id),
-            &win.preview_path,
-            minimized_icon,
-            metrics,
-        ))
+        .child(if render_gpui_preview {
+            preview_tile(
+                context.previews.get(&win.id),
+                &win.preview_path,
+                minimized_icon,
+                metrics,
+            )
+        } else {
+            preview_plane_slot(metrics, palette, selected)
+        })
         .when_some(overlay_icon, |el, icon| {
             let icon = div()
                 .absolute()
@@ -486,7 +500,7 @@ fn render_preview(
                         .rounded_sm()
                         .opacity(0.8),
                 );
-            match icon_position {
+            match snap.icon_position {
                 PreviewIconPosition::TopLeft => el.child(icon.left(px(inset_px))),
                 PreviewIconPosition::TopRight => el.child(icon.right(px(inset_px))),
             }
@@ -639,6 +653,25 @@ fn preview_tile(
             .into_any_element();
     }
     empty_placeholder(metrics)
+}
+
+fn preview_plane_slot(
+    metrics: &CardMetrics,
+    palette: &SurfacePalette,
+    selected: bool,
+) -> AnyElement {
+    let border = if selected {
+        palette.preview_icon_selected_border
+    } else {
+        palette.preview_icon_border
+    };
+    div()
+        .w(px(metrics.preview_width))
+        .h(px(metrics.preview_height))
+        .rounded_md()
+        .border_1()
+        .border_color(rgba(border))
+        .into_any_element()
 }
 
 fn minimized_placeholder(icon: &Arc<RenderImage>, metrics: &CardMetrics) -> AnyElement {
