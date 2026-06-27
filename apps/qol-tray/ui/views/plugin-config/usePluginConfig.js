@@ -16,7 +16,21 @@ export function usePluginConfig(pluginId) {
     const fieldPathsRef = useRef(null);
     const saveTimerRef = useRef(null);
 
-    useEffect(() => { loadConfig(pluginId, setForm, configRef, fieldPathsRef, setLoading, setError); }, [pluginId]);
+    useEffect(() => {
+        return startPluginConfigSessionLoad(
+            pluginId,
+            (session) => {
+                applyConfigSession(session, setForm, configRef, fieldPathsRef, setError);
+                setLoading(false);
+                setRenderTick(t => t + 1);
+            },
+            (err) => {
+                applyConfigSession({ ...emptyConfigSession(), error: errorMessage(err) }, setForm, configRef, fieldPathsRef, setError);
+                setLoading(false);
+                setRenderTick(t => t + 1);
+            },
+        );
+    }, [pluginId]);
 
     const state = {
         config: configRef.current,
@@ -66,20 +80,28 @@ export function usePluginConfig(pluginId) {
     };
 }
 
-async function loadConfig(pluginId, setForm, configRef, fieldPathsRef, setLoading, setError) {
-    try {
-        const result = await fetchConfigData(pluginId);
-        await applyConfigResult(result, setForm, configRef, fieldPathsRef, setError);
-        setLoading(false);
-    } catch (err) {
-        setError(err.message);
-        setLoading(false);
-    }
+export function startPluginConfigSessionLoad(pluginId, applySession, applyError, loadSession = loadPluginConfigSession) {
+    let cancelled = false;
+    loadSession(pluginId)
+        .then(session => {
+            if (cancelled) return;
+            applySession(session);
+        })
+        .catch(err => {
+            if (cancelled) return;
+            applyError(err);
+        });
+    return () => { cancelled = true; };
+}
+
+export async function loadPluginConfigSession(pluginId) {
+    const result = await fetchConfigData(pluginId);
+    return resolveConfigSession(result);
 }
 
 async function fetchConfigData(pluginId) {
     const preloaded = preloadedForms.get(pluginId);
-    if (preloaded) { preloadedForms.delete(pluginId); return { type: 'form', data: preloaded }; }
+    if (preloaded) { preloadedForms.delete(pluginId); return { type: 'form', data: preloaded, pluginId }; }
     const formResponse = await fetch(`/api/plugins/${pluginId}/config-form`);
     if (formResponse.ok) return { type: 'form', data: await tryParseJson(formResponse), pluginId };
     if (formResponse.status !== 404) throw new Error(await formResponse.text());
@@ -103,19 +125,35 @@ async function fetchExistingConfig(pluginId) {
     } catch { return {}; }
 }
 
-async function applyConfigResult(result, setForm, configRef, fieldPathsRef, setError) {
+async function resolveConfigSession(result) {
     if (result.type === 'none') {
-        setError('No configuration found for this plugin.');
-        return;
+        return { ...emptyConfigSession(), error: 'No configuration found for this plugin.' };
     }
     if (result.type === 'raw') {
-        configRef.current = result.data;
-        return;
+        return { ...emptyConfigSession(), config: result.data };
     }
-    fieldPathsRef.current = buildFieldPathIndex(result.data);
     const existingConfig = await fetchExistingConfig(result.pluginId);
-    configRef.current = configFromForm(result.data, existingConfig);
-    setForm(result.data);
+    return {
+        form: result.data,
+        config: configFromForm(result.data, existingConfig),
+        fieldPaths: buildFieldPathIndex(result.data),
+        error: null,
+    };
+}
+
+function emptyConfigSession() {
+    return { form: null, config: null, fieldPaths: null, error: null };
+}
+
+function applyConfigSession(session, setForm, configRef, fieldPathsRef, setError) {
+    configRef.current = session.config;
+    fieldPathsRef.current = session.fieldPaths;
+    setForm(session.form);
+    setError(session.error);
+}
+
+function errorMessage(err) {
+    return err instanceof Error ? err.message : String(err);
 }
 
 async function persistConfig(pluginId, config, form, extraKeys) {

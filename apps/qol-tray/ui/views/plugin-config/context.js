@@ -16,7 +16,7 @@ export function usePluginConfigContext() {
 
 export function PluginConfigProvider({ pluginId, activeSectionId, children }) {
     if (!pluginId) return html`<${PluginConfigContext.Provider} value=${null}>${children}<//>`;
-    return html`<${ActivePluginConfigProvider} pluginId=${pluginId} activeSectionId=${activeSectionId}>${children}<//>`;
+    return html`<${ActivePluginConfigProvider} key=${pluginId} pluginId=${pluginId} activeSectionId=${activeSectionId}>${children}<//>`;
 }
 
 function ActivePluginConfigProvider({ pluginId, activeSectionId, children }) {
