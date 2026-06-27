@@ -239,6 +239,28 @@ test('ascend returns false when stack is empty', () => {
     assert.equal(nav.getCurrentAnchor().pageId, 'plugins');
 });
 
+test('subscribeAnchor observes post-mutation stackDepth for diveInto and ascend', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    const events = [];
+
+    registry.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['plugins-config'] });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    const unsubscribe = nav.subscribeAnchor((anchor) => {
+        events.push({ pageId: anchor?.pageId, depth: nav.stackDepth() });
+    });
+
+    assert.ok(nav.diveInto('#card-a'));
+    assert.equal(nav.ascend(), true);
+    unsubscribe();
+
+    assert.deepEqual(events, [
+        { pageId: 'plugins-config', depth: 1 },
+        { pageId: 'plugins', depth: 0 },
+    ]);
+});
+
 test('dive/ascend invariant holds across all layer-0 pages', () => {
     const { registry, camera, getSettings, domHelpers } = makeMocks();
     const nav = createNavigation({ registry, camera, getSettings, domHelpers });

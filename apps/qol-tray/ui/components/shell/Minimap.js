@@ -24,7 +24,7 @@ const log = createDebug('qol:minimap');
 
 const ARROW_FLASH_MS = 350;
 
-export function MinimapContainer({ camera, registry, viewportRef, diveParent, diveDepth, navigation, version, updateState, isDevMode, onAction, branches, defaultBranch, setDefaultBranch, repoBranch }) {
+export function MinimapContainer({ camera, registry, viewportRef, diveDepth, navigation, version, updateState, isDevMode, onAction, branches, defaultBranch, setDefaultBranch, repoBranch }) {
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [settings, setSettings] = useState(getWorldSettings);
     const cogRef = useRef(null);
@@ -66,7 +66,7 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, di
         <${Peripheral} camera=${camera} navigation=${navigation} edge="br"
             className="world-minimap-container">
             ${diveDepth > 0 && html`<span class="world-minimap-depth" style=${`--wedge-hue: ${50 + (diveDepth - 1) * 45}`}>${diveDepth}</span>`}
-            <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} diveParent=${diveParent} navigation=${navigation} />
+            <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} navigation=${navigation} />
         <//>
         <${Peripheral} camera=${camera} navigation=${navigation} edge="bl"
             alwaysVisible=${settingsOpen} className="world-cog-anchor" elementRef=${cogRef}>
@@ -286,7 +286,7 @@ function versionDetail(status, state, isDevMode) {
     return null;
 }
 
-function Minimap({ camera, registry, viewportRef, width, diveParent, navigation }) {
+function Minimap({ camera, registry, viewportRef, width, navigation }) {
     const canvasRef = useRef(null);
     const [, bump] = useState(0);
     const [flash, setFlash] = useState(null);
@@ -347,7 +347,7 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
         ctx.clearRect(0, 0, cw, ch);
 
         const view = computeMinimapView({
-            camera, registry, viewportRef, navigation, diveParent,
+            camera, registry, viewportRef, navigation,
             minimapWidth: cw, canvasHeight: ch,
         });
         if (!view) return;
@@ -394,7 +394,7 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
         const clickY = Math.min(Math.max(e.clientY - bounds.top, 0), canvasHeight - 1e-6);
 
         const view = computeMinimapView({
-            camera, registry, viewportRef, navigation, diveParent,
+            camera, registry, viewportRef, navigation,
             minimapWidth, canvasHeight,
         });
         if (!view) return;
@@ -425,7 +425,7 @@ function slotLabel(entry) {
     return resolveViewLabel(entry).text;
 }
 
-function computeMinimapView({ camera, registry, viewportRef, navigation, diveParent, minimapWidth, canvasHeight }) {
+function computeMinimapView({ camera, registry, viewportRef, navigation, minimapWidth, canvasHeight }) {
     const currentLayer = camera.layer;
     const vp = resolveViewport(viewportRef);
     const vpW = vp ? vp.clientWidth : 0;
@@ -434,7 +434,7 @@ function computeMinimapView({ camera, registry, viewportRef, navigation, divePar
 
     const confinedPages = navigation?.getConfinedPages?.() || [];
     const allEntries = registry.getEntriesForLayer(currentLayer);
-    const entries = visibleMinimapEntries({ allEntries, confinedPages, diveParent });
+    const entries = visibleMinimapEntries({ allEntries, confinedPages });
     if (entries.length === 0) return null;
 
     const sortedAll = [...entries].sort((a, b) => a.x - b.x);

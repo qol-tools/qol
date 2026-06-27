@@ -359,10 +359,7 @@ function AppShell() {
     const registry = registryRef.current;
 
     const [cameraLayer, setCameraLayer] = useState(0);
-    const [diveParent, setDiveParent] = useState(null);
-    const [diveDepth, setDiveDepth] = useState(0);
     const [targetsVersion, setTargetsVersion] = useState(0);
-    const diveParentRef = useRef(null);
     const layerAnimatingRef = useRef(false);
     const diveTargetsRegisteredRef = useRef(new Set());
 
@@ -485,9 +482,12 @@ function AppShell() {
     }, [camera]);
 
     const [activeAnchorId, setActiveAnchorId] = useState(() => navigation.getCurrentAnchor()?.pageId || null);
+    const [diveDepth, setDiveDepth] = useState(() => navigation.stackDepth());
     useEffect(() => {
-        const unsub = navigation.subscribeAnchor((anchor) => setActiveAnchorId(anchor?.pageId || null));
-        return unsub;
+        return navigation.subscribeAnchor((anchor) => {
+            setActiveAnchorId(anchor?.pageId || null);
+            setDiveDepth(navigation.stackDepth());
+        });
     }, [navigation]);
     const activeSectionId = (activeAnchorId && activePluginId && activeAnchorId.startsWith(`${activePluginId}-`))
         ? activeAnchorId.slice(activePluginId.length + 1)
@@ -527,22 +527,10 @@ function AppShell() {
 
     useWorldNav({ camera, registry, viewportRef });
 
-    const syncDiveParentFromPage = useCallback((pageId) => {
-        if (!pageId) return;
-        const entry = registry.getEntry(pageId);
-        const newParent = entry?.parent || pageId;
-        diveParentRef.current = newParent;
-        setDiveParent(newParent);
-    }, [registry]);
-
     const diveViaSelector = useCallback((selector) => {
         if (layerAnimatingRef.current) return false;
-        const target = navigation.diveInto(selector);
-        if (!target) return false;
-        setDiveDepth(navigation.stackDepth());
-        syncDiveParentFromPage(target.pages?.[0]);
-        return true;
-    }, [navigation, syncDiveParentFromPage]);
+        return Boolean(navigation.diveInto(selector));
+    }, [navigation]);
 
     useEffect(() => {
         setDiveViaSelector(diveViaSelector);
@@ -575,17 +563,7 @@ function AppShell() {
         return () => setDiveFromSurface(null);
     }, [dive]);
 
-    const ascend = useCallback(() => {
-        const didAscend = navigation.ascend();
-        if (!didAscend) return false;
-        const topAnchor = navigation.getCurrentAnchor();
-        const topEntry = topAnchor?.pageId ? registry.getEntry(topAnchor.pageId) : null;
-        const parentForAnchor = topEntry?.parent ?? null;
-        diveParentRef.current = parentForAnchor;
-        setDiveParent(parentForAnchor);
-        setDiveDepth(navigation.stackDepth());
-        return true;
-    }, [navigation, registry]);
+    const ascend = useCallback(() => navigation.ascend(), [navigation]);
 
     useEffect(() => {
         setAscend(ascend);
@@ -636,8 +614,6 @@ function AppShell() {
             const didRetarget = Boolean(target);
             if (didRetarget) {
                 activePluginDiveRef.current = activePluginId;
-                syncDiveParentFromPage(target.pages?.[0]);
-                setDiveDepth(navigation.stackDepth());
             }
             traceWorld('dive', {
                 action: 'auto_plugin_config_dive',
@@ -668,7 +644,7 @@ function AppShell() {
             });
         }
         if (!activePluginId && hiddenUntilDive) setHiddenUntilDive(false);
-    }, [activePluginId, diveViaSelector, ascend, targetsVersion, hiddenUntilDive, cameraLayer, navigation, syncDiveParentFromPage]);
+    }, [activePluginId, diveViaSelector, ascend, targetsVersion, hiddenUntilDive, cameraLayer, navigation]);
     useEffect(() => {
         if (hiddenUntilDive && cameraLayer !== 0) setHiddenUntilDive(false);
     }, [cameraLayer, hiddenUntilDive]);
@@ -751,7 +727,7 @@ function AppShell() {
                         <${RegionLabels} registry=${registry} cameraLayer=${cameraLayer} navigation=${navigation} diveDepth=${diveDepth} camera=${camera} />
                     `}
                     <${CommandPalette} camera=${camera} navigation=${navigation} />
-                    <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef} diveParent=${diveParent}
+                    <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef}
                         diveDepth=${diveDepth} navigation=${navigation}
                         version=${appVersion} updateState=${updateState} isDevMode=${devEnabled} onAction=${handleSidebarAction}
                         branches=${branches} defaultBranch=${defaultBranch} setDefaultBranch=${setDefaultBranch}
