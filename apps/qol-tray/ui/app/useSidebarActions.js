@@ -1,5 +1,6 @@
 import { useCallback, useEffect } from 'preact/hooks';
 import { readResponseText } from '../api/client.js';
+import { postRestartTrigger } from './restart-trigger.js';
 
 const RECOMPILE_ERRORS = {
     404: 'Connected daemon is older than this UI. Stop it and launch the current checkout.',
@@ -28,11 +29,7 @@ export function useSidebarActions({
 
         if (action === 'self-update') {
             beginSelfUpdate();
-            try {
-                await fetch('/api/self-update', { method: 'POST' });
-            } catch {
-                failSelfUpdate();
-            }
+            await postRestartTrigger('/api/self-update', { method: 'POST' }, () => failSelfUpdate());
             return;
         }
 
@@ -43,23 +40,16 @@ export function useSidebarActions({
             return;
         }
 
-        try {
-            const branch = defaultBranchRef?.current || null;
-            const fetchOpts = branch
-                ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ worktree_branch: branch }) }
-                : { method: 'POST' };
-            const res = await fetch('/api/dev/recompile-self', fetchOpts);
-            if (!res.ok) {
-                const body = await readResponseText(res);
-                throw new Error(
-                    RECOMPILE_ERRORS[res.status]
-                        || body
-                        || `Could not start recompile (${res.status})`
-                );
-            }
-        } catch (error) {
-            failDevRecompile(error?.message || 'Could not start recompile');
-        }
+        const branch = defaultBranchRef?.current || null;
+        const fetchOpts = branch
+            ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ worktree_branch: branch }) }
+            : { method: 'POST' };
+        await postRestartTrigger('/api/dev/recompile-self', fetchOpts, async (res) => {
+            const body = await readResponseText(res);
+            failDevRecompile(
+                RECOMPILE_ERRORS[res.status] || body || `Could not start recompile (${res.status})`
+            );
+        });
     }, [
         devEnabled,
         beginDevRecompile,

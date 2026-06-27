@@ -1,4 +1,5 @@
 import { toast } from '../lib/toast.js';
+import { isHostRestarting } from '../lib/host-restart.js';
 
 const originalFetch = window.fetch.bind(window);
 const inflightGets = new Map();
@@ -27,14 +28,22 @@ function isCoalescableGet(url, options) {
 }
 
 async function wrappedFetch(url, options) {
+    const suppressErrorToast = options?.qolSuppressErrorToast === true;
+    let fetchOptions = options;
+    if (suppressErrorToast) {
+        fetchOptions = { ...options };
+        delete fetchOptions.qolSuppressErrorToast;
+    }
     try {
-        const response = await originalFetch(url, options);
-        if (!response.ok) {
+        const response = await originalFetch(url, fetchOptions);
+        if (!response.ok && !suppressErrorToast && !isHostRestarting()) {
             toast('error', `${response.status} — ${extractPath(url)}`);
         }
         return response;
     } catch (error) {
-        toast('error', error.message);
+        if (!suppressErrorToast && !isHostRestarting()) {
+            toast('error', error.message);
+        }
         throw error;
     }
 }
