@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Git merge driver for Cargo.lock (activated by `/Cargo.lock merge=cargo-lock`).
+# Cargo.lock is fully derived from the Cargo.toml manifests, so a "conflict" in it
+# is never a real conflict - just two regenerations of derived data. Keep one side,
+# then let cargo reconcile the workspace-member versions with the already-merged
+# manifests. Result: a valid, current lockfile with no conflict markers, ever.
+#
+# Invoked as: cargo-lock-merge %O %A %B %P
+#   $2 (%A) is "ours" AND the file git takes as the merge RESULT.
+set -u
+
+ours="$2"
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+lock="$root/Cargo.lock"
+
+cp -f "$ours" "$lock"
+
+if command -v cargo >/dev/null 2>&1; then
+  cargo update --manifest-path "$root/Cargo.toml" --workspace --offline >/dev/null 2>&1 \
+    || cargo update --manifest-path "$root/Cargo.toml" --workspace >/dev/null 2>&1 \
+    || true
+fi
+
+cp -f "$lock" "$ours"
+exit 0

@@ -32,6 +32,7 @@ const DEV_BUILD_ARGS: [&str; 7] = [
 pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
     let branch = optional_single_arg(args, "qol dev [worktree]")?;
     let root = repo_root()?;
+    crate::setup::ensure_lockfile_merge_driver(&root);
     let reload = std::env::var_os(RELOAD_ENV).is_some();
     print_title("qol dev");
     print_hint(verbose);

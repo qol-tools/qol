@@ -10,6 +10,8 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use toml::Value as TomlValue;
 
+const CARGO_LOCK_DRIVER_CMD: &str = ".githooks/cargo-lock-merge %O %A %B %P";
+
 pub(crate) fn cmd_setup(args: &[OsString], verbose: bool) -> Result<()> {
     if !args.is_empty() {
         bail!("usage: qol setup");
@@ -20,6 +22,7 @@ pub(crate) fn cmd_setup(args: &[OsString], verbose: bool) -> Result<()> {
     let version = package_version(&package)?;
     print_title("qol setup");
     print_hint(verbose);
+    configure_lockfile_merge_driver(&root);
     let target_display = target.display().to_string();
     if install_is_current(&root, &package, &target, &version)? {
         step_label("current", StepKind::Success, &target_display);
@@ -44,6 +47,69 @@ pub(crate) fn cmd_setup(args: &[OsString], verbose: bool) -> Result<()> {
 
 pub(crate) fn installed_qol_path() -> Result<PathBuf> {
     Ok(cargo_bin_dir()?.join(exe_name("qol")))
+}
+
+fn configure_lockfile_merge_driver(root: &Path) {
+    match register_cargo_lock_driver(root) {
+        Ok(()) => step_label("merge", StepKind::Success, "Cargo.lock auto-resolve"),
+        Err(error) => step_label(
+            "merge",
+            StepKind::Info,
+            &format!("Cargo.lock driver skipped: {error}"),
+        ),
+    }
+}
+
+pub(crate) fn ensure_lockfile_merge_driver(root: &Path) {
+    if !lockfile_driver_is_current(root) {
+        let _ = register_cargo_lock_driver(root);
+    }
+}
+
+fn lockfile_driver_is_current(root: &Path) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["config", "--get", "merge.cargo-lock.driver"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| {
+            String::from_utf8_lossy(&output.stdout).trim() == CARGO_LOCK_DRIVER_CMD
+        })
+}
+
+fn register_cargo_lock_driver(root: &Path) -> Result<()> {
+    git_config(
+        root,
+        "merge.cargo-lock.name",
+        "Cargo.lock auto-resolve (regenerate from manifests)",
+    )?;
+    git_config(root, "merge.cargo-lock.driver", CARGO_LOCK_DRIVER_CMD)?;
+    git_config_unset(root, "merge.lockfile.driver");
+    git_config_unset(root, "merge.lockfile.name");
+    Ok(())
+}
+
+fn git_config(root: &Path, key: &str, value: &str) -> Result<()> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["config", key, value])
+        .status()
+        .with_context(|| format!("failed to run git config {key}"))?;
+    if !status.success() {
+        bail!("git config {key} exited with {status}");
+    }
+    Ok(())
+}
+
+fn git_config_unset(root: &Path, key: &str) {
+    let _ = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["config", "--unset", key])
+        .status();
 }
 
 fn install_is_current(root: &Path, package: &Path, target: &Path, version: &str) -> Result<bool> {
