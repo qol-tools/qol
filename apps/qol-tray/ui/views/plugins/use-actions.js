@@ -4,17 +4,17 @@ import { useGridNav } from '../../lib/hooks/useGridNav.js';
 import { updateInstalledPlugin } from './data.js';
 import { toast } from '../../lib/toast.js';
 
-async function doUpdate(pluginId, updatingRef, setUpdating, refreshPlugins) {
+async function doUpdate(pluginId, updatingRef, setUpdating, markUpdated) {
     if (updatingRef.current.has(pluginId)) return;
     setUpdating(prev => new Set(prev).add(pluginId));
     try {
         await updateInstalledPlugin(pluginId);
+        markUpdated(pluginId);
         toast('success', `Updated ${pluginId}`);
     } catch (error) {
         toast('error', `Failed to update ${pluginId}: ${error.message}`);
     } finally {
         setUpdating(prev => { const s = new Set(prev); s.delete(pluginId); return s; });
-        refreshPlugins();
     }
 }
 
@@ -35,8 +35,8 @@ async function doOpenSelected(pluginsRef, selectedIndexRef, onOpenPluginConfig) 
 export function usePluginActions(list, modal, onOpenPluginConfig) {
     const [updating, setUpdating, updatingRef] = useStateRef(new Set());
     const updatePlugin = useCallback(
-        pluginId => doUpdate(pluginId, updatingRef, setUpdating, list.refreshPlugins),
-        [list.refreshPlugins]
+        pluginId => doUpdate(pluginId, updatingRef, setUpdating, list.markUpdated),
+        [list.markUpdated]
     );
     const openSelected = useCallback(
         () => doOpenSelected(list.pluginsRef, list.selectedIndexRef, onOpenPluginConfig),

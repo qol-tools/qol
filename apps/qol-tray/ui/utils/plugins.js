@@ -19,6 +19,16 @@ const PLUGIN_EQ_KEYS = [
     'load_error', 'active_failure_reason'
 ];
 
+export function markPluginUpdated(plugins, id) {
+    const idx = plugins.findIndex(plugin => plugin.id === id);
+    if (idx < 0) return plugins;
+    const current = plugins[idx];
+    const version = current.available_version ?? current.installed_version ?? current.version ?? null;
+    const next = plugins.slice();
+    next[idx] = { ...current, update_available: false, installed_version: version, version };
+    return next;
+}
+
 export function samePluginList(a, b) {
     if (a === b) return true;
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;

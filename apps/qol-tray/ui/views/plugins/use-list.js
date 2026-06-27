@@ -6,7 +6,7 @@ import { useRefreshOnFocus } from '../../lib/hooks/useRefreshOnFocus.js';
 import { useSSEDebounce } from '../../hooks/useSSEDebounce.js';
 import { useInstalling } from '../../hooks/useInstalling.js';
 import { loadInstalledPlugins, buildGhostPlugins, readInstalledCache, writeInstalledCache } from './data.js';
-import { samePluginList } from '../../utils/plugins.js';
+import { samePluginList, markPluginUpdated } from '../../utils/plugins.js';
 import { toast } from '../../lib/toast.js';
 
 const FOCUS_REFRESH_MIN_MS = 30000;
@@ -62,6 +62,7 @@ export function usePluginsList() {
         opts => doRefresh(opts || {}, { nextToken, isCurrentToken, latestRevisionRef, applyPayload }),
         [applyPayload]
     );
+    const markUpdated = useCallback((id) => setPlugins(prev => markPluginUpdated(prev, id)), []);
     useListEffects(refreshPlugins, latestRevisionRef);
     const ghostPlugins = buildGhostPlugins(plugins, installingItems);
     const selectedIndex = findPluginIndex(plugins, selectedPluginId);
@@ -71,5 +72,5 @@ export function usePluginsList() {
         const plugin = pluginsRef.current[idx];
         if (plugin) setSelectedPluginId(plugin.id);
     }, []);
-    return { plugins, pluginsRef, selectedIndex, setSelectedIndex, selectedIndexRef, refreshPlugins, ghostPlugins, loaded };
+    return { plugins, pluginsRef, selectedIndex, setSelectedIndex, selectedIndexRef, refreshPlugins, markUpdated, ghostPlugins, loaded };
 }

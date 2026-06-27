@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { samePluginList } from './plugins.js';
+import { samePluginList, markPluginUpdated } from './plugins.js';
 
 test('samePluginList is true for identical reference and identical content', () => {
     const list = [{ id: 'a', version: '1.0.0', update_available: false }];
@@ -44,4 +44,35 @@ test('samePluginList handles empty lists and non-arrays', () => {
     assert.equal(samePluginList(null, []), false);
     assert.equal(samePluginList([], null), false);
     assert.equal(samePluginList(undefined, undefined), true);
+});
+
+test('markPluginUpdated clears the update flag and bumps versions for the matching plugin only', () => {
+    const before = [
+        { id: 'a', update_available: true, available_version: '2.0.0', installed_version: '1.0.0', version: '1.0.0' },
+        { id: 'b', update_available: true, available_version: '3.0.0', installed_version: '2.5.0', version: '2.5.0' },
+    ];
+    const after = markPluginUpdated(before, 'a');
+    const cases = [
+        [after[0].update_available, false, 'a no longer updatable'],
+        [after[0].installed_version, '2.0.0', 'a installed_version bumped to available'],
+        [after[0].version, '2.0.0', 'a version bumped to available'],
+        [after[1], before[1], 'b untouched (same reference)'],
+        [before[0].update_available, true, 'original list not mutated'],
+    ];
+    for (const [actual, expected, label] of cases) {
+        assert.equal(actual, expected, label);
+    }
+    assert.notEqual(after, before, 'returns a new array');
+});
+
+test('markPluginUpdated falls back to the current version when available_version is absent', () => {
+    const after = markPluginUpdated([{ id: 'a', update_available: true, installed_version: '1.0.0', version: '1.0.0' }], 'a');
+    assert.equal(after[0].update_available, false, 'flag cleared');
+    assert.equal(after[0].installed_version, '1.0.0', 'installed_version kept');
+    assert.equal(after[0].version, '1.0.0', 'version kept');
+});
+
+test('markPluginUpdated is a no-op that preserves identity for an unknown id', () => {
+    const before = [{ id: 'a', update_available: true }];
+    assert.equal(markPluginUpdated(before, 'zzz'), before);
 });
