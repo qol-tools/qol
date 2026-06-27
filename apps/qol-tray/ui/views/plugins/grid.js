@@ -1,7 +1,7 @@
 import { html } from '../../lib/html.js';
 import { useState } from 'preact/hooks';
 import { Card, CardGrid } from '../../lib/components/Card.js';
-import { useModifierState } from '../../lib/hooks/modifier-state-context.js';
+import { useModifierState } from '../../lib/hooks/use-modifier-state.js';
 import { PluginVersion } from '../../components/PluginVersion.js';
 
 const brokenCovers = new Set();

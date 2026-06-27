@@ -5,7 +5,7 @@ import { hslLuminance } from '../color.js';
 import { surfaceDepth } from '../surface-traits.js';
 import { SelectionWedgeGlyph } from './SelectionWedgeGlyph.js';
 import { createDebug, elLabel, rectLabel } from '../debug.js';
-import { isCtrlHeld, subscribeCtrl } from '../ctrl-state.js';
+import { isCtrlHeld, subscribeCtrl } from '../modifier-state.js';
 import { nearestSurfaceToCenter } from '../viewport-spatial.js';
 
 const log = createDebug('qol:wedge');

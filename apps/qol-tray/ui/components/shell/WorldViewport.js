@@ -2,7 +2,7 @@ import { html } from '../../lib/html.js';
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { createWorldCanvasBg } from '../../fx/world-canvas-bg.js';
 import { createDebug, elLabel } from '../../lib/debug.js';
-import { isCtrlHeld } from '../../lib/ctrl-state.js';
+import { isCtrlHeld } from '../../lib/modifier-state.js';
 import { nearestSurfaceToCenter } from '../../lib/viewport-spatial.js';
 import { getWorldSettings } from '../../lib/world-settings.js';
 import { selectorFor } from '../../lib/world-navigation.js';

@@ -10,8 +10,6 @@ import { getWorldSettings, subscribeWorldSettings } from '../lib/world-settings.
 import { applyAccent, resolveAccent } from '../lib/accent-presets.js';
 
 const log = createDebug('qol:app');
-import { ModifierStateProvider } from '../lib/hooks/modifier-state-context.js';
-import { useShiftHeld } from '../lib/hooks/use-shift-held.js';
 import { PluginConfigProvider } from '../views/plugin-config/context.js';
 import { useApp } from '../app/useApp.js';
 import { useAppKeyboardRouting } from '../app/useAppKeyboardRouting.js';
@@ -293,7 +291,6 @@ export function App() {
 }
 
 function AppShell() {
-    useShiftHeld();
     const dissolveRef = useRef(null);
     const onDissolve = useCallback((reload) => dissolveRef.current?.(reload), []);
     const {
@@ -702,7 +699,6 @@ function AppShell() {
     const renderPage = useCallback((pageId) => renderPageContent(pageId, renderCtx), [renderCtx]);
 
     return html`
-        <${ModifierStateProvider}>
         <${PluginConfigProvider} pluginId=${activePluginId} activeSectionId=${activeSectionId}>
             <${ViewKeyboardProvider}>
                 <${AppKeyboardRouting}
@@ -738,7 +734,6 @@ function AppShell() {
                     <${GlobalToast} />
                 </div>
             <//>
-        <//>
         <//>
     `;
 }
