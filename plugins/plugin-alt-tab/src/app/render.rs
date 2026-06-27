@@ -198,9 +198,9 @@ impl Render for AltTabApp {
             .w(px(panel_w))
             .h(px(panel_h))
             .when(!snap.transparent_bg, |s| s.bg(rgb(snap.palette.panel_bg)))
+            .on_key_down(key_handler)
             .when(snap.visible, |s| {
-                s.on_key_down(key_handler)
-                    .on_modifiers_changed(modifiers_handler)
+                s.on_modifiers_changed(modifiers_handler)
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                     .on_click(|_, _, cx| cx.stop_propagation())

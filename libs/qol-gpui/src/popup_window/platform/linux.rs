@@ -192,7 +192,6 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
 }
 
 pub fn show_window_by_title(title: &str) -> bool {
-    #[cfg(debug_assertions)]
     let reason = crate::popup_window::change_reason();
     let Ok((conn, screen_num)) = x11rb::connect(None) else {
         return false;
@@ -212,20 +211,61 @@ pub fn show_window_by_title(title: &str) -> bool {
     let Some(active_atom) = intern(&conn, b"_NET_ACTIVE_WINDOW") else {
         return false;
     };
-    let _ = clear_window_opacity(&conn, wid);
+    let active_before = active_window(&conn, root);
+    let before = show_window_state(&conn, root, wid, active_before);
+    qol_runtime::probe!(
+        "SHOW_WIN_STATE",
+        "reason={reason} phase=before title={title} wid={wid} {before}"
+    );
+    let clear_ok = clear_window_opacity(&conn, wid);
     store_card(title, wid, None);
-    let _ = set_input_passthrough(&conn, wid, false);
-    let _ = conn.map_window(wid);
+    let input_ok = set_input_passthrough(&conn, wid, false);
+    let map_ok = conn
+        .map_window(wid)
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some();
     const SOURCE_APPLICATION: u32 = 1;
     let event = ClientMessageEvent::new(32, wid, active_atom, [SOURCE_APPLICATION, 0, 0, 0, 0]);
     let mask = EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT;
-    let _ = conn.send_event(false, root, mask, event);
-    let _ = conn.flush();
+    let activate_ok = conn
+        .send_event(false, root, mask, event)
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some();
+    let flush_ok = conn.flush().is_ok();
+    let active_after = active_window(&conn, root);
+    let after = show_window_state(&conn, root, wid, active_after);
+    qol_runtime::probe!(
+        "SHOW_WIN_STATE",
+        "reason={reason} phase=after title={title} wid={wid} clear_opacity={clear_ok} input_passthrough_false={input_ok} map={map_ok} activate={activate_ok} flush={flush_ok} {after}",
+    );
     qol_runtime::probe!(
         "SHOW_WIN",
-        "title={title} wid={wid} cleared_opacity->1 source={SOURCE_APPLICATION} timestamp=0 requester_active=0 reason={reason}",
+        "title={title} wid={wid} cleared_opacity={clear_ok} source={SOURCE_APPLICATION} timestamp=0 requester_active=0 reason={reason}",
     );
     true
+}
+
+fn show_window_state(conn: &impl Connection, root: u32, wid: u32, active: Option<u32>) -> String {
+    let opacity = window_opacity(conn, wid)
+        .map(|value| format!("{value:.2}"))
+        .unwrap_or_else(|| "unset".to_string());
+    let (x, y, width, height) = absolute_geometry(conn, root, wid)
+        .map(|(x, y, width, height)| (x, y, width.to_string(), height.to_string()))
+        .unwrap_or_else(|| (i32::MIN, i32::MIN, "?".to_string(), "?".to_string()));
+    format!(
+        "active={:?} target_active={} map={} opacity={} pos=({},{}) size={}x{} override_redirect={}",
+        active,
+        active == Some(wid),
+        map_state(conn, wid),
+        opacity,
+        x,
+        y,
+        width,
+        height,
+        window_is_override_redirect(conn, wid)
+    )
 }
 
 pub fn configure_overlay_window(title: &str) -> bool {
@@ -795,7 +835,6 @@ fn is_qol_ghost(conn: &impl Connection, wid: u32) -> bool {
         == Some(1)
 }
 
-#[cfg(debug_assertions)]
 fn window_opacity(conn: &impl Connection, wid: u32) -> Option<f32> {
     let atom = intern(conn, b"_NET_WM_WINDOW_OPACITY")?;
     let reply = conn
@@ -807,7 +846,6 @@ fn window_opacity(conn: &impl Connection, wid: u32) -> Option<f32> {
     Some(raw as f32 / u32::MAX as f32)
 }
 
-#[cfg(debug_assertions)]
 fn map_state(conn: &impl Connection, wid: u32) -> &'static str {
     let Ok(cookie) = conn.get_window_attributes(wid) else {
         return "err";
@@ -826,7 +864,6 @@ fn map_state(conn: &impl Connection, wid: u32) -> &'static str {
     }
 }
 
-#[cfg(debug_assertions)]
 fn absolute_geometry(conn: &impl Connection, root: u32, wid: u32) -> Option<(i32, i32, u16, u16)> {
     let geometry = conn.get_geometry(wid).ok()?.reply().ok()?;
     let translated = conn

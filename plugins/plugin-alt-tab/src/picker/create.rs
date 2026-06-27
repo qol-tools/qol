@@ -20,13 +20,24 @@ pub(super) struct CreateRequest<'a> {
     pub preview_cache: SharedPreviewCache,
     pub current: &'a PickerWindowState,
     pub has_shown_once: Arc<AtomicBool>,
+    pub show_id: u64,
 }
 
 pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mut App) {
     let bounds = compute_create_bounds(req, &gathered, cx);
     let target = req.placement.target();
     let title = super::platform::picker_window_title(target);
-    let post = PostCreateData::new(req.config, &gathered, title.clone());
+    qol_runtime::probe!(
+        "CREATE_BEGIN",
+        "show_id={} title={} target={},{},{}x{}",
+        req.show_id,
+        title,
+        target.x,
+        target.y,
+        target.width,
+        target.height,
+    );
+    let post = PostCreateData::new(req.config, &gathered, title.clone(), req.show_id);
     let handle = open_picker_window(
         bounds,
         title.clone(),
@@ -34,7 +45,7 @@ pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mu
             req.config,
             gathered,
             req.preview_cache.clone(),
-            title,
+            title.clone(),
             true,
             req.placement.monitor_size(),
         ),
@@ -42,6 +53,12 @@ pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mu
         cx,
     );
     let Some(handle) = handle else {
+        qol_runtime::probe!(
+            "CREATE_ABORT",
+            "show_id={} title={} phase=open_window",
+            req.show_id,
+            title
+        );
         return on_open_failure();
     };
     req.current.borrow_mut().insert(target, handle);
@@ -245,6 +262,7 @@ pub(crate) fn pre_create_ghost(
 }
 
 struct PostCreateData {
+    show_id: u64,
     title: String,
     transparent_bg: bool,
     windows: Vec<WindowInfo>,
@@ -252,8 +270,9 @@ struct PostCreateData {
 }
 
 impl PostCreateData {
-    fn new(config: &AltTabConfig, gathered: &GatheredWindows, title: String) -> Self {
+    fn new(config: &AltTabConfig, gathered: &GatheredWindows, title: String, show_id: u64) -> Self {
         Self {
+            show_id,
             title,
             transparent_bg: config.display.transparent_background,
             windows: gathered.windows.clone(),
@@ -270,8 +289,24 @@ impl PostCreateData {
     ) {
         PICKER_VISIBLE.store(true, Ordering::Relaxed);
         has_shown_once.store(true, Ordering::Release);
-        qol_runtime::probe!("PICKER_READY", "title={}", self.title);
+        qol_runtime::probe!(
+            "PICKER_READY",
+            "show_id={} title={}",
+            self.show_id,
+            self.title
+        );
+        let reason = format!("show#{}", self.show_id);
+        let _reason = qol_gpui::popup_window::reason_scope(reason);
         super::platform::show_picker_window(&self.title, std::slice::from_ref(&self.title));
+        qol_runtime::probe!(
+            "CREATE_SHOW_WINDOW",
+            "show_id={} title={}",
+            self.show_id,
+            self.title
+        );
+        let _ = handle.update(cx, |view, window, _| {
+            view.focus_for_keys("create-after-show", Some(self.show_id), window);
+        });
         cx.activate(true);
         super::probe_app_active_after_frame(handle, cx);
         if self.transparent_bg {

@@ -9,11 +9,12 @@ use gpui::*;
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
 pub(crate) type SharedPreviewCache = Arc<Mutex<crate::PreviewMap>>;
+static NEXT_SHOW_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 pub(super) struct PickerCaches {
@@ -43,7 +44,7 @@ impl PickerCaches {
 }
 
 impl PickerState {
-    fn open_picker(&self, config: &AltTabConfig, reverse: bool, cx: &mut App) {
+    fn open_picker(&self, config: &AltTabConfig, reverse: bool, show_id: u64, cx: &mut App) {
         let req = OpenPickerRequest {
             config,
             current: &self.current,
@@ -54,9 +55,14 @@ impl PickerState {
             preview_cache: self.caches.preview_cache.clone(),
             has_shown_once: self.has_shown_once.clone(),
             reverse,
+            show_id,
         };
         open_picker(&req, cx);
     }
+}
+
+fn next_show_id() -> u64 {
+    NEXT_SHOW_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 pub(crate) fn run_app(
@@ -98,7 +104,7 @@ pub(crate) fn run_app(
         );
 
         if show_on_start {
-            state.open_picker(&config, false, cx);
+            state.open_picker(&config, false, next_show_id(), cx);
         }
         spawn_daemon_loop(cx, rx, state);
     });
@@ -157,7 +163,8 @@ async fn dispatch_reload(cx: &AsyncApp, state: &PickerState) {
 async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     #[cfg(debug_assertions)]
     let t_total = std::time::Instant::now();
-    qol_runtime::probe!("SHOW_RECV", "reverse={reverse}");
+    let show_id = next_show_id();
+    qol_runtime::probe!("SHOW_RECV", "show_id={show_id} reverse={reverse}");
 
     if crate::app::PICKER_VISIBLE.load(Ordering::Relaxed) {
         let state_fast = state.clone();
@@ -165,12 +172,14 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
             .update(move |app_cx| {
                 #[cfg(debug_assertions)]
                 crate::app::set_cycle_origin(t_total);
-                let cycled = super::try_cycle_visible(&state_fast.current, reverse, app_cx);
+                let cycled =
+                    super::try_cycle_visible(&state_fast.current, reverse, show_id, app_cx);
                 #[cfg(debug_assertions)]
                 crate::app::clear_cycle_origin();
                 cycled
             })
             .unwrap_or(false);
+        qol_runtime::probe!("SHOW_CYCLE_FAST", "show_id={show_id} cycled={cycled}");
         if cycled {
             #[cfg(debug_assertions)]
             eprintln!(
@@ -218,7 +227,7 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
         }
         #[cfg(debug_assertions)]
         crate::app::set_cycle_origin(t_total);
-        state_for_update.open_picker(&config, reverse, app_cx);
+        state_for_update.open_picker(&config, reverse, show_id, app_cx);
         #[cfg(debug_assertions)]
         crate::app::clear_cycle_origin();
     });

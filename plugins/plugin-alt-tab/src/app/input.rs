@@ -9,6 +9,8 @@ pub(crate) fn handle_key_down(
     window: &mut Window,
     cx: &mut Context<AltTabApp>,
 ) {
+    let visible = crate::app::PICKER_VISIBLE.load(std::sync::atomic::Ordering::Relaxed);
+    let focused = this.focus_handle.is_focused(window);
     #[cfg(debug_assertions)]
     eprintln!(
         "[alt-tab/input] key_down: key={:?} alt={} shift={}",
@@ -20,11 +22,16 @@ pub(crate) fn handle_key_down(
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
         "KEY_RECV",
-        "key={:?} shift={} selected={:?}",
+        "key={:?} shift={} selected={:?} visible={} focus={}",
         event.keystroke.key,
         event.keystroke.modifiers.shift,
         this.delegate.read(cx).selected_index,
+        visible,
+        focused,
     );
+    if !visible {
+        return;
+    }
     match event.keystroke.key.as_str() {
         "escape" | "esc" => this.dismiss("key/escape", window, cx),
         "enter" => on_activate(this, window, cx),

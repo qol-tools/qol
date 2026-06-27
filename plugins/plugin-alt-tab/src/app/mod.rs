@@ -57,6 +57,22 @@ pub(crate) fn clear_cycle_origin() {
 }
 
 impl AltTabApp {
+    pub(crate) fn focus_for_keys(&self, phase: &str, show_id: Option<u64>, window: &mut Window) {
+        let show_id = show_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        let before = self.focus_handle.is_focused(window);
+        window.focus(&self.focus_handle);
+        window.activate_window();
+        let after = self.focus_handle.is_focused(window);
+        let visible = PICKER_VISIBLE.load(Ordering::Relaxed);
+        qol_runtime::probe!(
+            "KEY_FOCUS",
+            "phase={phase} show_id={show_id} before={before} after={after} visible={visible} title={}",
+            self.picker_title
+        );
+    }
+
     pub(crate) fn mark_cycle(&mut self, method: &'static str, from: Option<usize>) {
         #[cfg(debug_assertions)]
         {
@@ -111,14 +127,33 @@ impl AltTabApp {
             |this: &Self| this.blur_guard_until,
             |_this: &Self| PICKER_VISIBLE.load(Ordering::Relaxed),
             cx,
-            |this, window, cx| match focus_out_decision(
-                PICKER_VISIBLE.load(Ordering::Relaxed),
-                &this.action_mode,
-                picker::is_modifier_held(),
-            ) {
-                FocusOutDecision::IgnoreHidden => {}
-                FocusOutDecision::IgnoreAltHeld => {}
-                FocusOutDecision::Dismiss => this.dismiss("focus-lost", window, cx),
+            |this, window, cx| {
+                let picker_visible = PICKER_VISIBLE.load(Ordering::Relaxed);
+                let modifier_held = picker::is_modifier_held();
+                match focus_out_decision(picker_visible, &this.action_mode, modifier_held) {
+                    FocusOutDecision::IgnoreHidden => {
+                        qol_runtime::probe!(
+                            "FOCUS_DISMISS_OUTCOME",
+                            "outcome=ignored_hidden visible={picker_visible} mode={:?} modifier_held={modifier_held}",
+                            this.action_mode
+                        );
+                    }
+                    FocusOutDecision::IgnoreAltHeld => {
+                        qol_runtime::probe!(
+                            "FOCUS_DISMISS_OUTCOME",
+                            "outcome=ignored_alt_held visible={picker_visible} mode={:?} modifier_held={modifier_held}",
+                            this.action_mode
+                        );
+                    }
+                    FocusOutDecision::Dismiss => {
+                        qol_runtime::probe!(
+                            "FOCUS_DISMISS_OUTCOME",
+                            "outcome=dismissed visible={picker_visible} mode={:?} modifier_held={modifier_held}",
+                            this.action_mode
+                        );
+                        this.dismiss("focus-lost", window, cx);
+                    }
+                }
             },
         );
 
@@ -154,7 +189,7 @@ impl AltTabApp {
         self.apply_reuse_config(req, window, cx);
         self.sync_alt_poll(window, cx);
         self.apply_reuse_windows(req, window, cx);
-        self.probe_show_list("reuse", cx);
+        self.probe_show_list("reuse", Some(req.show_id), cx);
         true
     }
 
@@ -231,9 +266,12 @@ impl AltTabApp {
     }
 
     #[allow(unused_variables)]
-    fn probe_show_list(&self, path: &str, cx: &Context<Self>) {
+    fn probe_show_list(&self, path: &str, show_id: Option<u64>, cx: &Context<Self>) {
         #[cfg(debug_assertions)]
         {
+            let show_id = show_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "none".to_string());
             let state = self.delegate.read(cx);
             let head: Vec<String> = state
                 .windows
@@ -249,7 +287,7 @@ impl AltTabApp {
                 .collect();
             qol_runtime::probe!(
                 "SHOW_LIST",
-                "path={path} sel={:?} n={} head=[{}] order=[{}]",
+                "show_id={show_id} path={path} sel={:?} n={} head=[{}] order=[{}]",
                 state.selected_index,
                 state.windows.len(),
                 head.join(" "),
@@ -308,7 +346,7 @@ impl AltTabApp {
             self.delegate.update(cx, |s, _| s.select_next());
             cx.notify();
         }
-        self.probe_show_list("ghost", cx);
+        self.probe_show_list("ghost", None, cx);
     }
 
     pub(crate) fn update_icons(

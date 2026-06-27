@@ -1,6 +1,6 @@
 mod platform;
 
-use std::cell::Cell;
+use std::cell::RefCell;
 
 use crate::runtime_config::load_gpui_runtime_config;
 
@@ -47,22 +47,29 @@ fn ghost_color_env() -> Option<String> {
 }
 
 thread_local! {
-    static CHANGE_REASON: Cell<&'static str> = const { Cell::new("?") };
+    static CHANGE_REASON: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
-#[cfg(debug_assertions)]
-pub(crate) fn change_reason() -> &'static str {
-    CHANGE_REASON.with(|cell| cell.get())
+pub(crate) fn change_reason() -> String {
+    CHANGE_REASON.with(|cell| {
+        let reason = cell.borrow();
+        if reason.is_empty() {
+            "?".to_string()
+        } else {
+            reason.clone()
+        }
+    })
 }
 
-pub struct ReasonScope(&'static str);
+pub struct ReasonScope(String);
 
-pub fn reason_scope(reason: &'static str) -> ReasonScope {
-    ReasonScope(CHANGE_REASON.with(|cell| cell.replace(reason)))
+pub fn reason_scope(reason: impl Into<String>) -> ReasonScope {
+    let reason = reason.into();
+    ReasonScope(CHANGE_REASON.with(|cell| std::mem::replace(&mut *cell.borrow_mut(), reason)))
 }
 
 impl Drop for ReasonScope {
     fn drop(&mut self) {
-        CHANGE_REASON.with(|cell| cell.set(self.0));
+        CHANGE_REASON.with(|cell| *cell.borrow_mut() = std::mem::take(&mut self.0));
     }
 }

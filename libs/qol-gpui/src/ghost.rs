@@ -47,9 +47,10 @@ pub fn ghost_window_title(prefix: &str, target: crate::window::MonitorKey) -> St
 }
 
 pub fn show_ghost_window(target_title: &str, all_titles: &[String]) {
+    let reason = popup_window::change_reason();
     qol_runtime::probe!(
         "SHOW_GHOST",
-        "target={target_title} n_titles={}",
+        "reason={reason} target={target_title} n_titles={}",
         all_titles.len()
     );
     for title in all_titles {
@@ -57,9 +58,13 @@ pub fn show_ghost_window(target_title: &str, all_titles: &[String]) {
             hide_invisible(title);
         }
     }
-    popup_window::show_window_by_title(target_title);
+    let shown = popup_window::show_window_by_title(target_title);
+    qol_runtime::probe!(
+        "SHOW_GHOST_RESULT",
+        "reason={reason} target={target_title} shown={shown}"
+    );
     popup_window::dump_ghost_windows(&format!(
-        "show target={target_title} active_mon={:?}",
+        "show reason={reason} target={target_title} active_mon={:?}",
         active_monitor()
     ));
 }

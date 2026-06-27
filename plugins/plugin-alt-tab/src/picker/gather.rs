@@ -60,7 +60,10 @@ pub(super) fn gather(
     }
 }
 
-pub(super) fn capture_frontmost_now(windows: &[WindowInfo]) -> Option<(u32, Arc<RenderImage>)> {
+pub(super) fn capture_frontmost_now(
+    windows: &[WindowInfo],
+    show_id: u64,
+) -> Option<(u32, Arc<RenderImage>)> {
     use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
     use crate::shared::preview::bgra_to_render_image;
     let front = windows.first()?;
@@ -73,7 +76,10 @@ pub(super) fn capture_frontmost_now(windows: &[WindowInfo]) -> Option<(u32, Arc<
     let rgba = rgba?;
     let img = bgra_to_render_image(rgba.data, rgba.width, rgba.height)?;
     #[cfg(debug_assertions)]
-    qol_runtime::probe!("PREVIEW_CAPTURE", "source=on_open targets=1 ids=[{wid}]");
+    qol_runtime::probe!(
+        "PREVIEW_CAPTURE",
+        "show_id={show_id} source=on_open targets=1 ids=[{wid}]"
+    );
     Some((wid, img))
 }
 

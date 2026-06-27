@@ -39,20 +39,41 @@ pub(crate) struct OpenPickerRequest<'a> {
     pub preview_cache: SharedPreviewCache,
     pub has_shown_once: Arc<AtomicBool>,
     pub reverse: bool,
+    pub show_id: u64,
 }
 
 pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/open] show request (reverse={})", req.reverse);
+    eprintln!(
+        "[alt-tab/open] show request id={} reverse={}",
+        req.show_id, req.reverse
+    );
 
     crate::actions::cancel_pending_activation();
     let is_visible = PICKER_VISIBLE.load(Ordering::Relaxed);
     let placement = resolve_placement(req.tracker, req.current, is_visible);
+    let target = placement.target();
+    qol_runtime::probe!(
+        "OPEN_PICKER",
+        "show_id={} reverse={} visible={} target={},{},{}x{}",
+        req.show_id,
+        req.reverse,
+        is_visible,
+        target.x,
+        target.y,
+        target.width,
+        target.height,
+    );
 
     if req.reverse && req.current.borrow().is_empty() {
+        qol_runtime::probe!(
+            "OPEN_PICKER_SKIP",
+            "show_id={} reason=reverse_empty",
+            req.show_id
+        );
         return;
     }
-    if try_cycle_existing(req.current, req.reverse, &placement, cx) {
+    if try_cycle_existing(req.current, req.reverse, req.show_id, &placement, cx) {
         return;
     }
 
@@ -71,7 +92,7 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
 }
 
 fn seed_frontmost_preview(req: &OpenPickerRequest, gathered: &mut GatheredWindows, cx: &mut App) {
-    let Some((wid, img)) = gather::capture_frontmost_now(&gathered.windows) else {
+    let Some((wid, img)) = gather::capture_frontmost_now(&gathered.windows, req.show_id) else {
         return;
     };
     gathered.previews.insert(wid, img.clone());
@@ -147,16 +168,18 @@ fn placement_from_key(key: MonitorKey, reason: &'static str) -> Option<PopupPlac
 fn try_cycle_existing(
     current: &PickerWindowState,
     reverse: bool,
+    show_id: u64,
     placement: &PopupPlacement,
     cx: &mut App,
 ) -> bool {
-    cycle_existing_window(current, Some(placement.target()), reverse, cx)
+    cycle_existing_window(current, Some(placement.target()), reverse, show_id, cx)
 }
 
 fn cycle_existing_window(
     current: &PickerWindowState,
     target: Option<MonitorKey>,
     reverse: bool,
+    show_id: u64,
     cx: &mut App,
 ) -> bool {
     let handle = match target
@@ -164,14 +187,19 @@ fn cycle_existing_window(
         .or_else(|| any_existing(current).map(|(_, h)| h))
     {
         Some(h) => h,
-        None => return false,
+        None => {
+            qol_runtime::probe!("CYCLE_EXISTING", "show_id={show_id} outcome=no_handle");
+            return false;
+        }
     };
-    if !try_cycle_selection(&handle, reverse, cx) {
+    if !try_cycle_selection(&handle, reverse, show_id, cx) {
+        qol_runtime::probe!("CYCLE_EXISTING", "show_id={show_id} outcome=rejected");
         return false;
     }
     PICKER_VISIBLE.store(true, Ordering::Relaxed);
     cx.activate(true);
     probe_app_active_after_frame(handle, cx);
+    qol_runtime::probe!("CYCLE_EXISTING", "show_id={show_id} outcome=cycled");
     true
 }
 
@@ -186,12 +214,17 @@ fn probe_app_active_after_frame(handle: WindowHandle<AltTabApp>, cx: &mut App) {
     let _ = (handle, cx);
 }
 
-pub(super) fn try_cycle_visible(current: &PickerWindowState, reverse: bool, cx: &mut App) -> bool {
+pub(super) fn try_cycle_visible(
+    current: &PickerWindowState,
+    reverse: bool,
+    show_id: u64,
+    cx: &mut App,
+) -> bool {
     if !PICKER_VISIBLE.load(Ordering::Relaxed) {
         return false;
     }
     let target = *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap();
-    cycle_existing_window(current, target, reverse, cx)
+    cycle_existing_window(current, target, reverse, show_id, cx)
 }
 
 fn try_reuse_existing(
@@ -233,6 +266,7 @@ fn try_reuse_existing(
         all_titles: &all_titles,
         reverse: req.reverse,
         monitor_size: placement.monitor_size(),
+        show_id: req.show_id,
     };
     if reuse::try_reuse(&reuse_req, cx) {
         if source_key != target {
@@ -290,17 +324,29 @@ fn create_from_request(
         preview_cache: req.preview_cache.clone(),
         current: req.current,
         has_shown_once: req.has_shown_once.clone(),
+        show_id: req.show_id,
     };
     create::create_new(&create_req, gathered, cx);
 }
 
-fn try_cycle_selection(handle: &WindowHandle<AltTabApp>, reverse: bool, cx: &mut App) -> bool {
+fn try_cycle_selection(
+    handle: &WindowHandle<AltTabApp>,
+    reverse: bool,
+    show_id: u64,
+    cx: &mut App,
+) -> bool {
     handle
         .update(cx, |view, window: &mut Window, cx| -> bool {
             if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+                qol_runtime::probe!("CYCLE_SELECTION", "show_id={show_id} outcome=hidden");
                 return false;
             }
             if view.action_mode != ActionMode::HoldToSwitch {
+                qol_runtime::probe!(
+                    "CYCLE_SELECTION",
+                    "show_id={show_id} outcome=wrong_mode mode={:?}",
+                    view.action_mode
+                );
                 return false;
             }
             view.ensure_live_preview(cx);
@@ -316,6 +362,7 @@ fn try_cycle_selection(handle: &WindowHandle<AltTabApp>, reverse: bool, cx: &mut
             view.delegate.update(cx, |s, _| s.cycle(reverse));
             view.mark_cycle(if reverse { "shift-tab" } else { "tab" }, from);
             cx.notify();
+            qol_runtime::probe!("CYCLE_SELECTION", "show_id={show_id} outcome=cycled");
             true
         })
         .unwrap_or(false)

@@ -1,8 +1,11 @@
 use super::GatheredWindows;
-use crate::app::AltTabApp;
+use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::AltTabConfig;
 use gpui::*;
 use qol_gpui::window::PopupPlacement;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub(crate) struct ReuseLayout {
     pub bounds: Bounds<Pixels>,
@@ -17,6 +20,7 @@ pub(crate) struct ReuseRequest<'a> {
     pub all_titles: &'a [String],
     pub reverse: bool,
     pub monitor_size: Option<(f32, f32)>,
+    pub show_id: u64,
 }
 
 pub(super) struct LayoutInput<'a> {
@@ -24,12 +28,25 @@ pub(super) struct LayoutInput<'a> {
 }
 
 pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
-    let _reason = qol_gpui::popup_window::reason_scope("show");
-    #[cfg(debug_assertions)]
-    let t_show = std::time::Instant::now();
+    let reason = format!("show#{}", req.show_id);
+    let _reason = qol_gpui::popup_window::reason_scope(reason);
+    let t_show = Instant::now();
     req.handle
         .update(cx, |view, window: &mut Window, cx| {
+            let was_visible = PICKER_VISIBLE.swap(true, Ordering::Relaxed);
+            qol_runtime::probe!(
+                "REUSE_BEGIN",
+                "show_id={} title={} origin=({},{}) size={}x{}",
+                req.show_id,
+                view.picker_title,
+                req.layout.bounds.origin.x.to_f64(),
+                req.layout.bounds.origin.y.to_f64(),
+                req.layout.size.width.to_f64(),
+                req.layout.size.height.to_f64(),
+            );
             if !view.apply_reuse(req, window, cx) {
+                PICKER_VISIBLE.store(was_visible, Ordering::Relaxed);
+                qol_runtime::probe!("REUSE_ABORT", "show_id={} phase=apply_reuse", req.show_id);
                 return false;
             }
             let title = view.picker_title.clone();
@@ -39,15 +56,54 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
                 req.layout.bounds.origin,
                 req.layout.size,
             ) {
+                PICKER_VISIBLE.store(was_visible, Ordering::Relaxed);
+                qol_runtime::probe!("REUSE_ABORT", "show_id={} phase=layout_sync", req.show_id);
                 return false;
             }
-            window.focus(&view.focus_handle(cx));
-            window.activate_window();
+            qol_runtime::probe!(
+                "REUSE_LAYOUT_SYNC",
+                "show_id={} title={} result=ok",
+                req.show_id,
+                title
+            );
+            view.focus_for_keys("reuse-before-show", Some(req.show_id), window);
+            qol_runtime::probe!(
+                "REUSE_FOCUS_ACTIVATE",
+                "show_id={} title={}",
+                req.show_id,
+                title
+            );
             super::platform::show_picker_window(&title, req.all_titles);
-            #[cfg(debug_assertions)]
+            qol_runtime::probe!(
+                "REUSE_SHOW_WINDOW",
+                "show_id={} title={}",
+                req.show_id,
+                title
+            );
+            view.focus_for_keys("reuse-after-show", Some(req.show_id), window);
+            let painted = Arc::new(AtomicBool::new(false));
+            let painted_for_frame = painted.clone();
+            let show_id = req.show_id;
             window.on_next_frame(move |_, _| {
-                qol_runtime::probe!("SHOW_PAINTED", "frame={}ms", t_show.elapsed().as_millis());
+                painted_for_frame.store(true, Ordering::Release);
+                qol_runtime::probe!(
+                    "SHOW_PAINTED",
+                    "show_id={show_id} frame={}ms",
+                    t_show.elapsed().as_millis()
+                );
             });
+            cx.spawn(move |_, cx: &mut AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(120))
+                        .await;
+                    if !painted.load(Ordering::Acquire) {
+                        qol_runtime::probe!("SHOW_PAINT_TIMEOUT", "show_id={show_id} after=120ms");
+                    }
+                }
+            })
+            .detach();
             true
         })
         .unwrap_or(false)
