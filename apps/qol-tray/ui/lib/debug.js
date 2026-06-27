@@ -11,6 +11,11 @@ let verbose = typeof localStorage !== 'undefined' && localStorage.getItem(VERBOS
 let colorIndex = 0;
 const nsColors = new Map();
 
+const TRACE_MAX = 500;
+const ARG_MAX = 200;
+const traceRing = [];
+let traceSeq = 0;
+
 export function isDebugEnabled() { return enabled; }
 
 export function setDebugEnabled(on) {
@@ -31,6 +36,7 @@ export function createDebug(namespace) {
     if (!nsColors.has(namespace)) nsColors.set(namespace, COLORS[colorIndex++ % COLORS.length]);
 
     const log = (...args) => {
+        captureTrace(namespace, args);
         if (!enabled) return;
         const color = nsColors.get(namespace);
         console.log(`%c${namespace}%c`, `color:${color};font-weight:bold`, 'color:inherit', ...args);
@@ -65,4 +71,35 @@ export function rectLabel(r) {
 export function pointLabel(p) {
     if (!p) return '(?)';
     return `(${Math.round(p.x)},${Math.round(p.y)})`;
+}
+
+function traceNow() {
+    return typeof performance !== 'undefined' && performance.now ? Math.round(performance.now()) : 0;
+}
+
+export function formatTraceArg(arg) {
+    if (arg == null) return String(arg);
+    const type = typeof arg;
+    if (type === 'string') return arg.length > ARG_MAX ? arg.slice(0, ARG_MAX) + '…' : arg;
+    if (type === 'number' || type === 'boolean') return String(arg);
+    if (typeof Element !== 'undefined' && arg instanceof Element) return elLabel(arg);
+    if (type === 'object') {
+        if ('width' in arg && ('left' in arg || 'x' in arg)) return rectLabel(arg);
+        try { return JSON.stringify(arg).slice(0, ARG_MAX); } catch { return String(arg); }
+    }
+    return String(arg);
+}
+
+function captureTrace(namespace, args) {
+    traceRing.push({ seq: traceSeq++, t: traceNow(), ns: namespace, msg: args.map(formatTraceArg).join(' ') });
+    if (traceRing.length > TRACE_MAX) traceRing.shift();
+}
+
+export function getTrace(filter) {
+    if (!filter) return traceRing.slice();
+    return traceRing.filter(entry => entry.ns.includes(filter) || entry.msg.includes(filter));
+}
+
+export function clearTrace() {
+    traceRing.length = 0;
 }

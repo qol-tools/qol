@@ -316,6 +316,8 @@ function navigateInActiveContainer(direction) {
         return el.closest('[data-view-id]')?.dataset?.viewId === currentViewId;
     });
     const next = nearestSurfaceInDirection(surfaces, current, direction);
+    log('arrow', direction, `cands=[${surfaces.map(surfaceLabel).join(', ')}]`,
+        'from', surfaceLabel(current), '→', next ? surfaceLabel(next) : 'NONE');
     if (!next || next === current) return;
 
     const cr = current.getBoundingClientRect();
@@ -662,6 +664,8 @@ function handlePluginConfigMove(event, detail, pluginConfig) {
     event.preventDefault();
     blurPluginConfigFocus(detail);
     const nextFieldId = nextPluginConfigFieldId(detail, pluginConfig.selectedFieldId, direction);
+    const fieldIds = getPluginConfigFieldElements(detail).map(f => f.dataset.pluginConfigFieldId);
+    log('field-move', direction, `fields=[${fieldIds.join(', ')}]`, 'from', pluginConfig.selectedFieldId, '→', nextFieldId);
     if (!nextFieldId) return true;
     pluginConfig.setSelectedFieldId(nextFieldId);
     return true;
