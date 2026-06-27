@@ -202,6 +202,28 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
         scheduleSave();
     }
 
+    function applyDiveTarget(sourceSelector, target) {
+        currentConfinement = target.claim;
+        currentConfinedPages = target.pages || [];
+        currentTraits = target.traits || {};
+        currentSourceSelector = sourceSelector;
+        setBounds(currentConfinement);
+        const remembered = lastViewedSection[sourceSelector];
+        const landingPageId = (remembered && currentConfinedPages.includes(remembered))
+            ? remembered
+            : currentConfinedPages[0];
+        if (landingPageId) {
+            currentAnchor = { pageId: landingPageId };
+            lastViewedSection[sourceSelector] = landingPageId;
+            notifyAnchorChange();
+            gotoAnchor(currentAnchor, { respectKnob: false });
+            return;
+        }
+        if (target.claim.layer !== camera.layer && typeof camera.setLayer === 'function') {
+            camera.setLayer(target.claim.layer);
+        }
+    }
+
     function diveInto(sourceSelector) {
         const target = registry.getDiveTargetForSource?.(sourceSelector);
         if (!target) {
@@ -210,7 +232,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
         }
         log('diveInto: saving layer', camera.layer,
             'anchor', currentAnchor?.pageId || 'none',
-            '→', target.pages[0] || 'no pages');
+            '→', target.pages?.[0] || 'no pages');
         diveStack.push({
             anchor: currentAnchor,
             zoom: camera.zoom,
@@ -220,23 +242,26 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
             traits: currentTraits,
             sourceSelector: currentSourceSelector,
         });
-        currentConfinement = target.claim;
-        currentConfinedPages = target.pages || [];
-        currentTraits = target.traits || {};
-        currentSourceSelector = sourceSelector;
-        setBounds(currentConfinement);
-        const remembered = lastViewedSection[sourceSelector];
-        const landingPageId = (remembered && currentConfinedPages.includes(remembered))
-            ? remembered
-            : target.pages[0];
-        if (landingPageId) {
-            currentAnchor = { pageId: landingPageId };
-            lastViewedSection[sourceSelector] = landingPageId;
-            notifyAnchorChange();
-            gotoAnchor(currentAnchor, { respectKnob: false });
-        } else if (target.claim.layer !== camera.layer && typeof camera.setLayer === 'function') {
-            camera.setLayer(target.claim.layer);
+        applyDiveTarget(sourceSelector, target);
+        scheduleSave();
+        return target;
+    }
+
+    function replaceCurrentDive(sourceSelector) {
+        if (!currentSourceSelector) {
+            log('replaceCurrentDive: skipped (no current dive)');
+            return null;
         }
+        const target = registry.getDiveTargetForSource?.(sourceSelector);
+        if (!target) {
+            log('replaceCurrentDive: no target for', sourceSelector);
+            return null;
+        }
+        log('replaceCurrentDive:', currentSourceSelector,
+            '→', sourceSelector,
+            'anchor', currentAnchor?.pageId || 'none',
+            '→', target.pages?.[0] || 'no pages');
+        applyDiveTarget(sourceSelector, target);
         scheduleSave();
         return target;
     }
@@ -293,6 +318,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
         getFocus,
         dive,
         diveInto,
+        replaceCurrentDive,
         ascend,
         gotoAnchor,
         stackDepth,

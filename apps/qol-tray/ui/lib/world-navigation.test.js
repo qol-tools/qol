@@ -617,6 +617,35 @@ test('per-plugin memory is independent across different sourceSelectors', () => 
     assert.equal(nav.getCurrentAnchor().pageId, 'p2-s2');
 });
 
+test('replaceCurrentDive retargets an active plugin dive without growing the stack', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMemoryMocks();
+    registry.addEntry({ id: 'p2-s1', x: 0, y: 500, width: 100, height: 100, layer: -1 });
+    registry.addEntry({ id: 'p2-s2', x: 200, y: 500, width: 100, height: 100, layer: -1 });
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    registry.addDiveTarget({
+        sourceSelector: '[data-plugin-id="p2"]',
+        claim,
+        pages: ['p2-s1', 'p2-s2'],
+    });
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.diveInto('[data-plugin-id="p2"]');
+    nav.setCurrentAnchor({ pageId: 'p2-s2' });
+    nav.ascend();
+    nav.diveInto('[data-plugin-id="p1"]');
+    nav.setCurrentAnchor({ pageId: 'p1-s2' });
+    const target = nav.replaceCurrentDive('[data-plugin-id="p2"]');
+    assert.ok(target);
+    assert.equal(nav.stackDepth(), 1);
+    assert.equal(nav.getCurrentAnchor().pageId, 'p2-s2');
+    assert.deepEqual(nav.getConfinedPages(), ['p2-s1', 'p2-s2']);
+    nav.ascend();
+    assert.equal(nav.getCurrentAnchor().pageId, 'plugins');
+    assert.equal(nav.stackDepth(), 0);
+    nav.diveInto('[data-plugin-id="p1"]');
+    assert.equal(nav.getCurrentAnchor().pageId, 'p1-s2');
+});
+
 test('setCurrentAnchor outside a confinement does not pollute lastViewedSection', () => {
     const { registry, camera, getSettings, domHelpers } = makeMemoryMocks();
     const nav = createNavigation({ registry, camera, getSettings, domHelpers });

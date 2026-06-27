@@ -527,20 +527,22 @@ function AppShell() {
 
     useWorldNav({ camera, registry, viewportRef });
 
+    const syncDiveParentFromPage = useCallback((pageId) => {
+        if (!pageId) return;
+        const entry = registry.getEntry(pageId);
+        const newParent = entry?.parent || pageId;
+        diveParentRef.current = newParent;
+        setDiveParent(newParent);
+    }, [registry]);
+
     const diveViaSelector = useCallback((selector) => {
         if (layerAnimatingRef.current) return false;
         const target = navigation.diveInto(selector);
         if (!target) return false;
         setDiveDepth(navigation.stackDepth());
-        const firstPageId = target.pages[0];
-        if (firstPageId) {
-            const entry = registry.getEntry(firstPageId);
-            const newParent = entry?.parent || firstPageId;
-            diveParentRef.current = newParent;
-            setDiveParent(newParent);
-        }
+        syncDiveParentFromPage(target.pages?.[0]);
         return true;
-    }, [navigation, registry]);
+    }, [navigation, syncDiveParentFromPage]);
 
     useEffect(() => {
         setDiveViaSelector(diveViaSelector);
@@ -590,7 +592,7 @@ function AppShell() {
         return () => setAscend(null);
     }, [ascend]);
 
-    const diveRef = useRef(false);
+    const activePluginDiveRef = useRef(null);
     const lastActivePluginIdRef = useRef(activePluginId);
     const [hiddenUntilDive, setHiddenUntilDive] = useState(() => {
         try { return !!window.localStorage?.getItem('qoltray.activePlugin'); } catch { return false; }
@@ -603,12 +605,14 @@ function AppShell() {
                 action: 'active_plugin_change',
                 from_plugin_id: previousPluginId || '',
                 to_plugin_id: activePluginId || '',
-                dive_ref: diveRef.current ? 'true' : 'false',
+                dive_ref: activePluginDiveRef.current ? 'true' : 'false',
+                active_plugin_dive: activePluginDiveRef.current || '',
                 camera_layer: cameraLayer,
             });
             lastActivePluginIdRef.current = activePluginId;
         }
-        if (activePluginId && !diveRef.current) {
+        const currentPluginDive = activePluginDiveRef.current;
+        if (activePluginId && !currentPluginDive) {
             const selector = `[data-plugin-id="${activePluginId}"]`;
             const didDive = diveViaSelector(selector);
             traceWorld('dive', {
@@ -623,24 +627,34 @@ function AppShell() {
                 reason: 'after_auto_dive',
             });
             if (didDive) {
-                diveRef.current = true;
+                activePluginDiveRef.current = activePluginId;
             }
-        } else if (activePluginId && diveRef.current && pluginChanged) {
+        }
+        if (activePluginId && currentPluginDive && currentPluginDive !== activePluginId) {
+            const selector = `[data-plugin-id="${activePluginId}"]`;
+            const target = navigation.replaceCurrentDive?.(selector);
+            const didRetarget = Boolean(target);
+            if (didRetarget) {
+                activePluginDiveRef.current = activePluginId;
+                syncDiveParentFromPage(target.pages?.[0]);
+                setDiveDepth(navigation.stackDepth());
+            }
             traceWorld('dive', {
                 action: 'auto_plugin_config_dive',
                 plugin_id: activePluginId,
-                previous_plugin_id: previousPluginId || '',
-                outcome: 'skip',
-                reason: 'already_dived',
+                previous_plugin_id: currentPluginDive || '',
+                selector,
+                outcome: didRetarget ? 'retargeted' : 'no_target',
                 stack_depth: navigation.stackDepth(),
             });
             traceWorldSnapshot('plugin_config_world_snapshot', {
                 plugin_id: activePluginId,
-                previous_plugin_id: previousPluginId || '',
-                reason: 'after_skip_already_dived',
+                previous_plugin_id: currentPluginDive || '',
+                reason: didRetarget ? 'after_retarget' : 'after_retarget_failed',
             });
-        } else if (!activePluginId && diveRef.current) {
-            diveRef.current = false;
+        }
+        if (!activePluginId && currentPluginDive) {
+            activePluginDiveRef.current = null;
             const didAscend = ascend();
             traceWorld('dive', {
                 action: 'clear_plugin_config_dive',
@@ -654,7 +668,7 @@ function AppShell() {
             });
         }
         if (!activePluginId && hiddenUntilDive) setHiddenUntilDive(false);
-    }, [activePluginId, diveViaSelector, ascend, targetsVersion, hiddenUntilDive]);
+    }, [activePluginId, diveViaSelector, ascend, targetsVersion, hiddenUntilDive, cameraLayer, navigation, syncDiveParentFromPage]);
     useEffect(() => {
         if (hiddenUntilDive && cameraLayer !== 0) setHiddenUntilDive(false);
     }, [cameraLayer, hiddenUntilDive]);
