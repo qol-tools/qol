@@ -239,7 +239,7 @@
 .field-group > .field-qr-label,
 .field-group > .field-color-label,
 .field-group > .field-list-label,
-.field-group > .slider-label,
+.field-group > .slider-control,
 .field-group > .status-label,
 .field-group > input,
 .field-group > .text-input,
@@ -786,70 +786,6 @@
     position: absolute;
     width: 22px;
     height: 22px;
-    border-radius: 50%;
-    transform: translate(-50%, -50%);
-    pointer-events: none;
-    outline: none;
-    border: none;
-    background: none;
-}
-
-.field-slider .slider-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    margin-bottom: 8px;
-}
-
-.field-slider .slider-label {
-    color: var(--text-primary);
-    font-size: var(--fs-sm);
-    font-weight: var(--fw-medium);
-}
-
-.field-slider .slider-value {
-    color: var(--text-muted);
-    font-size: var(--fs-sm);
-    font-variant-numeric: tabular-nums;
-}
-
-.field-slider .slider-track {
-    position: relative;
-    height: 28px;
-    border-radius: var(--radius-pill);
-    background: var(--tui-bg-screen);
-    box-shadow: inset 0 2px 4px rgba(var(--ink-rgb), 0.3), 0 0 0 1px rgba(var(--paper-rgb), 0.05);
-    cursor: pointer;
-    touch-action: none;
-    overflow: hidden;
-}
-
-.field-slider .slider-fill {
-    position: absolute;
-    top: 0;
-    left: 0;
-    height: 100%;
-    background: linear-gradient(to right, rgba(var(--accent-rgb), 0.3), rgba(var(--accent-rgb), 0.7));
-    pointer-events: none;
-}
-
-.field-slider .slider-thumb {
-    position: absolute;
-    top: 50%;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background: white;
-    box-shadow: 0 2px 4px rgba(var(--ink-rgb), 0.4);
-    transform: translate(-50%, -50%);
-    pointer-events: none;
-}
-
-.slider-thumb-target {
-    position: absolute;
-    top: 50%;
-    width: 24px;
-    height: 24px;
     border-radius: 50%;
     transform: translate(-50%, -50%);
     pointer-events: none;

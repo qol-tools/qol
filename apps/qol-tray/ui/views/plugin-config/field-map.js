@@ -14,6 +14,7 @@ import { CustomSelect } from '../../lib/components/CustomSelect.js';
 import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
 import { useSurface } from '../../lib/components/Surface.js';
 import { FieldLabel } from './fields/FieldLabel.js';
+import { isSliderNumberField } from './field-rules.js';
 
 const FIELD_MAP = {
     boolean: BooleanField,
@@ -30,7 +31,7 @@ const FIELD_MAP = {
 };
 
 export function renderField(field) {
-    if (field.kind === 'number' && field.variant === 'slider') {
+    if (isSliderNumberField(field)) {
         return html`<${SliderField} key=${field.id} field=${field} />`;
     }
     const Component = FIELD_MAP[field.kind] || StringField;

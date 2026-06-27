@@ -164,6 +164,17 @@ description = "Base color for picker cards; the panel, hover, and selected color
 section = "layout"
 default = "#202322"
 
+[field.display_card_background_brightness]
+type = "number"
+config_key = "display.card_background_brightness"
+label = "Card Background Brightness"
+description = "Brightness multiplier for the picker card color. Lower values keep saturated colors subdued."
+section = "layout"
+default = 1.0
+min = 0.0
+max = 1.0
+step = 0.05
+
 [field.display_card_background_opacity]
 type = "number"
 config_key = "display.card_background_opacity"

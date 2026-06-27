@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { useKeyboard } from '../lib/hooks/useKeyboard.js';
 import { usePluginConfigContext } from '../views/plugin-config/context.js';
+import { isSliderNumberField } from '../views/plugin-config/field-rules.js';
 import { useViewKeyboardContext } from './view-keyboard-context.js';
 import { createDebug } from '../lib/debug.js';
 import { nearestSurfaceToCenter, isInViewport } from '../lib/viewport-spatial.js';
@@ -452,7 +453,7 @@ function delegateToPluginConfig(event, pluginConfig, closePluginConfig) {
 const DIRECT_EDIT_HANDLERS = {
     string: (event, detail, _pluginConfig, field) => startStringFieldEdit(event, detail, field.id),
     number: (event, detail, _pluginConfig, field) =>
-        field.variant === 'slider' ? false : startNumberFieldEdit(event, detail, field.id),
+        isSliderNumberField(field) ? false : startNumberFieldEdit(event, detail, field.id),
 };
 
 const FIELD_ACTION_HANDLERS = {
@@ -460,7 +461,7 @@ const FIELD_ACTION_HANDLERS = {
     select: (event, detail, pluginConfig, field) => handleSelectFieldAction(event, detail, pluginConfig, field),
     string: (event, detail, _pluginConfig, field) => handleTextFieldActivation(event, detail, field.id),
     number: (event, detail, _pluginConfig, field) =>
-        field.variant === 'slider'
+        isSliderNumberField(field)
             ? handleSliderFieldAction(event, detail, field)
             : handleNumberFieldActivation(event, detail, field.id),
     action: (event, detail, _pluginConfig, field) => handleActionFieldActivation(event, detail, field.id),

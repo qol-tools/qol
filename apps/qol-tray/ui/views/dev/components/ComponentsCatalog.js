@@ -3,6 +3,7 @@ import { useCallback, useRef, useState } from 'preact/hooks';
 import { SurfaceContainer } from '../../../lib/components/SurfaceContainer.js';
 import { directSurfaces } from '../../../lib/surface-traits.js';
 import { ToggleSwitch } from '../../../lib/components/ToggleSwitch.js';
+import { Slider } from '../../../lib/components/Slider.js';
 import { CustomSelect } from '../../../lib/components/CustomSelect.js';
 import { Expander, ExpanderTrigger, ExpanderBody } from '../../../lib/components/Expander.js';
 import { Badge, HealthDot, Alert } from '../../../lib/components/StatusIndicators.js';
@@ -34,6 +35,7 @@ const SHOWCASES = {
     dropdown: DropdownShowcase,
     expander: ExpanderShowcase,
     toggle: ToggleShowcase,
+    slider: SliderShowcase,
     'depth-diver': DepthDiver,
     'key-legend': KeyLegendShowcase,
     'dev-plugin-row': DevPluginRowShowcase,
@@ -243,6 +245,36 @@ function ToggleShowcase() {
                     <${ToggleSwitch} checked=${true} onChange=${() => {}} label="Enabled" />
                     <${StateLabel}>off<//>
                     <${ToggleSwitch} checked=${false} onChange=${() => {}} label="Disabled" />
+                <//>
+            </div>
+        <//>
+    `;
+}
+
+function SliderShowcase() {
+    const [value, setValue] = useState(0.65);
+    return html`
+        <${CatalogSection} title="Slider">
+            <div class="catalog-showcase">
+                <${Interactive}>
+                    <${Slider}
+                        label="Brightness"
+                        description="Live value updates while dragging; commit stores the final value."
+                        value=${value}
+                        min=${0}
+                        max=${1}
+                        step=${0.05}
+                        formatter=${v => v.toFixed(2)}
+                        onCommit=${setValue}
+                    />
+                <//>
+                <${States}>
+                    <${StateLabel}>range<//>
+                    <${Slider} label="Volume" value=${42} min=${0} max=${100} step=${1} unit="%" onCommit=${() => {}} />
+                    <${StateLabel}>fraction<//>
+                    <${Slider} label="Opacity" value=${0.35} min=${0} max=${1} step=${0.05} formatter=${v => v.toFixed(2)} onCommit=${() => {}} />
+                    <${StateLabel}>disabled<//>
+                    <${Slider} label="Locked" value=${0.8} min=${0} max=${1} step=${0.1} disabled formatter=${v => v.toFixed(1)} onCommit=${() => {}} />
                 <//>
             </div>
         <//>

@@ -351,8 +351,15 @@ fn finalize_reuse(
 pub(crate) fn resolve_card_bg(display: &DisplayConfig) -> (u32, f32) {
     let fallback = parse_hex_color(DEFAULT_CARD_BACKGROUND_COLOR).unwrap_or((0x20, 0x23, 0x22));
     let (r, g, b) = parse_hex_color(&display.card_background_color).unwrap_or(fallback);
-    let color = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+    let brightness = display.card_background_brightness.clamp(0.0, 1.0);
+    let color = ((scale_channel(r, brightness) as u32) << 16)
+        | ((scale_channel(g, brightness) as u32) << 8)
+        | (scale_channel(b, brightness) as u32);
     (color, display.card_background_opacity.clamp(0.0, 1.0))
+}
+
+fn scale_channel(value: u8, brightness: f32) -> u8 {
+    (value as f32 * brightness).round() as u8
 }
 
 #[cfg(test)]
@@ -364,10 +371,38 @@ mod color_tests {
     fn card_background_accepts_color_picker_hex() {
         let display = DisplayConfig {
             card_background_color: "#203040".to_string(),
+            card_background_brightness: 1.0,
             card_background_opacity: 1.2,
             ..Default::default()
         };
         assert_eq!(resolve_card_bg(&display), (0x203040, 1.0));
+    }
+
+    #[test]
+    fn card_background_brightness_dims_color_picker_hex() {
+        let display = DisplayConfig {
+            card_background_color: "#ff8040".to_string(),
+            card_background_brightness: 0.25,
+            ..Default::default()
+        };
+        assert_eq!(resolve_card_bg(&display), (0x402010, 0.85));
+    }
+
+    #[test]
+    fn card_background_brightness_is_clamped() {
+        let bright = DisplayConfig {
+            card_background_color: "#102030".to_string(),
+            card_background_brightness: 2.0,
+            ..Default::default()
+        };
+        let dark = DisplayConfig {
+            card_background_color: "#102030".to_string(),
+            card_background_brightness: -1.0,
+            ..Default::default()
+        };
+
+        assert_eq!(resolve_card_bg(&bright), (0x102030, 0.85));
+        assert_eq!(resolve_card_bg(&dark), (0x000000, 0.85));
     }
 
     #[test]

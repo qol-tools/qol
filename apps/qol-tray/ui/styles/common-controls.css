@@ -115,6 +115,112 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     user-select: none;
 }
 
+.slider-control {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+    width: 100%;
+}
+
+.slider-control.is-disabled {
+    opacity: 0.45;
+    pointer-events: none;
+}
+
+.slider-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--space-3);
+}
+
+.slider-label {
+    color: var(--text-primary);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-medium);
+}
+
+.slider-description {
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    line-height: var(--lh-relaxed);
+}
+
+.slider-value {
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.slider-track {
+    --slider-progress: 0;
+    --slider-position: 0%;
+    --slider-bar-start: rgba(var(--accent-rgb), 0.3);
+    --slider-bar-end: rgba(var(--accent-rgb), 0.7);
+    position: relative;
+    height: 28px;
+    border-radius: var(--radius-pill);
+    background: var(--tui-bg-screen);
+    box-shadow:
+        inset 0 2px 4px rgba(var(--ink-rgb), 0.3),
+        0 0 0 1px rgba(var(--paper-rgb), 0.05);
+    cursor: pointer;
+    touch-action: none;
+    overflow: visible;
+}
+
+.slider-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(to right, var(--slider-bar-start), var(--slider-bar-end));
+    transform: scaleX(var(--slider-progress));
+    transform-origin: left center;
+    transition: transform var(--dur-base) ease-out;
+    pointer-events: none;
+}
+
+.slider-track.is-dragging .slider-fill,
+.slider-track.is-dragging .slider-thumb,
+.slider-track.is-dragging .slider-thumb-target {
+    transition: none;
+}
+
+.slider-thumb {
+    position: absolute;
+    top: 50%;
+    left: var(--slider-position);
+    width: 16px;
+    height: 16px;
+    box-sizing: content-box;
+    border: 6px solid var(--slider-bar-end);
+    border-radius: 50%;
+    background: var(--text-primary);
+    box-shadow: 0 2px 4px rgba(var(--ink-rgb), 0.4);
+    transform: translate(-50%, -50%);
+    transition: left var(--dur-base) ease-out, opacity var(--dur-sm);
+    pointer-events: none;
+}
+
+.slider-thumb-target {
+    position: absolute;
+    top: 50%;
+    left: var(--slider-position);
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    transition: left var(--dur-base) ease-out;
+    pointer-events: none;
+    outline: none;
+    border: none;
+    background: none;
+}
+
 .btn {
     display: inline-flex;
     align-items: center;
