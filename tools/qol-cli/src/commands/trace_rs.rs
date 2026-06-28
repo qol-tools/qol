@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const DEFAULT_LOG_FILE: &str = "/tmp/qol-altmon.log";
+const DEFAULT_LOG_FILE: &str = qol_conventions::TRACE_LOG_PATH;
 const REPLAY_GAP_MS: u64 = 120;
 const REVERT_WINDOW_MS: u64 = 200;
 const TAIL_FLUSH_AFTER: Duration = Duration::from_millis(80);
@@ -257,7 +257,7 @@ fn print_help(command_name: &str) {
     println!(
         "qol {command_name} [plugin|focus] [flags]\n\
          \n\
-         Runtime trace formatter for /tmp/qol-altmon.log.\n\
+         Runtime trace formatter for {DEFAULT_LOG_FILE}.\n\
          \n\
          Flags:\n\
            -f, --focus-only        focus events only\n\

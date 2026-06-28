@@ -9,6 +9,7 @@ pub const DEFAULT_PORT: u16 = 42700;
 pub const LOCAL_HOST: &str = "127.0.0.1";
 
 pub const STATE_SOCKET_PATH: &str = "/tmp/qol-tray-state.sock";
+pub const TRACE_LOG_PATH: &str = "/tmp/qol-altmon.log";
 
 pub const ENV_STATE_SOCKET: &str = "QOL_TRAY_STATE_SOCKET";
 pub const ENV_PLUGIN_ID: &str = "QOL_TRAY_PLUGIN_ID";

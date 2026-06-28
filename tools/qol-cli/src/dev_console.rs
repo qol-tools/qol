@@ -2195,7 +2195,7 @@ fn set_trace_details(dash: &mut Dash, enabled: bool) {
     start_trace(dash);
 }
 
-const DEFAULT_TRACE_LOG_FILE: &str = "/tmp/qol-altmon.log";
+const DEFAULT_TRACE_LOG_FILE: &str = qol_conventions::TRACE_LOG_PATH;
 
 struct LogSourceInfo {
     kind: &'static str,
@@ -5540,7 +5540,7 @@ mod tests {
     #[test]
     fn trace_pretty_snapshot_helpers_keep_utf8_and_strip_ansi() {
         assert_eq!(
-            pretty_trace_file(Path::new("/tmp/qol-altmon.log")),
+            pretty_trace_file(Path::new(DEFAULT_TRACE_LOG_FILE)),
             PathBuf::from("/tmp/qol-altmon.pretty.log")
         );
         assert_eq!(

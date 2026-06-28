@@ -32,7 +32,7 @@ function grep(cwd, pattern, pathspec) {
 const root = repoRoot();
 if (!root) process.exit(0);
 
-const conventionConstants = '42700|qol-tray-state\\.sock|QOL_TRAY_STATE_SOCKET|QOL_TRAY_PLUGIN_ID|RESERVED_PLUGIN_IDS';
+const conventionConstants = '42700|qol-tray-state\\.sock|QOL_TRAY_STATE_SOCKET|QOL_TRAY_PLUGIN_ID|RESERVED_PLUGIN_IDS|qol-altmon\\.log';
 const pluginPorts = '42710|42720';
 
 const hits = [
@@ -50,6 +50,7 @@ if (hits) {
     out.write('\n  fix:\n');
     out.write('    - host constants: qol_conventions::{DEFAULT_PORT, STATE_SOCKET_PATH, ENV_STATE_SOCKET, ENV_PLUGIN_ID, settings_url}\n');
     out.write('    - reserved ids  : qol_conventions::is_reserved_plugin_id\n');
+    out.write('    - trace log     : qol_conventions::TRACE_LOG_PATH\n');
     out.write('    - plugin id     : qol_conventions::build::emit_plugin_id (from plugin.toml)\n');
     out.write('    - daemon port   : [daemon] port in plugin.toml (emit_daemon_port in Rust; host-served daemonPort in JS)\n\n');
     process.exit(1);

@@ -1,5 +1,5 @@
 #[cfg(debug_assertions)]
-const LOG_FILE: &str = "/tmp/qol-altmon.log";
+const LOG_FILE: &str = qol_conventions::TRACE_LOG_PATH;
 
 #[cfg(debug_assertions)]
 const MAX_LOG_BYTES: u64 = 16 * 1024 * 1024;
