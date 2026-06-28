@@ -60,6 +60,7 @@ fn parse_json_body<T: DeserializeOwned>(body: Bytes) -> Result<T, Box<Response>>
 }
 
 fn reload_after_profile_apply(state: &ProfileHttpState) {
+    materialize_loaded_plugin_configs(state);
     let mut manager = match state.plugin_manager.lock() {
         Ok(manager) => manager,
         Err(error) => {
@@ -76,6 +77,35 @@ fn reload_after_profile_apply(state: &ProfileHttpState) {
         .config
         .config_changed(crate::daemon::ConfigKind::Profile);
     state.daemon.events.send_plugins_changed();
+}
+
+fn materialize_loaded_plugin_configs(state: &ProfileHttpState) {
+    let plugins = match state.plugin_manager.lock() {
+        Ok(manager) => manager
+            .plugins()
+            .map(|plugin| (plugin.id.to_string(), plugin.manifest.clone()))
+            .collect::<Vec<_>>(),
+        Err(error) => {
+            log::error!("Plugin manager mutex poisoned: {}", error);
+            return;
+        }
+    };
+    let manager = match crate::plugins::PluginConfigManager::new() {
+        Ok(manager) => manager,
+        Err(error) => {
+            log::error!("Failed to initialize plugin config manager: {error:#}");
+            return;
+        }
+    };
+    let mut count = 0;
+    for (plugin_id, manifest) in plugins {
+        if let Err(error) = manager.materialize_runtime_config_for_manifest(&plugin_id, &manifest) {
+            log::error!("Failed to materialize runtime config for {plugin_id}: {error:#}");
+            continue;
+        }
+        count += 1;
+    }
+    log::info!("Materialized runtime config for {count} loaded plugin(s)");
 }
 
 fn invalid_json_response() -> Response {

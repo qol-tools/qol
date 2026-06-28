@@ -499,8 +499,10 @@ async fn async_init_inner(
     {
         let sync_for_pull = Arc::clone(&sync_service);
         tokio::spawn(async move {
-            if let Err(error) = sync_for_pull.pull_on_launch().await {
-                log::error!("Cloud profile pull on launch failed: {error:#}");
+            match sync_for_pull.pull_on_launch().await {
+                Ok(result) if result.applied_remote => materialize_installed_runtime_configs(),
+                Ok(_) => {}
+                Err(error) => log::error!("Cloud profile pull on launch failed: {error:#}"),
             }
         });
     }
@@ -574,6 +576,17 @@ async fn async_init_inner(
         feature_registry,
         events: daemon.events.clone(),
     })
+}
+
+fn materialize_installed_runtime_configs() {
+    match qol_tray::plugins::PluginConfigManager::new()
+        .and_then(|manager| manager.materialize_installed_runtime_configs())
+    {
+        Ok(count) => log::info!("Materialized runtime config for {count} installed plugin(s)"),
+        Err(error) => {
+            log::error!("Failed to materialize runtime configs after profile pull: {error:#}")
+        }
+    }
 }
 
 fn sync_launcher_apps(plugin_manager: Arc<Mutex<PluginManager>>) {

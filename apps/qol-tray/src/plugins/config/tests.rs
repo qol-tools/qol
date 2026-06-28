@@ -312,6 +312,153 @@ fn get_config_ignores_stale_runtime_cache_and_reflects_slices() {
 }
 
 #[test]
+fn get_config_restores_from_uid_slice_when_runtime_missing() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    let (manager, _temp_base, _temp_plugins) = setup_test_env();
+    let lock = crate::features::profile::core::PluginLockEntry {
+        uid: crate::plugins::PluginUid::new("uid-alt-tab"),
+        id: "plugin-alt-tab".to_string(),
+        repo_url: "https://example.invalid/plugin-alt-tab.git".to_string(),
+        version: "1.0.0".to_string(),
+        platforms: Some(vec!["linux".to_string(), "macos".to_string()]),
+    };
+    let expected_config = json!({"display": {"transparent_background": true}});
+    fs::create_dir_all(manager.store().core_plugin_configs_dir()).unwrap();
+    fs::write(
+        manager
+            .store()
+            .core_plugin_configs_dir()
+            .join("uid-alt-tab.json"),
+        serde_json::to_string(&expected_config).unwrap(),
+    )
+    .unwrap();
+
+    let result = manager
+        .get_config_with("plugin-alt-tab", Some(&lock), None)
+        .unwrap();
+
+    assert_eq!(result, Some(expected_config.clone()));
+    let runtime = PluginConfigManager::plugin_config_path("plugin-alt-tab").unwrap();
+    let runtime_value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&runtime).unwrap()).unwrap();
+    assert_eq!(runtime_value, expected_config);
+}
+
+#[test]
+fn get_config_restores_from_manifest_uid_slice_when_lock_missing() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    let (manager, _temp_base, _temp_plugins) = setup_test_env();
+    let manifest: crate::plugins::PluginManifest = toml::from_str(
+        r#"
+[plugin]
+id = "plugin-alt-tab"
+uid = "uid-alt-tab"
+name = "Alt Tab"
+description = ""
+version = "1.0.0"
+
+[menu]
+label = "Alt Tab"
+items = []
+"#,
+    )
+    .unwrap();
+    let expected_config = json!({"display": {"show_hotkey_hints": false}});
+    fs::create_dir_all(manager.store().core_plugin_configs_dir()).unwrap();
+    fs::write(
+        manager
+            .store()
+            .core_plugin_configs_dir()
+            .join("uid-alt-tab.json"),
+        serde_json::to_string(&expected_config).unwrap(),
+    )
+    .unwrap();
+
+    let result = manager
+        .get_config_with("plugin-alt-tab", None, Some(&manifest))
+        .unwrap();
+
+    assert_eq!(result, Some(expected_config.clone()));
+    let runtime = PluginConfigManager::plugin_config_path("plugin-alt-tab").unwrap();
+    let runtime_value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&runtime).unwrap()).unwrap();
+    assert_eq!(runtime_value, expected_config);
+}
+
+#[test]
+fn get_config_prefers_manifest_uid_when_lock_uid_defaults_to_plugin_id() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    let (manager, _temp_base, _temp_plugins) = setup_test_env();
+    let lock = crate::features::profile::core::PluginLockEntry {
+        uid: crate::plugins::PluginUid::new("plugin-alt-tab"),
+        id: "plugin-alt-tab".to_string(),
+        repo_url: "https://example.invalid/plugin-alt-tab.git".to_string(),
+        version: "1.0.0".to_string(),
+        platforms: Some(vec!["linux".to_string()]),
+    };
+    let manifest: crate::plugins::PluginManifest = toml::from_str(
+        r#"
+[plugin]
+id = "plugin-alt-tab"
+uid = "a7f48ac7-3cd5-4402-a1fe-d517fbce0fd6"
+name = "Alt Tab"
+description = ""
+version = "1.0.0"
+
+[menu]
+label = "Alt Tab"
+items = []
+"#,
+    )
+    .unwrap();
+    let expected_config = json!({"display": {"transparent_background": true}});
+    fs::create_dir_all(manager.store().core_plugin_configs_dir()).unwrap();
+    fs::write(
+        manager
+            .store()
+            .core_plugin_configs_dir()
+            .join("a7f48ac7-3cd5-4402-a1fe-d517fbce0fd6.json"),
+        serde_json::to_string(&expected_config).unwrap(),
+    )
+    .unwrap();
+
+    let result = manager
+        .get_config_with("plugin-alt-tab", Some(&lock), Some(&manifest))
+        .unwrap();
+
+    assert_eq!(result, Some(expected_config.clone()));
+    let runtime = PluginConfigManager::plugin_config_path("plugin-alt-tab").unwrap();
+    let runtime_value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&runtime).unwrap()).unwrap();
+    assert_eq!(runtime_value, expected_config);
+}
+
+#[test]
+fn get_config_removes_stale_runtime_cache_when_profile_has_no_effective_config() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    let (manager, _temp_base, _temp_plugins) = setup_test_env();
+    let runtime = PluginConfigManager::plugin_config_path("test-plugin").unwrap();
+    fs::create_dir_all(runtime.parent().unwrap()).unwrap();
+    fs::write(
+        &runtime,
+        serde_json::to_string(&json!({"stale": true})).unwrap(),
+    )
+    .unwrap();
+
+    let result = manager.get_config_with("test-plugin", None, None).unwrap();
+
+    assert!(result.is_none());
+    assert!(
+        !runtime.exists(),
+        "empty effective profile config must clear a stale runtime cache"
+    );
+}
+
+#[test]
 fn plugin_config_path_cases() {
     let valid = ["plugin-test", "my_plugin", "a"];
     for id in valid {

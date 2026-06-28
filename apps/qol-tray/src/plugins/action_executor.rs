@@ -1,6 +1,6 @@
 use super::manager::PluginManager;
 use crate::plugins::action_transport::DaemonActionDispatch;
-use crate::plugins::PluginId;
+use crate::plugins::{Plugin, PluginId};
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -152,6 +152,7 @@ fn resolve_plugin_daemon_socket(
     let plugin = plugins
         .get(plugin_id)
         .ok_or_else(|| ActionExecutionError::PluginNotFound(PluginId::new(plugin_id)))?;
+    materialize_plugin_runtime_config(plugin)?;
     let socket = plugin
         .manifest
         .daemon
@@ -175,7 +176,23 @@ fn resolve_plugin_action(
     let plugin = plugins
         .get(plugin_id)
         .ok_or_else(|| ActionExecutionError::PluginNotFound(PluginId::new(plugin_id)))?;
+    materialize_plugin_runtime_config(plugin)?;
     resolution::resolve_action(plugin, action_id)
+}
+
+fn materialize_plugin_runtime_config(plugin: &Plugin) -> Result<(), ActionExecutionError> {
+    crate::plugins::PluginConfigManager::new()
+        .and_then(|manager| {
+            manager
+                .materialize_runtime_config_for_manifest(plugin.id.as_str(), &plugin.manifest)
+                .map(|_| ())
+        })
+        .map_err(|error| {
+            ActionExecutionError::SpawnFailed(format!(
+                "failed to materialize runtime config for {}: {error:#}",
+                plugin.id
+            ))
+        })
 }
 
 fn ensure_daemon_ready_for_action(

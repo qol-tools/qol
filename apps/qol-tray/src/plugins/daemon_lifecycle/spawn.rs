@@ -13,6 +13,7 @@ pub(super) fn enabled_daemon(plugin: &Plugin) -> Option<&DaemonConfig> {
 }
 
 pub(super) fn spawn_daemon(plugin: &Plugin, daemon_config: &DaemonConfig) -> Result<Child> {
+    materialize_runtime_config(plugin)?;
     let daemon_path = daemon_path(plugin, daemon_config)?;
     let mut command = daemon_command(plugin, daemon_config, &daemon_path);
     #[cfg(feature = "dev")]
@@ -43,6 +44,12 @@ pub(super) fn spawn_daemon(plugin: &Plugin, daemon_config: &DaemonConfig) -> Res
         );
         Ok(child)
     }
+}
+
+fn materialize_runtime_config(plugin: &Plugin) -> Result<()> {
+    crate::plugins::PluginConfigManager::new()?
+        .materialize_runtime_config_for_manifest(plugin.id.as_str(), &plugin.manifest)?;
+    Ok(())
 }
 
 fn daemon_path(plugin: &Plugin, daemon_config: &DaemonConfig) -> Result<PathBuf> {
@@ -124,7 +131,10 @@ fn configure_log_relay(plugin: &Plugin, command: &mut Command) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::{PluginId, PluginManifest};
+    use serde_json::json;
     use std::ffi::OsStr;
+    use tempfile::TempDir;
 
     fn daemon_config() -> crate::plugins::manifest::DaemonConfig {
         crate::plugins::manifest::DaemonConfig {
@@ -151,5 +161,46 @@ mod tests {
             value.is_none(),
             "XMODIFIERS must be cleared, not overridden with a value",
         );
+    }
+
+    #[test]
+    fn materialize_runtime_config_uses_loaded_manifest_uid_before_spawn() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let store = crate::features::profile::ProfileScopeStore::from_active().unwrap();
+        let expected = json!({"display": {"transparent_background": true}});
+        let profile_path = store.core_plugin_configs_dir().join("uid-alt-tab.json");
+        std::fs::create_dir_all(profile_path.parent().unwrap()).unwrap();
+        std::fs::write(&profile_path, serde_json::to_string(&expected).unwrap()).unwrap();
+        let manifest: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "plugin-alt-tab"
+uid = "uid-alt-tab"
+name = "Alt Tab"
+description = ""
+version = "1.0.0"
+
+[menu]
+label = "Alt Tab"
+items = []
+"#,
+        )
+        .unwrap();
+        let plugin = Plugin::new(
+            PluginId::new("plugin-alt-tab"),
+            manifest,
+            root.path().join("plugin-alt-tab"),
+        );
+
+        materialize_runtime_config(&plugin).unwrap();
+
+        let runtime = crate::paths::plugins_dir()
+            .unwrap()
+            .join("plugin-alt-tab")
+            .join("config.json");
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(runtime).unwrap()).unwrap();
+        assert_eq!(value, expected);
     }
 }

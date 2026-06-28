@@ -97,6 +97,11 @@ mod tests {
     use crate::mode::{ModeConfig, ModeFlag};
     use tempfile::TempDir;
 
+    #[cfg(feature = "dev")]
+    type TestRootGuard = crate::paths::TestEnvPathRootGuard;
+    #[cfg(not(feature = "dev"))]
+    type TestRootGuard = crate::paths::TestPathRootGuard;
+
     #[test]
     fn decide_delivery_requires_a_subscriber() {
         assert!(!decide_delivery(0));
@@ -138,13 +143,12 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
-    async fn isolated_env() -> (
-        tokio::sync::MutexGuard<'static, ()>,
-        TempDir,
-        crate::paths::TestPathRootGuard,
-    ) {
+    async fn isolated_env() -> (tokio::sync::MutexGuard<'static, ()>, TempDir, TestRootGuard) {
         let guard = crate::test_support::env_lock().lock().await;
         let tmp = TempDir::new().unwrap();
+        #[cfg(feature = "dev")]
+        let path_guard = crate::paths::push_test_env_path_root(tmp.path());
+        #[cfg(not(feature = "dev"))]
         let path_guard = crate::paths::push_test_path_root(tmp.path());
         (guard, tmp, path_guard)
     }

@@ -17,7 +17,7 @@ use crate::plugins::paths as plugin_paths;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginConfigs {
@@ -73,14 +73,35 @@ impl PluginConfigManager {
         lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
         manifest: Option<&crate::plugins::manifest::PluginManifest>,
     ) -> Result<Option<serde_json::Value>> {
-        let uid = uid_from_lock_or_id(lock_entry, plugin_id);
-        let merged = load_plugin_config_merged(&self.scope_store, &uid, lock_entry, manifest)?;
-        if merged.as_object().is_some_and(|m| m.is_empty()) {
-            return Ok(None);
+        self.materialize_runtime_config_with(plugin_id, lock_entry, manifest)
+    }
+
+    pub fn materialize_runtime_config(&self, plugin_id: &str) -> Result<Option<serde_json::Value>> {
+        let lock = load_lock_entry_for(plugin_id);
+        let manifest = try_load_plugin_manifest(plugin_id);
+        self.materialize_runtime_config_with(plugin_id, lock.as_ref(), manifest.as_ref())
+    }
+
+    pub fn materialize_runtime_config_for_manifest(
+        &self,
+        plugin_id: &str,
+        manifest: &crate::plugins::manifest::PluginManifest,
+    ) -> Result<Option<serde_json::Value>> {
+        let lock = load_lock_entry_for(plugin_id);
+        self.materialize_runtime_config_with(plugin_id, lock.as_ref(), Some(manifest))
+    }
+
+    pub fn materialize_installed_runtime_configs(&self) -> Result<usize> {
+        let lock = crate::features::profile::core::load_plugins_lock()?;
+        let mut count = 0;
+        for entry in lock.plugins {
+            let Some(manifest) = try_load_plugin_manifest(&entry.id) else {
+                continue;
+            };
+            self.materialize_runtime_config_with(&entry.id, Some(&entry), Some(&manifest))?;
+            count += 1;
         }
-        let runtime_path = Self::plugin_config_path(plugin_id)?;
-        refresh_runtime_cache(&runtime_path, &merged)?;
-        Ok(Some(merged))
+        Ok(count)
     }
 
     pub fn set_config(&self, plugin_id: &str, config: serde_json::Value) -> Result<()> {
@@ -96,18 +117,62 @@ impl PluginConfigManager {
         lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
         manifest: Option<&crate::plugins::manifest::PluginManifest>,
     ) -> Result<()> {
-        let uid = uid_from_lock_or_id(lock_entry, plugin_id);
+        let uid = uid_from_lock_manifest_or_id(lock_entry, manifest, plugin_id);
         let runtime_path = Self::plugin_config_path(plugin_id)?;
         store::write_plugin_config(&runtime_path, &config)?;
         save_plugin_config_split(&self.scope_store, &uid, &config, lock_entry, manifest)
     }
 }
 
-fn refresh_runtime_cache(path: &std::path::Path, merged: &serde_json::Value) -> Result<()> {
-    if store::load_plugin_config(path).ok().as_ref() == Some(merged) {
-        return Ok(());
+impl PluginConfigManager {
+    fn materialize_runtime_config_with(
+        &self,
+        plugin_id: &str,
+        lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
+        manifest: Option<&crate::plugins::manifest::PluginManifest>,
+    ) -> Result<Option<serde_json::Value>> {
+        let uid = uid_from_lock_manifest_or_id(lock_entry, manifest, plugin_id);
+        let merged = load_plugin_config_merged(&self.scope_store, &uid, lock_entry, manifest)?;
+        let runtime_path = Self::plugin_config_path(plugin_id)?;
+        let outcome = materialize_runtime_cache(&runtime_path, &merged)?;
+        trace_runtime_materialization(plugin_id, outcome);
+        if merged.as_object().is_some_and(|m| m.is_empty()) {
+            return Ok(None);
+        }
+        Ok(Some(merged))
     }
-    store::write_plugin_config(path, merged)
+}
+
+fn materialize_runtime_cache(path: &Path, merged: &serde_json::Value) -> Result<&'static str> {
+    if merged.as_object().is_some_and(|m| m.is_empty()) {
+        return remove_runtime_cache(path);
+    }
+    if store::load_plugin_config(path).ok().as_ref() == Some(merged) {
+        return Ok("unchanged");
+    }
+    store::write_plugin_config(path, merged)?;
+    Ok("written")
+}
+
+fn remove_runtime_cache(path: &Path) -> Result<&'static str> {
+    if !path.exists() {
+        return Ok("empty_missing");
+    }
+    std::fs::remove_file(path)?;
+    Ok("removed")
+}
+
+fn trace_runtime_materialization(plugin_id: &str, outcome: &str) {
+    #[cfg(debug_assertions)]
+    {
+        qol_runtime::probe!(
+            "PROFILE_CONFIG_MATERIALIZE",
+            "plugin={:?} outcome={outcome}",
+            plugin_id
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (plugin_id, outcome);
 }
 
 fn load_lock_entry_for(plugin_id: &str) -> Option<crate::features::profile::core::PluginLockEntry> {
@@ -152,13 +217,18 @@ pub fn save_plugin_config_split(
     store::write_scoped_slices(&paths, &slices)
 }
 
-fn uid_from_lock_or_id(
+fn uid_from_lock_manifest_or_id(
     lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
+    manifest: Option<&crate::plugins::manifest::PluginManifest>,
     plugin_id: &str,
 ) -> PluginUid {
-    lock_entry
-        .map(|e| e.uid.clone())
-        .unwrap_or_else(|| PluginUid::new(plugin_id))
+    let manifest_uid = manifest.and_then(|m| m.plugin.uid.clone());
+    if let Some(entry) = lock_entry {
+        if entry.uid.as_str() != entry.id.as_str() || manifest_uid.is_none() {
+            return entry.uid.clone();
+        }
+    }
+    manifest_uid.unwrap_or_else(|| PluginUid::new(plugin_id))
 }
 
 pub(crate) fn load_config_contract(
