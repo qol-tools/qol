@@ -37,7 +37,7 @@ mod tests {
             let folder = entry.file_name();
             let folder_name = folder.to_string_lossy();
 
-            if folder_name == "plugin-template" {
+            if qol_conventions::is_reserved_plugin_id(&folder_name) {
                 continue;
             }
 

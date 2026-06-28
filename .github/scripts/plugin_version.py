@@ -31,7 +31,17 @@ GLOBAL_FILES_AFFECT_ALL = {
     "rust-toolchain.toml",
 }
 GLOBAL_PREFIXES_AFFECT_ALL = (".cargo/",)
-AUTO_EXCLUDED_PLUGIN_IDS = {"plugin-template"}
+def _reserved_plugin_ids() -> set[str]:
+    lib = Path(__file__).resolve().parents[2] / "libs/qol-conventions/src/lib.rs"
+    match = re.search(
+        r"RESERVED_PLUGIN_IDS:\s*&\[&str\]\s*=\s*&\[(.*?)\]", lib.read_text(), re.DOTALL
+    )
+    if not match:
+        raise RuntimeError("RESERVED_PLUGIN_IDS not found in qol-conventions")
+    return set(re.findall(r'"([^"]+)"', match.group(1)))
+
+
+AUTO_EXCLUDED_PLUGIN_IDS = _reserved_plugin_ids()
 HOST_RELEASE_UNITS = (("qol-tray", "apps/qol-tray"),)
 
 

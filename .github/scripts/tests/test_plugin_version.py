@@ -199,5 +199,10 @@ class HighestVersionTagTests(unittest.TestCase):
             self.assertEqual(pv.highest_version_tag(tags, prefix), expected, f"tags={tags}")
 
 
+class ReservedPluginIdsTests(unittest.TestCase):
+    def test_auto_excluded_derives_from_qol_conventions(self):
+        self.assertEqual(pv.AUTO_EXCLUDED_PLUGIN_IDS, {"plugin-template"})
+
+
 if __name__ == "__main__":
     unittest.main()
