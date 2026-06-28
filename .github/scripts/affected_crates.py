@@ -12,6 +12,8 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
+from pathlib import Path
 
 GLOBAL_PREFIXES = (".github/workflows/", ".github/scripts/", ".cargo/")
 GLOBAL_FILES = {
@@ -23,7 +25,30 @@ GLOBAL_FILES = {
     "rustfmt.toml",
     ".rustfmt.toml",
 }
-MACOS_ONLY = {"keyremap"}
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def platform_excludes():
+    ubuntu, macos = set(), set()
+    for manifest in sorted(REPO_ROOT.glob("plugins/*/plugin.toml")):
+        platforms = (
+            tomllib.loads(manifest.read_text())
+            .get("plugin", {})
+            .get("platforms", ["linux"])
+        )
+        name = tomllib.loads((manifest.parent / "Cargo.toml").read_text())["package"]["name"]
+        if "linux" not in platforms:
+            ubuntu.add(name)
+        if "macos" not in platforms:
+            macos.add(name)
+    return ubuntu, macos
+
+
+UBUNTU_EXCLUDE, MACOS_EXCLUDE = platform_excludes()
+
+
+def exclude_flags(names):
+    return "".join(f" --exclude {name}" for name in sorted(names))
 
 
 def run(cmd):
@@ -44,11 +69,11 @@ def full_workspace(reason):
     emit(
         {
             "full": "true",
-            "ubuntu_clippy": "--workspace --exclude keyremap --all-targets",
-            "ubuntu_test": "--workspace --exclude keyremap",
+            "ubuntu_clippy": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)} --all-targets",
+            "ubuntu_test": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}",
             "ubuntu_skip": "false",
-            "macos_clippy": "--workspace --all-targets",
-            "macos_test": "--workspace",
+            "macos_clippy": f"--workspace{exclude_flags(MACOS_EXCLUDE)} --all-targets",
+            "macos_test": f"--workspace{exclude_flags(MACOS_EXCLUDE)}",
             "macos_skip": "false",
         }
     )
@@ -162,8 +187,8 @@ def main():
         return skip_all("no crate-owning changes (docs/non-build files only)")
 
     affected = dependents_closure(seeds, pkgs)
-    macos = sorted(affected)
-    ubuntu = sorted(a for a in affected if a not in MACOS_ONLY)
+    macos = sorted(a for a in affected if a not in MACOS_EXCLUDE)
+    ubuntu = sorted(a for a in affected if a not in UBUNTU_EXCLUDE)
     sys.stderr.write(f"[affected] changed={sorted(seeds)} affected={macos}\n")
     emit(
         {
