@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::file_io;
 
 const INSTALL_ID_MARKER_FILE: &str = "qol-tray.install-id";
-const ACTIVE_INSTALL_ID_FILE: &str = "active-install-id";
+const ACTIVE_INSTALL_ID_FILE: &str = qol_config::ACTIVE_INSTALL_ID_FILE;
 
 pub(super) fn marker_path_for(current_exe: &Path) -> Result<PathBuf> {
     let Some(parent) = current_exe.parent() else {

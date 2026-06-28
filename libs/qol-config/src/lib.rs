@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 
 pub const NAMESPACE: &str = "qol-tray";
 
+pub const ACTIVE_INSTALL_ID_FILE: &str = "active-install-id";
+
 fn resolve_namespaced(base: Option<PathBuf>) -> Option<PathBuf> {
     base.map(|path| path.join(NAMESPACE))
 }
@@ -152,7 +154,7 @@ pub fn install_id_from_env() -> Option<String> {
 }
 
 pub fn install_id_from_active_file(base_data_dir: &Path) -> Option<String> {
-    let content = fs::read_to_string(base_data_dir.join("active-install-id")).ok()?;
+    let content = fs::read_to_string(base_data_dir.join(ACTIVE_INSTALL_ID_FILE)).ok()?;
     let trimmed = content.trim();
     if !valid_install_id(trimmed) {
         return None;

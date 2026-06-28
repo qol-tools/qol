@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::file_io;
 
-const ACTIVE_INSTALL_ID_FILE: &str = "active-install-id";
+const ACTIVE_INSTALL_ID_FILE: &str = qol_config::ACTIVE_INSTALL_ID_FILE;
 const ACTIVE_PROFILE_FILE: &str = "active";
 pub const DEFAULT_PROFILE_NAME: &str = "default";
 #[cfg(any(test, debug_assertions))]
