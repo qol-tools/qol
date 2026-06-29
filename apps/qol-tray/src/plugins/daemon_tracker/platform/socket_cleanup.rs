@@ -174,7 +174,8 @@ fn starts_in_root(path: &Path, root: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::net::UnixListener;
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::time::Duration;
 
     #[cfg(target_os = "linux")]
     fn policy() -> SocketPathPolicy {
@@ -192,6 +193,7 @@ mod tests {
         let listener = UnixListener::bind(&socket_path).unwrap();
         drop(listener);
         assert!(socket_path.exists(), "socket file should remain after drop");
+        wait_for_listener_to_close(&socket_path);
 
         clean_orphan_sockets_in(tmp.path(), &policy());
 
@@ -239,5 +241,15 @@ mod tests {
             path.exists(),
             "regular files must not be removed even if name matches"
         );
+    }
+
+    fn wait_for_listener_to_close(socket_path: &Path) {
+        for _ in 0..100 {
+            if UnixStream::connect(socket_path).is_err() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        panic!("socket still accepts connections after listener drop");
     }
 }
