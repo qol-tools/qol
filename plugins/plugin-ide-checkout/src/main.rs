@@ -1,7 +1,8 @@
+mod daemon;
+
 use std::env;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
 use std::process::{Command, ExitCode, Stdio};
 use std::time::Duration;
 
@@ -13,48 +14,11 @@ fn daemon_port() -> u16 {
 
 fn main() -> ExitCode {
     match env::args().nth(1).as_deref() {
-        None | Some("daemon") => run_daemon(),
+        None | Some("daemon") => daemon::run(),
         Some("status") => run_status(),
         Some(action) => {
             eprintln!("Unknown action: {action}");
             ExitCode::from(1)
-        }
-    }
-}
-
-fn run_daemon() -> ExitCode {
-    let Some(server_path) = find_server_script(server_script_dirs()) else {
-        eprintln!("Missing daemon server script server.py (looked next to the binary and in QOL_TRAY_PLUGIN_DIR)");
-        return ExitCode::from(1);
-    };
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let error = Command::new("python3")
-            .env("QOL_DAEMON_PORT", env!("QOL_DAEMON_PORT"))
-            .arg(&server_path)
-            .exec();
-        eprintln!("Failed to start daemon: {error}");
-        ExitCode::from(1)
-    }
-
-    #[cfg(not(unix))]
-    {
-        match Command::new("python3")
-            .env("QOL_DAEMON_PORT", env!("QOL_DAEMON_PORT"))
-            .arg(&server_path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()
-        {
-            Ok(status) if status.success() => ExitCode::SUCCESS,
-            Ok(_) => ExitCode::from(1),
-            Err(error) => {
-                eprintln!("Failed to start daemon: {error}");
-                ExitCode::from(1)
-            }
         }
     }
 }
@@ -157,26 +121,6 @@ fn escape_applescript(input: &str) -> String {
     input.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn server_script_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(exe_dir) = env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()))
-    {
-        dirs.push(exe_dir);
-    }
-    if let Some(plugin_dir) = env::var_os("QOL_TRAY_PLUGIN_DIR") {
-        dirs.push(PathBuf::from(plugin_dir));
-    }
-    dirs
-}
-
-fn find_server_script(dirs: Vec<PathBuf>) -> Option<PathBuf> {
-    dirs.into_iter()
-        .map(|dir| dir.join("server.py"))
-        .find(|path| path.is_file())
-}
-
 #[cfg(test)]
 mod tests {
     use qol_plugin_api::manifest::PluginManifest;
@@ -184,24 +128,5 @@ mod tests {
     #[test]
     fn validate_plugin_contract() {
         PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
-    }
-
-    #[test]
-    fn find_server_script_picks_first_dir_containing_it() {
-        let empty = tempfile::tempdir().unwrap();
-        let with_script = tempfile::tempdir().unwrap();
-        std::fs::write(with_script.path().join("server.py"), "").unwrap();
-
-        let dirs = vec![empty.path().to_path_buf(), with_script.path().to_path_buf()];
-        assert_eq!(
-            super::find_server_script(dirs),
-            Some(with_script.path().join("server.py")),
-            "skips dirs without the script"
-        );
-        assert_eq!(
-            super::find_server_script(vec![empty.path().to_path_buf()]),
-            None,
-            "no candidate yields None"
-        );
     }
 }

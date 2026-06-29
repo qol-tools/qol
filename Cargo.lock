@@ -7598,6 +7598,8 @@ version = "1.5.0"
 dependencies = [
  "qol-conventions",
  "qol-plugin-api",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

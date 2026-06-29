@@ -1,6 +1,6 @@
 schema_version = 1
 title = "Task Runner"
-description = "Application launchers, script definitions, and checkout temp storage."
+description = "Application launchers and checkout temp storage."
 
 [section.general]
 label = "General"
@@ -28,20 +28,3 @@ default = {}
 [field.apps.entry_fields]
 name = "string"
 paths = "string_array"
-
-[section.scripts]
-label = "Scripts"
-description = "Named scripts that can be executed through the task runner."
-
-[field.scripts]
-type = "object_map"
-config_key = "scripts"
-key_label = "Script ID"
-label = "Scripts"
-section = "scripts"
-default = {}
-
-[field.scripts.entry_fields]
-command = "string"
-cwd = "string"
-timeout = "number"

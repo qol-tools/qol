@@ -8,9 +8,6 @@
 // plugin/CLI/tray/UI process uses can never drift from its single source.
 // Run by the pre-commit hook and by the CI "Single source guard" step.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { daemonEnvDrift } from './single-source-guard-lib.mjs';
 
 function repoRoot() {
     try {
@@ -32,14 +29,6 @@ function grep(cwd, pattern, pathspec) {
     }
 }
 
-function readOrNull(repoRootDir, relPath) {
-    try {
-        return readFileSync(join(repoRootDir, relPath), 'utf8');
-    } catch {
-        return null;
-    }
-}
-
 const root = repoRoot();
 if (!root) process.exit(0);
 
@@ -53,24 +42,11 @@ const hits = [
     .join('')
     .trim();
 
-// The Python ide-checkout daemon ships without the Rust source, so it hardcodes
-// the replace-existing env name rather than importing the const. Assert the two
-// agree; fail closed if either value can't be read (rule in the lib).
-const crossLangError = daemonEnvDrift(
-    readOrNull(root, 'libs/qol-conventions/src/lib.rs'),
-    readOrNull(root, 'plugins/plugin-ide-checkout/server.py'),
-);
-
-if (hits || crossLangError) {
+if (hits) {
     const out = process.stderr;
     out.write('\n  single-source guard rejected: cross-process constants must come from their single source\n');
-    if (hits) {
-        out.write('  offending occurrences:\n');
-        for (const line of hits.split('\n')) out.write(`    ${line}\n`);
-    }
-    if (crossLangError) {
-        out.write(`  ${crossLangError}\n`);
-    }
+    out.write('  offending occurrences:\n');
+    for (const line of hits.split('\n')) out.write(`    ${line}\n`);
     out.write('\n  fix:\n');
     out.write('    - host constants: qol_conventions::{DEFAULT_PORT, STATE_SOCKET_PATH, ENV_STATE_SOCKET, ENV_PLUGIN_ID, ENV_DAEMON_SOCKET, ENV_DAEMON_REPLACE_EXISTING, settings_url}\n');
     out.write('    - reserved ids  : qol_conventions::is_reserved_plugin_id\n');
