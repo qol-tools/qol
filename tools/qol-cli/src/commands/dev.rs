@@ -5,7 +5,7 @@ use crate::dev_server::{
     wait_for_shutdown_best_effort, DevLink, DevLinkOutcome,
 };
 use crate::host_facade;
-use crate::progress::{print_hint, print_title, run_step, step_label, StepKind};
+use crate::progress::{print_title, run_status, step_label, StepKind};
 use crate::workspace::{
     display_name, repo_root, scan_buildable_plugins, sibling_crates, BuildablePlugin,
 };
@@ -34,8 +34,9 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     let root = repo_root()?;
     crate::setup::ensure_lockfile_merge_driver(&root);
     let reload = std::env::var_os(RELOAD_ENV).is_some();
-    print_title("qol dev");
-    print_hint(verbose);
+    if verbose {
+        print_title("qol dev");
+    }
     match branch {
         Some(branch) => ensure_worktree_branch(&root, branch)?,
         None => clear_active_worktree_marker(),
@@ -47,7 +48,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         .join("target")
         .join("debug")
         .join(host_facade::exe_name("qol-tray"));
-    run_step(
+    run_dev_step(
         "build",
         StepKind::Pending,
         "qol-tray dev",
@@ -56,7 +57,12 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
             .args(DEV_BUILD_ARGS),
         verbose,
     )?;
-    step_label("run", StepKind::Pending, &binary.display().to_string());
+    dev_step_label(
+        "run",
+        StepKind::Pending,
+        &binary.display().to_string(),
+        verbose,
+    );
     let mut child = Command::new(&binary)
         .current_dir(&root)
         .arg("--write-mode=dev")
@@ -68,7 +74,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     let lines = dev_console::spawn_forwarders(&mut child);
 
     let plugin_names: Vec<String> = buildable.iter().map(|p| display_name(&p.dir)).collect();
-    finish_boot(&mut child, &buildable, branch)?;
+    finish_boot(&mut child, &buildable, branch, verbose)?;
     match dev_console::run_session(&mut child, verbose, plugin_names, lines, None)? {
         dev_console::SessionEnd::UserQuit => Ok(()),
         dev_console::SessionEnd::ReloadRequested => reload_self(),
@@ -83,12 +89,13 @@ fn finish_boot(
     child: &mut std::process::Child,
     buildable: &[BuildablePlugin],
     branch: Option<&str>,
+    verbose: bool,
 ) -> Result<()> {
     wait_for_health_or_exit(child).context("dev server did not become healthy")?;
     if !buildable.is_empty() {
-        register_dev_links(buildable);
+        register_dev_links(buildable, verbose);
         if branch.is_none() {
-            request_plugin_reload()?;
+            request_plugin_reload(verbose)?;
         }
     }
     if let Some(branch) = branch {
@@ -103,11 +110,16 @@ fn boot_preflight(
     skip_plugins: bool,
     reload: bool,
 ) -> Result<Vec<BuildablePlugin>> {
-    let buildable = collect_buildable_plugins(root, skip_plugins)?;
+    let buildable = collect_buildable_plugins(root, skip_plugins, verbose)?;
     fix_rustfmt(root, verbose)?;
     build_plugins_batch(root, &buildable, verbose)?;
     if reload {
-        step_label("reload", StepKind::Info, "self-reload, hook skipped");
+        dev_step_label(
+            "reload",
+            StepKind::Info,
+            "self-reload, hook skipped",
+            verbose,
+        );
         return Ok(buildable);
     }
     run_dev_hook(root, verbose)?;
@@ -134,9 +146,13 @@ fn reload_self() -> Result<()> {
     }
 }
 
-fn collect_buildable_plugins(root: &Path, skip_plugins: bool) -> Result<Vec<BuildablePlugin>> {
+fn collect_buildable_plugins(
+    root: &Path,
+    skip_plugins: bool,
+    verbose: bool,
+) -> Result<Vec<BuildablePlugin>> {
     if skip_plugins {
-        step_label("plugins", StepKind::Info, "skipped (-n)");
+        dev_step_label("plugins", StepKind::Info, "skipped (-n)", verbose);
         return Ok(Vec::new());
     }
     let scan = scan_buildable_plugins(root)?;
@@ -145,10 +161,10 @@ fn collect_buildable_plugins(root: &Path, skip_plugins: bool) -> Result<Vec<Buil
         && scan.skipped_no_runtime == 0
         && scan.skipped_reserved == 0
     {
-        step_label("plugins", StepKind::Info, "no plugins discovered");
+        dev_step_label("plugins", StepKind::Info, "no plugins discovered", verbose);
         return Ok(Vec::new());
     }
-    step_label(
+    dev_step_label(
         "plugins",
         StepKind::Info,
         &format!(
@@ -158,6 +174,7 @@ fn collect_buildable_plugins(root: &Path, skip_plugins: bool) -> Result<Vec<Buil
             scan.skipped_no_runtime,
             scan.skipped_reserved
         ),
+        verbose,
     );
     Ok(scan.buildable)
 }
@@ -176,7 +193,7 @@ fn build_plugins_batch(root: &Path, plugins: &[BuildablePlugin], verbose: bool) 
     for plugin in plugins {
         command.arg("-p").arg(&plugin.package_name);
     }
-    let result = run_step("build", StepKind::Pending, &label, &mut command, verbose);
+    let result = run_dev_step("build", StepKind::Pending, &label, &mut command, verbose);
     if result.is_err() {
         eprintln!("qol dev: plugin batch build failed");
         eprintln!("qol dev: continuing - recover via qol-tray GUI Recompile pane.");
@@ -185,7 +202,7 @@ fn build_plugins_batch(root: &Path, plugins: &[BuildablePlugin], verbose: bool) 
 }
 
 fn fix_rustfmt(root: &Path, verbose: bool) -> Result<()> {
-    run_step(
+    run_dev_step(
         "fix",
         StepKind::Pending,
         "rustfmt",
@@ -196,11 +213,11 @@ fn fix_rustfmt(root: &Path, verbose: bool) -> Result<()> {
     )
 }
 
-fn request_plugin_reload() -> Result<()> {
+fn request_plugin_reload(verbose: bool) -> Result<()> {
     post_reload_plugins().context("failed to queue plugin rebuild")?;
-    step_label("reload", StepKind::Info, "plugins queued");
+    dev_step_label("reload", StepKind::Info, "plugins queued", verbose);
     wait_for_dev_links_fresh()?;
-    step_label("doctor", StepKind::Success, "dev-links fresh");
+    dev_step_label("doctor", StepKind::Success, "dev-links fresh", verbose);
     Ok(())
 }
 
@@ -241,12 +258,16 @@ fn stale_dev_link_labels(links: &[DevLink]) -> Vec<String> {
         .collect()
 }
 
-fn register_dev_links(plugins: &[BuildablePlugin]) {
+fn register_dev_links(plugins: &[BuildablePlugin], verbose: bool) {
     for plugin in plugins {
         let display = display_name(&plugin.dir);
         match post_dev_link(&plugin.dir) {
-            Ok(DevLinkOutcome::Created) => step_label("link", StepKind::Success, &display),
-            Ok(DevLinkOutcome::AlreadyLinked) => step_label("link", StepKind::Info, &display),
+            Ok(DevLinkOutcome::Created) => {
+                dev_step_label("link", StepKind::Success, &display, verbose)
+            }
+            Ok(DevLinkOutcome::AlreadyLinked) => {
+                dev_step_label("link", StepKind::Info, &display, verbose)
+            }
             Err(error) => eprintln!("qol dev: failed to link {display}: {error:#}"),
         }
     }
@@ -268,13 +289,30 @@ fn run_dev_hook(root: &Path, verbose: bool) -> Result<()> {
     if !hook.is_file() {
         return Ok(());
     }
-    run_step(
+    run_dev_step(
         "hook",
         StepKind::Pending,
         ".qol-tray-dev-hooks",
         Command::new(hook).current_dir(root),
         verbose,
     )
+}
+
+fn run_dev_step(
+    verb: &str,
+    kind: StepKind,
+    target: &str,
+    command: &mut Command,
+    verbose: bool,
+) -> Result<()> {
+    dev_step_label(verb, kind, target, verbose);
+    run_status(command, verbose)
+}
+
+fn dev_step_label(verb: &str, kind: StepKind, target: &str, verbose: bool) {
+    if verbose {
+        step_label(verb, kind, target);
+    }
 }
 
 fn ensure_worktree_branch(root: &Path, branch: &str) -> Result<()> {
