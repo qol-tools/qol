@@ -143,20 +143,27 @@ fn bind_broker_listener_rejects_world_accessible_parent() {
     );
 }
 
-// Minimal local tempdir; avoids pulling in `tempfile` for one helper.
-//
-// AF_UNIX paths are bounded by `sun_path` (108 bytes Linux, 104 macOS),
-// so keep the full directory name compact. We use the low 6 hex digits
-// of the nanosecond timestamp plus the pid; collisions inside a single
-// test run are vanishingly unlikely.
 fn tempdir() -> std::path::PathBuf {
-    let nonce: u128 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     let pid = std::process::id();
-    let mut p = std::env::temp_dir();
-    p.push(format!("qrt-{pid:x}-{:x}", nonce & 0xffffff));
-    std::fs::create_dir_all(&p).unwrap();
-    p
+    for attempt in 0..256 {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + attempt;
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "qrt-{pid:x}-{:06x}-{:02x}",
+            nonce & 0xffffff,
+            seq & 0xff
+        ));
+        match std::fs::create_dir(&p) {
+            Ok(()) => return p,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => panic!("failed to create temp dir {}: {error}", p.display()),
+        }
+    }
+    panic!("failed to allocate a unique qrt temp dir")
 }
