@@ -10,6 +10,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { daemonEnvDrift } from './single-source-guard-lib.mjs';
 
 function repoRoot() {
     try {
@@ -31,10 +32,9 @@ function grep(cwd, pattern, pathspec) {
     }
 }
 
-function literalFromFile(relPath, re) {
+function readOrNull(repoRootDir, relPath) {
     try {
-        const match = readFileSync(join(root, relPath), 'utf8').match(re);
-        return match ? match[1] : null;
+        return readFileSync(join(repoRootDir, relPath), 'utf8');
     } catch {
         return null;
     }
@@ -55,28 +55,21 @@ const hits = [
 
 // The Python ide-checkout daemon ships without the Rust source, so it hardcodes
 // the replace-existing env name rather than importing the const. Assert the two
-// agree so a rename in qol-conventions can't leave the daemon reading a dead var.
-const rustReplaceEnv = literalFromFile(
-    'libs/qol-conventions/src/lib.rs',
-    /ENV_DAEMON_REPLACE_EXISTING:\s*&str\s*=\s*"([^"]+)"/,
+// agree; fail closed if either value can't be read (rule in the lib).
+const crossLangError = daemonEnvDrift(
+    readOrNull(root, 'libs/qol-conventions/src/lib.rs'),
+    readOrNull(root, 'plugins/plugin-ide-checkout/server.py'),
 );
-const pyReplaceEnv = literalFromFile(
-    'plugins/plugin-ide-checkout/server.py',
-    /REPLACE_EXISTING_ENV\s*=\s*'([^']+)'/,
-);
-const crossLangDrift =
-    rustReplaceEnv && pyReplaceEnv && rustReplaceEnv !== pyReplaceEnv;
 
-if (hits || crossLangDrift) {
+if (hits || crossLangError) {
     const out = process.stderr;
     out.write('\n  single-source guard rejected: cross-process constants must come from their single source\n');
     if (hits) {
         out.write('  offending occurrences:\n');
         for (const line of hits.split('\n')) out.write(`    ${line}\n`);
     }
-    if (crossLangDrift) {
-        out.write(`  cross-language drift: plugin-ide-checkout/server.py REPLACE_EXISTING_ENV='${pyReplaceEnv}'\n`);
-        out.write(`    must equal qol_conventions::ENV_DAEMON_REPLACE_EXISTING='${rustReplaceEnv}'\n`);
+    if (crossLangError) {
+        out.write(`  ${crossLangError}\n`);
     }
     out.write('\n  fix:\n');
     out.write('    - host constants: qol_conventions::{DEFAULT_PORT, STATE_SOCKET_PATH, ENV_STATE_SOCKET, ENV_PLUGIN_ID, ENV_DAEMON_SOCKET, ENV_DAEMON_REPLACE_EXISTING, settings_url}\n');

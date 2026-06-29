@@ -35,6 +35,9 @@ jobs:
       - name: Single source guard
         run: node .githooks/single-source-guard.mjs
 
+      - name: Test single source guard
+        run: node --test .githooks/single-source-guard.test.mjs
+
       - name: Test release scripts
         run: python3 -m unittest discover -s .github/scripts/tests -p 'test_*.py'
 
