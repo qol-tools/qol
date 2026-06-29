@@ -9,7 +9,7 @@ use std::sync::mpsc::Sender;
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 const ACK_TIMEOUT_MS: u64 = 80;
-const REPLACE_EXISTING_ENV: &str = "QOL_TRAY_DAEMON_REPLACE_EXISTING";
+const REPLACE_EXISTING_ENV: &str = qol_conventions::ENV_DAEMON_REPLACE_EXISTING;
 
 pub struct DaemonConfig {
     pub default_socket_name: &'static str,
@@ -27,7 +27,7 @@ pub enum ReadResult<C> {
 }
 
 pub fn socket_path(config: &DaemonConfig) -> PathBuf {
-    std::env::var("QOL_TRAY_DAEMON_SOCKET")
+    std::env::var(qol_conventions::ENV_DAEMON_SOCKET)
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             if config.use_tmpdir_env {

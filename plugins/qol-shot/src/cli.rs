@@ -78,8 +78,8 @@ fn record_command(binary_name: &'static str) -> Command {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn forward_host_fallback_record_to_daemon() -> bool {
-    if std::env::var_os("QOL_TRAY_DAEMON_SOCKET").is_none()
-        || std::env::var_os("QOL_TRAY_DAEMON_REPLACE_EXISTING").is_some()
+    if std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_none()
+        || std::env::var_os(qol_conventions::ENV_DAEMON_REPLACE_EXISTING).is_some()
     {
         return false;
     }

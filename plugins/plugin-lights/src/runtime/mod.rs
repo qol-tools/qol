@@ -11,7 +11,7 @@ pub fn entrypoint(args: Vec<String>) -> Result<()> {
 }
 
 fn daemon_or_settings() -> Result<()> {
-    if std::env::var_os("QOL_TRAY_DAEMON_SOCKET").is_some() {
+    if std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_some() {
         return crate::daemon::run_from_env();
     }
 

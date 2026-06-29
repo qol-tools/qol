@@ -29,7 +29,7 @@ fn spawn_null(cmd: &str, args: &[&OsStr]) -> bool {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .env_remove("QOL_TRAY_DAEMON_SOCKET")
+        .env_remove(qol_conventions::ENV_DAEMON_SOCKET)
         .env_remove("QOL_TRAY_INSTALL_ID");
     if let Some(dir) = qol_platform::launch_working_dir() {
         command.current_dir(dir);

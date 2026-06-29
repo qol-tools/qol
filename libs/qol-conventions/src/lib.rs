@@ -13,6 +13,8 @@ pub const TRACE_LOG_PATH: &str = "/tmp/qol-altmon.log";
 
 pub const ENV_STATE_SOCKET: &str = "QOL_TRAY_STATE_SOCKET";
 pub const ENV_PLUGIN_ID: &str = "QOL_TRAY_PLUGIN_ID";
+pub const ENV_DAEMON_SOCKET: &str = "QOL_TRAY_DAEMON_SOCKET";
+pub const ENV_DAEMON_REPLACE_EXISTING: &str = "QOL_TRAY_DAEMON_REPLACE_EXISTING";
 
 pub fn local_base_url() -> String {
     format!("http://{LOCAL_HOST}:{DEFAULT_PORT}")

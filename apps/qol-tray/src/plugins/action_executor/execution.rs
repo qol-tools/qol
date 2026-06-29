@@ -147,7 +147,7 @@ fn runtime_command(resolved: &ResolvedAction, command_path: &Path) -> std::proce
             qol_conventions::STATE_SOCKET_PATH,
         );
     if let Some(socket_path) = &resolved.daemon_socket {
-        command.env("QOL_TRAY_DAEMON_SOCKET", socket_path);
+        command.env(qol_conventions::ENV_DAEMON_SOCKET, socket_path);
     }
     command
 }

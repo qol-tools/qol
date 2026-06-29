@@ -32,7 +32,7 @@ function grep(cwd, pattern, pathspec) {
 const root = repoRoot();
 if (!root) process.exit(0);
 
-const conventionConstants = '42700|qol-tray-state\\.sock|QOL_TRAY_STATE_SOCKET|QOL_TRAY_PLUGIN_ID|RESERVED_PLUGIN_IDS|qol-altmon\\.log';
+const conventionConstants = '42700|qol-tray-state\\.sock|QOL_TRAY_STATE_SOCKET|QOL_TRAY_PLUGIN_ID|RESERVED_PLUGIN_IDS|qol-altmon\\.log|QOL_TRAY_DAEMON_SOCKET|QOL_TRAY_DAEMON_REPLACE_EXISTING';
 const pluginPorts = '42710|42720';
 
 const hits = [
@@ -48,7 +48,7 @@ if (hits) {
     out.write('  offending occurrences:\n');
     for (const line of hits.split('\n')) out.write(`    ${line}\n`);
     out.write('\n  fix:\n');
-    out.write('    - host constants: qol_conventions::{DEFAULT_PORT, STATE_SOCKET_PATH, ENV_STATE_SOCKET, ENV_PLUGIN_ID, settings_url}\n');
+    out.write('    - host constants: qol_conventions::{DEFAULT_PORT, STATE_SOCKET_PATH, ENV_STATE_SOCKET, ENV_PLUGIN_ID, ENV_DAEMON_SOCKET, ENV_DAEMON_REPLACE_EXISTING, settings_url}\n');
     out.write('    - reserved ids  : qol_conventions::is_reserved_plugin_id\n');
     out.write('    - trace log     : qol_conventions::TRACE_LOG_PATH\n');
     out.write('    - plugin id     : qol_conventions::build::emit_plugin_id (from plugin.toml)\n');

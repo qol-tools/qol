@@ -40,8 +40,8 @@ enum DaemonRuntime {
 }
 
 pub fn run_from_env() -> Result<()> {
-    let socket_path =
-        std::env::var("QOL_TRAY_DAEMON_SOCKET").context("QOL_TRAY_DAEMON_SOCKET is not set")?;
+    let socket_path = std::env::var(qol_conventions::ENV_DAEMON_SOCKET)
+        .with_context(|| format!("{} is not set", qol_conventions::ENV_DAEMON_SOCKET))?;
     run(&socket_path)
 }
 
