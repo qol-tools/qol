@@ -1,5 +1,6 @@
 use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
+use super::cargo_target::workspace_root;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -27,13 +28,6 @@ enum ClippyStatus {
     Clean,
     Lints(String),
     Unavailable(String),
-}
-
-fn workspace_root() -> Option<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2)?;
-    root.join("Cargo.toml")
-        .is_file()
-        .then(|| root.to_path_buf())
 }
 
 fn clippy_status(workspace: &Path) -> ClippyStatus {

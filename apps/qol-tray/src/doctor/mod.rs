@@ -414,6 +414,32 @@ mod tests {
     }
 
     #[test]
+    fn startup_selector_is_non_devbuild_partition() {
+        let metas: Vec<CheckMeta> = checks::registry()
+            .iter()
+            .map(|check| check.meta())
+            .filter(|meta| {
+                meta.platform.matches_current() && check_enabled_for_build(meta.dev_only)
+            })
+            .collect();
+        let startup_count = metas
+            .iter()
+            .filter(|meta| Selector::Startup.matches(meta))
+            .count();
+        let dev_build_count = metas
+            .iter()
+            .filter(|meta| meta.category == CheckCategory::DevBuild)
+            .count();
+
+        assert_eq!(startup_count + dev_build_count, metas.len());
+        #[cfg(feature = "dev")]
+        assert!(
+            dev_build_count > 0,
+            "dev builds must keep expensive checks out of startup doctor"
+        );
+    }
+
+    #[test]
     fn fix_policy_allows_or_skips_per_variant() {
         let cases = [
             (

@@ -4304,7 +4304,11 @@ fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Span<'static>>
             Color::Green,
             vec![
                 label.fg(Color::Green).bold(),
-                format!(" · {} checks", report.ok).fg(Color::DarkGray),
+                match run.scope {
+                    DoctorScope::Full => format!(" · {} checks", report.ok),
+                    DoctorScope::Startup => format!(" · {} startup checks", report.ok),
+                }
+                .fg(Color::DarkGray),
             ],
         )
     } else {
@@ -4751,7 +4755,16 @@ enum DoctorScope {
     Startup,
 }
 
+const STARTUP_DOCTOR_CHECK_ARGS: &[&str] = &["check", "--startup"];
+
 impl DoctorMode {
+    fn full_command_args(self) -> &'static [&'static str] {
+        match self {
+            DoctorMode::Check => &["check"],
+            DoctorMode::Fix => &["fix"],
+        }
+    }
+
     fn gerund(self) -> &'static str {
         match self {
             DoctorMode::Check => "checking",
@@ -4767,17 +4780,6 @@ impl DoctorMode {
     }
 }
 
-impl DoctorScope {
-    fn command_args(self, mode: DoctorMode) -> &'static [&'static str] {
-        match (self, mode) {
-            (DoctorScope::Full, DoctorMode::Check) => &["check"],
-            (DoctorScope::Full, DoctorMode::Fix) => &["fix"],
-            (DoctorScope::Startup, DoctorMode::Check) => &["check", "--startup"],
-            (DoctorScope::Startup, DoctorMode::Fix) => &["fix"],
-        }
-    }
-}
-
 fn spawn_doctor(mode: DoctorMode) -> Receiver<Result<DoctorRun, String>> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {
@@ -4789,7 +4791,13 @@ fn spawn_doctor(mode: DoctorMode) -> Receiver<Result<DoctorRun, String>> {
 fn run_doctor(mode: DoctorMode) -> Result<DoctorRun, String> {
     let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
     build_doctor(&root)?;
-    run_doctor_binary(&doctor_binary(&root), &root, mode, DoctorScope::Full)
+    run_doctor_binary(
+        &doctor_binary(&root),
+        &root,
+        mode,
+        DoctorScope::Full,
+        mode.full_command_args(),
+    )
 }
 
 fn run_doctor_prebuilt() -> Result<DoctorRun, String> {
@@ -4798,7 +4806,13 @@ fn run_doctor_prebuilt() -> Result<DoctorRun, String> {
     if !binary.exists() {
         return Err("doctor binary not built · press d".to_string());
     }
-    run_doctor_binary(&binary, &root, DoctorMode::Check, DoctorScope::Startup)
+    run_doctor_binary(
+        &binary,
+        &root,
+        DoctorMode::Check,
+        DoctorScope::Startup,
+        STARTUP_DOCTOR_CHECK_ARGS,
+    )
 }
 
 fn doctor_binary(root: &std::path::Path) -> std::path::PathBuf {
@@ -4812,10 +4826,11 @@ fn run_doctor_binary(
     root: &std::path::Path,
     mode: DoctorMode,
     scope: DoctorScope,
+    args: &[&str],
 ) -> Result<DoctorRun, String> {
     let output = Command::new(binary)
         .current_dir(root)
-        .args(scope.command_args(mode))
+        .args(args)
         .output()
         .map_err(|error| error.to_string())?;
     let text = String::from_utf8_lossy(&output.stdout);
@@ -5016,7 +5031,7 @@ mod tests {
                     error: None,
                 },
                 Color::Green,
-                "startup good · 11 checks · 15s ago",
+                "startup good · 11 startup checks · 15s ago",
             ),
             (
                 DoctorPanel {
@@ -5056,7 +5071,7 @@ mod tests {
                     error: Some("boom".to_string()),
                 },
                 Color::Green,
-                "startup good · 11 checks · 15s ago · probe failed",
+                "startup good · 11 startup checks · 15s ago · probe failed",
             ),
             (
                 DoctorPanel {
@@ -6218,11 +6233,12 @@ mod tests {
     #[test]
     fn background_doctor_uses_startup_scope() {
         assert_eq!(
-            DoctorScope::Startup.command_args(DoctorMode::Check),
+            STARTUP_DOCTOR_CHECK_ARGS,
             ["check", "--startup"],
             "the dashboard poller must not run full DevBuild checks in the background"
         );
-        assert_eq!(DoctorScope::Full.command_args(DoctorMode::Check), ["check"]);
+        assert_eq!(DoctorMode::Check.full_command_args(), ["check"]);
+        assert_eq!(DoctorMode::Fix.full_command_args(), ["fix"]);
     }
 
     #[test]
