@@ -1,10 +1,9 @@
 use std::sync::mpsc::Sender;
 
-use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult};
+use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 
 const CONFIG: DaemonConfig = DaemonConfig {
-    default_socket_name: "qol-alt-tab.sock",
-    use_tmpdir_env: true,
+    socket: SocketSource::EnvRequired,
     support_replace_existing: false,
 };
 

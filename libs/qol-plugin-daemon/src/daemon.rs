@@ -12,9 +12,16 @@ const ACK_TIMEOUT_MS: u64 = 80;
 const REPLACE_EXISTING_ENV: &str = qol_conventions::ENV_DAEMON_REPLACE_EXISTING;
 
 pub struct DaemonConfig {
-    pub default_socket_name: &'static str,
-    pub use_tmpdir_env: bool,
+    pub socket: SocketSource,
     pub support_replace_existing: bool,
+}
+
+pub enum SocketSource {
+    EnvRequired,
+    Fallback {
+        default_socket_name: &'static str,
+        use_tmpdir_env: bool,
+    },
 }
 
 pub enum ReadResult<C> {
@@ -26,23 +33,40 @@ pub enum ReadResult<C> {
     Ignore,
 }
 
-pub fn socket_path(config: &DaemonConfig) -> PathBuf {
-    std::env::var(qol_conventions::ENV_DAEMON_SOCKET)
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            if config.use_tmpdir_env {
-                let dir = std::env::var("TMPDIR")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|_| PathBuf::from("/tmp"));
-                dir.join(config.default_socket_name)
-            } else {
-                PathBuf::from("/tmp").join(config.default_socket_name)
-            }
-        })
+pub fn socket_path(config: &DaemonConfig) -> Option<PathBuf> {
+    if let Ok(path) = std::env::var(qol_conventions::ENV_DAEMON_SOCKET) {
+        return Some(PathBuf::from(path));
+    }
+    match &config.socket {
+        SocketSource::EnvRequired => None,
+        SocketSource::Fallback {
+            default_socket_name,
+            use_tmpdir_env,
+        } => Some(fallback_socket_path(default_socket_name, *use_tmpdir_env)),
+    }
+}
+
+fn fallback_socket_path(name: &str, use_tmpdir_env: bool) -> PathBuf {
+    if use_tmpdir_env {
+        let dir = std::env::var("TMPDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/tmp"));
+        dir.join(name)
+    } else {
+        PathBuf::from("/tmp").join(name)
+    }
 }
 
 pub fn send_action(config: &DaemonConfig, action: &str, expect_reply: bool) -> bool {
-    let Ok(mut stream) = UnixStream::connect(socket_path(config)) else {
+    let Some(path) = socket_path(config) else {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[daemon] {} unset and no fallback socket - cannot send action",
+            qol_conventions::ENV_DAEMON_SOCKET
+        );
+        return false;
+    };
+    let Ok(mut stream) = UnixStream::connect(path) else {
         return false;
     };
     let timeout = std::time::Duration::from_millis(ACK_TIMEOUT_MS);
@@ -86,7 +110,9 @@ pub fn send_ping(config: &DaemonConfig) -> bool {
 }
 
 pub fn cleanup(config: &DaemonConfig) {
-    remove_socket_file(socket_path(config));
+    if let Some(path) = socket_path(config) {
+        remove_socket_file(path);
+    }
 }
 
 pub fn start_listener<C: Send + 'static>(
@@ -94,7 +120,14 @@ pub fn start_listener<C: Send + 'static>(
     tx: Sender<C>,
     parser: fn(&str) -> ReadResult<C>,
 ) -> bool {
-    let socket_path = socket_path(config);
+    let Some(socket_path) = socket_path(config) else {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[daemon] {} unset and no fallback socket - not binding",
+            qol_conventions::ENV_DAEMON_SOCKET
+        );
+        return false;
+    };
     let support_replace = config.support_replace_existing;
 
     #[cfg(debug_assertions)]

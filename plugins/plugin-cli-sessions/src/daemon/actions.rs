@@ -1,10 +1,9 @@
 use std::sync::mpsc::Sender;
 
-use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult};
+use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 
 pub const CONFIG: DaemonConfig = DaemonConfig {
-    default_socket_name: "qol-cli-sessions.sock",
-    use_tmpdir_env: false,
+    socket: SocketSource::EnvRequired,
     support_replace_existing: true,
 };
 
