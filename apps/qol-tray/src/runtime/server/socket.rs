@@ -8,15 +8,10 @@ use std::sync::Arc;
 use crossbeam_channel::{Receiver, Sender};
 
 use super::shared::SharedState;
-use crate::paths::STATE_SOCKET_PATH;
 use io::{prepare_stream, read_request};
 use requests::{handle_request, request_is_long_lived};
 
 const CONNECTION_WORKERS: usize = 4;
-
-pub(super) fn run(shared: Arc<SharedState>) {
-    run_at(shared, Path::new(STATE_SOCKET_PATH));
-}
 
 pub(crate) fn run_at(shared: Arc<SharedState>, path: &Path) {
     let _ = std::fs::remove_file(path);

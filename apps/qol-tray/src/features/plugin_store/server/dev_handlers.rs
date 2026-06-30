@@ -15,6 +15,14 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/dev/reload", post(reload_plugins))
         .route("/dev/reload/{plugin_id}", post(reload_single_plugin))
         .route("/dev/recompile-self", post(recompile_self))
+        .route(
+            qol_conventions::DEV_RESTART_PREBUILT_ROUTE,
+            post(restart_prebuilt),
+        )
+        .route(
+            qol_conventions::DEV_PROMOTE_GENERATION_ROUTE,
+            post(promote_generation),
+        )
         .route("/dev/worktrees", get(list_worktrees_handler))
         .route("/dev/active-worktree", get(active_worktree_handler))
 }
@@ -106,6 +114,21 @@ pub(super) async fn recompile_self(
 
     dev_services::queue_reload(&state, requested_branch)
         .map(|_| (StatusCode::ACCEPTED, "Plugin reload queued"))
+        .unwrap_or_else(|msg| (StatusCode::CONFLICT, msg))
+        .into_response()
+}
+
+async fn restart_prebuilt(State(state): State<AppState>) -> impl IntoResponse {
+    dev_services::restart_prebuilt(&state)
+        .map(|_| (StatusCode::ACCEPTED, "Restart queued"))
+        .unwrap_or_else(|msg| (StatusCode::CONFLICT, msg))
+        .into_response()
+}
+
+async fn promote_generation(State(state): State<AppState>) -> impl IntoResponse {
+    dev_services::promote_generation(&state)
+        .await
+        .map(|_| (StatusCode::ACCEPTED, "Promoted".to_string()))
         .unwrap_or_else(|msg| (StatusCode::CONFLICT, msg))
         .into_response()
 }

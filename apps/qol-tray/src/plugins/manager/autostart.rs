@@ -1,8 +1,10 @@
 use crate::plugins::resolver::PluginSource;
 use crate::plugins::Plugin;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 const DEV_DAEMON_AUTOSTART_MARKER: &str = ".qol-tray-dev-autostart";
+const DAEMON_READY_INTERVAL: Duration = Duration::from_millis(25);
 
 pub(super) fn start_plugin_daemons<'a, I>(plugins: I)
 where
@@ -70,9 +72,66 @@ fn daemon_enabled(plugin: &Plugin) -> bool {
 }
 
 fn start_daemon(plugin: &mut Plugin) {
+    if crate::dev_generation::is_rolling_restart()
+        && super::super::daemon_lifecycle::existing_daemon_socket_ready(plugin)
+    {
+        log::info!(
+            "Preserving existing daemon for plugin {} during rolling restart",
+            plugin.id
+        );
+        return;
+    }
     if let Err(error) = plugin.start_daemon() {
         log::error!("Failed to start daemon for plugin {}: {}", plugin.id, error);
     }
+}
+
+pub(super) fn wait_for_autostart_daemons_ready<'a, I>(plugins: I, timeout: Duration) -> Vec<String>
+where
+    I: IntoIterator<Item = &'a Plugin>,
+{
+    let mut pending: Vec<&Plugin> = plugins
+        .into_iter()
+        .filter(|plugin| should_wait_for_daemon_readiness(plugin))
+        .collect();
+    let deadline = Instant::now() + timeout;
+    while !pending.is_empty() && Instant::now() < deadline {
+        pending
+            .retain(|plugin| !super::super::daemon_lifecycle::existing_daemon_socket_ready(plugin));
+        if pending.is_empty() {
+            break;
+        }
+        std::thread::sleep(DAEMON_READY_INTERVAL);
+    }
+    pending
+        .into_iter()
+        .map(|plugin| plugin.id.as_str().to_string())
+        .collect()
+}
+
+fn should_wait_for_daemon_readiness(plugin: &Plugin) -> bool {
+    should_wait_for_daemon_readiness_for_source(
+        plugin.id.as_str(),
+        &plugin.path,
+        daemon_enabled(plugin),
+        Some(&plugin.source),
+    )
+}
+
+fn should_wait_for_daemon_readiness_for_source(
+    plugin_id: &str,
+    plugin_path: &Path,
+    daemon_enabled: bool,
+    source: Option<&PluginSource>,
+) -> bool {
+    daemon_enabled
+        && should_autostart_daemon_for_source_with_logging(
+            plugin_id,
+            plugin_path,
+            daemon_enabled,
+            source,
+            false,
+        )
 }
 
 fn should_autostart_daemon_for_source(
@@ -80,6 +139,22 @@ fn should_autostart_daemon_for_source(
     plugin_path: &Path,
     daemon_enabled: bool,
     source: Option<&PluginSource>,
+) -> bool {
+    should_autostart_daemon_for_source_with_logging(
+        plugin_id,
+        plugin_path,
+        daemon_enabled,
+        source,
+        true,
+    )
+}
+
+fn should_autostart_daemon_for_source_with_logging(
+    plugin_id: &str,
+    plugin_path: &Path,
+    daemon_enabled: bool,
+    source: Option<&PluginSource>,
+    log_blocked: bool,
 ) -> bool {
     if !daemon_enabled {
         return true;
@@ -93,18 +168,23 @@ fn should_autostart_daemon_for_source(
         return true;
     }
 
-    log::warn!(
-        "Daemon autostart blocked for dev-linked plugin {} at {}. Create {} to opt in.",
-        plugin_id,
-        plugin_path.display(),
-        marker_path.display()
-    );
+    if log_blocked {
+        log::warn!(
+            "Daemon autostart blocked for dev-linked plugin {} at {}. Create {} to opt in.",
+            plugin_id,
+            plugin_path.display(),
+            marker_path.display()
+        );
+    }
     false
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{should_autostart_daemon_for_source, DEV_DAEMON_AUTOSTART_MARKER};
+    use super::{
+        should_autostart_daemon_for_source, should_wait_for_daemon_readiness_for_source,
+        DEV_DAEMON_AUTOSTART_MARKER,
+    };
     use crate::plugins::resolver::PluginSource;
 
     #[test]
@@ -145,6 +225,31 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         std::fs::write(temp.path().join(DEV_DAEMON_AUTOSTART_MARKER), "").unwrap();
         assert!(should_autostart_daemon_for_source(
+            "plugin",
+            temp.path(),
+            true,
+            Some(&PluginSource::DevLinked),
+        ));
+    }
+
+    #[test]
+    fn readiness_wait_skips_dev_linked_plugin_without_autostart_marker() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        assert!(!should_wait_for_daemon_readiness_for_source(
+            "plugin",
+            temp.path(),
+            true,
+            Some(&PluginSource::DevLinked),
+        ));
+    }
+
+    #[test]
+    fn readiness_wait_tracks_dev_linked_plugin_with_autostart_marker() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join(DEV_DAEMON_AUTOSTART_MARKER), "").unwrap();
+
+        assert!(should_wait_for_daemon_readiness_for_source(
             "plugin",
             temp.path(),
             true,

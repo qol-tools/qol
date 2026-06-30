@@ -39,7 +39,7 @@ impl Plugins {
         daemon: &Daemon,
         sync_service: Arc<crate::features::profile::sync::SyncService>,
         #[cfg(feature = "dev")] core_log_controls: crate::logging::CoreControlsHandle,
-    ) -> Result<()> {
+    ) -> Result<u16> {
         log::info!("Starting plugin server with embedded UI");
         let port = server::start_ui_server(
             plugin_manager,
@@ -51,7 +51,7 @@ impl Plugins {
         .await?;
         ACTIVE_SERVER_PORT.store(port, Ordering::Relaxed);
         log::info!("Plugin server started at http://127.0.0.1:{}", port);
-        Ok(())
+        Ok(port)
     }
 }
 

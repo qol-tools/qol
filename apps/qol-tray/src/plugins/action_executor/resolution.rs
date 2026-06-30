@@ -69,7 +69,7 @@ fn daemon_socket(plugin: &Plugin) -> Option<PathBuf> {
         .daemon
         .as_ref()
         .and_then(|daemon| enabled_socket(daemon))
-        .map(PathBuf::from)
+        .map(crate::dev_generation::daemon_socket_path)
 }
 
 fn enabled_socket(daemon: &crate::plugins::manifest::DaemonConfig) -> Option<&str> {

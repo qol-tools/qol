@@ -9,6 +9,10 @@ fn api_url(path: &str) -> String {
     format!("{}{path}", qol_conventions::local_base_url())
 }
 
+fn local_api_url(port: u16, route: &str) -> String {
+    format!("http://{}:{port}/api{route}", qol_conventions::LOCAL_HOST)
+}
+
 pub(crate) fn website_url() -> String {
     format!("http://localhost:{}", qol_conventions::DEFAULT_PORT)
 }
@@ -264,6 +268,15 @@ pub(crate) fn post_reload_plugins() -> Result<()> {
         return Ok(());
     }
     bail!("plugin reload request failed with HTTP {status}");
+}
+
+pub(crate) fn post_promote_generation(port: u16) -> Result<()> {
+    let url = local_api_url(port, qol_conventions::DEV_PROMOTE_GENERATION_ROUTE);
+    let status = http_request("POST", &url, Some("{}"))?;
+    if status / 100 == 2 {
+        return Ok(());
+    }
+    bail!("generation promotion request failed with HTTP {status}");
 }
 
 fn post_recompile_body(body: &str) -> Result<()> {

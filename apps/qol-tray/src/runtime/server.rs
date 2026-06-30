@@ -10,14 +10,13 @@ use poll::RuntimeChannels;
 use shared::SharedState;
 
 use crate::desktop_state;
-use crate::paths::STATE_SOCKET_PATH;
-
 pub struct RuntimeServer {
     _handle: (),
 }
 
 impl RuntimeServer {
     pub fn start() -> Self {
+        let state_socket_path = crate::dev_generation::state_socket_path();
         let platform = desktop_state::create_shared();
         let channels = RuntimeChannels::new(platform.clone());
         let initial_monitors = channels.initial_monitors();
@@ -25,7 +24,7 @@ impl RuntimeServer {
         log::info!(
             "Runtime server starting: {} monitors, socket={}",
             initial_monitors.len(),
-            STATE_SOCKET_PATH,
+            state_socket_path.display(),
         );
 
         let shared = Arc::new(SharedState::new(initial_monitors));
@@ -34,7 +33,7 @@ impl RuntimeServer {
         trace::print_monitor_legend();
         spawn_poll_thread(shared.clone(), channels);
         spawn_window_list_thread(shared.clone(), platform);
-        spawn_socket_thread(shared);
+        spawn_socket_thread(shared, state_socket_path);
         Self { _handle: () }
     }
 }
@@ -53,9 +52,9 @@ fn spawn_window_list_thread(shared: Arc<SharedState>, platform: desktop_state::S
         .expect("failed to spawn runtime window-list thread");
 }
 
-fn spawn_socket_thread(shared: Arc<SharedState>) {
+fn spawn_socket_thread(shared: Arc<SharedState>, path: std::path::PathBuf) {
     std::thread::Builder::new()
         .name("runtime-sock".into())
-        .spawn(move || socket::run(shared))
+        .spawn(move || socket::run_at(shared, &path))
         .expect("failed to spawn runtime socket thread");
 }

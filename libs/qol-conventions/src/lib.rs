@@ -16,6 +16,15 @@ pub const ENV_PLUGIN_ID: &str = "QOL_TRAY_PLUGIN_ID";
 pub const ENV_DAEMON_SOCKET: &str = "QOL_TRAY_DAEMON_SOCKET";
 pub const ENV_DAEMON_REPLACE_EXISTING: &str = "QOL_TRAY_DAEMON_REPLACE_EXISTING";
 
+pub const ENV_DEV_GENERATION_MODE: &str = "QOL_DEV_GENERATION_MODE";
+pub const ENV_DEV_GENERATION_ID: &str = "QOL_DEV_GENERATION_ID";
+pub const ENV_DEV_READY_FILE: &str = "QOL_DEV_READY_FILE";
+pub const ENV_DEV_UI_PORT: &str = "QOL_DEV_UI_PORT";
+pub const ENV_DEV_ROLLING_RESTART: &str = "QOL_DEV_ROLLING_RESTART";
+pub const DEV_GENERATION_MODE_SHADOW: &str = "shadow";
+pub const DEV_RESTART_PREBUILT_ROUTE: &str = "/dev/restart-prebuilt";
+pub const DEV_PROMOTE_GENERATION_ROUTE: &str = "/dev/promote-generation";
+
 pub mod launcher {
     pub const APP_ID: &str = "qol-tray-launcher";
     pub const WINDOW_TITLE: &str = "qol-launcher";

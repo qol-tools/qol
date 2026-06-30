@@ -18,6 +18,8 @@ use tokio::sync::broadcast;
 
 use qol_conventions::DEFAULT_PORT;
 
+const DEV_GENERATION_DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(8);
+
 fn main() -> Result<()> {
     if let Some(code) = try_handle_cli_flag() {
         std::process::exit(code);
@@ -38,81 +40,91 @@ fn main() -> Result<()> {
     #[cfg(not(feature = "dev"))]
     qol_tray::logging::init_logger();
 
-    if let Err(e) = qol_tray::installer::bootstrap_current_install() {
-        log::error!("Failed to bootstrap current install: {}", e);
-    }
+    let generation = qol_tray::dev_generation::current();
+    let rolling_restart = qol_tray::dev_generation::is_rolling_restart();
+    if generation.is_shadow() {
+        log::info!("Starting shadow dev generation");
+    } else if rolling_restart {
+        log::info!("Starting rolling dev restart");
+    } else {
+        if let Err(e) = qol_tray::installer::bootstrap_current_install() {
+            log::error!("Failed to bootstrap current install: {}", e);
+        }
 
-    if is_already_running() {
-        eprintln!("qol-tray is already running on port {}", DEFAULT_PORT);
-        already_running_notification::show();
-        return Ok(());
-    }
+        if is_already_running() {
+            eprintln!("qol-tray is already running on port {}", DEFAULT_PORT);
+            already_running_notification::show();
+            return Ok(());
+        }
 
-    if let Err(e) = qol_tray::paths::init_runtime_dirs() {
-        log::error!("Failed to initialize runtime directories: {}", e);
-    }
+        if let Err(e) = qol_tray::paths::init_runtime_dirs() {
+            log::error!("Failed to initialize runtime directories: {}", e);
+        }
 
-    if let Ok(config_dir) = qol_tray::paths::shared_config_dir() {
-        match qol_migrations::run_pre_flight(&config_dir, env!("CARGO_PKG_VERSION")) {
-            Ok(reports) if reports.is_empty() => {}
-            Ok(reports) => {
-                for report in reports {
-                    log::info!(
-                        "qol-migrations[pre-flight]: applied {} (archived {} paths)",
-                        report.name,
-                        report.archived.len()
-                    );
+        if let Ok(config_dir) = qol_tray::paths::shared_config_dir() {
+            match qol_migrations::run_pre_flight(&config_dir, env!("CARGO_PKG_VERSION")) {
+                Ok(reports) if reports.is_empty() => {}
+                Ok(reports) => {
+                    for report in reports {
+                        log::info!(
+                            "qol-migrations[pre-flight]: applied {} (archived {} paths)",
+                            report.name,
+                            report.archived.len()
+                        );
+                    }
+                }
+                Err(error) => log::error!("qol-migrations[pre-flight] failed: {error:#}"),
+            }
+            if let Err(e) = qol_tray::housekeeping::run_startup_cleanup(&config_dir) {
+                log::error!("Housekeeping failed: {}", e);
+            }
+        }
+
+        let drained = qol_tray::config_drain::drain_orphan_runtime_configs();
+        if drained > 0 {
+            log::info!(
+                "[config-drain] folded {drained} orphan plugin config(s) into the host store"
+            );
+        }
+
+        #[cfg(feature = "dev")]
+        {
+            if let Ok(config_dir) = qol_tray::paths::shared_config_dir() {
+                let env = qol_tray::installer::boot_environment::default_boot_environment();
+                let lister = qol_tray::dev::boot_contract::GitWorktreeLister;
+                let probe = qol_tray::dev::boot_contract::FsBinaryProbe;
+                let report = qol_tray::dev::boot_contract::heal_drift_on_startup(
+                    env.as_ref(),
+                    &config_dir,
+                    &lister,
+                    &probe,
+                );
+                for event in &report.events {
+                    log::warn!("[boot-contract] drift observed: {:?}", event);
+                }
+                for action in &report.actions {
+                    log::info!("[boot-contract] applied: {:?}", action);
+                }
+                for failure in &report.failures {
+                    log::error!("[boot-contract] failed: {:?}", failure);
+                }
+                if !report.events.is_empty() {
+                    let _ = PENDING_HEAL_REPORT.set(report);
                 }
             }
-            Err(error) => log::error!("qol-migrations[pre-flight] failed: {error:#}"),
         }
-        if let Err(e) = qol_tray::housekeeping::run_startup_cleanup(&config_dir) {
-            log::error!("Housekeeping failed: {}", e);
-        }
-    }
 
-    let drained = qol_tray::config_drain::drain_orphan_runtime_configs();
-    if drained > 0 {
-        log::info!("[config-drain] folded {drained} orphan plugin config(s) into the host store");
+        let startup_doctor = qol_tray::doctor::auto_fix_startup();
+        println!(
+            "[doctor] startup summary: attempted={}, applied={}, failures={}, ok={}, warn={}, error={}",
+            startup_doctor.attempted,
+            startup_doctor.applied,
+            startup_doctor.failures.len(),
+            startup_doctor.after.count_ok(),
+            startup_doctor.after.count_warn(),
+            startup_doctor.after.count_error()
+        );
     }
-
-    #[cfg(feature = "dev")]
-    {
-        if let Ok(config_dir) = qol_tray::paths::shared_config_dir() {
-            let env = qol_tray::installer::boot_environment::default_boot_environment();
-            let lister = qol_tray::dev::boot_contract::GitWorktreeLister;
-            let probe = qol_tray::dev::boot_contract::FsBinaryProbe;
-            let report = qol_tray::dev::boot_contract::heal_drift_on_startup(
-                env.as_ref(),
-                &config_dir,
-                &lister,
-                &probe,
-            );
-            for event in &report.events {
-                log::warn!("[boot-contract] drift observed: {:?}", event);
-            }
-            for action in &report.actions {
-                log::info!("[boot-contract] applied: {:?}", action);
-            }
-            for failure in &report.failures {
-                log::error!("[boot-contract] failed: {:?}", failure);
-            }
-            if !report.events.is_empty() {
-                let _ = PENDING_HEAL_REPORT.set(report);
-            }
-        }
-    }
-
-    let startup_doctor = qol_tray::doctor::auto_fix_startup();
-    println!(
-        "[doctor] startup summary: attempted={}, applied={}, failures={}, ok={}, warn={}, error={}",
-        startup_doctor.attempted,
-        startup_doctor.applied,
-        startup_doctor.failures.len(),
-        startup_doctor.after.count_ok(),
-        startup_doctor.after.count_warn(),
-        startup_doctor.after.count_error()
-    );
 
     log::info!("Starting QoL Tray daemon...");
 
@@ -484,7 +496,13 @@ fn app_init_inner(
 async fn async_init_inner(
     #[cfg(feature = "dev")] core_log_controls: qol_tray::logging::CoreControlsHandle,
 ) -> Result<InitResult> {
-    let update_available = check_for_updates().await;
+    let shadow_generation = qol_tray::dev_generation::is_shadow();
+    let rolling_restart = qol_tray::dev_generation::is_rolling_restart();
+    let update_available = if shadow_generation || rolling_restart {
+        false
+    } else {
+        check_for_updates().await
+    };
     let (shutdown_tx, shutdown_rx) = broadcast::channel::<()>(1);
     #[cfg(unix)]
     let _state_server = qol_tray::runtime::RuntimeServer::start();
@@ -496,7 +514,7 @@ async fn async_init_inner(
             log::error!("qol-migrations[post-auth] failed: {error:#}");
         }
     }
-    {
+    if !shadow_generation && !rolling_restart {
         let sync_for_pull = Arc::clone(&sync_service);
         tokio::spawn(async move {
             match sync_for_pull.pull_on_launch().await {
@@ -527,7 +545,7 @@ async fn async_init_inner(
     #[cfg(feature = "dev")]
     feature_registry.register(Box::new(features::mode_toggle::ModeToggle::new()));
     let feature_registry = Arc::new(feature_registry);
-    features::plugin_store::Plugins::start_server(
+    let ui_port = features::plugin_store::Plugins::start_server(
         plugin_manager.clone(),
         &daemon,
         sync_service,
@@ -553,21 +571,45 @@ async fn async_init_inner(
         plugin_manager.clone(),
         shutdown_tx.subscribe(),
     );
-    {
+    let generation_restart = shadow_generation || rolling_restart;
+    let missing_generation_daemons = {
         let plugin_manager = plugin_manager.clone();
-        tokio::task::spawn_blocking(move || {
+        match tokio::task::spawn_blocking(move || {
             if let Ok(mut manager) = plugin_manager.lock() {
                 manager.autostart_daemons();
+                if generation_restart {
+                    return manager
+                        .wait_for_autostart_daemons_ready(DEV_GENERATION_DAEMON_READY_TIMEOUT);
+                }
             } else {
                 log::error!("plugin manager lock poisoned during daemon autostart");
             }
-        });
+            Vec::new()
+        })
+        .await
+        {
+            Ok(missing) => missing,
+            Err(error) => {
+                log::error!("daemon autostart task failed: {}", error);
+                Vec::new()
+            }
+        }
+    };
+    if !missing_generation_daemons.is_empty() {
+        let missing = missing_generation_daemons.join(", ");
+        if shadow_generation {
+            anyhow::bail!("shadow generation daemon(s) not ready: {missing}");
+        }
+        log::warn!("rolling restart daemon(s) not ready before handoff: {missing}");
     }
     {
         let plugin_manager = plugin_manager.clone();
         tokio::task::spawn_blocking(move || sync_launcher_apps(plugin_manager));
     }
     spawn_config_reconcilers(&daemon.config, &plugin_manager);
+    if let Err(error) = qol_tray::dev_generation::write_ready_file(ui_port) {
+        log::error!("Failed to write dev generation ready file: {}", error);
+    }
     Ok(InitResult {
         shutdown_tx,
         shutdown_rx,

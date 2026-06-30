@@ -144,7 +144,7 @@ fn runtime_command(resolved: &ResolvedAction, command_path: &Path) -> std::proce
         .env(qol_conventions::ENV_PLUGIN_ID, resolved.plugin_id.as_str())
         .env(
             qol_conventions::ENV_STATE_SOCKET,
-            qol_conventions::STATE_SOCKET_PATH,
+            crate::dev_generation::state_socket_path(),
         );
     if let Some(socket_path) = &resolved.daemon_socket {
         command.env(qol_conventions::ENV_DAEMON_SOCKET, socket_path);

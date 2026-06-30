@@ -80,12 +80,15 @@ fn daemon_command(plugin: &Plugin, daemon_config: &DaemonConfig, daemon_path: &P
 
 fn apply_daemon_env(command: &mut Command, daemon_config: &DaemonConfig) {
     if let Some(socket) = daemon_config.socket.as_deref() {
-        command.env(qol_conventions::ENV_DAEMON_SOCKET, socket);
+        command.env(
+            qol_conventions::ENV_DAEMON_SOCKET,
+            crate::dev_generation::daemon_socket_path(socket),
+        );
     }
     command.env(qol_conventions::ENV_DAEMON_REPLACE_EXISTING, "1");
     command.env(
         qol_conventions::ENV_STATE_SOCKET,
-        qol_conventions::STATE_SOCKET_PATH,
+        crate::dev_generation::state_socket_path(),
     );
     command.env_remove("XMODIFIERS");
 }

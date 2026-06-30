@@ -78,8 +78,9 @@ fn existing_socket(plugin: &Plugin) -> Option<SocketCandidate> {
     if !daemon.enabled {
         return None;
     }
-    let socket = daemon.socket.clone()?;
-    let path = PathBuf::from(&socket);
+    let socket = daemon.socket.as_deref()?;
+    let path = crate::dev_generation::daemon_socket_path(socket);
+    let socket = path.to_string_lossy().to_string();
     if !path.exists() {
         return None;
     }

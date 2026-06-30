@@ -28,6 +28,8 @@ const DEV_BUILD_ARGS: [&str; 7] = [
     "--features",
     "dev",
 ];
+pub(crate) const DEV_PREBUILD_COMMAND: &str = "__dev-prebuild";
+pub(crate) const QOL_CLI_BUILD_ARGS: [&str; 5] = ["build", "-p", "qol", "--bin", "qol"];
 
 pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
     let branch = optional_single_arg(args, "qol dev [worktree]")?;
@@ -37,26 +39,12 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     if verbose {
         print_title("qol dev");
     }
-    match branch {
-        Some(branch) => ensure_worktree_branch(&root, branch)?,
-        None => clear_active_worktree_marker(),
-    }
+    select_worktree_branch(&root, branch)?;
     let buildable = boot_preflight(&root, verbose, skip_plugins, reload)?;
+    let binary = dev_binary_path(&root);
+    build_qol_tray_dev(&root, verbose)?;
     host_facade::stop_qol_tray()?;
     wait_for_shutdown_best_effort();
-    let binary = root
-        .join("target")
-        .join("debug")
-        .join(host_facade::exe_name("qol-tray"));
-    run_dev_step(
-        "build",
-        StepKind::Pending,
-        "qol-tray dev",
-        Command::new("cargo")
-            .current_dir(&root)
-            .args(DEV_BUILD_ARGS),
-        verbose,
-    )?;
     dev_step_label(
         "run",
         StepKind::Pending,
@@ -77,7 +65,6 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     finish_boot(&mut child, &buildable, branch, verbose)?;
     match dev_console::run_session(&mut child, verbose, plugin_names, lines, None)? {
         dev_console::SessionEnd::UserQuit => Ok(()),
-        dev_console::SessionEnd::ReloadRequested => reload_self(),
         dev_console::SessionEnd::ChildExited(status) if status.success() => Ok(()),
         dev_console::SessionEnd::ChildExited(status) => {
             bail!("qol-tray dev process exited with {status}")
@@ -126,24 +113,65 @@ fn boot_preflight(
     Ok(buildable)
 }
 
-fn reload_self() -> Result<()> {
-    let exe = crate::setup::installed_qol_path()?;
-    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let mut command = Command::new(&exe);
-    command.args(&args).env(RELOAD_ENV, "1");
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let error = command.exec();
-        Err(error).context("failed to exec the reloaded qol binary")
+pub(crate) fn prebuild(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
+    let usage = format!("qol {DEV_PREBUILD_COMMAND} [worktree]");
+    let branch = optional_single_arg(args, &usage)?;
+    let root = repo_root()?;
+    crate::setup::ensure_lockfile_merge_driver(&root);
+    select_worktree_branch(&root, branch)?;
+    let _ = boot_preflight(&root, verbose, skip_plugins, true)?;
+    build_qol_tray_dev(&root, verbose)?;
+    build_qol_cli_debug(&root, verbose)?;
+    dev_step_label("reload", StepKind::Success, "prebuilt", verbose);
+    Ok(())
+}
+
+fn select_worktree_branch(root: &Path, branch: Option<&str>) -> Result<()> {
+    match branch {
+        Some(branch) => ensure_worktree_branch(root, branch)?,
+        None => clear_active_worktree_marker(),
     }
-    #[cfg(not(unix))]
-    {
-        let status = command
-            .status()
-            .context("failed to run the reloaded qol binary")?;
-        std::process::exit(status.code().unwrap_or(0));
-    }
+    Ok(())
+}
+
+fn dev_binary_path(root: &Path) -> PathBuf {
+    root.join("target")
+        .join("debug")
+        .join(host_facade::exe_name("qol-tray"))
+}
+
+fn build_qol_tray_dev(root: &Path, verbose: bool) -> Result<()> {
+    let mut command = dev_build_command(root);
+    run_dev_step(
+        "build",
+        StepKind::Pending,
+        "qol-tray dev",
+        &mut command,
+        verbose,
+    )
+}
+
+fn dev_build_command(root: &Path) -> Command {
+    let mut command = Command::new("cargo");
+    command.current_dir(root).args(DEV_BUILD_ARGS);
+    command
+}
+
+fn build_qol_cli_debug(root: &Path, verbose: bool) -> Result<()> {
+    let mut command = qol_cli_build_command(root);
+    run_dev_step(
+        "build",
+        StepKind::Pending,
+        "qol dev cli",
+        &mut command,
+        verbose,
+    )
+}
+
+fn qol_cli_build_command(root: &Path) -> Command {
+    let mut command = Command::new("cargo");
+    command.current_dir(root).args(QOL_CLI_BUILD_ARGS);
+    command
 }
 
 fn collect_buildable_plugins(
@@ -360,6 +388,7 @@ fn parse_worktree_branches(input: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
 
     #[test]
     fn parses_worktree_branches_skipping_detached() {
@@ -390,6 +419,37 @@ mod tests {
             Some(&"dev"),
             "both bins must be built with the dev feature so dev-only checks are present"
         );
+    }
+
+    #[test]
+    fn dev_binary_paths_use_workspace_debug_artifacts() {
+        let root = Path::new("/repo/qol");
+        assert_eq!(
+            dev_binary_path(root),
+            root.join("target")
+                .join("debug")
+                .join(host_facade::exe_name("qol-tray"))
+        );
+    }
+
+    #[test]
+    fn startup_build_command_uses_incremental_debug_profile() {
+        let root = Path::new("/repo/qol");
+        let command = dev_build_command(root);
+        let args: Vec<&OsStr> = command.get_args().collect();
+        assert_eq!(args, DEV_BUILD_ARGS.map(OsStr::new));
+        assert_eq!(command.get_current_dir(), Some(root));
+        assert_eq!(command.get_program(), OsStr::new("cargo"));
+    }
+
+    #[test]
+    fn reload_cli_build_command_uses_workspace_debug_profile() {
+        let root = Path::new("/repo/qol");
+        let command = qol_cli_build_command(root);
+        let args: Vec<&OsStr> = command.get_args().collect();
+        assert_eq!(args, QOL_CLI_BUILD_ARGS.map(OsStr::new));
+        assert_eq!(command.get_current_dir(), Some(root));
+        assert_eq!(command.get_program(), OsStr::new("cargo"));
     }
 
     #[test]

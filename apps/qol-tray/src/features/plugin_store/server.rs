@@ -43,6 +43,8 @@ use axum::{
     Router,
 };
 use std::path::PathBuf;
+#[cfg(feature = "dev")]
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tower_http::set_header::SetResponseHeaderLayer;
 
@@ -65,11 +67,15 @@ pub(crate) async fn start_ui_server(
         #[cfg(feature = "dev")]
         core_log_controls,
     )?;
-    start_sync_loop(&app_state);
-    #[cfg(feature = "dev")]
-    start_dev_discovery(&app_state);
-    #[cfg(feature = "dev")]
-    schedule_post_restart_rebuild(&app_state);
+    if !crate::dev_generation::is_shadow() {
+        start_sync_loop(&app_state);
+        #[cfg(feature = "dev")]
+        start_dev_discovery(&app_state);
+        #[cfg(feature = "dev")]
+        schedule_post_restart_rebuild(&app_state);
+    } else {
+        log::info!("Shadow dev generation: skipping sync loop and dev discovery");
+    }
     let app = assemble_app(app_state, plugins_dir);
     let (listener, port) = bind_listener().await?;
     tokio::spawn(async move {
@@ -77,6 +83,38 @@ pub(crate) async fn start_ui_server(
             log::error!("UI server error: {}", e);
         }
     });
+    Ok(port)
+}
+
+#[cfg(feature = "dev")]
+async fn promote_shadow_to_stable(app_state: AppState) -> Result<u16> {
+    if !crate::dev_generation::is_shadow() {
+        anyhow::bail!("only a shadow dev generation can be promoted");
+    }
+    if app_state
+        .promoted_to_stable
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Ok(qol_conventions::DEFAULT_PORT);
+    }
+    let app = assemble_app(app_state.clone(), app_state.plugins_dir.clone());
+    let listener = match bind_listener_at(qol_conventions::DEFAULT_PORT).await {
+        Ok((listener, port)) => (listener, port),
+        Err(error) => {
+            app_state.promoted_to_stable.store(false, Ordering::Release);
+            return Err(error);
+        }
+    };
+    let (listener, port) = listener;
+    super::ACTIVE_SERVER_PORT.store(port, Ordering::Relaxed);
+    tokio::spawn(async move {
+        if let Err(error) = axum::serve(listener, app).await {
+            log::error!("Promoted UI server error: {}", error);
+        }
+    });
+    start_sync_loop(&app_state);
+    start_dev_discovery(&app_state);
     Ok(port)
 }
 
@@ -173,7 +211,12 @@ fn start_dev_discovery(app_state: &AppState) {
 }
 
 async fn bind_listener() -> Result<(tokio::net::TcpListener, u16)> {
-    let address = format!("127.0.0.1:{}", DEFAULT_UI_SERVER_PORT);
+    bind_listener_at(crate::dev_generation::current().ui_bind_port()).await
+}
+
+async fn bind_listener_at(port: u16) -> Result<(tokio::net::TcpListener, u16)> {
+    let address = format!("127.0.0.1:{port}");
     let listener = tokio::net::TcpListener::bind(&address).await?;
-    Ok((listener, DEFAULT_UI_SERVER_PORT))
+    let port = listener.local_addr()?.port();
+    Ok((listener, port))
 }

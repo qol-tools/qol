@@ -9,9 +9,7 @@ const LIFELINE_AUDIT_ATTEMPTS: u32 = 6;
 /// false alarms during those windows while still catching a real leak.
 #[cfg(unix)]
 pub(super) fn settle_missing_lifelines(expected: &[String]) -> Vec<String> {
-    let client = qol_runtime::PlatformStateClient::new(std::path::PathBuf::from(
-        crate::paths::STATE_SOCKET_PATH,
-    ));
+    let client = qol_runtime::PlatformStateClient::new(crate::dev_generation::state_socket_path());
     let mut missing = expected.to_vec();
     for _ in 0..LIFELINE_AUDIT_ATTEMPTS {
         std::thread::sleep(LIFELINE_AUDIT_INTERVAL);

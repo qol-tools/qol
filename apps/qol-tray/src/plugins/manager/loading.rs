@@ -12,7 +12,9 @@ use std::path::Path;
 use std::path::PathBuf;
 
 pub(super) fn load_plugins(manager: &mut PluginManager) -> Result<()> {
-    super::super::daemon_tracker::kill_orphan_daemons();
+    if !crate::dev_generation::is_shadow() && !crate::dev_generation::is_rolling_restart() {
+        super::super::daemon_tracker::kill_orphan_daemons();
+    }
     let loaded = load_all_plugins()?;
     finalize_load(manager, loaded);
     Ok(())
@@ -26,7 +28,9 @@ struct LoadedPlugins {
 fn load_all_plugins() -> Result<LoadedPlugins> {
     let report = resolution_report()?;
     let plugins = PluginLoader::load_resolved(&report.plugins)?;
-    super::super::daemon_tracker::clean_stale_sockets(&plugins);
+    if !crate::dev_generation::is_shadow() && !crate::dev_generation::is_rolling_restart() {
+        super::super::daemon_tracker::clean_stale_sockets(&plugins);
+    }
     Ok(LoadedPlugins { plugins, report })
 }
 

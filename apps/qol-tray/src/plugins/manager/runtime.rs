@@ -122,6 +122,11 @@ fn start_plugin_daemon_if_needed(manager: &mut PluginManager, plugin_id: &str) -
     if plugin.daemon_pid().is_some() {
         return Ok(());
     }
+    if crate::dev_generation::is_rolling_restart()
+        && super::super::daemon_lifecycle::existing_daemon_socket_ready(plugin)
+    {
+        return Ok(());
+    }
 
     plugin.start_daemon()
 }

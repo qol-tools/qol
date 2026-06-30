@@ -50,6 +50,8 @@ pub(super) struct AppState {
     #[cfg(feature = "dev")]
     pub(super) restart: Arc<dyn RestartPort>,
     #[cfg(feature = "dev")]
+    pub(super) promoted_to_stable: Arc<AtomicBool>,
+    #[cfg(feature = "dev")]
     pub(super) core_log_controls:
         Arc<std::sync::RwLock<HashMap<String, crate::logging::LogControl>>>,
 }
@@ -82,6 +84,8 @@ impl AppState {
             runtime: super::dev_runtime::new_dev_runtime(),
             #[cfg(feature = "dev")]
             restart: super::restart::default_restart_port(),
+            #[cfg(feature = "dev")]
+            promoted_to_stable: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "dev")]
             core_log_controls,
         };

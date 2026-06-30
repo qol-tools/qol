@@ -112,6 +112,8 @@ fn handle_lifeline(writer: &mut UnixStream, shared: &SharedState, plugin_id: Str
         return;
     }
 
+    preserve_lifeline_across_exec(writer);
+
     let _ = writer.set_write_timeout(Some(Duration::from_secs(SUBSCRIBER_WRITE_TIMEOUT_SECS)));
 
     // No events ever flow on a lifeline; the held-open connection exists purely
@@ -123,6 +125,23 @@ fn handle_lifeline(writer: &mut UnixStream, shared: &SharedState, plugin_id: Str
     shared.disarm_lifeline(&plugin_id);
     log::info!("[runtime/socket] host-death lifeline dropped by {plugin_id}");
 }
+
+#[cfg(unix)]
+fn preserve_lifeline_across_exec(writer: &UnixStream) {
+    use std::os::fd::AsRawFd;
+
+    let fd = writer.as_raw_fd();
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFD);
+        if flags < 0 {
+            return;
+        }
+        let _ = libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+    }
+}
+
+#[cfg(not(unix))]
+fn preserve_lifeline_across_exec(_writer: &UnixStream) {}
 
 fn handle_subscription(
     writer: &mut UnixStream,
@@ -280,6 +299,26 @@ mod tests {
         let mut buf = [0u8; 4096];
         let n = stream.read(&mut buf).unwrap_or(0);
         String::from_utf8_lossy(&buf[..n]).into_owned()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lifeline_socket_is_preserved_across_exec() {
+        use std::os::fd::AsRawFd;
+
+        let (writer, _reader) = pair();
+        unsafe {
+            let fd = writer.as_raw_fd();
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            assert!(flags >= 0);
+            assert_eq!(libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC), 0);
+
+            preserve_lifeline_across_exec(&writer);
+
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            assert!(flags >= 0);
+            assert_eq!(flags & libc::FD_CLOEXEC, 0);
+        }
     }
 
     #[test]

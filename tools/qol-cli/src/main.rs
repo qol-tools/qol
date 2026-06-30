@@ -31,6 +31,9 @@ fn run(args: Vec<OsString>) -> Result<()> {
     match command {
         "setup" => setup::cmd_setup(rest, args.verbose),
         "dev" => commands::dev::run(rest, args.verbose, args.skip_plugins),
+        command if command == commands::dev::DEV_PREBUILD_COMMAND => {
+            commands::dev::prebuild(rest, args.verbose, args.skip_plugins)
+        }
         "emu" => commands::emu::run(rest, args.verbose),
         "cat" => commands::cat::run(rest),
         "build" => commands::build::run(rest, args.verbose),

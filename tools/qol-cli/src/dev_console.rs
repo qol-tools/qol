@@ -6,7 +6,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
@@ -20,9 +20,9 @@ use crate::commands::emu::{
     LastRun, ResolveState, RunDetail,
 };
 use crate::dev_server::{
-    fetch_workspace_plugins, health_ok, post_recompile_current, post_reload_plugins,
-    probe_endpoints, toggle_dev_link, web_ok, website_url, EndpointStatus, LinkToggle,
-    WorkspacePlugin,
+    fetch_workspace_plugins, health_ok, post_promote_generation, post_recompile_current,
+    post_reload_plugins, probe_endpoints, toggle_dev_link, wait_for_shutdown_best_effort, web_ok,
+    website_url, EndpointStatus, LinkToggle, WorkspacePlugin,
 };
 use crate::host_facade;
 use crate::poller::Poller;
@@ -37,6 +37,12 @@ const DOCTOR_BASE_INTERVAL: Duration = Duration::from_secs(10);
 const DOCTOR_CAP_INTERVAL: Duration = Duration::from_secs(60);
 const ENDPOINTS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const STOP_GRACE: Duration = Duration::from_secs(5);
+const HANDOFF_STOP_GRACE: Duration = Duration::from_millis(750);
+const HANDOFF_STOP_INTERVAL: Duration = Duration::from_millis(50);
+const SHADOW_READY_TIMEOUT: Duration = Duration::from_secs(20);
+const SHADOW_READY_INTERVAL: Duration = Duration::from_millis(100);
+const PROMOTION_TIMEOUT: Duration = Duration::from_secs(10);
+const PROMOTION_INTERVAL: Duration = Duration::from_millis(100);
 const CRASH_TAIL: usize = 40;
 const ACK_TTL: Duration = Duration::from_secs(6);
 const FILTER_PANEL_MIN_WIDTH: u16 = 32;
@@ -47,7 +53,6 @@ const FILTER_BRICK_CHROME: usize = 4;
 pub(crate) enum SessionEnd {
     ChildExited(ExitStatus),
     UserQuit,
-    ReloadRequested,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -78,6 +83,15 @@ enum Action {
     ToggleArch,
     Confirm,
     Ignore,
+}
+
+#[derive(Debug, Deserialize)]
+struct ShadowGenerationReady {
+    generation: String,
+    id: Option<String>,
+    port: u16,
+    #[serde(rename = "stateSocket")]
+    state_socket: String,
 }
 
 fn preserves_arm(action: Action) -> bool {
@@ -1537,7 +1551,8 @@ pub(crate) fn run_session(
     dash.boot_rx = boot;
     start_trace(&mut dash);
     let mut terminal = ratatui::init();
-    let result = tui_session(&mut terminal, child, &lines, &mut probes, &mut dash);
+    let mut lines = lines;
+    let result = tui_session(&mut terminal, child, &mut lines, &mut probes, &mut dash);
     ratatui::restore();
     if let Ok(SessionEnd::ChildExited(status)) = &result {
         if !status.success() {
@@ -1633,7 +1648,7 @@ fn handle_key(dash: &mut Dash, code: KeyCode, mods: KeyModifiers) -> KeyOutcome 
 fn tui_session(
     terminal: &mut DefaultTerminal,
     child: &mut Child,
-    lines: &Receiver<String>,
+    lines: &mut Receiver<String>,
     probes: &mut Probes,
     dash: &mut Dash,
 ) -> Result<SessionEnd> {
@@ -1694,11 +1709,7 @@ fn tui_session(
         drain_boot(dash);
         drain_emu_runs(dash);
         if let ReloadOutcome::Ready = poll_reload(dash) {
-            persist_if_dirty(dash);
-            stop_trace(dash);
-            stop_emu_runs(dash);
-            stop_child(child)?;
-            return Ok(SessionEnd::ReloadRequested);
+            restart_child_from_prebuilt(child, lines, dash)?;
         }
         if let Some(status) = try_wait(child)? {
             while let Ok(line) = lines.try_recv() {
@@ -2700,7 +2711,7 @@ fn start_reload(dash: &mut Dash) {
     }
     match spawn_reload() {
         Some((child, rx)) => {
-            dash.push_log("[qol dev] reloading: qol setup");
+            dash.push_log("[qol dev] reloading: prebuild dev artifacts");
             dash.reload = Reload::Running { child, rx };
         }
         None => dash.push_log("[qol dev] reload failed to start"),
@@ -2708,18 +2719,46 @@ fn start_reload(dash: &mut Dash) {
 }
 
 fn spawn_reload() -> Option<(Child, Receiver<String>)> {
-    let exe = std::env::current_exe().ok()?;
     let root = crate::workspace::repo_root().ok()?;
-    let mut child = Command::new(exe)
-        .arg("setup")
-        .current_dir(&root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
+    let exe = std::env::current_exe().ok()?;
+    let raw_args = std::env::args_os().skip(1);
+    let mut command = reload_prebuild_command(&root, &exe, raw_args);
+    let mut child = command.spawn().ok()?;
     let rx = spawn_forwarders(&mut child);
     Some((child, rx))
+}
+
+fn reload_prebuild_command(
+    root: &Path,
+    exe: &Path,
+    raw_args: impl IntoIterator<Item = std::ffi::OsString>,
+) -> Command {
+    let mut command = Command::new(exe);
+    command
+        .arg(crate::commands::dev::DEV_PREBUILD_COMMAND)
+        .args(reload_prebuild_args(raw_args))
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+}
+
+fn reload_prebuild_args(
+    raw_args: impl IntoIterator<Item = std::ffi::OsString>,
+) -> Vec<std::ffi::OsString> {
+    let parsed = crate::cli::parse_cli(raw_args.into_iter().collect());
+    let mut args = Vec::new();
+    if parsed.verbose {
+        args.push("-v".into());
+    }
+    if parsed.skip_plugins {
+        args.push("-n".into());
+    }
+    if parsed.values.first().and_then(|arg| arg.to_str()) == Some("dev") {
+        args.extend(parsed.values.into_iter().skip(1));
+    }
+    args
 }
 
 fn poll_reload(dash: &mut Dash) -> ReloadOutcome {
@@ -2748,8 +2787,182 @@ fn poll_reload(dash: &mut Dash) -> ReloadOutcome {
     if status.success() {
         return ReloadOutcome::Ready;
     }
-    dash.push_log(format!("[qol dev] reload aborted: qol setup {status}"));
+    dash.push_log(format!("[qol dev] reload aborted: prebuild {status}"));
     ReloadOutcome::Pending
+}
+
+fn restart_child_from_prebuilt(
+    child: &mut Child,
+    lines: &mut Receiver<String>,
+    dash: &mut Dash,
+) -> Result<()> {
+    dash.push_log("[qol dev] starting successor generation");
+    let root = crate::workspace::repo_root()?;
+    let binary = root
+        .join("target")
+        .join("debug")
+        .join(host_facade::exe_name("qol-tray"));
+    let (mut next, next_lines, ready) = start_shadow_generation(&root, &binary, dash)?;
+    if let Err(error) = retire_child_for_handoff(child) {
+        terminate_child(&mut next);
+        let _ = next.wait();
+        return Err(error);
+    }
+    wait_for_shutdown_best_effort();
+    if let Err(error) = promote_shadow_generation(ready.port, &mut next, &next_lines, dash) {
+        dash.push_log(format!(
+            "[qol dev] successor promotion incomplete: {error:#}"
+        ));
+    }
+    *child = next;
+    *lines = next_lines;
+    dash.pokes.doctor = true;
+    dash.pokes.links = true;
+    dash.push_log("[qol dev] successor generation active");
+    Ok(())
+}
+
+fn start_shadow_generation(
+    root: &Path,
+    binary: &Path,
+    dash: &mut Dash,
+) -> Result<(Child, Receiver<String>, ShadowGenerationReady)> {
+    let generation_id = shadow_generation_id();
+    let ready_file = shadow_ready_file(root, &generation_id);
+    let _ = fs::remove_file(&ready_file);
+    dash.push_log(format!(
+        "[qol dev] booting successor generation {generation_id}"
+    ));
+    let mut child = shadow_generation_command(root, binary, &generation_id, &ready_file)
+        .spawn()
+        .with_context(|| format!("failed to start successor {}", binary.display()))?;
+    let rx = spawn_forwarders(&mut child);
+    let ready = match wait_for_shadow_ready(&ready_file, &mut child, &rx, dash) {
+        Ok(ready) => ready,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+    dash.push_log(format!(
+        "[qol dev] successor ready: {} localhost:{} state={}",
+        ready.id.as_deref().unwrap_or("unknown"),
+        ready.port,
+        ready.state_socket
+    ));
+    Ok((child, rx, ready))
+}
+
+fn promote_shadow_generation(
+    port: u16,
+    child: &mut Child,
+    rx: &Receiver<String>,
+    dash: &mut Dash,
+) -> Result<()> {
+    let deadline = Instant::now() + PROMOTION_TIMEOUT;
+    let mut requested = false;
+    let mut last_error = None;
+    while Instant::now() < deadline {
+        drain_shadow_logs(rx, dash);
+        if let Some(status) = child.try_wait()? {
+            bail!("successor generation exited during promotion: {status}");
+        }
+        if !requested {
+            match post_promote_generation(port) {
+                Ok(()) => {
+                    requested = true;
+                    dash.push_log("[qol dev] successor promotion requested");
+                }
+                Err(error) => last_error = Some(error.to_string()),
+            }
+        }
+        if requested && health_ok() {
+            return Ok(());
+        }
+        std::thread::sleep(PROMOTION_INTERVAL);
+    }
+    match last_error {
+        Some(error) => bail!("stable dev API did not promote: {error}"),
+        None => bail!("stable dev API did not become healthy after promotion"),
+    }
+}
+
+fn shadow_generation_id() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    format!("{}-{millis}", std::process::id())
+}
+
+fn shadow_ready_file(root: &Path, generation_id: &str) -> PathBuf {
+    root.join("target")
+        .join("qol-dev")
+        .join("generations")
+        .join(format!("{generation_id}.json"))
+}
+
+fn shadow_generation_command(
+    root: &Path,
+    binary: &Path,
+    generation_id: &str,
+    ready_file: &Path,
+) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .current_dir(root)
+        .arg("--write-mode=dev")
+        .env(
+            qol_conventions::ENV_DEV_GENERATION_MODE,
+            qol_conventions::DEV_GENERATION_MODE_SHADOW,
+        )
+        .env(qol_conventions::ENV_DEV_GENERATION_ID, generation_id)
+        .env(qol_conventions::ENV_DEV_READY_FILE, ready_file)
+        .env(qol_conventions::ENV_DEV_UI_PORT, "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+}
+
+fn wait_for_shadow_ready(
+    ready_file: &Path,
+    child: &mut Child,
+    rx: &Receiver<String>,
+    dash: &mut Dash,
+) -> Result<ShadowGenerationReady> {
+    let deadline = Instant::now() + SHADOW_READY_TIMEOUT;
+    while Instant::now() < deadline {
+        drain_shadow_logs(rx, dash);
+        if ready_file.is_file() {
+            return read_shadow_ready(ready_file);
+        }
+        if let Some(status) = child.try_wait()? {
+            drain_shadow_logs(rx, dash);
+            bail!("shadow generation exited before ready: {status}");
+        }
+        std::thread::sleep(SHADOW_READY_INTERVAL);
+    }
+    drain_shadow_logs(rx, dash);
+    bail!("shadow generation did not become ready within {SHADOW_READY_TIMEOUT:?}")
+}
+
+fn drain_shadow_logs(rx: &Receiver<String>, dash: &mut Dash) {
+    while let Ok(line) = rx.try_recv() {
+        dash.push_log(format!("[qol dev:shadow] {line}"));
+    }
+}
+
+fn read_shadow_ready(path: &Path) -> Result<ShadowGenerationReady> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("failed to read shadow ready file {}", path.display()))?;
+    let ready: ShadowGenerationReady =
+        serde_json::from_str(&content).context("invalid shadow ready payload")?;
+    if ready.generation != qol_conventions::DEV_GENERATION_MODE_SHADOW {
+        bail!("unexpected shadow generation marker: {}", ready.generation);
+    }
+    Ok(ready)
 }
 
 fn trigger_rebuild(dash: &mut Dash) {
@@ -4412,7 +4625,7 @@ fn try_wait(child: &mut Child) -> Result<Option<ExitStatus>> {
 }
 
 fn stop_child(child: &mut Child) -> Result<()> {
-    host_facade::stop_qol_tray()?;
+    terminate_child(child);
     let deadline = Instant::now() + STOP_GRACE;
     while Instant::now() < deadline {
         if try_wait(child)?.is_some() {
@@ -4423,6 +4636,33 @@ fn stop_child(child: &mut Child) -> Result<()> {
     let _ = child.kill();
     child.wait().context("failed to reap qol-tray after kill")?;
     Ok(())
+}
+
+fn retire_child_for_handoff(child: &mut Child) -> Result<()> {
+    terminate_child(child);
+    let deadline = Instant::now() + HANDOFF_STOP_GRACE;
+    while Instant::now() < deadline {
+        if try_wait(child)?.is_some() {
+            return Ok(());
+        }
+        std::thread::sleep(HANDOFF_STOP_INTERVAL);
+    }
+    let _ = child.kill();
+    child
+        .wait()
+        .context("failed to reap previous qol-tray generation")?;
+    Ok(())
+}
+
+fn terminate_child(child: &mut Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGTERM);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
 }
 
 pub(crate) fn spawn_forwarders(child: &mut Child) -> Receiver<String> {
@@ -4612,6 +4852,7 @@ fn parse_summary_field(line: &str, key: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
 
     #[test]
     fn relative_age_buckets_seconds_minutes_hours_days() {
@@ -5524,6 +5765,69 @@ mod tests {
             "armed ctrl+r reloads from the trace view too"
         );
         assert!(!dash.armed, "reload consumes the armed state");
+    }
+
+    #[test]
+    fn armed_reload_builds_the_workspace_cli_incrementally() {
+        let root = Path::new("/repo/qol");
+        let exe = Path::new("/bin/qol");
+        let command = reload_prebuild_command(
+            root,
+            exe,
+            ["-n", "dev", "feat/x", "-v"].map(std::ffi::OsString::from),
+        );
+        let args: Vec<&OsStr> = command.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                crate::commands::dev::DEV_PREBUILD_COMMAND,
+                "-v",
+                "-n",
+                "feat/x",
+            ]
+            .map(OsStr::new)
+        );
+        assert_eq!(command.get_current_dir(), Some(root));
+        assert_eq!(command.get_program(), exe.as_os_str());
+    }
+
+    #[test]
+    fn shadow_generation_command_uses_shared_generation_contract() {
+        let root = Path::new("/repo/qol");
+        let binary = Path::new("/repo/qol/target/debug/qol-tray");
+        let ready_file = Path::new("/repo/qol/target/qol-dev/generations/abc.json");
+        let command = shadow_generation_command(root, binary, "abc", ready_file);
+
+        assert_eq!(command.get_current_dir(), Some(root));
+        assert_eq!(command.get_program(), binary.as_os_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [OsStr::new("--write-mode=dev")]
+        );
+        let envs: std::collections::HashMap<_, _> = command
+            .get_envs()
+            .filter_map(|(key, value)| value.map(|value| (key, value)))
+            .collect();
+        assert_eq!(
+            envs.get(OsStr::new(qol_conventions::ENV_DEV_GENERATION_MODE))
+                .copied(),
+            Some(OsStr::new(qol_conventions::DEV_GENERATION_MODE_SHADOW))
+        );
+        assert_eq!(
+            envs.get(OsStr::new(qol_conventions::ENV_DEV_GENERATION_ID))
+                .copied(),
+            Some(OsStr::new("abc"))
+        );
+        assert_eq!(
+            envs.get(OsStr::new(qol_conventions::ENV_DEV_READY_FILE))
+                .copied(),
+            Some(ready_file.as_os_str())
+        );
+        assert_eq!(
+            envs.get(OsStr::new(qol_conventions::ENV_DEV_UI_PORT))
+                .copied(),
+            Some(OsStr::new("0"))
+        );
     }
 
     #[test]

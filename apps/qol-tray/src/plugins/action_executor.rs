@@ -162,7 +162,7 @@ fn resolve_plugin_daemon_socket(
             plugin_id: PluginId::new(plugin_id),
             action_id: "<query>".to_string(),
         })?;
-    Ok(std::path::PathBuf::from(socket))
+    Ok(crate::dev_generation::daemon_socket_path(socket))
 }
 
 fn resolve_plugin_action(

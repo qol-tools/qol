@@ -17,6 +17,24 @@ pub(super) fn start_daemon(plugin: &mut Plugin) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn existing_daemon_socket_ready(plugin: &Plugin) -> bool {
+    let Some(socket_path) = plugin
+        .manifest
+        .daemon
+        .as_ref()
+        .filter(|daemon| daemon.enabled)
+        .and_then(|daemon| daemon.socket.as_deref())
+        .map(crate::dev_generation::daemon_socket_path)
+    else {
+        return false;
+    };
+
+    matches!(
+        super::action_transport::dispatch_daemon_action(&socket_path, "ping"),
+        super::action_transport::DaemonActionDispatch::Handled { .. }
+    )
+}
+
 pub(super) fn stop_daemon(plugin: &mut Plugin) -> Result<()> {
     let Some(mut child) = plugin.daemon_process.take() else {
         return Ok(());

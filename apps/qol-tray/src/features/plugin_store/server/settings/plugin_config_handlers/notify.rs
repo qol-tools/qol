@@ -43,13 +43,21 @@ fn daemon_snapshot(state: &AppState, plugin_id: &str) -> Result<DaemonSnapshot, 
     if !daemon.enabled || plugin.daemon_pid().is_none() {
         return Ok(DaemonSnapshot {
             running: false,
-            socket_path: daemon.socket.clone(),
+            socket_path: resolved_socket(daemon),
         });
     }
     Ok(DaemonSnapshot {
         running: true,
-        socket_path: daemon.socket.clone(),
+        socket_path: resolved_socket(daemon),
     })
+}
+
+fn resolved_socket(daemon: &crate::plugins::manifest::DaemonConfig) -> Option<String> {
+    daemon
+        .socket
+        .as_deref()
+        .map(crate::dev_generation::daemon_socket_path)
+        .map(|path| path.to_string_lossy().to_string())
 }
 
 fn restart_running_plugin_daemon(state: &AppState, plugin_id: &str) -> Result<(), String> {

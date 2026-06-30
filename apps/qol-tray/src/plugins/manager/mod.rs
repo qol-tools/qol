@@ -7,6 +7,7 @@ use super::{Plugin, PluginId, PluginIdentityIndex};
 use crate::plugins::resolver::ResolutionReport;
 use anyhow::Result;
 use std::collections::HashMap;
+use std::time::Duration;
 
 pub struct PluginManager {
     plugins: HashMap<PluginId, Plugin>,
@@ -33,6 +34,10 @@ impl PluginManager {
 
     pub fn autostart_daemons(&mut self) {
         autostart::start_plugin_daemons(self.plugins.values_mut());
+    }
+
+    pub fn wait_for_autostart_daemons_ready(&self, timeout: Duration) -> Vec<String> {
+        autostart::wait_for_autostart_daemons_ready(self.plugins.values(), timeout)
     }
 
     pub fn reload_plugins(&mut self) -> Result<()> {

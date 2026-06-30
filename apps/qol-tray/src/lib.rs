@@ -6,6 +6,7 @@ pub mod daemon;
 pub(crate) mod desktop_state;
 #[cfg(feature = "dev")]
 pub mod dev;
+pub mod dev_generation;
 pub mod doctor;
 pub mod features;
 pub(crate) mod file_io;
