@@ -1243,6 +1243,7 @@ struct DoctorPanel {
 struct DoctorRun {
     report: DoctorReport,
     lines: Vec<String>,
+    scope: DoctorScope,
 }
 
 enum RebuildState {
@@ -4263,10 +4264,14 @@ fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Span<'static>>
     };
     let report = run.report;
     let (color, mut value) = if report.divergences() == 0 {
+        let label = match run.scope {
+            DoctorScope::Full => "all good",
+            DoctorScope::Startup => "startup good",
+        };
         (
             Color::Green,
             vec![
-                "all good".fg(Color::Green).bold(),
+                label.fg(Color::Green).bold(),
                 format!(" · {} checks", report.ok).fg(Color::DarkGray),
             ],
         )
@@ -4276,12 +4281,14 @@ fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Span<'static>>
         } else {
             Color::Yellow
         };
+        let label = match run.scope {
+            DoctorScope::Full => format!("{} divergences", report.divergences()),
+            DoctorScope::Startup => format!("startup {} divergences", report.divergences()),
+        };
         (
             color,
             vec![
-                format!("{} divergences", report.divergences())
-                    .fg(color)
-                    .bold(),
+                label.fg(color).bold(),
                 format!(
                     " · {} warn · {} err",
                     report.warn,
@@ -4706,7 +4713,7 @@ enum DoctorMode {
     Fix,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum DoctorScope {
     Full,
     Startup,
@@ -4785,6 +4792,7 @@ fn run_doctor_binary(
     Ok(DoctorRun {
         report,
         lines: doctor_lines(&text, mode),
+        scope,
     })
 }
 
@@ -4933,6 +4941,12 @@ mod tests {
         let run = DoctorRun {
             report,
             lines: Vec::new(),
+            scope: DoctorScope::Full,
+        };
+        let startup_run = DoctorRun {
+            report,
+            lines: Vec::new(),
+            scope: DoctorScope::Startup,
         };
         let warn_report = DoctorReport {
             ok: 9,
@@ -4943,6 +4957,12 @@ mod tests {
         let warn_run = DoctorRun {
             report: warn_report,
             lines: Vec::new(),
+            scope: DoctorScope::Full,
+        };
+        let startup_warn_run = DoctorRun {
+            report: warn_report,
+            lines: Vec::new(),
+            scope: DoctorScope::Startup,
         };
         let now = 1_000_000_000;
         let cases = [
@@ -4958,6 +4978,16 @@ mod tests {
             ),
             (
                 DoctorPanel {
+                    last: Some(startup_run.clone()),
+                    last_at_ms: Some(now - 15_000),
+                    manual: None,
+                    error: None,
+                },
+                Color::Green,
+                "startup good · 11 checks · 15s ago",
+            ),
+            (
+                DoctorPanel {
                     last: Some(run.clone()),
                     last_at_ms: Some(now - 15_000),
                     manual: None,
@@ -4965,6 +4995,16 @@ mod tests {
                 },
                 Color::Green,
                 "all good · 11 checks · 15s ago",
+            ),
+            (
+                DoctorPanel {
+                    last: Some(startup_warn_run),
+                    last_at_ms: Some(now - 5_000),
+                    manual: None,
+                    error: None,
+                },
+                Color::Yellow,
+                "startup 2 divergences · 2 warn · 0 err · just now",
             ),
             (
                 DoctorPanel {
@@ -4978,13 +5018,13 @@ mod tests {
             ),
             (
                 DoctorPanel {
-                    last: Some(run.clone()),
+                    last: Some(startup_run.clone()),
                     last_at_ms: Some(now - 15_000),
                     manual: None,
                     error: Some("boom".to_string()),
                 },
                 Color::Green,
-                "all good · 11 checks · 15s ago · probe failed",
+                "startup good · 11 checks · 15s ago · probe failed",
             ),
             (
                 DoctorPanel {
