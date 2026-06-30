@@ -169,11 +169,8 @@ fn corrupt_report(path: &Path, reason: &str) -> CheckReport {
 }
 
 fn binary_missing(entry: &Entry) -> bool {
-    let manifest_path = entry.active.path.join("plugin.toml");
-    let Ok(content) = std::fs::read_to_string(&manifest_path) else {
-        return false;
-    };
-    let Ok(manifest) = toml::from_str::<crate::plugins::manifest::PluginManifest>(&content) else {
+    let Ok(manifest) = crate::plugins::manifest::PluginManifest::read_from_dir(&entry.active.path)
+    else {
         return false;
     };
     if !manifest.plugin.supports_current_platform() {

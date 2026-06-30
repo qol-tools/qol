@@ -20,9 +20,7 @@ impl DoctorCheck for PluginUidTableCheck {
             .entries
             .iter()
             .filter_map(|entry| {
-                let manifest_path = entry.active.path.join("plugin.toml");
-                let content = std::fs::read_to_string(&manifest_path).ok()?;
-                let manifest: PluginManifest = toml::from_str(&content).ok()?;
+                let manifest = PluginManifest::read_from_dir(&entry.active.path).ok()?;
                 let id = entry.id.clone();
                 let name = manifest.plugin.name.clone();
                 let (uid, transitional) = match &manifest.plugin.uid {

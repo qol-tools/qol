@@ -37,9 +37,7 @@ pub fn sync_plugins_lock_from_plugins<'a>(
 }
 
 pub(super) fn read_plugin_version(plugin_dir: &Path) -> std::result::Result<String, ()> {
-    let manifest_path = plugin_dir.join("plugin.toml");
-    let content = std::fs::read_to_string(&manifest_path).map_err(|_| ())?;
-    let manifest: crate::plugins::PluginManifest = toml::from_str(&content).map_err(|_| ())?;
+    let manifest = crate::plugins::PluginManifest::read_from_dir(plugin_dir).map_err(|_| ())?;
     Ok(manifest.plugin.version)
 }
 

@@ -182,9 +182,7 @@ fn load_lock_entry_for(plugin_id: &str) -> Option<crate::features::profile::core
 
 fn try_load_plugin_manifest(plugin_id: &str) -> Option<crate::plugins::manifest::PluginManifest> {
     let plugin_root = plugin_paths::resolve_plugin_root(plugin_id).ok()?;
-    let manifest_path = plugin_root.join("plugin.toml");
-    let content = std::fs::read_to_string(&manifest_path).ok()?;
-    toml::from_str::<crate::plugins::manifest::PluginManifest>(&content).ok()
+    crate::plugins::manifest::PluginManifest::read_from_dir(&plugin_root).ok()
 }
 
 pub(crate) fn daemon_port(plugin_id: &str) -> Option<u16> {

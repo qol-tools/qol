@@ -28,6 +28,13 @@ impl PluginManifest {
         validate_manifest_version(self.manifest_version)
     }
 
+    pub fn read_from_dir(dir: impl AsRef<std::path::Path>) -> Result<Self> {
+        let path = dir.as_ref().join("plugin.toml");
+        let raw =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        toml::from_str(&raw).with_context(|| format!("parse {}", path.display()))
+    }
+
     pub fn load_and_validate(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let path = path.as_ref();
         let raw =
@@ -78,5 +85,31 @@ mod tests {
     #[test]
     fn rejects_above_current() {
         assert!(validate_manifest_version(CURRENT_MANIFEST_VERSION + 1).is_err());
+    }
+
+    const SAMPLE_MANIFEST: &str =
+        "[plugin]\nid = \"plugin-x\"\nname = \"X\"\ndescription = \"\"\nversion = \"1.2.3\"\n[menu]\nlabel = \"\"\nitems = []\n";
+
+    #[test]
+    fn read_from_dir_parses_manifest_in_dir() {
+        let dir = std::env::temp_dir().join("qol-plugin-api-read-from-dir-ok");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("plugin.toml"), SAMPLE_MANIFEST).unwrap();
+
+        let manifest = PluginManifest::read_from_dir(&dir).unwrap();
+
+        assert_eq!(manifest.plugin.name, "X");
+        assert_eq!(manifest.plugin.version, "1.2.3");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_from_dir_errors_when_manifest_missing() {
+        let dir = std::env::temp_dir().join("qol-plugin-api-read-from-dir-missing");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert!(PluginManifest::read_from_dir(&dir).is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
