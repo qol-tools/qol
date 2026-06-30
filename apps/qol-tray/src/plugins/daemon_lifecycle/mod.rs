@@ -29,10 +29,7 @@ pub(super) fn existing_daemon_socket_ready(plugin: &Plugin) -> bool {
         return false;
     };
 
-    matches!(
-        super::action_transport::dispatch_daemon_action(&socket_path, "ping"),
-        super::action_transport::DaemonActionDispatch::Handled { .. }
-    )
+    super::action_transport::daemon_listener_reachable(&socket_path)
 }
 
 pub(super) fn stop_daemon(plugin: &mut Plugin) -> Result<()> {

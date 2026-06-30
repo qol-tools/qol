@@ -2865,7 +2865,7 @@ fn promote_shadow_generation(
     let mut requested = false;
     let mut last_error = None;
     while Instant::now() < deadline {
-        drain_shadow_logs(rx, dash);
+        let _ = drain_shadow_logs(rx, dash);
         if let Some(status) = child.try_wait()? {
             bail!("successor generation exited during promotion: {status}");
         }
@@ -2934,25 +2934,57 @@ fn wait_for_shadow_ready(
     dash: &mut Dash,
 ) -> Result<ShadowGenerationReady> {
     let deadline = Instant::now() + SHADOW_READY_TIMEOUT;
+    let mut recent_logs = VecDeque::new();
     while Instant::now() < deadline {
-        drain_shadow_logs(rx, dash);
+        append_shadow_logs(&mut recent_logs, drain_shadow_logs(rx, dash));
         if ready_file.is_file() {
             return read_shadow_ready(ready_file);
         }
         if let Some(status) = child.try_wait()? {
-            drain_shadow_logs(rx, dash);
-            bail!("shadow generation exited before ready: {status}");
+            append_shadow_logs(&mut recent_logs, drain_shadow_logs(rx, dash));
+            bail!(
+                "shadow generation exited before ready: {status}{}",
+                shadow_crash_detail(&recent_logs)
+            );
         }
         std::thread::sleep(SHADOW_READY_INTERVAL);
     }
-    drain_shadow_logs(rx, dash);
-    bail!("shadow generation did not become ready within {SHADOW_READY_TIMEOUT:?}")
+    append_shadow_logs(&mut recent_logs, drain_shadow_logs(rx, dash));
+    bail!(
+        "shadow generation did not become ready within {SHADOW_READY_TIMEOUT:?}{}",
+        shadow_crash_detail(&recent_logs)
+    )
 }
 
-fn drain_shadow_logs(rx: &Receiver<String>, dash: &mut Dash) {
+fn drain_shadow_logs(rx: &Receiver<String>, dash: &mut Dash) -> Vec<String> {
+    let mut drained = Vec::new();
     while let Ok(line) = rx.try_recv() {
-        dash.push_log(format!("[qol dev:shadow] {line}"));
+        let line = format!("[qol dev:shadow] {line}");
+        dash.push_log(line.clone());
+        drained.push(line);
     }
+    drained
+}
+
+fn append_shadow_logs(recent: &mut VecDeque<String>, lines: Vec<String>) {
+    for line in lines {
+        recent.push_back(line);
+        while recent.len() > CRASH_TAIL {
+            recent.pop_front();
+        }
+    }
+}
+
+fn shadow_crash_detail(recent: &VecDeque<String>) -> String {
+    if recent.is_empty() {
+        return String::new();
+    }
+    let mut detail = String::from("\nlast shadow logs:");
+    for line in recent {
+        detail.push('\n');
+        detail.push_str(line);
+    }
+    detail
 }
 
 fn read_shadow_ready(path: &Path) -> Result<ShadowGenerationReady> {
@@ -5878,6 +5910,23 @@ mod tests {
             envs.get(OsStr::new(qol_conventions::ENV_DEV_UI_PORT))
                 .copied(),
             Some(OsStr::new("0"))
+        );
+    }
+
+    #[test]
+    fn shadow_crash_detail_includes_recent_logs() {
+        let mut recent = VecDeque::new();
+        append_shadow_logs(
+            &mut recent,
+            vec![
+                "[qol dev:shadow] first".to_string(),
+                "[qol dev:shadow] Error: daemon missing".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            shadow_crash_detail(&recent),
+            "\nlast shadow logs:\n[qol dev:shadow] first\n[qol dev:shadow] Error: daemon missing"
         );
     }
 

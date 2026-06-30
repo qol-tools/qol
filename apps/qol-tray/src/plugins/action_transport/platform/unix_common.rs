@@ -24,6 +24,10 @@ pub(super) fn dispatch_action(endpoint: &Path, action_id: &str) -> DaemonActionD
     super::super::protocol::parse_response(line.trim())
 }
 
+pub(super) fn can_connect(endpoint: &Path) -> bool {
+    connect_stream(endpoint).is_ok()
+}
+
 fn connect_stream(endpoint: &Path) -> DispatchResult<UnixStream> {
     let stream = UnixStream::connect(endpoint).map_err(|_| ())?;
     apply_timeout(&stream);

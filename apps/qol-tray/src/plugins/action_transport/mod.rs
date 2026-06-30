@@ -19,3 +19,7 @@ pub fn dispatch_daemon_action(endpoint: &Path, action_id: &str) -> DaemonActionD
     }
     platform::dispatch_action(endpoint, action_id)
 }
+
+pub fn daemon_listener_reachable(endpoint: &Path) -> bool {
+    platform::can_connect(endpoint)
+}

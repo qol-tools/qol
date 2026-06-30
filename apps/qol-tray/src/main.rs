@@ -598,9 +598,10 @@ async fn async_init_inner(
     if !missing_generation_daemons.is_empty() {
         let missing = missing_generation_daemons.join(", ");
         if shadow_generation {
-            anyhow::bail!("shadow generation daemon(s) not ready: {missing}");
+            log::warn!("shadow generation daemon(s) not ready before handoff: {missing}");
+        } else {
+            log::warn!("rolling restart daemon(s) not ready before handoff: {missing}");
         }
-        log::warn!("rolling restart daemon(s) not ready before handoff: {missing}");
     }
     {
         let plugin_manager = plugin_manager.clone();

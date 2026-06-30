@@ -14,7 +14,17 @@ pub(super) fn dispatch_action(endpoint: &Path, action_id: &str) -> DaemonActionD
     unix_common::dispatch_action(endpoint, action_id)
 }
 
+#[cfg(unix)]
+pub(super) fn can_connect(endpoint: &Path) -> bool {
+    unix_common::can_connect(endpoint)
+}
+
 #[cfg(target_os = "windows")]
 pub(super) fn dispatch_action(_endpoint: &Path, _action_id: &str) -> DaemonActionDispatch {
     DaemonActionDispatch::Unavailable
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn can_connect(_endpoint: &Path) -> bool {
+    false
 }
