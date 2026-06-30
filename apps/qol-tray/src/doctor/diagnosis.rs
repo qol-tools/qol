@@ -67,6 +67,10 @@ pub(super) enum FixAction {
         path: PathBuf,
     },
     #[cfg(feature = "dev")]
+    CargoClean {
+        workspace: PathBuf,
+    },
+    #[cfg(feature = "dev")]
     HealDevLinkedPlugins {
         rebuild_ids: Vec<String>,
     },
@@ -101,6 +105,7 @@ impl FixAction {
             | FixAction::FormatRustSources { .. }
             | FixAction::FixClippyLints { .. }
             | FixAction::PruneCargoIncrementalCache { .. }
+            | FixAction::CargoClean { .. }
             | FixAction::HealDevLinkedPlugins { .. } => FixApplicability::SafeAutomatic,
         }
     }
@@ -113,6 +118,7 @@ impl FixAction {
                 FixAction::FormatRustSources { .. }
                     | FixAction::FixClippyLints { .. }
                     | FixAction::PruneCargoIncrementalCache { .. }
+                    | FixAction::CargoClean { .. }
                     | FixAction::HealDevLinkedPlugins { .. }
             ) {
                 return true;
@@ -177,8 +183,27 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         #[cfg(feature = "dev")]
         FixAction::PruneCargoIncrementalCache { path } => prune_cargo_incremental_cache(path),
         #[cfg(feature = "dev")]
+        FixAction::CargoClean { workspace } => cargo_clean(workspace),
+        #[cfg(feature = "dev")]
         FixAction::HealDevLinkedPlugins { rebuild_ids } => heal_dev_linked_plugins(rebuild_ids),
     }
+}
+
+#[cfg(feature = "dev")]
+fn cargo_clean(workspace: &std::path::Path) -> Result<()> {
+    let output = Command::new("cargo")
+        .arg("clean")
+        .current_dir(workspace)
+        .output()
+        .with_context(|| format!("failed to run cargo clean in {}", workspace.display()))?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "cargo clean exited with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "dev")]
@@ -623,6 +648,15 @@ mod tests {
     fn prune_cargo_incremental_cache_is_safe_automatic() {
         let action = FixAction::PruneCargoIncrementalCache {
             path: PathBuf::from("/ws/target/debug/incremental"),
+        };
+        assert_eq!(action.applicability(), FixApplicability::SafeAutomatic);
+    }
+
+    #[cfg(feature = "dev")]
+    #[test]
+    fn cargo_clean_is_safe_automatic() {
+        let action = FixAction::CargoClean {
+            workspace: PathBuf::from("/ws"),
         };
         assert_eq!(action.applicability(), FixApplicability::SafeAutomatic);
     }

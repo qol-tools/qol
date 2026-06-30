@@ -87,7 +87,7 @@ pub fn auto_fix_startup() -> FixReport {
     if let Some(trigger) = trigger::take() {
         run_triggered_check(&trigger);
     }
-    let report = fix_with_policy(FixPolicy::startup());
+    let report = fix_with_selector_and_policy(Selector::Startup, FixPolicy::startup());
     log_fix_attempts(&report);
     log_fix_failures(&report);
     log_remaining_outcomes(&report.after);
@@ -297,6 +297,10 @@ fn log_applied(action: &FixAction) {
             log::info!("doctor: pruned cargo incremental cache {}", path.display());
         }
         #[cfg(feature = "dev")]
+        FixAction::CargoClean { workspace } => {
+            log::info!("doctor: ran cargo clean in {}", workspace.display());
+        }
+        #[cfg(feature = "dev")]
         FixAction::HealDevLinkedPlugins { rebuild_ids } => {
             log::info!(
                 "doctor: healed dev-linked plugin(s) (rebuilt: {}; restarted stale daemons)",
@@ -391,6 +395,16 @@ mod tests {
             summary.applied,
             summary.failures
         );
+    }
+
+    #[test]
+    fn startup_selector_excludes_dev_build_checks() {
+        let startup = Selector::Startup;
+        let host_surface = CheckMeta::new("host", "Host", CheckCategory::HostSurface);
+        let dev_build = CheckMeta::new("target", "Target", CheckCategory::DevBuild);
+
+        assert!(startup.matches(&host_surface));
+        assert!(!startup.matches(&dev_build));
     }
 
     #[test]

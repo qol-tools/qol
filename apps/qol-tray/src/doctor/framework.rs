@@ -159,6 +159,7 @@ impl CheckMeta {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Selector {
     All,
+    Startup,
     Id(String),
     Group(String),
     Category(CheckCategory),
@@ -168,6 +169,7 @@ impl Selector {
     pub(super) fn matches(&self, meta: &CheckMeta) -> bool {
         match self {
             Self::All => true,
+            Self::Startup => meta.category != CheckCategory::DevBuild,
             Self::Id(id) => meta.id == id,
             Self::Group(group) => meta.groups.contains(&group.as_str()),
             Self::Category(category) => meta.category == *category,
