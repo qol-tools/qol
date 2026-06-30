@@ -22,7 +22,7 @@ label = "Audio Inputs"
 description = "Linux-only PulseAudio inputs. Use values like mic and system."
 section = "audio"
 placeholder = "mic"
-default = ["mic", "system"]
+default = ["mic"]
 
 [field.audio_mic_device]
 type = "string"

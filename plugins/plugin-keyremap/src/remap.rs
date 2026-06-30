@@ -528,8 +528,7 @@ mod tests {
     use proptest::prelude::*;
 
     fn test_config() -> ResolvedConfig {
-        let raw: RemapConfig =
-            serde_json::from_str(include_str!("../config/default.json")).unwrap();
+        let raw = crate::config::builtin_defaults();
         resolve(&raw)
     }
 

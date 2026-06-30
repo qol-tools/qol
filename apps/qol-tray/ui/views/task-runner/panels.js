@@ -29,10 +29,14 @@ export function ActionEditForm({ modal, fieldProps, handlers }) {
             <div class="form-group" ...${fieldProps(fi++)}>
                 <label>Timeout <span class="hint">(seconds)</span></label>
                 <input type="number" value=${modal.timeout} min="1" max="3600"
-                       onInput=${(e) => updateField('timeout', parseInt(e.target.value, 10) || 60)} />
+                       onInput=${(e) => updateField('timeout', parseTimeout(e.target.value, modal.defaultTimeout))} />
             </div>
             <${ModalActions} onClose=${onClose} onSave=${onSave} />
         </div>
     `;
 }
 
+function parseTimeout(value, fallback) {
+    const parsed = parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}

@@ -70,7 +70,7 @@ fn record_command(binary_name: &'static str) -> Command {
             if forward_host_fallback_record_to_daemon() {
                 return Ok(PlainTextOutput::empty());
             }
-            let config: Config = qol_config::load_plugin_config_from_env(PLUGIN_ID);
+            let config = crate::config::load();
             recording::toggle_recording(&config)?;
             Ok(PlainTextOutput::empty())
         })

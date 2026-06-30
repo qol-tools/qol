@@ -75,9 +75,3 @@ section = "animation"
 default = 18
 min = 1
 step = 1
-
-[field.enable_shape_preserving_growth]
-type = "boolean"
-label = "Shape Preserving Growth"
-section = "animation"
-default = false

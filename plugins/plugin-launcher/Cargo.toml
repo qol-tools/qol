@@ -12,6 +12,7 @@ examples = []
 [dependencies]
 gpui.workspace = true
 serde = { version = "1.0", features = ["derive"] }
+serde_json.workspace = true
 notify = { version = "8", default-features = false, features = [
   "macos_fsevent",
 ] }

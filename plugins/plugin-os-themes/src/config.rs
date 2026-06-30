@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(default)]
 pub struct Config {
     pub velocity_threshold: f64,
     pub shakiness_threshold: f64,
@@ -15,21 +15,6 @@ pub struct Config {
     pub restore_steps: u32,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            velocity_threshold: 4500.0,
-            shakiness_threshold: 75.0,
-            regrow_velocity_threshold: 1500.0,
-            regrow_shakiness_threshold: 3.0,
-            post_trigger_threshold: 1000.0,
-            scale_factor: 4,
-            calm_duration_ms: 650,
-            restore_steps: 18,
-        }
-    }
-}
-
 pub fn load() -> Config {
     let config = load_from_disk();
     persist(&config);
@@ -38,10 +23,12 @@ pub fn load() -> Config {
 }
 
 fn load_from_disk() -> Config {
-    if config_paths().iter().any(|path| path.exists()) {
-        return qol_config::load_plugin_config_from_env(PLUGIN_ID);
-    }
-    Config::default()
+    qol_config::load_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
+}
+
+#[cfg(test)]
+fn contract_defaults() -> Config {
+    qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).expect("contract defaults must parse")
 }
 
 fn persist(config: &Config) {
@@ -75,4 +62,18 @@ fn log_config(config: &Config) {
 
 fn config_paths() -> Vec<std::path::PathBuf> {
     qol_config::plugin_config_paths_from_env(PLUGIN_ID)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contract_defaults_match_runtime_type() {
+        qol_config::validate_contract_defaults_match_type::<Config>(CONFIG_CONTRACT).unwrap();
+
+        let defaults = contract_defaults();
+        assert_eq!(defaults.velocity_threshold, 4500.0);
+        assert_eq!(defaults.restore_steps, 18);
+    }
 }

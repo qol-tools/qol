@@ -12,13 +12,6 @@ pub use geometry::{
     center, maximize, move_monitor_left, move_monitor_right, snap_bottom, snap_left, snap_right,
 };
 
-const LAUNCHER_MATCH_MARKERS: [&str; 4] = [
-    "qol-tray-launcher",
-    "plugin-launcher",
-    "qol-launcher",
-    "qol launcher",
-];
-
 pub struct MacWindowSystem;
 
 impl WindowSystem for MacWindowSystem {
@@ -73,7 +66,9 @@ impl WindowSystem for MacWindowSystem {
         process_name(pid as u32)
             .map(|name| {
                 let lower = name.to_ascii_lowercase();
-                LAUNCHER_MATCH_MARKERS.iter().any(|m| lower.contains(m))
+                qol_conventions::launcher::MATCH_MARKERS
+                    .iter()
+                    .any(|marker| lower.contains(marker))
             })
             .unwrap_or(false)
     }

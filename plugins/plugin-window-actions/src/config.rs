@@ -1,68 +1,28 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
+const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CenterMode {
     Pixels,
     Percent,
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct WindowActionsConfig {
-    #[serde(default = "default_center_mode")]
     pub center_mode: CenterMode,
-    #[serde(default = "default_center_width_px")]
     pub center_width_px: f64,
-    #[serde(default = "default_center_height_px")]
     pub center_height_px: f64,
-    #[serde(default = "default_center_width_percent")]
     pub center_width_percent: f64,
-    #[serde(default = "default_center_height_percent")]
     pub center_height_percent: f64,
-    #[serde(default = "default_snap_fraction")]
     pub snap_fraction: f64,
-    #[serde(default = "default_reveal_taskbar")]
     pub reveal_taskbar_after_move: bool,
 }
 
-fn default_center_mode() -> CenterMode {
-    CenterMode::Pixels
-}
-fn default_center_width_px() -> f64 {
-    1152.0
-}
-fn default_center_height_px() -> f64 {
-    892.0
-}
-fn default_center_width_percent() -> f64 {
-    0.64
-}
-fn default_center_height_percent() -> f64 {
-    0.79
-}
-fn default_snap_fraction() -> f64 {
-    0.5
-}
-fn default_reveal_taskbar() -> bool {
-    true
-}
-
-impl Default for WindowActionsConfig {
-    fn default() -> Self {
-        Self {
-            center_mode: default_center_mode(),
-            center_width_px: default_center_width_px(),
-            center_height_px: default_center_height_px(),
-            center_width_percent: default_center_width_percent(),
-            center_height_percent: default_center_height_percent(),
-            snap_fraction: default_snap_fraction(),
-            reveal_taskbar_after_move: default_reveal_taskbar(),
-        }
-    }
-}
-
 pub fn load_config() -> WindowActionsConfig {
-    qol_config::load_plugin_config_from_env("plugin-window-actions")
+    qol_config::load_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
 }
 
 impl WindowActionsConfig {
@@ -97,6 +57,24 @@ impl WindowActionsConfig {
 mod tests {
     use super::{CenterMode, WindowActionsConfig};
     use proptest::prelude::*;
+
+    #[test]
+    fn contract_defaults_match_runtime_type() {
+        qol_config::validate_contract_defaults_match_type::<WindowActionsConfig>(
+            super::CONFIG_CONTRACT,
+        )
+        .unwrap();
+
+        let defaults: WindowActionsConfig =
+            qol_config::typed_defaults_from_contract(super::CONFIG_CONTRACT).unwrap();
+        assert_eq!(defaults.center_mode, CenterMode::Pixels);
+        assert_eq!(defaults.center_width_px, 1152.0);
+        assert_eq!(defaults.center_height_px, 892.0);
+        assert_eq!(defaults.center_width_percent, 0.64);
+        assert_eq!(defaults.center_height_percent, 0.79);
+        assert_eq!(defaults.snap_fraction, 0.5);
+        assert!(defaults.reveal_taskbar_after_move);
+    }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(200))]

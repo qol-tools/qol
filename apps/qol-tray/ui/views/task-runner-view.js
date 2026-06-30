@@ -59,7 +59,13 @@ export function TaskRunnerView() {
     useEffect(ensureCssLoaded, []);
 
     const data = useTaskData();
-    const edit = useEditModal(data.actionsRef, data.setActions, data.setActionIds, data.setSelectedIndex);
+    const edit = useEditModal(
+        data.actionsRef,
+        data.defaultsRef,
+        data.setActions,
+        data.setActionIds,
+        data.setSelectedIndex,
+    );
     const test = useTestPanel();
     const { handleKey, isBlocking, modalNav } = useTaskKeyHandler(data, edit);
     useRegisterViewKeyboard('task-runner', handleKey, isBlocking);

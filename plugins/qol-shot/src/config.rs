@@ -1,6 +1,8 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Default)]
+const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub audio: AudioConfig,
@@ -8,7 +10,7 @@ pub struct Config {
     pub video: VideoConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AudioConfig {
     #[serde(default = "default_true")]
     #[cfg_attr(
@@ -59,7 +61,7 @@ impl Default for AudioConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VideoConfig {
     #[serde(default = "default_crf")]
     #[cfg_attr(
@@ -129,4 +131,33 @@ fn default_framerate() -> u32 {
 
 fn default_format() -> String {
     "mov".to_string()
+}
+
+#[cfg(test)]
+fn contract_defaults() -> Config {
+    qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).expect("contract defaults must parse")
+}
+
+pub fn load() -> Config {
+    qol_config::load_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contract_defaults_match_runtime_fallbacks() {
+        qol_config::validate_contract_defaults_match_type::<Config>(CONFIG_CONTRACT).unwrap();
+
+        let defaults = contract_defaults();
+        assert_eq!(defaults.audio.inputs, default_audio_inputs());
+        assert_eq!(defaults.audio.enabled, default_true());
+        assert_eq!(defaults.audio.mic_device, default_string_default());
+        assert_eq!(defaults.audio.system_device, default_string_default());
+        assert_eq!(defaults.video.crf, default_crf());
+        assert_eq!(defaults.video.preset, default_preset());
+        assert_eq!(defaults.video.framerate, default_framerate());
+        assert_eq!(defaults.video.format, default_format());
+    }
 }

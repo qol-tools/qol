@@ -1,6 +1,13 @@
 pub mod contract;
+pub mod defaults;
 pub mod normalized;
 pub mod validation;
+
+pub use defaults::{
+    defaults_json_from_contract, defaults_json_from_spec, deserialize_with_contract_defaults,
+    typed_defaults_from_contract, typed_defaults_from_spec, validate_contract_defaults_match_type,
+    validate_defaults_match_type,
+};
 
 use qol_conventions::ENV_PLUGIN_ID;
 use serde::de::DeserializeOwned;
@@ -10,6 +17,13 @@ use std::path::{Path, PathBuf};
 pub const NAMESPACE: &str = "qol-tray";
 
 pub const ACTIVE_INSTALL_ID_FILE: &str = "active-install-id";
+
+#[macro_export]
+macro_rules! plugin_config_contract {
+    () => {
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/qol-config.toml"))
+    };
+}
 
 fn resolve_namespaced(base: Option<PathBuf>) -> Option<PathBuf> {
     base.map(|path| path.join(NAMESPACE))
@@ -97,6 +111,14 @@ pub fn load_plugin_config_from_env<T: DeserializeOwned + Default>(fallback_id: &
     load_plugin_config(&[id.as_str()])
 }
 
+pub fn load_plugin_config_from_env_with_contract<T: DeserializeOwned>(
+    fallback_id: &str,
+    contract: &str,
+) -> T {
+    let id = plugin_id_from_env(fallback_id);
+    load_plugin_config_with_contract(&[id.as_str()], contract)
+}
+
 /// Config file paths for the host-injected (or standalone-fallback) plugin id.
 pub fn plugin_config_paths_from_env(fallback_id: &str) -> Vec<PathBuf> {
     let id = plugin_id_from_env(fallback_id);
@@ -126,6 +148,13 @@ pub fn plugin_id_from_env(fallback_id: &str) -> String {
 }
 
 pub fn load_plugin_config<T: DeserializeOwned + Default>(names: &[&str]) -> T {
+    load_plugin_config_or(names, T::default)
+}
+
+pub fn load_plugin_config_or<T: DeserializeOwned>(
+    names: &[&str],
+    default: impl FnOnce() -> T,
+) -> T {
     for path in plugin_config_paths(names) {
         let contents = match fs::read_to_string(&path) {
             Ok(contents) => contents,
@@ -141,7 +170,42 @@ pub fn load_plugin_config<T: DeserializeOwned + Default>(names: &[&str]) -> T {
             }
         }
     }
-    T::default()
+    default()
+}
+
+pub fn load_plugin_config_with_contract<T: DeserializeOwned>(names: &[&str], contract: &str) -> T {
+    let defaults = defaults_json_from_contract(contract).expect("config contract must validate");
+    load_plugin_config_with_defaults(names, defaults)
+}
+
+fn load_plugin_config_with_defaults<T: DeserializeOwned>(
+    names: &[&str],
+    defaults: serde_json::Value,
+) -> T {
+    for path in plugin_config_paths(names) {
+        let contents = match fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(_) => continue,
+        };
+        let overrides = match serde_json::from_str::<serde_json::Value>(&contents) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("[config] failed to parse {}: {}", path.display(), error);
+                continue;
+            }
+        };
+        let merged = defaults::merge_json_defaults(defaults.clone(), overrides);
+        match serde_json::from_value::<T>(merged) {
+            Ok(config) => {
+                eprintln!("[config] loaded from {}", path.display());
+                return config;
+            }
+            Err(error) => {
+                eprintln!("[config] failed to parse {}: {}", path.display(), error);
+            }
+        }
+    }
+    serde_json::from_value(defaults).expect("config contract defaults must deserialize")
 }
 
 pub fn install_id_from_env() -> Option<String> {
@@ -283,6 +347,71 @@ mod tests {
         assert_eq!(
             assemble_config_roots(base.clone(), None, None, Some(base.clone())),
             vec![base]
+        );
+    }
+
+    #[test]
+    fn deserialize_with_contract_defaults_recursively_preserves_missing_values() {
+        #[derive(Debug, serde::Deserialize, PartialEq)]
+        struct Config {
+            audio: Audio,
+            video: Video,
+        }
+        #[derive(Debug, serde::Deserialize, PartialEq)]
+        struct Audio {
+            enabled: bool,
+            inputs: Vec<String>,
+            mic_device: String,
+        }
+        #[derive(Debug, serde::Deserialize, PartialEq)]
+        struct Video {
+            framerate: u32,
+        }
+
+        let contract = r#"
+schema_version = 1
+
+[field.audio_enabled]
+type = "boolean"
+config_key = "audio.enabled"
+default = true
+
+[field.audio_inputs]
+type = "string_array"
+config_key = "audio.inputs"
+default = ["mic"]
+
+[field.audio_mic_device]
+type = "string"
+config_key = "audio.mic_device"
+default = "default"
+
+[field.video_framerate]
+type = "number"
+config_key = "video.framerate"
+default = 60
+"#;
+
+        let config: Config = deserialize_with_contract_defaults(
+            contract,
+            serde_json::json!({
+                "audio": {
+                    "enabled": false
+                }
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            config,
+            Config {
+                audio: Audio {
+                    enabled: false,
+                    inputs: vec!["mic".to_string()],
+                    mic_device: "default".to_string(),
+                },
+                video: Video { framerate: 60 },
+            }
         );
     }
 }

@@ -235,7 +235,7 @@ struct ChipModel {
 
 impl ChipModel {
     fn load(kind: CaptureKind) -> Self {
-        let config: crate::Config = qol_config::load_plugin_config_from_env(crate::PLUGIN_ID);
+        let config = crate::config::load();
         let free_bytes = qol_platform::launch_working_dir()
             .or_else(|| Some(std::env::temp_dir()))
             .and_then(|dir| qol_platform::disk_space(&dir).ok())

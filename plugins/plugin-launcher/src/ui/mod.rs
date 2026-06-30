@@ -25,8 +25,8 @@ pub use input::key_to_input_char;
 
 const BLUR_GUARD_MS: u64 = 400;
 const TRAIL_DECAY_TICK: Duration = Duration::from_millis(20);
-const LAUNCHER_APP_ID: &str = "qol-tray-launcher";
-pub(crate) const LAUNCHER_WINDOW_TITLE: &str = "qol-launcher";
+const LAUNCHER_APP_ID: &str = qol_conventions::launcher::APP_ID;
+pub(crate) const LAUNCHER_WINDOW_TITLE: &str = qol_conventions::launcher::WINDOW_TITLE;
 
 pub(crate) struct LauncherView {
     pub(super) state: LauncherState,

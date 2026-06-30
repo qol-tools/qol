@@ -4,6 +4,7 @@ import { usePluginConfigContext } from './context.js';
 import { NumberField } from './fields/NumberField.js';
 import { StringArrayField } from './fields/StringArrayField.js';
 import { ObjectArrayField } from './fields/ObjectArrayField.js';
+import { ObjectMapField } from './fields/ObjectMapField.js';
 import { ColorField } from './fields/ColorField.js';
 import { ActionField } from './fields/ActionField.js';
 import { ListField } from './fields/ListField.js';
@@ -16,13 +17,14 @@ import { useSurface } from '../../lib/components/Surface.js';
 import { FieldLabel } from './fields/FieldLabel.js';
 import { isSliderNumberField } from './field-rules.js';
 
-const FIELD_MAP = {
+export const FIELD_MAP = {
     boolean: BooleanField,
     string: StringField,
     select: SelectField,
     number: NumberField,
     string_array: StringArrayField,
     object_array: ObjectArrayField,
+    object_map: ObjectMapField,
     color: ColorField,
     action: ActionField,
     list: ListField,
@@ -30,12 +32,24 @@ const FIELD_MAP = {
     qr_code: QrCodeField,
 };
 
+export const SUPPORTED_FIELD_KINDS = Object.freeze(Object.keys(FIELD_MAP));
+
 export function renderField(field) {
     if (isSliderNumberField(field)) {
         return html`<${SliderField} key=${field.id} field=${field} />`;
     }
-    const Component = FIELD_MAP[field.kind] || StringField;
+    const Component = FIELD_MAP[field.kind] || UnsupportedField;
     return html`<${Component} key=${field.id} field=${field} />`;
+}
+
+function UnsupportedField({ field }) {
+    const ctx = usePluginConfigContext();
+    return html`
+        <div ...${fieldSurfaceAttrs(field, ctx, 'field-group field-unsupported')}>
+            <${FieldLabel} text=${field.label} description=${field.description || ''} />
+            <div class="field-empty">Unsupported field kind: ${field.kind}</div>
+        </div>
+    `;
 }
 
 function BooleanField({ field }) {

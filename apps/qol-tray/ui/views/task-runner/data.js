@@ -5,17 +5,25 @@ const API_BASE = '/api/task-runner';
 export { API_BASE };
 
 export async function loadTaskRunnerData() {
+    const defaults = await loadTaskRunnerDefaults();
     const res = await fetch(`${API_BASE}/config`);
     if (!res.ok) {
-        return emptyTaskRunnerData();
+        return emptyTaskRunnerData(defaults);
     }
 
     const config = await res.json();
     const actions = config.actions || {};
     return {
         actions,
-        actionIds: Object.keys(actions)
+        actionIds: Object.keys(actions),
+        defaults,
     };
+}
+
+export async function loadTaskRunnerDefaults() {
+    const res = await fetch(`${API_BASE}/defaults`);
+    if (!res.ok) throw new Error('Failed to load task runner defaults');
+    return res.json();
 }
 
 export async function persistTaskRunnerConfig(actions) {
@@ -26,15 +34,17 @@ export async function persistTaskRunnerConfig(actions) {
     });
 }
 
-export function createEditModalState(actions, actionId = null) {
+export function createEditModalState(actions, actionId = null, defaults) {
     const action = actionId ? actions[actionId] : null;
+    const defaultTimeout = defaults?.actionTimeout ?? action?.timeout;
     return {
         actionId: actionId || '',
         isNew: !actionId,
         name: action?.name || '',
         description: action?.description || '',
         command: action?.command || '',
-        timeout: action?.timeout || 60
+        timeout: action?.timeout ?? defaultTimeout,
+        defaultTimeout,
     };
 }
 
@@ -90,10 +100,11 @@ export async function runTaskActionTest(actionId, params) {
     return res.json();
 }
 
-function emptyTaskRunnerData() {
+function emptyTaskRunnerData(defaults) {
     return {
         actions: {},
-        actionIds: []
+        actionIds: [],
+        defaults,
     };
 }
 

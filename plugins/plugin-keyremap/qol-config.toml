@@ -58,7 +58,13 @@ description = "Translate keys or key groups into other modifier or key combinati
 type = "object_array"
 label = "Key Rules"
 section = "key_rules"
-default = []
+default = [
+  { from_mods = ["ctrl"], to_mods = ["cmd"], keys = ["c", "v", "x", "a", "z", "s", "p", "f", "t", "w", "n", "d", "r", "return"] },
+  { from_mods = ["ctrl"], to_mods = ["alt"], keys = ["left", "right", "forwarddelete", "delete"] },
+  { from_mods = ["ctrl", "shift"], to_mods = ["cmd", "shift"], keys = ["r", "t", "b"] },
+  { from_mods = ["ctrl", "shift"], to_mods = ["cmd", "alt"], keys = ["e", "c", "k"] },
+  { from_mods = ["ctrl"], from_key = "y", to_mods = ["cmd", "shift"], to_key = "z" },
+]
 
 [field.key_rules.item.fields]
 from_mods = "string_array"
@@ -76,7 +82,9 @@ description = "Apply modifier remaps to mouse button clicks."
 type = "object_array"
 label = "Mouse Rules"
 section = "mouse_rules"
-default = []
+default = [
+  { from_mods = ["ctrl"], button = "left", to_mods = ["cmd"] },
+]
 
 [field.mouse_rules.item.fields]
 from_mods = "string_array"
@@ -92,7 +100,9 @@ description = "Apply modifier remaps to scroll gestures."
 type = "object_array"
 label = "Scroll Rules"
 section = "scroll_rules"
-default = []
+default = [
+  { from_mods = ["ctrl"], to_mods = ["cmd"] },
+]
 
 [field.scroll_rules.item.fields]
 from_mods = "string_array"

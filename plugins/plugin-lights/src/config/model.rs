@@ -171,7 +171,7 @@ impl Default for PresetSlot {
 }
 
 fn default_color() -> String {
-    "ffffff".into()
+    "#FFFFFF".into()
 }
 
 fn default_brightness() -> u8 {

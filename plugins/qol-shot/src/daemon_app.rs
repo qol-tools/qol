@@ -315,7 +315,7 @@ async fn run_cli(cx: &AsyncApp, state: &State, action: String) {
 
 async fn toggle_recording(cx: &AsyncApp, state: &State) {
     qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon");
-    let config: crate::Config = qol_config::load_plugin_config_from_env(crate::PLUGIN_ID);
+    let config = crate::config::load();
     let stop_config = config.clone();
     match cx
         .background_spawn(

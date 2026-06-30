@@ -3,13 +3,6 @@ use std::process::Command;
 
 use crate::restore::WindowSystem;
 
-const LAUNCHER_MATCH_MARKERS: [&str; 4] = [
-    "qol-tray-launcher",
-    "plugin-launcher",
-    "qol-launcher",
-    "qol launcher",
-];
-
 #[derive(Clone, Copy, Default)]
 pub struct X11WindowSystem;
 
@@ -226,7 +219,7 @@ fn launcher_window_metadata_matches(window_id: &str) -> bool {
 
 fn launcher_text_matches(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    LAUNCHER_MATCH_MARKERS
+    qol_conventions::launcher::MATCH_MARKERS
         .iter()
         .any(|marker| lower.contains(marker))
 }

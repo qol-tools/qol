@@ -86,6 +86,7 @@ dependencies = [
  "qol-plugin-daemon",
  "qol-runtime",
  "serde",
+ "serde_json",
  "smallvec",
  "x11rb",
 ]
@@ -3940,6 +3941,7 @@ dependencies = [
  "qol-runtime",
  "qol-search",
  "serde",
+ "serde_json",
  "toml 0.9.12+spec-1.1.0",
 ]
 
@@ -5363,6 +5365,7 @@ dependencies = [
  "crossbeam-channel",
  "getrandom 0.2.17",
  "log",
+ "qol-config",
  "qol-conventions",
  "qol-plugin-api",
  "qol-runtime",
@@ -7596,6 +7599,7 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 name = "task-runner"
 version = "1.5.0"
 dependencies = [
+ "qol-config",
  "qol-conventions",
  "qol-plugin-api",
  "serde",
@@ -8963,6 +8967,7 @@ version = "2.7.0"
 dependencies = [
  "proptest",
  "qol-config",
+ "qol-conventions",
  "qol-plugin-api",
  "qol-runtime",
  "serde",

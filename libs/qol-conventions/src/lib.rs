@@ -16,6 +16,13 @@ pub const ENV_PLUGIN_ID: &str = "QOL_TRAY_PLUGIN_ID";
 pub const ENV_DAEMON_SOCKET: &str = "QOL_TRAY_DAEMON_SOCKET";
 pub const ENV_DAEMON_REPLACE_EXISTING: &str = "QOL_TRAY_DAEMON_REPLACE_EXISTING";
 
+pub mod launcher {
+    pub const APP_ID: &str = "qol-tray-launcher";
+    pub const WINDOW_TITLE: &str = "qol-launcher";
+    pub const BOOSTS_FILE_NAME: &str = "qol-launcher-boosts.toml";
+    pub const MATCH_MARKERS: &[&str] = &[APP_ID, "plugin-launcher", WINDOW_TITLE, "qol launcher"];
+}
+
 pub fn local_base_url() -> String {
     format!("http://{LOCAL_HOST}:{DEFAULT_PORT}")
 }
@@ -60,5 +67,11 @@ mod tests {
         for (id, expected) in cases {
             assert_eq!(is_reserved_plugin_id(id), expected, "id: {id}");
         }
+    }
+
+    #[test]
+    fn launcher_match_markers_include_the_window_identity() {
+        assert!(launcher::MATCH_MARKERS.contains(&launcher::APP_ID));
+        assert!(launcher::MATCH_MARKERS.contains(&launcher::WINDOW_TITLE));
     }
 }

@@ -37,7 +37,7 @@ impl EntryStore {
         app_entries: Arc<Vec<discovery::AppEntry>>,
         file_entries: Arc<Vec<discovery::FileEntry>>,
     ) -> Self {
-        let frecency_path = frecency::default_store_path("qol-launcher");
+        let frecency_path = frecency::default_store_path(qol_conventions::launcher::WINDOW_TITLE);
         let frecency = frecency::load(&frecency_path);
         let boosts = load_boosts(&frecency_path);
         Self {
@@ -258,7 +258,7 @@ fn load_boosts(frecency_path: &Path) -> HashMap<String, i32> {
     let boosts_path = frecency_path
         .parent()
         .unwrap_or(Path::new("."))
-        .join("qol-launcher-boosts.toml");
+        .join(qol_conventions::launcher::BOOSTS_FILE_NAME);
     let Ok(content) = std::fs::read_to_string(&boosts_path) else {
         return HashMap::new();
     };
@@ -275,7 +275,7 @@ fn save_boosts(frecency_path: &Path, boosts: &HashMap<String, i32>) {
     let boosts_path = frecency_path
         .parent()
         .unwrap_or(Path::new("."))
-        .join("qol-launcher-boosts.toml");
+        .join(qol_conventions::launcher::BOOSTS_FILE_NAME);
     let table: toml::Table = boosts
         .iter()
         .map(|(k, v)| (k.clone(), toml::Value::Integer(*v as i64)))

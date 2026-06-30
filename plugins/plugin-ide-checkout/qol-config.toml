@@ -23,7 +23,18 @@ config_key = "apps"
 key_label = "App ID"
 label = "Applications"
 section = "apps"
-default = {}
+
+[field.apps.default.idea]
+paths = ["/opt/homebrew/bin/idea", "/usr/local/bin/idea", "/snap/bin/idea-ultimate", "/snap/bin/intellij-idea-ultimate", "~/.local/share/JetBrains/Toolbox/scripts/idea"]
+
+[field.apps.default.vscode]
+paths = ["/usr/bin/code", "/opt/homebrew/bin/code", "/snap/bin/code", "/usr/local/bin/code"]
+
+[field.apps.default.cursor]
+paths = ["/opt/homebrew/bin/cursor", "/usr/bin/cursor", "/usr/local/bin/cursor", "~/.local/bin/cursor"]
+
+[field.apps.default.zed]
+paths = ["/opt/homebrew/bin/zed", "/usr/bin/zed", "~/.local/bin/zed"]
 
 [field.apps.entry_fields]
 name = "string"

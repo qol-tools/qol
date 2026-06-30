@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -19,9 +20,8 @@ fn default_enabled() -> bool {
     true
 }
 
-fn builtin_defaults() -> RemapConfig {
-    serde_json::from_str(include_str!("../config/default.json"))
-        .expect("embedded default config must parse")
+pub(crate) fn builtin_defaults() -> RemapConfig {
+    qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).expect("contract defaults must parse")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,7 +93,7 @@ pub fn load_config() -> RemapConfig {
     let has_file = paths.iter().any(|p| p.exists());
 
     let config = if has_file {
-        qol_config::load_plugin_config_from_env(PLUGIN_ID)
+        qol_config::load_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
     } else {
         let defaults = builtin_defaults();
         if let Some(path) = paths.first() {
@@ -119,9 +119,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_full_config() {
-        let json = include_str!("../config/default.json");
-        let config: RemapConfig = serde_json::from_str(json).expect("default config should parse");
+    fn contract_defaults_parse_as_config() {
+        qol_config::validate_contract_defaults_match_type::<RemapConfig>(CONFIG_CONTRACT).unwrap();
+
+        let config = builtin_defaults();
         assert!(config.enabled);
         assert!(!config.excluded_apps.is_empty());
         assert!(!config.key_rules.is_empty());

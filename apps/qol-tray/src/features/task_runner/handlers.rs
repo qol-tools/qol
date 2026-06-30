@@ -49,6 +49,7 @@ pub(super) fn router(state: TaskRunnerState) -> Router {
     Router::new()
         .route("/actions", get(list_actions))
         .route("/execute", post(execute_action))
+        .route("/defaults", get(get_defaults))
         .route("/config", get(get_config))
         .route("/config", axum::routing::put(set_config))
         .with_state(state)
@@ -112,6 +113,10 @@ impl From<ExecutionResult> for ExecuteResponse {
 async fn get_config(State(state): State<TaskRunnerState>) -> Json<TaskRunnerConfig> {
     let config = state.config.read().await;
     Json(config.clone())
+}
+
+async fn get_defaults() -> Json<config::TaskRunnerDefaults> {
+    Json(config::defaults())
 }
 
 async fn set_config(

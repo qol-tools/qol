@@ -9,9 +9,10 @@ import {
     removeSelectedAction
 } from './data.js';
 
-async function doLoad(setActions, setActionIds, setSelectedIndex, markRestored) {
+async function doLoad(setActions, setActionIds, setSelectedIndex, markRestored, setDefaults) {
     try {
         const loaded = await loadTaskRunnerData();
+        setDefaults(loaded.defaults);
         setActions(loaded.actions);
         setActionIds(loaded.actionIds);
         setSelectedIndex(prev => {
@@ -36,9 +37,10 @@ function doDelete(actionsRef, actionIdsRef, selectedIndexRef, setActions, setAct
 export function useTaskData() {
     const [actions, setActions, actionsRef] = useStateRef({});
     const [actionIds, setActionIds, actionIdsRef] = useStateRef([]);
+    const [defaults, setDefaults, defaultsRef] = useStateRef(null);
     const [si, setSI, siRef, markRestored] = usePersistedIndex('taskrunner-selected-index');
     const loadActions = useCallback(
-        () => doLoad(setActions, setActionIds, setSI, markRestored),
+        () => doLoad(setActions, setActionIds, setSI, markRestored, setDefaults),
         []
     );
     useEffect(() => { loadActions(); }, [loadActions]);
@@ -50,5 +52,5 @@ export function useTaskData() {
         () => navigator.clipboard.writeText(buildApiExample(actionsRef.current, actionIdsRef.current).json),
         []
     );
-    return { actions, setActions, actionsRef, actionIds, setActionIds, actionIdsRef, selectedIndex: si, setSelectedIndex: setSI, selectedIndexRef: siRef, deleteAction, copyApiExample };
+    return { actions, setActions, actionsRef, actionIds, setActionIds, actionIdsRef, defaults, defaultsRef, selectedIndex: si, setSelectedIndex: setSI, selectedIndexRef: siRef, deleteAction, copyApiExample };
 }

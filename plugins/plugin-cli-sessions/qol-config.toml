@@ -13,19 +13,3 @@ config_key = "corner"
 label = "Screen corner"
 description = "Which corner the panel parks in: top-left, top-right, bottom-left, bottom-right."
 default = "top-right"
-
-[field.poll_secs]
-type = "number"
-section = "panel"
-config_key = "poll_secs"
-label = "Refresh interval (seconds)"
-description = "How often the reconciler prunes dead sessions and re-scans the terminal host."
-default = 3
-
-[field.host]
-type = "string"
-section = "panel"
-config_key = "host"
-label = "Terminal host"
-description = "Which terminal the jump-to-session uses. Only 'kitty' is supported today."
-default = "kitty"

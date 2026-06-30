@@ -102,6 +102,7 @@ fn validate_fields(spec: &ConfigSpec, errors: &mut Vec<ValidationError>) {
         validate_number_constraints(id, field, errors);
         validate_show_when(id, field, spec, errors);
     }
+    validate_config_key_collisions(spec, errors);
 }
 
 fn validate_field_id(id: &str, errors: &mut Vec<ValidationError>) {
@@ -148,6 +149,49 @@ fn kind_has_stored_value(kind: FieldKind) -> bool {
         kind,
         FieldKind::Action | FieldKind::List | FieldKind::Status | FieldKind::QrCode
     )
+}
+
+fn validate_config_key_collisions(spec: &ConfigSpec, errors: &mut Vec<ValidationError>) {
+    let keys: Vec<(&str, String)> = spec
+        .fields
+        .iter()
+        .filter_map(|(id, field)| {
+            if kind_has_stored_value(field.kind) {
+                Some((
+                    id.as_str(),
+                    field.config_key.clone().unwrap_or_else(|| id.clone()),
+                ))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for (left_index, (left_id, left_key)) in keys.iter().enumerate() {
+        for (right_id, right_key) in keys.iter().skip(left_index + 1) {
+            if left_key == right_key {
+                errors.push(ValidationError::new(
+                    format!("field.{right_id}.config_key"),
+                    format!("duplicates field.{left_id} config key {right_key}"),
+                ));
+                continue;
+            }
+            if config_key_prefix_collision(left_key, right_key) {
+                errors.push(ValidationError::new(
+                    format!("field.{right_id}.config_key"),
+                    format!("collides with field.{left_id} config key {left_key}"),
+                ));
+            }
+        }
+    }
+}
+
+fn config_key_prefix_collision(left: &str, right: &str) -> bool {
+    left.strip_prefix(right)
+        .is_some_and(|suffix| suffix.starts_with('.'))
+        || right
+            .strip_prefix(left)
+            .is_some_and(|suffix| suffix.starts_with('.'))
 }
 
 fn validate_field_default(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
@@ -513,5 +557,147 @@ fn field_kind_name(kind: FieldKind) -> &'static str {
         FieldKind::List => "list",
         FieldKind::Status => "status",
         FieldKind::QrCode => "qr_code",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::parse_spec_str;
+
+    #[test]
+    fn config_key_prefix_collision_is_symmetric_and_segment_aware() {
+        let cases = [
+            ("display", "display.scale", true),
+            ("display.scale", "display", true),
+            ("display.scale", "display.scale.inner", true),
+            ("display", "displayed", false),
+            ("display.scale", "display.scaled", false),
+            ("audio.inputs", "video.inputs", false),
+        ];
+
+        for (left, right, expected) in cases {
+            assert_eq!(
+                config_key_prefix_collision(left, right),
+                expected,
+                "{left} vs {right}"
+            );
+        }
+    }
+
+    #[test]
+    fn validates_exact_duplicate_config_keys() {
+        let errors = validate_contract(
+            r##"
+schema_version = 1
+
+[field.first]
+type = "string"
+config_key = "display.color"
+default = "red"
+
+[field.second]
+type = "color"
+config_key = "display.color"
+default = "#ffffff"
+"##,
+        );
+
+        assert_has_error(&errors, "field.second.config_key", "duplicates field.first");
+    }
+
+    #[test]
+    fn validates_prefix_config_key_collisions_in_both_orders() {
+        for contract in [
+            r#"
+schema_version = 1
+
+[field.parent]
+type = "string"
+config_key = "display"
+default = "red"
+
+[field.child]
+type = "number"
+config_key = "display.scale"
+default = 1
+"#,
+            r#"
+schema_version = 1
+
+[field.child]
+type = "number"
+config_key = "display.scale"
+default = 1
+
+[field.parent]
+type = "string"
+config_key = "display"
+default = "red"
+"#,
+        ] {
+            let errors = validate_contract(contract);
+            assert_has_collision_between(&errors, "parent", "child");
+        }
+    }
+
+    #[test]
+    fn allows_config_keys_that_only_share_text_prefixes() {
+        let errors = validate_contract(
+            r#"
+schema_version = 1
+
+[field.display]
+type = "string"
+config_key = "display_color"
+default = "red"
+
+[field.displayed]
+type = "number"
+config_key = "displayed.scale"
+default = 1
+
+[field.scale]
+type = "number"
+config_key = "display.scale_factor"
+default = 2
+"#,
+        );
+
+        assert!(
+            errors
+                .iter()
+                .all(|error| !error.message.contains("collides with")),
+            "{errors:?}"
+        );
+    }
+
+    fn validate_contract(contract: &str) -> Vec<ValidationError> {
+        let spec = parse_spec_str(contract).expect("contract parses");
+        validate_spec_collect(&spec)
+    }
+
+    fn assert_has_error(errors: &[ValidationError], path: &str, message: &str) {
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == path && error.message.contains(message)),
+            "missing {path} / {message} in {errors:?}"
+        );
+    }
+
+    fn assert_has_collision_between(errors: &[ValidationError], left: &str, right: &str) {
+        let left_path = format!("field.{left}.config_key");
+        let right_path = format!("field.{right}.config_key");
+        let left_message = format!("field.{left}");
+        let right_message = format!("field.{right}");
+        assert!(
+            errors.iter().any(|error| {
+                error.message.contains("collides with")
+                    && ((error.path == left_path && error.message.contains(&right_message))
+                        || (error.path == right_path && error.message.contains(&left_message)))
+            }),
+            "missing collision between {left} and {right} in {errors:?}"
+        );
     }
 }

@@ -14,10 +14,14 @@ function doSave(actionsRef, editModal, setActions, setActionIds, setSelectedInde
     setEditModal(null);
 }
 
-export function useEditModal(actionsRef, setActions, setActionIds, setSelectedIndex) {
+export function useEditModal(actionsRef, defaultsRef, setActions, setActionIds, setSelectedIndex) {
     const [editModal, setEditModal, editModalRef] = useStateRef(null);
     const openEditModal = useCallback(
-        (actionId = null) => setEditModal(createEditModalState(actionsRef.current, actionId)),
+        (actionId = null) => {
+            const action = actionId ? actionsRef.current[actionId] : null;
+            if (action?.timeout == null && !defaultsRef.current) return;
+            setEditModal(createEditModalState(actionsRef.current, actionId, defaultsRef.current));
+        },
         []
     );
     const saveAction = useCallback(

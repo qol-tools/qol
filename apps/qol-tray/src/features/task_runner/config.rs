@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-const CONFIG_FILENAME: &str = "task-runner.json";
+pub(super) const DEFAULT_ACTION_TIMEOUT_SECONDS: u64 = 60;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActionConfig {
@@ -19,7 +19,7 @@ pub struct ActionConfig {
 }
 
 fn default_timeout() -> u64 {
-    60
+    DEFAULT_ACTION_TIMEOUT_SECONDS
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -32,6 +32,18 @@ pub struct TaskRunnerConfig {
 pub(super) struct TaskRunnerState {
     pub(super) config: Arc<RwLock<TaskRunnerConfig>>,
     pub(super) config_path: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub(super) struct TaskRunnerDefaults {
+    #[serde(rename = "actionTimeout")]
+    pub action_timeout: u64,
+}
+
+pub(super) fn defaults() -> TaskRunnerDefaults {
+    TaskRunnerDefaults {
+        action_timeout: DEFAULT_ACTION_TIMEOUT_SECONDS,
+    }
 }
 
 pub(super) fn load_state() -> TaskRunnerState {
@@ -50,7 +62,7 @@ fn config_path() -> PathBuf {
 fn fallback_config_path() -> PathBuf {
     qol_config::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(CONFIG_FILENAME)
+        .join(crate::features::profile::scope_store::TASK_RUNNER_FILE)
 }
 
 fn load_config(path: &Path) -> TaskRunnerConfig {
@@ -104,7 +116,8 @@ mod tests {
 
     #[test]
     fn config_default_timeout() {
-        assert_eq!(default_timeout(), 60);
+        assert_eq!(default_timeout(), DEFAULT_ACTION_TIMEOUT_SECONDS);
+        assert_eq!(defaults().action_timeout, default_timeout());
     }
 
     #[test]
@@ -204,10 +217,11 @@ mod tests {
     fn fallback_config_path_uses_qol_config_namespace_when_available() {
         let path = fallback_config_path();
         assert!(
-            path.ends_with(CONFIG_FILENAME),
-            "expected {CONFIG_FILENAME} leaf, got {path:?}"
+            path.ends_with(crate::features::profile::scope_store::TASK_RUNNER_FILE),
+            "expected task runner config leaf, got {path:?}"
         );
-        if path != PathBuf::from(".").join(CONFIG_FILENAME) {
+        if path != PathBuf::from(".").join(crate::features::profile::scope_store::TASK_RUNNER_FILE)
+        {
             let parent = path.parent().expect("config path has a parent");
             assert!(
                 parent.ends_with(qol_config::NAMESPACE),
