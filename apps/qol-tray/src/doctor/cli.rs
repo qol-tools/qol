@@ -1,19 +1,26 @@
 use super::{
-    check, check_single, fix_single_with_policy, fix_with_policy, FixPolicy, FixReport, Outcome,
-    OutcomeStatus, Report,
+    check, check_single, check_startup, fix_single_with_policy, fix_with_policy, FixPolicy,
+    FixReport, Outcome, OutcomeStatus, Report,
 };
 use anyhow::{anyhow, Result};
 
 pub(super) fn run_cli_from_env() -> Result<i32> {
     match command()? {
-        DoctorCommand::Check { id } => run_check(id),
+        DoctorCommand::Check { selection } => run_check(selection),
         DoctorCommand::Fix { id, policy } => run_fix(id, policy),
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum CheckSelection {
+    All,
+    Startup,
+    Id(String),
+}
+
 enum DoctorCommand {
     Check {
-        id: Option<String>,
+        selection: CheckSelection,
     },
     Fix {
         id: Option<String>,
@@ -28,7 +35,7 @@ fn command() -> Result<DoctorCommand> {
 
     match command.as_str() {
         "check" => Ok(DoctorCommand::Check {
-            id: parse_check_flags(&rest)?,
+            selection: parse_check_flags(&rest)?,
         }),
         "fix" => {
             let (id, policy) = parse_fix_flags(&rest)?;
@@ -38,16 +45,25 @@ fn command() -> Result<DoctorCommand> {
     }
 }
 
-fn parse_check_flags(rest: &[String]) -> Result<Option<String>> {
+fn parse_check_flags(rest: &[String]) -> Result<CheckSelection> {
     let mut id = None;
+    let mut startup = false;
     let mut args = rest.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--id" => id = Some(take_id_value(&mut args)?),
-            _ => return Err(usage_error("check [--id <CHECK_ID>]", rest)),
+            "--startup" => startup = true,
+            _ => return Err(usage_error("check [--id <CHECK_ID>] [--startup]", rest)),
         }
     }
-    Ok(id)
+    match (id, startup) {
+        (Some(_), true) => Err(anyhow!(
+            "qol-tray-doctor check accepts either --id or --startup, not both"
+        )),
+        (Some(id), false) => Ok(CheckSelection::Id(id)),
+        (None, true) => Ok(CheckSelection::Startup),
+        (None, false) => Ok(CheckSelection::All),
+    }
 }
 
 fn parse_fix_flags(rest: &[String]) -> Result<(Option<String>, FixPolicy)> {
@@ -84,10 +100,11 @@ fn usage_error(usage: &str, rest: &[String]) -> anyhow::Error {
     anyhow!("Usage: qol-tray-doctor {usage} (got: {})", rest.join(" "))
 }
 
-fn run_check(id: Option<String>) -> Result<i32> {
-    let report = match id {
-        Some(id) => check_single(&id),
-        None => check(),
+fn run_check(selection: CheckSelection) -> Result<i32> {
+    let report = match selection {
+        CheckSelection::All => check(),
+        CheckSelection::Startup => check_startup(),
+        CheckSelection::Id(id) => check_single(&id),
     };
     print_report("Doctor Check", &report);
     Ok(exit_code_for_report(&report))
@@ -174,4 +191,31 @@ fn exit_code_for_report(report: &Report) -> i32 {
         return 1;
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn parse_check_flags_selects_startup_scope() {
+        assert_eq!(
+            parse_check_flags(&args(&["--startup"])).unwrap(),
+            CheckSelection::Startup
+        );
+    }
+
+    #[test]
+    fn parse_check_flags_rejects_ambiguous_scope() {
+        let error = parse_check_flags(&args(&["--startup", "--id", "install_identity"]))
+            .expect_err("--startup and --id select different check sets");
+        assert!(
+            error.to_string().contains("either --id or --startup"),
+            "unexpected error: {error:#}"
+        );
+    }
 }

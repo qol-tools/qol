@@ -61,6 +61,12 @@ pub fn check() -> Report {
     report::report(results)
 }
 
+pub fn check_startup() -> Report {
+    let ctx = DoctorContext::new();
+    let results = run_selected(&Selector::Startup, &ctx);
+    report::report(results)
+}
+
 pub fn fix_safe() -> FixReport {
     fix_with_policy(FixPolicy::safe())
 }

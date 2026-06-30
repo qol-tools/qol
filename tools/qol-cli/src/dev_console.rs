@@ -4706,14 +4706,13 @@ enum DoctorMode {
     Fix,
 }
 
-impl DoctorMode {
-    fn arg(self) -> &'static str {
-        match self {
-            DoctorMode::Check => "check",
-            DoctorMode::Fix => "fix",
-        }
-    }
+#[derive(Clone, Copy)]
+enum DoctorScope {
+    Full,
+    Startup,
+}
 
+impl DoctorMode {
     fn gerund(self) -> &'static str {
         match self {
             DoctorMode::Check => "checking",
@@ -4729,6 +4728,17 @@ impl DoctorMode {
     }
 }
 
+impl DoctorScope {
+    fn command_args(self, mode: DoctorMode) -> &'static [&'static str] {
+        match (self, mode) {
+            (DoctorScope::Full, DoctorMode::Check) => &["check"],
+            (DoctorScope::Full, DoctorMode::Fix) => &["fix"],
+            (DoctorScope::Startup, DoctorMode::Check) => &["check", "--startup"],
+            (DoctorScope::Startup, DoctorMode::Fix) => &["fix"],
+        }
+    }
+}
+
 fn spawn_doctor(mode: DoctorMode) -> Receiver<Result<DoctorRun, String>> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {
@@ -4740,7 +4750,7 @@ fn spawn_doctor(mode: DoctorMode) -> Receiver<Result<DoctorRun, String>> {
 fn run_doctor(mode: DoctorMode) -> Result<DoctorRun, String> {
     let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
     build_doctor(&root)?;
-    run_doctor_binary(&doctor_binary(&root), &root, mode)
+    run_doctor_binary(&doctor_binary(&root), &root, mode, DoctorScope::Full)
 }
 
 fn run_doctor_prebuilt() -> Result<DoctorRun, String> {
@@ -4749,7 +4759,7 @@ fn run_doctor_prebuilt() -> Result<DoctorRun, String> {
     if !binary.exists() {
         return Err("doctor binary not built · press d".to_string());
     }
-    run_doctor_binary(&binary, &root, DoctorMode::Check)
+    run_doctor_binary(&binary, &root, DoctorMode::Check, DoctorScope::Startup)
 }
 
 fn doctor_binary(root: &std::path::Path) -> std::path::PathBuf {
@@ -4762,10 +4772,11 @@ fn run_doctor_binary(
     binary: &std::path::Path,
     root: &std::path::Path,
     mode: DoctorMode,
+    scope: DoctorScope,
 ) -> Result<DoctorRun, String> {
     let output = Command::new(binary)
         .current_dir(root)
-        .arg(mode.arg())
+        .args(scope.command_args(mode))
         .output()
         .map_err(|error| error.to_string())?;
     let text = String::from_utf8_lossy(&output.stdout);
@@ -6113,6 +6124,16 @@ mod tests {
             vec!["[ERR] a: rebuild failed", "[WARN] a: x"],
             "fix failures must stay visible alongside the after block"
         );
+    }
+
+    #[test]
+    fn background_doctor_uses_startup_scope() {
+        assert_eq!(
+            DoctorScope::Startup.command_args(DoctorMode::Check),
+            ["check", "--startup"],
+            "the dashboard poller must not run full DevBuild checks in the background"
+        );
+        assert_eq!(DoctorScope::Full.command_args(DoctorMode::Check), ["check"]);
     }
 
     #[test]
