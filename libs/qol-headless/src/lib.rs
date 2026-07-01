@@ -82,6 +82,12 @@ type StreamingHandler =
     Box<dyn Fn(&CommandContext, &mut dyn OutputSink) -> Result<u8> + Send + Sync>;
 type JsonHandler = Box<dyn Fn(&CommandContext) -> Result<Value> + Send + Sync>;
 
+enum ModeHandler {
+    PlainText(PlainTextHandler),
+    Result(ResultHandler),
+    Streaming(StreamingHandler),
+}
+
 pub trait OutputSink {
     fn stdout(&mut self, text: &str);
     fn stderr(&mut self, text: &str);
@@ -144,9 +150,7 @@ pub struct Command {
     details: Vec<String>,
     output: Option<String>,
     exit_behavior: Option<String>,
-    plain_text_handler: Option<PlainTextHandler>,
-    result_handler: Option<ResultHandler>,
-    streaming_handler: Option<StreamingHandler>,
+    mode_handler: Option<ModeHandler>,
     json_handler: Option<JsonHandler>,
     subcommands: Vec<Command>,
 }
@@ -161,9 +165,7 @@ impl Command {
             details: Vec::new(),
             output: None,
             exit_behavior: None,
-            plain_text_handler: None,
-            result_handler: None,
-            streaming_handler: None,
+            mode_handler: None,
             json_handler: None,
             subcommands: Vec::new(),
         }
@@ -203,7 +205,7 @@ impl Command {
     where
         F: Fn(&CommandContext) -> Result<PlainTextOutput> + Send + Sync + 'static,
     {
-        self.plain_text_handler = Some(Box::new(handler));
+        self.mode_handler = Some(ModeHandler::PlainText(Box::new(handler)));
         self
     }
 
@@ -211,7 +213,7 @@ impl Command {
     where
         F: Fn(&CommandContext) -> Result<CommandResult> + Send + Sync + 'static,
     {
-        self.result_handler = Some(Box::new(handler));
+        self.mode_handler = Some(ModeHandler::Result(Box::new(handler)));
         self
     }
 
@@ -219,7 +221,7 @@ impl Command {
     where
         F: Fn(&CommandContext, &mut dyn OutputSink) -> Result<u8> + Send + Sync + 'static,
     {
-        self.streaming_handler = Some(Box::new(handler));
+        self.mode_handler = Some(ModeHandler::Streaming(Box::new(handler)));
         self
     }
 
@@ -428,28 +430,24 @@ impl HeadlessApp {
         };
 
         match output_format {
-            OutputFormat::PlainText => {
-                if let Some(handler) = resolved.command.result_handler.as_ref() {
-                    return handler(&context).map_err(DispatchError::Runtime);
+            OutputFormat::PlainText => match resolved.command.mode_handler.as_ref() {
+                Some(ModeHandler::Result(handler)) => {
+                    handler(&context).map_err(DispatchError::Runtime)
                 }
-                if let Some(handler) = resolved.command.streaming_handler.as_ref() {
+                Some(ModeHandler::Streaming(handler)) => {
                     let mut sink = BufferedOutputSink::default();
                     let exit_code = handler(&context, &mut sink).map_err(DispatchError::Runtime)?;
-                    return Ok(sink.into_execution(exit_code));
+                    Ok(sink.into_execution(exit_code))
                 }
-                let handler = resolved
-                    .command
-                    .plain_text_handler
-                    .as_ref()
-                    .ok_or_else(|| {
-                        DispatchError::Usage(format!(
-                            "Command `{}` is not directly runnable.",
-                            resolved.path.join(" ")
-                        ))
-                    })?;
-                let output = handler(&context).map_err(DispatchError::Runtime)?;
-                Ok(Execution::success(output.into_stdout()))
-            }
+                Some(ModeHandler::PlainText(handler)) => {
+                    let output = handler(&context).map_err(DispatchError::Runtime)?;
+                    Ok(Execution::success(output.into_stdout()))
+                }
+                None => Err(DispatchError::Usage(format!(
+                    "Command `{}` is not directly runnable.",
+                    resolved.path.join(" ")
+                ))),
+            },
             OutputFormat::Json => {
                 let handler = resolved
                     .command
@@ -497,11 +495,11 @@ impl HeadlessApp {
             ))
         })?;
 
-        if output_format == OutputFormat::Json || resolved.command.result_handler.is_some() {
+        if output_format == OutputFormat::Json {
             return Ok(None);
         }
 
-        let Some(handler) = resolved.command.streaming_handler.as_ref() else {
+        let Some(ModeHandler::Streaming(handler)) = resolved.command.mode_handler.as_ref() else {
             return Ok(None);
         };
 
