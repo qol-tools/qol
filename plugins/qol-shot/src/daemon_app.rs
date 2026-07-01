@@ -9,6 +9,7 @@ use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::window::ActiveWindows;
 
 use crate::daemon;
+use crate::geometry::rect_label;
 use crate::preview::PreviewWindows;
 use crate::screenshot::PreviewCapture;
 
@@ -290,11 +291,8 @@ fn trace_selected(source: &'static str, selected: Option<crate::Rect>) {
     match selected {
         Some(rect) => qol_runtime::probe!(
             "SHOT_SELECT_RESULT",
-            "source={source} rect={}x{}+{},{}",
-            rect.w,
-            rect.h,
-            rect.x,
-            rect.y
+            "source={source} rect={}",
+            rect_label(rect)
         ),
         None => qol_runtime::probe!("SHOT_SELECT_RESULT", "source={source} rect=none"),
     }

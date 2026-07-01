@@ -18,6 +18,14 @@ pub struct Rect {
 
 const SNAP_MARGIN_PX: i32 = 50;
 
+pub(crate) fn rect_label(rect: Rect) -> String {
+    format!("{}x{}+{},{}", rect.w, rect.h, rect.x, rect.y)
+}
+
+pub(crate) fn monitor_label(monitor: Monitor) -> String {
+    format!("{}x{}+{},{}", monitor.w, monitor.h, monitor.x, monitor.y)
+}
+
 pub(crate) fn prepare_recording_rect(
     mut rect: Rect,
     monitors: &[Monitor],

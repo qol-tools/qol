@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
+use crate::geometry::rect_label;
 use crate::space::{self, CaptureKind, Level};
 use crate::{Monitor, Rect};
 
@@ -961,12 +962,8 @@ fn trace_drag_rect(start: Point<Pixels>, end: Point<Pixels>) {
 }
 
 fn trace_selection_release(source: &'static str, raw: Option<Rect>, mapped: Option<Rect>) {
-    let raw = raw
-        .map(|rect| format!("{}x{}+{},{}", rect.w, rect.h, rect.x, rect.y))
-        .unwrap_or_else(|| "none".to_string());
-    let mapped = mapped
-        .map(|rect| format!("{}x{}+{},{}", rect.w, rect.h, rect.x, rect.y))
-        .unwrap_or_else(|| "none".to_string());
+    let raw = raw.map(rect_label).unwrap_or_else(|| "none".to_string());
+    let mapped = mapped.map(rect_label).unwrap_or_else(|| "none".to_string());
     qol_runtime::probe!(
         "SHOT_SELECT_RELEASE",
         "source={source} raw={raw} mapped={mapped}"

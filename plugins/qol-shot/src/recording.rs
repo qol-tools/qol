@@ -4,7 +4,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::geometry;
+use crate::geometry::{self, monitor_label, rect_label};
 use crate::{platform, Config, Rect};
 
 const STATE_FILE_NAME: &str = "record-region.pid";
@@ -287,14 +287,6 @@ fn trace_capture_session(stage: &'static str, session: &platform::CaptureSession
         path_label(session.output_file.as_deref()),
         path_label(session.capture_file.as_deref())
     );
-}
-
-fn rect_label(rect: Rect) -> String {
-    format!("{}x{}+{},{}", rect.w, rect.h, rect.x, rect.y)
-}
-
-fn monitor_label(monitor: crate::Monitor) -> String {
-    format!("{}x{}+{},{}", monitor.w, monitor.h, monitor.x, monitor.y)
 }
 
 fn path_label(path: Option<&Path>) -> String {
