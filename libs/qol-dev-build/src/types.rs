@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::dev::core::BuildStatus;
+use crate::core::BuildStatus;
 
 pub(crate) const DEV_BUILD_STATE_FILE: &str = "dev/build-fingerprints.json";
 

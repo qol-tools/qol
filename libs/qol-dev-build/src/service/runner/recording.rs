@@ -1,6 +1,6 @@
-use crate::dev::build::planning::queue::SkipRecord;
-use crate::dev::build::types::PluginBuildPlan;
-use crate::dev::core::{self, BuildStatus};
+use crate::core::{self, BuildStatus};
+use crate::planning::queue::SkipRecord;
+use crate::types::PluginBuildPlan;
 
 use super::BuildRunner;
 
@@ -14,7 +14,7 @@ where
         if skip.remove_fingerprint {
             self.fingerprints.remove(&plan.plugin_id);
         }
-        self.results.push(crate::dev::build::types::BuildResult {
+        self.results.push(crate::types::BuildResult {
             plugin_id: plan.plugin_id.clone(),
             success: true,
             output: skip.output,

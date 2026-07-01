@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::dev::adapters::BuildFingerprintStore;
+use crate::adapters::BuildFingerprintStore;
 
 use super::super::types::BuildRun;
 

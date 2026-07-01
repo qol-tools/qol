@@ -1,8 +1,8 @@
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use crate::dev::core::progress_estimator::CargoProgressEstimator;
-use crate::dev::core::progress_parser::CargoProgressSnapshot;
+use crate::core::progress_estimator::CargoProgressEstimator;
+use crate::core::progress_parser::CargoProgressSnapshot;
 
 pub(super) fn emit_progress<F>(rx: &Receiver<CargoProgressSnapshot>, on_progress: &mut F)
 where

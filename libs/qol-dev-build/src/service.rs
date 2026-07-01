@@ -5,8 +5,8 @@ mod runner;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::dev::adapters::{BuildFingerprintStore, CargoPluginBuilder, CoreEventSink};
-use crate::dev::core;
+use crate::adapters::{BuildFingerprintStore, CargoPluginBuilder, CoreEventSink};
+use crate::core;
 
 use super::cargo_build::CargoCommandPluginBuilder;
 use super::fingerprint_store::JSON_BUILD_FINGERPRINT_STORE;

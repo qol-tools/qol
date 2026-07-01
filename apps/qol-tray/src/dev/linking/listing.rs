@@ -7,11 +7,8 @@ pub fn list_linked_plugins(config_dir: &Path) -> Result<Vec<LinkedPlugin>, Strin
     let links = super::active_dev_links(config_dir);
     let known_fingerprints = crate::dev::load_build_fingerprints(config_dir);
     let branch = super::get_active_worktree_branch(config_dir);
-    let plans = super::super::build::plan_linked_plugin_builds(
-        &links,
-        &known_fingerprints,
-        branch.as_deref(),
-    );
+    let plans =
+        qol_dev_build::plan_linked_plugin_builds(&links, &known_fingerprints, branch.as_deref());
     let log_controls = crate::logging::load_all_plugin_controls(config_dir);
     let plans_by_id: HashMap<String, _> = plans
         .into_iter()
@@ -33,7 +30,7 @@ pub fn list_linked_plugins(config_dir: &Path) -> Result<Vec<LinkedPlugin>, Strin
 fn build_plugin_entry(
     id: &str,
     path: &Path,
-    plan: Option<&crate::dev::build::PluginBuildPlan>,
+    plan: Option<&qol_dev_build::PluginBuildPlan>,
     name: String,
     version: String,
     log_control: crate::logging::LogControl,

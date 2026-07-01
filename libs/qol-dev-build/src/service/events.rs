@@ -1,4 +1,4 @@
-use crate::dev::core::{self, BuildStatus, CoreBuildResult, CoreInput, CoreState};
+use crate::core::{self, BuildStatus, CoreBuildResult, CoreInput, CoreState};
 
 use super::super::types::{BuildResult, PluginBuildProgress};
 

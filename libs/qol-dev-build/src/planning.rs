@@ -1,14 +1,14 @@
-pub(in crate::dev::build) mod queue;
+pub(crate) mod queue;
 mod rebuild_reason;
 mod selection;
-pub(crate) mod worktree;
+pub mod worktree;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::types::PluginBuildPlan;
 
-pub(crate) fn plan_linked_plugin_builds(
+pub fn plan_linked_plugin_builds(
     dev_links: &HashMap<String, PathBuf>,
     known_fingerprints: &HashMap<String, String>,
     worktree_branch: Option<&str>,
@@ -23,11 +23,11 @@ pub(crate) fn plan_linked_plugin_builds(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dev::build::fingerprint::fingerprint_plugin;
-    use crate::dev::build::{
+    use crate::core::BuildStatus;
+    use crate::fingerprint::fingerprint_plugin;
+    use crate::{
         build_linked_plugins_with_progress, load_build_fingerprints, save_build_fingerprints,
     };
-    use crate::dev::core::BuildStatus;
     use std::fs;
     use std::path::Path;
     use tempfile::TempDir;

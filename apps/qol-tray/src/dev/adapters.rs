@@ -1,8 +1,8 @@
-use crate::dev::core::{BuildStatus, CoreEvent};
+use crate::dev::core::BuildStatus;
 use crate::dev::state::BuildResultInfo;
-use crate::dev::BuildResult;
 use std::collections::HashMap;
-use std::path::Path;
+
+pub use qol_dev_build::adapters::{BuildFingerprintStore, CargoPluginBuilder, CoreEventSink};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BuildStateProgress {
@@ -19,25 +19,6 @@ pub trait BuildStateStore: Send + Sync {
     fn last_results(&self) -> Option<Vec<BuildResultInfo>>;
     fn is_building(&self) -> bool;
     fn snapshot(&self) -> HashMap<String, BuildStateProgress>;
-}
-
-pub trait CoreEventSink: Send + Sync {
-    fn publish(&self, event: CoreEvent);
-}
-
-pub trait CargoPluginBuilder: Send + Sync {
-    fn build_plugin_with_progress(
-        &self,
-        plugin_id: &str,
-        path: &Path,
-        on_progress: &mut dyn FnMut(u8, String),
-    ) -> BuildResult;
-}
-
-pub trait BuildFingerprintStore: Send + Sync {
-    fn load(&self, config_dir: &Path) -> HashMap<String, String>;
-    fn save(&self, config_dir: &Path, fingerprints: &HashMap<String, String>)
-        -> Result<(), String>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

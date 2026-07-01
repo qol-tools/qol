@@ -5368,6 +5368,7 @@ dependencies = [
  "qol-config",
  "qol-conventions",
  "qol-plugin-api",
+ "qol-plugin-daemon",
  "qol-runtime",
  "serde",
  "serde_json",
@@ -5713,6 +5714,8 @@ dependencies = [
  "libc",
  "qol-config",
  "qol-conventions",
+ "qol-dev-build",
+ "qol-workspace",
  "ratatui",
  "serde",
  "serde_json",
@@ -5758,6 +5761,21 @@ dependencies = [
 [[package]]
 name = "qol-conventions"
 version = "0.1.0"
+
+[[package]]
+name = "qol-dev-build"
+version = "1.0.0"
+dependencies = [
+ "log",
+ "proptest",
+ "qol-plugin-api",
+ "qol-workspace",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
+ "walkdir",
+]
 
 [[package]]
 name = "qol-frecency"
@@ -5922,10 +5940,12 @@ dependencies = [
  "qol-apps",
  "qol-config",
  "qol-conventions",
+ "qol-dev-build",
  "qol-hotkeys",
  "qol-migrations",
  "qol-plugin-api",
  "qol-runtime",
+ "qol-workspace",
  "rand 0.9.4",
  "reqwest",
  "rust-embed",
@@ -5957,6 +5977,19 @@ dependencies = [
  "qol-search",
  "serde-wasm-bindgen",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "qol-workspace"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "qol-conventions",
+ "qol-plugin-api",
+ "serde",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
+ "walkdir",
 ]
 
 [[package]]

@@ -4,9 +4,9 @@ mod recording;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::dev::adapters::CargoPluginBuilder;
-use crate::dev::build::planning::queue::{classify_plan, queued_plugins, PlanDisposition};
-use crate::dev::core::{self, BuildStatus};
+use crate::adapters::CargoPluginBuilder;
+use crate::core::{self, BuildStatus};
+use crate::planning::queue::{classify_plan, queued_plugins, PlanDisposition};
 
 use super::super::types::{BuildResult, BuildRun, PluginBuildPlan};
 use super::events::CoreEventEmitter;

@@ -3,7 +3,7 @@ use std::process::{ChildStderr, ChildStdout};
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 
-use crate::dev::core::progress_parser::{
+use crate::core::progress_parser::{
     drain_console_segments, parse_console_segment, CargoProgressSnapshot,
 };
 

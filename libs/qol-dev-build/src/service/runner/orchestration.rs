@@ -1,9 +1,9 @@
 use std::sync::mpsc;
 use std::sync::Mutex;
 
-use crate::dev::build::planning::queue::PlanDisposition;
-use crate::dev::build::types::{BuildResult, BuildRun, PluginBuildPlan};
-use crate::dev::core::{self, BuildStatus};
+use crate::core::{self, BuildStatus};
+use crate::planning::queue::PlanDisposition;
+use crate::types::{BuildResult, BuildRun, PluginBuildPlan};
 
 use super::{classify, BuildRunner};
 
@@ -141,7 +141,7 @@ fn update_fingerprint(
     fingerprints: &mut std::collections::HashMap<String, String>,
     plan: &PluginBuildPlan,
 ) {
-    if let Some(fp) = crate::dev::build::fingerprint::fingerprint_plugin(&plan.path)
+    if let Some(fp) = crate::fingerprint::fingerprint_plugin(&plan.path)
         .ok()
         .or_else(|| plan.current_fingerprint.clone())
     {

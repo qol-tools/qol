@@ -4,15 +4,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use super::super::types::BuildResult;
-use super::{spawn_piped, CargoChild};
 use crate::paths;
+use qol_dev_build::cargo_build::{spawn_piped, CargoChild};
+use qol_dev_build::BuildResult;
 
 static LAST_ARTIFACT_COUNT: AtomicU32 = AtomicU32::new(0);
 
 const QOL_TRAY_ID: &str = "qol-tray";
 
-pub(super) fn build_qol_tray_self_with_progress<F>(
+pub fn build_qol_tray_self_with_progress<F>(
     repo_root: Option<&Path>,
     mut on_progress: F,
 ) -> BuildResult
@@ -39,7 +39,7 @@ where
     finish_build(&mut child, actual_done, combined, &mut on_progress)
 }
 
-pub(super) fn resolve_qol_tray_self_root(repo_root: Option<&Path>) -> std::path::PathBuf {
+pub fn resolve_qol_tray_self_root(repo_root: Option<&Path>) -> std::path::PathBuf {
     let repo_root = repo_root
         .map(Path::to_path_buf)
         .unwrap_or_else(paths::repo_root_from_manifest_dir);
@@ -172,7 +172,7 @@ fn finish_build<F>(
 where
     F: FnMut(u8, String),
 {
-    super::finish_build(
+    qol_dev_build::cargo_build::finish_build(
         QOL_TRAY_ID,
         child,
         combined,
@@ -192,11 +192,11 @@ where
 }
 
 fn failed_build(output: String) -> BuildResult {
-    super::failed_build(QOL_TRAY_ID, output)
+    qol_dev_build::cargo_build::failed_build(QOL_TRAY_ID, output)
 }
 
 fn finished_build(output: String) -> BuildResult {
-    super::finished_build(QOL_TRAY_ID, output)
+    qol_dev_build::cargo_build::finished_build(QOL_TRAY_ID, output)
 }
 
 #[cfg(test)]

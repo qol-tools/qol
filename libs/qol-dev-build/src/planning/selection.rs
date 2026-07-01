@@ -52,7 +52,7 @@ fn check_plugin_platform(path: &Path) -> PlatformSupport {
 }
 
 enum ManifestLoad {
-    Ok(Box<crate::plugins::PluginManifest>),
+    Ok(Box<qol_plugin_api::manifest::PluginManifest>),
     Missing,
     Unparseable(String),
 }
@@ -66,7 +66,7 @@ fn load_manifest(path: &Path) -> ManifestLoad {
         }
         Err(error) => return ManifestLoad::Unparseable(error.to_string()),
     };
-    match toml::from_str::<crate::plugins::PluginManifest>(&content) {
+    match toml::from_str::<qol_plugin_api::manifest::PluginManifest>(&content) {
         Ok(manifest) => ManifestLoad::Ok(Box::new(manifest)),
         Err(error) => ManifestLoad::Unparseable(error.to_string()),
     }
@@ -93,7 +93,7 @@ fn supported_platform() -> PlatformSupport {
     }
 }
 
-fn unsupported_platform(manifest: crate::plugins::PluginManifest) -> PlatformSupport {
+fn unsupported_platform(manifest: qol_plugin_api::manifest::PluginManifest) -> PlatformSupport {
     let declared = manifest
         .plugin
         .platforms
