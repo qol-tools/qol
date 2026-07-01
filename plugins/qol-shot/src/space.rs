@@ -1,4 +1,4 @@
-use crate::Rect;
+use crate::{Monitor, Rect};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureKind {
@@ -129,13 +129,15 @@ pub fn captured_pixels(selection: Rect, displays: &[DisplayScale]) -> u64 {
 }
 
 fn intersection_area(a: Rect, b: Rect) -> u64 {
-    let left = a.x.max(b.x);
-    let top = a.y.max(b.y);
-    let right = (a.x + a.w).min(b.x + b.w);
-    let bottom = (a.y + a.h).min(b.y + b.h);
-    let width = (right - left).max(0) as u64;
-    let height = (bottom - top).max(0) as u64;
-    width * height
+    let bounds = Monitor {
+        x: b.x,
+        y: b.y,
+        w: b.w,
+        h: b.h,
+    };
+    crate::geometry::rect_intersection(a, bounds)
+        .map(|r| r.w as u64 * r.h as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

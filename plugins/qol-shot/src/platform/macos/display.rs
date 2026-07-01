@@ -105,29 +105,7 @@ fn screencapture_display_order(display_ids: &[CGDirectDisplayID]) -> Vec<CGDirec
 }
 
 fn union_bounds(monitors: &[Monitor]) -> Result<Monitor> {
-    let first = monitors
-        .first()
-        .copied()
-        .ok_or_else(|| anyhow!("no active displays found"))?;
-
-    let mut left = first.x;
-    let mut top = first.y;
-    let mut right = first.x + first.w;
-    let mut bottom = first.y + first.h;
-
-    for monitor in monitors.iter().skip(1) {
-        left = left.min(monitor.x);
-        top = top.min(monitor.y);
-        right = right.max(monitor.x + monitor.w);
-        bottom = bottom.max(monitor.y + monitor.h);
-    }
-
-    Ok(Monitor {
-        x: left,
-        y: top,
-        w: right - left,
-        h: bottom - top,
-    })
+    crate::geometry::union_bounds(monitors).ok_or_else(|| anyhow!("no active displays found"))
 }
 
 fn monitor_from_cg_bounds(bounds: CGRect) -> Monitor {
@@ -144,16 +122,5 @@ fn round_i32(value: f64) -> i32 {
 }
 
 pub(super) fn rect_intersection(left: Rect, right: Monitor) -> Option<Rect> {
-    let x = left.x.max(right.x);
-    let y = left.y.max(right.y);
-    let right_edge = (left.x + left.w).min(right.x + right.w);
-    let bottom_edge = (left.y + left.h).min(right.y + right.h);
-    let w = right_edge - x;
-    let h = bottom_edge - y;
-
-    if w <= 0 || h <= 0 {
-        return None;
-    }
-
-    Some(Rect { x, y, w, h })
+    crate::geometry::rect_intersection(left, right)
 }

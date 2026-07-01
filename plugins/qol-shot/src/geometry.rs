@@ -87,7 +87,7 @@ fn rects_intersect(left: Rect, right: Monitor) -> bool {
     rect_intersection(left, right).is_some()
 }
 
-fn union_bounds(monitors: &[Monitor]) -> Option<Monitor> {
+pub(crate) fn union_bounds(monitors: &[Monitor]) -> Option<Monitor> {
     let first = monitors.first().copied()?;
     let mut left = first.x;
     let mut top = first.y;
