@@ -354,49 +354,13 @@ fn exec_shortcut(id: &str) -> i32 {
     0
 }
 
-/// Send a POST to the running daemon over loopback. Returns the HTTP status
-/// code and the response body. The `Origin` header is set to the loopback UI
-/// origin so the request passes `reject_cross_site_mutations`.
-fn post_to_daemon(path: &str, body: &str) -> std::io::Result<(u16, String)> {
-    use std::io::{Read, Write};
-    use std::net::{SocketAddr, TcpStream};
-
-    let addr: SocketAddr = ([127, 0, 0, 1], DEFAULT_PORT).into();
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))?;
-    let timeout = Some(Duration::from_secs(5));
-    let _ = stream.set_read_timeout(timeout);
-    let _ = stream.set_write_timeout(timeout);
-
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}",
-        port = DEFAULT_PORT,
-        len = body.len(),
-    );
-    stream.write_all(request.as_bytes())?;
-
-    let mut buf = Vec::new();
-    let _ = stream.read_to_end(&mut buf);
-    let response = String::from_utf8_lossy(&buf);
-    let status = response
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|code| code.parse::<u16>().ok())
-        .unwrap_or(0);
-    let body = response
-        .split_once("\r\n\r\n")
-        .map(|(_, b)| b.to_string())
-        .unwrap_or_default();
-    Ok((status, body))
-}
-
 /// Ask the running daemon to navigate an already-open UI tab to `route`.
 /// Returns true only when a tab was subscribed and the event was delivered;
 /// any connection error or `delivered:false` returns false so the caller
 /// falls back to opening a fresh browser tab.
 fn navigated_open_tab(route: &str) -> bool {
     let body = serde_json::json!({ "route": route }).to_string();
-    match post_to_daemon("/api/navigate", &body) {
+    match qol_tray::local_http::post_to_daemon("/api/navigate", &body) {
         Ok((status, body)) if (200..300).contains(&status) => {
             serde_json::from_str::<serde_json::Value>(&body)
                 .ok()
@@ -409,7 +373,7 @@ fn navigated_open_tab(route: &str) -> bool {
 
 fn fire_action_request(plugin_id: &str, action_id: &str) -> i32 {
     let path = format!("/api/plugins/{plugin_id}/actions/{action_id}");
-    match post_to_daemon(&path, "") {
+    match qol_tray::local_http::post_to_daemon(&path, "") {
         Ok((status, _)) if (200..300).contains(&status) => 0,
         Ok((status, body)) => {
             let msg = if body.is_empty() {
