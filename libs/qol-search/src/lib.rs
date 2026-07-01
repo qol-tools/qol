@@ -103,6 +103,31 @@ fn score_pass(
     })
 }
 
+fn matching_windows<'a>(
+    query: &'a [char],
+    candidate_lower: &'a [char],
+) -> impl Iterator<Item = (usize, usize)> + 'a {
+    (0..=candidate_lower.len() - query.len()).filter_map(move |start| {
+        let end = start + query.len();
+        query
+            .iter()
+            .zip(candidate_lower[start..end].iter())
+            .all(|(q, c)| q == c)
+            .then_some((start, end))
+    })
+}
+
+fn keep_first_on_tie(matches: impl Iterator<Item = FuzzyMatch>) -> Option<FuzzyMatch> {
+    let mut best: Option<FuzzyMatch> = None;
+    for candidate_match in matches {
+        best = match best {
+            Some(current) if current.score <= candidate_match.score => Some(current),
+            _ => Some(candidate_match),
+        };
+    }
+    best
+}
+
 fn score_contiguous_pass(
     query: &[char],
     query_orig: &[char],
@@ -113,29 +138,15 @@ fn score_contiguous_pass(
         return None;
     }
 
-    let mut best: Option<FuzzyMatch> = None;
-    for start in 0..=candidate_lower.len() - query.len() {
-        if !query
-            .iter()
-            .zip(candidate_lower[start..start + query.len()].iter())
-            .all(|(q, c)| q == c)
-        {
-            continue;
-        }
-
-        let positions: Vec<usize> = (start..start + query.len()).collect();
-        let candidate_match = FuzzyMatch {
-            score: compute_score(&positions, candidate, query_orig),
-            positions,
-        };
-
-        best = match best {
-            Some(current) if current.score <= candidate_match.score => Some(current),
-            _ => Some(candidate_match),
-        };
-    }
-
-    best
+    keep_first_on_tie(
+        matching_windows(query, candidate_lower).map(|(start, end)| {
+            let positions: Vec<usize> = (start..end).collect();
+            FuzzyMatch {
+                score: compute_score(&positions, candidate, query_orig),
+                positions,
+            }
+        }),
+    )
 }
 
 fn score_word_match_pass(
@@ -148,38 +159,22 @@ fn score_word_match_pass(
         return None;
     }
 
-    let mut best: Option<FuzzyMatch> = None;
-    for start in 0..=candidate_lower.len() - query.len() {
-        if !query
-            .iter()
-            .zip(candidate_lower[start..start + query.len()].iter())
-            .all(|(q, c)| q == c)
-        {
-            continue;
-        }
+    keep_first_on_tie(
+        matching_windows(query, candidate_lower).filter_map(|(start, end)| {
+            let at_word_start = start == 0 || is_separator(candidate[start - 1]);
+            let at_word_end = end == candidate_lower.len() || is_separator(candidate[end]);
+            if !at_word_start || !at_word_end {
+                return None;
+            }
 
-        let end = start + query.len();
-        let at_word_start = start == 0 || is_separator(candidate[start - 1]);
-        let at_word_end = end == candidate_lower.len() || is_separator(candidate[end]);
-
-        if !at_word_start || !at_word_end {
-            continue;
-        }
-
-        let positions: Vec<usize> = (start..end).collect();
-        let word_bonus = -10 * query.len() as i32;
-        let candidate_match = FuzzyMatch {
-            score: compute_score(&positions, candidate, query_orig) + word_bonus,
-            positions,
-        };
-
-        best = match best {
-            Some(current) if current.score <= candidate_match.score => Some(current),
-            _ => Some(candidate_match),
-        };
-    }
-
-    best
+            let positions: Vec<usize> = (start..end).collect();
+            let word_bonus = -10 * query.len() as i32;
+            Some(FuzzyMatch {
+                score: compute_score(&positions, candidate, query_orig) + word_bonus,
+                positions,
+            })
+        }),
+    )
 }
 
 fn is_separator(c: char) -> bool {
