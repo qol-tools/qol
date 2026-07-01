@@ -142,57 +142,34 @@ pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result
     if config.audio.enabled {
         let has_mic = config.audio.inputs.iter().any(|input| input == "mic");
         let has_system = config.audio.inputs.iter().any(|input| input == "system");
-        if has_mic && has_system {
-            args.extend_from_slice(&[
-                "-thread_queue_size".to_string(),
-                "128".to_string(),
-                "-f".to_string(),
-                "pulse".to_string(),
-                "-i".to_string(),
-                config.audio.mic_device.clone(),
-                "-thread_queue_size".to_string(),
-                "128".to_string(),
-                "-f".to_string(),
-                "pulse".to_string(),
-                "-i".to_string(),
-                format!("{}.monitor", config.audio.system_device),
-                "-filter_complex".to_string(),
-                "[1:a][2:a]amerge=inputs=2[aout]".to_string(),
-                "-map".to_string(),
-                "0:v".to_string(),
-                "-map".to_string(),
-                "[aout]".to_string(),
-                "-c:a".to_string(),
-                "aac".to_string(),
-                "-b:a".to_string(),
-                "192k".to_string(),
-            ]);
-        } else if has_mic {
-            args.extend_from_slice(&[
-                "-thread_queue_size".to_string(),
-                "128".to_string(),
-                "-f".to_string(),
-                "pulse".to_string(),
-                "-i".to_string(),
-                config.audio.mic_device.clone(),
-                "-c:a".to_string(),
-                "aac".to_string(),
-                "-b:a".to_string(),
-                "192k".to_string(),
-            ]);
-        } else if has_system {
-            args.extend_from_slice(&[
-                "-thread_queue_size".to_string(),
-                "128".to_string(),
-                "-f".to_string(),
-                "pulse".to_string(),
-                "-i".to_string(),
-                format!("{}.monitor", config.audio.system_device),
-                "-c:a".to_string(),
-                "aac".to_string(),
-                "-b:a".to_string(),
-                "192k".to_string(),
-            ]);
+
+        let mut audio_inputs = Vec::new();
+        if has_mic {
+            audio_inputs.push(config.audio.mic_device.clone());
+        }
+        if has_system {
+            audio_inputs.push(format!("{}.monitor", config.audio.system_device));
+        }
+
+        for input in &audio_inputs {
+            args.extend(["-thread_queue_size", "128", "-f", "pulse", "-i"].map(str::to_string));
+            args.push(input.clone());
+        }
+        if audio_inputs.len() == 2 {
+            args.extend(
+                [
+                    "-filter_complex",
+                    "[1:a][2:a]amerge=inputs=2[aout]",
+                    "-map",
+                    "0:v",
+                    "-map",
+                    "[aout]",
+                ]
+                .map(str::to_string),
+            );
+        }
+        if !audio_inputs.is_empty() {
+            args.extend(["-c:a", "aac", "-b:a", "192k"].map(str::to_string));
         }
     }
 
