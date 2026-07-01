@@ -1,0 +1,166 @@
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Style, Stylize};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Paragraph};
+use ratatui::Frame;
+
+use super::Dash;
+
+pub(super) struct SignBox<'a> {
+    pub(super) title: &'a str,
+    pub(super) rows: Vec<Line<'a>>,
+}
+
+impl SignBox<'_> {
+    pub(super) const CHROME_ROWS: u16 = 4;
+
+    pub(super) fn capacity(height: u16) -> usize {
+        height.saturating_sub(Self::CHROME_ROWS) as usize
+    }
+
+    pub(super) fn render(self, frame: &mut Frame, area: Rect, accent: Color) {
+        let body = Rect {
+            y: area.y + 1,
+            height: area.height.saturating_sub(1),
+            ..area
+        };
+        let block = Block::bordered().border_style(Style::new().fg(accent));
+        let inner = block.inner(body);
+        frame.render_widget(block, body);
+        let rows_area = Rect {
+            y: inner.y + 1,
+            height: inner.height.saturating_sub(1),
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(self.rows), rows_area);
+        Sign {
+            content: Line::from(self.title.to_string().fg(accent).bold()),
+        }
+        .render(frame, body, accent);
+    }
+}
+
+pub(super) struct Sign {
+    pub(super) content: Line<'static>,
+}
+
+impl Sign {
+    pub(super) fn render(self, frame: &mut Frame, body: Rect, accent: Color) {
+        let span = self.content.width() as u16 + 2;
+        let width = span + 2;
+        if width + 2 > body.width {
+            return;
+        }
+        let x = body.x + (body.width - width) / 2;
+        let bar = "─".repeat(span as usize);
+        render_overlay(
+            frame,
+            x,
+            body.y.saturating_sub(1),
+            Line::from(format!("╭{bar}╮").fg(accent)),
+        );
+        let mut middle = vec!["┤ ".fg(accent)];
+        middle.extend(self.content.spans);
+        middle.push(" ├".fg(accent));
+        render_overlay(frame, x, body.y, Line::from(middle));
+        render_overlay(
+            frame,
+            x,
+            body.y + 1,
+            Line::from(format!("╰{bar}╯").fg(accent)),
+        );
+    }
+}
+
+fn render_overlay(frame: &mut Frame, x: u16, y: u16, line: Line<'static>) {
+    let width = line.width() as u16;
+    frame.render_widget(Paragraph::new(line), Rect::new(x, y, width, 1));
+}
+
+pub(super) const ITEM_GAP: u16 = 1;
+
+fn space_rows(rows: Vec<Line>, gap: u16) -> Vec<Line> {
+    if gap == 0 || rows.len() <= 1 {
+        return rows;
+    }
+    let last = rows.len() - 1;
+    let mut spaced = Vec::with_capacity(rows.len() + last * gap as usize);
+    for (index, row) in rows.into_iter().enumerate() {
+        spaced.push(row);
+        if index != last {
+            spaced.extend((0..gap).map(|_| Line::from("")));
+        }
+    }
+    spaced
+}
+
+pub(super) fn spaced_height(items: usize, gap: u16) -> u16 {
+    items as u16 + items.saturating_sub(1) as u16 * gap
+}
+
+pub(super) fn list_capacity(height: u16) -> usize {
+    (height as usize + ITEM_GAP as usize) / (1 + ITEM_GAP as usize)
+}
+
+pub(super) fn view_content(frame: &mut Frame, area: Rect, lines: Vec<Line>) {
+    frame.render_widget(Paragraph::new(space_rows(lines, ITEM_GAP)), area);
+}
+
+pub(super) fn list_window(dash: &mut Dash, area: Rect, total: usize) -> (usize, usize) {
+    let height = list_capacity(area.height);
+    dash.log_height = height;
+    dash.scroll_offset = super::clamp_offset(total, height, dash.scroll_offset);
+    (
+        super::window_start(total, height, dash.scroll_offset),
+        height,
+    )
+}
+
+pub(super) fn list_status(total: usize, scroll_offset: usize) -> String {
+    let mode = if scroll_offset == 0 {
+        "follow"
+    } else {
+        "scroll"
+    };
+    format!("{total} lines · {mode}")
+}
+
+pub(super) fn styled_line(raw: &str) -> Line<'_> {
+    use ansi_to_tui::IntoText;
+    let Ok(text) = raw.into_text() else {
+        return Line::from(raw);
+    };
+    text.lines
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| Line::from(raw))
+}
+
+pub(super) fn format_duration(elapsed: Duration) -> String {
+    let total = elapsed.as_secs();
+    let (minutes, seconds) = (total / 60, total % 60);
+    if minutes >= 60 {
+        return format!("{}h{:02}m", minutes / 60, minutes % 60);
+    }
+    format!("{minutes}m{seconds:02}s")
+}
+
+pub(super) fn relative_age(now_ms: u64, then_ms: u64) -> String {
+    let seconds = now_ms.saturating_sub(then_ms) / 1000;
+    match seconds {
+        0..=9 => "just now".to_string(),
+        10..=59 => format!("{seconds}s ago"),
+        60..=3599 => format!("{}m ago", seconds / 60),
+        3600..=86399 => format!("{}h ago", seconds / 3600),
+        _ => format!("{}d ago", seconds / 86400),
+    }
+}
+
+pub(super) fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
+}
