@@ -60,15 +60,17 @@ fn resolve_window(
     Some(wid)
 }
 
-pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool {
-    let Ok((conn, screen_num)) = x11rb::connect(None) else {
-        return false;
-    };
+fn connect_with_atoms() -> Option<(impl Connection, usize, u32, u32, u32, u32)> {
+    let (conn, screen_num) = x11rb::connect(None).ok()?;
     let root = conn.setup().roots[screen_num].root;
-    let list_atom = intern(&conn, b"_NET_CLIENT_LIST");
-    let name_atom = intern(&conn, b"_NET_WM_NAME");
-    let utf8_atom = intern(&conn, b"UTF8_STRING");
-    let (Some(list_atom), Some(name_atom), Some(utf8_atom)) = (list_atom, name_atom, utf8_atom)
+    let list_atom = intern(&conn, b"_NET_CLIENT_LIST")?;
+    let name_atom = intern(&conn, b"_NET_WM_NAME")?;
+    let utf8_atom = intern(&conn, b"UTF8_STRING")?;
+    Some((conn, screen_num, root, list_atom, name_atom, utf8_atom))
+}
+
+pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool {
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
         return false;
     };
@@ -86,14 +88,7 @@ fn set_window_bounds_by_title(
     gpui_width: f64,
     gpui_height: f64,
 ) -> bool {
-    let Ok((conn, screen_num)) = x11rb::connect(None) else {
-        return false;
-    };
-    let root = conn.setup().roots[screen_num].root;
-    let list_atom = intern(&conn, b"_NET_CLIENT_LIST");
-    let name_atom = intern(&conn, b"_NET_WM_NAME");
-    let utf8_atom = intern(&conn, b"UTF8_STRING");
-    let (Some(list_atom), Some(name_atom), Some(utf8_atom)) = (list_atom, name_atom, utf8_atom)
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
         return false;
     };
@@ -153,14 +148,7 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
     #[cfg(debug_assertions)]
     let reason = crate::popup_window::change_reason();
     let target = opacity_to_cardinal(opacity);
-    let Ok((conn, screen_num)) = x11rb::connect(None) else {
-        return false;
-    };
-    let root = conn.setup().roots[screen_num].root;
-    let list_atom = intern(&conn, b"_NET_CLIENT_LIST");
-    let name_atom = intern(&conn, b"_NET_WM_NAME");
-    let utf8_atom = intern(&conn, b"UTF8_STRING");
-    let (Some(list_atom), Some(name_atom), Some(utf8_atom)) = (list_atom, name_atom, utf8_atom)
+    let Some((conn, screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
         return false;
     };
@@ -195,14 +183,7 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
 
 pub fn show_window_by_title(title: &str) -> bool {
     let reason = crate::popup_window::change_reason();
-    let Ok((conn, screen_num)) = x11rb::connect(None) else {
-        return false;
-    };
-    let root = conn.setup().roots[screen_num].root;
-    let list_atom = intern(&conn, b"_NET_CLIENT_LIST");
-    let name_atom = intern(&conn, b"_NET_WM_NAME");
-    let utf8_atom = intern(&conn, b"UTF8_STRING");
-    let (Some(list_atom), Some(name_atom), Some(utf8_atom)) = (list_atom, name_atom, utf8_atom)
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
         return false;
     };
@@ -266,14 +247,7 @@ fn show_window_state(conn: &impl Connection, root: u32, wid: u32, active: Option
 }
 
 pub fn configure_overlay_window(title: &str) -> bool {
-    let Ok((conn, screen_num)) = x11rb::connect(None) else {
-        return false;
-    };
-    let root = conn.setup().roots[screen_num].root;
-    let list_atom = intern(&conn, b"_NET_CLIENT_LIST");
-    let name_atom = intern(&conn, b"_NET_WM_NAME");
-    let utf8_atom = intern(&conn, b"UTF8_STRING");
-    let (Some(list_atom), Some(name_atom), Some(utf8_atom)) = (list_atom, name_atom, utf8_atom)
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
         return false;
     };
@@ -347,14 +321,7 @@ pub fn disable_window_shadow(_title: &str) -> bool {
 }
 
 pub fn configure_popup_window(title: &str) -> bool {
-    let Ok((conn, screen_num)) = x11rb::connect(None) else {
-        return false;
-    };
-    let root = conn.setup().roots[screen_num].root;
-    let list_atom = intern(&conn, b"_NET_CLIENT_LIST");
-    let name_atom = intern(&conn, b"_NET_WM_NAME");
-    let utf8_atom = intern(&conn, b"UTF8_STRING");
-    let (Some(list_atom), Some(name_atom), Some(utf8_atom)) = (list_atom, name_atom, utf8_atom)
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
         return false;
     };
@@ -371,14 +338,7 @@ pub fn configure_popup_window(title: &str) -> bool {
 }
 
 pub fn make_override_redirect(title: &str) -> bool {
-    let Ok((conn, screen_num)) = x11rb::connect(None) else {
-        return false;
-    };
-    let root = conn.setup().roots[screen_num].root;
-    let list_atom = intern(&conn, b"_NET_CLIENT_LIST");
-    let name_atom = intern(&conn, b"_NET_WM_NAME");
-    let utf8_atom = intern(&conn, b"UTF8_STRING");
-    let (Some(list_atom), Some(name_atom), Some(utf8_atom)) = (list_atom, name_atom, utf8_atom)
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
         return false;
     };
