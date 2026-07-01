@@ -11,6 +11,8 @@ use crate::workspace::{
     BuildablePlugin,
 };
 use anyhow::{bail, Context, Result};
+use qol_dev_build::adapters::CoreEventSink;
+use qol_dev_build::core::CoreEvent;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -114,13 +116,78 @@ fn boot_preflight(
     Ok(buildable)
 }
 
+struct CliEventSink {
+    verbose: bool,
+}
+
+impl CoreEventSink for CliEventSink {
+    fn publish(&self, event: CoreEvent) {
+        let CoreEvent::BuildComplete { results } = event else {
+            return;
+        };
+        for result in results.iter().filter(|r| !r.skipped) {
+            let status = if result.success { "ok" } else { "failed" };
+            dev_step_label(
+                "build",
+                StepKind::Info,
+                &format!("{}: {status}", result.plugin_id),
+                self.verbose,
+            );
+        }
+    }
+}
+
+fn reload_linked_plugins(verbose: bool, skip_plugins: bool, branch: Option<&str>) -> Result<()> {
+    if skip_plugins {
+        dev_step_label("plugins", StepKind::Info, "skipped (-n)", verbose);
+        return Ok(());
+    }
+    let Some(config_dir) = qol_config::config_dir() else {
+        dev_step_label(
+            "plugins",
+            StepKind::Info,
+            "config dir unavailable, skipping",
+            verbose,
+        );
+        return Ok(());
+    };
+    let dev_links = qol_dev_build::registry::dev_linked_paths(&config_dir);
+    if dev_links.is_empty() {
+        dev_step_label(
+            "plugins",
+            StepKind::Info,
+            "no dev-linked plugins registered",
+            verbose,
+        );
+        return Ok(());
+    }
+    let sink = CliEventSink { verbose };
+    let run = qol_dev_build::default_build_application_service(&sink).run(
+        &dev_links,
+        Some(&config_dir),
+        branch,
+    );
+    let failed: Vec<&str> = run
+        .results
+        .iter()
+        .filter(|r| !r.success && !r.skipped)
+        .map(|r| r.plugin_id.as_str())
+        .collect();
+    if !failed.is_empty() {
+        eprintln!("qol dev: plugin build failed for: {}", failed.join(", "));
+        eprintln!("qol dev: continuing - recover via qol-tray GUI Recompile pane.");
+    }
+    Ok(())
+}
+
 pub(crate) fn prebuild(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
     let usage = format!("qol {DEV_PREBUILD_COMMAND} [worktree]");
     let branch = optional_single_arg(args, &usage)?;
     let root = repo_root()?;
     crate::setup::ensure_lockfile_merge_driver(&root);
     select_worktree_branch(&root, branch)?;
-    let _ = boot_preflight(&root, verbose, skip_plugins, true)?;
+    fix_rustfmt(&root, verbose)?;
+    reload_linked_plugins(verbose, skip_plugins, branch)?;
     build_qol_tray_dev(&root, verbose)?;
     build_qol_cli_debug(&root, verbose)?;
     dev_step_label("reload", StepKind::Success, "prebuilt", verbose);
