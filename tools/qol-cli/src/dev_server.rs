@@ -1,8 +1,8 @@
+use crate::dev_console::TrayHandle;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::json;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::process::Child;
 use std::time::{Duration, Instant};
 
 fn api_url(path: &str) -> String {
@@ -205,7 +205,7 @@ pub(crate) fn wait_for_shutdown_best_effort() {
     }
 }
 
-pub(crate) fn wait_for_health_or_exit(child: &mut Child) -> Result<()> {
+pub(crate) fn wait_for_health_or_exit(child: &mut TrayHandle) -> Result<()> {
     let deadline = Instant::now() + HEALTH_TIMEOUT;
     while Instant::now() < deadline {
         if health_ok() {

@@ -16,8 +16,8 @@ use crate::host_facade;
 
 use super::{
     spawn_forwarders, terminate_child, try_wait, Dash, RebuildState, Reload, ReloadOutcome,
-    CRASH_TAIL, HANDOFF_STOP_GRACE, HANDOFF_STOP_INTERVAL, PROMOTION_INTERVAL, PROMOTION_TIMEOUT,
-    SHADOW_READY_INTERVAL, SHADOW_READY_TIMEOUT,
+    TrayHandle, CRASH_TAIL, HANDOFF_STOP_GRACE, HANDOFF_STOP_INTERVAL, PROMOTION_INTERVAL,
+    PROMOTION_TIMEOUT, SHADOW_READY_INTERVAL, SHADOW_READY_TIMEOUT,
 };
 
 #[derive(Debug, Deserialize)]
@@ -137,7 +137,7 @@ pub(super) fn poll_reload(dash: &mut Dash) -> ReloadOutcome {
 }
 
 pub(super) fn restart_child_from_prebuilt(
-    child: &mut Child,
+    child: &mut TrayHandle,
     lines: &mut Receiver<String>,
     dash: &mut Dash,
 ) -> Result<()> {
@@ -147,7 +147,8 @@ pub(super) fn restart_child_from_prebuilt(
         .join("target")
         .join("debug")
         .join(host_facade::exe_name("qol-tray"));
-    let (mut next, next_lines, ready) = start_shadow_generation(&root, &binary, dash)?;
+    let (next, next_lines, ready) = start_shadow_generation(&root, &binary, dash)?;
+    let mut next = TrayHandle::Owned(next);
     if let Err(error) = retire_child_for_handoff(child) {
         terminate_child(&mut next);
         let _ = next.wait();
@@ -201,7 +202,7 @@ fn start_shadow_generation(
 
 fn promote_shadow_generation(
     port: u16,
-    child: &mut Child,
+    child: &mut TrayHandle,
     rx: &Receiver<String>,
     dash: &mut Dash,
 ) -> Result<()> {
@@ -342,7 +343,7 @@ fn read_shadow_ready(path: &Path) -> Result<ShadowGenerationReady> {
     Ok(ready)
 }
 
-fn retire_child_for_handoff(child: &mut Child) -> Result<()> {
+fn retire_child_for_handoff(child: &mut TrayHandle) -> Result<()> {
     terminate_child(child);
     let deadline = Instant::now() + HANDOFF_STOP_GRACE;
     while Instant::now() < deadline {

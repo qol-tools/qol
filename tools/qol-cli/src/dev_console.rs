@@ -75,6 +75,9 @@ use reload::{
     poll_reload, restart_child_from_prebuilt, start_reload, trigger_rebuild, trigger_reload,
 };
 
+mod tray_handle;
+pub(crate) use tray_handle::TrayHandle;
+
 mod emu_panel;
 use emu_panel::{
     act_emu, confirm_selected_candidate, drain_emu_runs, draw_emu, draw_emu_detail,
@@ -115,6 +118,7 @@ const ACK_TTL: Duration = Duration::from_secs(6);
 pub(crate) enum SessionEnd {
     ChildExited(ExitStatus),
     UserQuit,
+    SelfRestart { tray_pid: u32 },
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default, Serialize, Deserialize)]
@@ -553,7 +557,7 @@ impl Dash {
 }
 
 pub(crate) fn run_session(
-    child: &mut Child,
+    child: &mut TrayHandle,
     verbose: bool,
     plugins: Vec<String>,
     lines: Receiver<String>,
@@ -588,7 +592,7 @@ fn print_crash_tail(logs: &LogRing) {
 }
 
 fn plain_session(
-    child: &mut Child,
+    child: &mut TrayHandle,
     lines: &Receiver<String>,
     boot: Option<Receiver<String>>,
 ) -> Result<SessionEnd> {
@@ -665,7 +669,7 @@ fn handle_key(dash: &mut Dash, code: KeyCode, mods: KeyModifiers) -> KeyOutcome 
 
 fn tui_session(
     terminal: &mut DefaultTerminal,
-    child: &mut Child,
+    child: &mut TrayHandle,
     lines: &mut Receiver<String>,
     probes: &mut Probes,
     dash: &mut Dash,
@@ -728,6 +732,9 @@ fn tui_session(
         drain_emu_runs(dash);
         if let ReloadOutcome::Ready = poll_reload(dash) {
             restart_child_from_prebuilt(child, lines, dash)?;
+            return Ok(SessionEnd::SelfRestart {
+                tray_pid: child.id(),
+            });
         }
         if let Some(status) = try_wait(child)? {
             while let Ok(line) = lines.try_recv() {
@@ -1634,13 +1641,13 @@ fn act_plugin(dash: &mut Dash) {
     dash.pokes.links = true;
 }
 
-fn try_wait(child: &mut Child) -> Result<Option<ExitStatus>> {
+fn try_wait(child: &mut TrayHandle) -> Result<Option<ExitStatus>> {
     child
         .try_wait()
         .context("failed polling qol-tray dev process")
 }
 
-fn stop_child(child: &mut Child) -> Result<()> {
+fn stop_child(child: &mut TrayHandle) -> Result<()> {
     terminate_child(child);
     let deadline = Instant::now() + STOP_GRACE;
     while Instant::now() < deadline {
@@ -1654,15 +1661,8 @@ fn stop_child(child: &mut Child) -> Result<()> {
     Ok(())
 }
 
-fn terminate_child(child: &mut Child) {
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(child.id() as i32, libc::SIGTERM);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.kill();
-    }
+fn terminate_child(child: &mut TrayHandle) {
+    child.signal_term();
 }
 
 pub(crate) fn spawn_forwarders(child: &mut Child) -> Receiver<String> {

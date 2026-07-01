@@ -38,11 +38,16 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     let branch = optional_single_arg(args, "qol dev [worktree]")?;
     let root = repo_root()?;
     crate::setup::ensure_lockfile_merge_driver(&root);
-    let reload = std::env::var_os(RELOAD_ENV).is_some();
     if verbose {
         print_title("qol dev");
     }
     select_worktree_branch(&root, branch)?;
+
+    if let Some(tray_pid) = crate::self_exec::resume_tray_pid() {
+        return run_attached(tray_pid, verbose);
+    }
+
+    let reload = std::env::var_os(RELOAD_ENV).is_some();
     let buildable = boot_preflight(&root, verbose, skip_plugins, reload)?;
     let binary = dev_binary_path(&root);
     build_qol_tray_dev(&root, verbose)?;
@@ -63,20 +68,46 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         .spawn()
         .context("failed to start qol-tray dev process")?;
     let lines = dev_console::spawn_forwarders(&mut child);
+    let mut child = dev_console::TrayHandle::Owned(child);
 
     let plugin_names: Vec<String> = buildable.iter().map(|p| display_name(&p.dir)).collect();
     finish_boot(&mut child, &buildable, branch, verbose)?;
-    match dev_console::run_session(&mut child, verbose, plugin_names, lines, None)? {
+    let end = dev_console::run_session(&mut child, verbose, plugin_names, lines, None)?;
+    handle_session_end(end)
+}
+
+fn run_attached(tray_pid: u32, verbose: bool) -> Result<()> {
+    let mut child = dev_console::TrayHandle::Attached(tray_pid);
+    wait_for_health_or_exit(&mut child).context("dev server did not become healthy on reattach")?;
+    let (tx, lines) = std::sync::mpsc::channel();
+    let _ = tx.send(format!(
+        "[qol dev] reattached to existing qol-tray (pid {tray_pid}) - live tray console \
+         unavailable until the next full restart"
+    ));
+    let end = dev_console::run_session(&mut child, verbose, Vec::new(), lines, None)?;
+    handle_session_end(end)
+}
+
+fn handle_session_end(end: dev_console::SessionEnd) -> Result<()> {
+    match end {
         dev_console::SessionEnd::UserQuit => Ok(()),
         dev_console::SessionEnd::ChildExited(status) if status.success() => Ok(()),
         dev_console::SessionEnd::ChildExited(status) => {
             bail!("qol-tray dev process exited with {status}")
         }
+        dev_console::SessionEnd::SelfRestart { tray_pid } => {
+            let root = repo_root()?;
+            let binary = root
+                .join("target")
+                .join("debug")
+                .join(host_facade::exe_name("qol"));
+            crate::self_exec::replace_with(&binary, tray_pid)
+        }
     }
 }
 
 fn finish_boot(
-    child: &mut std::process::Child,
+    child: &mut dev_console::TrayHandle,
     buildable: &[BuildablePlugin],
     branch: Option<&str>,
     verbose: bool,

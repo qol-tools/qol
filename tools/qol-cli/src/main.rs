@@ -6,6 +6,7 @@ mod host_facade;
 mod platform;
 mod poller;
 mod progress;
+mod self_exec;
 mod setup;
 mod workspace;
 
