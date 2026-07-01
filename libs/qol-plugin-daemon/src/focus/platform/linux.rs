@@ -24,22 +24,17 @@ pub fn has_process_focus() -> bool {
         Err(_) => return true,
     };
 
-    let focus_opt = {
-        let conn = match &*guard {
-            Some(c) => c,
-            None => {
-                *guard = x11rb::connect(None).map(|(c, _)| c).ok();
-                if guard.is_none() {
-                    return true;
-                }
-                guard.as_ref().unwrap()
-            }
-        };
-        conn.get_input_focus()
-            .ok()
-            .and_then(|cookie| cookie.reply().ok())
-            .map(|reply| reply.focus)
-    };
+    if !ensure_connected(&mut guard) {
+        return true;
+    }
+
+    let focus_opt = guard
+        .as_ref()
+        .unwrap()
+        .get_input_focus()
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|reply| reply.focus);
 
     let focus = match focus_opt {
         Some(f) => f,
@@ -63,6 +58,14 @@ pub fn has_process_focus() -> bool {
         KNOWN_OWNED_WINDOW.store(focus, std::sync::atomic::Ordering::Relaxed);
     }
     owns
+}
+
+fn ensure_connected(guard: &mut Option<RustConnection>) -> bool {
+    if guard.is_some() {
+        return true;
+    }
+    *guard = x11rb::connect(None).map(|(c, _)| c).ok();
+    guard.is_some()
 }
 
 fn owns_window(conn: &impl Connection, mut window: u32, target_pid: u32) -> bool {
