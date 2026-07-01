@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use crate::fs_util::{current_os_subdir, legacy_sidecar_path, list_profile_dirs};
 use crate::{FileMigration, MigrationReport};
 
 pub struct V3_16ToV3_17DeviceToOs {
@@ -17,40 +18,6 @@ impl V3_16ToV3_17DeviceToOs {
     pub fn default_for_production() -> Self {
         Self::new_for_os(current_os_subdir())
     }
-}
-
-fn current_os_subdir() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "macos",
-        "windows" => "windows",
-        _ => "linux",
-    }
-}
-
-fn legacy_sidecar_path(src: &Path) -> PathBuf {
-    let mut name = src
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    name.push_str(".legacy");
-    src.with_file_name(name)
-}
-
-fn list_profile_dirs(profile_dir: &Path) -> Result<Vec<PathBuf>> {
-    if !profile_dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(profile_dir)
-        .with_context(|| format!("reading {}", profile_dir.display()))?
-    {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() && entry.path().join("manifest.json").is_file() {
-            out.push(entry.path());
-        }
-    }
-    out.sort();
-    Ok(out)
 }
 
 impl FileMigration for V3_16ToV3_17DeviceToOs {
@@ -137,6 +104,7 @@ impl FileMigration for V3_16ToV3_17DeviceToOs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     const OS_MAC: &str = "macos";
     const OS_LINUX: &str = "linux";

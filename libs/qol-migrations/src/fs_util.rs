@@ -51,6 +51,104 @@ fn sanitize(name: &str) -> String {
         .collect()
 }
 
+pub(crate) fn current_os_subdir() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "macos",
+        "windows" => "windows",
+        _ => "linux",
+    }
+}
+
+pub(crate) fn is_safe_path_component(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+}
+
+pub(crate) fn is_safe_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && !value.starts_with('-')
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+pub(crate) fn legacy_sidecar_path(src: &Path) -> PathBuf {
+    let mut name = src
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    name.push_str(".legacy");
+    src.with_file_name(name)
+}
+
+pub(crate) fn list_profile_dirs(profile_dir: &Path) -> Result<Vec<PathBuf>> {
+    if !profile_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(profile_dir)
+        .with_context(|| format!("reading {}", profile_dir.display()))?
+    {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() && entry.path().join("manifest.json").is_file() {
+            out.push(entry.path());
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+pub(crate) fn list_subdirs(dir: &Path) -> Vec<PathBuf> {
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = read_dir
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    out.sort();
+    out
+}
+
+/// Every plugin-configs dir on disk for a profile: core, device, and each os
+/// bucket. All buckets are walked so a synced foreign-OS profile is migrated
+/// too, not just the running OS.
+pub(crate) fn plugin_config_dirs(profile_dir: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![
+        profile_dir.join("core").join("plugin-configs"),
+        profile_dir.join("device").join("plugin-configs"),
+    ];
+    for bucket in list_subdirs(&profile_dir.join("os")) {
+        dirs.push(bucket.join("plugin-configs"));
+    }
+    dirs
+}
+
+pub(crate) fn hotkey_files(profile_dir: &Path) -> Vec<PathBuf> {
+    list_subdirs(&profile_dir.join("os"))
+        .into_iter()
+        .map(|bucket| bucket.join("hotkeys.json"))
+        .filter(|p| p.is_file())
+        .collect()
+}
+
+pub(crate) fn write_json_atomic(path: &Path, value: &serde_json::Value) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("no parent for {}", path.display()))?;
+    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let serialized = serde_json::to_string_pretty(value).context("serializing migrated json")?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serialized).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("finalizing {}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

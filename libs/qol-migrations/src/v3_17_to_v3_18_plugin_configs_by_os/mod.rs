@@ -1,7 +1,10 @@
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use crate::fs_util::{
+    current_os_subdir, is_safe_path_component, legacy_sidecar_path, list_profile_dirs,
+};
 use crate::{FileMigration, MigrationReport};
 
 pub struct V3_17ToV3_18PluginConfigsByOs {
@@ -15,14 +18,6 @@ impl V3_17ToV3_18PluginConfigsByOs {
 
     pub fn default_for_production() -> Self {
         Self::new_for_os(current_os_subdir())
-    }
-}
-
-fn current_os_subdir() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "macos",
-        "windows" => "windows",
-        _ => "linux",
     }
 }
 
@@ -108,32 +103,6 @@ fn single_platform(platforms: Option<&[String]>) -> Option<String> {
     }
 }
 
-fn is_safe_path_component(name: &str) -> bool {
-    !name.is_empty()
-        && name != "."
-        && name != ".."
-        && !name.contains('/')
-        && !name.contains('\\')
-        && !name.contains('\0')
-}
-
-fn list_profile_dirs(profile_root: &Path) -> Result<Vec<PathBuf>> {
-    if !profile_root.exists() {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(profile_root)
-        .with_context(|| format!("reading {}", profile_root.display()))?
-    {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() && entry.path().join("manifest.json").is_file() {
-            out.push(entry.path());
-        }
-    }
-    out.sort();
-    Ok(out)
-}
-
 fn read_lock(profile_dir: &Path) -> Option<LockFile> {
     let path = profile_dir.join("core").join("plugins.lock.json");
     if !path.is_file() {
@@ -153,15 +122,6 @@ fn read_plugin_manifest(plugins_dir: &Path, plugin_id: &str) -> Option<PluginTom
     }
     let raw = std::fs::read_to_string(&path).ok()?;
     toml::from_str(&raw).ok()
-}
-
-fn legacy_sidecar_path(src: &Path) -> PathBuf {
-    let mut name = src
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    name.push_str(".legacy");
-    src.with_file_name(name)
 }
 
 impl FileMigration for V3_17ToV3_18PluginConfigsByOs {
@@ -320,6 +280,7 @@ impl FileMigration for V3_17ToV3_18PluginConfigsByOs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     const OS_MAC: &str = "macos";
     const OS_LINUX: &str = "linux";

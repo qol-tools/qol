@@ -1,7 +1,7 @@
-use crate::fs_util::move_into_archive;
+use crate::fs_util::{current_os_subdir, list_profile_dirs, move_into_archive};
 use crate::{FileMigration, MigrationReport};
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub(crate) struct V3_15ToV3_16;
 
@@ -36,14 +36,6 @@ const INTERIOR_MOVES: &[InteriorMove] = &[
     },
 ];
 
-fn current_os_subdir() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "macos",
-        "windows" => "windows",
-        _ => "linux",
-    }
-}
-
 fn resolve_template(template: &str) -> String {
     template.replace("{os}", current_os_subdir())
 }
@@ -56,20 +48,6 @@ fn is_empty_dir(path: &Path) -> Result<bool> {
         .with_context(|| format!("reading {}", path.display()))?
         .next()
         .is_none())
-}
-
-fn list_profile_dirs(profile_dir: &Path) -> Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    let entries = std::fs::read_dir(profile_dir)
-        .with_context(|| format!("reading {}", profile_dir.display()))?;
-    for entry in entries {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() && entry.path().join("manifest.json").is_file() {
-            out.push(entry.path());
-        }
-    }
-    out.sort();
-    Ok(out)
 }
 
 impl FileMigration for V3_15ToV3_16 {
