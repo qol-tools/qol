@@ -1,4 +1,3 @@
-mod manifest;
 mod output;
 mod search;
 mod source;

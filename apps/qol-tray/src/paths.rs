@@ -309,16 +309,7 @@ pub fn open_url(url: &str) -> Result<()> {
 #[cfg(feature = "dev")]
 pub fn repo_root_from_manifest_dir() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut dir = manifest.as_path();
-    loop {
-        if dir.join(".worktrees").is_dir() {
-            return dir.to_path_buf();
-        }
-        match dir.parent() {
-            Some(parent) => dir = parent,
-            None => return manifest,
-        }
-    }
+    qol_workspace::workspace_root_from(&manifest).unwrap_or(manifest)
 }
 
 #[cfg(test)]

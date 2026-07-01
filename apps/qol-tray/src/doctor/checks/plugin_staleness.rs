@@ -157,7 +157,7 @@ fn dev_link_stale_findings(linked: &[dev::LinkedPlugin]) -> Vec<Finding> {
 }
 
 fn plugin_sources_dir() -> PathBuf {
-    crate::paths::repo_root_from_manifest_dir().join("plugins")
+    qol_workspace::plugins_dir(&crate::paths::repo_root_from_manifest_dir())
 }
 
 fn dir_has_plugin_toml(path: &Path) -> bool {

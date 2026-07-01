@@ -1,8 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use super::manifest;
-
 #[derive(Debug, Clone)]
 pub struct ClassifiedSource {
     pub id: String,
@@ -52,7 +50,7 @@ fn classify_source(
         return None;
     }
 
-    let source = read_source(path)?;
+    let source = qol_workspace::read_plugin_source(path)?;
     let (already_linked, installed_not_linked) = install_status(link_state, &source);
 
     Some(ClassifiedSource {
@@ -64,32 +62,6 @@ fn classify_source(
     })
 }
 
-#[derive(Debug, Clone)]
-struct SourceInfo {
-    id: String,
-    name: String,
-    path: PathBuf,
-}
-
-fn read_source(path: &Path) -> Option<SourceInfo> {
-    if !is_plugin_dir(path) {
-        return None;
-    }
-
-    let id = path.file_name()?.to_string_lossy().into_owned();
-    if crate::plugins::is_reserved_plugin_id(&id) {
-        return None;
-    }
-
-    let name = manifest::read_plugin_name(&path.join("plugin.toml")).unwrap_or_else(|| id.clone());
-
-    Some(SourceInfo {
-        id,
-        name,
-        path: path.to_path_buf(),
-    })
-}
-
 fn mark_source_path(path: &Path, seen_paths: &mut HashSet<PathBuf>) -> bool {
     seen_paths.insert(canonical_path(path))
 }
@@ -98,9 +70,10 @@ fn canonical_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-use super::search::is_plugin_dir;
-
-fn install_status(link_state: &LinkState<'_>, source: &SourceInfo) -> (bool, bool) {
+fn install_status(
+    link_state: &LinkState<'_>,
+    source: &qol_workspace::PluginSource,
+) -> (bool, bool) {
     let canonical_source = source.path.canonicalize().ok();
 
     let matches_linked = |links: &HashMap<String, PathBuf>| {

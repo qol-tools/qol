@@ -35,10 +35,7 @@ mod tests {
 
     #[test]
     fn returns_false_after_exhausting_attempts_when_port_closed() {
-        let addr = {
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.local_addr().unwrap()
-        };
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
         let interval = Duration::from_millis(5);
         let start = Instant::now();
         let ready = wait_for_tcp_ready(addr, 3, interval);

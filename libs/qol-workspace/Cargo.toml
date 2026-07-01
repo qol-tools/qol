@@ -1,0 +1,17 @@
+[package]
+name = "qol-workspace"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared workspace and plugin source discovery for qol-tools"
+
+[dependencies]
+anyhow = "1.0"
+qol-conventions.workspace = true
+qol-plugin-api.workspace = true
+serde.workspace = true
+toml.workspace = true
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3.8"

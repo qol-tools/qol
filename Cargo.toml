@@ -26,6 +26,7 @@ qol-headless = { path = "libs/qol-headless" }
 qol-hotkeys = { path = "libs/qol-hotkeys" }
 qol-plugin-api = { path = "libs/qol-plugin-api" }
 qol-plugin-daemon = { path = "libs/qol-plugin-daemon" }
+qol-workspace = { path = "libs/qol-workspace" }
 qol-tray = { path = "apps/qol-tray" }
 
 # shared external deps (hoisted from the ex-qol-libs workspace)

@@ -25,7 +25,9 @@ impl DoctorCheck for DevLinkPathsCheck {
             }
         };
 
-        let dev_root = std::env::current_dir().ok().map(|dir| dir.join("plugins"));
+        let dev_root = qol_workspace::workspace_root_from(Path::new(env!("CARGO_MANIFEST_DIR")))
+            .ok()
+            .map(|root| qol_workspace::plugins_dir(&root));
         let findings = collect_findings(
             registry,
             dev_root.as_deref(),

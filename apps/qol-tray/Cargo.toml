@@ -34,6 +34,7 @@ linux_evdev = ["dep:evdev"]
 
 [dependencies]
 qol-conventions.workspace = true
+qol-workspace.workspace = true
 # Core async runtime
 tokio = { version = "1.35", features = ["rt-multi-thread", "fs", "process", "net", "sync", "time", "macros"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
@@ -88,7 +89,7 @@ rust-embed = "8.0"
 
 semver = "1"
 
-# Filesystem traversal for dev plugin discovery
+# Filesystem traversal
 walkdir = "2"
 
 # Archive extraction for self-update

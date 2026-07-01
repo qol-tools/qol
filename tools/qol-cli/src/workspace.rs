@@ -1,10 +1,15 @@
 use crate::host_facade;
-use anyhow::{anyhow, bail, Context, Result};
-use std::env;
-use std::fs;
+use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use toml::Value;
+
+pub(crate) use qol_workspace::{
+    display_name, monorepo_plugin_dirs, non_host_plugin_packages, scan_buildable_plugins,
+    sibling_crates, BuildablePlugin,
+};
+
+#[cfg(test)]
+use qol_workspace::{cargo_package_name, discover_plugin_dirs};
 
 pub(crate) const DOCTOR_BUILD_ARGS: [&str; 7] = [
     "build",
@@ -29,241 +34,7 @@ pub(crate) fn cargo_build_command(root: &Path, args: &[&str]) -> Command {
 }
 
 pub(crate) fn repo_root() -> Result<PathBuf> {
-    workspace_root_from_cwd()
-}
-
-pub(crate) fn workspace_root_from_cwd() -> Result<PathBuf> {
-    let mut current = env::current_dir().context("failed to read current directory")?;
-    loop {
-        if cargo_manifest_declares_workspace(&current)? {
-            return Ok(current);
-        }
-        if !current.pop() {
-            bail!("run this from inside a qol-tray cargo workspace");
-        }
-    }
-}
-
-fn cargo_manifest_declares_workspace(path: &Path) -> Result<bool> {
-    let manifest = path.join("Cargo.toml");
-    if !manifest.is_file() {
-        return Ok(false);
-    }
-    let content = fs::read_to_string(&manifest)
-        .with_context(|| format!("failed to read {}", manifest.display()))?;
-    let parsed: Value = toml::from_str(&content)
-        .with_context(|| format!("failed to parse {}", manifest.display()))?;
-    Ok(parsed.get("workspace").is_some())
-}
-
-pub(crate) fn workspace_root(repo: &Path) -> Result<PathBuf> {
-    for path in repo.ancestors() {
-        if path.file_name().and_then(|name| name.to_str()) == Some("worktrees") {
-            let parent = path
-                .parent()
-                .ok_or_else(|| anyhow!("worktrees directory has no parent"))?;
-            return Ok(parent.to_path_buf());
-        }
-    }
-    let parent = repo
-        .parent()
-        .ok_or_else(|| anyhow!("repo has no parent directory"))?;
-    Ok(parent.to_path_buf())
-}
-
-pub(crate) fn sibling_crates(repo: &Path) -> Result<Vec<PathBuf>> {
-    let workspace = workspace_root(repo)?;
-    if !workspace.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut paths = Vec::new();
-    for entry in fs::read_dir(&workspace)
-        .with_context(|| format!("failed to read {}", workspace.display()))?
-    {
-        let path = entry?.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let name = match path.file_name().and_then(|name| name.to_str()) {
-            Some(name) => name,
-            None => continue,
-        };
-        if name == "qol-tray" {
-            continue;
-        }
-        if !name.starts_with("plugin-") && !name.starts_with("qol-") {
-            continue;
-        }
-        if !path.join("Cargo.toml").is_file() {
-            continue;
-        }
-        paths.push(path);
-    }
-    paths.sort();
-    Ok(paths)
-}
-
-pub(crate) fn monorepo_plugins_dir(workspace_root: &Path) -> Option<PathBuf> {
-    let candidate = workspace_root.join("plugins");
-    if candidate.is_dir() {
-        Some(candidate)
-    } else {
-        None
-    }
-}
-
-pub(crate) fn monorepo_plugin_dirs(workspace_root: &Path) -> Result<Vec<PathBuf>> {
-    let Some(plugins_dir) = monorepo_plugins_dir(workspace_root) else {
-        return Ok(Vec::new());
-    };
-    let mut paths = Vec::new();
-    for entry in fs::read_dir(&plugins_dir)
-        .with_context(|| format!("failed to read {}", plugins_dir.display()))?
-    {
-        let path = entry?.path();
-        if !path.is_dir() {
-            continue;
-        }
-        if !path.join("plugin.toml").is_file() {
-            continue;
-        }
-        paths.push(path);
-    }
-    paths.sort();
-    Ok(paths)
-}
-
-pub(crate) fn discover_plugin_dirs(workspace_root: &Path) -> Result<Vec<PathBuf>> {
-    let mono = monorepo_plugin_dirs(workspace_root)?;
-    if !mono.is_empty() {
-        return Ok(mono);
-    }
-    sibling_crates(workspace_root)
-}
-
-pub(crate) fn cargo_package_name(crate_dir: &Path) -> Result<String> {
-    let manifest = crate_dir.join("Cargo.toml");
-    let content = fs::read_to_string(&manifest)
-        .with_context(|| format!("failed to read {}", manifest.display()))?;
-    let parsed: Value = toml::from_str(&content)
-        .with_context(|| format!("failed to parse {}", manifest.display()))?;
-    parsed
-        .get("package")
-        .and_then(|package| package.get("name"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| anyhow!("{} has no [package].name", manifest.display()))
-}
-
-pub(crate) struct BuildablePlugin {
-    pub(crate) dir: PathBuf,
-    pub(crate) package_name: String,
-}
-
-pub(crate) struct PluginScan {
-    pub(crate) buildable: Vec<BuildablePlugin>,
-    pub(crate) skipped_host: usize,
-    pub(crate) skipped_no_runtime: usize,
-    pub(crate) skipped_reserved: usize,
-}
-
-pub(crate) fn scan_buildable_plugins(root: &Path) -> Result<PluginScan> {
-    let mut scan = PluginScan {
-        buildable: Vec::new(),
-        skipped_host: 0,
-        skipped_no_runtime: 0,
-        skipped_reserved: 0,
-    };
-    for dir in discover_plugin_dirs(root)? {
-        match PluginEligibility::for_path(&dir)? {
-            PluginEligibility::Buildable => {
-                let package_name = cargo_package_name(&dir)
-                    .with_context(|| format!("reading package name for {}", dir.display()))?;
-                scan.buildable.push(BuildablePlugin { dir, package_name });
-            }
-            PluginEligibility::SkippedHost => scan.skipped_host += 1,
-            PluginEligibility::SkippedNoRuntime => scan.skipped_no_runtime += 1,
-            PluginEligibility::SkippedReserved => scan.skipped_reserved += 1,
-        }
-    }
-    Ok(scan)
-}
-
-pub(crate) fn non_host_plugin_packages(root: &Path) -> Result<Vec<String>> {
-    let mut excluded = Vec::new();
-    for dir in discover_plugin_dirs(root)? {
-        if matches!(
-            PluginEligibility::for_path(&dir)?,
-            PluginEligibility::SkippedHost
-        ) {
-            excluded.push(cargo_package_name(&dir)?);
-        }
-    }
-    Ok(excluded)
-}
-
-fn manifest_plugin_id(manifest: &Value) -> Option<&str> {
-    manifest
-        .get("plugin")
-        .and_then(|plugin| plugin.get("id"))
-        .and_then(Value::as_str)
-}
-
-enum PluginEligibility {
-    Buildable,
-    SkippedHost,
-    SkippedNoRuntime,
-    SkippedReserved,
-}
-
-impl PluginEligibility {
-    fn for_path(path: &Path) -> Result<Self> {
-        let manifest_path = path.join("plugin.toml");
-        if !manifest_path.is_file() {
-            return Ok(Self::SkippedNoRuntime);
-        }
-        let content = fs::read_to_string(&manifest_path)
-            .with_context(|| format!("failed to read {}", manifest_path.display()))?;
-        let manifest: Value = toml::from_str(&content)
-            .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
-        if manifest_plugin_id(&manifest).is_some_and(qol_conventions::is_reserved_plugin_id) {
-            return Ok(Self::SkippedReserved);
-        }
-        if !supports_host(&manifest) {
-            return Ok(Self::SkippedHost);
-        }
-        if section_command(&manifest, "runtime").is_none()
-            && section_command(&manifest, "daemon").is_none()
-        {
-            return Ok(Self::SkippedNoRuntime);
-        }
-        Ok(Self::Buildable)
-    }
-}
-
-fn supports_host(manifest: &Value) -> bool {
-    let entries = manifest
-        .get("plugin")
-        .and_then(|plugin| plugin.get("platforms"))
-        .and_then(Value::as_array);
-    let entries = match entries {
-        Some(entries) => entries,
-        None => return true,
-    };
-    if entries.is_empty() {
-        return true;
-    }
-    entries
-        .iter()
-        .filter_map(Value::as_str)
-        .any(|entry| entry == host_facade::os_name())
-}
-
-fn section_command<'a>(manifest: &'a Value, section: &str) -> Option<&'a str> {
-    manifest
-        .get(section)
-        .and_then(|value| value.get("command"))
-        .and_then(Value::as_str)
+    qol_workspace::workspace_root_from_cwd()
 }
 
 pub(crate) fn resolve_crate_target(root: &Path, name: &str) -> Result<PathBuf> {
@@ -294,13 +65,6 @@ fn crate_name_matches(display: &str, query: &str) -> bool {
     display == query || display == format!("plugin-{query}") || display == format!("qol-{query}")
 }
 
-pub(crate) fn display_name(path: &Path) -> String {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("<unknown>")
-        .to_string()
-}
-
 pub(crate) fn exe_name(name: &str) -> String {
     host_facade::exe_name(name)
 }
@@ -308,6 +72,7 @@ pub(crate) fn exe_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn write_workspace(dir: &Path) {
         fs::write(
@@ -421,40 +186,6 @@ mod tests {
     }
 
     #[test]
-    fn cargo_manifest_declares_workspace_recognizes_workspace_and_package_only() {
-        let tmp = tempfile::tempdir().unwrap();
-        let workspace = tmp.path().join("ws");
-        fs::create_dir_all(&workspace).unwrap();
-        write_workspace(&workspace);
-        let package_only = tmp.path().join("pkg");
-        fs::create_dir_all(&package_only).unwrap();
-        fs::write(package_only.join("Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
-        let hybrid = tmp.path().join("hybrid");
-        fs::create_dir_all(&hybrid).unwrap();
-        fs::write(
-            hybrid.join("Cargo.toml"),
-            "[package]\nname = \"a\"\n[workspace]\nmembers = [\"tools/*\"]\n",
-        )
-        .unwrap();
-        let empty = tmp.path().join("empty");
-        fs::create_dir_all(&empty).unwrap();
-
-        let cases = [
-            (workspace.as_path(), true, "pure workspace"),
-            (package_only.as_path(), false, "package only"),
-            (hybrid.as_path(), true, "package + workspace (old layout)"),
-            (empty.as_path(), false, "no Cargo.toml"),
-        ];
-        for (path, expected, label) in cases {
-            assert_eq!(
-                cargo_manifest_declares_workspace(path).unwrap(),
-                expected,
-                "case: {label}"
-            );
-        }
-    }
-
-    #[test]
     fn monorepo_plugin_dirs_discovers_under_plugins_subdir() {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = tmp.path().join("mono");
@@ -560,60 +291,5 @@ mod tests {
 
         let resolved = resolve_crate_target(&workspace, "plugin-alt-tab").unwrap();
         assert_eq!(display_name(&resolved), "plugin-alt-tab");
-    }
-
-    fn write_manifest(dir: &Path, body: &str) {
-        fs::create_dir_all(dir).unwrap();
-        fs::write(dir.join("plugin.toml"), body).unwrap();
-    }
-
-    #[test]
-    fn plugin_eligibility_classifies_manifests() {
-        let tmp = tempfile::tempdir().unwrap();
-        let buildable = tmp.path().join("buildable");
-        write_manifest(
-            &buildable,
-            "[plugin]\nname = \"a\"\nversion = \"0\"\nplatforms = [\"linux\", \"macos\", \"windows\"]\n[runtime]\ncommand = \"x\"\n",
-        );
-        let unsupported = tmp.path().join("unsupported");
-        write_manifest(
-            &unsupported,
-            "[plugin]\nname = \"b\"\nversion = \"0\"\nplatforms = [\"plan9\"]\n[runtime]\ncommand = \"x\"\n",
-        );
-        let no_runtime = tmp.path().join("no_runtime");
-        write_manifest(
-            &no_runtime,
-            "[plugin]\nname = \"c\"\nversion = \"0\"\nplatforms = [\"linux\", \"macos\", \"windows\"]\n",
-        );
-        let missing = tmp.path().join("missing");
-        fs::create_dir_all(&missing).unwrap();
-        let daemon_only = tmp.path().join("daemon_only");
-        write_manifest(
-            &daemon_only,
-            "[plugin]\nname = \"d\"\nversion = \"0\"\nplatforms = [\"linux\", \"macos\", \"windows\"]\n[daemon]\nenabled = true\ncommand = \"x\"\n",
-        );
-        let reserved = tmp.path().join("reserved");
-        write_manifest(
-            &reserved,
-            "[plugin]\nid = \"plugin-template\"\nname = \"t\"\nversion = \"0\"\nplatforms = [\"linux\", \"macos\", \"windows\"]\n[runtime]\ncommand = \"x\"\n",
-        );
-
-        let cases: &[(&Path, &str)] = &[
-            (&buildable, "Buildable"),
-            (&unsupported, "SkippedHost"),
-            (&no_runtime, "SkippedNoRuntime"),
-            (&missing, "SkippedNoRuntime"),
-            (&daemon_only, "Buildable"),
-            (&reserved, "SkippedReserved"),
-        ];
-        for (path, want) in cases {
-            let got = match PluginEligibility::for_path(path).unwrap() {
-                PluginEligibility::Buildable => "Buildable",
-                PluginEligibility::SkippedHost => "SkippedHost",
-                PluginEligibility::SkippedNoRuntime => "SkippedNoRuntime",
-                PluginEligibility::SkippedReserved => "SkippedReserved",
-            };
-            assert_eq!(got, *want, "path: {}", path.display());
-        }
     }
 }

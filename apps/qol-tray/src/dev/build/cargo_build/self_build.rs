@@ -1,6 +1,6 @@
 mod artifacts;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -52,6 +52,18 @@ pub(super) fn resolve_qol_tray_self_root(repo_root: Option<&Path>) -> std::path:
 }
 
 fn resolve_missing_tray_root(repo_root: &Path) -> std::path::PathBuf {
+    for ancestor in repo_root.ancestors() {
+        let monorepo_tray = ancestor.join("apps").join("qol-tray");
+        if manifest_is_qol_tray(&monorepo_tray) {
+            return monorepo_tray;
+        }
+    }
+    if let Ok(workspace_root) = qol_workspace::workspace_root_from(repo_root) {
+        let workspace_tray = workspace_root.join("apps").join("qol-tray");
+        if manifest_is_qol_tray(&workspace_tray) {
+            return workspace_tray;
+        }
+    }
     let nested_tray = repo_root.join("qol-tray");
     if manifest_is_qol_tray(&nested_tray) {
         return nested_tray;
@@ -63,13 +75,17 @@ fn resolve_missing_tray_root(repo_root: &Path) -> std::path::PathBuf {
         }
     }
 
-    let base = paths::repo_root_from_manifest_dir();
+    let base = manifest_qol_tray_root();
     log::info!(
         "[worktree] qol-tray not found in feature {}, falling back to base: {}",
         repo_root.display(),
         base.display()
     );
     base
+}
+
+fn manifest_qol_tray_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
 fn manifest_is_qol_tray(dir: &Path) -> bool {
@@ -286,6 +302,23 @@ path = \"src/main.rs\"
             manifest_is_qol_tray(&resolved),
             "fallback must point at real qol-tray manifest"
         );
+    }
+
+    #[test]
+    fn resolve_missing_tray_root_finds_monorepo_app_member() {
+        let tmp = TempDir::new().unwrap();
+        write_manifest(
+            &tmp.path().join("plugins").join("plugin-alt-tab"),
+            &plugin_manifest("alt-tab"),
+        );
+        write_manifest(
+            &tmp.path().join("apps").join("qol-tray"),
+            qol_tray_manifest(),
+        );
+
+        let resolved =
+            resolve_qol_tray_self_root(Some(&tmp.path().join("plugins").join("plugin-alt-tab")));
+        assert_eq!(resolved, tmp.path().join("apps").join("qol-tray"));
     }
 
     #[test]
