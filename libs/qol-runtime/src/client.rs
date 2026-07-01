@@ -3,6 +3,7 @@ use crate::protocol::{
     SubscribeAck,
 };
 use crate::PlatformState;
+use serde::Serialize;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -35,20 +36,27 @@ impl PlatformStateClient {
     }
 
     pub fn get_state(&self) -> Option<PlatformState> {
-        let mut stream = UnixStream::connect(&self.socket_path).ok()?;
-        stream.set_read_timeout(Some(TIMEOUT)).ok()?;
-        stream.set_write_timeout(Some(TIMEOUT)).ok()?;
-
-        let request = RuntimeRequest::GetState;
-        let mut payload = serde_json::to_string(&request).ok()?;
-        payload.push('\n');
-        stream.write_all(payload.as_bytes()).ok()?;
-
-        let mut reader = BufReader::new(stream);
+        let mut reader = self.send(&RuntimeRequest::GetState, Some(TIMEOUT))?;
         let mut line = String::new();
         reader.read_line(&mut line).ok()?;
 
         serde_json::from_str(&line).ok()
+    }
+
+    fn send(
+        &self,
+        request: &impl Serialize,
+        read_timeout: Option<Duration>,
+    ) -> Option<BufReader<UnixStream>> {
+        let mut stream = UnixStream::connect(&self.socket_path).ok()?;
+        stream.set_read_timeout(read_timeout).ok()?;
+        stream.set_write_timeout(Some(TIMEOUT)).ok()?;
+
+        let mut payload = serde_json::to_string(request).ok()?;
+        payload.push('\n');
+        stream.write_all(payload.as_bytes()).ok()?;
+
+        Some(BufReader::new(stream))
     }
 
     pub fn set_focus(&self, monitor_idx: usize) {
@@ -93,15 +101,7 @@ impl PlatformStateClient {
     }
 
     fn request_plugin_config(&self, request: &RuntimeRequest) -> Option<PluginConfigResponse> {
-        let mut stream = UnixStream::connect(&self.socket_path).ok()?;
-        stream.set_read_timeout(Some(TIMEOUT)).ok()?;
-        stream.set_write_timeout(Some(TIMEOUT)).ok()?;
-
-        let mut payload = serde_json::to_string(request).ok()?;
-        payload.push('\n');
-        stream.write_all(payload.as_bytes()).ok()?;
-
-        let mut reader = BufReader::new(stream);
+        let mut reader = self.send(request, Some(TIMEOUT))?;
         let mut line = String::new();
         reader.read_line(&mut line).ok()?;
 
@@ -120,15 +120,7 @@ impl PlatformStateClient {
     }
 
     fn open_subscription(&self, request: RuntimeRequest) -> Option<Subscription> {
-        let mut stream = UnixStream::connect(&self.socket_path).ok()?;
-        stream.set_write_timeout(Some(TIMEOUT)).ok()?;
-        stream.set_read_timeout(None).ok()?;
-
-        let mut payload = serde_json::to_string(&request).ok()?;
-        payload.push('\n');
-        stream.write_all(payload.as_bytes()).ok()?;
-
-        let mut reader = BufReader::new(stream);
+        let mut reader = self.send(&request, None)?;
         let mut ack_line = String::new();
         reader.read_line(&mut ack_line).ok()?;
 
@@ -141,15 +133,7 @@ impl PlatformStateClient {
     }
 
     pub fn armed_lifelines(&self) -> Option<Vec<String>> {
-        let mut stream = UnixStream::connect(&self.socket_path).ok()?;
-        stream.set_read_timeout(Some(TIMEOUT)).ok()?;
-        stream.set_write_timeout(Some(TIMEOUT)).ok()?;
-
-        let mut payload = serde_json::to_string(&RuntimeRequest::ArmedLifelines).ok()?;
-        payload.push('\n');
-        stream.write_all(payload.as_bytes()).ok()?;
-
-        let mut reader = BufReader::new(stream);
+        let mut reader = self.send(&RuntimeRequest::ArmedLifelines, Some(TIMEOUT))?;
         let mut line = String::new();
         reader.read_line(&mut line).ok()?;
 
