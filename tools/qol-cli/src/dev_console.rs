@@ -4755,13 +4755,16 @@ enum DoctorScope {
     Startup,
 }
 
-const STARTUP_DOCTOR_CHECK_ARGS: &[&str] = &["check", "--startup"];
+const STARTUP_DOCTOR_CHECK_ARGS: &[&str] = &[
+    qol_conventions::doctor_cli::ARG_CHECK,
+    qol_conventions::doctor_cli::ARG_STARTUP,
+];
 
 impl DoctorMode {
     fn full_command_args(self) -> &'static [&'static str] {
         match self {
-            DoctorMode::Check => &["check"],
-            DoctorMode::Fix => &["fix"],
+            DoctorMode::Check => &[qol_conventions::doctor_cli::ARG_CHECK],
+            DoctorMode::Fix => &[qol_conventions::doctor_cli::ARG_FIX],
         }
     }
 
@@ -4792,7 +4795,7 @@ fn run_doctor(mode: DoctorMode) -> Result<DoctorRun, String> {
     let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
     build_doctor(&root)?;
     run_doctor_binary(
-        &doctor_binary(&root),
+        &crate::workspace::doctor_binary_path(&root),
         &root,
         mode,
         DoctorScope::Full,
@@ -4802,7 +4805,7 @@ fn run_doctor(mode: DoctorMode) -> Result<DoctorRun, String> {
 
 fn run_doctor_prebuilt() -> Result<DoctorRun, String> {
     let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
-    let binary = doctor_binary(&root);
+    let binary = crate::workspace::doctor_binary_path(&root);
     if !binary.exists() {
         return Err("doctor binary not built · press d".to_string());
     }
@@ -4813,12 +4816,6 @@ fn run_doctor_prebuilt() -> Result<DoctorRun, String> {
         DoctorScope::Startup,
         STARTUP_DOCTOR_CHECK_ARGS,
     )
-}
-
-fn doctor_binary(root: &std::path::Path) -> std::path::PathBuf {
-    root.join("target")
-        .join("debug")
-        .join(host_facade::exe_name("qol-tray-doctor"))
 }
 
 fn run_doctor_binary(
@@ -4844,17 +4841,7 @@ fn run_doctor_binary(
 }
 
 fn build_doctor(root: &std::path::Path) -> Result<(), String> {
-    let output = Command::new("cargo")
-        .current_dir(root)
-        .args([
-            "build",
-            "-p",
-            "qol-tray",
-            "--features",
-            "dev",
-            "--bin",
-            "qol-tray-doctor",
-        ])
+    let output = crate::workspace::cargo_build_command(root, &crate::workspace::DOCTOR_BUILD_ARGS)
         .output()
         .map_err(|error| error.to_string())?;
     if output.status.success() {

@@ -3,7 +3,30 @@ use anyhow::{anyhow, bail, Context, Result};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use toml::Value;
+
+pub(crate) const DOCTOR_BUILD_ARGS: [&str; 7] = [
+    "build",
+    "-p",
+    "qol-tray",
+    "--features",
+    "dev",
+    "--bin",
+    "qol-tray-doctor",
+];
+
+pub(crate) fn doctor_binary_path(root: &Path) -> PathBuf {
+    root.join("target")
+        .join("debug")
+        .join(exe_name("qol-tray-doctor"))
+}
+
+pub(crate) fn cargo_build_command(root: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new("cargo");
+    command.current_dir(root).args(args);
+    command
+}
 
 pub(crate) fn repo_root() -> Result<PathBuf> {
     workspace_root_from_cwd()

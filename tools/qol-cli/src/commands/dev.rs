@@ -7,7 +7,8 @@ use crate::dev_server::{
 use crate::host_facade;
 use crate::progress::{print_title, run_status, step_label, StepKind};
 use crate::workspace::{
-    display_name, repo_root, scan_buildable_plugins, sibling_crates, BuildablePlugin,
+    cargo_build_command, display_name, repo_root, scan_buildable_plugins, sibling_crates,
+    BuildablePlugin,
 };
 use anyhow::{bail, Context, Result};
 use std::ffi::OsString;
@@ -141,7 +142,7 @@ fn dev_binary_path(root: &Path) -> PathBuf {
 }
 
 fn build_qol_tray_dev(root: &Path, verbose: bool) -> Result<()> {
-    let mut command = dev_build_command(root);
+    let mut command = cargo_build_command(root, &DEV_BUILD_ARGS);
     run_dev_step(
         "build",
         StepKind::Pending,
@@ -151,14 +152,8 @@ fn build_qol_tray_dev(root: &Path, verbose: bool) -> Result<()> {
     )
 }
 
-fn dev_build_command(root: &Path) -> Command {
-    let mut command = Command::new("cargo");
-    command.current_dir(root).args(DEV_BUILD_ARGS);
-    command
-}
-
 fn build_qol_cli_debug(root: &Path, verbose: bool) -> Result<()> {
-    let mut command = qol_cli_build_command(root);
+    let mut command = cargo_build_command(root, &QOL_CLI_BUILD_ARGS);
     run_dev_step(
         "build",
         StepKind::Pending,
@@ -166,12 +161,6 @@ fn build_qol_cli_debug(root: &Path, verbose: bool) -> Result<()> {
         &mut command,
         verbose,
     )
-}
-
-fn qol_cli_build_command(root: &Path) -> Command {
-    let mut command = Command::new("cargo");
-    command.current_dir(root).args(QOL_CLI_BUILD_ARGS);
-    command
 }
 
 fn collect_buildable_plugins(
@@ -433,23 +422,20 @@ mod tests {
     }
 
     #[test]
-    fn startup_build_command_uses_incremental_debug_profile() {
+    fn cargo_build_commands_use_workspace_debug_profile() {
         let root = Path::new("/repo/qol");
-        let command = dev_build_command(root);
-        let args: Vec<&OsStr> = command.get_args().collect();
-        assert_eq!(args, DEV_BUILD_ARGS.map(OsStr::new));
-        assert_eq!(command.get_current_dir(), Some(root));
-        assert_eq!(command.get_program(), OsStr::new("cargo"));
-    }
-
-    #[test]
-    fn reload_cli_build_command_uses_workspace_debug_profile() {
-        let root = Path::new("/repo/qol");
-        let command = qol_cli_build_command(root);
-        let args: Vec<&OsStr> = command.get_args().collect();
-        assert_eq!(args, QOL_CLI_BUILD_ARGS.map(OsStr::new));
-        assert_eq!(command.get_current_dir(), Some(root));
-        assert_eq!(command.get_program(), OsStr::new("cargo"));
+        let cases: [(&str, &[&str]); 2] = [
+            ("qol-tray dev build", &DEV_BUILD_ARGS),
+            ("qol cli build", &QOL_CLI_BUILD_ARGS),
+        ];
+        for (label, args) in cases {
+            let command = cargo_build_command(root, args);
+            let got: Vec<&OsStr> = command.get_args().collect();
+            let want: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
+            assert_eq!(got, want, "case: {label}");
+            assert_eq!(command.get_current_dir(), Some(root), "case: {label}");
+            assert_eq!(command.get_program(), OsStr::new("cargo"), "case: {label}");
+        }
     }
 
     #[test]

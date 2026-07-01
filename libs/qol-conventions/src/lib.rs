@@ -25,6 +25,22 @@ pub const DEV_GENERATION_MODE_SHADOW: &str = "shadow";
 pub const DEV_RESTART_PREBUILT_ROUTE: &str = "/dev/restart-prebuilt";
 pub const DEV_PROMOTE_GENERATION_ROUTE: &str = "/dev/promote-generation";
 
+/// The `qol-tray-doctor` CLI contract shared between its parser
+/// (`apps/qol-tray/src/doctor/cli.rs`) and its callers in `tools/qol-cli`
+/// (the dashboard's background/manual probes and the top-level `qol doctor`
+/// command). Not covered by the literal-guard above: "check"/"fix" are
+/// common English words that also appear as unrelated progress-step labels
+/// elsewhere in `tools/qol-cli`, so a repo-wide grep for them would be noisy
+/// rather than protective. Usage/error strings and test fixtures may still
+/// spell these out literally; only the actual parse/dispatch logic must use
+/// these constants.
+pub mod doctor_cli {
+    pub const ARG_CHECK: &str = "check";
+    pub const ARG_FIX: &str = "fix";
+    pub const ARG_STARTUP: &str = "--startup";
+    pub const ARG_ID: &str = "--id";
+}
+
 pub mod launcher {
     pub const APP_ID: &str = "qol-tray-launcher";
     pub const WINDOW_TITLE: &str = "qol-launcher";

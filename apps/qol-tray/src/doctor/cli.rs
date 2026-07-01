@@ -3,6 +3,7 @@ use super::{
     FixReport, Outcome, OutcomeStatus, Report,
 };
 use anyhow::{anyhow, Result};
+use qol_conventions::doctor_cli::{ARG_CHECK, ARG_FIX, ARG_ID, ARG_STARTUP};
 
 pub(super) fn run_cli_from_env() -> Result<i32> {
     match command()? {
@@ -30,14 +31,14 @@ enum DoctorCommand {
 
 fn command() -> Result<DoctorCommand> {
     let mut args = std::env::args().skip(1);
-    let command = args.next().unwrap_or_else(|| "check".to_string());
+    let command = args.next().unwrap_or_else(|| ARG_CHECK.to_string());
     let rest: Vec<String> = args.collect();
 
     match command.as_str() {
-        "check" => Ok(DoctorCommand::Check {
+        ARG_CHECK => Ok(DoctorCommand::Check {
             selection: parse_check_flags(&rest)?,
         }),
-        "fix" => {
+        ARG_FIX => {
             let (id, policy) = parse_fix_flags(&rest)?;
             Ok(DoctorCommand::Fix { id, policy })
         }
@@ -51,8 +52,8 @@ fn parse_check_flags(rest: &[String]) -> Result<CheckSelection> {
     let mut args = rest.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--id" => id = Some(take_id_value(&mut args)?),
-            "--startup" => startup = true,
+            ARG_ID => id = Some(take_id_value(&mut args)?),
+            ARG_STARTUP => startup = true,
             _ => return Err(usage_error("check [--id <CHECK_ID>] [--startup]", rest)),
         }
     }
@@ -72,7 +73,7 @@ fn parse_fix_flags(rest: &[String]) -> Result<(Option<String>, FixPolicy)> {
     let mut args = rest.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--id" => id = Some(take_id_value(&mut args)?),
+            ARG_ID => id = Some(take_id_value(&mut args)?),
             "--apply-host-fixes" | "--apply-de-fixes" => host_fixes = true,
             _ => {
                 return Err(usage_error(
