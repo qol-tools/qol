@@ -144,19 +144,12 @@ fn validate_field_section(
     ));
 }
 
-fn kind_has_stored_value(kind: FieldKind) -> bool {
-    !matches!(
-        kind,
-        FieldKind::Action | FieldKind::List | FieldKind::Status | FieldKind::QrCode
-    )
-}
-
 fn validate_config_key_collisions(spec: &ConfigSpec, errors: &mut Vec<ValidationError>) {
     let keys: Vec<(&str, String)> = spec
         .fields
         .iter()
         .filter_map(|(id, field)| {
-            if kind_has_stored_value(field.kind) {
+            if field.kind.has_stored_value() {
                 Some((
                     id.as_str(),
                     field.config_key.clone().unwrap_or_else(|| id.clone()),
@@ -198,7 +191,7 @@ fn validate_field_default(id: &str, field: &FieldSpec, errors: &mut Vec<Validati
     let default = match &field.default {
         Some(default) => default,
         None => {
-            if kind_has_stored_value(field.kind) {
+            if field.kind.has_stored_value() {
                 errors.push(ValidationError::new(
                     format!("field.{id}.default"),
                     "missing default",
@@ -388,10 +381,7 @@ fn validate_show_when(
     }
     errors.push(ValidationError::new(
         format!("field.{id}.show_when.equals"),
-        format!(
-            "value does not match field type {}",
-            field_kind_name(referenced.kind)
-        ),
+        format!("value does not match field type {}", referenced.kind.name()),
     ));
 }
 
@@ -406,10 +396,7 @@ fn validate_field_value_type(
     }
     errors.push(ValidationError::new(
         path,
-        format!(
-            "value does not match field type {}",
-            field_kind_name(field.kind)
-        ),
+        format!("value does not match field type {}", field.kind.name()),
     ));
 }
 
@@ -541,23 +528,6 @@ fn valid_config_key(value: &str) -> bool {
         return false;
     }
     value.split('.').all(valid_id)
-}
-
-fn field_kind_name(kind: FieldKind) -> &'static str {
-    match kind {
-        FieldKind::Boolean => "boolean",
-        FieldKind::String => "string",
-        FieldKind::Number => "number",
-        FieldKind::Select => "select",
-        FieldKind::StringArray => "string_array",
-        FieldKind::ObjectArray => "object_array",
-        FieldKind::ObjectMap => "object_map",
-        FieldKind::Color => "color",
-        FieldKind::Action => "action",
-        FieldKind::List => "list",
-        FieldKind::Status => "status",
-        FieldKind::QrCode => "qr_code",
-    }
 }
 
 #[cfg(test)]

@@ -94,10 +94,7 @@ pub fn resolve_config(
     let mut sections = build_sections(spec);
 
     for (id, field) in &spec.fields {
-        let no_stored_value = matches!(
-            field.kind,
-            FieldKind::Action | FieldKind::List | FieldKind::Status | FieldKind::QrCode
-        );
+        let no_stored_value = !field.kind.has_stored_value();
         let default = field
             .default
             .clone()
@@ -212,10 +209,7 @@ fn resolve_field_value(
         None => {
             errors.push(ValidationError::new(
                 format!("overrides.{id}"),
-                format!(
-                    "value does not match field type {}",
-                    field_kind_name(field.kind)
-                ),
+                format!("value does not match field type {}", field.kind.name()),
             ));
             return default.clone();
         }
@@ -357,21 +351,4 @@ fn title_case(value: &str) -> String {
     result.extend(first.to_uppercase());
     result.push_str(chars.as_str());
     result
-}
-
-fn field_kind_name(kind: FieldKind) -> &'static str {
-    match kind {
-        FieldKind::Boolean => "boolean",
-        FieldKind::String => "string",
-        FieldKind::Number => "number",
-        FieldKind::Select => "select",
-        FieldKind::StringArray => "string_array",
-        FieldKind::ObjectArray => "object_array",
-        FieldKind::ObjectMap => "object_map",
-        FieldKind::Color => "color",
-        FieldKind::Action => "action",
-        FieldKind::List => "list",
-        FieldKind::Status => "status",
-        FieldKind::QrCode => "qr_code",
-    }
 }

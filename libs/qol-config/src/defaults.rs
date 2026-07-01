@@ -1,4 +1,4 @@
-use crate::contract::{parse_spec_str, ConfigSpec, FieldDefault, FieldKind};
+use crate::contract::{parse_spec_str, ConfigSpec, FieldDefault};
 use crate::validation::{validate_spec_collect, ValidationError};
 use indexmap::IndexMap;
 use serde::{de::DeserializeOwned, Serialize};
@@ -17,7 +17,7 @@ pub fn defaults_json_from_spec(spec: &ConfigSpec) -> Result<Value, Vec<Validatio
 
     let mut root = Map::new();
     for (id, field) in &spec.fields {
-        if !field_has_stored_value(field.kind) {
+        if !field.kind.has_stored_value() {
             continue;
         }
         let Some(default) = &field.default else {
@@ -131,13 +131,6 @@ pub(crate) fn merge_json_defaults(defaults: Value, overrides: Value) -> Value {
         }
         (_, override_value) => override_value,
     }
-}
-
-fn field_has_stored_value(kind: FieldKind) -> bool {
-    !matches!(
-        kind,
-        FieldKind::Action | FieldKind::List | FieldKind::Status | FieldKind::QrCode
-    )
 }
 
 fn insert_path(root: &mut Map<String, Value>, path: &str, value: Value) -> Result<(), String> {

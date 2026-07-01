@@ -151,6 +151,32 @@ pub enum FieldKind {
     QrCode,
 }
 
+impl FieldKind {
+    pub fn has_stored_value(self) -> bool {
+        !matches!(
+            self,
+            Self::Action | Self::List | Self::Status | Self::QrCode
+        )
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Boolean => "boolean",
+            Self::String => "string",
+            Self::Number => "number",
+            Self::Select => "select",
+            Self::StringArray => "string_array",
+            Self::ObjectArray => "object_array",
+            Self::ObjectMap => "object_map",
+            Self::Color => "color",
+            Self::Action => "action",
+            Self::List => "list",
+            Self::Status => "status",
+            Self::QrCode => "qr_code",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum FieldDefault {
