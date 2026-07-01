@@ -196,7 +196,11 @@ fn dismiss_status_overlay() {
     let pids = take_status_overlay_pids();
     qol_runtime::probe!("SHOT_STATUS_OVERLAY", "event=dismiss count={}", pids.len());
     for entry in pids {
-        stop_status_overlay_pid(entry);
+        stop_overlay_pid(
+            entry,
+            "SHOT_STATUS_OVERLAY",
+            "/qol-shot-swift/status-overlay-",
+        );
     }
 }
 
@@ -218,17 +222,17 @@ fn clear_status_overlay_pid(pid: u32) {
     }
 }
 
-fn take_status_overlay_pids() -> Vec<StatusOverlayPid> {
+fn take_status_overlay_pids() -> Vec<OverlayPid> {
     let mut pids = Vec::new();
     if let Ok(mut current_pid) = STATUS_OVERLAY_PID.lock() {
         if let Some(pid) = current_pid.take() {
-            pids.push(StatusOverlayPid { pid, trusted: true });
+            pids.push(OverlayPid { pid, trusted: true });
         }
     }
 
     if let Some(pid) = read_status_overlay_pid_file() {
         if pids.iter().all(|entry| entry.pid != pid) {
-            pids.push(StatusOverlayPid {
+            pids.push(OverlayPid {
                 pid,
                 trusted: false,
             });
@@ -240,7 +244,7 @@ fn take_status_overlay_pids() -> Vec<StatusOverlayPid> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct StatusOverlayPid {
+struct OverlayPid {
     pid: u32,
     trusted: bool,
 }
@@ -252,40 +256,6 @@ fn read_status_overlay_pid_file() -> Option<u32> {
 
 fn status_overlay_pid_file_path() -> PathBuf {
     env::temp_dir().join(STATUS_OVERLAY_PID_FILE_NAME)
-}
-
-fn stop_status_overlay_pid(entry: StatusOverlayPid) {
-    if !entry.trusted && !status_overlay_process_matches(entry.pid) {
-        qol_runtime::probe!("SHOT_STATUS_OVERLAY", "pid={} result=skip-stale", entry.pid);
-        return;
-    }
-    if !process_alive(entry.pid) {
-        return;
-    }
-
-    qol_runtime::probe!("SHOT_STATUS_OVERLAY", "pid={} signal=term", entry.pid);
-    let _ = signal_process(entry.pid, libc::SIGTERM);
-    if wait_for_process_exit(entry.pid, Duration::from_millis(500)) {
-        return;
-    }
-
-    qol_runtime::probe!("SHOT_STATUS_OVERLAY", "pid={} signal=kill", entry.pid);
-    let _ = signal_process(entry.pid, libc::SIGKILL);
-}
-
-fn status_overlay_process_matches(pid: u32) -> bool {
-    let pid_arg = pid.to_string();
-    let Ok(output) = Command::new("ps")
-        .args(["-p", pid_arg.as_str(), "-o", "command="])
-        .output()
-    else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let command = String::from_utf8_lossy(&output.stdout);
-    command.contains("/qol-shot-swift/status-overlay-")
 }
 
 pub(super) fn show_recording_region_overlay(session: &CaptureSession) {
@@ -449,7 +419,11 @@ pub(super) fn dismiss_recording_region_overlay() {
     let pids = take_recording_overlay_pids();
     qol_runtime::probe!("SHOT_RECORD_OVERLAY", "event=dismiss count={}", pids.len());
     for entry in pids {
-        stop_recording_overlay_pid(entry);
+        stop_overlay_pid(
+            entry,
+            "SHOT_RECORD_OVERLAY",
+            "/qol-shot-swift/recording-overlay-",
+        );
     }
 }
 
@@ -474,17 +448,17 @@ fn clear_recording_overlay_pid(pid: u32) {
     write_recording_overlay_pid_file(&pids);
 }
 
-fn take_recording_overlay_pids() -> Vec<RecordingOverlayPid> {
+fn take_recording_overlay_pids() -> Vec<OverlayPid> {
     let mut pids = Vec::new();
     if let Ok(mut current_pids) = RECORDING_OVERLAY_PIDS.lock() {
         for pid in current_pids.drain(..) {
-            pids.push(RecordingOverlayPid { pid, trusted: true });
+            pids.push(OverlayPid { pid, trusted: true });
         }
     }
 
     for pid in read_recording_overlay_pid_file() {
         if pids.iter().all(|entry| entry.pid != pid) {
-            pids.push(RecordingOverlayPid {
+            pids.push(OverlayPid {
                 pid,
                 trusted: false,
             });
@@ -493,12 +467,6 @@ fn take_recording_overlay_pids() -> Vec<RecordingOverlayPid> {
 
     let _ = fs::remove_file(recording_overlay_pid_file_path());
     pids
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RecordingOverlayPid {
-    pid: u32,
-    trusted: bool,
 }
 
 fn read_recording_overlay_pid_file() -> Vec<u32> {
@@ -529,26 +497,26 @@ fn recording_overlay_pid_file_path() -> PathBuf {
     env::temp_dir().join(RECORDING_OVERLAY_PID_FILE_NAME)
 }
 
-fn stop_recording_overlay_pid(entry: RecordingOverlayPid) {
-    if !entry.trusted && !recording_overlay_process_matches(entry.pid) {
-        qol_runtime::probe!("SHOT_RECORD_OVERLAY", "pid={} result=skip-stale", entry.pid);
+fn stop_overlay_pid(entry: OverlayPid, probe: &str, needle: &str) {
+    if !entry.trusted && !overlay_process_matches(entry.pid, needle) {
+        qol_runtime::probe!(probe, "pid={} result=skip-stale", entry.pid);
         return;
     }
     if !process_alive(entry.pid) {
         return;
     }
 
-    qol_runtime::probe!("SHOT_RECORD_OVERLAY", "pid={} signal=term", entry.pid);
+    qol_runtime::probe!(probe, "pid={} signal=term", entry.pid);
     let _ = signal_process(entry.pid, libc::SIGTERM);
     if wait_for_process_exit(entry.pid, Duration::from_millis(500)) {
         return;
     }
 
-    qol_runtime::probe!("SHOT_RECORD_OVERLAY", "pid={} signal=kill", entry.pid);
+    qol_runtime::probe!(probe, "pid={} signal=kill", entry.pid);
     let _ = signal_process(entry.pid, libc::SIGKILL);
 }
 
-fn recording_overlay_process_matches(pid: u32) -> bool {
+fn overlay_process_matches(pid: u32, needle: &str) -> bool {
     let pid_arg = pid.to_string();
     let Ok(output) = Command::new("ps")
         .args(["-p", pid_arg.as_str(), "-o", "command="])
@@ -560,5 +528,5 @@ fn recording_overlay_process_matches(pid: u32) -> bool {
         return false;
     }
     let command = String::from_utf8_lossy(&output.stdout);
-    command.contains("/qol-shot-swift/recording-overlay-")
+    command.contains(needle)
 }
