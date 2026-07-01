@@ -33,7 +33,10 @@ pub fn fuzzy_match_prepared(prepared: &PreparedFuzzyQuery, candidate: &str) -> O
     }
 
     let c_orig: Vec<char> = candidate.chars().collect();
-    let c_lower: Vec<char> = candidate.to_lowercase().chars().collect();
+    let c_lower: Vec<char> = candidate
+        .chars()
+        .map(|c| c.to_lowercase().next().unwrap())
+        .collect();
 
     let greedy = score_pass(
         &prepared.query_lower,
@@ -303,6 +306,12 @@ mod tests {
             teams.score,
             steam.score
         );
+    }
+
+    #[test]
+    fn unicode_lowercase_expansion_does_not_panic() {
+        let result = fuzzy_match("l", "İstanbul").expect("should match trailing l in İstanbul");
+        assert_eq!(result.positions, vec![7]);
     }
 
     #[test]
