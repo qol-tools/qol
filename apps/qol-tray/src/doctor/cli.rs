@@ -1,9 +1,9 @@
 use super::{
-    check, check_single, check_startup, fix_single_with_policy, fix_with_policy, FixPolicy,
+    check, check_quick, check_single, fix_single_with_policy, fix_with_policy, FixPolicy,
     FixReport, Outcome, OutcomeStatus, Report,
 };
 use anyhow::{anyhow, Result};
-use qol_conventions::doctor_cli::{ARG_CHECK, ARG_FIX, ARG_ID, ARG_STARTUP};
+use qol_conventions::doctor_cli::{ARG_CHECK, ARG_FIX, ARG_ID, ARG_QUICK};
 
 pub(super) fn run_cli_from_env() -> Result<i32> {
     match command()? {
@@ -15,7 +15,7 @@ pub(super) fn run_cli_from_env() -> Result<i32> {
 #[derive(Debug, PartialEq, Eq)]
 enum CheckSelection {
     All,
-    Startup,
+    Quick,
     Id(String),
 }
 
@@ -48,21 +48,21 @@ fn command() -> Result<DoctorCommand> {
 
 fn parse_check_flags(rest: &[String]) -> Result<CheckSelection> {
     let mut id = None;
-    let mut startup = false;
+    let mut quick = false;
     let mut args = rest.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             ARG_ID => id = Some(take_id_value(&mut args)?),
-            ARG_STARTUP => startup = true,
-            _ => return Err(usage_error("check [--id <CHECK_ID>] [--startup]", rest)),
+            ARG_QUICK => quick = true,
+            _ => return Err(usage_error("check [--id <CHECK_ID>] [--quick]", rest)),
         }
     }
-    match (id, startup) {
+    match (id, quick) {
         (Some(_), true) => Err(anyhow!(
-            "qol-tray-doctor check accepts either --id or --startup, not both"
+            "qol-tray-doctor check accepts either --id or --quick, not both"
         )),
         (Some(id), false) => Ok(CheckSelection::Id(id)),
-        (None, true) => Ok(CheckSelection::Startup),
+        (None, true) => Ok(CheckSelection::Quick),
         (None, false) => Ok(CheckSelection::All),
     }
 }
@@ -104,7 +104,7 @@ fn usage_error(usage: &str, rest: &[String]) -> anyhow::Error {
 fn run_check(selection: CheckSelection) -> Result<i32> {
     let report = match selection {
         CheckSelection::All => check(),
-        CheckSelection::Startup => check_startup(),
+        CheckSelection::Quick => check_quick(),
         CheckSelection::Id(id) => check_single(&id),
     };
     print_report("Doctor Check", &report);
@@ -203,19 +203,19 @@ mod tests {
     }
 
     #[test]
-    fn parse_check_flags_selects_startup_scope() {
+    fn parse_check_flags_selects_quick_scope() {
         assert_eq!(
-            parse_check_flags(&args(&["--startup"])).unwrap(),
-            CheckSelection::Startup
+            parse_check_flags(&args(&["--quick"])).unwrap(),
+            CheckSelection::Quick
         );
     }
 
     #[test]
     fn parse_check_flags_rejects_ambiguous_scope() {
-        let error = parse_check_flags(&args(&["--startup", "--id", "install_identity"]))
-            .expect_err("--startup and --id select different check sets");
+        let error = parse_check_flags(&args(&["--quick", "--id", "install_identity"]))
+            .expect_err("--quick and --id select different check sets");
         assert!(
-            error.to_string().contains("either --id or --startup"),
+            error.to_string().contains("either --id or --quick"),
             "unexpected error: {error:#}"
         );
     }

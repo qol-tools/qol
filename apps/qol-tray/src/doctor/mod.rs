@@ -61,9 +61,9 @@ pub fn check() -> Report {
     report::report(results)
 }
 
-pub fn check_startup() -> Report {
+pub fn check_quick() -> Report {
     let ctx = DoctorContext::new();
-    let results = run_selected(&Selector::Startup, &ctx);
+    let results = run_selected(&Selector::Quick, &ctx);
     report::report(results)
 }
 
@@ -93,7 +93,7 @@ pub fn auto_fix_startup() -> FixReport {
     if let Some(trigger) = trigger::take() {
         run_triggered_check(&trigger);
     }
-    let report = fix_with_selector_and_policy(Selector::Startup, FixPolicy::startup());
+    let report = fix_with_selector_and_policy(Selector::Quick, FixPolicy::startup());
     log_fix_attempts(&report);
     log_fix_failures(&report);
     log_remaining_outcomes(&report.after);
@@ -404,18 +404,18 @@ mod tests {
     }
 
     #[test]
-    fn startup_selector_excludes_dev_build_checks() {
-        let startup = Selector::Startup;
+    fn quick_selector_excludes_dev_build_checks() {
+        let quick = Selector::Quick;
         let host_surface = CheckMeta::new("host", "Host", CheckCategory::HostSurface);
         let dev_build = CheckMeta::new("target", "Target", CheckCategory::DevBuild);
 
-        assert!(startup.matches(&host_surface));
-        assert!(!startup.matches(&dev_build));
+        assert!(quick.matches(&host_surface));
+        assert!(!quick.matches(&dev_build));
     }
 
     #[test]
     #[cfg(feature = "dev")]
-    fn startup_selector_includes_cheap_runtime_checks_only() {
+    fn quick_selector_includes_cheap_runtime_checks_only() {
         let cases = [
             ("plugin_staleness", true),
             ("dev_link_paths", true),
@@ -429,7 +429,7 @@ mod tests {
         for (id, should_be_continuous) in cases {
             let included = checks::registry()
                 .iter()
-                .any(|check| check.meta().id == id && Selector::Startup.matches(&check.meta()));
+                .any(|check| check.meta().id == id && Selector::Quick.matches(&check.meta()));
             assert_eq!(
                 included, should_be_continuous,
                 "check id: {id} (cheap dev-loop checks must be continuously evaluated; \
@@ -439,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_selector_is_non_devbuild_partition() {
+    fn quick_selector_is_non_devbuild_partition() {
         let metas: Vec<CheckMeta> = checks::registry()
             .iter()
             .map(|check| check.meta())
@@ -447,20 +447,20 @@ mod tests {
                 meta.platform.matches_current() && check_enabled_for_build(meta.dev_only)
             })
             .collect();
-        let startup_count = metas
+        let quick_count = metas
             .iter()
-            .filter(|meta| Selector::Startup.matches(meta))
+            .filter(|meta| Selector::Quick.matches(meta))
             .count();
         let dev_build_count = metas
             .iter()
             .filter(|meta| meta.category == CheckCategory::DevBuild)
             .count();
 
-        assert_eq!(startup_count + dev_build_count, metas.len());
+        assert_eq!(quick_count + dev_build_count, metas.len());
         #[cfg(feature = "dev")]
         assert!(
             dev_build_count > 0,
-            "dev builds must keep expensive checks out of startup doctor"
+            "dev builds must keep expensive checks out of the quick doctor pass"
         );
     }
 

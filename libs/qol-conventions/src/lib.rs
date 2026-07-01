@@ -37,7 +37,7 @@ pub const DEV_PROMOTE_GENERATION_ROUTE: &str = "/dev/promote-generation";
 pub mod doctor_cli {
     pub const ARG_CHECK: &str = "check";
     pub const ARG_FIX: &str = "fix";
-    pub const ARG_STARTUP: &str = "--startup";
+    pub const ARG_QUICK: &str = "--quick";
     pub const ARG_ID: &str = "--id";
 }
 

@@ -77,17 +77,13 @@ pub(super) fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Spa
     };
     let report = run.report;
     let (color, mut value) = if report.divergences() == 0 {
-        let label = match run.scope {
-            DoctorScope::Full => "all good",
-            DoctorScope::Startup => "startup good",
-        };
         (
             Color::Green,
             vec![
-                label.fg(Color::Green).bold(),
+                "all good".fg(Color::Green).bold(),
                 match run.scope {
                     DoctorScope::Full => format!(" · {} checks", report.ok),
-                    DoctorScope::Startup => format!(" · {} startup checks", report.ok),
+                    DoctorScope::Quick => format!(" · {} quick checks", report.ok),
                 }
                 .fg(Color::DarkGray),
             ],
@@ -98,10 +94,7 @@ pub(super) fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Spa
         } else {
             Color::Yellow
         };
-        let label = match run.scope {
-            DoctorScope::Full => format!("{} divergences", report.divergences()),
-            DoctorScope::Startup => format!("startup {} divergences", report.divergences()),
-        };
+        let label = format!("{} divergences", report.divergences());
         (
             color,
             vec![
@@ -241,12 +234,12 @@ pub(super) enum DoctorMode {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum DoctorScope {
     Full,
-    Startup,
+    Quick,
 }
 
-const STARTUP_DOCTOR_CHECK_ARGS: &[&str] = &[
+const QUICK_DOCTOR_CHECK_ARGS: &[&str] = &[
     qol_conventions::doctor_cli::ARG_CHECK,
-    qol_conventions::doctor_cli::ARG_STARTUP,
+    qol_conventions::doctor_cli::ARG_QUICK,
 ];
 
 impl DoctorMode {
@@ -302,8 +295,8 @@ fn run_doctor_prebuilt() -> Result<DoctorRun, String> {
         &binary,
         &root,
         DoctorMode::Check,
-        DoctorScope::Startup,
-        STARTUP_DOCTOR_CHECK_ARGS,
+        DoctorScope::Quick,
+        QUICK_DOCTOR_CHECK_ARGS,
     )
 }
 
@@ -412,10 +405,10 @@ mod tests {
             lines: Vec::new(),
             scope: DoctorScope::Full,
         };
-        let startup_run = DoctorRun {
+        let quick_run = DoctorRun {
             report,
             lines: Vec::new(),
-            scope: DoctorScope::Startup,
+            scope: DoctorScope::Quick,
         };
         let warn_report = DoctorReport {
             ok: 9,
@@ -428,10 +421,10 @@ mod tests {
             lines: Vec::new(),
             scope: DoctorScope::Full,
         };
-        let startup_warn_run = DoctorRun {
+        let quick_warn_run = DoctorRun {
             report: warn_report,
             lines: Vec::new(),
-            scope: DoctorScope::Startup,
+            scope: DoctorScope::Quick,
         };
         let now = 1_000_000_000;
         let cases = [
@@ -447,13 +440,13 @@ mod tests {
             ),
             (
                 DoctorPanel {
-                    last: Some(startup_run.clone()),
+                    last: Some(quick_run.clone()),
                     last_at_ms: Some(now - 15_000),
                     manual: None,
                     error: None,
                 },
                 Color::Green,
-                "startup good · 11 startup checks · 15s ago",
+                "all good · 11 quick checks · 15s ago",
             ),
             (
                 DoctorPanel {
@@ -467,13 +460,13 @@ mod tests {
             ),
             (
                 DoctorPanel {
-                    last: Some(startup_warn_run),
+                    last: Some(quick_warn_run),
                     last_at_ms: Some(now - 5_000),
                     manual: None,
                     error: None,
                 },
                 Color::Yellow,
-                "startup 2 divergences · 2 warn · 0 err · just now",
+                "2 divergences · 2 warn · 0 err · just now",
             ),
             (
                 DoctorPanel {
@@ -487,13 +480,13 @@ mod tests {
             ),
             (
                 DoctorPanel {
-                    last: Some(startup_run.clone()),
+                    last: Some(quick_run.clone()),
                     last_at_ms: Some(now - 15_000),
                     manual: None,
                     error: Some("boom".to_string()),
                 },
                 Color::Green,
-                "startup good · 11 startup checks · 15s ago · probe failed",
+                "all good · 11 quick checks · 15s ago · probe failed",
             ),
             (
                 DoctorPanel {
@@ -558,10 +551,10 @@ mod tests {
     }
 
     #[test]
-    fn background_doctor_uses_startup_scope() {
+    fn background_doctor_uses_quick_scope() {
         assert_eq!(
-            STARTUP_DOCTOR_CHECK_ARGS,
-            ["check", "--startup"],
+            QUICK_DOCTOR_CHECK_ARGS,
+            ["check", "--quick"],
             "the dashboard poller must not run full DevBuild checks in the background"
         );
         assert_eq!(DoctorMode::Check.full_command_args(), ["check"]);
