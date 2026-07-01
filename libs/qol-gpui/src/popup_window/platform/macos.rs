@@ -49,11 +49,13 @@ pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool
     true
 }
 
+fn resolve_window(title: &str) -> Option<Retained<NSWindow>> {
+    let mtm = MainThreadMarker::new()?;
+    find_window_by_title(mtm, title)
+}
+
 pub fn hide_window_by_title(title: &str) -> bool {
-    let Some(mtm) = MainThreadMarker::new() else {
-        return false;
-    };
-    let Some(window) = find_window_by_title(mtm, title) else {
+    let Some(window) = resolve_window(title) else {
         return false;
     };
     window.setLevel(NSPopUpMenuWindowLevel);
@@ -86,10 +88,7 @@ pub fn hide_window_by_title(title: &str) -> bool {
 }
 
 pub fn hide_invisible(title: &str) -> bool {
-    let Some(mtm) = MainThreadMarker::new() else {
-        return false;
-    };
-    let Some(window) = find_window_by_title(mtm, title) else {
+    let Some(window) = resolve_window(title) else {
         return false;
     };
     window.setLevel(NSPopUpMenuWindowLevel);
@@ -209,10 +208,7 @@ fn debug_ghost_color() -> Option<Retained<NSColor>> {
 }
 
 pub fn show_window_by_title(title: &str) -> bool {
-    let Some(mtm) = MainThreadMarker::new() else {
-        return false;
-    };
-    let Some(window) = find_window_by_title(mtm, title) else {
+    let Some(window) = resolve_window(title) else {
         return false;
     };
     window.setLevel(NSPopUpMenuWindowLevel);
@@ -229,10 +225,7 @@ pub fn show_window_by_title(title: &str) -> bool {
 }
 
 pub fn disable_window_shadow(title: &str) -> bool {
-    let Some(mtm) = MainThreadMarker::new() else {
-        return false;
-    };
-    let Some(window) = find_window_by_title(mtm, title) else {
+    let Some(window) = resolve_window(title) else {
         return false;
     };
     window.setHasShadow(false);
@@ -251,10 +244,7 @@ pub fn disable_window_shadow(title: &str) -> bool {
 }
 
 pub fn configure_popup_window(title: &str) -> bool {
-    let Some(mtm) = MainThreadMarker::new() else {
-        return false;
-    };
-    let Some(window) = find_window_by_title(mtm, title) else {
+    let Some(window) = resolve_window(title) else {
         return false;
     };
     window.setAnimationBehavior(NSWindowAnimationBehavior::None);
