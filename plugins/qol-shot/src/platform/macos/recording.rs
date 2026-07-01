@@ -788,38 +788,24 @@ fn wait_for_stable_file(output_file: &Path) -> Result<()> {
     ))
 }
 
+const STOP_ESCALATION: [(i32, &str, Duration); 3] = [
+    (libc::SIGINT, "int", Duration::from_secs(8)),
+    (libc::SIGTERM, "term", Duration::from_secs(2)),
+    (libc::SIGKILL, "kill", Duration::from_secs(2)),
+];
+
 fn stop_capture_process(pid: u32) -> Result<()> {
-    qol_runtime::probe!("SHOT_RECORD_STOP_PID", "pid={} signal=int", pid);
-    signal_process(pid, libc::SIGINT)?;
-    if wait_for_process_exit(pid, Duration::from_secs(8)) {
-        qol_runtime::probe!(
-            "SHOT_RECORD_STOP_PID",
-            "pid={} result=stopped signal=int",
-            pid
-        );
-        return Ok(());
-    }
-
-    qol_runtime::probe!("SHOT_RECORD_STOP_PID", "pid={} signal=term", pid);
-    signal_process(pid, libc::SIGTERM)?;
-    if wait_for_process_exit(pid, Duration::from_secs(2)) {
-        qol_runtime::probe!(
-            "SHOT_RECORD_STOP_PID",
-            "pid={} result=stopped signal=term",
-            pid
-        );
-        return Ok(());
-    }
-
-    qol_runtime::probe!("SHOT_RECORD_STOP_PID", "pid={} signal=kill", pid);
-    signal_process(pid, libc::SIGKILL)?;
-    if wait_for_process_exit(pid, Duration::from_secs(2)) {
-        qol_runtime::probe!(
-            "SHOT_RECORD_STOP_PID",
-            "pid={} result=stopped signal=kill",
-            pid
-        );
-        return Ok(());
+    for (signal, label, timeout) in STOP_ESCALATION {
+        qol_runtime::probe!("SHOT_RECORD_STOP_PID", "pid={} signal={label}", pid);
+        signal_process(pid, signal)?;
+        if wait_for_process_exit(pid, timeout) {
+            qol_runtime::probe!(
+                "SHOT_RECORD_STOP_PID",
+                "pid={} result=stopped signal={label}",
+                pid
+            );
+            return Ok(());
+        }
     }
 
     qol_runtime::probe!("SHOT_RECORD_STOP_PID", "pid={} result=still_alive", pid);
