@@ -4,16 +4,10 @@
 //! with `env!("QOL_PLUGIN_ID")` / `env!("QOL_DAEMON_PORT")`, so neither can be
 //! hand-typed (and thus drift) anywhere in Rust or Python.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub fn emit_plugin_id() {
-    let manifest_dir =
-        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set in build scripts");
-    let toml_path = Path::new(&manifest_dir).join("plugin.toml");
-    println!("cargo:rerun-if-changed={}", toml_path.display());
-
-    let contents = std::fs::read_to_string(&toml_path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", toml_path.display()));
+    let (contents, toml_path) = read_plugin_toml();
     let id = plugin_id(&contents).unwrap_or_else(|| {
         panic!(
             "no `id` under the [plugin] table in {}",
@@ -25,13 +19,7 @@ pub fn emit_plugin_id() {
 }
 
 pub fn emit_daemon_port() {
-    let manifest_dir =
-        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set in build scripts");
-    let toml_path = Path::new(&manifest_dir).join("plugin.toml");
-    println!("cargo:rerun-if-changed={}", toml_path.display());
-
-    let contents = std::fs::read_to_string(&toml_path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", toml_path.display()));
+    let (contents, toml_path) = read_plugin_toml();
     let port = daemon_port(&contents).unwrap_or_else(|| {
         panic!(
             "no `port` under the [daemon] table in {}",
@@ -42,21 +30,40 @@ pub fn emit_daemon_port() {
     println!("cargo:rustc-env=QOL_DAEMON_PORT={port}");
 }
 
-fn daemon_port(contents: &str) -> Option<u16> {
-    let mut in_daemon_table = false;
+fn read_plugin_toml() -> (String, PathBuf) {
+    let manifest_dir =
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set in build scripts");
+    let toml_path = Path::new(&manifest_dir).join("plugin.toml");
+    println!("cargo:rerun-if-changed={}", toml_path.display());
+
+    let contents = std::fs::read_to_string(&toml_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", toml_path.display()));
+    (contents, toml_path)
+}
+
+fn value_in_table<T>(
+    contents: &str,
+    table: &str,
+    parse_value: impl Fn(&str) -> Option<T>,
+) -> Option<T> {
+    let mut in_table = false;
     for line in contents.lines() {
         let trimmed = line.trim();
         if let Some(section) = section_name(trimmed) {
-            in_daemon_table = section == "daemon";
+            in_table = section == table;
             continue;
         }
-        if in_daemon_table {
-            if let Some(value) = port_value(trimmed) {
+        if in_table {
+            if let Some(value) = parse_value(trimmed) {
                 return Some(value);
             }
         }
     }
     None
+}
+
+fn daemon_port(contents: &str) -> Option<u16> {
+    value_in_table(contents, "daemon", port_value)
 }
 
 fn port_value(line: &str) -> Option<u16> {
@@ -71,20 +78,7 @@ fn port_value(line: &str) -> Option<u16> {
 }
 
 fn plugin_id(contents: &str) -> Option<String> {
-    let mut in_plugin_table = false;
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if let Some(section) = section_name(trimmed) {
-            in_plugin_table = section == "plugin";
-            continue;
-        }
-        if in_plugin_table {
-            if let Some(value) = id_value(trimmed) {
-                return Some(value);
-            }
-        }
-    }
-    None
+    value_in_table(contents, "plugin", id_value)
 }
 
 fn section_name(line: &str) -> Option<&str> {
