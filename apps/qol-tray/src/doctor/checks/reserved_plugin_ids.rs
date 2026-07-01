@@ -8,7 +8,7 @@ pub(super) struct ReservedPluginIdsCheck;
 
 impl DoctorCheck for ReservedPluginIdsCheck {
     fn meta(&self) -> CheckMeta {
-        CheckMeta::new(ID, "Reserved plugin ids", CheckCategory::DevBuild)
+        CheckMeta::new(ID, "Reserved plugin ids", CheckCategory::Runtime)
             .group(&["dev-loop"])
             .dev_only()
     }

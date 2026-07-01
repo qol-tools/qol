@@ -16,7 +16,7 @@ pub(super) struct FingerprintHealthCheck;
 
 impl DoctorCheck for FingerprintHealthCheck {
     fn meta(&self) -> CheckMeta {
-        CheckMeta::new(ID, "Fingerprint health", CheckCategory::DevBuild)
+        CheckMeta::new(ID, "Fingerprint health", CheckCategory::Runtime)
             .group(&["dev-loop"])
             .dev_only()
     }

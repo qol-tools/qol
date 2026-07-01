@@ -12,7 +12,7 @@ pub(super) struct DevLinkPathsCheck;
 
 impl DoctorCheck for DevLinkPathsCheck {
     fn meta(&self) -> CheckMeta {
-        CheckMeta::new(ID, "Dev-link paths", CheckCategory::DevBuild)
+        CheckMeta::new(ID, "Dev-link paths", CheckCategory::Runtime)
             .group(&["dev-loop"])
             .dev_only()
     }

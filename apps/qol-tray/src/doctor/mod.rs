@@ -414,6 +414,31 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dev")]
+    fn startup_selector_includes_cheap_runtime_checks_only() {
+        let cases = [
+            ("plugin_staleness", true),
+            ("dev_link_paths", true),
+            ("fingerprint_health", true),
+            ("reserved_plugin_ids", true),
+            ("cargo_target_cache", false),
+            ("cargo_target_total", false),
+            ("rust_clippy", false),
+            ("rust_formatting", false),
+        ];
+        for (id, should_be_continuous) in cases {
+            let included = checks::registry()
+                .iter()
+                .any(|check| check.meta().id == id && Selector::Startup.matches(&check.meta()));
+            assert_eq!(
+                included, should_be_continuous,
+                "check id: {id} (cheap dev-loop checks must be continuously evaluated; \
+                 cargo/clippy/fmt scans must stay manual-only)"
+            );
+        }
+    }
+
+    #[test]
     fn startup_selector_is_non_devbuild_partition() {
         let metas: Vec<CheckMeta> = checks::registry()
             .iter()

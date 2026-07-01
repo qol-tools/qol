@@ -14,7 +14,7 @@ pub(super) struct PluginStalenessCheck;
 
 impl DoctorCheck for PluginStalenessCheck {
     fn meta(&self) -> CheckMeta {
-        CheckMeta::new(ID, "Plugin staleness", CheckCategory::DevBuild)
+        CheckMeta::new(ID, "Plugin staleness", CheckCategory::Runtime)
             .group(&["dev-loop"])
             .dev_only()
     }
