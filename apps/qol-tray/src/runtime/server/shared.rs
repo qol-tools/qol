@@ -2,8 +2,9 @@ mod snapshot;
 mod subscribers;
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc as std_mpsc;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
 
 use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
@@ -11,7 +12,7 @@ use qol_runtime::MonitorBounds;
 
 use super::super::state::{self, InputState, Stamped};
 use crate::desktop_state::SharedPlatform;
-use subscribers::SubscriberEntry;
+use subscribers::{SubscriberEntry, SubscriberId};
 
 pub(crate) struct SharedState {
     input: Mutex<InputState>,
@@ -20,6 +21,8 @@ pub(crate) struct SharedState {
     focused_window: Mutex<Option<MonitorBounds>>,
     last_focus_bounds: Mutex<Option<MonitorBounds>>,
     subscribers: Mutex<Vec<SubscriberEntry>>,
+    subscriber_changed: Condvar,
+    next_subscriber_id: AtomicU64,
     armed_lifelines: Mutex<HashSet<String>>,
     platform: OnceLock<SharedPlatform>,
 }
@@ -33,6 +36,8 @@ impl SharedState {
             focused_window: Mutex::new(None),
             last_focus_bounds: Mutex::new(None),
             subscribers: Mutex::new(Vec::new()),
+            subscriber_changed: Condvar::new(),
+            next_subscriber_id: AtomicU64::new(1),
             armed_lifelines: Mutex::new(HashSet::new()),
             platform: OnceLock::new(),
         }
@@ -138,8 +143,17 @@ impl SharedState {
         plugin_id: String,
         interests: HashSet<RuntimeEventKind>,
         tx: std_mpsc::Sender<RuntimeEvent>,
-    ) {
-        subscribers::push(&self.subscribers, plugin_id, interests, tx);
+    ) -> SubscriberId {
+        let id = self.next_subscriber_id.fetch_add(1, Ordering::Relaxed);
+        subscribers::push(&self.subscribers, id, plugin_id, interests, tx);
+        self.subscriber_changed.notify_all();
+        id
+    }
+
+    pub(super) fn remove_subscriber(&self, id: SubscriberId) {
+        if subscribers::remove(&self.subscribers, id) {
+            self.subscriber_changed.notify_all();
+        }
     }
 
     pub(super) fn build_state(&self) -> qol_runtime::PlatformState {
@@ -158,6 +172,10 @@ impl SharedState {
         subscribers::has_poll_subscribers(&self.subscribers)
     }
 
+    pub(super) fn has_window_list_subscribers(&self) -> bool {
+        subscribers::has_window_list_subscribers(&self.subscribers)
+    }
+
     pub(super) fn input(&self) -> InputState {
         lock_or_recover(&self.input).clone()
     }
@@ -173,7 +191,32 @@ impl SharedState {
     pub(crate) fn publish(&self, events: &[RuntimeEvent]) {
         let lifelines = self.armed_lifelines();
         let monitors = self.monitors();
-        subscribers::publish(&self.subscribers, events, &lifelines, &monitors);
+        if subscribers::publish(&self.subscribers, events, &lifelines, &monitors) {
+            self.subscriber_changed.notify_all();
+        }
+    }
+
+    pub(super) fn wait_for_poll_subscriber(&self) {
+        let mut subscribers = lock_or_recover(&self.subscribers);
+        while !subscribers::has_poll_subscribers_in(&subscribers) {
+            subscribers = self
+                .subscriber_changed
+                .wait(subscribers)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+    }
+
+    pub(super) fn wait_for_window_list_subscriber(&self) {
+        let mut subscribers = lock_or_recover(&self.subscribers);
+        while !subscribers::has_event_subscribers_in(
+            &subscribers,
+            RuntimeEventKind::WindowListChanged,
+        ) {
+            subscribers = self
+                .subscriber_changed
+                .wait(subscribers)
+                .unwrap_or_else(|error| error.into_inner());
+        }
     }
 
     pub(super) fn remember_focus_bounds(&self, bounds: Option<MonitorBounds>) -> bool {
@@ -212,4 +255,43 @@ impl SharedState {
 
 pub(super) fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn interests(kinds: &[RuntimeEventKind]) -> HashSet<RuntimeEventKind> {
+        kinds.iter().copied().collect()
+    }
+
+    #[test]
+    fn remove_subscriber_clears_only_matching_token() {
+        let shared = SharedState::new(Vec::new());
+        let (poll_tx, _poll_rx) = std_mpsc::channel();
+        let (window_tx, _window_rx) = std_mpsc::channel();
+
+        let poll_id = shared.add_subscriber(
+            "poll".to_string(),
+            interests(&[RuntimeEventKind::CursorMoved]),
+            poll_tx,
+        );
+        let window_id = shared.add_subscriber(
+            "window".to_string(),
+            interests(&[RuntimeEventKind::WindowListChanged]),
+            window_tx,
+        );
+
+        assert!(shared.has_poll_subscribers());
+        assert!(shared.has_window_list_subscribers());
+
+        shared.remove_subscriber(poll_id);
+
+        assert!(!shared.has_poll_subscribers());
+        assert!(shared.has_window_list_subscribers());
+
+        shared.remove_subscriber(window_id);
+
+        assert!(!shared.has_window_list_subscribers());
+    }
 }

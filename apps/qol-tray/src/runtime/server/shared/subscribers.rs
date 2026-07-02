@@ -6,7 +6,10 @@ use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
 
 use super::lock_or_recover;
 
+pub(super) type SubscriberId = u64;
+
 pub(super) struct SubscriberEntry {
+    pub(super) id: SubscriberId,
     pub(super) plugin_id: String,
     pub(super) interests: HashSet<RuntimeEventKind>,
     pub(super) tx: Sender<RuntimeEvent>,
@@ -14,15 +17,24 @@ pub(super) struct SubscriberEntry {
 
 pub(super) fn push(
     subscribers: &Mutex<Vec<SubscriberEntry>>,
+    id: SubscriberId,
     plugin_id: String,
     interests: HashSet<RuntimeEventKind>,
     tx: Sender<RuntimeEvent>,
 ) {
     lock_or_recover(subscribers).push(SubscriberEntry {
+        id,
         plugin_id,
         interests,
         tx,
     });
+}
+
+pub(super) fn remove(subscribers: &Mutex<Vec<SubscriberEntry>>, id: SubscriberId) -> bool {
+    let mut subscribers = lock_or_recover(subscribers);
+    let before = subscribers.len();
+    subscribers.retain(|entry| entry.id != id);
+    subscribers.len() != before
 }
 
 pub(super) fn has_subscribers(subscribers: &Mutex<Vec<SubscriberEntry>>) -> bool {
@@ -30,9 +42,29 @@ pub(super) fn has_subscribers(subscribers: &Mutex<Vec<SubscriberEntry>>) -> bool
 }
 
 pub(super) fn has_poll_subscribers(subscribers: &Mutex<Vec<SubscriberEntry>>) -> bool {
-    lock_or_recover(subscribers)
+    has_poll_subscribers_in(&lock_or_recover(subscribers))
+}
+
+pub(super) fn has_poll_subscribers_in(subscribers: &[SubscriberEntry]) -> bool {
+    subscribers
         .iter()
         .any(|entry| entry.interests.iter().any(is_poll_event_kind))
+}
+
+pub(super) fn has_window_list_subscribers(subscribers: &Mutex<Vec<SubscriberEntry>>) -> bool {
+    has_event_subscribers_in(
+        &lock_or_recover(subscribers),
+        RuntimeEventKind::WindowListChanged,
+    )
+}
+
+pub(super) fn has_event_subscribers_in(
+    subscribers: &[SubscriberEntry],
+    kind: RuntimeEventKind,
+) -> bool {
+    subscribers
+        .iter()
+        .any(|entry| entry.interests.contains(&kind))
 }
 
 pub(super) fn publish(
@@ -40,7 +72,7 @@ pub(super) fn publish(
     events: &[RuntimeEvent],
     armed_lifelines: &[String],
     monitors: &[qol_runtime::MonitorBounds],
-) {
+) -> bool {
     let mut subscribers = lock_or_recover(subscribers);
     let results = fan_out(&subscribers, events);
 
@@ -53,7 +85,7 @@ pub(super) fn publish(
         monitors,
     );
 
-    retain_succeeded(&mut subscribers, &results);
+    retain_succeeded(&mut subscribers, &results)
 }
 
 fn fan_out(subscribers: &[SubscriberEntry], events: &[RuntimeEvent]) -> Vec<(String, bool, bool)> {
@@ -79,13 +111,18 @@ fn fan_out(subscribers: &[SubscriberEntry], events: &[RuntimeEvent]) -> Vec<(Str
         .collect()
 }
 
-fn retain_succeeded(subscribers: &mut Vec<SubscriberEntry>, results: &[(String, bool, bool)]) {
+fn retain_succeeded(
+    subscribers: &mut Vec<SubscriberEntry>,
+    results: &[(String, bool, bool)],
+) -> bool {
+    let before = subscribers.len();
     let mut i = 0;
     subscribers.retain(|_| {
         let success = results[i].1;
         i += 1;
         success
     });
+    subscribers.len() != before
 }
 
 fn amc_interested_ids(subscribers: &[SubscriberEntry]) -> Vec<String> {
@@ -195,7 +232,7 @@ mod tests {
     ) {
         let subscribers = Mutex::new(Vec::new());
         let (tx, rx) = std_mpsc::channel();
-        push(&subscribers, plugin_id.to_string(), interests(kinds), tx);
+        push(&subscribers, 1, plugin_id.to_string(), interests(kinds), tx);
         (subscribers, rx)
     }
 
@@ -224,6 +261,7 @@ mod tests {
         let (tx, _rx) = std_mpsc::channel();
         push(
             &subs,
+            1,
             "test".to_string(),
             interests(&[RuntimeEventKind::CursorMoved]),
             tx,
@@ -290,6 +328,7 @@ mod tests {
         let (tx, rx) = std_mpsc::channel();
         push(
             &subs,
+            1,
             "test".to_string(),
             interests(&[RuntimeEventKind::CursorMoved]),
             tx,
@@ -323,6 +362,7 @@ mod tests {
         let (tx, rx) = std_mpsc::channel();
         push(
             &subs,
+            1,
             "test".to_string(),
             interests(&[RuntimeEventKind::CursorMoved]),
             tx,
@@ -343,6 +383,7 @@ mod tests {
         let (tx, _rx) = std_mpsc::channel();
         push(
             &subs,
+            1,
             "test".to_string(),
             interests(&[RuntimeEventKind::FocusChanged]),
             tx,
@@ -368,12 +409,14 @@ mod tests {
         let (tx_focus, rx_focus) = std_mpsc::channel();
         push(
             &subs,
+            1,
             "test-cursor".to_string(),
             interests(&[RuntimeEventKind::CursorMoved]),
             tx_cursor,
         );
         push(
             &subs,
+            2,
             "test-focus".to_string(),
             interests(&[RuntimeEventKind::FocusChanged]),
             tx_focus,
@@ -400,6 +443,7 @@ mod tests {
     fn publish_to_subscriber_returns_false_when_send_fails_mid_batch() {
         let (tx, rx) = std_mpsc::channel();
         let entry = SubscriberEntry {
+            id: 1,
             plugin_id: "test".to_string(),
             interests: interests(&[
                 RuntimeEventKind::CursorMoved,
@@ -451,8 +495,8 @@ mod tests {
             let subs = Mutex::new(Vec::new());
             let (tx_a, rx_a) = std_mpsc::channel();
             let (tx_b, rx_b) = std_mpsc::channel();
-            push(&subs, "test-a".to_string(), interests_a.clone(), tx_a);
-            push(&subs, "test-b".to_string(), interests_b.clone(), tx_b);
+            push(&subs, 1, "test-a".to_string(), interests_a.clone(), tx_a);
+            push(&subs, 2, "test-b".to_string(), interests_b.clone(), tx_b);
 
             publish(&subs, &events, &[], &[]);
 
@@ -488,7 +532,7 @@ mod tests {
 
             let subs = Mutex::new(Vec::new());
             let (tx, rx) = std_mpsc::channel();
-            push(&subs, "test".to_string(), interests, tx);
+            push(&subs, 1, "test".to_string(), interests, tx);
             drop(rx);
 
             publish(&subs, &events, &[], &[]);

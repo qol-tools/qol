@@ -119,8 +119,9 @@ fn handle_lifeline(writer: &mut UnixStream, shared: &SharedState, plugin_id: Str
     // No events ever flow on a lifeline; the held-open connection exists purely
     // so the daemon's read sees EOF when this host process dies. Block until the
     // daemon disconnects (it exited) or the probe detects the peer is gone.
-    let (_tx, rx) = std_mpsc::channel::<RuntimeEvent>();
+    let (keepalive_tx, rx) = std_mpsc::channel::<RuntimeEvent>();
     forward_events(writer, rx);
+    drop(keepalive_tx);
 
     unregister_lifeline_for_exec_handoff(writer);
     shared.disarm_lifeline(&plugin_id);
@@ -162,9 +163,10 @@ fn handle_subscription(
         clean_id,
         interests
     );
-    shared.add_subscriber(plugin_id.clone(), interests, tx);
+    let subscriber_id = shared.add_subscriber(plugin_id.clone(), interests, tx);
 
     if !write_flushed_json_line(writer, &SubscribeAck::Subscribed) {
+        shared.remove_subscriber(subscriber_id);
         return;
     }
 
@@ -174,6 +176,7 @@ fn handle_subscription(
     let _ = writer.set_write_timeout(Some(Duration::from_secs(SUBSCRIBER_WRITE_TIMEOUT_SECS)));
 
     forward_events(writer, rx);
+    shared.remove_subscriber(subscriber_id);
 
     log::info!("[runtime/socket] subscriber disconnected: {}", clean_id);
 }
@@ -589,6 +592,38 @@ mod tests {
     }
 
     #[test]
+    fn subscription_is_removed_on_disconnect() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (server, mut client) = pair();
+
+        std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let mut server = server;
+                handle_request(
+                    r#"{"cmd":"subscribe","plugin_id":"plugin-x","events":["cursor_moved"]}"#,
+                    &mut server,
+                    &shared,
+                );
+            });
+
+            let ack = read_to_string(&mut client);
+            assert!(ack.contains("subscribed"), "ack: {ack:?}");
+            assert!(
+                shared.has_poll_subscribers(),
+                "subscription must be visible while the daemon is connected",
+            );
+
+            drop(client);
+            handle.join().expect("subscription handler thread");
+        });
+
+        assert!(
+            !shared.has_poll_subscribers(),
+            "subscription must be removed when the daemon disconnects",
+        );
+    }
+
+    #[test]
     fn armed_lifelines_request_returns_sorted_armed_set() {
         let shared = SharedState::new(vec![mon(0.0)]);
         shared.arm_lifeline("plugin-launcher".to_string());
@@ -632,6 +667,39 @@ mod tests {
         assert!(
             shared.armed_lifelines().is_empty(),
             "lifeline must disarm when the daemon disconnects",
+        );
+    }
+
+    #[test]
+    fn lifeline_stays_armed_while_peer_is_connected() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (server, mut client) = pair();
+
+        std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let mut server = server;
+                handle_request(
+                    r#"{"cmd":"lifeline","plugin_id":"plugin-x"}"#,
+                    &mut server,
+                    &shared,
+                );
+            });
+
+            let ack = read_to_string(&mut client);
+            assert!(ack.contains("subscribed"), "ack: {ack:?}");
+            std::thread::sleep(SUBSCRIBER_KEEPALIVE_PROBE * 3);
+            assert!(
+                shared.armed_lifelines().iter().any(|id| id == "plugin-x"),
+                "lifeline must remain armed until the daemon disconnects",
+            );
+
+            drop(client);
+            handle.join().expect("lifeline handler thread");
+        });
+
+        assert!(
+            shared.armed_lifelines().is_empty(),
+            "lifeline must disarm after the daemon disconnects",
         );
     }
 }

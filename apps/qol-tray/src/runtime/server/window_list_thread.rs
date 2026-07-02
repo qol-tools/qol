@@ -11,13 +11,15 @@ pub(super) fn run(shared: Arc<SharedState>, platform: SharedPlatform) {
     let mut channel = WindowListChannel::new(platform);
     let interval = channel.min_interval();
     loop {
-        std::thread::sleep(interval);
-        if !channel.poll() {
+        shared.wait_for_window_list_subscriber();
+        if !shared.has_window_list_subscribers() {
             continue;
         }
-        if !shared.has_subscribers() {
+        if !channel.poll() {
+            std::thread::sleep(interval);
             continue;
         }
         shared.publish(&[RuntimeEvent::WindowListChanged]);
+        std::thread::sleep(interval);
     }
 }

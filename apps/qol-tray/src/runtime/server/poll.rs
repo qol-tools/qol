@@ -132,6 +132,7 @@ impl PollRuntime {
 
     fn run(mut self) {
         loop {
+            self.shared.wait_for_poll_subscriber();
             if self.wait_for_monitors() {
                 continue;
             }
