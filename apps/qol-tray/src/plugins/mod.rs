@@ -28,6 +28,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 use std::process::Child;
 
+use daemon_lifecycle::DaemonListener;
 pub(crate) use execution_contract::{
     resolve_plugin_command_path_for_source, validate_execution_contract,
     validate_execution_contract_for_source,
@@ -40,6 +41,7 @@ pub struct Plugin {
     pub path: PathBuf,
     pub source: PluginSource,
     daemon_process: Option<Child>,
+    daemon_listener: Option<DaemonListener>,
 }
 
 impl Plugin {
@@ -59,6 +61,7 @@ impl Plugin {
             path,
             source,
             daemon_process: None,
+            daemon_listener: None,
         }
     }
 

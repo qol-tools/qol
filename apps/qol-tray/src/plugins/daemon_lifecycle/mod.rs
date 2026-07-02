@@ -1,3 +1,4 @@
+mod listener;
 mod spawn;
 
 use super::Plugin;
@@ -5,14 +6,21 @@ use anyhow::Result;
 use std::process::Child;
 use std::time::Duration;
 
+pub(super) use listener::DaemonListener;
+
 const DAEMON_STOP_GRACE: Duration = Duration::from_secs(2);
 
 pub(super) fn start_daemon(plugin: &mut Plugin) -> Result<()> {
-    let Some(daemon_config) = spawn::enabled_daemon(plugin) else {
+    let Some(daemon_config) = spawn::enabled_daemon(plugin).cloned() else {
         return Ok(());
     };
 
-    let child = spawn::spawn_daemon(plugin, daemon_config)?;
+    if plugin.daemon_listener.is_none() {
+        let bound = listener::bind_for_plugin(plugin, &daemon_config);
+        plugin.daemon_listener = bound;
+    }
+
+    let child = spawn::spawn_daemon(plugin, &daemon_config, plugin.daemon_listener.as_ref())?;
     register_daemon(plugin, child);
     Ok(())
 }

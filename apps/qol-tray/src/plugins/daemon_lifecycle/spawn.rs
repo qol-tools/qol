@@ -12,10 +12,14 @@ pub(super) fn enabled_daemon(plugin: &Plugin) -> Option<&DaemonConfig> {
         .filter(|daemon| daemon.enabled)
 }
 
-pub(super) fn spawn_daemon(plugin: &Plugin, daemon_config: &DaemonConfig) -> Result<Child> {
+pub(super) fn spawn_daemon(
+    plugin: &Plugin,
+    daemon_config: &DaemonConfig,
+    daemon_listener: Option<&super::DaemonListener>,
+) -> Result<Child> {
     materialize_runtime_config(plugin)?;
     let daemon_path = daemon_path(plugin, daemon_config)?;
-    let mut command = daemon_command(plugin, daemon_config, &daemon_path);
+    let mut command = daemon_command(plugin, daemon_config, &daemon_path, daemon_listener);
     #[cfg(feature = "dev")]
     let relay_patterns = configure_log_relay(plugin, &mut command);
     #[cfg(not(feature = "dev"))]
@@ -67,7 +71,12 @@ fn daemon_path(plugin: &Plugin, daemon_config: &DaemonConfig) -> Result<PathBuf>
     })
 }
 
-fn daemon_command(plugin: &Plugin, daemon_config: &DaemonConfig, daemon_path: &Path) -> Command {
+fn daemon_command(
+    plugin: &Plugin,
+    daemon_config: &DaemonConfig,
+    daemon_path: &Path,
+    daemon_listener: Option<&super::DaemonListener>,
+) -> Command {
     let mut command = Command::new(daemon_path);
     command.current_dir(&plugin.path).stdin(Stdio::null());
     command.env(qol_conventions::ENV_PLUGIN_ID, plugin.id.as_str());
@@ -75,6 +84,9 @@ fn daemon_command(plugin: &Plugin, daemon_config: &DaemonConfig, daemon_path: &P
     apply_log_env(&mut command);
     apply_daemon_env(&mut command, daemon_config);
     apply_process_group(&mut command);
+    if let Some(daemon_listener) = daemon_listener {
+        super::listener::apply_to_command(daemon_listener, &mut command);
+    }
     command
 }
 
