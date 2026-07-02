@@ -6,6 +6,7 @@ mod takeover;
 use std::process::ExitCode;
 
 pub fn run() -> ExitCode {
+    qol_runtime::spawn_host_death_watchdog();
     let config = config::Config::load();
     match server::serve(daemon_port(), config) {
         Ok(()) => ExitCode::SUCCESS,
