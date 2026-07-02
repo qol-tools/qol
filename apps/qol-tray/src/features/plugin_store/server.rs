@@ -46,11 +46,16 @@ use std::path::PathBuf;
 #[cfg(feature = "dev")]
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "dev")]
+use std::time::Duration;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::daemon::Daemon;
 use crate::plugins::PluginManager;
 use types::*;
+
+#[cfg(feature = "dev")]
+const PROMOTED_DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(8);
 
 pub(crate) async fn start_ui_server(
     plugin_manager: Arc<Mutex<PluginManager>>,
@@ -107,18 +112,47 @@ async fn promote_shadow_to_stable(app_state: AppState) -> Result<u16> {
         }
     };
     let (listener, port) = listener;
+    if let Err(error) = crate::dev_generation::drain_predecessor_daemons_for_promotion() {
+        app_state.promoted_to_stable.store(false, Ordering::Release);
+        return Err(error);
+    }
+    #[cfg(unix)]
+    if !crate::runtime::RuntimeServer::bind_public_socket() {
+        app_state.promoted_to_stable.store(false, Ordering::Release);
+        anyhow::bail!("failed to bind promoted runtime state socket");
+    }
     super::ACTIVE_SERVER_PORT.store(port, Ordering::Relaxed);
     tokio::spawn(async move {
         if let Err(error) = axum::serve(listener, app).await {
             log::error!("Promoted UI server error: {}", error);
         }
     });
-    crate::dev_generation::release_daemon_autostart();
+    crate::dev_generation::promote_to_stable();
     let plugin_manager = app_state.plugin_manager.clone();
-    tokio::task::spawn_blocking(move || match plugin_manager.lock() {
-        Ok(mut manager) => manager.autostart_daemons(),
-        Err(_) => log::error!("plugin manager lock poisoned during promoted daemon autostart"),
+    let missing_daemons = tokio::task::spawn_blocking(move || match plugin_manager.lock() {
+        Ok(mut manager) => {
+            manager.autostart_daemons();
+            manager.wait_for_autostart_daemons_ready(PROMOTED_DAEMON_READY_TIMEOUT)
+        }
+        Err(_) => {
+            log::error!("plugin manager lock poisoned during promoted daemon autostart");
+            Vec::new()
+        }
+    })
+    .await
+    .unwrap_or_else(|error| {
+        log::error!("promoted daemon autostart task failed: {}", error);
+        Vec::new()
     });
+    if missing_daemons.is_empty() {
+        log::info!("Promoted dev generation: daemon autostart ready");
+    } else {
+        log::warn!(
+            "Promoted dev generation: daemon(s) not ready before handoff: {}",
+            missing_daemons.join(", ")
+        );
+    }
+    crate::hotkeys::start_capture_with_fallback(app_state.plugin_manager.clone());
     start_sync_loop(&app_state);
     start_dev_discovery(&app_state);
     Ok(port)

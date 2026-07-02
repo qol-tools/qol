@@ -36,6 +36,22 @@ impl RuntimeServer {
         spawn_socket_thread(shared, state_socket_path);
         Self { _handle: () }
     }
+
+    pub fn bind_public_socket() -> bool {
+        let path = std::path::PathBuf::from(qol_conventions::STATE_SOCKET_PATH);
+        let Some(shared) = super::publisher::shared() else {
+            log::error!(
+                "Cannot bind promoted runtime socket at {}: runtime publisher is not installed",
+                path.display()
+            );
+            return false;
+        };
+        let Some(listener) = socket::bind_at(&path) else {
+            return false;
+        };
+        spawn_socket_listener_thread(shared, listener);
+        true
+    }
 }
 
 fn spawn_poll_thread(shared: Arc<SharedState>, channels: RuntimeChannels) {
@@ -57,4 +73,14 @@ fn spawn_socket_thread(shared: Arc<SharedState>, path: std::path::PathBuf) {
         .name("runtime-sock".into())
         .spawn(move || socket::run_at(shared, &path))
         .expect("failed to spawn runtime socket thread");
+}
+
+fn spawn_socket_listener_thread(
+    shared: Arc<SharedState>,
+    listener: std::os::unix::net::UnixListener,
+) {
+    std::thread::Builder::new()
+        .name("runtime-sock-promoted".into())
+        .spawn(move || socket::run_listener(shared, listener))
+        .expect("failed to spawn promoted runtime socket thread");
 }

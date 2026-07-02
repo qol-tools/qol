@@ -519,19 +519,10 @@ async fn async_init_inner(
         core_log_controls,
     )
     .await?;
-    match hotkeys::start_capture(plugin_manager.clone()) {
-        Ok(()) => log::info!("Hotkey capture: kernel-level (evdev/uinput)"),
-        Err(e) => {
-            log::info!("Hotkey capture fallback to global_hotkey ({e})");
-            if let Err(e) = hotkeys::start_hotkey_listener(plugin_manager.clone()) {
-                log::warn!("Failed to start hotkey listener: {}", e);
-            } else {
-                tokio::spawn(async {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    hotkeys::trigger_reload();
-                });
-            }
-        }
+    if shadow_generation {
+        log::info!("Shadow dev generation: deferring hotkey capture until promotion");
+    } else {
+        hotkeys::start_capture_with_fallback(plugin_manager.clone());
     }
     qol_tray::plugins::daemon_supervisor::spawn_supervisor(
         plugin_manager.clone(),

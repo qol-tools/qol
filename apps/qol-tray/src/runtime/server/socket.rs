@@ -14,14 +14,22 @@ use requests::{handle_request, request_is_long_lived};
 const CONNECTION_WORKERS: usize = 4;
 
 pub(crate) fn run_at(shared: Arc<SharedState>, path: &Path) {
-    let _ = std::fs::remove_file(path);
-
-    let Some(listener) = bind_listener(path) else {
+    let Some(listener) = bind_at(path) else {
         return;
     };
 
-    log::info!("Runtime socket listening on {}", path.display());
+    run_listener(shared, listener);
+}
 
+pub(crate) fn bind_at(path: &Path) -> Option<UnixListener> {
+    let _ = std::fs::remove_file(path);
+
+    let listener = bind_listener(path)?;
+    log::info!("Runtime socket listening on {}", path.display());
+    Some(listener)
+}
+
+pub(crate) fn run_listener(shared: Arc<SharedState>, listener: UnixListener) {
     let dispatcher = ConnectionDispatcher::new(shared);
     for stream in listener.incoming() {
         dispatcher.dispatch(stream);

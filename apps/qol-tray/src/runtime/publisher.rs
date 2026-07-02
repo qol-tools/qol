@@ -10,6 +10,10 @@ pub(super) fn install(shared: Arc<SharedState>) {
     let _ = PUBLISHER.set(shared);
 }
 
+pub(super) fn shared() -> Option<Arc<SharedState>> {
+    PUBLISHER.get().cloned()
+}
+
 pub fn publish(events: &[RuntimeEvent]) {
     let Some(shared) = PUBLISHER.get() else {
         log::warn!(

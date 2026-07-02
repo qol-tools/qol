@@ -72,6 +72,25 @@ pub fn start_capture(
     capture::install(bindings, on_fire, reload_rx, rebuild)
 }
 
+pub fn start_capture_with_fallback(
+    plugin_manager: std::sync::Arc<std::sync::Mutex<crate::plugins::PluginManager>>,
+) {
+    match start_capture(plugin_manager.clone()) {
+        Ok(()) => log::info!("Hotkey capture: native"),
+        Err(error) => {
+            log::info!("Hotkey capture fallback to global_hotkey ({error})");
+            if let Err(error) = start_hotkey_listener(plugin_manager) {
+                log::warn!("Failed to start hotkey listener: {}", error);
+            } else {
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    trigger_reload();
+                });
+            }
+        }
+    }
+}
+
 fn load_bindings_for_capture() -> anyhow::Result<Vec<capture::Binding>> {
     let manager = HotkeyManager::new()?;
     let config = manager.load_config()?;
