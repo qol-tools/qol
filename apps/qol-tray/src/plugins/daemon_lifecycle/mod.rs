@@ -26,6 +26,16 @@ pub(super) fn start_daemon(plugin: &mut Plugin) -> Result<()> {
 }
 
 pub(super) fn existing_daemon_socket_ready(plugin: &Plugin) -> bool {
+    // When qol-tray holds the pre-bound listener itself, connecting to the
+    // socket succeeds regardless of daemon state - the probe would only be
+    // measuring our own fd. Any daemon on that socket was spawned by this
+    // process, so its child liveness is the real signal.
+    if plugin.daemon_listener.is_some() {
+        return plugin
+            .daemon_pid()
+            .is_some_and(|pid| crate::process_utils::is_pid_alive(pid as i32));
+    }
+
     let Some(socket_path) = plugin
         .manifest
         .daemon
@@ -362,6 +372,69 @@ items = []
             "a daemon that crashed and was reaped before the stop still leaves the \
              retained listener behind unless stop_daemon drops it unconditionally"
         );
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[cfg(unix)]
+    fn migrated_plugin_with_daemon(socket_path: &str) -> Plugin {
+        let manifest: PluginManifest = toml::from_str(&format!(
+            r#"
+[plugin]
+id = "plugin-alt-tab"
+name = "Foo"
+description = ""
+version = "1.0.0"
+
+[menu]
+label = "Foo"
+items = []
+
+[daemon]
+enabled = true
+command = "any"
+socket = "{socket_path}"
+"#
+        ))
+        .unwrap();
+        Plugin::new(
+            PluginId::new("plugin-alt-tab"),
+            manifest,
+            std::path::PathBuf::new(),
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_daemon_socket_ready_is_not_satisfied_by_the_trays_own_listener() {
+        let socket_path = format!(
+            "/tmp/qol-daemon-lifecycle-test-ready-{}.sock",
+            std::process::id()
+        );
+        let _ = std::fs::remove_file(&socket_path);
+        let mut plugin = migrated_plugin_with_daemon(&socket_path);
+        let daemon_config = plugin.manifest.daemon.clone().unwrap();
+        plugin.daemon_listener = listener::bind_for_plugin(&plugin, &daemon_config);
+        assert!(
+            plugin.daemon_listener.is_some(),
+            "test setup must pre-bind a listener"
+        );
+
+        assert!(
+            !existing_daemon_socket_ready(&plugin),
+            "the tray's own retained listener accepts connects even with no daemon \
+             behind it, so it must not read as a serving daemon - otherwise the \
+             supervisor never respawns a crashed one"
+        );
+
+        plugin.daemon_process = Some(spawn_long_running());
+        assert!(
+            existing_daemon_socket_ready(&plugin),
+            "a live daemon process behind the retained listener is serving"
+        );
+
+        let child = plugin.daemon_process.as_mut().unwrap();
+        child.kill().unwrap();
+        child.wait().unwrap();
         let _ = std::fs::remove_file(&socket_path);
     }
 }
