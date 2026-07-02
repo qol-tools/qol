@@ -3,7 +3,7 @@ use crate::plugins::Plugin;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-const DEV_DAEMON_AUTOSTART_MARKER: &str = ".qol-tray-dev-autostart";
+pub(super) const DEV_DAEMON_AUTOSTART_MARKER: &str = ".qol-tray-dev-autostart";
 const DAEMON_READY_INTERVAL: Duration = Duration::from_millis(25);
 
 pub(super) fn start_plugin_daemons<'a, I>(plugins: I)
@@ -92,7 +92,7 @@ where
 {
     let mut pending: Vec<&Plugin> = plugins
         .into_iter()
-        .filter(|plugin| should_wait_for_daemon_readiness(plugin))
+        .filter(|plugin| daemon_auto_managed(plugin))
         .collect();
     let deadline = Instant::now() + timeout;
     while !pending.is_empty() && Instant::now() < deadline {
@@ -109,7 +109,7 @@ where
         .collect()
 }
 
-fn should_wait_for_daemon_readiness(plugin: &Plugin) -> bool {
+pub(super) fn daemon_auto_managed(plugin: &Plugin) -> bool {
     should_wait_for_daemon_readiness_for_source(
         plugin.id.as_str(),
         &plugin.path,

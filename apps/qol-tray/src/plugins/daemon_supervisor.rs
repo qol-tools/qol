@@ -129,11 +129,11 @@ fn snapshot_daemons(plugin_manager: &Arc<Mutex<PluginManager>>) -> Vec<DaemonSna
         return Vec::new();
     };
     manager
-        .plugins()
-        .filter(|p| p.manifest.daemon.as_ref().is_some_and(|d| d.enabled))
-        .map(|p| DaemonSnapshot {
-            plugin_id: p.id.clone(),
-            daemon_pid: p.daemon_pid(),
+        .supervised_daemon_snapshots()
+        .into_iter()
+        .map(|(plugin_id, daemon_pid)| DaemonSnapshot {
+            plugin_id,
+            daemon_pid,
         })
         .collect()
 }
