@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::io::{self, BufRead, BufReader, ErrorKind, Write};
 use std::net::Shutdown;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -29,7 +29,7 @@ pub enum ReadResult<C> {
     Handled,
     HandledWithData(serde_json::Value),
     Fallback,
-    Error(&'static str),
+    Error(String),
     Ignore,
 }
 
@@ -120,38 +120,8 @@ pub fn start_listener<C: Send + 'static>(
     tx: Sender<C>,
     parser: fn(&str) -> ReadResult<C>,
 ) -> bool {
-    let Some(socket_path) = socket_path(config) else {
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[daemon] {} unset and no fallback socket - not binding",
-            qol_conventions::ENV_DAEMON_SOCKET
-        );
+    let Ok((listener, socket_path)) = bind_listener(config) else {
         return false;
-    };
-    let support_replace = config.support_replace_existing;
-
-    #[cfg(debug_assertions)]
-    eprintln!("[daemon] binding to {:?}", socket_path);
-
-    let listener = match UnixListener::bind(&socket_path) {
-        Ok(l) => l,
-        Err(e) if e.kind() == ErrorKind::AddrInUse => {
-            if send_ping(config) {
-                if !support_replace || !replace_existing_enabled() {
-                    #[cfg(debug_assertions)]
-                    eprintln!("[daemon] existing instance alive, exiting");
-                    return false;
-                }
-                #[cfg(debug_assertions)]
-                eprintln!("[daemon] replacing existing socket owner");
-            }
-            remove_socket_file(&socket_path);
-            let Ok(l) = UnixListener::bind(&socket_path) else {
-                return false;
-            };
-            l
-        }
-        Err(_) => return false,
     };
 
     qol_runtime::spawn_host_death_watchdog();
@@ -161,37 +131,15 @@ pub fn start_listener<C: Send + 'static>(
             match stream {
                 Ok(mut s) => {
                     let result = read_and_parse(&mut s, parser);
-                    match result {
-                        ReadResult::Command(cmd) => {
-                            let resp = if tx.send(cmd).is_ok() {
-                                DaemonResponse::Handled { data: None }
-                            } else {
-                                DaemonResponse::Fallback
-                            };
-                            let is_fallback = matches!(resp, DaemonResponse::Fallback);
-                            write_response(&mut s, &resp);
-                            if is_fallback {
-                                break;
-                            }
+                    let should_continue = handle_read_result(&mut s, result, |cmd| {
+                        if tx.send(cmd).is_ok() {
+                            DaemonResponse::Handled { data: None }
+                        } else {
+                            DaemonResponse::Fallback
                         }
-                        ReadResult::Handled => {
-                            write_response(&mut s, &DaemonResponse::Handled { data: None });
-                        }
-                        ReadResult::HandledWithData(data) => {
-                            write_response(&mut s, &DaemonResponse::Handled { data: Some(data) });
-                        }
-                        ReadResult::Fallback => {
-                            write_response(&mut s, &DaemonResponse::Fallback);
-                        }
-                        ReadResult::Error(msg) => {
-                            write_response(
-                                &mut s,
-                                &DaemonResponse::Error {
-                                    message: msg.to_string(),
-                                },
-                            );
-                        }
-                        ReadResult::Ignore => {}
+                    });
+                    if !should_continue {
+                        break;
                     }
                 }
                 Err(_) => break,
@@ -203,7 +151,79 @@ pub fn start_listener<C: Send + 'static>(
     true
 }
 
-fn read_and_parse<C>(stream: &mut UnixStream, parser: fn(&str) -> ReadResult<C>) -> ReadResult<C> {
+pub fn run_stateful_listener<S, F>(
+    config: &DaemonConfig,
+    mut state: S,
+    mut handler: F,
+) -> io::Result<()>
+where
+    F: FnMut(&mut S, &str) -> ReadResult<()>,
+{
+    let (listener, socket_path) = bind_listener(config)?;
+
+    qol_runtime::spawn_host_death_watchdog();
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(mut s) => {
+                let result = read_and_parse(&mut s, |action| handler(&mut state, action));
+                handle_read_result(&mut s, result, |_| DaemonResponse::Handled { data: None });
+            }
+            Err(error) => {
+                eprintln!("accept error: {error:#}");
+            }
+        }
+    }
+
+    remove_socket_file(socket_path);
+    Ok(())
+}
+
+fn bind_listener(config: &DaemonConfig) -> io::Result<(UnixListener, PathBuf)> {
+    let Some(socket_path) = socket_path(config) else {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[daemon] {} unset and no fallback socket - not binding",
+            qol_conventions::ENV_DAEMON_SOCKET
+        );
+        return Err(io::Error::new(
+            ErrorKind::NotFound,
+            format!("{} is not set", qol_conventions::ENV_DAEMON_SOCKET),
+        ));
+    };
+    let support_replace = config.support_replace_existing;
+
+    #[cfg(debug_assertions)]
+    eprintln!("[daemon] binding to {:?}", socket_path);
+
+    let listener = match UnixListener::bind(&socket_path) {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == ErrorKind::AddrInUse => {
+            if send_ping(config) {
+                if !support_replace || !replace_existing_enabled() {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[daemon] existing instance alive, exiting");
+                    return Err(io::Error::new(
+                        ErrorKind::AddrInUse,
+                        "existing daemon instance is alive",
+                    ));
+                }
+                #[cfg(debug_assertions)]
+                eprintln!("[daemon] replacing existing socket owner");
+            }
+            remove_socket_file(&socket_path);
+            UnixListener::bind(&socket_path)?
+        }
+        Err(error) => return Err(error),
+    };
+
+    Ok((listener, socket_path))
+}
+
+fn read_and_parse<C, F>(stream: &mut UnixStream, mut parser: F) -> ReadResult<C>
+where
+    F: FnMut(&str) -> ReadResult<C>,
+{
     let timeout = std::time::Duration::from_millis(ACK_TIMEOUT_MS);
     let _ = stream.set_read_timeout(Some(timeout));
 
@@ -246,6 +266,31 @@ fn read_and_parse<C>(stream: &mut UnixStream, parser: fn(&str) -> ReadResult<C>)
     parser(cmd)
 }
 
+fn handle_read_result<C, F>(
+    stream: &mut UnixStream,
+    result: ReadResult<C>,
+    command_response: F,
+) -> bool
+where
+    F: FnOnce(C) -> DaemonResponse,
+{
+    let response = match result {
+        ReadResult::Command(cmd) => {
+            let response = command_response(cmd);
+            let should_continue = !matches!(response, DaemonResponse::Fallback);
+            write_response(stream, &response);
+            return should_continue;
+        }
+        ReadResult::Handled => DaemonResponse::Handled { data: None },
+        ReadResult::HandledWithData(data) => DaemonResponse::Handled { data: Some(data) },
+        ReadResult::Fallback => DaemonResponse::Fallback,
+        ReadResult::Error(message) => DaemonResponse::Error { message },
+        ReadResult::Ignore => return true,
+    };
+    write_response(stream, &response);
+    true
+}
+
 fn write_response(stream: &mut UnixStream, response: &DaemonResponse) {
     if let Ok(json) = serde_json::to_string(response) {
         let _ = stream.write_all(json.as_bytes());
@@ -269,5 +314,184 @@ fn remove_socket_file(path: impl AsRef<std::path::Path>) {
     };
     if meta.file_type().is_socket() {
         let _ = fs::remove_file(path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_SOCKET_ID: AtomicUsize = AtomicUsize::new(0);
+
+    fn stream_with_line(line: &str) -> UnixStream {
+        let (mut writer, reader) = UnixStream::pair().unwrap();
+        writer.write_all(line.as_bytes()).unwrap();
+        writer.write_all(b"\n").unwrap();
+        reader
+    }
+
+    fn response_for_result<C>(
+        result: ReadResult<C>,
+        command_response: impl FnOnce(C) -> DaemonResponse,
+    ) -> (bool, DaemonResponse) {
+        let (mut server, client) = UnixStream::pair().unwrap();
+        let should_continue = handle_read_result(&mut server, result, command_response);
+        drop(server);
+
+        let mut reader = BufReader::new(client);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let response = serde_json::from_str(line.trim()).unwrap();
+        (should_continue, response)
+    }
+
+    fn temp_socket_name(tag: &str) -> &'static str {
+        let id = NEXT_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
+        Box::leak(
+            format!("qol-plugin-daemon-{tag}-{}-{id}.sock", std::process::id()).into_boxed_str(),
+        )
+    }
+
+    fn fallback_config(socket_name: &'static str) -> DaemonConfig {
+        DaemonConfig {
+            socket: SocketSource::Fallback {
+                default_socket_name: socket_name,
+                use_tmpdir_env: false,
+            },
+            support_replace_existing: false,
+        }
+    }
+
+    #[test]
+    fn parses_json_request_action() {
+        let mut stream = stream_with_line(r#"{"action":"open"}"#);
+        let result = read_and_parse(&mut stream, |action| {
+            ReadResult::<String>::Command(action.to_string())
+        });
+
+        match result {
+            ReadResult::Command(action) => assert_eq!(action, "open"),
+            _ => panic!("expected command"),
+        }
+    }
+
+    #[test]
+    fn parses_plain_and_prefixed_actions() {
+        for (line, expected) in [("open", "open"), ("action:reload", "reload")] {
+            let mut stream = stream_with_line(line);
+            let result = read_and_parse(&mut stream, |action| {
+                ReadResult::<String>::Command(action.to_string())
+            });
+
+            match result {
+                ReadResult::Command(action) => assert_eq!(action, expected),
+                _ => panic!("expected command"),
+            }
+        }
+    }
+
+    #[test]
+    fn ignores_empty_requests() {
+        let mut stream = stream_with_line("");
+        let result = read_and_parse(&mut stream, |_| ReadResult::<()>::Handled);
+
+        match result {
+            ReadResult::Ignore => {}
+            _ => panic!("expected ignore"),
+        }
+    }
+
+    #[test]
+    fn writes_handled_data_response() {
+        let payload = serde_json::json!({ "state": "offline" });
+        let (should_continue, response) = response_for_result::<()>(
+            ReadResult::HandledWithData(payload.clone()),
+            |_| unreachable!(),
+        );
+
+        assert!(should_continue);
+        match response {
+            DaemonResponse::Handled { data } => assert_eq!(data, Some(payload)),
+            _ => panic!("expected handled response"),
+        }
+    }
+
+    #[test]
+    fn fallback_response_keeps_listener_running() {
+        let (should_continue, response) =
+            response_for_result::<()>(ReadResult::Fallback, |_| unreachable!());
+
+        assert!(should_continue);
+        match response {
+            DaemonResponse::Fallback => {}
+            _ => panic!("expected fallback response"),
+        }
+    }
+
+    #[test]
+    fn command_send_fallback_stops_threaded_listener() {
+        let (should_continue, response) =
+            response_for_result(ReadResult::Command(()), |_| DaemonResponse::Fallback);
+
+        assert!(!should_continue);
+        match response {
+            DaemonResponse::Fallback => {}
+            _ => panic!("expected fallback response"),
+        }
+    }
+
+    #[test]
+    fn writes_owned_error_message() {
+        let (should_continue, response) = response_for_result::<()>(
+            ReadResult::Error("hardware offline".to_string()),
+            |_| unreachable!(),
+        );
+
+        assert!(should_continue);
+        match response {
+            DaemonResponse::Error { message } => assert_eq!(message, "hardware offline"),
+            _ => panic!("expected error response"),
+        }
+    }
+
+    #[test]
+    fn parser_can_keep_state_across_requests() {
+        let mut count = 0;
+
+        for line in ["first", "second"] {
+            let mut stream = stream_with_line(line);
+            let result = read_and_parse(&mut stream, |action| {
+                count += 1;
+                assert_eq!(action, line);
+                ReadResult::<()>::Handled
+            });
+
+            match result {
+                ReadResult::Handled => {}
+                _ => panic!("expected handled"),
+            }
+        }
+
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn bind_listener_replaces_stale_socket() {
+        let socket_name = temp_socket_name("stale");
+        let path = PathBuf::from("/tmp").join(socket_name);
+        let _ = fs::remove_file(&path);
+
+        {
+            let _stale_listener = UnixListener::bind(&path).unwrap();
+        }
+
+        assert!(fs::symlink_metadata(&path).is_ok());
+
+        let config = fallback_config(socket_name);
+        let (_listener, bound_path) = bind_listener(&config).unwrap();
+
+        assert_eq!(bound_path, path);
+        remove_socket_file(path);
     }
 }

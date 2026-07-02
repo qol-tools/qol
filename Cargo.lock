@@ -5368,6 +5368,7 @@ dependencies = [
  "qol-config",
  "qol-conventions",
  "qol-plugin-api",
+ "qol-plugin-daemon",
  "qol-runtime",
  "serde",
  "serde_json",

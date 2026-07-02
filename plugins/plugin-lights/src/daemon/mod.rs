@@ -4,14 +4,11 @@ compile_error!("plugin-lights daemon requires unix domain sockets");
 mod state;
 pub mod ws;
 
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 
 use crate::backend::zigbee::ZigbeeBackend;
 use crate::config::model::{DeviceEntry, EndpointEntry};
@@ -20,54 +17,26 @@ use crate::service::light_service::LightService;
 
 pub use state::{DaemonOutcome, DaemonState};
 
-#[derive(Debug, Deserialize)]
-struct DaemonRequest {
-    action: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DaemonResponse {
-    status: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<serde_json::Value>,
-}
-
 enum DaemonRuntime {
     Ready(Box<DaemonState>),
     Unavailable(String),
 }
 
+const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
+    socket: SocketSource::EnvRequired,
+    support_replace_existing: true,
+};
+
 pub fn run_from_env() -> Result<()> {
-    let socket_path = std::env::var(qol_conventions::ENV_DAEMON_SOCKET)
-        .with_context(|| format!("{} is not set", qol_conventions::ENV_DAEMON_SOCKET))?;
-    run(&socket_path)
+    let runtime = runtime_state();
+    core_daemon::run_stateful_listener(&DAEMON_CONFIG, runtime, handle_action)
+        .context("plugin-lights daemon listener failed")
 }
 
 pub fn execute_action_once(action: &str) -> Result<()> {
     let mut state = DaemonState::new()?;
     let outcome = state.handle_action(action);
     map_outcome(action, outcome)
-}
-
-pub fn run(socket_path: &str) -> Result<()> {
-    let listener = bind_listener(socket_path)?;
-    qol_runtime::spawn_host_death_watchdog();
-    let mut runtime = runtime_state();
-
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                if let Err(error) = handle_stream(&mut runtime, stream) {
-                    eprintln!("{error:#}");
-                }
-            }
-            Err(error) => eprintln!("accept error: {error:#}"),
-        }
-    }
-
-    Ok(())
 }
 
 // Runs on a background thread. When a device joins (ZDO_END_DEVICE_ANNCE_IND),
@@ -148,29 +117,21 @@ fn format_ieee(addr: &[u8; 8]) -> String {
         .join(":")
 }
 
-fn bind_listener(socket_path: &str) -> Result<UnixListener> {
-    let path = Path::new(socket_path);
-    let _ = std::fs::remove_file(path);
-    UnixListener::bind(path)
-        .with_context(|| format!("failed to bind daemon socket {}", path.display()))
-}
-
-fn handle_stream(runtime: &mut DaemonRuntime, stream: UnixStream) -> Result<()> {
-    let request = read_request(&stream)?;
-    let Some(request) = request else {
-        return Ok(());
-    };
-    let outcome = dispatch_action(runtime, &request.action);
-    let response = response_line(outcome.clone())?;
-    write_response(stream, &response)?;
-    if let DaemonOutcome::Error(message) = outcome {
-        eprintln!("action '{}' failed: {}", request.action, message);
-    }
-    Ok(())
-}
-
 const CONNECTION_STATUS_QUERY: &str = "connection_status";
 const LIST_DEVICES_QUERY: &str = "list_devices";
+
+fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
+    let outcome = dispatch_action(runtime, action);
+    match outcome {
+        DaemonOutcome::Handled => ReadResult::Handled,
+        DaemonOutcome::HandledWithData(data) => ReadResult::HandledWithData(data),
+        DaemonOutcome::Fallback => ReadResult::Fallback,
+        DaemonOutcome::Error(message) => {
+            eprintln!("action '{}' failed: {}", action, message);
+            ReadResult::Error(message)
+        }
+    }
+}
 
 fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
     // Reads from the coordinator's live device registry, not the config file.
@@ -237,52 +198,6 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
     start_background_services(&state);
     *runtime = DaemonRuntime::Ready(Box::new(state));
     DaemonOutcome::Handled
-}
-
-fn read_request(stream: &UnixStream) -> Result<Option<DaemonRequest>> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    serde_json::from_str(trimmed)
-        .map(Some)
-        .context("failed to parse daemon request")
-}
-
-fn response_line(outcome: DaemonOutcome) -> Result<String> {
-    let response = match outcome {
-        DaemonOutcome::Handled => DaemonResponse {
-            status: "handled",
-            message: None,
-            data: None,
-        },
-        DaemonOutcome::HandledWithData(data) => DaemonResponse {
-            status: "handled",
-            message: None,
-            data: Some(data),
-        },
-        DaemonOutcome::Fallback => DaemonResponse {
-            status: "fallback",
-            message: None,
-            data: None,
-        },
-        DaemonOutcome::Error(message) => DaemonResponse {
-            status: "error",
-            message: Some(message),
-            data: None,
-        },
-    };
-    let mut line = serde_json::to_string(&response)?;
-    line.push('\n');
-    Ok(line)
-}
-
-fn write_response(mut stream: UnixStream, response: &str) -> Result<()> {
-    stream.write_all(response.as_bytes())?;
-    Ok(())
 }
 
 fn map_outcome(action: &str, outcome: DaemonOutcome) -> Result<()> {

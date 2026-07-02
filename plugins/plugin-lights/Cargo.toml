@@ -11,6 +11,7 @@ serde = { version = "1", features = ["derive"] }
 log = "0.4"
 qol-conventions.workspace = true
 qol-config.workspace = true
+qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
 serde_json = "1"
 serialport = { version = "4", default-features = false }
