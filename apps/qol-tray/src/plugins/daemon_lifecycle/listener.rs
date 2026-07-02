@@ -24,6 +24,7 @@ const MIGRATED_PLUGINS: &[&str] = &[
 #[derive(Debug)]
 pub(in crate::plugins) struct DaemonListener {
     unix: UnixListener,
+    port: Option<TcpListener>,
     extra: Vec<(String, ExtraSocket)>,
 }
 
@@ -63,12 +64,30 @@ pub(super) fn bind_for_plugin(
             return None;
         }
     };
+    let port = daemon_config
+        .port
+        .and_then(|port| bind_primary_port(plugin, port));
     let extra = daemon_config
         .extra_ports
         .iter()
         .filter_map(|named_port| bind_extra_port(plugin, named_port))
         .collect();
-    Some(DaemonListener { unix, extra })
+    Some(DaemonListener { unix, port, extra })
+}
+
+fn bind_primary_port(plugin: &Plugin, port: u16) -> Option<TcpListener> {
+    match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(listener) => Some(listener),
+        Err(error) => {
+            log::warn!(
+                "Failed to pre-bind daemon port for plugin {} on port {}: {}. The daemon will bind its own socket instead.",
+                plugin.id,
+                port,
+                error
+            );
+            None
+        }
+    }
 }
 
 fn bind_reclaiming_stale_socket(socket_path: &std::path::Path) -> std::io::Result<UnixListener> {
@@ -113,6 +132,13 @@ pub(super) fn apply_to_command(daemon_listener: &DaemonListener, command: &mut C
         qol_conventions::ENV_DAEMON_LISTENER_FD.to_string(),
         daemon_listener.unix.as_raw_fd(),
     );
+    if let Some(port) = &daemon_listener.port {
+        set_inheritable_fd(
+            command,
+            qol_conventions::ENV_DAEMON_PORT_FD.to_string(),
+            port.as_raw_fd(),
+        );
+    }
     for (name, socket) in &daemon_listener.extra {
         let env_name = format!(
             "{}_{}",
@@ -322,6 +348,78 @@ items = []
     }
 
     #[test]
+    fn bind_primary_port_binds_a_tcp_socket() {
+        let plugin = minimal_plugin();
+
+        let bound = bind_primary_port(&plugin, 0);
+
+        assert!(bound.is_some(), "an ephemeral TCP port must always bind");
+    }
+
+    #[test]
+    fn bind_primary_port_returns_none_on_a_genuine_collision() {
+        let plugin = minimal_plugin();
+        let holder = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let taken_port = holder.local_addr().unwrap().port();
+
+        let bound = bind_primary_port(&plugin, taken_port);
+
+        assert!(
+            bound.is_none(),
+            "a port already held by another listener must not be double-bound"
+        );
+    }
+
+    #[test]
+    fn bind_for_plugin_includes_the_primary_port_for_a_migrated_plugin() {
+        let plugin = plugin_with_id("plugin-alt-tab");
+        let socket_path = format!(
+            "/tmp/qol-listener-test-primary-port-{}.sock",
+            std::process::id()
+        );
+        let _ = std::fs::remove_file(&socket_path);
+        let daemon_config = DaemonConfig {
+            enabled: true,
+            command: "any".to_string(),
+            socket: Some(socket_path.clone()),
+            port: Some(0),
+            extra_ports: Vec::new(),
+        };
+
+        let bound = bind_for_plugin(&plugin, &daemon_config).unwrap();
+
+        assert!(
+            bound.port.is_some(),
+            "the declared top-level port must be pre-bound"
+        );
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[test]
+    fn apply_to_command_publishes_the_primary_port_env_var_without_a_suffix() {
+        use std::ffi::OsStr;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let unix = UnixListener::bind(dir.path().join("primary-port-env.sock")).unwrap();
+        let port = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let expected_fd = port.as_raw_fd().to_string();
+        let listener = DaemonListener {
+            unix,
+            port: Some(port),
+            extra: Vec::new(),
+        };
+        let mut command = Command::new("/bin/true");
+
+        apply_to_command(&listener, &mut command);
+
+        let entry = command
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new(qol_conventions::ENV_DAEMON_PORT_FD));
+        let (_, value) = entry.expect("primary port fd env var must be set");
+        assert_eq!(value, Some(OsStr::new(expected_fd.as_str())));
+    }
+
+    #[test]
     fn bind_for_plugin_includes_extra_ports_for_a_migrated_plugin() {
         let plugin = plugin_with_id("plugin-alt-tab");
         let socket_path = format!("/tmp/qol-listener-test-extra-{}.sock", std::process::id());
@@ -359,6 +457,7 @@ items = []
         let expected_fd = udp.as_raw_fd().to_string();
         let listener = DaemonListener {
             unix,
+            port: None,
             extra: vec![("discovery".to_string(), ExtraSocket::Udp(udp))],
         };
         let mut command = Command::new("/bin/true");
@@ -376,6 +475,7 @@ items = []
     fn bound_listener(dir: &tempfile::TempDir, name: &str) -> DaemonListener {
         DaemonListener {
             unix: UnixListener::bind(dir.path().join(name)).unwrap(),
+            port: None,
             extra: Vec::new(),
         }
     }

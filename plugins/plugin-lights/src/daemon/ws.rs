@@ -1,4 +1,5 @@
 use std::net::TcpListener;
+use std::os::fd::FromRawFd;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -38,7 +39,7 @@ pub fn start(
     let ws_port: u16 = env!("QOL_DAEMON_PORT")
         .parse()
         .expect("QOL_DAEMON_PORT must be a valid u16");
-    let listener = match TcpListener::bind(format!("127.0.0.1:{}", ws_port)) {
+    let listener = match bind_ws_listener(ws_port) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("ws: failed to bind port {}: {}", ws_port, e);
@@ -53,6 +54,13 @@ pub fn start(
         .name("ws-accept".into())
         .spawn(move || accept_loop(listener, buffer))
         .ok();
+}
+
+fn bind_ws_listener(port: u16) -> std::io::Result<TcpListener> {
+    if let Some(fd) = qol_plugin_daemon::daemon::inherited_primary_port_fd() {
+        return Ok(unsafe { TcpListener::from_raw_fd(fd) });
+    }
+    TcpListener::bind(format!("127.0.0.1:{}", port))
 }
 
 fn accept_loop(listener: TcpListener, buffer: CommandBuffer) {

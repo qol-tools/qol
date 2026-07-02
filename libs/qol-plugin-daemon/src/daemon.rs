@@ -261,6 +261,19 @@ pub fn inherited_port_fd(name: &str) -> Option<RawFd> {
         qol_conventions::ENV_DAEMON_PORT_FD,
         name.to_uppercase()
     );
+    fd_from_env(&env_name)
+}
+
+/// Looks up the fd qol-tray pre-bound for the daemon's single top-level
+/// `port` (declared as `port = ...` directly under `[daemon]` in
+/// plugin.toml, as opposed to a named `[[daemon.extra_ports]]` entry).
+/// Returns `None` if qol-tray didn't pre-bind it - the caller should fall
+/// back to binding it directly.
+pub fn inherited_primary_port_fd() -> Option<RawFd> {
+    fd_from_env(qol_conventions::ENV_DAEMON_PORT_FD)
+}
+
+fn fd_from_env(env_name: &str) -> Option<RawFd> {
     std::env::var(env_name).ok()?.parse().ok()
 }
 
@@ -614,5 +627,24 @@ mod tests {
             fd, None,
             "a malformed port fd falls back to direct binding rather than propagating an error"
         );
+    }
+
+    #[test]
+    fn inherited_primary_port_fd_reads_the_unsuffixed_env_var() {
+        let _lock = daemon_listener_fd_env_lock();
+        std::env::set_var(qol_conventions::ENV_DAEMON_PORT_FD, "7");
+
+        let fd = inherited_primary_port_fd();
+
+        std::env::remove_var(qol_conventions::ENV_DAEMON_PORT_FD);
+        assert_eq!(fd, Some(7));
+    }
+
+    #[test]
+    fn inherited_primary_port_fd_returns_none_when_env_var_absent() {
+        let _lock = daemon_listener_fd_env_lock();
+        std::env::remove_var(qol_conventions::ENV_DAEMON_PORT_FD);
+
+        assert_eq!(inherited_primary_port_fd(), None);
     }
 }
