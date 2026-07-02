@@ -111,6 +111,12 @@ pub fn send_ping(config: &DaemonConfig) -> bool {
 }
 
 pub fn cleanup(config: &DaemonConfig) {
+    // An inherited listener's socket path is bound and owned by qol-tray's
+    // retained fd; unlinking it here would leave every respawned daemon
+    // serving a socket no path resolves to anymore.
+    if std::env::var_os(qol_conventions::ENV_DAEMON_LISTENER_FD).is_some() {
+        return;
+    }
     if let Some(path) = socket_path(config) {
         remove_socket_file(path);
     }
@@ -576,6 +582,34 @@ mod tests {
 
         assert_eq!(bound_path, Some(path.clone()));
         remove_socket_file(path);
+    }
+
+    #[test]
+    fn cleanup_leaves_an_inherited_listeners_socket_path_alone() {
+        let _lock = daemon_listener_fd_env_lock();
+        let socket_name = temp_socket_name("cleanup-inherited");
+        let path = PathBuf::from("/tmp").join(socket_name);
+        let _ = fs::remove_file(&path);
+        let _listener = UnixListener::bind(&path).unwrap();
+        std::env::set_var(qol_conventions::ENV_DAEMON_LISTENER_FD, "7");
+
+        cleanup(&fallback_config(socket_name));
+        let survived_inherited = path.exists();
+
+        std::env::remove_var(qol_conventions::ENV_DAEMON_LISTENER_FD);
+        cleanup(&fallback_config(socket_name));
+        let survived_owned = path.exists();
+
+        assert!(
+            survived_inherited,
+            "an inherited listener does not own its socket path; cleanup must not \
+             unlink it out from under qol-tray's retained fd"
+        );
+        assert!(
+            !survived_owned,
+            "a self-bound daemon still cleans up its own socket path"
+        );
+        let _ = fs::remove_file(&path);
     }
 
     // `bind_listener` reads QOL_TRAY_DAEMON_LISTENER_FD from the process
