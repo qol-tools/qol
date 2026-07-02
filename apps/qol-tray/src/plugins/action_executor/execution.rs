@@ -98,7 +98,23 @@ fn execute_via_runtime(resolved: &ResolvedAction) -> Result<(), ActionExecutionE
         command_path,
         resolved.args
     );
-    let child = spawn_runtime_command(resolved, command_path)?;
+    #[cfg(feature = "dev")]
+    let mut command = runtime_command(resolved, command_path);
+    #[cfg(not(feature = "dev"))]
+    let command = runtime_command(resolved, command_path);
+    #[cfg(feature = "dev")]
+    let relay_patterns = configure_action_log_relay(resolved, &mut command);
+    #[cfg(feature = "dev")]
+    let mut child = spawn_runtime_command(resolved, command)?;
+    #[cfg(not(feature = "dev"))]
+    let child = spawn_runtime_command(resolved, command)?;
+    #[cfg(feature = "dev")]
+    crate::logging::relay::attach(
+        resolved.plugin_id.as_str(),
+        None::<std::process::ChildStdout>,
+        child.stderr.take(),
+        relay_patterns,
+    );
     let pid = child.id();
     if resolved.dedupe_runtime_spawn {
         track_action_process(resolved.plugin_id.as_str(), &resolved.action_id, pid);
@@ -122,16 +138,32 @@ fn runtime_command_path(resolved: &ResolvedAction) -> Result<&Path, ActionExecut
 
 fn spawn_runtime_command(
     resolved: &ResolvedAction,
-    command_path: &Path,
+    mut command: std::process::Command,
 ) -> Result<std::process::Child, ActionExecutionError> {
-    runtime_command(resolved, command_path)
-        .spawn()
-        .map_err(|error| {
-            if resolved.dedupe_runtime_spawn {
-                clear_runtime_spawn_reservation(resolved.plugin_id.as_str(), &resolved.action_id);
-            }
-            ActionExecutionError::SpawnFailed(error.to_string())
-        })
+    command.spawn().map_err(|error| {
+        if resolved.dedupe_runtime_spawn {
+            clear_runtime_spawn_reservation(resolved.plugin_id.as_str(), &resolved.action_id);
+        }
+        ActionExecutionError::SpawnFailed(error.to_string())
+    })
+}
+
+// Same constraint as daemon spawns: the tray's stderr is a pipe into qol dev
+// that dies at every generation handoff, and an action inheriting it
+// EPIPE-panics on its first write. Pipe stderr into the relay instead.
+#[cfg(feature = "dev")]
+fn configure_action_log_relay(
+    resolved: &ResolvedAction,
+    command: &mut std::process::Command,
+) -> Vec<String> {
+    let log_control =
+        crate::logging::load_plugin_control_from_shared_config(resolved.plugin_id.as_str());
+    if log_control.muted {
+        command.stderr(std::process::Stdio::null());
+        return Vec::new();
+    }
+    command.stderr(std::process::Stdio::piped());
+    log_control.suppress_patterns
 }
 
 fn runtime_command(resolved: &ResolvedAction, command_path: &Path) -> std::process::Command {
@@ -179,6 +211,26 @@ mod tests {
             runtime_fallback_allowed: true,
             dedupe_runtime_spawn: false,
         }
+    }
+
+    #[cfg(feature = "dev")]
+    #[test]
+    fn dev_action_spawns_pipe_stderr_instead_of_inheriting_the_tray_pipe() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let resolved = resolved();
+        let mut command = runtime_command(&resolved, Path::new("/usr/bin/true"));
+        let _patterns = configure_action_log_relay(&resolved, &mut command);
+
+        let mut child = command.spawn().unwrap();
+
+        let stderr = child.stderr.take();
+        let _ = child.wait();
+        assert!(
+            stderr.is_some(),
+            "dev runtime actions must pipe stderr; inheriting the tray's qol dev \
+             pipe makes the action EPIPE-panic after a generation handoff",
+        );
     }
 
     #[test]
