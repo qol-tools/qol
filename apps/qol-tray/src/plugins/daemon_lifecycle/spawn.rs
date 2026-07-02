@@ -134,11 +134,12 @@ fn configure_log_relay(plugin: &Plugin, command: &mut Command) -> Vec<String> {
         command.stdout(Stdio::null()).stderr(Stdio::null());
         return Vec::new();
     }
-    if log_control.suppress_patterns.is_empty() {
-        command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
-        return Vec::new();
-    }
-
+    // Never Stdio::inherit() here: the tray's own stdio is a pipe into qol
+    // dev, which dies at every generation handoff. A daemon inheriting it
+    // EPIPE-panics on its next write, and inside extern-C frames (gpui's
+    // launch callback, event-tap callbacks) that panic cannot unwind and
+    // aborts the daemon. The piped relay is read by the tray, which outlives
+    // the handoff, so daemon writes always succeed.
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     log_control.suppress_patterns
 }
