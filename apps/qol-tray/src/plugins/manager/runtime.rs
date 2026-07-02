@@ -116,6 +116,9 @@ fn stop_plugin_daemon(plugin: &mut Plugin) {
 }
 
 fn start_plugin_daemon_if_needed(manager: &mut PluginManager, plugin_id: &str) -> Result<()> {
+    if crate::dev_generation::daemon_autostart_held() {
+        return Ok(());
+    }
     let plugin = plugin_mut(manager, plugin_id)?;
     if !plugin
         .manifest

@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use qol_conventions::{
     DEFAULT_PORT, DEV_GENERATION_MODE_SHADOW, ENV_DEV_GENERATION_ID, ENV_DEV_GENERATION_MODE,
@@ -89,6 +90,21 @@ pub fn is_rolling_restart() -> bool {
     std::env::var(ENV_DEV_ROLLING_RESTART)
         .ok()
         .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+}
+
+// A shadow generation boots while the predecessor generation is still fully
+// running. Namespaced socket paths keep the two generations' IPC apart, but
+// daemons that grab exclusive host resources (event taps, hotkeys, fixed UDP
+// ports, gpui UIs) cannot coexist with their predecessor twins - so daemon
+// autostart is held until promotion, when the predecessor is already gone.
+static DAEMON_AUTOSTART_RELEASED: AtomicBool = AtomicBool::new(false);
+
+pub fn daemon_autostart_held() -> bool {
+    is_shadow() && !DAEMON_AUTOSTART_RELEASED.load(Ordering::Acquire)
+}
+
+pub fn release_daemon_autostart() {
+    DAEMON_AUTOSTART_RELEASED.store(true, Ordering::Release);
 }
 
 pub fn state_socket_path() -> PathBuf {

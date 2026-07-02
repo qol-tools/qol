@@ -113,6 +113,12 @@ async fn promote_shadow_to_stable(app_state: AppState) -> Result<u16> {
             log::error!("Promoted UI server error: {}", error);
         }
     });
+    crate::dev_generation::release_daemon_autostart();
+    let plugin_manager = app_state.plugin_manager.clone();
+    tokio::task::spawn_blocking(move || match plugin_manager.lock() {
+        Ok(mut manager) => manager.autostart_daemons(),
+        Err(_) => log::error!("plugin manager lock poisoned during promoted daemon autostart"),
+    });
     start_sync_loop(&app_state);
     start_dev_discovery(&app_state);
     Ok(port)

@@ -49,6 +49,12 @@ async fn run_supervision_loop(
 }
 
 fn supervise_once(plugin_manager: &Arc<Mutex<PluginManager>>, state: &mut SupervisorState) {
+    // DeadStaysDead is retriable, so without this gate the supervisor would
+    // start held-back daemons on its first tick, while the predecessor
+    // generation's twins are still alive.
+    if crate::dev_generation::daemon_autostart_held() {
+        return;
+    }
     reap_exited_daemons(plugin_manager);
     let snapshots = snapshot_daemons(plugin_manager);
     let outcome = classify_snapshots(&snapshots, state);

@@ -541,6 +541,12 @@ async fn async_init_inner(
     let missing_generation_daemons = {
         let plugin_manager = plugin_manager.clone();
         match tokio::task::spawn_blocking(move || {
+            if qol_tray::dev_generation::daemon_autostart_held() {
+                log::info!(
+                    "Shadow dev generation: deferring plugin daemon autostart until promotion"
+                );
+                return Vec::new();
+            }
             if let Ok(mut manager) = plugin_manager.lock() {
                 manager.autostart_daemons();
                 if generation_restart {
