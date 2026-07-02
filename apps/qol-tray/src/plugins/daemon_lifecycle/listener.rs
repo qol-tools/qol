@@ -5,7 +5,7 @@ use std::process::Command;
 #[cfg(unix)]
 pub(in crate::plugins) use imp::DaemonListener;
 #[cfg(unix)]
-pub(super) use imp::{apply_to_command, bind_for_plugin};
+pub(super) use imp::{apply_to_command, bind_for_plugin, refresh_for_respawn};
 
 // Socket activation only exists on Unix today. Windows needs a fundamentally
 // different mechanism (WSADuplicateSocketW + handle inheritance) and stays
@@ -81,6 +81,48 @@ mod imp {
             return None;
         }
         Some(DaemonListener { unix, port, extra })
+    }
+
+    // Revalidates a listener retained from the previous spawn. A daemon exit
+    // can leave the unix socket path unlinked out from under the retained fd
+    // (nothing can connect to it anymore), and pre-binds that lost their
+    // first attempt - typically to the predecessor generation still holding
+    // the port - deserve another try once that generation is gone.
+    pub(in crate::plugins::daemon_lifecycle) fn refresh_for_respawn(
+        mut listener: DaemonListener,
+        plugin: &Plugin,
+        daemon_config: &DaemonConfig,
+    ) -> Option<DaemonListener> {
+        if listener.unix.is_some() {
+            let path_gone = daemon_config
+                .socket
+                .as_deref()
+                .map(crate::dev_generation::daemon_socket_path)
+                .is_some_and(|path| !path.exists());
+            if path_gone {
+                return None;
+            }
+        } else if let Some(socket) = daemon_config.socket.as_deref() {
+            listener.unix = bind_unix_socket(plugin, socket);
+        }
+        if listener.port.is_none() {
+            listener.port = daemon_config
+                .port
+                .and_then(|port| bind_primary_port(plugin, port));
+        }
+        for named_port in &daemon_config.extra_ports {
+            if listener
+                .extra
+                .iter()
+                .any(|(name, _)| name == &named_port.name)
+            {
+                continue;
+            }
+            if let Some(bound) = bind_extra_port(plugin, named_port) {
+                listener.extra.push(bound);
+            }
+        }
+        Some(listener)
     }
 
     fn bind_unix_socket(plugin: &Plugin, socket: &str) -> Option<UnixListener> {
@@ -302,6 +344,88 @@ items = []
             let bound = bound.expect("a declared port alone must still be pre-bound");
             assert!(bound.unix.is_none());
             assert!(bound.port.is_some());
+        }
+
+        #[test]
+        fn refresh_for_respawn_drops_a_listener_whose_socket_path_was_unlinked() {
+            let plugin = plugin_with_id("plugin-alt-tab");
+            let socket_path = format!(
+                "/tmp/qol-listener-test-refresh-unlinked-{}.sock",
+                std::process::id()
+            );
+            let _ = std::fs::remove_file(&socket_path);
+            let daemon_config = socket_daemon_config(&socket_path);
+            let bound = bind_for_plugin(&plugin, &daemon_config).unwrap();
+            std::fs::remove_file(&socket_path).unwrap();
+
+            let refreshed = refresh_for_respawn(bound, &plugin, &daemon_config);
+
+            assert!(
+                refreshed.is_none(),
+                "a retained fd whose socket path was unlinked serves a socket no \
+                 path resolves to; it must be dropped so the respawn rebinds fresh"
+            );
+        }
+
+        #[test]
+        fn refresh_for_respawn_keeps_a_listener_whose_socket_path_is_intact() {
+            let plugin = plugin_with_id("plugin-alt-tab");
+            let socket_path = format!(
+                "/tmp/qol-listener-test-refresh-intact-{}.sock",
+                std::process::id()
+            );
+            let _ = std::fs::remove_file(&socket_path);
+            let daemon_config = socket_daemon_config(&socket_path);
+            let bound = bind_for_plugin(&plugin, &daemon_config).unwrap();
+
+            let refreshed = refresh_for_respawn(bound, &plugin, &daemon_config);
+
+            let refreshed = refreshed.expect("an intact listener must be retained");
+            assert!(refreshed.unix.is_some());
+            let _ = std::fs::remove_file(&socket_path);
+        }
+
+        #[test]
+        fn refresh_for_respawn_binds_ports_that_failed_the_first_time() {
+            let plugin = plugin_with_id("plugin-alt-tab");
+            let socket_path = format!(
+                "/tmp/qol-listener-test-refresh-ports-{}.sock",
+                std::process::id()
+            );
+            let _ = std::fs::remove_file(&socket_path);
+            let daemon_config = DaemonConfig {
+                enabled: true,
+                command: "any".to_string(),
+                socket: Some(socket_path.clone()),
+                port: Some(0),
+                extra_ports: vec![NamedPort {
+                    name: "discovery".to_string(),
+                    port: 0,
+                    protocol: PortProtocol::Udp,
+                }],
+            };
+            let unix = UnixListener::bind(&socket_path).unwrap();
+            let partial = DaemonListener {
+                unix: Some(unix),
+                port: None,
+                extra: Vec::new(),
+            };
+
+            let refreshed = refresh_for_respawn(partial, &plugin, &daemon_config);
+
+            let refreshed = refreshed.expect("a partial listener must be retained and completed");
+            assert!(
+                refreshed.port.is_some(),
+                "a declared port that lost its first bind (e.g. to the predecessor \
+                 generation) must be re-attempted on respawn"
+            );
+            assert_eq!(
+                refreshed.extra.len(),
+                1,
+                "missing extra ports must be re-attempted"
+            );
+            assert_eq!(refreshed.extra[0].0, "discovery");
+            let _ = std::fs::remove_file(&socket_path);
         }
 
         #[test]
@@ -604,6 +728,15 @@ pub(in crate::plugins) struct DaemonListener;
 
 #[cfg(not(unix))]
 pub(super) fn bind_for_plugin(
+    _plugin: &Plugin,
+    _daemon_config: &DaemonConfig,
+) -> Option<DaemonListener> {
+    None
+}
+
+#[cfg(not(unix))]
+pub(super) fn refresh_for_respawn(
+    _daemon_listener: DaemonListener,
     _plugin: &Plugin,
     _daemon_config: &DaemonConfig,
 ) -> Option<DaemonListener> {

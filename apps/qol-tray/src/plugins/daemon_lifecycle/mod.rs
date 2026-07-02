@@ -15,9 +15,11 @@ pub(super) fn start_daemon(plugin: &mut Plugin) -> Result<()> {
         return Ok(());
     };
 
+    if let Some(existing) = plugin.daemon_listener.take() {
+        plugin.daemon_listener = listener::refresh_for_respawn(existing, plugin, &daemon_config);
+    }
     if plugin.daemon_listener.is_none() {
-        let bound = listener::bind_for_plugin(plugin, &daemon_config);
-        plugin.daemon_listener = bound;
+        plugin.daemon_listener = listener::bind_for_plugin(plugin, &daemon_config);
     }
 
     let child = spawn::spawn_daemon(plugin, &daemon_config, plugin.daemon_listener.as_ref())?;
