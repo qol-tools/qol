@@ -1,7 +1,8 @@
 # Plugin Runtime Health - Design
 
 Date: 2026-07-02
-Status: Draft (awaiting review)
+Status: Reviewed 2026-07-02 (revised: doctor signal redesigned, autostart-blocked
+variant added, snapshot publishing specified)
 
 ## Problem
 
@@ -49,9 +50,9 @@ must be fixed for any health signal built on top of it to be truthful.
 - `last_error` (the restart failure message) in the per-plugin payload. Would
   require new `SupervisorState` storage that doesn't exist today. Add only if
   a real need shows up.
-- Health for plugins outside what the Plugins page already lists
-  (`/api/dev/links` + `/api/dev/discovery-state`). Release-installed plugins
-  the supervisor tracks internally but that page doesn't show are unaffected.
+- Dashboard health for plugins outside what the Plugins page already lists
+  (`/api/dev/links` + `/api/dev/discovery-state`). The snapshot enumerates
+  every loaded plugin, but the page renders only the rows it already shows.
 - Making doctor network-dependent. It stays fully offline-capable - see
   Architecture.
 
@@ -97,6 +98,9 @@ Fix: pid-aware probation. Track per plugin, in `SupervisorState`:
   reset `consecutive_failures`.
 - Dies during probation -> increment `consecutive_failures` (a new failure
   source, distinct from a spawn-level `Err`).
+- At most one failure increment per plugin per tick: a death observed and a
+  failed respawn on the same tick count once, so the effective
+  `MAX_CONSECUTIVE_FAILURES` threshold is not halved.
 - Survives past `STABLE_TICKS` -> mark stable, reset `consecutive_failures`
   to 0.
 - Dies after stable -> fresh failure cycle, retry as today.
@@ -114,24 +118,40 @@ Three consumers, one source of truth. None re-derives liveness independently.
 
 1. **qol-tray (source of truth).** The corrected supervisor (P2) is the only
    thing that knows true liveness/stability/failure history. It already
-   ticks every 5s; no new server-side polling loop.
+   ticks every 5s; no new server-side polling loop. `SupervisorState` is a
+   local variable inside the supervision task today, so the supervisor gains
+   one structural change: each tick it projects the plugin statuses and
+   publishes them twice - into a `tokio::sync::watch` channel whose receiver
+   is handed to the dev server at spawn time, and as an atomically-renamed
+   (temp + rename) `daemon-health.json` in the runtime dir for the offline
+   doctor check. One projection, two transports; nothing else reads
+   supervisor internals, and no lock ordering is introduced. While
+   `daemon_autostart_held()` holds (shadow generation), `supervise_once`
+   already early-returns, so a shadow never publishes and never overwrites
+   the stable generation's file.
 2. **Offline doctor check (coarse, free dashboard surfacing).** New dev-only,
-   `dev-loop`-grouped check `plugin_daemon_pids`, mirroring
-   `plugin_staleness.rs`'s `stale_running_daemons`: reads `tracked_pids()`
-   from the runtime pids dir, warns on any tracked pid that isn't alive. Zero
-   tracked pids is not a failure (tray may simply not be running). Cheap,
-   offline, and lands automatically in `qol dev`'s existing adaptive Doctor
-   panel (`dev_console/doctor.rs`, 10-60s poll) - no new endpoint or merge
-   logic needed for the coarse signal.
+   `dev-loop`-grouped check `plugin_daemon_health` that reads
+   `daemon-health.json`. A tracked-pids check cannot work here: reaping
+   unregisters the pid file within one 5s supervisor tick, and an unreaped
+   dead child is a zombie that `is_pid_alive` reports as alive, so a
+   crash-looped or suppressed daemon is invisible at doctor's 10-60s poll
+   cadence - while a retired tray (SIGKILLed, no shutdown path) leaves
+   stale pid files that would warn in the benign tray-not-running state.
+   File semantics instead: file absent -> ok (tray never ran here);
+   `process_pid` in the file not alive -> ok ("stale snapshot, qol-tray not
+   running"); fresh file -> warn listing plugins whose status is
+   `Down { suppressed: true }`. Transient `Down`/`Probation` states
+   self-heal and do not warn. Cheap, offline, and lands automatically in
+   `qol dev`'s existing adaptive Doctor panel (`dev_console/doctor.rs`,
+   10-60s poll) - no new endpoint or merge logic needed for the coarse
+   signal.
 3. **`GET /api/dev/plugin-health` (row-level detail).** New endpoint on
    qol-tray's existing dev HTTP surface, for what doctor's message-string
-   format can't give: per-plugin-row detail on the Plugins page. Reads the
-   corrected supervisor state. Follows the `list_linked_plugins` convention
-   (`tokio::task::spawn_blocking` around manager-lock access, not a raw sync
-   `lock()` in the async fn body) and the existing lock-poisoned defensive
-   pattern (`get_discovery_state`): log and return a degraded response,
-   never a 500 - this is polled every 5s and transient lock contention
-   should not flash an error state.
+   format can't give: per-plugin-row detail on the Plugins page. The handler
+   serves the watch receiver's current snapshot verbatim - no manager lock,
+   no `spawn_blocking`, nothing that can poison or contend, so it can never
+   500 on the 5s poll. Before the first tick the channel holds an empty
+   `tick: 0` snapshot; clients render those rows as unknown.
 
 Doctor deliberately never calls the endpoint. It is the tool for diagnosing
 "why won't qol-tray start" - making any check depend on qol-tray's HTTP
@@ -140,10 +160,15 @@ server being up would break that.
 ## Data model
 
 Response envelope - once per response, not per row, since generation
-identity is a single per-process fact:
+identity is a single per-process fact. The supervisor composes the full
+envelope at tick time; both transports carry it verbatim (one schema, two
+transports, one composer). Its process-level fields are at most one tick
+stale, and all of them are static per process except at promotion, which
+the next tick refreshes:
 
 ```
-process_pid: u32              // the responding qol-tray's own pid
+tick: u64                     // 0 = nothing published yet, render as unknown
+process_pid: u32              // the publishing qol-tray's own pid
 role: "stable" | "shadow"     // matches dev_generation::is_shadow()
 bind_port: u16                // 42700 by default; shadows bind elsewhere until promoted
 daemon_autostart_held: bool
@@ -162,25 +187,31 @@ PluginHealth {
 }
 
 PluginRuntimeStatus =
-  | NotExpected                                            // manifest.daemon.enabled == false
+  | NotExpected                                            // no [daemon] section, or enabled == false
+  | AutostartBlocked                                       // dev-linked, daemon enabled, no .qol-tray-dev-autostart marker
   | Down { consecutive_failures: u32, suppressed: bool }    // no living pid
   | Probation { pid: u32, consecutive_failures: u32 }       // alive, pre-STABLE_TICKS
   | Stable { pid: u32 }                                     // alive, past STABLE_TICKS
 ```
 
-Derived directly from `SupervisorState`'s per-plugin fields: `suppressed` is
-`!can_retry()`, `consecutive_failures` is the counter as-is, and the
-`Probation`/`Stable` split is whether `stable_since_tick` has been reached
-for the current `last_pid`. The endpoint does not add new supervisor state
-beyond P2 - it only projects it.
+Projection happens inside the supervisor tick, which already holds the
+manager lock: it enumerates all loaded plugins, classifies `NotExpected`
+(no daemon wanted) and `AutostartBlocked` (daemon-enabled but
+`daemon_auto_managed` is false - the dev-linked opt-in marker is absent;
+by design, not a failure, and `supervised_daemon_snapshots` never sees
+these plugins), and derives the rest from `SupervisorState`'s per-plugin
+fields: `suppressed` is `!can_retry()`, `consecutive_failures` is the
+counter as-is, and the `Probation`/`Stable` split is whether
+`stable_since_tick` has been reached for the current `last_pid`. The
+endpoint adds no state - it serves the last published snapshot.
 
 ## Client (`qol dev` / `dev_console`)
 
 - Fetch `/api/dev/plugin-health` on the existing `LINKS_REFRESH_INTERVAL` (5s)
   cadence alongside `/api/dev/links` - no new timer.
 - `plugin_row_line` gains a second, independent status dimension (running /
-  probation / dead / suppressed) alongside the existing linked/stale/linkable
-  dot.
+  probation / dead / suppressed / autostart-blocked / no daemon) alongside
+  the existing linked/stale/linkable dot.
 - Handoff freeze/thaw (depends on P1): while `dash.is_reloading()`, freeze
   health consumption and render a "handoff in progress" state instead of
   polling. On a confirmed successful promotion (a real `Ok` from
@@ -197,16 +228,26 @@ beyond P2 - it only projects it.
   case - must now suppress after N cycles instead of looping forever),
   spawn-succeeds-and-survives-past-`STABLE_TICKS` (resets to `Stable`),
   dies-after-stable (fresh cycle, does not inherit the old count),
-  out-of-band pid change mid-probation (re-enters probation).
+  out-of-band pid change mid-probation (re-enters probation),
+  death-plus-failed-respawn on one tick (increments once, not twice).
 - **`restart_child_from_prebuilt`**: on `promote_shadow_generation` returning
   `Err`, assert the function returns `Err`, does not mutate `*child`/`*lines`,
   and terminates/reaps `next`.
-- **`plugin_daemon_pids` check**: pure `diagnose()` tests following
-  `plugin_process_leaks`/`plugin_staleness`'s existing pattern - empty
-  tracked pids is ok, a tracked-but-dead pid warns.
-- **Endpoint**: `tokio::test` following `dev_link_handlers.rs` /
-  `dev_state_handlers.rs`'s `isolated_env` pattern; assert envelope shape and
-  each `PluginRuntimeStatus` variant.
+- **Snapshot projection** (table-driven): each `PluginRuntimeStatus` variant,
+  including `AutostartBlocked` (dev-linked, daemon enabled, no marker) and
+  `NotExpected` (no `[daemon]` section).
+- **Publishing**: the watch receiver sees the projected snapshot after a
+  tick; `daemon-health.json` is written atomically. The file path must be an
+  injectable parameter: the runtime dir is a fixed `/tmp/qol-tray` that
+  `push_test_path_root` does not redirect, and the file is a singleton, so
+  parallel tests would collide on the real path.
+- **`plugin_daemon_health` check** (table-driven): file absent is ok, file
+  with a dead `process_pid` is ok (stale), fresh file with a
+  `Down { suppressed: true }` plugin warns, fresh file with only
+  transient `Down`/`Probation` states is ok.
+- **Endpoint**: none - serving the watch snapshot verbatim makes it a thin
+  wrapper (workspace rule: no tests for thin wrappers). The wire shape is
+  covered by serde round-trip tests on the envelope and status enum.
 
 ## Risks / open questions
 
@@ -215,8 +256,10 @@ beyond P2 - it only projects it.
   "unstable" for too long. Tune empirically if it proves twitchy or slow.
 - `MAX_CONSECUTIVE_FAILURES` (existing constant, 5) was tuned under the old,
   broken failure-counting semantics. Revisit once P2 ships.
-- Three consumers (doctor check, endpoint, dashboard) means two schemas
-  (doctor's plain warn message vs. `PluginHealth`) to keep conceptually in
-  sync with the supervisor's internal state if it changes shape later.
-  Accepted: the doctor check is intentionally minimal (pid + alive only) and
-  does not share a wire format with the endpoint.
+- One schema, two transports (watch channel + `daemon-health.json`): both
+  readers deserialize the same struct, so the compiler keeps them in sync;
+  only the file's forward-compat needs care (`#[serde(default)]` on
+  additions, matching the channel rules in `qol-arch-channels`).
+- The file's staleness test is writer-pid liveness; pid reuse could make a
+  stale file look fresh. Accepted: the window is one boot cycle and the
+  consequence is a spurious doctor warn, not a wrong action.
