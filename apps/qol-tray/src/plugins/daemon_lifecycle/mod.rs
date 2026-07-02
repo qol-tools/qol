@@ -94,6 +94,16 @@ fn reaped_elsewhere(error: &std::io::Error) -> bool {
 }
 
 pub(super) fn stop_daemon(plugin: &mut Plugin) -> Result<()> {
+    // qol-tray keeps its own copy of a pre-bound listener open so a crashed
+    // daemon can respawn onto the same fd without re-binding (see
+    // listener::bind_for_plugin). An explicit stop has no respawn coming, so
+    // that copy must close too - otherwise the socket stays "reachable" with
+    // nothing behind it to ever accept a connection, and callers hang for a
+    // full timeout instead of getting refused immediately. Dropped before the
+    // no-child early return: the daemon may already have crashed and been
+    // reaped by the time the stop arrives.
+    plugin.daemon_listener = None;
+
     let Some(mut child) = plugin.daemon_process.take() else {
         return Ok(());
     };
@@ -263,5 +273,95 @@ items = []
         let child = plugin.daemon_process.as_mut().unwrap();
         child.kill().unwrap();
         child.wait().unwrap();
+    }
+
+    #[cfg(unix)]
+    fn migrated_plugin() -> Plugin {
+        let manifest: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "plugin-alt-tab"
+name = "Foo"
+description = ""
+version = "1.0.0"
+
+[menu]
+label = "Foo"
+items = []
+"#,
+        )
+        .unwrap();
+        Plugin::new(
+            PluginId::new("plugin-alt-tab"),
+            manifest,
+            std::path::PathBuf::new(),
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_daemon_drops_the_pre_bound_listener() {
+        let mut plugin = migrated_plugin();
+        let socket_path = format!(
+            "/tmp/qol-daemon-lifecycle-test-stop-{}.sock",
+            std::process::id()
+        );
+        let _ = std::fs::remove_file(&socket_path);
+        let daemon_config = crate::plugins::manifest::DaemonConfig {
+            enabled: true,
+            command: "any".to_string(),
+            socket: Some(socket_path.clone()),
+            port: None,
+            extra_ports: Vec::new(),
+        };
+        plugin.daemon_listener = listener::bind_for_plugin(&plugin, &daemon_config);
+        assert!(
+            plugin.daemon_listener.is_some(),
+            "test setup must pre-bind a listener"
+        );
+        plugin.daemon_process = Some(spawn_long_running());
+
+        stop_daemon(&mut plugin).unwrap();
+
+        assert!(
+            plugin.daemon_listener.is_none(),
+            "stop_daemon must drop the retained listener so a disabled plugin's socket \
+             refuses connections instead of accepting into a backlog nothing will ever \
+             read from"
+        );
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_daemon_drops_the_listener_even_when_the_daemon_already_exited() {
+        let mut plugin = migrated_plugin();
+        let socket_path = format!(
+            "/tmp/qol-daemon-lifecycle-test-stop-reaped-{}.sock",
+            std::process::id()
+        );
+        let _ = std::fs::remove_file(&socket_path);
+        let daemon_config = crate::plugins::manifest::DaemonConfig {
+            enabled: true,
+            command: "any".to_string(),
+            socket: Some(socket_path.clone()),
+            port: None,
+            extra_ports: Vec::new(),
+        };
+        plugin.daemon_listener = listener::bind_for_plugin(&plugin, &daemon_config);
+        assert!(
+            plugin.daemon_listener.is_some(),
+            "test setup must pre-bind a listener"
+        );
+        plugin.daemon_process = None;
+
+        stop_daemon(&mut plugin).unwrap();
+
+        assert!(
+            plugin.daemon_listener.is_none(),
+            "a daemon that crashed and was reaped before the stop still leaves the \
+             retained listener behind unless stop_daemon drops it unconditionally"
+        );
+        let _ = std::fs::remove_file(&socket_path);
     }
 }
