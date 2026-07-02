@@ -86,6 +86,10 @@ impl PluginManager {
     pub fn ensure_plugin_daemon_running(&mut self, plugin_id: &str) -> Result<()> {
         runtime::ensure_plugin_daemon_running(self, plugin_id)
     }
+
+    pub fn reap_exited_daemons(&mut self) {
+        runtime::reap_exited_daemons(self)
+    }
 }
 
 impl Default for PluginManager {

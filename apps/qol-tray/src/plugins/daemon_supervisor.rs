@@ -49,6 +49,7 @@ async fn run_supervision_loop(
 }
 
 fn supervise_once(plugin_manager: &Arc<Mutex<PluginManager>>, state: &mut SupervisorState) {
+    reap_exited_daemons(plugin_manager);
     let snapshots = snapshot_daemons(plugin_manager);
     let outcome = classify_snapshots(&snapshots, state);
     state.note_known_plugins(&snapshots);
@@ -112,6 +113,14 @@ fn classify_snapshots(snapshots: &[DaemonSnapshot], state: &SupervisorState) -> 
         }
     }
     outcome
+}
+
+fn reap_exited_daemons(plugin_manager: &Arc<Mutex<PluginManager>>) {
+    let Ok(mut manager) = plugin_manager.lock() else {
+        log::error!("Daemon supervisor: plugin manager lock poisoned");
+        return;
+    };
+    manager.reap_exited_daemons();
 }
 
 fn snapshot_daemons(plugin_manager: &Arc<Mutex<PluginManager>>) -> Vec<DaemonSnapshot> {

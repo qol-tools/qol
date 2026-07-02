@@ -77,6 +77,10 @@ impl Plugin {
         self.daemon_process.as_ref().map(|child| child.id())
     }
 
+    pub fn reap_daemon_if_exited(&mut self) {
+        daemon_lifecycle::reap_daemon_if_exited(self)
+    }
+
     pub fn stop_daemon(&mut self) -> Result<()> {
         daemon_lifecycle::stop_daemon(self)
     }

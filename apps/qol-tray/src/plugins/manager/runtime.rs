@@ -78,6 +78,12 @@ pub(super) fn ensure_plugin_daemon_running(
     Ok(())
 }
 
+pub(super) fn reap_exited_daemons(manager: &mut PluginManager) {
+    for plugin in manager.plugins.values_mut() {
+        plugin.reap_daemon_if_exited();
+    }
+}
+
 pub(super) fn sync_ignore_pids(manager: &PluginManager) {
     for plugin in manager.plugins.values() {
         let Some(pid) = plugin.daemon_pid() else {
@@ -119,6 +125,7 @@ fn start_plugin_daemon_if_needed(manager: &mut PluginManager, plugin_id: &str) -
     {
         return Ok(());
     }
+    plugin.reap_daemon_if_exited();
     if plugin.daemon_pid().is_some() {
         return Ok(());
     }
@@ -136,4 +143,91 @@ fn plugin_mut<'a>(manager: &'a mut PluginManager, plugin_id: &str) -> Result<&'a
         .plugins
         .get_mut(plugin_id)
         .ok_or_else(|| anyhow::anyhow!("plugin not found: {}", plugin_id))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::plugins::manifest::PluginManifest;
+    use crate::plugins::PluginId;
+    use std::time::{Duration, Instant};
+
+    const PLUGIN_ID: &str = "plugin-foo";
+
+    fn manager_with_running_daemon(root: &std::path::Path) -> PluginManager {
+        use std::os::unix::fs::PermissionsExt;
+        let plugin_dir = root.join(PLUGIN_ID);
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let script = plugin_dir.join("daemon.sh");
+        std::fs::write(&script, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let manifest: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "plugin-foo"
+name = "Foo"
+description = ""
+version = "1.0.0"
+
+[menu]
+label = "Foo"
+items = []
+
+[daemon]
+enabled = true
+command = "daemon.sh"
+"#,
+        )
+        .unwrap();
+
+        let mut manager = PluginManager::new();
+        manager.plugins.insert(
+            PluginId::new(PLUGIN_ID),
+            Plugin::new(PluginId::new(PLUGIN_ID), manifest, plugin_dir),
+        );
+        manager.ensure_plugin_daemon_running(PLUGIN_ID).unwrap();
+        manager
+    }
+
+    #[test]
+    fn ensure_plugin_daemon_running_respawns_daemon_after_unexpected_exit() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let mut manager = manager_with_running_daemon(root.path());
+        let old_pid = manager
+            .get(PLUGIN_ID)
+            .unwrap()
+            .daemon_pid()
+            .expect("daemon spawned");
+
+        unsafe {
+            libc::kill(old_pid as i32, libc::SIGKILL);
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut respawned_pid = None;
+        while Instant::now() < deadline {
+            manager.ensure_plugin_daemon_running(PLUGIN_ID).unwrap();
+            let pid = manager.get(PLUGIN_ID).unwrap().daemon_pid();
+            if pid.is_some() && pid != Some(old_pid) {
+                respawned_pid = pid;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(
+            respawned_pid.is_some(),
+            "daemon must respawn with a fresh pid after it dies, still stuck on pid {}",
+            old_pid
+        );
+
+        manager
+            .plugins
+            .get_mut(PLUGIN_ID)
+            .unwrap()
+            .stop_daemon()
+            .unwrap();
+    }
 }
