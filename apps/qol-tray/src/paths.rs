@@ -271,7 +271,7 @@ pub fn runtime_gpui_config_path() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join("runtime/gpui.json"))
 }
 
-const RUNTIME_DIR: &str = "/tmp/qol-tray";
+const RUNTIME_DIR: &str = qol_conventions::RUNTIME_DIR_PATH;
 
 pub fn runtime_dir() -> PathBuf {
     PathBuf::from(RUNTIME_DIR)
