@@ -9,7 +9,7 @@ use std::process::Command;
 // as an already-open fd, instead of the daemon binding it itself. Migrating a
 // plugin here is a one-line addition once its daemon adopts the inherited-fd
 // fallback in qol_plugin_daemon::daemon::bind_listener.
-const MIGRATED_PLUGINS: &[&str] = &[];
+const MIGRATED_PLUGINS: &[&str] = &["plugin-alt-tab"];
 
 #[derive(Debug)]
 pub(in crate::plugins) struct DaemonListener {
@@ -66,10 +66,14 @@ mod tests {
     use crate::plugins::PluginId;
 
     fn minimal_plugin() -> Plugin {
-        let manifest: PluginManifest = toml::from_str(
+        plugin_with_id("plugin-listener-test")
+    }
+
+    fn plugin_with_id(id: &str) -> Plugin {
+        let manifest: PluginManifest = toml::from_str(&format!(
             r#"
 [plugin]
-id = "plugin-listener-test"
+id = "{id}"
 name = "Foo"
 description = ""
 version = "1.0.0"
@@ -77,14 +81,10 @@ version = "1.0.0"
 [menu]
 label = "Foo"
 items = []
-"#,
-        )
+"#
+        ))
         .unwrap();
-        Plugin::new(
-            PluginId::new("plugin-listener-test"),
-            manifest,
-            std::path::PathBuf::new(),
-        )
+        Plugin::new(PluginId::new(id), manifest, std::path::PathBuf::new())
     }
 
     fn socket_daemon_config(socket: &str) -> DaemonConfig {
@@ -103,8 +103,27 @@ items = []
 
         assert!(
             bind_for_plugin(&plugin, &daemon_config).is_none(),
-            "an empty MIGRATED_PLUGINS allowlist must never pre-bind"
+            "a plugin id absent from MIGRATED_PLUGINS must never pre-bind"
         );
+    }
+
+    #[test]
+    fn bind_for_plugin_binds_for_a_migrated_plugin() {
+        // A migrated plugin id but a throwaway test-only socket name -
+        // never the plugin's real declared socket - so this can't collide
+        // with an actual running daemon on this machine.
+        let plugin = plugin_with_id("plugin-alt-tab");
+        let socket_path = format!("/tmp/qol-listener-test-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+        let daemon_config = socket_daemon_config(&socket_path);
+
+        let bound = bind_for_plugin(&plugin, &daemon_config);
+
+        assert!(
+            bound.is_some(),
+            "plugin-alt-tab is in MIGRATED_PLUGINS and must be pre-bound"
+        );
+        let _ = std::fs::remove_file(&socket_path);
     }
 
     #[test]
