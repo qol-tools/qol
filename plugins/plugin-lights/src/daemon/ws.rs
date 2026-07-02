@@ -12,6 +12,8 @@ use crate::domain::model::{LightCommand, LightTarget, RgbColor};
 use crate::service::light_service::LightService;
 
 const SEND_INTERVAL: Duration = Duration::from_millis(100);
+const BIND_RETRY_WINDOW: Duration = Duration::from_secs(30);
+const BIND_RETRY_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Deserialize)]
 struct WsCommand {
@@ -39,21 +41,47 @@ pub fn start(
     let ws_port: u16 = env!("QOL_DAEMON_PORT")
         .parse()
         .expect("QOL_DAEMON_PORT must be a valid u16");
-    let listener = match bind_ws_listener(ws_port) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("ws: failed to bind port {}: {}", ws_port, e);
-            return;
-        }
-    };
-    eprintln!("ws: listening on 127.0.0.1:{}", ws_port);
 
     start_send_loop(buffer.clone(), service, target);
 
     thread::Builder::new()
         .name("ws-accept".into())
-        .spawn(move || accept_loop(listener, buffer))
+        .spawn(move || {
+            // The port may still be held by the predecessor generation during
+            // a qol dev handoff; a one-shot bind here left the websocket dead
+            // for the daemon's whole lifetime. Retrying off the startup path
+            // rides out the overlap window without delaying the daemon.
+            let listener =
+                match bind_ws_listener_retrying(ws_port, BIND_RETRY_WINDOW, BIND_RETRY_INTERVAL) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        eprintln!("ws: failed to bind port {}: {}", ws_port, e);
+                        return;
+                    }
+                };
+            eprintln!("ws: listening on 127.0.0.1:{}", ws_port);
+            accept_loop(listener, buffer)
+        })
         .ok();
+}
+
+fn bind_ws_listener_retrying(
+    port: u16,
+    window: Duration,
+    interval: Duration,
+) -> std::io::Result<TcpListener> {
+    let deadline = std::time::Instant::now() + window;
+    loop {
+        match bind_ws_listener(port) {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::AddrInUse
+                    && std::time::Instant::now() < deadline =>
+            {
+                thread::sleep(interval)
+            }
+            result => return result,
+        }
+    }
 }
 
 fn bind_ws_listener(port: u16) -> std::io::Result<TcpListener> {
@@ -158,5 +186,47 @@ fn parse_hex(hex: &str) -> RgbColor {
         red: r,
         green: g,
         blue: b,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression tests for the generation-handoff window: the predecessor
+    // qol-tray generation still holds the ws port when this daemon starts,
+    // and a one-shot bind left the websocket dead for the daemon's lifetime.
+    #[test]
+    fn ws_bind_retries_until_the_holder_releases_the_port() {
+        let holder = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = holder.local_addr().unwrap().port();
+        let release = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            drop(holder);
+        });
+
+        let bound =
+            bind_ws_listener_retrying(port, Duration::from_secs(5), Duration::from_millis(25));
+
+        release.join().unwrap();
+        assert!(
+            bound.is_ok(),
+            "the bind must succeed once the previous holder exits"
+        );
+    }
+
+    #[test]
+    fn ws_bind_gives_up_after_the_retry_window() {
+        let holder = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = holder.local_addr().unwrap().port();
+
+        let bound =
+            bind_ws_listener_retrying(port, Duration::from_millis(100), Duration::from_millis(25));
+
+        assert_eq!(
+            bound.unwrap_err().kind(),
+            std::io::ErrorKind::AddrInUse,
+            "a port that never frees must surface the original error, not spin forever"
+        );
     }
 }
