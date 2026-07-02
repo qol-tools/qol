@@ -9,7 +9,15 @@ use std::process::Command;
 // as an already-open fd, instead of the daemon binding it itself. Migrating a
 // plugin here is a one-line addition once its daemon adopts the inherited-fd
 // fallback in qol_plugin_daemon::daemon::bind_listener.
-const MIGRATED_PLUGINS: &[&str] = &["plugin-alt-tab"];
+const MIGRATED_PLUGINS: &[&str] = &[
+    "plugin-alt-tab",
+    "plugin-cli-sessions",
+    "plugin-keyremap",
+    "plugin-launcher",
+    "plugin-lights",
+    "plugin-os-themes",
+    "qol-shot",
+];
 
 #[derive(Debug)]
 pub(in crate::plugins) struct DaemonListener {
@@ -25,7 +33,7 @@ pub(super) fn bind_for_plugin(
     }
     let socket = daemon_config.socket.as_deref()?;
     let socket_path = crate::dev_generation::daemon_socket_path(socket);
-    match UnixListener::bind(&socket_path) {
+    match bind_reclaiming_stale_socket(&socket_path) {
         Ok(listener) => Some(DaemonListener { listener }),
         Err(error) => {
             log::warn!(
@@ -36,6 +44,20 @@ pub(super) fn bind_for_plugin(
             );
             None
         }
+    }
+}
+
+fn bind_reclaiming_stale_socket(socket_path: &std::path::Path) -> std::io::Result<UnixListener> {
+    match UnixListener::bind(socket_path) {
+        Ok(listener) => Ok(listener),
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            if crate::plugins::action_transport::daemon_listener_reachable(socket_path) {
+                return Err(error);
+            }
+            let _ = std::fs::remove_file(socket_path);
+            UnixListener::bind(socket_path)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -137,6 +159,48 @@ items = []
         };
 
         assert!(bind_for_plugin(&plugin, &daemon_config).is_none());
+    }
+
+    #[test]
+    fn bind_reclaiming_stale_socket_removes_a_dead_leftover_and_rebinds() {
+        let path = std::path::PathBuf::from(format!(
+            "/tmp/qol-listener-test-stale-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let _dead_listener = UnixListener::bind(&path).unwrap();
+            // dropped here: the socket file is left behind, but nothing is
+            // listening on it anymore - exactly a leftover from a crashed
+            // or force-killed prior generation.
+        }
+        assert!(path.exists(), "stale socket file must still be present");
+
+        let listener = bind_reclaiming_stale_socket(&path);
+
+        assert!(
+            listener.is_ok(),
+            "a dead leftover socket must be reclaimed, not treated as in-use"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn bind_reclaiming_stale_socket_refuses_to_steal_a_live_listener() {
+        let path = std::path::PathBuf::from(format!(
+            "/tmp/qol-listener-test-live-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let _live_listener = UnixListener::bind(&path).unwrap();
+
+        let listener = bind_reclaiming_stale_socket(&path);
+
+        assert!(
+            listener.is_err(),
+            "a genuinely live listener must never be stolen out from under it"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     fn bound_listener(dir: &tempfile::TempDir, name: &str) -> DaemonListener {
