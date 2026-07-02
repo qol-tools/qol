@@ -119,17 +119,41 @@ pub(super) async fn execute_plugin_action(
     if validate_plugin_id(&id).is_err() {
         return invalid_plugin_id_action_result();
     }
-    let result =
-        crate::plugins::action_executor::try_execute_action(&state.plugin_manager, &id, &action);
-    match result {
-        Ok(()) => (
+    let plugin_manager = state.plugin_manager.clone();
+    let worker_id = id.clone();
+    let worker_action = action.clone();
+    match tokio::task::spawn_blocking(move || {
+        crate::plugins::action_executor::try_execute_action(
+            &plugin_manager,
+            &worker_id,
+            &worker_action,
+        )
+    })
+    .await
+    {
+        Ok(Ok(())) => (
             StatusCode::OK,
             Json(ExecuteActionResult {
                 success: true,
                 message: "Action dispatched".to_string(),
             }),
         ),
-        Err(error) => action_error_response(&id, &action, &error),
+        Ok(Err(error)) => action_error_response(&id, &action, &error),
+        Err(error) => {
+            log::error!(
+                "Plugin action handler crashed for {}::{}: {}",
+                id,
+                action,
+                error
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ExecuteActionResult {
+                    success: false,
+                    message: "Handler crashed".to_string(),
+                }),
+            )
+        }
     }
 }
 

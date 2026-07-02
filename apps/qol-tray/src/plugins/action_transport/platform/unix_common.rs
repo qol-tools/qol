@@ -8,11 +8,15 @@ use std::time::Duration;
 
 // 10s: ZCL commands need up to 5s for DATA_CONFIRM + 3s for NWK_ADDR resolution.
 // The original 80ms caused every action to return "daemon unavailable".
-const SOCKET_IO_TIMEOUT_MS: u64 = 10_000;
+pub(super) const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(10);
 type DispatchResult<T> = Result<T, ()>;
 
-pub(super) fn dispatch_action(endpoint: &Path, action_id: &str) -> DaemonActionDispatch {
-    let Ok(stream) = connect_stream(endpoint) else {
+pub(super) fn dispatch_action(
+    endpoint: &Path,
+    action_id: &str,
+    timeout: Duration,
+) -> DaemonActionDispatch {
+    let Ok(stream) = connect_stream(endpoint, timeout) else {
         return DaemonActionDispatch::Unavailable;
     };
     let Ok(stream) = send_request(stream, action_id) else {
@@ -25,17 +29,16 @@ pub(super) fn dispatch_action(endpoint: &Path, action_id: &str) -> DaemonActionD
 }
 
 pub(super) fn can_connect(endpoint: &Path) -> bool {
-    connect_stream(endpoint).is_ok()
+    connect_stream(endpoint, DEFAULT_IO_TIMEOUT).is_ok()
 }
 
-fn connect_stream(endpoint: &Path) -> DispatchResult<UnixStream> {
+fn connect_stream(endpoint: &Path, timeout: Duration) -> DispatchResult<UnixStream> {
     let stream = UnixStream::connect(endpoint).map_err(|_| ())?;
-    apply_timeout(&stream);
+    apply_timeout(&stream, timeout);
     Ok(stream)
 }
 
-fn apply_timeout(stream: &UnixStream) {
-    let timeout = Duration::from_millis(SOCKET_IO_TIMEOUT_MS);
+fn apply_timeout(stream: &UnixStream, timeout: Duration) {
     let _ = stream.set_write_timeout(Some(timeout));
     let _ = stream.set_read_timeout(Some(timeout));
 }
@@ -67,5 +70,28 @@ fn read_line(reader: &mut BufReader<UnixStream>, line: &mut String) -> DispatchR
     match reader.read_line(line) {
         Ok(0) | Err(_) => Err(()),
         Ok(_) => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+    use std::time::Instant;
+
+    #[test]
+    fn dispatch_respects_short_read_timeout_when_listener_does_not_answer() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let socket_path = dir.path().join("hung-daemon.sock");
+        let _listener = UnixListener::bind(&socket_path).unwrap();
+        let started = Instant::now();
+
+        let dispatch = dispatch_action(&socket_path, "ping", Duration::from_millis(50));
+
+        assert!(matches!(dispatch, DaemonActionDispatch::Unavailable));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "readiness probes must not inherit the long action timeout"
+        );
     }
 }
