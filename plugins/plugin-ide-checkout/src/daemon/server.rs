@@ -1,5 +1,6 @@
 use std::io::{BufRead, BufReader, Write};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
+use std::os::fd::FromRawFd;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -16,7 +17,7 @@ const MAX_BODY: usize = 64 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn serve(port: u16, config: Config) -> std::io::Result<()> {
-    let listener = takeover::bind_with_takeover(port)?;
+    let listener = bind_task_runner_listener(port)?;
     eprintln!("[task-runner] listening on 127.0.0.1:{port}");
     let config = Arc::new(config);
     for stream in listener.incoming() {
@@ -27,6 +28,13 @@ pub fn serve(port: u16, config: Config) -> std::io::Result<()> {
         thread::spawn(move || handle_connection(stream, &config));
     }
     Ok(())
+}
+
+fn bind_task_runner_listener(port: u16) -> std::io::Result<TcpListener> {
+    if let Some(fd) = qol_plugin_daemon::daemon::inherited_primary_port_fd() {
+        return Ok(unsafe { TcpListener::from_raw_fd(fd) });
+    }
+    takeover::bind_with_takeover(port)
 }
 
 struct Request {
@@ -428,6 +436,50 @@ mod tests {
         assert!(
             !response.contains("Access-Control-Allow-Origin"),
             "{response}"
+        );
+    }
+
+    // Both tests below share QOL_TRAY_DAEMON_PORT_FD (an unsuffixed, single
+    // process-wide name, unlike pointz's per-name port env vars), so they
+    // need to be serialized against each other the same way
+    // qol-plugin-daemon's own env-var tests are.
+    fn port_fd_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    #[test]
+    fn bind_task_runner_listener_adopts_an_inherited_fd() {
+        use std::os::fd::{AsRawFd, IntoRawFd};
+
+        let _lock = port_fd_env_lock();
+        let pre_bound = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let expected_port = pre_bound.local_addr().unwrap().port();
+        let fd = pre_bound.into_raw_fd();
+        std::env::set_var(qol_conventions::ENV_DAEMON_PORT_FD, fd.to_string());
+
+        let listener = bind_task_runner_listener(0);
+
+        std::env::remove_var(qol_conventions::ENV_DAEMON_PORT_FD);
+        let listener = listener.unwrap();
+        assert_eq!(
+            listener.local_addr().unwrap().port(),
+            expected_port,
+            "must adopt the pre-bound listener rather than binding its own"
+        );
+        assert_eq!(listener.as_raw_fd(), fd);
+    }
+
+    #[test]
+    fn bind_task_runner_listener_binds_directly_when_env_var_absent() {
+        let _lock = port_fd_env_lock();
+        std::env::remove_var(qol_conventions::ENV_DAEMON_PORT_FD);
+
+        let listener = bind_task_runner_listener(0);
+
+        assert!(
+            listener.is_ok(),
+            "must fall back to binding its own port when nothing is pre-bound"
         );
     }
 }

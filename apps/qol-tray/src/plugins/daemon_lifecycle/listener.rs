@@ -13,6 +13,7 @@ use std::process::Command;
 const MIGRATED_PLUGINS: &[&str] = &[
     "plugin-alt-tab",
     "plugin-cli-sessions",
+    "plugin-ide-checkout",
     "plugin-keyremap",
     "plugin-launcher",
     "plugin-lights",
@@ -23,7 +24,7 @@ const MIGRATED_PLUGINS: &[&str] = &[
 
 #[derive(Debug)]
 pub(in crate::plugins) struct DaemonListener {
-    unix: UnixListener,
+    unix: Option<UnixListener>,
     port: Option<TcpListener>,
     extra: Vec<(String, ExtraSocket)>,
 }
@@ -50,20 +51,10 @@ pub(super) fn bind_for_plugin(
     if !MIGRATED_PLUGINS.contains(&plugin.id.as_str()) {
         return None;
     }
-    let socket = daemon_config.socket.as_deref()?;
-    let socket_path = crate::dev_generation::daemon_socket_path(socket);
-    let unix = match bind_reclaiming_stale_socket(&socket_path) {
-        Ok(listener) => listener,
-        Err(error) => {
-            log::warn!(
-                "Failed to pre-bind daemon listener for plugin {} at {:?}: {}. The daemon will bind its own socket instead.",
-                plugin.id,
-                socket_path,
-                error
-            );
-            return None;
-        }
-    };
+    let unix = daemon_config
+        .socket
+        .as_deref()
+        .and_then(|socket| bind_unix_socket(plugin, socket));
     let port = daemon_config
         .port
         .and_then(|port| bind_primary_port(plugin, port));
@@ -71,8 +62,28 @@ pub(super) fn bind_for_plugin(
         .extra_ports
         .iter()
         .filter_map(|named_port| bind_extra_port(plugin, named_port))
-        .collect();
+        .collect::<Vec<_>>();
+
+    if unix.is_none() && port.is_none() && extra.is_empty() {
+        return None;
+    }
     Some(DaemonListener { unix, port, extra })
+}
+
+fn bind_unix_socket(plugin: &Plugin, socket: &str) -> Option<UnixListener> {
+    let socket_path = crate::dev_generation::daemon_socket_path(socket);
+    match bind_reclaiming_stale_socket(&socket_path) {
+        Ok(listener) => Some(listener),
+        Err(error) => {
+            log::warn!(
+                "Failed to pre-bind daemon listener for plugin {} at {:?}: {}. The daemon will bind its own socket instead.",
+                plugin.id,
+                socket_path,
+                error
+            );
+            None
+        }
+    }
 }
 
 fn bind_primary_port(plugin: &Plugin, port: u16) -> Option<TcpListener> {
@@ -127,11 +138,13 @@ fn bind_extra_port(plugin: &Plugin, named_port: &NamedPort) -> Option<(String, E
 }
 
 pub(super) fn apply_to_command(daemon_listener: &DaemonListener, command: &mut Command) {
-    set_inheritable_fd(
-        command,
-        qol_conventions::ENV_DAEMON_LISTENER_FD.to_string(),
-        daemon_listener.unix.as_raw_fd(),
-    );
+    if let Some(unix) = &daemon_listener.unix {
+        set_inheritable_fd(
+            command,
+            qol_conventions::ENV_DAEMON_LISTENER_FD.to_string(),
+            unix.as_raw_fd(),
+        );
+    }
     if let Some(port) = &daemon_listener.port {
         set_inheritable_fd(
             command,
@@ -248,6 +261,27 @@ items = []
         };
 
         assert!(bind_for_plugin(&plugin, &daemon_config).is_none());
+    }
+
+    // Regression test: plugin-ide-checkout declares only a top-level `port`
+    // in plugin.toml, no `socket` at all. bind_for_plugin must not treat the
+    // unix socket as a prerequisite gate for binding anything else.
+    #[test]
+    fn bind_for_plugin_binds_the_port_even_without_a_socket() {
+        let plugin = plugin_with_id("plugin-alt-tab");
+        let daemon_config = DaemonConfig {
+            enabled: true,
+            command: "any".to_string(),
+            socket: None,
+            port: Some(0),
+            extra_ports: Vec::new(),
+        };
+
+        let bound = bind_for_plugin(&plugin, &daemon_config);
+
+        let bound = bound.expect("a declared port alone must still be pre-bound");
+        assert!(bound.unix.is_none());
+        assert!(bound.port.is_some());
     }
 
     #[test]
@@ -404,7 +438,7 @@ items = []
         let port = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let expected_fd = port.as_raw_fd().to_string();
         let listener = DaemonListener {
-            unix,
+            unix: Some(unix),
             port: Some(port),
             extra: Vec::new(),
         };
@@ -456,7 +490,7 @@ items = []
         let udp = UdpSocket::bind(("0.0.0.0", 0)).unwrap();
         let expected_fd = udp.as_raw_fd().to_string();
         let listener = DaemonListener {
-            unix,
+            unix: Some(unix),
             port: None,
             extra: vec![("discovery".to_string(), ExtraSocket::Udp(udp))],
         };
@@ -474,7 +508,7 @@ items = []
 
     fn bound_listener(dir: &tempfile::TempDir, name: &str) -> DaemonListener {
         DaemonListener {
-            unix: UnixListener::bind(dir.path().join(name)).unwrap(),
+            unix: Some(UnixListener::bind(dir.path().join(name)).unwrap()),
             port: None,
             extra: Vec::new(),
         }
@@ -486,7 +520,7 @@ items = []
 
         let dir = tempfile::TempDir::new().unwrap();
         let listener = bound_listener(&dir, "env-var.sock");
-        let expected_fd = listener.unix.as_raw_fd().to_string();
+        let expected_fd = listener.unix.as_ref().unwrap().as_raw_fd().to_string();
         let mut command = Command::new("/bin/true");
 
         apply_to_command(&listener, &mut command);
@@ -514,7 +548,7 @@ items = []
     fn clear_cloexec_flips_the_close_on_exec_flag() {
         let dir = tempfile::TempDir::new().unwrap();
         let listener = bound_listener(&dir, "cloexec.sock");
-        let fd = listener.unix.as_raw_fd();
+        let fd = listener.unix.as_ref().unwrap().as_raw_fd();
         assert!(cloexec_is_set(fd), "std sockets start close-on-exec");
 
         clear_cloexec(fd).unwrap();
@@ -529,7 +563,7 @@ items = []
     fn apply_to_command_does_not_touch_the_parents_own_cloexec_flag() {
         let dir = tempfile::TempDir::new().unwrap();
         let listener = bound_listener(&dir, "parent-untouched.sock");
-        let fd = listener.unix.as_raw_fd();
+        let fd = listener.unix.as_ref().unwrap().as_raw_fd();
         let mut command = Command::new("/bin/true");
 
         apply_to_command(&listener, &mut command);
