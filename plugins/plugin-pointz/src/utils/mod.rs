@@ -24,6 +24,7 @@ pub fn get_hostname() -> String {
 /// qol-tray didn't pre-bind it (e.g. when run outside qol-tray's supervision).
 pub async fn bind_udp_or_inherit(name: &str, port: u16) -> anyhow::Result<UdpSocket> {
     if let Some(fd) = qol_plugin_daemon::daemon::inherited_port_fd(name) {
+        qol_plugin_daemon::daemon::restore_cloexec(fd)?;
         let std_socket = unsafe { std::net::UdpSocket::from_raw_fd(fd) };
         std_socket.set_nonblocking(true)?;
         return Ok(UdpSocket::from_std(std_socket)?);

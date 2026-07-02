@@ -254,7 +254,26 @@ fn listener_from_fd_str(raw: &str) -> io::Result<UnixListener> {
             ),
         )
     })?;
+    restore_cloexec(fd)?;
     Ok(unsafe { UnixListener::from_raw_fd(fd) })
+}
+
+/// qol-tray clears CLOEXEC on a pre-bound fd so it survives the exec into
+/// this daemon's binary. That cleared flag would otherwise keep propagating
+/// into every further child this daemon spawns (e.g. a launched app, a
+/// terminal, ffmpeg), leaking the listener past this process. Callers must
+/// invoke this immediately after adopting any fd handed off via the
+/// `QOL_TRAY_DAEMON_*_FD` env vars, before wrapping it in a socket type.
+pub fn restore_cloexec(fd: RawFd) -> io::Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let set = unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
+    if set < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Looks up the fd qol-tray pre-bound for a named extra port (declared via
@@ -597,6 +616,64 @@ mod tests {
     fn listener_from_fd_str_rejects_malformed_value() {
         let error = listener_from_fd_str("not-a-number").unwrap_err();
         assert_eq!(error.kind(), ErrorKind::InvalidInput);
+    }
+
+    fn fd_has_cloexec(fd: RawFd) -> bool {
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert!(flags >= 0, "fd {fd} must be open");
+        flags & libc::FD_CLOEXEC != 0
+    }
+
+    #[test]
+    fn restore_cloexec_sets_the_close_on_exec_flag() {
+        use std::os::fd::IntoRawFd;
+
+        let path = PathBuf::from(format!(
+            "/tmp/qol-plugin-daemon-test-restore-cloexec-{}.sock",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).unwrap();
+        let fd = listener.into_raw_fd();
+        unsafe { libc::fcntl(fd, libc::F_SETFD, 0) };
+        assert!(
+            !fd_has_cloexec(fd),
+            "test setup must start with cloexec cleared"
+        );
+
+        restore_cloexec(fd).unwrap();
+
+        assert!(fd_has_cloexec(fd), "restore_cloexec must set FD_CLOEXEC");
+        unsafe { libc::close(fd) };
+        let _ = fs::remove_file(&path);
+    }
+
+    // Regression test for the leak this whole redesign was meant to close:
+    // qol-tray clears CLOEXEC so the fd survives its own exec into the
+    // daemon. Once adopted here, that cleared flag must not keep propagating
+    // into every further child the daemon spawns.
+    #[test]
+    fn listener_from_fd_str_restores_cloexec_on_the_adopted_fd() {
+        use std::os::fd::IntoRawFd;
+
+        let path = PathBuf::from(format!(
+            "/tmp/qol-plugin-daemon-test-adopt-cloexec-{}.sock",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+        let pre_bound = UnixListener::bind(&path).unwrap();
+        let fd = pre_bound.into_raw_fd();
+        unsafe { libc::fcntl(fd, libc::F_SETFD, 0) };
+
+        let listener = listener_from_fd_str(&fd.to_string()).unwrap();
+
+        assert!(
+            fd_has_cloexec(fd),
+            "adopting an inherited fd must re-arm cloexec so it can't leak \
+             into a further child this daemon spawns"
+        );
+        drop(listener);
+        let _ = fs::remove_file(&path);
     }
 
     #[test]
