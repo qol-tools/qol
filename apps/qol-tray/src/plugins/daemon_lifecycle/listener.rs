@@ -1,5 +1,6 @@
-use crate::plugins::manifest::DaemonConfig;
+use crate::plugins::manifest::{DaemonConfig, NamedPort, PortProtocol};
 use crate::plugins::Plugin;
+use std::net::{TcpListener, UdpSocket};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixListener;
 use std::os::unix::process::CommandExt;
@@ -16,12 +17,29 @@ const MIGRATED_PLUGINS: &[&str] = &[
     "plugin-launcher",
     "plugin-lights",
     "plugin-os-themes",
+    "plugin-pointz",
     "qol-shot",
 ];
 
 #[derive(Debug)]
 pub(in crate::plugins) struct DaemonListener {
-    listener: UnixListener,
+    unix: UnixListener,
+    extra: Vec<(String, ExtraSocket)>,
+}
+
+#[derive(Debug)]
+enum ExtraSocket {
+    Tcp(TcpListener),
+    Udp(UdpSocket),
+}
+
+impl AsRawFd for ExtraSocket {
+    fn as_raw_fd(&self) -> RawFd {
+        match self {
+            ExtraSocket::Tcp(listener) => listener.as_raw_fd(),
+            ExtraSocket::Udp(socket) => socket.as_raw_fd(),
+        }
+    }
 }
 
 pub(super) fn bind_for_plugin(
@@ -33,8 +51,8 @@ pub(super) fn bind_for_plugin(
     }
     let socket = daemon_config.socket.as_deref()?;
     let socket_path = crate::dev_generation::daemon_socket_path(socket);
-    match bind_reclaiming_stale_socket(&socket_path) {
-        Ok(listener) => Some(DaemonListener { listener }),
+    let unix = match bind_reclaiming_stale_socket(&socket_path) {
+        Ok(listener) => listener,
         Err(error) => {
             log::warn!(
                 "Failed to pre-bind daemon listener for plugin {} at {:?}: {}. The daemon will bind its own socket instead.",
@@ -42,9 +60,15 @@ pub(super) fn bind_for_plugin(
                 socket_path,
                 error
             );
-            None
+            return None;
         }
-    }
+    };
+    let extra = daemon_config
+        .extra_ports
+        .iter()
+        .filter_map(|named_port| bind_extra_port(plugin, named_port))
+        .collect();
+    Some(DaemonListener { unix, extra })
 }
 
 fn bind_reclaiming_stale_socket(socket_path: &std::path::Path) -> std::io::Result<UnixListener> {
@@ -61,9 +85,46 @@ fn bind_reclaiming_stale_socket(socket_path: &std::path::Path) -> std::io::Resul
     }
 }
 
+fn bind_extra_port(plugin: &Plugin, named_port: &NamedPort) -> Option<(String, ExtraSocket)> {
+    let bound = match named_port.protocol {
+        PortProtocol::Tcp => {
+            TcpListener::bind(("127.0.0.1", named_port.port)).map(ExtraSocket::Tcp)
+        }
+        PortProtocol::Udp => UdpSocket::bind(("0.0.0.0", named_port.port)).map(ExtraSocket::Udp),
+    };
+    match bound {
+        Ok(socket) => Some((named_port.name.clone(), socket)),
+        Err(error) => {
+            log::warn!(
+                "Failed to pre-bind daemon port '{}' for plugin {} on port {}: {}. The daemon will bind its own socket instead.",
+                named_port.name,
+                plugin.id,
+                named_port.port,
+                error
+            );
+            None
+        }
+    }
+}
+
 pub(super) fn apply_to_command(daemon_listener: &DaemonListener, command: &mut Command) {
-    let fd = daemon_listener.listener.as_raw_fd();
-    command.env(qol_conventions::ENV_DAEMON_LISTENER_FD, fd.to_string());
+    set_inheritable_fd(
+        command,
+        qol_conventions::ENV_DAEMON_LISTENER_FD.to_string(),
+        daemon_listener.unix.as_raw_fd(),
+    );
+    for (name, socket) in &daemon_listener.extra {
+        let env_name = format!(
+            "{}_{}",
+            qol_conventions::ENV_DAEMON_PORT_FD,
+            name.to_uppercase()
+        );
+        set_inheritable_fd(command, env_name, socket.as_raw_fd());
+    }
+}
+
+fn set_inheritable_fd(command: &mut Command, env_name: String, fd: RawFd) {
+    command.env(env_name, fd.to_string());
     unsafe {
         command.pre_exec(move || clear_cloexec(fd));
     }
@@ -115,6 +176,7 @@ items = []
             command: "any".to_string(),
             socket: Some(socket.to_string()),
             port: None,
+            extra_ports: Vec::new(),
         }
     }
 
@@ -156,6 +218,7 @@ items = []
             command: "any".to_string(),
             socket: None,
             port: None,
+            extra_ports: Vec::new(),
         };
 
         assert!(bind_for_plugin(&plugin, &daemon_config).is_none());
@@ -203,9 +266,117 @@ items = []
         let _ = std::fs::remove_file(&path);
     }
 
+    #[test]
+    fn bind_extra_port_binds_a_udp_socket() {
+        let plugin = minimal_plugin();
+        let named_port = NamedPort {
+            name: "test-udp".to_string(),
+            port: 0,
+            protocol: PortProtocol::Udp,
+        };
+
+        let bound = bind_extra_port(&plugin, &named_port);
+
+        assert!(
+            bound.is_some(),
+            "an ephemeral UDP port must always be bindable"
+        );
+        assert_eq!(bound.unwrap().0, "test-udp");
+    }
+
+    #[test]
+    fn bind_extra_port_binds_a_tcp_socket() {
+        let plugin = minimal_plugin();
+        let named_port = NamedPort {
+            name: "test-tcp".to_string(),
+            port: 0,
+            protocol: PortProtocol::Tcp,
+        };
+
+        let bound = bind_extra_port(&plugin, &named_port);
+
+        assert!(
+            bound.is_some(),
+            "an ephemeral TCP port must always be bindable"
+        );
+        assert_eq!(bound.unwrap().0, "test-tcp");
+    }
+
+    #[test]
+    fn bind_extra_port_returns_none_on_a_genuine_collision() {
+        let plugin = minimal_plugin();
+        let holder = UdpSocket::bind(("0.0.0.0", 0)).unwrap();
+        let taken_port = holder.local_addr().unwrap().port();
+        let named_port = NamedPort {
+            name: "test-udp-collision".to_string(),
+            port: taken_port,
+            protocol: PortProtocol::Udp,
+        };
+
+        let bound = bind_extra_port(&plugin, &named_port);
+
+        assert!(
+            bound.is_none(),
+            "a port already held by another socket must not be double-bound"
+        );
+    }
+
+    #[test]
+    fn bind_for_plugin_includes_extra_ports_for_a_migrated_plugin() {
+        let plugin = plugin_with_id("plugin-alt-tab");
+        let socket_path = format!("/tmp/qol-listener-test-extra-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+        let daemon_config = DaemonConfig {
+            enabled: true,
+            command: "any".to_string(),
+            socket: Some(socket_path.clone()),
+            port: None,
+            extra_ports: vec![NamedPort {
+                name: "discovery".to_string(),
+                port: 0,
+                protocol: PortProtocol::Udp,
+            }],
+        };
+
+        let bound = bind_for_plugin(&plugin, &daemon_config).unwrap();
+
+        assert_eq!(
+            bound.extra.len(),
+            1,
+            "the declared extra port must be pre-bound"
+        );
+        assert_eq!(bound.extra[0].0, "discovery");
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[test]
+    fn apply_to_command_publishes_a_named_env_var_per_extra_port() {
+        use std::ffi::OsStr;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let unix = UnixListener::bind(dir.path().join("extra-env.sock")).unwrap();
+        let udp = UdpSocket::bind(("0.0.0.0", 0)).unwrap();
+        let expected_fd = udp.as_raw_fd().to_string();
+        let listener = DaemonListener {
+            unix,
+            extra: vec![("discovery".to_string(), ExtraSocket::Udp(udp))],
+        };
+        let mut command = Command::new("/bin/true");
+
+        apply_to_command(&listener, &mut command);
+
+        let expected_name = format!("{}_DISCOVERY", qol_conventions::ENV_DAEMON_PORT_FD);
+        let entry = command
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new(&expected_name));
+        let (_, value) = entry.expect("named port fd env var must be set");
+        assert_eq!(value, Some(OsStr::new(expected_fd.as_str())));
+    }
+
     fn bound_listener(dir: &tempfile::TempDir, name: &str) -> DaemonListener {
         DaemonListener {
-            listener: UnixListener::bind(dir.path().join(name)).unwrap(),
+            unix: UnixListener::bind(dir.path().join(name)).unwrap(),
+            extra: Vec::new(),
         }
     }
 
@@ -215,7 +386,7 @@ items = []
 
         let dir = tempfile::TempDir::new().unwrap();
         let listener = bound_listener(&dir, "env-var.sock");
-        let expected_fd = listener.listener.as_raw_fd().to_string();
+        let expected_fd = listener.unix.as_raw_fd().to_string();
         let mut command = Command::new("/bin/true");
 
         apply_to_command(&listener, &mut command);
@@ -243,7 +414,7 @@ items = []
     fn clear_cloexec_flips_the_close_on_exec_flag() {
         let dir = tempfile::TempDir::new().unwrap();
         let listener = bound_listener(&dir, "cloexec.sock");
-        let fd = listener.listener.as_raw_fd();
+        let fd = listener.unix.as_raw_fd();
         assert!(cloexec_is_set(fd), "std sockets start close-on-exec");
 
         clear_cloexec(fd).unwrap();
@@ -258,7 +429,7 @@ items = []
     fn apply_to_command_does_not_touch_the_parents_own_cloexec_flag() {
         let dir = tempfile::TempDir::new().unwrap();
         let listener = bound_listener(&dir, "parent-untouched.sock");
-        let fd = listener.listener.as_raw_fd();
+        let fd = listener.unix.as_raw_fd();
         let mut command = Command::new("/bin/true");
 
         apply_to_command(&listener, &mut command);

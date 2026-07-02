@@ -1,9 +1,9 @@
 use crate::domain::config::ServerConfig;
 use crate::domain::models::Command;
 use crate::input::InputHandler;
+use crate::utils::bind_udp_or_inherit;
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::net::UdpSocket;
 
 pub struct CommandService {
     input_handler: Arc<InputHandler>,
@@ -17,7 +17,7 @@ impl CommandService {
     }
 
     pub async fn run(&self) -> Result<()> {
-        let socket = UdpSocket::bind(format!("0.0.0.0:{}", ServerConfig::COMMAND_PORT)).await?;
+        let socket = bind_udp_or_inherit("command", ServerConfig::COMMAND_PORT).await?;
         socket.set_broadcast(true)?;
 
         let mut buf = [0; ServerConfig::COMMAND_BUFFER_SIZE];

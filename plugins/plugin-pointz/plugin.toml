@@ -24,6 +24,16 @@ enabled = true
 command = "pointzerver"
 socket = "/tmp/qol-pointz.sock"
 
+[[daemon.extra_ports]]
+name = "discovery"
+port = 45454
+protocol = "udp"
+
+[[daemon.extra_ports]]
+name = "command"
+port = 45455
+protocol = "udp"
+
 [[dependencies.binaries]]
 name = "pointzerver"
 repo = "qol-tools/pointzerver"

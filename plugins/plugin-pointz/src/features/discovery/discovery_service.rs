@@ -1,6 +1,6 @@
 use crate::domain::config::ServerConfig;
 use crate::domain::models::DiscoveryResponse;
-use crate::utils::get_hostname;
+use crate::utils::{bind_udp_or_inherit, get_hostname};
 use anyhow::Result;
 use tokio::net::UdpSocket;
 
@@ -11,7 +11,7 @@ pub struct DiscoveryService {
 
 impl DiscoveryService {
     pub async fn new() -> Result<Self> {
-        let socket = UdpSocket::bind(format!("0.0.0.0:{}", ServerConfig::DISCOVERY_PORT)).await?;
+        let socket = bind_udp_or_inherit("discovery", ServerConfig::DISCOVERY_PORT).await?;
         socket.set_broadcast(true)?;
         let response = DiscoveryResponse {
             hostname: get_hostname(),

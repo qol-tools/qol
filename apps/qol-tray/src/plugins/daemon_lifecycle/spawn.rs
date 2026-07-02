@@ -157,6 +157,7 @@ mod tests {
             command: "any".to_string(),
             socket: None,
             port: None,
+            extra_ports: Vec::new(),
         }
     }
 

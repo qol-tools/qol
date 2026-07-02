@@ -338,6 +338,24 @@ pub struct DaemonConfig {
     pub socket: Option<String>,
     #[serde(default)]
     pub port: Option<u16>,
+    #[serde(default)]
+    pub extra_ports: Vec<NamedPort>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct NamedPort {
+    pub name: String,
+    pub port: u16,
+    #[serde(default)]
+    pub protocol: PortProtocol,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PortProtocol {
+    #[default]
+    Tcp,
+    Udp,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

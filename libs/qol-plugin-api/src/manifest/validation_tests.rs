@@ -138,6 +138,7 @@ mod command_rules {
                 command: "pointzerver".to_string(),
                 socket: None,
                 port: None,
+                extra_ports: Vec::new(),
             }),
             runtime: Some(RuntimeConfig {
                 command: "window_actions_2".to_string(),

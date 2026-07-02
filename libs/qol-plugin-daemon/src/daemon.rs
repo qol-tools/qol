@@ -251,6 +251,19 @@ fn listener_from_fd_str(raw: &str) -> io::Result<UnixListener> {
     Ok(unsafe { UnixListener::from_raw_fd(fd) })
 }
 
+/// Looks up the fd qol-tray pre-bound for a named extra port (declared via
+/// `[[daemon.extra_ports]]` in plugin.toml), e.g. `inherited_port_fd("discovery")`
+/// for a port named `discovery`. Returns `None` if qol-tray didn't pre-bind
+/// this port - the caller should fall back to binding it directly.
+pub fn inherited_port_fd(name: &str) -> Option<RawFd> {
+    let env_name = format!(
+        "{}_{}",
+        qol_conventions::ENV_DAEMON_PORT_FD,
+        name.to_uppercase()
+    );
+    std::env::var(env_name).ok()?.parse().ok()
+}
+
 fn read_and_parse<C, F>(stream: &mut UnixStream, mut parser: F) -> ReadResult<C>
 where
     F: FnMut(&str) -> ReadResult<C>,
@@ -565,5 +578,41 @@ mod tests {
     fn listener_from_fd_str_rejects_malformed_value() {
         let error = listener_from_fd_str("not-a-number").unwrap_err();
         assert_eq!(error.kind(), ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn inherited_port_fd_reads_the_named_env_var() {
+        let _lock = daemon_listener_fd_env_lock();
+        let env_name = format!("{}_TESTPORT", qol_conventions::ENV_DAEMON_PORT_FD);
+        std::env::set_var(&env_name, "42");
+
+        let fd = inherited_port_fd("testport");
+
+        std::env::remove_var(&env_name);
+        assert_eq!(fd, Some(42));
+    }
+
+    #[test]
+    fn inherited_port_fd_returns_none_when_env_var_absent() {
+        let _lock = daemon_listener_fd_env_lock();
+        let env_name = format!("{}_ABSENTPORT", qol_conventions::ENV_DAEMON_PORT_FD);
+        std::env::remove_var(&env_name);
+
+        assert_eq!(inherited_port_fd("absentport"), None);
+    }
+
+    #[test]
+    fn inherited_port_fd_returns_none_for_malformed_value() {
+        let _lock = daemon_listener_fd_env_lock();
+        let env_name = format!("{}_MALFORMEDPORT", qol_conventions::ENV_DAEMON_PORT_FD);
+        std::env::set_var(&env_name, "not-a-number");
+
+        let fd = inherited_port_fd("malformedport");
+
+        std::env::remove_var(&env_name);
+        assert_eq!(
+            fd, None,
+            "a malformed port fd falls back to direct binding rather than propagating an error"
+        );
     }
 }

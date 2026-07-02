@@ -143,6 +143,7 @@ mod tests {
                 command: "plugin-foo".to_string(),
                 socket: Some("qol-this-socket-does-not-exist.sock".to_string()),
                 port: None,
+                extra_ports: Vec::new(),
             }),
             vec![run_action("toggle")],
         );
@@ -174,6 +175,7 @@ mod tests {
                     command: "plugin-disabled-daemon".to_string(),
                     socket: None,
                     port: None,
+                    extra_ports: Vec::new(),
                 }),
                 vec![run_action("gamma")],
             ),
