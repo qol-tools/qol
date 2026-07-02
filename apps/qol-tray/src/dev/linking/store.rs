@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn set_active_worktree_branch(
     config_dir: &Path,
@@ -24,16 +24,14 @@ pub fn get_active_worktree_branch(config_dir: &Path) -> Option<String> {
 }
 
 pub fn create_link(source: &Path, config_dir: &Path) -> Result<String, String> {
-    let plugin_id = validate_link_source(source)?;
+    let (plugin_id, plugin_root) = validate_link_source(source)?;
 
     if crate::plugins::registry::dev_linked_paths(config_dir).contains_key(&plugin_id) {
         return Err("Already linked".to_string());
     }
 
-    let canonical =
-        crate::dev::find_git_worktree_base(source).unwrap_or_else(|| source.to_path_buf());
-    crate::plugins::registry::record_dev_link_create(config_dir, &plugin_id, canonical.clone())?;
-    log::info!("Created dev-link: {} -> {:?}", plugin_id, canonical);
+    crate::plugins::registry::record_dev_link_create(config_dir, &plugin_id, plugin_root.clone())?;
+    log::info!("Created dev-link: {} -> {:?}", plugin_id, plugin_root);
     Ok(plugin_id)
 }
 
@@ -46,7 +44,7 @@ pub fn remove_link(id: &str, config_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_link_source(source: &Path) -> Result<String, String> {
+fn validate_link_source(source: &Path) -> Result<(String, PathBuf), String> {
     if !source.exists() {
         return Err("Source path does not exist".to_string());
     }
@@ -89,5 +87,5 @@ fn validate_link_source(source: &Path) -> Result<String, String> {
         .as_str()
         .to_string();
 
-    Ok(plugin_id)
+    Ok((plugin_id, canonical))
 }

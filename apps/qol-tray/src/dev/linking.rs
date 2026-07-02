@@ -40,6 +40,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
+    use std::process::Command;
     use tempfile::TempDir;
 
     fn write_plugin_toml(dir: &Path, name: &str) {
@@ -71,7 +72,31 @@ mod tests {
 
         let links = crate::plugins::registry::dev_linked_paths(tmp.path());
         assert_eq!(links.len(), 1);
-        assert_eq!(links["my-plugin"], source);
+        assert_eq!(links["my-plugin"], source.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn create_link_records_plugin_directory_inside_git_worktree() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let status = Command::new("git")
+            .args(["init", "--initial-branch=main"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let source = repo.join("plugins/my-plugin");
+        fs::create_dir_all(&source).unwrap();
+        write_plugin_toml(&source, "My Plugin");
+
+        let id = create_link(&source, tmp.path()).unwrap();
+        assert_eq!(id, "my-plugin");
+
+        let links = crate::plugins::registry::dev_linked_paths(tmp.path());
+        assert_eq!(links["my-plugin"], source.canonicalize().unwrap());
+        assert_ne!(links["my-plugin"], repo.canonicalize().unwrap());
     }
 
     #[test]
@@ -137,7 +162,10 @@ mod tests {
         assert_eq!(listed[0].id, "foo");
         assert_eq!(listed[0].name, "Fancy Plugin");
         assert_eq!(listed[0].version, "1.0.0");
-        assert_eq!(listed[0].source, source.to_string_lossy());
+        assert_eq!(
+            listed[0].source,
+            source.canonicalize().unwrap().to_string_lossy()
+        );
         assert!(!listed[0].has_cargo);
         assert_eq!(listed[0].rebuild_reason, "Cargo.toml missing");
     }
