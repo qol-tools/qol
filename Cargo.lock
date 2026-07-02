@@ -5860,6 +5860,7 @@ dependencies = [
 name = "qol-plugin-daemon"
 version = "1.0.0"
 dependencies = [
+ "libc",
  "objc2-app-kit",
  "objc2-foundation",
  "qol-conventions",

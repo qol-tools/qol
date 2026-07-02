@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{self, BufRead, BufReader, ErrorKind, Write};
 use std::net::Shutdown;
+use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -145,7 +146,9 @@ pub fn start_listener<C: Send + 'static>(
                 Err(_) => break,
             }
         }
-        remove_socket_file(&socket_path);
+        if let Some(socket_path) = socket_path {
+            remove_socket_file(&socket_path);
+        }
     });
 
     true
@@ -175,11 +178,19 @@ where
         }
     }
 
-    remove_socket_file(socket_path);
+    if let Some(socket_path) = socket_path {
+        remove_socket_file(socket_path);
+    }
     Ok(())
 }
 
-fn bind_listener(config: &DaemonConfig) -> io::Result<(UnixListener, PathBuf)> {
+fn bind_listener(config: &DaemonConfig) -> io::Result<(UnixListener, Option<PathBuf>)> {
+    if let Some(listener) = inherited_listener()? {
+        #[cfg(debug_assertions)]
+        eprintln!("[daemon] adopting a pre-bound listener fd, skipping bind()");
+        return Ok((listener, None));
+    }
+
     let Some(socket_path) = socket_path(config) else {
         #[cfg(debug_assertions)]
         eprintln!(
@@ -217,7 +228,27 @@ fn bind_listener(config: &DaemonConfig) -> io::Result<(UnixListener, PathBuf)> {
         Err(error) => return Err(error),
     };
 
-    Ok((listener, socket_path))
+    Ok((listener, Some(socket_path)))
+}
+
+fn inherited_listener() -> io::Result<Option<UnixListener>> {
+    let Ok(raw) = std::env::var(qol_conventions::ENV_DAEMON_LISTENER_FD) else {
+        return Ok(None);
+    };
+    listener_from_fd_str(&raw).map(Some)
+}
+
+fn listener_from_fd_str(raw: &str) -> io::Result<UnixListener> {
+    let fd: RawFd = raw.parse().map_err(|_| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "malformed {}: {raw:?}",
+                qol_conventions::ENV_DAEMON_LISTENER_FD
+            ),
+        )
+    })?;
+    Ok(unsafe { UnixListener::from_raw_fd(fd) })
 }
 
 fn read_and_parse<C, F>(stream: &mut UnixStream, mut parser: F) -> ReadResult<C>
@@ -478,6 +509,7 @@ mod tests {
 
     #[test]
     fn bind_listener_replaces_stale_socket() {
+        let _lock = daemon_listener_fd_env_lock();
         let socket_name = temp_socket_name("stale");
         let path = PathBuf::from("/tmp").join(socket_name);
         let _ = fs::remove_file(&path);
@@ -491,7 +523,47 @@ mod tests {
         let config = fallback_config(socket_name);
         let (_listener, bound_path) = bind_listener(&config).unwrap();
 
-        assert_eq!(bound_path, path);
+        assert_eq!(bound_path, Some(path.clone()));
         remove_socket_file(path);
+    }
+
+    // `bind_listener` reads QOL_TRAY_DAEMON_LISTENER_FD from the process
+    // environment, which is shared across every test thread in this binary.
+    // Any test that sets it must hold this lock for the duration, so it can't
+    // leak into a concurrently-running test that also calls bind_listener.
+    fn daemon_listener_fd_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    #[test]
+    fn bind_listener_uses_inherited_fd_when_env_var_present() {
+        use std::os::fd::IntoRawFd;
+
+        let _lock = daemon_listener_fd_env_lock();
+        let socket_name = temp_socket_name("inherited");
+        let path = PathBuf::from("/tmp").join(socket_name);
+        let _ = fs::remove_file(&path);
+        let pre_bound = UnixListener::bind(&path).unwrap();
+        let fd = pre_bound.into_raw_fd();
+        std::env::set_var(qol_conventions::ENV_DAEMON_LISTENER_FD, fd.to_string());
+
+        let config = fallback_config(temp_socket_name("unused-when-inherited"));
+        let result = bind_listener(&config);
+
+        std::env::remove_var(qol_conventions::ENV_DAEMON_LISTENER_FD);
+
+        let (_listener, bound_path) = result.unwrap();
+        assert_eq!(
+            bound_path, None,
+            "an inherited listener does not own its socket path and must not unlink it"
+        );
+        remove_socket_file(path);
+    }
+
+    #[test]
+    fn listener_from_fd_str_rejects_malformed_value() {
+        let error = listener_from_fd_str("not-a-number").unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidInput);
     }
 }
