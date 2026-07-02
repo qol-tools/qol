@@ -1,4 +1,4 @@
 /target
 __pycache__/
 .superpowers/
-.claude/agent-memory/**/.reflect-last.log
+**/.claude/agent-memory/**/.reflect-last.log
