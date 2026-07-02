@@ -191,6 +191,12 @@ fn bind_listener(config: &DaemonConfig) -> io::Result<(UnixListener, Option<Path
         return Ok((listener, None));
     }
 
+    // Every daemon-bearing plugin in this repo is spawned with a pre-bound fd
+    // today, so this self-bind path (and support_replace_existing below) is
+    // not the common case anymore. It stays as the fallback for a plugin
+    // binary launched by hand outside qol-tray, and for any pre-bind attempt
+    // that failed and gracefully degraded (see daemon_lifecycle::listener in
+    // qol-tray).
     let Some(socket_path) = socket_path(config) else {
         #[cfg(debug_assertions)]
         eprintln!(

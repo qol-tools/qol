@@ -3,6 +3,11 @@ use std::net::{TcpListener, TcpStream};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+// qol-tray pre-binds this port and hands off the fd today (see
+// bind_task_runner_listener in server.rs), so this escalation ladder is only
+// reached when nothing was pre-bound: a manually-launched instance outside
+// qol-tray's supervision, or a pre-bind attempt that failed and gracefully
+// degraded to this fallback.
 pub fn bind_with_takeover(port: u16) -> std::io::Result<TcpListener> {
     match try_bind(port) {
         Ok(listener) => return Ok(listener),

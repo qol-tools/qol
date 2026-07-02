@@ -58,7 +58,7 @@ fn report_from_ports(ports: &[(String, u16)]) -> CheckReport {
         .iter()
         .map(|(port, ids)| DoctorIssue {
             code: ID,
-            severity: Severity::Warn,
+            severity: Severity::Error,
             message: format!("port {port} claimed by {}", ids.join(", ")),
             evidence: ids.clone(),
         })
@@ -103,7 +103,12 @@ mod tests {
             ("plugin-c", 42720),
         ]));
         assert_eq!(report.issues.len(), 1, "one issue per collided port");
-        assert_eq!(report.issues[0].severity, Severity::Warn);
+        assert_eq!(
+            report.issues[0].severity,
+            Severity::Error,
+            "qol-tray now pre-binds declared ports, so a collision is a guaranteed \
+             startup failure for the losing plugin, not a maybe-someday problem"
+        );
         assert_eq!(report.issues[0].code, ID);
         assert_eq!(
             report.issues[0].message, "port 42710 claimed by plugin-a, plugin-b",
