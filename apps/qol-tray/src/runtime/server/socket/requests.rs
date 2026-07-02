@@ -112,7 +112,7 @@ fn handle_lifeline(writer: &mut UnixStream, shared: &SharedState, plugin_id: Str
         return;
     }
 
-    preserve_lifeline_across_exec(writer);
+    register_lifeline_for_exec_handoff(writer);
 
     let _ = writer.set_write_timeout(Some(Duration::from_secs(SUBSCRIBER_WRITE_TIMEOUT_SECS)));
 
@@ -122,26 +122,30 @@ fn handle_lifeline(writer: &mut UnixStream, shared: &SharedState, plugin_id: Str
     let (_tx, rx) = std_mpsc::channel::<RuntimeEvent>();
     forward_events(writer, rx);
 
+    unregister_lifeline_for_exec_handoff(writer);
     shared.disarm_lifeline(&plugin_id);
     log::info!("[runtime/socket] host-death lifeline dropped by {plugin_id}");
 }
 
 #[cfg(unix)]
-fn preserve_lifeline_across_exec(writer: &UnixStream) {
+fn register_lifeline_for_exec_handoff(writer: &UnixStream) {
     use std::os::fd::AsRawFd;
 
-    let fd = writer.as_raw_fd();
-    unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFD);
-        if flags < 0 {
-            return;
-        }
-        let _ = libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
-    }
+    crate::lifeline_handoff::register(writer.as_raw_fd());
 }
 
 #[cfg(not(unix))]
-fn preserve_lifeline_across_exec(_writer: &UnixStream) {}
+fn register_lifeline_for_exec_handoff(_writer: &UnixStream) {}
+
+#[cfg(unix)]
+fn unregister_lifeline_for_exec_handoff(writer: &UnixStream) {
+    use std::os::fd::AsRawFd;
+
+    crate::lifeline_handoff::unregister(writer.as_raw_fd());
+}
+
+#[cfg(not(unix))]
+fn unregister_lifeline_for_exec_handoff(_writer: &UnixStream) {}
 
 fn handle_subscription(
     writer: &mut UnixStream,
@@ -303,22 +307,37 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn lifeline_socket_is_preserved_across_exec() {
+    fn armed_lifeline_socket_stays_close_on_exec() {
         use std::os::fd::AsRawFd;
 
-        let (writer, _reader) = pair();
-        unsafe {
-            let fd = writer.as_raw_fd();
-            let flags = libc::fcntl(fd, libc::F_GETFD);
-            assert!(flags >= 0);
-            assert_eq!(libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC), 0);
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (server, mut client) = pair();
+        let server_fd = server.as_raw_fd();
 
-            preserve_lifeline_across_exec(&writer);
+        std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let mut server = server;
+                handle_request(
+                    r#"{"cmd":"lifeline","plugin_id":"plugin-x"}"#,
+                    &mut server,
+                    &shared,
+                );
+            });
 
-            let flags = libc::fcntl(fd, libc::F_GETFD);
-            assert!(flags >= 0);
-            assert_eq!(flags & libc::FD_CLOEXEC, 0);
-        }
+            let ack = read_to_string(&mut client);
+            assert!(ack.contains("subscribed"), "ack: {ack:?}");
+
+            let flags = unsafe { libc::fcntl(server_fd, libc::F_GETFD) };
+            assert!(flags >= 0, "armed lifeline fd must be open");
+            assert_ne!(
+                flags & libc::FD_CLOEXEC,
+                0,
+                "armed lifeline must stay close-on-exec so spawned plugin daemons cannot inherit it",
+            );
+
+            drop(client);
+            handle.join().expect("lifeline handler thread");
+        });
     }
 
     #[test]

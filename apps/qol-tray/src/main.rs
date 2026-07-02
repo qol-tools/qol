@@ -40,6 +40,8 @@ fn main() -> Result<()> {
     #[cfg(not(feature = "dev"))]
     qol_tray::logging::init_logger();
 
+    qol_tray::lifeline_handoff::adopt_handed_off_fds();
+
     let generation = qol_tray::dev_generation::current();
     let rolling_restart = qol_tray::dev_generation::is_rolling_restart();
     if generation.is_shadow() {
