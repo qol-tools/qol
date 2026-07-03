@@ -322,7 +322,12 @@ impl SupervisorState {
     fn status_for(&self, snap: &DaemonSnapshot) -> PluginRuntimeStatus {
         match snap.expectation {
             DaemonExpectation::NotExpected => PluginRuntimeStatus::NotExpected,
-            DaemonExpectation::AutostartBlocked => PluginRuntimeStatus::AutostartBlocked,
+            DaemonExpectation::AutostartBlocked => {
+                match snap.daemon_pid.filter(|pid| is_daemon_alive(Some(*pid))) {
+                    Some(pid) => PluginRuntimeStatus::OnDemand { pid },
+                    None => PluginRuntimeStatus::AutostartBlocked,
+                }
+            }
             DaemonExpectation::Supervised => {
                 let Some(record) = self.records.get(&snap.plugin_id) else {
                     return PluginRuntimeStatus::Down {
@@ -712,6 +717,12 @@ mod tests {
                 DaemonExpectation::AutostartBlocked,
                 None,
                 PluginRuntimeStatus::AutostartBlocked,
+            ),
+            (
+                "plugin-on-demand",
+                DaemonExpectation::AutostartBlocked,
+                Some(alive_pid()),
+                PluginRuntimeStatus::OnDemand { pid: alive_pid() },
             ),
             (
                 "plugin-unseen",

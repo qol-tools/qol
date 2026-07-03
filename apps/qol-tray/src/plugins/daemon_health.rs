@@ -14,6 +14,9 @@ pub enum DaemonExpectation {
 pub enum PluginRuntimeStatus {
     NotExpected,
     AutostartBlocked,
+    OnDemand {
+        pid: u32,
+    },
     Down {
         consecutive_failures: u32,
         suppressed: bool,
@@ -124,6 +127,10 @@ mod tests {
             (
                 PluginRuntimeStatus::AutostartBlocked,
                 r#"{"state":"autostart_blocked"}"#,
+            ),
+            (
+                PluginRuntimeStatus::OnDemand { pid: 12 },
+                r#"{"state":"on_demand","pid":12}"#,
             ),
             (
                 PluginRuntimeStatus::Down {

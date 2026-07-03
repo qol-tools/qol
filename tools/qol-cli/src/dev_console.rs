@@ -1669,6 +1669,7 @@ fn daemon_status_span(status: Option<&PluginDaemonStatus>) -> Option<Span<'stati
     match status? {
         PluginDaemonStatus::NotExpected => None,
         PluginDaemonStatus::AutostartBlocked => Some(" · daemon off".fg(Color::DarkGray)),
+        PluginDaemonStatus::OnDemand { pid: _ } => Some(" · running (on-demand)".fg(Color::Green)),
         PluginDaemonStatus::Stable { pid: _ } => Some(" · running".fg(Color::Green)),
         PluginDaemonStatus::Probation {
             pid: _,
@@ -1886,6 +1887,10 @@ mod tests {
             (None, ""),
             (Some(PluginDaemonStatus::NotExpected), ""),
             (Some(PluginDaemonStatus::AutostartBlocked), "daemon off"),
+            (
+                Some(PluginDaemonStatus::OnDemand { pid: 1 }),
+                "running (on-demand)",
+            ),
             (Some(PluginDaemonStatus::Stable { pid: 1 }), "running"),
             (
                 Some(PluginDaemonStatus::Probation {

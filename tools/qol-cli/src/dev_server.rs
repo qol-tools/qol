@@ -119,6 +119,9 @@ pub(crate) struct PluginHealthRow {
 pub(crate) enum PluginDaemonStatus {
     NotExpected,
     AutostartBlocked,
+    OnDemand {
+        pid: u32,
+    },
     Down {
         consecutive_failures: u32,
         suppressed: bool,

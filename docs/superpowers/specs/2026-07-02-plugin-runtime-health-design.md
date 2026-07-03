@@ -188,11 +188,15 @@ PluginHealth {
 
 PluginRuntimeStatus =
   | NotExpected                                            // no [daemon] section, or enabled == false
-  | AutostartBlocked                                       // dev-linked, daemon enabled, no .qol-tray-dev-autostart marker
+  | AutostartBlocked                                       // dev-linked, daemon enabled, no .qol-tray-dev-autostart marker, no live pid
+  | OnDemand { pid: u32 }                                  // autostart-blocked but alive anyway - action dispatch starts daemons on demand
   | Down { consecutive_failures: u32, suppressed: bool }    // no living pid
   | Probation { pid: u32, consecutive_failures: u32 }       // alive, pre-STABLE_TICKS
   | Stable { pid: u32 }                                     // alive, past STABLE_TICKS
 ```
+
+`OnDemand` daemons are not supervised: no probation, no failure counting, no
+restart on death - if one dies, its row falls back to `AutostartBlocked`.
 
 Projection happens inside the supervisor tick, which already holds the
 manager lock: it enumerates all loaded plugins, classifies `NotExpected`
@@ -210,8 +214,8 @@ endpoint adds no state - it serves the last published snapshot.
 - Fetch `/api/dev/plugin-health` on the existing `LINKS_REFRESH_INTERVAL` (5s)
   cadence alongside `/api/dev/links` - no new timer.
 - `plugin_row_line` gains a second, independent status dimension (running /
-  probation / dead / suppressed / autostart-blocked / no daemon) alongside
-  the existing linked/stale/linkable dot.
+  running on-demand / probation / dead / suppressed / autostart-blocked /
+  no daemon) alongside the existing linked/stale/linkable dot.
 - Handoff freeze/thaw (depends on P1): while `dash.is_reloading()`, freeze
   health consumption and render a "handoff in progress" state instead of
   polling. On a confirmed successful promotion (a real `Ok` from
