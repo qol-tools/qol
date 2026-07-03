@@ -731,10 +731,17 @@ fn tui_session(
         drain_boot(dash);
         drain_emu_runs(dash);
         if let ReloadOutcome::Ready = poll_reload(dash) {
-            restart_child_from_prebuilt(child, lines, dash)?;
-            return Ok(SessionEnd::SelfRestart {
-                tray_pid: child.id(),
-            });
+            match restart_child_from_prebuilt(child, lines, dash) {
+                Ok(()) => {
+                    return Ok(SessionEnd::SelfRestart {
+                        tray_pid: child.id(),
+                    });
+                }
+                Err(error) => {
+                    dash.push_log(format!("[qol dev] handoff failed: {error:#}"));
+                    dash.notice = Some((Instant::now(), "handoff failed".to_string()));
+                }
+            }
         }
         if let Some(status) = try_wait(child)? {
             while let Ok(line) = lines.try_recv() {

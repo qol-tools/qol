@@ -172,9 +172,9 @@ pub(super) fn restart_child_from_prebuilt(
     wait_for_shutdown_best_effort();
     wait_for_predecessor_daemons(predecessor_daemons, dash);
     if let Err(error) = promote_shadow_generation(ready.port, &mut next, &next_lines, dash) {
-        dash.push_log(format!(
-            "[qol dev] successor promotion incomplete: {error:#}"
-        ));
+        dash.push_log(format!("[qol dev] successor promotion failed: {error:#}"));
+        abandon_failed_successor(&mut next);
+        return Err(error);
     }
     *child = next;
     *lines = next_lines;
@@ -473,6 +473,11 @@ fn process_is_zombie(pid: u32) -> bool {
         .starts_with('Z')
 }
 
+fn abandon_failed_successor(next: &mut TrayHandle) {
+    terminate_child(next);
+    let _ = next.wait();
+}
+
 fn retire_child_for_handoff(child: &mut TrayHandle) -> Result<()> {
     terminate_child(child);
     let deadline = Instant::now() + HANDOFF_STOP_GRACE;
@@ -613,5 +618,18 @@ mod tests {
         ];
 
         assert_eq!(format_daemon_pids(&daemons), "plugin-a=111, plugin-z=222");
+    }
+
+    #[test]
+    fn abandon_failed_successor_terminates_and_reaps() {
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let mut next = TrayHandle::Owned(child);
+
+        abandon_failed_successor(&mut next);
+
+        assert!(
+            next.try_wait().unwrap().is_some(),
+            "failed successor must be reaped, not left running"
+        );
     }
 }
