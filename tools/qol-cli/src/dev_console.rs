@@ -747,6 +747,7 @@ fn tui_session(
         if let ReloadOutcome::Ready = poll_reload(dash) {
             match restart_child_from_prebuilt(child, lines, dash) {
                 Ok(()) => {
+                    stop_session_children(dash);
                     return Ok(SessionEnd::SelfRestart {
                         tray_pid: child.id(),
                     });
@@ -762,8 +763,7 @@ fn tui_session(
             while let Ok(line) = lines.try_recv() {
                 dash.push_log(line);
             }
-            stop_trace(dash);
-            stop_emu_runs(dash);
+            stop_session_children(dash);
             return Ok(SessionEnd::ChildExited(status));
         }
         flush_pokes(dash, probes);
@@ -772,8 +772,7 @@ fn tui_session(
             match handle_key(dash, code, mods) {
                 KeyOutcome::Quit => {
                     persist_if_dirty(dash);
-                    stop_trace(dash);
-                    stop_emu_runs(dash);
+                    stop_session_children(dash);
                     stop_child(child)?;
                     return Ok(SessionEnd::UserQuit);
                 }
@@ -783,6 +782,11 @@ fn tui_session(
         }
         persist_if_dirty(dash);
     }
+}
+
+fn stop_session_children(dash: &mut Dash) {
+    stop_trace(dash);
+    stop_emu_runs(dash);
 }
 
 fn persist_if_dirty(dash: &mut Dash) {
