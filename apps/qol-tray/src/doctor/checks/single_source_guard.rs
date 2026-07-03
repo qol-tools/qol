@@ -95,7 +95,7 @@ mod tests {
     #[test]
     fn rejection_warns_without_fix() {
         let report = report_for(GuardStatus::Rejected(
-            "apps/qol-tray/src/plugins/daemon_health.rs:167:42700".to_string(),
+            "apps/qol-tray/src/plugins/daemon_health.rs:167:99999".to_string(),
         ));
         assert_eq!(report.issues.len(), 1);
         assert!(report.fixes.is_empty());
@@ -122,14 +122,14 @@ mod tests {
 
   cross-process constants must come from their single source
   offending occurrences:
-    apps/qol-tray/src/plugins/daemon_health.rs:167:42700
+    apps/qol-tray/src/plugins/daemon_health.rs:167:99999
 
   fix:
     - host constants: qol_conventions::DEFAULT_PORT
 ";
         assert_eq!(
             first_rejection(stderr),
-            "apps/qol-tray/src/plugins/daemon_health.rs:167:42700"
+            "apps/qol-tray/src/plugins/daemon_health.rs:167:99999"
         );
     }
 
