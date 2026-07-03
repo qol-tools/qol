@@ -10,6 +10,15 @@ use std::time::{Duration, Instant};
 
 pub(crate) type LiveFrame = core_video::pixel_buffer::CVPixelBuffer;
 
+pub(crate) fn live_frame_element(frame: &LiveFrame, width: f32, height: f32) -> gpui::AnyElement {
+    use gpui::{px, surface, IntoElement, ObjectFit, Styled};
+    surface(frame.clone())
+        .w(px(width))
+        .h(px(height))
+        .object_fit(ObjectFit::Cover)
+        .into_any_element()
+}
+
 pub(crate) type ShotReply = (u32, Option<SendCVBuf>);
 
 pub(crate) const PIXEL_FORMAT_420F: u32 = 0x3432_3066;

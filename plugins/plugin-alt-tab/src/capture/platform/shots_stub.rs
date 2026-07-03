@@ -1,10 +1,8 @@
 #[derive(Clone)]
 pub(crate) enum LiveFrame {}
 
-impl From<LiveFrame> for gpui::SurfaceSource {
-    fn from(frame: LiveFrame) -> Self {
-        match frame {}
-    }
+pub(crate) fn live_frame_element(frame: &LiveFrame, _width: f32, _height: f32) -> gpui::AnyElement {
+    match *frame {}
 }
 
 #[derive(Clone)]

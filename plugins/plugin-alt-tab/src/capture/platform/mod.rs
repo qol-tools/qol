@@ -23,13 +23,13 @@ mod shots_stub;
 
 #[cfg(target_os = "macos")]
 pub(crate) use macos::shots::{
-    cached_shots_session, fetch_shots_session, live_shots_available, warm_shots_session, LiveFrame,
-    SendCVBuf, ShotReply, PIXEL_FORMAT_420F,
+    cached_shots_session, fetch_shots_session, live_frame_element, live_shots_available,
+    warm_shots_session, LiveFrame, SendCVBuf, ShotReply, PIXEL_FORMAT_420F,
 };
 #[cfg(not(target_os = "macos"))]
 pub(crate) use shots_stub::{
-    cached_shots_session, fetch_shots_session, live_shots_available, warm_shots_session, LiveFrame,
-    SendCVBuf, ShotReply, PIXEL_FORMAT_420F,
+    cached_shots_session, fetch_shots_session, live_frame_element, live_shots_available,
+    warm_shots_session, LiveFrame, SendCVBuf, ShotReply, PIXEL_FORMAT_420F,
 };
 
 pub fn capture_previews_cg(

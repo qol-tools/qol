@@ -642,11 +642,11 @@ fn preview_tile(
         return minimized_placeholder(icon, metrics);
     }
     if let Some(frame) = live_frame {
-        return surface(frame.clone())
-            .w(px(metrics.preview_width))
-            .h(px(metrics.preview_height))
-            .object_fit(ObjectFit::Cover)
-            .into_any_element();
+        return crate::capture::live_frame_element(
+            frame,
+            metrics.preview_width,
+            metrics.preview_height,
+        );
     }
     if let Some(render_image) = live_image {
         return img(render_image.clone())
