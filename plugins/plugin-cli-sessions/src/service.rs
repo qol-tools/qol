@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use crate::host::Pane;
 
@@ -16,17 +17,31 @@ impl ServiceProbe for NoServiceProbe {
 }
 
 pub struct SystemServiceProbe {
+    declared: Vec<String>,
+    snapshot: OnceLock<ProcessSnapshot>,
+    load: fn() -> ProcessSnapshot,
+}
+
+struct ProcessSnapshot {
     listeners: HashSet<i32>,
     children: HashMap<i32, Vec<i32>>,
-    declared: Vec<String>,
 }
 
 impl SystemServiceProbe {
     pub fn snapshot(declared: Vec<String>) -> Self {
         Self {
-            listeners: listening_pids(),
-            children: child_map(),
             declared,
+            snapshot: OnceLock::new(),
+            load: process_snapshot,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_loader(declared: Vec<String>, load: fn() -> ProcessSnapshot) -> Self {
+        Self {
+            declared,
+            snapshot: OnceLock::new(),
+            load,
         }
     }
 
@@ -47,6 +62,7 @@ impl SystemServiceProbe {
     }
 
     fn subtree_listens(&self, pane: &Pane) -> bool {
+        let snapshot = self.snapshot.get_or_init(|| (self.load)());
         let mut stack: Vec<i32> = pane.foreground_pids.clone();
         stack.push(pane.root_pid);
         let mut seen = HashSet::new();
@@ -54,10 +70,10 @@ impl SystemServiceProbe {
             if !seen.insert(pid) {
                 continue;
             }
-            if self.listeners.contains(&pid) {
+            if snapshot.listeners.contains(&pid) {
                 return true;
             }
-            if let Some(kids) = self.children.get(&pid) {
+            if let Some(kids) = snapshot.children.get(&pid) {
                 stack.extend(kids);
             }
         }
@@ -71,6 +87,13 @@ impl ServiceProbe for SystemServiceProbe {
     }
 }
 
+fn process_snapshot() -> ProcessSnapshot {
+    ProcessSnapshot {
+        listeners: listening_pids(),
+        children: child_map(),
+    }
+}
+
 fn listening_pids() -> HashSet<i32> {
     let Ok(out) = Command::new("lsof")
         .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-Fp"])
@@ -80,8 +103,8 @@ fn listening_pids() -> HashSet<i32> {
     };
     String::from_utf8_lossy(&out.stdout)
         .lines()
-        .filter_map(|l| l.strip_prefix('p'))
-        .filter_map(|p| p.trim().parse::<i32>().ok())
+        .filter_map(|line| line.strip_prefix('p'))
+        .filter_map(|pid| pid.trim().parse::<i32>().ok())
         .collect()
 }
 
@@ -100,4 +123,80 @@ fn child_map() -> HashMap<i32, Vec<i32>> {
         }
     }
     map
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    use super::*;
+
+    static LOADS: AtomicUsize = AtomicUsize::new(0);
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn counted_snapshot() -> ProcessSnapshot {
+        LOADS.fetch_add(1, Ordering::SeqCst);
+        ProcessSnapshot {
+            listeners: HashSet::from([44]),
+            children: HashMap::from([(10, vec![44])]),
+        }
+    }
+
+    fn reset_loads() {
+        LOADS.store(0, Ordering::SeqCst);
+    }
+
+    fn load_count() -> usize {
+        LOADS.load(Ordering::SeqCst)
+    }
+
+    fn pane(root_pid: i32, command: &str, foreground_pids: Vec<i32>) -> Pane {
+        Pane {
+            window_id: 1,
+            root_pid,
+            cwd: "/tmp".into(),
+            title: "test".into(),
+            at_prompt: false,
+            reported_cmd: Some(command.into()),
+            foreground_basenames: vec![command.into()],
+            foreground_pids,
+        }
+    }
+
+    #[test]
+    fn construction_does_not_load_process_snapshot() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_loads();
+        let _probe = SystemServiceProbe::with_loader(Vec::new(), counted_snapshot);
+        assert_eq!(load_count(), 0);
+    }
+
+    #[test]
+    fn declared_command_does_not_load_process_snapshot() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_loads();
+        let probe = SystemServiceProbe::with_loader(vec!["qol dev".into()], counted_snapshot);
+        assert!(probe.is_service(&pane(10, "qol dev", Vec::new())));
+        assert_eq!(load_count(), 0);
+    }
+
+    #[test]
+    fn process_snapshot_loads_once_for_subtree_checks() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_loads();
+        let probe = SystemServiceProbe::with_loader(Vec::new(), counted_snapshot);
+        assert!(probe.is_service(&pane(10, "server", Vec::new())));
+        assert!(probe.is_service(&pane(10, "server", Vec::new())));
+        assert_eq!(load_count(), 1);
+    }
+
+    #[test]
+    fn foreground_process_can_match_listener_directly() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_loads();
+        let probe = SystemServiceProbe::with_loader(Vec::new(), counted_snapshot);
+        assert!(probe.is_service(&pane(10, "server", vec![44])));
+        assert_eq!(load_count(), 1);
+    }
 }
