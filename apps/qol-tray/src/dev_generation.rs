@@ -37,6 +37,10 @@ impl GenerationContext {
         Self { id, mode }
     }
 
+    pub fn generation_id(&self) -> Option<String> {
+        self.id.clone()
+    }
+
     pub fn stable() -> Self {
         Self {
             id: None,

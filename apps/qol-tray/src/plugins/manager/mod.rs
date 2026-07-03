@@ -97,11 +97,22 @@ impl PluginManager {
             .and_then(|plugin| plugin.daemon_pid())
     }
 
-    pub fn supervised_daemon_snapshots(&self) -> Vec<(PluginId, Option<u32>)> {
+    pub fn daemon_health_snapshots(
+        &self,
+    ) -> Vec<(
+        PluginId,
+        crate::plugins::daemon_health::DaemonExpectation,
+        Option<u32>,
+    )> {
         self.plugins
             .values()
-            .filter(|plugin| autostart::daemon_auto_managed(plugin))
-            .map(|plugin| (plugin.id.clone(), plugin.daemon_pid()))
+            .map(|plugin| {
+                (
+                    plugin.id.clone(),
+                    autostart::daemon_expectation(plugin),
+                    plugin.daemon_pid(),
+                )
+            })
             .collect()
     }
 }
@@ -160,30 +171,52 @@ items = []
     }
 
     #[test]
-    fn supervised_daemon_snapshots_respect_daemon_autostart_policy() {
+    fn daemon_health_snapshots_classify_by_autostart_policy() {
+        use crate::plugins::daemon_health::DaemonExpectation;
+
         let root = tempfile::TempDir::new().unwrap();
         let mut manager = PluginManager::new();
         let cases = [
-            ("plugin-installed", true, PluginSource::Installed, false),
-            ("plugin-dev-blocked", true, PluginSource::DevLinked, false),
-            ("plugin-dev-opted-in", true, PluginSource::DevLinked, true),
-            ("plugin-no-daemon", false, PluginSource::Installed, false),
+            (
+                "plugin-installed",
+                true,
+                PluginSource::Installed,
+                false,
+                DaemonExpectation::Supervised,
+            ),
+            (
+                "plugin-dev-blocked",
+                true,
+                PluginSource::DevLinked,
+                false,
+                DaemonExpectation::AutostartBlocked,
+            ),
+            (
+                "plugin-dev-opted-in",
+                true,
+                PluginSource::DevLinked,
+                true,
+                DaemonExpectation::Supervised,
+            ),
+            (
+                "plugin-no-daemon",
+                false,
+                PluginSource::Installed,
+                false,
+                DaemonExpectation::NotExpected,
+            ),
         ];
-        for (id, daemon, source, marker) in cases {
+        for (id, daemon, source, marker, _) in cases.clone() {
             insert_plugin(&mut manager, root.path(), id, daemon, source, marker);
         }
 
-        let mut supervised: Vec<String> = manager
-            .supervised_daemon_snapshots()
-            .into_iter()
-            .map(|(id, _)| id.as_str().to_string())
-            .collect();
-        supervised.sort();
-
-        assert_eq!(
-            supervised,
-            ["plugin-dev-opted-in", "plugin-installed"],
-            "supervisor must only manage daemons the autostart policy allows",
-        );
+        let snapshots = manager.daemon_health_snapshots();
+        for (id, _, _, _, expected) in cases {
+            let (_, expectation, _) = snapshots
+                .iter()
+                .find(|(plugin_id, _, _)| plugin_id.as_str() == id)
+                .unwrap_or_else(|| panic!("missing snapshot for {id}"));
+            assert_eq!(*expectation, expected, "plugin: {id}");
+        }
     }
 }

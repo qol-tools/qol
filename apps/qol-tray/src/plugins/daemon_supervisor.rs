@@ -1,3 +1,6 @@
+use crate::plugins::daemon_health::{
+    DaemonExpectation, HealthPublisher, PluginHealth, PluginRuntimeStatus,
+};
 use crate::plugins::{PluginId, PluginManager};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -11,6 +14,7 @@ const STABLE_TICKS: u64 = 3;
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DaemonSnapshot {
     plugin_id: PluginId,
+    expectation: DaemonExpectation,
     daemon_pid: Option<u32>,
 }
 
@@ -25,15 +29,17 @@ enum LivenessTransition {
 pub fn spawn_supervisor(
     plugin_manager: Arc<Mutex<PluginManager>>,
     shutdown_rx: broadcast::Receiver<()>,
+    publisher: HealthPublisher,
 ) {
     tokio::spawn(async move {
-        run_supervision_loop(plugin_manager, shutdown_rx).await;
+        run_supervision_loop(plugin_manager, shutdown_rx, publisher).await;
     });
 }
 
 async fn run_supervision_loop(
     plugin_manager: Arc<Mutex<PluginManager>>,
     mut shutdown_rx: broadcast::Receiver<()>,
+    publisher: HealthPublisher,
 ) {
     let mut state = SupervisorState::default();
     loop {
@@ -43,13 +49,17 @@ async fn run_supervision_loop(
                 return;
             }
             _ = tokio::time::sleep(SUPERVISION_INTERVAL) => {
-                supervise_once(&plugin_manager, &mut state);
+                supervise_once(&plugin_manager, &mut state, &publisher);
             }
         }
     }
 }
 
-fn supervise_once(plugin_manager: &Arc<Mutex<PluginManager>>, state: &mut SupervisorState) {
+fn supervise_once(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    state: &mut SupervisorState,
+    publisher: &HealthPublisher,
+) {
     // DeadStaysDead is retriable, so without this gate the supervisor would
     // start held-back daemons on its first tick, while the predecessor
     // generation's twins are still alive.
@@ -90,6 +100,7 @@ fn supervise_once(plugin_manager: &Arc<Mutex<PluginManager>>, state: &mut Superv
     }
 
     state.prune_unknown_plugins();
+    publisher.publish(state.tick, state.project(&snapshots));
 
     if any_state_change {
         crate::hotkeys::trigger_reload();
@@ -107,6 +118,9 @@ struct TickOutcome {
 fn classify_snapshots(snapshots: &[DaemonSnapshot], state: &SupervisorState) -> TickOutcome {
     let mut outcome = TickOutcome::default();
     for snap in snapshots {
+        if snap.expectation != DaemonExpectation::Supervised {
+            continue;
+        }
         match state.transition_for(&snap.plugin_id, snap.daemon_pid) {
             LivenessTransition::Alive => {
                 if let Some(pid) = snap.daemon_pid {
@@ -149,10 +163,11 @@ fn snapshot_daemons(plugin_manager: &Arc<Mutex<PluginManager>>) -> Vec<DaemonSna
         return Vec::new();
     };
     manager
-        .supervised_daemon_snapshots()
+        .daemon_health_snapshots()
         .into_iter()
-        .map(|(plugin_id, daemon_pid)| DaemonSnapshot {
+        .map(|(plugin_id, expectation, daemon_pid)| DaemonSnapshot {
             plugin_id,
+            expectation,
             daemon_pid,
         })
         .collect()
@@ -294,6 +309,46 @@ impl SupervisorState {
         }
     }
 
+    fn project(&self, snapshots: &[DaemonSnapshot]) -> Vec<PluginHealth> {
+        snapshots
+            .iter()
+            .map(|snap| PluginHealth {
+                plugin_id: snap.plugin_id.as_str().to_string(),
+                status: self.status_for(snap),
+            })
+            .collect()
+    }
+
+    fn status_for(&self, snap: &DaemonSnapshot) -> PluginRuntimeStatus {
+        match snap.expectation {
+            DaemonExpectation::NotExpected => PluginRuntimeStatus::NotExpected,
+            DaemonExpectation::AutostartBlocked => PluginRuntimeStatus::AutostartBlocked,
+            DaemonExpectation::Supervised => {
+                let Some(record) = self.records.get(&snap.plugin_id) else {
+                    return PluginRuntimeStatus::Down {
+                        consecutive_failures: 0,
+                        suppressed: false,
+                    };
+                };
+                if let (Some(LastSeen::Alive), Some(pid)) = (record.last_seen, record.last_pid) {
+                    if record.stable {
+                        PluginRuntimeStatus::Stable { pid }
+                    } else {
+                        PluginRuntimeStatus::Probation {
+                            pid,
+                            consecutive_failures: record.consecutive_failures,
+                        }
+                    }
+                } else {
+                    PluginRuntimeStatus::Down {
+                        consecutive_failures: record.consecutive_failures,
+                        suppressed: record.consecutive_failures >= MAX_CONSECUTIVE_FAILURES,
+                    }
+                }
+            }
+        }
+    }
+
     fn note_known_plugins(&mut self, snapshots: &[DaemonSnapshot]) {
         self.known = snapshots.iter().map(|s| s.plugin_id.clone()).collect();
     }
@@ -315,6 +370,7 @@ mod tests {
     fn snapshot(id: &str, daemon_pid: Option<u32>) -> DaemonSnapshot {
         DaemonSnapshot {
             plugin_id: pid(id),
+            expectation: DaemonExpectation::Supervised,
             daemon_pid,
         }
     }
@@ -627,6 +683,78 @@ mod tests {
             outcome.retriable_dead.is_empty(),
             "exhausted backoff still blocks restart attempt"
         );
+    }
+
+    #[test]
+    fn projection_covers_every_status_variant() {
+        let mut state = SupervisorState::default();
+        state.begin_tick();
+        state.observe_alive(&pid("plugin-probation"), 11);
+        state.observe_spawned(&pid("plugin-stable"), Some(12));
+        for _ in 0..STABLE_TICKS {
+            state.begin_tick();
+            state.observe_alive(&pid("plugin-stable"), 12);
+        }
+        for _ in 0..MAX_CONSECUTIVE_FAILURES {
+            state.begin_tick();
+            state.record_failure(&pid("plugin-suppressed"));
+        }
+
+        let cases = [
+            (
+                "plugin-no-daemon",
+                DaemonExpectation::NotExpected,
+                None,
+                PluginRuntimeStatus::NotExpected,
+            ),
+            (
+                "plugin-blocked",
+                DaemonExpectation::AutostartBlocked,
+                None,
+                PluginRuntimeStatus::AutostartBlocked,
+            ),
+            (
+                "plugin-unseen",
+                DaemonExpectation::Supervised,
+                None,
+                PluginRuntimeStatus::Down {
+                    consecutive_failures: 0,
+                    suppressed: false,
+                },
+            ),
+            (
+                "plugin-probation",
+                DaemonExpectation::Supervised,
+                Some(11),
+                PluginRuntimeStatus::Probation {
+                    pid: 11,
+                    consecutive_failures: 0,
+                },
+            ),
+            (
+                "plugin-stable",
+                DaemonExpectation::Supervised,
+                Some(12),
+                PluginRuntimeStatus::Stable { pid: 12 },
+            ),
+            (
+                "plugin-suppressed",
+                DaemonExpectation::Supervised,
+                None,
+                PluginRuntimeStatus::Down {
+                    consecutive_failures: MAX_CONSECUTIVE_FAILURES,
+                    suppressed: true,
+                },
+            ),
+        ];
+        for (id, expectation, daemon_pid, expected) in cases {
+            let snap = DaemonSnapshot {
+                plugin_id: pid(id),
+                expectation,
+                daemon_pid,
+            };
+            assert_eq!(state.status_for(&snap), expected, "plugin: {id}");
+        }
     }
 
     #[test]

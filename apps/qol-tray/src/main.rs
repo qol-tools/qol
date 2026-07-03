@@ -524,9 +524,15 @@ async fn async_init_inner(
     } else {
         hotkeys::start_capture_with_fallback(plugin_manager.clone());
     }
+    let (health_tx, _health_rx) = qol_tray::plugins::daemon_health::channel();
     qol_tray::plugins::daemon_supervisor::spawn_supervisor(
         plugin_manager.clone(),
         shutdown_tx.subscribe(),
+        qol_tray::plugins::daemon_health::HealthPublisher::new(
+            health_tx,
+            ui_port,
+            qol_tray::plugins::daemon_health::default_file_path(),
+        ),
     );
     let generation_restart = shadow_generation || rolling_restart;
     let missing_generation_daemons = {

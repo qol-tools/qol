@@ -109,6 +109,20 @@ where
         .collect()
 }
 
+pub(super) fn daemon_expectation(
+    plugin: &Plugin,
+) -> crate::plugins::daemon_health::DaemonExpectation {
+    use crate::plugins::daemon_health::DaemonExpectation;
+    if !daemon_enabled(plugin) {
+        return DaemonExpectation::NotExpected;
+    }
+    if daemon_auto_managed(plugin) {
+        DaemonExpectation::Supervised
+    } else {
+        DaemonExpectation::AutostartBlocked
+    }
+}
+
 pub(super) fn daemon_auto_managed(plugin: &Plugin) -> bool {
     should_wait_for_daemon_readiness_for_source(
         plugin.id.as_str(),

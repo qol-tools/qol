@@ -2,6 +2,7 @@ pub mod action_executor;
 pub mod action_transport;
 pub mod capabilities;
 pub mod config;
+pub mod daemon_health;
 mod daemon_lifecycle;
 pub mod daemon_supervisor;
 pub mod daemon_tracker;
