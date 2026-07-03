@@ -481,10 +481,13 @@ mod tests {
 
     #[test]
     fn plugin_health_payload_parses_tagged_statuses() {
-        let body = r#"{"tick":4,"process_pid":1,"role":"stable","bind_port":42700,
+        let body = format!(
+            r#"{{"tick":4,"process_pid":1,"role":"stable","bind_port":{},
             "daemon_autostart_held":false,"generation_id":null,
-            "plugins":[{"plugin_id":"plugin-foo","status":{"state":"down","consecutive_failures":5,"suppressed":true}}]}"#;
-        let snapshot: PluginHealthSnapshot = serde_json::from_str(body).unwrap();
+            "plugins":[{{"plugin_id":"plugin-foo","status":{{"state":"down","consecutive_failures":5,"suppressed":true}}}}]}}"#,
+            qol_conventions::DEFAULT_PORT,
+        );
+        let snapshot: PluginHealthSnapshot = serde_json::from_str(&body).unwrap();
         assert_eq!(snapshot.tick, 4);
         assert_eq!(
             snapshot.plugins[0].status,

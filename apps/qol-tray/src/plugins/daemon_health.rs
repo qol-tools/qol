@@ -164,7 +164,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("daemon-health.json");
         let (tx, rx) = channel();
-        let publisher = HealthPublisher::new(tx, 42700, path.clone());
+        let publisher = HealthPublisher::new(tx, qol_conventions::DEFAULT_PORT, path.clone());
 
         publisher.publish(
             3,
@@ -176,7 +176,7 @@ mod tests {
 
         let from_watch = rx.borrow().clone();
         assert_eq!(from_watch.tick, 3, "watch carries the published tick");
-        assert_eq!(from_watch.bind_port, 42700);
+        assert_eq!(from_watch.bind_port, qol_conventions::DEFAULT_PORT);
         assert_eq!(from_watch.process_pid, std::process::id());
         let from_file: HealthSnapshot =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();

@@ -27,6 +27,8 @@ mod rust_clippy;
 #[cfg(feature = "dev")]
 mod rust_formatting;
 mod shell_hook_present;
+#[cfg(feature = "dev")]
+mod single_source_guard;
 
 #[cfg(feature = "dev")]
 pub(super) use dev_link_paths::relocate_dev_link;
@@ -57,6 +59,7 @@ pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
         checks.push(Box::new(dev_link_paths::DevLinkPathsCheck));
         checks.push(Box::new(fingerprint_health::FingerprintHealthCheck));
         checks.push(Box::new(reserved_plugin_ids::ReservedPluginIdsCheck));
+        checks.push(Box::new(single_source_guard::SingleSourceGuardCheck));
         checks.push(Box::new(rust_formatting::RustFormattingCheck));
         checks.push(Box::new(rust_clippy::RustClippyCheck));
     }

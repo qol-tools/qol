@@ -421,6 +421,7 @@ mod tests {
             ("dev_link_paths", true),
             ("fingerprint_health", true),
             ("reserved_plugin_ids", true),
+            ("single_source_guard", true),
             ("cargo_target_cache", false),
             ("cargo_target_total", false),
             ("rust_clippy", false),
