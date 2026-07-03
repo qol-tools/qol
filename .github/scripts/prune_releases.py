@@ -14,7 +14,12 @@ import json
 import re
 import subprocess
 import sys
+import time
 from collections import defaultdict
+
+MUTATION_PAUSE_SECONDS = 0.5
+RETRY_PAUSE_SECONDS = 30
+RETRIES = 3
 
 TAG_PATTERN = re.compile(r"^(?P<component>.+)-v(?P<version>\d+\.\d+\.\d+)$")
 
@@ -49,6 +54,23 @@ def gh_api(args: list[str]) -> str:
     return result.stdout
 
 
+GONE_MARKERS = ("HTTP 404", "Reference does not exist")
+
+
+def gh_api_mutation(args: list[str]) -> None:
+    for attempt in range(1, RETRIES + 1):
+        try:
+            gh_api(args)
+            return
+        except subprocess.CalledProcessError as error:
+            if any(marker in (error.stderr or "") for marker in GONE_MARKERS):
+                return
+            if attempt == RETRIES:
+                print(error.stderr, file=sys.stderr)
+                raise
+            time.sleep(RETRY_PAUSE_SECONDS * attempt)
+
+
 def list_remote_tags() -> list[str]:
     output = gh_api(
         ["--paginate", "repos/{owner}/{repo}/git/matching-refs/tags", "--jq", ".[].ref"]
@@ -67,8 +89,11 @@ def release_id_for_tag(tag: str) -> int | None:
 def delete_tag(tag: str) -> None:
     release_id = release_id_for_tag(tag)
     if release_id is not None:
-        gh_api(["-X", "DELETE", f"repos/{{owner}}/{{repo}}/releases/{release_id}"])
-    gh_api(["-X", "DELETE", f"repos/{{owner}}/{{repo}}/git/refs/tags/{tag}"])
+        gh_api_mutation(
+            ["-X", "DELETE", f"repos/{{owner}}/{{repo}}/releases/{release_id}"]
+        )
+    gh_api_mutation(["-X", "DELETE", f"repos/{{owner}}/{{repo}}/git/refs/tags/{tag}"])
+    time.sleep(MUTATION_PAUSE_SECONDS)
 
 
 def main() -> int:
