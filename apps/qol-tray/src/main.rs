@@ -511,10 +511,15 @@ async fn async_init_inner(
     #[cfg(feature = "dev")]
     feature_registry.register(Box::new(features::mode_toggle::ModeToggle::new()));
     let feature_registry = Arc::new(feature_registry);
+    let (health_tx, health_rx) = qol_tray::plugins::daemon_health::channel();
+    #[cfg(not(feature = "dev"))]
+    drop(health_rx);
     let ui_port = features::plugin_store::Plugins::start_server(
         plugin_manager.clone(),
         &daemon,
         sync_service,
+        #[cfg(feature = "dev")]
+        health_rx,
         #[cfg(feature = "dev")]
         core_log_controls,
     )
@@ -524,7 +529,6 @@ async fn async_init_inner(
     } else {
         hotkeys::start_capture_with_fallback(plugin_manager.clone());
     }
-    let (health_tx, _health_rx) = qol_tray::plugins::daemon_health::channel();
     qol_tray::plugins::daemon_supervisor::spawn_supervisor(
         plugin_manager.clone(),
         shutdown_tx.subscribe(),

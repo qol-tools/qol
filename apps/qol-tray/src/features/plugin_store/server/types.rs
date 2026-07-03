@@ -42,6 +42,9 @@ pub(super) struct AppState {
     pub(super) plugins_cache: Arc<RwLock<Option<PluginCache>>>,
     pub(super) plugins_revalidating: Arc<AtomicBool>,
     #[cfg(feature = "dev")]
+    pub(super) daemon_health:
+        tokio::sync::watch::Receiver<crate::plugins::daemon_health::HealthSnapshot>,
+    #[cfg(feature = "dev")]
     pub(super) dev_state: Arc<crate::dev::state::DevState>,
     #[cfg(feature = "dev")]
     pub(super) runtime: Arc<DevRuntimeService>,
@@ -62,6 +65,9 @@ impl AppState {
         daemon: &Daemon,
         github_auth_service: Arc<crate::features::github_auth::GitHubAuthService>,
         sync_service: Arc<crate::features::profile::sync::SyncService>,
+        #[cfg(feature = "dev")] daemon_health: tokio::sync::watch::Receiver<
+            crate::plugins::daemon_health::HealthSnapshot,
+        >,
         #[cfg(feature = "dev")] core_log_controls: Arc<
             std::sync::RwLock<HashMap<String, crate::logging::LogControl>>,
         >,
@@ -75,6 +81,8 @@ impl AppState {
             daemon: daemon.clone(),
             github_auth_service,
             sync_service,
+            #[cfg(feature = "dev")]
+            daemon_health,
             installed_cache: Arc::new(Mutex::new(None)),
             plugins_cache: Arc::new(RwLock::new(super::super::github::read_cache())),
             plugins_revalidating: Arc::new(AtomicBool::new(false)),

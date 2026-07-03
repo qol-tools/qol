@@ -8,6 +8,8 @@ mod dev_gate;
 #[cfg(feature = "dev")]
 mod dev_handlers;
 #[cfg(feature = "dev")]
+mod dev_health_handlers;
+#[cfg(feature = "dev")]
 mod dev_link_handlers;
 #[cfg(feature = "dev")]
 mod dev_mock_handlers;
@@ -61,6 +63,9 @@ pub(crate) async fn start_ui_server(
     plugin_manager: Arc<Mutex<PluginManager>>,
     daemon: &Daemon,
     sync_service: Arc<crate::features::profile::sync::SyncService>,
+    #[cfg(feature = "dev")] daemon_health: tokio::sync::watch::Receiver<
+        crate::plugins::daemon_health::HealthSnapshot,
+    >,
     #[cfg(feature = "dev")] core_log_controls: crate::logging::CoreControlsHandle,
 ) -> Result<u16> {
     let github_auth_service = Arc::new(crate::features::github_auth::GitHubAuthService::new());
@@ -69,6 +74,8 @@ pub(crate) async fn start_ui_server(
         daemon,
         github_auth_service,
         sync_service,
+        #[cfg(feature = "dev")]
+        daemon_health,
         #[cfg(feature = "dev")]
         core_log_controls,
     )?;
@@ -195,6 +202,7 @@ fn api_router(app_state: AppState) -> Router {
 fn dev_api_router() -> Router<AppState> {
     Router::new()
         .merge(dev_handlers::routes())
+        .merge(dev_health_handlers::routes())
         .merge(dev_link_handlers::routes())
         .merge(dev_state_handlers::routes())
         .merge(dev_mock_handlers::routes())

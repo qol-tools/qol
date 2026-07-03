@@ -38,6 +38,9 @@ impl Plugins {
         plugin_manager: Arc<Mutex<PluginManager>>,
         daemon: &Daemon,
         sync_service: Arc<crate::features::profile::sync::SyncService>,
+        #[cfg(feature = "dev")] daemon_health: tokio::sync::watch::Receiver<
+            crate::plugins::daemon_health::HealthSnapshot,
+        >,
         #[cfg(feature = "dev")] core_log_controls: crate::logging::CoreControlsHandle,
     ) -> Result<u16> {
         log::info!("Starting plugin server with embedded UI");
@@ -45,6 +48,8 @@ impl Plugins {
             plugin_manager,
             daemon,
             sync_service,
+            #[cfg(feature = "dev")]
+            daemon_health,
             #[cfg(feature = "dev")]
             core_log_controls,
         )
