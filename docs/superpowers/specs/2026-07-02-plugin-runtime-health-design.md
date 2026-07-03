@@ -214,8 +214,11 @@ endpoint adds no state - it serves the last published snapshot.
 - Fetch `/api/dev/plugin-health` on the existing `LINKS_REFRESH_INTERVAL` (5s)
   cadence alongside `/api/dev/links` - no new timer.
 - `plugin_row_line` gains a second, independent status dimension (running /
-  running on-demand / probation / dead / suppressed / autostart-blocked /
+  running on-demand / probation / dead / suppressed / idle on-demand /
   no daemon) alongside the existing linked/stale/linkable dot.
+  `AutostartBlocked` renders as "idle (on-demand)", not as an error state:
+  the daemon is not alive, but action dispatch will start it on first use,
+  so the plugin is fully usable.
 - Handoff freeze/thaw (depends on P1): while `dash.is_reloading()`, freeze
   health consumption and render a "handoff in progress" state instead of
   polling. On a confirmed successful promotion (a real `Ok` from

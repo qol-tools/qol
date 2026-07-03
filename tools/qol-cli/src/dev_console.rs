@@ -1668,7 +1668,7 @@ fn plugin_row_line(
 fn daemon_status_span(status: Option<&PluginDaemonStatus>) -> Option<Span<'static>> {
     match status? {
         PluginDaemonStatus::NotExpected => None,
-        PluginDaemonStatus::AutostartBlocked => Some(" · daemon off".fg(Color::DarkGray)),
+        PluginDaemonStatus::AutostartBlocked => Some(" · idle (on-demand)".fg(Color::DarkGray)),
         PluginDaemonStatus::OnDemand { pid: _ } => Some(" · running (on-demand)".fg(Color::Green)),
         PluginDaemonStatus::Stable { pid: _ } => Some(" · running".fg(Color::Green)),
         PluginDaemonStatus::Probation {
@@ -1886,7 +1886,10 @@ mod tests {
         let cases = [
             (None, ""),
             (Some(PluginDaemonStatus::NotExpected), ""),
-            (Some(PluginDaemonStatus::AutostartBlocked), "daemon off"),
+            (
+                Some(PluginDaemonStatus::AutostartBlocked),
+                "idle (on-demand)",
+            ),
             (
                 Some(PluginDaemonStatus::OnDemand { pid: 1 }),
                 "running (on-demand)",
