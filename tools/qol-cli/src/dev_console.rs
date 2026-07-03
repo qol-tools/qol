@@ -20,8 +20,9 @@ use serde::{Deserialize, Serialize};
 use crate::commands::emu::ResolveState;
 use crate::commands::emu::{emu_scan, EnvironmentStatus, ImageCandidate};
 use crate::dev_server::{
-    fetch_workspace_plugins, health_ok, probe_endpoints, toggle_dev_link, web_ok, website_url,
-    EndpointStatus, LinkToggle, WorkspacePlugin,
+    fetch_plugin_health_rows, fetch_workspace_plugins, health_ok, probe_endpoints, toggle_dev_link,
+    web_ok, website_url, EndpointStatus, LinkToggle, PluginDaemonStatus, PluginHealthRow,
+    WorkspacePlugin,
 };
 use crate::host_facade;
 use crate::poller::Poller;
@@ -214,11 +215,12 @@ struct HealthSnapshot {
 }
 
 type EmuScanResult = Result<(Vec<EnvironmentStatus>, Vec<ImageCandidate>), String>;
+type LinksProbeResult = Result<(Vec<WorkspacePlugin>, Option<Vec<PluginHealthRow>>), String>;
 
 struct Probes {
     health: Poller<HealthSnapshot>,
     emu: Poller<EmuScanResult>,
-    links: Poller<Result<Vec<WorkspacePlugin>, String>>,
+    links: Poller<LinksProbeResult>,
     doctor: Poller<Result<DoctorRun, String>>,
     endpoints: Option<Poller<Vec<EndpointStatus>>>,
 }
@@ -234,7 +236,9 @@ impl Probes {
                 emu_scan().map_err(|error| format!("{error:#}"))
             }),
             links: Poller::spawn(LINKS_REFRESH_INTERVAL, || {
-                fetch_workspace_plugins().map_err(|error| format!("{error:#}"))
+                fetch_workspace_plugins()
+                    .map(|plugins| (plugins, fetch_plugin_health_rows().ok().flatten()))
+                    .map_err(|error| format!("{error:#}"))
             }),
             doctor: spawn_doctor_probe(),
             endpoints: None,
@@ -324,6 +328,7 @@ struct Dash {
     reload: Reload,
     pokes: Pokes,
     links: LinksState,
+    plugin_health: Option<Vec<PluginHealthRow>>,
 }
 
 impl Dash {
@@ -377,6 +382,7 @@ impl Dash {
             reload: Reload::Idle,
             pokes: Pokes::default(),
             links: LinksState::Unknown,
+            plugin_health: None,
         }
     }
 
@@ -701,10 +707,18 @@ fn tui_session(
             };
         }
         if let Some(outcome) = probes.links.latest() {
-            dash.links = match outcome {
-                Ok(links) => LinksState::Live(links),
-                Err(_) => LinksState::Unreachable,
-            };
+            match outcome {
+                Ok((links, health)) => {
+                    if !dash.is_reloading() {
+                        dash.plugin_health = health;
+                    }
+                    dash.links = LinksState::Live(links);
+                }
+                Err(_) => {
+                    dash.plugin_health = None;
+                    dash.links = LinksState::Unreachable;
+                }
+            }
         }
         let manual_outcome = dash
             .doctor
@@ -740,6 +754,7 @@ fn tui_session(
                 Err(error) => {
                     dash.push_log(format!("[qol dev] handoff failed: {error:#}"));
                     dash.notice = Some((Instant::now(), "handoff failed".to_string()));
+                    dash.plugin_health = None;
                 }
             }
         }
@@ -1580,7 +1595,15 @@ fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         .enumerate()
         .skip(start)
         .take(height)
-        .map(|(index, row)| plugin_row_line(row, index == cursor))
+        .map(|(index, row)| {
+            let status = dash.plugin_health.as_deref().and_then(|health_rows| {
+                health_rows
+                    .iter()
+                    .find(|health| health.plugin_id == row.id)
+                    .map(|health| &health.status)
+            });
+            plugin_row_line(row, status, index == cursor)
+        })
         .collect();
     view_content(frame, area, lines);
 }
@@ -1597,7 +1620,11 @@ fn cursor_window_start(total: usize, height: usize, cursor: usize) -> usize {
     }
 }
 
-fn plugin_row_line(row: &WorkspacePlugin, selected: bool) -> Line<'static> {
+fn plugin_row_line(
+    row: &WorkspacePlugin,
+    daemon_status: Option<&PluginDaemonStatus>,
+    selected: bool,
+) -> Line<'static> {
     let caret: Span<'static> = if selected {
         "▸ ".fg(Color::Green).bold()
     } else {
@@ -1628,7 +1655,30 @@ fn plugin_row_line(row: &WorkspacePlugin, selected: bool) -> Line<'static> {
         spans.push(" · ".fg(Color::Yellow));
         spans.push(row.rebuild_reason.clone().fg(Color::DarkGray));
     }
+    if let Some(daemon_span) = daemon_status_span(daemon_status) {
+        spans.push(daemon_span);
+    }
     Line::from(spans)
+}
+
+fn daemon_status_span(status: Option<&PluginDaemonStatus>) -> Option<Span<'static>> {
+    match status? {
+        PluginDaemonStatus::NotExpected => None,
+        PluginDaemonStatus::AutostartBlocked => Some(" · daemon off".fg(Color::DarkGray)),
+        PluginDaemonStatus::Stable { pid: _ } => Some(" · running".fg(Color::Green)),
+        PluginDaemonStatus::Probation {
+            pid: _,
+            consecutive_failures: _,
+        } => Some(" · starting".fg(Color::Yellow)),
+        PluginDaemonStatus::Down {
+            consecutive_failures: _,
+            suppressed: true,
+        } => Some(" · crash-looped".fg(Color::Red).bold()),
+        PluginDaemonStatus::Down {
+            consecutive_failures: _,
+            suppressed: false,
+        } => Some(" · dead".fg(Color::Red)),
+    }
 }
 
 fn act_plugin(dash: &mut Dash) {
@@ -1817,7 +1867,7 @@ mod tests {
             (workspace_plugin("b", false, false), "○ b · linkable"),
         ];
         for (row, expected) in cases {
-            let text = span_text(&plugin_row_line(&row, false).spans);
+            let text = span_text(&plugin_row_line(&row, None, false).spans);
             assert!(
                 text.contains(expected),
                 "row line must show {expected:?}, got {text:?}"
@@ -1826,10 +1876,56 @@ mod tests {
     }
 
     #[test]
+    fn plugin_row_line_renders_daemon_status_dimension() {
+        let row = workspace_plugin("a", true, false);
+        let cases = [
+            (None, ""),
+            (Some(PluginDaemonStatus::NotExpected), ""),
+            (Some(PluginDaemonStatus::AutostartBlocked), "daemon off"),
+            (Some(PluginDaemonStatus::Stable { pid: 1 }), "running"),
+            (
+                Some(PluginDaemonStatus::Probation {
+                    pid: 1,
+                    consecutive_failures: 0,
+                }),
+                "starting",
+            ),
+            (
+                Some(PluginDaemonStatus::Down {
+                    consecutive_failures: 1,
+                    suppressed: false,
+                }),
+                "dead",
+            ),
+            (
+                Some(PluginDaemonStatus::Down {
+                    consecutive_failures: 5,
+                    suppressed: true,
+                }),
+                "crash-looped",
+            ),
+        ];
+        for (status, expected) in cases {
+            let text = span_text(&plugin_row_line(&row, status.as_ref(), false).spans);
+            if expected.is_empty() {
+                assert!(
+                    text.ends_with("· linked"),
+                    "no daemon suffix for {status:?}, got {text:?}"
+                );
+            } else {
+                assert!(
+                    text.contains(expected),
+                    "{status:?} renders {expected}, got: {text}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn plugin_row_line_carets_the_selected_row() {
         let row = workspace_plugin("a", true, false);
-        let selected = span_text(&plugin_row_line(&row, true).spans);
-        let unselected = span_text(&plugin_row_line(&row, false).spans);
+        let selected = span_text(&plugin_row_line(&row, None, true).spans);
+        let unselected = span_text(&plugin_row_line(&row, None, false).spans);
         assert!(
             selected.starts_with("▸"),
             "selected row gets a caret: {selected:?}"

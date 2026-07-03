@@ -34,6 +34,9 @@ fn dev_links_url() -> String {
 fn dev_discovery_url() -> String {
     api_url("/api/dev/discovery-state")
 }
+fn plugin_health_url() -> String {
+    api_url("/api/dev/plugin-health")
+}
 fn auth_health_url() -> String {
     api_url("/api/auth/health")
 }
@@ -93,6 +96,57 @@ pub(crate) struct WorkspacePlugin {
 pub(crate) enum LinkToggle {
     Linked,
     Unlinked,
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+pub(crate) struct PluginHealthSnapshot {
+    #[serde(default)]
+    pub(crate) tick: u64,
+    #[serde(default)]
+    pub(crate) daemon_autostart_held: bool,
+    #[serde(default)]
+    pub(crate) plugins: Vec<PluginHealthRow>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub(crate) struct PluginHealthRow {
+    pub(crate) plugin_id: String,
+    pub(crate) status: PluginDaemonStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub(crate) enum PluginDaemonStatus {
+    NotExpected,
+    AutostartBlocked,
+    Down {
+        consecutive_failures: u32,
+        suppressed: bool,
+    },
+    Probation {
+        pid: u32,
+        consecutive_failures: u32,
+    },
+    Stable {
+        pid: u32,
+    },
+}
+
+pub(crate) fn fetch_plugin_health() -> Result<PluginHealthSnapshot> {
+    let url = plugin_health_url();
+    let (status, body) = http_exchange("GET", &url, None)?;
+    if status != 200 {
+        bail!("GET {url} returned {status}");
+    }
+    serde_json::from_str(&body).context("invalid plugin health payload")
+}
+
+pub(crate) fn fetch_plugin_health_rows() -> Result<Option<Vec<PluginHealthRow>>> {
+    let snapshot = fetch_plugin_health()?;
+    if snapshot.tick == 0 || snapshot.daemon_autostart_held {
+        return Ok(None);
+    }
+    Ok(Some(snapshot.plugins))
 }
 
 pub(crate) fn fetch_dev_links() -> Result<Vec<DevLink>> {
@@ -421,6 +475,22 @@ fn parse_http_status(response: &str) -> Result<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugin_health_payload_parses_tagged_statuses() {
+        let body = r#"{"tick":4,"process_pid":1,"role":"stable","bind_port":42700,
+            "daemon_autostart_held":false,"generation_id":null,
+            "plugins":[{"plugin_id":"plugin-foo","status":{"state":"down","consecutive_failures":5,"suppressed":true}}]}"#;
+        let snapshot: PluginHealthSnapshot = serde_json::from_str(body).unwrap();
+        assert_eq!(snapshot.tick, 4);
+        assert_eq!(
+            snapshot.plugins[0].status,
+            PluginDaemonStatus::Down {
+                consecutive_failures: 5,
+                suppressed: true
+            }
+        );
+    }
 
     #[test]
     fn parses_http_status_line() {
