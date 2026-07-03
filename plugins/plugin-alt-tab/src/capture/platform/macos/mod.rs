@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 
 mod cg;
+pub(crate) mod shots;
 
 const ICON_SIZE: usize = 32;
 

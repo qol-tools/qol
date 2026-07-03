@@ -13,6 +13,7 @@ use crate::config::{load_alt_tab_config, PLUGIN_ID};
 use std::sync::mpsc;
 
 type PreviewMap = std::collections::HashMap<u32, std::sync::Arc<gpui::RenderImage>>;
+type LiveFrameMap = std::collections::HashMap<u32, capture::LiveFrame>;
 type IconMap = std::collections::HashMap<String, std::sync::Arc<gpui::RenderImage>>;
 type SharedIconCache = std::sync::Arc<std::sync::Mutex<IconMap>>;
 type PickerWindowState =

@@ -10,6 +10,7 @@ pub use platform::is_modifier_held;
 pub(crate) use reuse::ReuseRequest;
 
 use crate::app::{AltTabApp, PICKER_VISIBLE};
+use crate::capture;
 use crate::config::{
     parse_hex_color, ActionMode, AltTabConfig, DisplayConfig, DEFAULT_CARD_BACKGROUND_COLOR,
 };
@@ -109,10 +110,16 @@ fn seed_frontmost_preview(
         );
         return;
     }
+    if capture::live_shots_available() {
+        gathered.fresh_live_frame =
+            gather::capture_frontmost_live_frame(&gathered.windows, req.show_id);
+        return;
+    }
     let Some((wid, img)) = gather::capture_frontmost_now(&gathered.windows, req.show_id) else {
         return;
     };
     gathered.previews.insert(wid, img.clone());
+    gathered.fresh_preview = Some(wid);
     if let Ok(mut cache) = req.preview_cache.lock() {
         let mut fresh = crate::PreviewMap::new();
         fresh.insert(wid, img);
@@ -399,10 +406,18 @@ fn finalize_reuse(
     let previews = gathered.previews.clone();
     PICKER_VISIBLE.store(true, Ordering::Relaxed);
     has_shown_once.store(true, Ordering::Release);
+    let fresh_preview = gathered.fresh_preview;
+    let fresh_live_frame = gathered.fresh_live_frame.clone();
     let _ = handle.update(cx, |view, window, cx| {
         view.ensure_live_preview(cx);
         view.delegate.update(cx, |state, ctx| {
-            state.insert_previews(previews, ctx, Some(window))
+            state.insert_previews(previews, ctx, Some(window));
+            if let Some(wid) = fresh_preview {
+                state.evict_live_frame(wid);
+            }
+            if let Some((wid, buf)) = fresh_live_frame {
+                state.insert_live_frames([(wid, buf.into_live_frame())].into_iter().collect());
+            }
         });
         cx.notify();
     });
@@ -523,7 +538,7 @@ pub(crate) mod state {
     use crate::discovery::WindowInfo;
     use crate::picker::create::PickerInit;
     use crate::shared::image_registry::{extend_with, replace_map, retain_or_release, REGISTRY};
-    use crate::{IconMap, PreviewMap};
+    use crate::{IconMap, LiveFrameMap, PreviewMap};
     use gpui::{App, Window};
 
     pub(crate) struct PickerState {
@@ -541,6 +556,7 @@ pub(crate) mod state {
         pub(crate) card_padding: f32,
         pub(crate) layout_budget: Option<(f32, f32)>,
         pub(crate) live_previews: PreviewMap,
+        pub(crate) live_frames: LiveFrameMap,
         pub(crate) icon_cache: IconMap,
     }
 
@@ -572,6 +588,11 @@ pub(crate) mod state {
                 card_padding: init.card_padding,
                 layout_budget: init.layout_budget,
                 live_previews: init.previews,
+                live_frames: init
+                    .fresh_live_frame
+                    .map(|(wid, buf)| (wid, buf.into_live_frame()))
+                    .into_iter()
+                    .collect(),
                 icon_cache: init.icons,
             }
         }
@@ -583,6 +604,7 @@ pub(crate) mod state {
             for (_, arc) in self.icon_cache.drain() {
                 REGISTRY.release(arc, app, None);
             }
+            self.live_frames.clear();
         }
 
         pub(crate) fn set_windows(
@@ -598,6 +620,7 @@ pub(crate) mod state {
             retain_or_release(&mut self.live_previews, app, window, |id| {
                 active_ids.contains(id)
             });
+            self.live_frames.retain(|id, _| active_ids.contains(id));
             self.update_selection_after_resize(reset_selection);
         }
 
@@ -643,6 +666,30 @@ pub(crate) mod state {
             window: Option<&mut Window>,
         ) {
             extend_with(&mut self.live_previews, previews, app, window);
+        }
+
+        pub(crate) fn insert_fresh_previews(
+            &mut self,
+            previews: PreviewMap,
+            app: &mut App,
+            window: Option<&mut Window>,
+        ) {
+            for wid in previews.keys() {
+                self.live_frames.remove(wid);
+            }
+            self.insert_previews(previews, app, window);
+        }
+
+        pub(crate) fn evict_live_frame(&mut self, wid: u32) {
+            self.live_frames.remove(&wid);
+        }
+
+        pub(crate) fn insert_live_frames(&mut self, frames: LiveFrameMap) {
+            self.live_frames.extend(frames);
+        }
+
+        pub(crate) fn clear_live_frames(&mut self) {
+            self.live_frames.clear();
         }
 
         pub(crate) fn replace_caches(
@@ -931,6 +978,7 @@ pub(crate) mod state {
                 preview_cache: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
                 previews: HashMap::new(),
                 icons: HashMap::new(),
+                fresh_live_frame: None,
             })
         }
 
@@ -1095,6 +1143,7 @@ pub(crate) mod state {
                 preview_cache: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
                 previews: HashMap::new(),
                 icons: HashMap::new(),
+                fresh_live_frame: None,
             });
             s.selected_index = selected;
             s

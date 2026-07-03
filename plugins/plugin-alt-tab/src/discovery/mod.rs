@@ -12,9 +12,7 @@ pub struct WindowInfo {
     pub x: f32,
     #[allow(dead_code)]
     pub y: f32,
-    #[allow(dead_code)]
     pub width: f32,
-    #[allow(dead_code)]
     pub height: f32,
     pub is_minimized: bool,
 }

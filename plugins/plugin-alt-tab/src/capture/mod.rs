@@ -3,6 +3,11 @@ use qol_app_icon::RgbaImage;
 
 mod platform;
 
+pub(crate) use platform::{
+    cached_shots_session, fetch_shots_session, live_shots_available, warm_shots_session, LiveFrame,
+    SendCVBuf, ShotReply, PIXEL_FORMAT_420F,
+};
+
 pub fn capture_previews_cg(
     targets: &[(usize, u32)],
     max_w: usize,

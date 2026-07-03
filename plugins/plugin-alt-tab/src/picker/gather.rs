@@ -22,6 +22,8 @@ pub(crate) struct GatheredWindows {
     pub windows: Vec<WindowInfo>,
     pub previews: PreviewMap,
     pub icons: IconMap,
+    pub fresh_preview: Option<u32>,
+    pub fresh_live_frame: Option<(u32, capture::SendCVBuf)>,
 }
 
 pub(super) fn gather(
@@ -57,6 +59,40 @@ pub(super) fn gather(
         windows,
         previews,
         icons,
+        fresh_preview: None,
+        fresh_live_frame: None,
+    }
+}
+
+pub(super) fn capture_frontmost_live_frame(
+    windows: &[WindowInfo],
+    show_id: u64,
+) -> Option<(u32, capture::SendCVBuf)> {
+    use crate::shared::preview::shot_request_dims;
+
+    let front = windows.first()?;
+    if front.is_minimized {
+        return None;
+    }
+    let wid = front.id;
+    let session = capture::cached_shots_session(&[wid])?;
+    let (w, h) = shot_request_dims(front.width, front.height);
+    let (tx, rx) = std::sync::mpsc::channel();
+    if !session.request_capture(wid, w, h, &tx) {
+        return None;
+    }
+    match rx.recv_timeout(std::time::Duration::from_millis(120)) {
+        Ok((_, Some(buf))) if buf.pixel_format() == capture::PIXEL_FORMAT_420F => {
+            #[cfg(debug_assertions)]
+            qol_runtime::probe!(
+                "PREVIEW_CAPTURE",
+                "show_id={show_id} source=on_open_sck targets=1 ids=[{wid}]"
+            );
+            #[cfg(not(debug_assertions))]
+            let _ = show_id;
+            Some((wid, buf))
+        }
+        _ => None,
     }
 }
 
@@ -276,6 +312,10 @@ async fn fill_previews(cx: &mut AsyncApp, req: PreviewFillRequest) {
     use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
     use crate::shared::preview::bgra_to_render_image;
 
+    if capture::live_shots_available() && fill_live_frames(cx, &req).await {
+        return;
+    }
+
     #[cfg(debug_assertions)]
     let t_start = std::time::Instant::now();
 
@@ -338,6 +378,97 @@ async fn fill_previews(cx: &mut AsyncApp, req: PreviewFillRequest) {
         target_count,
         skipped_count,
     );
+}
+
+async fn fill_live_frames(cx: &mut AsyncApp, req: &PreviewFillRequest) -> bool {
+    use crate::shared::preview::shot_request_dims;
+
+    let covered = snapshot_live_frame_keys(cx, req.handle);
+    let targets = select_capture_targets_with_focus(
+        &req.windows,
+        &covered,
+        req.refresh_frontmost,
+        req.refresh_previous_frontmost,
+    );
+    if targets.is_empty() {
+        return true;
+    }
+    let requests: Vec<(u32, (usize, usize))> = req
+        .windows
+        .iter()
+        .filter(|w| targets.iter().any(|(_, wid)| *wid == w.id))
+        .map(|w| (w.id, shot_request_dims(w.width, w.height)))
+        .collect();
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "PREVIEW_CAPTURE",
+        "source=fill_sck targets={} ids=[{}]",
+        requests.len(),
+        format_ids(&requests.iter().map(|(wid, _)| *wid).collect::<Vec<_>>()),
+    );
+    let executor = cx.background_executor().clone();
+    let shots = executor
+        .spawn(async move { capture_live_frames_blocking(requests) })
+        .await;
+    if shots.is_empty() {
+        return false;
+    }
+    commit_live_frames_foreground(cx, req.handle, shots);
+    true
+}
+
+fn capture_live_frames_blocking(
+    requests: Vec<(u32, (usize, usize))>,
+) -> Vec<(u32, capture::SendCVBuf)> {
+    let wids: Vec<u32> = requests.iter().map(|(wid, _)| *wid).collect();
+    let Some(session) = capture::warm_shots_session(&wids) else {
+        return Vec::new();
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut shots = Vec::new();
+    for (wid, (w, h)) in requests {
+        if !session.request_capture(wid, w, h, &tx) {
+            continue;
+        }
+        match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+            Ok((wid, Some(buf))) if buf.pixel_format() == capture::PIXEL_FORMAT_420F => {
+                shots.push((wid, buf));
+            }
+            _ => {}
+        }
+    }
+    shots
+}
+
+fn snapshot_live_frame_keys(cx: &mut AsyncApp, handle: WindowHandle<AltTabApp>) -> HashSet<u32> {
+    cx.update(|cx| {
+        handle
+            .update(cx, |view, _, cx| {
+                view.delegate.read(cx).live_frames.keys().copied().collect()
+            })
+            .unwrap_or_default()
+    })
+    .unwrap_or_default()
+}
+
+fn commit_live_frames_foreground(
+    cx: &mut AsyncApp,
+    handle: WindowHandle<AltTabApp>,
+    shots: Vec<(u32, capture::SendCVBuf)>,
+) {
+    let _ = cx.update(|cx| {
+        let _ = handle.update(cx, |view, _, cx| {
+            view.delegate.update(cx, |state, _| {
+                state.insert_live_frames(
+                    shots
+                        .into_iter()
+                        .map(|(wid, buf)| (wid, buf.into_live_frame()))
+                        .collect(),
+                );
+            });
+            cx.notify();
+        });
+    });
 }
 
 fn snapshot_preview_keys(cache: &SharedPreviewCache) -> HashSet<u32> {

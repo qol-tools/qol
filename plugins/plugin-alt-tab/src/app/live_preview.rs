@@ -1,18 +1,27 @@
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::capture;
+use crate::capture::{SendCVBuf, ShotReply};
 use crate::picker::run::SharedPreviewCache;
 use crate::picker::state::PickerState;
+use crate::shared::first_fill::FirstFillGate;
 use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
-use crate::shared::preview::{bgra_to_render_image, fast_pixel_hash};
+use crate::shared::live_lanes::LaneScheduler;
+use crate::shared::preview::{bgra_to_render_image, fast_pixel_hash, shot_request_dims};
 use crate::PreviewMap;
 use gpui::{AsyncApp, Entity, RenderImage, Task, WeakEntity};
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const TICK_MS: u64 = 50;
 const CAPTURE_INTERVAL: Duration = Duration::from_millis(500);
 const SELECTION_SETTLE: Duration = Duration::from_millis(50);
+const SHOTS_TICK_MS: u64 = 16;
+const SHOTS_BACKGROUND_LANES: usize = 2;
+const MAX_SHOT_FAILURES: u32 = 5;
+const SHOT_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub(crate) fn spawn(
     delegate: Entity<PickerState>,
@@ -21,8 +30,206 @@ pub(crate) fn spawn(
 ) -> Task<()> {
     cx.spawn(move |this: WeakEntity<AltTabApp>, cx: &mut AsyncApp| {
         let cx = cx.clone();
-        async move { preview_loop(delegate, preview_cache, this, cx).await }
+        async move { run(delegate, preview_cache, this, cx).await }
     })
+}
+
+async fn run(
+    delegate: Entity<PickerState>,
+    preview_cache: SharedPreviewCache,
+    this: WeakEntity<AltTabApp>,
+    cx: AsyncApp,
+) {
+    if shots_loop(&delegate, &this, &cx).await {
+        clear_task_handle(&this, &cx);
+        return;
+    }
+    preview_loop(delegate, preview_cache, this, cx).await
+}
+
+async fn shots_loop(
+    delegate: &Entity<PickerState>,
+    this: &WeakEntity<AltTabApp>,
+    cx: &AsyncApp,
+) -> bool {
+    if !capture::live_shots_available() {
+        return false;
+    }
+    let executor = cx.background_executor().clone();
+    let Some(session) = executor
+        .spawn(async { capture::fetch_shots_session() })
+        .await
+    else {
+        return false;
+    };
+    let session = Arc::new(session);
+    let (tx, rx) = mpsc::channel();
+    let mut scheduler = LaneScheduler::new();
+    let mut in_flight: Vec<(u32, Instant)> = Vec::new();
+    let mut failures = 0u32;
+    let mut gate = FirstFillGate::new(read_live_frames_empty(delegate, cx));
+    qol_runtime::probe!("PREVIEW_LIVE", "source=shots outcome=started");
+
+    while PICKER_VISIBLE.load(Ordering::Relaxed) {
+        executor.timer(Duration::from_millis(SHOTS_TICK_MS)).await;
+        if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+            break;
+        }
+        let (frames, failed) = drain_shot_results(&rx, &mut in_flight, &mut failures);
+        let expired = expire_stale_shots(&mut in_flight, &mut failures);
+        if failures >= MAX_SHOT_FAILURES {
+            qol_runtime::probe!(
+                "PREVIEW_LIVE",
+                "source=shots outcome=degraded reason=consecutive_failures"
+            );
+            clear_live_frames(delegate, this, cx);
+            return false;
+        }
+        let (selected, visible, dims) = read_shot_targets(delegate, cx);
+        for wid in failed.into_iter().chain(expired) {
+            gate.note_failure(wid);
+        }
+        if let Some(batch) = gate.admit(frames, &visible) {
+            push_live_frames(batch, delegate, this, cx);
+        }
+        let in_flight_wids: Vec<u32> = in_flight.iter().map(|(wid, _)| *wid).collect();
+        for wid in scheduler.plan(selected, &visible, &in_flight_wids, SHOTS_BACKGROUND_LANES) {
+            in_flight.push((wid, Instant::now()));
+            let (w, h) = dims
+                .get(&wid)
+                .copied()
+                .unwrap_or((PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT));
+            if !session.request_capture(wid, w, h, &tx) {
+                let _ = tx.send((wid, None));
+            }
+        }
+    }
+    qol_runtime::probe!(
+        "PREVIEW_LIVE",
+        "source=shots outcome=stopped reason=picker_hidden"
+    );
+    if let Some(pending) = gate.take_pending() {
+        push_live_frames(pending, delegate, this, cx);
+    }
+    true
+}
+
+fn read_live_frames_empty(delegate: &Entity<PickerState>, cx: &AsyncApp) -> bool {
+    cx.update(|app_cx| delegate.read(app_cx).live_frames.is_empty())
+        .unwrap_or(true)
+}
+
+fn drain_shot_results(
+    rx: &mpsc::Receiver<ShotReply>,
+    in_flight: &mut Vec<(u32, Instant)>,
+    failures: &mut u32,
+) -> (Vec<(u32, SendCVBuf)>, Vec<u32>) {
+    let mut frames = Vec::new();
+    let mut failed = Vec::new();
+    while let Ok((wid, result)) = rx.try_recv() {
+        in_flight.retain(|(w, _)| *w != wid);
+        match result {
+            Some(buf) if buf.pixel_format() == capture::PIXEL_FORMAT_420F => {
+                *failures = 0;
+                frames.push((wid, buf));
+            }
+            Some(buf) => {
+                qol_runtime::probe!(
+                    "PREVIEW_LIVE",
+                    "source=shots outcome=dropped reason=pixel_format format={:#x}",
+                    buf.pixel_format()
+                );
+                *failures += 1;
+                failed.push(wid);
+            }
+            None => {
+                *failures += 1;
+                failed.push(wid);
+            }
+        }
+    }
+    (frames, failed)
+}
+
+fn expire_stale_shots(in_flight: &mut Vec<(u32, Instant)>, failures: &mut u32) -> Vec<u32> {
+    let mut expired = Vec::new();
+    in_flight.retain(|(wid, launched)| {
+        if launched.elapsed() < SHOT_TIMEOUT {
+            return true;
+        }
+        qol_runtime::probe!("PREVIEW_LIVE", "source=shots outcome=timeout wid={wid}");
+        *failures += 1;
+        expired.push(*wid);
+        false
+    });
+    expired
+}
+
+fn push_live_frames(
+    frames: Vec<(u32, SendCVBuf)>,
+    delegate: &Entity<PickerState>,
+    this: &WeakEntity<AltTabApp>,
+    cx: &AsyncApp,
+) {
+    if frames.is_empty() {
+        return;
+    }
+    let delegate = delegate.clone();
+    let this = this.clone();
+    let _ = cx.update(|app_cx| {
+        delegate.update(app_cx, |state, _| {
+            state.insert_live_frames(
+                frames
+                    .into_iter()
+                    .map(|(wid, buf)| (wid, buf.into_live_frame()))
+                    .collect(),
+            );
+        });
+        let _ = this.update(app_cx, |_, cx: &mut gpui::Context<AltTabApp>| cx.notify());
+    });
+}
+
+type ShotTargets = (Option<u32>, Vec<u32>, HashMap<u32, (usize, usize)>);
+
+fn read_shot_targets(delegate: &Entity<PickerState>, cx: &AsyncApp) -> ShotTargets {
+    cx.update(|app_cx| {
+        let state = delegate.read(app_cx);
+        let selected = state
+            .selected_index
+            .and_then(|ix| state.windows.get(ix))
+            .filter(|w| !w.is_minimized)
+            .map(|w| w.id);
+        let mut visible = Vec::new();
+        let mut dims = HashMap::new();
+        for w in state.windows.iter().filter(|w| !w.is_minimized) {
+            visible.push(w.id);
+            dims.insert(w.id, shot_request_dims(w.width, w.height));
+        }
+        visible.sort_by_key(|wid| state.live_frames.contains_key(wid));
+        (selected, visible, dims)
+    })
+    .unwrap_or((None, Vec::new(), HashMap::new()))
+}
+
+fn clear_live_frames(delegate: &Entity<PickerState>, this: &WeakEntity<AltTabApp>, cx: &AsyncApp) {
+    let delegate = delegate.clone();
+    let this = this.clone();
+    let _ = cx.update(|app_cx| {
+        delegate.update(app_cx, |state, _| state.clear_live_frames());
+        let _ = this.update(app_cx, |_, cx: &mut gpui::Context<AltTabApp>| cx.notify());
+    });
+}
+
+fn clear_task_handle(this: &WeakEntity<AltTabApp>, cx: &AsyncApp) {
+    let this = this.clone();
+    let _ = cx.update(|app_cx| {
+        let Some(entity) = this.upgrade() else {
+            return;
+        };
+        entity.update(app_cx, |app, _| {
+            app._live_preview_task = None;
+        });
+    });
 }
 
 async fn preview_loop(
@@ -129,14 +336,7 @@ async fn preview_loop(
         }
     }
 
-    let _ = cx.update(|app_cx| {
-        let Some(entity) = this.upgrade() else {
-            return;
-        };
-        entity.update(app_cx, |app, _| {
-            app._live_preview_task = None;
-        });
-    });
+    clear_task_handle(&this, &cx);
 }
 
 struct Snapshot {
@@ -207,7 +407,7 @@ fn push_updates(
         // passes None. The picker window stays in App::windows and gets
         // touched via the iteration in App::drop_image.
         delegate.update(app_cx, |state, ctx| {
-            state.insert_previews(updates, ctx, None);
+            state.insert_fresh_previews(updates, ctx, None);
         });
         let _ = this.update(app_cx, |_, cx: &mut gpui::Context<AltTabApp>| cx.notify());
         PreviewUpdateResult {

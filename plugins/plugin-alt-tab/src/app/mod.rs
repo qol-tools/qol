@@ -338,6 +338,12 @@ impl AltTabApp {
                 ctx,
                 Some(&mut *window),
             );
+            if let Some(wid) = gathered.fresh_preview {
+                state.evict_live_frame(wid);
+            }
+            if let Some((wid, buf)) = gathered.fresh_live_frame.clone() {
+                state.insert_live_frames([(wid, buf.into_live_frame())].into_iter().collect());
+            }
             #[cfg(debug_assertions)]
             {
                 let is_stale = state
@@ -388,7 +394,7 @@ impl AltTabApp {
         cx: &mut Context<Self>,
     ) {
         self.delegate.update(cx, |state, ctx| {
-            state.insert_previews(previews, ctx, Some(window))
+            state.insert_fresh_previews(previews, ctx, Some(window))
         });
         cx.notify();
     }

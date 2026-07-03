@@ -1,9 +1,10 @@
 use super::AltTabApp;
+use crate::capture::LiveFrame;
 use crate::config::{capitalize_first, ActionMode, LabelConfig, PreviewIconPosition};
 use crate::discovery::WindowInfo;
 use crate::rendering::RenderingFlow;
 use crate::shared::layout::{picker_layout, CardMetrics};
-use crate::{IconMap, PreviewMap};
+use crate::{IconMap, LiveFrameMap, PreviewMap};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 #[cfg(debug_assertions)]
@@ -35,6 +36,7 @@ struct CardRenderContext<'a> {
     snap: &'a RenderSnap,
     label_config: &'a LabelConfig,
     previews: &'a PreviewMap,
+    live_frames: &'a LiveFrameMap,
     icons: &'a IconMap,
     entity: WeakEntity<AltTabApp>,
     window: &'a Window,
@@ -196,6 +198,7 @@ impl Render for AltTabApp {
             snap: &snap,
             label_config: &d.label_config,
             previews: &d.live_previews,
+            live_frames: &d.live_frames,
             icons: &d.icon_cache,
             entity,
             window,
@@ -473,6 +476,7 @@ fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, selected: b
         .overflow_hidden()
         .child(if render_gpui_preview {
             preview_tile(
+                context.live_frames.get(&win.id),
                 context.previews.get(&win.id),
                 &win.preview_path,
                 minimized_icon,
@@ -628,6 +632,7 @@ fn truncate_label(
 }
 
 fn preview_tile(
+    live_frame: Option<&LiveFrame>,
     live_image: Option<&Arc<RenderImage>>,
     preview_path: &Option<String>,
     minimized_icon: Option<&Arc<RenderImage>>,
@@ -635,6 +640,13 @@ fn preview_tile(
 ) -> AnyElement {
     if let Some(icon) = minimized_icon {
         return minimized_placeholder(icon, metrics);
+    }
+    if let Some(frame) = live_frame {
+        return surface(frame.clone())
+            .w(px(metrics.preview_width))
+            .h(px(metrics.preview_height))
+            .object_fit(ObjectFit::Cover)
+            .into_any_element();
     }
     if let Some(render_image) = live_image {
         return img(render_image.clone())

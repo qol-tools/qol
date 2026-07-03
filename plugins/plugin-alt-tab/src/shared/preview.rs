@@ -20,3 +20,19 @@ pub(crate) fn bgra_to_render_image(data: Vec<u8>, w: usize, h: usize) -> Option<
     let frame = image::Frame::new(buf);
     Some(Arc::new(RenderImage::new(smallvec::smallvec![frame])))
 }
+
+pub(crate) fn shot_request_dims(window_w: f32, window_h: f32) -> (usize, usize) {
+    use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
+    if window_w <= 0.0 || window_h <= 0.0 {
+        return (PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT);
+    }
+    let aspect = window_w / window_h;
+    let box_aspect = PREVIEW_MAX_WIDTH as f32 / PREVIEW_MAX_HEIGHT as f32;
+    if aspect >= box_aspect {
+        let width = (PREVIEW_MAX_HEIGHT as f32 * aspect).round() as usize;
+        (width.max(1), PREVIEW_MAX_HEIGHT)
+    } else {
+        let height = (PREVIEW_MAX_WIDTH as f32 / aspect).round() as usize;
+        (PREVIEW_MAX_WIDTH, height.max(1))
+    }
+}
