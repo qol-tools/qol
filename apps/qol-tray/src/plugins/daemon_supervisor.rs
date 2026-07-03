@@ -6,6 +6,7 @@ use tokio::sync::broadcast;
 
 const SUPERVISION_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_CONSECUTIVE_FAILURES: u32 = 5;
+const STABLE_TICKS: u64 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DaemonSnapshot {
@@ -55,21 +56,28 @@ fn supervise_once(plugin_manager: &Arc<Mutex<PluginManager>>, state: &mut Superv
     if crate::dev_generation::daemon_autostart_held() {
         return;
     }
+    state.begin_tick();
     reap_exited_daemons(plugin_manager);
     let snapshots = snapshot_daemons(plugin_manager);
     let outcome = classify_snapshots(&snapshots, state);
     state.note_known_plugins(&snapshots);
 
-    for id in &outcome.alive {
-        state.observe_alive(id);
+    for (id, pid) in &outcome.alive {
+        state.observe_alive(id, *pid);
+    }
+    for id in &outcome.fresh_deaths {
+        state.observe_death(id);
     }
 
     let mut any_state_change =
         !outcome.fresh_deaths.is_empty() || !outcome.fresh_recoveries.is_empty();
     for plugin_id in outcome.retriable_dead {
+        if !state.can_retry(&plugin_id) {
+            continue;
+        }
         match restart_daemon(plugin_manager, &plugin_id) {
-            Ok(()) => {
-                state.observe_alive(&plugin_id);
+            Ok(pid) => {
+                state.observe_spawned(&plugin_id, pid);
                 any_state_change = true;
                 log::info!("Restarted dead daemon for plugin {}", plugin_id);
             }
@@ -90,7 +98,7 @@ fn supervise_once(plugin_manager: &Arc<Mutex<PluginManager>>, state: &mut Superv
 
 #[derive(Default)]
 struct TickOutcome {
-    alive: Vec<PluginId>,
+    alive: Vec<(PluginId, u32)>,
     fresh_deaths: Vec<PluginId>,
     fresh_recoveries: Vec<PluginId>,
     retriable_dead: Vec<PluginId>,
@@ -100,10 +108,16 @@ fn classify_snapshots(snapshots: &[DaemonSnapshot], state: &SupervisorState) -> 
     let mut outcome = TickOutcome::default();
     for snap in snapshots {
         match state.transition_for(&snap.plugin_id, snap.daemon_pid) {
-            LivenessTransition::Alive => outcome.alive.push(snap.plugin_id.clone()),
+            LivenessTransition::Alive => {
+                if let Some(pid) = snap.daemon_pid {
+                    outcome.alive.push((snap.plugin_id.clone(), pid));
+                }
+            }
             LivenessTransition::DeadToAlive => {
-                outcome.alive.push(snap.plugin_id.clone());
-                outcome.fresh_recoveries.push(snap.plugin_id.clone());
+                if let Some(pid) = snap.daemon_pid {
+                    outcome.alive.push((snap.plugin_id.clone(), pid));
+                    outcome.fresh_recoveries.push(snap.plugin_id.clone());
+                }
             }
             LivenessTransition::AliveToDead => {
                 outcome.fresh_deaths.push(snap.plugin_id.clone());
@@ -147,11 +161,12 @@ fn snapshot_daemons(plugin_manager: &Arc<Mutex<PluginManager>>) -> Vec<DaemonSna
 fn restart_daemon(
     plugin_manager: &Arc<Mutex<PluginManager>>,
     plugin_id: &PluginId,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<u32>> {
     let mut manager = plugin_manager
         .lock()
         .map_err(|_| anyhow::anyhow!("plugin manager lock poisoned"))?;
-    manager.ensure_plugin_daemon_running(plugin_id.as_str())
+    manager.ensure_plugin_daemon_running(plugin_id.as_str())?;
+    Ok(manager.plugin_daemon_pid(plugin_id))
 }
 
 fn is_daemon_alive(daemon_pid: Option<u32>) -> bool {
@@ -167,23 +182,48 @@ enum LastSeen {
     Dead,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+struct PluginRecord {
+    consecutive_failures: u32,
+    last_failure_tick: Option<u64>,
+    last_pid: Option<u32>,
+    probation_start: Option<u64>,
+    stable: bool,
+    last_seen: Option<LastSeen>,
+}
+
 #[derive(Default)]
 struct SupervisorState {
-    counts: HashMap<PluginId, u32>,
-    last_seen: HashMap<PluginId, LastSeen>,
+    records: HashMap<PluginId, PluginRecord>,
     known: HashSet<PluginId>,
+    tick: u64,
 }
 
 impl SupervisorState {
+    fn begin_tick(&mut self) {
+        self.tick += 1;
+    }
+
     fn can_retry(&self, plugin_id: &PluginId) -> bool {
-        self.counts.get(plugin_id).copied().unwrap_or(0) < MAX_CONSECUTIVE_FAILURES
+        self.records
+            .get(plugin_id)
+            .map_or(0, |record| record.consecutive_failures)
+            < MAX_CONSECUTIVE_FAILURES
     }
 
     fn record_failure(&mut self, plugin_id: &PluginId) {
-        let entry = self.counts.entry(plugin_id.clone()).or_insert(0);
-        *entry += 1;
-        self.last_seen.insert(plugin_id.clone(), LastSeen::Dead);
-        if *entry == MAX_CONSECUTIVE_FAILURES {
+        let tick = self.tick;
+        let record = self.records.entry(plugin_id.clone()).or_default();
+        record.last_seen = Some(LastSeen::Dead);
+        record.last_pid = None;
+        record.probation_start = None;
+        record.stable = false;
+        if record.last_failure_tick == Some(tick) {
+            return;
+        }
+        record.last_failure_tick = Some(tick);
+        record.consecutive_failures += 1;
+        if record.consecutive_failures == MAX_CONSECUTIVE_FAILURES {
             log::error!(
                 "Daemon supervisor: plugin {} hit {} consecutive failures, suppressing",
                 plugin_id,
@@ -192,19 +232,63 @@ impl SupervisorState {
         }
     }
 
-    fn observe_alive(&mut self, plugin_id: &PluginId) {
-        self.counts.remove(plugin_id);
-        self.last_seen.insert(plugin_id.clone(), LastSeen::Alive);
+    fn observe_alive(&mut self, plugin_id: &PluginId, pid: u32) {
+        let tick = self.tick;
+        let record = self.records.entry(plugin_id.clone()).or_default();
+        record.last_seen = Some(LastSeen::Alive);
+        if record.last_pid != Some(pid) {
+            record.last_pid = Some(pid);
+            record.probation_start = Some(tick);
+            record.stable = false;
+            return;
+        }
+        if record.stable {
+            return;
+        }
+        if tick.saturating_sub(record.probation_start.unwrap_or(tick)) >= STABLE_TICKS {
+            record.stable = true;
+            record.consecutive_failures = 0;
+            record.last_failure_tick = None;
+        }
+    }
+
+    fn observe_spawned(&mut self, plugin_id: &PluginId, pid: Option<u32>) {
+        let tick = self.tick;
+        let record = self.records.entry(plugin_id.clone()).or_default();
+        record.last_seen = Some(LastSeen::Alive);
+        record.last_pid = pid;
+        record.probation_start = pid.map(|_| tick);
+        record.stable = false;
+    }
+
+    fn observe_death(&mut self, plugin_id: &PluginId) {
+        let was_stable = self
+            .records
+            .get(plugin_id)
+            .is_some_and(|record| record.stable);
+        if was_stable {
+            let record = self.records.entry(plugin_id.clone()).or_default();
+            record.last_seen = Some(LastSeen::Dead);
+            record.last_pid = None;
+            record.probation_start = None;
+            record.stable = false;
+            return;
+        }
+        self.record_failure(plugin_id);
     }
 
     fn transition_for(&self, plugin_id: &PluginId, pid: Option<u32>) -> LivenessTransition {
+        let last_seen = self
+            .records
+            .get(plugin_id)
+            .and_then(|record| record.last_seen);
         if is_daemon_alive(pid) {
-            return match self.last_seen.get(plugin_id) {
+            return match last_seen {
                 Some(LastSeen::Dead) => LivenessTransition::DeadToAlive,
                 Some(LastSeen::Alive) | None => LivenessTransition::Alive,
             };
         }
-        match self.last_seen.get(plugin_id) {
+        match last_seen {
             Some(LastSeen::Dead) => LivenessTransition::DeadStaysDead,
             Some(LastSeen::Alive) | None => LivenessTransition::AliveToDead,
         }
@@ -216,8 +300,7 @@ impl SupervisorState {
 
     fn prune_unknown_plugins(&mut self) {
         let known = std::mem::take(&mut self.known);
-        self.counts.retain(|id, _| known.contains(id));
-        self.last_seen.retain(|id, _| known.contains(id));
+        self.records.retain(|id, _| known.contains(id));
     }
 }
 
@@ -247,6 +330,7 @@ mod tests {
 
         for _ in 0..MAX_CONSECUTIVE_FAILURES {
             assert!(state.can_retry(&p), "should allow retry below threshold");
+            state.begin_tick();
             state.record_failure(&p);
         }
         assert!(
@@ -257,19 +341,108 @@ mod tests {
     }
 
     #[test]
-    fn observe_alive_resets_count() {
+    fn crash_loop_after_successful_spawn_suppresses() {
         let mut state = SupervisorState::default();
         let p = pid("plugin-foo");
 
-        state.record_failure(&p);
-        state.record_failure(&p);
-        state.observe_alive(&p);
-
-        for _ in 0..MAX_CONSECUTIVE_FAILURES {
-            assert!(state.can_retry(&p), "observe_alive reset failure count");
-            state.record_failure(&p);
+        for cycle in 0..MAX_CONSECUTIVE_FAILURES {
+            assert!(
+                state.can_retry(&p),
+                "cycle {cycle}: retry allowed pre-threshold"
+            );
+            state.begin_tick();
+            state.observe_spawned(&p, Some(1000 + cycle));
+            state.begin_tick();
+            state.observe_death(&p);
         }
-        assert!(!state.can_retry(&p), "threshold reached again after reset");
+        assert!(!state.can_retry(&p), "spawn-then-die cycles must suppress");
+    }
+
+    #[test]
+    fn surviving_past_stable_ticks_resets_failures() {
+        let mut state = SupervisorState::default();
+        let p = pid("plugin-foo");
+
+        state.begin_tick();
+        state.record_failure(&p);
+        state.begin_tick();
+        state.record_failure(&p);
+        state.begin_tick();
+        state.observe_spawned(&p, Some(1234));
+        for _ in 0..STABLE_TICKS {
+            state.begin_tick();
+            state.observe_alive(&p, 1234);
+        }
+        let rec = state.records.get(&p).unwrap();
+        assert!(rec.stable, "must be stable after STABLE_TICKS");
+        assert_eq!(rec.consecutive_failures, 0, "stability resets failures");
+    }
+
+    #[test]
+    fn early_alive_observation_does_not_reset_failures() {
+        let mut state = SupervisorState::default();
+        let p = pid("plugin-foo");
+
+        state.begin_tick();
+        state.record_failure(&p);
+        state.begin_tick();
+        state.observe_alive(&p, 42);
+        assert_eq!(
+            state.records.get(&p).unwrap().consecutive_failures,
+            1,
+            "pre-stable alive must not reset the counter"
+        );
+    }
+
+    #[test]
+    fn pid_change_mid_probation_restarts_probation() {
+        let mut state = SupervisorState::default();
+        let p = pid("plugin-foo");
+
+        state.begin_tick();
+        state.observe_alive(&p, 41);
+        state.begin_tick();
+        state.observe_alive(&p, 42);
+        let rec = state.records.get(&p).unwrap();
+        assert_eq!(rec.probation_start, Some(2), "new pid re-enters probation");
+        assert!(!rec.stable, "pid change clears stability");
+    }
+
+    #[test]
+    fn death_after_stable_starts_fresh_cycle_without_increment() {
+        let mut state = SupervisorState::default();
+        let p = pid("plugin-foo");
+
+        state.begin_tick();
+        state.observe_spawned(&p, Some(7));
+        for _ in 0..STABLE_TICKS {
+            state.begin_tick();
+            state.observe_alive(&p, 7);
+        }
+        state.begin_tick();
+        state.observe_death(&p);
+        assert_eq!(
+            state.records.get(&p).unwrap().consecutive_failures,
+            0,
+            "death after stability is a fresh cycle, not a failure"
+        );
+    }
+
+    #[test]
+    fn death_and_failed_respawn_on_one_tick_increment_once() {
+        let mut state = SupervisorState::default();
+        let p = pid("plugin-foo");
+
+        state.begin_tick();
+        state.observe_alive(&p, 9);
+        state.begin_tick();
+        state.observe_death(&p);
+        state.record_failure(&p);
+        assert_eq!(
+            state.records.get(&p).unwrap().consecutive_failures,
+            1,
+            "one tick may add at most one failure"
+        );
     }
 
     #[test]
@@ -279,6 +452,7 @@ mod tests {
         let bar = pid("plugin-bar");
 
         for _ in 0..MAX_CONSECUTIVE_FAILURES {
+            state.begin_tick();
             state.record_failure(&foo);
         }
         assert!(!state.can_retry(&foo), "foo suppressed");
@@ -297,8 +471,8 @@ mod tests {
         let bar = pid("plugin-bar");
         let baz = pid("plugin-baz");
 
-        state.last_seen.insert(foo.clone(), LastSeen::Alive);
-        state.last_seen.insert(baz.clone(), LastSeen::Dead);
+        state.records.entry(foo.clone()).or_default().last_seen = Some(LastSeen::Alive);
+        state.records.entry(baz.clone()).or_default().last_seen = Some(LastSeen::Dead);
 
         let live = alive_pid();
         let cases = [
@@ -346,7 +520,11 @@ mod tests {
     fn transition_classifies_dead_to_alive_when_pid_recovers() {
         let mut state = SupervisorState::default();
         let recovered = pid("plugin-recovered");
-        state.last_seen.insert(recovered.clone(), LastSeen::Dead);
+        state
+            .records
+            .entry(recovered.clone())
+            .or_default()
+            .last_seen = Some(LastSeen::Dead);
 
         assert_eq!(
             state.transition_for(&recovered, Some(alive_pid())),
@@ -358,12 +536,16 @@ mod tests {
     fn classify_snapshots_emits_fresh_recovery_when_dead_plugin_returns() {
         let mut state = SupervisorState::default();
         let recovered_id = pid("plugin-recovered");
-        state.last_seen.insert(recovered_id.clone(), LastSeen::Dead);
+        state
+            .records
+            .entry(recovered_id.clone())
+            .or_default()
+            .last_seen = Some(LastSeen::Dead);
 
         let snapshots = vec![snapshot("plugin-recovered", Some(alive_pid()))];
         let outcome = classify_snapshots(&snapshots, &state);
 
-        assert_eq!(outcome.alive, vec![recovered_id.clone()]);
+        assert_eq!(outcome.alive, vec![(recovered_id.clone(), alive_pid())]);
         assert_eq!(outcome.fresh_recoveries, vec![recovered_id]);
         assert!(outcome.fresh_deaths.is_empty());
         assert!(outcome.retriable_dead.is_empty());
@@ -377,11 +559,15 @@ mod tests {
         let stale_dead_id = pid("plugin-stale-dead");
 
         state
-            .last_seen
-            .insert(stale_dead_id.clone(), LastSeen::Dead);
+            .records
+            .entry(stale_dead_id.clone())
+            .or_default()
+            .last_seen = Some(LastSeen::Dead);
         state
-            .last_seen
-            .insert(fresh_dead_id.clone(), LastSeen::Alive);
+            .records
+            .entry(fresh_dead_id.clone())
+            .or_default()
+            .last_seen = Some(LastSeen::Alive);
 
         let snapshots = vec![
             snapshot("plugin-alive", Some(alive_pid())),
@@ -390,7 +576,7 @@ mod tests {
         ];
 
         let outcome = classify_snapshots(&snapshots, &state);
-        assert_eq!(outcome.alive, vec![alive_id]);
+        assert_eq!(outcome.alive, vec![(alive_id, alive_pid())]);
         assert_eq!(outcome.fresh_deaths, vec![fresh_dead_id.clone()]);
         assert_eq!(outcome.retriable_dead, vec![fresh_dead_id, stale_dead_id]);
     }
@@ -400,8 +586,8 @@ mod tests {
         let mut state = SupervisorState::default();
         let exhausted = pid("plugin-exhausted");
 
-        state.last_seen.insert(exhausted.clone(), LastSeen::Dead);
         for _ in 0..MAX_CONSECUTIVE_FAILURES {
+            state.begin_tick();
             state.record_failure(&exhausted);
         }
 
@@ -423,11 +609,11 @@ mod tests {
         let mut state = SupervisorState::default();
         let dying = pid("plugin-dying");
 
-        state.last_seen.insert(dying.clone(), LastSeen::Alive);
         for _ in 0..MAX_CONSECUTIVE_FAILURES {
+            state.begin_tick();
             state.record_failure(&dying);
         }
-        state.last_seen.insert(dying.clone(), LastSeen::Alive);
+        state.records.entry(dying.clone()).or_default().last_seen = Some(LastSeen::Alive);
 
         let snapshots = vec![snapshot("plugin-dying", None)];
         let outcome = classify_snapshots(&snapshots, &state);
@@ -451,16 +637,11 @@ mod tests {
 
         state.record_failure(&kept);
         state.record_failure(&removed);
-        state.last_seen.insert(removed.clone(), LastSeen::Dead);
 
         state.note_known_plugins(&[snapshot("plugin-kept", Some(alive_pid()))]);
         state.prune_unknown_plugins();
 
-        assert!(state.counts.contains_key(&kept));
-        assert!(!state.counts.contains_key(&removed), "stale count pruned");
-        assert!(
-            !state.last_seen.contains_key(&removed),
-            "stale last_seen pruned"
-        );
+        assert!(state.records.contains_key(&kept));
+        assert!(!state.records.contains_key(&removed), "stale record pruned");
     }
 }

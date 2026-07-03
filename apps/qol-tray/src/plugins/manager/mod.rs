@@ -91,6 +91,12 @@ impl PluginManager {
         runtime::reap_exited_daemons(self)
     }
 
+    pub fn plugin_daemon_pid(&self, plugin_id: &PluginId) -> Option<u32> {
+        self.plugins
+            .get(plugin_id)
+            .and_then(|plugin| plugin.daemon_pid())
+    }
+
     pub fn supervised_daemon_snapshots(&self) -> Vec<(PluginId, Option<u32>)> {
         self.plugins
             .values()
