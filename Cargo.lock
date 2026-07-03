@@ -68,7 +68,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alt-tab"
-version = "0.27.2"
+version = "0.28.0"
 dependencies = [
  "gpui",
  "image",
@@ -3845,7 +3845,7 @@ dependencies = [
 
 [[package]]
 name = "keyremap"
-version = "1.9.2"
+version = "1.10.0"
 dependencies = [
  "core-foundation 0.10.0",
  "core-graphics 0.25.0",
@@ -3921,7 +3921,7 @@ checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
 name = "launcher"
-version = "1.19.2"
+version = "1.20.0"
 dependencies = [
  "block2",
  "gpui",
@@ -5339,7 +5339,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-cli-sessions"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -5359,7 +5359,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-lights"
-version = "1.9.1"
+version = "1.10.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -5378,7 +5378,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-os-themes"
-version = "0.10.2"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -5394,7 +5394,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-removeapp"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
@@ -5452,7 +5452,7 @@ dependencies = [
 
 [[package]]
 name = "pointzerver"
-version = "1.10.2"
+version = "1.11.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5889,7 +5889,7 @@ dependencies = [
 
 [[package]]
 name = "qol-shot"
-version = "1.14.1"
+version = "1.15.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5912,7 +5912,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.17.6"
+version = "3.18.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7631,7 +7631,7 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
 name = "task-runner"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "qol-config",
  "qol-conventions",
@@ -8999,7 +8999,7 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "window-actions"
-version = "2.7.1"
+version = "2.8.0"
 dependencies = [
  "proptest",
  "qol-config",
