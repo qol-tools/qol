@@ -272,6 +272,20 @@ pub fn set_selected_worktree(
     })
 }
 
+/// Re-align the autostart artifact with the persisted selection without
+/// changing the selection itself. Shadow generations skip the startup heal
+/// because the predecessor still owns the host surface when they boot, so
+/// promotion must reconcile the moment ownership transfers.
+pub fn repair_autostart_for_selection(
+    env: &dyn crate::installer::BootEnvironment,
+    config_dir: &Path,
+    lister: &dyn WorktreeLister,
+    probe: &dyn BinaryProbe,
+) -> anyhow::Result<SetSelectedReport> {
+    let marker = read_marker(config_dir);
+    set_selected_worktree(env, config_dir, marker.as_deref(), lister, probe)
+}
+
 /// Runs resolve, observes drift events, applies the healing matrix:
 /// - If ignored-dev-marker: clear marker, then write autostart.
 /// - Else if autostart drift only: keep marker, write autostart.
@@ -698,6 +712,82 @@ mod set_tests {
         .unwrap();
         assert!(r.cleared_selection);
         assert!(!r.wrote_autostart);
+    }
+
+    #[test]
+    fn promotion_repair_realigns_autostart_without_touching_the_selection() {
+        let tmp = TempDir::new().unwrap();
+        let wt = "/wt";
+        let binary_path = binary_in_worktree(wt);
+        std::fs::create_dir_all(tmp.path().join("dev")).unwrap();
+        std::fs::write(tmp.path().join("dev/active-worktree.txt"), "feat-x").unwrap();
+        let env = InMemoryBootEnvironment::new(PathBuf::from("/main"), true)
+            .with_autostart(PathBuf::from("/main"));
+        let lister = InMemoryWorktreeLister {
+            map: [("feat-x".to_string(), PathBuf::from(wt))]
+                .into_iter()
+                .collect(),
+        };
+        let probe = InMemoryBinaryProbe {
+            existing: [PathBuf::from(&binary_path)].into_iter().collect(),
+        };
+        let r = repair_autostart_for_selection(&env, tmp.path(), &lister, &probe).unwrap();
+        assert!(r.wrote_autostart, "stale autostart must be rewritten");
+        assert!(!r.cleared_selection, "repair must never clear the marker");
+        assert_eq!(
+            env.read_autostart_target().unwrap(),
+            Some(PathBuf::from(&binary_path)),
+            "autostart must follow the selected worktree binary"
+        );
+        assert_eq!(
+            read_marker(tmp.path()).as_deref(),
+            Some("feat-x"),
+            "marker must survive the repair"
+        );
+    }
+
+    #[test]
+    fn promotion_repair_returns_autostart_to_canonical_after_a_base_switch() {
+        let tmp = TempDir::new().unwrap();
+        let env = InMemoryBootEnvironment::new(PathBuf::from("/main"), true)
+            .with_autostart(PathBuf::from(binary_in_worktree("/wt")));
+        let r = repair_autostart_for_selection(
+            &env,
+            tmp.path(),
+            &InMemoryWorktreeLister {
+                map: Default::default(),
+            },
+            &InMemoryBinaryProbe {
+                existing: Default::default(),
+            },
+        )
+        .unwrap();
+        assert!(r.wrote_autostart);
+        assert_eq!(
+            env.read_autostart_target().unwrap(),
+            Some(PathBuf::from("/main")),
+            "cleared selection must point autostart back to canonical"
+        );
+    }
+
+    #[test]
+    fn promotion_repair_is_a_no_op_when_already_aligned() {
+        let tmp = TempDir::new().unwrap();
+        let env = InMemoryBootEnvironment::new(PathBuf::from("/main"), true)
+            .with_autostart(PathBuf::from("/main"));
+        let r = repair_autostart_for_selection(
+            &env,
+            tmp.path(),
+            &InMemoryWorktreeLister {
+                map: Default::default(),
+            },
+            &InMemoryBinaryProbe {
+                existing: Default::default(),
+            },
+        )
+        .unwrap();
+        assert!(!r.wrote_autostart, "aligned state must not be rewritten");
+        assert!(!r.cleared_selection);
     }
 
     #[test]

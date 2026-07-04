@@ -135,6 +135,7 @@ async fn promote_shadow_to_stable(app_state: AppState) -> Result<u16> {
         }
     });
     crate::dev_generation::promote_to_stable();
+    tokio::task::spawn_blocking(repair_boot_selection_after_promotion);
     let plugin_manager = app_state.plugin_manager.clone();
     let missing_daemons = tokio::task::spawn_blocking(move || match plugin_manager.lock() {
         Ok(mut manager) => {
@@ -163,6 +164,29 @@ async fn promote_shadow_to_stable(app_state: AppState) -> Result<u16> {
     start_sync_loop(&app_state);
     start_dev_discovery(&app_state);
     Ok(port)
+}
+
+#[cfg(feature = "dev")]
+fn repair_boot_selection_after_promotion() {
+    let Ok(config_dir) = crate::paths::shared_config_dir() else {
+        return;
+    };
+    let env = crate::installer::boot_environment::default_boot_environment();
+    let lister = crate::dev::boot_contract::GitWorktreeLister;
+    let probe = crate::dev::boot_contract::FsBinaryProbe;
+    match crate::dev::boot_contract::repair_autostart_for_selection(
+        env.as_ref(),
+        &config_dir,
+        &lister,
+        &probe,
+    ) {
+        Ok(report) if report.wrote_autostart => log::info!(
+            "[boot-contract] promoted generation re-aligned autostart to {}",
+            report.target.binary().display()
+        ),
+        Ok(_) => {}
+        Err(error) => log::error!("[boot-contract] promoted autostart repair failed: {error:#}"),
+    }
 }
 
 #[cfg(feature = "dev")]
