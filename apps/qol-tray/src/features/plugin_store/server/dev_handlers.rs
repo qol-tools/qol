@@ -137,7 +137,7 @@ fn resolve_path_for_branch(branch: &str) -> Option<PathBuf> {
     dev_services::list_worktrees()
         .into_iter()
         .find(|w| w.branch == branch)
-        .map(|w| PathBuf::from(w.path))
+        .map(|w| w.path)
 }
 
 #[cfg(test)]

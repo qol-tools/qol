@@ -8,16 +8,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
+use super::{
+    spawn_forwarders, terminate_child, try_wait, Dash, RebuildState, Reload, ReloadOutcome,
+    TrayHandle, WorktreeSelection, CRASH_TAIL, HANDOFF_STOP_GRACE, HANDOFF_STOP_INTERVAL,
+    PROMOTION_INTERVAL, PROMOTION_TIMEOUT, SHADOW_READY_INTERVAL, SHADOW_READY_TIMEOUT,
+};
 use crate::dev_server::{
     health_ok, post_promote_generation, post_recompile_current, post_reload_plugins,
     wait_for_shutdown_best_effort,
-};
-use crate::host_facade;
-
-use super::{
-    spawn_forwarders, terminate_child, try_wait, Dash, RebuildState, Reload, ReloadOutcome,
-    TrayHandle, CRASH_TAIL, HANDOFF_STOP_GRACE, HANDOFF_STOP_INTERVAL, PROMOTION_INTERVAL,
-    PROMOTION_TIMEOUT, SHADOW_READY_INTERVAL, SHADOW_READY_TIMEOUT,
 };
 
 #[derive(Debug, Deserialize)]
@@ -62,7 +60,7 @@ pub(super) fn start_reload(dash: &mut Dash) {
     if dash.is_reloading() {
         return;
     }
-    match spawn_reload() {
+    match spawn_reload(dash) {
         Some((child, rx)) => {
             dash.push_log("[qol dev] reloading: prebuild dev artifacts");
             dash.reload = Reload::Running { child, rx };
@@ -71,25 +69,41 @@ pub(super) fn start_reload(dash: &mut Dash) {
     }
 }
 
-fn spawn_reload() -> Option<(Child, Receiver<String>)> {
+fn spawn_reload(dash: &Dash) -> Option<(Child, Receiver<String>)> {
     let root = crate::workspace::repo_root().ok()?;
     let exe = std::env::current_exe().ok()?;
     let raw_args = std::env::args_os().skip(1);
-    let mut command = reload_prebuild_command(&root, &exe, raw_args);
+    let mut command = reload_prebuild_command(&root, &exe, raw_args, reload_target_arg(dash));
     let mut child = command.spawn().ok()?;
     let rx = spawn_forwarders(&mut child);
     Some((child, rx))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReloadTargetArg {
+    Passthrough,
+    Base,
+    Branch(String),
+}
+
+fn reload_target_arg(dash: &Dash) -> ReloadTargetArg {
+    match &dash.worktree_selection {
+        WorktreeSelection::Follow => ReloadTargetArg::Passthrough,
+        WorktreeSelection::Pin(None) => ReloadTargetArg::Base,
+        WorktreeSelection::Pin(Some(branch)) => ReloadTargetArg::Branch(branch.clone()),
+    }
 }
 
 fn reload_prebuild_command(
     root: &Path,
     exe: &Path,
     raw_args: impl IntoIterator<Item = std::ffi::OsString>,
+    target: ReloadTargetArg,
 ) -> Command {
     let mut command = Command::new(exe);
     command
         .arg(crate::commands::dev::DEV_PREBUILD_COMMAND)
-        .args(reload_prebuild_args(raw_args))
+        .args(reload_prebuild_args(raw_args, target))
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -99,6 +113,7 @@ fn reload_prebuild_command(
 
 fn reload_prebuild_args(
     raw_args: impl IntoIterator<Item = std::ffi::OsString>,
+    target: ReloadTargetArg,
 ) -> Vec<std::ffi::OsString> {
     let parsed = crate::cli::parse_cli(raw_args.into_iter().collect());
     let mut args = Vec::new();
@@ -108,8 +123,10 @@ fn reload_prebuild_args(
     if parsed.skip_plugins {
         args.push("-n".into());
     }
-    if parsed.values.first().and_then(|arg| arg.to_str()) == Some("dev") {
-        args.extend(parsed.values.into_iter().skip(1));
+    match target {
+        ReloadTargetArg::Base => args.push(crate::commands::dev::DEV_PREBUILD_BASE_ARG.into()),
+        ReloadTargetArg::Branch(branch) => args.push(branch.into()),
+        ReloadTargetArg::Passthrough => {}
     }
     args
 }
@@ -158,11 +175,16 @@ pub(super) fn restart_child_from_prebuilt(
         ));
     }
     let root = crate::workspace::repo_root()?;
-    let binary = root
-        .join("target")
-        .join("debug")
-        .join(host_facade::exe_name("qol-tray"));
-    let (next, next_lines, ready) = start_shadow_generation(&root, &binary, dash)?;
+    let (target, note) = crate::commands::dev::marker_tray_target(
+        &root,
+        crate::commands::dev::current_active_worktree_marker(),
+    );
+    if let Some(note) = note {
+        dash.push_log(note);
+    }
+    let binary = crate::commands::dev::dev_binary_path(&target.root);
+    let run_root = crate::commands::dev::dev_run_root(&target.root);
+    let (next, next_lines, ready) = start_shadow_generation(&run_root, &binary, dash)?;
     let mut next = TrayHandle::Owned(next);
     if let Err(error) = retire_child_for_handoff(child) {
         terminate_child(&mut next);
@@ -500,27 +522,51 @@ mod tests {
     use std::ffi::OsStr;
 
     #[test]
-    fn armed_reload_builds_the_workspace_cli_incrementally() {
+    fn armed_reload_follow_defers_to_the_persisted_marker() {
         let root = Path::new("/repo/qol");
         let exe = Path::new("/bin/qol");
         let command = reload_prebuild_command(
             root,
             exe,
             ["-n", "dev", "feat/x", "-v"].map(std::ffi::OsString::from),
+            ReloadTargetArg::Passthrough,
         );
         let args: Vec<&OsStr> = command.get_args().collect();
         assert_eq!(
             args,
-            [
-                crate::commands::dev::DEV_PREBUILD_COMMAND,
-                "-v",
-                "-n",
-                "feat/x",
-            ]
-            .map(OsStr::new)
+            [crate::commands::dev::DEV_PREBUILD_COMMAND, "-v", "-n"].map(OsStr::new),
+            "follow must not forward the argv branch; the prebuild reads the marker"
         );
         assert_eq!(command.get_current_dir(), Some(root));
         assert_eq!(command.get_program(), exe.as_os_str());
+    }
+
+    #[test]
+    fn armed_reload_uses_selected_worktree_target_over_argv() {
+        let args = reload_prebuild_args(
+            ["-n", "dev", "argv-branch", "-v"].map(std::ffi::OsString::from),
+            ReloadTargetArg::Branch("panel-branch".to_string()),
+        );
+        let got: Vec<&OsStr> = args.iter().map(|arg| arg.as_os_str()).collect();
+        assert_eq!(
+            got,
+            ["-v", "-n", "panel-branch"].map(OsStr::new),
+            "panel selection must override startup argv branch"
+        );
+    }
+
+    #[test]
+    fn armed_reload_can_explicitly_select_base_over_argv() {
+        let args = reload_prebuild_args(
+            ["dev", "argv-branch"].map(std::ffi::OsString::from),
+            ReloadTargetArg::Base,
+        );
+        let got: Vec<&OsStr> = args.iter().map(|arg| arg.as_os_str()).collect();
+        assert_eq!(
+            got,
+            [crate::commands::dev::DEV_PREBUILD_BASE_ARG].map(OsStr::new),
+            "explicit base target must clear a startup argv branch"
+        );
     }
 
     #[test]

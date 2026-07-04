@@ -31,6 +31,9 @@ fn dev_reload_url() -> String {
 fn dev_links_url() -> String {
     api_url("/api/dev/links")
 }
+fn active_worktree_url() -> String {
+    api_url("/api/dev/active-worktree")
+}
 fn dev_discovery_url() -> String {
     api_url("/api/dev/discovery-state")
 }
@@ -91,6 +94,11 @@ pub(crate) struct WorkspacePlugin {
     pub(crate) linked: bool,
     pub(crate) needs_rebuild: bool,
     pub(crate) rebuild_reason: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub(crate) struct ActiveWorktreeResponse {
+    pub(crate) branch: Option<String>,
 }
 
 pub(crate) enum LinkToggle {
@@ -176,6 +184,15 @@ pub(crate) fn fetch_workspace_plugins() -> Result<Vec<WorkspacePlugin>> {
     let links = fetch_dev_links()?;
     let discovered = fetch_discovered_plugins().unwrap_or_default();
     Ok(merge_workspace_plugins(&links, &discovered))
+}
+
+pub(crate) fn fetch_active_worktree() -> Result<ActiveWorktreeResponse> {
+    let url = active_worktree_url();
+    let (status, body) = http_exchange("GET", &url, None)?;
+    if status != 200 {
+        bail!("GET {url} returned {status}");
+    }
+    serde_json::from_str(&body).context("invalid active worktree payload")
 }
 
 pub(crate) fn merge_workspace_plugins(
@@ -277,11 +294,6 @@ pub(crate) fn wait_for_health_or_exit(child: &mut TrayHandle) -> Result<()> {
         std::thread::sleep(HEALTH_INTERVAL);
     }
     bail!("qol-tray dev server did not become healthy");
-}
-
-pub(crate) fn post_recompile(branch: &str) -> Result<()> {
-    let body = json!({ "worktree_branch": branch }).to_string();
-    post_recompile_body(&body)
 }
 
 pub(crate) fn health_ok() -> bool {

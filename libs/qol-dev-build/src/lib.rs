@@ -6,6 +6,7 @@ mod fingerprint_store;
 pub mod planning;
 pub mod registry;
 mod service;
+pub mod tray;
 mod types;
 
 pub use cargo_build::{CargoChild, CargoCommandPluginBuilder};

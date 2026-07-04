@@ -8,9 +8,7 @@ use crate::paths;
 pub(super) trait RestartPort: Send + Sync {
     fn resolve_restart_binary(&self) -> Option<PathBuf>;
     fn binary_at(&self, dir: &Path) -> PathBuf {
-        dir.join("target")
-            .join("debug")
-            .join(platform::binary_name())
+        qol_dev_build::tray::debug_binary_path(dir, platform::binary_name())
     }
     fn exec_restart(&self, binary: &Path) -> Result<(), String>;
 }
@@ -21,10 +19,10 @@ impl RestartPort for PlatformRestartPort {
     fn resolve_restart_binary(&self) -> Option<PathBuf> {
         let mut candidates = Vec::new();
 
-        let debug_binary = paths::repo_root_from_manifest_dir()
-            .join("target")
-            .join("debug")
-            .join(platform::binary_name());
+        let debug_binary = qol_dev_build::tray::debug_binary_path(
+            &paths::repo_root_from_manifest_dir(),
+            platform::binary_name(),
+        );
         candidates.push(debug_binary);
 
         if let Ok(current) = std::env::current_exe() {
@@ -53,4 +51,48 @@ fn strip_deleted_suffix(path: &Path) -> Option<PathBuf> {
         return None;
     }
     Some(PathBuf::from(stripped))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    struct TestRestartPort;
+
+    impl RestartPort for TestRestartPort {
+        fn resolve_restart_binary(&self) -> Option<PathBuf> {
+            None
+        }
+
+        fn exec_restart(&self, _binary: &Path) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn binary_at_uses_workspace_target_for_member_roots() {
+        let tmp = TempDir::new().unwrap();
+        let workspace = tmp.path().join("mono");
+        let tray_root = workspace.join("apps").join("qol-tray");
+        std::fs::create_dir_all(&tray_root).unwrap();
+        std::fs::write(
+            workspace.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"apps/qol-tray\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tray_root.join("Cargo.toml"),
+            "[package]\nname = \"qol-tray\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            TestRestartPort.binary_at(&tray_root),
+            workspace
+                .join("target")
+                .join("debug")
+                .join(platform::binary_name())
+        );
+    }
 }

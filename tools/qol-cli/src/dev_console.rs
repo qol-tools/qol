@@ -20,9 +20,9 @@ use serde::{Deserialize, Serialize};
 use crate::commands::emu::ResolveState;
 use crate::commands::emu::{emu_scan, EnvironmentStatus, ImageCandidate};
 use crate::dev_server::{
-    fetch_plugin_health_rows, fetch_workspace_plugins, health_ok, probe_endpoints, toggle_dev_link,
-    web_ok, website_url, EndpointStatus, LinkToggle, PluginDaemonStatus, PluginHealthRow,
-    WorkspacePlugin,
+    fetch_active_worktree, fetch_plugin_health_rows, fetch_workspace_plugins, health_ok,
+    probe_endpoints, toggle_dev_link, web_ok, website_url, ActiveWorktreeResponse, EndpointStatus,
+    LinkToggle, PluginDaemonStatus, PluginHealthRow, WorkspacePlugin,
 };
 use crate::host_facade;
 use crate::poller::Poller;
@@ -30,7 +30,7 @@ use crate::poller::Poller;
 mod key_bindings;
 use key_bindings::{
     action_for, context_action_bindings, global_action_bindings, is_feature_flags_shortcut,
-    preserves_arm, unique_hints, Action, KeyHint,
+    is_worktrees_shortcut, preserves_arm, unique_hints, Action, KeyHint,
 };
 
 mod log_pane;
@@ -55,11 +55,19 @@ use feature_flags::{
     FeatureFlags, FEATURE_FLAGS,
 };
 
+mod worktrees_panel;
+#[cfg(test)]
+use worktrees_panel::worktree_panel_rows;
+use worktrees_panel::{
+    arm_selected_worktree, draw_worktrees_panel, move_worktree_selection, open_worktrees_panel,
+    target_label, WorktreePanel,
+};
+
 mod render_util;
 #[cfg(test)]
 use render_util::relative_age;
 use render_util::{
-    format_duration, list_capacity, now_unix_ms, view_content, Sign, SignBox, ITEM_GAP,
+    accent, format_duration, list_capacity, now_unix_ms, view_content, Sign, SignBox, ITEM_GAP,
 };
 
 mod console_state;
@@ -115,6 +123,8 @@ const PROMOTION_TIMEOUT: Duration = Duration::from_secs(10);
 const PROMOTION_INTERVAL: Duration = Duration::from_millis(100);
 const CRASH_TAIL: usize = 40;
 const ACK_TTL: Duration = Duration::from_secs(6);
+pub(super) const ORANGE: Color = Color::Rgb(255, 153, 0);
+const BASE_ACCENT: Color = Color::Green;
 
 pub(crate) enum SessionEnd {
     ChildExited(ExitStatus),
@@ -216,9 +226,11 @@ struct HealthSnapshot {
 
 type EmuScanResult = Result<(Vec<EnvironmentStatus>, Vec<ImageCandidate>), String>;
 type LinksProbeResult = Result<(Vec<WorkspacePlugin>, Option<Vec<PluginHealthRow>>), String>;
+type ActiveWorktreeResult = Result<ActiveWorktreeResponse, String>;
 
 struct Probes {
     health: Poller<HealthSnapshot>,
+    active_worktree: Poller<ActiveWorktreeResult>,
     emu: Poller<EmuScanResult>,
     links: Poller<LinksProbeResult>,
     doctor: Poller<Result<DoctorRun, String>>,
@@ -231,6 +243,9 @@ impl Probes {
             health: Poller::spawn(HEALTH_PROBE_INTERVAL, || HealthSnapshot {
                 api: health_ok(),
                 web: web_ok(),
+            }),
+            active_worktree: Poller::spawn(HEALTH_PROBE_INTERVAL, || {
+                fetch_active_worktree().map_err(|error| format!("{error:#}"))
             }),
             emu: Poller::spawn(EMU_REFRESH_INTERVAL, || {
                 emu_scan().map_err(|error| format!("{error:#}"))
@@ -314,6 +329,11 @@ struct Dash {
     trace_rate: TraceRate,
     features: FeatureFlags,
     feature_panel: FeatureFlagPanel,
+    worktree_panel: WorktreePanel,
+    worktree_selection: WorktreeSelection,
+    startup_branch: Option<String>,
+    running_branch: Option<String>,
+    base_label: String,
     boot_rx: Option<Receiver<String>>,
     keys_hidden: bool,
     filters: ViewFilters,
@@ -332,7 +352,12 @@ struct Dash {
 }
 
 impl Dash {
+    #[cfg(test)]
     fn new(plugin_names: Vec<String>) -> Self {
+        Self::new_for_startup(plugin_names, None)
+    }
+
+    fn new_for_startup(plugin_names: Vec<String>, startup_branch: Option<String>) -> Self {
         Self {
             view: View::Dashboard,
             logs: LogPane::new(),
@@ -368,6 +393,14 @@ impl Dash {
                 layout_width: default_filter_layout_width(),
                 ..FeatureFlagPanel::default()
             },
+            worktree_panel: WorktreePanel {
+                layout_width: default_filter_layout_width(),
+                ..WorktreePanel::default()
+            },
+            worktree_selection: WorktreeSelection::Follow,
+            startup_branch: startup_branch.clone(),
+            running_branch: startup_branch,
+            base_label: "base".to_string(),
             boot_rx: None,
             keys_hidden: false,
             filters: ViewFilters::default(),
@@ -535,6 +568,7 @@ impl Dash {
             return;
         }
         self.filter_state = FilterState::Closed;
+        self.worktree_panel.open = false;
         self.copying = false;
         self.armed = false;
         self.feature_panel.open = true;
@@ -560,6 +594,58 @@ impl Dash {
         };
         toggle_feature_flag(def.flag);
     }
+
+    fn toggle_worktrees_panel(&mut self) {
+        if self.worktree_panel.is_active() {
+            self.worktree_panel.open = false;
+            return;
+        }
+        self.filter_state = FilterState::Closed;
+        self.feature_panel.open = false;
+        self.copying = false;
+        open_worktrees_panel(self);
+    }
+
+    fn move_worktree(&mut self, direction: PickerMove) {
+        move_worktree_selection(self, direction);
+    }
+
+    fn arm_selected_worktree(&mut self) {
+        arm_selected_worktree(self);
+    }
+
+    fn worktree_diverged(&self) -> bool {
+        match &self.worktree_selection {
+            WorktreeSelection::Follow => false,
+            WorktreeSelection::Pin(target) => *target != self.running_branch,
+        }
+    }
+
+    fn effective_worktree_target(&self) -> Option<&str> {
+        match &self.worktree_selection {
+            WorktreeSelection::Follow => self.startup_branch.as_deref(),
+            WorktreeSelection::Pin(target) => target.as_deref(),
+        }
+    }
+
+    fn pinned_label(&self) -> String {
+        let target = match &self.worktree_selection {
+            WorktreeSelection::Follow => &self.running_branch,
+            WorktreeSelection::Pin(target) => target,
+        };
+        target_label(target.as_deref(), &self.base_label)
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+        self.worktree_selection = WorktreeSelection::Follow;
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WorktreeSelection {
+    Follow,
+    Pin(Option<String>),
 }
 
 pub(crate) fn run_session(
@@ -567,13 +653,15 @@ pub(crate) fn run_session(
     verbose: bool,
     plugins: Vec<String>,
     lines: Receiver<String>,
+    worktree_branch: Option<String>,
     boot: Option<Receiver<String>>,
 ) -> Result<SessionEnd> {
     if verbose || !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
         return plain_session(child, &lines, boot);
     }
     let mut probes = Probes::spawn();
-    let mut dash = Dash::new(plugins);
+    let mut dash = Dash::new_for_startup(plugins, worktree_branch);
+    dash.base_label = resolve_base_label();
     dash.apply_state(load_console_state());
     dash.start_log_file();
     dash.boot_rx = boot;
@@ -639,6 +727,14 @@ fn handle_key(dash: &mut Dash, code: KeyCode, mods: KeyModifiers) -> KeyOutcome 
         dash.toggle_feature_flags_panel();
         return KeyOutcome::Handled;
     }
+    if is_worktrees_shortcut(code, mods) {
+        dash.toggle_worktrees_panel();
+        return KeyOutcome::Handled;
+    }
+    if dash.worktree_panel.is_active() {
+        edit_worktrees(dash, code);
+        return KeyOutcome::Handled;
+    }
     if dash.feature_panel.is_active() {
         edit_feature_flags(dash, code);
         return KeyOutcome::Handled;
@@ -652,7 +748,7 @@ fn handle_key(dash: &mut Dash, code: KeyCode, mods: KeyModifiers) -> KeyOutcome 
         return KeyOutcome::Handled;
     }
     if dash.armed && code == KeyCode::Esc {
-        dash.armed = false;
+        dash.disarm();
         return KeyOutcome::Handled;
     }
     let modified = dash.armed;
@@ -666,7 +762,7 @@ fn handle_key(dash: &mut Dash, code: KeyCode, mods: KeyModifiers) -> KeyOutcome 
         action => {
             apply_action(dash, action, modified);
             if modified && !preserves_arm(action) {
-                dash.armed = false;
+                dash.disarm();
             }
             KeyOutcome::Handled
         }
@@ -680,12 +776,21 @@ fn tui_session(
     probes: &mut Probes,
     dash: &mut Dash,
 ) -> Result<SessionEnd> {
+    let mut last_state = String::new();
     loop {
         while let Ok(line) = lines.try_recv() {
             dash.push_log(line);
         }
+        let state = accent_state_line(dash);
+        if state != last_state {
+            dash.push_log(state.clone());
+            last_state = state;
+        }
         if let Some(snapshot) = probes.health.latest() {
             apply_health(dash, snapshot);
+        }
+        if let Some(Ok(active)) = probes.active_worktree.latest() {
+            dash.running_branch = active.branch;
         }
         match (dash.view == View::Endpoints, probes.endpoints.is_some()) {
             (true, false) => {
@@ -820,6 +925,18 @@ fn edit_feature_flags(dash: &mut Dash, code: KeyCode) {
     }
 }
 
+fn edit_worktrees(dash: &mut Dash, code: KeyCode) {
+    match code {
+        KeyCode::Left => dash.move_worktree(PickerMove::Left),
+        KeyCode::Right => dash.move_worktree(PickerMove::Right),
+        KeyCode::Up => dash.move_worktree(PickerMove::Up),
+        KeyCode::Down => dash.move_worktree(PickerMove::Down),
+        KeyCode::Enter => dash.arm_selected_worktree(),
+        KeyCode::Esc => dash.worktree_panel.open = false,
+        _ => {}
+    }
+}
+
 fn edit_filters(dash: &mut Dash, code: KeyCode) {
     if let FilterState::Editing {
         draft, strategy, ..
@@ -941,20 +1058,19 @@ fn poll_key() -> Result<Option<(KeyCode, KeyModifiers)>> {
 fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
     let page = dash.log_height.max(1);
     match action {
-        Action::ToggleView => {
-            dash.view = match dash.view {
-                View::Logs => View::Dashboard,
-                _ => View::Logs,
-            };
-            dash.scroll_offset = 0;
-            dash.close_filters();
-        }
         Action::ToggleKeys => {
             dash.keys_hidden = !dash.keys_hidden;
             dash.mark_state_dirty();
         }
-        Action::ToggleArm => dash.armed = !dash.armed,
+        Action::ToggleArm => {
+            if dash.armed {
+                dash.disarm();
+            } else {
+                dash.armed = true;
+            }
+        }
         Action::FeatureFlags => dash.toggle_feature_flags_panel(),
+        Action::Worktrees => dash.toggle_worktrees_panel(),
         Action::Rebuild => {
             trigger_rebuild(dash);
             trigger_reload(dash);
@@ -1155,8 +1271,13 @@ fn core_log_dir() -> PathBuf {
 
 fn draw(frame: &mut Frame, dash: &mut Dash) {
     let accent = frame_accent(dash);
-    let [_, body] =
-        Layout::vertical([Constraint::Length(TITLE_CAP), Constraint::Min(0)]).areas(frame.area());
+    render_util::set_frame_accent(accent);
+    let [_, body, _] = Layout::vertical([
+        Constraint::Length(TITLE_CAP),
+        Constraint::Min(0),
+        Constraint::Length(TITLE_CAP),
+    ])
+    .areas(frame.area());
     let block = Block::bordered()
         .border_style(Style::new().fg(accent))
         .padding(PANEL_PADDING);
@@ -1175,10 +1296,12 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
     }
     draw_filter_panel(frame, dash, inner, accent);
     draw_feature_flags_panel(frame, dash, inner, accent);
+    draw_worktrees_panel(frame, dash, inner, accent);
     Sign {
         content: breadcrumb(dash, accent),
     }
     .render(frame, body, accent);
+    draw_branch_sign(frame, dash, body, accent);
     draw_keys_hud(frame, dash, inner);
 }
 
@@ -1255,6 +1378,12 @@ fn breadcrumb(dash: &Dash, accent: Color) -> Line<'static> {
     }
     if dash.is_reloading() {
         spans.push(" · RELOADING".fg(Color::Red).bold());
+    } else if dash.worktree_diverged() {
+        spans.push(
+            format!(" · WORKTREE {}", dash.pinned_label())
+                .fg(ORANGE)
+                .bold(),
+        );
     } else if dash.armed {
         spans.push(" · ARMED".fg(Color::Yellow).bold());
     }
@@ -1262,6 +1391,44 @@ fn breadcrumb(dash: &Dash, accent: Color) -> Line<'static> {
 }
 
 const KEYS_HUD_WIDTH: u16 = 34;
+
+fn accent_state_line(dash: &Dash) -> String {
+    format!(
+        "[state] accent={:?} armed={} reloading={} view={:?} selection={:?} running={:?}",
+        frame_accent(dash),
+        dash.armed,
+        dash.is_reloading(),
+        dash.view,
+        dash.worktree_selection,
+        dash.running_branch
+    )
+}
+
+fn resolve_base_label() -> String {
+    crate::workspace::repo_root()
+        .ok()
+        .and_then(|root| qol_dev_build::tray::resolve_git_branch(&root))
+        .unwrap_or_else(|| "base".to_string())
+}
+
+fn branch_sign_line(dash: &Dash) -> Line<'static> {
+    let running = target_label(dash.running_branch.as_deref(), &dash.base_label);
+    if !dash.worktree_diverged() {
+        return Line::from(running.fg(accent()).bold());
+    }
+    Line::from(vec![
+        running.fg(accent()),
+        " → ".fg(ORANGE).bold(),
+        dash.pinned_label().fg(ORANGE).bold(),
+    ])
+}
+
+fn draw_branch_sign(frame: &mut Frame, dash: &Dash, body: Rect, accent: Color) {
+    Sign {
+        content: branch_sign_line(dash),
+    }
+    .render_bottom(frame, body, accent);
+}
 
 fn context_keys(dash: &Dash) -> Vec<KeyHint> {
     if dash.copying {
@@ -1293,6 +1460,22 @@ fn context_keys(dash: &Dash) -> Vec<KeyHint> {
             KeyHint {
                 key: "enter",
                 desc: "toggle",
+            },
+            KeyHint {
+                key: "esc",
+                desc: "close",
+            },
+        ];
+    }
+    if dash.worktree_panel.is_active() {
+        return vec![
+            KeyHint {
+                key: "←↑↓→",
+                desc: "select worktree",
+            },
+            KeyHint {
+                key: "enter",
+                desc: "arm target",
             },
             KeyHint {
                 key: "esc",
@@ -1366,7 +1549,7 @@ fn key_lines(keys: &[KeyHint]) -> Vec<Line<'static>> {
 }
 
 fn section_label(label: &'static str) -> Line<'static> {
-    Line::from(format!(" {label}").fg(Color::Green).bold())
+    Line::from(format!(" {label}").fg(accent()).bold())
 }
 
 fn keys_rows(dash: &Dash) -> Vec<Line<'static>> {
@@ -1398,7 +1581,7 @@ fn draw_keys_hud(frame: &mut Frame, dash: &Dash, area: Rect) {
     };
     frame.render_widget(Clear, rect);
     SignBox {
-        title: "keys · k",
+        title: "keys · ctrl+k",
         rows,
     }
     .render(frame, rect, frame_accent(dash));
@@ -1438,7 +1621,7 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
 fn tray_status(dash: &Dash) -> (Color, Vec<Span<'static>>) {
     let (text, color) = match dash.health {
         Health::Checking => ("starting", Color::Yellow),
-        Health::Up => ("running", Color::Green),
+        Health::Up => ("running", accent()),
         Health::Down => ("down", Color::Red),
     };
     let mut value = vec![
@@ -1446,7 +1629,7 @@ fn tray_status(dash: &Dash) -> (Color, Vec<Span<'static>>) {
         format!(" · up {}", format_duration(dash.started.elapsed())).fg(Color::DarkGray),
     ];
     if dash.health == Health::Up {
-        value.push(" · api ✓".fg(Color::Green));
+        value.push(" · api ✓".fg(accent()));
     }
     match &dash.rebuild {
         RebuildState::Requested(at) if at.elapsed() < ACK_TTL => {
@@ -1466,9 +1649,9 @@ fn web_status(web: Health) -> (Color, Vec<Span<'static>>) {
     match web {
         Health::Checking => (Color::Yellow, vec!["checking".fg(Color::Yellow)]),
         Health::Up => (
-            Color::Green,
+            accent(),
             vec![
-                "up".fg(Color::Green).bold(),
+                "up".fg(accent()).bold(),
                 format!(" · localhost:{}", qol_conventions::DEFAULT_PORT).fg(Color::DarkGray),
             ],
         ),
@@ -1478,7 +1661,7 @@ fn web_status(web: Health) -> (Color, Vec<Span<'static>>) {
 
 fn dash_row(selected: bool, color: Color, label: &str, value: Vec<Span<'static>>) -> Line<'static> {
     let caret: Span<'static> = if selected {
-        "▸ ".fg(Color::Green).bold()
+        "▸ ".fg(accent()).bold()
     } else {
         "  ".into()
     };
@@ -1495,10 +1678,12 @@ fn dash_row(selected: bool, color: Color, label: &str, value: Vec<Span<'static>>
 fn frame_accent(dash: &Dash) -> Color {
     if dash.is_reloading() {
         Color::Red
+    } else if dash.worktree_diverged() {
+        ORANGE
     } else if dash.armed {
         Color::Yellow
     } else {
-        Color::Green
+        BASE_ACCENT
     }
 }
 
@@ -1527,19 +1712,16 @@ fn plugins_status(
                 (
                     Color::Yellow,
                     vec![
-                        format!("{linked} linked").fg(Color::Green),
+                        format!("{linked} linked").fg(accent()),
                         format!(" · {stale} stale").fg(Color::Yellow).bold(),
                     ],
                 )
             } else {
-                (
-                    Color::Green,
-                    vec![format!("{linked} linked").fg(Color::Green)],
-                )
+                (accent(), vec![format!("{linked} linked").fg(accent())])
             }
         }
         LinksState::Unknown => (
-            Color::Green,
+            accent(),
             vec![format!("{boot_count} linked").fg(Color::DarkGray)],
         ),
         LinksState::Unreachable => (
@@ -1630,7 +1812,7 @@ fn plugin_row_line(
     selected: bool,
 ) -> Line<'static> {
     let caret: Span<'static> = if selected {
-        "▸ ".fg(Color::Green).bold()
+        "▸ ".fg(accent()).bold()
     } else {
         "  ".into()
     };
@@ -1642,7 +1824,7 @@ fn plugin_row_line(
     } else if row.needs_rebuild {
         ("●".fg(Color::Yellow).bold(), " · stale".fg(Color::Yellow))
     } else {
-        ("●".fg(Color::Green).bold(), " · linked".fg(Color::DarkGray))
+        ("●".fg(accent()).bold(), " · linked".fg(Color::DarkGray))
     };
     let name = format!(" {}", row.name);
     let name_span = if selected {
@@ -1669,8 +1851,8 @@ fn daemon_status_span(status: Option<&PluginDaemonStatus>) -> Option<Span<'stati
     match status? {
         PluginDaemonStatus::NotExpected => None,
         PluginDaemonStatus::AutostartBlocked => Some(" · idle (on-demand)".fg(Color::DarkGray)),
-        PluginDaemonStatus::OnDemand { pid: _ } => Some(" · running (on-demand)".fg(Color::Green)),
-        PluginDaemonStatus::Stable { pid: _ } => Some(" · running".fg(Color::Green)),
+        PluginDaemonStatus::OnDemand { pid: _ } => Some(" · running (on-demand)".fg(accent())),
+        PluginDaemonStatus::Stable { pid: _ } => Some(" · running".fg(accent())),
         PluginDaemonStatus::Probation {
             pid: _,
             consecutive_failures: _,
@@ -2395,13 +2577,14 @@ mod tests {
             assert!(text.contains(expected), "missing {expected:?}");
             assert!(text.contains("ctrl+r"), "missing globals");
             assert!(text.contains("rebuild tray+plugins"), "missing globals");
+            assert!(text.contains("worktrees"), "missing worktree picker key");
             assert!(
                 !text.contains("reload qol dev"),
                 "reload shown while unarmed"
             );
             assert!(!text.contains("armed ctrl+r"), "stale armed label rendered");
             assert!(!text.contains("ctrl+u"), "stale reload shortcut rendered");
-            assert!(text.contains("keys · k"), "missing keys badge");
+            assert!(text.contains("keys · ctrl+k"), "missing keys badge");
             assert!(text.contains("global"), "missing global section");
             assert!(text.contains("context"), "missing context section");
             assert!(
@@ -2432,7 +2615,7 @@ mod tests {
             !text.contains("rebuild tray+plugins"),
             "unarmed rebuild action rendered"
         );
-        assert!(text.contains("keys · k"), "missing keys badge");
+        assert!(text.contains("keys · ctrl+k"), "missing keys badge");
         assert!(text.contains("global"), "missing global section");
         assert!(text.contains("context"), "missing context section");
         assert!(!text.contains("armed ctrl+r"), "stale armed label rendered");
@@ -2449,10 +2632,10 @@ mod tests {
         assert_eq!(rows[0], " global");
         assert_eq!(rows[1], "");
         assert_eq!(rows[2], " ctrl+r    rebuild tray+plugins ");
-        assert_eq!(rows[3], " l         logs ");
-        assert_eq!(rows[4], " k         keys ");
+        assert_eq!(rows[3], " ctrl+k    keys ");
+        assert_eq!(rows[4], " ctrl+w    worktrees ");
         assert_eq!(rows[5], " ctrl+f    feature flags ");
-        assert_eq!(rows[6], " q / ctrl+c quit ");
+        assert_eq!(rows[6], " ctrl+c    quit ");
         assert_eq!(rows[7], "");
         assert_eq!(rows[8], "");
         assert_eq!(rows[9], " context");
@@ -2672,6 +2855,58 @@ mod tests {
     }
 
     #[test]
+    fn worktree_panel_arms_base_without_building() {
+        let mut dash = Dash::new_for_startup(Vec::new(), Some("feat/argv".to_string()));
+        dash.worktree_panel.open = true;
+        dash.worktree_panel.targets = vec![worktrees_panel::WorktreeTarget {
+            branch: None,
+            id: "base".to_string(),
+        }];
+        dash.worktree_panel.selected = 0;
+
+        edit_worktrees(&mut dash, KeyCode::Enter);
+
+        assert_eq!(dash.worktree_selection, WorktreeSelection::Pin(None));
+        assert!(dash.armed, "enter arms the selected target");
+        assert!(!dash.worktree_panel.is_active(), "enter closes the panel");
+    }
+
+    #[test]
+    fn worktree_panel_closes_without_changing_target() {
+        let mut dash = Dash::new_for_startup(Vec::new(), Some("feat/argv".to_string()));
+        dash.worktree_panel.open = true;
+        dash.worktree_panel.targets = vec![worktrees_panel::WorktreeTarget {
+            branch: None,
+            id: "base".to_string(),
+        }];
+
+        edit_worktrees(&mut dash, KeyCode::Esc);
+
+        assert_eq!(dash.worktree_selection, WorktreeSelection::Follow);
+        assert_eq!(dash.effective_worktree_target(), Some("feat/argv"));
+        assert!(!dash.worktree_panel.is_active());
+    }
+
+    #[test]
+    fn worktree_panel_empty_scan_renders_no_worktrees() {
+        let mut dash = Dash::new(Vec::new());
+        dash.worktree_panel.open = true;
+        dash.worktree_panel.layout_width = 24;
+        dash.worktree_panel.targets = vec![worktrees_panel::WorktreeTarget {
+            branch: None,
+            id: "base".to_string(),
+        }];
+
+        let rows: Vec<String> = worktree_panel_rows(&dash)
+            .into_iter()
+            .map(|line| span_text(&line.spans))
+            .collect();
+
+        assert!(rows.iter().any(|row| row.contains("base")));
+        assert!(rows.iter().any(|row| row.contains("no worktrees")));
+    }
+
+    #[test]
     fn filter_manager_arrows_follow_brick_rows() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Logs;
@@ -2726,20 +2961,188 @@ mod tests {
     }
 
     #[test]
+    fn branch_sign_shows_running_and_diverged_target() {
+        let mut dash = Dash::new(Vec::new());
+        dash.base_label = "main".to_string();
+        let cases: [(Option<&str>, Option<&str>, &str); 3] = [
+            (None, None, "main"),
+            (Some("feat/x"), None, "main → feat/x"),
+            (Some("feat/x"), Some("feat/x"), "feat/x"),
+        ];
+        for (target, running, expected) in cases {
+            dash.worktree_selection = match target {
+                Some(branch) => WorktreeSelection::Pin(Some(branch.to_string())),
+                None => WorktreeSelection::Follow,
+            };
+            dash.running_branch = running.map(str::to_string);
+            let text = span_text(&branch_sign_line(&dash).spans);
+            assert_eq!(text, expected, "target: {target:?} running: {running:?}");
+        }
+    }
+
+    #[test]
+    fn branch_sign_straddles_bottom_border() {
+        let mut dash = Dash::new(Vec::new());
+        let rows = render_rows(&mut dash);
+        let border = &rows[rows.len() - 2];
+        assert!(
+            border.contains("┤ base ├"),
+            "bottom sign missing from the border row: {border}"
+        );
+        assert!(
+            border.contains('└') && border.contains('┘'),
+            "frame corners must share the border row: {border}"
+        );
+        let cap = rows.last().expect("render produced rows");
+        assert!(
+            cap.contains('╰') && cap.contains('╯'),
+            "sign undercurve must not be cut off: {cap}"
+        );
+    }
+
+    #[test]
+    fn accent_source_tints_normally_green_ui() {
+        render_util::set_frame_accent(Color::Red);
+        let label = section_label("global");
+        assert_eq!(
+            label.spans[0].style.fg,
+            Some(Color::Red),
+            "section labels must follow the frame accent"
+        );
+        let sign = branch_sign_line(&Dash::new(Vec::new()));
+        assert_eq!(
+            sign.spans[0].style.fg,
+            Some(Color::Red),
+            "branch sign must follow the frame accent"
+        );
+        render_util::set_frame_accent(Color::Green);
+    }
+
+    #[test]
+    fn disarming_cancels_pending_worktree_switch() {
+        let mut dash = Dash::new(Vec::new());
+        dash.worktree_panel.open = true;
+        dash.worktree_panel.targets = vec![worktrees_panel::WorktreeTarget {
+            branch: Some("feat/x".to_string()),
+            id: "feat/x".to_string(),
+        }];
+        edit_worktrees(&mut dash, KeyCode::Enter);
+        assert!(dash.armed && dash.worktree_diverged());
+        assert_eq!(frame_accent(&dash), ORANGE);
+
+        handle_key(&mut dash, KeyCode::Char(' '), KeyModifiers::NONE);
+
+        assert!(!dash.armed, "space toggles the arm off");
+        assert!(
+            !dash.worktree_diverged(),
+            "disarm cancels the pending switch"
+        );
+        assert_eq!(dash.worktree_selection, WorktreeSelection::Follow);
+        assert_eq!(frame_accent(&dash), Color::Green);
+    }
+
+    #[test]
+    fn plain_arm_disarm_stays_green_when_running_branch_updates() {
+        let mut dash = Dash::new_for_startup(Vec::new(), None);
+        handle_key(&mut dash, KeyCode::Char(' '), KeyModifiers::NONE);
+        assert_eq!(frame_accent(&dash), Color::Yellow);
+
+        dash.running_branch = Some("feat/x".to_string());
+        handle_key(&mut dash, KeyCode::Char(' '), KeyModifiers::NONE);
+        assert_eq!(frame_accent(&dash), Color::Green);
+
+        dash.running_branch = None;
+        assert_eq!(
+            frame_accent(&dash),
+            Color::Green,
+            "without an explicit selection the accent must follow the running branch, never diverge"
+        );
+    }
+
+    #[test]
+    fn armed_reload_keeps_the_pending_worktree_target() {
+        let mut dash = Dash::new(Vec::new());
+        dash.worktree_panel.open = true;
+        dash.worktree_panel.targets = vec![worktrees_panel::WorktreeTarget {
+            branch: Some("feat/x".to_string()),
+            id: "feat/x".to_string(),
+        }];
+        edit_worktrees(&mut dash, KeyCode::Enter);
+
+        let outcome = handle_key(&mut dash, KeyCode::Char('r'), KeyModifiers::CONTROL);
+
+        assert_eq!(outcome, KeyOutcome::Reload);
+        assert_eq!(
+            dash.worktree_selection,
+            WorktreeSelection::Pin(Some("feat/x".to_string())),
+            "the reload must still consume the armed target"
+        );
+    }
+
+    #[test]
+    fn frame_accent_does_not_latch_the_previous_frames_accent() {
+        let mut dash = Dash::new(Vec::new());
+        dash.armed = true;
+        render_util::set_frame_accent(frame_accent(&dash));
+        dash.disarm();
+        render_util::set_frame_accent(frame_accent(&dash));
+        assert_eq!(
+            frame_accent(&dash),
+            Color::Green,
+            "frame accent must derive from state only, never from the previous frame"
+        );
+        render_util::set_frame_accent(Color::Green);
+    }
+
+    #[test]
+    fn accent_states_are_exclusive_reloading_worktree_armed() {
+        let mut dash = Dash::new(Vec::new());
+        dash.armed = true;
+        assert_eq!(frame_accent(&dash), Color::Yellow);
+        let crumb = span_text(&breadcrumb(&dash, Color::Green).spans);
+        assert!(crumb.contains("ARMED"), "crumb: {crumb}");
+
+        dash.worktree_selection = WorktreeSelection::Pin(Some("feat/x".to_string()));
+        dash.running_branch = None;
+        assert!(dash.worktree_diverged());
+        assert_eq!(
+            frame_accent(&dash),
+            ORANGE,
+            "worktree change outranks armed"
+        );
+        let crumb = span_text(&breadcrumb(&dash, Color::Green).spans);
+        assert!(crumb.contains("WORKTREE feat/x"), "crumb: {crumb}");
+        assert!(!crumb.contains("ARMED"), "single flag only: {crumb}");
+
+        let child = Command::new("true").spawn().unwrap();
+        let (_tx, rx) = channel();
+        dash.reload = Reload::Running { child, rx };
+        assert_eq!(frame_accent(&dash), Color::Red);
+        let crumb = span_text(&breadcrumb(&dash, Color::Green).spans);
+        assert!(crumb.contains("RELOADING"), "crumb: {crumb}");
+        assert!(!crumb.contains("WORKTREE"), "single flag only: {crumb}");
+        if let Reload::Running { mut child, .. } = dash.reload {
+            let _ = child.wait();
+        }
+    }
+
+    #[test]
     fn shell_uses_last_terminal_row_after_footer_removal() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Logs;
         dash.open_filter_manager();
         let rows = render_rows(&mut dash);
-        let last = rows.last().expect("render produced rows");
+        let border = &rows[rows.len() - 2];
         assert!(
-            last.contains('└') && last.contains('┘'),
-            "main panel should own the last terminal row: {last}"
+            border.contains('└') && border.contains('┘'),
+            "main panel should own the row above the sign cap: {border}"
         );
-        assert!(
-            !last.contains("filter") && !last.contains("enter"),
-            "footer text leaked onto the last row: {last}"
-        );
+        for row in rows.iter().rev().take(2) {
+            assert!(
+                !row.contains("filter") && !row.contains("enter"),
+                "footer text leaked onto the bottom rows: {row}"
+            );
+        }
     }
 
     #[test]
@@ -2819,8 +3222,13 @@ mod tests {
         );
 
         dash.view = View::Logs;
-        apply_action(&mut dash, Action::ToggleView, false);
-        apply_action(&mut dash, Action::ToggleView, false);
+        apply_action(&mut dash, Action::Back, false);
+        assert_eq!(dash.view, View::Dashboard);
+        dash.cursor = ROWS
+            .iter()
+            .position(|row| matches!(row, Row::Logs))
+            .unwrap();
+        apply_action(&mut dash, Action::Dive, false);
         assert_eq!(dash.view, View::Logs);
         assert_eq!(
             dash.filters.logs,

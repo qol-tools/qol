@@ -4,10 +4,10 @@ use super::{Dash, View};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(super) enum Action {
-    ToggleView,
     ToggleKeys,
     ToggleArm,
     FeatureFlags,
+    Worktrees,
     Rebuild,
     Doctor,
     ToggleTraceDetails,
@@ -41,7 +41,6 @@ pub(super) fn preserves_arm(action: Action) -> bool {
             | Action::PageDown
             | Action::Dive
             | Action::Back
-            | Action::ToggleView
             | Action::ToggleKeys
             | Action::Follow
     )
@@ -135,20 +134,25 @@ pub(super) fn global_action_bindings(armed: bool) -> Vec<KeyBinding> {
             Action::Rebuild,
             vec![KeyStroke::ctrl('r')],
         ),
-        char_binding("l", "logs", Action::ToggleView, 'l'),
-        char_binding("k", "keys", Action::ToggleKeys, 'k'),
+        binding(
+            "ctrl+k",
+            "keys",
+            Action::ToggleKeys,
+            vec![KeyStroke::ctrl('k')],
+        ),
+        binding(
+            "ctrl+w",
+            "worktrees",
+            Action::Worktrees,
+            vec![KeyStroke::ctrl('w')],
+        ),
         binding(
             "ctrl+f",
             "feature flags",
             Action::FeatureFlags,
             vec![KeyStroke::ctrl('f')],
         ),
-        binding(
-            "q / ctrl+c",
-            "quit",
-            Action::Quit,
-            vec![KeyStroke::plain(KeyCode::Char('q')), KeyStroke::ctrl('c')],
-        ),
+        binding("ctrl+c", "quit", Action::Quit, vec![KeyStroke::ctrl('c')]),
     ]
 }
 
@@ -447,6 +451,10 @@ pub(super) fn is_feature_flags_shortcut(code: KeyCode, mods: KeyModifiers) -> bo
     KeyStroke::ctrl('f').matches(code, mods)
 }
 
+pub(super) fn is_worktrees_shortcut(code: KeyCode, mods: KeyModifiers) -> bool {
+    KeyStroke::ctrl('w').matches(code, mods)
+}
+
 pub(super) fn unique_hints(bindings: Vec<KeyBinding>) -> Vec<KeyHint> {
     let mut hints = Vec::new();
     for binding in bindings {
@@ -471,8 +479,8 @@ mod tests {
         let ctrl = KeyModifiers::CONTROL;
         let mut dash = Dash::new(Vec::new());
         let cases = [
-            (KeyCode::Char('l'), none, Action::ToggleView),
-            (KeyCode::Char('L'), none, Action::ToggleView),
+            (KeyCode::Char('l'), none, Action::Ignore),
+            (KeyCode::Char('L'), none, Action::Ignore),
             (KeyCode::Char('d'), none, Action::Doctor),
             (KeyCode::Char('D'), none, Action::Doctor),
             (KeyCode::Esc, none, Action::Back),
@@ -484,11 +492,13 @@ mod tests {
             (KeyCode::Char('p'), ctrl, Action::Ignore),
             (KeyCode::Char('u'), ctrl, Action::Ignore),
             (KeyCode::Char('c'), ctrl, Action::Quit),
-            (KeyCode::Char('q'), none, Action::Quit),
+            (KeyCode::Char('q'), none, Action::Ignore),
             (KeyCode::Up, none, Action::ScrollUp),
             (KeyCode::Down, none, Action::ScrollDown),
-            (KeyCode::Char('k'), none, Action::ToggleKeys),
-            (KeyCode::Char('K'), none, Action::ToggleKeys),
+            (KeyCode::Char('k'), ctrl, Action::ToggleKeys),
+            (KeyCode::Char('k'), none, Action::Ignore),
+            (KeyCode::Char('w'), ctrl, Action::Worktrees),
+            (KeyCode::Char('w'), none, Action::Ignore),
             (KeyCode::Char(' '), none, Action::ToggleArm),
             (KeyCode::Char('r'), none, Action::Ignore),
             (KeyCode::Char('p'), none, Action::Ignore),

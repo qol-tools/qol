@@ -9,7 +9,7 @@ use super::picker::{
     filter_text, filter_text_width, picker_brick_layout, PickerBrick, FILTER_BRICK_CHROME,
     FILTER_PANEL_MAX_WIDTH, FILTER_PANEL_MIN_WIDTH,
 };
-use super::render_util::SignBox;
+use super::render_util::{accent, SignBox};
 use super::{Dash, View};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
@@ -29,7 +29,7 @@ impl FilterStrategy {
 
     pub(super) fn color(self) -> Color {
         match self {
-            Self::Include => Color::Green,
+            Self::Include => accent(),
             Self::Exclude => Color::Red,
         }
     }

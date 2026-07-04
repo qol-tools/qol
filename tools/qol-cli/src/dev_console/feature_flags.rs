@@ -8,7 +8,7 @@ use super::picker::{
     filter_text, filter_text_width, picker_brick_layout, PickerBrick, FILTER_BRICK_CHROME,
     FILTER_PANEL_MAX_WIDTH, FILTER_PANEL_MIN_WIDTH,
 };
-use super::render_util::SignBox;
+use super::render_util::{accent, SignBox};
 use super::Dash;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -200,7 +200,7 @@ fn feature_flag_brick_spans(
 
 fn feature_flag_color(dash: &Dash, flag: &FeatureFlagDef) -> Color {
     if dash.features.enabled(flag.flag) {
-        Color::Green
+        accent()
     } else {
         Color::DarkGray
     }

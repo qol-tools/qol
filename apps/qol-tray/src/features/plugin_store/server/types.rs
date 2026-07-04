@@ -276,11 +276,7 @@ pub(super) struct ReloadRequest {
 }
 
 #[cfg(feature = "dev")]
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct WorktreeInfo {
-    pub(super) branch: String,
-    pub(super) path: String,
-}
+pub(super) use qol_dev_build::tray::WorktreeInfo;
 
 #[cfg(feature = "dev")]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

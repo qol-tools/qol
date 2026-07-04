@@ -32,3 +32,22 @@ The `qol` CLI: dev console (`qol dev`), emu workflows (`qol emu`), doctor, trace
   failure states; healthy items earn exactly one line. Static facts that never
   change between renders (paths, versions) belong in `qol emu doctor` or the
   empty state, not on every frame.
+- **One accent source.** `draw()` derives the frame accent once
+  (`frame_accent`: red RELOADING > orange WORKTREE > yellow ARMED >
+  `BASE_ACCENT` green) and publishes it via `render_util::set_frame_accent`;
+  every "healthy/brand green" in any view reads `render_util::accent()`.
+  Never write `Color::Green` in render code - hardcoding it splits the color
+  source and that element stops following the frame state. Red/yellow error
+  and warning semantics stay literal; only the green family routes through
+  the accent. `frame_accent` itself is the ONE place that must NOT read
+  `accent()`: its fallback is the `BASE_ACCENT` constant. Reading the
+  thread-local there feeds the published value back into itself and latches
+  the previous frame's color permanently.
+- **One worktree source.** The persisted worktree selection lives in exactly
+  one place: the active-worktree marker (`qol_dev_build::tray` marker IO),
+  shared with the web UI and the tray boot contract. Argv is a transient
+  directive (`<branch>` writes the marker, `--base` clears it, absent follows
+  it) and `Dash.worktree_selection` is transient session intent. Anything that
+  builds or launches a tray binary resolves its target FROM the marker
+  (`marker_tray_target`); never resolve from argv or console state directly,
+  and never clear the marker except on an explicit `--base`.

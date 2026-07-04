@@ -80,7 +80,7 @@ pub(super) fn resolve_branch_from_path(worktree_path: &Path) -> Option<String> {
     let known = super::super::list_worktrees();
     known
         .into_iter()
-        .find(|w| Path::new(&w.path) == worktree_path)
+        .find(|w| w.path == worktree_path)
         .map(|w| w.branch)
 }
 

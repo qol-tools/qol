@@ -12,7 +12,9 @@ use crate::commands::emu::{
     ResolveState, RunDetail,
 };
 
-use super::render_util::{list_window, now_unix_ms, relative_age, spaced_height, view_content};
+use super::render_util::{
+    accent, list_window, now_unix_ms, relative_age, spaced_height, view_content,
+};
 use super::{
     copy_highlight, draw_run_log, frame_accent, spawn_forwarders, Dash, LogPane, LogRing, View,
     ITEM_GAP,
@@ -256,7 +258,7 @@ pub(super) fn live_verb(dash: &Dash, id: &str) -> Option<String> {
 
 fn state_color(state: ResolveState) -> Color {
     match state {
-        ResolveState::Ready => Color::Green,
+        ResolveState::Ready => accent(),
         ResolveState::Missing => Color::Yellow,
         ResolveState::Unsupported => Color::Red,
     }
@@ -296,8 +298,8 @@ fn candidate_info_lines(
     detail: Option<&RunDetail>,
 ) -> Vec<Line<'static>> {
     let mut head = vec![
-        "○ ".fg(Color::Green).bold(),
-        "ready".fg(Color::Green).bold(),
+        "○ ".fg(accent()).bold(),
+        "ready".fg(accent()).bold(),
         " · candidate".fg(Color::DarkGray),
     ];
     if let Some(detail) = detail {
@@ -381,10 +383,10 @@ pub(super) fn emu_status(state: &EmuState) -> (Color, Vec<Span<'static>>) {
         .count();
     if ready > 0 {
         return (
-            Color::Green,
+            accent(),
             vec![
                 format!("{} envs · {ready} ready", statuses.len())
-                    .fg(Color::Green)
+                    .fg(accent())
                     .bold(),
                 " · → open".fg(Color::DarkGray),
             ],
@@ -425,7 +427,7 @@ pub(super) fn candidate_line(
     live_verb: Option<String>,
 ) -> Line<'static> {
     let caret: Span<'static> = if selected {
-        "▸ ".fg(Color::Green).bold()
+        "▸ ".fg(accent()).bold()
     } else {
         "  ".into()
     };
@@ -441,7 +443,7 @@ pub(super) fn candidate_line(
             spans.push(" · → log".fg(Color::DarkGray));
         }
         None => {
-            spans.push("  ready".fg(Color::Green));
+            spans.push("  ready".fg(accent()));
             if let crate::commands::emu::ArchGuess::Assumed(arch) = candidate.arch {
                 spans.push(format!(" · arch assumed {}", arch.as_str()).fg(Color::DarkGray));
             }
@@ -466,7 +468,7 @@ pub(super) fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
                 let selected = index == dash.emu_cursor;
                 let color = state_color(status.state);
                 let caret: Span<'static> = if selected {
-                    "▸ ".fg(Color::Green).bold()
+                    "▸ ".fg(accent()).bold()
                 } else {
                     "  ".into()
                 };
@@ -590,7 +592,7 @@ fn last_run_spans(last_run: Option<&LastRun>) -> Vec<Span<'static>> {
         return Vec::new();
     };
     let color = match run.status.as_str() {
-        "pass" => Color::Green,
+        "pass" => accent(),
         "failed" => Color::Red,
         "running" => Color::Yellow,
         _ => Color::DarkGray,

@@ -199,11 +199,7 @@ pub fn resolve(
 }
 
 fn read_marker(config_dir: &Path) -> Option<String> {
-    let path = config_dir.join("dev").join("active-worktree.txt");
-    std::fs::read_to_string(&path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    qol_dev_build::tray::read_active_worktree_marker(config_dir)
 }
 
 fn push_autostart_drift_if_any(

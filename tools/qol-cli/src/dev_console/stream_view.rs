@@ -15,7 +15,7 @@ use crate::dev_server::EndpointStatus;
 
 use super::filters::{line_matches_filters, LogFilter};
 use super::log_pane::{clamp_offset, dev_log_dir, window_start, LogRing};
-use super::render_util::{list_status, styled_line, view_content, SignBox};
+use super::render_util::{accent, list_status, styled_line, view_content, SignBox};
 use super::{copy_highlight, spawn_forwarders, Dash, TraceRenderer, View};
 
 pub(super) enum EndpointsState {
@@ -464,7 +464,7 @@ pub(super) fn draw_endpoints(frame: &mut Frame, dash: &Dash, area: Rect) {
 
 fn endpoint_line(status: &EndpointStatus) -> Line<'static> {
     let (symbol, color) = if status.ok {
-        ("✓", Color::Green)
+        ("✓", accent())
     } else {
         ("✗", Color::Red)
     };

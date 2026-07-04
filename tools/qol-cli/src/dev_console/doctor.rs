@@ -8,7 +8,7 @@ use ratatui::Frame;
 
 use crate::poller::Poller;
 
-use super::render_util::{list_window, now_unix_ms, relative_age, view_content};
+use super::render_util::{accent, list_window, now_unix_ms, relative_age, view_content};
 use super::{Dash, View, DOCTOR_BASE_INTERVAL, DOCTOR_CAP_INTERVAL};
 
 pub(super) fn spawn_doctor_probe() -> Poller<Result<DoctorRun, String>> {
@@ -78,9 +78,9 @@ pub(super) fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Spa
     let report = run.report;
     let (color, mut value) = if report.divergences() == 0 {
         (
-            Color::Green,
+            accent(),
             vec![
-                "all good".fg(Color::Green).bold(),
+                "all good".fg(accent()).bold(),
                 match run.scope {
                     DoctorScope::Full => format!(" · {} checks", report.ok),
                     DoctorScope::Quick => format!(" · {} quick checks", report.ok),
@@ -157,7 +157,7 @@ fn doctor_view_lines(panel: &DoctorPanel) -> Vec<String> {
 fn doctor_line_style(raw: &str) -> Option<(&'static str, Color)> {
     let trimmed = raw.trim_start();
     if trimmed.starts_with("[OK]") {
-        return Some(("✓", Color::Green));
+        return Some(("✓", accent()));
     }
     if trimmed.starts_with("[WARN]") {
         return Some(("▲", Color::Yellow));

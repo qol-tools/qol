@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ratatui::layout::Rect;
@@ -7,6 +8,18 @@ use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 
 use super::Dash;
+
+thread_local! {
+    static ACCENT: Cell<Color> = const { Cell::new(Color::Green) };
+}
+
+pub(super) fn set_frame_accent(color: Color) {
+    ACCENT.with(|cell| cell.set(color));
+}
+
+pub(super) fn accent() -> Color {
+    ACCENT.with(Cell::get)
+}
 
 pub(super) struct SignBox<'a> {
     pub(super) title: &'a str,
@@ -47,6 +60,25 @@ pub(super) struct Sign {
 }
 
 impl Sign {
+    pub(super) fn render_bottom(self, frame: &mut Frame, body: Rect, accent: Color) {
+        let span = self.content.width() as u16 + 2;
+        let width = span + 2;
+        if width + 2 > body.width || body.height < 3 {
+            return;
+        }
+        let x = body.x + (body.width - width) / 2;
+        let y = body.y + body.height - 1;
+        let bar = "─".repeat(span as usize);
+        render_overlay(frame, x, y - 1, Line::from(format!("╭{bar}╮").fg(accent)));
+        let mut middle = vec!["┤ ".fg(accent)];
+        middle.extend(self.content.spans);
+        middle.push(" ├".fg(accent));
+        render_overlay(frame, x, y, Line::from(middle));
+        if y + 1 < frame.area().y + frame.area().height {
+            render_overlay(frame, x, y + 1, Line::from(format!("╰{bar}╯").fg(accent)));
+        }
+    }
+
     pub(super) fn render(self, frame: &mut Frame, body: Rect, accent: Color) {
         let span = self.content.width() as u16 + 2;
         let width = span + 2;

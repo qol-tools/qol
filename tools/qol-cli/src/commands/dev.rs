@@ -1,14 +1,13 @@
 use crate::cli::optional_single_arg;
 use crate::dev_console;
 use crate::dev_server::{
-    fetch_dev_links, post_dev_link, post_recompile, post_reload_plugins, wait_for_health_or_exit,
+    fetch_dev_links, post_dev_link, post_reload_plugins, wait_for_health_or_exit,
     wait_for_shutdown_best_effort, DevLink, DevLinkOutcome,
 };
 use crate::host_facade;
 use crate::progress::{print_title, run_status, step_label, StepKind};
 use crate::workspace::{
-    cargo_build_command, display_name, repo_root, scan_buildable_plugins, sibling_crates,
-    BuildablePlugin,
+    cargo_build_command, display_name, repo_root, scan_buildable_plugins, BuildablePlugin,
 };
 use anyhow::{bail, Context, Result};
 use qol_dev_build::adapters::CoreEventSink;
@@ -22,35 +21,41 @@ const RELOAD_ENV: &str = "QOL_DEV_RELOAD";
 const PLUGIN_RELOAD_TIMEOUT: Duration = Duration::from_secs(120);
 const PLUGIN_RELOAD_INTERVAL: Duration = Duration::from_millis(500);
 
-const DEV_BUILD_ARGS: [&str; 7] = [
-    "build",
-    "--bin",
-    "qol-tray",
-    "--bin",
-    "qol-tray-doctor",
-    "--features",
-    "dev",
-];
+const TRAY_DEV_BINS: [&str; 2] = ["qol-tray", "qol-tray-doctor"];
 pub(crate) const DEV_PREBUILD_COMMAND: &str = "__dev-prebuild";
+pub(crate) const DEV_PREBUILD_BASE_ARG: &str = "--base";
 pub(crate) const QOL_CLI_BUILD_ARGS: [&str; 5] = ["build", "-p", "qol", "--bin", "qol"];
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TrayTarget {
+    pub(crate) branch: Option<String>,
+    pub(crate) root: PathBuf,
+}
+
 pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
-    let branch = optional_single_arg(args, "qol dev [worktree]")?;
+    let directive = tray_directive(optional_single_arg(args, "qol dev [worktree|--base]")?);
     let root = repo_root()?;
     crate::setup::ensure_lockfile_merge_driver(&root);
     if verbose {
         print_title("qol dev");
     }
-    select_worktree_branch(&root, branch)?;
 
     if let Some(tray_pid) = crate::self_exec::resume_tray_pid() {
-        return run_attached(tray_pid, verbose);
+        return run_attached(tray_pid, verbose, current_active_worktree_marker());
     }
 
+    let target = select_worktree_branch(&root, directive)?;
     let reload = std::env::var_os(RELOAD_ENV).is_some();
-    let buildable = boot_preflight(&root, verbose, skip_plugins, reload)?;
-    let binary = dev_binary_path(&root);
-    build_qol_tray_dev(&root, verbose)?;
+    let buildable = boot_preflight(
+        &root,
+        verbose,
+        skip_plugins,
+        reload,
+        target.branch.as_deref(),
+    )?;
+    let binary = dev_binary_path(&target.root);
+    let run_root = dev_run_root(&target.root);
+    build_qol_tray_dev(&target.root, verbose)?;
     host_facade::stop_qol_tray()?;
     wait_for_shutdown_best_effort();
     dev_step_label(
@@ -60,7 +65,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         verbose,
     );
     let mut child = Command::new(&binary)
-        .current_dir(&root)
+        .current_dir(&run_root)
         .arg("--write-mode=dev")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -71,12 +76,19 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     let mut child = dev_console::TrayHandle::Owned(child);
 
     let plugin_names: Vec<String> = buildable.iter().map(|p| display_name(&p.dir)).collect();
-    finish_boot(&mut child, &buildable, branch, verbose)?;
-    let end = dev_console::run_session(&mut child, verbose, plugin_names, lines, None)?;
+    finish_boot(&mut child, &buildable, verbose)?;
+    let end = dev_console::run_session(
+        &mut child,
+        verbose,
+        plugin_names,
+        lines,
+        target.branch.clone(),
+        None,
+    )?;
     handle_session_end(end)
 }
 
-fn run_attached(tray_pid: u32, verbose: bool) -> Result<()> {
+fn run_attached(tray_pid: u32, verbose: bool, branch: Option<String>) -> Result<()> {
     let mut child = dev_console::TrayHandle::Attached(tray_pid);
     wait_for_health_or_exit(&mut child).context("dev server did not become healthy on reattach")?;
     let (tx, lines) = std::sync::mpsc::channel();
@@ -84,7 +96,7 @@ fn run_attached(tray_pid: u32, verbose: bool) -> Result<()> {
         "[qol dev] reattached to existing qol-tray (pid {tray_pid}) - live tray console \
          unavailable until the next full restart"
     ));
-    let end = dev_console::run_session(&mut child, verbose, Vec::new(), lines, None)?;
+    let end = dev_console::run_session(&mut child, verbose, Vec::new(), lines, branch, None)?;
     handle_session_end(end)
 }
 
@@ -109,18 +121,12 @@ fn handle_session_end(end: dev_console::SessionEnd) -> Result<()> {
 fn finish_boot(
     child: &mut dev_console::TrayHandle,
     buildable: &[BuildablePlugin],
-    branch: Option<&str>,
     verbose: bool,
 ) -> Result<()> {
     wait_for_health_or_exit(child).context("dev server did not become healthy")?;
     if !buildable.is_empty() {
         register_dev_links(buildable, verbose);
-        if branch.is_none() {
-            request_plugin_reload(verbose)?;
-        }
-    }
-    if let Some(branch) = branch {
-        post_recompile(branch)?;
+        request_plugin_reload(verbose)?;
     }
     Ok(())
 }
@@ -130,10 +136,20 @@ fn boot_preflight(
     verbose: bool,
     skip_plugins: bool,
     reload: bool,
+    branch: Option<&str>,
 ) -> Result<Vec<BuildablePlugin>> {
     let buildable = collect_buildable_plugins(root, skip_plugins, verbose)?;
     fix_rustfmt(root, verbose)?;
-    build_plugins_batch(root, &buildable, verbose)?;
+    if branch.is_none() {
+        build_plugins_batch(root, &buildable, verbose)?;
+    } else if !buildable.is_empty() {
+        dev_step_label(
+            "plugins",
+            StepKind::Info,
+            "worktree reload will build",
+            verbose,
+        );
+    }
     if reload {
         dev_step_label(
             "reload",
@@ -212,42 +228,129 @@ fn reload_linked_plugins(verbose: bool, skip_plugins: bool, branch: Option<&str>
 }
 
 pub(crate) fn prebuild(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
-    let usage = format!("qol {DEV_PREBUILD_COMMAND} [worktree]");
-    let branch = optional_single_arg(args, &usage)?;
+    let usage = format!("qol {DEV_PREBUILD_COMMAND} [{DEV_PREBUILD_BASE_ARG}|worktree]");
+    let directive = tray_directive(optional_single_arg(args, &usage)?);
     let root = repo_root()?;
     crate::setup::ensure_lockfile_merge_driver(&root);
-    select_worktree_branch(&root, branch)?;
+    let target = select_worktree_branch(&root, directive)?;
     fix_rustfmt(&root, verbose)?;
-    reload_linked_plugins(verbose, skip_plugins, branch)?;
-    build_qol_tray_dev(&root, verbose)?;
+    reload_linked_plugins(verbose, skip_plugins, target.branch.as_deref())?;
+    build_qol_tray_dev(&target.root, verbose)?;
     build_qol_cli_debug(&root, verbose)?;
     dev_step_label("reload", StepKind::Success, "prebuilt", verbose);
     Ok(())
 }
 
-fn select_worktree_branch(root: &Path, branch: Option<&str>) -> Result<()> {
-    match branch {
-        Some(branch) => ensure_worktree_branch(root, branch)?,
-        None => clear_active_worktree_marker(),
-    }
-    Ok(())
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TrayDirective {
+    Follow,
+    Base,
+    Branch(String),
 }
 
-fn dev_binary_path(root: &Path) -> PathBuf {
-    root.join("target")
-        .join("debug")
-        .join(host_facade::exe_name("qol-tray"))
+fn tray_directive(arg: Option<&str>) -> TrayDirective {
+    match arg {
+        None => TrayDirective::Follow,
+        Some(DEV_PREBUILD_BASE_ARG) => TrayDirective::Base,
+        Some(branch) => TrayDirective::Branch(branch.to_string()),
+    }
+}
+
+fn select_worktree_branch(root: &Path, directive: TrayDirective) -> Result<TrayTarget> {
+    match directive {
+        TrayDirective::Branch(branch) => {
+            let target = resolve_tray_target(root, Some(&branch))?;
+            persist_active_worktree(Some(&branch))?;
+            Ok(target)
+        }
+        TrayDirective::Base => {
+            persist_active_worktree(None)?;
+            resolve_tray_target(root, None)
+        }
+        TrayDirective::Follow => {
+            let (target, note) = marker_tray_target(root, current_active_worktree_marker());
+            if let Some(note) = note {
+                eprintln!("{note}");
+            }
+            Ok(target)
+        }
+    }
+}
+
+fn persist_active_worktree(branch: Option<&str>) -> Result<()> {
+    let Some(config_dir) = qol_config::config_dir() else {
+        return Ok(());
+    };
+    qol_dev_build::tray::set_active_worktree_marker(&config_dir, branch).map_err(anyhow::Error::msg)
+}
+
+pub(crate) fn marker_tray_target(
+    root: &Path,
+    marker: Option<String>,
+) -> (TrayTarget, Option<String>) {
+    let base = TrayTarget {
+        branch: None,
+        root: root.to_path_buf(),
+    };
+    let Some(branch) = marker else {
+        return (base, None);
+    };
+    match resolve_tray_target(root, Some(&branch)) {
+        Ok(target) => (target, None),
+        Err(_) => (
+            base,
+            Some(format!(
+                "qol dev: no worktree for persisted `{branch}`; using base (selection kept)"
+            )),
+        ),
+    }
+}
+
+pub(crate) fn current_active_worktree_marker() -> Option<String> {
+    qol_config::config_dir()
+        .as_deref()
+        .and_then(qol_dev_build::tray::read_active_worktree_marker)
+}
+
+pub(crate) fn resolve_tray_target(root: &Path, branch: Option<&str>) -> Result<TrayTarget> {
+    let Some(branch) = branch else {
+        return Ok(TrayTarget {
+            branch: None,
+            root: root.to_path_buf(),
+        });
+    };
+    let worktrees = qol_dev_build::tray::list_worktrees(root);
+    let Some(worktree) = worktrees.iter().find(|worktree| worktree.branch == branch) else {
+        bail!("no worktree for `{branch}` in qol-tray or any sibling repo");
+    };
+    Ok(TrayTarget {
+        branch: Some(branch.to_string()),
+        root: qol_dev_build::tray::resolve_tray_root(Some(&worktree.path), root),
+    })
+}
+
+pub(crate) fn dev_binary_path(root: &Path) -> PathBuf {
+    qol_dev_build::tray::debug_binary_path(root, "qol-tray")
+}
+
+pub(crate) fn dev_run_root(root: &Path) -> PathBuf {
+    qol_dev_build::tray::artifact_root(root)
 }
 
 fn build_qol_tray_dev(root: &Path, verbose: bool) -> Result<()> {
-    let mut command = cargo_build_command(root, &DEV_BUILD_ARGS);
-    run_dev_step(
-        "build",
-        StepKind::Pending,
-        "qol-tray dev",
-        &mut command,
-        verbose,
-    )
+    dev_step_label("build", StepKind::Pending, "qol-tray dev", verbose);
+    let result = qol_dev_build::tray::build_tray(root, &TRAY_DEV_BINS, |percent, phase| {
+        dev_step_label(
+            "build",
+            StepKind::Info,
+            &format!("{percent}% {phase}"),
+            verbose,
+        );
+    });
+    if result.success {
+        return Ok(());
+    }
+    bail!("{}", result.output)
 }
 
 fn build_qol_cli_debug(root: &Path, verbose: bool) -> Result<()> {
@@ -388,17 +491,6 @@ fn register_dev_links(plugins: &[BuildablePlugin], verbose: bool) {
     }
 }
 
-fn active_worktree_marker_path() -> Option<PathBuf> {
-    qol_config::config_dir().map(|dir| dir.join("dev/active-worktree.txt"))
-}
-
-fn clear_active_worktree_marker() {
-    let Some(path) = active_worktree_marker_path() else {
-        return;
-    };
-    let _ = std::fs::remove_file(path);
-}
-
 fn run_dev_hook(root: &Path, verbose: bool) -> Result<()> {
     let hook = root.join(".qol-tray-dev-hooks");
     if !hook.is_file() {
@@ -430,81 +522,21 @@ fn dev_step_label(verb: &str, kind: StepKind, target: &str, verbose: bool) {
     }
 }
 
-fn ensure_worktree_branch(root: &Path, branch: &str) -> Result<()> {
-    if git_worktree_branches(root)
-        .unwrap_or_default()
-        .iter()
-        .any(|c| c == branch)
-    {
-        return Ok(());
-    }
-    for sibling in sibling_crates(root).unwrap_or_default() {
-        if git_worktree_branches(&sibling)
-            .unwrap_or_default()
-            .iter()
-            .any(|c| c == branch)
-        {
-            return Ok(());
-        }
-    }
-    bail!("no worktree for `{branch}` in qol-tray or any sibling repo");
-}
-
-fn git_worktree_branches(root: &Path) -> Result<Vec<String>> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["worktree", "list", "--porcelain"])
-        .output()
-        .context("failed to run git worktree list")?;
-    if !output.status.success() {
-        bail!("git worktree list failed with {}", output.status);
-    }
-    let text = String::from_utf8(output.stdout).context("git output was not UTF-8")?;
-    Ok(parse_worktree_branches(&text))
-}
-
-fn parse_worktree_branches(input: &str) -> Vec<String> {
-    input
-        .lines()
-        .filter_map(|line| line.strip_prefix("branch refs/heads/"))
-        .map(str::to_string)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::ffi::OsStr;
 
     #[test]
-    fn parses_worktree_branches_skipping_detached() {
-        let input = "worktree /a\nHEAD abc\nbranch refs/heads/main\n\nworktree /b\nHEAD def\nbranch refs/heads/feat/x\n\nworktree /c\nHEAD ghi\ndetached\n\n";
-        assert_eq!(
-            parse_worktree_branches(input),
-            vec!["main".to_string(), "feat/x".to_string()]
-        );
-    }
-
-    #[test]
-    fn dev_build_includes_dev_doctor_so_dashboard_runs_dev_checks() {
+    fn dev_build_targets_tray_and_dev_doctor() {
         assert!(
-            DEV_BUILD_ARGS.contains(&"qol-tray-doctor"),
+            TRAY_DEV_BINS.contains(&"qol-tray-doctor"),
             "startup must build qol-tray-doctor; otherwise the dashboard doctor poller runs a \
              stale non-dev binary and reports divergences a manual check disproves"
         );
         assert!(
-            DEV_BUILD_ARGS.contains(&"qol-tray"),
+            TRAY_DEV_BINS.contains(&"qol-tray"),
             "startup must still build the qol-tray binary it launches"
-        );
-        let features = DEV_BUILD_ARGS
-            .iter()
-            .position(|arg| *arg == "--features")
-            .and_then(|i| DEV_BUILD_ARGS.get(i + 1));
-        assert_eq!(
-            features,
-            Some(&"dev"),
-            "both bins must be built with the dev feature so dev-only checks are present"
         );
     }
 
@@ -522,10 +554,7 @@ mod tests {
     #[test]
     fn cargo_build_commands_use_workspace_debug_profile() {
         let root = Path::new("/repo/qol");
-        let cases: [(&str, &[&str]); 2] = [
-            ("qol-tray dev build", &DEV_BUILD_ARGS),
-            ("qol cli build", &QOL_CLI_BUILD_ARGS),
-        ];
+        let cases: [(&str, &[&str]); 1] = [("qol cli build", &QOL_CLI_BUILD_ARGS)];
         for (label, args) in cases {
             let command = cargo_build_command(root, args);
             let got: Vec<&OsStr> = command.get_args().collect();
@@ -564,15 +593,42 @@ mod tests {
     }
 
     #[test]
-    fn active_worktree_marker_path_is_under_qol_config_namespace() {
-        let path = active_worktree_marker_path().expect("config dir resolves in test env");
-        assert!(
-            path.ends_with("dev/active-worktree.txt"),
-            "expected dev/active-worktree.txt tail, got {path:?}"
+    fn tray_directive_distinguishes_follow_base_and_branch() {
+        let cases = [
+            (None, TrayDirective::Follow),
+            (Some(DEV_PREBUILD_BASE_ARG), TrayDirective::Base),
+            (Some("feat/x"), TrayDirective::Branch("feat/x".to_string())),
+        ];
+        for (arg, expected) in cases {
+            assert_eq!(tray_directive(arg), expected, "arg: {arg:?}");
+        }
+    }
+
+    #[test]
+    fn marker_tray_target_follows_marker_and_falls_back_when_worktree_is_gone() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let (target, note) = marker_tray_target(root, None);
+        assert_eq!(
+            target,
+            TrayTarget {
+                branch: None,
+                root: root.to_path_buf()
+            }
         );
-        let namespaced = path
-            .components()
-            .any(|c| c.as_os_str() == qol_config::NAMESPACE);
-        assert!(namespaced, "expected {} in {path:?}", qol_config::NAMESPACE);
+        assert_eq!(note, None, "no marker must boot base silently");
+
+        let (target, note) = marker_tray_target(root, Some("feat/gone".to_string()));
+        assert_eq!(
+            target,
+            TrayTarget {
+                branch: None,
+                root: root.to_path_buf()
+            },
+            "vanished worktree must fall back to base"
+        );
+        let note = note.expect("fallback must explain itself");
+        assert!(note.contains("feat/gone"), "got: {note}");
     }
 }
