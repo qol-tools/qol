@@ -201,10 +201,45 @@ pub(super) fn restart_child_from_prebuilt(
     }
     *child = next;
     *lines = next_lines;
+    repair_autostart_after_promotion(dash, &root);
     dash.pokes.doctor = true;
     dash.pokes.links = true;
     dash.push_log("[qol dev] successor generation active");
     Ok(())
+}
+
+fn repair_autostart_after_promotion(dash: &mut Dash, root: &Path) {
+    let binary = crate::workspace::doctor_binary_path(root);
+    if !binary.is_file() {
+        dash.push_log("[qol dev] autostart repair skipped: base doctor not built");
+        return;
+    }
+    let output = autostart_repair_command(root, &binary).output();
+    match output {
+        Ok(out) if out.status.success() => {
+            dash.push_log("[qol dev] autostart re-aligned to the promoted selection");
+        }
+        Ok(out) => dash.push_log(format!(
+            "[qol dev] autostart repair failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )),
+        Err(error) => dash.push_log(format!("[qol dev] autostart repair failed: {error}")),
+    }
+}
+
+fn autostart_repair_command(root: &Path, binary: &Path) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .current_dir(root)
+        .args([
+            qol_conventions::doctor_cli::ARG_FIX,
+            qol_conventions::doctor_cli::ARG_ID,
+            "autostart_target",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
 }
 
 fn start_shadow_generation(
@@ -567,6 +602,20 @@ mod tests {
             got,
             [crate::commands::dev::DEV_PREBUILD_BASE_ARG].map(OsStr::new),
             "explicit base target must clear a startup argv branch"
+        );
+    }
+
+    #[test]
+    fn autostart_repair_runs_the_scoped_doctor_fix_at_the_base_root() {
+        let root = Path::new("/repo/qol");
+        let binary = Path::new("/repo/qol/target/debug/qol-tray-doctor");
+        let command = autostart_repair_command(root, binary);
+        assert_eq!(command.get_program(), binary.as_os_str());
+        assert_eq!(command.get_current_dir(), Some(root));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            ["fix", "--id", "autostart_target"].map(OsStr::new),
+            "repair must be the scoped autostart fix, never a full fix run"
         );
     }
 
