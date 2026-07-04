@@ -65,7 +65,9 @@ Moved out of qol-tray, with the tray delegating so behavior is unchanged:
 
 - The console passes the armed target to the prebuild command explicitly: `__dev-prebuild <branch>` for a worktree, `__dev-prebuild --base` for an explicit base selection, and no target arg when the panel was never used (`Follow`), which makes the prebuild follow the marker.
   `--base` exists so selecting base can override a persisted selection.
-- The prebuild step applies the same three-way directive as startup: pin writes the marker, base clears it, follow reads it.
+- The prebuild step resolves the same three-way directive but never writes the marker: builds are not commitments.
+  The console persists the selection only at the commit point, right before spawning the successor, and rolls the marker back to its prior value if the handoff fails, so an aborted or killed switch can never move the persisted selection.
+  Startup persists after the tray build succeeds, just before launching, for the same reason.
 - `restart_child_from_prebuilt` resolves the successor from the marker the prebuild just persisted, so the launched binary can never diverge from what was built or from what the web UI recorded.
 - The shadow/promote handoff protocol itself is untouched.
 

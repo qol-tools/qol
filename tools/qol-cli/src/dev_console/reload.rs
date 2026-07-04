@@ -167,6 +167,34 @@ pub(super) fn restart_child_from_prebuilt(
     lines: &mut Receiver<String>,
     dash: &mut Dash,
 ) -> Result<()> {
+    let prior = crate::commands::dev::current_active_worktree_marker();
+    let desired = desired_marker(&dash.worktree_selection, prior.clone());
+    if desired != prior {
+        crate::commands::dev::persist_active_worktree(desired.as_deref())?;
+    }
+    let result = hand_off_to_prebuilt(child, lines, dash, desired.clone());
+    if result.is_err() && desired != prior {
+        match crate::commands::dev::persist_active_worktree(prior.as_deref()) {
+            Ok(()) => dash.push_log("[qol dev] handoff failed: worktree selection rolled back"),
+            Err(error) => dash.push_log(format!("[qol dev] selection rollback failed: {error:#}")),
+        }
+    }
+    result
+}
+
+fn desired_marker(selection: &WorktreeSelection, prior: Option<String>) -> Option<String> {
+    match selection {
+        WorktreeSelection::Follow => prior,
+        WorktreeSelection::Pin(target) => target.clone(),
+    }
+}
+
+fn hand_off_to_prebuilt(
+    child: &mut TrayHandle,
+    lines: &mut Receiver<String>,
+    dash: &mut Dash,
+    marker: Option<String>,
+) -> Result<()> {
     dash.push_log("[qol dev] starting successor generation");
     let predecessor_daemons = snapshot_runtime_daemon_pids();
     if !predecessor_daemons.is_empty() {
@@ -176,10 +204,7 @@ pub(super) fn restart_child_from_prebuilt(
         ));
     }
     let root = crate::workspace::repo_root()?;
-    let (target, note) = crate::commands::dev::marker_tray_target(
-        &root,
-        crate::commands::dev::current_active_worktree_marker(),
-    );
+    let (target, note) = crate::commands::dev::marker_tray_target(&root, marker);
     if let Some(note) = note {
         dash.push_log(note);
     }
@@ -603,6 +628,27 @@ mod tests {
             [crate::commands::dev::DEV_PREBUILD_BASE_ARG].map(OsStr::new),
             "explicit base target must clear a startup argv branch"
         );
+    }
+
+    #[test]
+    fn desired_marker_commits_pins_and_follows_the_prior_selection() {
+        let cases = [
+            (WorktreeSelection::Follow, Some("feat/x"), Some("feat/x")),
+            (WorktreeSelection::Follow, None, None),
+            (
+                WorktreeSelection::Pin(Some("feat/y".to_string())),
+                Some("feat/x"),
+                Some("feat/y"),
+            ),
+            (WorktreeSelection::Pin(None), Some("feat/x"), None),
+        ];
+        for (selection, prior, expected) in cases {
+            assert_eq!(
+                desired_marker(&selection, prior.map(str::to_string)),
+                expected.map(str::to_string),
+                "selection: {selection:?} prior: {prior:?}"
+            );
+        }
     }
 
     #[test]

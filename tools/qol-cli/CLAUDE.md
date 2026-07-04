@@ -50,4 +50,9 @@ The `qol` CLI: dev console (`qol dev`), emu workflows (`qol emu`), doctor, trace
   it) and `Dash.worktree_selection` is transient session intent. Anything that
   builds or launches a tray binary resolves its target FROM the marker
   (`marker_tray_target`); never resolve from argv or console state directly,
-  and never clear the marker except on an explicit `--base`.
+  and never clear the marker except on an explicit `--base`. Marker writes
+  happen only at commit points: after a successful build right before
+  launch (startup) or right before spawning the successor with rollback on
+  handoff failure (armed reload). The prebuild never writes the marker - a
+  build is not a commitment, and an aborted switch must not move the
+  persisted selection.

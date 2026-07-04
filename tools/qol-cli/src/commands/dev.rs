@@ -44,7 +44,11 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         return run_attached(tray_pid, verbose, current_active_worktree_marker());
     }
 
-    let target = select_worktree_branch(&root, directive)?;
+    let plan = resolve_directive(&root, directive, current_active_worktree_marker())?;
+    if let Some(note) = &plan.note {
+        eprintln!("{note}");
+    }
+    let target = plan.target;
     let reload = std::env::var_os(RELOAD_ENV).is_some();
     let buildable = boot_preflight(
         &root,
@@ -56,6 +60,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     let binary = dev_binary_path(&target.root);
     let run_root = dev_run_root(&target.root);
     build_qol_tray_dev(&target.root, verbose)?;
+    apply_marker_update(&plan.marker_update)?;
     host_facade::stop_qol_tray()?;
     wait_for_shutdown_best_effort();
     dev_step_label(
@@ -233,10 +238,13 @@ pub(crate) fn prebuild(args: &[OsString], verbose: bool, skip_plugins: bool) -> 
     let directive = tray_directive(optional_single_arg(args, &usage)?);
     let root = repo_root()?;
     crate::setup::ensure_lockfile_merge_driver(&root);
-    let target = select_worktree_branch(&root, directive)?;
+    let plan = resolve_directive(&root, directive, current_active_worktree_marker())?;
+    if let Some(note) = &plan.note {
+        eprintln!("{note}");
+    }
     fix_rustfmt(&root, verbose)?;
-    reload_linked_plugins(verbose, skip_plugins, target.branch.as_deref())?;
-    build_qol_tray_dev(&target.root, verbose)?;
+    reload_linked_plugins(verbose, skip_plugins, plan.target.branch.as_deref())?;
+    build_qol_tray_dev(&plan.target.root, verbose)?;
     build_qol_cli_debug(&root, verbose)?;
     dev_step_label("reload", StepKind::Success, "prebuilt", verbose);
     Ok(())
@@ -257,28 +265,56 @@ fn tray_directive(arg: Option<&str>) -> TrayDirective {
     }
 }
 
-fn select_worktree_branch(root: &Path, directive: TrayDirective) -> Result<TrayTarget> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MarkerUpdate {
+    Keep,
+    Set(String),
+    Clear,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DirectivePlan {
+    target: TrayTarget,
+    marker_update: MarkerUpdate,
+    note: Option<String>,
+}
+
+fn resolve_directive(
+    root: &Path,
+    directive: TrayDirective,
+    marker: Option<String>,
+) -> Result<DirectivePlan> {
     match directive {
-        TrayDirective::Branch(branch) => {
-            let target = resolve_tray_target(root, Some(&branch))?;
-            persist_active_worktree(Some(&branch))?;
-            Ok(target)
-        }
-        TrayDirective::Base => {
-            persist_active_worktree(None)?;
-            resolve_tray_target(root, None)
-        }
+        TrayDirective::Branch(branch) => Ok(DirectivePlan {
+            target: resolve_tray_target(root, Some(&branch))?,
+            marker_update: MarkerUpdate::Set(branch),
+            note: None,
+        }),
+        TrayDirective::Base => Ok(DirectivePlan {
+            target: resolve_tray_target(root, None)?,
+            marker_update: MarkerUpdate::Clear,
+            note: None,
+        }),
         TrayDirective::Follow => {
-            let (target, note) = marker_tray_target(root, current_active_worktree_marker());
-            if let Some(note) = note {
-                eprintln!("{note}");
-            }
-            Ok(target)
+            let (target, note) = marker_tray_target(root, marker);
+            Ok(DirectivePlan {
+                target,
+                marker_update: MarkerUpdate::Keep,
+                note,
+            })
         }
     }
 }
 
-fn persist_active_worktree(branch: Option<&str>) -> Result<()> {
+fn apply_marker_update(update: &MarkerUpdate) -> Result<()> {
+    match update {
+        MarkerUpdate::Keep => Ok(()),
+        MarkerUpdate::Set(branch) => persist_active_worktree(Some(branch)),
+        MarkerUpdate::Clear => persist_active_worktree(None),
+    }
+}
+
+pub(crate) fn persist_active_worktree(branch: Option<&str>) -> Result<()> {
     let Some(config_dir) = qol_config::config_dir() else {
         return Ok(());
     };
@@ -603,6 +639,44 @@ mod tests {
         for (arg, expected) in cases {
             assert_eq!(tray_directive(arg), expected, "arg: {arg:?}");
         }
+    }
+
+    #[test]
+    fn resolve_directive_defers_marker_writes_to_the_commit_point() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let base_target = TrayTarget {
+            branch: None,
+            root: root.to_path_buf(),
+        };
+
+        let plan = resolve_directive(root, TrayDirective::Follow, None).unwrap();
+        assert_eq!(
+            plan,
+            DirectivePlan {
+                target: base_target.clone(),
+                marker_update: MarkerUpdate::Keep,
+                note: None,
+            },
+            "follow must never plan a marker write"
+        );
+
+        let plan =
+            resolve_directive(root, TrayDirective::Follow, Some("feat/gone".to_string())).unwrap();
+        assert_eq!(plan.marker_update, MarkerUpdate::Keep);
+        assert!(plan.note.is_some(), "vanished worktree must explain itself");
+
+        let plan = resolve_directive(root, TrayDirective::Base, None).unwrap();
+        assert_eq!(plan.target, base_target);
+        assert_eq!(plan.marker_update, MarkerUpdate::Clear);
+
+        let error = resolve_directive(root, TrayDirective::Branch("feat/gone".to_string()), None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("feat/gone"),
+            "unknown branch must fail before any state changes, got: {error}"
+        );
     }
 
     #[test]
