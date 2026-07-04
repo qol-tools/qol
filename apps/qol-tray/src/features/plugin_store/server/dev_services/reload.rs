@@ -19,7 +19,9 @@ pub(super) fn queue_reload(
     }
 
     log::info!("Developer reload requested");
-    super::super::helpers::persist_worktree_branch(worktree_branch.as_deref());
+    if worktree_branch.is_some() {
+        super::super::helpers::persist_worktree_branch(worktree_branch.as_deref());
+    }
 
     let task = reload_task(state, runtime.clone(), None, worktree_branch);
     tokio::task::spawn_blocking(move || run_reload(task));

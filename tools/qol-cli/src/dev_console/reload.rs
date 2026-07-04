@@ -46,7 +46,8 @@ pub(super) fn trigger_rebuild(dash: &mut Dash) {
 }
 
 pub(super) fn trigger_reload(dash: &mut Dash) {
-    dash.plugin_reload = match post_reload_plugins() {
+    let branch = crate::commands::dev::current_active_worktree_marker();
+    dash.plugin_reload = match post_reload_plugins(branch.as_deref()) {
         Ok(()) => {
             dash.pokes.links = true;
             dash.pokes.doctor = true;

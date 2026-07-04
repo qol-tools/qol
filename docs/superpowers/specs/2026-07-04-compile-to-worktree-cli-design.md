@@ -58,6 +58,7 @@ Moved out of qol-tray, with the tray delegating so behavior is unchanged:
     A marker branch whose worktree has vanished falls back to base with a printed note and keeps the marker, mirroring the tray's heal semantics.
 - With a resolved branch: `build_tray(worktree_root, ["qol-tray", "qol-tray-doctor"], ...)`, launch `worktree_root/target/debug/qol-tray` with `current_dir = worktree_root`.
 - `post_recompile(branch)` at boot is removed; `finish_boot` requests a plugin reload in both the branch and branchless case (the tray resolves plugin worktree paths from the marker).
+- Reload requests echo the booted branch in the body. Tray-side, `/dev/reload` persists the marker only when a branch is explicitly provided - an absent branch means "no opinion", never "select base" - and the `/dev/active-worktree` GET reports without ever mutating the marker. The explicit clear paths remain `--base` (CLI) and a base recompile-self (web UI).
 - The base plugin batch build is skipped when a branch is set; the reload request covers plugin builds against worktree paths.
 
 ### 3. Armed reload

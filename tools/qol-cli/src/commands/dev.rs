@@ -76,7 +76,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     let mut child = dev_console::TrayHandle::Owned(child);
 
     let plugin_names: Vec<String> = buildable.iter().map(|p| display_name(&p.dir)).collect();
-    finish_boot(&mut child, &buildable, verbose)?;
+    finish_boot(&mut child, &buildable, verbose, target.branch.as_deref())?;
     let end = dev_console::run_session(
         &mut child,
         verbose,
@@ -122,11 +122,12 @@ fn finish_boot(
     child: &mut dev_console::TrayHandle,
     buildable: &[BuildablePlugin],
     verbose: bool,
+    branch: Option<&str>,
 ) -> Result<()> {
     wait_for_health_or_exit(child).context("dev server did not become healthy")?;
     if !buildable.is_empty() {
         register_dev_links(buildable, verbose);
-        request_plugin_reload(verbose)?;
+        request_plugin_reload(verbose, branch)?;
     }
     Ok(())
 }
@@ -431,8 +432,8 @@ fn fix_rustfmt(root: &Path, verbose: bool) -> Result<()> {
     )
 }
 
-fn request_plugin_reload(verbose: bool) -> Result<()> {
-    post_reload_plugins().context("failed to queue plugin rebuild")?;
+fn request_plugin_reload(verbose: bool, branch: Option<&str>) -> Result<()> {
+    post_reload_plugins(branch).context("failed to queue plugin rebuild")?;
     dev_step_label("reload", StepKind::Info, "plugins queued", verbose);
     wait_for_dev_links_fresh()?;
     dev_step_label("doctor", StepKind::Success, "dev-links fresh", verbose);

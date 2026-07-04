@@ -331,12 +331,20 @@ pub(crate) fn post_recompile_current() -> Result<()> {
     post_recompile_body("{}")
 }
 
-pub(crate) fn post_reload_plugins() -> Result<()> {
-    let status = http_request("POST", &dev_reload_url(), Some("{}"))?;
+pub(crate) fn post_reload_plugins(branch: Option<&str>) -> Result<()> {
+    let body = reload_request_body(branch);
+    let status = http_request("POST", &dev_reload_url(), Some(&body))?;
     if status / 100 == 2 {
         return Ok(());
     }
     bail!("plugin reload request failed with HTTP {status}");
+}
+
+fn reload_request_body(branch: Option<&str>) -> String {
+    match branch {
+        Some(branch) => serde_json::json!({ "worktree_branch": branch }).to_string(),
+        None => "{}".to_string(),
+    }
 }
 
 pub(crate) fn post_promote_generation(port: u16) -> Result<()> {
@@ -490,6 +498,17 @@ fn parse_http_status(response: &str) -> Result<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reload_request_body_echoes_the_booted_branch() {
+        let cases = [
+            (Some("feat/x"), r#"{"worktree_branch":"feat/x"}"#),
+            (None, "{}"),
+        ];
+        for (branch, expected) in cases {
+            assert_eq!(reload_request_body(branch), expected, "branch: {branch:?}");
+        }
+    }
 
     #[test]
     fn plugin_health_payload_parses_tagged_statuses() {

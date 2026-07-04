@@ -81,19 +81,15 @@ fn resolve_active_worktree() -> super::types::ActiveWorktreeResponse {
         .as_ref()
         .and_then(|dir| crate::dev::get_active_worktree_branch(dir));
     let known = dev_services::list_branches();
-    let branch = match persisted {
-        Some(b) if known.iter().any(|k| k == &b) => Some(b),
-        Some(_) => {
-            super::helpers::persist_worktree_branch(None);
-            None
-        }
-        None => None,
-    };
     let repo_branch = dev_services::current_repo_branch();
     super::types::ActiveWorktreeResponse {
-        branch,
+        branch: filter_known_branch(persisted, &known),
         repo_branch,
     }
+}
+
+fn filter_known_branch(persisted: Option<String>, known: &[String]) -> Option<String> {
+    persisted.filter(|branch| known.iter().any(|k| k == branch))
 }
 
 pub(super) async fn recompile_self(
@@ -160,5 +156,23 @@ mod tests {
         };
         let json = serde_json::to_string(&response).unwrap();
         assert_eq!(json, r#"{"branch":null,"repoBranch":"main"}"#);
+    }
+
+    #[test]
+    fn filter_known_branch_reports_without_mutating_the_selection() {
+        let known = vec!["feat/x".to_string()];
+        let cases = [
+            (Some("feat/x".to_string()), Some("feat/x".to_string())),
+            (Some("feat/gone".to_string()), None),
+            (None, None),
+        ];
+        for (persisted, expected) in cases {
+            let label = format!("{persisted:?}");
+            assert_eq!(
+                super::filter_known_branch(persisted, &known),
+                expected,
+                "persisted: {label}"
+            );
+        }
     }
 }
