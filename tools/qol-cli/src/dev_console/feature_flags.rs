@@ -1,14 +1,12 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Clear;
 use ratatui::Frame;
 
 use super::picker::{
     filter_text, filter_text_width, picker_brick_layout, PickerBrick, FILTER_BRICK_CHROME,
-    FILTER_PANEL_MAX_WIDTH, FILTER_PANEL_MIN_WIDTH,
 };
-use super::render_util::{accent, SignBox};
+use super::render_util::{accent, panel_width, render_bottom_panel};
 use super::Dash;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -76,32 +74,9 @@ pub(super) fn draw_feature_flags_panel(
     if !dash.feature_panel.is_active() {
         return;
     }
-    let width = if area.width <= FILTER_PANEL_MIN_WIDTH {
-        area.width
-    } else {
-        area.width
-            .saturating_sub(4)
-            .clamp(FILTER_PANEL_MIN_WIDTH, FILTER_PANEL_MAX_WIDTH)
-    };
-    dash.feature_panel.layout_width = width.saturating_sub(2) as usize;
-    let mut rows = feature_flag_panel_rows(dash);
-    let height = (rows.len() as u16 + SignBox::CHROME_ROWS).min(area.height);
-    if width == 0 || height == 0 {
-        return;
-    }
-    rows.truncate(SignBox::capacity(height));
-    let rect = Rect {
-        x: area.x + (area.width.saturating_sub(width)) / 2,
-        y: area.y + area.height.saturating_sub(height + 1),
-        width,
-        height,
-    };
-    frame.render_widget(Clear, rect);
-    SignBox {
-        title: "feature flags",
-        rows,
-    }
-    .render(frame, rect, accent);
+    dash.feature_panel.layout_width = panel_width(area).saturating_sub(2) as usize;
+    let rows = feature_flag_panel_rows(dash);
+    render_bottom_panel(frame, area, "feature flags", rows, accent);
 }
 
 fn feature_flag_panel_rows(dash: &Dash) -> Vec<Line<'static>> {

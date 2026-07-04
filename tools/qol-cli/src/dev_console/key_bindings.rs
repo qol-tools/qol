@@ -152,7 +152,12 @@ pub(super) fn global_action_bindings(armed: bool) -> Vec<KeyBinding> {
             Action::FeatureFlags,
             vec![KeyStroke::ctrl('f')],
         ),
-        binding("ctrl+c", "quit", Action::Quit, vec![KeyStroke::ctrl('c')]),
+        binding(
+            "ctrl+q",
+            "quit (press twice)",
+            Action::Quit,
+            vec![KeyStroke::ctrl('q')],
+        ),
     ]
 }
 
@@ -455,6 +460,10 @@ pub(super) fn is_worktrees_shortcut(code: KeyCode, mods: KeyModifiers) -> bool {
     KeyStroke::ctrl('w').matches(code, mods)
 }
 
+pub(super) fn is_quit_shortcut(code: KeyCode, mods: KeyModifiers) -> bool {
+    KeyStroke::ctrl('q').matches(code, mods)
+}
+
 pub(super) fn unique_hints(bindings: Vec<KeyBinding>) -> Vec<KeyHint> {
     let mut hints = Vec::new();
     for binding in bindings {
@@ -491,7 +500,8 @@ mod tests {
             (KeyCode::Char('f'), ctrl, Action::FeatureFlags),
             (KeyCode::Char('p'), ctrl, Action::Ignore),
             (KeyCode::Char('u'), ctrl, Action::Ignore),
-            (KeyCode::Char('c'), ctrl, Action::Quit),
+            (KeyCode::Char('c'), ctrl, Action::Ignore),
+            (KeyCode::Char('q'), ctrl, Action::Quit),
             (KeyCode::Char('q'), none, Action::Ignore),
             (KeyCode::Up, none, Action::ScrollUp),
             (KeyCode::Down, none, Action::ScrollDown),

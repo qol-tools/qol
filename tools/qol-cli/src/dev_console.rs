@@ -30,7 +30,7 @@ use crate::poller::Poller;
 mod key_bindings;
 use key_bindings::{
     action_for, context_action_bindings, global_action_bindings, is_feature_flags_shortcut,
-    is_worktrees_shortcut, preserves_arm, unique_hints, Action, KeyHint,
+    is_quit_shortcut, is_worktrees_shortcut, preserves_arm, unique_hints, Action, KeyHint,
 };
 
 mod log_pane;
@@ -123,6 +123,7 @@ const PROMOTION_TIMEOUT: Duration = Duration::from_secs(10);
 const PROMOTION_INTERVAL: Duration = Duration::from_millis(100);
 const CRASH_TAIL: usize = 40;
 const ACK_TTL: Duration = Duration::from_secs(6);
+const QUIT_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 pub(super) const ORANGE: Color = Color::Rgb(255, 153, 0);
 const BASE_ACCENT: Color = Color::Green;
 
@@ -344,6 +345,7 @@ struct Dash {
     copy_count: String,
     copying: bool,
     notice: Option<(Instant, String)>,
+    quit_prompt: Option<Instant>,
     armed: bool,
     reload: Reload,
     pokes: Pokes,
@@ -411,6 +413,7 @@ impl Dash {
             copy_count: String::new(),
             copying: false,
             notice: None,
+            quit_prompt: None,
             armed: false,
             reload: Reload::Idle,
             pokes: Pokes::default(),
@@ -433,6 +436,11 @@ impl Dash {
 
     fn is_reloading(&self) -> bool {
         matches!(self.reload, Reload::Running { .. })
+    }
+
+    fn quit_prompt_active(&self) -> bool {
+        self.quit_prompt
+            .is_some_and(|since| since.elapsed() < QUIT_CONFIRM_WINDOW)
     }
 
     fn start_doctor(&mut self, mode: DoctorMode) {
@@ -723,6 +731,9 @@ enum KeyOutcome {
 }
 
 fn handle_key(dash: &mut Dash, code: KeyCode, mods: KeyModifiers) -> KeyOutcome {
+    if dash.quit_prompt.is_some() && !is_quit_shortcut(code, mods) {
+        dash.quit_prompt = None;
+    }
     if is_feature_flags_shortcut(code, mods) {
         dash.toggle_feature_flags_panel();
         return KeyOutcome::Handled;
@@ -754,7 +765,14 @@ fn handle_key(dash: &mut Dash, code: KeyCode, mods: KeyModifiers) -> KeyOutcome 
     let modified = dash.armed;
     let action = action_for(dash, code, mods);
     match action {
-        Action::Quit => KeyOutcome::Quit,
+        Action::Quit if dash.quit_prompt_active() => KeyOutcome::Quit,
+        Action::Quit => {
+            if modified {
+                dash.disarm();
+            }
+            dash.quit_prompt = Some(Instant::now());
+            KeyOutcome::Handled
+        }
         Action::Rebuild if modified => {
             dash.armed = false;
             KeyOutcome::Reload
@@ -780,6 +798,9 @@ fn tui_session(
     loop {
         while let Ok(line) = lines.try_recv() {
             dash.push_log(line);
+        }
+        if dash.quit_prompt.is_some() && !dash.quit_prompt_active() {
+            dash.quit_prompt = None;
         }
         let state = accent_state_line(dash);
         if state != last_state {
@@ -1297,6 +1318,7 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
     draw_filter_panel(frame, dash, inner, accent);
     draw_feature_flags_panel(frame, dash, inner, accent);
     draw_worktrees_panel(frame, dash, inner, accent);
+    draw_quit_prompt(frame, dash, inner, accent);
     Sign {
         content: breadcrumb(dash, accent),
     }
@@ -1376,7 +1398,9 @@ fn breadcrumb(dash: &Dash, accent: Color) -> Line<'static> {
     if filters_visible(dash) {
         spans.push(" · FILTERED".fg(Color::Yellow).bold());
     }
-    if dash.is_reloading() {
+    if dash.quit_prompt_active() {
+        spans.push(" · QUIT?".fg(Color::Red).bold());
+    } else if dash.is_reloading() {
         spans.push(" · RELOADING".fg(Color::Red).bold());
     } else if dash.worktree_diverged() {
         spans.push(
@@ -1394,10 +1418,11 @@ const KEYS_HUD_WIDTH: u16 = 34;
 
 fn accent_state_line(dash: &Dash) -> String {
     format!(
-        "[state] accent={:?} armed={} reloading={} view={:?} selection={:?} running={:?}",
+        "[state] accent={:?} armed={} reloading={} quit={} view={:?} selection={:?} running={:?}",
         frame_accent(dash),
         dash.armed,
         dash.is_reloading(),
+        dash.quit_prompt_active(),
         dash.view,
         dash.worktree_selection,
         dash.running_branch
@@ -1428,6 +1453,21 @@ fn draw_branch_sign(frame: &mut Frame, dash: &Dash, body: Rect, accent: Color) {
         content: branch_sign_line(dash),
     }
     .render_bottom(frame, body, accent);
+}
+
+fn quit_prompt_rows() -> Vec<Line<'static>> {
+    vec![Line::from(vec![
+        " press ".fg(Color::White),
+        "ctrl+q".fg(Color::Red).bold(),
+        " again to quit".fg(Color::White),
+    ])]
+}
+
+fn draw_quit_prompt(frame: &mut Frame, dash: &Dash, area: Rect, accent: Color) {
+    if !dash.quit_prompt_active() {
+        return;
+    }
+    render_util::render_bottom_panel(frame, area, "quit", quit_prompt_rows(), accent);
 }
 
 fn context_keys(dash: &Dash) -> Vec<KeyHint> {
@@ -1676,7 +1716,7 @@ fn dash_row(selected: bool, color: Color, label: &str, value: Vec<Span<'static>>
 }
 
 fn frame_accent(dash: &Dash) -> Color {
-    if dash.is_reloading() {
+    if dash.quit_prompt_active() || dash.is_reloading() {
         Color::Red
     } else if dash.worktree_diverged() {
         ORANGE
@@ -2635,7 +2675,7 @@ mod tests {
         assert_eq!(rows[3], " ctrl+k    keys ");
         assert_eq!(rows[4], " ctrl+w    worktrees ");
         assert_eq!(rows[5], " ctrl+f    feature flags ");
-        assert_eq!(rows[6], " ctrl+c    quit ");
+        assert_eq!(rows[6], " ctrl+q    quit (press twice) ");
         assert_eq!(rows[7], "");
         assert_eq!(rows[8], "");
         assert_eq!(rows[9], " context");
@@ -3077,6 +3117,60 @@ mod tests {
             WorktreeSelection::Pin(Some("feat/x".to_string())),
             "the reload must still consume the armed target"
         );
+    }
+
+    #[test]
+    fn ctrl_q_quits_only_on_second_press_within_the_window() {
+        let mut dash = Dash::new(Vec::new());
+        let ctrl = KeyModifiers::CONTROL;
+        assert_eq!(
+            handle_key(&mut dash, KeyCode::Char('q'), ctrl),
+            KeyOutcome::Handled,
+            "first press must open the confirmation, not quit"
+        );
+        assert!(dash.quit_prompt_active());
+        assert_eq!(frame_accent(&dash), Color::Red, "confirm window turns red");
+        let line = breadcrumb(&dash, frame_accent(&dash));
+        assert!(
+            line.spans.iter().any(|span| span.content.contains("QUIT?")),
+            "breadcrumb must flag the pending quit"
+        );
+        assert_eq!(
+            handle_key(&mut dash, KeyCode::Char('q'), ctrl),
+            KeyOutcome::Quit,
+            "second press inside the window quits"
+        );
+    }
+
+    #[test]
+    fn any_other_key_dismisses_the_quit_prompt() {
+        let mut dash = Dash::new(Vec::new());
+        handle_key(&mut dash, KeyCode::Char('q'), KeyModifiers::CONTROL);
+        handle_key(&mut dash, KeyCode::Down, KeyModifiers::NONE);
+        assert!(!dash.quit_prompt_active());
+        assert_eq!(frame_accent(&dash), Color::Green);
+    }
+
+    #[test]
+    fn quit_prompt_expires_and_a_late_press_reopens_instead_of_quitting() {
+        let mut dash = Dash::new(Vec::new());
+        dash.quit_prompt = Instant::now().checked_sub(QUIT_CONFIRM_WINDOW);
+        assert!(!dash.quit_prompt_active(), "window must close after 3s");
+        assert_eq!(frame_accent(&dash), Color::Green);
+        assert_eq!(
+            handle_key(&mut dash, KeyCode::Char('q'), KeyModifiers::CONTROL),
+            KeyOutcome::Handled,
+            "a press after expiry restarts the confirmation"
+        );
+    }
+
+    #[test]
+    fn quit_prompt_outranks_every_other_accent_state() {
+        let mut dash = Dash::new(Vec::new());
+        dash.armed = true;
+        dash.worktree_selection = WorktreeSelection::Pin(Some("feat/x".to_string()));
+        dash.quit_prompt = Some(Instant::now());
+        assert_eq!(frame_accent(&dash), Color::Red);
     }
 
     #[test]

@@ -3,14 +3,13 @@ use std::collections::BTreeSet;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Clear;
 use ratatui::Frame;
 
 use super::picker::{
     filter_text, filter_text_width, move_picker_selection, picker_brick_layout, PickerBrick,
-    PickerMove, FILTER_BRICK_CHROME, FILTER_PANEL_MAX_WIDTH, FILTER_PANEL_MIN_WIDTH,
+    PickerMove, FILTER_BRICK_CHROME,
 };
-use super::render_util::{accent, SignBox};
+use super::render_util::{accent, panel_width, render_bottom_panel};
 use super::{Dash, WorktreeSelection, ORANGE};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,32 +74,9 @@ pub(super) fn draw_worktrees_panel(frame: &mut Frame, dash: &mut Dash, area: Rec
     if !dash.worktree_panel.is_active() {
         return;
     }
-    let width = if area.width <= FILTER_PANEL_MIN_WIDTH {
-        area.width
-    } else {
-        area.width
-            .saturating_sub(4)
-            .clamp(FILTER_PANEL_MIN_WIDTH, FILTER_PANEL_MAX_WIDTH)
-    };
-    dash.worktree_panel.layout_width = width.saturating_sub(2) as usize;
-    let mut rows = worktree_panel_rows(dash);
-    let height = (rows.len() as u16 + SignBox::CHROME_ROWS).min(area.height);
-    if width == 0 || height == 0 {
-        return;
-    }
-    rows.truncate(SignBox::capacity(height));
-    let rect = Rect {
-        x: area.x + (area.width.saturating_sub(width)) / 2,
-        y: area.y + area.height.saturating_sub(height + 1),
-        width,
-        height,
-    };
-    frame.render_widget(Clear, rect);
-    SignBox {
-        title: "worktree",
-        rows,
-    }
-    .render(frame, rect, accent);
+    dash.worktree_panel.layout_width = panel_width(area).saturating_sub(2) as usize;
+    let rows = worktree_panel_rows(dash);
+    render_bottom_panel(frame, area, "worktree", rows, accent);
 }
 
 pub(super) fn worktree_panel_rows(dash: &Dash) -> Vec<Line<'static>> {

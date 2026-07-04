@@ -4,9 +4,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::Frame;
 
+use super::picker::{FILTER_PANEL_MAX_WIDTH, FILTER_PANEL_MIN_WIDTH};
 use super::Dash;
 
 thread_local! {
@@ -53,6 +54,39 @@ impl SignBox<'_> {
         }
         .render(frame, body, accent);
     }
+}
+
+pub(super) fn panel_width(area: Rect) -> u16 {
+    if area.width <= FILTER_PANEL_MIN_WIDTH {
+        area.width
+    } else {
+        area.width
+            .saturating_sub(4)
+            .clamp(FILTER_PANEL_MIN_WIDTH, FILTER_PANEL_MAX_WIDTH)
+    }
+}
+
+pub(super) fn render_bottom_panel(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    mut rows: Vec<Line<'static>>,
+    accent: Color,
+) {
+    let width = panel_width(area);
+    let height = (rows.len() as u16 + SignBox::CHROME_ROWS).min(area.height);
+    if width == 0 || height == 0 {
+        return;
+    }
+    rows.truncate(SignBox::capacity(height));
+    let rect = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + area.height.saturating_sub(height + 1),
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    SignBox { title, rows }.render(frame, rect, accent);
 }
 
 pub(super) struct Sign {
