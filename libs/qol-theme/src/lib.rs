@@ -252,9 +252,9 @@ impl ComponentPalettes {
             cli_sessions: CliSessionsPalette::from_theme(reference, system),
             launcher: LauncherPalette::from_system(system),
             remove_app: RemoveAppPalette::from_theme(reference, system),
-            shot_selector: ShotSelectorPalette::dark(),
-            shot_preview: ShotPreviewPalette::dark(),
-            alt_tab_preview_plane: AltTabPreviewPlanePalette::dark(),
+            shot_selector: ShotSelectorPalette::from_theme(reference, system),
+            shot_preview: ShotPreviewPalette::from_system(system),
+            alt_tab_preview_plane: AltTabPreviewPlanePalette::from_theme(reference, system),
         }
     }
 }
@@ -382,22 +382,25 @@ pub struct ShotSelectorPalette {
 }
 
 impl ShotSelectorPalette {
-    pub const fn dark() -> Self {
+    pub fn from_theme(reference: ReferencePalette, system: SystemPalette) -> Self {
         Self {
-            backdrop_rgba: 0x2f80ed24,
-            panel_bg_rgba: 0x000000c7,
-            panel_border_rgba: 0xffffffdb,
-            text_primary: 0xffffff,
-            text_subtitle_rgba: 0xffffffc7,
-            label_text_rgba: 0xfffffff5,
-            selection_outer: 0xffffff,
-            selection_inner: 0xff4d4d,
-            chip_ok_border_rgba: 0xffffffdb,
-            chip_ok_text_rgba: 0xffffffff,
-            chip_low_border_rgba: 0xf5a623ff,
-            chip_low_text_rgba: 0xf7c66bff,
-            chip_critical_border_rgba: 0xff4d4dff,
-            chip_critical_text_rgba: 0xff9a9aff,
+            backdrop_rgba: with_alpha(system.info, 0x24),
+            panel_bg_rgba: with_alpha(reference.black, 0xc7),
+            panel_border_rgba: with_alpha(reference.white, 0xdb),
+            text_primary: reference.white,
+            text_subtitle_rgba: with_alpha(reference.white, 0xc7),
+            label_text_rgba: with_alpha(reference.white, 0xf5),
+            selection_outer: reference.white,
+            selection_inner: system.danger,
+            chip_ok_border_rgba: with_alpha(reference.white, 0xdb),
+            chip_ok_text_rgba: with_alpha(reference.white, 0xff),
+            chip_low_border_rgba: with_alpha(system.warning, 0xff),
+            chip_low_text_rgba: with_alpha(mix_rgb(system.warning, reference.white, 0.35), 0xff),
+            chip_critical_border_rgba: with_alpha(system.danger, 0xff),
+            chip_critical_text_rgba: with_alpha(
+                mix_rgb(system.danger, reference.white, 0.35),
+                0xff,
+            ),
         }
     }
 }
@@ -415,16 +418,16 @@ pub struct ShotPreviewPalette {
 }
 
 impl ShotPreviewPalette {
-    pub const fn dark() -> Self {
+    pub fn from_system(system: SystemPalette) -> Self {
         Self {
-            window_bg: 0x14141c,
-            thumb_border: 0x2a2a3a,
-            label_text: 0xc8c8e0,
-            action_glyph: 0xe8e8f4,
-            action_bg: 0x1d1d28,
-            action_bg_selected: 0x2a2a52,
-            action_border: 0x33333f,
-            action_border_selected: 0x8a8aff,
+            window_bg: system.surface_elevated,
+            thumb_border: system.border_subtle,
+            label_text: system.text_secondary,
+            action_glyph: system.text_primary,
+            action_bg: system.surface_raised,
+            action_bg_selected: mix_rgb(system.surface_raised, system.accent, 0.28),
+            action_border: system.border_subtle,
+            action_border_selected: system.accent,
         }
     }
 }
@@ -440,14 +443,20 @@ pub struct AltTabPreviewPlanePalette {
 }
 
 impl AltTabPreviewPlanePalette {
-    pub const fn dark() -> Self {
+    pub fn from_theme(reference: ReferencePalette, system: SystemPalette) -> Self {
         Self {
-            backdrop_rgba: 0x0000001c,
-            label_text: 0xedf3ff,
-            card_bg_rgba: 0x14181ec8,
-            card_border_rgba: 0xa0aabeb4,
-            card_selected_bg_rgba: 0x28374ed2,
-            card_selected_border_rgba: 0xb4d7ffff,
+            backdrop_rgba: with_alpha(reference.black, 0x1c),
+            label_text: system.text_primary,
+            card_bg_rgba: with_alpha(system.surface_elevated, 0xc8),
+            card_border_rgba: with_alpha(system.text_secondary, 0xb4),
+            card_selected_bg_rgba: with_alpha(
+                mix_rgb(system.surface_raised, system.accent, 0.28),
+                0xd2,
+            ),
+            card_selected_border_rgba: with_alpha(
+                mix_rgb(system.accent, reference.white, 0.3),
+                0xff,
+            ),
         }
     }
 }

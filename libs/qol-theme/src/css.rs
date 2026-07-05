@@ -1,5 +1,7 @@
 use std::fmt::Write;
 
+use qol_color::mix_rgb;
+
 use crate::{
     alt_tab_preview_plane_dark, dark_accent_preset, dark_accent_presets, dark_theme, Theme,
     DARK_REFERENCE, DARK_TRAY_RAMP, DEV_ACCENT_KEY, PROD_ACCENT_KEY,
@@ -19,13 +21,13 @@ pub fn tray_css() -> String {
 
 pub fn plugin_lights_css() -> String {
     let mut out = dark_css();
-    out.push_str(&plugin_lights_variables(":root"));
+    out.push_str(&plugin_lights_variables(":root", dark_theme()));
     out
 }
 
 pub fn plugin_keyremap_css() -> String {
     let mut out = dark_css();
-    out.push_str(&plugin_keyremap_variables(":root"));
+    out.push_str(&plugin_keyremap_variables(":root", dark_theme()));
     out
 }
 
@@ -188,197 +190,324 @@ fn push_accent_preset_variables(out: &mut String) {
     }
 }
 
-fn plugin_lights_variables(selector: &str) -> String {
+fn plugin_lights_variables(selector: &str, theme: Theme) -> String {
+    let reference = theme.reference;
+    let system = theme.system;
+    let accent_end = mix_rgb(system.accent, reference.black, 0.12);
+    let accent_hover = mix_rgb(system.accent, reference.black, 0.06);
+    let primary_btn = system.info;
+    let primary_btn_hover = mix_rgb(system.info, reference.white, 0.2);
+
     let mut out = String::new();
     let _ = writeln!(out, "{selector} {{");
-    push_value(&mut out, "qol-lights-bg-start", "#1a1a2e");
-    push_value(&mut out, "qol-lights-bg-mid", "#16213e");
-    push_value(&mut out, "qol-lights-bg-end", "#0f0f1a");
-    push_value(&mut out, "qol-lights-section-bg", "rgba(22, 33, 62, 0.8)");
-    push_value(&mut out, "qol-lights-text-primary", "#eeeeee");
-    push_value(&mut out, "qol-lights-text-strong", "#e5e7eb");
-    push_value(&mut out, "qol-lights-text-secondary", "#bbbbbb");
-    push_value(&mut out, "qol-lights-text-muted", "#999999");
-    push_value(&mut out, "qol-lights-text-subtle", "#888888");
-    push_value(&mut out, "qol-lights-text-faint", "#777777");
-    push_value(&mut out, "qol-lights-text-disabled", "#666666");
-    push_value(&mut out, "qol-lights-text-port-muted", "#b8bec8");
-    push_value(&mut out, "qol-lights-warning", "#fbbf24");
+    push_value(
+        &mut out,
+        "qol-lights-bg-start",
+        &hex6(system.surface_raised),
+    );
+    push_value(
+        &mut out,
+        "qol-lights-bg-mid",
+        &hex6(system.surface_elevated),
+    );
+    push_value(&mut out, "qol-lights-bg-end", &hex6(system.surface_canvas));
+    push_value(
+        &mut out,
+        "qol-lights-section-bg",
+        &css_rgba(system.surface_elevated, 0.8),
+    );
+    push_value(
+        &mut out,
+        "qol-lights-text-primary",
+        &hex6(system.text_primary),
+    );
+    push_value(
+        &mut out,
+        "qol-lights-text-strong",
+        &hex6(system.text_primary),
+    );
+    push_value(
+        &mut out,
+        "qol-lights-text-secondary",
+        &hex6(system.text_secondary),
+    );
+    push_value(&mut out, "qol-lights-text-muted", &hex6(system.text_muted));
+    push_value(&mut out, "qol-lights-text-subtle", &hex6(system.text_muted));
+    push_value(&mut out, "qol-lights-text-faint", &hex6(system.text_faint));
+    push_value(
+        &mut out,
+        "qol-lights-text-disabled",
+        &hex6(system.text_faint),
+    );
+    push_value(
+        &mut out,
+        "qol-lights-text-port-muted",
+        &hex6(system.text_secondary),
+    );
+    push_value(&mut out, "qol-lights-warning", &hex6(system.warning));
     push_value(
         &mut out,
         "qol-lights-warning-glow",
-        "rgba(251, 191, 36, 0.5)",
+        &css_rgba(system.warning, 0.5),
     );
-    push_value(&mut out, "qol-lights-danger", "#f87171");
+    push_value(&mut out, "qol-lights-danger", &hex6(system.danger));
     push_value(
         &mut out,
         "qol-lights-danger-glow",
-        "rgba(248, 113, 113, 0.5)",
+        &css_rgba(system.danger, 0.5),
     );
     push_value(
         &mut out,
         "qol-lights-permission-backdrop",
-        "rgba(6, 8, 18, 0.5)",
+        &css_rgba(system.surface_canvas, 0.5),
     );
     push_value(
         &mut out,
         "qol-lights-permission-danger-wash",
-        "rgba(233, 69, 96, 0.18)",
+        &css_rgba(system.danger, 0.18),
     );
     push_value(
         &mut out,
         "qol-lights-permission-card-bg",
-        "rgba(15, 18, 34, 0.94)",
+        &css_rgba(system.surface_elevated, 0.94),
     );
-    push_value(&mut out, "qol-lights-primary-btn", "#0f3460");
-    push_value(&mut out, "qol-lights-primary-btn-hover", "#154785");
-    push_value(&mut out, "qol-lights-accent-btn", "#e94560");
-    push_value(&mut out, "qol-lights-accent-btn-hover", "#d63851");
-    push_value(&mut out, "qol-lights-accent-btn-end", "#c73550");
+    push_value(&mut out, "qol-lights-primary-btn", &hex6(primary_btn));
+    push_value(
+        &mut out,
+        "qol-lights-primary-btn-hover",
+        &hex6(primary_btn_hover),
+    );
+    push_value(&mut out, "qol-lights-accent-btn", &hex6(system.accent));
+    push_value(&mut out, "qol-lights-accent-btn-hover", &hex6(accent_hover));
+    push_value(&mut out, "qol-lights-accent-btn-end", &hex6(accent_end));
     push_value(
         &mut out,
         "qol-lights-accent-btn-shadow",
-        "rgba(233, 69, 96, 0.3)",
+        &css_rgba(system.accent, 0.3),
     );
-    push_value(&mut out, "qol-lights-wheel-shadow", "rgba(0, 0, 0, 0.5)");
+    push_value(
+        &mut out,
+        "qol-lights-wheel-shadow",
+        &css_rgba(reference.black, 0.5),
+    );
     push_value(&mut out, "qol-lights-wheel-brightness-floor", "#0a0a0a");
     out.push_str("}\n");
     out
 }
 
-fn plugin_keyremap_variables(selector: &str) -> String {
+fn plugin_keyremap_variables(selector: &str, theme: Theme) -> String {
+    let reference = theme.reference;
+    let system = theme.system;
+    let glow_primary = mix_rgb(system.surface_raised, system.accent, 0.12);
+    let glow_secondary = mix_rgb(system.surface_canvas, system.accent, 0.06);
+    let border_base = mix_rgb(system.border_subtle, reference.white, 0.4);
+    let warning_muted = mix_rgb(system.warning, system.surface_raised, 0.4);
+    let save_bg_end = mix_rgb(system.accent, reference.black, 0.12);
+
     let mut out = String::new();
     let _ = writeln!(out, "{selector} {{");
-    push_value(&mut out, "qol-keyremap-bg-glow-primary", "#2f3a51");
-    push_value(&mut out, "qol-keyremap-bg-glow-secondary", "#1a2937");
-    push_value(&mut out, "qol-keyremap-bg-start", "#0b1018");
-    push_value(&mut out, "qol-keyremap-bg-mid", "#121a27");
-    push_value(&mut out, "qol-keyremap-bg-end", "#0f141f");
-    push_value(&mut out, "qol-keyremap-text-primary", "#e8eef9");
-    push_value(&mut out, "qol-keyremap-text-secondary", "#a8b7cf");
-    push_value(&mut out, "qol-keyremap-text-heading", "#b8cff9");
-    push_value(&mut out, "qol-keyremap-text-muted", "#9fb1cf");
-    push_value(&mut out, "qol-keyremap-text-strong", "#d7e4ff");
-    push_value(&mut out, "qol-keyremap-text-faint", "#5a6a82");
-    push_value(&mut out, "qol-keyremap-text-tab-muted", "#7a8ea8");
-    push_value(&mut out, "qol-keyremap-text-save", "#f7fbff");
-    push_value(&mut out, "qol-keyremap-card-bg", "rgba(14, 22, 35, 0.74)");
+    push_value(
+        &mut out,
+        "qol-keyremap-bg-glow-primary",
+        &hex6(glow_primary),
+    );
+    push_value(
+        &mut out,
+        "qol-keyremap-bg-glow-secondary",
+        &hex6(glow_secondary),
+    );
+    push_value(
+        &mut out,
+        "qol-keyremap-bg-start",
+        &hex6(system.surface_canvas),
+    );
+    push_value(
+        &mut out,
+        "qol-keyremap-bg-mid",
+        &hex6(system.surface_raised),
+    );
+    push_value(
+        &mut out,
+        "qol-keyremap-bg-end",
+        &hex6(system.surface_elevated),
+    );
+    push_value(
+        &mut out,
+        "qol-keyremap-text-primary",
+        &hex6(system.text_primary),
+    );
+    push_value(
+        &mut out,
+        "qol-keyremap-text-secondary",
+        &hex6(system.text_secondary),
+    );
+    push_value(
+        &mut out,
+        "qol-keyremap-text-heading",
+        &hex6(mix_rgb(system.text_primary, system.accent, 0.25)),
+    );
+    push_value(
+        &mut out,
+        "qol-keyremap-text-muted",
+        &hex6(system.text_secondary),
+    );
+    push_value(
+        &mut out,
+        "qol-keyremap-text-strong",
+        &hex6(system.text_primary),
+    );
+    push_value(
+        &mut out,
+        "qol-keyremap-text-faint",
+        &hex6(system.text_faint),
+    );
+    push_value(
+        &mut out,
+        "qol-keyremap-text-tab-muted",
+        &hex6(system.text_muted),
+    );
+    push_value(
+        &mut out,
+        "qol-keyremap-text-save",
+        &hex6(reference.slate_050),
+    );
+    push_value(
+        &mut out,
+        "qol-keyremap-card-bg",
+        &css_rgba(system.surface_raised, 0.74),
+    );
     push_value(
         &mut out,
         "qol-keyremap-card-border",
-        "rgba(111, 139, 188, 0.25)",
+        &css_rgba(border_base, 0.25),
     );
-    push_value(&mut out, "qol-keyremap-row-bg", "rgba(8, 14, 24, 0.6)");
-    push_value(&mut out, "qol-keyremap-input-bg", "rgba(8, 14, 24, 0.8)");
+    push_value(
+        &mut out,
+        "qol-keyremap-row-bg",
+        &css_rgba(system.surface_canvas, 0.6),
+    );
+    push_value(
+        &mut out,
+        "qol-keyremap-input-bg",
+        &css_rgba(system.surface_canvas, 0.8),
+    );
     push_value(
         &mut out,
         "qol-keyremap-dropdown-bg",
-        "rgba(8, 14, 24, 0.97)",
+        &css_rgba(system.surface_canvas, 0.97),
     );
     push_value(
         &mut out,
         "qol-keyremap-border-subtle",
-        "rgba(107, 129, 176, 0.2)",
+        &css_rgba(border_base, 0.2),
     );
     push_value(
         &mut out,
         "qol-keyremap-border-default",
-        "rgba(107, 129, 176, 0.3)",
+        &css_rgba(border_base, 0.3),
     );
     push_value(
         &mut out,
         "qol-keyremap-border-muted",
-        "rgba(107, 129, 176, 0.25)",
+        &css_rgba(border_base, 0.25),
     );
     push_value(
         &mut out,
         "qol-keyremap-border-strong",
-        "rgba(107, 129, 176, 0.35)",
+        &css_rgba(border_base, 0.35),
     );
     push_value(
         &mut out,
         "qol-keyremap-border-hairline",
-        "rgba(107, 129, 176, 0.08)",
+        &css_rgba(border_base, 0.08),
     );
     push_value(
         &mut out,
         "qol-keyremap-border-rule",
-        "rgba(123, 151, 199, 0.2)",
+        &css_rgba(border_base, 0.2),
     );
     push_value(
         &mut out,
         "qol-keyremap-chip-bg",
-        "rgba(107, 129, 176, 0.15)",
+        &css_rgba(border_base, 0.15),
     );
     push_value(
         &mut out,
         "qol-keyremap-chip-bg-soft",
-        "rgba(107, 129, 176, 0.1)",
+        &css_rgba(border_base, 0.1),
     );
-    push_value(&mut out, "qol-keyremap-accent", "#7db3ff");
+    push_value(&mut out, "qol-keyremap-accent", &hex6(system.accent));
     push_value(
         &mut out,
         "qol-keyremap-accent-bg",
-        "rgba(63, 120, 223, 0.3)",
+        &css_rgba(system.accent, 0.3),
     );
     push_value(
         &mut out,
         "qol-keyremap-accent-bg-strong",
-        "rgba(63, 120, 223, 0.5)",
+        &css_rgba(system.accent, 0.5),
     );
     push_value(
         &mut out,
         "qol-keyremap-accent-bg-active",
-        "rgba(63, 120, 223, 0.4)",
+        &css_rgba(system.accent, 0.4),
     );
     push_value(
         &mut out,
         "qol-keyremap-accent-bg-tab",
-        "rgba(63, 120, 223, 0.25)",
+        &css_rgba(system.accent, 0.25),
     );
     push_value(
         &mut out,
         "qol-keyremap-accent-bg-hover",
-        "rgba(63, 120, 223, 0.2)",
+        &css_rgba(system.accent, 0.2),
     );
     push_value(
         &mut out,
         "qol-keyremap-accent-border",
-        "rgba(125, 179, 255, 0.3)",
+        &css_rgba(system.accent, 0.3),
     );
     push_value(
         &mut out,
         "qol-keyremap-accent-border-strong",
-        "rgba(125, 179, 255, 0.35)",
+        &css_rgba(system.accent, 0.35),
     );
-    push_value(&mut out, "qol-keyremap-danger", "#ff8989");
-    push_value(&mut out, "qol-keyremap-success", "#86d5a3");
+    push_value(&mut out, "qol-keyremap-danger", &hex6(system.danger));
+    push_value(&mut out, "qol-keyremap-success", &hex6(system.success));
     push_value(
         &mut out,
         "qol-keyremap-success-bg",
-        "rgba(134, 213, 163, 0.2)",
+        &css_rgba(system.success, 0.2),
     );
     push_value(
         &mut out,
         "qol-keyremap-success-border",
-        "rgba(134, 213, 163, 0.3)",
+        &css_rgba(system.success, 0.3),
     );
     push_value(
         &mut out,
         "qol-keyremap-warning-border",
-        "rgba(255, 193, 7, 0.4)",
+        &css_rgba(system.warning, 0.4),
     );
     push_value(
         &mut out,
         "qol-keyremap-warning-bg",
-        "rgba(255, 193, 7, 0.08)",
+        &css_rgba(system.warning, 0.08),
     );
-    push_value(&mut out, "qol-keyremap-warning", "#ffd54f");
-    push_value(&mut out, "qol-keyremap-warning-muted", "#bba836");
-    push_value(&mut out, "qol-keyremap-save-bg-start", "#3f78df");
-    push_value(&mut out, "qol-keyremap-save-bg-end", "#2f57b8");
-    push_value(&mut out, "qol-keyremap-shadow", "rgba(0, 0, 0, 0.4)");
-    push_value(&mut out, "qol-keyremap-separator", "#3a4a62");
+    push_value(&mut out, "qol-keyremap-warning", &hex6(system.warning));
+    push_value(&mut out, "qol-keyremap-warning-muted", &hex6(warning_muted));
+    push_value(&mut out, "qol-keyremap-save-bg-start", &hex6(system.accent));
+    push_value(&mut out, "qol-keyremap-save-bg-end", &hex6(save_bg_end));
+    push_value(
+        &mut out,
+        "qol-keyremap-shadow",
+        &css_rgba(reference.black, 0.4),
+    );
+    push_value(
+        &mut out,
+        "qol-keyremap-separator",
+        &hex6(system.border_subtle),
+    );
     out.push_str("}\n");
     out
 }
@@ -410,6 +539,19 @@ fn clutter_rgba(color: u32) -> String {
 
 fn hex6(color: u32) -> String {
     format!("#{:06x}", color & 0x00ff_ffff)
+}
+
+fn css_rgba(color: u32, alpha: f32) -> String {
+    let (red, green, blue) = rgb_channels(color);
+    format!("rgba({red}, {green}, {blue}, {})", css_alpha(alpha))
+}
+
+fn css_alpha(alpha: f32) -> String {
+    let formatted = format!("{:.3}", alpha);
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
 }
 
 fn rgb_string(color: u32) -> String {
