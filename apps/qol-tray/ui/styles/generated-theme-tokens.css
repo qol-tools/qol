@@ -3,6 +3,7 @@
     --qol-system-accent-rgb: 255, 180, 84;
     --qol-system-success-rgb: 74, 222, 128;
     --qol-system-danger-rgb: 255, 107, 107;
+    --qol-system-info-rgb: 104, 176, 255;
     --qol-system-warning-rgb: 255, 193, 7;
     --qol-system-ink-rgb: 0, 0, 0;
     --qol-system-paper-rgb: 255, 255, 255;
@@ -15,4 +16,49 @@
     --qol-system-text-muted: #67748f;
     --qol-system-text-faint: #4d5870;
     --qol-system-border-subtle: #2f3644;
+}
+:root {
+    --qol-reference-slate-750: #2f3644;
+    --qol-reference-slate-600: #4d5870;
+    --qol-reference-slate-500: #67748f;
+    --qol-reference-slate-300: #b8c0d0;
+    --qol-reference-slate-100: #edf2fb;
+    --qol-reference-blue-400: #68b0ff;
+    --qol-reference-green-400: #4ade80;
+    --qol-reference-red-500: #ff6b6b;
+    --qol-reference-amber-500: #ffc107;
+    --qol-tray-slate-975: #111317;
+    --qol-tray-slate-950: #161920;
+    --qol-tray-slate-900: #1a1e26;
+    --qol-tray-slate-850: #20252f;
+    --qol-tray-slate-800: #272d38;
+    --qol-tray-slate-700: #394257;
+    --qol-tray-slate-400: #8a97ae;
+    --qol-tray-slate-200: #d6deeb;
+    --qol-tray-blue-700: #2d75d5;
+    --qol-tray-blue-600: #3a88ea;
+    --qol-tray-blue-500: #4a9eff;
+    --qol-tray-blue-300: #8fc4ff;
+    --qol-tray-green-700: #179e4f;
+    --qol-tray-green-600: #1fb55b;
+    --qol-tray-green-500: #32cd73;
+    --qol-tray-green-300: #78e8a0;
+    --qol-tray-red-700: #db4747;
+    --qol-tray-red-600: #ea5656;
+    --qol-tray-red-400: #ff8787;
+    --qol-tray-red-300: #ffabab;
+    --qol-tray-amber-700: #c98a00;
+    --qol-tray-amber-600: #dca110;
+    --qol-tray-amber-400: #ffd34e;
+    --qol-tray-amber-300: #ffe08a;
+    --qol-accent-amber-rgb: 255, 180, 84;
+    --qol-accent-amber-hover: #ffc77a;
+    --qol-accent-green-rgb: 70, 224, 138;
+    --qol-accent-green-hover: #7ff0ab;
+    --qol-accent-cyan-rgb: 86, 214, 224;
+    --qol-accent-cyan-hover: #8fe8f0;
+    --qol-accent-magenta-rgb: 232, 121, 198;
+    --qol-accent-magenta-hover: #f49ad6;
+    --qol-accent-blue-rgb: 74, 158, 255;
+    --qol-accent-blue-hover: #68b0ff;
 }

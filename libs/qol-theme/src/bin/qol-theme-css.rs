@@ -45,6 +45,8 @@ fn parse_profile(args: &mut Vec<std::ffi::OsString>) -> Result<Profile, CliError
         Some("plugin-keyremap") => Ok(Profile::PluginKeyremap),
         Some("plugin-lights") => Ok(Profile::PluginLights),
         Some("alt-tab-cinnamon") => Ok(Profile::AltTabCinnamon),
+        Some("tray-css") => Ok(Profile::TrayCss),
+        Some("tray-js") => Ok(Profile::TrayJs),
         _ => Err(CliError::Usage(usage())),
     }
 }
@@ -78,7 +80,7 @@ fn write(profile: Profile, path: PathBuf) -> Result<(), CliError> {
 }
 
 fn usage() -> String {
-    "usage: qol-theme-css [--profile core|plugin-keyremap|plugin-lights|alt-tab-cinnamon] [--check <path> | --write <path>]"
+    "usage: qol-theme-css [--profile core|plugin-keyremap|plugin-lights|alt-tab-cinnamon|tray-css|tray-js] [--check <path> | --write <path>]"
         .to_string()
 }
 
@@ -88,6 +90,8 @@ enum Profile {
     PluginKeyremap,
     PluginLights,
     AltTabCinnamon,
+    TrayCss,
+    TrayJs,
 }
 
 impl Profile {
@@ -97,6 +101,8 @@ impl Profile {
             Self::PluginKeyremap => "--profile plugin-keyremap ",
             Self::PluginLights => "--profile plugin-lights ",
             Self::AltTabCinnamon => "--profile alt-tab-cinnamon ",
+            Self::TrayCss => "--profile tray-css ",
+            Self::TrayJs => "--profile tray-js ",
         }
     }
 }
@@ -107,6 +113,8 @@ fn render(profile: Profile) -> String {
         Profile::PluginKeyremap => qol_theme::css::plugin_keyremap_css(),
         Profile::PluginLights => qol_theme::css::plugin_lights_css(),
         Profile::AltTabCinnamon => qol_theme::css::alt_tab_cinnamon_js(),
+        Profile::TrayCss => qol_theme::css::tray_css(),
+        Profile::TrayJs => qol_theme::css::tray_theme_js(),
     }
 }
 

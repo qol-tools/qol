@@ -1,8 +1,9 @@
 use qol_color::{mix_rgb, with_alpha};
 use qol_theme::{
-    alt_tab_preview_plane_dark, cli_sessions_dark, css, dark_theme, launcher_dark, remove_app_dark,
-    resolve_surface_color, shot_preview_dark, shot_selector_dark, PickerSurfacePalette, ThemeMode,
-    DARK_REFERENCE, DARK_SYSTEM,
+    alt_tab_preview_plane_dark, cli_sessions_dark, css, dark_accent_preset, dark_theme,
+    launcher_dark, remove_app_dark, resolve_surface_color, shot_preview_dark, shot_selector_dark,
+    PickerSurfacePalette, ThemeMode, DARK_ACCENT_PRESETS, DARK_REFERENCE, DARK_SYSTEM,
+    DEV_ACCENT_KEY, PROD_ACCENT_KEY,
 };
 use std::{fs, path::Path};
 
@@ -12,6 +13,10 @@ fn dark_theme_has_explicit_reference_system_and_component_layers() {
     assert_eq!(theme.mode, ThemeMode::Dark);
     assert_eq!(theme.reference, DARK_REFERENCE);
     assert_eq!(theme.system, DARK_SYSTEM);
+    assert_eq!(
+        theme.system.accent,
+        dark_accent_preset(PROD_ACCENT_KEY).unwrap().rgb
+    );
     assert_eq!(theme.components.launcher, launcher_dark());
 }
 
@@ -238,6 +243,7 @@ fn dark_css_emits_stable_token_names() {
             "    --qol-system-accent-rgb: 255, 180, 84;\n",
             "    --qol-system-success-rgb: 74, 222, 128;\n",
             "    --qol-system-danger-rgb: 255, 107, 107;\n",
+            "    --qol-system-info-rgb: 104, 176, 255;\n",
             "    --qol-system-warning-rgb: 255, 193, 7;\n",
             "    --qol-system-ink-rgb: 0, 0, 0;\n",
             "    --qol-system-paper-rgb: 255, 255, 255;\n",
@@ -253,6 +259,39 @@ fn dark_css_emits_stable_token_names() {
             "}\n",
         )
     );
+}
+
+#[test]
+fn tray_css_layers_tray_tokens_without_polluting_core() {
+    let core = css::dark_css();
+    assert!(!core.contains("--qol-tray-"));
+    assert!(!core.contains("--qol-accent-"));
+    assert!(!core.contains("--qol-reference-"));
+
+    let tray = css::tray_css();
+    assert!(tray.starts_with(&core));
+    assert!(tray.contains("    --qol-reference-slate-750: #2f3644;\n"));
+    assert!(tray.contains("    --qol-tray-blue-500: #4a9eff;\n"));
+    assert!(tray.contains("    --qol-accent-amber-hover: #ffc77a;\n"));
+}
+
+#[test]
+fn tray_theme_js_emits_accent_presets_from_theme() {
+    let js = css::tray_theme_js();
+    for preset in DARK_ACCENT_PRESETS {
+        assert!(
+            js.contains(&format!("key: \"{}\"", preset.key)),
+            "tray JS must emit {} preset key",
+            preset.key
+        );
+        assert!(
+            js.contains(&format!("label: \"{}\"", preset.label)),
+            "tray JS must emit {} preset label",
+            preset.key
+        );
+    }
+    assert!(js.contains(&format!("QOL_DEFAULT_ACCENT = \"{PROD_ACCENT_KEY}\"")));
+    assert!(js.contains(&format!("QOL_DEV_ACCENT = \"{DEV_ACCENT_KEY}\"")));
 }
 
 #[test]
@@ -290,8 +329,15 @@ fn tray_theme_tokens_import_and_derive_generated_base() {
 
     let required_derivations = [
         "--accent-rgb: var(--qol-system-accent-rgb);",
+        "--accent-hover: var(--qol-accent-amber-hover);",
         "--success-rgb: var(--qol-system-success-rgb);",
         "--danger-rgb: var(--qol-system-danger-rgb);",
+        "--blue-400: var(--qol-reference-blue-400);",
+        "--green-400: var(--qol-reference-green-400);",
+        "--red-500: var(--qol-reference-red-500);",
+        "--amber-500: var(--qol-reference-amber-500);",
+        "--slate-750: var(--qol-reference-slate-750);",
+        "--slate-975: var(--qol-tray-slate-975);",
         "--warning-rgb: var(--qol-system-warning-rgb);",
         "--surface-canvas: var(--qol-system-surface-canvas);",
         "--surface-elevated: var(--qol-system-surface-elevated);",
@@ -310,6 +356,15 @@ fn tray_theme_tokens_import_and_derive_generated_base() {
             "theme-tokens.css must derive `{derivation}` from generated theme tokens"
         );
     }
+
+    assert!(
+        !theme_tokens.contains("255, 180, 84"),
+        "theme-tokens.css must not hand-copy the default accent rgb fallback"
+    );
+    assert!(
+        !theme_tokens.contains("#ffc77a"),
+        "theme-tokens.css must not hand-copy the default accent hover"
+    );
 }
 
 #[test]
@@ -318,7 +373,7 @@ fn generated_artifacts_are_current() {
     let artifacts = [
         (
             "apps/qol-tray/ui/styles/generated-theme-tokens.css",
-            css::dark_css(),
+            css::tray_css(),
         ),
         (
             "plugins/plugin-lights/ui/generated-theme-tokens.css",
@@ -332,6 +387,10 @@ fn generated_artifacts_are_current() {
             "plugins/plugin-alt-tab/shell/cinnamon/qol-alt-tab-preview-plane@qol-tools/generated-theme-tokens.js",
             css::alt_tab_cinnamon_js(),
         ),
+        (
+            "apps/qol-tray/ui/lib/generated-theme-tokens.js",
+            css::tray_theme_js(),
+        ),
     ];
 
     for (artifact_path, expected) in artifacts {
@@ -341,6 +400,27 @@ fn generated_artifacts_are_current() {
         assert_eq!(
             actual, expected,
             "{artifact_path} must be regenerated with qol-theme-css"
+        );
+    }
+}
+
+#[test]
+fn plugin_css_profiles_exclude_tray_only_tokens() {
+    for (profile, css) in [
+        ("plugin-lights", css::plugin_lights_css()),
+        ("plugin-keyremap", css::plugin_keyremap_css()),
+    ] {
+        assert!(
+            !css.contains("--qol-tray-"),
+            "{profile} generated CSS must not include tray ramp tokens"
+        );
+        assert!(
+            !css.contains("--qol-accent-"),
+            "{profile} generated CSS must not include tray accent preset tokens"
+        );
+        assert!(
+            !css.contains("--qol-reference-"),
+            "{profile} generated CSS must not include tray reference aliases"
         );
     }
 }
@@ -481,6 +561,7 @@ fn has_numeric_rgb(line: &str) -> bool {
 fn generated_css_tokens_are_namespaced() {
     let profiles = [
         ("core", css::dark_css()),
+        ("tray-css", css::tray_css()),
         ("plugin-lights", css::plugin_lights_css()),
         ("plugin-keyremap", css::plugin_keyremap_css()),
     ];

@@ -1,4 +1,5 @@
 import { computeSlotCoverage } from './minimap-geometry.js';
+import { DEFAULT_ACCENT_RGB } from './accent-presets.js';
 
 const SLOT_INSET = 1;
 const RADIUS = 3;
@@ -7,14 +8,12 @@ const ACTIVE_SCALE_Y = 1.12;
 const VIEWPORT_MIN_WIDTH = 8;
 const INACTIVE_OPACITY_FLOOR = 0.22;
 const ACTIVE_OPACITY_FLOOR = 0.55;
-const ACCENT_FALLBACK = '255, 180, 84';
-
 function accentChannel() {
     if (typeof document === 'undefined' || typeof getComputedStyle === 'undefined') {
-        return ACCENT_FALLBACK;
+        return DEFAULT_ACCENT_RGB;
     }
     const v = getComputedStyle(document.documentElement).getPropertyValue('--accent-rgb');
-    return v.trim() || ACCENT_FALLBACK;
+    return v.trim() || DEFAULT_ACCENT_RGB;
 }
 
 function slotAlpha(coverage, floor) {

@@ -5957,6 +5957,7 @@ dependencies = [
  "qol-migrations",
  "qol-plugin-api",
  "qol-runtime",
+ "qol-theme",
  "qol-workspace",
  "rand 0.9.4",
  "reqwest",

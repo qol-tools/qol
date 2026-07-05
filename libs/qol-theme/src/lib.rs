@@ -5,6 +5,61 @@ use qol_color::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AccentPreset {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub rgb: u32,
+    pub hover: u32,
+}
+
+pub const PROD_ACCENT_KEY: &str = "amber";
+pub const DEV_ACCENT_KEY: &str = "green";
+
+pub const DARK_ACCENT_PRESETS: [AccentPreset; 5] = [
+    AccentPreset {
+        key: "amber",
+        label: "Amber",
+        rgb: DARK_REFERENCE.orange_400,
+        hover: 0xffc77a,
+    },
+    AccentPreset {
+        key: "green",
+        label: "Green",
+        rgb: 0x46e08a,
+        hover: 0x7ff0ab,
+    },
+    AccentPreset {
+        key: "cyan",
+        label: "Cyan",
+        rgb: 0x56d6e0,
+        hover: 0x8fe8f0,
+    },
+    AccentPreset {
+        key: "magenta",
+        label: "Magenta",
+        rgb: 0xe879c6,
+        hover: 0xf49ad6,
+    },
+    AccentPreset {
+        key: "blue",
+        label: "Blue",
+        rgb: DARK_TRAY_RAMP.blue_500,
+        hover: 0x68b0ff,
+    },
+];
+
+pub fn dark_accent_presets() -> &'static [AccentPreset] {
+    &DARK_ACCENT_PRESETS
+}
+
+pub fn dark_accent_preset(key: &str) -> Option<AccentPreset> {
+    DARK_ACCENT_PRESETS
+        .iter()
+        .copied()
+        .find(|preset| preset.key == key)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThemeMode {
     Dark,
 }
@@ -125,6 +180,61 @@ impl SystemPalette {
 }
 
 pub const DARK_SYSTEM: SystemPalette = SystemPalette::from_reference(DARK_REFERENCE);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrayRampPalette {
+    pub slate_975: u32,
+    pub slate_950: u32,
+    pub slate_900: u32,
+    pub slate_850: u32,
+    pub slate_800: u32,
+    pub slate_700: u32,
+    pub slate_400: u32,
+    pub slate_200: u32,
+    pub blue_700: u32,
+    pub blue_600: u32,
+    pub blue_500: u32,
+    pub blue_300: u32,
+    pub green_700: u32,
+    pub green_600: u32,
+    pub green_500: u32,
+    pub green_300: u32,
+    pub red_700: u32,
+    pub red_600: u32,
+    pub red_400: u32,
+    pub red_300: u32,
+    pub amber_700: u32,
+    pub amber_600: u32,
+    pub amber_400: u32,
+    pub amber_300: u32,
+}
+
+pub const DARK_TRAY_RAMP: TrayRampPalette = TrayRampPalette {
+    slate_975: 0x111317,
+    slate_950: 0x161920,
+    slate_900: 0x1a1e26,
+    slate_850: 0x20252f,
+    slate_800: 0x272d38,
+    slate_700: 0x394257,
+    slate_400: 0x8a97ae,
+    slate_200: 0xd6deeb,
+    blue_700: 0x2d75d5,
+    blue_600: 0x3a88ea,
+    blue_500: 0x4a9eff,
+    blue_300: 0x8fc4ff,
+    green_700: 0x179e4f,
+    green_600: 0x1fb55b,
+    green_500: 0x32cd73,
+    green_300: 0x78e8a0,
+    red_700: 0xdb4747,
+    red_600: 0xea5656,
+    red_400: 0xff8787,
+    red_300: 0xffabab,
+    amber_700: 0xc98a00,
+    amber_600: 0xdca110,
+    amber_400: 0xffd34e,
+    amber_300: 0xffe08a,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ComponentPalettes {
