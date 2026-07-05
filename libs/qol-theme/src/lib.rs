@@ -1,6 +1,8 @@
 pub mod css;
 
-use qol_color::{clamp_unit, mix_rgb, parse_hex_color, rgb24, rgba_from_rgb, scale_rgb};
+use qol_color::{
+    clamp_unit, mix_rgb, parse_hex_color, rgb24, rgba_from_rgb, scale_rgb, with_alpha,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThemeMode {
@@ -18,7 +20,7 @@ pub struct Theme {
 impl Theme {
     pub fn from_reference(mode: ThemeMode, reference: ReferencePalette) -> Self {
         let system = SystemPalette::from_reference(reference);
-        let components = ComponentPalettes::from_system(system);
+        let components = ComponentPalettes::new(reference, system);
         Self {
             mode,
             reference,
@@ -135,11 +137,11 @@ pub struct ComponentPalettes {
 }
 
 impl ComponentPalettes {
-    pub fn from_system(system: SystemPalette) -> Self {
+    pub fn new(reference: ReferencePalette, system: SystemPalette) -> Self {
         Self {
-            cli_sessions: CliSessionsPalette::dark(),
+            cli_sessions: CliSessionsPalette::from_theme(reference, system),
             launcher: LauncherPalette::from_system(system),
-            remove_app: RemoveAppPalette::dark(),
+            remove_app: RemoveAppPalette::from_theme(reference, system),
             shot_selector: ShotSelectorPalette::dark(),
             shot_preview: ShotPreviewPalette::dark(),
             alt_tab_preview_plane: AltTabPreviewPlanePalette::dark(),
@@ -177,30 +179,30 @@ pub struct CliSessionsPalette {
 }
 
 impl CliSessionsPalette {
-    pub const fn dark() -> Self {
+    pub fn from_theme(reference: ReferencePalette, system: SystemPalette) -> Self {
         Self {
-            panel_bg: 0x161b22,
-            chrome_bg: 0x0d1117,
-            border: 0x30363d,
-            divider: 0x21262d,
-            text_primary: 0xe6edf3,
-            text_heading: 0xc9d1d9,
-            text_secondary: 0x8b949e,
-            text_muted: 0x7d8590,
-            text_faint: 0x6e7681,
-            keycap_bg_rgba: 0xffffff0f,
-            selection_border: 0x58a6ff,
-            needs_you: 0xf85149,
-            your_turn: 0xd29922,
-            working: 0x3fb950,
-            service: 0x58a6ff,
-            unknown: 0x6e7681,
-            needs_you_tint_rgba: 0xf8514922,
-            your_turn_tint_rgba: 0xd2992222,
-            your_turn_badge_rgba: 0xd2992233,
-            your_turn_hover_rgba: 0xd2992255,
-            working_tint_rgba: 0x3fb9501e,
-            service_tint_rgba: 0x58a6ff14,
+            panel_bg: system.surface_elevated,
+            chrome_bg: system.surface_canvas,
+            border: system.border_subtle,
+            divider: mix_rgb(system.surface_elevated, system.border_subtle, 0.5),
+            text_primary: system.text_primary,
+            text_heading: system.text_secondary,
+            text_secondary: system.text_muted,
+            text_muted: system.text_muted,
+            text_faint: system.text_faint,
+            keycap_bg_rgba: with_alpha(reference.white, 0x0f),
+            selection_border: system.accent,
+            needs_you: system.danger,
+            your_turn: system.warning,
+            working: system.success,
+            service: system.info,
+            unknown: system.text_faint,
+            needs_you_tint_rgba: with_alpha(system.danger, 0x22),
+            your_turn_tint_rgba: with_alpha(system.warning, 0x22),
+            your_turn_badge_rgba: with_alpha(system.warning, 0x33),
+            your_turn_hover_rgba: with_alpha(system.warning, 0x55),
+            working_tint_rgba: with_alpha(system.success, 0x1e),
+            service_tint_rgba: with_alpha(system.info, 0x14),
             transparent_rgba: 0x00000000,
             claude: 0xd97757,
             codex: 0x10a37f,
@@ -229,24 +231,24 @@ pub struct RemoveAppPalette {
 }
 
 impl RemoveAppPalette {
-    pub const fn dark() -> Self {
+    pub fn from_theme(reference: ReferencePalette, system: SystemPalette) -> Self {
         Self {
-            panel_bg: 0x161b22,
-            chrome_bg: 0x0d1117,
-            border: 0x21262d,
-            border_strong: 0x30363d,
-            text_primary: 0xe6edf3,
-            text_heading: 0xc9d1d9,
-            text_secondary: 0x8b949e,
-            text_muted: 0x6e7681,
-            accent: 0x58a6ff,
-            success: 0x3fb950,
-            danger: 0xf85149,
-            warning: 0xf0883e,
-            selection_bg_rgba: 0x58a6ff14,
+            panel_bg: system.surface_elevated,
+            chrome_bg: system.surface_canvas,
+            border: mix_rgb(system.surface_elevated, system.border_subtle, 0.5),
+            border_strong: system.border_subtle,
+            text_primary: system.text_primary,
+            text_heading: system.text_secondary,
+            text_secondary: system.text_muted,
+            text_muted: system.text_faint,
+            accent: system.accent,
+            success: system.success,
+            danger: system.danger,
+            warning: system.warning,
+            selection_bg_rgba: with_alpha(system.accent, 0x14),
             transparent_rgba: 0x00000000,
-            keycap_bg_rgba: 0xffffff0f,
-            warning_banner_rgba: 0xf0883e1a,
+            keycap_bg_rgba: with_alpha(reference.white, 0x0f),
+            warning_banner_rgba: with_alpha(system.warning, 0x1a),
         }
     }
 }

@@ -1,3 +1,4 @@
+use qol_color::{mix_rgb, with_alpha};
 use qol_theme::{
     alt_tab_preview_plane_dark, cli_sessions_dark, css, dark_theme, launcher_dark, remove_app_dark,
     resolve_surface_color, shot_preview_dark, shot_selector_dark, PickerSurfacePalette, ThemeMode,
@@ -30,54 +31,90 @@ fn launcher_palette_derives_from_system_roles() {
 }
 
 #[test]
-fn cli_sessions_palette_preserves_existing_gpui_contract() {
+fn cli_sessions_palette_derives_from_system_roles() {
     let palette = cli_sessions_dark();
-    assert_eq!(palette.panel_bg, 0x161b22);
-    assert_eq!(palette.chrome_bg, 0x0d1117);
-    assert_eq!(palette.border, 0x30363d);
-    assert_eq!(palette.divider, 0x21262d);
-    assert_eq!(palette.text_primary, 0xe6edf3);
-    assert_eq!(palette.text_heading, 0xc9d1d9);
-    assert_eq!(palette.text_secondary, 0x8b949e);
-    assert_eq!(palette.text_muted, 0x7d8590);
-    assert_eq!(palette.text_faint, 0x6e7681);
-    assert_eq!(palette.keycap_bg_rgba, 0xffffff0f);
-    assert_eq!(palette.selection_border, 0x58a6ff);
-    assert_eq!(palette.needs_you, 0xf85149);
-    assert_eq!(palette.your_turn, 0xd29922);
-    assert_eq!(palette.working, 0x3fb950);
-    assert_eq!(palette.service, 0x58a6ff);
-    assert_eq!(palette.unknown, 0x6e7681);
-    assert_eq!(palette.needs_you_tint_rgba, 0xf8514922);
-    assert_eq!(palette.your_turn_tint_rgba, 0xd2992222);
-    assert_eq!(palette.your_turn_badge_rgba, 0xd2992233);
-    assert_eq!(palette.your_turn_hover_rgba, 0xd2992255);
-    assert_eq!(palette.working_tint_rgba, 0x3fb9501e);
-    assert_eq!(palette.service_tint_rgba, 0x58a6ff14);
+    assert_eq!(palette.panel_bg, DARK_SYSTEM.surface_elevated);
+    assert_eq!(palette.chrome_bg, DARK_SYSTEM.surface_canvas);
+    assert_eq!(palette.border, DARK_SYSTEM.border_subtle);
+    assert_eq!(
+        palette.divider,
+        mix_rgb(DARK_SYSTEM.surface_elevated, DARK_SYSTEM.border_subtle, 0.5)
+    );
+    assert_eq!(palette.text_primary, DARK_SYSTEM.text_primary);
+    assert_eq!(palette.text_heading, DARK_SYSTEM.text_secondary);
+    assert_eq!(palette.text_secondary, DARK_SYSTEM.text_muted);
+    assert_eq!(palette.text_muted, DARK_SYSTEM.text_muted);
+    assert_eq!(palette.text_faint, DARK_SYSTEM.text_faint);
+    assert_eq!(
+        palette.keycap_bg_rgba,
+        with_alpha(DARK_REFERENCE.white, 0x0f)
+    );
+    assert_eq!(palette.selection_border, DARK_SYSTEM.accent);
+    assert_eq!(palette.needs_you, DARK_SYSTEM.danger);
+    assert_eq!(palette.your_turn, DARK_SYSTEM.warning);
+    assert_eq!(palette.working, DARK_SYSTEM.success);
+    assert_eq!(palette.service, DARK_SYSTEM.info);
+    assert_eq!(palette.unknown, DARK_SYSTEM.text_faint);
+    assert_eq!(
+        palette.needs_you_tint_rgba,
+        with_alpha(DARK_SYSTEM.danger, 0x22)
+    );
+    assert_eq!(
+        palette.your_turn_tint_rgba,
+        with_alpha(DARK_SYSTEM.warning, 0x22)
+    );
+    assert_eq!(
+        palette.your_turn_badge_rgba,
+        with_alpha(DARK_SYSTEM.warning, 0x33)
+    );
+    assert_eq!(
+        palette.your_turn_hover_rgba,
+        with_alpha(DARK_SYSTEM.warning, 0x55)
+    );
+    assert_eq!(
+        palette.working_tint_rgba,
+        with_alpha(DARK_SYSTEM.success, 0x1e)
+    );
+    assert_eq!(
+        palette.service_tint_rgba,
+        with_alpha(DARK_SYSTEM.info, 0x14)
+    );
     assert_eq!(palette.transparent_rgba, 0x00000000);
     assert_eq!(palette.claude, 0xd97757);
     assert_eq!(palette.codex, 0x10a37f);
 }
 
 #[test]
-fn remove_app_palette_preserves_existing_gpui_contract() {
+fn remove_app_palette_derives_from_system_roles() {
     let palette = remove_app_dark();
-    assert_eq!(palette.panel_bg, 0x161b22);
-    assert_eq!(palette.chrome_bg, 0x0d1117);
-    assert_eq!(palette.border, 0x21262d);
-    assert_eq!(palette.border_strong, 0x30363d);
-    assert_eq!(palette.text_primary, 0xe6edf3);
-    assert_eq!(palette.text_heading, 0xc9d1d9);
-    assert_eq!(palette.text_secondary, 0x8b949e);
-    assert_eq!(palette.text_muted, 0x6e7681);
-    assert_eq!(palette.accent, 0x58a6ff);
-    assert_eq!(palette.success, 0x3fb950);
-    assert_eq!(palette.danger, 0xf85149);
-    assert_eq!(palette.warning, 0xf0883e);
-    assert_eq!(palette.selection_bg_rgba, 0x58a6ff14);
+    assert_eq!(palette.panel_bg, DARK_SYSTEM.surface_elevated);
+    assert_eq!(palette.chrome_bg, DARK_SYSTEM.surface_canvas);
+    assert_eq!(
+        palette.border,
+        mix_rgb(DARK_SYSTEM.surface_elevated, DARK_SYSTEM.border_subtle, 0.5)
+    );
+    assert_eq!(palette.border_strong, DARK_SYSTEM.border_subtle);
+    assert_eq!(palette.text_primary, DARK_SYSTEM.text_primary);
+    assert_eq!(palette.text_heading, DARK_SYSTEM.text_secondary);
+    assert_eq!(palette.text_secondary, DARK_SYSTEM.text_muted);
+    assert_eq!(palette.text_muted, DARK_SYSTEM.text_faint);
+    assert_eq!(palette.accent, DARK_SYSTEM.accent);
+    assert_eq!(palette.success, DARK_SYSTEM.success);
+    assert_eq!(palette.danger, DARK_SYSTEM.danger);
+    assert_eq!(palette.warning, DARK_SYSTEM.warning);
+    assert_eq!(
+        palette.selection_bg_rgba,
+        with_alpha(DARK_SYSTEM.accent, 0x14)
+    );
     assert_eq!(palette.transparent_rgba, 0x00000000);
-    assert_eq!(palette.keycap_bg_rgba, 0xffffff0f);
-    assert_eq!(palette.warning_banner_rgba, 0xf0883e1a);
+    assert_eq!(
+        palette.keycap_bg_rgba,
+        with_alpha(DARK_REFERENCE.white, 0x0f)
+    );
+    assert_eq!(
+        palette.warning_banner_rgba,
+        with_alpha(DARK_SYSTEM.warning, 0x1a)
+    );
 }
 
 #[test]

@@ -34,6 +34,10 @@ pub fn rgba_from_rgb(color: u32, opacity: f32) -> u32 {
     (color << 8) | alpha
 }
 
+pub const fn with_alpha(color: u32, alpha: u8) -> u32 {
+    (color << 8) | alpha as u32
+}
+
 pub fn clamp_unit(value: f32) -> f32 {
     if value.is_nan() {
         return 0.0;
@@ -115,6 +119,18 @@ mod tests {
         ];
         for (color, opacity, expected) in cases {
             assert_eq!(rgba_from_rgb(color, opacity), expected);
+        }
+    }
+
+    #[test]
+    fn with_alpha_appends_exact_alpha_byte() {
+        let cases = [
+            (0x203040, 0x00, 0x20304000),
+            (0x203040, 0x22, 0x20304022),
+            (0x203040, 0xff, 0x203040ff),
+        ];
+        for (color, alpha, expected) in cases {
+            assert_eq!(with_alpha(color, alpha), expected, "alpha: {alpha:#04x}");
         }
     }
 }
