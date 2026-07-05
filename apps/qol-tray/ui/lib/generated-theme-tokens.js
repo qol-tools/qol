@@ -9,3 +9,19 @@ export const QOL_ACCENT_PRESETS = [
 export const QOL_DEFAULT_ACCENT = "amber";
 export const QOL_DEV_ACCENT = "green";
 export const QOL_DEFAULT_ACCENT_RGB = "255, 180, 84";
+export const QOL_TRAY_INTERNAL_COLORS = {
+    dissolveTargetColor: "#4a9eff",
+    transparentKeyword: "transparent",
+    transparentRgba: "rgba(0, 0, 0, 0)",
+    minimapInactiveFill: "rgba(255, 255, 255, 0.05)",
+    minimapInactiveStroke: "rgba(255, 255, 255, 0.15)",
+    minimapInactiveText: "rgba(255, 255, 255, 0.45)",
+    minimapActiveFill: "rgba(255, 255, 255, 0.22)",
+    minimapActiveStroke: "rgba(255, 255, 255, 0.85)",
+    minimapActiveText: "rgba(255, 255, 255, 0.98)",
+    configQrDark: "#000000",
+    configQrLight: "#ffffff",
+    configLiveColorFallback: "#ffffff",
+    configColorThumbStroke: "#ffffff",
+    configColorThumbShadow: "rgba(0, 0, 0, 0.5)",
+};

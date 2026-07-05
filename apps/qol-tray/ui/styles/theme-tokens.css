@@ -63,8 +63,8 @@
     --text-disabled-2: var(--slate-700);
 
     --border-weak: var(--qol-system-border-subtle);
-    --border-default-2: #3e485b;
-    --border-strong: #55627a;
+    --border-default-2: var(--qol-tray-border-default-2);
+    --border-strong: var(--qol-tray-border-strong);
 
     --state-info-bg: rgba(var(--accent-rgb), 0.14);
     --state-success-bg: rgba(var(--success-rgb), 0.14);
@@ -345,10 +345,10 @@
     --btn-primary-glow: 0 0 14px rgba(var(--accent-rgb), 0.3);
     --btn-success-glow: 0 0 14px rgba(var(--success-rgb), 0.3);
 
-    --tui-bg-desktop: #07080b;
-    --tui-bg-panel: #0c0e12;
-    --tui-bg-screen: #070809;
-    --tui-bg-card: #0a0b0d;
+    --tui-bg-desktop: var(--qol-tray-tui-bg-desktop);
+    --tui-bg-panel: var(--qol-tray-tui-bg-panel);
+    --tui-bg-screen: var(--qol-tray-tui-bg-screen);
+    --tui-bg-card: var(--qol-tray-tui-bg-card);
     --tui-line: rgba(var(--accent-rgb), 0.5);
     --tui-line-soft: rgba(var(--accent-rgb), 0.18);
     --tui-scanline: repeating-linear-gradient(0deg, rgba(var(--accent-rgb), 0.05) 0 1px, transparent 1px 3px);

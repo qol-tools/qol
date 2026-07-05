@@ -44,5 +44,6 @@
     --qol-lights-accent-btn-end: #e09e4a;
     --qol-lights-accent-btn-shadow: rgba(255, 180, 84, 0.3);
     --qol-lights-wheel-shadow: rgba(0, 0, 0, 0.5);
+    --qol-lights-wheel-thumb-stroke: #ffffff;
     --qol-lights-wheel-brightness-floor: #0a0a0a;
 }

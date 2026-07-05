@@ -6,6 +6,7 @@ import { fieldSurfaceAttrs } from '../field-map.js';
 import { useSurface } from '../../../lib/components/Surface.js';
 import { hueComponents, hueSatToHex, hexToHueSat } from './color-math.js';
 import { openColorStream, closeColorStream, streamColorHex } from './color-stream.js';
+import { QOL_TRAY_INTERNAL_COLORS } from '../../../lib/generated-theme-tokens.js';
 
 const DISC_SIZE = 200;
 const THUMB_R = 8;
@@ -16,7 +17,9 @@ export function ColorField({ field }) {
     const hasStream = !!field.stream;
     const { dispatch: sendColor } = useDispatchAction(ctx.pluginId, hasStream ? 'set_color_main' : null);
     const stored = ctx.getFieldValue(field);
-    const raw = typeof stored === 'string' ? stored.replace(/^#/, '') : 'ffffff';
+    const raw = typeof stored === 'string'
+        ? stored.replace(/^#/, '')
+        : QOL_TRAY_INTERNAL_COLORS.configLiveColorFallback.replace(/^#/, '');
     const initial = hexToHueSat(raw);
 
     const [hue, setHue] = useState(initial.hue);
@@ -276,8 +279,8 @@ function drawDisc(canvas, offscreen, hue, sat, showThumb) {
     ctx.fillStyle = '#' + hueSatToHex(hue, sat);
     ctx.fill();
     ctx.lineWidth = 3;
-    ctx.strokeStyle = 'white';
-    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    ctx.strokeStyle = QOL_TRAY_INTERNAL_COLORS.configColorThumbStroke;
+    ctx.shadowColor = QOL_TRAY_INTERNAL_COLORS.configColorThumbShadow;
     ctx.shadowBlur = 6;
     ctx.stroke();
     ctx.restore();

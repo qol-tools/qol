@@ -1,6 +1,7 @@
 const DISC_SIZE = 280;
 const DISC_THUMB_R = 9;
 const WHEEL_SHADOW_COLOR = '--qol-lights-wheel-shadow';
+const WHEEL_THUMB_STROKE = '--qol-lights-wheel-thumb-stroke';
 const WHEEL_BRIGHTNESS_FLOOR = '--qol-lights-wheel-brightness-floor';
 
 export function createHueWheel(container, {
@@ -109,8 +110,8 @@ export function createHueWheel(container, {
         ctx.fillStyle = '#' + hueSatToHex(hue, sat);
         ctx.fill();
         ctx.lineWidth = 3;
-        ctx.strokeStyle = 'white';
-        ctx.shadowColor = themeColor(WHEEL_SHADOW_COLOR, 'black');
+        ctx.strokeStyle = themeColor(WHEEL_THUMB_STROKE);
+        ctx.shadowColor = themeColor(WHEEL_SHADOW_COLOR);
         ctx.shadowBlur = 6;
         ctx.stroke();
         ctx.restore();
@@ -248,11 +249,11 @@ export function createHueWheel(container, {
     };
 }
 
-function themeColor(name, fallback) {
+function themeColor(name) {
     const value = getComputedStyle(document.documentElement)
         .getPropertyValue(name)
         .trim();
-    return value || fallback;
+    return value;
 }
 
 function hueComponents(h) {

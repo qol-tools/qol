@@ -264,6 +264,85 @@ pub const DARK_TRAY_RAMP: TrayRampPalette = TrayRampPalette {
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CssRgba {
+    pub rgb: u32,
+    pub alpha_milli: u16,
+}
+
+pub const fn css_rgba_milli(rgb: u32, alpha_milli: u16) -> CssRgba {
+    CssRgba { rgb, alpha_milli }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrayInternalPalette {
+    pub border_default_2: u32,
+    pub border_strong: u32,
+    pub tui_bg_desktop: u32,
+    pub tui_bg_panel: u32,
+    pub tui_bg_screen: u32,
+    pub tui_bg_card: u32,
+    pub atmosphere_wood_bg: u32,
+    pub atmosphere_wood_glow_a: CssRgba,
+    pub atmosphere_wood_glow_b: CssRgba,
+    pub atmosphere_parchment_bg: u32,
+    pub atmosphere_parchment_glow_a: CssRgba,
+    pub atmosphere_parchment_glow_b: CssRgba,
+    pub atmosphere_terminal_bg: u32,
+    pub atmosphere_terminal_glow: CssRgba,
+    pub atmosphere_spacecraft_bg: u32,
+    pub atmosphere_spacecraft_glow_a: CssRgba,
+    pub atmosphere_spacecraft_glow_b: CssRgba,
+    pub minimap_inactive_fill: CssRgba,
+    pub minimap_inactive_stroke: CssRgba,
+    pub minimap_inactive_text: CssRgba,
+    pub minimap_active_fill: CssRgba,
+    pub minimap_active_stroke: CssRgba,
+    pub minimap_active_text: CssRgba,
+    pub dissolve_target: u32,
+    pub transparent_rgba: CssRgba,
+    pub config_field_thumb_bg: u32,
+    pub config_qr_dark: u32,
+    pub config_qr_light: u32,
+    pub config_live_color_fallback: u32,
+    pub config_color_thumb_stroke: u32,
+    pub config_color_thumb_shadow: CssRgba,
+}
+
+pub const DARK_TRAY_INTERNAL: TrayInternalPalette = TrayInternalPalette {
+    border_default_2: 0x3e485b,
+    border_strong: 0x55627a,
+    tui_bg_desktop: 0x07080b,
+    tui_bg_panel: 0x0c0e12,
+    tui_bg_screen: 0x070809,
+    tui_bg_card: 0x0a0b0d,
+    atmosphere_wood_bg: 0x120a05,
+    atmosphere_wood_glow_a: css_rgba_milli(0x653d1e, 180),
+    atmosphere_wood_glow_b: css_rgba_milli(0x3c220f, 180),
+    atmosphere_parchment_bg: 0x141210,
+    atmosphere_parchment_glow_a: css_rgba_milli(0x8c693c, 120),
+    atmosphere_parchment_glow_b: css_rgba_milli(0x5f4828, 140),
+    atmosphere_terminal_bg: 0x030a06,
+    atmosphere_terminal_glow: css_rgba_milli(DARK_TRAY_RAMP.green_500, 80),
+    atmosphere_spacecraft_bg: 0x080a14,
+    atmosphere_spacecraft_glow_a: css_rgba_milli(0xff69b4, 100),
+    atmosphere_spacecraft_glow_b: css_rgba_milli(0x783cb4, 120),
+    minimap_inactive_fill: css_rgba_milli(DARK_REFERENCE.white, 50),
+    minimap_inactive_stroke: css_rgba_milli(DARK_REFERENCE.white, 150),
+    minimap_inactive_text: css_rgba_milli(DARK_REFERENCE.white, 450),
+    minimap_active_fill: css_rgba_milli(DARK_REFERENCE.white, 220),
+    minimap_active_stroke: css_rgba_milli(DARK_REFERENCE.white, 850),
+    minimap_active_text: css_rgba_milli(DARK_REFERENCE.white, 980),
+    dissolve_target: DARK_TRAY_RAMP.blue_500,
+    transparent_rgba: css_rgba_milli(DARK_REFERENCE.black, 0),
+    config_field_thumb_bg: DARK_REFERENCE.white,
+    config_qr_dark: DARK_REFERENCE.black,
+    config_qr_light: DARK_REFERENCE.white,
+    config_live_color_fallback: DARK_REFERENCE.white,
+    config_color_thumb_stroke: DARK_REFERENCE.white,
+    config_color_thumb_shadow: css_rgba_milli(DARK_REFERENCE.black, 500),
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ComponentPalettes {
     pub cli_sessions: CliSessionsPalette,
     pub launcher: LauncherPalette,

@@ -3,7 +3,7 @@ use qol_theme::{
     alt_tab_preview_plane_dark, cli_sessions_dark, css, dark_accent_preset, dark_theme,
     launcher_dark, remove_app_dark, resolve_surface_color, runtime_dark_theme, shot_preview_dark,
     shot_selector_dark, PickerSurfacePalette, ThemeMode, DARK_ACCENT_PRESETS, DARK_REFERENCE,
-    DARK_SYSTEM, DEV_ACCENT_KEY, PROD_ACCENT_KEY,
+    DARK_SYSTEM, DARK_TRAY_INTERNAL, DEV_ACCENT_KEY, PROD_ACCENT_KEY,
 };
 use std::{
     fs,
@@ -355,6 +355,9 @@ fn tray_css_layers_tray_tokens_without_polluting_core() {
     assert!(tray.starts_with(&core));
     assert!(tray.contains("    --qol-reference-slate-750: #2f3644;\n"));
     assert!(tray.contains("    --qol-tray-blue-500: #4a9eff;\n"));
+    assert!(tray.contains("    --qol-tray-border-default-2: #3e485b;\n"));
+    assert!(tray.contains("    --qol-atmosphere-wood-bg: #120a05;\n"));
+    assert!(tray.contains("    --qol-minimap-active-text: rgba(255, 255, 255, 0.98);\n"));
     assert!(tray.contains("    --qol-accent-amber-hover: #ffc77a;\n"));
 }
 
@@ -375,6 +378,12 @@ fn tray_theme_js_emits_accent_presets_from_theme() {
     }
     assert!(js.contains(&format!("QOL_DEFAULT_ACCENT = \"{PROD_ACCENT_KEY}\"")));
     assert!(js.contains(&format!("QOL_DEV_ACCENT = \"{DEV_ACCENT_KEY}\"")));
+    assert!(js.contains(&format!(
+        "dissolveTargetColor: \"{}\"",
+        hex6(DARK_TRAY_INTERNAL.dissolve_target)
+    )));
+    assert!(js.contains("minimapActiveText: \"rgba(255, 255, 255, 0.98)\""));
+    assert!(js.contains("configColorThumbShadow: \"rgba(0, 0, 0, 0.5)\""));
 }
 
 #[test]
@@ -394,6 +403,7 @@ fn plugin_lights_css_emits_component_token_names() {
         rgb_triplet(DARK_SYSTEM.accent)
     )));
     assert!(css.contains("    --qol-lights-wheel-shadow: rgba(0, 0, 0, 0.5);\n"));
+    assert!(css.contains("    --qol-lights-wheel-thumb-stroke: #ffffff;\n"));
     assert!(css.contains("    --qol-lights-wheel-brightness-floor: #0a0a0a;\n"));
 }
 
@@ -448,6 +458,12 @@ fn tray_theme_tokens_import_and_derive_generated_base() {
         "--text-muted-2: var(--qol-system-text-muted);",
         "--text-subtle: var(--qol-system-text-faint);",
         "--border-weak: var(--qol-system-border-subtle);",
+        "--border-default-2: var(--qol-tray-border-default-2);",
+        "--border-strong: var(--qol-tray-border-strong);",
+        "--tui-bg-desktop: var(--qol-tray-tui-bg-desktop);",
+        "--tui-bg-panel: var(--qol-tray-tui-bg-panel);",
+        "--tui-bg-screen: var(--qol-tray-tui-bg-screen);",
+        "--tui-bg-card: var(--qol-tray-tui-bg-card);",
     ];
 
     for derivation in required_derivations {
@@ -464,6 +480,47 @@ fn tray_theme_tokens_import_and_derive_generated_base() {
     assert!(
         !theme_tokens.contains("#ffc77a"),
         "theme-tokens.css must not hand-copy the default accent hover"
+    );
+    assert!(
+        !theme_tokens.contains("#3e485b"),
+        "theme-tokens.css must not hand-copy tray border colors"
+    );
+}
+
+#[test]
+fn themed_tray_internals_do_not_use_raw_color_literals() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let files = [
+        "apps/qol-tray/ui/styles/theme-tokens.css",
+        "apps/qol-tray/ui/fx/atmosphere/atmosphere.css",
+        "apps/qol-tray/ui/fx/dissolve/engine.js",
+        "apps/qol-tray/ui/fx/dissolve/glitch-squares.js",
+        "apps/qol-tray/ui/fx/dissolve/gpu.js",
+        "apps/qol-tray/ui/fx/dissolve/index.js",
+        "apps/qol-tray/ui/fx/dissolve/worker.js",
+        "apps/qol-tray/ui/lib/minimap-draw.js",
+        "apps/qol-tray/ui/styles/plugin-config.css",
+        "apps/qol-tray/ui/views/plugin-config/fields/QrCodeField.js",
+        "apps/qol-tray/ui/views/plugin-config/fields/SliderField.js",
+        "apps/qol-tray/ui/views/plugin-config/fields/ColorField.js",
+    ];
+    let mut violations = Vec::new();
+
+    for file in files {
+        let path = workspace.join(file);
+        let contents = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        for (index, line) in contents.lines().enumerate() {
+            if has_raw_css_color(line) {
+                violations.push(format!("{file}:{}", index + 1));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "themed tray internals must use generated theme tokens, not raw color literals:\n{}",
+        violations.join("\n")
     );
 }
 
@@ -652,23 +709,24 @@ impl Drop for ThemeAccentEnvGuard {
 }
 
 fn has_raw_css_color(line: &str) -> bool {
-    has_hex_color(line) || has_numeric_rgb(line)
+    has_hex_color(line) || has_raw_rgb_call(line) || has_named_color(line)
 }
 
 fn has_hex_color(line: &str) -> bool {
     let bytes = line.as_bytes();
-    for index in 0..bytes.len().saturating_sub(6) {
+    for index in 0..bytes.len() {
         if bytes[index] != b'#' {
             continue;
         }
-        if !bytes[index + 1..index + 7]
+        let hex_len = bytes[index + 1..]
             .iter()
-            .all(|byte| byte.is_ascii_hexdigit())
-        {
+            .take_while(|byte| byte.is_ascii_hexdigit())
+            .count();
+        if !matches!(hex_len, 3 | 4 | 6 | 8) {
             continue;
         }
         if bytes
-            .get(index + 7)
+            .get(index + 1 + hex_len)
             .is_some_and(|byte| byte.is_ascii_hexdigit())
         {
             continue;
@@ -678,7 +736,7 @@ fn has_hex_color(line: &str) -> bool {
     false
 }
 
-fn has_numeric_rgb(line: &str) -> bool {
+fn has_raw_rgb_call(line: &str) -> bool {
     ["rgb(", "rgba("].iter().any(|prefix| {
         let mut cursor = 0;
         while let Some(index) = line[cursor..].find(prefix) {
@@ -691,6 +749,9 @@ fn has_numeric_rgb(line: &str) -> bool {
             {
                 return true;
             }
+            if is_rgb_indirection(after) {
+                return true;
+            }
             cursor = after_start;
             if cursor >= line.len() {
                 return false;
@@ -699,6 +760,77 @@ fn has_numeric_rgb(line: &str) -> bool {
         }
         false
     })
+}
+
+fn is_rgb_indirection(after_rgb_prefix: &str) -> bool {
+    if after_rgb_prefix.starts_with("var(") {
+        return false;
+    }
+    after_rgb_prefix
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+}
+
+fn has_named_color(line: &str) -> bool {
+    ["black", "white"]
+        .iter()
+        .any(|color| contains_css_word(line, color))
+}
+
+fn contains_css_word(line: &str, word: &str) -> bool {
+    let mut cursor = 0;
+    while let Some(index) = line[cursor..].find(word) {
+        let start = cursor + index;
+        let end = start + word.len();
+        let before = start
+            .checked_sub(1)
+            .and_then(|pos| line.as_bytes().get(pos));
+        let after = line.as_bytes().get(end);
+        if before.is_none_or(|byte| !is_css_word_byte(*byte))
+            && after.is_none_or(|byte| !is_css_word_byte(*byte))
+        {
+            return true;
+        }
+        cursor = end;
+    }
+    false
+}
+
+fn is_css_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'
+}
+
+#[test]
+fn raw_color_scanner_catches_hardened_forms() {
+    for line in [
+        "color: #fff;",
+        "color: #ffff;",
+        "color: #ffffffff;",
+        "strokeStyle = 'white';",
+        "shadowColor = 'black';",
+        "background: rgb(1, 2, 3);",
+        "background: rgba(ACCENT_FALLBACK, 0.5);",
+        "background: rgb(DEFAULT_COLOR);",
+    ] {
+        assert!(has_raw_css_color(line), "scanner missed `{line}`");
+    }
+}
+
+#[test]
+fn raw_color_scanner_allows_tokenized_and_dynamic_forms() {
+    for line in [
+        "color: var(--text-primary);",
+        "background: rgba(var(--accent-rgb), 0.2);",
+        "ctx.fillStyle = `rgba(${accent}, 0.18)`;",
+        "background: transparent;",
+        "const colorHex = QOL_TRAY_INTERNAL_COLORS.configQrLight;",
+    ] {
+        assert!(
+            !has_raw_css_color(line),
+            "scanner false-positive for `{line}`"
+        );
+    }
 }
 
 #[test]
