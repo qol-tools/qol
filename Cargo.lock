@@ -5800,6 +5800,7 @@ dependencies = [
  "objc2-foundation",
  "qol-config",
  "qol-runtime",
+ "qol-theme",
  "raw-window-handle",
  "serde",
  "serde_json",
@@ -5911,6 +5912,13 @@ dependencies = [
  "serde_json",
  "smallvec",
  "x11rb",
+]
+
+[[package]]
+name = "qol-theme"
+version = "1.0.0"
+dependencies = [
+ "qol-color",
 ]
 
 [[package]]

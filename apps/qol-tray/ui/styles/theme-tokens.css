@@ -1,3 +1,5 @@
+@import "./generated-theme-tokens.css";
+
 :root {
     --slate-975: #111317;
     --slate-950: #161920;
@@ -37,30 +39,30 @@
     --amber-400: #ffd34e;
     --amber-300: #ffe08a;
 
-    --accent-rgb: 255, 180, 84;
-    --success-rgb: 74, 222, 128;
-    --danger-rgb: 255, 107, 107;
-    --warning-rgb: 255, 193, 7;
-    --ink-rgb: 0, 0, 0;
-    --paper-rgb: 255, 255, 255;
+    --accent-rgb: var(--qol-system-accent-rgb);
+    --success-rgb: var(--qol-system-success-rgb);
+    --danger-rgb: var(--qol-system-danger-rgb);
+    --warning-rgb: var(--qol-system-warning-rgb);
+    --ink-rgb: var(--qol-system-ink-rgb);
+    --paper-rgb: var(--qol-system-paper-rgb);
     --overlay-surface-rgb: 18, 22, 30;
     --overlay-deep-rgb: 17, 20, 25;
     --overlay-ink-rgb: 7, 10, 14;
     --scrim-rgb: 4, 5, 8;
 
-    --surface-canvas: #0c0e13;
-    --surface-elevated: #14181f;
-    --surface-raised: #171c26;
-    --surface-hovered: #1f2531;
+    --surface-canvas: var(--qol-system-surface-canvas);
+    --surface-elevated: var(--qol-system-surface-elevated);
+    --surface-raised: var(--qol-system-surface-raised);
+    --surface-hovered: var(--qol-system-surface-hovered);
     --surface-selected: linear-gradient(0deg, rgba(var(--accent-rgb), 0.16), rgba(var(--accent-rgb), 0.16)), var(--surface-elevated);
 
-    --text-strong: var(--slate-100);
-    --text-default: var(--slate-300);
-    --text-muted-2: var(--slate-500);
-    --text-subtle: var(--slate-600);
+    --text-strong: var(--qol-system-text-primary);
+    --text-default: var(--qol-system-text-secondary);
+    --text-muted-2: var(--qol-system-text-muted);
+    --text-subtle: var(--qol-system-text-faint);
     --text-disabled-2: var(--slate-700);
 
-    --border-weak: #2f3644;
+    --border-weak: var(--qol-system-border-subtle);
     --border-default-2: #3e485b;
     --border-strong: #55627a;
 

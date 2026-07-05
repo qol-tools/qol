@@ -11,14 +11,13 @@ pub(crate) use reuse::ReuseRequest;
 
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::capture;
-use crate::config::{
-    parse_hex_color, ActionMode, AltTabConfig, DisplayConfig, DEFAULT_CARD_BACKGROUND_COLOR,
-};
+use crate::config::{ActionMode, AltTabConfig, DisplayConfig, DEFAULT_CARD_BACKGROUND_COLOR};
 use crate::rendering::RenderingFlow;
 use crate::{PickerWindowState, SharedIconCache};
 use gather::{gather, spawn_icon_fill, GatheredWindows, IconFillRequest};
 use gpui::*;
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
+use qol_gpui::theme::resolve_surface_color;
 use qol_gpui::window::{MonitorKey, PopupPlacement};
 use qol_gpui::MonitorBounds;
 use run::{SharedPreviewCache, WindowCache};
@@ -432,17 +431,12 @@ fn finalize_reuse(
 }
 
 pub(crate) fn resolve_card_bg(display: &DisplayConfig) -> (u32, f32) {
-    let fallback = parse_hex_color(DEFAULT_CARD_BACKGROUND_COLOR).unwrap_or((0x20, 0x23, 0x22));
-    let (r, g, b) = parse_hex_color(&display.card_background_color).unwrap_or(fallback);
-    let brightness = display.card_background_brightness.clamp(0.0, 1.0);
-    let color = ((scale_channel(r, brightness) as u32) << 16)
-        | ((scale_channel(g, brightness) as u32) << 8)
-        | (scale_channel(b, brightness) as u32);
-    (color, display.card_background_opacity.clamp(0.0, 1.0))
-}
-
-fn scale_channel(value: u8, brightness: f32) -> u8 {
-    (value as f32 * brightness).round() as u8
+    resolve_surface_color(
+        &display.card_background_color,
+        DEFAULT_CARD_BACKGROUND_COLOR,
+        display.card_background_brightness,
+        display.card_background_opacity,
+    )
 }
 
 #[cfg(test)]

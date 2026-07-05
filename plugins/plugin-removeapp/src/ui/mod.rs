@@ -1,5 +1,7 @@
 pub mod run;
 
+use std::sync::LazyLock;
+
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, App, AsyncApp, Context, FocusHandle, Focusable, FontWeight,
@@ -10,6 +12,7 @@ use crate::core::{
     self, CaskIndex, CaskStatus, Disposal, Guards, InstalledApp, RemovalOutcome, RemovalPlan,
 };
 use qol_gpui::scroll_list::ScrollList;
+use qol_gpui::theme::{remove_app_dark, RemoveAppPalette};
 
 pub const WINDOW_TITLE: &str = "removeapp";
 pub const WINDOW_WIDTH: f32 = 460.0;
@@ -18,6 +21,12 @@ const SEARCH_H: f32 = 40.0;
 const FOOTER_H: f32 = 34.0;
 const ROW_H: f32 = 38.0;
 const MAX_VISIBLE: usize = ((WINDOW_HEIGHT - SEARCH_H - FOOTER_H) / ROW_H) as usize;
+
+static CURRENT_PALETTE: LazyLock<RemoveAppPalette> = LazyLock::new(remove_app_dark);
+
+fn current_palette() -> &'static RemoveAppPalette {
+    &CURRENT_PALETTE
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
@@ -315,6 +324,7 @@ impl RemoveAppView {
     }
 
     fn search_box(&self) -> impl IntoElement {
+        let palette = current_palette();
         let empty = self.query.is_empty();
         let shown = if empty {
             "Type to search apps".to_string()
@@ -328,26 +338,31 @@ impl RemoveAppView {
             .items_center()
             .gap(px(8.0))
             .px(px(12.0))
-            .bg(rgb(0x0d1117u32))
+            .bg(rgb(palette.chrome_bg))
             .border_b_1()
-            .border_color(rgb(0x21262du32))
-            .child(div().text_color(rgb(0x6e7681u32)).child(">"))
+            .border_color(rgb(palette.border))
+            .child(div().text_color(rgb(palette.text_muted)).child(">"))
             .child(
                 div()
                     .flex_1()
-                    .text_color(rgb(if empty { 0x6e7681u32 } else { 0xe6edf3u32 }))
+                    .text_color(rgb(if empty {
+                        palette.text_muted
+                    } else {
+                        palette.text_primary
+                    }))
                     .child(shown),
             )
             .child(
                 div()
                     .flex_none()
-                    .text_color(rgb(0x6e7681u32))
+                    .text_color(rgb(palette.text_muted))
                     .text_size(px(11.0))
                     .child(format!("{}", self.matches.len())),
             )
     }
 
     fn render_confirming(&self) -> AnyElement {
+        let palette = current_palette();
         let Some(plan) = &self.plan else {
             return div().into_any_element();
         };
@@ -367,21 +382,21 @@ impl RemoveAppView {
                             .min_w(px(0.0))
                             .truncate()
                             .text_size(px(11.0))
-                            .text_color(rgb(0x8b949eu32))
+                            .text_color(rgb(palette.text_secondary))
                             .child(l.path.display().to_string()),
                     )
                     .child(
                         div()
                             .flex_none()
                             .text_size(px(11.0))
-                            .text_color(rgb(0x6e7681u32))
+                            .text_color(rgb(palette.text_muted))
                             .child(format_size(l.size_bytes)),
                     )
             })
             .collect();
         let (disp_label, disp_color) = match self.disposal {
-            Disposal::Trash => ("Move to Trash", 0x3fb950u32),
-            Disposal::Delete => ("PERMANENTLY DELETE", 0xf85149u32),
+            Disposal::Trash => ("Move to Trash", palette.success),
+            Disposal::Delete => ("PERMANENTLY DELETE", palette.danger),
         };
         let mut hints: Vec<(&str, &str)> = Vec::new();
         if let Some(g) = &self.guards {
@@ -421,7 +436,7 @@ impl RemoveAppView {
                     .px(px(12.0))
                     .py(px(8.0))
                     .border_t_1()
-                    .border_color(rgb(0x21262du32))
+                    .border_color(rgb(palette.border))
                     .child(
                         div()
                             .text_color(rgb(disp_color))
@@ -430,7 +445,7 @@ impl RemoveAppView {
                     )
                     .child(
                         div()
-                            .text_color(rgb(0xe6edf3u32))
+                            .text_color(rgb(palette.text_primary))
                             .text_size(px(11.0))
                             .child(format!(
                                 "{} items \u{00b7} {}",
@@ -444,9 +459,10 @@ impl RemoveAppView {
     }
 
     fn guard_banner(&self) -> Option<AnyElement> {
+        let palette = current_palette();
         let Some(g) = self.guards.as_ref() else {
             return Some(banner_container(vec![banner_line(
-                0x6e7681u32,
+                palette.text_muted,
                 "Checking Homebrew\u{2026}",
             )
             .into_any_element()]));
@@ -458,16 +474,22 @@ impl RemoveAppView {
             } else {
                 "is running - press Q to quit & continue"
             };
-            lines.push(banner_line(0xf0883eu32, text).into_any_element());
+            lines.push(banner_line(palette.warning, text).into_any_element());
         }
         match &g.cask {
             CaskStatus::Managed(_) => lines.push(
-                banner_line(0x58a6ffu32, "Homebrew-managed - press B to brew uninstall")
-                    .into_any_element(),
+                banner_line(
+                    palette.accent,
+                    "Homebrew-managed - press B to brew uninstall",
+                )
+                .into_any_element(),
             ),
             CaskStatus::Unavailable(_) => lines.push(
-                banner_line(0x6e7681u32, "couldn't confirm Homebrew - check manually")
-                    .into_any_element(),
+                banner_line(
+                    palette.text_muted,
+                    "couldn't confirm Homebrew - check manually",
+                )
+                .into_any_element(),
             ),
             CaskStatus::NotManaged => {}
         }
@@ -478,6 +500,7 @@ impl RemoveAppView {
     }
 
     fn render_done(&self) -> AnyElement {
+        let palette = current_palette();
         if let Some(error) = &self.error {
             return div()
                 .flex()
@@ -490,18 +513,18 @@ impl RemoveAppView {
                 .child(
                     div()
                         .text_size(px(15.0))
-                        .text_color(rgb(0xf85149u32))
+                        .text_color(rgb(palette.danger))
                         .child("Removal failed"),
                 )
                 .child(
                     div()
-                        .text_color(rgb(0x8b949eu32))
+                        .text_color(rgb(palette.text_secondary))
                         .text_size(px(12.0))
                         .child(error.clone()),
                 )
                 .child(
                     div()
-                        .text_color(rgb(0x6e7681u32))
+                        .text_color(rgb(palette.text_muted))
                         .text_size(px(11.0))
                         .child("Press any key to close"),
                 )
@@ -523,26 +546,26 @@ impl RemoveAppView {
             .child(
                 div()
                     .text_size(px(15.0))
-                    .text_color(rgb(0x3fb950u32))
+                    .text_color(rgb(palette.success))
                     .child(format!("Removed {removed} item(s)")),
             )
             .child(
                 div()
-                    .text_color(rgb(0x8b949eu32))
+                    .text_color(rgb(palette.text_secondary))
                     .text_size(px(12.0))
                     .child(format!("Freed {}", format_size(outcome.freed_bytes))),
             )
             .when(failed > 0, |d| {
                 d.child(
                     div()
-                        .text_color(rgb(0xf85149u32))
+                        .text_color(rgb(palette.danger))
                         .text_size(px(11.0))
                         .child(format!("{failed} failed")),
                 )
             })
             .child(
                 div()
-                    .text_color(rgb(0x6e7681u32))
+                    .text_color(rgb(palette.text_muted))
                     .text_size(px(11.0))
                     .child("Press any key to close"),
             )
@@ -558,6 +581,7 @@ impl Focusable for RemoveAppView {
 
 impl Render for RemoveAppView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = current_palette();
         self.list.sync(self.matches.len());
         div()
             .id("removeapp")
@@ -566,8 +590,8 @@ impl Render for RemoveAppView {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .bg(rgb(0x161b22u32))
-            .text_color(rgb(0xe6edf3u32))
+            .bg(rgb(palette.panel_bg))
+            .text_color(rgb(palette.text_primary))
             .font_family(SharedString::from("Menlo"))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| this.on_key(ev, cx)))
             .child(self.render_body())
@@ -582,6 +606,7 @@ fn is_typed_char(key: &str) -> bool {
 }
 
 fn app_row(app: &InstalledApp, selected: bool, protected: bool) -> impl IntoElement {
+    let palette = current_palette();
     div()
         .w_full()
         .h(px(ROW_H))
@@ -592,14 +617,14 @@ fn app_row(app: &InstalledApp, selected: bool, protected: bool) -> impl IntoElem
         .px(px(12.0))
         .border_l_2()
         .border_color(if selected {
-            rgb(0x58a6ffu32)
+            rgb(palette.accent)
         } else {
-            rgba(0x00000000u32)
+            rgba(palette.transparent_rgba)
         })
         .bg(if selected {
-            rgba(0x58a6ff14u32)
+            rgba(palette.selection_bg_rgba)
         } else {
-            rgba(0x00000000u32)
+            rgba(palette.transparent_rgba)
         })
         .child(
             div()
@@ -607,9 +632,9 @@ fn app_row(app: &InstalledApp, selected: bool, protected: bool) -> impl IntoElem
                 .min_w(px(0.0))
                 .truncate()
                 .text_color(if protected {
-                    rgb(0x6e7681u32)
+                    rgb(palette.text_muted)
                 } else {
-                    rgb(0xe6edf3u32)
+                    rgb(palette.text_primary)
                 })
                 .child(app.name.clone()),
         )
@@ -618,31 +643,33 @@ fn app_row(app: &InstalledApp, selected: bool, protected: bool) -> impl IntoElem
                 div()
                     .flex_none()
                     .text_size(px(10.0))
-                    .text_color(rgb(0xf85149u32))
+                    .text_color(rgb(palette.danger))
                     .child("protected"),
             )
         })
 }
 
 fn section_header(title: &str) -> impl IntoElement {
+    let palette = current_palette();
     div()
         .h(px(36.0))
         .w_full()
         .flex()
         .items_center()
         .px(px(12.0))
-        .bg(rgb(0x0d1117u32))
+        .bg(rgb(palette.chrome_bg))
         .border_b_1()
-        .border_color(rgb(0x21262du32))
+        .border_color(rgb(palette.border))
         .child(
             div()
-                .text_color(rgb(0xe6edf3u32))
+                .text_color(rgb(palette.text_primary))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(format!("Remove {title}")),
         )
 }
 
 fn footer(hints: &[(&str, &str)]) -> impl IntoElement {
+    let palette = current_palette();
     div()
         .flex()
         .flex_none()
@@ -651,23 +678,23 @@ fn footer(hints: &[(&str, &str)]) -> impl IntoElement {
         .gap(px(10.0))
         .w_full()
         .px(px(11.0))
-        .bg(rgb(0x0d1117u32))
+        .bg(rgb(palette.chrome_bg))
         .border_t_1()
-        .border_color(rgb(0x21262du32))
+        .border_color(rgb(palette.border))
         .children(hints.iter().map(|(key, label)| {
             div()
                 .flex()
                 .items_center()
                 .gap(px(5.0))
-                .text_color(rgb(0x6e7681u32))
+                .text_color(rgb(palette.text_muted))
                 .text_size(px(10.0))
                 .child(
                     div()
-                        .text_color(rgb(0xc9d1d9u32))
+                        .text_color(rgb(palette.text_heading))
                         .text_size(px(9.0))
-                        .bg(rgba(0xffffff0fu32))
+                        .bg(rgba(palette.keycap_bg_rgba))
                         .border_1()
-                        .border_color(rgb(0x30363du32))
+                        .border_color(rgb(palette.border_strong))
                         .rounded(px(4.0))
                         .px(px(5.0))
                         .py(px(1.0))
@@ -678,6 +705,7 @@ fn footer(hints: &[(&str, &str)]) -> impl IntoElement {
 }
 
 fn banner_container(lines: Vec<AnyElement>) -> AnyElement {
+    let palette = current_palette();
     div()
         .flex()
         .flex_col()
@@ -685,9 +713,9 @@ fn banner_container(lines: Vec<AnyElement>) -> AnyElement {
         .px(px(12.0))
         .py(px(6.0))
         .gap(px(3.0))
-        .bg(rgba(0xf0883e1au32))
+        .bg(rgba(palette.warning_banner_rgba))
         .border_b_1()
-        .border_color(rgb(0x21262du32))
+        .border_color(rgb(palette.border))
         .children(lines)
         .into_any_element()
 }

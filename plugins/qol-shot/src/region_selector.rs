@@ -3,12 +3,13 @@ use gpui::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, LazyLock};
 use std::time::Duration;
 
 use crate::geometry::rect_label;
 use crate::space::{self, CaptureKind, Level};
 use crate::{Monitor, Rect};
+use qol_gpui::theme::{shot_selector_dark, ShotSelectorPalette};
 
 const SELECTOR_TITLE: &str = "qol-shot-selector";
 const SELECTOR_TITLE_PREFIX: &str = "qol-shot-selector-";
@@ -27,10 +28,14 @@ const LABEL_MIN_H: f32 = 80.0;
 const CHIP_W: f32 = 300.0;
 const CHIP_H: f32 = 30.0;
 const CHIP_TOP: f32 = 12.0;
-const BACKDROP_COLOR: u32 = 0x2f80ed24;
 const HIDE_BARRIER_CLEAR_SAMPLES: usize = 3;
 const HIDE_BARRIER_MAX_MS: u64 = 750;
 static SELECTOR_SEQ: AtomicU64 = AtomicU64::new(0);
+static CURRENT_PALETTE: LazyLock<ShotSelectorPalette> = LazyLock::new(shot_selector_dark);
+
+fn current_palette() -> &'static ShotSelectorPalette {
+    &CURRENT_PALETTE
+}
 
 pub type RectMapper = Rc<dyn Fn(Rect) -> Option<Rect>>;
 
@@ -971,13 +976,14 @@ fn trace_selection_release(source: &'static str, raw: Option<Rect>, mapped: Opti
 }
 
 fn backdrop_segment(bounds: Bounds<Pixels>) -> Div {
+    let palette = current_palette();
     div()
         .absolute()
         .left(bounds.origin.x)
         .top(bounds.origin.y)
         .w(bounds.size.width)
         .h(bounds.size.height)
-        .bg(rgba(BACKDROP_COLOR))
+        .bg(rgba(palette.backdrop_rgba))
 }
 
 fn rect_from_bounds(bounds: Bounds<Pixels>) -> Rect {
@@ -1046,6 +1052,7 @@ fn chip_frame_in(
 }
 
 fn chip_element(left: f32, top: f32, width: f32, text: String, level: Level) -> Div {
+    let palette = current_palette();
     let (border, foreground) = chip_colors(level);
     div()
         .absolute()
@@ -1056,7 +1063,7 @@ fn chip_element(left: f32, top: f32, width: f32, text: String, level: Level) -> 
         .rounded(px(CHIP_H / 2.0))
         .border_1()
         .border_color(rgba(border))
-        .bg(rgba(0x000000c7))
+        .bg(rgba(palette.panel_bg_rgba))
         .flex()
         .items_center()
         .justify_center()
@@ -1069,10 +1076,14 @@ fn chip_element(left: f32, top: f32, width: f32, text: String, level: Level) -> 
 }
 
 fn chip_colors(level: Level) -> (u32, u32) {
+    let palette = current_palette();
     match level {
-        Level::Ok => (0xffffffdb, 0xffffffff),
-        Level::Low => (0xf5a623ff, 0xf7c66bff),
-        Level::Critical => (0xff4d4dff, 0xff9a9aff),
+        Level::Ok => (palette.chip_ok_border_rgba, palette.chip_ok_text_rgba),
+        Level::Low => (palette.chip_low_border_rgba, palette.chip_low_text_rgba),
+        Level::Critical => (
+            palette.chip_critical_border_rgba,
+            palette.chip_critical_text_rgba,
+        ),
     }
 }
 
@@ -1106,6 +1117,7 @@ fn format_duration(seconds: u64) -> String {
 }
 
 fn selection_frame(bounds: Bounds<Pixels>) -> Div {
+    let palette = current_palette();
     let mut frame = div()
         .absolute()
         .left(bounds.origin.x)
@@ -1113,7 +1125,7 @@ fn selection_frame(bounds: Bounds<Pixels>) -> Div {
         .w(bounds.size.width)
         .h(bounds.size.height)
         .border_2()
-        .border_color(rgb(0xffffff));
+        .border_color(rgb(palette.selection_outer));
 
     if bounds.size.width <= px(4.0) || bounds.size.height <= px(4.0) {
         return frame;
@@ -1127,7 +1139,7 @@ fn selection_frame(bounds: Bounds<Pixels>) -> Div {
             .w(bounds.size.width - px(4.0))
             .h(bounds.size.height - px(4.0))
             .border_2()
-            .border_color(rgb(0xff4d4d)),
+            .border_color(rgb(palette.selection_inner)),
     );
     frame
 }
@@ -1188,6 +1200,7 @@ struct OverlayText {
 
 impl OverlayText {
     fn panel(self, left: f32, top: f32, width: f32, height: f32) -> impl IntoElement {
+        let palette = current_palette();
         let content_width = width - GUIDE_CONTENT_X * 2.0;
         let mut panel = div()
             .absolute()
@@ -1197,8 +1210,8 @@ impl OverlayText {
             .h(px(height))
             .rounded(px(14.0))
             .border_1()
-            .border_color(rgba(0xffffffdb))
-            .bg(rgba(0x000000c7))
+            .border_color(rgba(palette.panel_border_rgba))
+            .bg(rgba(palette.panel_bg_rgba))
             .relative();
 
         panel = panel.child(
@@ -1215,7 +1228,7 @@ impl OverlayText {
                 .text_size(px(self.title_size))
                 .line_height(px(GUIDE_TITLE_H))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(0xffffff))
+                .text_color(rgb(palette.text_primary))
                 .child(self.title),
         );
 
@@ -1233,7 +1246,7 @@ impl OverlayText {
                     .text_center()
                     .text_size(px(self.subtitle_size))
                     .line_height(px(GUIDE_SUBTITLE_H))
-                    .text_color(rgba(0xffffffc7))
+                    .text_color(rgba(palette.text_subtitle_rgba))
                     .child(subtitle),
             );
         }
@@ -1242,6 +1255,7 @@ impl OverlayText {
     }
 
     fn label(self, left: f32, top: f32, width: f32, height: f32) -> impl IntoElement {
+        let palette = current_palette();
         div()
             .absolute()
             .left(px(left))
@@ -1255,7 +1269,7 @@ impl OverlayText {
             .text_size(px(self.title_size))
             .line_height(px(height))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(rgba(0xfffffff5))
+            .text_color(rgba(palette.label_text_rgba))
             .child(self.title)
     }
 }

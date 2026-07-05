@@ -7,6 +7,7 @@ use crate::shared::layout::{picker_layout, CardMetrics};
 use crate::{IconMap, LiveFrameMap, PreviewMap};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use qol_gpui::theme::PickerSurfacePalette;
 #[cfg(debug_assertions)]
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
@@ -28,7 +29,7 @@ struct RenderSnap {
     show_hotkey_hints: bool,
     icon_position: PreviewIconPosition,
     rendering: RenderingFlow,
-    palette: SurfacePalette,
+    palette: PickerSurfacePalette,
     metrics: CardMetrics,
 }
 
@@ -41,59 +42,6 @@ struct CardRenderContext<'a> {
     entity: WeakEntity<AltTabApp>,
     window: &'a Window,
     app: &'a App,
-}
-
-#[derive(Clone, Copy)]
-struct SurfacePalette {
-    panel_bg: u32,
-    header_bg: u32,
-    header_border: u32,
-    card_bg: u32,
-    card_hover_bg: u32,
-    card_selected_bg: u32,
-    card_selected_border: u32,
-    card_bg_rgba: u32,
-    card_selected_rgba: u32,
-    caption_divider: u32,
-    preview_icon_border: u32,
-    preview_icon_selected_border: u32,
-}
-
-impl SurfacePalette {
-    fn from_card_color(card_bg: u32, opacity: f32) -> Self {
-        let opacity = opacity.clamp(0.0, 1.0);
-        Self {
-            panel_bg: mix_rgb(card_bg, 0x000000, 0.56),
-            header_bg: mix_rgb(card_bg, 0x000000, 0.35),
-            header_border: mix_rgb(card_bg, 0xffffff, 0.08),
-            card_bg,
-            card_hover_bg: mix_rgb(card_bg, 0xffffff, 0.07),
-            card_selected_bg: mix_rgb(card_bg, 0xffffff, 0.13),
-            card_selected_border: mix_rgb(card_bg, 0xc7d0c9, 0.36),
-            card_bg_rgba: rgba_from_rgb(card_bg, opacity),
-            card_selected_rgba: rgba_from_rgb(mix_rgb(card_bg, 0xffffff, 0.13), opacity.max(0.92)),
-            caption_divider: rgba_from_rgb(mix_rgb(card_bg, 0xffffff, 0.12), 0.58),
-            preview_icon_border: rgba_from_rgb(mix_rgb(card_bg, 0xffffff, 0.12), 0.48),
-            preview_icon_selected_border: rgba_from_rgb(mix_rgb(card_bg, 0xffffff, 0.18), 0.52),
-        }
-    }
-}
-
-fn mix_rgb(color: u32, target: u32, amount: f32) -> u32 {
-    let amount = amount.clamp(0.0, 1.0);
-    let r = mix_channel((color >> 16) & 0xff, (target >> 16) & 0xff, amount);
-    let g = mix_channel((color >> 8) & 0xff, (target >> 8) & 0xff, amount);
-    let b = mix_channel(color & 0xff, target & 0xff, amount);
-    (r << 16) | (g << 8) | b
-}
-
-fn mix_channel(from: u32, to: u32, amount: f32) -> u32 {
-    (from as f32 + (to as f32 - from as f32) * amount).round() as u32
-}
-
-fn rgba_from_rgb(color: u32, opacity: f32) -> u32 {
-    let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u32;
-    (color << 8) | alpha
 }
 
 impl Render for AltTabApp {
@@ -171,7 +119,7 @@ impl Render for AltTabApp {
             show_hotkey_hints: d.show_hotkey_hints,
             icon_position: d.icon_position,
             rendering: self.rendering,
-            palette: SurfacePalette::from_card_color(d.card_bg_color, d.card_bg_opacity),
+            palette: PickerSurfacePalette::from_card_color(d.card_bg_color, d.card_bg_opacity),
             metrics: CardMetrics::from_config(d.card_scale, d.card_padding),
         };
 
@@ -309,7 +257,7 @@ fn probe_rendered_front(
     }
 }
 
-fn header_bar(left: &str, right: &str, palette: &SurfacePalette) -> Div {
+fn header_bar(left: &str, right: &str, palette: &PickerSurfacePalette) -> Div {
     div()
         .px_4()
         .py_2()
@@ -321,13 +269,13 @@ fn header_bar(left: &str, right: &str, palette: &SurfacePalette) -> Div {
         .justify_between()
         .child(
             div()
-                .text_color(rgb(0x5e6a84))
+                .text_color(rgb(palette.header_left_text))
                 .text_xs()
                 .child(left.to_string()),
         )
         .child(
             div()
-                .text_color(rgb(0x3a4252))
+                .text_color(rgb(palette.header_right_text))
                 .text_xs()
                 .child(right.to_string()),
         )
@@ -351,7 +299,7 @@ fn render_grid(windows: &[WindowInfo], context: &CardRenderContext<'_>) -> Div {
                 s.items_center().justify_center().child(
                     div()
                         .text_sm()
-                        .text_color(rgb(0x5e6a84))
+                        .text_color(rgb(context.snap.palette.grid_empty_text))
                         .child("Scanning windows..."),
                 )
             })
@@ -416,7 +364,7 @@ fn card_bg(
     selected: bool,
     visible: bool,
     transparent: bool,
-    palette: &SurfacePalette,
+    palette: &PickerSurfacePalette,
 ) -> Stateful<Div> {
     if selected && transparent {
         return el
@@ -481,6 +429,7 @@ fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, selected: b
                 &win.preview_path,
                 minimized_icon,
                 metrics,
+                palette,
             )
         } else {
             preview_plane_slot(metrics, palette, selected)
@@ -529,11 +478,11 @@ fn render_label(
     let label_slot_px = metrics.label_strip_height;
     let label_padding_px = (metrics.scale * 3.0).clamp(3.0, 7.0);
     let label_width_px = (metrics.preview_width - label_padding_px * 2.0).max(1.0);
-    let primary_color = if selected {
-        rgb(0xf8fbff)
+    let primary_color = rgb(if selected {
+        palette.label_selected_text
     } else {
-        rgb(0xd4dbea)
-    };
+        palette.label_text
+    });
 
     let base = div()
         .w(px(metrics.preview_width))
@@ -637,9 +586,10 @@ fn preview_tile(
     preview_path: &Option<String>,
     minimized_icon: Option<&Arc<RenderImage>>,
     metrics: &CardMetrics,
+    palette: &PickerSurfacePalette,
 ) -> AnyElement {
     if let Some(icon) = minimized_icon {
-        return minimized_placeholder(icon, metrics);
+        return minimized_placeholder(icon, metrics, palette);
     }
     if let Some(frame) = live_frame {
         return crate::capture::live_frame_element(
@@ -664,12 +614,12 @@ fn preview_tile(
             .rounded_md()
             .into_any_element();
     }
-    empty_placeholder(metrics)
+    empty_placeholder(metrics, palette)
 }
 
 fn preview_plane_slot(
     metrics: &CardMetrics,
-    palette: &SurfacePalette,
+    palette: &PickerSurfacePalette,
     selected: bool,
 ) -> AnyElement {
     let border = if selected {
@@ -686,29 +636,33 @@ fn preview_plane_slot(
         .into_any_element()
 }
 
-fn minimized_placeholder(icon: &Arc<RenderImage>, metrics: &CardMetrics) -> AnyElement {
+fn minimized_placeholder(
+    icon: &Arc<RenderImage>,
+    metrics: &CardMetrics,
+    palette: &PickerSurfacePalette,
+) -> AnyElement {
     let icon_px = metrics.minimized_icon_px();
-    placeholder_frame(metrics)
+    placeholder_frame(metrics, palette)
         .child(img(icon.clone()).w(px(icon_px)).h(px(icon_px)).rounded_md())
         .into_any_element()
 }
 
-fn empty_placeholder(metrics: &CardMetrics) -> AnyElement {
-    placeholder_frame(metrics)
+fn empty_placeholder(metrics: &CardMetrics, palette: &PickerSurfacePalette) -> AnyElement {
+    placeholder_frame(metrics, palette)
         .text_xs()
-        .text_color(rgb(0x4a5268))
+        .text_color(rgb(palette.placeholder_text))
         .child("...")
         .into_any_element()
 }
 
-fn placeholder_frame(metrics: &CardMetrics) -> Div {
+fn placeholder_frame(metrics: &CardMetrics, palette: &PickerSurfacePalette) -> Div {
     div()
         .w(px(metrics.preview_width))
         .h(px(metrics.preview_height))
-        .bg(rgb(0x1e2130))
+        .bg(rgb(palette.placeholder_bg))
         .rounded_md()
         .border_1()
-        .border_color(rgb(0x3a4252))
+        .border_color(rgb(palette.placeholder_border))
         .flex()
         .items_center()
         .justify_center()
