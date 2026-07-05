@@ -5,14 +5,14 @@ use gpui::{
     div, px, rgb, rgba, AnyElement, Context, CursorStyle, FontWeight, KeyDownEvent, MouseButton,
     SharedString, Window,
 };
-use qol_gpui::theme::{cli_sessions_dark, CliSessionsPalette};
+use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
 
 use crate::registry::SessionState;
 use crate::status::Status;
 use crate::tool::Tool;
 use crate::ui::SessionsView;
 
-static CURRENT_PALETTE: LazyLock<CliSessionsPalette> = LazyLock::new(cli_sessions_dark);
+static CURRENT_PALETTE: LazyLock<CliSessionsPalette> = LazyLock::new(cli_sessions_runtime);
 
 fn current_palette() -> &'static CliSessionsPalette {
     &CURRENT_PALETTE

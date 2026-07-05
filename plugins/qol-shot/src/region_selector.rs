@@ -9,7 +9,7 @@ use std::time::Duration;
 use crate::geometry::rect_label;
 use crate::space::{self, CaptureKind, Level};
 use crate::{Monitor, Rect};
-use qol_gpui::theme::{shot_selector_dark, ShotSelectorPalette};
+use qol_gpui::theme::{shot_selector_runtime, ShotSelectorPalette};
 
 const SELECTOR_TITLE: &str = "qol-shot-selector";
 const SELECTOR_TITLE_PREFIX: &str = "qol-shot-selector-";
@@ -31,7 +31,7 @@ const CHIP_TOP: f32 = 12.0;
 const HIDE_BARRIER_CLEAR_SAMPLES: usize = 3;
 const HIDE_BARRIER_MAX_MS: u64 = 750;
 static SELECTOR_SEQ: AtomicU64 = AtomicU64::new(0);
-static CURRENT_PALETTE: LazyLock<ShotSelectorPalette> = LazyLock::new(shot_selector_dark);
+static CURRENT_PALETTE: LazyLock<ShotSelectorPalette> = LazyLock::new(shot_selector_runtime);
 
 fn current_palette() -> &'static ShotSelectorPalette {
     &CURRENT_PALETTE

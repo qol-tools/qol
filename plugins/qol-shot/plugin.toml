@@ -35,6 +35,9 @@ label = "Settings..."
 kind = "settings"
 args = ["settings"]
 
+[capabilities]
+gpui = true
+
 [menu]
 label = "QoL Shot"
 items = [

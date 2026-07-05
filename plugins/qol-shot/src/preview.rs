@@ -13,7 +13,7 @@ use qol_gpui::ghost::{ghost_window_title, show_ghost_window, sync_window_layout}
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
-use qol_gpui::theme::{shot_preview_dark, ShotPreviewPalette};
+use qol_gpui::theme::{shot_preview_runtime, ShotPreviewPalette};
 use qol_gpui::window::{centered_window_placement, ActiveWindows, MonitorKey, WindowPlacement};
 
 use crate::screenshot::PreviewCapture;
@@ -30,7 +30,7 @@ const PREVIEW_TITLE: &str = "qol-shot-preview";
 const PREVIEW_APP_ID: &str = "qol-tray-shot";
 
 static PREVIEW_SEQ: AtomicU64 = AtomicU64::new(0);
-static CURRENT_PALETTE: LazyLock<ShotPreviewPalette> = LazyLock::new(shot_preview_dark);
+static CURRENT_PALETTE: LazyLock<ShotPreviewPalette> = LazyLock::new(shot_preview_runtime);
 
 fn current_palette() -> &'static ShotPreviewPalette {
     &CURRENT_PALETTE

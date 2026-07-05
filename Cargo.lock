@@ -5919,6 +5919,7 @@ name = "qol-theme"
 version = "1.0.0"
 dependencies = [
  "qol-color",
+ "qol-conventions",
 ]
 
 [[package]]

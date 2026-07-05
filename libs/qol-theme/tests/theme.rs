@@ -1,11 +1,15 @@
 use qol_color::{mix_rgb, with_alpha};
 use qol_theme::{
     alt_tab_preview_plane_dark, cli_sessions_dark, css, dark_accent_preset, dark_theme,
-    launcher_dark, remove_app_dark, resolve_surface_color, shot_preview_dark, shot_selector_dark,
-    PickerSurfacePalette, ThemeMode, DARK_ACCENT_PRESETS, DARK_REFERENCE, DARK_SYSTEM,
-    DEV_ACCENT_KEY, PROD_ACCENT_KEY,
+    launcher_dark, remove_app_dark, resolve_surface_color, runtime_dark_theme, shot_preview_dark,
+    shot_selector_dark, PickerSurfacePalette, ThemeMode, DARK_ACCENT_PRESETS, DARK_REFERENCE,
+    DARK_SYSTEM, DEV_ACCENT_KEY, PROD_ACCENT_KEY,
 };
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::Path,
+    sync::{Mutex, OnceLock},
+};
 
 #[test]
 fn dark_theme_has_explicit_reference_system_and_component_layers() {
@@ -18,6 +22,28 @@ fn dark_theme_has_explicit_reference_system_and_component_layers() {
         dark_accent_preset(PROD_ACCENT_KEY).unwrap().rgb
     );
     assert_eq!(theme.components.launcher, launcher_dark());
+}
+
+#[test]
+fn runtime_dark_theme_uses_valid_injected_accent_key() {
+    let _env = ThemeAccentEnvGuard::set("blue");
+
+    let theme = runtime_dark_theme();
+    let expected = dark_accent_preset("blue").unwrap().rgb;
+
+    assert_eq!(theme.system.accent, expected);
+    assert_eq!(theme.components.launcher.highlight, expected);
+    assert_eq!(theme.components.cli_sessions.selection_border, expected);
+    assert_eq!(theme.components.remove_app.accent, expected);
+}
+
+#[test]
+fn runtime_dark_theme_falls_back_for_unknown_injected_accent_key() {
+    let _env = ThemeAccentEnvGuard::set("not-a-preset");
+
+    let theme = runtime_dark_theme();
+
+    assert_eq!(theme.system.accent, DARK_SYSTEM.accent);
 }
 
 #[test]
@@ -590,6 +616,39 @@ fn rgb_triplet(color: u32) -> String {
     let green = (color >> 8) & 0xff;
     let blue = color & 0xff;
     format!("{red}, {green}, {blue}")
+}
+
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+struct ThemeAccentEnvGuard {
+    previous: Option<std::ffi::OsString>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl ThemeAccentEnvGuard {
+    fn set(value: &str) -> Self {
+        let lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::env::var_os(qol_conventions::ENV_THEME_ACCENT);
+        std::env::set_var(qol_conventions::ENV_THEME_ACCENT, value);
+        Self {
+            previous,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for ThemeAccentEnvGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => std::env::set_var(qol_conventions::ENV_THEME_ACCENT, value),
+            None => std::env::remove_var(qol_conventions::ENV_THEME_ACCENT),
+        }
+    }
 }
 
 fn has_raw_css_color(line: &str) -> bool {

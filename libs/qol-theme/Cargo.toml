@@ -7,6 +7,7 @@ description = "First-party theme source of truth for qol-tools Rust and CSS surf
 
 [dependencies]
 qol-color.workspace = true
+qol-conventions.workspace = true
 
 [[bin]]
 name = "qol-theme-css"

@@ -16,15 +16,10 @@
         try {
             var boot = window.__QOL_BOOT__;
             if (boot && boot.accent) {
-                var ws = {};
-                try { ws = JSON.parse(localStorage.getItem('qol-world-settings') || '{}'); } catch (e) {}
                 var palette = boot.accent.palette || [];
                 var chosen = null;
                 for (var i = 0; i < palette.length; i++) {
-                    if (palette[i].key === ws.accent) { chosen = palette[i]; break; }
-                }
-                if (!chosen) for (var j = 0; j < palette.length; j++) {
-                    if (palette[j].key === boot.accent.defaultKey) { chosen = palette[j]; break; }
+                    if (palette[i].key === boot.accent.defaultKey) { chosen = palette[i]; break; }
                 }
                 if (chosen) {
                     document.documentElement.style.setProperty('--accent-rgb', chosen.rgb);

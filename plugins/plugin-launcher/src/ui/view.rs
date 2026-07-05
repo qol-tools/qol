@@ -2,12 +2,12 @@ use std::ops::Range;
 use std::sync::LazyLock;
 
 use gpui::*;
-use qol_gpui::theme::{launcher_dark, LauncherPalette};
+use qol_gpui::theme::{launcher_runtime, LauncherPalette};
 
 use super::layout::HEADER_HEIGHT;
 use crate::discovery::search::{MatchKind, Scored};
 
-static CURRENT_PALETTE: LazyLock<LauncherPalette> = LazyLock::new(launcher_dark);
+static CURRENT_PALETTE: LazyLock<LauncherPalette> = LazyLock::new(launcher_runtime);
 
 fn current_palette() -> &'static LauncherPalette {
     &CURRENT_PALETTE

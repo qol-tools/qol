@@ -75,6 +75,14 @@ pub struct Theme {
 impl Theme {
     pub fn from_reference(mode: ThemeMode, reference: ReferencePalette) -> Self {
         let system = SystemPalette::from_reference(reference);
+        Self::from_reference_and_system(mode, reference, system)
+    }
+
+    pub fn from_reference_and_system(
+        mode: ThemeMode,
+        reference: ReferencePalette,
+        system: SystemPalette,
+    ) -> Self {
         let components = ComponentPalettes::new(reference, system);
         Self {
             mode,
@@ -87,6 +95,21 @@ impl Theme {
 
 pub fn dark_theme() -> Theme {
     Theme::from_reference(ThemeMode::Dark, DARK_REFERENCE)
+}
+
+pub fn dark_theme_with_accent_key(key: &str) -> Theme {
+    let accent = dark_accent_preset(key)
+        .unwrap_or_else(|| dark_accent_preset(PROD_ACCENT_KEY).expect("default accent exists"))
+        .rgb;
+    let system = SystemPalette::from_reference(DARK_REFERENCE).with_accent(accent);
+    Theme::from_reference_and_system(ThemeMode::Dark, DARK_REFERENCE, system)
+}
+
+pub fn runtime_dark_theme() -> Theme {
+    match std::env::var(qol_conventions::ENV_THEME_ACCENT) {
+        Ok(key) => dark_theme_with_accent_key(&key),
+        Err(_) => dark_theme(),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,6 +199,10 @@ impl SystemPalette {
             info: reference.blue_400,
             warning: reference.amber_500,
         }
+    }
+
+    pub const fn with_accent(self, accent: u32) -> Self {
+        Self { accent, ..self }
     }
 }
 
@@ -600,20 +627,40 @@ pub fn launcher_dark() -> LauncherPalette {
     dark_theme().components.launcher
 }
 
+pub fn launcher_runtime() -> LauncherPalette {
+    runtime_dark_theme().components.launcher
+}
+
 pub fn cli_sessions_dark() -> CliSessionsPalette {
     dark_theme().components.cli_sessions
+}
+
+pub fn cli_sessions_runtime() -> CliSessionsPalette {
+    runtime_dark_theme().components.cli_sessions
 }
 
 pub fn remove_app_dark() -> RemoveAppPalette {
     dark_theme().components.remove_app
 }
 
+pub fn remove_app_runtime() -> RemoveAppPalette {
+    runtime_dark_theme().components.remove_app
+}
+
 pub fn shot_selector_dark() -> ShotSelectorPalette {
     dark_theme().components.shot_selector
 }
 
+pub fn shot_selector_runtime() -> ShotSelectorPalette {
+    runtime_dark_theme().components.shot_selector
+}
+
 pub fn shot_preview_dark() -> ShotPreviewPalette {
     dark_theme().components.shot_preview
+}
+
+pub fn shot_preview_runtime() -> ShotPreviewPalette {
+    runtime_dark_theme().components.shot_preview
 }
 
 pub fn alt_tab_preview_plane_dark() -> AltTabPreviewPlanePalette {

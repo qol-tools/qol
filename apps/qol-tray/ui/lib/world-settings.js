@@ -11,7 +11,6 @@ const DEFAULTS = {
     resetZoomOnNav: true,
     ghostThreshold: 0.55,
     uiScaleOnZoomOut: true,
-    accent: null,
 };
 
 let current = load();
@@ -19,7 +18,7 @@ let current = load();
 function load() {
     try {
         const raw = localStorage.getItem(KEY);
-        return raw ? { ...DEFAULTS, ...JSON.parse(raw) } : { ...DEFAULTS };
+        return raw ? { ...DEFAULTS, ...withoutThemeOwnedSettings(JSON.parse(raw)) } : { ...DEFAULTS };
     } catch {
         return { ...DEFAULTS };
     }
@@ -36,6 +35,7 @@ const listeners = new Set();
 export function getWorldSettings() { return current; }
 
 export function setWorldSetting(key, value) {
+    if (key === 'accent') return;
     current[key] = value;
     save();
 }
@@ -43,4 +43,10 @@ export function setWorldSetting(key, value) {
 export function subscribeWorldSettings(fn) {
     listeners.add(fn);
     return () => listeners.delete(fn);
+}
+
+function withoutThemeOwnedSettings(settings) {
+    if (!settings || typeof settings !== 'object') return {};
+    const { accent: _accent, ...worldSettings } = settings;
+    return worldSettings;
 }

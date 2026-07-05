@@ -5,6 +5,7 @@ mod media_cover_handlers;
 mod media_icon_handlers;
 mod plugin_config_handlers;
 mod shortcut_handlers;
+mod theme_handlers;
 
 use axum::{
     routing::{get, post},
@@ -43,6 +44,11 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/hotkeys/errors", get(get_hotkey_errors))
         .route("/hotkeys/open-file", post(open_hotkeys_file))
         .route("/shortcuts/open-file", post(open_shortcuts_file))
+        .route("/theme/accent", get(theme_handlers::get_theme_accent))
+        .route(
+            "/theme/accent",
+            axum::routing::put(theme_handlers::set_theme_accent),
+        )
         .route("/shortcuts", get(shortcut_handlers::list_shortcuts))
         .route("/shortcuts", post(shortcut_handlers::create_shortcut))
         .route(

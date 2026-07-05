@@ -5,6 +5,7 @@ import { ALWAYS_ID } from '../../palette/registry.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { getWorldSettings, setWorldSetting, subscribeWorldSettings } from '../../lib/world-settings.js';
 import { ACCENT_PRESETS } from '../../lib/accent-presets.js';
+import { getThemeAccent, setThemeAccent, subscribeThemeAccent } from '../../lib/theme-accent-sync.js';
 import { IconCog } from '../../assets/icon-cog.js';
 import { useClickOutside } from '../../lib/hooks/useClickOutside.js';
 import { Peripheral } from './Peripheral.js';
@@ -93,9 +94,15 @@ export const MINIMAP_NEIGHBOURS_MIN = 1;
 export const MINIMAP_NEIGHBOURS_MAX = 12;
 
 function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction, branches, defaultBranch, setDefaultBranch, repoBranch, containerRef, onKeyDown }) {
+    const [themeAccent, setThemeAccentState] = useState(getThemeAccent);
     const updateRange = (key) => (e) => setWorldSetting(key, Number(e.target.value));
     const updateToggle = (key) => (value) => setWorldSetting(key, value);
     const updateSelect = (key) => (value) => setWorldSetting(key, value);
+    const updateThemeAccent = useCallback((key) => {
+        setThemeAccent(key).catch(() => {});
+    }, []);
+
+    useEffect(() => subscribeThemeAccent(setThemeAccentState), []);
 
     const minimapZoom = Number(settings.minimapZoomFactor ?? 4);
     const minimapZoomLabel = minimapZoom >= MINIMAP_NEIGHBOURS_MAX ? 'all' : `±${minimapZoom | 0}`;
@@ -130,8 +137,7 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
             </div>
             <div class="wsp-section">
                 <div class="wsp-heading">Appearance</div>
-                <${AccentRow} value=${settings.accent} isDevMode=${isDevMode}
-                    onPick=${(key) => setWorldSetting('accent', key)} />
+                <${AccentRow} value=${themeAccent} isDevMode=${isDevMode} onPick=${updateThemeAccent} />
             </div>
             ${isDevMode && branches && branches.length > 0 && html`
                 <${WorktreeSection} branches=${branches} defaultBranch=${defaultBranch}

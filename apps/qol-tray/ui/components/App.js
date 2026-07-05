@@ -7,7 +7,7 @@ import { prettyLabel } from '../auto-config/heuristics.js';
 import { createNavigation, selectorFor, animateTransition } from '../lib/world-navigation.js';
 import { setAscend, setDiveFromSurface, setDiveViaSelector } from '../lib/world-navigation-singleton.js';
 import { getWorldSettings, subscribeWorldSettings } from '../lib/world-settings.js';
-import { applyAccent, resolveAccent } from '../lib/accent-presets.js';
+import { applyThemeAccent } from '../lib/theme-accent-sync.js';
 
 const log = createDebug('qol:app');
 import { PluginConfigProvider } from '../views/plugin-config/context.js';
@@ -322,9 +322,7 @@ function AppShell() {
     }, []);
 
     useEffect(() => {
-        const apply = () => applyAccent(resolveAccent(getWorldSettings().accent));
-        apply();
-        return subscribeWorldSettings(apply);
+        applyThemeAccent();
     }, []);
 
     useEffect(() => {

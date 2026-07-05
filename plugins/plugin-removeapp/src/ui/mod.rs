@@ -12,7 +12,7 @@ use crate::core::{
     self, CaskIndex, CaskStatus, Disposal, Guards, InstalledApp, RemovalOutcome, RemovalPlan,
 };
 use qol_gpui::scroll_list::ScrollList;
-use qol_gpui::theme::{remove_app_dark, RemoveAppPalette};
+use qol_gpui::theme::{remove_app_runtime, RemoveAppPalette};
 
 pub const WINDOW_TITLE: &str = "removeapp";
 pub const WINDOW_WIDTH: f32 = 460.0;
@@ -22,7 +22,7 @@ const FOOTER_H: f32 = 34.0;
 const ROW_H: f32 = 38.0;
 const MAX_VISIBLE: usize = ((WINDOW_HEIGHT - SEARCH_H - FOOTER_H) / ROW_H) as usize;
 
-static CURRENT_PALETTE: LazyLock<RemoveAppPalette> = LazyLock::new(remove_app_dark);
+static CURRENT_PALETTE: LazyLock<RemoveAppPalette> = LazyLock::new(remove_app_runtime);
 
 fn current_palette() -> &'static RemoveAppPalette {
     &CURRENT_PALETTE

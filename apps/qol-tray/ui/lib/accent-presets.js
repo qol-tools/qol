@@ -17,6 +17,7 @@ function buildPresets(palette) {
 export const ACCENT_PRESETS = buildPresets(boot?.accent?.palette || QOL_ACCENT_PRESETS);
 
 export const DEFAULT_ACCENT = boot?.accent?.defaultKey ?? QOL_DEFAULT_ACCENT;
+export const SELECTED_ACCENT = boot?.accent?.selectedKey ?? null;
 export const DEFAULT_ACCENT_RGB = ACCENT_PRESETS[DEFAULT_ACCENT]?.rgb || QOL_DEFAULT_ACCENT_RGB;
 
 export function resolveAccent(setting) {
