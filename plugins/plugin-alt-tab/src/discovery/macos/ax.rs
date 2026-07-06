@@ -432,7 +432,7 @@ fn should_keep(win: &CgWindow, dedup: &PidDedup, emitted: usize) -> bool {
         );
         return false;
     }
-    if dedup.ax_ids.len() >= dedup.budget && !dedup.ax_ids.contains(&win.id) {
+    if !dedup.ax_ids.is_empty() && !dedup.ax_ids.contains(&win.id) {
         #[cfg(debug_assertions)]
         eprintln!(
             "[alt-tab/ax] DEDUP not in AX ids: wid={} app={:?}",
@@ -610,4 +610,53 @@ unsafe fn pick_best_match(
         CFRelease(first_win);
     }
     std::ptr::null()
+}
+
+#[cfg(test)]
+mod dedup_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn window(id: u32) -> CgWindow {
+        CgWindow {
+            id,
+            pid: 100,
+            layer: 0,
+            app_name: "foo".to_string(),
+            title: "bar".to_string(),
+            has_title: true,
+            is_onscreen: true,
+            is_cross_space: false,
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        }
+    }
+
+    #[test]
+    fn budget_slack_never_readmits_windows_missing_from_ax_ids() {
+        let mut ax_meta = HashMap::new();
+        ax_meta.insert(
+            10u32,
+            AxWindowMeta {
+                title: "bar".to_string(),
+                is_minimized: false,
+            },
+        );
+        let dedup = PidDedup {
+            ax_ids: ax_meta.keys().copied().collect(),
+            ax_meta,
+            budget: 2,
+        };
+        let mut info = HashMap::new();
+        info.insert(100, dedup);
+        let out = emit_deduped(vec![window(10), window(11)], &info);
+        let ids: Vec<u32> = out.iter().map(|w| w.id).collect();
+        assert_eq!(
+            ids,
+            vec![10],
+            "AX listed exactly one window; the second CG entry is an overlay and must be dropped"
+        );
+    }
 }
