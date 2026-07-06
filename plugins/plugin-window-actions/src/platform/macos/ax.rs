@@ -12,7 +12,7 @@ use super::objc::{
     AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE, CG_WINDOW_LIST_EXCLUDE_DESKTOP,
     CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
-use super::trace::{timed_bool, timed_opt, timed_pred, timed_unit};
+use super::trace::{timed_bool, timed_opt, timed_pred};
 
 const VERIFY_TIMEOUT: Duration = Duration::from_millis(120);
 const VERIFY_INTERVAL: Duration = Duration::from_millis(8);
@@ -78,13 +78,37 @@ fn ns_running_app(pid: i32) -> Option<*mut c_void> {
     Some(ns_app)
 }
 
-fn activate_app(pid: i32, options: usize) {
-    timed_unit("activate_app", pid, || unsafe {
-        let Some(ns_app) = ns_running_app(pid) else {
-            return;
-        };
-        msg_bool_usize(ns_app, sel("activateWithOptions:"), options);
-    });
+fn activate_app(pid: i32, app: *const c_void, options: usize) -> bool {
+    timed_bool("activate_app", pid, || unsafe {
+        let _ = set_ax_bool_attr(app, "AXFrontmost", true);
+        if wait_for_app_active(pid) {
+            return true;
+        }
+        if let Some(ns_app) = ns_running_app(pid) {
+            msg_bool_usize(ns_app, sel("activateWithOptions:"), options);
+        }
+        wait_for_app_active(pid)
+    })
+}
+
+fn wait_for_app_active(pid: i32) -> bool {
+    if app_is_active(pid) {
+        return true;
+    }
+
+    let deadline = Instant::now() + VERIFY_TIMEOUT;
+    while Instant::now() < deadline {
+        sleep(VERIFY_INTERVAL);
+        if app_is_active(pid) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn app_is_active(pid: i32) -> bool {
+    ns_app_bool(pid, "isActive") || frontmost_pid() == Some(pid)
 }
 
 fn read_ax_position(win: *const c_void) -> Option<CGPoint> {
@@ -100,44 +124,9 @@ fn read_ax_position(win: *const c_void) -> Option<CGPoint> {
     Some(pos)
 }
 
-fn ax_set_position(win: *const c_void, pos: &CGPoint) {
-    let val = CfGuard::new(unsafe {
-        AXValueCreate(AX_VALUE_TYPE_CG_POINT, pos as *const _ as *const c_void)
-    })
-    .unwrap();
-    let attr = CfGuard::new(cfstr("AXPosition")).unwrap();
-    unsafe {
-        AXUIElementSetAttributeValue(win, attr.as_const(), val.as_const());
-    }
-}
-
-/// Nudge window position +1px then back to force WindowServer to re-register input.
-fn nudge_position(win: *const c_void) {
-    let Some(pos) = read_ax_position(win) else {
-        return;
-    };
-    ax_set_position(
-        win,
-        &CGPoint {
-            x: pos.x + 1.0,
-            y: pos.y,
-        },
-    );
-    ax_set_position(win, &pos);
-}
-
-fn plain_minimize(win: *const c_void) -> bool {
-    let _ = set_ax_bool_attr(win, "AXMinimized", true);
-    if wait_for_bool_attr(win, "AXMinimized", true) {
-        return true;
-    }
-
-    false
-}
-
 fn verified_minimize(pid: i32, win: *const c_void) -> bool {
     timed_bool("set_minimized", pid, || {
-        if plain_minimize(win) {
+        if set_ax_bool_attr(win, "AXMinimized", true) {
             return true;
         }
         let _ = press_minimize_button(pid, win);
@@ -422,6 +411,11 @@ fn app_is_hidden(pid: i32, app: *const c_void) -> bool {
     ax_bool_attr_is(app, "AXHidden", true) || ns_app_is_hidden(pid)
 }
 
+fn focus_window(win: *const c_void) {
+    let _ = set_ax_bool_attr(win, "AXMain", true);
+    let _ = set_ax_bool_attr(win, "AXFocused", true);
+}
+
 fn ns_hide_app(pid: i32) -> bool {
     timed_bool("ns_hide", pid, || ns_app_bool(pid, "hide"))
 }
@@ -492,9 +486,11 @@ pub(super) fn unminimize_and_raise(pid: i32) -> bool {
 
         if was_hidden {
             let _ = show_app(pid, app.as_ptr());
-            activate_app(pid, 3); // IgnoringOtherApps | AllWindows
-            return true;
+            return activate_app(pid, app.as_ptr(), 3); // IgnoringOtherApps | AllWindows
         }
+
+        let app_was_frontmost = frontmost_pid() == Some(pid);
+        let mut restored = false;
 
         // Individual window minimize: only restore one window.
         if let Some(windows) = ax_attr(app.as_ptr(), "AXWindows") {
@@ -508,15 +504,23 @@ pub(super) fn unminimize_and_raise(pid: i32) -> bool {
                 }
                 unsafe {
                     AXUIElementSetAttributeValue(win, ax_minimized.as_const(), cf_boolean_false());
-                    AXUIElementPerformAction(win, ax_raise.as_const());
                 }
-                nudge_position(win);
+                if !app_was_frontmost {
+                    unsafe {
+                        AXUIElementPerformAction(win, ax_raise.as_const());
+                    }
+                    if !activate_app(pid, app.as_ptr(), 2) {
+                        return false;
+                    }
+                } else {
+                    focus_window(win);
+                }
+                restored = true;
                 break;
             }
         }
 
         // Only raise the restored window, not all app windows.
-        activate_app(pid, 2); // IgnoringOtherApps (without AllWindows)
-        true
+        restored && wait_for_app_active(pid)
     })
 }
