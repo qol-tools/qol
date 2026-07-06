@@ -1,3 +1,5 @@
+import { QOL_TRAY_INTERNAL_COLORS } from '../../lib/generated-theme-tokens.js';
+
 let resolveColor;
 if (typeof document !== 'undefined') {
     resolveColor = (cssValue) => {
@@ -651,7 +653,7 @@ export function sampleCompositeBg(el) {
     let node = el;
     while (node) {
         const bg = getComputedStyle(node).backgroundColor;
-        if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') layers.push(bg);
+        if (bg && bg !== QOL_TRAY_INTERNAL_COLORS.transparentKeyword && bg !== QOL_TRAY_INTERNAL_COLORS.transparentRgba) layers.push(bg);
         node = node.parentElement;
     }
     layers.reverse();

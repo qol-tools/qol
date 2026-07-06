@@ -5,6 +5,7 @@ import { useDispatchAction } from '../../../lib/hooks/useDispatchAction.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
 import { Slider } from '../../../lib/components/Slider.js';
 import { openColorStream, closeColorStream, streamBrightness } from './color-stream.js';
+import { QOL_TRAY_INTERNAL_COLORS } from '../../../lib/generated-theme-tokens.js';
 
 const DEFAULT_MIN = 0;
 const DEFAULT_MAX = 100;
@@ -71,7 +72,7 @@ export function SliderField({ field }) {
 
 function streamValue(field, value, ctx) {
     if (field.config_key === 'live_brightness') {
-        const colorHex = (ctx.state?.config?.live_color_hex || '#ffffff').replace(/^#/, '');
+        const colorHex = (ctx.state?.config?.live_color_hex || QOL_TRAY_INTERNAL_COLORS.configLiveColorFallback).replace(/^#/, '');
         streamBrightness(value, colorHex);
     }
 }

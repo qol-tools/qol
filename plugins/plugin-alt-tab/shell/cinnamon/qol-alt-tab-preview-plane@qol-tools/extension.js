@@ -6,6 +6,7 @@ const St = imports.gi.St;
 const Main = imports.ui.main;
 const Mainloop = imports.mainloop;
 const WindowUtils = imports.misc.windowUtils;
+const Theme = require("./generated-theme-tokens");
 
 const DBUS_IFACE = `
 <node>
@@ -116,7 +117,7 @@ class PreviewPlane {
         this._group = new St.Widget({
             name: "qol-alt-tab-preview-plane",
             reactive: false,
-            style: backdrop ? "background-color: rgba(0, 0, 0, 28);" : null
+            style: backdrop ? `background-color: ${Theme.backdrop};` : null
         });
         this._group.set_position(0, 0);
         this._group.set_size(global.stage.width, global.stage.height);
@@ -193,7 +194,7 @@ class PreviewPlane {
         if (labelH > 0) {
             const label = new St.Label({
                 text: title.slice(0, 72),
-                style: "font-size: 12px; color: #edf3ff; padding-left: 8px; padding-right: 8px;"
+                style: `font-size: 12px; color: ${Theme.labelText}; padding-left: 8px; padding-right: 8px;`
             });
             label.set_position(0, h - labelH);
             label.set_size(w, labelH);
@@ -269,11 +270,11 @@ class PreviewPlane {
 
     _cardStyle(selected) {
         if (selected) {
-            return "background-color: rgba(40, 55, 78, 210); " +
-                "border: 2px solid rgba(180, 215, 255, 255); border-radius: 8px;";
+            return `background-color: ${Theme.cardSelectedBg}; ` +
+                `border: 2px solid ${Theme.cardSelectedBorder}; border-radius: 8px;`;
         }
-        return "background-color: rgba(20, 24, 30, 200); " +
-            "border: 1px solid rgba(160, 170, 190, 180); border-radius: 8px;";
+        return `background-color: ${Theme.cardBg}; ` +
+            `border: 1px solid ${Theme.cardBorder}; border-radius: 8px;`;
     }
 
     _findMetaWindow(wid) {

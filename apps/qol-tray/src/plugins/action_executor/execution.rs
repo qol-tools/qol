@@ -178,6 +178,7 @@ fn runtime_command(resolved: &ResolvedAction, command_path: &Path) -> std::proce
             qol_conventions::ENV_STATE_SOCKET,
             crate::dev_generation::state_socket_path(),
         );
+    crate::features::theme::apply_accent_env(&mut command);
     if let Some(socket_path) = &resolved.daemon_socket {
         command.env(qol_conventions::ENV_DAEMON_SOCKET, socket_path);
     }
@@ -246,5 +247,20 @@ mod tests {
             Some(OsStr::new(crate::paths::STATE_SOCKET_PATH)),
             "watchdog lifeline must point at the host state socket",
         );
+    }
+
+    #[test]
+    fn runtime_command_injects_saved_theme_accent() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        crate::features::theme::save_selected_accent_key("blue").unwrap();
+
+        let command = runtime_command(&resolved(), Path::new("/bin/true"));
+        let (_, value) = command
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new(qol_conventions::ENV_THEME_ACCENT))
+            .expect("runtime action spawns must inherit the selected tray accent");
+
+        assert_eq!(value, Some(OsStr::new("blue")));
     }
 }

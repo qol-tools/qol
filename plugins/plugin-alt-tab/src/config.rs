@@ -40,8 +40,6 @@ impl Default for DisplayConfig {
     }
 }
 
-pub use qol_color::parse_hex_color;
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PreviewIconPosition {

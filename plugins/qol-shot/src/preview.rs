@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use gpui::*;
@@ -13,6 +13,7 @@ use qol_gpui::ghost::{ghost_window_title, show_ghost_window, sync_window_layout}
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
+use qol_gpui::theme::{shot_preview_runtime, ShotPreviewPalette};
 use qol_gpui::window::{centered_window_placement, ActiveWindows, MonitorKey, WindowPlacement};
 
 use crate::screenshot::PreviewCapture;
@@ -29,6 +30,11 @@ const PREVIEW_TITLE: &str = "qol-shot-preview";
 const PREVIEW_APP_ID: &str = "qol-tray-shot";
 
 static PREVIEW_SEQ: AtomicU64 = AtomicU64::new(0);
+static CURRENT_PALETTE: LazyLock<ShotPreviewPalette> = LazyLock::new(shot_preview_runtime);
+
+fn current_palette() -> &'static ShotPreviewPalette {
+    &CURRENT_PALETTE
+}
 
 type Completion = Arc<Mutex<Option<Result<()>>>>;
 type DismissSub = (Subscription, Subscription, Option<Task<()>>);
@@ -615,6 +621,7 @@ impl Focusable for PreviewView {
 impl Render for PreviewView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_dismiss_tracking(window, cx);
+        let palette = current_palette();
 
         let mut root = div()
             .id("shot-preview")
@@ -622,7 +629,7 @@ impl Render for PreviewView {
             .on_key_down(cx.listener(Self::on_key))
             .size_full()
             .relative()
-            .bg(rgb(0x14141c));
+            .bg(rgb(palette.window_bg));
 
         if !self.ready {
             return root;
@@ -654,7 +661,7 @@ impl Render for PreviewView {
                     .rounded_md()
                     .overflow_hidden()
                     .border_1()
-                    .border_color(rgb(0x2a2a3a))
+                    .border_color(rgb(palette.thumb_border))
                     .child(self.thumbnail(thumb_w, thumb_h)),
             )
             .child(
@@ -665,7 +672,7 @@ impl Render for PreviewView {
                     .right_0()
                     .flex()
                     .justify_center()
-                    .text_color(rgb(0xc8c8e0))
+                    .text_color(rgb(palette.label_text))
                     .child(label),
             );
 
@@ -686,16 +693,16 @@ impl Render for PreviewView {
                     .justify_center()
                     .border_2()
                     .border_color(if selected {
-                        rgb(0x8a8aff)
+                        rgb(palette.action_border_selected)
                     } else {
-                        rgb(0x33333f)
+                        rgb(palette.action_border)
                     })
                     .bg(if selected {
-                        rgb(0x2a2a52)
+                        rgb(palette.action_bg_selected)
                     } else {
-                        rgb(0x1d1d28)
+                        rgb(palette.action_bg)
                     })
-                    .text_color(rgb(0xe8e8f4))
+                    .text_color(rgb(palette.action_glyph))
                     .child(action.glyph())
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         this.choose(action, window, cx)

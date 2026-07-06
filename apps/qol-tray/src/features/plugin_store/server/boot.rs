@@ -1,48 +1,14 @@
 use serde::Serialize;
 
+use qol_theme::{css, dark_accent_presets};
+
 #[derive(Serialize)]
 struct AccentEntry {
     key: &'static str,
     label: &'static str,
-    rgb: &'static str,
-    hover: &'static str,
+    rgb: String,
+    hover: String,
 }
-
-const PALETTE: &[AccentEntry] = &[
-    AccentEntry {
-        key: "amber",
-        label: "Amber",
-        rgb: "255, 180, 84",
-        hover: "#ffc77a",
-    },
-    AccentEntry {
-        key: "green",
-        label: "Green",
-        rgb: "70, 224, 138",
-        hover: "#7ff0ab",
-    },
-    AccentEntry {
-        key: "cyan",
-        label: "Cyan",
-        rgb: "86, 214, 224",
-        hover: "#8fe8f0",
-    },
-    AccentEntry {
-        key: "magenta",
-        label: "Magenta",
-        rgb: "232, 121, 198",
-        hover: "#f49ad6",
-    },
-    AccentEntry {
-        key: "blue",
-        label: "Blue",
-        rgb: "74, 158, 255",
-        hover: "#68b0ff",
-    },
-];
-
-const PROD_DEFAULT: &str = "amber";
-const DEV_DEFAULT: &str = "green";
 
 /// Sentinel the served `index.html` ships with; the index handler swaps it for the
 /// real boot document. Kept here so the handler and the asset never drift apart.
@@ -50,9 +16,23 @@ pub(super) const BOOT_PLACEHOLDER: &str = "window.__QOL_BOOT__ = null; /* QOL_BO
 
 #[derive(Serialize)]
 struct AccentBoot {
-    palette: &'static [AccentEntry],
+    palette: Vec<AccentEntry>,
     #[serde(rename = "defaultKey")]
-    default_key: &'static str,
+    default_key: String,
+    #[serde(rename = "selectedKey")]
+    selected_key: Option<String>,
+}
+
+fn accent_palette() -> Vec<AccentEntry> {
+    dark_accent_presets()
+        .iter()
+        .map(|preset| AccentEntry {
+            key: preset.key,
+            label: preset.label,
+            rgb: css::rgb_string(preset.rgb),
+            hover: css::hex_string(preset.hover),
+        })
+        .collect()
 }
 
 #[cfg(target_os = "macos")]
@@ -86,8 +66,9 @@ pub(super) fn boot_json(dev: bool) -> String {
     let state = BootState {
         dev,
         accent: AccentBoot {
-            palette: PALETTE,
-            default_key: if dev { DEV_DEFAULT } else { PROD_DEFAULT },
+            palette: accent_palette(),
+            default_key: crate::features::theme::resolved_accent_key(dev),
+            selected_key: crate::features::theme::selected_accent_key().ok().flatten(),
         },
         device: device_boot(),
     };
@@ -107,6 +88,17 @@ pub(crate) async fn current_dev() -> bool {
 mod tests {
     use super::*;
 
+    fn rgb_string(color: u32) -> String {
+        let red = (color >> 16) & 0xff;
+        let green = (color >> 8) & 0xff;
+        let blue = color & 0xff;
+        format!("{red}, {green}, {blue}")
+    }
+
+    fn hex_string(color: u32) -> String {
+        format!("#{:06x}", color & 0x00ff_ffff)
+    }
+
     fn default_key(json: &str) -> String {
         let v: serde_json::Value = serde_json::from_str(json).unwrap();
         v["accent"]["defaultKey"].as_str().unwrap().to_string()
@@ -114,12 +106,42 @@ mod tests {
 
     #[test]
     fn dev_resolves_default_to_green() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
         assert_eq!(default_key(&boot_json(true)), "green");
     }
 
     #[test]
     fn prod_resolves_default_to_amber() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
         assert_eq!(default_key(&boot_json(false)), "amber");
+    }
+
+    #[test]
+    fn boot_json_prefers_saved_accent_over_mode_default() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        crate::features::theme::save_selected_accent_key("blue").unwrap();
+
+        let dev: serde_json::Value = serde_json::from_str(&boot_json(true)).unwrap();
+        let prod: serde_json::Value = serde_json::from_str(&boot_json(false)).unwrap();
+        assert_eq!(dev["accent"]["defaultKey"], "blue");
+        assert_eq!(dev["accent"]["selectedKey"], "blue");
+        assert_eq!(prod["accent"]["defaultKey"], "blue");
+        assert_eq!(prod["accent"]["selectedKey"], "blue");
+    }
+
+    #[test]
+    fn boot_json_marks_auto_accent_with_null_selected_key() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        let dev: serde_json::Value = serde_json::from_str(&boot_json(true)).unwrap();
+        assert_eq!(dev["accent"]["defaultKey"], "green");
+        assert_eq!(dev["accent"]["selectedKey"], serde_json::Value::Null);
     }
 
     #[test]
@@ -127,12 +149,26 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&boot_json(true)).unwrap();
         assert_eq!(v["dev"], true);
         let palette = v["accent"]["palette"].as_array().unwrap();
-        assert_eq!(palette.len(), PALETTE.len());
+        assert_eq!(palette.len(), dark_accent_presets().len());
         for entry in palette {
             assert!(entry["key"].is_string());
             assert!(entry["rgb"].is_string());
             assert!(entry["hover"].is_string());
         }
+    }
+
+    #[test]
+    fn boot_palette_is_serialized_from_qol_theme() {
+        let v: serde_json::Value = serde_json::from_str(&boot_json(false)).unwrap();
+        let amber = v["accent"]["palette"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["key"] == "amber")
+            .expect("amber preset present");
+        let preset = qol_theme::dark_accent_preset("amber").unwrap();
+        assert_eq!(amber["rgb"], rgb_string(preset.rgb));
+        assert_eq!(amber["hover"], hex_string(preset.hover));
     }
 
     #[test]
@@ -152,6 +188,19 @@ mod tests {
         assert!(
             index.contains(BOOT_PLACEHOLDER),
             "index.html lost the boot placeholder; the boot document would never be injected"
+        );
+    }
+
+    #[test]
+    fn served_index_does_not_use_world_settings_as_accent_source() {
+        let index = super::super::assets::index_html_for_test();
+        assert!(
+            !index.contains("qol-world-settings"),
+            "accent bootstrapping must use backend boot state, not world-settings localStorage"
+        );
+        assert!(
+            !index.contains("ws.accent"),
+            "accent bootstrapping must not prefer the legacy world-settings accent"
         );
     }
 }

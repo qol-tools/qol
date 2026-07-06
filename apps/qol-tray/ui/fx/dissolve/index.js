@@ -5,6 +5,7 @@ import {
 } from './engine.js';
 import { resolveColor } from '../canvas.js';
 import { createField, renderField } from './glitch-squares.js';
+import { QOL_TRAY_INTERNAL_COLORS } from '../../lib/generated-theme-tokens.js';
 
 export { createEvaporateState, evaporateFrame, runDissolve };
 
@@ -64,7 +65,7 @@ export function materializeInScatter(container, opts = {}) {
         materialize: 16,
         ...opts,
     };
-    const s = createEvaporateState(canvas, bg, opts.targetColor ?? '#4a9eff', mergedOpts);
+    const s = createEvaporateState(canvas, bg, opts.targetColor ?? QOL_TRAY_INTERNAL_COLORS.dissolveTargetColor, mergedOpts);
     const glowCanvas = document.createElement('canvas');
     glowCanvas.width = s.W;
     glowCanvas.height = s.H;
@@ -130,7 +131,7 @@ export function materializeIn(container, opts = {}) {
         materialize: 0,
         ...opts,
     };
-    const s = createEvaporateState(canvas, bg, opts.targetColor ?? '#4a9eff', mergedOpts);
+    const s = createEvaporateState(canvas, bg, opts.targetColor ?? QOL_TRAY_INTERNAL_COLORS.dissolveTargetColor, mergedOpts);
     const glowCanvas = document.createElement('canvas');
     glowCanvas.width = s.W;
     glowCanvas.height = s.H;

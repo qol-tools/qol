@@ -6,6 +6,7 @@ pub mod mode_toggle;
 pub mod plugin_store;
 pub mod profile;
 pub mod task_runner;
+pub mod theme;
 
 use crate::plugins::MenuItem as PluginMenuItem;
 use anyhow::Result;

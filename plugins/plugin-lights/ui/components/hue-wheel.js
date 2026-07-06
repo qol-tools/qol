@@ -1,5 +1,8 @@
 const DISC_SIZE = 280;
 const DISC_THUMB_R = 9;
+const WHEEL_SHADOW_COLOR = '--qol-lights-wheel-shadow';
+const WHEEL_THUMB_STROKE = '--qol-lights-wheel-thumb-stroke';
+const WHEEL_BRIGHTNESS_FLOOR = '--qol-lights-wheel-brightness-floor';
 
 export function createHueWheel(container, {
     onRelease,
@@ -107,8 +110,8 @@ export function createHueWheel(container, {
         ctx.fillStyle = '#' + hueSatToHex(hue, sat);
         ctx.fill();
         ctx.lineWidth = 3;
-        ctx.strokeStyle = 'white';
-        ctx.shadowColor = 'rgba(0,0,0,0.5)';
+        ctx.strokeStyle = themeColor(WHEEL_THUMB_STROKE);
+        ctx.shadowColor = themeColor(WHEEL_SHADOW_COLOR);
         ctx.shadowBlur = 6;
         ctx.stroke();
         ctx.restore();
@@ -163,7 +166,7 @@ export function createHueWheel(container, {
     function syncBrightnessSlider() {
         const hex = hueSatToHex(hue, sat);
         bSlider.track.style.background =
-            `linear-gradient(to right, #0a0a0a, #${hex})`;
+            `linear-gradient(to right, var(${WHEEL_BRIGHTNESS_FLOOR}), #${hex})`;
         bSlider.thumb.style.left = `${brightness}%`;
         bSlider.value.textContent = `${brightness}%`;
     }
@@ -244,6 +247,13 @@ export function createHueWheel(container, {
             wrapper.remove();
         },
     };
+}
+
+function themeColor(name) {
+    const value = getComputedStyle(document.documentElement)
+        .getPropertyValue(name)
+        .trim();
+    return value;
 }
 
 function hueComponents(h) {

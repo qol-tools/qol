@@ -1,13 +1,22 @@
+use std::sync::LazyLock;
+
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, Context, CursorStyle, FontWeight, KeyDownEvent, MouseButton,
     SharedString, Window,
 };
+use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
 
 use crate::registry::SessionState;
 use crate::status::Status;
 use crate::tool::Tool;
 use crate::ui::SessionsView;
+
+static CURRENT_PALETTE: LazyLock<CliSessionsPalette> = LazyLock::new(cli_sessions_runtime);
+
+fn current_palette() -> &'static CliSessionsPalette {
+    &CURRENT_PALETTE
+}
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
@@ -30,24 +39,26 @@ fn format_elapsed(since: u64) -> String {
 }
 
 fn status_color(status: Status) -> u32 {
+    let palette = current_palette();
     match status {
-        Status::NeedsYou => 0xf85149,
-        Status::YourTurn => 0xd29922,
-        Status::Working => 0x3fb950,
-        Status::Service => 0x58a6ff,
-        Status::Unknown => 0x6e7681,
-        Status::Acknowledged => 0x6e7681,
+        Status::NeedsYou => palette.needs_you,
+        Status::YourTurn => palette.your_turn,
+        Status::Working => palette.working,
+        Status::Service => palette.service,
+        Status::Unknown => palette.unknown,
+        Status::Acknowledged => palette.unknown,
     }
 }
 
 fn tint_color(status: Status) -> u32 {
+    let palette = current_palette();
     match status {
-        Status::NeedsYou => 0xf8514922,
-        Status::YourTurn => 0xd2992222,
-        Status::Working => 0x3fb9501e,
-        Status::Service => 0x58a6ff14,
-        Status::Unknown => 0x00000000,
-        Status::Acknowledged => 0x00000000,
+        Status::NeedsYou => palette.needs_you_tint_rgba,
+        Status::YourTurn => palette.your_turn_tint_rgba,
+        Status::Working => palette.working_tint_rgba,
+        Status::Service => palette.service_tint_rgba,
+        Status::Unknown => palette.transparent_rgba,
+        Status::Acknowledged => palette.transparent_rgba,
     }
 }
 
@@ -72,7 +83,13 @@ fn summary_groups(rows: &[SessionState]) -> Vec<(u32, usize)> {
             Status::Unknown | Status::Acknowledged => counts[4] += 1,
         }
     }
-    let colors = [0xf85149u32, 0xd29922, 0x3fb950, 0x58a6ff, 0x6e7681];
+    let colors = [
+        status_color(Status::NeedsYou),
+        status_color(Status::YourTurn),
+        status_color(Status::Working),
+        status_color(Status::Service),
+        status_color(Status::Unknown),
+    ];
     colors
         .into_iter()
         .zip(counts)
@@ -90,6 +107,7 @@ fn meta_value(s: &SessionState) -> String {
 }
 
 fn header(rows: &[SessionState]) -> impl IntoElement {
+    let palette = current_palette();
     div()
         .h(px(34.0))
         .w_full()
@@ -97,16 +115,16 @@ fn header(rows: &[SessionState]) -> impl IntoElement {
         .items_center()
         .justify_between()
         .px(px(12.0))
-        .bg(rgb(0x0d1117u32))
+        .bg(rgb(palette.chrome_bg))
         .border_b_1()
-        .border_color(rgb(0x21262du32))
+        .border_color(rgb(palette.divider))
         .cursor(CursorStyle::OpenHand)
         .on_mouse_down(MouseButton::Left, |_event, window, _cx| {
             window.start_window_move();
         })
         .child(
             div()
-                .text_color(rgb(0xc9d1d9u32))
+                .text_color(rgb(palette.text_heading))
                 .text_size(px(11.0))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child("CLI SESSIONS"),
@@ -120,7 +138,7 @@ fn header(rows: &[SessionState]) -> impl IntoElement {
                     .child(div().w(px(7.0)).h(px(7.0)).rounded_full().bg(rgb(color)))
                     .child(
                         div()
-                            .text_color(rgb(0x8b949eu32))
+                            .text_color(rgb(palette.text_secondary))
                             .text_size(px(11.0))
                             .child(format!("{count}")),
                     )
@@ -129,6 +147,7 @@ fn header(rows: &[SessionState]) -> impl IntoElement {
 }
 
 fn empty_state() -> impl IntoElement {
+    let palette = current_palette();
     div()
         .size_full()
         .flex()
@@ -139,32 +158,33 @@ fn empty_state() -> impl IntoElement {
         .px(px(24.0))
         .child(
             div()
-                .text_color(rgb(0xc9d1d9u32))
+                .text_color(rgb(palette.text_heading))
                 .text_size(px(13.0))
                 .child("No CLI sessions found"),
         )
         .child(
             div()
-                .text_color(rgb(0x7d8590u32))
+                .text_color(rgb(palette.text_muted))
                 .text_size(px(11.0))
                 .child("Open a CLI in kitty, then open this panel again."),
         )
 }
 
 fn key_hint(key: &'static str, label: &'static str) -> impl IntoElement {
+    let palette = current_palette();
     div()
         .flex()
         .items_center()
         .gap(px(5.0))
-        .text_color(rgb(0x6e7681u32))
+        .text_color(rgb(palette.text_faint))
         .text_size(px(10.0))
         .child(
             div()
-                .text_color(rgb(0xc9d1d9u32))
+                .text_color(rgb(palette.text_heading))
                 .text_size(px(9.0))
-                .bg(rgba(0xffffff0fu32))
+                .bg(rgba(palette.keycap_bg_rgba))
                 .border_1()
-                .border_color(rgb(0x30363du32))
+                .border_color(rgb(palette.border))
                 .rounded(px(4.0))
                 .px(px(5.0))
                 .py(px(1.0))
@@ -174,6 +194,7 @@ fn key_hint(key: &'static str, label: &'static str) -> impl IntoElement {
 }
 
 fn footer() -> impl IntoElement {
+    let palette = current_palette();
     div()
         .flex()
         .items_center()
@@ -181,9 +202,9 @@ fn footer() -> impl IntoElement {
         .w_full()
         .px(px(11.0))
         .py(px(7.0))
-        .bg(rgb(0x0d1117u32))
+        .bg(rgb(palette.chrome_bg))
         .border_t_1()
-        .border_color(rgb(0x21262du32))
+        .border_color(rgb(palette.divider))
         .child(key_hint("\u{2191}\u{2193}", "move"))
         .child(key_hint("\u{23CE}", "jump"))
         .child(key_hint("a", "ack"))
@@ -191,12 +212,13 @@ fn footer() -> impl IntoElement {
 }
 
 fn identity_line(s: &SessionState) -> impl IntoElement {
+    let palette = current_palette();
     let branch = s.branch.clone().unwrap_or_default();
     let label = s.name.clone().unwrap_or_else(|| s.project.clone());
     let (tool_tag, tool_color) = match s.tool {
-        Tool::Claude => ("Claude", 0xd97757u32),
-        Tool::Codex => ("Codex", 0x10a37fu32),
-        Tool::Generic => ("", 0x6e7681u32),
+        Tool::Claude => ("Claude", palette.claude),
+        Tool::Codex => ("Codex", palette.codex),
+        Tool::Generic => ("", palette.text_faint),
     };
 
     div()
@@ -218,7 +240,7 @@ fn identity_line(s: &SessionState) -> impl IntoElement {
                         .min_w(px(0.0))
                         .overflow_hidden()
                         .truncate()
-                        .text_color(rgb(0xe6edf3u32))
+                        .text_color(rgb(palette.text_primary))
                         .text_size(px(13.0))
                         .child(label),
                 )
@@ -226,7 +248,7 @@ fn identity_line(s: &SessionState) -> impl IntoElement {
                     d.child(
                         div()
                             .flex_none()
-                            .text_color(rgb(0x8b949eu32))
+                            .text_color(rgb(palette.text_secondary))
                             .text_size(px(11.0))
                             .child(branch),
                     )
@@ -252,6 +274,7 @@ fn summary_cell(
     cx: &mut Context<SessionsView>,
 ) -> AnyElement {
     let accent = status_color(status);
+    let palette = current_palette();
     if status == Status::YourTurn {
         return div()
             .id(("ack", index))
@@ -259,11 +282,11 @@ fn summary_cell(
             .px(px(7.0))
             .py(px(1.0))
             .rounded_md()
-            .bg(rgba(0xd2992233))
+            .bg(rgba(palette.your_turn_badge_rgba))
             .text_color(rgb(accent))
             .text_size(px(11.0))
             .cursor_pointer()
-            .hover(|s| s.bg(rgba(0xd2992255)))
+            .hover(|style| style.bg(rgba(palette.your_turn_hover_rgba)))
             .child(format!("{summary} \u{2713}"))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.acknowledge(window_id);
@@ -298,6 +321,7 @@ fn summary_cell(
 }
 
 fn status_line(s: &SessionState, index: usize, cx: &mut Context<SessionsView>) -> impl IntoElement {
+    let palette = current_palette();
     div()
         .flex()
         .items_center()
@@ -309,7 +333,7 @@ fn status_line(s: &SessionState, index: usize, cx: &mut Context<SessionsView>) -
         .child(
             div()
                 .flex_none()
-                .text_color(rgb(0x6e7681u32))
+                .text_color(rgb(palette.text_faint))
                 .text_size(px(11.0))
                 .child(meta_value(s)),
         )
@@ -323,14 +347,15 @@ fn session_row(
 ) -> impl IntoElement {
     let tint = tint_color(s.status);
     let window_id = s.window_id;
+    let palette = current_palette();
     div()
         .id(("session-row", index))
         .w_full()
         .border_l_2()
         .border_color(if selected {
-            rgb(0x58a6ffu32)
+            rgb(palette.selection_border)
         } else {
-            rgba(0x00000000u32)
+            rgba(palette.transparent_rgba)
         })
         .on_click(cx.listener(move |this, _, _, cx| {
             this.jump_to_window(window_id, "row-click", cx);
@@ -341,7 +366,7 @@ fn session_row(
                 .w_full()
                 .bg(rgba(tint))
                 .border_b_1()
-                .border_color(rgb(0x21262du32))
+                .border_color(rgb(palette.divider))
                 .flex()
                 .flex_col()
                 .gap(px(3.0))
@@ -355,6 +380,7 @@ fn session_row(
 impl Render for SessionsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self.rows();
+        let palette = current_palette();
         let order: Vec<u64> = rows.iter().map(|s| s.window_id).collect();
         let highlight = self.selection().highlight_index(&order);
         let is_empty = rows.is_empty();
@@ -373,8 +399,8 @@ impl Render for SessionsView {
             .overflow_hidden()
             .rounded_lg()
             .border_1()
-            .border_color(rgb(0x30363du32))
-            .bg(rgb(0x161b22u32))
+            .border_color(rgb(palette.border))
+            .bg(rgb(palette.panel_bg))
             .font_family(SharedString::from("Menlo"))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| {
                 match ev.keystroke.key.as_str() {

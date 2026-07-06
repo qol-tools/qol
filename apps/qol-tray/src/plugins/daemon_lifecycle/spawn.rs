@@ -81,6 +81,7 @@ fn daemon_command(
     command.current_dir(&plugin.path).stdin(Stdio::null());
     command.env(qol_conventions::ENV_PLUGIN_ID, plugin.id.as_str());
     command.env("QOL_TRAY_PLUGIN_DIR", &plugin.path);
+    crate::features::theme::apply_accent_env(&mut command);
     apply_log_env(&mut command);
     apply_daemon_env(&mut command, daemon_config);
     apply_process_group(&mut command);
@@ -150,6 +151,7 @@ mod tests {
     use crate::plugins::{PluginId, PluginManifest};
     use serde_json::json;
     use std::ffi::OsStr;
+    use std::path::Path;
     use tempfile::TempDir;
 
     fn daemon_config() -> crate::plugins::manifest::DaemonConfig {
@@ -160,6 +162,44 @@ mod tests {
             port: None,
             extra_ports: Vec::new(),
         }
+    }
+
+    fn minimal_plugin(root: &std::path::Path) -> Plugin {
+        let manifest: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "plugin-launcher"
+uid = "uid-launcher"
+name = "Launcher"
+description = ""
+version = "1.0.0"
+
+[menu]
+label = "Launcher"
+items = []
+"#,
+        )
+        .unwrap();
+        Plugin::new(
+            PluginId::new("plugin-launcher"),
+            manifest,
+            root.join("plugin-launcher"),
+        )
+    }
+
+    #[test]
+    fn daemon_command_injects_saved_theme_accent() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        crate::features::theme::save_selected_accent_key("blue").unwrap();
+        let plugin = minimal_plugin(root.path());
+        let command = daemon_command(&plugin, &daemon_config(), Path::new("/bin/true"), None);
+
+        let (_, value) = command
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new(qol_conventions::ENV_THEME_ACCENT))
+            .expect("daemon spawns must inherit the selected tray accent");
+        assert_eq!(value, Some(OsStr::new("blue")));
     }
 
     #[test]

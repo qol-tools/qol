@@ -1,4 +1,6 @@
 import { computeSlotCoverage } from './minimap-geometry.js';
+import { DEFAULT_ACCENT_RGB } from './accent-presets.js';
+import { QOL_TRAY_INTERNAL_COLORS } from './generated-theme-tokens.js';
 
 const SLOT_INSET = 1;
 const RADIUS = 3;
@@ -7,14 +9,12 @@ const ACTIVE_SCALE_Y = 1.12;
 const VIEWPORT_MIN_WIDTH = 8;
 const INACTIVE_OPACITY_FLOOR = 0.22;
 const ACTIVE_OPACITY_FLOOR = 0.55;
-const ACCENT_FALLBACK = '255, 180, 84';
-
 function accentChannel() {
     if (typeof document === 'undefined' || typeof getComputedStyle === 'undefined') {
-        return ACCENT_FALLBACK;
+        return DEFAULT_ACCENT_RGB;
     }
     const v = getComputedStyle(document.documentElement).getPropertyValue('--accent-rgb');
-    return v.trim() || ACCENT_FALLBACK;
+    return v.trim() || DEFAULT_ACCENT_RGB;
 }
 
 function slotAlpha(coverage, floor) {
@@ -47,15 +47,15 @@ function drawInactiveSlot(ctx, cw, label, slot, alpha) {
 
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    ctx.fillStyle = QOL_TRAY_INTERNAL_COLORS.minimapInactiveFill;
     roundRect(ctx, innerX, innerY, innerW, innerH, RADIUS);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.strokeStyle = QOL_TRAY_INTERNAL_COLORS.minimapInactiveStroke;
     ctx.lineWidth = 0.5;
     ctx.stroke();
 
     if (innerW >= 18 && label) {
-        ctx.fillStyle = 'rgba(255,255,255,0.45)';
+        ctx.fillStyle = QOL_TRAY_INTERNAL_COLORS.minimapInactiveText;
         ctx.font = '8px -apple-system, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -83,20 +83,20 @@ function drawActiveSlot(ctx, cw, label, slot, alpha) {
     ctx.globalAlpha = alpha;
     ctx.shadowColor = `rgba(${accentChannel()}, 0.55)`;
     ctx.shadowBlur = 8;
-    ctx.fillStyle = 'rgba(255,255,255,0.22)';
+    ctx.fillStyle = QOL_TRAY_INTERNAL_COLORS.minimapActiveFill;
     roundRect(ctx, drawX, drawY, drawW, drawH, RADIUS);
     ctx.fill();
     ctx.restore();
 
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.strokeStyle = QOL_TRAY_INTERNAL_COLORS.minimapActiveStroke;
     ctx.lineWidth = 1.5;
     roundRect(ctx, drawX, drawY, drawW, drawH, RADIUS);
     ctx.stroke();
 
     if (drawW >= 18 && label) {
-        ctx.fillStyle = 'rgba(255,255,255,0.98)';
+        ctx.fillStyle = QOL_TRAY_INTERNAL_COLORS.minimapActiveText;
         ctx.font = 'bold 11px -apple-system, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';

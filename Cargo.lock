@@ -5800,6 +5800,7 @@ dependencies = [
  "objc2-foundation",
  "qol-config",
  "qol-runtime",
+ "qol-theme",
  "raw-window-handle",
  "serde",
  "serde_json",
@@ -5914,6 +5915,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-theme"
+version = "1.0.0"
+dependencies = [
+ "qol-color",
+ "qol-conventions",
+]
+
+[[package]]
 name = "qol-tray"
 version = "3.19.0"
 dependencies = [
@@ -5949,6 +5958,7 @@ dependencies = [
  "qol-migrations",
  "qol-plugin-api",
  "qol-runtime",
+ "qol-theme",
  "qol-workspace",
  "rand 0.9.4",
  "reqwest",

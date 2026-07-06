@@ -11,6 +11,10 @@ pub mod runtime_config;
 pub mod scroll_list;
 pub mod window;
 
+pub mod theme {
+    pub use qol_theme::*;
+}
+
 pub use qol_runtime::protocol;
 pub use qol_runtime::{CursorPos, MonitorBounds, PlatformState, WindowBounds};
 #[cfg(unix)]

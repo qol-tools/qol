@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { useQueryPoll } from '../../../lib/hooks/useQueryPoll.js';
 import { fieldLayoutAttrs } from '../field-map.js';
+import { QOL_TRAY_INTERNAL_COLORS } from '../../../lib/generated-theme-tokens.js';
 
 const DEFAULT_POLL_MS = 5000;
 const QR_SIZE = 256;
@@ -23,7 +24,10 @@ export function QrCodeField({ field }) {
         QRCode.toCanvas(canvasRef.current, url, {
             width: QR_SIZE,
             margin: 2,
-            color: { dark: '#000000', light: '#ffffff' },
+            color: {
+                dark: QOL_TRAY_INTERNAL_COLORS.configQrDark,
+                light: QOL_TRAY_INTERNAL_COLORS.configQrLight,
+            },
         }).catch(() => {});
     }, [url]);
 

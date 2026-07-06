@@ -83,6 +83,33 @@ impl PluginManager {
         runtime::restart_running_plugin_daemon(self, plugin_id)
     }
 
+    pub fn restart_running_gpui_daemons(&mut self) -> Vec<PluginId> {
+        let plugin_ids = self.running_gpui_daemon_ids();
+        let mut restarted = Vec::new();
+        for plugin_id in plugin_ids {
+            match self.restart_running_plugin_daemon(plugin_id.as_str()) {
+                Ok(()) => restarted.push(plugin_id),
+                Err(error) => {
+                    log::error!(
+                        "Failed to restart GPUI daemon {} after theme accent change: {}",
+                        plugin_id,
+                        error
+                    );
+                }
+            }
+        }
+        restarted
+    }
+
+    pub fn running_gpui_daemon_ids(&self) -> Vec<PluginId> {
+        self.plugins
+            .values()
+            .filter(|plugin| plugin.manifest.capabilities.gpui)
+            .filter(|plugin| plugin.daemon_pid().is_some())
+            .map(|plugin| plugin.id.clone())
+            .collect()
+    }
+
     pub fn ensure_plugin_daemon_running(&mut self, plugin_id: &str) -> Result<()> {
         runtime::ensure_plugin_daemon_running(self, plugin_id)
     }
@@ -149,6 +176,17 @@ items = []
 {daemon_section}"#
         ))
         .unwrap()
+    }
+
+    fn plugin_with_daemon(id: &str, gpui: bool, daemon: std::process::Child) -> Plugin {
+        let mut plugin = Plugin::new(
+            PluginId::new(id),
+            manifest(id, true),
+            std::path::PathBuf::new(),
+        );
+        plugin.manifest.capabilities.gpui = gpui;
+        plugin.daemon_process = Some(daemon);
+        plugin
     }
 
     fn insert_plugin(
@@ -218,5 +256,43 @@ items = []
                 .unwrap_or_else(|| panic!("missing snapshot for {id}"));
             assert_eq!(*expectation, expected, "plugin: {id}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn running_gpui_daemon_ids_skips_headless_and_stopped_plugins() {
+        let mut manager = PluginManager::new();
+        manager.plugins.insert(
+            PluginId::new("plugin-gpui-running"),
+            plugin_with_daemon(
+                "plugin-gpui-running",
+                true,
+                std::process::Command::new("true").spawn().unwrap(),
+            ),
+        );
+        manager.plugins.insert(
+            PluginId::new("plugin-headless-running"),
+            plugin_with_daemon(
+                "plugin-headless-running",
+                false,
+                std::process::Command::new("true").spawn().unwrap(),
+            ),
+        );
+        let mut stopped_gpui = Plugin::new(
+            PluginId::new("plugin-gpui-stopped"),
+            manifest("plugin-gpui-stopped", true),
+            std::path::PathBuf::new(),
+        );
+        stopped_gpui.manifest.capabilities.gpui = true;
+        manager
+            .plugins
+            .insert(PluginId::new("plugin-gpui-stopped"), stopped_gpui);
+
+        let ids = manager.running_gpui_daemon_ids();
+
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0].as_str(), "plugin-gpui-running");
+
+        manager.shutdown();
     }
 }
