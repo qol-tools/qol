@@ -62,22 +62,45 @@ pub(super) fn start_reload(dash: &mut Dash) {
         return;
     }
     match spawn_reload(dash) {
-        Some((child, rx)) => {
+        Ok((child, rx)) => {
             dash.push_log("[qol dev] reloading: prebuild dev artifacts");
             dash.reload = Reload::Running { child, rx };
         }
-        None => dash.push_log("[qol dev] reload failed to start"),
+        Err(error) => dash.push_log(format!("[qol dev] reload failed to start: {error:#}")),
     }
 }
 
-fn spawn_reload(dash: &Dash) -> Option<(Child, Receiver<String>)> {
-    let root = crate::workspace::repo_root().ok()?;
-    let exe = std::env::current_exe().ok()?;
+fn spawn_reload(dash: &Dash) -> Result<(Child, Receiver<String>)> {
+    let root = crate::workspace::repo_root().context("failed to resolve qol workspace root")?;
+    let exe = reload_executable().context("failed to resolve reload executable")?;
     let raw_args = std::env::args_os().skip(1);
     let mut command = reload_prebuild_command(&root, &exe, raw_args, reload_target_arg(dash));
-    let mut child = command.spawn().ok()?;
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("failed to spawn reload prebuild command {}", exe.display()))?;
     let rx = spawn_forwarders(&mut child);
-    Some((child, rx))
+    Ok((child, rx))
+}
+
+fn reload_executable() -> Result<PathBuf> {
+    let current = std::env::current_exe().context("failed to resolve current executable")?;
+    Ok(reload_executable_path(
+        &current,
+        std::env::var_os("HOME").as_deref().map(Path::new),
+    ))
+}
+
+fn reload_executable_path(current: &Path, home: Option<&Path>) -> PathBuf {
+    if current.symlink_metadata().is_ok() {
+        return current.to_path_buf();
+    }
+    if let Some(home) = home {
+        return home
+            .join(".cargo")
+            .join("bin")
+            .join(crate::workspace::exe_name("qol"));
+    }
+    PathBuf::from(crate::workspace::exe_name("qol"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -600,6 +623,43 @@ mod tests {
         );
         assert_eq!(command.get_current_dir(), Some(root));
         assert_eq!(command.get_program(), exe.as_os_str());
+    }
+
+    #[test]
+    fn reload_executable_prefers_the_current_binary_when_it_still_exists() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let current = tmp.path().join("target/debug/qol");
+        fs::create_dir_all(current.parent().unwrap()).unwrap();
+        fs::write(&current, "").unwrap();
+
+        let got = reload_executable_path(&current, Some(tmp.path()));
+
+        assert_eq!(got, current);
+    }
+
+    #[test]
+    fn reload_executable_falls_back_to_installed_qol_when_current_binary_is_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let current = tmp.path().join("target/debug/qol");
+        let expected = tmp
+            .path()
+            .join(".cargo")
+            .join("bin")
+            .join(crate::workspace::exe_name("qol"));
+
+        let got = reload_executable_path(&current, Some(tmp.path()));
+
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn reload_executable_falls_back_to_path_lookup_without_home() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let current = tmp.path().join("target/debug/qol");
+
+        let got = reload_executable_path(&current, None);
+
+        assert_eq!(got, PathBuf::from(crate::workspace::exe_name("qol")));
     }
 
     #[test]
