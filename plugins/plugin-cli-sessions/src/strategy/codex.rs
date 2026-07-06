@@ -2,6 +2,8 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -68,23 +70,62 @@ fn turn_taken(session: &Option<CodexSession>, screen: &str) -> bool {
     }
 }
 
-pub struct DiskCodexStore;
+const CACHE_TTL: Duration = Duration::from_secs(30);
+
+#[derive(Default)]
+pub struct DiskCodexStore {
+    cache: Mutex<DiskCodexCache>,
+}
+
+#[derive(Default)]
+struct DiskCodexCache {
+    rollouts: std::collections::HashMap<i32, Timed<Option<PathBuf>>>,
+    names: std::collections::HashMap<String, Timed<Option<String>>>,
+}
+
+struct Timed<T> {
+    value: T,
+    checked_at: Instant,
+}
+
+impl<T: Clone> Timed<T> {
+    fn fresh(&self) -> Option<T> {
+        (self.checked_at.elapsed() < CACHE_TTL).then(|| self.value.clone())
+    }
+}
 
 impl CodexStore for DiskCodexStore {
     fn session(&self, pane: &Pane) -> Option<CodexSession> {
-        let rollout = rollout_path_for(pane)?;
+        let mut cache = self.cache.lock().ok()?;
+        let rollout = rollout_path_for(pane, &mut cache)?;
         let uuid = uuid_from_path(&rollout)?;
         Some(CodexSession {
-            name: thread_name(&uuid),
+            name: thread_name_cached(&uuid, &mut cache),
             touched: touched(&rollout),
         })
     }
 }
 
-fn rollout_path_for(pane: &Pane) -> Option<PathBuf> {
+fn rollout_path_for(pane: &Pane, cache: &mut DiskCodexCache) -> Option<PathBuf> {
     pane.foreground_pids
         .iter()
-        .find_map(|pid| open_rollout(*pid))
+        .find_map(|pid| open_rollout_cached(*pid, cache))
+}
+
+fn open_rollout_cached(pid: i32, cache: &mut DiskCodexCache) -> Option<PathBuf> {
+    if let Some(entry) = cache.rollouts.get(&pid).and_then(Timed::fresh) {
+        return entry;
+    }
+
+    let value = open_rollout(pid);
+    cache.rollouts.insert(
+        pid,
+        Timed {
+            value: value.clone(),
+            checked_at: Instant::now(),
+        },
+    );
+    value
 }
 
 fn open_rollout(pid: i32) -> Option<PathBuf> {
@@ -108,6 +149,22 @@ fn uuid_from_path(path: &Path) -> Option<String> {
 
 fn codex_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex"))
+}
+
+fn thread_name_cached(uuid: &str, cache: &mut DiskCodexCache) -> Option<String> {
+    if let Some(entry) = cache.names.get(uuid).and_then(Timed::fresh) {
+        return entry;
+    }
+
+    let value = thread_name(uuid);
+    cache.names.insert(
+        uuid.to_string(),
+        Timed {
+            value: value.clone(),
+            checked_at: Instant::now(),
+        },
+    );
+    value
 }
 
 fn thread_name(uuid: &str) -> Option<String> {

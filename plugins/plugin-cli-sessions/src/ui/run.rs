@@ -58,12 +58,13 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
     let cfg = config::load();
     let corner = cfg.corner();
     let service_commands: Arc<[String]> = Arc::from(cfg.service_commands);
+    let codex_store = Arc::new(DiskCodexStore::default());
 
     let probe = SystemServiceProbe::snapshot(service_commands.to_vec());
     reconcile::tick(
         &registry,
         host.as_ref(),
-        &DiskCodexStore,
+        codex_store.as_ref(),
         &probe,
         now_secs(),
     );
@@ -82,6 +83,7 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
         spawn_reconcile_timer(
             reg_for_app.clone(),
             host_for_app.clone(),
+            codex_store.clone(),
             service_commands.clone(),
             panel.clone(),
             show_on_start,
@@ -185,21 +187,35 @@ fn open_panel(
 fn spawn_reconcile_timer(
     registry: Arc<Mutex<Registry>>,
     host: Arc<dyn TerminalHost + Send + Sync>,
+    codex_store: Arc<DiskCodexStore>,
     service_commands: Arc<[String]>,
     panel: SharedPanel,
     show_on_start: bool,
     cx: &mut gpui::App,
 ) {
+    let caches = Arc::new(Mutex::new(reconcile::ReconcileCaches::default()));
     let mut interval = reconcile_interval(show_on_start);
     cx.spawn(async move |cx: &mut AsyncApp| loop {
         cx.background_executor().timer(interval).await;
         let reg = registry.clone();
         let h = host.clone();
+        let store = codex_store.clone();
         let sc = service_commands.clone();
+        let cache = caches.clone();
         let now = now_secs();
         cx.background_spawn(async move {
             let probe = SystemServiceProbe::snapshot(sc.to_vec());
-            let notices = reconcile::tick(&reg, h.as_ref(), &DiskCodexStore, &probe, now);
+            let notices = match cache.lock() {
+                Ok(mut caches) => reconcile::tick_with_caches(
+                    &reg,
+                    h.as_ref(),
+                    store.as_ref(),
+                    &probe,
+                    now,
+                    &mut caches,
+                ),
+                Err(_) => Vec::new(),
+            };
             for notice in &notices {
                 crate::notify::send(notice);
             }

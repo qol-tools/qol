@@ -14,6 +14,11 @@ use crate::strategy::codex::CodexStore;
 use crate::strategy::{for_tool, running_since_for, status_for, Ctx, Prev, Reading};
 use crate::tool::{classify, Tool};
 
+#[derive(Default)]
+pub struct ReconcileCaches {
+    branch: git::BranchCache,
+}
+
 fn pid_alive(pid: i32) -> bool {
     pid > 0 && unsafe { libc::kill(pid, 0) } == 0
 }
@@ -25,7 +30,21 @@ pub fn tick(
     service_probe: &dyn ServiceProbe,
     now: u64,
 ) -> Vec<Notice> {
+    let mut caches = ReconcileCaches::default();
+    tick_with_caches(registry, host, codex_store, service_probe, now, &mut caches)
+}
+
+pub fn tick_with_caches(
+    registry: &Arc<Mutex<Registry>>,
+    host: &dyn TerminalHost,
+    codex_store: &dyn CodexStore,
+    service_probe: &dyn ServiceProbe,
+    now: u64,
+    caches: &mut ReconcileCaches,
+) -> Vec<Notice> {
     let mut notices = Vec::new();
+    #[cfg(debug_assertions)]
+    let tick_start = std::time::Instant::now();
     let panes = host.discover();
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
@@ -77,8 +96,9 @@ pub fn tick(
         );
 
         let phase = reading.phase;
+        let branch = caches.branch.branch(&pane.cwd, now);
         if let Ok(mut reg) = registry.lock() {
-            let (notice, status) = apply(&mut reg, pane, tool, reading, new_hash, now);
+            let (notice, status) = apply(&mut reg, pane, tool, reading, new_hash, branch, now);
             if let Some(notice) = notice {
                 notices.push(notice);
             }
@@ -97,6 +117,17 @@ pub fn tick(
     if let Ok(reg) = registry.lock() {
         if let Some(path) = paths::state_path() {
             persist::save(&path, &reg.sorted());
+        }
+    }
+    #[cfg(debug_assertions)]
+    {
+        let elapsed_ms = tick_start.elapsed().as_millis();
+        if elapsed_ms >= 250 {
+            qol_runtime::probe!(
+                "CLI_SESSIONS_RECON_SLOW",
+                "phase=tick total_ms={elapsed_ms} panes={}",
+                panes.len()
+            );
         }
     }
     notices
@@ -171,9 +202,9 @@ fn apply(
     tool: Tool,
     reading: Reading,
     new_hash: Option<u64>,
+    branch: Option<String>,
     now: u64,
 ) -> (Option<Notice>, Status) {
-    let branch = git::branch(&pane.cwd);
     let (prev_status, prev_running) = match reg.get(pane.window_id) {
         Some(s) => (s.status, s.running_since),
         None => (Status::Unknown, None),
@@ -210,6 +241,9 @@ fn apply(
         s.status = status;
         s.tool = tool;
         s.summary = summary;
+        s.root_pid = pane.root_pid;
+        s.project = project_of(&pane.cwd);
+        s.cwd = pane.cwd.clone();
         s.branch = branch;
         s.name = reading.label;
         s.running_since = running_since;

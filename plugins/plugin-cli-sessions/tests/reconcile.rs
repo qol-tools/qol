@@ -2,10 +2,11 @@ use std::sync::{Arc, Mutex};
 
 use plugin_cli_sessions::daemon::reconcile::tick;
 use plugin_cli_sessions::host::{Pane, TerminalHost};
-use plugin_cli_sessions::registry::Registry;
+use plugin_cli_sessions::registry::{Registry, SessionState};
 use plugin_cli_sessions::service::{NoServiceProbe, ServiceProbe};
 use plugin_cli_sessions::status::Status;
 use plugin_cli_sessions::strategy::codex::{CodexSession, CodexStore, NoCodexStore};
+use plugin_cli_sessions::tool::Tool;
 
 struct FakeHost {
     panes: Vec<Pane>,
@@ -317,6 +318,36 @@ fn tick_labels_generic_from_command() {
     let rows = reg.lock().unwrap().sorted();
     assert_eq!(rows[0].name.as_deref(), Some("qol dev"));
     assert_eq!(rows[0].status, Status::Working, "running generic => green");
+}
+
+#[test]
+fn tick_refreshes_restored_identity_fields() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    reg.lock().unwrap().restore(vec![SessionState {
+        window_id: 21,
+        root_pid: -1,
+        project: "stale".into(),
+        name: None,
+        cwd: "/stale".into(),
+        branch: None,
+        tool: Tool::Generic,
+        status: Status::Unknown,
+        summary: "idle".into(),
+        last_activity: 1,
+        screen_hash: None,
+        running_since: None,
+    }]);
+    let host = FakeHost {
+        panes: vec![pane(21, "qol dev", false, &["zsh", "qol"], "qol dev")],
+        screen: String::new(),
+    };
+
+    tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
+
+    let rows = reg.lock().unwrap().sorted();
+    assert_eq!(rows[0].project, "proj");
+    assert_eq!(rows[0].cwd, "/a/proj");
+    assert_ne!(rows[0].root_pid, -1);
 }
 
 #[test]
