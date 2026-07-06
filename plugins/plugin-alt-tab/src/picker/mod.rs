@@ -547,6 +547,7 @@ pub(crate) mod state {
         pub(crate) show_hotkey_hints: bool,
         pub(crate) max_columns: usize,
         pub(crate) card_scale: f32,
+        pub(crate) dynamic_card_scale: bool,
         pub(crate) card_padding: f32,
         pub(crate) layout_budget: Option<(f32, f32)>,
         pub(crate) live_previews: PreviewMap,
@@ -579,6 +580,7 @@ pub(crate) mod state {
                 show_hotkey_hints: init.show_hotkey_hints,
                 max_columns: init.max_columns,
                 card_scale: init.card_scale,
+                dynamic_card_scale: init.dynamic_card_scale,
                 card_padding: init.card_padding,
                 layout_budget: init.layout_budget,
                 live_previews: init.previews,
@@ -722,6 +724,7 @@ pub(crate) mod state {
             self.show_debug_overlay = config.display.show_debug_overlay;
             self.show_hotkey_hints = config.display.show_hotkey_hints;
             self.card_scale = config.display.card_scale;
+            self.dynamic_card_scale = config.display.dynamic_card_scale;
             self.card_padding = config.display.card_padding;
         }
 
@@ -966,6 +969,7 @@ pub(crate) mod state {
                 cycle_on_open: false,
                 max_columns: 6,
                 card_scale: 1.0,
+                dynamic_card_scale: true,
                 card_padding: crate::shared::layout::DEFAULT_CARD_PADDING,
                 layout_budget: None,
                 rendering: crate::rendering::RenderingFlow::gpui_snapshots(),
@@ -1131,6 +1135,7 @@ pub(crate) mod state {
                 cycle_on_open: false,
                 max_columns: 6,
                 card_scale: 1.0,
+                dynamic_card_scale: true,
                 card_padding: crate::shared::layout::DEFAULT_CARD_PADDING,
                 layout_budget: None,
                 rendering: crate::rendering::RenderingFlow::gpui_snapshots(),

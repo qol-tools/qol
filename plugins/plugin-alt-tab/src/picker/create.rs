@@ -94,6 +94,7 @@ fn estimate_picker_size(req: &CreateRequest, gathered: &GatheredWindows) -> Size
         req.config.display.show_hotkey_hints,
         req.config.display.card_scale,
         req.config.display.card_padding,
+        req.config.display.dynamic_card_scale,
     );
     size(px(layout.width), px(layout.height))
 }
@@ -112,6 +113,7 @@ pub(crate) struct PickerInit {
     pub(crate) cycle_on_open: bool,
     pub(crate) max_columns: usize,
     pub(crate) card_scale: f32,
+    pub(crate) dynamic_card_scale: bool,
     pub(crate) card_padding: f32,
     pub(crate) layout_budget: Option<(f32, f32)>,
     pub(crate) rendering: RenderingFlow,
@@ -147,6 +149,7 @@ impl PickerInit {
             cycle_on_open: config.open_behavior == crate::config::OpenBehavior::CycleOnce,
             max_columns: config.display.max_columns,
             card_scale: config.display.card_scale,
+            dynamic_card_scale: config.display.dynamic_card_scale,
             card_padding: config.display.card_padding,
             layout_budget,
             rendering,

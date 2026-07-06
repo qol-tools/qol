@@ -111,6 +111,15 @@ impl Render for AltTabApp {
         });
 
         let d = self.delegate.read(cx);
+        let layout = picker_layout(
+            d.windows.len().max(1),
+            d.max_columns,
+            d.layout_budget,
+            d.show_hotkey_hints,
+            d.card_scale,
+            d.card_padding,
+            d.dynamic_card_scale,
+        );
         let snap = RenderSnap {
             selected_index: d.selected_index,
             visible,
@@ -120,7 +129,7 @@ impl Render for AltTabApp {
             icon_position: d.icon_position,
             rendering: self.rendering,
             palette: PickerSurfacePalette::from_card_color(d.card_bg_color, d.card_bg_opacity),
-            metrics: CardMetrics::from_config(d.card_scale, d.card_padding),
+            metrics: layout.metrics,
         };
 
         #[cfg(debug_assertions)]
@@ -132,14 +141,6 @@ impl Render for AltTabApp {
             visible,
         );
 
-        let layout = picker_layout(
-            d.windows.len().max(1),
-            d.max_columns,
-            d.layout_budget,
-            d.show_hotkey_hints,
-            d.card_scale,
-            d.card_padding,
-        );
         let (panel_w, panel_h) = (layout.width, layout.height);
 
         let render_context = CardRenderContext {

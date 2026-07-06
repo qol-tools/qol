@@ -10,7 +10,7 @@ use crate::picker::run::SharedPreviewCache;
 use crate::picker::state::PickerState;
 use crate::preview_plane::{PreviewPlaneItem, PreviewPlanePayload, PreviewPlaneRect};
 use crate::rendering::RenderingFlow;
-use crate::shared::layout::{picker_layout, preview_rect_for_card, CardMetrics};
+use crate::shared::layout::{picker_layout, preview_rect_for_card};
 use crate::{IconMap, PreviewMap};
 use gpui::*;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -439,8 +439,9 @@ impl AltTabApp {
             state.show_hotkey_hints,
             state.card_scale,
             state.card_padding,
+            state.dynamic_card_scale,
         );
-        let metrics = CardMetrics::from_config(state.card_scale, state.card_padding);
+        let metrics = layout.metrics;
         let bounds = window.bounds();
         let win_x = bounds.origin.x.to_f64() as f32;
         let win_y = bounds.origin.y.to_f64() as f32;

@@ -99,6 +99,7 @@ pub struct PickerLayout {
     pub width: f32,
     pub height: f32,
     pub columns: usize,
+    pub metrics: CardMetrics,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -116,47 +117,95 @@ pub fn picker_layout(
     show_hotkey_hints: bool,
     card_scale: f32,
     card_padding: f32,
+    dynamic_card_scale: bool,
 ) -> PickerLayout {
-    let metrics = CardMetrics::from_config(card_scale, card_padding);
     let count = window_count.max(1);
+    let padding = clamp_card_padding(card_padding);
     let (max_w, max_h) = monitor_size
         .map(|(w, h)| (w * 0.9, h * 0.9))
         .unwrap_or((1820.0, 980.0));
-
-    let preferred = preferred_column_count(count, max_columns);
-    let columns = if width_for_cols(preferred, &metrics) <= max_w {
-        preferred
-    } else {
-        cols_for_width(max_w, count, &metrics)
-    };
-    let width = (width_for_cols(columns, &metrics) + WIDTH_SLACK).min(max_w);
-
     let hints_height = if show_hotkey_hints {
         HOTKEY_HINTS_HEIGHT
     } else {
         0.0
     };
+    let grid_max_h = max_h - hints_height;
+
+    let (columns, scale) = if dynamic_card_scale {
+        best_dynamic_fit(count, max_columns, max_w, grid_max_h, padding)
+    } else {
+        fixed_fit(count, max_columns, max_w, grid_max_h, padding, card_scale)
+    };
+
+    let metrics = CardMetrics::from_config(scale, padding);
+    let width = (width_for_cols(columns, &metrics) + WIDTH_SLACK).min(max_w);
     let height = (picker_height_for(count, columns, &metrics) + hints_height).min(max_h);
     PickerLayout {
         width,
         height,
         columns,
+        metrics,
     }
 }
 
-pub fn preferred_column_count(window_count: usize, max_columns: usize) -> usize {
-    let count = window_count.max(1);
-    if count == 1 {
-        return 1;
+fn best_dynamic_fit(
+    count: usize,
+    max_columns: usize,
+    max_w: f32,
+    max_h: f32,
+    padding: f32,
+) -> (usize, f32) {
+    let cap = count.min(max_columns.max(2)).max(1);
+    let mut best = (1usize, f32::NEG_INFINITY);
+    for cols in 1..=cap {
+        let rows = count.div_ceil(cols);
+        let fit = fit_scale(cols, rows, max_w, max_h, padding).min(MAX_CARD_SCALE);
+        if fit >= best.1 {
+            best = (cols, fit);
+        }
     }
-    let max_cols = max_columns.max(2);
-    count.min(max_cols)
+    (best.0, best.1.max(MIN_CARD_SCALE))
+}
+
+fn fixed_fit(
+    count: usize,
+    max_columns: usize,
+    max_w: f32,
+    max_h: f32,
+    padding: f32,
+    card_scale: f32,
+) -> (usize, f32) {
+    let configured = clamp_card_scale(card_scale);
+    let cap = count.min(max_columns.max(2)).max(1);
+    let mut best = (1usize, f32::NEG_INFINITY);
+    for columns in 1..=cap {
+        let rows = count.div_ceil(columns);
+        let fit = fit_scale(columns, rows, max_w, max_h, padding).min(configured);
+        if fit >= best.1 {
+            best = (columns, fit);
+        }
+    }
+    (best.0, best.1.max(MIN_CARD_SCALE))
+}
+
+fn fit_scale(cols: usize, rows: usize, max_w: f32, max_h: f32, padding: f32) -> f32 {
+    let cols_f = cols.max(1) as f32;
+    let rows_f = rows.max(1) as f32;
+    let aspect = PREVIEW_ASPECT_H / PREVIEW_ASPECT_W;
+    let width_budget = max_w - RENDER_PAD_X - WIDTH_SLACK - (cols_f - 1.0) * RENDER_GAP;
+    let scale_w = width_budget / (cols_f * BASE_CARD_WIDTH);
+    let row_budget = (max_h - RENDER_PAD_Y - (rows_f - 1.0) * RENDER_GAP) / rows_f;
+    let height_slope = BASE_CARD_WIDTH * aspect + BASE_LABEL_STRIP_HEIGHT;
+    let height_intercept = 2.0 * padding * (1.0 - aspect);
+    let scale_h = (row_budget - height_intercept) / height_slope;
+    scale_w.min(scale_h)
 }
 
 fn width_for_cols(cols: usize, metrics: &CardMetrics) -> f32 {
     RENDER_PAD_X + cols as f32 * metrics.card_width + cols.saturating_sub(1) as f32 * RENDER_GAP
 }
 
+#[cfg(test)]
 fn cols_for_width(width: f32, max_items: usize, metrics: &CardMetrics) -> usize {
     let usable = (width - RENDER_PAD_X).max(metrics.card_width);
     let cols = ((usable + RENDER_GAP) / (metrics.card_width + RENDER_GAP)).floor();
@@ -246,6 +295,15 @@ mod tests {
         );
     }
 
+    fn content_height(layout: &PickerLayout, count: usize, hints: bool) -> f32 {
+        let rows = count.max(1).div_ceil(layout.columns.max(1));
+        let hints_h = if hints { HOTKEY_HINTS_HEIGHT } else { 0.0 };
+        RENDER_PAD_Y
+            + rows as f32 * layout.metrics.card_height
+            + rows.saturating_sub(1) as f32 * RENDER_GAP
+            + hints_h
+    }
+
     #[test]
     fn card_padding_is_configurable_and_clamped() {
         let cases = [
@@ -277,9 +335,9 @@ mod tests {
         for budget in budgets {
             for scale in scales {
                 for count in counts {
-                    let layout = picker_layout(count, 6, budget, true, scale, DEFAULT_CARD_PADDING);
-                    let metrics = CardMetrics::from_config(scale, DEFAULT_CARD_PADDING);
-                    let wrapped = cols_for_width(layout.width, count, &metrics);
+                    let layout =
+                        picker_layout(count, 6, budget, true, scale, DEFAULT_CARD_PADDING, false);
+                    let wrapped = cols_for_width(layout.width, count, &layout.metrics);
                     assert_eq!(
                         layout.columns, wrapped,
                         "budget={budget:?} scale={scale} count={count}: \
@@ -302,9 +360,9 @@ mod tests {
                 false,
                 scale,
                 DEFAULT_CARD_PADDING,
+                false,
             );
-            let metrics = CardMetrics::from_config(scale, DEFAULT_CARD_PADDING);
-            let exact = width_for_cols(layout.columns, &metrics);
+            let exact = width_for_cols(layout.columns, &layout.metrics);
             assert!(
                 layout.width >= exact && layout.width <= exact + WIDTH_SLACK,
                 "count={count} scale={scale}: width {} not hugging content {}",
@@ -340,6 +398,7 @@ mod tests {
                 true,
                 scale,
                 DEFAULT_CARD_PADDING,
+                false,
             );
             assert!(
                 layout.width <= 1280.0 * 0.9 && layout.height <= 800.0 * 0.9,
@@ -352,6 +411,113 @@ mod tests {
     }
 
     #[test]
+    fn grid_content_always_fits_monitor_budget() {
+        let budgets = [(1280.0, 800.0), (1920.0, 1080.0), (3440.0, 1440.0)];
+        let scales = [0.5, 1.5, 2.5];
+        let counts = [1, 2, 3, 6, 12, 30];
+        for dynamic in [false, true] {
+            for (bw, bh) in budgets {
+                for scale in scales {
+                    for count in counts {
+                        let layout = picker_layout(
+                            count,
+                            6,
+                            Some((bw, bh)),
+                            true,
+                            scale,
+                            DEFAULT_CARD_PADDING,
+                            dynamic,
+                        );
+                        let fits = content_height(&layout, count, true) <= bh * 0.9 + 0.01
+                            && layout.width <= bw * 0.9 + 0.01;
+                        let at_floor = (layout.metrics.scale - MIN_CARD_SCALE).abs() < 0.0001;
+                        assert!(
+                            fits || at_floor,
+                            "dynamic={dynamic} budget={bw}x{bh} scale={scale} count={count}: \
+                             content overflows without hitting the scale floor"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dynamic_scale_grows_for_few_windows() {
+        let cases = [(1, 1), (2, 2), (3, 3)];
+        for (count, expected_columns) in cases {
+            let layout = picker_layout(
+                count,
+                6,
+                Some((3440.0, 1440.0)),
+                true,
+                DEFAULT_CARD_SCALE,
+                DEFAULT_CARD_PADDING,
+                true,
+            );
+            assert_eq!(layout.columns, expected_columns, "count={count}");
+            assert!(
+                (layout.metrics.scale - MAX_CARD_SCALE).abs() < 0.0001,
+                "count={count}: huge monitor must max out card scale, got {}",
+                layout.metrics.scale
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_prefers_one_row_over_stacking_at_equal_scale() {
+        let layout = picker_layout(
+            2,
+            6,
+            Some((3440.0, 1440.0)),
+            false,
+            DEFAULT_CARD_SCALE,
+            DEFAULT_CARD_PADDING,
+            true,
+        );
+        assert_eq!(layout.columns, 2, "two windows must sit side by side");
+    }
+
+    #[test]
+    fn fixed_mode_never_exceeds_configured_scale() {
+        let counts = [1, 2, 3, 12, 30];
+        for count in counts {
+            let layout = picker_layout(
+                count,
+                6,
+                Some((3440.0, 1440.0)),
+                true,
+                1.0,
+                DEFAULT_CARD_PADDING,
+                false,
+            );
+            assert!(
+                layout.metrics.scale <= 1.0 + 0.0001,
+                "count={count}: fixed mode grew past configured scale"
+            );
+        }
+    }
+
+    #[test]
+    fn fixed_mode_shrinks_to_fit_instead_of_overshooting() {
+        let layout = picker_layout(
+            30,
+            6,
+            Some((1280.0, 800.0)),
+            true,
+            2.5,
+            DEFAULT_CARD_PADDING,
+            false,
+        );
+        assert!(
+            layout.metrics.scale < 2.5,
+            "30 windows at scale 2.5 on 1280x800 must shrink, got {}",
+            layout.metrics.scale
+        );
+        assert!(content_height(&layout, 30, true) <= 800.0 * 0.9 + 0.01);
+    }
+
+    #[test]
     fn single_window_gets_single_column_panel() {
         let layout = picker_layout(
             1,
@@ -360,10 +526,10 @@ mod tests {
             false,
             1.5,
             DEFAULT_CARD_PADDING,
+            false,
         );
-        let metrics = CardMetrics::from_config(1.5, DEFAULT_CARD_PADDING);
         assert_eq!(layout.columns, 1);
-        assert!(layout.width <= width_for_cols(1, &metrics) + WIDTH_SLACK);
+        assert!(layout.width <= width_for_cols(1, &layout.metrics) + WIDTH_SLACK);
     }
 
     #[test]

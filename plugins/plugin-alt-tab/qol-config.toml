@@ -51,6 +51,14 @@ min = 0.5
 max = 2.5
 step = 0.1
 
+[field.display_dynamic_card_scale]
+type = "boolean"
+config_key = "display.dynamic_card_scale"
+label = "Dynamic card size"
+description = "Grow window cards to fill free space when few windows are open; shrink to fit when many are."
+section = "layout"
+default = true
+
 [field.display_card_padding]
 type = "number"
 config_key = "display.card_padding"
