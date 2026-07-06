@@ -316,9 +316,9 @@ fn cap_frecency_bonus_prepared(raw_bonus: i32, name: &str, query: &str) -> i32 {
     }
 
     let base_cap = (query.chars().count() as i32 * 40).clamp(80, 240);
-    let cap = if name.starts_with(&query) || contains_at_word_boundary(&name, &query) {
+    let cap = if name.starts_with(query) || contains_at_word_boundary(name, query) {
         base_cap
-    } else if name.contains(&query) {
+    } else if name.contains(query) {
         base_cap / 2
     } else {
         base_cap / 3
