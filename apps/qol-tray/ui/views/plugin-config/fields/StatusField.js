@@ -20,6 +20,7 @@ export function StatusField({ field }) {
     const label = (field.label_map && stringValue && field.label_map[stringValue]) || stringValue;
     const tone = (field.tone_map && stringValue && field.tone_map[stringValue]) || 'neutral';
     const displayText = loading && !data ? 'Loading...' : error ? 'Error' : (label || '—');
+    const message = typeof data?.message === 'string' ? data.message : null;
 
     useEffect(() => {
         if (loading && !data) return;
@@ -40,6 +41,7 @@ export function StatusField({ field }) {
         <div class="field-group field-status" ...${fieldLayoutAttrs(field)}>
             <div class="status-label">${field.label}</div>
             <div class="status-chip status-chip--${effectiveTone}">${displayText}</div>
+            ${message && html`<div class="field-help">${message}</div>`}
             ${error && html`<div class="field-status-error">${error}</div>`}
         </div>
     `;

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { useDispatchAction } from '../../../lib/hooks/useDispatchAction.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
+import { isActionRuntimeGated } from '../field-rules.js';
 
 const PAIR_DURATION_S = 60;
 
@@ -51,9 +52,9 @@ export function ActionField({ field }) {
     }, [run]);
 
     const variant = field.variant || 'primary';
-    const exempt = field.variant === 'ghost' || field.action === 'reload' || isPairAction;
-    const gated = ctx.isRuntimeDisabled && !exempt;
+    const gated = isActionRuntimeGated(field, ctx.isRuntimeDisabled);
     const busy = pending || stopPair.pending;
+    const gatedMessage = gated ? 'Unavailable until the plugin connection is healthy.' : null;
 
     let label;
     if (isPairAction && pairing) {
@@ -77,6 +78,8 @@ export function ActionField({ field }) {
                     ${label}
                 </button>
             </div>
+            ${field.description && html`<div class="field-help">${field.description}</div>`}
+            ${gatedMessage && html`<div class="field-action-error">${gatedMessage}</div>`}
             ${error && html`<div class="field-action-error">${error}</div>`}
         </div>
     `;

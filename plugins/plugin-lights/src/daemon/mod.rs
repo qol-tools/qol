@@ -119,6 +119,8 @@ fn format_ieee(addr: &[u8; 8]) -> String {
 
 const CONNECTION_STATUS_QUERY: &str = "connection_status";
 const LIST_DEVICES_QUERY: &str = "list_devices";
+const PING_ACTION: &str = "ping";
+const NO_COORDINATOR_MESSAGE: &str = "No compatible Zigbee coordinator detected on this PC. Plug in a supported Zigbee dongle, then scan again.";
 
 fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
     let outcome = dispatch_action(runtime, action);
@@ -134,9 +136,10 @@ fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
 }
 
 fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
-    // Reads from the coordinator's live device registry, not the config file.
-    // Devices appear here immediately when they join (via DeviceJoined event),
-    // without needing a config reload.
+    if action == PING_ACTION {
+        return DaemonOutcome::Handled;
+    }
+
     if action == LIST_DEVICES_QUERY {
         let devices: Vec<serde_json::Value> = match runtime {
             DaemonRuntime::Ready(s) => {
@@ -167,11 +170,18 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
     }
 
     if action == CONNECTION_STATUS_QUERY {
-        let state = match runtime {
-            DaemonRuntime::Ready(_) => "ok",
-            DaemonRuntime::Unavailable(_) => "offline",
+        let data = match runtime {
+            DaemonRuntime::Ready(_) => serde_json::json!({
+                "state": "ok",
+                "can_pair": true,
+            }),
+            DaemonRuntime::Unavailable(message) => serde_json::json!({
+                "state": "offline",
+                "can_pair": false,
+                "message": user_facing_unavailable_message(message),
+            }),
         };
-        return DaemonOutcome::HandledWithData(serde_json::json!({ "state": state }));
+        return DaemonOutcome::HandledWithData(data);
     }
 
     if let DaemonRuntime::Ready(state) = runtime {
@@ -180,7 +190,7 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
 
     if action != "reload" {
         if let DaemonRuntime::Unavailable(message) = runtime {
-            return DaemonOutcome::Error(message.clone());
+            return DaemonOutcome::Error(user_facing_unavailable_message(message));
         }
         unreachable!()
     }
@@ -188,9 +198,10 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
     let state = match DaemonState::new() {
         Ok(state) => state,
         Err(error) => {
-            let message = error.to_string();
-            *runtime = DaemonRuntime::Unavailable(message.clone());
-            return DaemonOutcome::Error(message);
+            let detailed_message = error.to_string();
+            let user_message = user_facing_unavailable_message(&detailed_message);
+            *runtime = DaemonRuntime::Unavailable(detailed_message);
+            return DaemonOutcome::Error(user_message);
         }
     };
 
@@ -200,6 +211,15 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
     DaemonOutcome::Handled
 }
 
+fn user_facing_unavailable_message(message: &str) -> String {
+    if message.contains("no supported Zigbee coordinator")
+        || message.contains("no Zigbee coordinator responded")
+    {
+        return NO_COORDINATOR_MESSAGE.to_string();
+    }
+    message.to_string()
+}
+
 fn map_outcome(action: &str, outcome: DaemonOutcome) -> Result<()> {
     match outcome {
         DaemonOutcome::Handled | DaemonOutcome::HandledWithData(_) => Ok(()),
@@ -207,5 +227,64 @@ fn map_outcome(action: &str, outcome: DaemonOutcome) -> Result<()> {
             anyhow::bail!("plugin-lights fell back for action '{}'", action)
         }
         DaemonOutcome::Error(message) => anyhow::bail!(message),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_runtime_still_handles_ping() {
+        let mut runtime = DaemonRuntime::Unavailable("coordinator missing".to_string());
+        let outcome = dispatch_action(&mut runtime, PING_ACTION);
+
+        assert!(matches!(outcome, DaemonOutcome::Handled));
+    }
+
+    #[test]
+    fn unavailable_runtime_rejects_pair_with_user_facing_message() {
+        let mut runtime = DaemonRuntime::Unavailable(
+            "no supported Zigbee coordinator detected automatically; available serial devices: /dev/tty.fake"
+                .to_string(),
+        );
+        let outcome = dispatch_action(&mut runtime, crate::runtime::actions::PAIR);
+
+        match outcome {
+            DaemonOutcome::Error(message) => assert_eq!(message, NO_COORDINATOR_MESSAGE),
+            _ => panic!("expected backend error"),
+        }
+    }
+
+    #[test]
+    fn unavailable_runtime_status_reports_pairing_unavailable() {
+        let mut runtime = DaemonRuntime::Unavailable(
+            "no Zigbee coordinator responded on auto-detected serial ports: /dev/tty.fake"
+                .to_string(),
+        );
+        let outcome = dispatch_action(&mut runtime, CONNECTION_STATUS_QUERY);
+
+        match outcome {
+            DaemonOutcome::HandledWithData(data) => assert_eq!(
+                data,
+                serde_json::json!({
+                    "state": "offline",
+                    "can_pair": false,
+                    "message": NO_COORDINATOR_MESSAGE,
+                })
+            ),
+            _ => panic!("expected status data"),
+        }
+    }
+
+    #[test]
+    fn unavailable_runtime_preserves_unknown_errors() {
+        let mut runtime = DaemonRuntime::Unavailable("permission denied".to_string());
+        let outcome = dispatch_action(&mut runtime, crate::runtime::actions::PAIR);
+
+        match outcome {
+            DaemonOutcome::Error(message) => assert_eq!(message, "permission denied"),
+            _ => panic!("expected backend error"),
+        }
     }
 }
