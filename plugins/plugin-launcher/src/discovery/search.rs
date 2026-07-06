@@ -2,7 +2,7 @@
 use super::trace;
 use crate::discovery::{AppEntry, FileEntry};
 use crate::frecency::FrequencyData;
-use crate::{fuzzy_match, FuzzyMatch};
+use qol_search::{fuzzy_match_prepared, prepare_fuzzy_query, FuzzyMatch, PreparedFuzzyQuery};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -99,7 +99,7 @@ pub fn filtered(
     if query.trim().is_empty() {
         return Vec::new();
     }
-    let hint = extension_hint(query);
+    let prepared = PreparedQuery::new(query);
 
     let boosts = frecency.map(|f| f.boosts).unwrap_or(&*EMPTY_BOOSTS);
     let results: Vec<Scored> = match mode {
@@ -107,15 +107,16 @@ pub fn filtered(
             .iter()
             .enumerate()
             .filter_map(|(index, entry)| {
-                let bonus = frecency_bonus_for(&entry.name, query, frecency);
-                let boost = manual_boost(&entry.name, boosts);
-                score_app(index, &entry.name, query, bonus, boost)
+                let name_key = lowercased_name(&entry.name);
+                let bonus = frecency_bonus_for_key(&name_key, &prepared, frecency);
+                let boost = boosts.get(&name_key).copied().unwrap_or(0);
+                score_app(index, &entry.name, &name_key, &prepared, bonus, boost)
             })
             .collect(),
         SearchMode::Files => file_entries
             .iter()
             .enumerate()
-            .filter_map(|(index, entry)| score_file(index, &entry.name, query, hint, fuzziness))
+            .filter_map(|(index, entry)| score_file(index, &entry.name, &prepared, fuzziness))
             .collect(),
     };
     sort_by_score(results)
@@ -133,7 +134,7 @@ pub fn filtered_from_candidates(
     if query.trim().is_empty() {
         return Vec::new();
     }
-    let hint = extension_hint(query);
+    let prepared = PreparedQuery::new(query);
 
     let results: Vec<Scored> = match mode {
         SearchMode::Apps => {
@@ -143,9 +144,17 @@ pub fn filtered_from_candidates(
                 .filter(|candidate| matches!(candidate.source, ResultSource::App))
                 .filter_map(|candidate| {
                     let entry = app_entries.get(candidate.index)?;
-                    let bonus = frecency_bonus_for(&entry.name, query, frecency);
-                    let boost = manual_boost(&entry.name, boosts);
-                    score_app(candidate.index, &entry.name, query, bonus, boost)
+                    let name_key = lowercased_name(&entry.name);
+                    let bonus = frecency_bonus_for_key(&name_key, &prepared, frecency);
+                    let boost = boosts.get(&name_key).copied().unwrap_or(0);
+                    score_app(
+                        candidate.index,
+                        &entry.name,
+                        &name_key,
+                        &prepared,
+                        bonus,
+                        boost,
+                    )
                 })
                 .collect()
         }
@@ -154,7 +163,7 @@ pub fn filtered_from_candidates(
             .filter(|candidate| matches!(candidate.source, ResultSource::File))
             .filter_map(|candidate| {
                 let entry = file_entries.get(candidate.index)?;
-                score_file(candidate.index, &entry.name, query, hint, fuzziness)
+                score_file(candidate.index, &entry.name, &prepared, fuzziness)
             })
             .collect(),
     };
@@ -169,6 +178,22 @@ pub struct FrecencyConfig<'a> {
     pub boosts: &'a HashMap<String, i32>,
 }
 
+struct PreparedQuery<'a> {
+    lower: String,
+    hint: Option<&'a str>,
+    fuzzy: PreparedFuzzyQuery,
+}
+
+impl<'a> PreparedQuery<'a> {
+    fn new(query: &'a str) -> Self {
+        Self {
+            lower: lowercased_query(query),
+            hint: extension_hint(query),
+            fuzzy: prepare_fuzzy_query(query),
+        }
+    }
+}
+
 fn lowercased_name(name: &str) -> String {
     #[cfg(debug_assertions)]
     trace::count_name_lower();
@@ -181,17 +206,20 @@ fn lowercased_query(query: &str) -> String {
     query.trim().to_lowercase()
 }
 
-fn frecency_bonus_for(name: &str, query: &str, config: Option<&FrecencyConfig>) -> i32 {
+fn frecency_bonus_for_key(
+    name_key: &str,
+    query: &PreparedQuery<'_>,
+    config: Option<&FrecencyConfig>,
+) -> i32 {
     let Some(cfg) = config else { return 0 };
-    let key = lowercased_name(name);
     let raw = crate::frecency::frequency_bonus(
-        &key,
+        name_key,
         cfg.data,
         cfg.now,
         cfg.half_life_days,
         cfg.bonus_weight,
     );
-    cap_frecency_bonus(raw, name, query)
+    cap_frecency_bonus_prepared(raw, name_key, &query.lower)
 }
 
 static EMPTY_BOOSTS: std::sync::LazyLock<HashMap<String, i32>> =
@@ -200,14 +228,15 @@ static EMPTY_BOOSTS: std::sync::LazyLock<HashMap<String, i32>> =
 fn score_app(
     index: usize,
     name: &str,
-    query: &str,
+    name_key: &str,
+    query: &PreparedQuery<'_>,
     frecency_bonus: i32,
     manual_boost: i32,
 ) -> Option<Scored> {
     #[cfg(debug_assertions)]
     trace::count_fuzzy_call();
-    let mut m = fuzzy_match(query, name)?;
-    let match_kind = classify_match(name, query);
+    let mut m = fuzzy_match_prepared(&query.fuzzy, name)?;
+    let match_kind = classify_lowered_match(name_key, &query.lower);
     m.score -= frecency_bonus + manual_boost;
     Some(Scored {
         source: ResultSource::App,
@@ -219,23 +248,18 @@ fn score_app(
     })
 }
 
-fn manual_boost(name: &str, boosts: &HashMap<String, i32>) -> i32 {
-    let key = lowercased_name(name);
-    boosts.get(&key).copied().unwrap_or(0)
-}
-
 fn score_file(
     index: usize,
     name: &str,
-    query: &str,
-    hint: Option<&str>,
+    query: &PreparedQuery<'_>,
     fuzziness: Fuzziness,
 ) -> Option<Scored> {
     #[cfg(debug_assertions)]
     trace::count_fuzzy_call();
-    let mut m = fuzzy_match(query, name)?;
-    let match_kind = classify_match(name, query);
-    apply_extension_rule(name, hint, fuzziness, &mut m)?;
+    let mut m = fuzzy_match_prepared(&query.fuzzy, name)?;
+    let name_key = lowercased_name(name);
+    let match_kind = classify_lowered_match(&name_key, &query.lower);
+    apply_extension_rule(name, query.hint, fuzziness, &mut m)?;
     Some(Scored {
         source: ResultSource::File,
         index,
@@ -275,17 +299,22 @@ fn sort_by_score(mut results: Vec<Scored>) -> Vec<Scored> {
     results
 }
 
+#[cfg(test)]
 fn cap_frecency_bonus(raw_bonus: i32, name: &str, query: &str) -> i32 {
+    let query = lowercased_query(query);
+    let name = lowercased_name(name);
+    cap_frecency_bonus_prepared(raw_bonus, &name, &query)
+}
+
+fn cap_frecency_bonus_prepared(raw_bonus: i32, name: &str, query: &str) -> i32 {
     if raw_bonus <= 0 {
         return 0;
     }
 
-    let query = lowercased_query(query);
     if query.is_empty() {
         return 0;
     }
 
-    let name = lowercased_name(name);
     let base_cap = (query.chars().count() as i32 * 40).clamp(80, 240);
     let cap = if name.starts_with(&query) || contains_at_word_boundary(&name, &query) {
         base_cap
@@ -323,14 +352,11 @@ fn contains_at_word_boundary(name: &str, query: &str) -> bool {
     false
 }
 
-fn classify_match(name: &str, query: &str) -> MatchKind {
-    let q = lowercased_query(query);
-    let n = lowercased_name(name);
-
-    if n.starts_with(&q) {
+fn classify_lowered_match(name: &str, query: &str) -> MatchKind {
+    if name.starts_with(query) {
         return MatchKind::Prefix;
     }
-    if n.contains(&q) {
+    if name.contains(query) {
         return MatchKind::Contains;
     }
 
