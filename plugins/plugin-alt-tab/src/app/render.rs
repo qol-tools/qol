@@ -186,7 +186,7 @@ impl Render for AltTabApp {
             })
             .child(grid);
 
-        div()
+        let root = div()
             .id("alt-tab-backdrop")
             .flex()
             .items_center()
@@ -198,7 +198,12 @@ impl Render for AltTabApp {
                     .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                     .on_click(|_, _, cx| cx.stop_propagation())
             })
-            .child(panel)
+            .child(panel);
+
+        if visible {
+            self.sync_preview_plane(None, window, cx);
+        }
+        root
     }
 }
 

@@ -36,6 +36,15 @@ fn availability_cache() -> &'static Mutex<Option<Availability>> {
     CACHE.get_or_init(|| Mutex::new(None))
 }
 
+fn last_payload_cache() -> &'static Mutex<Option<String>> {
+    static CACHE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn should_send_show(payload_json: &str, last: Option<&str>) -> bool {
+    last != Some(payload_json)
+}
+
 fn command_queue() -> &'static Sender<PlaneCommand> {
     static QUEUE: OnceLock<Sender<PlaneCommand>> = OnceLock::new();
     QUEUE.get_or_init(|| {
@@ -167,6 +176,17 @@ pub(crate) fn show_async(payload: PreviewPlanePayload) {
         return;
     };
 
+    if let Ok(mut last) = last_payload_cache().lock() {
+        if !should_send_show(&payload_json, last.as_deref()) {
+            qol_runtime::probe!(
+                "PREVIEW_PLANE_SHOW",
+                "backend=cinnamon_shell show_id={show_id} outcome=skipped reason=unchanged items={item_count}"
+            );
+            return;
+        }
+        *last = Some(payload_json.clone());
+    }
+
     qol_runtime::probe!(
         "PREVIEW_PLANE_SHOW",
         "backend=cinnamon_shell show_id={show_id} outcome=queued items={item_count}"
@@ -187,6 +207,9 @@ pub(crate) fn show_async(payload: PreviewPlanePayload) {
 }
 
 pub(crate) fn hide_async(reason: &'static str) {
+    if let Ok(mut last) = last_payload_cache().lock() {
+        *last = None;
+    }
     qol_runtime::probe!(
         "PREVIEW_PLANE_HIDE",
         "backend=cinnamon_shell reason={reason} outcome=queued"
@@ -316,8 +339,38 @@ fn trim_for_probe(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{availability_decision, Availability, AvailabilityDecision, AVAILABILITY_TTL};
+    use super::{
+        availability_decision, should_send_show, Availability, AvailabilityDecision,
+        AVAILABILITY_TTL,
+    };
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn should_send_show_skips_only_identical_repeat() {
+        let payload_a = "{\"show_id\":\"visible\",\"items\":[{\"wid\":1}]}";
+        let payload_b = "{\"show_id\":\"visible\",\"items\":[{\"wid\":2}]}";
+        let cases = [
+            ("first call, no prior payload", payload_a, None, true),
+            ("identical repeat", payload_a, Some(payload_a), false),
+            (
+                "different payload after previous send",
+                payload_b,
+                Some(payload_a),
+                true,
+            ),
+            (
+                "reverse: previously B, now A",
+                payload_a,
+                Some(payload_b),
+                true,
+            ),
+            ("empty first call", "", None, true),
+            ("empty identical repeat", "", Some(""), false),
+        ];
+        for (case, payload, last, expected) in cases {
+            assert_eq!(should_send_show(payload, last), expected, "case: {case}");
+        }
+    }
 
     #[test]
     fn availability_decision_classifies_cache_state() {
