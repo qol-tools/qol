@@ -3,15 +3,16 @@ import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { createWorldCanvasBg } from '../../fx/world-canvas-bg.js';
 import { createDebug, elLabel } from '../../lib/debug.js';
 import { isCtrlHeld } from '../../lib/modifier-state.js';
+import { findActiveSelectedSurface } from '../../lib/selected-surface.js';
+import { edgeFollowDelta, keyboardTargetCenterDelta, normalizedZoom } from '../../lib/viewport-follow.js';
 import { nearestSurfaceToCenter } from '../../lib/viewport-spatial.js';
 import { getWorldSettings } from '../../lib/world-settings.js';
-import { selectorFor } from '../../lib/world-navigation.js';
+import { SKIP_CAMERA_FOLLOW_ONCE_ATTR, selectorFor } from '../../lib/world-navigation.js';
 import { contains } from '../../lib/world-registry.js';
 import { PeripheralPreview } from './PeripheralPreview.js';
 import { AtmosphereLayer } from './AtmosphereLayer.js';
 
 const log = createDebug('qol:world');
-const CAMERA_FOLLOW_PAD = 40;
 const WHEEL_ZOOM_FACTOR = 0.002;
 const INTERACTIVE_SELECTOR = 'button, input, select, textarea, [data-selected-surface], a, [role="tab"], [tabindex]';
 
@@ -151,17 +152,28 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, rend
                 const selector = selectorFor(surface);
                 if (pageId && selector) navigation.setFocus(pageId, selector);
             }
+            if (surface.hasAttribute(SKIP_CAMERA_FOLLOW_ONCE_ATTR)) {
+                surface.removeAttribute(SKIP_CAMERA_FOLLOW_ONCE_ATTR);
+                return;
+            }
+            followSurface(activeFollowTarget(surface));
+        }
+
+        function followSurface(surface) {
+            if (!(surface instanceof HTMLElement)) return;
             if (isCtrlHeld()) return;
             const vr = vp.getBoundingClientRect();
             const fr = surface.getBoundingClientRect();
-            let dx = 0, dy = 0;
-            if (fr.bottom > vr.bottom - CAMERA_FOLLOW_PAD) dy = fr.bottom - (vr.bottom - CAMERA_FOLLOW_PAD);
-            else if (fr.top < vr.top + CAMERA_FOLLOW_PAD) dy = fr.top - (vr.top + CAMERA_FOLLOW_PAD);
-            if (fr.right > vr.right - CAMERA_FOLLOW_PAD) dx = fr.right - (vr.right - CAMERA_FOLLOW_PAD);
-            else if (fr.left < vr.left + CAMERA_FOLLOW_PAD) dx = fr.left - (vr.left + CAMERA_FOLLOW_PAD);
+            const inputMode = document.querySelector('.app-container')?.dataset?.inputMode || 'keyboard';
+            const { dx, dy, mode, duration } = inputMode === 'keyboard'
+                ? keyboardTargetCenterDelta(vr, fr)
+                : edgeFollowDelta(vr, fr);
             if (dx || dy) {
-                log('cam follow Δ', Math.round(dx), Math.round(dy), elLabel(surface));
-                camera.panSmooth(camera.x + dx / camera.zoom, camera.y + dy / camera.zoom, 200);
+                const zoom = normalizedZoom(camera.zoom);
+                const targetX = camera.x + dx / zoom;
+                const targetY = camera.y + dy / zoom;
+                log('cam follow', mode, 'Δ', Math.round(dx), Math.round(dy), elLabel(surface));
+                camera.panSmooth(targetX, targetY, duration);
             }
         }
 
@@ -235,4 +247,8 @@ function snapToCenter(viewport, onViewChange, navigation, registry) {
     } else {
         surface.focus({ preventScroll: true });
     }
+}
+
+function activeFollowTarget(fallback) {
+    return findActiveSelectedSurface({ currentTarget: fallback }) || fallback;
 }

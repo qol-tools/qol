@@ -3,6 +3,15 @@ import { getWorldSettings } from './world-settings.js';
 import { cameraTargetFor, paddedWorldBounds } from './world-geometry.js';
 
 const log = createDebug('qol:nav-state');
+export const SKIP_CAMERA_FOLLOW_ONCE_ATTR = 'data-skip-camera-follow-once';
+
+export function skipCameraFollowOnce(target) {
+    if (!target?.setAttribute) return;
+    target.setAttribute(SKIP_CAMERA_FOLLOW_ONCE_ATTR, '');
+    if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => target.removeAttribute?.(SKIP_CAMERA_FOLLOW_ONCE_ATTR));
+    }
+}
 
 export function createNavigation({ registry, camera, getSettings, domHelpers, groundConfinement }) {
     const STORAGE_KEY = 'qoltray.navigation';
@@ -143,18 +152,13 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
         const { x: targetX, y: targetY } = cameraTargetFor(entry, w, h, z);
         if (entry.layer !== camera.layer) camera.setLayer(entry.layer);
         const pageId = anchor.pageId;
+        const focusTarget = resolveFocusTargetElement(pageId, useFocusMemory);
         const focusAfterPan = () => {
             if (typeof document === 'undefined') return;
-            const rememberedSel = useFocusMemory ? focusRegistry[pageId] : null;
-            const remembered = rememberedSel ? document.querySelector(rememberedSel) : null;
-            if (remembered && typeof remembered.focus === 'function') {
-                remembered.focus({ preventScroll: true });
-                return;
-            }
-            const slot = document.querySelector(`[data-view-id="${CSS.escape(pageId)}"]`);
-            const firstSurface = slot?.querySelector?.('[data-selected-surface]');
-            if (firstSurface && typeof firstSurface.focus === 'function') {
-                firstSurface.focus({ preventScroll: true });
+            const target = focusTarget || resolveFocusTargetElement(pageId, useFocusMemory);
+            if (target && typeof target.focus === 'function') {
+                skipCameraFollowOnce(target);
+                target.focus({ preventScroll: true });
             }
         };
         if (instant) {
@@ -183,6 +187,15 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
             return;
         }
         camera.panSmooth(targetX, targetY, 140, focusAfterPan);
+    }
+
+    function resolveFocusTargetElement(pageId, useFocusMemory) {
+        if (typeof document === 'undefined') return null;
+        const rememberedSel = useFocusMemory ? focusRegistry[pageId] : null;
+        const remembered = rememberedSel ? document.querySelector(rememberedSel) : null;
+        if (remembered && typeof remembered.focus === 'function') return remembered;
+        const slot = document.querySelector(`[data-view-id="${escapeCss(pageId)}"]`);
+        return slot?.querySelector?.('[data-selected-surface]') || null;
     }
 
     function dive(targetPageId) {
@@ -344,6 +357,11 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
         },
         subscribeAnchor,
     };
+}
+
+function escapeCss(value) {
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
+    return String(value).replace(/["\\]/g, '\\$&');
 }
 
 export function selectorFor(el) {

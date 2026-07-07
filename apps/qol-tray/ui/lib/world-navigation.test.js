@@ -336,6 +336,29 @@ test('gotoAnchor falls back to first layer-0 page on unknown pageId', () => {
     assert.equal(pan[1], 640 - 800 / 2);
 });
 
+test('gotoAnchor far page switch approaches instantly then glides the last stretch smoothly', () => {
+    const { registry, getSettings, domHelpers } = makeMocks();
+    const camera = spyCamera();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.gotoAnchor({ pageId: 'hotkeys' }, { respectKnob: false });
+
+    const finalX = 10000 + 1280 / 2 - 800 / 2;
+    const finalY = 0 - PAGE_TOP_PAD_PX;
+
+    const panTo = camera._calls.find(c => c[0] === 'panTo');
+    assert.ok(panTo, 'panTo was called to approach the far page');
+    const approachDistance = Math.hypot(finalX - panTo[1], finalY - panTo[2]);
+    assert.ok(Math.abs(approachDistance - 120) < 0.01, `approach should stop 120px short, got ${approachDistance}`);
+
+    const panSmooth = camera._calls.find(c => c[0] === 'panSmooth');
+    assert.ok(panSmooth, 'panSmooth was called to glide the final stretch');
+    assert.equal(panSmooth[1], finalX);
+    assert.equal(panSmooth[2], finalY);
+
+    assert.equal(camera.x, finalX);
+    assert.equal(camera.y, finalY);
+});
+
 test('gotoAnchor top-aligns the target page regardless of focus registry', () => {
     const { registry, camera, getSettings, domHelpers } = makeMocks();
     const nav = createNavigation({ registry, camera, getSettings, domHelpers });

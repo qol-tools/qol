@@ -20,6 +20,7 @@ import { getWorldSettings } from '../lib/world-settings.js';
 import { resolveViewKeyboard } from '../lib/view-keyboard-fallback.js';
 import { hasModalCapturingFocus } from '../lib/focus-retention.js';
 import { finishSurfaceFocusTarget } from '../lib/surface-focus-target.js';
+import { skipCameraFollowOnce } from '../lib/world-navigation.js';
 
 const log = createDebug('qol:nav');
 const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
@@ -56,6 +57,7 @@ export function useAppKeyboardRouting({
     viewOrderRef.current = viewOrder;
     const switchViewRef = useRef(switchView);
     switchViewRef.current = switchView;
+    const initialFocusObserverRef = useRef(null);
     const cycleSubPages = useCallback((shiftKey) => {
         if ((navigation?.stackDepth?.() ?? 0) === 0) return false;
         const pages = navigation.getConfinedPages?.() || [];
@@ -88,6 +90,40 @@ export function useAppKeyboardRouting({
         if ((navigation?.stackDepth?.() ?? 0) > 0) return;
         cycleTopLevelView(event.shiftKey);
     }, [cycleSubPages, cycleTopLevelView, navigation]);
+
+    const visibleFieldCount = pluginConfig?.visibleFields?.length || 0;
+    useLayoutEffect(() => {
+        let cancelled = false;
+        const frame = requestAnimationFrame(() => {
+            if (cancelled) return;
+            const pageId = navigation?.getCurrentAnchor?.()?.pageId || activeViewId;
+            initialFocusObserverRef.current?.disconnect();
+            initialFocusObserverRef.current = null;
+            if (!pageId || reconcileFocusForSlot(pageId, 'initial')) return;
+            const root = document.getElementById('world') || document.body;
+            const observer = new MutationObserver(() => {
+                if (cancelled) return;
+                if (!reconcileFocusForSlot(pageId, 'initial-ready')) return;
+                observer.disconnect();
+                if (initialFocusObserverRef.current === observer) {
+                    initialFocusObserverRef.current = null;
+                }
+            });
+            observer.observe(root, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ['data-selected', 'data-selected-surface', 'data-view-id', 'class'],
+            });
+            initialFocusObserverRef.current = observer;
+        });
+        return () => {
+            cancelled = true;
+            cancelAnimationFrame(frame);
+            initialFocusObserverRef.current?.disconnect();
+            initialFocusObserverRef.current = null;
+        };
+    }, [activeViewId, activePluginId, navigation, visibleFieldCount]);
 
     const prevPluginIdRef = useRef(activePluginId);
     useLayoutEffect(() => {
@@ -148,27 +184,29 @@ export function useAppKeyboardRouting({
 function reconcileFocusForSlot(pageId, label) {
     if (hasModalCapturingFocus(document)) {
         log(`${label}: isolated panel holds focus, skip`);
-        return;
+        return true;
     }
     const slot = document.querySelector(`.world-view-slot[data-view-id="${pageId}"]`);
-    if (!slot) { log(`${label}: no slot for`, pageId); return; }
+    if (!slot) { log(`${label}: no slot for`, pageId); return false; }
     const focused = document.activeElement;
     if (focused && focused !== document.body && slot.contains(focused)) {
         log(`${label}:`, pageId, '→ already focused:', surfaceLabel(focused));
-        return;
+        return true;
     }
     const surface = slot.querySelector('[data-selected-surface][data-selected="true"]')
         || slot.querySelector('[data-selected-surface]');
     log(`${label}:`, pageId, '→', surface ? surfaceLabel(surface) : 'no surfaces');
     if (!surface) {
         if (focused instanceof HTMLElement && focused !== document.body) focused.blur();
-        return;
+        return false;
     }
+    skipCameraFollowOnce(surface);
     surface.focus({ preventScroll: true });
     if (surface instanceof HTMLInputElement || surface instanceof HTMLTextAreaElement) {
         const end = surface.value?.length ?? 0;
         surface.setSelectionRange?.(end, end);
     }
+    return true;
 }
 
 function handlePaletteToggle(event, palette, activePluginId) {
@@ -439,12 +477,15 @@ function delegateToPluginConfig(event, pluginConfig, closePluginConfig) {
         if (event.key === 'Escape') { event.preventDefault(); closePluginConfig(); }
         return;
     }
-    const selectedField = pluginConfig.selectedField;
+    const selectedField = resolvePluginConfigKeyboardField(detail, pluginConfig);
     if (!selectedField) {
         if (event.key === 'Escape') { event.preventDefault(); closePluginConfig(); }
         return;
     }
-    if (handleFieldSubmode(event, detail, selectedField.id)) return;
+    if (handleFieldSubmode(event, detail, selectedField.id)) {
+        if (NAV_KEYS[event.key]) retainPluginConfigFocus(detail, selectedField.id);
+        return;
+    }
     if (event.key === 'Escape') {
         event.preventDefault();
         blurPluginConfigFocus(detail);
@@ -453,8 +494,29 @@ function delegateToPluginConfig(event, pluginConfig, closePluginConfig) {
     }
     if (isEditingText(detail)) return;
     if (handlePluginConfigDirectEdit(event, detail, selectedField)) return;
-    if (handlePluginConfigFieldAction(event, detail, pluginConfig, selectedField)) return;
-    handlePluginConfigMove(event, detail, pluginConfig);
+    if (handlePluginConfigFieldAction(event, detail, pluginConfig, selectedField)) {
+        if (NAV_KEYS[event.key]) retainPluginConfigFocus(detail, selectedField.id);
+        return;
+    }
+    handlePluginConfigMove(event, detail, pluginConfig, selectedField.id);
+}
+
+function resolvePluginConfigKeyboardField(detail, pluginConfig) {
+    const active = document.activeElement;
+    const focusedField = active instanceof HTMLElement
+        ? active.closest(PLUGIN_CONFIG_FIELD)
+        : null;
+    const focusedFieldId = focusedField instanceof HTMLElement && detail.contains(focusedField)
+        ? focusedField.dataset.pluginConfigFieldId
+        : null;
+    if (focusedFieldId) {
+        if (focusedFieldId !== pluginConfig.selectedFieldId) {
+            pluginConfig.setSelectedFieldId(focusedFieldId);
+        }
+        return pluginConfig.visibleFields.find(field => field.id === focusedFieldId)
+            || pluginConfig.selectedField;
+    }
+    return pluginConfig.selectedField;
 }
 
 const DIRECT_EDIT_HANDLERS = {
@@ -658,17 +720,35 @@ function handleNumberFieldActivation(event, detail, fieldId) {
     return true;
 }
 
-function handlePluginConfigMove(event, detail, pluginConfig) {
+function handlePluginConfigMove(event, detail, pluginConfig, currentFieldId) {
     const direction = NAV_KEYS[event.key];
     if (!direction) return false;
     event.preventDefault();
-    blurPluginConfigFocus(detail);
-    const nextFieldId = nextPluginConfigFieldId(detail, pluginConfig.selectedFieldId, direction);
+    const nextFieldId = nextPluginConfigFieldId(detail, currentFieldId || pluginConfig.selectedFieldId, direction);
     const fieldIds = getPluginConfigFieldElements(detail).map(f => f.dataset.pluginConfigFieldId);
-    log('field-move', direction, `fields=[${fieldIds.join(', ')}]`, 'from', pluginConfig.selectedFieldId, '→', nextFieldId);
+    log('field-move', direction, `fields=[${fieldIds.join(', ')}]`, 'from', currentFieldId || pluginConfig.selectedFieldId, '→', nextFieldId);
     if (!nextFieldId) return true;
     pluginConfig.setSelectedFieldId(nextFieldId);
+    retainPluginConfigFocus(detail, nextFieldId, { forcePreferred: true });
     return true;
+}
+
+function retainPluginConfigFocus(detail, preferredFieldId, { forcePreferred = false } = {}) {
+    requestAnimationFrame(() => {
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && active !== document.body && detail.contains(active)) {
+            const activeField = active.closest(PLUGIN_CONFIG_FIELD);
+            const activeFieldId = activeField instanceof HTMLElement
+                ? activeField.dataset.pluginConfigFieldId
+                : null;
+            if (!forcePreferred || activeFieldId === preferredFieldId) return;
+        }
+        const preferred = queryFieldElement(detail, preferredFieldId);
+        const selected = detail.querySelector(`${PLUGIN_CONFIG_FIELD}.is-selected, ${PLUGIN_CONFIG_FIELD}[data-selected="true"]`);
+        const fallback = detail.querySelector(PLUGIN_CONFIG_FIELD);
+        const target = preferred || selected || fallback;
+        if (target instanceof HTMLElement) target.focus({ preventScroll: true });
+    });
 }
 
 function nextPluginConfigFieldId(detail, selectedFieldId, direction) {

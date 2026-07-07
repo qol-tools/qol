@@ -23,19 +23,23 @@ export function ViewTabs({ subtitle, tabs, onActivate, onContentBlur, trailing, 
     return html`
         <${PageShell} subtitle=${subtitle} className=${className}>
             <div class="view-tabs" role="tablist" ref=${vt.rootRef}>
-                ${tabs.map((tab, i) => html`
-                    <${Surface} as="button" key=${tab.id}
-                        className="view-tab ${vt.activeTab === tab.id ? 'active' : ''}"
-                        role="tab"
-                        selected=${vt.activeTab === tab.id}
-                        data-tab-id=${tab.id}
-                        aria-selected=${vt.activeTab === tab.id}
-                        onSelect=${() => vt.previewTab(i)}
-                        onActivate=${() => vt.activateTab(i)}>
-                        ${tab.label}
-                        ${tab.count > 0 ? html`<span class="view-tab-count">${tab.count}</span>` : null}
-                    <//>
-                `)}
+                ${tabs.map((tab, i) => {
+                    const hasCount = typeof tab.count === 'number';
+                    const countClass = `view-tab-count ${tab.count > 0 ? '' : 'is-empty'}`.trim();
+                    return html`
+                        <${Surface} as="button" key=${tab.id}
+                            className="view-tab ${vt.activeTab === tab.id ? 'active' : ''}"
+                            role="tab"
+                            selected=${vt.activeTab === tab.id}
+                            data-tab-id=${tab.id}
+                            aria-selected=${vt.activeTab === tab.id}
+                            onSelect=${() => vt.previewTab(i)}
+                            onActivate=${() => vt.activateTab(i)}>
+                            ${tab.label}
+                            ${hasCount ? html`<span class=${countClass} aria-hidden=${tab.count > 0 ? undefined : 'true'}>${tab.count}</span>` : null}
+                        <//>
+                    `;
+                })}
                 ${trailing}
             </div>
             <${SurfaceContainer} className="view-tab-content" role="tabpanel"

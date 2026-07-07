@@ -471,6 +471,10 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     text-align: center;
 }
 
+.view-tab-count.is-empty {
+    visibility: hidden;
+}
+
 .view-tab.active .view-tab-count {
     background: rgba(var(--accent-rgb), 0.15);
     color: rgba(var(--accent-rgb), 0.9);

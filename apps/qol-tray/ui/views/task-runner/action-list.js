@@ -1,6 +1,7 @@
 import { html } from '../../lib/html.js';
 import { extractParams } from './data.js';
 import { Card } from '../../lib/components/Card.js';
+import { Surface } from '../../lib/components/Surface.js';
 
 function ActionCard({ actionId, action, isSelected, index, onSelect, onEdit }) {
     const params = extractParams(action.command);
@@ -27,7 +28,13 @@ function ActionCard({ actionId, action, isSelected, index, onSelect, onEdit }) {
 export function ActionList({ data, edit }) {
     if (data.actionIds.length === 0) {
         return html`<div class="actions-list">
-            <div class="empty">No actions configured.</div>
+            <${Surface}
+                className="empty"
+                index=${0}
+                selected=${true}
+                onActivate=${() => edit.openEditModal()}>
+                No actions configured. Press Enter to add one.
+            <//>
         </div>`;
     }
     return html`<div class="actions-list">
