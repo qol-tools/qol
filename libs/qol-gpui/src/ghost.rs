@@ -189,6 +189,66 @@ fn rearm_on_new_show(
     }
 }
 
+const DISMISS_DEBOUNCE_MS: u64 = 120;
+
+fn should_dismiss_after_debounce(showing: bool, still_active: bool) -> bool {
+    showing && !still_active
+}
+
+fn schedule_debounced_dismiss<V: 'static>(
+    label: &'static str,
+    event: &'static str,
+    window_handle: gpui::AnyWindowHandle,
+    is_showing: std::rc::Rc<impl Fn(&V) -> bool + 'static>,
+    on_dismiss: std::rc::Rc<
+        std::cell::RefCell<impl FnMut(&mut V, &mut gpui::Window, &mut gpui::Context<V>) + 'static>,
+    >,
+    cx: &mut gpui::Context<V>,
+) {
+    cx.spawn(
+        move |view_handle: gpui::WeakEntity<V>, cx: &mut gpui::AsyncApp| {
+            let mut cx = cx.clone();
+            let is_showing = is_showing.clone();
+            let on_dismiss = on_dismiss.clone();
+            async move {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(DISMISS_DEBOUNCE_MS))
+                    .await;
+                let _ = cx.update_window(window_handle, move |_, window, cx| {
+                    let Some(handle) = view_handle.upgrade() else {
+                        return;
+                    };
+                    let showing = is_showing(handle.read(cx));
+                    let still_active = window.is_window_active();
+                    if !should_dismiss_after_debounce(showing, still_active) {
+                        trace_dismiss_decision(
+                            label,
+                            event,
+                            showing,
+                            if still_active { "true" } else { "false" },
+                            std::time::Instant::now(),
+                            "debounce_recovered",
+                        );
+                        return;
+                    }
+                    trace_dismiss_decision(
+                        label,
+                        event,
+                        showing,
+                        "false",
+                        std::time::Instant::now(),
+                        "dismiss",
+                    );
+                    handle.update(cx, |view, cx| {
+                        (*on_dismiss.borrow_mut())(view, window, cx);
+                    });
+                });
+            }
+        },
+    )
+    .detach();
+}
+
 pub fn track_dismiss<V: gpui::Focusable + 'static>(
     label: &'static str,
     focus_handle: &gpui::FocusHandle,
@@ -230,8 +290,15 @@ pub fn track_dismiss<V: gpui::Focusable + 'static>(
             trace_dismiss_decision(label, "blur", showing, "true", guard, "skip_active");
             return;
         }
-        trace_dismiss_decision(label, "blur", showing, "false", guard, "dismiss");
-        (*on_dismiss_1.borrow_mut())(view, window, cx);
+        trace_dismiss_decision(label, "blur", showing, "false", guard, "debounce_scheduled");
+        schedule_debounced_dismiss(
+            label,
+            "blur",
+            window_handle,
+            is_showing_1.clone(),
+            on_dismiss_1.clone(),
+            cx,
+        );
     });
 
     let get_blur_guard_2 = get_blur_guard.clone();
@@ -265,8 +332,22 @@ pub fn track_dismiss<V: gpui::Focusable + 'static>(
             );
             return;
         }
-        trace_dismiss_decision(label, "activation", showing, "false", guard, "dismiss");
-        (*on_dismiss_2.borrow_mut())(view, window, cx);
+        trace_dismiss_decision(
+            label,
+            "activation",
+            showing,
+            "false",
+            guard,
+            "debounce_scheduled",
+        );
+        schedule_debounced_dismiss(
+            label,
+            "activation",
+            window_handle,
+            is_showing_2.clone(),
+            on_dismiss_2.clone(),
+            cx,
+        );
     });
 
     let mut poll_task = None;
@@ -336,4 +417,41 @@ pub fn track_dismiss<V: gpui::Focusable + 'static>(
     }
 
     (blur_sub, active_sub, poll_task)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_dismiss_after_debounce;
+
+    #[test]
+    fn debounce_recheck_only_dismisses_if_still_hidden_and_still_inactive() {
+        let cases = [
+            ("still showing, still inactive: dismiss", true, false, true),
+            (
+                "still showing, became active again: recovered",
+                true,
+                true,
+                false,
+            ),
+            (
+                "no longer showing, still inactive: nothing to dismiss",
+                false,
+                false,
+                false,
+            ),
+            (
+                "no longer showing, became active: nothing to dismiss",
+                false,
+                true,
+                false,
+            ),
+        ];
+        for (case, showing, still_active, expected) in cases {
+            assert_eq!(
+                should_dismiss_after_debounce(showing, still_active),
+                expected,
+                "case: {case}"
+            );
+        }
+    }
 }
