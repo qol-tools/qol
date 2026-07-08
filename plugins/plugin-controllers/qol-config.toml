@@ -1,0 +1,32 @@
+schema_version = 1
+title = "Controllers"
+description = "Known controller defects and their driver fixes."
+
+[section.fixes]
+label = "Controller Fixes"
+
+[field.fixes_status]
+type = "status"
+label = "Status"
+section = "fixes"
+query = "controllers_status"
+value_from = "state"
+label_map = { ok = "All fixes applied", pending = "Fix available", driver_missing = "Driver missing", none = "No known controllers connected" }
+tone_map = { ok = "success", pending = "danger", driver_missing = "danger" }
+
+[field.detected_pads]
+type = "list"
+label = "Detected Controllers"
+section = "fixes"
+query = "list_controllers"
+row_label = "{name}"
+row_subtitle = "{mac} - {state}"
+empty_message = "No known controllers connected."
+
+[field.apply_fixes]
+type = "action"
+label = "Apply Controller Fixes"
+section = "fixes"
+action = "apply_fixes"
+variant = "primary"
+description = "Writes the driver workaround system-wide. Asks for authorization once."
