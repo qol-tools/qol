@@ -291,7 +291,8 @@ fn reject_if_below_oldest_supported(config_dir: &Path, host_version: &str) -> Re
 }
 
 fn parse_semver(v: &str) -> (u64, u64, u64) {
-    let mut parts = v
+    let normalized = v.trim().trim_start_matches(['v', 'V']);
+    let mut parts = normalized
         .split('.')
         .map(|p| p.split(|c: char| !c.is_ascii_digit()).next().unwrap_or(""))
         .map(|p| p.parse::<u64>().unwrap_or(0));
@@ -637,6 +638,9 @@ mod tests {
             ("3.15.1", "3.15.0", 1),
             ("4.0.0", "3.99.99", 1),
             ("3.15", "3.15.0", 0),
+            ("v3.15.1", "3.15.0", 1),
+            ("V3.15.0", "3.15.0", 0),
+            ("v3.15.1-dev", "3.15.0", 1),
         ];
         for (a, b, expected) in cases {
             assert_eq!(compare_semver(a, b), expected, "compare_semver({a}, {b})");
