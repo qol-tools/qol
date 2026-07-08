@@ -1,0 +1,19 @@
+[package]
+name = "plugin-controllers"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+qol-conventions.workspace = true
+qol-plugin-daemon.workspace = true
+qol-headless.workspace = true
+open.workspace = true
+
+[build-dependencies]
+qol-conventions.workspace = true
+
+[dev-dependencies]
+qol-plugin-api.workspace = true
+tempfile = "3"
