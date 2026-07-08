@@ -124,7 +124,7 @@ pub(super) fn churn_suffix(classification: Option<&OpacityClassification>) -> St
         }) => {
             format!(" {COLOR_FAIL}⟲ REVERT {previous_reason}@{age_ms}ms{COLOR_RESET}")
         }
-        _ => String::new(),
+        Some(OpacityClassification::Redundant) | None => String::new(),
     }
 }
 
