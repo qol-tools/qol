@@ -5361,6 +5361,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "plugin-controllers"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "open",
+ "qol-conventions",
+ "qol-headless",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "plugin-lights"
 version = "1.11.4"
 dependencies = [
