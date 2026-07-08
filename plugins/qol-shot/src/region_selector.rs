@@ -12,7 +12,7 @@ use crate::{Monitor, Rect};
 use qol_gpui::theme::{shot_selector_runtime, ShotSelectorPalette};
 
 const SELECTOR_TITLE: &str = "qol-shot-selector";
-const SELECTOR_TITLE_PREFIX: &str = "qol-shot-selector-";
+pub(crate) const SELECTOR_TITLE_PREFIX: &str = "qol-shot-selector-";
 const SELECTOR_APP_ID: &str = "qol-tray-shot";
 const GUIDE_W: f32 = 520.0;
 const GUIDE_H: f32 = 78.0;
@@ -39,12 +39,46 @@ fn current_palette() -> &'static ShotSelectorPalette {
 
 pub type RectMapper = Rc<dyn Fn(Rect) -> Option<Rect>>;
 
+pub trait ActiveBounds {
+    fn active_bounds(&self) -> Option<Bounds<Pixels>>;
+}
+
+pub type ActiveBoundsSource = Rc<dyn ActiveBounds>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DetectedTarget {
+    Window(Rect),
+    Monitor(Rect),
+}
+
+impl DetectedTarget {
+    pub fn rect(self) -> Rect {
+        match self {
+            Self::Window(rect) | Self::Monitor(rect) => rect,
+        }
+    }
+}
+
+pub trait HoverTarget {
+    fn target_at(&self, point: Point<Pixels>) -> Option<DetectedTarget>;
+}
+
+pub type HoverTargetSource = Rc<dyn HoverTarget>;
+
 pub trait GlobalPointer {
     fn position(&self) -> Option<Point<Pixels>>;
     fn primary_button_down(&self) -> bool;
 }
 
 pub type GlobalPointerSource = Rc<dyn GlobalPointer>;
+
+#[derive(Clone)]
+pub struct SelectorWindowSources {
+    pub map_rect: RectMapper,
+    pub global_pointer: Option<GlobalPointerSource>,
+    pub active_bounds: Option<ActiveBoundsSource>,
+    pub hover_target: Option<HoverTargetSource>,
+}
 
 pub struct SelectorWindowOptions {
     pub display_id: Option<DisplayId>,
@@ -57,32 +91,32 @@ pub struct SelectorWindow {
     title: String,
     bounds: Bounds<Pixels>,
     active_bounds: Option<Bounds<Pixels>>,
+    default_target: Option<DetectedTarget>,
     display_id: Option<DisplayId>,
     kind: WindowKind,
     decorations: WindowDecorations,
     focus: bool,
-    map_rect: RectMapper,
-    global_pointer: Option<GlobalPointerSource>,
+    sources: SelectorWindowSources,
 }
 
 impl SelectorWindow {
     pub fn new(
         bounds: Bounds<Pixels>,
         active_bounds: Option<Bounds<Pixels>>,
+        default_target: Option<DetectedTarget>,
         options: SelectorWindowOptions,
-        map_rect: RectMapper,
-        global_pointer: Option<GlobalPointerSource>,
+        sources: SelectorWindowSources,
     ) -> Self {
         Self {
             title: selector_title(),
             bounds,
             active_bounds,
+            default_target,
             display_id: options.display_id,
             kind: options.kind,
             decorations: options.decorations,
             focus: options.focus,
-            map_rect,
-            global_pointer,
+            sources,
         }
     }
 
@@ -129,6 +163,9 @@ pub fn open_all(
 ) -> bool {
     let selector_count = selectors.len();
     let active_bounds = selectors.iter().find_map(|selector| selector.active_bounds);
+    let default_target = selectors
+        .iter()
+        .find_map(|selector| selector.default_target);
     let monitor_bounds = selectors
         .iter()
         .map(|selector| selector.bounds)
@@ -140,6 +177,7 @@ pub fn open_all(
     let state = Rc::new(RefCell::new(SelectionState::new(
         tx,
         active_bounds,
+        default_target,
         monitor_bounds,
         titles,
         kind,
@@ -179,8 +217,7 @@ fn open_window(
     let options = selector.options();
     let focus = selector.focus;
     let window_bounds = selector.bounds;
-    let map_rect = selector.map_rect;
-    let global_pointer = selector.global_pointer;
+    let sources = selector.sources;
     let window_title = selector.title;
     cx.open_window(options, move |window, cx| {
         window.set_window_title(&window_title);
@@ -195,8 +232,7 @@ fn open_window(
                 window_title.clone(),
                 quit_on_finish,
                 window_bounds,
-                map_rect,
-                global_pointer,
+                sources,
                 cx,
             )
         });
@@ -269,6 +305,7 @@ impl ChipModel {
 struct SelectionState {
     tx: Option<mpsc::Sender<Option<Rect>>>,
     active_bounds: Option<Bounds<Pixels>>,
+    default_target: Option<DetectedTarget>,
     monitor_bounds: Vec<Bounds<Pixels>>,
     titles: Vec<String>,
     drag_start: Option<Point<Pixels>>,
@@ -285,6 +322,7 @@ impl SelectionState {
     fn new(
         tx: mpsc::Sender<Option<Rect>>,
         active_bounds: Option<Bounds<Pixels>>,
+        default_target: Option<DetectedTarget>,
         monitor_bounds: Vec<Bounds<Pixels>>,
         titles: Vec<String>,
         kind: CaptureKind,
@@ -292,6 +330,7 @@ impl SelectionState {
         Self {
             tx: Some(tx),
             active_bounds,
+            default_target,
             monitor_bounds,
             titles,
             drag_start: None,
@@ -327,9 +366,24 @@ impl SelectionState {
         self.set_active_bounds(bounds)
     }
 
-    fn resync_active_bounds(&mut self, pointer: Option<Point<Pixels>>) -> bool {
+    fn set_default_target(&mut self, target: Option<DetectedTarget>) -> bool {
+        if self.default_target == target {
+            return false;
+        }
+        self.default_target = target;
+        true
+    }
+
+    fn resync_active_bounds(
+        &mut self,
+        pointer: Option<Point<Pixels>>,
+        active_bounds: Option<Bounds<Pixels>>,
+    ) -> bool {
         if let Some(current) = self.drag_current {
             return self.set_active_bounds_for_point(current);
+        }
+        if let Some(bounds) = active_bounds {
+            return self.set_active_bounds(bounds);
         }
         let Some(position) = pointer else {
             return false;
@@ -386,6 +440,8 @@ struct RegionSelector {
     window_bounds: Bounds<Pixels>,
     map_rect: RectMapper,
     global_pointer: Option<GlobalPointerSource>,
+    active_bounds: Option<ActiveBoundsSource>,
+    hover_target: Option<HoverTargetSource>,
     focus_handle: FocusHandle,
 }
 
@@ -395,8 +451,7 @@ impl RegionSelector {
         title: String,
         quit_on_finish: bool,
         window_bounds: Bounds<Pixels>,
-        map_rect: RectMapper,
-        global_pointer: Option<GlobalPointerSource>,
+        sources: SelectorWindowSources,
         cx: &mut Context<Self>,
     ) -> Self {
         qol_runtime::probe!("SHOT_SELECT_START", "path=gpui");
@@ -406,8 +461,10 @@ impl RegionSelector {
             title,
             quit_on_finish,
             window_bounds,
-            map_rect,
-            global_pointer,
+            map_rect: sources.map_rect,
+            global_pointer: sources.global_pointer,
+            active_bounds: sources.active_bounds,
+            hover_target: sources.hover_target,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -448,11 +505,23 @@ impl RegionSelector {
             }
             return;
         }
-        if self
+        let hover_changed = match &self.hover_target {
+            Some(source) => {
+                let target = source.target_at(position);
+                let changed = self.state.borrow_mut().set_default_target(target);
+                if changed {
+                    trace_hover_target(target);
+                }
+                changed
+            }
+            None => false,
+        };
+        let active_bounds = self.active_bounds_sample();
+        let resynced = self
             .state
             .borrow_mut()
-            .set_active_bounds_for_point(position)
-        {
+            .resync_active_bounds(Some(position), active_bounds);
+        if hover_changed || resynced {
             self.notify_all(cx);
         }
     }
@@ -465,7 +534,7 @@ impl RegionSelector {
             state.set_active_bounds_for_point(end);
         }
         let raw = self.current_raw_rect(Some(end));
-        let rect = self.capture_rect(raw);
+        let rect = self.resolved_capture_rect(raw);
         trace_selection_release("event", raw, rect);
         self.finish(rect, window, cx);
     }
@@ -607,7 +676,7 @@ impl RegionSelector {
             return GlobalDragResult::Continue;
         }
         let raw = self.current_raw_rect(tracked);
-        let rect = self.capture_rect(raw);
+        let rect = self.resolved_capture_rect(raw);
         trace_selection_release("global", raw, rect);
         self.finish_from_global_pointer(rect)
     }
@@ -628,6 +697,13 @@ impl RegionSelector {
         let offset = self.state.borrow().pointer_offset;
         raw.map(|rect| shift_rect(rect, offset))
             .and_then(|rect| (self.map_rect)(rect))
+    }
+
+    fn resolved_capture_rect(&self, raw: Option<Rect>) -> Option<Rect> {
+        if raw.is_some() {
+            return self.capture_rect(raw);
+        }
+        self.state.borrow().default_target.map(DetectedTarget::rect)
     }
 
     fn current_raw_rect(&self, end: Option<Point<Pixels>>) -> Option<Rect> {
@@ -722,27 +798,27 @@ impl RegionSelector {
         if self.state.borrow().drag_start.is_some() {
             return "Release mouse to capture";
         }
-        "Drag to select capture area"
+        match self.state.borrow().default_target {
+            Some(DetectedTarget::Window(_)) => "Detected window",
+            Some(DetectedTarget::Monitor(_)) => "Full monitor",
+            None => "No window detected",
+        }
+    }
+
+    fn guide_subtitle(&self) -> &'static str {
+        if self.state.borrow().drag_start.is_some() {
+            return "Press Esc to cancel";
+        }
+        if self.state.borrow().default_target.is_some() {
+            return "Click to capture or drag to select area";
+        }
+        "Drag to select area or press Esc to cancel"
     }
 
     fn selection_bounds(&self) -> Option<Bounds<Pixels>> {
         let state = self.state.borrow();
-        let start = state.drag_start?;
-        let current = state.drag_current?;
-        let left = start.x.min(current.x);
-        let top = start.y.min(current.y);
-        let right = start.x.max(current.x);
-        let bottom = start.y.max(current.y);
-        let selection = Bounds::new(point(left, top), size(right - left, bottom - top));
-        let window_bounds = self.window_bounds;
-        let clipped = intersect_bounds(selection, window_bounds)?;
-        Some(Bounds::new(
-            point(
-                clipped.origin.x - window_bounds.origin.x,
-                clipped.origin.y - window_bounds.origin.y,
-            ),
-            clipped.size,
-        ))
+        selection_global_rect(&state)
+            .and_then(|selection| selection_bounds_in_window(selection, self.window_bounds))
     }
 
     fn guide_frame(&self) -> Option<(f32, f32, f32)> {
@@ -786,7 +862,27 @@ impl RegionSelector {
             .as_ref()
             .and_then(|pointer| pointer.position())
             .map(|cg| self.tracked_point(cg));
-        self.state.borrow_mut().resync_active_bounds(pointer)
+        self.state
+            .borrow_mut()
+            .resync_active_bounds(pointer, self.active_bounds_sample())
+    }
+
+    fn active_bounds_sample(&self) -> Option<Bounds<Pixels>> {
+        self.active_bounds
+            .as_ref()
+            .and_then(|active_bounds| active_bounds.active_bounds())
+    }
+
+    fn selection_label_title(&self) -> &'static str {
+        let state = self.state.borrow();
+        if manual_selection_global_rect(&state).is_some() {
+            return "Capture area";
+        }
+        match state.default_target {
+            Some(DetectedTarget::Window(_)) => "Detected window",
+            Some(DetectedTarget::Monitor(_)) => "Full monitor",
+            None => "Capture area",
+        }
     }
 
     fn notify_all(&self, cx: &mut Context<Self>) {
@@ -887,7 +983,7 @@ impl Render for RegionSelector {
             root = root.child(
                 OverlayText {
                     title: self.guide_title(),
-                    subtitle: Some("Press Esc to cancel"),
+                    subtitle: Some(self.guide_subtitle()),
                     title_size: 22.0,
                     subtitle_size: 14.0,
                 }
@@ -905,7 +1001,7 @@ impl Render for RegionSelector {
                     f32::from(bounds.origin.y) + f32::from(bounds.size.height) / 2.0 - 13.0;
                 root = root.child(
                     OverlayText {
-                        title: "Capture area",
+                        title: self.selection_label_title(),
                         subtitle: None,
                         title_size: 18.0,
                         subtitle_size: 14.0,
@@ -927,6 +1023,20 @@ impl Render for RegionSelector {
 
         root
     }
+}
+
+fn trace_hover_target(target: Option<DetectedTarget>) {
+    #[cfg(debug_assertions)]
+    {
+        let target = match target {
+            Some(DetectedTarget::Window(rect)) => format!("window:{}", rect_label(rect)),
+            Some(DetectedTarget::Monitor(rect)) => format!("monitor:{}", rect_label(rect)),
+            None => "none".to_string(),
+        };
+        qol_runtime::probe!("SHOT_SELECT_TARGET", "hover={target}");
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = target;
 }
 
 #[cfg(debug_assertions)]
@@ -996,8 +1106,14 @@ fn rect_from_bounds(bounds: Bounds<Pixels>) -> Rect {
 }
 
 fn selection_global_rect(state: &SelectionState) -> Option<Rect> {
-    let start = state.drag_start?;
-    let current = state.drag_current?;
+    if let Some(rect) = manual_selection_global_rect(state) {
+        return Some(rect);
+    }
+    state.default_target.map(DetectedTarget::rect)
+}
+
+fn manual_selection_global_rect(state: &SelectionState) -> Option<Rect> {
+    let (start, current) = state.drag_start.zip(state.drag_current)?;
     selected_rect(point(px(0.0), px(0.0)), start, current)
 }
 
@@ -1036,6 +1152,24 @@ fn capture_estimate(
         .filter(|pixels| *pixels > 0)
         .map(|pixels| chip.estimate_for(pixels))
         .unwrap_or(zero)
+}
+
+fn selection_bounds_in_window(
+    selection: Rect,
+    window_bounds: Bounds<Pixels>,
+) -> Option<Bounds<Pixels>> {
+    let selection = Bounds::new(
+        point(px(selection.x as f32), px(selection.y as f32)),
+        size(px(selection.w as f32), px(selection.h as f32)),
+    );
+    let clipped = intersect_bounds(selection, window_bounds)?;
+    Some(Bounds::new(
+        point(
+            clipped.origin.x - window_bounds.origin.x,
+            clipped.origin.y - window_bounds.origin.y,
+        ),
+        clipped.size,
+    ))
 }
 
 fn chip_frame_in(
@@ -1333,7 +1467,8 @@ mod tests {
     use super::{
         backdrop_segments, capture_estimate, chip_frame_in, format_bytes, format_duration,
         intersect_bounds, kind_label, local_from_global, monitor_bounds_for_point, selected_rect,
-        shift_rect, ChipModel, SelectionState, CHIP_TOP,
+        selection_bounds_in_window, selection_global_rect, shift_rect, ChipModel, DetectedTarget,
+        SelectionState, CHIP_TOP,
     };
     use crate::space::{CaptureKind, DisplayScale, Quality};
     use crate::Rect;
@@ -1560,13 +1695,14 @@ mod tests {
         let mut state = SelectionState::new(
             tx,
             Some(laptop),
+            None,
             vec![laptop, external],
             Vec::new(),
             CaptureKind::Recording,
         );
 
         state.drag_current = Some(point(px(-800.0), px(700.0)));
-        assert!(state.resync_active_bounds(Some(point(px(800.0), px(700.0)))));
+        assert!(state.resync_active_bounds(Some(point(px(800.0), px(700.0))), None));
         assert_eq!(
             state.active_bounds,
             Some(external),
@@ -1574,7 +1710,7 @@ mod tests {
         );
 
         state.drag_current = None;
-        assert!(state.resync_active_bounds(Some(point(px(800.0), px(700.0)))));
+        assert!(state.resync_active_bounds(Some(point(px(800.0), px(700.0))), None));
         assert_eq!(
             state.active_bounds,
             Some(laptop),
@@ -1582,10 +1718,40 @@ mod tests {
         );
 
         assert!(
-            !state.resync_active_bounds(None),
+            !state.resync_active_bounds(None, None),
             "no drag and no pointer leaves the active monitor untouched"
         );
         assert_eq!(state.active_bounds, Some(laptop));
+    }
+
+    #[test]
+    fn resync_prefers_active_signal_when_not_dragging() {
+        let (tx, _rx) = mpsc::channel();
+        let laptop = Bounds::new(point(px(0.0), px(0.0)), size(px(2560.0), px(1440.0)));
+        let external = Bounds::new(point(px(-1512.0), px(458.0)), size(px(1512.0), px(982.0)));
+        let mut state = SelectionState::new(
+            tx,
+            Some(laptop),
+            None,
+            vec![laptop, external],
+            Vec::new(),
+            CaptureKind::Recording,
+        );
+
+        assert!(state.resync_active_bounds(Some(point(px(800.0), px(700.0))), Some(external)));
+        assert_eq!(
+            state.active_bounds,
+            Some(external),
+            "the runtime active monitor signal places the message when no drag is in progress"
+        );
+
+        state.drag_current = Some(point(px(800.0), px(700.0)));
+        assert!(state.resync_active_bounds(None, Some(external)));
+        assert_eq!(
+            state.active_bounds,
+            Some(laptop),
+            "an in-progress drag still anchors the message to the dragged monitor"
+        );
     }
 
     #[test]
@@ -1595,6 +1761,7 @@ mod tests {
         let mut state = SelectionState::new(
             tx,
             Some(screen),
+            None,
             vec![screen],
             Vec::new(),
             CaptureKind::Recording,
@@ -1632,6 +1799,7 @@ mod tests {
         let mut state = SelectionState::new(
             tx,
             Some(laptop),
+            None,
             vec![laptop, external],
             Vec::new(),
             CaptureKind::Recording,
@@ -1641,6 +1809,67 @@ mod tests {
         assert_eq!(state.active_bounds, Some(external));
         assert!(!state.set_active_bounds_for_point(point(px(-800.0), px(200.0))));
         assert_eq!(state.active_bounds, Some(external));
+    }
+
+    #[test]
+    fn default_target_drives_selection_until_drag_has_area() {
+        let (tx, _rx) = mpsc::channel();
+        let screen = Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0)));
+        let target = Rect {
+            x: 100,
+            y: 120,
+            w: 800,
+            h: 600,
+        };
+        let mut state = SelectionState::new(
+            tx,
+            Some(screen),
+            Some(DetectedTarget::Window(target)),
+            vec![screen],
+            Vec::new(),
+            CaptureKind::Recording,
+        );
+
+        assert_eq!(selection_global_rect(&state), Some(target));
+
+        state.drag_start = Some(point(px(400.0), px(400.0)));
+        state.drag_current = Some(point(px(400.0), px(400.0)));
+        assert_eq!(
+            selection_global_rect(&state),
+            Some(target),
+            "a click without area captures the detected target"
+        );
+
+        state.drag_current = Some(point(px(640.0), px(500.0)));
+        assert_eq!(
+            selection_global_rect(&state),
+            Some(Rect {
+                x: 400,
+                y: 400,
+                w: 240,
+                h: 100,
+            }),
+            "a real drag overrides the detected target"
+        );
+    }
+
+    #[test]
+    fn default_target_bounds_are_clipped_to_selector_window() {
+        let window = Bounds::new(point(px(100.0), px(100.0)), size(px(200.0), px(200.0)));
+        let target = Rect {
+            x: 50,
+            y: 120,
+            w: 120,
+            h: 260,
+        };
+
+        assert_eq!(
+            selection_bounds_in_window(target, window),
+            Some(Bounds::new(
+                point(px(0.0), px(20.0)),
+                size(px(70.0), px(180.0))
+            ))
+        );
     }
 
     #[test]

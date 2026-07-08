@@ -84,3 +84,16 @@ description = "macOS records natively as MOV, then converts after stop when need
 section = "video"
 default = "mov"
 options = ["mkv", "mp4", "mov", "webm"]
+
+[section.capture]
+label = "Capture"
+description = "Region selector behavior when detecting windows."
+actions = ["screenshot", "record"]
+
+[field.capture_include_window_frame]
+type = "boolean"
+config_key = "capture.include_window_frame"
+label = "Include Window Frame"
+description = "Linux-only. Include the title bar and borders when capturing a detected window. Disable to capture the client area only."
+section = "capture"
+default = true

@@ -154,14 +154,19 @@ fn selector_window(
     crate::region_selector::SelectorWindow::new(
         bounds,
         active_bounds,
+        None,
         crate::region_selector::SelectorWindowOptions {
             display_id,
             kind: ghost_window_kind(),
             decorations: ghost_window_decorations(false),
             focus,
         },
-        map_rect,
-        global_pointer,
+        crate::region_selector::SelectorWindowSources {
+            map_rect,
+            global_pointer,
+            active_bounds: None,
+            hover_target: None,
+        },
     )
 }
 

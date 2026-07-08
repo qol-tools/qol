@@ -8,6 +8,29 @@ pub struct Config {
     pub audio: AudioConfig,
     #[serde(default)]
     pub video: VideoConfig,
+    #[serde(default)]
+    pub capture: CaptureConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CaptureConfig {
+    #[serde(default = "default_true")]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(
+            dead_code,
+            reason = "window frame extents are only applied by the X11 selector"
+        )
+    )]
+    pub include_window_frame: bool,
+}
+
+impl Default for CaptureConfig {
+    fn default() -> Self {
+        Self {
+            include_window_frame: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
