@@ -10,6 +10,7 @@ getrandom = "0.2"
 serde = { version = "1", features = ["derive"] }
 log = "0.4"
 qol-conventions.workspace = true
+qol-color.workspace = true
 qol-config.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true

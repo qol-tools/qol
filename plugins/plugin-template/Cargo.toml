@@ -9,6 +9,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 qol-conventions.workspace = true
+open.workspace = true
 
 [build-dependencies]
 qol-conventions.workspace = true
