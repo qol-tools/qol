@@ -3,9 +3,9 @@ pub fn parse_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
     if hex.len() != 6 {
         return None;
     }
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    let r = u8::from_str_radix(hex.get(0..2)?, 16).ok()?;
+    let g = u8::from_str_radix(hex.get(2..4)?, 16).ok()?;
+    let b = u8::from_str_radix(hex.get(4..6)?, 16).ok()?;
     Some((r, g, b))
 }
 
@@ -67,6 +67,8 @@ mod tests {
             ("#123", None),
             ("#12345678", None),
             ("nope", None),
+            ("aäxyz", None),
+            ("#aäxyz", None),
         ];
         for (input, expected) in cases {
             assert_eq!(parse_hex_color(input), expected, "input: {input}");
