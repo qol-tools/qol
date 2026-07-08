@@ -4,9 +4,9 @@ schema_version = 1
 description = "Apply driver fixes for connected known-broken controllers"
 
 [query.controllers_status]
-description = "Aggregate fix state across detected known controllers"
+description = "Aggregate verdict across connected controllers"
 poll_interval_ms = 3000
 
 [query.list_controllers]
-description = "Detected known controllers with per-pad fix state"
+description = "Connected controllers with per-pad verdicts"
 poll_interval_ms = 3000

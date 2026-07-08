@@ -1,32 +1,29 @@
 schema_version = 1
 title = "Controllers"
-description = "Known controller defects and their driver fixes."
+description = "Connected game controllers and known driver defects."
 
-[section.fixes]
-label = "Controller Fixes"
+[section.controllers]
+label = "Controllers"
 
 [field.fixes_status]
 type = "status"
 label = "Status"
-section = "fixes"
+section = "controllers"
 query = "controllers_status"
 value_from = "state"
-label_map = { ok = "All fixes applied", pending = "Fix available", driver_missing = "Driver missing", none = "No known controllers connected" }
+label_map = { none = "No Controllers Detected", ok = "All controllers healthy", pending = "Fix available", driver_missing = "Driver missing" }
 tone_map = { ok = "success", pending = "danger", driver_missing = "danger" }
 
 [field.detected_pads]
 type = "list"
-label = "Detected Controllers"
-section = "fixes"
+label = "Connected Controllers"
+section = "controllers"
 query = "list_controllers"
 row_label = "{name}"
-row_subtitle = "{mac} - {state}"
-empty_message = "No known controllers connected."
+row_subtitle = "{transport} - {verdict}"
+empty_message = "No controllers detected."
 
-[field.apply_fixes]
-type = "action"
-label = "Apply Controller Fixes"
-section = "fixes"
+[field.detected_pads.row_action]
 action = "apply_fixes"
-variant = "primary"
-description = "Writes the driver workaround system-wide. Asks for authorization once."
+label = "Fix"
+when = "fixable"

@@ -35,6 +35,17 @@ pub struct DetectedDevice {
     pub product: u16,
     pub name: String,
     pub uniq: Option<String>,
+    pub is_gamepad: bool,
+}
+
+impl DetectedDevice {
+    pub fn transport(&self) -> &'static str {
+        match self.bus {
+            0x0005 => "Bluetooth",
+            0x0003 => "USB",
+            _ => "Other",
+        }
+    }
 }
 
 pub struct FixEntry {
@@ -50,7 +61,7 @@ pub struct FixEntry {
 
 pub const FIXES: &[FixEntry] = &[FixEntry {
     id: "gulikit-xw-bt-rumble",
-    summary: "GuliKit pad rumbles forever over Bluetooth without xpadneo quirk 263",
+    summary: "Rumble never stops over Bluetooth",
     driver: "hid_xpadneo",
     bus: 0x0005,
     vendor: 0x045e,
@@ -65,26 +76,32 @@ pub struct FixTarget {
     pub mac: Mac,
 }
 
+pub fn match_device(device: &DetectedDevice) -> Option<FixTarget> {
+    for entry in FIXES {
+        if device.bus != entry.bus
+            || device.vendor != entry.vendor
+            || !entry.products.contains(&device.product)
+            || device.name != entry.name
+        {
+            continue;
+        }
+        let mac = device.uniq.as_deref().and_then(Mac::parse)?;
+        return Some(FixTarget { entry, mac });
+    }
+    None
+}
+
 pub fn match_devices(devices: &[DetectedDevice]) -> Vec<FixTarget> {
     let mut targets: Vec<FixTarget> = Vec::new();
     for device in devices {
-        for entry in FIXES {
-            if device.bus != entry.bus
-                || device.vendor != entry.vendor
-                || !entry.products.contains(&device.product)
-                || device.name != entry.name
-            {
-                continue;
-            }
-            let Some(mac) = device.uniq.as_deref().and_then(Mac::parse) else {
-                continue;
-            };
-            let duplicate = targets
-                .iter()
-                .any(|target| target.entry.id == entry.id && target.mac == mac);
-            if !duplicate {
-                targets.push(FixTarget { entry, mac });
-            }
+        let Some(target) = match_device(device) else {
+            continue;
+        };
+        let duplicate = targets
+            .iter()
+            .any(|existing| existing.entry.id == target.entry.id && existing.mac == target.mac);
+        if !duplicate {
+            targets.push(target);
         }
     }
     targets
@@ -126,6 +143,7 @@ mod tests {
             product,
             name: name.into(),
             uniq: uniq.map(str::to_string),
+            is_gamepad: true,
         }
     }
 

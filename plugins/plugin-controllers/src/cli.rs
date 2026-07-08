@@ -38,16 +38,16 @@ fn apply_command() -> Command {
 
 fn status_command() -> Command {
     Command::new("status")
-        .about("Print detected known controllers and their fix state.")
+        .about("Print connected controllers and their verdicts.")
         .usage(format!("{BINARY_NAME} status"))
-        .output("One line per detected known controller.")
-        .exit_behavior("Exits zero even when no known controller is connected.")
+        .output("One line per connected controller.")
+        .exit_behavior("Exits zero even when no controller is connected.")
         .run_plain_text(|_| {
-            let statuses = daemon::snapshot();
-            if statuses.is_empty() {
-                return Ok(PlainTextOutput::text("no known controllers connected"));
+            let rows = daemon::snapshot();
+            if rows.is_empty() {
+                return Ok(PlainTextOutput::text("no controllers detected"));
             }
-            Ok(PlainTextOutput::text(summary_lines(&statuses)))
+            Ok(PlainTextOutput::text(summary_lines(&rows)))
         })
 }
 
@@ -95,38 +95,37 @@ fn pkexec_check() -> Result<DoctorCheckResult> {
 }
 
 fn fixes_check() -> Result<DoctorCheckResult> {
-    let statuses = daemon::snapshot();
-    if statuses.is_empty() {
+    let rows = daemon::snapshot();
+    if rows.is_empty() {
         return Ok(DoctorCheckResult::ok(
             "controller_fixes",
             format!(
-                "no known controllers connected ({} fixes in database)",
+                "no controllers detected ({} fixes in database)",
                 crate::fixes::FIXES.len()
             ),
         ));
     }
-    let summary = summary_lines(&statuses);
+    let summary = summary_lines(&rows);
     let mut result = DoctorCheckResult::ok("controller_fixes", summary.clone());
-    for status in &statuses {
-        match status.state {
-            FixState::DriverMissing => {
+    for row in &rows {
+        match row.fix_state {
+            Some(FixState::DriverMissing) => {
                 return Ok(DoctorCheckResult::fail("controller_fixes", summary)
                     .with_fix("install xpadneo: https://github.com/atar-axis/xpadneo"));
             }
-            FixState::Pending | FixState::LiveOnly => {
+            Some(FixState::Pending | FixState::LiveOnly) => {
                 result = DoctorCheckResult::warn("controller_fixes", summary.clone())
                     .with_fix(format!("run: {BINARY_NAME} apply_fixes"));
             }
-            FixState::Applied => {}
+            Some(FixState::Applied) | None => {}
         }
     }
     Ok(result)
 }
 
-fn summary_lines(statuses: &[daemon::TargetStatus]) -> String {
-    statuses
-        .iter()
-        .map(|status| format!("{} [{}]: {:?}", status.fix_id, status.mac, status.state))
+fn summary_lines(rows: &[daemon::ControllerRow]) -> String {
+    rows.iter()
+        .map(|row| format!("{} [{}]: {}", row.name, row.transport, row.verdict))
         .collect::<Vec<_>>()
         .join("\n")
 }

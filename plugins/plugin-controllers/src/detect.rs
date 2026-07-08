@@ -14,6 +14,7 @@ fn parse_block(block: &str) -> Option<DetectedDevice> {
     let mut ids: Option<(u16, u16, u16)> = None;
     let mut name: Option<String> = None;
     let mut uniq: Option<String> = None;
+    let mut is_gamepad = false;
     for line in block.lines() {
         if let Some(rest) = line.strip_prefix("I: ") {
             ids = parse_ids(rest);
@@ -22,6 +23,10 @@ fn parse_block(block: &str) -> Option<DetectedDevice> {
         } else if let Some(rest) = line.strip_prefix("U: Uniq=") {
             let value = rest.trim();
             uniq = (!value.is_empty()).then(|| value.to_string());
+        } else if let Some(rest) = line.strip_prefix("H: Handlers=") {
+            is_gamepad = rest
+                .split_whitespace()
+                .any(|handler| handler.starts_with("js"));
         }
     }
     let (bus, vendor, product) = ids?;
@@ -31,6 +36,7 @@ fn parse_block(block: &str) -> Option<DetectedDevice> {
         product,
         name: name?,
         uniq,
+        is_gamepad,
     })
 }
 
@@ -66,20 +72,29 @@ I: Bus=0003 Vendor=28de Product=11ff Version=0001
 N: Name=\"Microsoft X-Box 360 pad 0\"
 U: Uniq=
 H: Handlers=event30 js1
+
+I: Bus=0005 Vendor=045e Product=028e Version=1130
+N: Name=\"GuliKit Controller XW Consumer Control\"
+U: Uniq=06:71:10:20:26:b4
+H: Handlers=event28
 ";
 
     #[test]
-    fn parser_extracts_bus_ids_name_and_uniq() {
+    fn parser_extracts_bus_ids_name_uniq_and_gamepad_flag() {
         let devices = parse_devices(SAMPLE);
-        assert_eq!(devices.len(), 2, "expected two device blocks");
+        assert_eq!(devices.len(), 3, "expected three device blocks");
         let first = &devices[0];
         assert_eq!(first.bus, 0x0005);
         assert_eq!(first.vendor, 0x045e);
         assert_eq!(first.product, 0x028e);
         assert_eq!(first.name, "GuliKit Controller XW");
         assert_eq!(first.uniq.as_deref(), Some("06:71:10:20:26:b4"));
+        assert!(first.is_gamepad, "js handler marks a gamepad");
         let second = &devices[1];
         assert_eq!(second.uniq, None, "empty Uniq= must map to None");
+        assert!(second.is_gamepad);
+        let third = &devices[2];
+        assert!(!third.is_gamepad, "no js handler means not a gamepad");
     }
 
     #[test]

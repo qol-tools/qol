@@ -91,6 +91,7 @@ mod tests {
             product: 0x028e,
             name: "GuliKit Controller XW".into(),
             uniq: Some("06:71:10:20:26:b4".into()),
+            is_gamepad: true,
         };
         match_devices(&[device]).remove(0)
     }
