@@ -370,14 +370,7 @@ pub fn show_notification(title: &str, message: &str, timeout_ms: u32) {
 }
 
 pub fn open_url(url: &str) -> Result<()> {
-    Command::new("xdg-open")
-        .arg(url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("failed to open URL")?;
-    Ok(())
+    open::that(url).context("failed to open URL")
 }
 
 pub fn grab_preview_rgba(rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {

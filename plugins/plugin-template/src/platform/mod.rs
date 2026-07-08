@@ -1,14 +1,8 @@
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "macos")]
-mod macos;
+use anyhow::{Context, Result};
 
-#[cfg(target_os = "linux")]
-pub use linux::*;
-#[cfg(target_os = "macos")]
-pub use macos::*;
+const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-compile_error!(
-    "plugin-template: unsupported target OS; add src/platform/<os>.rs and wire it in src/platform/mod.rs"
-);
+pub fn open_settings() -> Result<()> {
+    let settings_url = qol_conventions::settings_url(PLUGIN_ID);
+    open::that(&settings_url).context("failed to open settings URL")
+}

@@ -3,8 +3,6 @@ mod runtime;
 mod scale;
 mod x11;
 
-use std::process::{Command, Stdio};
-
 use anyhow::{Context, Result};
 
 use crate::config::PLUGIN_ID;
@@ -27,14 +25,7 @@ impl CursorPlatform for Platform {
 
     fn open_settings(&self) -> Result<()> {
         let url = qol_conventions::settings_url(PLUGIN_ID);
-        Command::new(OPENER)
-            .arg(&url)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .context("failed to open settings URL")?;
-        Ok(())
+        open::that(&url).context("failed to open settings URL")
     }
 }
 
@@ -48,5 +39,3 @@ fn register(signal: libc::c_int) {
 extern "C" fn handle_signal(_: libc::c_int) {
     request_external_stop();
 }
-
-const OPENER: &str = "xdg-open";

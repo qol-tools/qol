@@ -30,14 +30,7 @@ pub fn show_notification(title: &str, message: &str, _timeout_ms: u32) {
 }
 
 pub fn open_url(url: &str) -> Result<()> {
-    Command::new("open")
-        .arg(url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("failed to open URL")?;
-    Ok(())
+    open::that(url).context("failed to open URL")
 }
 
 pub fn grab_preview_rgba(_rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {
@@ -119,14 +112,7 @@ pub(super) fn reveal_path(path: &Path) -> bool {
 }
 
 pub(super) fn open_path(path: &Path) -> bool {
-    Command::new("open")
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    open::that(path).is_ok()
 }
 
 pub(super) fn videos_dir() -> Option<PathBuf> {
