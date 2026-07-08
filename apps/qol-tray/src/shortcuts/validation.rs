@@ -12,22 +12,25 @@ pub fn validate_shortcut(shortcut: &Shortcut) -> Result<(), String> {
 }
 
 pub fn validate_id(id: &str) -> Result<(), String> {
-    if id.is_empty() {
-        return Err("id must not be empty".into());
+    qol_plugin_api::manifest::validate_safe_identifier(id).map_err(shortcut_id_error)
+}
+
+fn shortcut_id_error(error: qol_plugin_api::manifest::SafeIdentifierError) -> String {
+    match error {
+        qol_plugin_api::manifest::SafeIdentifierError::Empty => "id must not be empty",
+        qol_plugin_api::manifest::SafeIdentifierError::LeadingOrTrailingWhitespace => {
+            "id must not have leading or trailing whitespace"
+        }
+        qol_plugin_api::manifest::SafeIdentifierError::NullByte => "id must not contain null bytes",
+        qol_plugin_api::manifest::SafeIdentifierError::TooLong => {
+            "id must be at most 64 characters"
+        }
+        qol_plugin_api::manifest::SafeIdentifierError::LeadingDash => "id must not start with '-'",
+        qol_plugin_api::manifest::SafeIdentifierError::InvalidCharacters => {
+            "id must only contain [A-Za-z0-9_-]"
+        }
     }
-    if id.len() > 64 {
-        return Err("id must be at most 64 characters".into());
-    }
-    if id.starts_with('-') {
-        return Err("id must not start with '-'".into());
-    }
-    if !id
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err("id must only contain [A-Za-z0-9_-]".into());
-    }
-    Ok(())
+    .into()
 }
 
 fn validate_name(name: &str) -> Result<(), String> {
@@ -184,6 +187,9 @@ mod tests {
             ("", "empty"),
             ("-leading-dash", "leading dash"),
             ("has space", "space"),
+            (" leading", "leading whitespace"),
+            ("trailing ", "trailing whitespace"),
+            ("has\0null", "null byte"),
             ("dot.in.id", "dot"),
             ("slash/in/id", "slash"),
         ];

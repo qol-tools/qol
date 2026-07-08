@@ -20,14 +20,46 @@ pub fn is_valid_action_id(action: &str) -> bool {
 }
 
 pub fn is_valid_command_basename(value: &str) -> bool {
-    !value.trim().is_empty()
-        && value.trim() == value
-        && !value.contains('\0')
-        && !value.starts_with('-')
-        && value.len() <= 64
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    is_valid_safe_identifier(value)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SafeIdentifierError {
+    Empty,
+    LeadingOrTrailingWhitespace,
+    NullByte,
+    TooLong,
+    LeadingDash,
+    InvalidCharacters,
+}
+
+pub fn is_valid_safe_identifier(value: &str) -> bool {
+    validate_safe_identifier(value).is_ok()
+}
+
+pub fn validate_safe_identifier(value: &str) -> Result<(), SafeIdentifierError> {
+    if value.trim().is_empty() {
+        return Err(SafeIdentifierError::Empty);
+    }
+    if value.trim() != value {
+        return Err(SafeIdentifierError::LeadingOrTrailingWhitespace);
+    }
+    if value.contains('\0') {
+        return Err(SafeIdentifierError::NullByte);
+    }
+    if value.len() > 64 {
+        return Err(SafeIdentifierError::TooLong);
+    }
+    if value.starts_with('-') {
+        return Err(SafeIdentifierError::LeadingDash);
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err(SafeIdentifierError::InvalidCharacters);
+    }
+    Ok(())
 }
 
 pub(super) fn validate_optional_daemon_config(daemon: Option<&DaemonConfig>) -> Result<()> {

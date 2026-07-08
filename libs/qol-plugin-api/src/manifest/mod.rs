@@ -12,7 +12,10 @@ pub use schema::{
     MenuItem, NamedPort, PluginId, PluginInfo, PluginManifest, PluginUid, PortProtocol,
     RuntimeConfig, ShortcutDeclaration,
 };
-pub use validation::{is_valid_action_id, is_valid_command_basename, is_valid_plugin_id};
+pub use validation::{
+    is_valid_action_id, is_valid_command_basename, is_valid_plugin_id, is_valid_safe_identifier,
+    validate_safe_identifier, SafeIdentifierError,
+};
 
 pub const CURRENT_MANIFEST_VERSION: u32 = 3;
 

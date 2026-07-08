@@ -79,11 +79,7 @@ fn test_env_path_root() -> Option<PathBuf> {
 }
 
 pub fn is_safe_path_component(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 64
-        && !s.starts_with('-')
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    qol_plugin_api::manifest::is_valid_safe_identifier(s)
 }
 
 fn legacy_config_dir() -> Result<PathBuf> {
@@ -438,6 +434,8 @@ mod tests {
             "../..",
             "foo/../bar",
             " ",
+            " plugin",
+            "plugin ",
             ".hidden",
             "..hidden",
             "plugin..name",
