@@ -5,7 +5,9 @@ use std::cell::RefCell;
 use crate::runtime_config::load_gpui_runtime_config;
 
 #[cfg(target_os = "linux")]
-pub use platform::{force_composite_below, make_override_redirect};
+pub use platform::{
+    force_composite_below, make_override_redirect, window_geometry_session, WindowGeometrySession,
+};
 
 #[cfg(target_os = "linux")]
 pub fn restore_composite() {
@@ -15,10 +17,11 @@ pub fn restore_composite() {
 #[cfg(not(target_os = "linux"))]
 pub fn restore_composite() {}
 pub use platform::{
-    configure_overlay_window, configure_popup_window, disable_window_shadow, dump_ghost_windows,
-    hide_for_capture, hide_invisible, hide_window_by_title, hide_windows_by_title_prefix,
-    reposition_window_by_title, show_window_by_title, sync_window_layout,
-    visible_windows_by_title_prefix, window_backing_scale,
+    configure_overlay_window, configure_pinned_window, configure_popup_window,
+    disable_window_shadow, dump_ghost_windows, hide_for_capture, hide_invisible,
+    hide_window_by_title, hide_windows_by_title_prefix, reposition_window_by_title,
+    show_window_by_title, sync_window_layout, visible_windows_by_title_prefix,
+    window_backing_scale,
 };
 
 const ENV_GHOST_OPACITY: &str = "QOL_TRAY_GHOST_OPACITY";

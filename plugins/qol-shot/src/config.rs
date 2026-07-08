@@ -23,12 +23,22 @@ pub struct CaptureConfig {
         )
     )]
     pub include_window_frame: bool,
+    #[serde(default = "default_true")]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        allow(
+            dead_code,
+            reason = "the pinned preview window only exists on linux and macos"
+        )
+    )]
+    pub pin_border: bool,
 }
 
 impl Default for CaptureConfig {
     fn default() -> Self {
         Self {
             include_window_frame: true,
+            pin_border: true,
         }
     }
 }

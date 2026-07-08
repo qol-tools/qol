@@ -69,6 +69,33 @@ fn connect_with_atoms() -> Option<(impl Connection, usize, u32, u32, u32, u32)> 
     Some((conn, screen_num, root, list_atom, name_atom, utf8_atom))
 }
 
+pub struct WindowGeometrySession {
+    conn: x11rb::rust_connection::RustConnection,
+    wid: u32,
+}
+
+pub fn window_geometry_session(title: &str) -> Option<WindowGeometrySession> {
+    let (conn, screen_num) = x11rb::connect(None).ok()?;
+    let root = conn.setup().roots[screen_num].root;
+    let list_atom = intern(&conn, b"_NET_CLIENT_LIST")?;
+    let name_atom = intern(&conn, b"_NET_WM_NAME")?;
+    let utf8_atom = intern(&conn, b"UTF8_STRING")?;
+    let wid = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title)?;
+    Some(WindowGeometrySession { conn, wid })
+}
+
+impl WindowGeometrySession {
+    pub fn set_bounds(&self, x: i32, y: i32, width: u32, height: u32) {
+        let aux = ConfigureWindowAux::new()
+            .x(x)
+            .y(y)
+            .width(width.max(1))
+            .height(height.max(1));
+        let _ = self.conn.configure_window(self.wid, &aux);
+        let _ = self.conn.flush();
+    }
+}
+
 pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
@@ -262,6 +289,55 @@ pub fn configure_overlay_window(title: &str) -> bool {
     activate_window(&conn, root, wid);
     let _ = conn.flush();
     true
+}
+
+pub fn configure_pinned_window(title: &str) -> bool {
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
+    else {
+        return false;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        return false;
+    };
+
+    set_window_manager_decorations(&conn, wid, false);
+    keep_content_on_resize(&conn, wid);
+    opt_out_of_sync_resize(&conn, wid);
+    add_window_state(&conn, root, wid);
+    let _ = conn.flush();
+    true
+}
+
+fn keep_content_on_resize(conn: &impl Connection, wid: u32) {
+    let attributes = ChangeWindowAttributesAux::new().bit_gravity(Gravity::NORTH_WEST);
+    let _ = conn.change_window_attributes(wid, &attributes);
+}
+
+fn opt_out_of_sync_resize(conn: &impl Connection, wid: u32) {
+    let Some(protocols_atom) = intern(conn, b"WM_PROTOCOLS") else {
+        return;
+    };
+    let Some(sync_atom) = intern(conn, b"_NET_WM_SYNC_REQUEST") else {
+        return;
+    };
+    let Some(property) = conn
+        .get_property(false, wid, protocols_atom, AtomEnum::ATOM, 0, 32)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+    else {
+        return;
+    };
+    let Some(atoms) = property.value32() else {
+        return;
+    };
+    let kept: Vec<u32> = atoms.filter(|atom| *atom != sync_atom).collect();
+    let _ = conn.change_property32(
+        PropMode::REPLACE,
+        wid,
+        protocols_atom,
+        AtomEnum::ATOM,
+        &kept,
+    );
 }
 
 fn lock_window_size(conn: &impl Connection, wid: u32) {

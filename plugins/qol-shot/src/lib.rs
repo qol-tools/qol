@@ -9,6 +9,8 @@ mod daemon;
 pub mod daemon_app;
 mod geometry;
 mod output;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod pinned;
 pub(crate) mod platform;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod preview;

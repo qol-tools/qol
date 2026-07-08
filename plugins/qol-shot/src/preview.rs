@@ -27,13 +27,55 @@ const CIRCLE_GAP: f32 = 14.0;
 const LABEL_H: f32 = 30.0;
 const BLUR_GUARD: Duration = Duration::from_millis(400);
 const PREVIEW_TITLE: &str = "qol-shot-preview";
-const PREVIEW_APP_ID: &str = "qol-tray-shot";
+pub(crate) const PREVIEW_APP_ID: &str = "qol-tray-shot";
 
 static PREVIEW_SEQ: AtomicU64 = AtomicU64::new(0);
 static CURRENT_PALETTE: LazyLock<ShotPreviewPalette> = LazyLock::new(shot_preview_runtime);
 
-fn current_palette() -> &'static ShotPreviewPalette {
+pub(crate) fn current_palette() -> &'static ShotPreviewPalette {
     &CURRENT_PALETTE
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PreviewControl {
+    Action(ShotAction),
+    Pin,
+}
+
+impl PreviewControl {
+    fn glyph(self) -> &'static str {
+        match self {
+            Self::Action(action) => action.glyph(),
+            Self::Pin => "◉",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Action(action) => action.label(),
+            Self::Pin => "Pin",
+        }
+    }
+
+    fn accel(self) -> char {
+        match self {
+            Self::Action(action) => action.accel(),
+            Self::Pin => 'i',
+        }
+    }
+}
+
+fn preview_controls() -> Vec<PreviewControl> {
+    ShotAction::ALL
+        .iter()
+        .copied()
+        .map(PreviewControl::Action)
+        .chain([PreviewControl::Pin])
+        .collect()
+}
+
+fn control_count() -> usize {
+    ShotAction::ALL.len() + 1
 }
 
 type Completion = Arc<Mutex<Option<Result<()>>>>;
@@ -73,7 +115,7 @@ pub fn show(path: &Path) -> Result<()> {
 }
 
 pub fn pre_create(windows: &PreviewWindows, tracker: &MonitorTracker, cx: &mut App) {
-    let default = window_dims(MAX_THUMB_W, MAX_THUMB_H, ShotAction::ALL.len());
+    let default = window_dims(MAX_THUMB_W, MAX_THUMB_H, control_count());
     let default_size = size(px(default.0), px(default.1));
     for monitor in monitors_or_snapshot(tracker) {
         let placement = centered_window_placement(Some(&monitor), default_size, cx);
@@ -146,7 +188,7 @@ pub fn show_capture(
     cx: &mut App,
 ) -> Result<()> {
     let content = GhostContent::from_capture(capture)?;
-    let (win_w, win_h) = window_dims(content.thumb.0, content.thumb.1, ShotAction::ALL.len());
+    let (win_w, win_h) = window_dims(content.thumb.0, content.thumb.1, control_count());
     let placement = centered_window_placement(
         tracker.snapshot_monitor().as_ref(),
         size(px(win_w), px(win_h)),
@@ -341,7 +383,7 @@ fn open_quit_window(
     image: Option<Arc<RenderImage>>,
     cx: &mut App,
 ) -> bool {
-    let (win_w, win_h) = window_dims(thumb.0, thumb.1, ShotAction::ALL.len());
+    let (win_w, win_h) = window_dims(thumb.0, thumb.1, control_count());
     let seq = PREVIEW_SEQ.fetch_add(1, Ordering::Relaxed);
     let title = format!("qol-shot-preview-{}-{seq}", std::process::id());
     let bounds = preview_bounds(size(px(win_w), px(win_h)), cx);
@@ -391,7 +433,10 @@ fn monitors_or_snapshot(tracker: &MonitorTracker) -> Vec<ActiveMonitor> {
     tracker.snapshot_monitor().into_iter().collect()
 }
 
-fn rgba_to_render_image(data: Vec<u8>, w: u32, h: u32) -> Option<Arc<RenderImage>> {
+fn rgba_to_render_image(mut data: Vec<u8>, w: u32, h: u32) -> Option<Arc<RenderImage>> {
+    for pixel in data.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
     let buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(w, h, data)?;
     let frame = image::Frame::new(buffer);
     Some(Arc::new(RenderImage::new(smallvec::smallvec![frame])))
@@ -528,9 +573,47 @@ impl PreviewView {
     }
 
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let n = ShotAction::ALL.len() as isize;
+        let n = control_count() as isize;
         self.selected = (((self.selected as isize + delta) % n + n) % n) as usize;
         cx.notify();
+    }
+
+    fn activate(&mut self, control: PreviewControl, window: &mut Window, cx: &mut Context<Self>) {
+        match control {
+            PreviewControl::Action(action) => self.choose(action, window, cx),
+            PreviewControl::Pin => self.pin(window, cx),
+        }
+    }
+
+    fn pin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let content = crate::pinned::PinnedContent {
+            path: self.path.clone(),
+            image: self.image.clone(),
+            size: self.thumb,
+        };
+        let window_origin = match self.mode {
+            DismissMode::Quit => window.bounds().origin,
+            DismissMode::Ghost => self.window_origin,
+        };
+        let origin = window_origin + point(px(MARGIN), px(MARGIN));
+        let dismiss = match self.mode {
+            DismissMode::Quit => crate::pinned::PinnedDismiss::Quit,
+            DismissMode::Ghost => crate::pinned::PinnedDismiss::Remove,
+        };
+        if !crate::pinned::open(content, origin, dismiss, cx) {
+            return;
+        }
+        match self.mode {
+            DismissMode::Quit => {
+                if let Ok(mut slot) = self.completion.lock() {
+                    if slot.is_none() {
+                        *slot = Some(Ok(()));
+                    }
+                }
+                window.remove_window();
+            }
+            DismissMode::Ghost => self.hide_to_ghost(window),
+        }
     }
 
     fn choose(&mut self, action: ShotAction, window: &mut Window, cx: &mut Context<Self>) {
@@ -570,17 +653,16 @@ impl PreviewView {
             "left" | "up" => self.move_selection(-1, cx),
             "right" | "down" | "tab" => self.move_selection(1, cx),
             "enter" | "return" | "space" => {
-                let action = ShotAction::ALL[self.selected];
-                self.choose(action, window, cx);
+                let control = preview_controls()[self.selected];
+                self.activate(control, window, cx);
             }
             other => {
                 let accel = other.chars().next();
-                if let Some(action) = ShotAction::ALL
-                    .iter()
-                    .copied()
-                    .find(|a| Some(a.accel()) == accel)
+                if let Some(control) = preview_controls()
+                    .into_iter()
+                    .find(|control| Some(control.accel()) == accel)
                 {
-                    self.choose(action, window, cx);
+                    self.activate(control, window, cx);
                 }
             }
         }
@@ -640,14 +722,15 @@ impl Render for PreviewView {
             qol_runtime::probe!("SHOT_RENDER", "seq={}", self.seq);
         }
 
+        let controls = preview_controls();
         let (thumb_w, thumb_h) = self.thumb;
-        let (win_w, _) = window_dims(thumb_w, thumb_h, ShotAction::ALL.len());
-        let circles_width = circles_total_width(ShotAction::ALL.len());
+        let (win_w, _) = window_dims(thumb_w, thumb_h, controls.len());
+        let circles_width = circles_total_width(controls.len());
         let start_x = (win_w - circles_width) / 2.0;
         let circle_top = MARGIN + thumb_h - CIRCLE / 2.0;
-        let label = ShotAction::ALL
+        let label = controls
             .get(self.selected)
-            .map(|action| action.label())
+            .map(|control| control.label())
             .unwrap_or_default();
 
         root = root
@@ -676,7 +759,7 @@ impl Render for PreviewView {
                     .child(label),
             );
 
-        for (index, action) in ShotAction::ALL.iter().copied().enumerate() {
+        for (index, control) in controls.into_iter().enumerate() {
             let left = start_x + index as f32 * (CIRCLE + CIRCLE_GAP);
             let selected = index == self.selected;
             root = root.child(
@@ -703,9 +786,9 @@ impl Render for PreviewView {
                         rgb(palette.action_bg)
                     })
                     .text_color(rgb(palette.action_glyph))
-                    .child(action.glyph())
+                    .child(control.glyph())
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        this.choose(action, window, cx)
+                        this.activate(control, window, cx)
                     })),
             );
         }

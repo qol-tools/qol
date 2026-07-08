@@ -87,7 +87,7 @@ options = ["mkv", "mp4", "mov", "webm"]
 
 [section.capture]
 label = "Capture"
-description = "Region selector behavior when detecting windows."
+description = "Region selector behavior and screenshot previews."
 actions = ["screenshot", "record"]
 
 [field.capture_include_window_frame]
@@ -95,5 +95,13 @@ type = "boolean"
 config_key = "capture.include_window_frame"
 label = "Include Window Frame"
 description = "Linux-only. Include the title bar and borders when capturing a detected window. Disable to capture the client area only."
+section = "capture"
+default = true
+
+[field.capture_pin_border]
+type = "boolean"
+config_key = "capture.pin_border"
+label = "Pinned Preview Border"
+description = "Draw a thin border around pinned screenshot previews to keep them distinct from the screen behind them."
 section = "capture"
 default = true

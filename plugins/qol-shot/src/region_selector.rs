@@ -46,6 +46,13 @@ pub trait ActiveBounds {
 pub type ActiveBoundsSource = Rc<dyn ActiveBounds>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(
+        dead_code,
+        reason = "only the linux backend constructs hover-detected targets"
+    )
+)]
 pub enum DetectedTarget {
     Window(Rect),
     Monitor(Rect),

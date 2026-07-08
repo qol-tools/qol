@@ -781,18 +781,55 @@ pub fn grab_preview_rgba(rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {
 }
 
 pub fn configure_preview_window(title: String) {
-    configure_overlay_window_async(title, "SHOT_OVERLAY");
+    configure_window_async(
+        title,
+        "SHOT_OVERLAY",
+        qol_gpui::popup_window::configure_overlay_window,
+    );
+}
+
+pub struct PinResizeSession(qol_gpui::popup_window::WindowGeometrySession);
+
+pub fn pin_resize_session(title: &str) -> Option<PinResizeSession> {
+    qol_gpui::popup_window::window_geometry_session(title).map(PinResizeSession)
+}
+
+impl PinResizeSession {
+    pub fn apply(&self, x: f32, y: f32, width: f32, height: f32) {
+        self.0.set_bounds(
+            x.round() as i32,
+            y.round() as i32,
+            width.round().max(1.0) as u32,
+            height.round().max(1.0) as u32,
+        );
+    }
+}
+
+pub fn configure_pin_window(title: String) {
+    configure_window_async(
+        title,
+        "SHOT_PIN",
+        qol_gpui::popup_window::configure_pinned_window,
+    );
 }
 
 fn configure_selector_window(title: String) {
-    configure_overlay_window_async(title, "SHOT_SELECT_OVERLAY");
+    configure_window_async(
+        title,
+        "SHOT_SELECT_OVERLAY",
+        qol_gpui::popup_window::configure_overlay_window,
+    );
 }
 
-fn configure_overlay_window_async(title: String, probe: &'static str) {
+fn configure_window_async(
+    title: String,
+    probe: &'static str,
+    configure: impl Fn(&str) -> bool + Send + 'static,
+) {
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
         for attempt in 1..=30 {
-            if qol_gpui::popup_window::configure_overlay_window(&title) {
+            if configure(&title) {
                 qol_runtime::probe!(
                     probe,
                     "ms={} attempt={attempt} result=mapped",

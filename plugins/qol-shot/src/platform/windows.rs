@@ -90,6 +90,18 @@ pub fn grab_preview_rgba(_rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {
 
 pub fn configure_preview_window(_title: String) {}
 
+pub struct PinResizeSession;
+
+pub fn pin_resize_session(_title: &str) -> Option<PinResizeSession> {
+    None
+}
+
+impl PinResizeSession {
+    pub fn apply(&self, _x: f32, _y: f32, _width: f32, _height: f32) {}
+}
+
+pub fn configure_pin_window(_title: String) {}
+
 pub fn platform_supported_check() -> DoctorCheckResult {
     DoctorCheckResult::fail(
         "platform_supported",

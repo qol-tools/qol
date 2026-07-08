@@ -256,6 +256,10 @@ pub fn configure_overlay_window(title: &str) -> bool {
     configure_popup_window(title)
 }
 
+pub fn configure_pinned_window(title: &str) -> bool {
+    configure_popup_window(title)
+}
+
 pub fn window_backing_scale(title: &str) -> Option<f32> {
     let mtm = MainThreadMarker::new()?;
     let window = find_window_by_title(mtm, title)?;
