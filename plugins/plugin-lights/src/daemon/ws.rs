@@ -138,8 +138,8 @@ fn handle_client(stream: std::net::TcpStream, buffer: CommandBuffer) {
 
 fn parse_pending(cmd: &WsCommand) -> Option<PendingCommand> {
     match cmd.kind.as_str() {
-        "color" => Some(PendingCommand::Color(parse_hex(&cmd.hex))),
-        "brightness" => Some(PendingCommand::Brightness(cmd.level, parse_hex(&cmd.hex))),
+        "color" => Some(PendingCommand::Color(parse_hex(&cmd.hex)?)),
+        "brightness" => Some(PendingCommand::Brightness(cmd.level, parse_hex(&cmd.hex)?)),
         _ => None,
     }
 }
@@ -178,15 +178,9 @@ fn dispatch(svc: &mut LightService<ZigbeeBackend>, target: &LightTarget, cmd: Pe
     }
 }
 
-fn parse_hex(hex: &str) -> RgbColor {
-    let r = u8::from_str_radix(hex.get(0..2).unwrap_or("ff"), 16).unwrap_or(255);
-    let g = u8::from_str_radix(hex.get(2..4).unwrap_or("ff"), 16).unwrap_or(255);
-    let b = u8::from_str_radix(hex.get(4..6).unwrap_or("ff"), 16).unwrap_or(255);
-    RgbColor {
-        red: r,
-        green: g,
-        blue: b,
-    }
+fn parse_hex(hex: &str) -> Option<RgbColor> {
+    let (red, green, blue) = qol_color::parse_hex_color(hex)?;
+    Some(RgbColor { red, green, blue })
 }
 
 #[cfg(test)]
@@ -228,5 +222,56 @@ mod tests {
             std::io::ErrorKind::AddrInUse,
             "a port that never frees must surface the original error, not spin forever"
         );
+    }
+
+    #[test]
+    fn parse_pending_accepts_hash_and_plain_rgb() {
+        let plain = parse_pending(&WsCommand {
+            kind: "color".to_string(),
+            hex: "203040".to_string(),
+            level: 0,
+        });
+        let hashed = parse_pending(&WsCommand {
+            kind: "brightness".to_string(),
+            hex: "#203040".to_string(),
+            level: 42,
+        });
+
+        assert_rgb(plain, 0x20, 0x30, 0x40);
+        let Some(PendingCommand::Brightness(42, color)) = hashed else {
+            panic!("expected brightness command");
+        };
+        assert_eq!((color.red, color.green, color.blue), (0x20, 0x30, 0x40));
+    }
+
+    #[test]
+    fn parse_pending_rejects_malformed_live_colors() {
+        for hex in ["", "#123", "#12345678", "gggggg"] {
+            assert!(
+                parse_pending(&WsCommand {
+                    kind: "color".to_string(),
+                    hex: hex.to_string(),
+                    level: 0,
+                })
+                .is_none(),
+                "hex: {hex}"
+            );
+            assert!(
+                parse_pending(&WsCommand {
+                    kind: "brightness".to_string(),
+                    hex: hex.to_string(),
+                    level: 42,
+                })
+                .is_none(),
+                "hex: {hex}"
+            );
+        }
+    }
+
+    fn assert_rgb(command: Option<PendingCommand>, red: u8, green: u8, blue: u8) {
+        let Some(PendingCommand::Color(color)) = command else {
+            panic!("expected color command");
+        };
+        assert_eq!((color.red, color.green, color.blue), (red, green, blue));
     }
 }
