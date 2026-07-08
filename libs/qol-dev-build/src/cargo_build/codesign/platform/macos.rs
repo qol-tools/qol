@@ -1,11 +1,10 @@
-use std::path::Path;
-#[cfg(target_os = "macos")]
-use std::path::PathBuf;
-#[cfg(target_os = "macos")]
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-#[cfg(target_os = "macos")]
-pub(super) fn codesign_debug_binaries(plugin_id: &str, plugin_path: &Path) {
+pub(in crate::cargo_build::codesign) fn codesign_debug_binaries(
+    plugin_id: &str,
+    plugin_path: &Path,
+) {
     let Some(identity) = codesign_identity() else {
         return;
     };
@@ -15,17 +14,12 @@ pub(super) fn codesign_debug_binaries(plugin_id: &str, plugin_path: &Path) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-pub(super) fn codesign_debug_binaries(_plugin_id: &str, _plugin_path: &Path) {}
-
-#[cfg(target_os = "macos")]
 fn codesign_identity() -> Option<String> {
     std::env::var("QOL_CODESIGN_IDENTITY")
         .ok()
         .filter(|value| !value.is_empty())
 }
 
-#[cfg(target_os = "macos")]
 fn plugin_debug_binaries(plugin_path: &Path) -> Vec<PathBuf> {
     let Ok(plugin_root) = plugin_path.canonicalize() else {
         return Vec::new();
@@ -50,7 +44,6 @@ fn plugin_debug_binaries(plugin_path: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-#[cfg(target_os = "macos")]
 fn cargo_metadata(plugin_root: &Path) -> Option<serde_json::Value> {
     let output = Command::new("cargo")
         .args(["metadata", "--no-deps", "--format-version", "1"])
@@ -64,7 +57,6 @@ fn cargo_metadata(plugin_root: &Path) -> Option<serde_json::Value> {
     serde_json::from_slice(&output.stdout).ok()
 }
 
-#[cfg(target_os = "macos")]
 fn package_in_plugin(package: &serde_json::Value, plugin_root: &Path) -> bool {
     package
         .get("manifest_path")
@@ -74,7 +66,6 @@ fn package_in_plugin(package: &serde_json::Value, plugin_root: &Path) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(target_os = "macos")]
 fn bin_target_names(package: &serde_json::Value) -> Vec<String> {
     let Some(targets) = package.get("targets").and_then(|v| v.as_array()) else {
         return Vec::new();
@@ -87,7 +78,6 @@ fn bin_target_names(package: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-#[cfg(target_os = "macos")]
 fn target_is_bin(target: &serde_json::Value) -> bool {
     target
         .get("kind")
@@ -96,7 +86,6 @@ fn target_is_bin(target: &serde_json::Value) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(target_os = "macos")]
 fn codesign_path(plugin_id: &str, identity: &str, path: PathBuf) {
     if !codesign_candidate(&path) {
         return;
@@ -115,12 +104,10 @@ fn codesign_path(plugin_id: &str, identity: &str, path: PathBuf) {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn codesign_candidate(path: &Path) -> bool {
     path.is_file() && executable(path) && path.extension().is_none()
 }
 
-#[cfg(target_os = "macos")]
 fn executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
 
@@ -129,7 +116,6 @@ fn executable(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(target_os = "macos")]
 fn codesign_status(identity: &str, path: &Path) -> std::io::Result<std::process::ExitStatus> {
     Command::new("codesign")
         .args(["-fs", identity])
