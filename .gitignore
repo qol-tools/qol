@@ -2,3 +2,4 @@
 __pycache__/
 .superpowers/
 **/.claude/agent-memory/**/.reflect-last.log
+.playwright-mcp/

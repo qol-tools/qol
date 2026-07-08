@@ -22,3 +22,8 @@
 - `make build` in apps/qol-tray invokes `lint` (clippy `--all-targets -D warnings`) - test-only code (e.g. inside `#[test]` fns) blocks the build, not just CI.
 - HashMap-backed JSON saves (e.g. build-fingerprints.json) re-emit keys in nondeterministic order; verify "no content change" with `jq -S` semantic diff, not raw `diff`.
 - CI clippy args come from `.github/scripts/affected_crates.py` (`--workspace --exclude keyremap --all-targets` on Ubuntu); local repro needs `--all-targets`, plain `cargo clippy -p X` misses it.
+
+## 2026-06-25
+- New `FixAction` variant must be added to FOUR sites: `applicability()` arm, `apply_fix()` dispatch, `log_applied` exhaustive match, and the `applicability_maps_each_action` table-test row.
+- Doctor checks split into prod vs `#[cfg(feature="dev")]` registry blocks in `checks.rs`; production checks go in the main `vec!`, not the dev push block.
+- Keep `DoctorCheck::run` thin: extract a pure `report_from_*(&[T]) -> CheckReport` so tests don't touch filesystem/global state (mirrors fingerprint_health pattern).
