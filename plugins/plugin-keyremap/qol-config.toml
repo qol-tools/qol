@@ -60,7 +60,7 @@ label = "Key Rules"
 section = "key_rules"
 default = [
   { from_mods = ["ctrl"], to_mods = ["cmd"], keys = ["c", "v", "x", "a", "z", "s", "p", "f", "t", "w", "n", "d", "r", "return"] },
-  { from_mods = ["ctrl"], to_mods = ["alt"], keys = ["left", "right", "forwarddelete", "delete"] },
+  { from_mods = ["ctrl"], to_mods = ["alt"], keys = ["left", "right", "delete", "backspace"] },
   { from_mods = ["ctrl", "shift"], to_mods = ["cmd", "shift"], keys = ["r", "t", "b"] },
   { from_mods = ["ctrl", "shift"], to_mods = ["cmd", "alt"], keys = ["e", "c", "k"] },
   { from_mods = ["ctrl"], from_key = "y", to_mods = ["cmd", "shift"], to_key = "z" },

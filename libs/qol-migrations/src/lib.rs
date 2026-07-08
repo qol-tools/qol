@@ -14,12 +14,14 @@ mod v3_16_to_v3_17_device_to_os;
 mod v3_17_to_v3_18_plugin_configs_by_os;
 mod v3_18_to_v3_19_declared_plugin_id;
 mod v3_19_to_v3_20_plugin_uid;
+mod v3_20_to_v3_21_keyremap_delete_alias;
 
 pub use v3_15_to_v3_16_gist_to_repo::V3_15ToV3_16GistToRepo;
 pub use v3_16_to_v3_17_device_to_os::V3_16ToV3_17DeviceToOs;
 pub use v3_17_to_v3_18_plugin_configs_by_os::V3_17ToV3_18PluginConfigsByOs;
 pub use v3_18_to_v3_19_declared_plugin_id::V3_18ToV3_19DeclaredPluginId;
 pub use v3_19_to_v3_20_plugin_uid::V3_19ToV3_20PluginUid;
+pub use v3_20_to_v3_21_keyremap_delete_alias::V3_20ToV3_21KeyremapDeleteAlias;
 
 pub use fs_util::archive_path;
 
@@ -87,6 +89,9 @@ impl PreFlightRegistry {
         ));
         registry.register(Box::new(
             v3_19_to_v3_20_plugin_uid::V3_19ToV3_20PluginUid::default_for_production(),
+        ));
+        registry.register(Box::new(
+            v3_20_to_v3_21_keyremap_delete_alias::V3_20ToV3_21KeyremapDeleteAlias,
         ));
         registry
     }
@@ -377,6 +382,13 @@ mod tests {
             http: None,
             host_version: TEST_HOST,
         }
+    }
+
+    #[test]
+    fn current_pre_flight_registry_includes_keyremap_delete_alias_migration() {
+        assert!(PreFlightRegistry::current()
+            .names()
+            .contains(&"v3.20-to-v3.21-keyremap-delete-alias"));
     }
 
     #[test]

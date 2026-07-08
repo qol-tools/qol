@@ -130,8 +130,8 @@ pub fn parse_key(name: &str) -> Option<u16> {
         "return" | "enter" => Some(RETURN),
         "tab" => Some(TAB),
         "space" => Some(SPACE),
-        "delete" | "backspace" => Some(DELETE),
-        "forwarddelete" => Some(FORWARD_DELETE),
+        "backspace" => Some(DELETE),
+        "delete" | "del" | "forwarddelete" => Some(FORWARD_DELETE),
         "escape" | "esc" => Some(ESCAPE),
         "left" => Some(LEFT_ARROW),
         "right" => Some(RIGHT_ARROW),
@@ -210,8 +210,8 @@ pub fn key_name(code: u16) -> &'static str {
         RETURN => "return",
         TAB => "tab",
         SPACE => "space",
-        DELETE => "delete",
-        FORWARD_DELETE => "forwarddelete",
+        DELETE => "backspace",
+        FORWARD_DELETE => "delete",
         ESCAPE => "escape",
         LEFT_ARROW => "left",
         RIGHT_ARROW => "right",
@@ -320,6 +320,8 @@ mod tests {
         assert_eq!(parse_key("A"), Some(ANSI_A));
         assert_eq!(parse_key("enter"), Some(RETURN));
         assert_eq!(parse_key("backspace"), Some(DELETE));
+        assert_eq!(parse_key("delete"), Some(FORWARD_DELETE));
+        assert_eq!(parse_key("del"), Some(FORWARD_DELETE));
         assert_eq!(parse_key("forwarddelete"), Some(FORWARD_DELETE));
         assert_eq!(parse_key("minus"), Some(ANSI_MINUS));
         assert_eq!(parse_key("<"), Some(ISO_SECTION));
@@ -329,7 +331,8 @@ mod tests {
     fn formats_keyremap_key_names() {
         assert_eq!(key_name(ANSI_A), "a");
         assert_eq!(key_name(RETURN), "return");
-        assert_eq!(key_name(FORWARD_DELETE), "forwarddelete");
+        assert_eq!(key_name(DELETE), "backspace");
+        assert_eq!(key_name(FORWARD_DELETE), "delete");
         assert_eq!(key_name(ANSI_MINUS), "minus");
         assert_eq!(key_name(ISO_SECTION), "section");
         assert_eq!(key_name(u16::MAX), "unknown");
