@@ -27,8 +27,53 @@ pub const ENV_DEV_READY_FILE: &str = "QOL_DEV_READY_FILE";
 pub const ENV_DEV_UI_PORT: &str = "QOL_DEV_UI_PORT";
 pub const ENV_DEV_ROLLING_RESTART: &str = "QOL_DEV_ROLLING_RESTART";
 pub const DEV_GENERATION_MODE_SHADOW: &str = "shadow";
-pub const DEV_RESTART_PREBUILT_ROUTE: &str = "/dev/restart-prebuilt";
-pub const DEV_PROMOTE_GENERATION_ROUTE: &str = "/dev/promote-generation";
+pub const DEV_RESTART_PREBUILT_ROUTE: &str = dev_routes::RESTART_PREBUILT;
+pub const DEV_PROMOTE_GENERATION_ROUTE: &str = dev_routes::PROMOTE_GENERATION;
+
+pub mod dev_routes {
+    pub const ENABLED: &str = "/dev/enabled";
+    pub const RELOAD: &str = "/dev/reload";
+    pub const RELOAD_PLUGIN: &str = "/dev/reload/{plugin_id}";
+    pub const RECOMPILE_SELF: &str = "/dev/recompile-self";
+    pub const RESTART_PREBUILT: &str = "/dev/restart-prebuilt";
+    pub const PROMOTE_GENERATION: &str = "/dev/promote-generation";
+    pub const WORKTREES: &str = "/dev/worktrees";
+    pub const ACTIVE_WORKTREE: &str = "/dev/active-worktree";
+    pub const PLUGIN_HEALTH: &str = "/dev/plugin-health";
+    pub const LINKS: &str = "/dev/links";
+    pub const LINK: &str = "/dev/links/{id}";
+    pub const LOG_CONTROLS: &str = "/dev/log-controls";
+    pub const LOG_CONTROL: &str = "/dev/log-controls/{id}";
+    pub const CORE_LOG_CONTROLS: &str = "/dev/core-log-controls";
+    pub const CORE_LOG_CONTROL: &str = "/dev/core-log-controls/{section}";
+    pub const DISCOVER: &str = "/dev/discover";
+    pub const DISCOVERY_STATE: &str = "/dev/discovery-state";
+    pub const BUILD_STATE: &str = "/dev/build-state";
+    pub const PLUGIN_CPU: &str = "/dev/plugin-cpu";
+    pub const PLUGIN_CPU_MONITORING: &str = "/dev/plugin-cpu/monitoring";
+    pub const TOOLING_GH_ACCOUNT: &str = "/dev/tooling-gh-account";
+    pub const RUNTIME_GPUI: &str = "/dev/runtime/gpui";
+    pub const MOCK_CHECK_UPDATE: &str = "/dev/mock-check-update";
+    pub const MOCK_TARGETS: &str = "/dev/mock-targets";
+    pub const MOCK_TARGETS_START: &str = "/dev/mock-targets/start";
+    pub const MOCK_TARGETS_STOP: &str = "/dev/mock-targets/stop";
+    pub const MOCK_PLUGIN_BUILD: &str = "/dev/mock-plugin-build";
+    pub const MOCK_PLUGIN_BUILD_STOP: &str = "/dev/mock-plugin-build/stop";
+    pub const MOCK_SELF_RECOMPILE: &str = "/dev/mock-self-recompile";
+    pub const MOCK_SELF_RECOMPILE_STOP: &str = "/dev/mock-self-recompile/stop";
+    pub const MOCK_SELF_UPDATE: &str = "/dev/mock-self-update";
+    pub const MOCK_SELF_UPDATE_STOP: &str = "/dev/mock-self-update/stop";
+    pub const UPDATE_FIXTURE: &str = "/dev/update-fixture.tar.gz";
+    pub const TEST_SELF_UPDATE: &str = "/dev/test-self-update";
+
+    pub fn link(id: &str) -> String {
+        format!("/dev/links/{id}")
+    }
+
+    pub fn api_path(route: &str) -> String {
+        format!("/api{route}")
+    }
+}
 
 /// The `qol-tray-doctor` CLI contract shared between its parser
 /// (`apps/qol-tray/src/doctor/cli.rs`) and its callers in `tools/qol-cli`
@@ -44,6 +89,55 @@ pub mod doctor_cli {
     pub const ARG_FIX: &str = "fix";
     pub const ARG_QUICK: &str = "--quick";
     pub const ARG_ID: &str = "--id";
+}
+
+pub mod dev_health {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(tag = "state", rename_all = "snake_case")]
+    pub enum PluginRuntimeStatus {
+        NotExpected,
+        AutostartBlocked,
+        OnDemand {
+            pid: u32,
+        },
+        Down {
+            consecutive_failures: u32,
+            suppressed: bool,
+        },
+        Probation {
+            pid: u32,
+            consecutive_failures: u32,
+        },
+        Stable {
+            pid: u32,
+        },
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct PluginHealth {
+        pub plugin_id: String,
+        pub status: PluginRuntimeStatus,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+    pub struct HealthSnapshot {
+        #[serde(default)]
+        pub tick: u64,
+        #[serde(default)]
+        pub process_pid: u32,
+        #[serde(default)]
+        pub role: String,
+        #[serde(default)]
+        pub bind_port: u16,
+        #[serde(default)]
+        pub daemon_autostart_held: bool,
+        #[serde(default)]
+        pub generation_id: Option<String>,
+        #[serde(default)]
+        pub plugins: Vec<PluginHealth>,
+    }
 }
 
 pub mod launcher {
@@ -103,5 +197,49 @@ mod tests {
     fn launcher_match_markers_include_the_window_identity() {
         assert!(launcher::MATCH_MARKERS.contains(&launcher::APP_ID));
         assert!(launcher::MATCH_MARKERS.contains(&launcher::WINDOW_TITLE));
+    }
+
+    #[test]
+    fn health_status_serde_round_trips_every_variant() {
+        use dev_health::PluginRuntimeStatus;
+
+        let cases = [
+            (
+                PluginRuntimeStatus::NotExpected,
+                r#"{"state":"not_expected"}"#,
+            ),
+            (
+                PluginRuntimeStatus::AutostartBlocked,
+                r#"{"state":"autostart_blocked"}"#,
+            ),
+            (
+                PluginRuntimeStatus::OnDemand { pid: 12 },
+                r#"{"state":"on_demand","pid":12}"#,
+            ),
+            (
+                PluginRuntimeStatus::Down {
+                    consecutive_failures: 5,
+                    suppressed: true,
+                },
+                r#"{"state":"down","consecutive_failures":5,"suppressed":true}"#,
+            ),
+            (
+                PluginRuntimeStatus::Probation {
+                    pid: 12,
+                    consecutive_failures: 1,
+                },
+                r#"{"state":"probation","pid":12,"consecutive_failures":1}"#,
+            ),
+            (
+                PluginRuntimeStatus::Stable { pid: 12 },
+                r#"{"state":"stable","pid":12}"#,
+            ),
+        ];
+        for (status, expected_json) in cases {
+            let json = serde_json::to_string(&status).unwrap();
+            assert_eq!(json, expected_json, "serialize {status:?}");
+            let back: PluginRuntimeStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, status, "round trip {expected_json}");
+        }
     }
 }

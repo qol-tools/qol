@@ -18,14 +18,20 @@ use super::types::{AppState, UpsertPluginLogControlRequest};
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/dev/links", get(list_linked_plugins))
-        .route("/dev/links", post(create_link))
-        .route("/dev/links/{id}", axum::routing::delete(delete_link))
+        .route(qol_conventions::dev_routes::LINKS, get(list_linked_plugins))
+        .route(qol_conventions::dev_routes::LINKS, post(create_link))
         .route(
-            "/dev/log-controls/{id}",
+            qol_conventions::dev_routes::LINK,
+            axum::routing::delete(delete_link),
+        )
+        .route(
+            qol_conventions::dev_routes::LOG_CONTROL,
             axum::routing::put(upsert_plugin_log_control),
         )
-        .route("/dev/log-controls", get(get_log_controls))
+        .route(
+            qol_conventions::dev_routes::LOG_CONTROLS,
+            get(get_log_controls),
+        )
 }
 
 fn config_dir() -> Result<PathBuf, (StatusCode, String)> {

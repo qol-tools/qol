@@ -12,7 +12,7 @@ use crate::daemon::DaemonEvent;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/dev/enabled", get(dev_enabled))
+        .route(qol_conventions::dev_routes::ENABLED, get(dev_enabled))
         .route("/version", get(get_version))
         .route("/check-update", get(check_update))
         .route("/self-update", post(self_update))

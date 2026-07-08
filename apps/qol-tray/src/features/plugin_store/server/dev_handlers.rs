@@ -12,9 +12,15 @@ use super::types::AppState;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/dev/reload", post(reload_plugins))
-        .route("/dev/reload/{plugin_id}", post(reload_single_plugin))
-        .route("/dev/recompile-self", post(recompile_self))
+        .route(qol_conventions::dev_routes::RELOAD, post(reload_plugins))
+        .route(
+            qol_conventions::dev_routes::RELOAD_PLUGIN,
+            post(reload_single_plugin),
+        )
+        .route(
+            qol_conventions::dev_routes::RECOMPILE_SELF,
+            post(recompile_self),
+        )
         .route(
             qol_conventions::DEV_RESTART_PREBUILT_ROUTE,
             post(restart_prebuilt),
@@ -23,8 +29,14 @@ pub(super) fn routes() -> Router<AppState> {
             qol_conventions::DEV_PROMOTE_GENERATION_ROUTE,
             post(promote_generation),
         )
-        .route("/dev/worktrees", get(list_worktrees_handler))
-        .route("/dev/active-worktree", get(active_worktree_handler))
+        .route(
+            qol_conventions::dev_routes::WORKTREES,
+            get(list_worktrees_handler),
+        )
+        .route(
+            qol_conventions::dev_routes::ACTIVE_WORKTREE,
+            get(active_worktree_handler),
+        )
 }
 
 pub(super) async fn reload_plugins(

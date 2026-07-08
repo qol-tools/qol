@@ -12,21 +12,54 @@ use super::types::{AppState, MockTargetInfo, DEFAULT_UI_SERVER_PORT};
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/dev/mock-check-update", get(mock_check_update))
-        .route("/dev/mock-targets", get(list_mock_targets))
-        .route("/dev/mock-targets/start", post(start_mock_targets))
-        .route("/dev/mock-targets/stop", post(stop_mock_targets))
-        .route("/dev/mock-plugin-build", post(mock_plugin_build))
-        .route("/dev/mock-plugin-build/stop", post(stop_mock_plugin_build))
-        .route("/dev/mock-self-recompile", post(mock_self_recompile))
         .route(
-            "/dev/mock-self-recompile/stop",
+            qol_conventions::dev_routes::MOCK_CHECK_UPDATE,
+            get(mock_check_update),
+        )
+        .route(
+            qol_conventions::dev_routes::MOCK_TARGETS,
+            get(list_mock_targets),
+        )
+        .route(
+            qol_conventions::dev_routes::MOCK_TARGETS_START,
+            post(start_mock_targets),
+        )
+        .route(
+            qol_conventions::dev_routes::MOCK_TARGETS_STOP,
+            post(stop_mock_targets),
+        )
+        .route(
+            qol_conventions::dev_routes::MOCK_PLUGIN_BUILD,
+            post(mock_plugin_build),
+        )
+        .route(
+            qol_conventions::dev_routes::MOCK_PLUGIN_BUILD_STOP,
+            post(stop_mock_plugin_build),
+        )
+        .route(
+            qol_conventions::dev_routes::MOCK_SELF_RECOMPILE,
+            post(mock_self_recompile),
+        )
+        .route(
+            qol_conventions::dev_routes::MOCK_SELF_RECOMPILE_STOP,
             post(stop_mock_self_recompile),
         )
-        .route("/dev/mock-self-update", post(mock_self_update))
-        .route("/dev/mock-self-update/stop", post(stop_mock_self_update))
-        .route("/dev/update-fixture.tar.gz", get(serve_update_fixture))
-        .route("/dev/test-self-update", post(test_self_update))
+        .route(
+            qol_conventions::dev_routes::MOCK_SELF_UPDATE,
+            post(mock_self_update),
+        )
+        .route(
+            qol_conventions::dev_routes::MOCK_SELF_UPDATE_STOP,
+            post(stop_mock_self_update),
+        )
+        .route(
+            qol_conventions::dev_routes::UPDATE_FIXTURE,
+            get(serve_update_fixture),
+        )
+        .route(
+            qol_conventions::dev_routes::TEST_SELF_UPDATE,
+            post(test_self_update),
+        )
 }
 
 pub(super) async fn mock_check_update() -> Json<serde_json::Value> {
@@ -232,8 +265,9 @@ async fn test_self_update(
 #[allow(clippy::unused_async)]
 async fn live_self_update() -> impl IntoResponse {
     let fixture_url = format!(
-        "http://127.0.0.1:{}/api/dev/update-fixture.tar.gz",
-        DEFAULT_UI_SERVER_PORT
+        "http://127.0.0.1:{}{}",
+        DEFAULT_UI_SERVER_PORT,
+        qol_conventions::dev_routes::api_path(qol_conventions::dev_routes::UPDATE_FIXTURE)
     );
     std::env::set_var("QOL_TRAY_DEV_UPDATE_URL", &fixture_url);
     (StatusCode::OK, "Fixture URL configured")
@@ -241,8 +275,9 @@ async fn live_self_update() -> impl IntoResponse {
 
 async fn dry_run_self_update() -> impl IntoResponse {
     let fixture_url = format!(
-        "http://127.0.0.1:{}/api/dev/update-fixture.tar.gz",
-        DEFAULT_UI_SERVER_PORT
+        "http://127.0.0.1:{}{}",
+        DEFAULT_UI_SERVER_PORT,
+        qol_conventions::dev_routes::api_path(qol_conventions::dev_routes::UPDATE_FIXTURE)
     );
 
     let mut steps: Vec<serde_json::Value> = Vec::new();

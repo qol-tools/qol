@@ -5,8 +5,17 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
+pub(crate) use qol_conventions::dev_health::{
+    HealthSnapshot as PluginHealthSnapshot, PluginHealth as PluginHealthRow,
+    PluginRuntimeStatus as PluginDaemonStatus,
+};
+
 fn api_url(path: &str) -> String {
     format!("{}{path}", qol_conventions::local_base_url())
+}
+
+fn api_dev_url(route: &str) -> String {
+    api_url(&qol_conventions::dev_routes::api_path(route))
 }
 
 fn local_api_url(port: u16, route: &str) -> String {
@@ -20,25 +29,25 @@ fn web_health_url() -> String {
     api_url("/")
 }
 fn dev_health_url() -> String {
-    api_url("/api/dev/enabled")
+    api_dev_url(qol_conventions::dev_routes::ENABLED)
 }
 fn dev_recompile_url() -> String {
-    api_url("/api/dev/recompile-self")
+    api_dev_url(qol_conventions::dev_routes::RECOMPILE_SELF)
 }
 fn dev_reload_url() -> String {
-    api_url("/api/dev/reload")
+    api_dev_url(qol_conventions::dev_routes::RELOAD)
 }
 fn dev_links_url() -> String {
-    api_url("/api/dev/links")
+    api_dev_url(qol_conventions::dev_routes::LINKS)
 }
 fn active_worktree_url() -> String {
-    api_url("/api/dev/active-worktree")
+    api_dev_url(qol_conventions::dev_routes::ACTIVE_WORKTREE)
 }
 fn dev_discovery_url() -> String {
-    api_url("/api/dev/discovery-state")
+    api_dev_url(qol_conventions::dev_routes::DISCOVERY_STATE)
 }
 fn plugin_health_url() -> String {
-    api_url("/api/dev/plugin-health")
+    api_dev_url(qol_conventions::dev_routes::PLUGIN_HEALTH)
 }
 fn auth_health_url() -> String {
     api_url("/api/auth/health")
@@ -104,43 +113,6 @@ pub(crate) struct ActiveWorktreeResponse {
 pub(crate) enum LinkToggle {
     Linked,
     Unlinked,
-}
-
-#[derive(Clone, Debug, Default, serde::Deserialize)]
-pub(crate) struct PluginHealthSnapshot {
-    #[serde(default)]
-    pub(crate) tick: u64,
-    #[serde(default)]
-    pub(crate) daemon_autostart_held: bool,
-    #[serde(default)]
-    pub(crate) plugins: Vec<PluginHealthRow>,
-}
-
-#[derive(Clone, Debug, serde::Deserialize)]
-pub(crate) struct PluginHealthRow {
-    pub(crate) plugin_id: String,
-    pub(crate) status: PluginDaemonStatus,
-}
-
-#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub(crate) enum PluginDaemonStatus {
-    NotExpected,
-    AutostartBlocked,
-    OnDemand {
-        pid: u32,
-    },
-    Down {
-        consecutive_failures: u32,
-        suppressed: bool,
-    },
-    Probation {
-        pid: u32,
-        consecutive_failures: u32,
-    },
-    Stable {
-        pid: u32,
-    },
 }
 
 pub(crate) fn fetch_plugin_health() -> Result<PluginHealthSnapshot> {
@@ -261,7 +233,7 @@ pub(crate) fn toggle_dev_link(plugin: &WorkspacePlugin) -> Result<LinkToggle> {
 }
 
 pub(crate) fn delete_dev_link(id: &str) -> Result<()> {
-    let url = format!("{}/{id}", dev_links_url());
+    let url = api_dev_url(&qol_conventions::dev_routes::link(id));
     let status = http_request("DELETE", &url, None)?;
     if status / 100 == 2 {
         return Ok(());
@@ -551,8 +523,9 @@ mod tests {
 
     #[test]
     fn dev_health_probe_uses_dev_enabled_metadata() {
+        let expected = qol_conventions::dev_routes::api_path(qol_conventions::dev_routes::ENABLED);
         assert!(
-            dev_health_url().ends_with("/api/dev/enabled"),
+            dev_health_url().ends_with(&expected),
             "dev health must not depend on gated or heavy discovery endpoints"
         );
     }

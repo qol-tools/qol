@@ -11,9 +11,12 @@ use super::types::{AppState, UpsertPluginLogControlRequest};
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/dev/core-log-controls", get(get_core_log_controls))
         .route(
-            "/dev/core-log-controls/{section}",
+            qol_conventions::dev_routes::CORE_LOG_CONTROLS,
+            get(get_core_log_controls),
+        )
+        .route(
+            qol_conventions::dev_routes::CORE_LOG_CONTROL,
             put(upsert_core_log_control),
         )
 }

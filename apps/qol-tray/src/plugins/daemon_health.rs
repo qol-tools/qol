@@ -1,57 +1,13 @@
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::sync::watch;
+
+pub use qol_conventions::dev_health::{HealthSnapshot, PluginHealth, PluginRuntimeStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonExpectation {
     NotExpected,
     AutostartBlocked,
     Supervised,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum PluginRuntimeStatus {
-    NotExpected,
-    AutostartBlocked,
-    OnDemand {
-        pid: u32,
-    },
-    Down {
-        consecutive_failures: u32,
-        suppressed: bool,
-    },
-    Probation {
-        pid: u32,
-        consecutive_failures: u32,
-    },
-    Stable {
-        pid: u32,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PluginHealth {
-    pub plugin_id: String,
-    pub status: PluginRuntimeStatus,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct HealthSnapshot {
-    #[serde(default)]
-    pub tick: u64,
-    #[serde(default)]
-    pub process_pid: u32,
-    #[serde(default)]
-    pub role: String,
-    #[serde(default)]
-    pub bind_port: u16,
-    #[serde(default)]
-    pub daemon_autostart_held: bool,
-    #[serde(default)]
-    pub generation_id: Option<String>,
-    #[serde(default)]
-    pub plugins: Vec<PluginHealth>,
 }
 
 pub fn channel() -> (
@@ -116,48 +72,6 @@ fn write_snapshot_file(path: &Path, snapshot: &HealthSnapshot) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn status_serde_round_trips_every_variant() {
-        let cases = [
-            (
-                PluginRuntimeStatus::NotExpected,
-                r#"{"state":"not_expected"}"#,
-            ),
-            (
-                PluginRuntimeStatus::AutostartBlocked,
-                r#"{"state":"autostart_blocked"}"#,
-            ),
-            (
-                PluginRuntimeStatus::OnDemand { pid: 12 },
-                r#"{"state":"on_demand","pid":12}"#,
-            ),
-            (
-                PluginRuntimeStatus::Down {
-                    consecutive_failures: 5,
-                    suppressed: true,
-                },
-                r#"{"state":"down","consecutive_failures":5,"suppressed":true}"#,
-            ),
-            (
-                PluginRuntimeStatus::Probation {
-                    pid: 12,
-                    consecutive_failures: 1,
-                },
-                r#"{"state":"probation","pid":12,"consecutive_failures":1}"#,
-            ),
-            (
-                PluginRuntimeStatus::Stable { pid: 12 },
-                r#"{"state":"stable","pid":12}"#,
-            ),
-        ];
-        for (status, expected_json) in cases {
-            let json = serde_json::to_string(&status).unwrap();
-            assert_eq!(json, expected_json, "serialize {status:?}");
-            let back: PluginRuntimeStatus = serde_json::from_str(&json).unwrap();
-            assert_eq!(back, status, "round trip {expected_json}");
-        }
-    }
 
     #[test]
     fn publisher_writes_file_and_watch_consistently() {

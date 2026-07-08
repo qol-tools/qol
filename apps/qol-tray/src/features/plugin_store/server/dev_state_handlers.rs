@@ -18,20 +18,29 @@ use super::types::{
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/dev/discover", post(trigger_discovery))
-        .route("/dev/discovery-state", get(get_discovery_state))
-        .route("/dev/build-state", get(get_build_state))
-        .route("/dev/plugin-cpu", get(get_plugin_cpu))
         .route(
-            "/dev/plugin-cpu/monitoring",
+            qol_conventions::dev_routes::DISCOVER,
+            post(trigger_discovery),
+        )
+        .route(
+            qol_conventions::dev_routes::DISCOVERY_STATE,
+            get(get_discovery_state),
+        )
+        .route(
+            qol_conventions::dev_routes::BUILD_STATE,
+            get(get_build_state),
+        )
+        .route(qol_conventions::dev_routes::PLUGIN_CPU, get(get_plugin_cpu))
+        .route(
+            qol_conventions::dev_routes::PLUGIN_CPU_MONITORING,
             axum::routing::put(set_plugin_cpu_monitoring),
         )
         .route(
-            "/dev/tooling-gh-account",
+            qol_conventions::dev_routes::TOOLING_GH_ACCOUNT,
             get(get_tooling_gh_account).post(set_tooling_gh_account),
         )
         .route(
-            "/dev/runtime/gpui",
+            qol_conventions::dev_routes::RUNTIME_GPUI,
             get(get_runtime_gpui).post(set_runtime_gpui),
         )
 }
