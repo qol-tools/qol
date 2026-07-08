@@ -132,6 +132,8 @@ pub struct RowActionSpec {
     pub label: Option<String>,
     #[serde(default)]
     pub key: Option<String>,
+    #[serde(default)]
+    pub when: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -322,6 +324,29 @@ empty_message = "No devices paired yet."
             Some("No devices paired yet."),
             "empty_message"
         );
+    }
+
+    #[test]
+    fn parses_list_row_action_with_when_gate() {
+        let spec_str = r#"
+schema_version = 1
+
+[field.pads]
+type = "list"
+query = "list_controllers"
+row_label = "{name}"
+
+[field.pads.row_action]
+action = "apply_fixes"
+label = "Fix"
+when = "fixable"
+"#;
+        let spec = parse_spec_str(spec_str).expect("parse");
+        let field = spec.fields.get("pads").expect("field present");
+        let row_action = field.row_action.as_ref().expect("row_action present");
+        assert_eq!(row_action.action, "apply_fixes", "action");
+        assert_eq!(row_action.label.as_deref(), Some("Fix"), "label");
+        assert_eq!(row_action.when.as_deref(), Some("fixable"), "when");
     }
 
     #[test]
