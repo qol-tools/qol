@@ -35,16 +35,15 @@ pub(crate) struct TrayTarget {
 pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
     let directive = tray_directive(optional_single_arg(args, "qol dev [worktree|--base]")?);
     let root = repo_root()?;
-    crate::setup::ensure_lockfile_merge_driver(&root);
-    if verbose {
-        print_title("qol dev");
-    }
-
     if let Some(tray_pid) = crate::self_exec::resume_tray_pid() {
         return run_attached(tray_pid, verbose, current_active_worktree_marker());
     }
 
     let plan = resolve_directive(&root, directive, current_active_worktree_marker())?;
+    crate::setup::run_setup(&root, verbose)?;
+    if verbose {
+        print_title("qol dev");
+    }
     if let Some(note) = &plan.note {
         eprintln!("{note}");
     }
@@ -237,8 +236,8 @@ pub(crate) fn prebuild(args: &[OsString], verbose: bool, skip_plugins: bool) -> 
     let usage = format!("qol {DEV_PREBUILD_COMMAND} [{DEV_PREBUILD_BASE_ARG}|worktree]");
     let directive = tray_directive(optional_single_arg(args, &usage)?);
     let root = repo_root()?;
-    crate::setup::ensure_lockfile_merge_driver(&root);
     let plan = resolve_directive(&root, directive, current_active_worktree_marker())?;
+    crate::setup::run_setup(&root, verbose)?;
     if let Some(note) = &plan.note {
         eprintln!("{note}");
     }

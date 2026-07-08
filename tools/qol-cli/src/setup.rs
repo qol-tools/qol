@@ -17,14 +17,18 @@ pub(crate) fn cmd_setup(args: &[OsString], verbose: bool) -> Result<()> {
         bail!("usage: qol setup");
     }
     let root = repo_root()?;
+    run_setup(&root, verbose)
+}
+
+pub(crate) fn run_setup(root: &Path, verbose: bool) -> Result<()> {
     let package = root.join("tools").join("qol-cli");
     let target = installed_qol_path()?;
     let version = package_version(&package)?;
     print_title("qol setup");
     print_hint(verbose);
-    configure_lockfile_merge_driver(&root);
+    configure_lockfile_merge_driver(root);
     let target_display = target.display().to_string();
-    if install_is_current(&root, &package, &target, &version)? {
+    if install_is_current(root, &package, &target, &version)? {
         step_label("current", StepKind::Success, &target_display);
         return Ok(());
     }
@@ -58,25 +62,6 @@ fn configure_lockfile_merge_driver(root: &Path) {
             &format!("Cargo.lock driver skipped: {error}"),
         ),
     }
-}
-
-pub(crate) fn ensure_lockfile_merge_driver(root: &Path) {
-    if !lockfile_driver_is_current(root) {
-        let _ = register_cargo_lock_driver(root);
-    }
-}
-
-fn lockfile_driver_is_current(root: &Path) -> bool {
-    Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["config", "--get", "merge.cargo-lock.driver"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .is_some_and(|output| {
-            String::from_utf8_lossy(&output.stdout).trim() == CARGO_LOCK_DRIVER_CMD
-        })
 }
 
 fn register_cargo_lock_driver(root: &Path) -> Result<()> {
