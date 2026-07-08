@@ -230,3 +230,46 @@ pub(super) fn now_unix_ms() -> u64 {
         .map(|elapsed| elapsed.as_millis() as u64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_age_buckets_seconds_minutes_hours_days() {
+        let cases = [
+            (5_000, "just now"),
+            (59_000, "59s ago"),
+            (60_000, "1m ago"),
+            (3_599_000, "59m ago"),
+            (3_600_000, "1h ago"),
+            (86_399_000, "23h ago"),
+            (86_400_000, "1d ago"),
+            (0, "just now"),
+        ];
+        for (elapsed_ms, expected) in cases {
+            assert_eq!(
+                relative_age(1_000_000_000 + elapsed_ms, 1_000_000_000),
+                expected,
+                "elapsed_ms: {elapsed_ms}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_age_gains_a_seconds_bucket() {
+        let cases = [
+            (5_000, "just now"),
+            (10_000, "10s ago"),
+            (59_000, "59s ago"),
+            (60_000, "1m ago"),
+        ];
+        for (elapsed_ms, expected) in cases {
+            assert_eq!(
+                relative_age(1_000_000_000 + elapsed_ms, 1_000_000_000),
+                expected,
+                "elapsed_ms: {elapsed_ms}"
+            );
+        }
+    }
+}

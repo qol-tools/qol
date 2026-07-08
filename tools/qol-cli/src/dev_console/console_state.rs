@@ -53,3 +53,43 @@ pub(super) fn save_console_state(state: &ConsoleState) {
     }
     let _ = fs::rename(&tmp, &path);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dev_console::filters::FilterStrategy;
+    use crate::dev_console::testkit::*;
+    use crate::dev_console::*;
+
+    #[test]
+    fn console_state_round_trips_through_json() {
+        let state = ConsoleState {
+            filters: ViewFilters {
+                logs: vec![log_filter(FilterStrategy::Exclude, "noise")],
+                trace: vec![log_filter(FilterStrategy::Include, "focus")],
+                emu: Vec::new(),
+            },
+            trace_details: true,
+            trace_rate: TraceRate::Realtime,
+            keys_hidden: true,
+            feature_flags: Vec::new(),
+        };
+        let json = serde_json::to_string(&state).expect("serialize console state");
+        let back: ConsoleState = serde_json::from_str(&json).expect("deserialize console state");
+        assert_eq!(back.filters, state.filters);
+        assert!(back.trace_details);
+        assert_eq!(back.trace_rate, TraceRate::Realtime);
+        assert!(back.keys_hidden);
+    }
+
+    #[test]
+    fn console_state_defaults_every_missing_field() {
+        let state: ConsoleState = serde_json::from_str("{}").expect("empty object deserializes");
+        assert!(state.filters.logs.is_empty());
+        assert!(state.filters.trace.is_empty());
+        assert!(!state.trace_details);
+        assert_eq!(state.trace_rate, TraceRate::Relaxed);
+        assert!(!state.keys_hidden);
+        assert!(state.feature_flags.is_empty());
+    }
+}

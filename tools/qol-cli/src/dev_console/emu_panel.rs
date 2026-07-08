@@ -603,3 +603,51 @@ fn last_run_spans(last_run: Option<&LastRun>) -> Vec<Span<'static>> {
         format!(" {}", relative_age(now_unix_ms(), run.finished_at_unix_ms)).fg(Color::DarkGray),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dev_console::testkit::*;
+
+    #[test]
+    fn candidate_line_uses_plain_ready_label() {
+        let line = candidate_line(&known_emu_candidate("plain"), false, None);
+        assert_eq!(span_text(&line.spans), "  ○ plain  ready");
+    }
+
+    #[test]
+    fn candidate_line_marks_assumed_arch() {
+        let line = candidate_line(&emu_candidate("plain"), false, None);
+        assert_eq!(
+            span_text(&line.spans),
+            "  ○ plain  ready · arch assumed x86_64"
+        );
+    }
+
+    #[test]
+    fn candidate_line_marks_live_run_with_log_hint() {
+        let line = candidate_line(&emu_candidate("plain"), true, Some("boot".to_string()));
+        assert_eq!(span_text(&line.spans), "▸ ○ plain  boot · → log");
+    }
+
+    #[test]
+    fn keep_emu_line_drops_noise_lines() {
+        let cases = [
+            ("qol emu up", false),
+            ("  hint: use -v/--verbose for detailed output", false),
+            ("", false),
+            ("   ", false),
+            ("  boot     foo · qmp 127.0.0.1:1234", true),
+            ("  verdict  pass · no qol traces survive", true),
+        ];
+        for (line, kept) in cases {
+            assert_eq!(keep_emu_line(line), kept, "line: {line:?}");
+        }
+    }
+
+    #[test]
+    fn emu_empty_lines_list_config_path() {
+        let lines = emu_empty_lines("~/.config/qol-tray/emu.toml");
+        assert_eq!(lines.len(), 2, "lines: {lines:?}");
+    }
+}

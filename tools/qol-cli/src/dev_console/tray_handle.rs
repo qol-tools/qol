@@ -1,5 +1,12 @@
 use std::io;
+use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, ExitStatus};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result};
+
+use super::STOP_GRACE;
 
 pub(crate) enum TrayHandle {
     Owned(Child),
@@ -132,6 +139,65 @@ mod platform {
     }
 }
 
+pub(super) fn try_wait(child: &mut TrayHandle) -> Result<Option<ExitStatus>> {
+    child
+        .try_wait()
+        .context("failed polling qol-tray dev process")
+}
+
+pub(super) fn stop_child(child: &mut TrayHandle) -> Result<()> {
+    terminate_child(child);
+    let deadline = Instant::now() + STOP_GRACE;
+    while Instant::now() < deadline {
+        if try_wait(child)?.is_some() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    child.wait().context("failed to reap qol-tray after kill")?;
+    Ok(())
+}
+
+pub(super) fn terminate_child(child: &mut TrayHandle) {
+    child.signal_term();
+}
+
+pub(crate) fn spawn_forwarders(child: &mut Child) -> Receiver<String> {
+    let (tx, rx) = channel();
+    if let Some(stdout) = child.stdout.take() {
+        spawn_forwarder(stdout, tx.clone());
+    }
+    if let Some(stderr) = child.stderr.take() {
+        spawn_forwarder(stderr, tx);
+    }
+    rx
+}
+
+fn spawn_forwarder(reader: impl Read + Send + 'static, tx: Sender<String>) {
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(reader);
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf) {
+                Ok(0) => return,
+                Ok(_) => {
+                    let line = String::from_utf8_lossy(&buf);
+                    let line = line.trim_end_matches(['\n', '\r']);
+                    if tx.send(line.to_string()).is_err() {
+                        return;
+                    }
+                }
+                Err(error) => {
+                    let _ = tx.send(format!("[qol dev] log stream error: {error}"));
+                    return;
+                }
+            }
+        }
+    });
+}
+
 #[cfg(all(test, unix))]
 #[allow(clippy::zombie_processes)]
 mod tests {
@@ -201,5 +267,17 @@ mod tests {
 
         let attached = TrayHandle::Attached(pid);
         assert_eq!(attached.id(), pid);
+    }
+
+    #[test]
+    fn forwarder_decodes_non_utf8_lossily_and_ends_on_eof() {
+        let (tx, rx) = channel();
+        let data = b"ok\n\xFF\xFEbad\nlast".to_vec();
+        spawn_forwarder(std::io::Cursor::new(data), tx);
+        let lines: Vec<String> = rx.iter().collect();
+        assert_eq!(lines.len(), 3, "all lines delivered: {lines:?}");
+        assert_eq!(lines[0], "ok");
+        assert!(lines[1].contains("bad"), "lossy line kept: {:?}", lines[1]);
+        assert_eq!(lines[2], "last", "no trailing newline still delivered");
     }
 }

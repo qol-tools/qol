@@ -304,3 +304,82 @@ fn dev_log_file_name() -> String {
         .unwrap_or_default();
     format!("qol-dev-{ts}-{}.log", std::process::id())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::dev_console::*;
+
+    #[test]
+    fn collapse_key_ignores_timestamp_and_ansi() {
+        let a = collapse_key("\u{1b}[90m[10:00:00.001]\u{1b}[0m GHOSTWIN foo");
+        let b = collapse_key("\u{1b}[90m[10:00:00.999]\u{1b}[0m GHOSTWIN foo");
+        assert_eq!(a, b, "the same event at different times shares a key");
+        assert_eq!(a, "GHOSTWIN foo");
+        assert_ne!(
+            a,
+            collapse_key("[10:00:00.001] FOCUS bar"),
+            "distinct events have distinct keys"
+        );
+    }
+
+    #[test]
+    fn collapsing_ring_folds_identical_consecutive_lines_with_a_count() {
+        let mut ring = LogRing::collapsing();
+        for ms in ["001", "050", "120"] {
+            ring.push(format!("\u{1b}[90m[10:00:00.{ms}]\u{1b}[0m GHOSTWIN foo"));
+        }
+        assert_eq!(
+            ring.len(),
+            1,
+            "events differing only by timestamp collapse to one line"
+        );
+        let folded = strip_ansi(&ring.lines[0]);
+        assert!(folded.contains("GHOSTWIN foo"), "keeps the text: {folded}");
+        assert!(
+            folded.contains("(\u{d7}3)"),
+            "shows the repeat count: {folded}"
+        );
+
+        ring.push("[10:00:00.200] FOCUS bar".to_string());
+        assert_eq!(ring.len(), 2, "a distinct event starts a new line");
+
+        ring.push("[10:00:00.260] FOCUS bar".to_string());
+        assert_eq!(ring.len(), 2, "the new event collapses on repeat too");
+        assert!(strip_ansi(&ring.lines[1]).contains("(\u{d7}2)"));
+    }
+
+    #[test]
+    fn non_collapsing_ring_keeps_every_line() {
+        let mut ring = LogRing::new();
+        ring.push("[10:00:00.001] GHOSTWIN foo".to_string());
+        ring.push("[10:00:00.050] GHOSTWIN foo".to_string());
+        assert_eq!(ring.len(), 2, "the logs ring never folds repeats");
+    }
+
+    #[test]
+    fn log_ring_caps_and_evicts_oldest() {
+        let mut ring = LogRing::new();
+        for i in 0..(LOG_CAP + 3) {
+            ring.push(format!("line-{i}"));
+        }
+        assert_eq!(ring.len(), LOG_CAP);
+        assert_eq!(ring.lines.front().map(String::as_str), Some("line-3"));
+    }
+
+    #[test]
+    fn window_math_keeps_tail_and_clamps() {
+        let cases = [
+            ("follow shows tail", 100, 10, 0, 90),
+            ("scrolled up shifts window", 100, 10, 25, 65),
+            ("short log starts at zero", 5, 10, 0, 0),
+            ("offset beyond start clamps to zero", 100, 10, 500, 0),
+        ];
+        for (label, len, height, offset, want_start) in cases {
+            assert_eq!(window_start(len, height, offset), want_start, "{label}");
+        }
+        assert_eq!(clamp_offset(100, 10, 500), 90, "clamp to len-height");
+        assert_eq!(clamp_offset(5, 10, 3), 0, "short log clamps to zero");
+    }
+}
