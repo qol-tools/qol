@@ -5368,6 +5368,7 @@ dependencies = [
  "crossbeam-channel",
  "getrandom 0.2.17",
  "log",
+ "qol-color",
  "qol-config",
  "qol-conventions",
  "qol-plugin-api",
@@ -5385,6 +5386,7 @@ version = "0.12.0"
 dependencies = [
  "anyhow",
  "libc",
+ "open",
  "qol-config",
  "qol-conventions",
  "qol-plugin-api",
@@ -5423,6 +5425,7 @@ name = "plugin-template"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "open",
  "qol-conventions",
  "qol-plugin-api",
 ]
@@ -5463,6 +5466,7 @@ dependencies = [
  "hostname",
  "if-addrs",
  "log",
+ "open",
  "qol-conventions",
  "qol-plugin-api",
  "qol-plugin-daemon",
@@ -5764,6 +5768,10 @@ dependencies = [
 [[package]]
 name = "qol-conventions"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "qol-dev-build"
@@ -5868,10 +5876,8 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "qol-conventions",
- "qol-platform",
  "qol-runtime",
  "serde_json",
- "x11rb",
 ]
 
 [[package]]
@@ -5900,6 +5906,7 @@ dependencies = [
  "gpui",
  "image",
  "libc",
+ "open",
  "qol-config",
  "qol-conventions",
  "qol-gpui",
