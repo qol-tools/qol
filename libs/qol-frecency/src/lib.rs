@@ -92,7 +92,10 @@ pub fn load(path: &Path) -> FrequencyData {
 
 pub fn save(path: &Path, data: &FrequencyData) {
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("[frecency] failed to create {}: {}", parent.display(), e);
+            return;
+        }
     }
     let json = match serde_json::to_string_pretty(data) {
         Ok(json) => json,
