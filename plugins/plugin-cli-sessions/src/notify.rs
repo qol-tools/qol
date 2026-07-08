@@ -25,38 +25,5 @@ pub fn announces_attention(prev: Status, new: Status) -> bool {
 }
 
 pub fn send(notice: &Notice) {
-    let _ = spawn_platform(&notice.title, &notice.body);
-}
-
-#[cfg(target_os = "macos")]
-fn spawn_platform(title: &str, body: &str) -> std::io::Result<()> {
-    let script = format!(
-        "display notification {} with title {}",
-        applescript_quote(body),
-        applescript_quote(title)
-    );
-    std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|_| ())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn spawn_platform(title: &str, body: &str) -> std::io::Result<()> {
-    std::process::Command::new("notify-send")
-        .arg(title)
-        .arg(body)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|_| ())
-}
-
-#[cfg(target_os = "macos")]
-fn applescript_quote(s: &str) -> String {
-    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
+    qol_plugin_daemon::notification::send_notification(&notice.title, &notice.body);
 }

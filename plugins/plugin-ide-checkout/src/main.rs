@@ -3,7 +3,7 @@ mod daemon;
 use std::env;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::process::{Command, ExitCode, Stdio};
+use std::process::ExitCode;
 use std::time::Duration;
 
 fn daemon_port() -> u16 {
@@ -30,7 +30,7 @@ fn run_status() -> ExitCode {
         "Task Runner daemon is NOT running".to_string()
     };
 
-    send_notification("Task Runner", &message);
+    qol_plugin_daemon::notification::send_notification("Task Runner", &message);
     ExitCode::SUCCESS
 }
 
@@ -72,53 +72,6 @@ fn daemon_is_running() -> bool {
     };
 
     response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200")
-}
-
-fn send_notification(title: &str, message: &str) {
-    if send_osascript_notification(title, message) {
-        return;
-    }
-
-    if send_notify_send_notification(title, message) {
-        return;
-    }
-
-    println!("{title}: {message}");
-}
-
-fn send_osascript_notification(title: &str, message: &str) -> bool {
-    let escaped_title = escape_applescript(title);
-    let escaped_message = escape_applescript(message);
-    let script = format!(
-        "display notification \"{}\" with title \"{}\"",
-        escaped_message, escaped_title
-    );
-
-    Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
-
-fn send_notify_send_notification(title: &str, message: &str) -> bool {
-    Command::new("notify-send")
-        .arg(title)
-        .arg(message)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
-
-fn escape_applescript(input: &str) -> String {
-    input.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]

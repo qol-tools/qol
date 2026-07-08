@@ -1,5 +1,5 @@
 pub mod activation;
-pub mod focus;
+pub mod notification;
 
 #[cfg(unix)]
 pub mod daemon;
