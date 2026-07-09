@@ -7,7 +7,7 @@ use crate::discovery::SharedEntries;
 use crate::monitor::{self, MonitorTracker};
 use crate::open_window_with_focus;
 
-use super::layout::{window_height_for_rows, WINDOW_WIDTH};
+use super::layout::{full_window_height, window_height_for_rows, WINDOW_WIDTH};
 use super::{trace, LauncherView, LAUNCHER_APP_ID, LAUNCHER_WINDOW_TITLE};
 
 use qol_gpui::popup_window;
@@ -17,6 +17,10 @@ pub(crate) type ActiveLaunchers = ActiveWindows<LauncherView>;
 
 fn header_size() -> Size<Pixels> {
     size(px(WINDOW_WIDTH), px(window_height_for_rows(0)))
+}
+
+fn full_window_size() -> Size<Pixels> {
+    size(px(WINDOW_WIDTH), px(full_window_height()))
 }
 
 pub(crate) fn pre_create_ghost(
@@ -208,7 +212,7 @@ fn show_ghost(
                 &title,
                 window,
                 placement.bounds.origin,
-                header_size(),
+                full_window_size(),
             );
             qol_gpui::ghost::show_ghost_window_topmost(&title, &all_titles);
             window.activate_window();
@@ -302,8 +306,12 @@ fn open_visible_ghost(
 }
 
 fn ghost_window_options(placement: &WindowPlacement, focus: bool) -> WindowOptions {
+    let bounds = Bounds {
+        origin: placement.bounds.origin,
+        size: full_window_size(),
+    };
     WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(placement.bounds)),
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
         display_id: placement.display_id,
         titlebar: None,
         window_decorations: Some(qol_gpui::platform::ghost_window_decorations(false)),

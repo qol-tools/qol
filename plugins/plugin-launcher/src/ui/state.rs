@@ -1,4 +1,4 @@
-use super::layout::{HEADER_HEIGHT, MAX_VISIBLE};
+use super::layout::MAX_VISIBLE;
 use crate::discovery::search::{Fuzziness, SearchMode};
 use std::time::{Duration, Instant};
 
@@ -46,7 +46,6 @@ pub struct LauncherState {
     pub nav_decay_step: Duration,
     pub last_nav_at: Option<Instant>,
     pub scroll_offset: usize,
-    pub window_height: f32,
     pub boost_adjusting: bool,
 }
 
@@ -66,7 +65,6 @@ impl LauncherState {
             nav_decay_step: NAV_DECAY_STEP_SLOW,
             last_nav_at: None,
             scroll_offset: 0,
-            window_height: HEADER_HEIGHT,
             boost_adjusting: false,
         }
     }

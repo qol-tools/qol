@@ -3,9 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::*;
 
-use super::layout::{
-    resize_for_visible_rows, window_height_for_rows, MAX_VISIBLE, ROW_HEIGHT, WINDOW_WIDTH,
-};
+use super::layout::{window_height_for_rows, MAX_VISIBLE, ROW_HEIGHT, WINDOW_WIDTH};
 use super::state::{EdgeHit, NavDirection};
 #[cfg(debug_assertions)]
 use super::trace;
@@ -66,14 +64,6 @@ impl Render for LauncherView {
         };
 
         if !self.is_showing {
-            let resize = resize_for_visible_rows(
-                &mut self.state.window_height,
-                0,
-                window,
-                &self.window_title,
-                self.window_origin,
-            );
-
             #[cfg(debug_assertions)]
             {
                 let total_us = render_start.elapsed().as_micros();
@@ -89,7 +79,7 @@ impl Render for LauncherView {
                         results_height: 0.0,
                         target_height: window_height_for_rows(0),
                         selected_name: String::new(),
-                        resize,
+                        resize: None,
                         total_us,
                         filter_us: 0,
                         rows_us: 0,
@@ -97,8 +87,6 @@ impl Render for LauncherView {
                     },
                 );
             }
-            #[cfg(not(debug_assertions))]
-            let _ = resize;
 
             return div()
                 .id("launcher")
@@ -150,13 +138,6 @@ impl Render for LauncherView {
             });
         let results_height = visible as f32 * ROW_HEIGHT;
         let target_height = window_height_for_rows(visible);
-        let resize = resize_for_visible_rows(
-            &mut self.state.window_height,
-            visible,
-            window,
-            &self.window_title,
-            self.window_origin,
-        );
 
         #[cfg(debug_assertions)]
         let t1 = std::time::Instant::now();
@@ -194,7 +175,7 @@ impl Render for LauncherView {
                     results_height,
                     target_height,
                     selected_name,
-                    resize,
+                    resize: None,
                     total_us,
                     filter_us,
                     rows_us,
@@ -209,8 +190,6 @@ impl Render for LauncherView {
                 );
             }
         }
-        #[cfg(not(debug_assertions))]
-        let _ = resize;
         div()
             .id("launcher")
             .track_focus(&self.focus_handle)

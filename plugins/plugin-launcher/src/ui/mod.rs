@@ -18,7 +18,6 @@ use gpui::*;
 use crate::discovery::entry_store::EntryStore;
 use crate::discovery::{PreloadedEntries, SharedEntries};
 
-use layout::HEADER_HEIGHT;
 use state::LauncherState;
 
 pub use input::key_to_input_char;
@@ -88,12 +87,11 @@ impl LauncherView {
         }
     }
 
-    pub(crate) fn hide_to_ghost(&mut self, _from: &'static str, window: &mut Window) {
+    pub(crate) fn hide_to_ghost(&mut self, _from: &'static str, _window: &mut Window) {
         trace::dismiss(self, _from);
         self.set_showing(false);
         qol_gpui::ghost::dismiss_to_ghost(LAUNCHER_WINDOW_TITLE, &self.window_title);
         qol_gpui::popup_window::restore_composite();
-        self.shrink_hidden_ghost(window);
     }
 
     fn request_dismiss(&mut self, from: &'static str) {
@@ -105,21 +103,11 @@ impl LauncherView {
         cx.notify();
     }
 
-    fn shrink_hidden_ghost(&mut self, window: &mut Window) {
-        qol_gpui::ghost::sync_window_layout(
-            &self.window_title,
-            window,
-            self.window_origin,
-            size(px(layout::WINDOW_WIDTH), px(HEADER_HEIGHT)),
-        );
-        self.state.window_height = HEADER_HEIGHT;
-    }
-
     pub(crate) fn set_window_origin(&mut self, origin: Point<Pixels>) {
         self.window_origin = origin;
     }
 
-    pub(crate) fn reset_for_show(&mut self) -> bool {
+    pub(crate) fn reset_for_show(&mut self) {
         #[cfg(debug_assertions)]
         if self.state.selected != 0 || !self.state.query.is_empty() {
             qol_runtime::probe!(
@@ -130,7 +118,6 @@ impl LauncherView {
                 self.window_title,
             );
         }
-        let should_resize = (self.state.window_height - HEADER_HEIGHT).abs() > f32::EPSILON;
         self.state = LauncherState::new();
         self.trail_decay_task_running = false;
         self.dismiss_requested = false;
@@ -141,7 +128,6 @@ impl LauncherView {
         {
             self.last_render_trace = None;
         }
-        should_resize
     }
 
     pub(crate) fn sync_entries_from_shared(&mut self) -> bool {
