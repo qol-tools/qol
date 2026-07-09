@@ -139,6 +139,37 @@ fn resolve_action_rejects_missing_runtime_command_binary() {
 }
 
 #[test]
+fn resolve_action_routes_to_daemon_when_runtime_binary_is_missing() {
+    let dir = TempDir::new().unwrap();
+    let plugin = make_plugin(
+        &dir,
+        "open",
+        Some(RuntimeConfig {
+            command: "launcher".to_string(),
+            actions: None,
+        }),
+        Some(DaemonConfig {
+            enabled: true,
+            command: "launcher".to_string(),
+            socket: Some("/tmp/qol-test.sock".to_string()),
+            port: None,
+            extra_ports: Vec::new(),
+        }),
+    );
+
+    let resolved = resolve_action(&plugin, "open").unwrap();
+    assert!(
+        resolved.command_path.is_none(),
+        "missing binary must not block daemon-served actions"
+    );
+    assert_eq!(
+        resolved.daemon_socket,
+        Some(PathBuf::from("/tmp/qol-test.sock"))
+    );
+    assert!(!resolved.runtime_fallback_allowed);
+}
+
+#[test]
 fn resolve_action_uses_passthrough_args_without_runtime_map() {
     let dir = TempDir::new().unwrap();
     let binary = dir.path().join("launcher");

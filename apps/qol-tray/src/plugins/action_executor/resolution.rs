@@ -20,7 +20,7 @@ pub(super) fn resolve_action(
     validate_action_id(action_id)?;
     validate_catalog_action_membership(plugin, action_id)?;
     let daemon_socket = daemon_socket(plugin);
-    let (command_path, args) = resolve_runtime_target(plugin, action_id)?;
+    let (command_path, args) = resolve_runtime_target(plugin, action_id, daemon_socket.is_some())?;
     let runtime_fallback_allowed =
         allow_runtime_fallback(plugin, daemon_socket.as_ref(), command_path.as_ref());
     let dedupe_runtime_spawn = should_dedupe_runtime_spawn(action_id, daemon_socket.as_ref());
@@ -146,15 +146,20 @@ fn paths_match(left: &Path, right: &Path) -> bool {
 fn resolve_runtime_target(
     plugin: &Plugin,
     action_id: &str,
+    daemon_available: bool,
 ) -> Result<(Option<PathBuf>, Vec<String>), ActionExecutionError> {
     let Some(runtime) = plugin.manifest.runtime.as_ref() else {
         return Ok((None, Vec::new()));
     };
 
     validate_runtime_command_path(plugin, &runtime.command)?;
-    let command_path = runtime_command_path(plugin, &runtime.command)?;
+    let command_path = match runtime_command_path(plugin, &runtime.command) {
+        Ok(path) => Some(path),
+        Err(_) if daemon_available => None,
+        Err(error) => return Err(error),
+    };
     let args = runtime_args(plugin, action_id, runtime)?;
-    Ok((Some(command_path), args))
+    Ok((command_path, args))
 }
 
 fn validate_runtime_command_path(
