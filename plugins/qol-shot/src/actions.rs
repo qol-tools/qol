@@ -21,8 +21,8 @@ impl ShotAction {
 
     pub fn glyph(self) -> &'static str {
         match self {
-            ShotAction::Copy => "C",
-            ShotAction::CopyPath => "P",
+            ShotAction::Copy => "⧉",
+            ShotAction::CopyPath => "∕",
         }
     }
 
