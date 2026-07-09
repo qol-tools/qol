@@ -20,7 +20,7 @@ pub use linux::{
     hide_invisible, hide_window_by_title, hide_windows_by_title_prefix, make_override_redirect,
     reposition_window_by_title, restore_composite, set_ghost_debug, show_window_by_title,
     sync_window_layout, visible_windows_by_title_prefix, window_backing_scale,
-    window_geometry_session, WindowGeometrySession,
+    window_geometry_session, window_position_by_title, WindowGeometrySession,
 };
 #[cfg(target_os = "macos")]
 pub use macos::{

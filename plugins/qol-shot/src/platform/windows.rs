@@ -100,7 +100,7 @@ impl PinResizeSession {
     pub fn apply(&self, _x: f32, _y: f32, _width: f32, _height: f32) {}
 }
 
-pub fn configure_pin_window(_title: String) {}
+pub fn configure_pin_window(_title: String, _origin: (f64, f64)) {}
 
 pub fn platform_supported_check() -> DoctorCheckResult {
     DoctorCheckResult::fail(

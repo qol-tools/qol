@@ -68,7 +68,7 @@ pub fn open(
         eprintln!("[qol-shot] pinned window open failed");
         return false;
     }
-    platform::configure_pin_window(title);
+    platform::configure_pin_window(title, (origin.x.to_f64(), origin.y.to_f64()));
     true
 }
 

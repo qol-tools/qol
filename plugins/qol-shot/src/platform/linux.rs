@@ -805,12 +805,18 @@ impl PinResizeSession {
     }
 }
 
-pub fn configure_pin_window(title: String) {
-    configure_window_async(
-        title,
-        "SHOT_PIN",
-        qol_gpui::popup_window::configure_pinned_window,
-    );
+pub fn configure_pin_window(title: String, origin: (f64, f64)) {
+    let target = (origin.0 as i32, origin.1 as i32);
+    configure_window_async(title, "SHOT_PIN", move |title| {
+        if !qol_gpui::popup_window::configure_pinned_window(title) {
+            return false;
+        }
+        if qol_gpui::popup_window::window_position_by_title(title) == Some(target) {
+            return true;
+        }
+        qol_gpui::popup_window::reposition_window_by_title(title, origin.0, origin.1);
+        false
+    });
 }
 
 fn configure_selector_window(title: String) {

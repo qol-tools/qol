@@ -6,7 +6,8 @@ use crate::runtime_config::load_gpui_runtime_config;
 
 #[cfg(target_os = "linux")]
 pub use platform::{
-    force_composite_below, make_override_redirect, window_geometry_session, WindowGeometrySession,
+    force_composite_below, make_override_redirect, window_geometry_session,
+    window_position_by_title, WindowGeometrySession,
 };
 
 #[cfg(target_os = "linux")]
