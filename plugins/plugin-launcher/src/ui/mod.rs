@@ -92,6 +92,7 @@ impl LauncherView {
         trace::dismiss(self, _from);
         self.set_showing(false);
         qol_gpui::ghost::dismiss_to_ghost(LAUNCHER_WINDOW_TITLE, &self.window_title);
+        qol_gpui::popup_window::restore_composite();
         self.shrink_hidden_ghost(window);
     }
 

@@ -191,6 +191,9 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
         qol_runtime::probe!("HIDE_WIN", "title={title} wid=NONE reason={reason}");
         return false;
     };
+    if window_is_override_redirect(&conn, wid) {
+        release_input_focus(&conn, wid);
+    }
     if cached_card(title) == Some(target) {
         return true;
     }
@@ -243,12 +246,13 @@ pub fn show_window_by_title(title: &str) -> bool {
     add_window_state(&conn, root, wid);
     let stack = raise_window(&conn, root, wid);
     let (activate_ok, timestamp) = activate_window(&conn, root, wid);
+    let focus_ok = take_input_focus(&conn, root, wid, active_before);
     let flush_ok = conn.flush().is_ok();
     let active_after = active_window(&conn, root);
     let after = show_window_state(&conn, root, wid, active_after);
     qol_runtime::probe!(
         "SHOW_WIN_STATE",
-        "reason={reason} phase=after title={title} wid={wid} frame={} clear_opacity={clear_ok} input_passthrough_false={input_ok} map={map_ok} stack_client={} stack_frame={} activate={activate_ok} timestamp={timestamp} flush={flush_ok} {after}",
+        "reason={reason} phase=after title={title} wid={wid} frame={} clear_opacity={clear_ok} input_passthrough_false={input_ok} map={map_ok} stack_client={} stack_frame={} activate={activate_ok} focus={focus_ok} timestamp={timestamp} flush={flush_ok} {after}",
         stack.frame,
         stack.client,
         stack.frame_ok,
@@ -484,6 +488,51 @@ fn window_is_override_redirect(conn: &impl Connection, wid: u32) -> bool {
         .and_then(|cookie| cookie.reply().ok())
         .map(|attrs| attrs.override_redirect)
         .unwrap_or(false)
+}
+
+static FOCUS_RETURN: Mutex<Option<u32>> = Mutex::new(None);
+
+fn take_input_focus(
+    conn: &impl Connection,
+    root: u32,
+    wid: u32,
+    active_before: Option<u32>,
+) -> bool {
+    if !window_is_override_redirect(conn, wid) {
+        return false;
+    }
+    let previous = active_before
+        .or_else(|| active_window(conn, root))
+        .filter(|&active| active != wid);
+    if let Ok(mut slot) = FOCUS_RETURN.lock() {
+        if previous.is_some() {
+            *slot = previous;
+        }
+    }
+    conn.set_input_focus(InputFocus::PARENT, wid, x11rb::CURRENT_TIME)
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some()
+}
+
+fn release_input_focus(conn: &impl Connection, wid: u32) {
+    let holds = conn
+        .get_input_focus()
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|reply| reply.focus == wid)
+        .unwrap_or(false);
+    if !holds {
+        return;
+    }
+    let target = FOCUS_RETURN
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+        .unwrap_or_else(|| u32::from(InputFocus::POINTER_ROOT));
+    let _ = conn.set_input_focus(InputFocus::PARENT, target, x11rb::CURRENT_TIME);
+    let _ = conn.flush();
+    qol_runtime::probe!("FOCUS_RETURN", "from={wid} to={target}");
 }
 
 static FORCED_COMPOSITE: Mutex<Option<(u32, Option<u32>)>> = Mutex::new(None);

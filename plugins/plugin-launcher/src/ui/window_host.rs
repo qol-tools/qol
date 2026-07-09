@@ -210,7 +210,7 @@ fn show_ghost(
                 placement.bounds.origin,
                 header_size(),
             );
-            qol_gpui::ghost::show_ghost_window(&title, &all_titles);
+            qol_gpui::ghost::show_ghost_window_topmost(&title, &all_titles);
             window.activate_window();
             window.focus(&view.focus_handle(cx));
             cx.notify();
@@ -246,7 +246,7 @@ fn create_and_show_ghost(
     popup_window::configure_popup_window(&title);
     let _ = handle.update(cx, |view, window, cx| {
         view.set_showing(true);
-        qol_gpui::ghost::show_ghost_window(&title, &all_titles);
+        qol_gpui::ghost::show_ghost_window_topmost(&title, &all_titles);
         window.activate_window();
         window.focus(&view.focus_handle(cx));
         cx.notify();

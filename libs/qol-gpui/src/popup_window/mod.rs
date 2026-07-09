@@ -5,10 +5,16 @@ use std::cell::RefCell;
 use crate::runtime_config::load_gpui_runtime_config;
 
 #[cfg(target_os = "linux")]
-pub use platform::{
-    force_composite_below, make_override_redirect, window_geometry_session,
-    window_position_by_title, WindowGeometrySession,
-};
+pub use platform::{window_geometry_session, window_position_by_title, WindowGeometrySession};
+
+#[cfg(target_os = "linux")]
+pub fn present_topmost(title: &str) {
+    platform::force_composite_below();
+    platform::make_override_redirect(title);
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn present_topmost(_title: &str) {}
 
 #[cfg(target_os = "linux")]
 pub fn restore_composite() {

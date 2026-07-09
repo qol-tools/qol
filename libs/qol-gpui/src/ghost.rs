@@ -69,6 +69,11 @@ pub fn show_ghost_window(target_title: &str, all_titles: &[String]) {
     ));
 }
 
+pub fn show_ghost_window_topmost(target_title: &str, all_titles: &[String]) {
+    popup_window::present_topmost(target_title);
+    show_ghost_window(target_title, all_titles);
+}
+
 pub fn reconcile(active_title: &str, all_titles: &[String]) {
     qol_runtime::probe!("RECONCILE", "active={active_title} n={}", all_titles.len());
     for title in all_titles {
