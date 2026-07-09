@@ -194,7 +194,7 @@ impl PinnedView {
     ) {
         platform::pin_focus(&self.title);
         if self.scroll_resize.is_some() {
-            self.end_resize(cx);
+            self.end_resize(window, cx);
         }
         let Some(session) = platform::pin_resize_session(&self.title) else {
             match edge {
@@ -220,10 +220,10 @@ impl PinnedView {
             session.apply(canvas.x, canvas.y, canvas.w, canvas.h);
             canvas
         });
-        let pointer_start = session.pointer().unwrap_or((
+        let pointer_start = (
             start.x + local.x.to_f64() as f32,
             start.y + local.y.to_f64() as f32,
-        ));
+        );
         self.resize_drag = Some(ResizeDrag {
             edge,
             start,
@@ -244,7 +244,7 @@ impl PinnedView {
         cx.spawn_in(window, async move |view, cx| loop {
             cx.background_executor().timer(RESIZE_TICK).await;
             let live = view
-                .update_in(cx, |view, _window, cx| view.resize_tick(cx))
+                .update_in(cx, |view, window, cx| view.resize_tick(window, cx))
                 .unwrap_or(false);
             if !live {
                 break;
@@ -253,9 +253,9 @@ impl PinnedView {
         .detach();
     }
 
-    fn resize_tick(&mut self, cx: &mut Context<Self>) -> bool {
+    fn resize_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.scroll_resize.is_some() {
-            return self.scroll_resize_tick(cx);
+            return self.scroll_resize_tick(window, cx);
         }
         let ratio = self.ratio;
         let Some(drag) = self.resize_drag.as_ref() else {
@@ -265,17 +265,7 @@ impl PinnedView {
         let Some(pointer) = drag.session.pointer() else {
             return true;
         };
-        let dx = pointer.0 - drag.pointer_start.0;
-        let dy = pointer.1 - drag.pointer_start.1;
-        let next = match drag.edge {
-            Some(edge) => resize_rect(drag.start, edge, dx, dy, ratio),
-            None => PinRect {
-                x: drag.start.x + dx,
-                y: drag.start.y + dy,
-                w: drag.start.w,
-                h: drag.start.h,
-            },
-        };
+        let next = drag_bounds(drag.start, drag.edge, drag.pointer_start, pointer, ratio);
         self.apply_resize_bounds(next, cx);
         true
     }
@@ -289,7 +279,15 @@ impl PinnedView {
         }
         drag.bounds = next;
         match drag.canvas {
-            None => drag.session.apply(next.x, next.y, next.w, next.h),
+            None => {
+                drag.session.apply(next.x, next.y, next.w, next.h);
+                qol_runtime::probe!(
+                    "SHOT_PIN_TICK",
+                    "mode=move pos=({:.0},{:.0})",
+                    next.x,
+                    next.y,
+                );
+            }
             Some(canvas) => {
                 if !canvas_contains(canvas, next) {
                     let grown = drag_canvas(next, drag.anchors);
@@ -301,7 +299,7 @@ impl PinnedView {
         }
     }
 
-    fn scroll_resize_tick(&mut self, cx: &mut Context<Self>) -> bool {
+    fn scroll_resize_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(scroll) = self.scroll_resize else {
             self.resize_loop_armed = false;
             return false;
@@ -309,7 +307,7 @@ impl PinnedView {
         if Instant::now() < scroll.commit_at {
             return true;
         }
-        self.end_resize(cx);
+        self.end_resize(window, cx);
         false
     }
 
@@ -318,18 +316,60 @@ impl PinnedView {
         drag.canvas.map(|canvas| (canvas, drag.bounds))
     }
 
-    fn end_resize(&mut self, cx: &mut Context<Self>) {
-        self.scroll_resize = None;
+    fn end_resize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let scroll = self.scroll_resize.take().is_some();
         self.scroll_remainder = 0.0;
         self.resize_loop_armed = false;
         let Some(drag) = self.resize_drag.take() else {
             return;
         };
-        if drag.canvas.is_some() {
-            let last = drag.bounds;
-            drag.session.apply(last.x, last.y, last.w, last.h);
-            cx.notify();
+        let last = if scroll {
+            drag.bounds
+        } else {
+            drag.session
+                .pointer()
+                .map(|pointer| {
+                    drag_bounds(
+                        drag.start,
+                        drag.edge,
+                        drag.pointer_start,
+                        pointer,
+                        self.ratio,
+                    )
+                })
+                .unwrap_or(drag.bounds)
+        };
+        if drag.canvas.is_none() {
+            if last != drag.bounds {
+                drag.session.apply(last.x, last.y, last.w, last.h);
+            }
+            qol_runtime::probe!(
+                "SHOT_PIN_TICK",
+                "mode=move stage=release pos=({:.0},{:.0}) corrected={}",
+                last.x,
+                last.y,
+                last != drag.bounds,
+            );
+            return;
         }
+        drag.session.apply(last.x, last.y, last.w, last.h);
+        let actual = drag.session.bounds();
+        let direct = actual.is_some_and(|(_, _, width, height)| {
+            (width - last.w).abs() <= 0.5 && (height - last.h).abs() <= 0.5
+        });
+        if !direct {
+            window.resize(size(px(last.w), px(last.h)));
+        }
+        qol_runtime::probe!(
+            "SHOT_PIN_RESIZE",
+            "stage=release mode={} direct={direct} requested=({:.0},{:.0}) {}x{} actual={actual:?}",
+            if scroll { "scroll" } else { "pointer" },
+            last.x,
+            last.y,
+            last.w,
+            last.h,
+        );
+        cx.notify();
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -581,11 +621,11 @@ impl Render for PinnedView {
                 .relative()
                 .on_mouse_up(
                     MouseButton::Left,
-                    cx.listener(|this, _: &MouseUpEvent, _window, cx| this.end_resize(cx)),
+                    cx.listener(|this, _: &MouseUpEvent, window, cx| this.end_resize(window, cx)),
                 )
                 .on_mouse_up_out(
                     MouseButton::Left,
-                    cx.listener(|this, _: &MouseUpEvent, _window, cx| this.end_resize(cx)),
+                    cx.listener(|this, _: &MouseUpEvent, window, cx| this.end_resize(window, cx)),
                 )
                 .child(picture_frame);
         }
@@ -613,11 +653,11 @@ impl Render for PinnedView {
             )
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _: &MouseUpEvent, _window, cx| this.end_resize(cx)),
+                cx.listener(|this, _: &MouseUpEvent, window, cx| this.end_resize(window, cx)),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(|this, _: &MouseUpEvent, _window, cx| this.end_resize(cx)),
+                cx.listener(|this, _: &MouseUpEvent, window, cx| this.end_resize(window, cx)),
             )
             .child(self.picture());
 
@@ -697,6 +737,26 @@ fn scale_rect(rect: PinRect, factor: f32) -> PinRect {
         w: rect.w * factor,
         h: rect.h * factor,
     }
+}
+
+fn drag_bounds(
+    start: PinRect,
+    edge: Option<ResizeEdge>,
+    pointer_start: (f32, f32),
+    pointer: (f32, f32),
+    ratio: f32,
+) -> PinRect {
+    let dx = pointer.0 - pointer_start.0;
+    let dy = pointer.1 - pointer_start.1;
+    let Some(edge) = edge else {
+        return PinRect {
+            x: start.x + dx,
+            y: start.y + dy,
+            w: start.w,
+            h: start.h,
+        };
+    };
+    resize_rect(start, edge, dx, dy, ratio)
 }
 
 fn session_rect(session: &platform::PinResizeSession) -> Option<PinRect> {
@@ -779,7 +839,7 @@ fn clamp_scale_factor(factor: f32, width: f32, height: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{action_row_fits, clamp_scale_factor, resize_rect, PinRect};
+    use super::{action_row_fits, clamp_scale_factor, drag_bounds, resize_rect, PinRect};
     use gpui::ResizeEdge;
 
     #[test]
@@ -883,6 +943,53 @@ mod tests {
             (got.h - 48.0).abs() < 0.01 && (got.w - 96.0).abs() < 0.01,
             "got {got:?}"
         );
+    }
+
+    #[test]
+    fn drag_bounds_uses_the_latest_root_pointer() {
+        let start = PinRect {
+            x: 100.0,
+            y: 50.0,
+            w: 400.0,
+            h: 200.0,
+        };
+        let pointer_start = (500.0, 250.0);
+        let cases = [
+            (
+                Some(ResizeEdge::Right),
+                (700.0, 250.0),
+                PinRect {
+                    x: 100.0,
+                    y: 50.0,
+                    w: 600.0,
+                    h: 300.0,
+                },
+            ),
+            (
+                Some(ResizeEdge::Left),
+                (300.0, 250.0),
+                PinRect {
+                    x: -100.0,
+                    y: 50.0,
+                    w: 600.0,
+                    h: 300.0,
+                },
+            ),
+            (
+                None,
+                (650.0, 300.0),
+                PinRect {
+                    x: 250.0,
+                    y: 100.0,
+                    w: 400.0,
+                    h: 200.0,
+                },
+            ),
+        ];
+        for (edge, pointer, expected) in cases {
+            let got = drag_bounds(start, edge, pointer_start, pointer, 2.0);
+            assert_eq!(got, expected, "edge={edge:?} pointer={pointer:?}");
+        }
     }
 
     #[test]
