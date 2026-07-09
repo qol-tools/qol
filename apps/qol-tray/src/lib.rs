@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod config_drain;
+pub mod console_guard;
 pub mod credentials;
 pub mod daemon;
 #[cfg(unix)]

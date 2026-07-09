@@ -21,6 +21,8 @@ use qol_conventions::DEFAULT_PORT;
 const DEV_GENERATION_DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(8);
 
 fn main() -> Result<()> {
+    qol_tray::console_guard::guard_console_pipes();
+
     if let Some(code) = try_handle_cli_flag() {
         std::process::exit(code);
     }
