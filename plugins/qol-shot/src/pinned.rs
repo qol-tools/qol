@@ -202,7 +202,7 @@ impl PinnedView {
         }
     }
 
-    fn perform(&mut self, action: ShotAction) {
+    fn perform(&mut self, action: ShotAction, window: &mut Window, cx: &mut Context<Self>) {
         match action.perform(&self.path) {
             Ok(()) => platform::show_notification(
                 action.done_message(),
@@ -211,6 +211,7 @@ impl PinnedView {
             ),
             Err(error) => eprintln!("[qol-shot] pinned action failed: {error:#}"),
         }
+        self.close(window, cx);
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -223,7 +224,7 @@ impl PinnedView {
                     .copied()
                     .find(|a| Some(a.accel()) == accel)
                 {
-                    self.perform(action);
+                    self.perform(action, window, cx);
                 }
             }
         }
@@ -292,8 +293,8 @@ impl PinnedView {
                             .text_color(rgb(palette.action_glyph))
                             .child(action.glyph())
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _window, _cx| {
-                                this.perform(action)
+                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                this.perform(action, window, cx)
                             }))
                     }),
             )
