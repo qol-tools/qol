@@ -98,9 +98,29 @@ pub fn pin_resize_session(_title: &str) -> Option<PinResizeSession> {
 
 impl PinResizeSession {
     pub fn apply(&self, _x: f32, _y: f32, _width: f32, _height: f32) {}
+
+    pub fn pointer(&self) -> Option<(f32, f32)> {
+        None
+    }
+
+    pub fn bounds(&self) -> Option<(f32, f32, f32, f32)> {
+        None
+    }
+
+    pub fn anchor(&self, _right: bool, _bottom: bool) {}
 }
 
-pub fn configure_pin_window(_title: String, _origin: (f64, f64)) {}
+pub fn pin_focus(_title: &str) {}
+
+pub fn pin_release_focus(_title: &str) {}
+
+pub fn configure_pin_window(
+    _title: String,
+    _origin: (f64, f64),
+    placed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    placed.store(true, std::sync::atomic::Ordering::Relaxed);
+}
 
 pub fn platform_supported_check() -> DoctorCheckResult {
     DoctorCheckResult::fail(

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use gpui::*;
 
-use qol_gpui::ghost::{ghost_window_title, show_ghost_window, sync_window_layout};
+use qol_gpui::ghost::{ghost_window_title, show_ghost_window_topmost, sync_window_layout};
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
@@ -179,6 +179,7 @@ pub fn any_showing(windows: &PreviewWindows, cx: &mut App) -> bool {
 fn park_ghost(title: &str, window: &mut Window, origin: Point<Pixels>) {
     sync_window_layout(title, window, origin, size(px(1.0), px(1.0)));
     hide_invisible(title);
+    qol_gpui::popup_window::restore_composite();
 }
 
 pub fn show_capture(
@@ -288,7 +289,7 @@ fn reuse_existing(
             view.window_origin = bounds.origin;
             view.reset_for_show(content, seq);
             sync_window_layout(&title, window, bounds.origin, bounds.size);
-            show_ghost_window(&title, &all_titles);
+            show_ghost_window_topmost(&title, &all_titles);
             window.activate_window();
             window.focus(&view.focus_handle(cx));
             cx.notify();
@@ -327,7 +328,7 @@ fn create_and_show(
     configure_popup_window(&title);
     let _ = handle.update(cx, |view, window, cx| {
         view.set_showing(true);
-        show_ghost_window(&title, &all_titles);
+        show_ghost_window_topmost(&title, &all_titles);
         window.activate_window();
         window.focus(&view.focus_handle(cx));
         cx.notify();

@@ -5,7 +5,10 @@ use std::cell::RefCell;
 use crate::runtime_config::load_gpui_runtime_config;
 
 #[cfg(target_os = "linux")]
-pub use platform::{window_geometry_session, window_position_by_title, WindowGeometrySession};
+pub use platform::{
+    focus_window_by_title, make_override_redirect, release_focus_by_title, window_geometry_session,
+    window_position_by_title, WindowGeometrySession,
+};
 
 #[cfg(target_os = "linux")]
 pub fn present_topmost(title: &str) {

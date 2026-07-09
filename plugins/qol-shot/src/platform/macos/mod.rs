@@ -16,9 +16,9 @@ pub use recording::{
 };
 pub use selector::{select_region, select_region_in_app};
 pub use system::{
-    configure_pin_window, configure_preview_window, grab_preview_rgba, open_url,
-    pin_resize_session, platform_supported_check, process_alive, required_binaries_check,
-    show_notification, PinResizeSession,
+    configure_pin_window, configure_preview_window, grab_preview_rgba, open_url, pin_focus,
+    pin_release_focus, pin_resize_session, platform_supported_check, process_alive,
+    required_binaries_check, show_notification, PinResizeSession,
 };
 
 #[cfg(test)]

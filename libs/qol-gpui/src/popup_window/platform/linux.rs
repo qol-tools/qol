@@ -71,6 +71,7 @@ fn connect_with_atoms() -> Option<(impl Connection, usize, u32, u32, u32, u32)> 
 
 pub struct WindowGeometrySession {
     conn: x11rb::rust_connection::RustConnection,
+    root: u32,
     wid: u32,
 }
 
@@ -81,7 +82,7 @@ pub fn window_geometry_session(title: &str) -> Option<WindowGeometrySession> {
     let name_atom = intern(&conn, b"_NET_WM_NAME")?;
     let utf8_atom = intern(&conn, b"UTF8_STRING")?;
     let wid = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title)?;
-    Some(WindowGeometrySession { conn, wid })
+    Some(WindowGeometrySession { conn, root, wid })
 }
 
 impl WindowGeometrySession {
@@ -92,6 +93,39 @@ impl WindowGeometrySession {
             .width(width.max(1))
             .height(height.max(1));
         let _ = self.conn.configure_window(self.wid, &aux);
+        let _ = self.conn.flush();
+    }
+
+    pub fn pointer_root(&self) -> Option<(i32, i32)> {
+        let reply = self.conn.query_pointer(self.root).ok()?.reply().ok()?;
+        Some((i32::from(reply.root_x), i32::from(reply.root_y)))
+    }
+
+    pub fn bounds(&self) -> Option<(i32, i32, u32, u32)> {
+        let geometry = self.conn.get_geometry(self.wid).ok()?.reply().ok()?;
+        let coords = self
+            .conn
+            .translate_coordinates(self.wid, self.root, 0, 0)
+            .ok()?
+            .reply()
+            .ok()?;
+        Some((
+            i32::from(coords.dst_x),
+            i32::from(coords.dst_y),
+            u32::from(geometry.width),
+            u32::from(geometry.height),
+        ))
+    }
+
+    pub fn anchor_content(&self, right: bool, bottom: bool) {
+        let gravity = match (right, bottom) {
+            (false, false) => Gravity::NORTH_WEST,
+            (true, false) => Gravity::NORTH_EAST,
+            (false, true) => Gravity::SOUTH_WEST,
+            (true, true) => Gravity::SOUTH_EAST,
+        };
+        let attributes = ChangeWindowAttributesAux::new().bit_gravity(gravity);
+        let _ = self.conn.change_window_attributes(self.wid, &attributes);
         let _ = self.conn.flush();
     }
 }
@@ -513,6 +547,28 @@ fn take_input_focus(
         .ok()
         .and_then(|cookie| cookie.check().ok())
         .is_some()
+}
+
+pub fn focus_window_by_title(title: &str) -> bool {
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
+    else {
+        return false;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        return false;
+    };
+    take_input_focus(&conn, root, wid, None)
+}
+
+pub fn release_focus_by_title(title: &str) {
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
+    else {
+        return;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        return;
+    };
+    release_input_focus(&conn, wid);
 }
 
 fn release_input_focus(conn: &impl Connection, wid: u32) {
