@@ -277,7 +277,7 @@ fn tray_build_command(root: &Path, manifest_path: &Path, bins: &[&str]) -> Comma
     command
         .args([
             "--features",
-            "dev",
+            dev_feature_set(),
             "--message-format",
             "json",
             "--manifest-path",
@@ -285,6 +285,13 @@ fn tray_build_command(root: &Path, manifest_path: &Path, bins: &[&str]) -> Comma
         .arg(manifest_path)
         .current_dir(root);
     command
+}
+
+fn dev_feature_set() -> &'static str {
+    if cfg!(target_os = "linux") {
+        return "dev,linux_evdev";
+    }
+    "dev"
 }
 
 fn finish_build<F>(
@@ -660,6 +667,7 @@ path = \"src/main.rs\"
     fn build_command_uses_requested_bins_dev_features_json_and_manifest_path() {
         let root = Path::new("/repo/qol");
         let manifest = root.join("Cargo.toml");
+        let features = dev_feature_set();
         let cases: [(&[&str], Vec<&str>); 2] = [
             (
                 &["qol-tray"],
@@ -668,7 +676,7 @@ path = \"src/main.rs\"
                     "--bin",
                     "qol-tray",
                     "--features",
-                    "dev",
+                    features,
                     "--message-format",
                     "json",
                     "--manifest-path",
@@ -683,7 +691,7 @@ path = \"src/main.rs\"
                     "--bin",
                     "qol-tray-doctor",
                     "--features",
-                    "dev",
+                    features,
                     "--message-format",
                     "json",
                     "--manifest-path",
