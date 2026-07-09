@@ -179,7 +179,7 @@ pub fn any_showing(windows: &PreviewWindows, cx: &mut App) -> bool {
 fn park_ghost(title: &str, window: &mut Window, origin: Point<Pixels>) {
     sync_window_layout(title, window, origin, size(px(1.0), px(1.0)));
     hide_invisible(title);
-    qol_gpui::popup_window::restore_composite();
+    qol_gpui::popup_window::restore_composite(title);
 }
 
 pub fn show_capture(

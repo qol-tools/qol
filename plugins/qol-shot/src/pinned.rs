@@ -334,7 +334,7 @@ impl PinnedView {
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         platform::pin_release_focus(&self.title);
-        qol_gpui::popup_window::restore_composite();
+        qol_gpui::popup_window::restore_composite(&self.title);
         match self.dismiss {
             PinnedDismiss::Quit => cx.quit(),
             PinnedDismiss::Remove => window.remove_window(),

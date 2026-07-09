@@ -91,7 +91,7 @@ impl LauncherView {
         trace::dismiss(self, _from);
         self.set_showing(false);
         qol_gpui::ghost::dismiss_to_ghost(LAUNCHER_WINDOW_TITLE, &self.window_title);
-        qol_gpui::popup_window::restore_composite();
+        qol_gpui::popup_window::restore_composite(&self.window_title);
     }
 
     fn request_dismiss(&mut self, from: &'static str) {

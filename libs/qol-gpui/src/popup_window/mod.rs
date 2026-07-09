@@ -12,7 +12,7 @@ pub use platform::{
 
 #[cfg(target_os = "linux")]
 pub fn present_topmost(title: &str) {
-    platform::force_composite_below();
+    platform::force_composite_below(composite_owner(title));
     platform::make_override_redirect(title);
 }
 
@@ -20,12 +20,17 @@ pub fn present_topmost(title: &str) {
 pub fn present_topmost(_title: &str) {}
 
 #[cfg(target_os = "linux")]
-pub fn restore_composite() {
-    platform::restore_composite()
+pub fn restore_composite(title: &str) {
+    platform::restore_composite(composite_owner(title))
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn restore_composite() {}
+pub fn restore_composite(_title: &str) {}
+
+#[cfg(target_os = "linux")]
+fn composite_owner(title: &str) -> &str {
+    title.split('@').next().unwrap_or(title)
+}
 pub use platform::{
     configure_overlay_window, configure_pinned_window, configure_popup_window,
     disable_window_shadow, dump_ghost_windows, hide_for_capture, hide_invisible,
@@ -84,5 +89,22 @@ pub fn reason_scope(reason: impl Into<String>) -> ReasonScope {
 impl Drop for ReasonScope {
     fn drop(&mut self) {
         CHANGE_REASON.with(|cell| *cell.borrow_mut() = std::mem::take(&mut self.0));
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::composite_owner;
+
+    #[test]
+    fn composite_owner_strips_ghost_geometry_suffix() {
+        let cases = [
+            ("foo@0,0,1920x1080", "foo"),
+            ("foo-pin-123-0", "foo-pin-123-0"),
+            ("foo@1,2,3x4@extra", "foo"),
+        ];
+        for (title, expected) in cases {
+            assert_eq!(composite_owner(title), expected, "title: {title}");
+        }
     }
 }

@@ -591,12 +591,43 @@ fn release_input_focus(conn: &impl Connection, wid: u32) {
     qol_runtime::probe!("FOCUS_RETURN", "from={wid} to={target}");
 }
 
-static FORCED_COMPOSITE: Mutex<Option<(u32, Option<u32>)>> = Mutex::new(None);
+struct CompositeLease {
+    holders: Vec<String>,
+    forced: Vec<(u32, Option<u32>)>,
+}
+
+impl CompositeLease {
+    fn needs_force(&self, wid: u32) -> bool {
+        !self.forced.iter().any(|(forced_wid, _)| *forced_wid == wid)
+    }
+
+    fn hold(&mut self, owner: &str, forced: Option<(u32, Option<u32>)>) {
+        if let Some(entry) = forced {
+            self.forced.push(entry);
+        }
+        if !self.holders.iter().any(|holder| holder == owner) {
+            self.holders.push(owner.to_string());
+        }
+    }
+
+    fn release(&mut self, owner: &str) -> Vec<(u32, Option<u32>)> {
+        self.holders.retain(|holder| holder != owner);
+        if self.holders.is_empty() {
+            std::mem::take(&mut self.forced)
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+static COMPOSITE_LEASE: Mutex<CompositeLease> = Mutex::new(CompositeLease {
+    holders: Vec::new(),
+    forced: Vec::new(),
+});
 
 const BYPASS_OFF: u32 = 2;
 
-pub fn force_composite_below() {
-    restore_composite();
+pub fn force_composite_below(owner: &str) {
     let Ok((conn, screen_num)) = x11rb::connect(None) else {
         return;
     };
@@ -607,35 +638,47 @@ pub fn force_composite_below() {
     if !window_is_fullscreen(&conn, active) {
         return;
     }
-    let original = read_bypass_compositor(&conn, active);
-    if original == Some(BYPASS_OFF) {
-        return;
-    }
-    set_bypass_compositor(&conn, active, BYPASS_OFF);
-    let _ = conn.flush();
-    if let Ok(mut slot) = FORCED_COMPOSITE.lock() {
-        *slot = Some((active, original));
-    }
-    qol_runtime::probe!("FORCE_COMPOSITE", "wid={active} was={original:?}");
-}
-
-pub fn restore_composite() {
-    let taken = FORCED_COMPOSITE
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take());
-    let Some((wid, original)) = taken else {
+    let Ok(mut lease) = COMPOSITE_LEASE.lock() else {
         return;
     };
+    let mut forced = None;
+    if lease.needs_force(active) {
+        let original = read_bypass_compositor(&conn, active);
+        if original != Some(BYPASS_OFF) {
+            set_bypass_compositor(&conn, active, BYPASS_OFF);
+            let _ = conn.flush();
+            forced = Some((active, original));
+        }
+    }
+    lease.hold(owner, forced);
+    qol_runtime::probe!(
+        "FORCE_COMPOSITE",
+        "owner={owner} wid={active} forced={forced:?}"
+    );
+}
+
+pub fn restore_composite(owner: &str) {
+    let forced = COMPOSITE_LEASE
+        .lock()
+        .map(|mut lease| lease.release(owner))
+        .unwrap_or_default();
+    if forced.is_empty() {
+        return;
+    }
     let Ok((conn, _screen_num)) = x11rb::connect(None) else {
         return;
     };
-    match original {
-        Some(value) => set_bypass_compositor(&conn, wid, value),
-        None => clear_bypass_compositor(&conn, wid),
+    for (wid, original) in forced {
+        match original {
+            Some(value) => set_bypass_compositor(&conn, wid, value),
+            None => clear_bypass_compositor(&conn, wid),
+        }
+        qol_runtime::probe!(
+            "RESTORE_COMPOSITE",
+            "owner={owner} wid={wid} to={original:?}"
+        );
     }
     let _ = conn.flush();
-    qol_runtime::probe!("RESTORE_COMPOSITE", "wid={wid} to={original:?}");
 }
 
 fn active_window(conn: &impl Connection, root: u32) -> Option<u32> {
@@ -1221,7 +1264,51 @@ fn intern(conn: &impl Connection, name: &[u8]) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_opacity, opacity_to_cardinal};
+    use super::{normalize_opacity, opacity_to_cardinal, CompositeLease};
+
+    #[test]
+    fn composite_lease_restores_only_after_last_holder_releases() {
+        let mut lease = CompositeLease {
+            holders: Vec::new(),
+            forced: Vec::new(),
+        };
+        lease.hold("pin-1", Some((7, None)));
+        assert!(!lease.needs_force(7), "wid 7 already forced");
+        lease.hold("preview", None);
+        lease.hold("preview", None);
+        assert_eq!(
+            lease.release("preview"),
+            Vec::new(),
+            "pin-1 still holds the lease"
+        );
+        assert_eq!(
+            lease.release("pin-1"),
+            vec![(7, None)],
+            "last holder triggers restore"
+        );
+        assert!(lease.needs_force(7), "forced list drained after restore");
+    }
+
+    #[test]
+    fn composite_lease_release_of_unknown_owner_keeps_forced_windows() {
+        let mut lease = CompositeLease {
+            holders: Vec::new(),
+            forced: Vec::new(),
+        };
+        lease.hold("pin-1", Some((7, Some(1))));
+        lease.hold("pin-2", Some((9, None)));
+        assert_eq!(lease.release("stranger"), Vec::new(), "holders remain");
+        assert_eq!(
+            lease.release("pin-1"),
+            Vec::new(),
+            "pin-2 still holds the lease"
+        );
+        assert_eq!(
+            lease.release("pin-2"),
+            vec![(7, Some(1)), (9, None)],
+            "all forced windows restored together"
+        );
+    }
 
     #[test]
     fn normalize_opacity_clamps_and_discards_invalid_values() {
