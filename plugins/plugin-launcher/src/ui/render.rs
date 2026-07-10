@@ -186,7 +186,7 @@ impl Render for LauncherView {
             if n.is_multiple_of(10) {
                 eprintln!(
                     "[render #{n}] total={total_us}us filter={filter_us}us rows={rows_us}us gap={gap_us}us visible={visible} results={result_count} q={:?}",
-                    &self.state.query
+                    self.state.query
                 );
             }
         }
