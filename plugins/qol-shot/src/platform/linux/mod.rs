@@ -1,11 +1,8 @@
 use anyhow::{anyhow, Context, Result};
 use gpui::{Bounds, Pixels, WindowDecorations, WindowKind};
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
-use qol_headless::DoctorCheckResult;
-use std::env;
 use std::fs::File;
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc;
@@ -16,9 +13,12 @@ use crate::{Config, Rect};
 
 mod clipboard;
 mod display;
+mod system;
 
 pub use clipboard::{copy_image_to_clipboard, copy_path_to_clipboard};
 pub use display::{full_screen_bounds, get_monitors};
+use system::resolve_command;
+pub use system::{open_url, platform_supported_check, required_binaries_check, show_notification};
 
 const MIN_DETECTED_TARGET_PX: i32 = 24;
 
@@ -595,23 +595,6 @@ pub fn process_alive(pid: u32) -> bool {
     super::unix_process_alive(pid)
 }
 
-pub fn show_notification(title: &str, message: &str, timeout_ms: u32) {
-    let _ = Command::new("notify-send")
-        .args([
-            "-u",
-            "normal",
-            "-t",
-            &timeout_ms.to_string(),
-            title,
-            message,
-        ])
-        .status();
-}
-
-pub fn open_url(url: &str) -> Result<()> {
-    open::that(url).context("failed to open URL")
-}
-
 pub fn grab_preview_rgba(rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{ConnectionExt, ImageFormat};
@@ -755,61 +738,6 @@ fn configure_window_async(
         }
         qol_runtime::probe!(probe, "ms={} result=timeout", started.elapsed().as_millis());
     });
-}
-
-pub fn platform_supported_check() -> DoctorCheckResult {
-    DoctorCheckResult::ok(
-        "platform_supported",
-        "Linux capture is supported through ffmpeg/x11grab.",
-    )
-}
-
-pub fn required_binaries_check() -> DoctorCheckResult {
-    let required = ["ffmpeg", "xrandr", "xdpyinfo"];
-    let missing = required
-        .iter()
-        .copied()
-        .filter(|name| resolve_command(name).is_none())
-        .collect::<Vec<_>>();
-
-    if missing.is_empty() {
-        return DoctorCheckResult::ok(
-            "required_binaries",
-            "Required Linux capture tools are available.",
-        );
-    }
-
-    DoctorCheckResult::fail(
-        "required_binaries",
-        format!("Missing required binaries: {}.", missing.join(", ")),
-    )
-    .with_fix("Install ffmpeg, xrandr, and xdpyinfo.")
-}
-
-fn resolve_command(command: &str) -> Option<PathBuf> {
-    command_search_dirs()
-        .into_iter()
-        .map(|dir| dir.join(command))
-        .find(|path| is_executable_file(path))
-}
-
-fn command_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = env::var_os("PATH")
-        .map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
-        .unwrap_or_default();
-    dirs.extend([
-        PathBuf::from("/usr/bin"),
-        PathBuf::from("/bin"),
-        PathBuf::from("/usr/local/bin"),
-    ]);
-    dirs
-}
-
-fn is_executable_file(path: &Path) -> bool {
-    let Ok(metadata) = path.metadata() else {
-        return false;
-    };
-    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
 }
 
 #[cfg(test)]
