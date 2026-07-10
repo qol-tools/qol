@@ -112,6 +112,18 @@ function readReport(reportPath) {
   return JSON.parse(readFileSync(reportPath, "utf8"));
 }
 
+function previousReport(reportPath) {
+  if (!existsSync(reportPath)) return null;
+  try {
+    const report = readReport(reportPath);
+    const compatible =
+      report.inputs?.platform === platformName() && report.inputs?.arch === process.arch;
+    return compatible ? report : null;
+  } catch {
+    return null;
+  }
+}
+
 function printSummary(reportPath, report) {
   console.log(`${report.name}: ${report.status}`);
   console.log(`platform=${report.inputs.platform} arch=${report.inputs.arch} display=${report.inputs.display_backend}`);
@@ -135,24 +147,29 @@ function parseInitArgs(args) {
 function init(args) {
   const { binary, reportPath } = parseInitArgs(args);
   if (!existsSync(binary)) throw new Error(`binary not found: ${binary}`);
+  const previous = previousReport(reportPath);
   const commands = [];
   const commit = run("git", ["rev-parse", "HEAD"]);
   commands.push(commit);
   const scenarios = automatedScenarios(binary, commands);
   scenarios.push(
-    ...MANUAL_SCENARIOS.map(([id, capability, contract]) => ({
-      id,
-      capability,
-      contract,
-      evidence_type: "native-manual",
-      status: "pending",
-      evidence: null,
-    })),
+    ...MANUAL_SCENARIOS.map(([id, capability, contract]) => {
+      const prior = previous?.scenarios.find((scenario) => scenario.id === id);
+      return {
+        id,
+        capability,
+        contract,
+        evidence_type: "native-manual",
+        status: prior?.status || "pending",
+        evidence: prior?.evidence || null,
+        ...(prior?.verified_at ? { verified_at: prior.verified_at } : {}),
+      };
+    }),
   );
   const now = new Date().toISOString();
   const report = {
     name: "qol-shot-platform-parity",
-    started_at: now,
+    started_at: previous?.started_at || now,
     updated_at: now,
     status: "pending",
     inputs: {
