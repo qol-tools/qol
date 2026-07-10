@@ -114,6 +114,7 @@ pub struct PinnedView {
     scroll_resize: Option<ScrollResize>,
     scroll_remainder: f32,
     resize_loop_armed: bool,
+    resize_loop_epoch: u64,
     placed: Arc<AtomicBool>,
     reveal_deadline: Instant,
     focus_handle: FocusHandle,
@@ -145,6 +146,7 @@ impl PinnedView {
             scroll_resize: None,
             scroll_remainder: 0.0,
             resize_loop_armed: false,
+            resize_loop_epoch: 0,
             placed,
             reveal_deadline: Instant::now() + REVEAL_TIMEOUT,
             focus_handle: cx.focus_handle(),
@@ -241,28 +243,56 @@ impl PinnedView {
             return;
         }
         self.resize_loop_armed = true;
+        let epoch = self.resize_loop_epoch;
+        let pointer_session = self
+            .scroll_resize
+            .is_none()
+            .then(|| self.resize_drag.as_ref().map(|drag| drag.session.clone()))
+            .flatten();
         cx.spawn_in(window, async move |view, cx| loop {
             cx.background_executor().timer(RESIZE_TICK).await;
+            let pointer = match pointer_session.clone() {
+                Some(session) => {
+                    cx.background_executor()
+                        .spawn(async move { session.pointer() })
+                        .await
+                }
+                None => None,
+            };
             let live = view
-                .update_in(cx, |view, window, cx| view.resize_tick(window, cx))
+                .update_in(cx, |view, window, cx| {
+                    if view.resize_loop_epoch != epoch {
+                        return false;
+                    }
+                    view.resize_tick(pointer, window, cx)
+                })
                 .unwrap_or(false);
             if !live {
+                let _ = view.update_in(cx, |view, _, _| {
+                    if view.resize_loop_epoch == epoch {
+                        view.resize_loop_armed = false;
+                    }
+                });
                 break;
             }
         })
         .detach();
     }
 
-    fn resize_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn resize_tick(
+        &mut self,
+        pointer: Option<(f32, f32)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.scroll_resize.is_some() {
             return self.scroll_resize_tick(window, cx);
         }
         let ratio = self.ratio;
         let Some(drag) = self.resize_drag.as_ref() else {
-            self.resize_loop_armed = false;
             return false;
         };
-        let Some(pointer) = drag.session.pointer() else {
+        let Some(pointer) = pointer else {
             return true;
         };
         let next = drag_bounds(drag.start, drag.edge, drag.pointer_start, pointer, ratio);
@@ -301,7 +331,6 @@ impl PinnedView {
 
     fn scroll_resize_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(scroll) = self.scroll_resize else {
-            self.resize_loop_armed = false;
             return false;
         };
         if Instant::now() < scroll.commit_at {
@@ -320,6 +349,7 @@ impl PinnedView {
         let scroll = self.scroll_resize.take().is_some();
         self.scroll_remainder = 0.0;
         self.resize_loop_armed = false;
+        self.resize_loop_epoch = self.resize_loop_epoch.wrapping_add(1);
         let Some(drag) = self.resize_drag.take() else {
             return;
         };
@@ -352,17 +382,11 @@ impl PinnedView {
             );
             return;
         }
-        drag.session.apply(last.x, last.y, last.w, last.h);
-        let actual = drag.session.bounds();
-        let direct = actual.is_some_and(|(_, _, width, height)| {
-            (width - last.w).abs() <= 0.5 && (height - last.h).abs() <= 0.5
-        });
-        if !direct {
-            window.resize(size(px(last.w), px(last.h)));
-        }
+        window.resize(size(px(last.w), px(last.h)));
+        drag.session.move_to(last.x, last.y);
         qol_runtime::probe!(
             "SHOT_PIN_RESIZE",
-            "stage=release mode={} direct={direct} requested=({:.0},{:.0}) {}x{} actual={actual:?}",
+            "stage=request mode={} requested=({:.0},{:.0}) {}x{}",
             if scroll { "scroll" } else { "pointer" },
             last.x,
             last.y,
@@ -422,7 +446,7 @@ impl PinnedView {
             return;
         }
 
-        let steps = self.scroll_steps(notches);
+        let steps = scroll_steps(&mut self.scroll_remainder, notches);
         if steps == 0 {
             return;
         }
@@ -457,19 +481,6 @@ impl PinnedView {
             commit_at: Instant::now() + SCROLL_COMMIT,
         });
         true
-    }
-
-    fn scroll_steps(&mut self, notches: f32) -> i32 {
-        if !notches.is_finite() || notches == 0.0 {
-            return 0;
-        }
-        if self.scroll_remainder != 0.0 && self.scroll_remainder.signum() != notches.signum() {
-            self.scroll_remainder = 0.0;
-        }
-        self.scroll_remainder += notches;
-        let steps = self.scroll_remainder.trunc() as i32;
-        self.scroll_remainder -= steps as f32;
-        steps
     }
 
     fn apply_scroll_steps(&mut self, steps: i32, cx: &mut Context<Self>) {
@@ -739,6 +750,26 @@ fn scale_rect(rect: PinRect, factor: f32) -> PinRect {
     }
 }
 
+fn scroll_steps(remainder: &mut f32, notches: f32) -> i32 {
+    if !notches.is_finite() || notches == 0.0 {
+        return 0;
+    }
+    if *remainder != 0.0 && remainder.signum() != notches.signum() {
+        *remainder = 0.0;
+    }
+    *remainder += notches;
+    let steps = remainder.trunc() as i32;
+    if steps == 0 {
+        return 0;
+    }
+    if !(-1..=1).contains(&steps) {
+        *remainder = 0.0;
+        return steps.signum();
+    }
+    *remainder -= steps as f32;
+    steps
+}
+
 fn drag_bounds(
     start: PinRect,
     edge: Option<ResizeEdge>,
@@ -839,7 +870,9 @@ fn clamp_scale_factor(factor: f32, width: f32, height: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{action_row_fits, clamp_scale_factor, drag_bounds, resize_rect, PinRect};
+    use super::{
+        action_row_fits, clamp_scale_factor, drag_bounds, resize_rect, scroll_steps, PinRect,
+    };
     use gpui::ResizeEdge;
 
     #[test]
@@ -989,6 +1022,25 @@ mod tests {
         for (edge, pointer, expected) in cases {
             let got = drag_bounds(start, edge, pointer_start, pointer, 2.0);
             assert_eq!(got, expected, "edge={edge:?} pointer={pointer:?}");
+        }
+    }
+
+    #[test]
+    fn scroll_steps_emit_at_most_one_increment_per_event() {
+        let mut remainder = 0.0;
+        let cases = [
+            (0.6, 0, 0.6),
+            (0.6, 1, 0.2),
+            (-0.6, 0, -0.6),
+            (-0.6, -1, -0.2),
+            (3.4, 1, 0.0),
+            (-3.4, -1, 0.0),
+            (0.0, 0, 0.0),
+            (f32::NAN, 0, 0.0),
+        ];
+        for (notches, expected_steps, expected_remainder) in cases {
+            assert_eq!(scroll_steps(&mut remainder, notches), expected_steps);
+            assert!((remainder - expected_remainder).abs() < 0.001);
         }
     }
 

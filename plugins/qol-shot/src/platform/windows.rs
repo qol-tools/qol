@@ -90,6 +90,7 @@ pub fn grab_preview_rgba(_rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {
 
 pub fn configure_preview_window(_title: String) {}
 
+#[derive(Clone)]
 pub struct PinResizeSession;
 
 pub fn pin_resize_session(_title: &str) -> Option<PinResizeSession> {
@@ -98,6 +99,8 @@ pub fn pin_resize_session(_title: &str) -> Option<PinResizeSession> {
 
 impl PinResizeSession {
     pub fn apply(&self, _x: f32, _y: f32, _width: f32, _height: f32) {}
+
+    pub fn move_to(&self, _x: f32, _y: f32) {}
 
     pub fn pointer(&self) -> Option<(f32, f32)> {
         None

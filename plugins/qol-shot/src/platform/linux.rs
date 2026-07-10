@@ -788,6 +788,7 @@ pub fn configure_preview_window(title: String) {
     );
 }
 
+#[derive(Clone)]
 pub struct PinResizeSession(qol_gpui::popup_window::WindowGeometrySession);
 
 pub fn pin_resize_session(title: &str) -> Option<PinResizeSession> {
@@ -802,6 +803,10 @@ impl PinResizeSession {
             width.round().max(1.0) as u32,
             height.round().max(1.0) as u32,
         );
+    }
+
+    pub fn move_to(&self, x: f32, y: f32) {
+        self.0.set_position(x.round() as i32, y.round() as i32);
     }
 
     pub fn pointer(&self) -> Option<(f32, f32)> {

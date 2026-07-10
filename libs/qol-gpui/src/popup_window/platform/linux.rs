@@ -6,7 +6,7 @@ use x11rb::wrapper::ConnectionExt as _;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 static GHOST_ALPHA: AtomicU32 = AtomicU32::new(0);
@@ -69,8 +69,9 @@ fn connect_with_atoms() -> Option<(impl Connection, usize, u32, u32, u32, u32)> 
     Some((conn, screen_num, root, list_atom, name_atom, utf8_atom))
 }
 
+#[derive(Clone)]
 pub struct WindowGeometrySession {
-    conn: x11rb::rust_connection::RustConnection,
+    conn: Arc<x11rb::rust_connection::RustConnection>,
     root: u32,
     wid: u32,
 }
@@ -82,7 +83,11 @@ pub fn window_geometry_session(title: &str) -> Option<WindowGeometrySession> {
     let name_atom = intern(&conn, b"_NET_WM_NAME")?;
     let utf8_atom = intern(&conn, b"UTF8_STRING")?;
     let wid = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title)?;
-    Some(WindowGeometrySession { conn, root, wid })
+    Some(WindowGeometrySession {
+        conn: Arc::new(conn),
+        root,
+        wid,
+    })
 }
 
 impl WindowGeometrySession {
@@ -92,6 +97,12 @@ impl WindowGeometrySession {
             .y(y)
             .width(width.max(1))
             .height(height.max(1));
+        let _ = self.conn.configure_window(self.wid, &aux);
+        let _ = self.conn.flush();
+    }
+
+    pub fn set_position(&self, x: i32, y: i32) {
+        let aux = ConfigureWindowAux::new().x(x).y(y);
         let _ = self.conn.configure_window(self.wid, &aux);
         let _ = self.conn.flush();
     }
