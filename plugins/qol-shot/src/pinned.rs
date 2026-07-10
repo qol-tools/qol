@@ -8,6 +8,7 @@ use gpui::*;
 use crate::actions::ShotAction;
 use crate::platform;
 use crate::preview::{current_palette, PREVIEW_APP_ID};
+use crate::shortcuts::{resolve_copy_command, shot_action_for_keystroke};
 
 const MIN_DIM: f32 = 48.0;
 const MAX_DIM: f32 = 4096.0;
@@ -59,14 +60,25 @@ pub fn open(
         app_id: Some(PREVIEW_APP_ID.to_string()),
         ..Default::default()
     };
-    let border = crate::config::load().capture.pin_border;
+    let config = crate::config::load();
+    let border = config.capture.pin_border;
+    let copy_command = resolve_copy_command(config.shortcuts.copy_command);
     let placed = Arc::new(AtomicBool::new(false));
     let window_title = title.clone();
     let view_placed = placed.clone();
     let opened = cx.open_window(options, move |window, cx| {
         window.set_window_title(&window_title);
-        let view =
-            cx.new(|cx| PinnedView::new(content, window_title, dismiss, border, view_placed, cx));
+        let view = cx.new(|cx| {
+            PinnedView::new(
+                content,
+                window_title,
+                dismiss,
+                border,
+                copy_command,
+                view_placed,
+                cx,
+            )
+        });
         window.focus(&view.focus_handle(cx));
         window.activate_window();
         view
@@ -108,6 +120,7 @@ pub struct PinnedView {
     title: String,
     dismiss: PinnedDismiss,
     border: bool,
+    copy_command: ShotAction,
     hovered: bool,
     ratio: f32,
     resize_drag: Option<ResizeDrag>,
@@ -126,6 +139,7 @@ impl PinnedView {
         title: String,
         dismiss: PinnedDismiss,
         border: bool,
+        copy_command: ShotAction,
         placed: Arc<AtomicBool>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -140,6 +154,7 @@ impl PinnedView {
             title,
             dismiss,
             border,
+            copy_command,
             hovered: false,
             ratio,
             resize_drag: None,
@@ -418,18 +433,14 @@ impl PinnedView {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(action) = shot_action_for_keystroke(&event.keystroke, self.copy_command) {
+            self.perform(action, window, cx);
+            return;
+        }
+
         match event.keystroke.key.as_str() {
             "escape" | "esc" => self.close(window, cx),
-            other => {
-                let accel = other.chars().next();
-                if let Some(action) = ShotAction::ALL
-                    .iter()
-                    .copied()
-                    .find(|a| Some(a.accel()) == accel)
-                {
-                    self.perform(action, window, cx);
-                }
-            }
+            _ => {}
         }
     }
 

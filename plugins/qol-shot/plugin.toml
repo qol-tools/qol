@@ -7,6 +7,9 @@ version = "1.20.2"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
+[config]
+default_scope = "os"
+
 [runtime]
 command = "qol-shot"
 

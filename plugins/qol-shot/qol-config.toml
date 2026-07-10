@@ -105,3 +105,21 @@ label = "Pinned Preview Border"
 description = "Draw a thin border around pinned screenshot previews to keep them distinct from the screen behind them."
 section = "capture"
 default = true
+
+[section.shortcuts]
+label = "Shortcuts"
+description = "Actions used by standard commands in screenshot previews."
+actions = ["preview"]
+
+[field.shortcuts_copy_command]
+type = "select"
+config_key = "shortcuts.copy_command"
+label = "Copy Command"
+description = "Choose whether the standard copy command copies the image or its file path."
+section = "shortcuts"
+default = "copy_image"
+options = ["copy_image", "copy_path"]
+
+[field.shortcuts_copy_command.option_labels]
+copy_image = "Copy Image"
+copy_path = "Copy Path"

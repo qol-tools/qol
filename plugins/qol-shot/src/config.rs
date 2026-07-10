@@ -10,6 +10,23 @@ pub struct Config {
     pub video: VideoConfig,
     #[serde(default)]
     pub capture: CaptureConfig,
+    #[serde(default)]
+    pub shortcuts: ShortcutsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct ShortcutsConfig {
+    #[serde(default)]
+    pub copy_command: CopyCommand,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CopyCommand {
+    #[default]
+    #[serde(alias = "platform_default")]
+    CopyImage,
+    CopyPath,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -192,5 +209,6 @@ mod tests {
         assert_eq!(defaults.video.preset, default_preset());
         assert_eq!(defaults.video.framerate, default_framerate());
         assert_eq!(defaults.video.format, default_format());
+        assert_eq!(defaults.shortcuts.copy_command, CopyCommand::CopyImage);
     }
 }

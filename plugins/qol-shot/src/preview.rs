@@ -17,6 +17,7 @@ use qol_gpui::theme::{shot_preview_runtime, ShotPreviewPalette};
 use qol_gpui::window::{centered_window_placement, ActiveWindows, MonitorKey, WindowPlacement};
 
 use crate::screenshot::PreviewCapture;
+use crate::shortcuts::{resolve_copy_command, shot_action_for_keystroke};
 use crate::{actions::ShotAction, platform};
 
 const MAX_THUMB_W: f32 = 360.0;
@@ -487,6 +488,7 @@ pub struct PreviewView {
     blur_guard_until: Instant,
     window_origin: Point<Pixels>,
     dismiss_sub: Option<DismissSub>,
+    copy_command: ShotAction,
     focus_handle: FocusHandle,
 }
 
@@ -550,6 +552,7 @@ impl PreviewView {
             blur_guard_until: Instant::now() + BLUR_GUARD,
             window_origin: origin,
             dismiss_sub: None,
+            copy_command: resolve_copy_command(crate::config::load().shortcuts.copy_command),
             focus_handle: cx.focus_handle(),
         }
     }
@@ -568,6 +571,7 @@ impl PreviewView {
         self.first_paint = true;
         self.is_showing = true;
         self.blur_guard_until = Instant::now() + BLUR_GUARD;
+        self.copy_command = resolve_copy_command(crate::config::load().shortcuts.copy_command);
         if let Ok(mut slot) = self.completion.lock() {
             *slot = None;
         }
@@ -649,6 +653,11 @@ impl PreviewView {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(action) = shot_action_for_keystroke(&event.keystroke, self.copy_command) {
+            self.activate(PreviewControl::Action(action), window, cx);
+            return;
+        }
+
         match event.keystroke.key.as_str() {
             "escape" | "esc" => self.close(window, cx),
             "left" | "up" => self.move_selection(-1, cx),
@@ -658,6 +667,9 @@ impl PreviewView {
                 self.activate(control, window, cx);
             }
             other => {
+                if event.keystroke.modifiers.modified() {
+                    return;
+                }
                 let accel = other.chars().next();
                 if let Some(control) = preview_controls()
                     .into_iter()

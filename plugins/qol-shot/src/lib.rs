@@ -19,9 +19,11 @@ pub mod recording;
 mod region_selector;
 pub mod screenshot;
 mod settings;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod shortcuts;
 mod space;
 
-pub use config::{AudioConfig, Config, VideoConfig};
+pub use config::{AudioConfig, Config, CopyCommand, ShortcutsConfig, VideoConfig};
 pub use geometry::{backdrop_regions, BackdropCorners, BackdropRegions, Monitor, Rect};
 
 pub const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
