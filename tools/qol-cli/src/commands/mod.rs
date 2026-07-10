@@ -1,5 +1,6 @@
 pub(crate) mod build;
 pub(crate) mod cat;
+pub(crate) mod check;
 pub(crate) mod clean;
 pub(crate) mod dev;
 pub(crate) mod doctor;

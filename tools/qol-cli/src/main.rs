@@ -38,6 +38,7 @@ fn run(args: Vec<OsString>) -> Result<()> {
         "emu" => commands::emu::run(rest, args.verbose),
         "cat" => commands::cat::run(rest),
         "build" => commands::build::run(rest, args.verbose),
+        "check" => commands::check::run(rest, args.verbose),
         "clean" => commands::clean::run(rest, args.verbose),
         "install" => commands::install::run(args.verbose),
         "trace" => commands::trace::run(rest),

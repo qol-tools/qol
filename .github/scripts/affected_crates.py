@@ -26,6 +26,7 @@ GLOBAL_FILES = {
     ".rustfmt.toml",
 }
 REPO_ROOT = Path(__file__).resolve().parents[2]
+WORKTREE_HEAD = "WORKTREE"
 
 
 def platform_excludes():
@@ -61,6 +62,9 @@ def emit(outputs):
     if path:
         with open(path, "a") as handle:
             handle.write(text)
+    json_path = os.environ.get("QOL_AFFECTED_OUTPUT")
+    if json_path:
+        Path(json_path).write_text(json.dumps(outputs, indent=2, sort_keys=True) + "\n")
     sys.stderr.write(text)
 
 
@@ -95,14 +99,26 @@ def skip_all(reason):
 
 
 def changed_files(base, head):
-    diff = run(["git", "diff", "--name-only", base, head])
+    diff_args = ["git", "diff", "--name-only", base]
+    if head != WORKTREE_HEAD:
+        diff_args.append(head)
+    diff = run(diff_args)
     if diff.returncode == 0:
-        return diff.stdout.splitlines()
+        return with_untracked(diff.stdout.splitlines(), head)
     run(["git", "fetch", "--no-tags", "--depth=50", "origin", base])
-    diff = run(["git", "diff", "--name-only", base, head])
+    diff = run(diff_args)
     if diff.returncode != 0:
         return None
-    return diff.stdout.splitlines()
+    return with_untracked(diff.stdout.splitlines(), head)
+
+
+def with_untracked(files, head):
+    if head != WORKTREE_HEAD:
+        return files
+    untracked = run(["git", "ls-files", "--others", "--exclude-standard"])
+    if untracked.returncode != 0:
+        return None
+    return sorted(set(files) | set(untracked.stdout.splitlines()))
 
 
 def workspace_graph():
