@@ -8,9 +8,14 @@
 // which the host injects via QOL_TRAY_DAEMON_SOCKET - so such a plugin must not
 // also hardcode a fallback socket name in Rust. This guard blocks the raw literals
 // from reappearing in code, so a value a plugin/CLI/tray/UI process uses can never
-// drift from its single source.
+// drift from its single source. Root .github/workflows owns monorepo automation;
+// plugin-template alone embeds nested workflows as distributable scaffold assets.
 // Run by the pre-commit hook and by the CI "Single source guard" step.
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const TEMPLATE_WORKFLOW_PREFIX = 'plugins/plugin-template/.github/workflows/';
 
 function repoRoot() {
     try {
@@ -78,6 +83,22 @@ function launcherIdentityHits(cwd) {
     return grep(cwd, 'qol-tray-launcher|qol-launcher', ['plugins/*/src']).trim();
 }
 
+function nestedWorkflowHits(cwd) {
+    const files = execFileSync(
+        'git',
+        ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+        { cwd, encoding: 'utf8' },
+    );
+    return files
+        .split('\0')
+        .filter(Boolean)
+        .filter((path) => path.includes('/.github/workflows/'))
+        .filter((path) => !path.startsWith(TEMPLATE_WORKFLOW_PREFIX))
+        .filter((path) => existsSync(resolve(cwd, path)))
+        .map((path) => `${path}:1`)
+        .join('\n');
+}
+
 const root = repoRoot();
 if (!root) process.exit(0);
 
@@ -110,8 +131,9 @@ const constantHits = [
 const socketHits = manifestSocketFallbackHits(root);
 const contractDefaultHits = contractDefaultDriftHits(root);
 const launcherHits = launcherIdentityHits(root);
+const nestedWorkflows = nestedWorkflowHits(root);
 
-if (constantHits || socketHits || contractDefaultHits || launcherHits) {
+if (constantHits || socketHits || contractDefaultHits || launcherHits || nestedWorkflows) {
     const out = process.stderr;
     out.write('\n  single-source guard rejected\n');
     if (constantHits) {
@@ -147,6 +169,12 @@ if (constantHits || socketHits || contractDefaultHits || launcherHits) {
         out.write('\n  launcher window identity markers must come from qol_conventions::launcher\n');
         out.write('  offending occurrences:\n');
         for (const line of launcherHits.split('\n')) out.write(`    ${line}\n`);
+    }
+    if (nestedWorkflows) {
+        out.write('\n  nested GitHub workflows are inert inside the monorepo and duplicate automation\n');
+        out.write('  offending occurrences:\n');
+        for (const line of nestedWorkflows.split('\n')) out.write(`    ${line}\n`);
+        out.write('\n  fix: keep executable workflows at root (or in qol-cicd); only plugin-template may embed scaffold workflows.\n');
     }
     out.write('\n');
     process.exit(1);
