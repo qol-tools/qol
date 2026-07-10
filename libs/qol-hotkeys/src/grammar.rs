@@ -53,13 +53,12 @@ pub fn parse(input: &str) -> Option<Hotkey> {
         }
         if let Some(modifier) = parse_modifier(&token) {
             mods.insert(modifier);
-        } else if let Some(parsed) = parse_key(&token) {
+        } else {
+            let parsed = parse_key(&token)?;
             if key.is_some() {
                 return None;
             }
             key = Some(parsed);
-        } else {
-            return None;
         }
     }
     Some(Hotkey { mods, key: key? })

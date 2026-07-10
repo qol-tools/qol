@@ -381,10 +381,7 @@ fn strict_validation_errors(
         let Some(value) = field_default_from_override(field.kind, raw) else {
             errors.push(qol_config::validation::ValidationError::new(
                 format!("overrides.{id}"),
-                format!(
-                    "value does not match field type {}",
-                    field_kind_name(field.kind)
-                ),
+                format!("value does not match field type {}", field.kind.name()),
             ));
             continue;
         };
@@ -431,22 +428,5 @@ fn field_default_matches_kind(
         FieldKind::ObjectArray => matches!(value, FieldDefault::ObjectArray(_)),
         FieldKind::ObjectMap => matches!(value, FieldDefault::ObjectMap(_)),
         FieldKind::Action | FieldKind::List | FieldKind::Status | FieldKind::QrCode => false,
-    }
-}
-
-fn field_kind_name(kind: qol_config::contract::FieldKind) -> &'static str {
-    match kind {
-        qol_config::contract::FieldKind::Boolean => "boolean",
-        qol_config::contract::FieldKind::String => "string",
-        qol_config::contract::FieldKind::Number => "number",
-        qol_config::contract::FieldKind::Select => "select",
-        qol_config::contract::FieldKind::StringArray => "string_array",
-        qol_config::contract::FieldKind::ObjectArray => "object_array",
-        qol_config::contract::FieldKind::ObjectMap => "object_map",
-        qol_config::contract::FieldKind::Color => "color",
-        qol_config::contract::FieldKind::Action => "action",
-        qol_config::contract::FieldKind::List => "list",
-        qol_config::contract::FieldKind::Status => "status",
-        qol_config::contract::FieldKind::QrCode => "qr_code",
     }
 }
