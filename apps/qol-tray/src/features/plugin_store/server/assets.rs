@@ -73,3 +73,65 @@ fn serve_embedded_file(path: &str) -> impl IntoResponse {
         None => (StatusCode::NOT_FOUND, "Not found").into_response(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::UiAssets;
+
+    #[test]
+    fn embedded_ui_does_not_depend_on_remote_assets() {
+        let violations = UiAssets::iter()
+            .filter(|path| {
+                path.ends_with(".css") || path.ends_with(".html") || path.ends_with(".js")
+            })
+            .filter_map(|path| {
+                let asset = UiAssets::get(path.as_ref())?;
+                let source = String::from_utf8_lossy(&asset.data);
+                has_remote_asset_dependency(&source).then(|| path.into_owned())
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            violations.is_empty(),
+            "embedded UI assets must be self-contained; remote dependencies found in: {}",
+            violations.join(", ")
+        );
+    }
+
+    fn has_remote_asset_dependency(source: &str) -> bool {
+        let compact = source
+            .chars()
+            .filter(|character| !character.is_ascii_whitespace())
+            .flat_map(char::to_lowercase)
+            .collect::<String>();
+
+        const LOAD_PREFIXES: &[&str] = &[
+            "from'",
+            "from\"",
+            "import('",
+            "import(\"",
+            "import'",
+            "import\"",
+            "url('",
+            "url(\"",
+            "url(",
+        ];
+        const REMOTE_LOCATIONS: &[&str] = &["http://", "https://", "//"];
+
+        REMOTE_LOCATIONS.iter().any(|location| {
+            LOAD_PREFIXES
+                .iter()
+                .any(|prefix| compact.contains(&format!("{prefix}{location}")))
+        }) || compact.split('<').any(|fragment| {
+            let tag = fragment.split_once('>').map_or(fragment, |(tag, _)| tag);
+            let remote = REMOTE_LOCATIONS
+                .iter()
+                .any(|location| tag.contains(location));
+            remote
+                && ((tag.starts_with("script") && tag.contains("src="))
+                    || (tag.starts_with("link")
+                        && tag.contains("stylesheet")
+                        && tag.contains("href=")))
+        })
+    }
+}

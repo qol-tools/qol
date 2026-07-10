@@ -1,4 +1,4 @@
-import QRCode from 'https://esm.sh/qrcode@1.5.4';
+import QRCode from '../../../lib/vendor/qrcode-1.5.4.js';
 import { html } from '../../../lib/html.js';
 import { useEffect, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
