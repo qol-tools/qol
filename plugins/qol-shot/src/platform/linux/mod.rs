@@ -12,7 +12,13 @@ use std::sync::mpsc;
 
 use crate::platform::{CaptureProcess, CaptureSession};
 use crate::space::CaptureKind;
-use crate::{Config, Monitor, Rect};
+use crate::{Config, Rect};
+
+mod clipboard;
+mod display;
+
+pub use clipboard::{copy_image_to_clipboard, copy_path_to_clipboard};
+pub use display::{full_screen_bounds, get_monitors};
 
 const MIN_DETECTED_TARGET_PX: i32 = 24;
 
@@ -447,56 +453,6 @@ fn selector_bounds() -> Bounds<Pixels> {
         .unwrap_or_else(|_| crate::region_selector::fallback_bounds())
 }
 
-pub fn get_monitors() -> Result<Vec<Monitor>> {
-    let output = Command::new("xrandr")
-        .args(["--query"])
-        .output()
-        .context("failed to run xrandr")?;
-    if !output.status.success() {
-        return Err(anyhow!("xrandr failed"));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let monitors: Vec<Monitor> = qol_runtime::xrandr::parse_monitors(&stdout)
-        .into_iter()
-        .map(monitor_from_xrandr)
-        .collect();
-    if monitors.is_empty() {
-        return Err(anyhow!("no monitors found from xrandr"));
-    }
-    Ok(monitors)
-}
-
-pub fn full_screen_bounds() -> Result<Monitor> {
-    let output = Command::new("xdpyinfo")
-        .output()
-        .context("failed to run xdpyinfo")?;
-    if !output.status.success() {
-        return Err(anyhow!("xdpyinfo failed"));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let dimensions = stdout
-        .lines()
-        .find_map(|line| {
-            if !line.contains("dimensions:") {
-                return None;
-            }
-            line.split_whitespace().find(|token| {
-                token.contains('x') && token.chars().all(|c| c.is_ascii_digit() || c == 'x')
-            })
-        })
-        .ok_or_else(|| anyhow!("could not read dimensions from xdpyinfo"))?;
-    let split = dimensions
-        .find('x')
-        .ok_or_else(|| anyhow!("invalid dimensions"))?;
-    let w = dimensions[..split]
-        .parse::<i32>()
-        .context("invalid width from xdpyinfo")?;
-    let h = dimensions[split + 1..]
-        .parse::<i32>()
-        .context("invalid height from xdpyinfo")?;
-    Ok(Monitor { x: 0, y: 0, w, h })
-}
-
 pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
     let mut args = vec![
         "-thread_queue_size".to_string(),
@@ -613,95 +569,6 @@ pub fn capture_screenshot(rect: &Rect, output_file: &Path) -> Result<()> {
     }
 
     Err(anyhow!("ffmpeg screenshot capture exited with {status}"))
-}
-
-pub fn copy_image_to_clipboard(path: &Path) -> Result<()> {
-    let wl_copy_error = match copy_image_with("wl-copy", &["--type", "image/png"], path) {
-        Ok(()) => return Ok(()),
-        Err(error) => error,
-    };
-    let xclip_error = match copy_image_with(
-        "xclip",
-        &["-selection", "clipboard", "-t", "image/png", "-i"],
-        path,
-    ) {
-        Ok(()) => return Ok(()),
-        Err(error) => error,
-    };
-
-    Err(anyhow!(
-        "failed to copy image to clipboard; wl-copy: {wl_copy_error:#}; xclip: {xclip_error:#}"
-    ))
-}
-
-pub fn copy_path_to_clipboard(path: &Path) -> Result<()> {
-    let text = path.to_string_lossy();
-    let wl_copy_error = match copy_text_with("wl-copy", &[], &text) {
-        Ok(()) => return Ok(()),
-        Err(error) => error,
-    };
-    let xclip_error = match copy_text_with("xclip", &["-selection", "clipboard"], &text) {
-        Ok(()) => return Ok(()),
-        Err(error) => error,
-    };
-
-    Err(anyhow!(
-        "failed to copy path to clipboard; wl-copy: {wl_copy_error:#}; xclip: {xclip_error:#}"
-    ))
-}
-
-fn copy_text_with(program: &str, args: &[&str], text: &str) -> Result<()> {
-    use std::io::Write;
-
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| format!("failed to run {program}"))?;
-
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow!("failed to open {program} stdin"))?
-        .write_all(text.as_bytes())
-        .with_context(|| format!("failed to write to {program}"))?;
-
-    let status = child
-        .wait()
-        .with_context(|| format!("failed to wait for {program}"))?;
-    if status.success() {
-        return Ok(());
-    }
-
-    Err(anyhow!(
-        "{program} text clipboard copy exited with {status}"
-    ))
-}
-
-fn copy_image_with(program: &str, args: &[&str], path: &Path) -> Result<()> {
-    let file = File::open(path).with_context(|| {
-        format!(
-            "failed to open screenshot for clipboard: {}",
-            path.display()
-        )
-    })?;
-    let status = Command::new(program)
-        .args(args)
-        .stdin(Stdio::from(file))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .with_context(|| format!("failed to run {program}"))?;
-
-    if status.success() {
-        return Ok(());
-    }
-
-    Err(anyhow!(
-        "{program} image clipboard copy exited with {status}"
-    ))
 }
 
 pub fn recording_format(format: &str) -> String {
@@ -917,15 +784,6 @@ pub fn required_binaries_check() -> DoctorCheckResult {
         format!("Missing required binaries: {}.", missing.join(", ")),
     )
     .with_fix("Install ffmpeg, xrandr, and xdpyinfo.")
-}
-
-fn monitor_from_xrandr(monitor: qol_runtime::xrandr::XrandrMonitor) -> Monitor {
-    Monitor {
-        x: monitor.bounds.x as i32,
-        y: monitor.bounds.y as i32,
-        w: monitor.bounds.width as i32,
-        h: monitor.bounds.height as i32,
-    }
 }
 
 fn resolve_command(command: &str) -> Option<PathBuf> {
