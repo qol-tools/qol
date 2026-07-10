@@ -342,7 +342,9 @@ impl AltTabApp {
                 state.evict_live_frame(wid);
             }
             if let Some((wid, buf)) = gathered.fresh_live_frame.clone() {
-                state.insert_live_frames([(wid, buf.into_live_frame())].into_iter().collect());
+                if let Some(frame) = buf.into_live_frame() {
+                    state.insert_live_frames([(wid, frame)].into_iter().collect());
+                }
             }
             #[cfg(debug_assertions)]
             {

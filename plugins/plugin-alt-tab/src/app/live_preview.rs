@@ -181,7 +181,7 @@ fn push_live_frames(
             state.insert_live_frames(
                 frames
                     .into_iter()
-                    .map(|(wid, buf)| (wid, buf.into_live_frame()))
+                    .filter_map(|(wid, buf)| buf.into_live_frame().map(|frame| (wid, frame)))
                     .collect(),
             );
         });

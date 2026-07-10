@@ -415,7 +415,9 @@ fn finalize_reuse(
                 state.evict_live_frame(wid);
             }
             if let Some((wid, buf)) = fresh_live_frame {
-                state.insert_live_frames([(wid, buf.into_live_frame())].into_iter().collect());
+                if let Some(frame) = buf.into_live_frame() {
+                    state.insert_live_frames([(wid, frame)].into_iter().collect());
+                }
             }
         });
         cx.notify();
@@ -586,7 +588,7 @@ pub(crate) mod state {
                 live_previews: init.previews,
                 live_frames: init
                     .fresh_live_frame
-                    .map(|(wid, buf)| (wid, buf.into_live_frame()))
+                    .and_then(|(wid, buf)| buf.into_live_frame().map(|frame| (wid, frame)))
                     .into_iter()
                     .collect(),
                 icon_cache: init.icons,

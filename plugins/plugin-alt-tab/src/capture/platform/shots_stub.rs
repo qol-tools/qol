@@ -13,8 +13,8 @@ impl SendCVBuf {
         match self.0 {}
     }
 
-    pub(crate) fn into_live_frame(self) -> LiveFrame {
-        match self.0 {}
+    pub(crate) fn into_live_frame(self) -> Option<LiveFrame> {
+        None
     }
 }
 

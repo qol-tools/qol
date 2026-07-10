@@ -462,7 +462,7 @@ fn commit_live_frames_foreground(
                 state.insert_live_frames(
                     shots
                         .into_iter()
-                        .map(|(wid, buf)| (wid, buf.into_live_frame()))
+                        .filter_map(|(wid, buf)| buf.into_live_frame().map(|frame| (wid, frame)))
                         .collect(),
                 );
             });

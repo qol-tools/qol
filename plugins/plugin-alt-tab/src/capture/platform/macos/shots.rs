@@ -87,13 +87,13 @@ impl SendCVBuf {
         unsafe { CVPixelBufferGetPixelFormatType(self.0 as *const c_void) }
     }
 
-    pub(crate) fn into_live_frame(self) -> LiveFrame {
+    pub(crate) fn into_live_frame(self) -> Option<LiveFrame> {
         use core_foundation::base::TCFType;
         let buf = unsafe {
             LiveFrame::wrap_under_create_rule(self.0 as core_video::pixel_buffer::CVPixelBufferRef)
         };
         std::mem::forget(self);
-        buf
+        Some(buf)
     }
 }
 
