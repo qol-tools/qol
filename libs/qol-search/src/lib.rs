@@ -88,13 +88,9 @@ fn score_pass(
             find_first_match(qc, candidate_lower, start)
         };
 
-        match pos {
-            Some(p) => {
-                positions.push(p);
-                start = p + 1;
-            }
-            None => return None,
-        }
+        let p = pos?;
+        positions.push(p);
+        start = p + 1;
     }
 
     Some(FuzzyMatch {
