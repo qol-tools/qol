@@ -69,23 +69,8 @@
     position: absolute;
     inset: 0;
     pointer-events: none;
-    background:
-        linear-gradient(180deg, transparent, rgba(var(--accent-rgb), 0.06) 30%, rgba(var(--accent-rgb), 0.14) 50%, rgba(var(--accent-rgb), 0.06) 70%, transparent) 0 calc(0% - 120px) / 100% 120px no-repeat,
-        var(--tui-scanline);
+    background: var(--tui-scanline);
     z-index: var(--z-1);
-}
-
-.plugin-card[data-selected="true"] .plugin-cover-placeholder::after {
-    animation: crt-card-roll 8s linear infinite;
-}
-
-@keyframes crt-card-roll {
-    0% {
-        background-position: 0 calc(0% - 120px), 0 0;
-    }
-    15%, 100% {
-        background-position: 0 calc(100% + 120px), 0 0;
-    }
 }
 
 .plugin-cover-monogram {
