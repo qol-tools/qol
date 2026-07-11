@@ -88,8 +88,78 @@ pub mod dev_routes {
 pub mod doctor_cli {
     pub const ARG_CHECK: &str = "check";
     pub const ARG_FIX: &str = "fix";
+    pub const ARG_JSON: &str = "--json";
     pub const ARG_QUICK: &str = "--quick";
     pub const ARG_ID: &str = "--id";
+}
+
+pub mod doctor_wire {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum OutcomeStatus {
+        Ok,
+        Warn,
+        Error,
+        Crash,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct Outcome {
+        pub id: String,
+        pub status: OutcomeStatus,
+        pub message: String,
+        pub fix_available: bool,
+    }
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct Report {
+        pub outcomes: Vec<Outcome>,
+    }
+
+    impl Report {
+        pub fn new(outcomes: Vec<Outcome>) -> Self {
+            Self { outcomes }
+        }
+
+        pub fn count_ok(&self) -> usize {
+            self.count(OutcomeStatus::Ok)
+        }
+
+        pub fn count_warn(&self) -> usize {
+            self.count(OutcomeStatus::Warn)
+        }
+
+        pub fn count_error(&self) -> usize {
+            self.count(OutcomeStatus::Error)
+        }
+
+        pub fn count_crash(&self) -> usize {
+            self.count(OutcomeStatus::Crash)
+        }
+
+        pub fn divergence_count(&self) -> usize {
+            self.count_warn() + self.count_error() + self.count_crash()
+        }
+
+        fn count(&self, status: OutcomeStatus) -> usize {
+            self.outcomes
+                .iter()
+                .filter(|outcome| outcome.status == status)
+                .count()
+        }
+    }
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct FixReport {
+        pub before: Report,
+        pub after: Report,
+        pub attempted: usize,
+        pub applied: usize,
+        pub skipped: usize,
+        pub failures: Vec<String>,
+    }
 }
 
 pub mod dev_health {
@@ -242,5 +312,54 @@ mod tests {
             let back: PluginRuntimeStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(back, status, "round trip {expected_json}");
         }
+    }
+
+    #[test]
+    fn doctor_wire_reports_round_trip_with_typed_counts() {
+        use doctor_wire::{FixReport, Outcome, OutcomeStatus, Report};
+
+        let report = Report::new(vec![
+            Outcome {
+                id: "healthy".to_string(),
+                status: OutcomeStatus::Ok,
+                message: "healthy".to_string(),
+                fix_available: false,
+            },
+            Outcome {
+                id: "drift".to_string(),
+                status: OutcomeStatus::Warn,
+                message: "drifted".to_string(),
+                fix_available: true,
+            },
+            Outcome {
+                id: "broken".to_string(),
+                status: OutcomeStatus::Error,
+                message: "broken".to_string(),
+                fix_available: false,
+            },
+            Outcome {
+                id: "panic".to_string(),
+                status: OutcomeStatus::Crash,
+                message: "panicked".to_string(),
+                fix_available: false,
+            },
+        ]);
+        assert_eq!(report.count_ok(), 1);
+        assert_eq!(report.count_warn(), 1);
+        assert_eq!(report.count_error(), 1);
+        assert_eq!(report.count_crash(), 1);
+        assert_eq!(report.divergence_count(), 3);
+
+        let fix_report = FixReport {
+            before: report.clone(),
+            after: Report::new(vec![report.outcomes[0].clone()]),
+            attempted: 1,
+            applied: 1,
+            skipped: 0,
+            failures: Vec::new(),
+        };
+        let json = serde_json::to_string(&fix_report).unwrap();
+        let decoded: FixReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, fix_report);
     }
 }

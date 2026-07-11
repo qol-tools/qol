@@ -268,7 +268,7 @@ fn derive_result(meta: CheckMeta, report: CheckReport, duration: Duration) -> Do
     let fix_available = !report.fixes.is_empty();
     DoctorCheckResult {
         outcome: Outcome {
-            id: meta.id,
+            id: meta.id.to_string(),
             status,
             message,
             fix_available,
@@ -285,7 +285,7 @@ fn crash_result(meta: CheckMeta, panic_message: String, duration: Duration) -> D
     let issue = DoctorIssue::new("check_panic", Severity::Crash, message.clone());
     DoctorCheckResult {
         outcome: Outcome {
-            id: meta.id,
+            id: meta.id.to_string(),
             status: OutcomeStatus::Crash,
             message,
             fix_available: false,

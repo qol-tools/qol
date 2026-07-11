@@ -1,6 +1,9 @@
 use std::process::Command;
 use std::sync::mpsc::{channel, Receiver};
 
+use qol_conventions::doctor_wire::{
+    FixReport as DoctorFixReport, Outcome, OutcomeStatus, Report as DoctorReport,
+};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Stylize};
 use ratatui::text::{Line, Span};
@@ -17,20 +20,6 @@ pub(super) fn spawn_doctor_probe() -> Poller<Result<DoctorRun, String>> {
         DOCTOR_CAP_INTERVAL,
         run_doctor_prebuilt,
     )
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub(super) struct DoctorReport {
-    pub(super) ok: usize,
-    pub(super) warn: usize,
-    pub(super) error: usize,
-    pub(super) crash: usize,
-}
-
-impl DoctorReport {
-    pub(super) fn divergences(&self) -> usize {
-        self.warn + self.error + self.crash
-    }
 }
 
 pub(super) struct DoctorPanel {
@@ -75,36 +64,33 @@ pub(super) fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Spa
             .unwrap_or_else(|| "waiting for first check".to_string());
         return (Color::Yellow, vec![detail.fg(Color::DarkGray)]);
     };
-    let report = run.report;
-    let (color, mut value) = if report.divergences() == 0 {
+    let report = &run.report;
+    let (color, mut value) = if report.divergence_count() == 0 {
         (
             accent(),
             vec![
                 "all good".fg(accent()).bold(),
                 match run.scope {
-                    DoctorScope::Full => format!(" · {} checks", report.ok),
-                    DoctorScope::Quick => format!(" · {} quick checks", report.ok),
+                    DoctorScope::Full => format!(" · {} checks", report.count_ok()),
+                    DoctorScope::Quick => format!(" · {} quick checks", report.count_ok()),
                 }
                 .fg(Color::DarkGray),
             ],
         )
     } else {
-        let color = if report.error + report.crash > 0 {
+        let error_count = report.count_error() + report.count_crash();
+        let color = if error_count > 0 {
             Color::Red
         } else {
             Color::Yellow
         };
-        let label = format!("{} divergences", report.divergences());
+        let label = format!("{} divergences", report.divergence_count());
         (
             color,
             vec![
                 label.fg(color).bold(),
-                format!(
-                    " · {} warn · {} err",
-                    report.warn,
-                    report.error + report.crash
-                )
-                .fg(Color::DarkGray),
+                format!(" · {} warn · {} err", report.count_warn(), error_count)
+                    .fg(Color::DarkGray),
             ],
         )
     };
@@ -240,13 +226,20 @@ pub(super) enum DoctorScope {
 const QUICK_DOCTOR_CHECK_ARGS: &[&str] = &[
     qol_conventions::doctor_cli::ARG_CHECK,
     qol_conventions::doctor_cli::ARG_QUICK,
+    qol_conventions::doctor_cli::ARG_JSON,
 ];
 
 impl DoctorMode {
     fn full_command_args(self) -> &'static [&'static str] {
         match self {
-            DoctorMode::Check => &[qol_conventions::doctor_cli::ARG_CHECK],
-            DoctorMode::Fix => &[qol_conventions::doctor_cli::ARG_FIX],
+            DoctorMode::Check => &[
+                qol_conventions::doctor_cli::ARG_CHECK,
+                qol_conventions::doctor_cli::ARG_JSON,
+            ],
+            DoctorMode::Fix => &[
+                qol_conventions::doctor_cli::ARG_FIX,
+                qol_conventions::doctor_cli::ARG_JSON,
+            ],
         }
     }
 
@@ -312,12 +305,18 @@ fn run_doctor_binary(
         .args(args)
         .output()
         .map_err(|error| error.to_string())?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    let report =
-        parse_doctor_summary(&text).ok_or_else(|| "could not read doctor summary".to_string())?;
+    let (report, lines) = parse_doctor_output(&output.stdout, mode).map_err(|error| {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr.trim();
+        if detail.is_empty() {
+            format!("could not read doctor report: {error}")
+        } else {
+            format!("could not read doctor report: {error}: {detail}")
+        }
+    })?;
     Ok(DoctorRun {
         report,
-        lines: doctor_lines(&text, mode),
+        lines,
         scope,
     })
 }
@@ -337,51 +336,58 @@ fn build_doctor(root: &std::path::Path) -> Result<(), String> {
     Err(format!("doctor build failed ({}): {detail}", output.status))
 }
 
-fn doctor_lines(text: &str, mode: DoctorMode) -> Vec<String> {
+fn parse_doctor_output(
+    bytes: &[u8],
+    mode: DoctorMode,
+) -> Result<(DoctorReport, Vec<String>), serde_json::Error> {
     match mode {
-        DoctorMode::Check => bracket_lines(text),
-        DoctorMode::Fix => fix_doctor_lines(text),
+        DoctorMode::Check => {
+            let report: DoctorReport = serde_json::from_slice(bytes)?;
+            let lines = report_lines(&report);
+            Ok((report, lines))
+        }
+        DoctorMode::Fix => {
+            let fix_report: DoctorFixReport = serde_json::from_slice(bytes)?;
+            let mut lines = fix_report
+                .failures
+                .iter()
+                .map(|failure| format!("[ERR] {}", first_line(failure)))
+                .collect::<Vec<_>>();
+            lines.extend(report_lines(&fix_report.after));
+            Ok((fix_report.after, lines))
+        }
     }
 }
 
-fn fix_doctor_lines(text: &str) -> Vec<String> {
-    let Some((before_after, after)) = text.rsplit_once("Doctor Check (After)") else {
-        return bracket_lines(text);
+fn report_lines(report: &DoctorReport) -> Vec<String> {
+    report.outcomes.iter().map(outcome_line).collect()
+}
+
+fn outcome_line(outcome: &Outcome) -> String {
+    let fix = if outcome.fix_available {
+        " (fix available)"
+    } else {
+        ""
     };
-
-    let mut lines = before_after
-        .lines()
-        .filter(|line| line.trim_start().starts_with("[ERR]"))
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-    lines.extend(bracket_lines(after));
-    lines
+    format!(
+        "[{}] {}: {}{fix}",
+        outcome_status_label(outcome.status),
+        outcome.id,
+        first_line(&outcome.message)
+    )
 }
 
-fn bracket_lines(text: &str) -> Vec<String> {
-    text.lines()
-        .filter(|line| line.trim_start().starts_with('['))
-        .map(|line| line.to_string())
-        .collect()
+fn first_line(value: &str) -> &str {
+    value.lines().next().unwrap_or_default()
 }
 
-fn parse_doctor_summary(text: &str) -> Option<DoctorReport> {
-    let line = text
-        .lines()
-        .rev()
-        .find(|line| line.trim_start().starts_with("Summary:"))?;
-    Some(DoctorReport {
-        ok: parse_summary_field(line, "ok=")?,
-        warn: parse_summary_field(line, "warn=")?,
-        error: parse_summary_field(line, "error=")?,
-        crash: parse_summary_field(line, "crash=")?,
-    })
-}
-
-fn parse_summary_field(line: &str, key: &str) -> Option<usize> {
-    let rest = line.split(key).nth(1)?;
-    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    digits.parse().ok()
+fn outcome_status_label(status: OutcomeStatus) -> &'static str {
+    match status {
+        OutcomeStatus::Ok => "OK",
+        OutcomeStatus::Warn => "WARN",
+        OutcomeStatus::Error => "ERR",
+        OutcomeStatus::Crash => "CRASH",
+    }
 }
 
 #[cfg(test)]
@@ -392,16 +398,38 @@ mod tests {
         spans.iter().map(|span| span.content.as_ref()).collect()
     }
 
+    fn outcome(id: &str, status: OutcomeStatus, message: &str, fix_available: bool) -> Outcome {
+        Outcome {
+            id: id.to_string(),
+            status,
+            message: message.to_string(),
+            fix_available,
+        }
+    }
+
+    fn make_report(ok: usize, warn: usize, error: usize, crash: usize) -> DoctorReport {
+        let mut outcomes = Vec::new();
+        for (label, status, count) in [
+            ("ok", OutcomeStatus::Ok, ok),
+            ("warn", OutcomeStatus::Warn, warn),
+            ("error", OutcomeStatus::Error, error),
+            ("crash", OutcomeStatus::Crash, crash),
+        ] {
+            outcomes.extend((0..count).map(|index| Outcome {
+                id: format!("{label}_{index}"),
+                status,
+                message: "message".to_string(),
+                fix_available: false,
+            }));
+        }
+        DoctorReport::new(outcomes)
+    }
+
     #[test]
     fn doctor_status_covers_panel_states() {
-        let report = DoctorReport {
-            ok: 11,
-            warn: 0,
-            error: 0,
-            crash: 0,
-        };
+        let report = make_report(11, 0, 0, 0);
         let run = DoctorRun {
-            report,
+            report: report.clone(),
             lines: Vec::new(),
             scope: DoctorScope::Full,
         };
@@ -410,14 +438,9 @@ mod tests {
             lines: Vec::new(),
             scope: DoctorScope::Quick,
         };
-        let warn_report = DoctorReport {
-            ok: 9,
-            warn: 2,
-            error: 0,
-            crash: 0,
-        };
+        let warn_report = make_report(9, 2, 0, 0);
         let warn_run = DoctorRun {
-            report: warn_report,
+            report: warn_report.clone(),
             lines: Vec::new(),
             scope: DoctorScope::Full,
         };
@@ -526,26 +549,48 @@ mod tests {
     }
 
     #[test]
-    fn doctor_lines_fix_mode_keeps_only_after_block() {
-        let text = "Doctor Check (Before)\n[WARN] a: x\nSummary: ok=0\n\nDoctor Check (After)\n[OK] a: x\nSummary: ok=1\n";
+    fn typed_check_output_preserves_outcomes() {
+        let expected = DoctorReport::new(vec![
+            outcome("a", OutcomeStatus::Warn, "x", true),
+            outcome("b", OutcomeStatus::Ok, "y\ndetail", false),
+        ]);
+        let json = serde_json::to_vec(&expected).unwrap();
+
+        let (actual, lines) = parse_doctor_output(&json, DoctorMode::Check).unwrap();
+
+        assert_eq!(actual, expected);
         assert_eq!(
-            doctor_lines(text, DoctorMode::Check).len(),
-            2,
-            "check keeps every bracket line"
-        );
-        assert_eq!(
-            doctor_lines(text, DoctorMode::Fix),
-            vec!["[OK] a: x".to_string()],
-            "fix keeps only the after block"
+            lines,
+            vec![
+                "[WARN] a: x (fix available)".to_string(),
+                "[OK] b: y".to_string(),
+            ]
         );
     }
 
     #[test]
-    fn doctor_lines_fix_mode_keeps_fix_failures() {
-        let text = "Doctor Check (Before)\n[WARN] a: x\nSummary: ok=0\n\nFixes attempted=1, applied=0, skipped=0, failures=1\n[ERR] a: rebuild failed\n\nDoctor Check (After)\n[WARN] a: x\nSummary: ok=0\n";
+    fn typed_fix_output_keeps_failures_and_after_report() {
+        let before = DoctorReport::new(vec![outcome("a", OutcomeStatus::Warn, "x", true)]);
+        let after = DoctorReport::new(vec![outcome("a", OutcomeStatus::Warn, "x", false)]);
+        let fix_report = DoctorFixReport {
+            before,
+            after: after.clone(),
+            attempted: 1,
+            applied: 0,
+            skipped: 0,
+            failures: vec!["a: rebuild failed\nnoise".to_string()],
+        };
+        let json = serde_json::to_vec(&fix_report).unwrap();
+
+        let (actual, lines) = parse_doctor_output(&json, DoctorMode::Fix).unwrap();
+
+        assert_eq!(actual, after);
         assert_eq!(
-            doctor_lines(text, DoctorMode::Fix),
-            vec!["[ERR] a: rebuild failed", "[WARN] a: x"],
+            lines,
+            vec![
+                "[ERR] a: rebuild failed".to_string(),
+                "[WARN] a: x".to_string(),
+            ],
             "fix failures must stay visible alongside the after block"
         );
     }
@@ -554,11 +599,11 @@ mod tests {
     fn background_doctor_uses_quick_scope() {
         assert_eq!(
             QUICK_DOCTOR_CHECK_ARGS,
-            ["check", "--quick"],
+            ["check", "--quick", "--json"],
             "the dashboard poller must not run full DevBuild checks in the background"
         );
-        assert_eq!(DoctorMode::Check.full_command_args(), ["check"]);
-        assert_eq!(DoctorMode::Fix.full_command_args(), ["fix"]);
+        assert_eq!(DoctorMode::Check.full_command_args(), ["check", "--json"]);
+        assert_eq!(DoctorMode::Fix.full_command_args(), ["fix", "--json"]);
     }
 
     #[test]
@@ -588,16 +633,20 @@ mod tests {
     }
 
     #[test]
-    fn parse_doctor_summary_reads_counts() {
-        let report = parse_doctor_summary(
-            "Doctor Check\n[OK] x: y\nSummary: ok=9, warn=2, error=1, crash=0",
-        )
-        .expect("summary present");
+    fn typed_report_counts_and_invalid_output_are_handled() {
+        let expected = make_report(9, 2, 1, 0);
+        let json = serde_json::to_vec(&expected).unwrap();
+        let (actual, _) = parse_doctor_output(&json, DoctorMode::Check).unwrap();
         assert_eq!(
-            (report.ok, report.warn, report.error, report.crash),
+            (
+                actual.count_ok(),
+                actual.count_warn(),
+                actual.count_error(),
+                actual.count_crash(),
+            ),
             (9, 2, 1, 0)
         );
-        assert_eq!(report.divergences(), 3);
-        assert!(parse_doctor_summary("no summary line here").is_none());
+        assert_eq!(actual.divergence_count(), 3);
+        assert!(parse_doctor_output(b"not json", DoctorMode::Check).is_err());
     }
 }

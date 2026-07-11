@@ -1,20 +1,7 @@
 use super::framework::DoctorCheckResult;
+use qol_conventions::doctor_wire::{FixReport as WireFixReport, Report as WireReport};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OutcomeStatus {
-    Ok,
-    Warn,
-    Error,
-    Crash,
-}
-
-#[derive(Clone, Debug)]
-pub struct Outcome {
-    pub id: &'static str,
-    pub status: OutcomeStatus,
-    pub message: String,
-    pub fix_available: bool,
-}
+pub use qol_conventions::doctor_wire::{Outcome, OutcomeStatus};
 
 #[derive(Clone, Debug, Default)]
 pub struct Report {
@@ -61,6 +48,10 @@ impl Report {
     pub fn has_crashes(&self) -> bool {
         self.count_crash() > 0
     }
+
+    pub(crate) fn to_wire(&self) -> WireReport {
+        WireReport::new(self.outcomes().cloned().collect())
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -71,6 +62,19 @@ pub struct FixReport {
     pub applied: usize,
     pub skipped: usize,
     pub failures: Vec<String>,
+}
+
+impl FixReport {
+    pub(crate) fn to_wire(&self) -> WireFixReport {
+        WireFixReport {
+            before: self.before.to_wire(),
+            after: self.after.to_wire(),
+            attempted: self.attempted,
+            applied: self.applied,
+            skipped: self.skipped,
+            failures: self.failures.clone(),
+        }
+    }
 }
 
 pub(super) fn report(results: Vec<DoctorCheckResult>) -> Report {

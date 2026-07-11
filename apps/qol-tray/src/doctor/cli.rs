@@ -2,13 +2,22 @@ use super::{
     check, check_quick, check_single, fix_single_with_policy, fix_with_policy, FixPolicy,
     FixReport, Outcome, OutcomeStatus, Report,
 };
-use anyhow::{anyhow, Result};
-use qol_conventions::doctor_cli::{ARG_CHECK, ARG_FIX, ARG_ID, ARG_QUICK};
+use anyhow::{anyhow, Context, Result};
+use qol_conventions::doctor_cli::{ARG_CHECK, ARG_FIX, ARG_ID, ARG_JSON, ARG_QUICK};
+use serde::Serialize;
+use std::io::Write;
 
 pub(super) fn run_cli_from_env() -> Result<i32> {
     match command()? {
-        DoctorCommand::Check { selection } => run_check(selection),
-        DoctorCommand::Fix { id, policy } => run_fix(id, policy),
+        DoctorCommand::Check {
+            selection,
+            output_format,
+        } => run_check(selection, output_format),
+        DoctorCommand::Fix {
+            id,
+            policy,
+            output_format,
+        } => run_fix(id, policy, output_format),
     }
 }
 
@@ -22,25 +31,47 @@ enum CheckSelection {
 enum DoctorCommand {
     Check {
         selection: CheckSelection,
+        output_format: OutputFormat,
     },
     Fix {
         id: Option<String>,
         policy: FixPolicy,
+        output_format: OutputFormat,
     },
 }
 
-fn command() -> Result<DoctorCommand> {
-    let mut args = std::env::args().skip(1);
-    let command = args.next().unwrap_or_else(|| ARG_CHECK.to_string());
-    let rest: Vec<String> = args.collect();
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OutputFormat {
+    PlainText,
+    Json,
+}
 
-    match command.as_str() {
+fn command() -> Result<DoctorCommand> {
+    parse_command(std::env::args().skip(1).collect())
+}
+
+fn parse_command(mut args: Vec<String>) -> Result<DoctorCommand> {
+    let output_format = if args.iter().any(|arg| arg == ARG_JSON) {
+        args.retain(|arg| arg != ARG_JSON);
+        OutputFormat::Json
+    } else {
+        OutputFormat::PlainText
+    };
+    let command = args.first().map(String::as_str).unwrap_or(ARG_CHECK);
+    let rest = args.get(1..).unwrap_or_default();
+
+    match command {
         ARG_CHECK => Ok(DoctorCommand::Check {
-            selection: parse_check_flags(&rest)?,
+            selection: parse_check_flags(rest)?,
+            output_format,
         }),
         ARG_FIX => {
-            let (id, policy) = parse_fix_flags(&rest)?;
-            Ok(DoctorCommand::Fix { id, policy })
+            let (id, policy) = parse_fix_flags(rest)?;
+            Ok(DoctorCommand::Fix {
+                id,
+                policy,
+                output_format,
+            })
         }
         _ => Err(anyhow!("Unknown command: {}", command)),
     }
@@ -101,23 +132,36 @@ fn usage_error(usage: &str, rest: &[String]) -> anyhow::Error {
     anyhow!("Usage: qol-tray-doctor {usage} (got: {})", rest.join(" "))
 }
 
-fn run_check(selection: CheckSelection) -> Result<i32> {
+fn run_check(selection: CheckSelection, output_format: OutputFormat) -> Result<i32> {
     let report = match selection {
         CheckSelection::All => check(),
         CheckSelection::Quick => check_quick(),
         CheckSelection::Id(id) => check_single(&id),
     };
-    print_report("Doctor Check", &report);
+    match output_format {
+        OutputFormat::PlainText => print_report("Doctor Check", &report),
+        OutputFormat::Json => print_json(&report.to_wire())?,
+    }
     Ok(exit_code_for_report(&report))
 }
 
-fn run_fix(id: Option<String>, policy: FixPolicy) -> Result<i32> {
+fn run_fix(id: Option<String>, policy: FixPolicy, output_format: OutputFormat) -> Result<i32> {
     let report = match id {
         Some(id) => fix_single_with_policy(&id, policy),
         None => fix_with_policy(policy),
     };
-    print_fix_report(&report);
+    match output_format {
+        OutputFormat::PlainText => print_fix_report(&report),
+        OutputFormat::Json => print_json(&report.to_wire())?,
+    }
     Ok(exit_code_for_report(&report.after))
+}
+
+fn print_json(value: &impl Serialize) -> Result<()> {
+    let stdout = std::io::stdout();
+    let mut stdout = stdout.lock();
+    serde_json::to_writer(&mut stdout, value).context("failed to serialize doctor report")?;
+    writeln!(stdout).context("failed to write doctor report")
 }
 
 fn print_fix_report(report: &FixReport) {
@@ -218,5 +262,23 @@ mod tests {
             error.to_string().contains("either --id or --quick"),
             "unexpected error: {error:#}"
         );
+    }
+
+    #[test]
+    fn json_flag_is_accepted_before_or_after_the_command() {
+        for values in [
+            ["--json", "check", "--quick"],
+            ["check", "--quick", "--json"],
+        ] {
+            let DoctorCommand::Check {
+                selection,
+                output_format,
+            } = parse_command(args(&values)).unwrap()
+            else {
+                panic!("expected check command");
+            };
+            assert_eq!(selection, CheckSelection::Quick);
+            assert_eq!(output_format, OutputFormat::Json);
+        }
     }
 }
