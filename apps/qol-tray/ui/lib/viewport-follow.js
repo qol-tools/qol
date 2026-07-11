@@ -1,42 +1,26 @@
+import { CAMERA_FOLLOW_PAD_PX, verticalComfortPx } from './world-geometry.js';
+
 export const KEYBOARD_FOLLOW_DURATION_MS = 180;
 export const EDGE_FOLLOW_DURATION_MS = 200;
 
-const CAMERA_FOLLOW_PAD = 40;
-const KEYBOARD_VERTICAL_COMFORT_RATIO = 0.24;
-const KEYBOARD_VERTICAL_COMFORT_MIN = 160;
-const KEYBOARD_VERTICAL_COMFORT_MAX = 260;
-
-export function keyboardFollowDelta(viewportRect, surfaceRect, pageRect) {
-    const page = pageRect || surfaceRect;
-    const centerDx = page.left + page.width / 2 - (viewportRect.left + viewportRect.width / 2);
-    const rawDy = surfaceRect.top + surfaceRect.height / 2 - (viewportRect.top + viewportRect.height / 2);
+export function surfaceCenterDelta(viewportRect, surfaceRect) {
+    const targetCenterX = surfaceRect.left + surfaceRect.width / 2;
+    const targetCenterY = surfaceRect.top + surfaceRect.height / 2;
+    const rawDy = targetCenterY - (viewportRect.top + viewportRect.height / 2);
     return {
-        dx: settleDelta(centerDx + overflowDx(viewportRect, surfaceRect, centerDx)),
-        dy: settleDelta(deadzoneDelta(rawDy, keyboardVerticalComfort(viewportRect))),
-        mode: 'keyboard-page-center',
+        dx: settleDelta(targetCenterX - (viewportRect.left + viewportRect.width / 2)),
+        dy: settleDelta(deadzoneDelta(rawDy, verticalComfortPx(viewportRect.height))),
+        mode: 'surface-center',
         duration: KEYBOARD_FOLLOW_DURATION_MS,
     };
 }
 
-function overflowDx(viewportRect, surfaceRect, centerDx) {
-    const left = surfaceRect.left - centerDx;
-    const right = left + surfaceRect.width;
-    const viewLeft = viewportRect.left + CAMERA_FOLLOW_PAD;
-    const viewRight = viewportRect.left + viewportRect.width - CAMERA_FOLLOW_PAD;
-    if (surfaceRect.width >= viewRight - viewLeft) {
-        return left + surfaceRect.width / 2 - (viewportRect.left + viewportRect.width / 2);
-    }
-    if (right > viewRight) return right - viewRight;
-    if (left < viewLeft) return left - viewLeft;
-    return 0;
-}
-
 export function edgeFollowDelta(viewportRect, surfaceRect) {
     let dx = 0, dy = 0;
-    if (surfaceRect.bottom > viewportRect.bottom - CAMERA_FOLLOW_PAD) dy = surfaceRect.bottom - (viewportRect.bottom - CAMERA_FOLLOW_PAD);
-    else if (surfaceRect.top < viewportRect.top + CAMERA_FOLLOW_PAD) dy = surfaceRect.top - (viewportRect.top + CAMERA_FOLLOW_PAD);
-    if (surfaceRect.right > viewportRect.right - CAMERA_FOLLOW_PAD) dx = surfaceRect.right - (viewportRect.right - CAMERA_FOLLOW_PAD);
-    else if (surfaceRect.left < viewportRect.left + CAMERA_FOLLOW_PAD) dx = surfaceRect.left - (viewportRect.left + CAMERA_FOLLOW_PAD);
+    if (surfaceRect.bottom > viewportRect.bottom - CAMERA_FOLLOW_PAD_PX) dy = surfaceRect.bottom - (viewportRect.bottom - CAMERA_FOLLOW_PAD_PX);
+    else if (surfaceRect.top < viewportRect.top + CAMERA_FOLLOW_PAD_PX) dy = surfaceRect.top - (viewportRect.top + CAMERA_FOLLOW_PAD_PX);
+    if (surfaceRect.right > viewportRect.right - CAMERA_FOLLOW_PAD_PX) dx = surfaceRect.right - (viewportRect.right - CAMERA_FOLLOW_PAD_PX);
+    else if (surfaceRect.left < viewportRect.left + CAMERA_FOLLOW_PAD_PX) dx = surfaceRect.left - (viewportRect.left + CAMERA_FOLLOW_PAD_PX);
     return {
         dx: settleDelta(dx),
         dy: settleDelta(dy),
@@ -47,13 +31,6 @@ export function edgeFollowDelta(viewportRect, surfaceRect) {
 
 export function normalizedZoom(zoom) {
     return zoom > 0 ? zoom : 1;
-}
-
-export function keyboardVerticalComfort(viewportRect) {
-    return Math.max(
-        KEYBOARD_VERTICAL_COMFORT_MIN,
-        Math.min(KEYBOARD_VERTICAL_COMFORT_MAX, viewportRect.height * KEYBOARD_VERTICAL_COMFORT_RATIO),
-    );
 }
 
 function settleDelta(value) {

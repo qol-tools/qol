@@ -20,7 +20,6 @@ import { getWorldSettings } from '../lib/world-settings.js';
 import { resolveViewKeyboard } from '../lib/view-keyboard-fallback.js';
 import { hasModalCapturingFocus } from '../lib/focus-retention.js';
 import { finishSurfaceFocusTarget } from '../lib/surface-focus-target.js';
-import { skipCameraFollowOnce } from '../lib/world-navigation.js';
 
 const log = createDebug('qol:nav');
 const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
@@ -200,7 +199,6 @@ function reconcileFocusForSlot(pageId, label) {
         if (focused instanceof HTMLElement && focused !== document.body) focused.blur();
         return false;
     }
-    skipCameraFollowOnce(surface);
     surface.focus({ preventScroll: true });
     if (surface instanceof HTMLInputElement || surface instanceof HTMLTextAreaElement) {
         const end = surface.value?.length ?? 0;

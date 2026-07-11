@@ -4,10 +4,11 @@ import { createWorldCanvasBg } from '../../fx/world-canvas-bg.js';
 import { createDebug, elLabel } from '../../lib/debug.js';
 import { isCtrlHeld } from '../../lib/modifier-state.js';
 import { findActiveSelectedSurface } from '../../lib/selected-surface.js';
-import { edgeFollowDelta, keyboardFollowDelta, normalizedZoom } from '../../lib/viewport-follow.js';
+import { KEYBOARD_FOLLOW_DURATION_MS, edgeFollowDelta, normalizedZoom, surfaceCenterDelta } from '../../lib/viewport-follow.js';
 import { nearestSurfaceToCenter } from '../../lib/viewport-spatial.js';
+import { cameraTargetForSurface, screenRectToWorld } from '../../lib/world-geometry.js';
 import { getWorldSettings } from '../../lib/world-settings.js';
-import { SKIP_CAMERA_FOLLOW_ONCE_ATTR, selectorFor } from '../../lib/world-navigation.js';
+import { selectorFor } from '../../lib/world-navigation.js';
 import { contains } from '../../lib/world-registry.js';
 import { PeripheralPreview } from './PeripheralPreview.js';
 import { AtmosphereLayer } from './AtmosphereLayer.js';
@@ -152,30 +153,49 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, rend
                 const selector = selectorFor(surface);
                 if (pageId && selector) navigation.setFocus(pageId, selector);
             }
-            if (surface.hasAttribute(SKIP_CAMERA_FOLLOW_ONCE_ATTR)) {
-                surface.removeAttribute(SKIP_CAMERA_FOLLOW_ONCE_ATTR);
-                return;
-            }
             followSurface(activeFollowTarget(surface));
         }
 
+        const VIEWPORT_ANIM_CLASSES = ['dive-out', 'ascend-out', 'fade-out', 'layer-in'];
+        let pendingFollow = 0;
+
         function followSurface(surface) {
+            cancelAnimationFrame(pendingFollow);
+            pendingFollow = 0;
             if (!(surface instanceof HTMLElement)) return;
             if (isCtrlHeld()) return;
+            if (VIEWPORT_ANIM_CLASSES.some((cls) => vp.classList.contains(cls))) {
+                pendingFollow = requestAnimationFrame(() => followSurface(surface));
+                return;
+            }
             const vr = vp.getBoundingClientRect();
             const fr = surface.getBoundingClientRect();
             const inputMode = document.querySelector('.app-container')?.dataset?.inputMode || 'keyboard';
-            const pageRect = surface.closest('[data-view-id]')?.getBoundingClientRect() || null;
+            if (inputMode === 'keyboard' && followPageFirst(vr, fr, surface)) return;
             const { dx, dy, mode, duration } = inputMode === 'keyboard'
-                ? keyboardFollowDelta(vr, fr, pageRect)
+                ? surfaceCenterDelta(vr, fr)
                 : edgeFollowDelta(vr, fr);
             if (dx || dy) {
                 const zoom = normalizedZoom(camera.zoom);
-                const targetX = camera.x + dx / zoom;
-                const targetY = camera.y + dy / zoom;
                 log('cam follow', mode, 'Δ', Math.round(dx), Math.round(dy), elLabel(surface));
-                camera.panSmooth(targetX, targetY, duration);
+                camera.panSmooth(camera.x + dx / zoom, camera.y + dy / zoom, duration);
             }
+        }
+
+        function followPageFirst(vr, fr, surface) {
+            const pageId = surface.closest('[data-view-id]')?.dataset?.viewId;
+            const entry = pageId ? registry?.getEntry?.(pageId) : null;
+            if (!entry || !(fr.width > 0) || !(fr.height > 0)) return false;
+            const zoom = normalizedZoom(camera.zoom);
+            const surfaceWorld = screenRectToWorld(fr, vr, camera);
+            const target = cameraTargetForSurface(entry, surfaceWorld, vr.width, vr.height, zoom);
+            const dx = (target.x - camera.x) * zoom;
+            const dy = (target.y - camera.y) * zoom;
+            if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+                log('cam follow page-first', 'Δ', Math.round(dx), Math.round(dy), elLabel(surface));
+                camera.panSmooth(target.x, target.y, KEYBOARD_FOLLOW_DURATION_MS);
+            }
+            return true;
         }
 
         vp.addEventListener('pointerdown', onPointerDown);
@@ -196,6 +216,7 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, rend
             document.removeEventListener('keyup', onKeyUp, true);
             document.removeEventListener('focusin', onFocusIn, true);
             cancelAnimationFrame(rafId);
+            cancelAnimationFrame(pendingFollow);
         };
     }, [camera, navigation, registry]);
 

@@ -1,51 +1,35 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    keyboardFollowDelta,
+    edgeFollowDelta,
+    surfaceCenterDelta,
 } from './viewport-follow.js';
 
 const viewportRect = { left: 0, top: 0, width: 1000, height: 1000, right: 1000, bottom: 1000 };
 
-test('keyboard follow centers the page, following the selection only when it leaves the viewport', () => {
+test('surfaceCenterDelta centers x and leaves y inside comfort band', () => {
     const cases = [
-        ['centered page stays put when selection moves within it',
-            { left: 100, top: 0, width: 800, height: 3000 },
-            { left: 700, top: 520, width: 100, height: 100 }, 0],
-        ['off-center page recenters on the page, not the selection',
-            { left: 300, top: 0, width: 800, height: 3000 },
-            { left: 350, top: 500, width: 100, height: 100 }, 200],
-        ['selection past the right edge of a wide page pulls into view',
-            { left: -1000, top: 0, width: 3000, height: 3000 },
-            { left: 1400, top: 500, width: 100, height: 100 }, 540],
-        ['selection past the left edge of a wide page pulls into view',
-            { left: -1000, top: 0, width: 3000, height: 3000 },
-            { left: -600, top: 500, width: 100, height: 100 }, -640],
-        ['oversized selection centers instead of clipping',
-            { left: -1000, top: 0, width: 3000, height: 3000 },
-            { left: 325, top: 500, width: 950, height: 100 }, 300],
+        ['off-center right', { left: 700, top: 520, width: 100, height: 100 }, 250, 0],
+        ['below comfort band', { left: 450, top: 900, width: 100, height: 100 }, 0, 210],
+        ['above comfort band', { left: 450, top: -100, width: 100, height: 100 }, 0, -310],
     ];
-    for (const [name, pageRect, surfaceRect, wantDx] of cases) {
-        const delta = keyboardFollowDelta(viewportRect, surfaceRect, pageRect);
-        assert.equal(delta.dx, wantDx, name);
+    for (const [name, surfaceRect, wantDx, wantDy] of cases) {
+        const delta = surfaceCenterDelta(viewportRect, surfaceRect);
+        assert.equal(delta.dx, wantDx, `${name}: dx`);
+        assert.equal(delta.dy, wantDy, `${name}: dy`);
     }
 });
 
-test('keyboard follow keeps y inside the comfort band', () => {
-    const pageRect = { left: 100, top: 0, width: 800, height: 3000 };
+test('edgeFollowDelta only reacts near viewport edges', () => {
     const cases = [
-        ['inside band', 520, 0],
-        ['below band', 900, 210],
-        ['above band', -100, -310],
+        ['inside pads', { left: 400, top: 400, right: 500, bottom: 500, width: 100, height: 100 }, 0, 0],
+        ['past right pad', { left: 900, top: 400, right: 1000, bottom: 500, width: 100, height: 100 }, 40, 0],
+        ['past bottom pad', { left: 400, top: 900, right: 500, bottom: 1000, width: 100, height: 100 }, 0, 40],
+        ['past left pad', { left: -20, top: 400, right: 80, bottom: 500, width: 100, height: 100 }, -60, 0],
     ];
-    for (const [name, top, wantDy] of cases) {
-        const delta = keyboardFollowDelta(viewportRect, { left: 450, top, width: 100, height: 100 }, pageRect);
-        assert.equal(delta.dy, wantDy, name);
+    for (const [name, surfaceRect, wantDx, wantDy] of cases) {
+        const delta = edgeFollowDelta(viewportRect, surfaceRect);
+        assert.equal(delta.dx, wantDx, `${name}: dx`);
+        assert.equal(delta.dy, wantDy, `${name}: dy`);
     }
-});
-
-test('keyboard follow without a page rect centers the selection', () => {
-    const surfaceRect = { left: 700, top: 520, width: 100, height: 100 };
-    const delta = keyboardFollowDelta(viewportRect, surfaceRect, null);
-    assert.equal(delta.dx, 250);
-    assert.equal(delta.dy, 0);
 });

@@ -8,6 +8,53 @@ export function cameraTargetFor(entry, viewportW, viewportH, zoom) {
     };
 }
 
+export const CAMERA_FOLLOW_PAD_PX = 40;
+const VERTICAL_COMFORT_RATIO = 0.24;
+const VERTICAL_COMFORT_MIN_PX = 160;
+const VERTICAL_COMFORT_MAX_PX = 260;
+
+export function verticalComfortPx(viewportH) {
+    return Math.max(
+        VERTICAL_COMFORT_MIN_PX,
+        Math.min(VERTICAL_COMFORT_MAX_PX, viewportH * VERTICAL_COMFORT_RATIO),
+    );
+}
+
+export function cameraTargetForSurface(entry, surface, viewportW, viewportH, zoom) {
+    const z = zoom || 1;
+    const base = cameraTargetFor(entry, viewportW, viewportH, z);
+    return {
+        x: base.x + surfaceOverflowX(base.x, surface, viewportW / z, CAMERA_FOLLOW_PAD_PX / z),
+        y: base.y + surfaceOverflowY(base.y, surface, entry, viewportH / z, verticalComfortPx(viewportH) / z),
+    };
+}
+
+function surfaceOverflowX(baseX, surface, viewW, pad) {
+    if (surface.width >= viewW - pad * 2) {
+        return surface.x + surface.width / 2 - (baseX + viewW / 2);
+    }
+    const right = surface.x + surface.width;
+    if (right > baseX + viewW - pad) return right - (baseX + viewW - pad);
+    if (surface.x < baseX + pad) return surface.x - (baseX + pad);
+    return 0;
+}
+
+function surfaceOverflowY(baseY, surface, entry, viewH, comfort) {
+    const down = surface.y + surface.height - (baseY + viewH - comfort);
+    if (down <= 0) return 0;
+    return Math.min(down, Math.max(surface.y - entry.y, 0));
+}
+
+export function screenRectToWorld(rect, viewportRect, camera) {
+    const z = camera.zoom > 0 ? camera.zoom : 1;
+    return {
+        x: camera.x + (rect.left - viewportRect.left) / z,
+        y: camera.y + (rect.top - viewportRect.top) / z,
+        width: rect.width / z,
+        height: rect.height / z,
+    };
+}
+
 export function withPadding(rect, padX, padY) {
     return {
         x: rect.x - padX,

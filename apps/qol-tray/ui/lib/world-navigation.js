@@ -3,15 +3,6 @@ import { getWorldSettings } from './world-settings.js';
 import { cameraTargetFor, paddedWorldBounds } from './world-geometry.js';
 
 const log = createDebug('qol:nav-state');
-export const SKIP_CAMERA_FOLLOW_ONCE_ATTR = 'data-skip-camera-follow-once';
-
-export function skipCameraFollowOnce(target) {
-    if (!target?.setAttribute) return;
-    target.setAttribute(SKIP_CAMERA_FOLLOW_ONCE_ATTR, '');
-    if (typeof requestAnimationFrame === 'function') {
-        requestAnimationFrame(() => target.removeAttribute?.(SKIP_CAMERA_FOLLOW_ONCE_ATTR));
-    }
-}
 
 export function createNavigation({ registry, camera, getSettings, domHelpers, groundConfinement }) {
     const STORAGE_KEY = 'qoltray.navigation';
@@ -157,7 +148,6 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
             if (typeof document === 'undefined') return;
             const target = focusTarget || resolveFocusTargetElement(pageId, useFocusMemory);
             if (target && typeof target.focus === 'function') {
-                skipCameraFollowOnce(target);
                 target.focus({ preventScroll: true });
             }
         };

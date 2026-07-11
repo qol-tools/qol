@@ -4,7 +4,10 @@ import {
     PAGE_TOP_PAD_PX,
     boundsOfEntries,
     cameraTargetFor,
+    cameraTargetForSurface,
     maxEntryExtent,
+    screenRectToWorld,
+    verticalComfortPx,
     viewportPadding,
     withPadding,
 } from './world-geometry.js';
@@ -186,6 +189,79 @@ test('cameraTargetFor: page top lands at the same screen-Y for any height (no ve
             `screenTop=${screenTop} should equal PAGE_TOP_PAD_PX=${PAGE_TOP_PAD_PX} (case ${i})`,
         );
     }
+});
+
+test('cameraTargetForSurface: page-first framing with selection corrections', () => {
+    const entry = { x: 0, y: 0, width: 800, height: 4000 };
+    const wideEntry = { x: 0, y: 0, width: 3000, height: 4000 };
+    const vpW = 1000;
+    const vpH = 1000;
+    const comfort = verticalComfortPx(vpH);
+    const cases = [
+        ['selection near page top keeps the plain page frame',
+            entry, { x: 100, y: 10, width: 100, height: 40 }, 1,
+            cameraTargetFor(entry, vpW, vpH, 1)],
+        ['deep selection scrolls so its bottom sits a comfort pad above the viewport bottom',
+            entry, { x: 100, y: 1500, width: 100, height: 60 }, 1,
+            { x: -100, y: -PAGE_TOP_PAD_PX + (1560 - (1000 - comfort - PAGE_TOP_PAD_PX)) }],
+        ['tall selection stops scrolling once its top reaches the page anchor line',
+            entry, { x: 100, y: 50, width: 100, height: 2000 }, 1,
+            { x: -100, y: 50 - PAGE_TOP_PAD_PX }],
+        ['selection past the right edge of a wide page pulls into view',
+            wideEntry, { x: 2900, y: 10, width: 80, height: 40 }, 1,
+            { x: 2980 - 1000 + 40, y: -PAGE_TOP_PAD_PX }],
+        ['selection past the left edge of a wide page pulls into view',
+            wideEntry, { x: 20, y: 10, width: 80, height: 40 }, 1,
+            { x: 20 - 40, y: -PAGE_TOP_PAD_PX }],
+        ['oversized selection centers instead of clipping',
+            wideEntry, { x: 500, y: 10, width: 960, height: 40 }, 1,
+            { x: 980 - 500, y: -PAGE_TOP_PAD_PX }],
+    ];
+    for (const [name, e, surface, zoom, want] of cases) {
+        const cam = cameraTargetForSurface(e, surface, vpW, vpH, zoom);
+        assert.ok(Math.abs(cam.x - want.x) < 1e-6, `${name}: x=${cam.x} want ${want.x}`);
+        assert.ok(Math.abs(cam.y - want.y) < 1e-6, `${name}: y=${cam.y} want ${want.y}`);
+    }
+});
+
+test('cameraTargetForSurface: framing invariants hold across zoom and depth (property)', () => {
+    const rng = seededRng(0x51a7e770);
+    for (let i = 0; i < 200; i++) {
+        const zoom = 0.25 + rng() * 3.75;
+        const vpW = 600 + Math.floor(rng() * 1400);
+        const vpH = 400 + Math.floor(rng() * 1200);
+        const entry = { x: Math.floor(rng() * 3000), y: Math.floor(rng() * 3000), width: 200 + Math.floor(rng() * 900), height: 5000 };
+        const surface = {
+            x: entry.x + rng() * (entry.width - 120),
+            y: entry.y + rng() * 4800,
+            width: 100,
+            height: 40 + rng() * 120,
+        };
+        const cam = cameraTargetForSurface(entry, surface, vpW, vpH, zoom);
+        const surfaceTop = (surface.y - cam.y) * zoom;
+        const surfaceBottom = (surface.y + surface.height - cam.y) * zoom;
+        assert.ok(surfaceTop >= PAGE_TOP_PAD_PX - 1e-6,
+            `selection top ${surfaceTop} never rises above the anchor line (case ${i})`);
+        if (surface.height * zoom <= vpH - verticalComfortPx(vpH) - PAGE_TOP_PAD_PX) {
+            assert.ok(surfaceBottom <= vpH - verticalComfortPx(vpH) + 1e-6,
+                `selection bottom ${surfaceBottom} stays above the comfort pad (case ${i})`);
+        }
+        if (entry.width * zoom <= vpW - 80) {
+            const pageCenter = (entry.x + entry.width / 2 - cam.x) * zoom;
+            assert.ok(Math.abs(pageCenter - vpW / 2) < 1e-6,
+                `page stays horizontally centered when it fits (case ${i})`);
+        }
+    }
+});
+
+test('screenRectToWorld: inverts the camera transform', () => {
+    const cam = { x: 250, y: -80, zoom: 2 };
+    const vpRect = { left: 40, top: 20 };
+    const world = screenRectToWorld({ left: 240, top: 220, width: 300, height: 100 }, vpRect, cam);
+    assert.equal(world.x, 250 + 100);
+    assert.equal(world.y, -80 + 100);
+    assert.equal(world.width, 150);
+    assert.equal(world.height, 50);
 });
 
 test('cameraTargetFor: x centers the entry horizontally regardless of width (property)', () => {
