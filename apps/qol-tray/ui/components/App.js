@@ -476,7 +476,7 @@ function AppShell() {
         return unsub;
     }, [camera]);
 
-    const [activeAnchorId, setActiveAnchorId] = useState(() => navigation.getCurrentAnchor()?.pageId || null);
+    const [activeAnchorId, setActiveAnchorId] = useState(() => activeViewId || navigation.getCurrentAnchor()?.pageId || null);
     const [diveDepth, setDiveDepth] = useState(() => navigation.stackDepth());
     useEffect(() => {
         return navigation.subscribeAnchor((anchor) => {
