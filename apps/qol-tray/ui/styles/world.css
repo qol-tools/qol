@@ -65,8 +65,7 @@ html.qol-bootstrapping-dive #app {
     isolation: isolate;
     border: var(--border-w-3) double var(--tui-line);
     border-radius: var(--radius-md);
-    background: var(--tui-panel-bg);
-    box-shadow: var(--tui-panel-shadow);
+    background: var(--tui-bg-screen);
 }
 
 .view-container.content-shell::after {

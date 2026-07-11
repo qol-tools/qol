@@ -352,8 +352,6 @@
     --tui-line: rgba(var(--accent-rgb), 0.5);
     --tui-line-soft: rgba(var(--accent-rgb), 0.18);
     --tui-scanline: repeating-linear-gradient(0deg, rgba(var(--accent-rgb), 0.03) 0 1px, transparent 1px 3px);
-    --tui-panel-bg: linear-gradient(180deg, rgba(var(--accent-rgb), 0.035), transparent 55%), var(--tui-bg-panel);
-    --tui-panel-shadow: inset 0 1px 0 rgba(var(--accent-rgb), 0.1), inset 0 0 34px rgba(var(--accent-rgb), 0.035);
     --tui-screen-bg: radial-gradient(120% 90% at 50% 25%, rgba(var(--accent-rgb), 0.07), transparent 70%), var(--tui-bg-screen);
     --tui-sign-bg: linear-gradient(180deg, rgba(var(--accent-rgb), 0.08), transparent), var(--tui-bg-panel);
     --tui-glow-text: 0 0 22px rgba(var(--accent-rgb), 0.45);

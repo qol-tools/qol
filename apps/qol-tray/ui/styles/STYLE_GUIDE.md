@@ -70,7 +70,7 @@ From outermost in, each layer has exactly one treatment. Do not mix treatments a
 | Layer | Role | Treatment |
 |-------|------|-----------|
 | Desktop | app backdrop behind every view | `--tui-desktop-bg` (accent-tinted radial over near-black), fixed attachment |
-| Window | the page panel (every view root) | `--border-w-3 double --tui-line` frame, `--tui-panel-bg`, `--tui-panel-shadow`, scanline `::after` |
+| Window | the page panel (every view root) | `--border-w-3 double --tui-line` frame, `--tui-bg-screen`, scanline `::after` |
 | Sign | the page title | framed plaque straddling the top border line, mono uppercase, `--tui-glow-text`; scales with zoom; a fixed title-clearance band keeps it off content |
 | Screen | a CRT surface inside the window (card cover, live panels) | `--tui-screen-bg`, scanline `::after`, glowing accent monogram/content |
 | Cartridge | a card (plugin / store) | single `--tui-line-soft` hairline, `--tui-bg-card`, crisp shadow, accent select ring; holds a Screen |
@@ -112,5 +112,5 @@ Defined in `theme-tokens.css` (this lists the families, not the values):
 
 - Lines: `--tui-line`, `--tui-line-soft`
 - Textures: `--tui-scanline`, `--tui-glow-text`
-- Surfaces: `--tui-panel-bg`, `--tui-screen-bg`, `--tui-sign-bg`, `--tui-desktop-bg`
+- Surfaces: `--tui-screen-bg`, `--tui-sign-bg`, `--tui-desktop-bg`
 - Near-black ramp: `--tui-bg-screen` (deepest), `--tui-bg-card`, `--tui-bg-panel`, `--tui-bg-desktop`. The `--tui-*-bg` composites and card backgrounds reference these - never hardcode a near-black literal.
