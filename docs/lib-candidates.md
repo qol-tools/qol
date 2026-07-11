@@ -6,9 +6,9 @@ Reference list for Rust code that is worth lifting into `libs/qol-*` when reuse 
 
 Target: `libs/qol-apps`
 
-Status: started.
+Status: shared.
 
-Shared app metadata, Linux desktop entry parsing/formatting, launcher inventory, and app export helpers are used by launcher discovery, tray launcher export, installer desktop files, media app selection, and app removal inventory.
+Shared app metadata, Linux desktop entry parsing/formatting, macOS bundle and Spotlight inventory, and launcher root scanning serve launcher discovery, tray launcher export, installer desktop files, media app selection, and app removal inventory. Consumer-specific ranking, response shaping, protection, and removal policy stay with each app or plugin.
 
 ## Hotkey grammar and input mapping
 

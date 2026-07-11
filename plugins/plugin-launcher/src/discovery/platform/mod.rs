@@ -18,18 +18,7 @@ compile_error!("platform implementation is required for this target OS");
 use std::path::PathBuf;
 
 use super::AppEntry;
-
-#[derive(Debug, Clone)]
-pub struct AppRoot {
-    pub path: PathBuf,
-    pub max_depth: usize,
-}
-
-impl AppRoot {
-    pub fn watch_recursive(&self) -> bool {
-        self.max_depth <= 1
-    }
-}
+pub use qol_apps::AppRoot;
 
 pub fn cache_dir() -> Option<PathBuf> {
     imp::cache_dir()

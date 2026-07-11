@@ -10,13 +10,7 @@ use anyhow::Result;
 pub use classify::MatchKind;
 pub use guards::{CaskIndex, CaskStatus, CaskToken, Guards};
 pub use platform::{AppPlatform, Platform};
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct InstalledApp {
-    pub name: String,
-    pub bundle_id: Option<String>,
-    pub path: PathBuf,
-}
+pub use qol_apps::InstalledApp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum LeftoverKind {

@@ -10,20 +10,10 @@ pub fn cache_dir() -> Option<PathBuf> {
 
 pub fn app_roots() -> Vec<AppRoot> {
     qol_apps::desktop::linux_app_roots()
-        .into_iter()
-        .map(|root| AppRoot {
-            path: root.path,
-            max_depth: root.max_depth,
-        })
-        .collect()
 }
 
 pub fn scan_root(root: &AppRoot) -> Vec<AppEntry> {
-    let root = qol_apps::AppRoot {
-        path: root.path.clone(),
-        max_depth: root.max_depth,
-    };
-    qol_apps::desktop::scan_desktop_root(&root)
+    qol_apps::desktop::scan_desktop_root(root)
 }
 
 pub fn file_watch_roots() -> Vec<PathBuf> {

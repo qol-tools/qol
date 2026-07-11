@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -100,81 +99,6 @@ fn classify_entry(
     }
 }
 
-fn read_installed_app(path: PathBuf) -> InstalledApp {
-    let (bundle_id, bundle_name) = read_bundle_info(&path);
-    let name = bundle_name.unwrap_or_else(|| {
-        path.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Unknown")
-            .to_string()
-    });
-    InstalledApp {
-        name,
-        bundle_id,
-        path,
-    }
-}
-
-fn is_app_bundle(path: &Path) -> bool {
-    if path.extension().and_then(|e| e.to_str()) != Some("app") {
-        return false;
-    }
-    for ancestor in path.ancestors().skip(1) {
-        if ancestor.extension().and_then(|e| e.to_str()) == Some("app")
-            || ancestor.file_name().is_some_and(|n| n == "Contents")
-        {
-            return false;
-        }
-    }
-    path.join("Contents/Info.plist").is_file()
-}
-
-fn location_rank(path: &Path, app_dirs: &[PathBuf]) -> usize {
-    app_dirs
-        .iter()
-        .position(|dir| path.parent() == Some(dir.as_path()))
-        .unwrap_or(app_dirs.len())
-}
-
-fn dedup_inventory(candidates: Vec<PathBuf>, app_dirs: &[PathBuf]) -> Vec<InstalledApp> {
-    let mut best: HashMap<PathBuf, (usize, InstalledApp)> = HashMap::new();
-    for path in candidates {
-        if !is_app_bundle(&path) {
-            continue;
-        }
-        let identity = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        let rank = location_rank(&path, app_dirs);
-        let app = read_installed_app(path);
-        if best.get(&identity).is_none_or(|(seen, _)| rank < *seen) {
-            best.insert(identity, (rank, app));
-        }
-    }
-    let mut apps: Vec<InstalledApp> = best.into_values().map(|(_, app)| app).collect();
-    apps.sort_by(|left, right| {
-        left.name
-            .to_lowercase()
-            .cmp(&right.name.to_lowercase())
-            .then_with(|| left.path.cmp(&right.path))
-    });
-    apps
-}
-
-fn read_bundle_info(app_path: &Path) -> (Option<String>, Option<String>) {
-    let info = app_path.join("Contents/Info.plist");
-    let Ok(value) = plist::Value::from_file(&info) else {
-        return (None, None);
-    };
-    let Some(dict) = value.as_dictionary() else {
-        return (None, None);
-    };
-    let get = |k: &str| {
-        dict.get(k)
-            .and_then(|v| v.as_string())
-            .map(|s| s.to_string())
-    };
-    (get("CFBundleIdentifier"), get("CFBundleName"))
-}
-
 fn path_size(path: &Path) -> u64 {
     let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
@@ -274,24 +198,6 @@ fn run_brew(brew: &Path, args: &[&str]) -> Result<std::process::Output> {
     })
 }
 
-fn mdfind_app_paths() -> Vec<PathBuf> {
-    let Ok(out) = Command::new("/usr/bin/mdfind")
-        .arg("kMDItemContentType == 'com.apple.application-bundle'")
-        .output()
-    else {
-        return Vec::new();
-    };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(PathBuf::from)
-        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("app"))
-        .filter(|p| {
-            let s = p.to_string_lossy();
-            !s.starts_with("/System/") && !s.contains(".app/")
-        })
-        .collect()
-}
-
 fn running_bundle_ids() -> Vec<String> {
     use objc2_app_kit::NSWorkspace;
     objc2::rc::autoreleasepool(|_| {
@@ -318,16 +224,14 @@ fn terminate_bundle_id(bid: &str) -> bool {
 
 impl AppPlatform for Platform {
     fn installed_apps(&self) -> Result<Vec<InstalledApp>> {
-        let mut candidates: Vec<PathBuf> = Vec::new();
-        for dir in &self.app_dirs {
-            if let Ok(entries) = fs::read_dir(dir) {
-                candidates.extend(entries.flatten().map(|e| e.path()));
-            }
-        }
-        if self.spotlight {
-            candidates.extend(mdfind_app_paths());
-        }
-        Ok(dedup_inventory(candidates, &self.app_dirs))
+        let spotlight = if self.spotlight {
+            qol_apps::Spotlight::All
+        } else {
+            qol_apps::Spotlight::Disabled
+        };
+        let mut apps = qol_apps::macos_installed_apps(&self.app_dirs, spotlight);
+        apps.retain(|app| !app.path.starts_with("/System"));
+        Ok(apps)
     }
 
     fn scan(&self, app: &InstalledApp, inventory: &[InstalledApp]) -> Result<RemovalPlan> {
@@ -605,7 +509,7 @@ mod tests {
             (root.join("folder"), false, "not an app"),
         ];
         for (path, expected, label) in cases {
-            assert_eq!(is_app_bundle(&path), expected, "{label}");
+            assert_eq!(qol_apps::is_macos_app_bundle(&path), expected, "{label}");
         }
     }
 
@@ -626,7 +530,7 @@ mod tests {
         );
         fs::create_dir_all(primary.join("ghost.app")).unwrap();
 
-        let inv = dedup_inventory(
+        let inv = qol_apps::macos_inventory_from_paths(
             vec![
                 dupe.clone(),
                 dupe.clone(),

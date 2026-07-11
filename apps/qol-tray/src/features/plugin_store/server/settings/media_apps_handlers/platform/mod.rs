@@ -3,9 +3,7 @@ mod fallback;
 #[cfg(target_os = "macos")]
 mod macos;
 
-use serde_json::Value;
-
-pub(super) fn discover_installed_apps() -> Vec<Value> {
+pub(super) fn discover_installed_apps() -> Vec<qol_apps::InstalledApp> {
     #[cfg(target_os = "macos")]
     return macos::discover_installed_apps();
 

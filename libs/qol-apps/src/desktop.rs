@@ -20,6 +20,12 @@ pub struct AppRoot {
     pub max_depth: usize,
 }
 
+impl AppRoot {
+    pub fn watch_recursive(&self) -> bool {
+        self.max_depth <= 1
+    }
+}
+
 pub enum DesktopExecArg<'a> {
     Literal(&'a str),
     Url,

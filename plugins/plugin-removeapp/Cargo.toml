@@ -18,12 +18,12 @@ anyhow = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json.workspace = true
 qol-plugin-daemon.workspace = true
+qol-apps.workspace = true
 gpui.workspace = true
 qol-gpui.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 dirs = "5"
-plist = "1"
 libc = "0.2"
 trash = "5"
 objc2 = { workspace = true }
