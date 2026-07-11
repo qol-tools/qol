@@ -1,102 +1,6 @@
-use super::super::super::binding::{Binding, Combo, Mod};
+use super::super::super::binding::{Binding, Combo};
+use qol_hotkeys::evdev;
 use std::collections::BTreeSet;
-
-/// Linux evdev keycode constants used by the matcher and its tests so this
-/// module does not depend on the `evdev` crate. Values match
-/// `linux/input-event-codes.h`.
-///
-/// Module visibility is `pub(super)` so the parent (`linux/`) can re-use the
-/// table from `evdev_backend.rs`.
-pub(super) mod keycodes {
-    pub(crate) const KEY_LEFTCTRL: u16 = 29;
-    pub(crate) const KEY_LEFTSHIFT: u16 = 42;
-    pub(crate) const KEY_RIGHTSHIFT: u16 = 54;
-    pub(crate) const KEY_LEFTALT: u16 = 56;
-    #[cfg(test)]
-    pub(super) const KEY_SPACE: u16 = 57;
-    pub(crate) const KEY_RIGHTCTRL: u16 = 97;
-    pub(crate) const KEY_RIGHTALT: u16 = 100;
-    pub(crate) const KEY_LEFTMETA: u16 = 125;
-    pub(crate) const KEY_RIGHTMETA: u16 = 126;
-
-    pub(crate) fn is_modifier(code: u16) -> bool {
-        matches!(
-            code,
-            KEY_LEFTSHIFT
-                | KEY_RIGHTSHIFT
-                | KEY_LEFTCTRL
-                | KEY_RIGHTCTRL
-                | KEY_LEFTALT
-                | KEY_RIGHTALT
-                | KEY_LEFTMETA
-                | KEY_RIGHTMETA
-        )
-    }
-}
-
-/// Both left and right evdev keycodes that count as this modifier.
-pub(super) fn evdev_codes_for(m: Mod) -> [u16; 2] {
-    match m {
-        Mod::Shift => [keycodes::KEY_LEFTSHIFT, keycodes::KEY_RIGHTSHIFT],
-        Mod::Ctrl => [keycodes::KEY_LEFTCTRL, keycodes::KEY_RIGHTCTRL],
-        Mod::Alt => [keycodes::KEY_LEFTALT, keycodes::KEY_RIGHTALT],
-        Mod::Super => [keycodes::KEY_LEFTMETA, keycodes::KEY_RIGHTMETA],
-    }
-}
-
-/// Tracks the press state of every modifier key, separately for left/right
-/// physical keys, so that a release on one side does not falsely mark the
-/// modifier as up while the other side is still held.
-#[derive(Debug, Default, Clone)]
-pub(super) struct ModifierState {
-    shift_l: bool,
-    shift_r: bool,
-    ctrl_l: bool,
-    ctrl_r: bool,
-    alt_l: bool,
-    alt_r: bool,
-    super_l: bool,
-    super_r: bool,
-}
-
-impl ModifierState {
-    /// Apply one modifier-key event. Non-modifier codes are ignored.
-    /// `value`: 0 = release, 1 = press, 2 = repeat (no state change for repeats).
-    pub(super) fn handle(&mut self, code: u16, value: i32) {
-        if value == 2 {
-            return;
-        }
-        let pressed = value == 1;
-        match code {
-            keycodes::KEY_LEFTSHIFT => self.shift_l = pressed,
-            keycodes::KEY_RIGHTSHIFT => self.shift_r = pressed,
-            keycodes::KEY_LEFTCTRL => self.ctrl_l = pressed,
-            keycodes::KEY_RIGHTCTRL => self.ctrl_r = pressed,
-            keycodes::KEY_LEFTALT => self.alt_l = pressed,
-            keycodes::KEY_RIGHTALT => self.alt_r = pressed,
-            keycodes::KEY_LEFTMETA => self.super_l = pressed,
-            keycodes::KEY_RIGHTMETA => self.super_r = pressed,
-            _ => {}
-        }
-    }
-
-    pub(super) fn current_mods(&self) -> BTreeSet<Mod> {
-        let mut set = BTreeSet::new();
-        if self.shift_l || self.shift_r {
-            set.insert(Mod::Shift);
-        }
-        if self.ctrl_l || self.ctrl_r {
-            set.insert(Mod::Ctrl);
-        }
-        if self.alt_l || self.alt_r {
-            set.insert(Mod::Alt);
-        }
-        if self.super_l || self.super_r {
-            set.insert(Mod::Super);
-        }
-        set
-    }
-}
 
 /// Outcome of feeding one key event to the matcher.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,7 +15,7 @@ pub(super) enum CaptureDecision {
 #[derive(Debug, Default)]
 pub(super) struct BindingMatcher {
     bindings: Vec<(Combo, Binding)>,
-    state: ModifierState,
+    state: evdev::ModifierState,
 }
 
 impl BindingMatcher {
@@ -122,20 +26,19 @@ impl BindingMatcher {
             .collect();
         Self {
             bindings,
-            state: ModifierState::default(),
+            state: evdev::ModifierState::default(),
         }
     }
 
     /// Process one key event. `value`: 0 = release, 1 = press, 2 = repeat.
     pub(super) fn observe(&mut self, code: u16, value: i32) -> CaptureDecision {
-        if keycodes::is_modifier(code) {
-            self.state.handle(code, value);
+        if self.state.handle(code, value) {
             return CaptureDecision::Forward;
         }
         if value != 1 {
             return CaptureDecision::Forward;
         }
-        let current = self.state.current_mods();
+        let current = self.state.pressed_modifiers();
         for (combo, binding) in &self.bindings {
             if combo.key == code && combo.mods == current {
                 return CaptureDecision::Fire(binding.clone());
@@ -150,8 +53,8 @@ impl BindingMatcher {
         let mut codes = BTreeSet::new();
         for (combo, _) in &self.bindings {
             codes.insert(combo.key);
-            for m in &combo.mods {
-                for code in evdev_codes_for(*m) {
+            for modifier in &combo.mods {
+                for code in evdev::modifier_keycodes(*modifier) {
                     codes.insert(code);
                 }
             }
@@ -161,71 +64,11 @@ impl BindingMatcher {
 }
 
 #[cfg(test)]
-mod modstate_tests {
-    use super::*;
-
-    #[test]
-    fn empty_when_nothing_pressed() {
-        assert!(ModifierState::default().current_mods().is_empty());
-    }
-
-    #[test]
-    fn single_press_then_release() {
-        let mut s = ModifierState::default();
-        s.handle(keycodes::KEY_LEFTSHIFT, 1);
-        assert_eq!(s.current_mods(), BTreeSet::from([Mod::Shift]));
-        s.handle(keycodes::KEY_LEFTSHIFT, 0);
-        assert!(s.current_mods().is_empty());
-    }
-
-    #[test]
-    fn left_release_keeps_modifier_active_when_right_still_held() {
-        let mut s = ModifierState::default();
-        s.handle(keycodes::KEY_LEFTSHIFT, 1);
-        s.handle(keycodes::KEY_RIGHTSHIFT, 1);
-        s.handle(keycodes::KEY_LEFTSHIFT, 0);
-        assert_eq!(s.current_mods(), BTreeSet::from([Mod::Shift]));
-        s.handle(keycodes::KEY_RIGHTSHIFT, 0);
-        assert!(s.current_mods().is_empty());
-    }
-
-    #[test]
-    fn repeat_does_not_change_state() {
-        let mut s = ModifierState::default();
-        s.handle(keycodes::KEY_LEFTSHIFT, 1);
-        let before = s.current_mods();
-        s.handle(keycodes::KEY_LEFTSHIFT, 2);
-        assert_eq!(s.current_mods(), before);
-        // A spurious release-with-value-2 must not turn it off.
-        s.handle(keycodes::KEY_LEFTSHIFT, 2);
-        assert_eq!(s.current_mods(), before);
-    }
-
-    #[test]
-    fn multi_modifier_combination_reports_all() {
-        let mut s = ModifierState::default();
-        s.handle(keycodes::KEY_LEFTSHIFT, 1);
-        s.handle(keycodes::KEY_LEFTCTRL, 1);
-        s.handle(keycodes::KEY_RIGHTMETA, 1);
-        assert_eq!(
-            s.current_mods(),
-            BTreeSet::from([Mod::Shift, Mod::Ctrl, Mod::Super])
-        );
-    }
-
-    #[test]
-    fn non_modifier_code_is_ignored() {
-        let mut s = ModifierState::default();
-        s.handle(keycodes::KEY_SPACE, 1);
-        s.handle(30 /* KEY_A */, 1);
-        assert!(s.current_mods().is_empty());
-    }
-}
-
-#[cfg(test)]
 mod matcher_tests {
     use super::*;
     use crate::hotkeys::capture::parse_combo;
+    use qol_hotkeys::evdev as keycodes;
+    use qol_hotkeys::grammar::Modifier;
 
     fn binding(key_str: &str, plugin: &str, action: &str) -> Binding {
         Binding {
@@ -243,7 +86,10 @@ mod matcher_tests {
             matcher.observe(keycodes::KEY_LEFTMETA, 1),
             CaptureDecision::Forward
         );
-        assert_eq!(matcher.state.current_mods(), BTreeSet::from([Mod::Super]));
+        assert_eq!(
+            matcher.state.pressed_modifiers(),
+            BTreeSet::from([Modifier::Super])
+        );
     }
 
     #[test]

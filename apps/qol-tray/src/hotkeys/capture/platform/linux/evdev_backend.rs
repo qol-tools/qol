@@ -1,9 +1,10 @@
 use super::super::super::Binding;
 use super::super::super::{OnFire, RebuildBindings};
-use super::matcher::{keycodes, BindingMatcher, CaptureDecision};
+use super::matcher::{BindingMatcher, CaptureDecision};
 use anyhow::{Context, Result};
 use crossbeam_channel::Receiver;
 use evdev::{uinput::VirtualDevice, AttributeSet, Device, EventSummary, InputEvent, KeyCode};
+use qol_hotkeys::evdev as keycodes;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once};
 
@@ -204,16 +205,7 @@ fn matcher_keycodes_as_attribute_set(matcher: &BindingMatcher) -> AttributeSet<K
     let mut set = AttributeSet::<KeyCode>::new();
     // Always include common modifiers so the virtual device can re-emit them
     // even if the configured bindings don't reference every modifier.
-    for code in [
-        keycodes::KEY_LEFTSHIFT,
-        keycodes::KEY_RIGHTSHIFT,
-        keycodes::KEY_LEFTCTRL,
-        keycodes::KEY_RIGHTCTRL,
-        keycodes::KEY_LEFTALT,
-        keycodes::KEY_RIGHTALT,
-        keycodes::KEY_LEFTMETA,
-        keycodes::KEY_RIGHTMETA,
-    ] {
+    for code in keycodes::MODIFIER_KEYCODES {
         set.insert(KeyCode(code));
     }
     for code in matcher.referenced_keycodes() {

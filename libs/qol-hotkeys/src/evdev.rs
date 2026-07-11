@@ -1,13 +1,21 @@
-use crate::grammar::{Key, NamedKey};
+use std::collections::BTreeSet;
+
+use crate::grammar::{Key, Modifier, NamedKey};
 
 pub const KEY_ESC: u16 = 1;
 pub const KEY_BACKSPACE: u16 = 14;
 pub const KEY_TAB: u16 = 15;
 pub const KEY_ENTER: u16 = 28;
+pub const KEY_LEFTCTRL: u16 = 29;
+pub const KEY_LEFTSHIFT: u16 = 42;
+pub const KEY_RIGHTSHIFT: u16 = 54;
+pub const KEY_LEFTALT: u16 = 56;
 pub const KEY_SPACE: u16 = 57;
 pub const KEY_F1: u16 = 59;
 pub const KEY_F12: u16 = 88;
+pub const KEY_RIGHTCTRL: u16 = 97;
 pub const KEY_PRINTSCREEN: u16 = 99;
+pub const KEY_RIGHTALT: u16 = 100;
 pub const KEY_HOME: u16 = 102;
 pub const KEY_UP: u16 = 103;
 pub const KEY_PAGEUP: u16 = 104;
@@ -19,6 +27,84 @@ pub const KEY_PAGEDOWN: u16 = 109;
 pub const KEY_INSERT: u16 = 110;
 pub const KEY_DELETE: u16 = 111;
 pub const KEY_PAUSE: u16 = 119;
+pub const KEY_LEFTMETA: u16 = 125;
+pub const KEY_RIGHTMETA: u16 = 126;
+
+pub const MODIFIER_KEYCODES: [u16; 8] = [
+    KEY_LEFTSHIFT,
+    KEY_RIGHTSHIFT,
+    KEY_LEFTCTRL,
+    KEY_RIGHTCTRL,
+    KEY_LEFTALT,
+    KEY_RIGHTALT,
+    KEY_LEFTMETA,
+    KEY_RIGHTMETA,
+];
+
+pub fn modifier_keycodes(modifier: Modifier) -> [u16; 2] {
+    match modifier {
+        Modifier::Shift => [KEY_LEFTSHIFT, KEY_RIGHTSHIFT],
+        Modifier::Ctrl => [KEY_LEFTCTRL, KEY_RIGHTCTRL],
+        Modifier::Alt => [KEY_LEFTALT, KEY_RIGHTALT],
+        Modifier::Super => [KEY_LEFTMETA, KEY_RIGHTMETA],
+    }
+}
+
+pub fn modifier_for_keycode(keycode: u16) -> Option<Modifier> {
+    Some(match keycode {
+        KEY_LEFTSHIFT | KEY_RIGHTSHIFT => Modifier::Shift,
+        KEY_LEFTCTRL | KEY_RIGHTCTRL => Modifier::Ctrl,
+        KEY_LEFTALT | KEY_RIGHTALT => Modifier::Alt,
+        KEY_LEFTMETA | KEY_RIGHTMETA => Modifier::Super,
+        _ => return None,
+    })
+}
+
+pub fn is_modifier_keycode(keycode: u16) -> bool {
+    modifier_for_keycode(keycode).is_some()
+}
+
+/// Tracks every physical modifier key independently so releasing one side does
+/// not clear a modifier while its other side is still held.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ModifierState {
+    pressed_keycodes: BTreeSet<u16>,
+}
+
+impl ModifierState {
+    /// Applies an evdev key value and returns whether `keycode` is a modifier.
+    /// Values follow evdev semantics: 0 is release, 1 is press, and 2 is repeat.
+    pub fn handle(&mut self, keycode: u16, value: i32) -> bool {
+        if !is_modifier_keycode(keycode) {
+            return false;
+        }
+        if value == 2 {
+            return true;
+        }
+        if value == 1 {
+            self.pressed_keycodes.insert(keycode);
+        } else {
+            self.pressed_keycodes.remove(&keycode);
+        }
+        true
+    }
+
+    pub fn pressed_modifiers(&self) -> BTreeSet<Modifier> {
+        [
+            Modifier::Ctrl,
+            Modifier::Alt,
+            Modifier::Shift,
+            Modifier::Super,
+        ]
+        .into_iter()
+        .filter(|modifier| {
+            modifier_keycodes(*modifier)
+                .iter()
+                .any(|keycode| self.pressed_keycodes.contains(keycode))
+        })
+        .collect()
+    }
+}
 
 pub fn key_to_keycode(key: Key) -> Option<u16> {
     Some(match key {
@@ -103,5 +189,47 @@ mod tests {
         assert_eq!(key_to_keycode(Key::Letter(26)), None);
         assert_eq!(key_to_keycode(Key::Digit(10)), None);
         assert_eq!(key_to_keycode(Key::Function(13)), None);
+    }
+
+    #[test]
+    fn modifier_keycodes_round_trip_and_are_unique() {
+        let mut seen = BTreeSet::new();
+        for modifier in [
+            Modifier::Ctrl,
+            Modifier::Alt,
+            Modifier::Shift,
+            Modifier::Super,
+        ] {
+            for keycode in modifier_keycodes(modifier) {
+                assert_eq!(modifier_for_keycode(keycode), Some(modifier));
+                assert!(seen.insert(keycode), "duplicate keycode {keycode}");
+            }
+        }
+        assert_eq!(seen, BTreeSet::from(MODIFIER_KEYCODES));
+    }
+
+    #[test]
+    fn modifier_state_tracks_left_and_right_keys_independently() {
+        let mut state = ModifierState::default();
+        state.handle(KEY_LEFTSHIFT, 1);
+        state.handle(KEY_RIGHTSHIFT, 1);
+        state.handle(KEY_LEFTSHIFT, 0);
+        assert_eq!(state.pressed_modifiers(), BTreeSet::from([Modifier::Shift]));
+        state.handle(KEY_RIGHTSHIFT, 0);
+        assert!(state.pressed_modifiers().is_empty());
+    }
+
+    #[test]
+    fn modifier_state_handles_combinations_repeats_and_non_modifiers() {
+        let mut state = ModifierState::default();
+        assert!(state.handle(KEY_LEFTSHIFT, 1));
+        assert!(state.handle(KEY_LEFTCTRL, 1));
+        assert!(state.handle(KEY_RIGHTMETA, 1));
+        assert!(state.handle(KEY_LEFTSHIFT, 2));
+        assert!(!state.handle(KEY_SPACE, 1));
+        assert_eq!(
+            state.pressed_modifiers(),
+            BTreeSet::from([Modifier::Shift, Modifier::Ctrl, Modifier::Super])
+        );
     }
 }

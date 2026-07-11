@@ -3,17 +3,9 @@ use qol_hotkeys::evdev;
 use qol_hotkeys::grammar::{self, Modifier};
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum Mod {
-    Shift,
-    Ctrl,
-    Alt,
-    Super,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Combo {
-    pub(crate) mods: BTreeSet<Mod>,
+    pub(crate) mods: BTreeSet<Modifier>,
     pub(crate) key: u16,
 }
 
@@ -31,18 +23,9 @@ pub(crate) struct Binding {
 pub(crate) fn parse_combo(input: &str) -> Option<Combo> {
     let parsed = grammar::parse(input)?;
     Some(Combo {
-        mods: parsed.mods.iter().map(|m| modifier_to_mod(*m)).collect(),
+        mods: parsed.mods,
         key: evdev::key_to_keycode(parsed.key)?,
     })
-}
-
-fn modifier_to_mod(modifier: Modifier) -> Mod {
-    match modifier {
-        Modifier::Shift => Mod::Shift,
-        Modifier::Ctrl => Mod::Ctrl,
-        Modifier::Alt => Mod::Alt,
-        Modifier::Super => Mod::Super,
-    }
 }
 
 #[cfg(test)]
@@ -53,14 +36,17 @@ mod tests {
     #[test]
     fn parses_super_space() {
         let combo = parse_combo("Super+Space").unwrap();
-        assert_eq!(combo.mods, BTreeSet::from([Mod::Super]));
+        assert_eq!(combo.mods, BTreeSet::from([Modifier::Super]));
         assert_eq!(combo.key, keycodes::KEY_SPACE);
     }
 
     #[test]
     fn parses_shift_super_r() {
         let combo = parse_combo("Shift+Super+R").unwrap();
-        assert_eq!(combo.mods, BTreeSet::from([Mod::Shift, Mod::Super]));
+        assert_eq!(
+            combo.mods,
+            BTreeSet::from([Modifier::Shift, Modifier::Super])
+        );
         assert_eq!(combo.key, 19);
     }
 
@@ -69,7 +55,7 @@ mod tests {
         let combo = parse_combo("Ctrl+Alt+Shift+F12").unwrap();
         assert_eq!(
             combo.mods,
-            BTreeSet::from([Mod::Ctrl, Mod::Alt, Mod::Shift])
+            BTreeSet::from([Modifier::Ctrl, Modifier::Alt, Modifier::Shift])
         );
         assert_eq!(combo.key, keycodes::KEY_F12);
     }
@@ -77,7 +63,7 @@ mod tests {
     #[test]
     fn parses_alt_tab() {
         let combo = parse_combo("Alt+Tab").unwrap();
-        assert_eq!(combo.mods, BTreeSet::from([Mod::Alt]));
+        assert_eq!(combo.mods, BTreeSet::from([Modifier::Alt]));
         assert_eq!(combo.key, keycodes::KEY_TAB);
     }
 
