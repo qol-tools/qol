@@ -5422,7 +5422,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
- "plist",
+ "qol-apps",
  "qol-gpui",
  "qol-plugin-api",
  "qol-plugin-daemon",
@@ -5761,7 +5761,10 @@ dependencies = [
 name = "qol-apps"
 version = "1.0.0"
 dependencies = [
+ "plist",
+ "serde",
  "shell-words",
+ "tempfile",
 ]
 
 [[package]]
