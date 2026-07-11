@@ -5346,13 +5346,13 @@ version = "0.12.3"
 dependencies = [
  "anyhow",
  "gpui",
- "libc",
  "proptest",
  "qol-config",
  "qol-conventions",
  "qol-gpui",
  "qol-plugin-api",
  "qol-plugin-daemon",
+ "qol-process",
  "qol-runtime",
  "serde",
  "serde_json",
@@ -5737,6 +5737,7 @@ dependencies = [
  "qol-conventions",
  "qol-dev-build",
  "qol-fs",
+ "qol-process",
  "qol-workspace",
  "ratatui",
  "serde",
@@ -5906,6 +5907,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-process"
+version = "1.0.0"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "qol-runtime"
 version = "0.1.0"
 dependencies = [
@@ -5939,6 +5948,7 @@ dependencies = [
  "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
+ "qol-process",
  "qol-runtime",
  "serde",
  "serde_json",
@@ -5990,6 +6000,7 @@ dependencies = [
  "qol-hotkeys",
  "qol-migrations",
  "qol-plugin-api",
+ "qol-process",
  "qol-runtime",
  "qol-theme",
  "qol-workspace",
@@ -6013,7 +6024,6 @@ dependencies = [
  "tracing-subscriber",
  "tray-icon",
  "walkdir",
- "windows-sys 0.59.0",
  "x11rb",
 ]
 
