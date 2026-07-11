@@ -8,6 +8,7 @@ import { createNavigation, selectorFor, animateTransition } from '../lib/world-n
 import { setAscend, setDiveFromSurface, setDiveViaSelector } from '../lib/world-navigation-singleton.js';
 import { getWorldSettings, subscribeWorldSettings } from '../lib/world-settings.js';
 import { applyThemeAccent } from '../lib/theme-accent-sync.js';
+import { installCrtBandSync } from '../lib/crt-band-sync.js';
 
 const log = createDebug('qol:app');
 import { PluginConfigProvider } from '../views/plugin-config/context.js';
@@ -519,6 +520,8 @@ function AppShell() {
         navigation.setCurrentAnchor({ pageId: activeViewId });
         navigation.gotoAnchor({ pageId: activeViewId }, { respectKnob: false, instant: true });
     }, []);
+
+    useEffect(() => installCrtBandSync(), []);
 
     useWorldNav({ camera, registry, viewportRef });
 
