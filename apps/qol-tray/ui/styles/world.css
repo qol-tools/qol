@@ -75,8 +75,20 @@ html.qol-bootstrapping-dive #app {
     inset: 0;
     border-radius: inherit;
     pointer-events: none;
-    background: var(--tui-scanline);
+    background:
+        linear-gradient(180deg, transparent, rgba(var(--accent-rgb), 0.05) 30%, rgba(var(--accent-rgb), 0.11) 50%, rgba(var(--accent-rgb), 0.05) 70%, transparent) 0 calc(0% - 320px) / 100% 320px no-repeat,
+        var(--tui-scanline);
     z-index: var(--z-base);
+    animation: crt-band-roll 5s linear infinite;
+}
+
+@keyframes crt-band-roll {
+    0% {
+        background-position: 0 calc(0% - 320px), 0 0;
+    }
+    100% {
+        background-position: 0 calc(100% + 320px), 0 30px;
+    }
 }
 
 .view-container.content-shell > * {
