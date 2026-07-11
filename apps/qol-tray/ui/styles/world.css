@@ -84,17 +84,17 @@ html.qol-bootstrapping-dive #app {
     inset: 0;
     border-radius: inherit;
     pointer-events: none;
-    background: linear-gradient(180deg, transparent, rgba(var(--accent-rgb), 0.05) 30%, rgba(var(--accent-rgb), 0.11) 50%, rgba(var(--accent-rgb), 0.05) 70%, transparent) 0 calc(0% - 320px) / 100% 320px no-repeat;
+    background: linear-gradient(180deg, transparent, rgba(var(--accent-rgb), 0.02) 30%, rgba(var(--accent-rgb), 0.055) 50%, rgba(var(--accent-rgb), 0.02) 70%, transparent) 0 calc(0% - 96px) / 100% 96px no-repeat;
     z-index: var(--z-2);
     animation: crt-band-roll 20s linear infinite;
 }
 
 @keyframes crt-band-roll {
     0% {
-        background-position: 0 calc(0% - 320px);
+        background-position: 0 calc(0% - 96px);
     }
     40%, 100% {
-        background-position: 0 calc(100% + 320px);
+        background-position: 0 calc(100% + 96px);
     }
 }
 
