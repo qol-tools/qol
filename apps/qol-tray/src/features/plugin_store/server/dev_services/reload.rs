@@ -85,7 +85,13 @@ fn run_reload(task: ReloadTask) {
         runtime: task.runtime.clone(),
     };
     run_build(&task);
-    reload_plugins(task.plugin_manager, task.config, task.events);
+    let plugin_filter = task.plugin_filter.clone();
+    reload_plugins(
+        task.plugin_manager,
+        task.config,
+        task.events,
+        plugin_filter.as_deref(),
+    );
     log_plugin_staleness();
 }
 
@@ -130,6 +136,7 @@ fn reload_plugins(
     plugin_manager: std::sync::Arc<std::sync::Mutex<crate::plugins::PluginManager>>,
     config: std::sync::Arc<crate::daemon::ConfigBus>,
     events: std::sync::Arc<crate::daemon::EventBus>,
+    plugin_filter: Option<&str>,
 ) {
     let mut manager = match plugin_manager.lock() {
         Ok(manager) => manager,
@@ -139,13 +146,24 @@ fn reload_plugins(
         }
     };
 
-    if let Err(error) = manager.reload_plugins() {
-        log::error!("Failed to reload plugins: {}", error);
+    let reload_result = match plugin_filter {
+        Some(plugin_id) => manager.reload_plugin(plugin_id),
+        None => manager.reload_plugins(),
+    };
+    if let Err(error) = reload_result {
+        if let Some(plugin_id) = plugin_filter {
+            log::error!("Failed to reload plugin {}: {}", plugin_id, error);
+        } else {
+            log::error!("Failed to reload plugins: {}", error);
+        }
         return;
     }
     drop(manager);
 
-    log::info!("Plugins reloaded successfully");
+    match plugin_filter {
+        Some(plugin_id) => log::info!("Plugin {} reloaded successfully", plugin_id),
+        None => log::info!("Plugins reloaded successfully"),
+    }
     config.config_changed(ConfigKind::Plugins);
     events.send_plugins_changed();
 }

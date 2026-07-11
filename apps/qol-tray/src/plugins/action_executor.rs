@@ -14,6 +14,7 @@ mod tracking;
 mod tests;
 
 pub use tracking::kill_all_plugin_processes;
+pub(crate) use tracking::kill_plugin_processes;
 
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(3);
 const DAEMON_READY_INTERVAL: Duration = Duration::from_millis(25);

@@ -25,6 +25,11 @@ struct LoadedPlugins {
     report: ResolutionReport,
 }
 
+pub(super) struct LoadedPlugin {
+    pub(super) plugin: Option<Plugin>,
+    pub(super) report: ResolutionReport,
+}
+
 fn load_all_plugins() -> Result<LoadedPlugins> {
     let report = resolution_report()?;
     let plugins = PluginLoader::load_resolved(&report.plugins)?;
@@ -32,6 +37,17 @@ fn load_all_plugins() -> Result<LoadedPlugins> {
         super::super::daemon_tracker::clean_stale_sockets(&plugins);
     }
     Ok(LoadedPlugins { plugins, report })
+}
+
+pub(super) fn load_plugin(plugin_id: &str) -> Result<LoadedPlugin> {
+    let report = resolution_report()?;
+    let plugin = report
+        .plugins
+        .iter()
+        .find(|plugin| plugin.id.as_str() == plugin_id)
+        .map(PluginLoader::load_resolved_plugin)
+        .transpose()?;
+    Ok(LoadedPlugin { plugin, report })
 }
 
 fn resolution_report() -> Result<ResolutionReport> {
@@ -135,15 +151,21 @@ fn finalize_load(manager: &mut PluginManager, loaded: LoadedPlugins) {
 }
 
 fn register_plugins(manager: &mut PluginManager, plugins: Vec<Plugin>) {
+    for plugin in plugins {
+        manager.plugins.insert(plugin.id.clone(), plugin);
+    }
+    rebuild_identity_index(manager);
+}
+
+pub(super) fn rebuild_identity_index(manager: &mut PluginManager) {
     use crate::plugins::PluginIdentityIndex;
     let mut index = PluginIdentityIndex::default();
-    for plugin in plugins {
+    for plugin in manager.plugins.values() {
         index.insert(
             plugin.uid(),
             plugin.id.clone(),
             plugin.manifest.plugin.name.clone(),
         );
-        manager.plugins.insert(plugin.id.clone(), plugin);
     }
     manager.identity_index = index;
 }

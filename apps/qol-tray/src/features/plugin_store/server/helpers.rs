@@ -91,15 +91,15 @@ pub(super) fn read_plugin_version(plugin_dir: &std::path::Path) -> Result<String
     Ok(manifest.plugin.version)
 }
 
-pub(super) fn reload_manager_and_notify(state: &AppState) {
-    reload_manager_and_notify_inner(state, true);
+pub(super) fn reload_plugin_and_notify(state: &AppState, plugin_id: &str) {
+    reload_manager_and_notify_inner(state, true, Some(plugin_id));
 }
 
 pub(super) fn reload_manager_and_notify_without_profile_sync(state: &AppState) {
-    reload_manager_and_notify_inner(state, false);
+    reload_manager_and_notify_inner(state, false, None);
 }
 
-fn reload_manager_and_notify_inner(state: &AppState, sync_profile: bool) {
+fn reload_manager_and_notify_inner(state: &AppState, sync_profile: bool, plugin_id: Option<&str>) {
     let mut manager = match state.plugin_manager.lock() {
         Ok(m) => m,
         Err(e) => {
@@ -107,10 +107,18 @@ fn reload_manager_and_notify_inner(state: &AppState, sync_profile: bool) {
             return;
         }
     };
-    let reload_ok = match manager.reload_plugins() {
+    let reload_result = match plugin_id {
+        Some(plugin_id) => manager.reload_plugin(plugin_id),
+        None => manager.reload_plugins(),
+    };
+    let reload_ok = match reload_result {
         Ok(()) => true,
         Err(e) => {
-            log::error!("Failed to reload plugins: {}", e);
+            if let Some(plugin_id) = plugin_id {
+                log::error!("Failed to reload plugin {}: {}", plugin_id, e);
+            } else {
+                log::error!("Failed to reload plugins: {}", e);
+            }
             false
         }
     };

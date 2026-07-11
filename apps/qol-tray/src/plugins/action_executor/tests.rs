@@ -1,7 +1,7 @@
 use super::resolution::resolve_action;
 use super::tracking::{
-    action_processes_snapshot, clear_tracking, running_actions_snapshot, track_action_process,
-    untrack_action_process,
+    action_processes_snapshot, clear_tracking, kill_plugin_processes, running_actions_snapshot,
+    track_action_process, untrack_action_process,
 };
 use super::*;
 use crate::plugins::manifest::{
@@ -418,5 +418,24 @@ fn kill_all_plugin_processes_clears_tracking_map() {
         assert!(tracked.is_empty());
         let tracked_running = running_actions_snapshot();
         assert!(tracked_running.is_empty());
+    });
+}
+
+#[test]
+fn kill_plugin_processes_preserves_other_plugins_tracking() {
+    with_process_tracking_lock(|| {
+        track_action_process("plugin-a", "open", 999_001);
+        track_action_process("plugin-a", "close", 999_002);
+        track_action_process("plugin-b", "open", 999_003);
+
+        kill_plugin_processes("plugin-a");
+
+        let tracked = action_processes_snapshot();
+        assert!(!tracked.contains_key("plugin-a"));
+        assert_eq!(tracked.get("plugin-b"), Some(&vec![999_003]));
+        let tracked_running = running_actions_snapshot();
+        assert!(!tracked_running.contains_key("plugin-a::open"));
+        assert!(!tracked_running.contains_key("plugin-a::close"));
+        assert_eq!(tracked_running.get("plugin-b::open"), Some(&999_003));
     });
 }

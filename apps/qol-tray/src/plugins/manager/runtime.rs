@@ -1,5 +1,8 @@
-use super::{loading, PluginManager};
-use crate::plugins::{action_executor::kill_all_plugin_processes, Plugin};
+use super::{autostart, loading, PluginManager};
+use crate::plugins::{
+    action_executor::{kill_all_plugin_processes, kill_plugin_processes},
+    Plugin,
+};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 
@@ -46,6 +49,42 @@ pub(super) fn reload_plugins(manager: &mut PluginManager) -> Result<()> {
     stop_all_plugins(manager);
     loading::load_plugins(manager)?;
     manager.autostart_daemons();
+    Ok(())
+}
+
+pub(super) fn reload_plugin(manager: &mut PluginManager, plugin_id: &str) -> Result<()> {
+    log::info!("Reloading plugin: {plugin_id}");
+    qol_runtime::probe!(
+        "PLUGIN_RELOAD",
+        "plugin={plugin_id} stage=start scope=single"
+    );
+
+    let loaded = loading::load_plugin(plugin_id)?;
+    let old_pid = manager.plugins.get(plugin_id).and_then(Plugin::daemon_pid);
+    kill_plugin_processes(plugin_id);
+    drop(manager.plugins.remove(plugin_id));
+
+    let mut new_pid = None;
+    let loaded_plugin = loaded.plugin.is_some();
+    if let Some(plugin) = loaded.plugin {
+        if !crate::dev_generation::is_shadow() && !crate::dev_generation::is_rolling_restart() {
+            super::super::daemon_tracker::clean_stale_sockets(std::slice::from_ref(&plugin));
+        }
+        let id = plugin.id.clone();
+        manager.plugins.insert(id.clone(), plugin);
+        if let Some(plugin) = manager.plugins.get_mut(&id) {
+            autostart::start_plugin_daemons(std::iter::once(&mut *plugin));
+            new_pid = plugin.daemon_pid();
+        }
+    }
+
+    loading::rebuild_identity_index(manager);
+    manager.set_resolution_report(loaded.report);
+    sync_ignore_pids(manager);
+    qol_runtime::probe!(
+        "PLUGIN_RELOAD",
+        "plugin={plugin_id} stage=done scope=single loaded={loaded_plugin} old_pid={old_pid:?} new_pid={new_pid:?}"
+    );
     Ok(())
 }
 
@@ -152,7 +191,7 @@ fn plugin_mut<'a>(manager: &'a mut PluginManager, plugin_id: &str) -> Result<&'a
 mod tests {
     use super::*;
     use crate::plugins::manifest::PluginManifest;
-    use crate::plugins::PluginId;
+    use crate::plugins::{PluginId, PluginLoader};
     use std::time::{Duration, Instant};
 
     const PLUGIN_ID: &str = "plugin-foo";
@@ -191,6 +230,48 @@ command = "daemon.sh"
         );
         manager.ensure_plugin_daemon_running(PLUGIN_ID).unwrap();
         manager
+    }
+
+    fn write_daemon_plugin(
+        plugins_dir: &std::path::Path,
+        plugin_id: &str,
+        version: &str,
+    ) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let plugin_dir = plugins_dir.join(plugin_id);
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let script = plugin_dir.join("daemon");
+        std::fs::write(&script, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            format!(
+                r#"
+[plugin]
+id = "{plugin_id}"
+name = "{plugin_id}"
+description = ""
+version = "{version}"
+
+[menu]
+label = "{plugin_id}"
+items = []
+
+[daemon]
+enabled = true
+command = "daemon"
+"#,
+            ),
+        )
+        .unwrap();
+        plugin_dir
+    }
+
+    fn insert_loaded_plugin(manager: &mut PluginManager, plugin_id: &str, path: &std::path::Path) {
+        let plugin = PluginLoader::load_plugin_with_id(plugin_id, path).unwrap();
+        manager.plugins.insert(PluginId::new(plugin_id), plugin);
+        manager.ensure_plugin_daemon_running(plugin_id).unwrap();
     }
 
     #[test]
@@ -232,5 +313,57 @@ command = "daemon.sh"
             .unwrap()
             .stop_daemon()
             .unwrap();
+    }
+
+    #[test]
+    fn reload_plugin_restarts_only_the_target_daemon() {
+        const TARGET_ID: &str = "plugin-selective-reload-target";
+        const OTHER_ID: &str = "plugin-selective-reload-other";
+
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let target_dir = write_daemon_plugin(&plugins_dir, TARGET_ID, "1.0.0");
+        let other_dir = write_daemon_plugin(&plugins_dir, OTHER_ID, "1.0.0");
+        let config_dir = crate::paths::shared_config_dir().unwrap();
+        crate::plugins::registry::record_release_install(
+            &config_dir,
+            TARGET_ID,
+            target_dir.clone(),
+        )
+        .unwrap();
+        crate::plugins::registry::record_release_install(&config_dir, OTHER_ID, other_dir.clone())
+            .unwrap();
+
+        let mut manager = PluginManager::new();
+        insert_loaded_plugin(&mut manager, TARGET_ID, &target_dir);
+        insert_loaded_plugin(&mut manager, OTHER_ID, &other_dir);
+        let target_pid_before = manager.get(TARGET_ID).unwrap().daemon_pid().unwrap();
+        let other_pid_before = manager.get(OTHER_ID).unwrap().daemon_pid().unwrap();
+
+        write_daemon_plugin(&plugins_dir, TARGET_ID, "2.0.0");
+        manager.reload_plugin(TARGET_ID).unwrap();
+
+        let target = manager.get(TARGET_ID).expect("target remains loaded");
+        let target_pid_after = target.daemon_pid().expect("target daemon restarted");
+        assert_eq!(target.manifest.plugin.version, "2.0.0");
+        assert_ne!(target_pid_after, target_pid_before);
+        assert!(
+            !crate::process_utils::is_pid_alive(target_pid_before as i32),
+            "the replaced target daemon must be stopped"
+        );
+        assert_eq!(
+            manager.get(OTHER_ID).unwrap().daemon_pid(),
+            Some(other_pid_before),
+            "an unrelated plugin daemon must keep the exact same process"
+        );
+        assert!(
+            crate::process_utils::is_pid_alive(other_pid_before as i32),
+            "the unrelated daemon must remain alive"
+        );
+
+        for plugin in manager.plugins.values_mut() {
+            plugin.stop_daemon().unwrap();
+        }
     }
 }

@@ -2,7 +2,7 @@ use axum::http::StatusCode;
 
 use crate::features::plugin_store::installer::PluginInstaller;
 
-use super::super::super::helpers::{read_plugin_version, reload_manager_and_notify};
+use super::super::super::helpers::{read_plugin_version, reload_plugin_and_notify};
 use super::super::super::types::{AppState, PluginInfo};
 use super::source_for;
 
@@ -21,7 +21,7 @@ pub(super) async fn install_plugin(
             format!("Installation failed: {:#}", error),
         )
     })?;
-    reload_manager_and_notify(state);
+    reload_plugin_and_notify(state, id);
     log::info!("Plugin {} installed successfully", id);
     Ok(installed_plugin_info(state, id))
 }

@@ -33,6 +33,13 @@ pub fn kill_all_plugin_processes() {
     crate::process_utils::reap_children_nonblocking();
 }
 
+pub(crate) fn kill_plugin_processes(plugin_id: &str) {
+    crate::process_utils::reap_children_nonblocking();
+    kill_tracked_processes_for_plugin(plugin_id);
+    clear_running_actions_for_plugin(plugin_id);
+    crate::process_utils::reap_children_nonblocking();
+}
+
 pub(super) fn reserve_runtime_spawn(plugin_id: &str, action_id: &str) -> bool {
     let key = action_key(plugin_id, action_id);
     let Ok(mut running) = running_actions().lock() else {
@@ -122,6 +129,14 @@ fn clear_running_actions() {
     running.clear();
 }
 
+fn clear_running_actions_for_plugin(plugin_id: &str) {
+    let Ok(mut running) = running_actions().lock() else {
+        return;
+    };
+    let prefix = format!("{plugin_id}::");
+    running.retain(|key, _| !key.starts_with(&prefix));
+}
+
 fn kill_tracked_processes() {
     let Ok(mut processes) = action_processes().lock() else {
         log::error!("Failed to lock action processes");
@@ -132,6 +147,19 @@ fn kill_tracked_processes() {
         for pid in pids {
             kill_process(pid, &plugin_id);
         }
+    }
+}
+
+fn kill_tracked_processes_for_plugin(plugin_id: &str) {
+    let Ok(mut processes) = action_processes().lock() else {
+        log::error!("Failed to lock action processes");
+        return;
+    };
+    let Some(pids) = processes.remove(plugin_id) else {
+        return;
+    };
+    for pid in pids {
+        kill_process(pid, plugin_id);
     }
 }
 

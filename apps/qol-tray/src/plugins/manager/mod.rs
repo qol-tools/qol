@@ -46,6 +46,12 @@ impl PluginManager {
         Ok(())
     }
 
+    pub fn reload_plugin(&mut self, plugin_id: &str) -> Result<()> {
+        runtime::reload_plugin(self, plugin_id)?;
+        self.last_state_hash = Some(runtime::hash_active_plugin_state());
+        Ok(())
+    }
+
     pub fn reload_plugins_if_changed(&mut self) -> Result<bool> {
         let current = runtime::hash_active_plugin_state();
         if self.last_state_hash.as_ref() == Some(&current) {

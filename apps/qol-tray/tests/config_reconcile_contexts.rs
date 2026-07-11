@@ -344,7 +344,7 @@ mod write_point_dispatch_contracts {
     }
 
     #[test]
-    fn plugin_install_uninstall_update_all_go_through_reload_manager_and_notify() {
+    fn plugin_install_uninstall_update_all_reload_only_the_changed_plugin() {
         let cases = [
             "features/plugin_store/server/plugin_services/operations/install.rs",
             "features/plugin_store/server/plugin_services/operations/uninstall.rs",
@@ -353,17 +353,19 @@ mod write_point_dispatch_contracts {
         for relative in cases {
             let src = read_src(relative);
             assert!(
-                src.contains("reload_manager_and_notify(state)"),
-                "{relative} must call reload_manager_and_notify(state) so menu, hotkeys, \
-                 launcher entries and SSE subscribers all reconcile after the operation"
+                src.contains("reload_plugin_and_notify(state, id)"),
+                "{relative} must call reload_plugin_and_notify(state, id) so the changed \
+                 plugin reloads without restarting unrelated daemons, while menu, hotkeys, \
+                 launcher entries and SSE subscribers still reconcile"
             );
         }
     }
 
     #[test]
-    fn reload_manager_and_notify_emits_one_plugins_signal_keeps_plugins_changed_and_runs_reload() {
+    fn reload_helpers_emit_one_plugins_signal_keep_plugins_changed_and_run_scoped_reload() {
         let src = read_src("features/plugin_store/server/helpers.rs");
         let helper_signals = [
+            "manager.reload_plugin(plugin_id)",
             "manager.reload_plugins()",
             "config_changed(ConfigKind::Plugins)",
             "state.daemon.events.send_plugins_changed()",
@@ -371,8 +373,8 @@ mod write_point_dispatch_contracts {
         for signal in helper_signals {
             assert!(
                 src.contains(signal),
-                "reload_manager_and_notify must invoke `{signal}` so plugin set + UI both \
-                 reconcile after the operation"
+                "reload helpers must invoke `{signal}` so plugin state + UI both reconcile \
+                 without widening single-plugin operations into a global restart"
             );
         }
         assert!(

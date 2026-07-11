@@ -34,7 +34,7 @@ impl PluginLoader {
     pub fn load_resolved(resolved: &[super::resolver::ResolvedPlugin]) -> Result<Vec<Plugin>> {
         Ok(resolved
             .iter()
-            .filter_map(|r| match manifest_loader::load_resolved_plugin(r) {
+            .filter_map(|r| match Self::load_resolved_plugin(r) {
                 Ok(plugin) => Some(plugin),
                 Err(e) => {
                     log::warn!("Skipping plugin {}: {}", r.id, e);
@@ -42,6 +42,12 @@ impl PluginLoader {
                 }
             })
             .collect())
+    }
+
+    pub(crate) fn load_resolved_plugin(
+        resolved: &super::resolver::ResolvedPlugin,
+    ) -> Result<Plugin> {
+        manifest_loader::load_resolved_plugin(resolved)
     }
 
     #[cfg(test)]

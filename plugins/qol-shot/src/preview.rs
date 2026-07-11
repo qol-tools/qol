@@ -84,6 +84,18 @@ type DismissSub = (Subscription, Subscription, Option<Task<()>>);
 
 pub type PreviewWindows = Rc<RefCell<ActiveWindows<PreviewView>>>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GhostOpenMode {
+    Hidden,
+    Interactive,
+}
+
+impl GhostOpenMode {
+    fn requests_focus(self) -> bool {
+        matches!(self, Self::Interactive)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum DismissMode {
     Quit,
@@ -122,9 +134,14 @@ pub fn pre_create(windows: &PreviewWindows, tracker: &MonitorTracker, cx: &mut A
         let placement = centered_window_placement(Some(&monitor), default_size, cx);
         let target = placement.target;
         let title = ghost_window_title(PREVIEW_TITLE, target);
-        let Some(handle) =
-            open_ghost_window(cx, GhostContent::empty(), 0, &title, &placement, false)
-        else {
+        let Some(handle) = open_ghost_window(
+            cx,
+            GhostContent::empty(),
+            0,
+            &title,
+            &placement,
+            GhostOpenMode::Hidden,
+        ) else {
             continue;
         };
         windows.borrow_mut().insert(target, handle);
@@ -320,7 +337,14 @@ fn create_and_show(
     let _reason = reason_scope("create");
     let title = ghost_window_title(PREVIEW_TITLE, target);
     let opened_at = Instant::now();
-    let Some(handle) = open_ghost_window(cx, content, seq, &title, placement, true) else {
+    let Some(handle) = open_ghost_window(
+        cx,
+        content,
+        seq,
+        &title,
+        placement,
+        GhostOpenMode::Interactive,
+    ) else {
         eprintln!("[qol-shot] preview window open failed");
         return;
     };
@@ -348,29 +372,31 @@ fn open_ghost_window(
     seq: u64,
     title: &str,
     placement: &WindowPlacement,
-    focus: bool,
+    mode: GhostOpenMode,
 ) -> Option<WindowHandle<PreviewView>> {
-    let options = ghost_window_options(placement, focus);
+    let options = ghost_window_options(placement, mode);
     let title = title.to_string();
     let origin = placement.bounds.origin;
     cx.open_window(options, move |window, cx| {
         window.set_window_title(&title);
         let view = cx.new(|cx| PreviewView::new_ghost(content, seq, title.clone(), origin, cx));
-        window.focus(&view.focus_handle(cx));
-        window.activate_window();
+        if mode.requests_focus() {
+            window.focus(&view.focus_handle(cx));
+            window.activate_window();
+        }
         view
     })
     .ok()
 }
 
-fn ghost_window_options(placement: &WindowPlacement, focus: bool) -> WindowOptions {
+fn ghost_window_options(placement: &WindowPlacement, mode: GhostOpenMode) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(placement.bounds)),
         display_id: placement.display_id,
         titlebar: None,
         window_decorations: Some(ghost_window_decorations(false)),
         kind: ghost_window_kind(),
-        focus,
+        focus: mode.requests_focus(),
         is_movable: true,
         window_background: WindowBackgroundAppearance::Transparent,
         app_id: Some(PREVIEW_APP_ID.to_string()),
@@ -837,7 +863,15 @@ fn circles_total_width(count: usize) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{circles_total_width, thumbnail_size, window_dims, MAX_THUMB_H, MAX_THUMB_W};
+    use super::{
+        circles_total_width, thumbnail_size, window_dims, GhostOpenMode, MAX_THUMB_H, MAX_THUMB_W,
+    };
+
+    #[test]
+    fn ghost_open_mode_keeps_hidden_windows_inert() {
+        assert!(!GhostOpenMode::Hidden.requests_focus());
+        assert!(GhostOpenMode::Interactive.requests_focus());
+    }
 
     #[test]
     fn thumbnail_preserves_aspect_within_box() {

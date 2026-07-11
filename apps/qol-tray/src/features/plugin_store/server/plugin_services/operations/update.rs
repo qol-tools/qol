@@ -1,6 +1,6 @@
 use crate::features::plugin_store::installer::PluginInstaller;
 
-use super::super::super::helpers::{read_plugin_version, reload_manager_and_notify};
+use super::super::super::helpers::{read_plugin_version, reload_plugin_and_notify};
 use super::super::super::types::{AppState, UninstallResult};
 use super::{failed_uninstall_result, source_for, success_uninstall_result};
 
@@ -16,7 +16,7 @@ pub(super) async fn update_plugin(state: &AppState, id: &str) -> UninstallResult
         return failed_uninstall_result(format!("Update failed: {:#}", error));
     }
     update_cached_version(state, id);
-    reload_manager_and_notify(state);
+    reload_plugin_and_notify(state, id);
     log::info!("Plugin {} updated successfully", id);
     success_uninstall_result("Updated successfully")
 }

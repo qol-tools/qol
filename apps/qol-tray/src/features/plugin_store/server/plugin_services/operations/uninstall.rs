@@ -1,6 +1,6 @@
 use crate::features::plugin_store::installer::PluginInstaller;
 
-use super::super::super::helpers::reload_manager_and_notify;
+use super::super::super::helpers::reload_plugin_and_notify;
 use super::super::super::types::{AppState, UninstallResult};
 use super::{failed_uninstall_result, success_uninstall_result};
 
@@ -24,7 +24,7 @@ pub(super) async fn uninstall_plugin(state: &AppState, id: &str) -> UninstallRes
         Err(result) => return result,
     };
 
-    reload_manager_and_notify(state);
+    reload_plugin_and_notify(state, id);
     log::info!("Plugin {} uninstalled successfully", id);
     success_uninstall_result(&uninstall_message(removed_installed_copy, unlinked_dev))
 }
