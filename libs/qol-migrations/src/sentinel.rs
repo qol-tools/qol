@@ -31,24 +31,9 @@ pub fn read_marker(path: &Path) -> Result<Option<MarkerFile>> {
 }
 
 pub fn write_marker(path: &Path, marker: &MarkerFile) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating parent dir {}", parent.display()))?;
-        }
-    }
     let bytes = serde_json::to_vec_pretty(marker).context("serialising marker")?;
-    let tmp = tmp_path(path);
-    std::fs::write(&tmp, &bytes)
-        .with_context(|| format!("writing marker tmp at {}", tmp.display()))?;
-    std::fs::rename(&tmp, path).with_context(|| {
-        format!(
-            "renaming marker tmp {} into place at {}",
-            tmp.display(),
-            path.display()
-        )
-    })?;
-    Ok(())
+    qol_fs::atomic_write_durable(path, &bytes)
+        .with_context(|| format!("writing marker at {}", path.display()))
 }
 
 pub fn ensure_marker_or_create(
@@ -102,12 +87,6 @@ fn check_profile_compatible(found: &MarkerFile, expected_profile_id: &str) -> Re
         ));
     }
     Ok(())
-}
-
-fn tmp_path(path: &Path) -> std::path::PathBuf {
-    let mut s = path.as_os_str().to_owned();
-    s.push(".tmp");
-    s.into()
 }
 
 #[cfg(test)]

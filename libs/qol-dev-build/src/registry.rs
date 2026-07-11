@@ -88,27 +88,10 @@ pub fn load_registry(config_dir: &Path) -> Result<Registry, String> {
 
 pub fn save_registry(config_dir: &Path, registry: &Registry) -> Result<(), String> {
     let final_path = registry_path(config_dir);
-    let tmp_path = config_dir.join(format!("{}.new", REGISTRY_FILE_NAME));
     let content = serde_json::to_string_pretty(registry)
         .map_err(|e| format!("Failed to serialize registry: {}", e))?;
-    std::fs::write(&tmp_path, &content)
-        .map_err(|e| format!("Failed to write {}: {}", tmp_path.display(), e))?;
-    std::fs::rename(&tmp_path, &final_path)
-        .map_err(|e| format!("Failed to finalize {}: {}", final_path.display(), e))?;
-    let _ = fsync_dir(config_dir);
-    Ok(())
-}
-
-fn fsync_dir(dir: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        std::fs::File::open(dir)?.sync_all()
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = dir;
-        Ok(())
-    }
+    qol_fs::atomic_write_durable(&final_path, content.as_bytes())
+        .map_err(|e| format!("Failed to save {}: {}", final_path.display(), e))
 }
 
 #[cfg(test)]

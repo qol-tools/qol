@@ -1,0 +1,9 @@
+[package]
+name = "qol-fs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Atomic file persistence primitives for qol-tools"
+
+[dependencies]
+tempfile = "3.27"

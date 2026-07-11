@@ -35,6 +35,7 @@ linux_evdev = ["dep:evdev"]
 [dependencies]
 qol-conventions.workspace = true
 qol-dev-build.workspace = true
+qol-fs.workspace = true
 qol-workspace.workspace = true
 # Core async runtime
 tokio = { version = "1.35", features = ["rt-multi-thread", "fs", "process", "net", "sync", "time", "macros"] }

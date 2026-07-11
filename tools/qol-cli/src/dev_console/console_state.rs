@@ -38,20 +38,10 @@ pub(super) fn save_console_state(state: &ConsoleState) {
     let Some(path) = console_state_path() else {
         return;
     };
-    let Some(parent) = path.parent() else {
-        return;
-    };
-    if fs::create_dir_all(parent).is_err() {
-        return;
-    }
     let Ok(json) = serde_json::to_string_pretty(state) else {
         return;
     };
-    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
-    if fs::write(&tmp, json).is_err() {
-        return;
-    }
-    let _ = fs::rename(&tmp, &path);
+    let _ = qol_fs::atomic_write(&path, json.as_bytes());
 }
 
 #[cfg(test)]

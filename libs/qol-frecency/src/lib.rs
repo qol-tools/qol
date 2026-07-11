@@ -91,12 +91,6 @@ pub fn load(path: &Path) -> FrequencyData {
 }
 
 pub fn save(path: &Path, data: &FrequencyData) {
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!("[frecency] failed to create {}: {}", parent.display(), e);
-            return;
-        }
-    }
     let json = match serde_json::to_string_pretty(data) {
         Ok(json) => json,
         Err(e) => {
@@ -104,24 +98,9 @@ pub fn save(path: &Path, data: &FrequencyData) {
             return;
         }
     };
-    let tmp = tmp_path(path);
-    if let Err(e) = std::fs::write(&tmp, &json) {
-        eprintln!("[frecency] failed to write {}: {}", tmp.display(), e);
-        return;
+    if let Err(e) = qol_fs::atomic_write(path, json.as_bytes()) {
+        eprintln!("[frecency] failed to save {}: {}", path.display(), e);
     }
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        eprintln!("[frecency] failed to finalize {}: {}", path.display(), e);
-        let _ = std::fs::remove_file(&tmp);
-    }
-}
-
-fn tmp_path(path: &Path) -> PathBuf {
-    let mut name = path
-        .file_name()
-        .map(|n| n.to_os_string())
-        .unwrap_or_default();
-    name.push(".new");
-    path.with_file_name(name)
 }
 
 #[cfg(test)]
@@ -175,7 +154,7 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.ends_with(".new"))
+            .filter(|n| n.starts_with(".foo-frequency.json.") && n.ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "temp files left: {:?}", leftovers);
         assert!(path.exists());

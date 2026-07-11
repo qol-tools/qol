@@ -7,6 +7,7 @@ description = "Shared dev-linked plugin registry, build, and fingerprint trackin
 
 [dependencies]
 log = "0.4"
+qol-fs.workspace = true
 qol-plugin-api.workspace = true
 qol-workspace.workspace = true
 serde.workspace = true

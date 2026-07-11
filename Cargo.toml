@@ -15,6 +15,7 @@ qol-config = { path = "libs/qol-config" }
 qol-conventions = { path = "libs/qol-conventions" }
 qol-dev-build = { path = "libs/qol-dev-build" }
 qol-frecency = { path = "libs/qol-frecency" }
+qol-fs = { path = "libs/qol-fs" }
 qol-platform = { path = "libs/qol-platform" }
 qol-runtime = { path = "libs/qol-runtime" }
 qol-search = { path = "libs/qol-search" }

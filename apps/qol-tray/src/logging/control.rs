@@ -51,20 +51,11 @@ fn save_controls_file(
     filename: &str,
     state: &impl Serialize,
 ) -> Result<(), String> {
-    std::fs::create_dir_all(config_dir.join("dev")).map_err(|e| {
-        format!(
-            "Failed to create dev directory {}: {}",
-            config_dir.display(),
-            e
-        )
-    })?;
     let path = config_dir.join(filename);
-    let tmp_path = config_dir.join(format!("dev/.{}.tmp", filename.trim_start_matches("dev/")));
     let content = serde_json::to_string_pretty(state)
         .map_err(|e| format!("Failed to serialize {}: {}", filename, e))?;
-    std::fs::write(&tmp_path, &content)
-        .map_err(|e| format!("Failed to write {}: {}", filename, e))?;
-    std::fs::rename(&tmp_path, &path).map_err(|e| format!("Failed to finalize {}: {}", filename, e))
+    crate::file_io::atomic_write(&path, content.as_bytes())
+        .map_err(|e| format!("Failed to save {}: {:#}", filename, e))
 }
 
 #[cfg(feature = "dev")]

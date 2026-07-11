@@ -38,23 +38,12 @@ pub fn save_build_fingerprints(
     config_dir: &Path,
     fingerprints: &HashMap<String, String>,
 ) -> Result<(), String> {
-    let dev_dir = config_dir.join("dev");
-    std::fs::create_dir_all(&dev_dir).map_err(|e| {
-        format!(
-            "Failed to create dev directory {}: {}",
-            dev_dir.display(),
-            e
-        )
-    })?;
     let state_path = config_dir.join(DEV_BUILD_STATE_FILE);
-    let tmp_path = config_dir.join("dev/.build-fingerprints.tmp");
     let state = BuildFingerprintState {
         fingerprints: fingerprints.clone(),
     };
     let content = serde_json::to_string_pretty(&state)
         .map_err(|e| format!("Failed to serialize build fingerprints: {}", e))?;
-    std::fs::write(&tmp_path, content)
-        .map_err(|e| format!("Failed to write build fingerprint temp file: {}", e))?;
-    std::fs::rename(&tmp_path, &state_path)
-        .map_err(|e| format!("Failed to finalize build fingerprint file: {}", e))
+    qol_fs::atomic_write(&state_path, content.as_bytes())
+        .map_err(|e| format!("Failed to save build fingerprints: {}", e))
 }

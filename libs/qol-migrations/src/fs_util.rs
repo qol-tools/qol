@@ -139,14 +139,9 @@ pub(crate) fn hotkey_files(profile_dir: &Path) -> Vec<PathBuf> {
 }
 
 pub(crate) fn write_json_atomic(path: &Path, value: &serde_json::Value) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("no parent for {}", path.display()))?;
-    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     let serialized = serde_json::to_string_pretty(value).context("serializing migrated json")?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serialized).with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, path).with_context(|| format!("finalizing {}", path.display()))
+    qol_fs::atomic_write(path, serialized.as_bytes())
+        .with_context(|| format!("writing migrated json to {}", path.display()))
 }
 
 #[cfg(test)]

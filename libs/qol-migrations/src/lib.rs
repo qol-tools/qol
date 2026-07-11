@@ -255,20 +255,9 @@ fn read_installed_version(config_dir: &Path) -> Result<String> {
 }
 
 fn write_current_version(config_dir: &Path, version: &str) -> Result<()> {
-    std::fs::create_dir_all(config_dir)
-        .with_context(|| format!("ensuring config dir {}", config_dir.display()))?;
     let final_path = version_path(config_dir);
-    let tmp_path = config_dir.join(format!("{VERSION_FILE}.tmp"));
-    std::fs::write(&tmp_path, version)
-        .with_context(|| format!("writing tmp {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, &final_path).with_context(|| {
-        format!(
-            "renaming {} -> {}",
-            tmp_path.display(),
-            final_path.display()
-        )
-    })?;
-    Ok(())
+    qol_fs::atomic_write_durable(&final_path, version.as_bytes())
+        .with_context(|| format!("writing current version to {}", final_path.display()))
 }
 
 fn reject_if_below_oldest_supported(config_dir: &Path, host_version: &str) -> Result<()> {

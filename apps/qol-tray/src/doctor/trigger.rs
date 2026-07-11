@@ -33,16 +33,9 @@ fn write_sentinel_at(path: &Path, check_id: &str, reason: &str) -> Result<()> {
         check_id: check_id.to_string(),
         written_at: SystemTime::now(),
     };
-    let parent = path
-        .parent()
-        .with_context(|| format!("sentinel path {} has no parent", path.display()))?;
-    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
     let body = serde_json::to_vec_pretty(&trigger).context("failed to serialize trigger")?;
-    let tmp = tmp_path(path);
-    fs::write(&tmp, &body).with_context(|| format!("failed to write {}", tmp.display()))?;
-    fs::rename(&tmp, path)
-        .with_context(|| format!("failed to rename {} -> {}", tmp.display(), path.display()))?;
-    Ok(())
+    crate::file_io::atomic_write(path, &body)
+        .with_context(|| format!("failed to write doctor trigger at {}", path.display()))
 }
 
 fn take_at(path: &Path) -> Option<Trigger> {
@@ -66,19 +59,6 @@ fn take_at(path: &Path) -> Option<Trigger> {
             None
         }
     }
-}
-
-fn tmp_path(target: &Path) -> PathBuf {
-    let file = target
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "trigger".to_string());
-    let pid = std::process::id();
-    let nanos = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    target.with_file_name(format!(".{file}.{pid}.{nanos}.tmp"))
 }
 
 #[cfg(test)]

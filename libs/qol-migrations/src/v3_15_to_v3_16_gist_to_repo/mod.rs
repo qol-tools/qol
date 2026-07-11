@@ -152,19 +152,8 @@ impl CloudMigration for V3_15ToV3_16GistToRepo {
 }
 
 fn atomic_write_file(final_path: &Path, content: &[u8]) -> Result<()> {
-    if let Some(parent) = final_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating parent dir {}", parent.display()))?;
-        }
-    }
-    let mut tmp = final_path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp: PathBuf = tmp.into();
-    std::fs::write(&tmp, content).with_context(|| format!("writing tmp {}", tmp.display()))?;
-    std::fs::rename(&tmp, final_path)
-        .with_context(|| format!("renaming {} -> {}", tmp.display(), final_path.display()))?;
-    Ok(())
+    qol_fs::atomic_write(final_path, content)
+        .with_context(|| format!("writing recovered gist file to {}", final_path.display()))
 }
 
 #[cfg(test)]

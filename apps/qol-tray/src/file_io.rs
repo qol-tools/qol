@@ -32,14 +32,8 @@ pub(crate) fn write_pretty_json<T: Serialize>(path: &Path, value: &T) -> Result<
 }
 
 pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
-    let tmp = tmp_sibling(path);
-    fs::write(&tmp, content).with_context(|| format!("Failed to write {}", tmp.display()))?;
-    fs::rename(&tmp, path).with_context(|| format!("Failed to finalize {}", path.display()))
-}
-
-fn tmp_sibling(path: &Path) -> PathBuf {
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    path.with_file_name(format!(".{}.tmp", name))
+    qol_fs::atomic_write(path, content)
+        .with_context(|| format!("Failed to atomically write {}", path.display()))
 }
 
 pub(crate) fn canonical_or_original(path: &Path) -> PathBuf {

@@ -59,14 +59,7 @@ impl HealthPublisher {
 }
 
 fn write_snapshot_file(path: &Path, snapshot: &HealthSnapshot) -> anyhow::Result<()> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("health file path has no parent"))?;
-    std::fs::create_dir_all(dir)?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec(snapshot)?)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    crate::file_io::atomic_write(path, &serde_json::to_vec(snapshot)?)
 }
 
 #[cfg(test)]

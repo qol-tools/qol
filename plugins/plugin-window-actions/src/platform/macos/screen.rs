@@ -146,14 +146,11 @@ fn write_cached_screens(screens: &[Rect]) {
     }
 
     let path = screen_cache_path();
-    let tmp_path = path.with_extension(format!("{}.tmp", std::process::id()));
     let contents = screens
         .iter()
         .map(|s| format!("{},{},{},{}\n", s.x, s.y, s.w, s.h))
         .collect::<String>();
-    if fs::write(&tmp_path, contents).is_ok() {
-        let _ = fs::rename(tmp_path, path);
-    }
+    let _ = qol_fs::atomic_write(&path, contents.as_bytes());
 }
 
 #[cfg(test)]

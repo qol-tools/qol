@@ -16,21 +16,10 @@ pub(crate) fn is_done(config_dir: &Path, name: &str) -> bool {
 }
 
 pub(crate) fn write_done(config_dir: &Path, name: &str) -> Result<()> {
-    let dir = applied_dir(config_dir);
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("creating journal dir {}", dir.display()))?;
     let final_path = done_path(config_dir, name);
-    let tmp_path = dir.join(format!("{name}.done.tmp"));
-    std::fs::write(&tmp_path, chrono::Utc::now().to_rfc3339())
-        .with_context(|| format!("writing journal tmp {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, &final_path).with_context(|| {
-        format!(
-            "renaming journal {} -> {}",
-            tmp_path.display(),
-            final_path.display()
-        )
-    })?;
-    Ok(())
+    let written_at = chrono::Utc::now().to_rfc3339();
+    qol_fs::atomic_write_durable(&final_path, written_at.as_bytes())
+        .with_context(|| format!("writing migration journal to {}", final_path.display()))
 }
 
 #[cfg(test)]
