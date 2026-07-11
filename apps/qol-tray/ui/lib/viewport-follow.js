@@ -6,16 +6,29 @@ const KEYBOARD_VERTICAL_COMFORT_RATIO = 0.24;
 const KEYBOARD_VERTICAL_COMFORT_MIN = 160;
 const KEYBOARD_VERTICAL_COMFORT_MAX = 260;
 
-export function keyboardTargetCenterDelta(viewportRect, surfaceRect) {
-    const targetCenterX = surfaceRect.left + surfaceRect.width / 2;
-    const targetCenterY = surfaceRect.top + surfaceRect.height / 2;
-    const rawDy = targetCenterY - (viewportRect.top + viewportRect.height / 2);
+export function keyboardFollowDelta(viewportRect, surfaceRect, pageRect) {
+    const page = pageRect || surfaceRect;
+    const centerDx = page.left + page.width / 2 - (viewportRect.left + viewportRect.width / 2);
+    const rawDy = surfaceRect.top + surfaceRect.height / 2 - (viewportRect.top + viewportRect.height / 2);
     return {
-        dx: settleDelta(targetCenterX - (viewportRect.left + viewportRect.width / 2)),
+        dx: settleDelta(centerDx + overflowDx(viewportRect, surfaceRect, centerDx)),
         dy: settleDelta(deadzoneDelta(rawDy, keyboardVerticalComfort(viewportRect))),
-        mode: 'keyboard-center',
+        mode: 'keyboard-page-center',
         duration: KEYBOARD_FOLLOW_DURATION_MS,
     };
+}
+
+function overflowDx(viewportRect, surfaceRect, centerDx) {
+    const left = surfaceRect.left - centerDx;
+    const right = left + surfaceRect.width;
+    const viewLeft = viewportRect.left + CAMERA_FOLLOW_PAD;
+    const viewRight = viewportRect.left + viewportRect.width - CAMERA_FOLLOW_PAD;
+    if (surfaceRect.width >= viewRight - viewLeft) {
+        return left + surfaceRect.width / 2 - (viewportRect.left + viewportRect.width / 2);
+    }
+    if (right > viewRight) return right - viewRight;
+    if (left < viewLeft) return left - viewLeft;
+    return 0;
 }
 
 export function edgeFollowDelta(viewportRect, surfaceRect) {

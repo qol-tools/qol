@@ -4,7 +4,7 @@ import { createWorldCanvasBg } from '../../fx/world-canvas-bg.js';
 import { createDebug, elLabel } from '../../lib/debug.js';
 import { isCtrlHeld } from '../../lib/modifier-state.js';
 import { findActiveSelectedSurface } from '../../lib/selected-surface.js';
-import { edgeFollowDelta, keyboardTargetCenterDelta, normalizedZoom } from '../../lib/viewport-follow.js';
+import { edgeFollowDelta, keyboardFollowDelta, normalizedZoom } from '../../lib/viewport-follow.js';
 import { nearestSurfaceToCenter } from '../../lib/viewport-spatial.js';
 import { getWorldSettings } from '../../lib/world-settings.js';
 import { SKIP_CAMERA_FOLLOW_ONCE_ATTR, selectorFor } from '../../lib/world-navigation.js';
@@ -165,8 +165,9 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, rend
             const vr = vp.getBoundingClientRect();
             const fr = surface.getBoundingClientRect();
             const inputMode = document.querySelector('.app-container')?.dataset?.inputMode || 'keyboard';
+            const pageRect = surface.closest('[data-view-id]')?.getBoundingClientRect() || null;
             const { dx, dy, mode, duration } = inputMode === 'keyboard'
-                ? keyboardTargetCenterDelta(vr, fr)
+                ? keyboardFollowDelta(vr, fr, pageRect)
                 : edgeFollowDelta(vr, fr);
             if (dx || dy) {
                 const zoom = normalizedZoom(camera.zoom);
