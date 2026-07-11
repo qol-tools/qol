@@ -48,12 +48,22 @@ Each role binds to semantic tokens, never to literals:
 - Touching a block with a hardcoded color literal? Migrate that block to tokens in the same change.
 - A new visual meaning means a new semantic token in `theme-tokens.css` first - never a one-off literal.
 
+## Animation Performance (hard rule)
+
+Gecko refuses compositor-driven animation inside the world canvas (oversized frames fail its viewport heuristic), so every infinite animation repaints on the main thread at display refresh. Measured on real hardware: continuous box-shadow/background-position animations idled the app at ~88% CPU.
+
+- Never run an infinite animation of paint properties (`box-shadow`, `border-color`, `background-position`) at continuous timing. Cap the tick rate with `animation-timing-function: steps(N)` (~6-30 updates/s reads identically at these alphas).
+- Keep the repaint area small: move a small strip element (`top` on a 96px pseudo) instead of animating the background of a full-page surface.
+- World-page effects animate only on the camera-anchored slot (`.world-view-slot[data-anchor]`), never on all mounted pages.
+- `will-change`/`transform` layer-promotion hacks make it worse here - they add layers that still repaint. Measure with a headed Firefox before trusting them.
+
 ## Review Checklist
 
 - No new hardcoded color values in shared CSS.
 - Opacity overlays use `rgba(var(--*-rgb), alpha)` channels.
 - Reused patterns use existing component classes/tokens.
 - Mobile breakpoints preserve contrast and hierarchy.
+- No new infinite animation without a `steps()` cap and an anchor/state gate.
 
 ---
 
