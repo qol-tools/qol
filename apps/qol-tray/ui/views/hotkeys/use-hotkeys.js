@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'preact/hooks';
+import { useEffect, useCallback, useRef } from 'preact/hooks';
 import { useStateRef } from '../../lib/hooks/useStateRef.js';
 import { usePersistedIndex } from '../../lib/hooks/usePersistedIndex.js';
 import { useSSEDebounce } from '../../hooks/useSSEDebounce.js';
@@ -30,8 +30,8 @@ export function useHotkeys({ onAfterSave, onAfterClose } = {}) {
         }, []),
     });
     const m = useModalActions(d, recorder);
-    const saveAndExit = useCallback(() => {
-        if (m.saveHotkey() === false) return false;
+    const saveAndExit = useCallback(async () => {
+        if (!await m.saveHotkey()) return false;
         onAfterSave?.();
         return true;
     }, [m.saveHotkey, onAfterSave]);
@@ -75,6 +75,7 @@ function useHotkeysData() {
     const [registrationErrors, setRegistrationErrors] = useStateRef([]);
     const [selectedIndex, setSelectedIndex, selectedIndexRef, markRestored] = usePersistedIndex('hotkeys-selected-index', -1);
     const [editModal, setEditModal, editModalRef] = useStateRef(null);
+    const mutationQueueRef = useRef(Promise.resolve());
     useEffect(() => { loadInitialData(setHotkeys, setPlugins, setSelectedIndex, markRestored); }, []);
     const refreshPlugins = useCallback(() => { loadPlugins().then(setPlugins).catch(() => {}); }, []);
     const refreshErrors = useCallback(() => { loadRegistrationErrors().then(setRegistrationErrors).catch(() => {}); }, []);
@@ -85,6 +86,7 @@ function useHotkeysData() {
         plugins, registrationErrors, refreshErrors,
         selectedIndex, setSelectedIndex, selectedIndexRef,
         editModal, setEditModal, editModalRef,
+        mutationQueueRef,
     };
 }
 
@@ -118,30 +120,61 @@ function useModalActions(d, recorder) {
     return { openEditModal, saveHotkey, getActions, handlePluginChange, handleActionChange, handleEnabledChange, startRecording, closeModal };
 }
 
-function executeSave(d, recorder) {
+export async function executeSave(d, recorder, persist = persistHotkeys) {
     const modal = d.editModalRef.current;
     if (!modal?.key || !modal?.pluginUid || !modal?.action) return false;
     recorder.cancel();
-    const nextHotkeys = buildSavedHotkeys(d.hotkeysRef.current, modal);
-    d.setHotkeys(nextHotkeys);
-    d.hotkeysRef.current = nextHotkeys;
-    persistHotkeys(nextHotkeys).then(() => setTimeout(d.refreshErrors, 200));
-    if (!modal.hotkey) d.setSelectedIndex(nextHotkeys.length - 1);
-    d.setEditModal(null);
-    return true;
+    return enqueueMutation(d, async () => {
+        const nextHotkeys = buildSavedHotkeys(d.hotkeysRef.current, modal);
+        try {
+            await persist(nextHotkeys);
+        } catch {
+            return false;
+        }
+        d.setHotkeys(nextHotkeys);
+        d.hotkeysRef.current = nextHotkeys;
+        if (!modal.hotkey) {
+            const nextIndex = nextHotkeys.length - 1;
+            d.setSelectedIndex(nextIndex);
+            d.selectedIndexRef.current = nextIndex;
+        }
+        const editorIsCurrent = d.editModalRef.current === modal;
+        if (editorIsCurrent) d.setEditModal(null);
+        setTimeout(d.refreshErrors, 200);
+        return editorIsCurrent;
+    });
+}
+
+export async function executeDelete(d, persist = persistHotkeys) {
+    const index = d.selectedIndexRef.current;
+    return enqueueMutation(d, async () => {
+        const hotkeys = d.hotkeysRef.current;
+        if (index < 0 || index >= hotkeys.length) return false;
+        const nextHotkeys = removeHotkeyAtIndex(hotkeys, index);
+        try {
+            await persist(nextHotkeys);
+        } catch {
+            return false;
+        }
+        const nextIndex = nextSelectedIndex(nextHotkeys, index);
+        d.setHotkeys(nextHotkeys);
+        d.hotkeysRef.current = nextHotkeys;
+        d.setSelectedIndex(nextIndex);
+        d.selectedIndexRef.current = nextIndex;
+        setTimeout(d.refreshErrors, 200);
+        return true;
+    });
+}
+
+function enqueueMutation(d, task) {
+    const queued = d.mutationQueueRef.current.then(task, task);
+    d.mutationQueueRef.current = queued.then(() => undefined, () => undefined);
+    return queued;
 }
 
 function useListActions(d) {
     return {
-        deleteSelected: useCallback(() => {
-            const idx = d.selectedIndexRef.current;
-            const hks = d.hotkeysRef.current;
-            if (idx < 0 || idx >= hks.length) return;
-            const next = removeHotkeyAtIndex(hks, idx);
-            d.setHotkeys(next);
-            d.setSelectedIndex(nextSelectedIndex(next, idx));
-            persistHotkeys(next).then(() => setTimeout(d.refreshErrors, 200));
-        }, [])
+        deleteSelected: useCallback(() => executeDelete(d), [])
     };
 }
 

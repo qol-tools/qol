@@ -1,4 +1,4 @@
-import { apiJson, apiResponse, jsonRequest } from '../../api/client.js';
+import { apiJson, apiText, jsonRequest } from '../../api/client.js';
 import { parseInstalledPlugins } from '../../utils/plugins.js';
 import { clampIndex } from '../../utils/collections.js';
 
@@ -25,7 +25,7 @@ export async function loadRegistrationErrors() {
 }
 
 export async function persistHotkeys(hotkeys) {
-    await apiResponse('/api/hotkeys', jsonRequest('PUT', { hotkeys }));
+    await apiText('/api/hotkeys', jsonRequest('PUT', { hotkeys }));
 }
 
 export function getAvailableActions(plugins, hotkeys, pluginUid, editingId) {
