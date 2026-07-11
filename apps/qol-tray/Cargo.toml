@@ -66,7 +66,6 @@ tray-icon = "0.21.2"
 
 # Path utilities
 dirs = "6.0.0"
-open.workspace = true
 
 # Device identity for the served UI boot document
 gethostname = "1.1"

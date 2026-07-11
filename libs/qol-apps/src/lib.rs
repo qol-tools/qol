@@ -1,5 +1,6 @@
 pub mod bundle;
 pub mod desktop;
+pub mod desktop_integration;
 mod platform;
 
 pub use bundle::{

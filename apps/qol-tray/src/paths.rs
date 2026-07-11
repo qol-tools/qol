@@ -298,7 +298,7 @@ fn init_runtime_dirs_at(base: &Path) -> Result<()> {
 }
 
 pub fn open_url(url: &str) -> Result<()> {
-    open::that(url)?;
+    qol_apps::desktop_integration::open_with_default_app(url)?;
     Ok(())
 }
 

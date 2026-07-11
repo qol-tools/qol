@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use serialport::{SerialPortInfo, SerialPortType, UsbPortInfo};
 
 #[cfg(target_os = "linux")]
@@ -5,10 +6,13 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 
-#[cfg(target_os = "linux")]
-pub use linux::open_settings;
-#[cfg(target_os = "macos")]
-pub use macos::open_settings;
+use crate::config::store::PLUGIN_ID;
+
+pub fn open_settings() -> Result<()> {
+    let settings_url = qol_conventions::settings_url(PLUGIN_ID);
+    qol_apps::desktop_integration::open_with_default_app(&settings_url)
+        .context("failed to open settings URL")
+}
 
 #[cfg(target_os = "linux")]
 pub fn detect_coordinator_port(ports: &[SerialPortInfo]) -> Option<String> {

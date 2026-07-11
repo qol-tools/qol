@@ -6,7 +6,11 @@ license.workspace = true
 description = "Shared app inventory and desktop entry helpers for qol-tools"
 
 [dependencies]
+open.workspace = true
 plist = "1"
+qol-conventions.workspace = true
+qol-platform.workspace = true
+qol-process.workspace = true
 serde.workspace = true
 shell-words = "1.1"
 

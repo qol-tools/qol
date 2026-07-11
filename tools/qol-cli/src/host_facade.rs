@@ -14,11 +14,11 @@ pub(crate) fn stop_qol_tray() -> Result<()> {
 }
 
 pub(crate) fn open_url(url: &str) {
-    Platform.open_url(url)
+    let _ = qol_apps::desktop_integration::open_with_default_app(url);
 }
 
 pub(crate) fn open_path(dir: &std::path::Path) {
-    Platform.open_path(dir)
+    let _ = qol_apps::desktop_integration::open_with_default_app(dir);
 }
 
 pub(crate) fn copy_to_clipboard(text: &str) -> Result<()> {

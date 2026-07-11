@@ -1,6 +1,6 @@
 use std::io;
-use std::os::windows::process::ExitStatusExt;
-use std::process::{Child, ExitStatus};
+use std::os::windows::process::{CommandExt, ExitStatusExt};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
@@ -16,6 +16,8 @@ const QUERY_AND_WAIT_ACCESS: u32 = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_S
 const TERMINATE_AND_WAIT_ACCESS: u32 =
     PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE;
 const WAIT_INTERVAL: Duration = Duration::from_millis(50);
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 struct ProcessHandle(HANDLE);
 
@@ -112,6 +114,17 @@ pub(crate) fn terminate_owned(child: &mut Child, _: Duration) -> io::Result<()> 
 }
 
 pub(crate) fn reap_children_nonblocking() {}
+
+pub(crate) fn spawn_detached(command: &mut Command) -> io::Result<()> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    let child = command.spawn()?;
+    drop(child);
+    Ok(())
+}
 
 fn open_process(pid: u32, access: u32) -> io::Result<ProcessHandle> {
     if pid == 0 {

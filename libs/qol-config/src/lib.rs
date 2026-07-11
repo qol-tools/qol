@@ -209,7 +209,7 @@ fn load_plugin_config_with_defaults<T: DeserializeOwned>(
 }
 
 pub fn install_id_from_env() -> Option<String> {
-    let value = std::env::var("QOL_TRAY_INSTALL_ID").ok()?;
+    let value = std::env::var(qol_conventions::ENV_INSTALL_ID).ok()?;
     let trimmed = value.trim();
     if !valid_install_id(trimmed) {
         return None;

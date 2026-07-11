@@ -23,6 +23,7 @@ qol-search.workspace = true
 qol-frecency.workspace = true
 qol-apps.workspace = true
 qol-platform.workspace = true
+qol-process.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
 toml = "0.9"

@@ -190,7 +190,7 @@ impl SyncService {
     pub fn open_backups_dir(&self) -> Result<()> {
         ensure_sync_dirs()?;
         let dir = crate::paths::sync_backups_dir()?;
-        super::platform::open_dir(&dir)
+        super::open_dir(&dir)
     }
 
     pub fn open_backup_file(&self, file_name: &str) -> Result<()> {
@@ -199,7 +199,7 @@ impl SyncService {
         if !path.exists() {
             anyhow::bail!("backup not found");
         }
-        super::platform::open_path(&path)
+        super::open_path(&path)
     }
 
     pub fn list_backups(&self) -> Result<Vec<SyncBackupEntry>> {

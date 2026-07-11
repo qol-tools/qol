@@ -77,15 +77,8 @@ async fn open_dir() -> StatusCode {
             return StatusCode::NOT_FOUND;
         }
 
-        #[cfg(target_os = "linux")]
-        let result = std::process::Command::new("xdg-open").arg(&dir).spawn();
-        #[cfg(target_os = "macos")]
-        let result = std::process::Command::new("open").arg(&dir).spawn();
-        #[cfg(target_os = "windows")]
-        let result = std::process::Command::new("explorer").arg(&dir).spawn();
-
-        match result {
-            Ok(_) => StatusCode::OK,
+        match qol_apps::desktop_integration::open_with_default_app(&dir) {
+            Ok(()) => StatusCode::OK,
             Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     })

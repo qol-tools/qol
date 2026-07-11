@@ -703,12 +703,8 @@ fn show_first_run_welcome() {
 
     wait_for_server_ready();
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let url = format!("http://localhost:{DEFAULT_PORT}");
-    #[cfg(target_os = "linux")]
-    let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-    #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg(&url).spawn();
+    let _ = qol_tray::paths::open_url(&url);
 }
 
 async fn check_for_updates() -> bool {

@@ -1,7 +1,7 @@
 mod platform;
 
 use std::io;
-use std::process::{Child, ExitStatus};
+use std::process::{Child, Command, ExitStatus};
 use std::time::Duration;
 
 pub fn is_pid_alive(pid: u32) -> bool {
@@ -40,9 +40,16 @@ pub fn reap_children_nonblocking() {
     platform::reap_children_nonblocking();
 }
 
+/// Spawns a command without inherited standard streams or a parent-owned child
+/// process that needs later cleanup.
+pub fn spawn_detached(command: &mut Command) -> io::Result<()> {
+    platform::spawn_detached(command)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn current_process_is_alive() {
@@ -56,5 +63,40 @@ mod tests {
         assert!(kill_pid(0).is_err());
         assert!(try_wait_pid(0).is_err());
         assert!(wait_pid(0).is_err());
+    }
+
+    #[test]
+    fn detached_child_helper() {
+        let Some(marker) = std::env::var_os("QOL_PROCESS_DETACHED_TEST_MARKER") else {
+            return;
+        };
+        std::fs::write(marker, "ready").unwrap();
+    }
+
+    #[test]
+    fn detached_spawn_runs_after_the_owned_child_is_released() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("detached-ready");
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "tests::detached_child_helper"])
+            .env("QOL_PROCESS_DETACHED_TEST_MARKER", &marker);
+
+        spawn_detached(&mut command).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !marker.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "ready");
+    }
+
+    #[test]
+    fn detached_spawn_reports_a_missing_program() {
+        let mut command = Command::new("qol-process-command-that-does-not-exist");
+        assert_eq!(
+            spawn_detached(&mut command).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
     }
 }

@@ -30,7 +30,7 @@ pub fn show_notification(title: &str, message: &str, _timeout_ms: u32) {
 }
 
 pub fn open_url(url: &str) -> Result<()> {
-    open::that(url).context("failed to open URL")
+    qol_apps::desktop_integration::open_with_default_app(url).context("failed to open URL")
 }
 
 pub fn grab_preview_rgba(_rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {
@@ -136,19 +136,11 @@ pub(super) fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
 }
 
 pub(super) fn reveal_path(path: &Path) -> bool {
-    Command::new("open")
-        .arg("-R")
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    qol_apps::desktop_integration::reveal_in_file_manager(path).is_ok()
 }
 
 pub(super) fn open_path(path: &Path) -> bool {
-    open::that(path).is_ok()
+    qol_apps::desktop_integration::open_with_default_app(path).is_ok()
 }
 
 pub(super) fn videos_dir() -> Option<PathBuf> {

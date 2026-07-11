@@ -9,7 +9,7 @@ serde_json = "1"
 qol-conventions.workspace = true
 qol-plugin-daemon.workspace = true
 qol-headless.workspace = true
-open.workspace = true
+qol-apps.workspace = true
 
 [build-dependencies]
 qol-conventions.workspace = true

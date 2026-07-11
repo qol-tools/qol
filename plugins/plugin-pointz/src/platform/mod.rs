@@ -6,7 +6,7 @@ pub fn settings_url() -> String {
 
 pub fn open_settings() {
     let url = settings_url();
-    if let Err(error) = open::that(&url) {
+    if let Err(error) = qol_apps::desktop_integration::open_with_default_app(&url) {
         log::warn!("{PLUGIN_ID}: failed to open settings URL {url}: {error}");
     }
 }

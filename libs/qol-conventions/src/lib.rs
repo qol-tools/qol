@@ -14,6 +14,7 @@ pub const RUNTIME_DIR_PATH: &str = "/tmp/qol-tray";
 pub const RUNTIME_PIDS_DIR_PATH: &str = "/tmp/qol-tray/pids";
 
 pub const ENV_STATE_SOCKET: &str = "QOL_TRAY_STATE_SOCKET";
+pub const ENV_INSTALL_ID: &str = "QOL_TRAY_INSTALL_ID";
 pub const ENV_PLUGIN_ID: &str = "QOL_TRAY_PLUGIN_ID";
 pub const ENV_DAEMON_SOCKET: &str = "QOL_TRAY_DAEMON_SOCKET";
 pub const ENV_DAEMON_REPLACE_EXISTING: &str = "QOL_TRAY_DAEMON_REPLACE_EXISTING";

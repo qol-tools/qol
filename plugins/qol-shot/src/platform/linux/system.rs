@@ -19,7 +19,7 @@ pub fn show_notification(title: &str, message: &str, timeout_ms: u32) {
 }
 
 pub fn open_url(url: &str) -> Result<()> {
-    open::that(url).context("failed to open URL")
+    qol_apps::desktop_integration::open_with_default_app(url).context("failed to open URL")
 }
 
 pub fn platform_supported_check() -> DoctorCheckResult {

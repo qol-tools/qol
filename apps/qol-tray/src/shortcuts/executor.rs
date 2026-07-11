@@ -51,7 +51,8 @@ fn open_url(url: &str, browser: Option<&AppRef>) -> Result<()> {
         Some(browser) => browser,
         None => {
             log::debug!("Shortcut open_url using default browser");
-            return open::that(url).map_err(|e| anyhow!("failed to open url: {}", e));
+            return qol_apps::desktop_integration::open_with_default_app(url)
+                .map_err(|error| anyhow!("failed to open url: {error}"));
         }
     };
     log::debug!(

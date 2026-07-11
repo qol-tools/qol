@@ -1,6 +1,6 @@
 use std::io;
-use std::os::unix::process::ExitStatusExt;
-use std::process::{Child, ExitStatus};
+use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 const WAIT_INTERVAL: Duration = Duration::from_millis(50);
@@ -113,6 +113,29 @@ pub(crate) fn reap_children_nonblocking() {
         }
         return;
     }
+}
+
+pub(crate) fn spawn_detached(command: &mut Command) -> io::Result<()> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    unsafe {
+        command.pre_exec(|| {
+            match libc::fork() {
+                -1 => return Err(io::Error::last_os_error()),
+                0 => {}
+                _ => libc::_exit(0),
+            }
+            if libc::setsid() == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut intermediate = command.spawn()?;
+    intermediate.wait()?;
+    Ok(())
 }
 
 fn pid_t(pid: u32) -> io::Result<libc::pid_t> {

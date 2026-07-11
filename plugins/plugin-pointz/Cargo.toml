@@ -17,7 +17,7 @@ env_logger = "0.11"
 chrono = "0.4"
 if-addrs = "0.10"
 hostname = "0.4"
-open.workspace = true
+qol-apps.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.52", features = [

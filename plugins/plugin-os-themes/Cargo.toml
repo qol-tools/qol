@@ -10,7 +10,7 @@ qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
-open.workspace = true
+qol-apps.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

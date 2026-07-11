@@ -64,7 +64,7 @@ fn open_config_file(path: anyhow::Result<std::path::PathBuf>) -> Response {
     let Ok(path) = path else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "Path unavailable").into_response();
     };
-    match crate::features::profile::sync::platform::open_path(&path) {
+    match crate::features::profile::sync::open_path(&path) {
         Ok(()) => StatusCode::OK.into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{error}")).into_response(),
     }

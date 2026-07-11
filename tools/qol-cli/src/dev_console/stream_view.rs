@@ -277,28 +277,17 @@ fn strip_ansi_codes(input: &str) -> String {
 }
 
 fn open_with_os_default(path: &Path) -> bool {
-    match crate::host_facade::os_name() {
-        "macos" => Command::new("open")
+    if crate::host_facade::os_name() == "macos" {
+        return Command::new("open")
             .arg("-t")
             .arg(path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .is_ok(),
-        "windows" => Command::new("cmd")
-            .args(["/C", "start", ""])
-            .arg(path)
-            .spawn()
-            .is_ok(),
-        _ => Command::new("xdg-open")
-            .arg(path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .is_ok(),
+            .is_ok();
     }
+    qol_apps::desktop_integration::open_with_default_app(path).is_ok()
 }
 
 pub(super) fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {

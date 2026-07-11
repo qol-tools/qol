@@ -1,20 +1,4 @@
-use anyhow::{Context, Result};
 use serialport::SerialPortInfo;
-use std::process::{Command, Stdio};
-
-use crate::config::store::PLUGIN_ID;
-
-pub fn open_settings() -> Result<()> {
-    let settings_url = qol_conventions::settings_url(PLUGIN_ID);
-    Command::new("open")
-        .arg(&settings_url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("failed to open settings URL")?;
-    Ok(())
-}
 
 pub fn detect_coordinator_port(ports: &[SerialPortInfo]) -> Option<String> {
     super::select_best_port(ports, score_port)

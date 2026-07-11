@@ -269,14 +269,7 @@ fn open_ui_after_start() {
         std::time::Duration::from_millis(50),
     );
     let url = format!("http://localhost:{}", qol_conventions::DEFAULT_PORT);
-    #[cfg(target_os = "linux")]
-    let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-    #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg(&url).spawn();
-    #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
-        .args(["/c", "start", url.as_str()])
-        .spawn();
+    let _ = crate::paths::open_url(&url);
 }
 
 fn is_in_path(dir: &Path) -> bool {

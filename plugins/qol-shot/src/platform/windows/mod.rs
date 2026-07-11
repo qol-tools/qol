@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use qol_headless::DoctorCheckResult;
 use std::path::Path;
 
@@ -78,10 +78,8 @@ pub fn show_notification(_title: &str, _message: &str, _timeout_ms: u32) {
     // Notifications are fire-and-forget UX; silently no-op on Windows.
 }
 
-pub fn open_url(_url: &str) -> Result<()> {
-    Err(anyhow!(
-        "qol-shot: URL launcher is not implemented on Windows"
-    ))
+pub fn open_url(url: &str) -> Result<()> {
+    qol_apps::desktop_integration::open_with_default_app(url).context("failed to open URL")
 }
 
 pub fn grab_preview_rgba(_rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {

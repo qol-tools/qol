@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Context, Result};
 use std::io::Write;
-use std::path::Path;
 use std::process::{Command, Stdio};
 
 #[cfg(target_os = "linux")]
@@ -25,8 +24,6 @@ pub(crate) trait PlatformOps {
     fn os_name(&self) -> &'static str;
     fn exe_name(&self, name: &str) -> String;
     fn stop_qol_tray(&self) -> Result<()>;
-    fn open_url(&self, url: &str);
-    fn open_path(&self, dir: &Path);
     fn copy_to_clipboard(&self, text: &str) -> Result<()>;
 }
 

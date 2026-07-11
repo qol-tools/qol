@@ -1,6 +1,5 @@
 pub mod git_repo;
 mod merge;
-pub(crate) mod platform;
 mod promote;
 mod reconcile;
 mod scope;
@@ -14,3 +13,15 @@ pub use types::{
     ConflictChoice, ResolvableConflict, Side, SyncActionResult, SyncBackupEntry, SyncBackupPreview,
     SyncConnectRequest, SyncHealth, SyncIncident, SyncIncidentKind, SyncStatus,
 };
+
+pub(crate) fn open_path(path: &std::path::Path) -> anyhow::Result<()> {
+    if !path.exists() {
+        anyhow::bail!("Path does not exist");
+    }
+    qol_apps::desktop_integration::open_with_default_app(path)?;
+    Ok(())
+}
+
+pub(crate) fn open_dir(path: &std::path::Path) -> anyhow::Result<()> {
+    open_path(path)
+}
