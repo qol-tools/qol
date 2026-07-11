@@ -5736,6 +5736,7 @@ dependencies = [
  "qol-config",
  "qol-conventions",
  "qol-dev-build",
+ "qol-fs",
  "qol-workspace",
  "ratatui",
  "serde",
@@ -5793,6 +5794,7 @@ version = "1.0.0"
 dependencies = [
  "log",
  "proptest",
+ "qol-fs",
  "qol-plugin-api",
  "qol-workspace",
  "serde",
@@ -5807,8 +5809,16 @@ name = "qol-frecency"
 version = "0.2.0"
 dependencies = [
  "dirs 6.0.0",
+ "qol-fs",
  "serde",
  "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "qol-fs"
+version = "1.0.0"
+dependencies = [
  "tempfile",
 ]
 
@@ -5851,6 +5861,7 @@ dependencies = [
  "chrono",
  "fs4",
  "log",
+ "qol-fs",
  "rand 0.9.4",
  "reqwest",
  "serde",
@@ -5975,6 +5986,7 @@ dependencies = [
  "qol-config",
  "qol-conventions",
  "qol-dev-build",
+ "qol-fs",
  "qol-hotkeys",
  "qol-migrations",
  "qol-plugin-api",
@@ -9038,6 +9050,7 @@ dependencies = [
  "proptest",
  "qol-config",
  "qol-conventions",
+ "qol-fs",
  "qol-plugin-api",
  "qol-runtime",
  "serde",
