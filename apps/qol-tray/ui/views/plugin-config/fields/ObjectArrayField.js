@@ -4,9 +4,14 @@ import { usePluginConfigContext } from '../context.js';
 import { FieldLabel } from './FieldLabel.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
 import { ToggleSwitch } from '../../../lib/components/ToggleSwitch.js';
-import { groupFields } from '../../../auto-config/object-array-form.js';
-import { declaredFieldsToSchema } from '../../../auto-config/object-array-renderer.js';
-import { KNOWN_MODS, prettyLabel, getObjectArraySchema, guessSchemaFromKey } from '../../../auto-config/heuristics.js';
+import {
+    declaredFieldsToSchema,
+    getObjectArraySchema,
+    groupFields,
+    guessSchemaFromKey,
+    KNOWN_MODS,
+    prettyLabel,
+} from '../../../lib/qol-config.js';
 
 export function ObjectArrayField({ field }) {
     const ctx = usePluginConfigContext();

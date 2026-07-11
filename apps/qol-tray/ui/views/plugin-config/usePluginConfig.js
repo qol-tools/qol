@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
-import { buildFieldPathIndex, getFieldValue, setFieldValue, getFieldValueById } from '../../auto-config/normalized-config.js';
+import { buildFieldPathIndex, getFieldValue, setFieldValue, getFieldValueById } from '../../lib/qol-config.js';
 import { configFromForm, getDisplaySections, ownedConfigKeys } from '../../auto-config/form-model.js';
 
 const SAVE_DEBOUNCE_MS = 400;

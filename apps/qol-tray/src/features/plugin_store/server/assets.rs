@@ -9,6 +9,12 @@ use rust_embed::Embed;
 #[folder = "ui/"]
 struct UiAssets;
 
+#[derive(Embed)]
+#[folder = "../../libs/qol-config/js/"]
+struct QolConfigAssets;
+
+const QOL_CONFIG_ASSET_PREFIX: &str = "libs/qol-config/js/";
+
 pub(super) async fn serve_embedded(Path(path): Path<String>) -> impl IntoResponse {
     serve_embedded_file(&path)
 }
@@ -63,7 +69,7 @@ pub(super) fn index_html_for_test() -> String {
 fn serve_embedded_file(path: &str) -> impl IntoResponse {
     let mime = mime_for_path(path);
 
-    match UiAssets::get(path) {
+    match embedded_file(path) {
         Some(content) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, mime)],
@@ -74,21 +80,24 @@ fn serve_embedded_file(path: &str) -> impl IntoResponse {
     }
 }
 
+fn embedded_file(path: &str) -> Option<rust_embed::EmbeddedFile> {
+    if let Some(config_path) = path.strip_prefix(QOL_CONFIG_ASSET_PREFIX) {
+        return QolConfigAssets::get(config_path);
+    }
+    UiAssets::get(path)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::UiAssets;
+    use super::{embedded_file, QolConfigAssets, UiAssets, QOL_CONFIG_ASSET_PREFIX};
 
     #[test]
     fn embedded_ui_does_not_depend_on_remote_assets() {
-        let violations = UiAssets::iter()
-            .filter(|path| {
-                path.ends_with(".css") || path.ends_with(".html") || path.ends_with(".js")
-            })
-            .filter_map(|path| {
-                let asset = UiAssets::get(path.as_ref())?;
-                let source = String::from_utf8_lossy(&asset.data);
-                has_remote_asset_dependency(&source).then(|| path.into_owned())
-            })
+        let violations = remote_asset_violations::<UiAssets>("")
+            .into_iter()
+            .chain(remote_asset_violations::<QolConfigAssets>(
+                QOL_CONFIG_ASSET_PREFIX,
+            ))
             .collect::<Vec<_>>();
 
         assert!(
@@ -96,6 +105,47 @@ mod tests {
             "embedded UI assets must be self-contained; remote dependencies found in: {}",
             violations.join(", ")
         );
+    }
+
+    #[test]
+    fn shared_qol_config_assets_resolve_through_the_ui_server() {
+        let asset = embedded_file("libs/qol-config/js/heuristics.js")
+            .expect("shared qol-config asset embedded");
+        let source = String::from_utf8_lossy(&asset.data);
+        assert!(source.contains("export function prettyLabel"));
+    }
+
+    #[test]
+    fn tray_ui_does_not_embed_copies_of_shared_qol_config_modules() {
+        let duplicate_paths = [
+            "auto-config/config-paths.js",
+            "auto-config/display-rules.js",
+            "auto-config/heuristics.js",
+            "auto-config/normalized-config.js",
+            "auto-config/object-array-form.js",
+            "auto-config/object-array-renderer.js",
+        ];
+
+        for path in duplicate_paths {
+            assert!(
+                UiAssets::get(path).is_none(),
+                "duplicate shared module: {path}"
+            );
+        }
+    }
+
+    fn remote_asset_violations<Assets: rust_embed::RustEmbed>(prefix: &str) -> Vec<String> {
+        Assets::iter()
+            .filter(|path| {
+                path.ends_with(".css") || path.ends_with(".html") || path.ends_with(".js")
+            })
+            .filter_map(|path| {
+                let asset = Assets::get(path.as_ref())?;
+                let source = String::from_utf8_lossy(&asset.data);
+                has_remote_asset_dependency(&source)
+                    .then(|| format!("{prefix}{}", path.into_owned()))
+            })
+            .collect()
     }
 
     fn has_remote_asset_dependency(source: &str) -> bool {

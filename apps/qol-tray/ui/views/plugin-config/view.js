@@ -8,7 +8,7 @@ import {
     optionLabel,
     selectorDensityClass,
     selectorGridTemplate,
-} from '../../auto-config/display-rules.js';
+} from '../../lib/qol-config.js';
 import { renderField, fieldSurfaceAttrs } from './field-map.js';
 import { dissolveIn, DISSOLVE_PRESETS } from '../../fx/dissolve/index.js';
 import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';

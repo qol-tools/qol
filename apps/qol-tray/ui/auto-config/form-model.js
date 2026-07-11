@@ -1,4 +1,4 @@
-import { setVal } from './config-paths.js';
+import { setVal } from '../lib/qol-config.js';
 
 const RUNTIME_ONLY_KINDS = new Set(['action', 'list', 'status', 'qr_code']);
 

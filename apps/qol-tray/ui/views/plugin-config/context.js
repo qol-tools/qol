@@ -6,7 +6,7 @@ import {
     buildBranchOwnerMap,
     collectVariantGroups,
     isFieldVisible,
-} from '../../auto-config/display-rules.js';
+} from '../../lib/qol-config.js';
 
 const PluginConfigContext = createContext(null);
 

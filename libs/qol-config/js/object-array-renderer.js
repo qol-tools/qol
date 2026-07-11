@@ -3,6 +3,9 @@ import { getObjectArraySchema, guessSchemaFromKey, prettyLabel } from './heurist
 import { appendStaticModChips } from './primitive-fields.js';
 import { buildAddForm } from './object-array-form.js';
 import { getFieldValue } from './normalized-config.js';
+import { declaredFieldsToSchema } from './object-array-model.js';
+
+export { declaredFieldsToSchema } from './object-array-model.js';
 
 export function renderObjectArray(key, value, path, state) {
     return renderObjectArrayBlock({
@@ -56,14 +59,6 @@ function renderObjectArrayBlock(context) {
     buildAddForm(addRow, schema, context.path, context.state, saveAndRender);
     renderOnly();
     return container;
-}
-
-export function declaredFieldsToSchema(itemFields) {
-    const KIND_MAP = { 'string': 'string', 'number': 'number', 'boolean': 'boolean', 'string_array': 'string-array' };
-    return Object.entries(itemFields).map(([key, kind]) => {
-        if (kind === 'string_array' && key.endsWith('_mods')) return [key, 'mods'];
-        return [key, KIND_MAP[kind] || 'string'];
-    });
 }
 
 function renderList(listEl, path, state, rerender) {

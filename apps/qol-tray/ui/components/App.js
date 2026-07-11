@@ -3,7 +3,7 @@ import { useRef, useCallback, useEffect, useLayoutEffect, useMemo, useState } fr
 import { PaletteProvider, usePaletteContext } from '../palette/context.js';
 import { createDebug, elLabel } from '../lib/debug.js';
 import { traceWorld } from '../lib/trace.js';
-import { prettyLabel } from '../auto-config/heuristics.js';
+import { prettyLabel } from '../lib/qol-config.js';
 import { createNavigation, selectorFor, animateTransition } from '../lib/world-navigation.js';
 import { setAscend, setDiveFromSurface, setDiveViaSelector } from '../lib/world-navigation-singleton.js';
 import { getWorldSettings, subscribeWorldSettings } from '../lib/world-settings.js';

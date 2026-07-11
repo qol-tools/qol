@@ -1,7 +1,14 @@
+const DECLARED_KIND_TYPES = {
+    string: 'string',
+    number: 'number',
+    boolean: 'boolean',
+    string_array: 'string-array',
+};
+
 function fieldPrefix(key) {
-    const i = key.indexOf('_');
-    if (i < 0) return null;
-    return key.slice(0, i);
+    const index = key.indexOf('_');
+    if (index < 0) return null;
+    return key.slice(0, index);
 }
 
 export function groupFields(schema) {
@@ -19,4 +26,11 @@ export function groupFields(schema) {
     }
 
     return { fromFields, toFields, rest, booleans };
+}
+
+export function declaredFieldsToSchema(itemFields) {
+    return Object.entries(itemFields).map(([key, kind]) => {
+        if (kind === 'string_array' && key.endsWith('_mods')) return [key, 'mods'];
+        return [key, DECLARED_KIND_TYPES[kind] || 'string'];
+    });
 }

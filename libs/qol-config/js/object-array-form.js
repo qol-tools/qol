@@ -1,6 +1,9 @@
 import { getVal, setVal } from './config-paths.js';
 import { createFieldLabel } from './field-label.js';
 import { KNOWN_MODS, prettyLabel } from './heuristics.js';
+import { groupFields } from './object-array-model.js';
+
+export { groupFields } from './object-array-model.js';
 
 export function buildAddForm(container, schema, arrayPath, state, rerender) {
     container.replaceChildren();
@@ -11,29 +14,6 @@ export function buildAddForm(container, schema, arrayPath, state, rerender) {
     addButton.textContent = '+ Add';
     addButton.addEventListener('click', () => handleAdd(inputs, arrayPath, state, rerender));
     container.appendChild(addButton);
-}
-
-function fieldPrefix(key) {
-    const i = key.indexOf('_');
-    if (i < 0) return null;
-    return key.slice(0, i);
-}
-
-export function groupFields(schema) {
-    const fromFields = [];
-    const toFields = [];
-    const booleans = [];
-    const rest = [];
-
-    for (const [key, type] of schema) {
-        if (type === 'boolean') { booleans.push([key, type]); continue; }
-        const prefix = fieldPrefix(key);
-        if (prefix === 'from') { fromFields.push([key, type]); continue; }
-        if (prefix === 'to') { toFields.push([key, type]); continue; }
-        rest.push([key, type]);
-    }
-
-    return { fromFields, toFields, rest, booleans };
 }
 
 function buildFieldInputs(container, schema) {

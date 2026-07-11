@@ -3,7 +3,7 @@ import { useState, useCallback, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { FieldLabel } from './FieldLabel.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
-import { prettyLabel } from '../../../auto-config/heuristics.js';
+import { prettyLabel } from '../../../lib/qol-config.js';
 
 export function ObjectMapField({ field }) {
     const ctx = usePluginConfigContext();
