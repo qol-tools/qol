@@ -8,6 +8,7 @@ anyhow = "1"
 qol-config.workspace = true
 qol-conventions.workspace = true
 qol-headless.workspace = true
+qol-process.workspace = true
 qol-runtime.workspace = true
 open.workspace = true
 serde = { version = "1", features = ["derive"] }

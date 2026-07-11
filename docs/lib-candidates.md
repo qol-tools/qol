@@ -42,6 +42,14 @@ Status: candidate.
 
 Tray dev mode and the `qol` CLI both reason about workspace roots, plugin source discovery, Cargo buildability, and fingerprint inputs. The shared seam is workspace/plugin scanning and build fingerprinting, not UI or process orchestration.
 
+## Process lifecycle
+
+Target: `libs/qol-process`
+
+Status: shared.
+
+PID liveness, signaling, attached-child waiting, graceful termination escalation, process-group shutdown, and child reaping are shared across the tray, dev CLI, and plugins. Process ownership policy and caller-specific logging stay at each integration point.
+
 ## CLI session domain
 
 Target: `libs/qol-cli-sessions`

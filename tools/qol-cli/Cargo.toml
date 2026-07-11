@@ -18,6 +18,7 @@ qol-config.workspace = true
 qol-conventions.workspace = true
 qol-dev-build.workspace = true
 qol-fs.workspace = true
+qol-process.workspace = true
 qol-workspace.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

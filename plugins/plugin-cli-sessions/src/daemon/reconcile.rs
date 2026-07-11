@@ -20,7 +20,7 @@ pub struct ReconcileCaches {
 }
 
 fn pid_alive(pid: i32) -> bool {
-    pid > 0 && unsafe { libc::kill(pid, 0) } == 0
+    u32::try_from(pid).is_ok_and(qol_process::is_pid_alive)
 }
 
 pub fn tick(

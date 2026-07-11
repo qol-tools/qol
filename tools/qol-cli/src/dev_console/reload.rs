@@ -465,6 +465,7 @@ fn read_shadow_ready(path: &Path) -> Result<ShadowGenerationReady> {
     Ok(ready)
 }
 
+#[cfg(any(unix, test))]
 fn runtime_daemon_pids_from_dir(pids_dir: &Path) -> Vec<TrackedDaemonPid> {
     let mut daemons: Vec<_> = fs::read_dir(pids_dir)
         .into_iter()
@@ -545,21 +546,12 @@ fn format_daemon_pids(daemons: &[TrackedDaemonPid]) -> String {
 
 #[cfg(unix)]
 fn process_holds_handoff_resources(pid: u32) -> bool {
-    process_alive(pid) && !process_is_zombie(pid)
+    qol_process::is_pid_alive(pid) && !process_is_zombie(pid)
 }
 
 #[cfg(not(unix))]
 fn process_holds_handoff_resources(_pid: u32) -> bool {
     false
-}
-
-#[cfg(unix)]
-fn process_alive(pid: u32) -> bool {
-    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if result == 0 {
-        return true;
-    }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 #[cfg(unix)]

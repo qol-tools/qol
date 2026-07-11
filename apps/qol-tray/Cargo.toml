@@ -36,6 +36,7 @@ linux_evdev = ["dep:evdev"]
 qol-conventions.workspace = true
 qol-dev-build.workspace = true
 qol-fs.workspace = true
+qol-process.workspace = true
 qol-workspace.workspace = true
 # Core async runtime
 tokio = { version = "1.35", features = ["rt-multi-thread", "fs", "process", "net", "sync", "time", "macros"] }
@@ -120,9 +121,6 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["NSAppl
 mach2 = "0.6"
 core-foundation = "0.10"
 core-graphics = "0.25"
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

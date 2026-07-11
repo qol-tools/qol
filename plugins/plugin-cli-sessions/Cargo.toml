@@ -17,14 +17,9 @@ serde_json.workspace = true
 gpui.workspace = true
 qol-gpui.workspace = true
 qol-plugin-daemon.workspace = true
+qol-process.workspace = true
 qol-runtime.workspace = true
 qol-config.workspace = true
-
-[target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-libc = "0.2"
 
 [build-dependencies]
 qol-conventions.workspace = true
