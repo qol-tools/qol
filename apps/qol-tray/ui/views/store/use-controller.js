@@ -19,7 +19,7 @@ export function useStoreController() {
     const data = useStoreData(token.hasTokenRef, token.onLoadResult);
     loadRef.current = data.loadPlugins;
     const nav = useStoreNav(data.plugins, searchQuery);
-    const install = useStoreInstall(data.pluginsRef, data.loadPlugins, installing);
+    const install = useStoreInstall(data.pluginsRef, data.loadPlugins, installing, data.markUpdated);
     useInitialLoad(token.setHasToken, data.loadPlugins);
     const handleKey = useKeyHandler(token.showTokenInputRef, token.view, nav, install, installing.has);
     const handleCardClick = useCardClick(install, nav.setSelectedIndex, nav.selectedIndexRef);

@@ -4,7 +4,7 @@ import { useAsyncToken } from '../../lib/hooks/useAsyncToken.js';
 import { useRefreshOnFocus } from '../../lib/hooks/useRefreshOnFocus.js';
 import { useSSEDebounce } from '../../hooks/useSSEDebounce.js';
 import { loadStorePlugins } from './data.js';
-import { samePluginList } from '../../utils/plugins.js';
+import { markPluginUpdated, samePluginList } from '../../utils/plugins.js';
 
 const FOCUS_REFRESH_MIN_MS = 30000;
 const REVALIDATE_MAX_MS = 25000;
@@ -19,9 +19,10 @@ export function useStoreData(hasTokenRef, onLoadResult) {
     const ctx = { hasTokenRef, nextToken, isCurrentToken, setPlugins, pluginsRef, setCacheAgeSecs, setFirstLoad, firstLoadRef, setRefreshing, revalTimerRef, onLoadResult };
     const loadPlugins = useCallback(options => executeLoad(ctx, options || {}), [hasTokenRef, nextToken, isCurrentToken, onLoadResult]);
     const refreshPlugins = useCallback(() => loadPlugins({ forceRefresh: true }), [loadPlugins]);
+    const markUpdated = useCallback(id => setPlugins(prev => markPluginUpdated(prev, id)), []);
     useRefreshOnFocus(loadPlugins, { minIntervalMs: FOCUS_REFRESH_MIN_MS });
     useSSEDebounce('plugins_changed', () => loadPlugins());
-    return { plugins, pluginsRef, firstLoad, refreshing, cacheAgeSecs, loadPlugins, refreshPlugins };
+    return { plugins, pluginsRef, firstLoad, refreshing, cacheAgeSecs, loadPlugins, refreshPlugins, markUpdated };
 }
 
 async function executeLoad(ctx, options) {

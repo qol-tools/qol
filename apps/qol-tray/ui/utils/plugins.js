@@ -25,7 +25,13 @@ export function markPluginUpdated(plugins, id) {
     const current = plugins[idx];
     const version = current.available_version ?? current.installed_version ?? current.version ?? null;
     const next = plugins.slice();
-    next[idx] = { ...current, update_available: false, installed_version: version, version };
+    next[idx] = {
+        ...current,
+        update_available: false,
+        running_version: version,
+        installed_version: version,
+        version,
+    };
     return next;
 }
 

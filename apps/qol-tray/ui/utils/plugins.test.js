@@ -48,12 +48,13 @@ test('samePluginList handles empty lists and non-arrays', () => {
 
 test('markPluginUpdated clears the update flag and bumps versions for the matching plugin only', () => {
     const before = [
-        { id: 'a', update_available: true, available_version: '2.0.0', installed_version: '1.0.0', version: '1.0.0' },
+        { id: 'a', update_available: true, available_version: '2.0.0', running_version: '1.0.0', installed_version: '1.0.0', version: '1.0.0' },
         { id: 'b', update_available: true, available_version: '3.0.0', installed_version: '2.5.0', version: '2.5.0' },
     ];
     const after = markPluginUpdated(before, 'a');
     const cases = [
         [after[0].update_available, false, 'a no longer updatable'],
+        [after[0].running_version, '2.0.0', 'a running_version bumped to available'],
         [after[0].installed_version, '2.0.0', 'a installed_version bumped to available'],
         [after[0].version, '2.0.0', 'a version bumped to available'],
         [after[1], before[1], 'b untouched (same reference)'],
