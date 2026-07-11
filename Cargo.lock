@@ -5913,7 +5913,7 @@ dependencies = [
 
 [[package]]
 name = "qol-shot"
-version = "1.21.0"
+version = "1.21.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5945,7 +5945,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.22.4"
+version = "3.22.5"
 dependencies = [
  "anyhow",
  "axum",
