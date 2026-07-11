@@ -52,6 +52,7 @@ pub(super) fn reload_plugins(manager: &mut PluginManager) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(not(debug_assertions), allow(unused_variables, unused_assignments))]
 pub(super) fn reload_plugin(manager: &mut PluginManager, plugin_id: &str) -> Result<()> {
     log::info!("Reloading plugin: {plugin_id}");
     qol_runtime::probe!(

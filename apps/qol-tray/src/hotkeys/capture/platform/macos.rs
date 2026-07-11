@@ -1,4 +1,4 @@
-use super::super::binding::{Binding, Mod};
+use super::super::binding::Binding;
 use super::super::{OnFire, RebuildBindings};
 use anyhow::{bail, Result};
 use core_foundation::base::TCFType;
@@ -10,6 +10,7 @@ use core_graphics::event::{
 };
 use crossbeam_channel::Receiver;
 use qol_hotkeys::grammar;
+use qol_hotkeys::grammar::Modifier as Mod;
 use qol_hotkeys::macos_keycode;
 use qol_runtime::keyremap_marker::{self, KeyRemapMarker};
 use std::collections::BTreeSet;
