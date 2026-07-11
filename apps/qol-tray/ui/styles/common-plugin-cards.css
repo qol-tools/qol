@@ -76,14 +76,14 @@
 }
 
 .plugin-card[data-selected="true"] .plugin-cover-placeholder::after {
-    animation: crt-card-roll 6s linear infinite;
+    animation: crt-card-roll 8s linear infinite;
 }
 
 @keyframes crt-card-roll {
     0% {
         background-position: 0 calc(0% - 120px), 0 0;
     }
-    20%, 100% {
+    15%, 100% {
         background-position: 0 calc(100% + 120px), 0 0;
     }
 }
