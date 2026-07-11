@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickFallbackSurface, hasModalCapturingFocus } from './focus-retention.js';
+import { createFocusRetention, pickFallbackSurface, hasModalCapturingFocus } from './focus-retention.js';
 
 function makeSurface({ id, selected = false, connected = true, visible = true, disabled = false }) {
     return {
@@ -34,6 +34,82 @@ function makeRoot({ id, surfaces = [], slots = [], connected = true, rect = null
     }
     return root;
 }
+
+function installFocusRuntime() {
+    const originals = {
+        HTMLElement: globalThis.HTMLElement,
+        MutationObserver: globalThis.MutationObserver,
+        requestAnimationFrame: globalThis.requestAnimationFrame,
+        cancelAnimationFrame: globalThis.cancelAnimationFrame,
+        document: globalThis.document,
+    };
+    const originalLog = console.log;
+    let scheduled = null;
+    class FakeHTMLElement {}
+    class FakeMutationObserver {
+        observe() {}
+        disconnect() {}
+    }
+    globalThis.HTMLElement = FakeHTMLElement;
+    globalThis.MutationObserver = FakeMutationObserver;
+    globalThis.requestAnimationFrame = callback => { scheduled = callback; return 1; };
+    globalThis.cancelAnimationFrame = () => { scheduled = null; };
+    console.log = () => {};
+    return {
+        FakeHTMLElement,
+        flush: () => { const callback = scheduled; scheduled = null; callback?.(); },
+        restore: () => {
+            for (const [name, value] of Object.entries(originals)) {
+                if (value === undefined) delete globalThis[name];
+                if (value !== undefined) globalThis[name] = value;
+            }
+            console.log = originalLog;
+        },
+    };
+}
+
+function makeNestedFocusHarness(FakeHTMLElement) {
+    const listeners = new Map();
+    const body = new FakeHTMLElement();
+    const container = new FakeHTMLElement();
+    const surface = new FakeHTMLElement();
+    const button = new FakeHTMLElement();
+    let doc;
+    container.isConnected = true;
+    container.querySelectorAll = () => [surface];
+    surface.isConnected = true;
+    surface.disabled = false;
+    surface.getAttribute = name => name === 'data-selected' ? 'true' : '';
+    surface.getClientRects = () => [{ width: 10, height: 10 }];
+    surface.closest = selector => selector === '[data-surface-container]' ? container : null;
+    surface.focus = () => { doc.activeElement = surface; };
+    button.closest = selector => selector === '[data-selected-surface]' ? surface : null;
+    doc = {
+        body,
+        activeElement: button,
+        querySelector: () => null,
+        addEventListener: (name, handler) => listeners.set(name, handler),
+        removeEventListener: name => listeners.delete(name),
+    };
+    globalThis.document = doc;
+    return { doc, body, surface, focusOut: () => listeners.get('focusout')?.() };
+}
+
+test('focus retention restores a surviving surface when its focused child disappears', () => {
+    const runtime = installFocusRuntime();
+    const harness = makeNestedFocusHarness(runtime.FakeHTMLElement);
+    let retention;
+    try {
+        retention = createFocusRetention(harness.doc);
+        harness.doc.activeElement = harness.body;
+        harness.focusOut();
+        runtime.flush();
+        assert.equal(harness.doc.activeElement, harness.surface);
+    } finally {
+        retention?.dispose();
+        runtime.restore();
+    }
+});
 
 test('pickFallbackSurface picks selected surface in lost container first', () => {
     const a = makeSurface({ id: 'a' });

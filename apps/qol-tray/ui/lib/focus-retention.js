@@ -126,7 +126,6 @@ export function createFocusRetention(doc = typeof document !== 'undefined' ? doc
         if (active && active !== doc.body) return;
         const lost = tracked.surface;
         if (!lost) return;
-        if (lost.isConnected) return;
         if (hasModalCapturingFocus(doc)) return;
         const fallback = pickFallbackSurface({
             lostContainer: tracked.container,
@@ -138,7 +137,6 @@ export function createFocusRetention(doc = typeof document !== 'undefined' ? doc
             tracked.surface = null;
             return;
         }
-        if (fallback === lost) return;
         log('recover:', elLabel(lost), '→', elLabel(fallback));
         fallback.focus({ preventScroll: true });
         tracked.surface = fallback;
