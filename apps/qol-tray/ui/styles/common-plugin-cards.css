@@ -73,23 +73,18 @@
         linear-gradient(180deg, transparent, rgba(var(--accent-rgb), 0.06) 30%, rgba(var(--accent-rgb), 0.14) 50%, rgba(var(--accent-rgb), 0.06) 70%, transparent) 0 calc(0% - 120px) / 100% 120px no-repeat,
         var(--tui-scanline);
     z-index: var(--z-1);
-    animation: crt-card-roll 4s linear infinite;
 }
 
-.plugin-card:nth-child(2n) .plugin-cover-placeholder::after {
-    animation-delay: -1.7s;
-}
-
-.plugin-card:nth-child(3n) .plugin-cover-placeholder::after {
-    animation-delay: -2.9s;
+.plugin-card[data-selected="true"] .plugin-cover-placeholder::after {
+    animation: crt-card-roll 6s linear infinite;
 }
 
 @keyframes crt-card-roll {
     0% {
         background-position: 0 calc(0% - 120px), 0 0;
     }
-    100% {
-        background-position: 0 calc(100% + 120px), 0 24px;
+    20%, 100% {
+        background-position: 0 calc(100% + 120px), 0 0;
     }
 }
 
