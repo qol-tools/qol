@@ -233,9 +233,9 @@ mod tests {
         Config {
             shake_reversals: 5,
             regrow_reversals: 3,
-            shake_window_ms: 900,
+            shake_window_ms: 600,
             swing_min_px: 40,
-            swing_min_speed: 1200.0,
+            swing_min_speed: 1400.0,
             scale_factor: 4,
             calm_duration_ms: 650,
             restore_steps: 18,
@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn shake_trigger_table() {
         let cases: [ShakeCase; 8] = [
-            ("brisk wiggle triggers", wiggle(120, 96, 2000), true),
+            ("brisk wiggle triggers", wiggle(150, 96, 2000), true),
             ("vigorous wide shake triggers", wiggle(240, 64, 2000), true),
             ("big fast arm shake triggers", wiggle(700, 125, 2000), true),
             ("slow fiddling never triggers", wiggle(60, 96, 3000), false),
@@ -293,7 +293,7 @@ mod tests {
             ),
             (
                 "vertical wiggle triggers too",
-                wiggle(120, 96, 2000)
+                wiggle(150, 96, 2000)
                     .iter()
                     .map(|(t, dx, dy)| (*t, *dy, *dx))
                     .collect(),
@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn moderate_wiggle_triggers_within_a_second() {
         let mut detector = ShakeDetector::new(&config());
-        let grew_at = feed(&mut detector, Instant::now(), &wiggle(120, 96, 2000));
+        let grew_at = feed(&mut detector, Instant::now(), &wiggle(150, 96, 2000));
         let at = grew_at.expect("brisk wiggle must trigger");
         assert!(at <= 1000, "trigger should land within 1s, got {at}ms");
     }
@@ -332,7 +332,7 @@ mod tests {
     fn cursor_shrinks_after_calm_and_regrows_on_three_reversals() {
         let mut detector = ShakeDetector::new(&config());
         let t0 = Instant::now();
-        feed(&mut detector, t0, &wiggle(120, 96, 1200)).expect("initial grow");
+        feed(&mut detector, t0, &wiggle(150, 96, 1200)).expect("initial grow");
         let mut t = Duration::from_millis(1200);
         let mut restored = false;
         for _ in 0..200 {

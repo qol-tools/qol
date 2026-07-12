@@ -74,8 +74,8 @@ mod tests {
 
         let defaults = contract_defaults();
         assert_eq!(defaults.shake_reversals, 5);
-        assert_eq!(defaults.shake_window_ms, 900);
-        assert_eq!(defaults.swing_min_speed, 1200.0);
+        assert_eq!(defaults.shake_window_ms, 600);
+        assert_eq!(defaults.swing_min_speed, 1400.0);
         assert_eq!(defaults.restore_steps, 18);
     }
 }
