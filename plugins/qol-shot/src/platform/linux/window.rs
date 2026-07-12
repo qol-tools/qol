@@ -1,3 +1,5 @@
+use crate::Rect;
+
 #[derive(Clone)]
 pub struct PinResizeSession(qol_gpui::popup_window::WindowGeometrySession);
 
@@ -70,12 +72,62 @@ pub fn configure_pin_window(
     });
 }
 
-pub(super) fn configure_selector_window(title: String) {
-    configure_window_async(
-        title,
-        "SHOT_SELECT_OVERLAY",
-        qol_gpui::popup_window::configure_overlay_window,
+pub(super) fn configure_selector_window(title: String, bounds: Rect) {
+    let Some(expected) = exact_window_bounds(bounds) else {
+        qol_runtime::probe!(
+            "SHOT_SELECT_VIEWPORT",
+            "title={title} expected={}x{}+{},{} result=invalid",
+            bounds.w,
+            bounds.h,
+            bounds.x,
+            bounds.y
+        );
+        return;
+    };
+    configure_window_async(title, "SHOT_SELECT_OVERLAY", move |title| {
+        configure_selector_window_once(title, expected)
+    });
+}
+
+fn configure_selector_window_once(title: &str, expected: (i32, i32, u32, u32)) -> bool {
+    if !qol_gpui::popup_window::configure_overlay_window(title) {
+        return false;
+    }
+    let Some(session) = qol_gpui::popup_window::window_geometry_session(title) else {
+        return false;
+    };
+    if !qol_gpui::popup_window::make_override_redirect(title) {
+        return false;
+    }
+    session.set_bounds(expected.0, expected.1, expected.2, expected.3);
+    let actual = session.bounds();
+    let aligned = selector_bounds_match(expected, actual);
+    let actual = actual
+        .map(|(x, y, width, height)| format!("{width}x{height}+{x},{y}"))
+        .unwrap_or_else(|| "none".to_string());
+    let focused = aligned && qol_gpui::popup_window::focus_window_by_title(title);
+    qol_runtime::probe!(
+        "SHOT_SELECT_VIEWPORT",
+        "title={title} expected={}x{}+{},{} actual={actual} aligned={aligned} focused={focused}",
+        expected.2,
+        expected.3,
+        expected.0,
+        expected.1
     );
+    focused
+}
+
+fn exact_window_bounds(bounds: Rect) -> Option<(i32, i32, u32, u32)> {
+    let width = u32::try_from(bounds.w).ok().filter(|width| *width > 0)?;
+    let height = u32::try_from(bounds.h).ok().filter(|height| *height > 0)?;
+    Some((bounds.x, bounds.y, width, height))
+}
+
+fn selector_bounds_match(
+    expected: (i32, i32, u32, u32),
+    actual: Option<(i32, i32, u32, u32)>,
+) -> bool {
+    actual == Some(expected)
 }
 
 pub(super) fn configure_window_async(
@@ -98,4 +150,65 @@ pub(super) fn configure_window_async(
         }
         qol_runtime::probe!(probe, "ms={} result=timeout", started.elapsed().as_millis());
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{exact_window_bounds, selector_bounds_match};
+    use crate::Rect;
+
+    #[test]
+    fn selector_requires_the_exact_desktop_viewport() {
+        let expected = (0, 0, 4480, 1440);
+        let cases = [
+            (Some(expected), true),
+            (Some((0, 0, 4480, 1398)), false),
+            (Some((0, 32, 4480, 1408)), false),
+            (Some((1, 0, 4480, 1440)), false),
+            (None, false),
+        ];
+        for (actual, aligned) in cases {
+            assert_eq!(
+                selector_bounds_match(expected, actual),
+                aligned,
+                "actual: {actual:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn selector_bounds_accept_negative_origins_and_reject_empty_sizes() {
+        let cases = [
+            (
+                Rect {
+                    x: -1920,
+                    y: -120,
+                    w: 4480,
+                    h: 1440,
+                },
+                Some((-1920, -120, 4480, 1440)),
+            ),
+            (
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 1440,
+                },
+                None,
+            ),
+            (
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 4480,
+                    h: -1,
+                },
+                None,
+            ),
+        ];
+        for (bounds, expected) in cases {
+            assert_eq!(exact_window_bounds(bounds), expected, "bounds: {bounds:?}");
+        }
+    }
 }

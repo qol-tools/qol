@@ -20,6 +20,10 @@ pub fn is_shift_held() -> bool {
     imp::is_shift_held()
 }
 
+pub fn is_escape_held() -> bool {
+    imp::is_escape_held()
+}
+
 pub fn set_accessory_policy() {
     imp::set_accessory_policy()
 }

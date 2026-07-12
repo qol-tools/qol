@@ -2,11 +2,15 @@ use anyhow::{anyhow, Context, Result};
 use qol_headless::DoctorCheckResult;
 use std::path::Path;
 
+use crate::frozen_frame::FrozenFrame;
 use crate::platform::CaptureSession;
 use crate::space::CaptureKind;
 use crate::{Config, Monitor, Rect};
 
-pub fn select_region(_kind: CaptureKind) -> Result<Option<Rect>> {
+pub fn select_region(
+    _kind: CaptureKind,
+    _frozen_frame: Option<FrozenFrame>,
+) -> Result<Option<Rect>> {
     Err(anyhow!(
         "qol-shot: region selection is not implemented on Windows"
     ))
@@ -84,6 +88,10 @@ pub fn open_url(url: &str) -> Result<()> {
 
 pub fn grab_preview_rgba(_rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {
     None
+}
+
+pub fn capture_frozen_frame() -> Result<Option<FrozenFrame>> {
+    Ok(None)
 }
 
 pub fn configure_preview_window(_title: String) {}

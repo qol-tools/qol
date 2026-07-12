@@ -7,6 +7,7 @@ mod config;
 mod daemon;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod daemon_app;
+mod frozen_frame;
 mod geometry;
 mod output;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

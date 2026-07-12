@@ -79,6 +79,7 @@ pub fn run() {
         spawn_active_monitor_cache(cx);
         crate::preview::pre_create(&state.windows, &state.tracker, cx);
         spawn_screenshot_loop(rx, state, cx);
+        qol_runtime::probe!("SHOT_DAEMON_APP", "state=ready");
     });
 
     daemon::cleanup();
@@ -181,12 +182,23 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
         return;
     };
     park_preview(cx, state, "screenshot");
-    let Some(selected) = select_region(cx, state, crate::space::CaptureKind::Screenshot).await
+    let frozen_frame = cx
+        .background_spawn(async { crate::screenshot::freeze_frame() })
+        .await;
+    let Some(selected) = select_region(
+        cx,
+        state,
+        crate::space::CaptureKind::Screenshot,
+        frozen_frame.clone(),
+    )
+    .await
     else {
         return;
     };
     let captured = cx
-        .background_spawn(async move { crate::screenshot::capture_selected_for_preview(selected) })
+        .background_spawn(async move {
+            crate::screenshot::capture_selected_for_preview(selected, frozen_frame.as_ref())
+        })
         .await;
     match captured {
         Ok(capture) => present(cx, state, capture),
@@ -259,8 +271,10 @@ async fn select_region(
     cx: &AsyncApp,
     state: &State,
     kind: crate::space::CaptureKind,
+    frozen_frame: Option<crate::frozen_frame::FrozenFrame>,
 ) -> Option<crate::Rect> {
     let tracker = state.tracker.clone();
+    let in_app_frame = frozen_frame.clone();
     qol_runtime::probe!("SHOT_SELECT_REQUEST", "source=daemon-app");
     if let Some(rx) = cx
         .update(move |cx| {
@@ -269,6 +283,7 @@ async fn select_region(
                 kind,
                 tracker.snapshot_monitor(),
                 tracker.all_monitors(),
+                in_app_frame,
             )
         })
         .ok()?
@@ -281,7 +296,11 @@ async fn select_region(
     }
 
     let selected = cx
-        .background_spawn(async move { crate::platform::select_region(kind).ok().flatten() })
+        .background_spawn(async move {
+            crate::platform::select_region(kind, frozen_frame)
+                .ok()
+                .flatten()
+        })
         .await;
     trace_selected("daemon-fallback", selected);
     selected
@@ -339,7 +358,7 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
     let Some(_flow) = begin_shot_flow(state, "record") else {
         return;
     };
-    let Some(selected) = select_region(cx, state, crate::space::CaptureKind::Recording).await
+    let Some(selected) = select_region(cx, state, crate::space::CaptureKind::Recording, None).await
     else {
         qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon result=select-cancel");
         return;

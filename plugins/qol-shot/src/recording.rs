@@ -30,7 +30,8 @@ pub fn toggle_recording(config: &Config) -> Result<()> {
     };
 
     qol_runtime::probe!("SHOT_SELECT_REQUEST", "source=cli");
-    let Some(selected) = platform::select_region(crate::space::CaptureKind::Recording)? else {
+    let Some(selected) = platform::select_region(crate::space::CaptureKind::Recording, None)?
+    else {
         qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=cli result=select-cancel");
         return Ok(());
     };

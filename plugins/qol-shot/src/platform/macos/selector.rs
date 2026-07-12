@@ -7,6 +7,7 @@ use std::ffi::c_void;
 use std::sync::mpsc;
 use std::time::Instant;
 
+use crate::frozen_frame::FrozenFrame;
 use crate::space::CaptureKind;
 use crate::{Monitor, Rect};
 
@@ -35,7 +36,7 @@ extern "C" {
     fn CFRelease(cf: *const c_void);
 }
 
-pub fn select_region(kind: CaptureKind) -> Result<Option<Rect>> {
+pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Result<Option<Rect>> {
     crate::region_selector::select_region_blocking_with(move |tx, cx| {
         let tracker = MonitorTracker::start(cx);
         let monitor = tracker.snapshot_monitor();
@@ -46,7 +47,7 @@ pub fn select_region(kind: CaptureKind) -> Result<Option<Rect>> {
             monitor.is_some(),
             monitors.len()
         );
-        open_region_selector_with_sender(tx, true, kind, monitor, monitors, cx);
+        open_region_selector_with_sender(tx, true, kind, monitor, monitors, frozen_frame, cx);
     })
 }
 
@@ -55,6 +56,7 @@ pub fn select_region_in_app(
     kind: CaptureKind,
     monitor: Option<ActiveMonitor>,
     monitors: Vec<ActiveMonitor>,
+    frozen_frame: Option<FrozenFrame>,
 ) -> Option<mpsc::Receiver<Option<Rect>>> {
     qol_runtime::probe!(
         "SHOT_SELECT_PLATFORM",
@@ -62,7 +64,13 @@ pub fn select_region_in_app(
         monitor.is_some(),
         monitors.len()
     );
-    Some(open_region_selector(cx, kind, monitor, monitors))
+    Some(open_region_selector(
+        cx,
+        kind,
+        monitor,
+        monitors,
+        frozen_frame,
+    ))
 }
 
 fn open_region_selector(
@@ -70,9 +78,10 @@ fn open_region_selector(
     kind: CaptureKind,
     monitor: Option<ActiveMonitor>,
     monitors: Vec<ActiveMonitor>,
+    frozen_frame: Option<FrozenFrame>,
 ) -> mpsc::Receiver<Option<Rect>> {
     let (tx, rx) = mpsc::channel();
-    open_region_selector_with_sender(tx, false, kind, monitor, monitors, cx);
+    open_region_selector_with_sender(tx, false, kind, monitor, monitors, frozen_frame, cx);
     rx
 }
 
@@ -82,9 +91,10 @@ fn open_region_selector_with_sender(
     kind: CaptureKind,
     monitor: Option<ActiveMonitor>,
     monitors: Vec<ActiveMonitor>,
+    frozen_frame: Option<FrozenFrame>,
     cx: &mut gpui::App,
 ) {
-    let selectors = selector_windows(monitor.as_ref(), monitors, cx);
+    let selectors = selector_windows(monitor.as_ref(), monitors, frozen_frame.as_ref(), cx);
     let titles = selectors
         .iter()
         .map(|selector| selector.title().to_string())
@@ -105,6 +115,7 @@ fn open_region_selector_with_sender(
 fn selector_windows(
     monitor: Option<&ActiveMonitor>,
     monitors: Vec<ActiveMonitor>,
+    frozen_frame: Option<&FrozenFrame>,
     cx: &gpui::App,
 ) -> Vec<crate::region_selector::SelectorWindow> {
     let active_bounds = monitor.map(|monitor| monitor.bounds());
@@ -124,6 +135,7 @@ fn selector_windows(
             true,
             map_rect,
             global_pointer,
+            frozen_frame.cloned(),
         )];
     }
     monitors
@@ -138,6 +150,7 @@ fn selector_windows(
                 selector_focus(bounds, active_bounds),
                 map_rect.clone(),
                 global_pointer.clone(),
+                frozen_frame.cloned(),
             )
         })
         .collect()
@@ -150,6 +163,7 @@ fn selector_window(
     focus: bool,
     map_rect: crate::region_selector::RectMapper,
     global_pointer: Option<crate::region_selector::GlobalPointerSource>,
+    frozen_frame: Option<FrozenFrame>,
 ) -> crate::region_selector::SelectorWindow {
     crate::region_selector::SelectorWindow::new(
         bounds,
@@ -164,8 +178,10 @@ fn selector_window(
         crate::region_selector::SelectorWindowSources {
             map_rect,
             global_pointer,
+            cancel_signal: None,
             active_bounds: None,
             hover_target: None,
+            frozen_frame,
         },
     )
 }

@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
 
+use crate::frozen_frame::{FrozenFrame, RgbaCrop};
 use crate::{geometry, platform, Rect};
 
 pub fn capture_screenshot() -> Result<Option<PathBuf>> {
@@ -16,11 +17,14 @@ pub fn capture_to_file() -> Result<Option<PathBuf>> {
         qol_runtime::probe!("SHOT_SKIP", "action=screenshot reason=busy");
         return Ok(None);
     };
-    let Some(selected) = platform::select_region(crate::space::CaptureKind::Screenshot)? else {
+    let frozen_frame = freeze_frame();
+    let Some(selected) =
+        platform::select_region(crate::space::CaptureKind::Screenshot, frozen_frame.clone())?
+    else {
         return Ok(None);
     };
     let rect = prepare_screenshot_rect(selected)?;
-    capture_rect_to_file(rect).map(Some)
+    capture_rect_to_file(rect, frozen_frame.as_ref()).map(Some)
 }
 
 pub struct PreviewCapture {
@@ -33,15 +37,55 @@ pub fn capture_for_preview() -> Result<Option<PreviewCapture>> {
         qol_runtime::probe!("SHOT_SKIP", "action=preview-capture reason=busy");
         return Ok(None);
     };
-    let Some(selected) = platform::select_region(crate::space::CaptureKind::Screenshot)? else {
+    let frozen_frame = freeze_frame();
+    let Some(selected) =
+        platform::select_region(crate::space::CaptureKind::Screenshot, frozen_frame.clone())?
+    else {
         return Ok(None);
     };
-    capture_selected_for_preview(selected).map(Some)
+    capture_selected_for_preview(selected, frozen_frame.as_ref()).map(Some)
 }
 
-pub fn capture_selected_for_preview(selected: Rect) -> Result<PreviewCapture> {
+pub(crate) fn capture_selected_for_preview(
+    selected: Rect,
+    frozen_frame: Option<&FrozenFrame>,
+) -> Result<PreviewCapture> {
     let rect = prepare_screenshot_rect(selected)?;
-    capture_rect_for_preview(rect)
+    capture_rect_for_preview(rect, frozen_frame)
+}
+
+pub(crate) fn freeze_frame() -> Option<FrozenFrame> {
+    let started = std::time::Instant::now();
+    match platform::capture_frozen_frame() {
+        Ok(Some(frame)) => {
+            let bounds = frame.bounds();
+            qol_runtime::probe!(
+                "SHOT_FREEZE",
+                "result=ok ms={} bounds={}x{}",
+                started.elapsed().as_millis(),
+                bounds.w,
+                bounds.h
+            );
+            Some(frame)
+        }
+        Ok(None) => {
+            qol_runtime::probe!(
+                "SHOT_FREEZE",
+                "result=unavailable ms={}",
+                started.elapsed().as_millis()
+            );
+            None
+        }
+        Err(error) => {
+            eprintln!("[qol-shot] failed to freeze screenshot frame: {error:#}");
+            qol_runtime::probe!(
+                "SHOT_FREEZE",
+                "result=error ms={}",
+                started.elapsed().as_millis()
+            );
+            None
+        }
+    }
 }
 
 fn prepare_screenshot_rect(selected: Rect) -> Result<Rect> {
@@ -64,13 +108,24 @@ fn prepare_screenshot_rect(selected: Rect) -> Result<Rect> {
     Ok(rect)
 }
 
-fn capture_rect_to_file(rect: Rect) -> Result<PathBuf> {
+fn capture_rect_to_file(rect: Rect, frozen_frame: Option<&FrozenFrame>) -> Result<PathBuf> {
     let output_file = crate::output::screenshot_output_file_path()?;
     let started = std::time::Instant::now();
+    if let Some(crop) = frozen_crop(frozen_frame, rect)? {
+        crop.save_png(&output_file)?;
+        qol_runtime::probe!(
+            "SHOT_CAPTURE",
+            "source=frozen ms={} rect={}x{}",
+            started.elapsed().as_millis(),
+            rect.w,
+            rect.h
+        );
+        return Ok(output_file);
+    }
     platform::capture_screenshot(&rect, &output_file)?;
     qol_runtime::probe!(
         "SHOT_CAPTURE",
-        "ms={} rect={}x{}",
+        "source=live ms={} rect={}x{}",
         started.elapsed().as_millis(),
         rect.w,
         rect.h
@@ -78,8 +133,27 @@ fn capture_rect_to_file(rect: Rect) -> Result<PathBuf> {
     Ok(output_file)
 }
 
-fn capture_rect_for_preview(rect: Rect) -> Result<PreviewCapture> {
+fn capture_rect_for_preview(
+    rect: Rect,
+    frozen_frame: Option<&FrozenFrame>,
+) -> Result<PreviewCapture> {
     let output_file = crate::output::screenshot_output_file_path()?;
+    let started = std::time::Instant::now();
+    if let Some(crop) = frozen_crop(frozen_frame, rect)? {
+        crop.save_png(&output_file)?;
+        let (rgba, width, height) = crop.into_parts();
+        qol_runtime::probe!(
+            "SHOT_CAPTURE",
+            "source=frozen ms={} rect={}x{}",
+            started.elapsed().as_millis(),
+            rect.w,
+            rect.h
+        );
+        return Ok(PreviewCapture {
+            path: output_file,
+            rgba: Some((rgba, width, height)),
+        });
+    }
     let grabbed = std::time::Instant::now();
     if let Some((rgba, w, h)) = platform::grab_preview_rgba(&rect) {
         qol_runtime::probe!(
@@ -94,11 +168,10 @@ fn capture_rect_for_preview(rect: Rect) -> Result<PreviewCapture> {
         });
     }
 
-    let started = std::time::Instant::now();
     platform::capture_screenshot(&rect, &output_file)?;
     qol_runtime::probe!(
         "SHOT_CAPTURE",
-        "ms={} rect={}x{}",
+        "source=live ms={} rect={}x{}",
         started.elapsed().as_millis(),
         rect.w,
         rect.h
@@ -107,6 +180,27 @@ fn capture_rect_for_preview(rect: Rect) -> Result<PreviewCapture> {
         path: output_file,
         rgba: None,
     })
+}
+
+fn frozen_crop(frozen_frame: Option<&FrozenFrame>, rect: Rect) -> Result<Option<RgbaCrop>> {
+    frozen_frame
+        .map(|frame| {
+            frame.rgba_crop(rect).ok_or_else(|| {
+                let bounds = frame.bounds();
+                anyhow!(
+                    "selected screenshot {}x{}+{},{} falls outside frozen frame {}x{}+{},{}",
+                    rect.w,
+                    rect.h,
+                    rect.x,
+                    rect.y,
+                    bounds.w,
+                    bounds.h,
+                    bounds.x,
+                    bounds.y
+                )
+            })
+        })
+        .transpose()
 }
 
 fn spawn_file_write(rect: Rect, path: PathBuf) {

@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::frozen_frame::FrozenFrame;
 use crate::Rect;
 
 pub fn process_alive(pid: u32) -> bool {
@@ -35,6 +36,10 @@ pub fn open_url(url: &str) -> Result<()> {
 
 pub fn grab_preview_rgba(_rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {
     None
+}
+
+pub fn capture_frozen_frame() -> Result<Option<FrozenFrame>> {
+    Ok(None)
 }
 
 pub fn configure_preview_window(_title: String) {}

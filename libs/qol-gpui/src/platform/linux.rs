@@ -23,18 +23,24 @@ pub fn is_modifier_held() -> bool {
     let Some(keys) = query_keymap_keys() else {
         return false;
     };
-    let alt_l_held = keys[64 / 8] & (1 << (64 % 8)) != 0;
-    let alt_r_held = keys[108 / 8] & (1 << (108 % 8)) != 0;
-    alt_l_held || alt_r_held
+    keycode_held(&keys, 64) || keycode_held(&keys, 108)
 }
 
 pub fn is_shift_held() -> bool {
     let Some(keys) = query_keymap_keys() else {
         return false;
     };
-    let shift_l = keys[50 / 8] & (1 << (50 % 8)) != 0;
-    let shift_r = keys[62 / 8] & (1 << (62 % 8)) != 0;
-    shift_l || shift_r
+    keycode_held(&keys, 50) || keycode_held(&keys, 62)
+}
+
+pub fn is_escape_held() -> bool {
+    query_keymap_keys()
+        .map(|keys| keycode_held(&keys, 9))
+        .unwrap_or(false)
+}
+
+fn keycode_held(keys: &[u8; 32], keycode: u8) -> bool {
+    keys[usize::from(keycode / 8)] & (1 << (keycode % 8)) != 0
 }
 
 pub fn set_accessory_policy() {}
@@ -148,4 +154,20 @@ fn window_pid(conn: &RustConnection, window: u32) -> Option<u32> {
         .reply()
         .ok()?;
     prop.value32().and_then(|mut value| value.next())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keycode_held;
+
+    #[test]
+    fn keymap_reads_escape_and_modifier_keycodes() {
+        let cases = [9u8, 50, 62, 64, 108, 255];
+        for keycode in cases {
+            let mut keys = [0u8; 32];
+            keys[usize::from(keycode / 8)] |= 1 << (keycode % 8);
+            assert!(keycode_held(&keys, keycode), "keycode: {keycode}");
+            assert!(!keycode_held(&[0u8; 32], keycode), "keycode: {keycode}");
+        }
+    }
 }

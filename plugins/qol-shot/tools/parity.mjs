@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createConnection } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
 const DEFAULT_BINARY = resolve(REPO, "target", "debug", "qol-shot");
+const TRACE_LOG = "/tmp/qol-altmon.log";
 const VERDICTS = new Set(["pass", "fail", "blocked"]);
 
 const MANUAL_SCENARIOS = [
@@ -212,8 +214,333 @@ function summary([reportArg]) {
   printSummary(reportPath, readReport(reportPath));
 }
 
+function parseSmokeArgs(args) {
+  let binary = DEFAULT_BINARY;
+  let reportPath = resolve(REPO, "target", "qol-shot-selector-smoke", "linux", "report.json");
+  let timeoutMs = 4000;
+  let beforeMs = null;
+  let beforeGrabMs = null;
+  let isolatedDaemon = true;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--binary") {
+      binary = resolve(args[++index]);
+      continue;
+    }
+    if (argument === "--out") {
+      reportPath = resolve(args[++index]);
+      continue;
+    }
+    if (argument === "--timeout-ms") {
+      timeoutMs = Number(args[++index]);
+      continue;
+    }
+    if (argument === "--before-ms") {
+      beforeMs = Number(args[++index]);
+      continue;
+    }
+    if (argument === "--before-grab-ms") {
+      beforeGrabMs = Number(args[++index]);
+      continue;
+    }
+    if (argument === "--standalone") {
+      isolatedDaemon = false;
+      continue;
+    }
+    throw new Error(`unknown argument: ${argument}`);
+  }
+  return { binary, reportPath, timeoutMs, beforeMs, beforeGrabMs, isolatedDaemon };
+}
+
+function selectorWindow() {
+  const result = run("xdotool", ["search", "--onlyvisible", "--name", "^qol-shot-selector-"]);
+  return result.exit_code === 0 ? result.stdout.trim().split("\n").filter(Boolean).at(-1) : null;
+}
+
+function rootWindow() {
+  const result = run("xwininfo", ["-root", "-int"]);
+  const id = result.stdout.match(/Window id:\s+(\d+)/)?.[1];
+  if (!id) throw new Error("could not resolve the X11 root window");
+  return id;
+}
+
+function windowGeometry(windowId) {
+  const result = run("xdotool", ["getwindowgeometry", "--shell", windowId]);
+  if (result.exit_code !== 0) return null;
+  const values = Object.fromEntries(
+    result.stdout
+      .trim()
+      .split("\n")
+      .map((line) => line.split("=")),
+  );
+  return {
+    x: Number(values.X),
+    y: Number(values.Y),
+    width: Number(values.WIDTH),
+    height: Number(values.HEIGHT),
+  };
+}
+
+function rootGeometry() {
+  const result = run("xwininfo", ["-root", "-int"]);
+  const width = Number(result.stdout.match(/Width:\s+(\d+)/)?.[1]);
+  const height = Number(result.stdout.match(/Height:\s+(\d+)/)?.[1]);
+  return { x: 0, y: 0, width, height };
+}
+
+function delay(ms) {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+}
+
+async function waitFor(check, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = check();
+    if (value) return value;
+    await delay(20);
+  }
+  return null;
+}
+
+function traceSlice(offset, pid) {
+  if (!existsSync(TRACE_LOG)) return "";
+  return readFileSync(TRACE_LOG).subarray(offset).toString().split("\n").filter((line) => line.includes(`pid=${pid} `)).join("\n");
+}
+
+function traceTimestamp(trace, tag) {
+  const line = trace.split("\n").find((candidate) => candidate.includes(` ${tag} `));
+  return Number(line?.match(/^(\d+)/)?.[1]) || null;
+}
+
+function traceMetric(trace, tag, field) {
+  const line = trace.split("\n").find((candidate) => candidate.includes(` ${tag} `));
+  return Number(line?.match(new RegExp(`${field}=(\\d+)`))?.[1]) || null;
+}
+
+async function stopChild(child) {
+  if (child.exitCode !== null) return;
+  child.kill("SIGTERM");
+  await Promise.race([new Promise((resolveExit) => child.once("exit", resolveExit)), delay(500)]);
+  if (child.exitCode !== null) return;
+  child.kill("SIGKILL");
+}
+
+function sendDaemonAction(socketPath, action) {
+  return new Promise((resolveAction, rejectAction) => {
+    const socket = createConnection(socketPath);
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      rejectAction(new Error(`daemon action timed out: ${action}`));
+    }, 1000);
+    socket.once("error", (error) => {
+      clearTimeout(timeout);
+      rejectAction(error);
+    });
+    socket.once("data", () => {
+      clearTimeout(timeout);
+      socket.destroy();
+      resolveAction();
+    });
+    socket.once("connect", () => {
+      socket.end(`${JSON.stringify({ action })}\n`);
+    });
+  });
+}
+
+function metricDelta(before, after) {
+  if (!Number.isFinite(before) || !Number.isFinite(after) || before === 0) return "N/A";
+  const amount = after - before;
+  const percent = ((amount / before) * 100).toFixed(1);
+  return `${amount} ms (${percent}%)`;
+}
+
+function smokeMetrics(context, reportPath, beforeMs, afterMs, beforeGrabMs, afterGrabMs, escaped) {
+  return [
+    {
+      improvement_vector: "frozen selector responsiveness",
+      scenario: "screenshot command to exact selector",
+      context,
+      metric: "startup latency",
+      before: Number.isFinite(beforeMs) ? `${beforeMs} ms` : "not measured by this run",
+      after: Number.isFinite(afterMs) ? `${afterMs} ms` : "not measured",
+      delta: metricDelta(beforeMs, afterMs),
+      correctness: Number.isFinite(afterMs) ? "passed" : "failed",
+      evidence: reportPath,
+    },
+    {
+      improvement_vector: "frozen selector responsiveness",
+      scenario: "full virtual desktop freeze",
+      context,
+      metric: "X11 frame transfer",
+      before: Number.isFinite(beforeGrabMs) ? `${beforeGrabMs} ms` : "not measured by this run",
+      after: Number.isFinite(afterGrabMs) ? `${afterGrabMs} ms` : "not measured",
+      delta: metricDelta(beforeGrabMs, afterGrabMs),
+      correctness: Number.isFinite(afterGrabMs) ? "passed" : "failed",
+      evidence: reportPath,
+    },
+    {
+      improvement_vector: "reliable selector cancellation",
+      scenario: "Escape after focus moves to the X11 root",
+      context,
+      metric: "global cancellation",
+      before: "failed",
+      after: escaped ? "passed" : "failed",
+      delta: "N/A",
+      correctness: escaped ? "passed" : "failed",
+      evidence: reportPath,
+    },
+  ];
+}
+
+async function smokeSelector(args) {
+  const { binary, reportPath, timeoutMs, beforeMs, beforeGrabMs, isolatedDaemon } =
+    parseSmokeArgs(args);
+  if (process.platform !== "linux" || displayBackend() !== "x11") {
+    throw new Error("selector smoke requires a live Linux X11 desktop");
+  }
+  if (!existsSync(binary)) throw new Error(`binary not found: ${binary}`);
+  if (selectorWindow()) throw new Error("a qol-shot selector is already visible");
+
+  const startedAt = new Date().toISOString();
+  const traceOffset = existsSync(TRACE_LOG) ? statSync(TRACE_LOG).size : 0;
+  const socketPath = resolve(dirname(reportPath), "daemon.sock");
+  rmSync(socketPath, { force: true });
+  const env = { ...process.env };
+  if (isolatedDaemon) {
+    env.QOL_TRAY_DAEMON_SOCKET = socketPath;
+    env.QOL_TRAY_DAEMON_REPLACE_EXISTING = "1";
+  }
+  const child = spawn(binary, isolatedDaemon ? [] : ["screenshot"], {
+    cwd: REPO,
+    stdio: "ignore",
+    env,
+  });
+  let escapeHeld = false;
+  let geometry = null;
+  let root = null;
+  let selectorGone = false;
+  let visibleMs = null;
+  let wallStarted = Date.now();
+
+  try {
+    if (isolatedDaemon) {
+      const ready = await waitFor(
+        () => traceSlice(traceOffset, child.pid).includes(" SHOT_DAEMON_APP state=ready"),
+        timeoutMs,
+      );
+      if (!ready) throw new Error("isolated daemon did not become ready before timeout");
+      wallStarted = Date.now();
+      await sendDaemonAction(socketPath, "screenshot");
+    }
+    const windowId = await waitFor(selectorWindow, timeoutMs);
+    if (!windowId) throw new Error("selector did not appear before timeout");
+    visibleMs = Date.now() - wallStarted;
+    const aligned = await waitFor(
+      () => {
+        const trace = traceSlice(traceOffset, child.pid);
+        return trace.includes(" SHOT_SELECT_VIEWPORT ") && trace.includes("aligned=true");
+      },
+      timeoutMs,
+    );
+    if (!aligned) throw new Error("selector did not reach exact viewport bounds before timeout");
+    geometry = windowGeometry(windowId);
+    root = rootGeometry();
+    run("xdotool", ["windowfocus", rootWindow()]);
+    await delay(60);
+    run("xdotool", ["keydown", "Escape"]);
+    escapeHeld = true;
+    await delay(150);
+    run("xdotool", ["keyup", "Escape"]);
+    escapeHeld = false;
+    selectorGone = Boolean(await waitFor(() => !selectorWindow(), timeoutMs));
+    await delay(100);
+  } finally {
+    if (escapeHeld) run("xdotool", ["keyup", "Escape"]);
+    if (isolatedDaemon && existsSync(socketPath)) {
+      await sendDaemonAction(socketPath, "kill").catch(() => {});
+    }
+    await stopChild(child);
+    rmSync(socketPath, { force: true });
+  }
+
+  const trace = traceSlice(traceOffset, child.pid);
+  const entryAt = isolatedDaemon
+    ? traceTimestamp(trace, "SHOT_CMD")
+    : traceTimestamp(trace, "SHOT_ENTRY");
+  const viewportAt = traceTimestamp(trace, "SHOT_SELECT_VIEWPORT");
+  const startupMs = entryAt && viewportAt ? viewportAt - entryAt : null;
+  const grabMs = traceMetric(trace, "SHOT_X11_GRAB", "ms");
+  const exactGeometry = JSON.stringify(geometry) === JSON.stringify(root);
+  const globalEscape = trace.includes(" SHOT_SELECT_CANCEL_INPUT source=global-escape");
+  const escaped = globalEscape && selectorGone;
+  const scenarios = [
+    {
+      id: "selector-alignment",
+      capability: "selection",
+      contract: "The frozen selector exactly matches the X11 root viewport.",
+      evidence_type: "automated-native",
+      status: exactGeometry ? "pass" : "fail",
+      evidence: { selector: geometry, root },
+    },
+    {
+      id: "selection-cancel-without-focus",
+      capability: "selection",
+      contract: "Escape cancels after input focus is moved away from the selector.",
+      evidence_type: "automated-native",
+      status: escaped ? "pass" : "fail",
+      evidence: { global_escape_trace: globalEscape, selector_gone: selectorGone },
+    },
+    {
+      id: "selector-startup",
+      capability: "performance",
+      contract: "The selector emits complete startup timing through the native trace.",
+      evidence_type: "automated-native",
+      status: Number.isFinite(startupMs) && Number.isFinite(grabMs) ? "pass" : "fail",
+      evidence: { visible_ms: visibleMs, trace_startup_ms: startupMs, x11_grab_ms: grabMs },
+    },
+  ];
+  const entrypoint = isolatedDaemon ? "isolated daemon action" : "standalone screenshot";
+  const context = `Linux X11, ${entrypoint}, one run, ${root?.width}x${root?.height}`;
+  const report = {
+    name: "qol-shot-selector-smoke",
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+    status: "pending",
+    inputs: {
+      platform: "linux",
+      arch: process.arch,
+      display_backend: "x11",
+      entrypoint,
+      binary,
+      timeout_ms: timeoutMs,
+    },
+    artifacts: { report: reportPath },
+    commands: [
+      isolatedDaemon ? [binary, "<isolated-daemon>"] : [binary, "screenshot"],
+      isolatedDaemon ? ["daemon-action", "screenshot"] : [binary, "screenshot"],
+      ["xdotool", "windowfocus", "<root>"],
+      ["xdotool", "keydown", "Escape"],
+    ],
+    scenarios,
+    metrics: smokeMetrics(context, reportPath, beforeMs, startupMs, beforeGrabMs, grabMs, escaped),
+    next: [`node ${fileURLToPath(import.meta.url)} smoke-selector --binary ${binary} --out ${reportPath}`],
+  };
+  save(reportPath, report);
+  printSummary(reportPath, report);
+  if (report.status !== "pass") process.exitCode = 1;
+}
+
 const [verb = "init", ...args] = process.argv.slice(2);
-if (verb === "init") init(args);
-else if (verb === "mark") mark(args);
-else if (verb === "summary") summary(args);
-else throw new Error(`unknown verb: ${verb}`);
+
+async function main() {
+  if (verb === "init") return init(args);
+  if (verb === "mark") return mark(args);
+  if (verb === "summary") return summary(args);
+  if (verb === "smoke-selector") return smokeSelector(args);
+  throw new Error(`unknown verb: ${verb}`);
+}
+
+main().catch((error) => {
+  console.error(error.message);
+  process.exitCode = 1;
+});

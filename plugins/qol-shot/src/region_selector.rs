@@ -3,9 +3,10 @@ use gpui::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, LazyLock};
+use std::sync::{mpsc, Arc, LazyLock};
 use std::time::Duration;
 
+use crate::frozen_frame::FrozenFrame;
 use crate::geometry::rect_label;
 use crate::space::{self, CaptureKind, Level};
 use crate::{Monitor, Rect};
@@ -30,6 +31,7 @@ const CHIP_H: f32 = 30.0;
 const CHIP_TOP: f32 = 12.0;
 const HIDE_BARRIER_CLEAR_SAMPLES: usize = 3;
 const HIDE_BARRIER_MAX_MS: u64 = 750;
+const SELECTOR_STATE_POLL_MS: u64 = 16;
 static SELECTOR_SEQ: AtomicU64 = AtomicU64::new(0);
 static CURRENT_PALETTE: LazyLock<ShotSelectorPalette> = LazyLock::new(shot_selector_runtime);
 
@@ -78,13 +80,16 @@ pub trait GlobalPointer {
 }
 
 pub type GlobalPointerSource = Rc<dyn GlobalPointer>;
+pub type CancelSignalSource = Rc<dyn Fn() -> bool>;
 
 #[derive(Clone)]
 pub struct SelectorWindowSources {
     pub map_rect: RectMapper,
     pub global_pointer: Option<GlobalPointerSource>,
+    pub cancel_signal: Option<CancelSignalSource>,
     pub active_bounds: Option<ActiveBoundsSource>,
     pub hover_target: Option<HoverTargetSource>,
+    pub frozen_frame: Option<FrozenFrame>,
 }
 
 pub struct SelectorWindowOptions {
@@ -410,7 +415,7 @@ impl SelectionState {
     }
 }
 
-enum GlobalDragResult {
+enum SelectorPollResult {
     Continue,
     Stop,
     Finish {
@@ -447,8 +452,10 @@ struct RegionSelector {
     window_bounds: Bounds<Pixels>,
     map_rect: RectMapper,
     global_pointer: Option<GlobalPointerSource>,
+    cancel_signal: Option<CancelSignalSource>,
     active_bounds: Option<ActiveBoundsSource>,
     hover_target: Option<HoverTargetSource>,
+    frozen_image: Option<Arc<RenderImage>>,
     focus_handle: FocusHandle,
 }
 
@@ -462,6 +469,17 @@ impl RegionSelector {
         cx: &mut Context<Self>,
     ) -> Self {
         qol_runtime::probe!("SHOT_SELECT_START", "path=gpui");
+        let image_started = std::time::Instant::now();
+        let frozen_image = sources
+            .frozen_frame
+            .as_ref()
+            .and_then(|frame| frame.render_image(rect_from_bounds(window_bounds)));
+        qol_runtime::probe!(
+            "SHOT_FREEZE_IMAGE",
+            "ms={} ready={}",
+            image_started.elapsed().as_millis(),
+            frozen_image.is_some()
+        );
         Self {
             state,
             handle: None,
@@ -470,8 +488,10 @@ impl RegionSelector {
             window_bounds,
             map_rect: sources.map_rect,
             global_pointer: sources.global_pointer,
+            cancel_signal: sources.cancel_signal,
             active_bounds: sources.active_bounds,
             hover_target: sources.hover_target,
+            frozen_image,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -588,26 +608,9 @@ impl RegionSelector {
                         .update(&mut cx, |view, cx| {
                             view.apply_global_pointer_sample(position, pressed, cx)
                         })
-                        .unwrap_or(GlobalDragResult::Stop);
-                    match result {
-                        GlobalDragResult::Continue => {}
-                        GlobalDragResult::Stop => break,
-                        GlobalDragResult::Finish {
-                            handles,
-                            completion,
-                        } => {
-                            for handle in handles {
-                                let _ = handle.update(&mut cx, |view, window, _cx| {
-                                    view.hide_window_before_remove(window);
-                                    window.remove_window();
-                                });
-                            }
-                            wait_for_selector_hide_barrier(&mut cx).await;
-                            let _ = cx.update(move |cx| {
-                                cx.defer(move |cx| completion.finish(cx));
-                            });
-                            break;
-                        }
+                        .unwrap_or(SelectorPollResult::Stop);
+                    if !continue_selector_poll(result, &mut cx).await {
+                        break;
                     }
                 }
             }
@@ -628,12 +631,12 @@ impl RegionSelector {
             async move {
                 loop {
                     cx.background_executor()
-                        .timer(Duration::from_millis(50))
+                        .timer(Duration::from_millis(SELECTOR_STATE_POLL_MS))
                         .await;
-                    let keep_polling = this
+                    let result = this
                         .update(&mut cx, |view, cx| view.apply_active_monitor_poll(cx))
-                        .unwrap_or(false);
-                    if !keep_polling {
+                        .unwrap_or(SelectorPollResult::Stop);
+                    if !continue_selector_poll(result, &mut cx).await {
                         break;
                     }
                 }
@@ -642,15 +645,20 @@ impl RegionSelector {
         .detach();
     }
 
-    fn apply_active_monitor_poll(&mut self, cx: &mut Context<Self>) -> bool {
+    fn apply_active_monitor_poll(&mut self, cx: &mut Context<Self>) -> SelectorPollResult {
         if self.state.borrow().tx.is_none() {
             self.state.borrow_mut().active_monitor_polling = false;
-            return false;
+            return SelectorPollResult::Stop;
+        }
+        if self.cancel_signal.as_ref().is_some_and(|cancel| cancel()) {
+            self.state.borrow_mut().active_monitor_polling = false;
+            qol_runtime::probe!("SHOT_SELECT_CANCEL_INPUT", "source=global-escape");
+            return self.finish_from_poll(None);
         }
         if self.sync_active_bounds_for_render() {
             self.notify_all(cx);
         }
-        true
+        SelectorPollResult::Continue
     }
 
     fn apply_global_pointer_sample(
@@ -658,14 +666,14 @@ impl RegionSelector {
         position: Option<Point<Pixels>>,
         pressed: bool,
         cx: &mut Context<Self>,
-    ) -> GlobalDragResult {
+    ) -> SelectorPollResult {
         if self.state.borrow().tx.is_none() {
             self.state.borrow_mut().polling = false;
-            return GlobalDragResult::Stop;
+            return SelectorPollResult::Stop;
         }
         if self.state.borrow().drag_start.is_none() {
             self.state.borrow_mut().polling = false;
-            return GlobalDragResult::Stop;
+            return SelectorPollResult::Stop;
         }
         let tracked = position.map(|cg| self.tracked_point(cg));
         let active_changed = self.sync_active_bounds_for_render();
@@ -680,12 +688,12 @@ impl RegionSelector {
             self.notify_all(cx);
         }
         if pressed {
-            return GlobalDragResult::Continue;
+            return SelectorPollResult::Continue;
         }
         let raw = self.current_raw_rect(tracked);
         let rect = self.resolved_capture_rect(raw);
         trace_selection_release("global", raw, rect);
-        self.finish_from_global_pointer(rect)
+        self.finish_from_poll(rect)
     }
 
     fn tracked_point(&self, global: Point<Pixels>) -> Point<Pixels> {
@@ -721,12 +729,12 @@ impl RegionSelector {
         selected_rect(point(px(0.0), px(0.0)), start, end)
     }
 
-    fn finish_from_global_pointer(&mut self, rect: Option<Rect>) -> GlobalDragResult {
+    fn finish_from_poll(&mut self, rect: Option<Rect>) -> SelectorPollResult {
         let Some(completion) = self.take_completion(rect) else {
-            return GlobalDragResult::Stop;
+            return SelectorPollResult::Stop;
         };
         self.hide_all_before_remove();
-        GlobalDragResult::Finish {
+        SelectorPollResult::Finish {
             handles: self.state.borrow().handles.clone(),
             completion,
         }
@@ -920,6 +928,27 @@ fn schedule_completion(completion: SelectionCompletion, cx: &mut Context<RegionS
     .detach();
 }
 
+async fn continue_selector_poll(result: SelectorPollResult, cx: &mut AsyncApp) -> bool {
+    match result {
+        SelectorPollResult::Continue => true,
+        SelectorPollResult::Stop => false,
+        SelectorPollResult::Finish {
+            handles,
+            completion,
+        } => {
+            for handle in handles {
+                let _ = handle.update(cx, |view, window, _cx| {
+                    view.hide_window_before_remove(window);
+                    window.remove_window();
+                });
+            }
+            wait_for_selector_hide_barrier(cx).await;
+            let _ = cx.update(move |cx| cx.defer(move |cx| completion.finish(cx)));
+            false
+        }
+    }
+}
+
 async fn wait_for_selector_hide_barrier(cx: &mut AsyncApp) {
     let started = std::time::Instant::now();
     let mut clear_samples = 0;
@@ -981,6 +1010,17 @@ impl Render for RegionSelector {
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up));
+
+        if let Some(image) = &self.frozen_image {
+            root = root.child(
+                img(image.clone())
+                    .absolute()
+                    .left(px(0.0))
+                    .top(px(0.0))
+                    .w(self.window_bounds.size.width)
+                    .h(self.window_bounds.size.height),
+            );
+        }
 
         for bounds in backdrop_segments(self.window_bounds.size, selection) {
             root = root.child(backdrop_segment(bounds));
