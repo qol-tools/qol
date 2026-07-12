@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::ptr;
 
@@ -10,6 +11,55 @@ const MAX_CURSOR_DIMENSION: u32 = 512;
 const XFIXES_CURSOR_NOTIFY: i32 = 1;
 const XFIXES_DISPLAY_CURSOR_NOTIFY: i32 = 0;
 const XFIXES_DISPLAY_CURSOR_NOTIFY_MASK: libc::c_ulong = 1;
+const SHAPE_CACHE_CAP: usize = 64;
+
+const CATALOG_SHAPE_NAMES: [&CStr; 45] = [
+    c"text",
+    c"xterm",
+    c"pointer",
+    c"hand2",
+    c"hand1",
+    c"grabbing",
+    c"openhand",
+    c"closedhand",
+    c"fleur",
+    c"move",
+    c"all-scroll",
+    c"crosshair",
+    c"cross",
+    c"watch",
+    c"progress",
+    c"left_ptr_watch",
+    c"help",
+    c"question_arrow",
+    c"not-allowed",
+    c"crossed_circle",
+    c"col-resize",
+    c"row-resize",
+    c"ew-resize",
+    c"ns-resize",
+    c"nesw-resize",
+    c"nwse-resize",
+    c"sb_h_double_arrow",
+    c"sb_v_double_arrow",
+    c"size_hor",
+    c"size_ver",
+    c"size_fdiag",
+    c"size_bdiag",
+    c"top_side",
+    c"bottom_side",
+    c"left_side",
+    c"right_side",
+    c"top_left_corner",
+    c"top_right_corner",
+    c"bottom_left_corner",
+    c"bottom_right_corner",
+    c"cell",
+    c"vertical-text",
+    c"zoom-in",
+    c"zoom-out",
+    c"pencil",
+];
 
 unsafe extern "C" {
     #[link_name = "XFixesSelectCursorInput"]
@@ -30,6 +80,62 @@ pub struct CursorSession {
     current_scale: f32,
     grow_cursor: Option<CursorImage>,
     xfixes_event_base: Option<i32>,
+    catalog: ShapeCatalog,
+}
+
+struct ShapeCatalog {
+    cache: HashMap<u64, Option<CursorRaster>>,
+}
+
+impl ShapeCatalog {
+    fn new() -> Self {
+        Self {
+            cache: HashMap::new(),
+        }
+    }
+
+    fn source_for(
+        &mut self,
+        display: *mut xlib::Display,
+        image: &CursorImage,
+        preferred_source_size: u32,
+    ) -> Option<CursorRaster> {
+        let key = cursor_hash(image);
+        if let Some(cached) = self.cache.get(&key) {
+            return cached.clone();
+        }
+        let source = identify_shape_source(display, image, preferred_source_size);
+        if self.cache.len() >= SHAPE_CACHE_CAP {
+            self.cache.clear();
+        }
+        self.cache.insert(key, source.clone());
+        source
+    }
+}
+
+fn identify_shape_source(
+    display: *mut xlib::Display,
+    image: &CursorImage,
+    preferred_source_size: u32,
+) -> Option<CursorRaster> {
+    let request_size = image.width.max(image.height);
+    for name in CATALOG_SHAPE_NAMES {
+        let Some(candidate) = load_named_cursor_raster(display, name, request_size) else {
+            continue;
+        };
+        if raster_matches_image(&candidate, image) {
+            return load_named_cursor_raster(display, name, preferred_source_size);
+        }
+    }
+    None
+}
+
+fn raster_matches_image(raster: &CursorRaster, image: &CursorImage) -> bool {
+    raster.width == image.width
+        && raster.height == image.height
+        && raster.xhot == image.xhot
+        && raster.yhot == image.yhot
+        && raster.pixels == image.pixels
 }
 
 struct BaseCursor {
@@ -95,6 +201,7 @@ impl CursorSession {
             current_scale: 1.0,
             grow_cursor: None,
             xfixes_event_base: subscribe_cursor_notifications(display, root),
+            catalog: ShapeCatalog::new(),
         })
     }
 
@@ -168,7 +275,13 @@ impl CursorSession {
         {
             return self.reapply_active_cursor();
         }
-        let sample = with_best_source(self.display, &self.base, sample, self.preferred_source_size);
+        let sample = with_best_source(
+            self.display,
+            &self.base,
+            &mut self.catalog,
+            sample,
+            self.preferred_source_size,
+        );
         log_cursor_image("live refresh adopt", &sample);
         self.grow_cursor = Some(sample);
         self.apply_grow_cursor()
@@ -196,7 +309,13 @@ impl CursorSession {
     fn capture_live_cursors(&mut self) {
         let live_cursor =
             load_live_cursor_image(self.display, self.base.default_size).map(|cursor| {
-                with_best_source(self.display, &self.base, cursor, self.preferred_source_size)
+                with_best_source(
+                    self.display,
+                    &self.base,
+                    &mut self.catalog,
+                    cursor,
+                    self.preferred_source_size,
+                )
             });
         let Some(live_cursor) = live_cursor else {
             eprintln!("[shake-to-grow] failed to capture live cursor at grow-start");
@@ -628,12 +747,18 @@ fn is_empty_cursor(image: &CursorImage) -> bool {
 }
 
 fn log_cursor_image(prefix: &str, image: &CursorImage) {
+    let source = image
+        .source
+        .as_ref()
+        .map(|source| format!("{}x{}", source.width, source.height))
+        .unwrap_or_else(|| "none".to_string());
     eprintln!(
-        "[shake-to-grow] {prefix}: size={}x{} hot=({}, {}) hash={:016x}",
+        "[shake-to-grow] {prefix}: size={}x{} hot=({}, {}) name={:?} source={source} hash={:016x}",
         image.width,
         image.height,
         image.xhot,
         image.yhot,
+        image.name.as_deref().unwrap_or("-"),
         cursor_hash(image),
     );
 }
@@ -673,6 +798,7 @@ fn preferred_source_size(default_size: u32, scale_factor: u32) -> u32 {
 fn with_best_source(
     display: *mut xlib::Display,
     base: &BaseCursor,
+    catalog: &mut ShapeCatalog,
     mut image: CursorImage,
     preferred_source_size: u32,
 ) -> CursorImage {
@@ -680,7 +806,8 @@ fn with_best_source(
         return image;
     }
     let source = named_cursor_source(display, &image, preferred_source_size)
-        .or_else(|| fallback_base_source(base, &image));
+        .or_else(|| fallback_base_source(base, &image))
+        .or_else(|| catalog.source_for(display, &image, preferred_source_size));
     let Some(source) = source else {
         return image;
     };
@@ -776,11 +903,12 @@ fn copy_cursor_name(
     name: *const libc::c_char,
 ) -> Option<String> {
     if !name.is_null() {
-        return Some(
-            unsafe { CStr::from_ptr(name) }
-                .to_string_lossy()
-                .into_owned(),
-        );
+        let owned = unsafe { CStr::from_ptr(name) }
+            .to_string_lossy()
+            .into_owned();
+        if !owned.is_empty() {
+            return Some(owned);
+        }
     }
     if atom == 0 {
         return None;
