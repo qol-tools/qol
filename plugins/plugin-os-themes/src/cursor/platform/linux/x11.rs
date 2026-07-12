@@ -315,8 +315,8 @@ impl CursorSession {
         if self.active_cursor.is_none() {
             return;
         }
-        clear_tree(self.display, self.root);
         restore_root_cursor(self.display, self.root, &self.base);
+        clear_children(self.display, self.root);
         self.flush();
         if let Some(cursor) = self.active_cursor.take() {
             unsafe { xlib::XFreeCursor(self.display, cursor) };
@@ -547,8 +547,8 @@ fn apply_to_tree(display: *mut xlib::Display, window: xlib::Window, cursor: xlib
     }
 }
 
-fn clear_tree(display: *mut xlib::Display, window: xlib::Window) {
-    let mut stack = vec![window];
+fn clear_children(display: *mut xlib::Display, root: xlib::Window) {
+    let mut stack = window_children(display, root);
     while let Some(window) = stack.pop() {
         unsafe { xlib::XUndefineCursor(display, window) };
         for child in window_children(display, window) {

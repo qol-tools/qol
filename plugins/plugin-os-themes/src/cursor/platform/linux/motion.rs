@@ -9,6 +9,7 @@ pub struct ShakeDetector {
     strictness: f64,
     regrow_strictness: f64,
     min_extent: f64,
+    regrow_min_extent: f64,
     calm_duration: Duration,
     scale_factor: f32,
     grow_step: f32,
@@ -59,6 +60,10 @@ impl Trail {
             vertices: VecDeque::new(),
             position: (0.0, 0.0),
         }
+    }
+
+    fn reset(&mut self) {
+        self.vertices.clear();
     }
 
     fn advance(&mut self, sample: MotionSample, window: Duration) -> Option<TrailShape> {
@@ -135,6 +140,7 @@ impl ShakeDetector {
             strictness: config.shake_strictness,
             regrow_strictness: config.regrow_strictness,
             min_extent: f64::from(config.shake_min_extent_px),
+            regrow_min_extent: f64::from(config.regrow_min_extent_px),
             calm_duration: Duration::from_millis(config.calm_duration_ms),
             scale_factor,
             grow_step: (scale_factor - 1.0) / (config.restore_steps as f32 / 2.0).max(1.0),
@@ -154,13 +160,13 @@ impl ShakeDetector {
         if sample.dx == 0 && sample.dy == 0 {
             return None;
         }
-        let strictness = if self.is_scaled() {
-            self.regrow_strictness
+        let (strictness, min_extent) = if self.is_scaled() {
+            (self.regrow_strictness, self.regrow_min_extent)
         } else {
-            self.strictness
+            (self.strictness, self.min_extent)
         };
         let shape = self.trail.advance(sample, self.window)?;
-        if shape.extent < self.min_extent || shape.tortuosity <= strictness {
+        if shape.extent < min_extent || shape.tortuosity <= strictness {
             return None;
         }
         Some(shape.tortuosity)
@@ -198,6 +204,7 @@ impl ShakeDetector {
             .is_some_and(|last_shake| now - last_shake > self.calm_duration)
         {
             self.growing = false;
+            self.trail.reset();
         }
     }
 
@@ -248,6 +255,7 @@ mod tests {
             shake_strictness: 6.5,
             regrow_strictness: 3.0,
             shake_min_extent_px: 150,
+            regrow_min_extent_px: 60,
             shake_window_ms: 1000,
             scale_factor: 4,
             calm_duration_ms: 650,
@@ -377,7 +385,7 @@ mod tests {
         }
         assert!(shrinking, "shrink phase must begin after calm");
         let offset = t.as_millis() as u64;
-        let burst: Vec<(u64, i32, i32)> = wiggle(160, 64, 300)
+        let burst: Vec<(u64, i32, i32)> = wiggle(80, 64, 300)
             .iter()
             .map(|(ms, dx, dy)| (ms + offset, *dx, *dy))
             .collect();
@@ -395,7 +403,7 @@ mod tests {
         );
 
         let mut rested = ShakeDetector::new(&config());
-        let grew = feed(&mut rested, Instant::now(), &wiggle(160, 64, 300));
+        let grew = feed(&mut rested, Instant::now(), &wiggle(80, 64, 300));
         assert_eq!(grew, None, "same burst from rest must not trigger");
     }
 

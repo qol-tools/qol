@@ -23,6 +23,14 @@ default = 2.5
 min = 1
 step = 0.5
 
+[field.regrow_min_extent_px]
+type = "number"
+label = "Regrow Min Size"
+section = "thresholds"
+default = 60
+min = 10
+step = 10
+
 [field.shake_min_extent_px]
 type = "number"
 label = "Min Shake Size"
