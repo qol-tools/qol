@@ -4,48 +4,32 @@ description = "Cursor growth behavior for the shake-to-grow effect."
 
 [section.thresholds]
 label = "Shake Detection"
-description = "A shake is counted in direction reversals: quick swings past the minimum travel and speed, all inside the detection window."
+description = "A shake must retrace its own ground: inside the detection window the cursor path must be several times longer than the area it covers, and that area must be at least the minimum shake size."
 actions = ["run"]
 
-[field.shake_reversals]
+[field.shake_strictness]
 type = "number"
-label = "Reversals To Grow"
+label = "Shake Strictness"
 section = "thresholds"
-default = 5
-min = 2
-step = 1
-
-[field.regrow_reversals]
-type = "number"
-label = "Reversals To Regrow"
-section = "thresholds"
-default = 3
+default = 6.5
 min = 1
-step = 1
+step = 0.5
+
+[field.shake_min_extent_px]
+type = "number"
+label = "Min Shake Size"
+section = "thresholds"
+default = 150
+min = 20
+step = 10
 
 [field.shake_window_ms]
 type = "number"
 label = "Detection Window"
 section = "thresholds"
-default = 600
+default = 1000
 min = 100
 step = 50
-
-[field.swing_min_px]
-type = "number"
-label = "Min Swing Travel"
-section = "thresholds"
-default = 40
-min = 1
-step = 1
-
-[field.swing_min_speed]
-type = "number"
-label = "Min Swing Speed"
-section = "thresholds"
-default = 1400
-min = 100
-step = 100
 
 [section.animation]
 label = "Animation"

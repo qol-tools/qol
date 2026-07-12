@@ -4,11 +4,10 @@ use std::time::{Duration, Instant};
 use crate::config::Config;
 
 pub struct ShakeDetector {
-    axes: [AxisSwing; 2],
-    reversals: VecDeque<Instant>,
-    last_at: Option<Instant>,
-    thresholds: Thresholds,
+    trail: Trail,
     window: Duration,
+    strictness: f64,
+    min_extent: f64,
     calm_duration: Duration,
     scale_factor: f32,
     grow_step: f32,
@@ -32,59 +31,108 @@ pub struct MotionSample {
 
 #[derive(Clone, Copy)]
 pub enum ScaleEvent {
-    Grew { reversals: usize },
+    Grew { tortuosity: f64 },
     Restored,
 }
 
-struct Thresholds {
-    reversals: usize,
-    regrow_reversals: usize,
-    swing_min: u32,
-    speed_min: f64,
+struct Trail {
+    vertices: VecDeque<Vertex>,
+    position: (f64, f64),
 }
 
 #[derive(Clone, Copy)]
-struct SwingRules {
-    travel_min: u32,
-    speed_min: f64,
+struct Vertex {
+    at: Instant,
+    x: f64,
+    y: f64,
 }
 
-#[derive(Default)]
-struct AxisSwing {
-    direction: i32,
-    travel: u32,
-    peak_speed: f64,
+struct TrailShape {
+    extent: f64,
+    tortuosity: f64,
 }
 
-impl AxisSwing {
-    fn advance(&mut self, delta: i32, speed: f64, rules: SwingRules) -> bool {
-        if delta == 0 {
-            return false;
+impl Trail {
+    fn new() -> Self {
+        Self {
+            vertices: VecDeque::new(),
+            position: (0.0, 0.0),
         }
-        let sign = delta.signum();
-        if sign == self.direction {
-            self.travel = self.travel.saturating_add(delta.unsigned_abs());
-            self.peak_speed = self.peak_speed.max(speed);
-            return false;
-        }
-        let completed = self.travel;
-        let completed_speed = self.peak_speed;
-        self.direction = sign;
-        self.travel = delta.unsigned_abs();
-        self.peak_speed = speed;
-        completed >= rules.travel_min && completed_speed >= rules.speed_min
     }
+
+    fn advance(&mut self, sample: MotionSample, window: Duration) -> Option<TrailShape> {
+        self.position.0 += f64::from(sample.dx);
+        self.position.1 += f64::from(sample.dy);
+        while self
+            .vertices
+            .front()
+            .is_some_and(|vertex| sample.at - vertex.at > window)
+        {
+            self.vertices.pop_front();
+        }
+        let vertex = Vertex {
+            at: sample.at,
+            x: self.position.0,
+            y: self.position.1,
+        };
+        if self.extends_last_segment(vertex) {
+            if let Some(last) = self.vertices.back_mut() {
+                *last = vertex;
+            }
+            return None;
+        }
+        self.vertices.push_back(vertex);
+        self.shape()
+    }
+
+    fn extends_last_segment(&self, next: Vertex) -> bool {
+        let count = self.vertices.len();
+        if count < 2 {
+            return false;
+        }
+        let previous = self.vertices[count - 2];
+        let last = self.vertices[count - 1];
+        same_direction(last.x - previous.x, next.x - last.x)
+            && same_direction(last.y - previous.y, next.y - last.y)
+    }
+
+    fn shape(&self) -> Option<TrailShape> {
+        let first = self.vertices.front()?;
+        let (mut min_x, mut max_x) = (first.x, first.x);
+        let (mut min_y, mut max_y) = (first.y, first.y);
+        let mut path = 0.0;
+        let mut previous = *first;
+        for vertex in self.vertices.iter().skip(1) {
+            path += (vertex.x - previous.x).hypot(vertex.y - previous.y);
+            min_x = min_x.min(vertex.x);
+            max_x = max_x.max(vertex.x);
+            min_y = min_y.min(vertex.y);
+            max_y = max_y.max(vertex.y);
+            previous = *vertex;
+        }
+        let extent = (max_x - min_x).hypot(max_y - min_y);
+        if extent <= 0.0 {
+            return None;
+        }
+        Some(TrailShape {
+            extent,
+            tortuosity: path / extent,
+        })
+    }
+}
+
+fn same_direction(previous: f64, current: f64) -> bool {
+    (previous >= -1.0 && current >= -1.0) || (previous <= 1.0 && current <= 1.0)
 }
 
 impl ShakeDetector {
     pub fn new(config: &Config) -> Self {
         let scale_factor = config.scale_factor as f32;
         Self {
-            axes: [AxisSwing::default(), AxisSwing::default()],
-            reversals: VecDeque::new(),
-            last_at: None,
-            thresholds: Thresholds::from(config),
+            trail: Trail::new(),
             window: Duration::from_millis(config.shake_window_ms),
+            strictness: config.shake_strictness,
+            min_extent: f64::from(config.shake_min_extent_px),
             calm_duration: Duration::from_millis(config.calm_duration_ms),
             scale_factor,
             grow_step: (scale_factor - 1.0) / (config.restore_steps as f32 / 2.0).max(1.0),
@@ -96,41 +144,23 @@ impl ShakeDetector {
     }
 
     pub fn record(&mut self, sample: MotionSample) -> ScaleUpdate {
-        self.track_reversals(sample);
-        self.last_at = Some(sample.at);
-        self.trim(sample.at);
-        self.update(sample.at)
+        let shake = self.detect(sample);
+        self.update(sample.at, shake)
     }
 
-    fn track_reversals(&mut self, sample: MotionSample) {
-        let elapsed = self
-            .last_at
-            .map(|last| (sample.at - last).as_secs_f64())
-            .unwrap_or(f64::INFINITY);
-        let rules = SwingRules {
-            travel_min: self.thresholds.swing_min,
-            speed_min: self.thresholds.speed_min,
-        };
-        for (axis, delta) in [(0, sample.dx), (1, sample.dy)] {
-            let speed = axis_speed(delta, elapsed);
-            if self.axes[axis].advance(delta, speed, rules) {
-                self.reversals.push_back(sample.at);
-            }
+    fn detect(&mut self, sample: MotionSample) -> Option<f64> {
+        if sample.dx == 0 && sample.dy == 0 {
+            return None;
         }
-    }
-
-    fn trim(&mut self, now: Instant) {
-        while self
-            .reversals
-            .front()
-            .is_some_and(|at| now - *at > self.window)
-        {
-            self.reversals.pop_front();
+        let shape = self.trail.advance(sample, self.window)?;
+        if shape.extent < self.min_extent || shape.tortuosity <= self.strictness {
+            return None;
         }
+        Some(shape.tortuosity)
     }
 
-    fn update(&mut self, now: Instant) -> ScaleUpdate {
-        if self.is_shake() {
+    fn update(&mut self, now: Instant, shake: Option<f64>) -> ScaleUpdate {
+        if shake.is_some() {
             self.growing = true;
             self.last_shake = Some(now);
         } else {
@@ -144,15 +174,8 @@ impl ShakeDetector {
 
         ScaleUpdate {
             scale_changed: scale_changed(previous_scale, next_scale),
-            event: scale_event(previous_scale, next_scale, self.reversals.len()),
+            event: scale_event(previous_scale, next_scale, shake),
         }
-    }
-
-    fn is_shake(&self) -> bool {
-        if !self.growing && self.is_scaled() {
-            return self.reversals.len() >= self.thresholds.regrow_reversals;
-        }
-        self.reversals.len() >= self.thresholds.reversals
     }
 
     fn maybe_stop_growing(&mut self, now: Instant) {
@@ -165,10 +188,6 @@ impl ShakeDetector {
         {
             self.growing = false;
         }
-    }
-
-    fn is_scaled(&self) -> bool {
-        self.current_scale > 1.0 + f32::EPSILON
     }
 
     fn next_scale(&self, target: f32) -> f32 {
@@ -188,24 +207,6 @@ impl MotionSample {
     }
 }
 
-impl From<&Config> for Thresholds {
-    fn from(config: &Config) -> Self {
-        Self {
-            reversals: config.shake_reversals as usize,
-            regrow_reversals: config.regrow_reversals as usize,
-            swing_min: config.swing_min_px,
-            speed_min: config.swing_min_speed,
-        }
-    }
-}
-
-fn axis_speed(delta: i32, elapsed_secs: f64) -> f64 {
-    if !elapsed_secs.is_finite() || elapsed_secs <= 0.0 {
-        return 0.0;
-    }
-    f64::from(delta.unsigned_abs()) / elapsed_secs
-}
-
 fn scale_changed(previous: f32, current: f32) -> Option<f32> {
     if (current - previous).abs() > f32::EPSILON {
         return Some(current);
@@ -213,11 +214,13 @@ fn scale_changed(previous: f32, current: f32) -> Option<f32> {
     None
 }
 
-fn scale_event(previous: f32, current: f32, reversals: usize) -> Option<ScaleEvent> {
+fn scale_event(previous: f32, current: f32, shake: Option<f64>) -> Option<ScaleEvent> {
     let was_scaled = previous > 1.0 + f32::EPSILON;
     let is_scaled = current > 1.0 + f32::EPSILON;
     match (was_scaled, is_scaled) {
-        (false, true) => Some(ScaleEvent::Grew { reversals }),
+        (false, true) => Some(ScaleEvent::Grew {
+            tortuosity: shake.unwrap_or(0.0),
+        }),
         (true, false) => Some(ScaleEvent::Restored),
         _ => None,
     }
@@ -231,11 +234,9 @@ mod tests {
 
     fn config() -> Config {
         Config {
-            shake_reversals: 5,
-            regrow_reversals: 3,
-            shake_window_ms: 600,
-            swing_min_px: 40,
-            swing_min_speed: 1400.0,
+            shake_strictness: 6.5,
+            shake_min_extent_px: 150,
+            shake_window_ms: 1000,
             scale_factor: 4,
             calm_duration_ms: 650,
             restore_steps: 18,
@@ -272,10 +273,10 @@ mod tests {
     #[test]
     fn shake_trigger_table() {
         let cases: [ShakeCase; 8] = [
-            ("brisk wiggle triggers", wiggle(150, 96, 2000), true),
-            ("vigorous wide shake triggers", wiggle(240, 64, 2000), true),
+            ("side-to-side rub triggers", wiggle(200, 125, 2000), true),
+            ("vigorous shake triggers", wiggle(240, 64, 2000), true),
             ("big fast arm shake triggers", wiggle(700, 125, 2000), true),
-            ("slow fiddling never triggers", wiggle(60, 96, 3000), false),
+            ("small wiggle never triggers", wiggle(90, 96, 3000), false),
             (
                 "straight glide never triggers",
                 (1..60).map(|i| (i * 16, 40, 0)).collect(),
@@ -292,8 +293,8 @@ mod tests {
                 false,
             ),
             (
-                "vertical wiggle triggers too",
-                wiggle(150, 96, 2000)
+                "vertical rub triggers too",
+                wiggle(200, 125, 2000)
                     .iter()
                     .map(|(t, dx, dy)| (*t, *dy, *dx))
                     .collect(),
@@ -312,55 +313,62 @@ mod tests {
     }
 
     #[test]
-    fn moderate_wiggle_triggers_within_a_second() {
+    fn vigorous_shake_triggers_within_a_second() {
         let mut detector = ShakeDetector::new(&config());
-        let grew_at = feed(&mut detector, Instant::now(), &wiggle(150, 96, 2000));
-        let at = grew_at.expect("brisk wiggle must trigger");
+        let grew_at = feed(&mut detector, Instant::now(), &wiggle(240, 64, 2000));
+        let at = grew_at.expect("vigorous shake must trigger");
         assert!(at <= 1000, "trigger should land within 1s, got {at}ms");
     }
 
     #[test]
-    fn slow_reversals_outside_window_never_trigger() {
-        // Direction changes 700ms apart: five reversals span far more than the
-        // 900ms window, so the count never accumulates.
+    fn sustained_shake_holds_growth_until_calm_then_restores() {
         let mut detector = ShakeDetector::new(&config());
-        let grew_at = feed(&mut detector, Instant::now(), &wiggle(60, 700, 6000));
-        assert_eq!(grew_at, None, "leisurely back-and-forth must not trigger");
+        let t0 = Instant::now();
+        let trace = wiggle(240, 64, 3000);
+        let grew_at = feed(&mut detector, t0, &trace).expect("shake must trigger");
+        for (ms, dx, dy) in trace.iter().filter(|(ms, _, _)| *ms > grew_at) {
+            let at = t0 + Duration::from_millis(*ms);
+            let update = detector.record(MotionSample::new(at, *dx, *dy));
+            assert!(
+                !matches!(update.event, Some(ScaleEvent::Restored)),
+                "must not restore mid-shake at {ms}ms"
+            );
+        }
+        let mut t = Duration::from_millis(3000);
+        for _ in 0..300 {
+            t += Duration::from_millis(16);
+            let update = detector.record(MotionSample::new(t0 + t, 0, 0));
+            if let Some(ScaleEvent::Restored) = update.event {
+                return;
+            }
+        }
+        panic!("cursor must restore after calm");
     }
 
     #[test]
-    fn cursor_shrinks_after_calm_and_regrows_on_three_reversals() {
+    fn shake_after_restore_grows_again() {
         let mut detector = ShakeDetector::new(&config());
         let t0 = Instant::now();
-        feed(&mut detector, t0, &wiggle(150, 96, 1200)).expect("initial grow");
+        feed(&mut detector, t0, &wiggle(240, 64, 1200)).expect("first grow");
         let mut t = Duration::from_millis(1200);
         let mut restored = false;
-        for _ in 0..200 {
+        for _ in 0..300 {
             t += Duration::from_millis(16);
             let update = detector.record(MotionSample::new(t0 + t, 0, 0));
             if let Some(ScaleEvent::Restored) = update.event {
                 restored = true;
                 break;
             }
-            if let Some(ScaleEvent::Grew { .. }) = update.event {
-                panic!("idle ticks must not regrow");
-            }
-            if update.scale_changed.is_some_and(|scale| scale < 4.0) && !detector.growing {
-                // shrinking has begun: three quick reversals must regrow
-                for dx in [40, -40, 40, -40, 40, -40] {
-                    t += Duration::from_millis(16);
-                    let update = detector.record(MotionSample::new(t0 + t, dx, 0));
-                    if let Some(ScaleEvent::Grew { .. }) = update.event {
-                        return;
-                    }
-                }
-                assert!(
-                    detector.growing,
-                    "three reversals while shrinking must regrow"
-                );
-                return;
-            }
         }
-        assert!(restored, "cursor must eventually restore after calm");
+        assert!(restored, "cursor must restore after calm");
+        let offset = t.as_millis() as u64;
+        let regrow: Vec<(u64, i32, i32)> = wiggle(240, 64, 2000)
+            .iter()
+            .map(|(ms, dx, dy)| (ms + offset, *dx, *dy))
+            .collect();
+        assert!(
+            feed(&mut detector, t0, &regrow).is_some(),
+            "renewed shake must grow again"
+        );
     }
 }

@@ -128,8 +128,8 @@ impl Session {
 
 fn log_event(event: ScaleEvent) {
     match event {
-        ScaleEvent::Grew { reversals } => {
-            eprintln!("[shake-to-grow] grow reversals={reversals}")
+        ScaleEvent::Grew { tortuosity } => {
+            eprintln!("[shake-to-grow] grow tortuosity={tortuosity:.1}")
         }
         ScaleEvent::Restored => eprintln!("[shake-to-grow] restore"),
     }
