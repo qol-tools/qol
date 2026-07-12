@@ -18,6 +18,7 @@ pub(crate) struct RgbaCrop {
 }
 
 impl FrozenFrame {
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn from_bgra(bounds: Rect, pixels: Vec<u8>) -> Option<Self> {
         let width = u32::try_from(bounds.w).ok()?;
         let height = u32::try_from(bounds.h).ok()?;
