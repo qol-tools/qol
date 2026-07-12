@@ -7,6 +7,7 @@ pub struct ShakeDetector {
     trail: Trail,
     window: Duration,
     strictness: f64,
+    regrow_strictness: f64,
     min_extent: f64,
     calm_duration: Duration,
     scale_factor: f32,
@@ -132,6 +133,7 @@ impl ShakeDetector {
             trail: Trail::new(),
             window: Duration::from_millis(config.shake_window_ms),
             strictness: config.shake_strictness,
+            regrow_strictness: config.regrow_strictness,
             min_extent: f64::from(config.shake_min_extent_px),
             calm_duration: Duration::from_millis(config.calm_duration_ms),
             scale_factor,
@@ -152,11 +154,20 @@ impl ShakeDetector {
         if sample.dx == 0 && sample.dy == 0 {
             return None;
         }
+        let strictness = if self.is_scaled() {
+            self.regrow_strictness
+        } else {
+            self.strictness
+        };
         let shape = self.trail.advance(sample, self.window)?;
-        if shape.extent < self.min_extent || shape.tortuosity <= self.strictness {
+        if shape.extent < self.min_extent || shape.tortuosity <= strictness {
             return None;
         }
         Some(shape.tortuosity)
+    }
+
+    fn is_scaled(&self) -> bool {
+        self.current_scale > 1.0 + f32::EPSILON
     }
 
     fn update(&mut self, now: Instant, shake: Option<f64>) -> ScaleUpdate {
@@ -235,6 +246,7 @@ mod tests {
     fn config() -> Config {
         Config {
             shake_strictness: 6.5,
+            regrow_strictness: 3.0,
             shake_min_extent_px: 150,
             shake_window_ms: 1000,
             scale_factor: 4,
@@ -343,6 +355,48 @@ mod tests {
             }
         }
         panic!("cursor must restore after calm");
+    }
+
+    #[test]
+    fn short_burst_regrows_while_shrinking_but_not_from_rest() {
+        let mut detector = ShakeDetector::new(&config());
+        let t0 = Instant::now();
+        feed(&mut detector, t0, &wiggle(240, 64, 1200)).expect("initial grow");
+        let mut t = Duration::from_millis(1200);
+        let mut shrinking = false;
+        for _ in 0..300 {
+            t += Duration::from_millis(16);
+            let update = detector.record(MotionSample::new(t0 + t, 0, 0));
+            if let Some(ScaleEvent::Restored) = update.event {
+                panic!("restored before the shrink phase was observed");
+            }
+            if update.scale_changed.is_some_and(|scale| scale < 4.0) && !detector.growing {
+                shrinking = true;
+                break;
+            }
+        }
+        assert!(shrinking, "shrink phase must begin after calm");
+        let offset = t.as_millis() as u64;
+        let burst: Vec<(u64, i32, i32)> = wiggle(160, 64, 300)
+            .iter()
+            .map(|(ms, dx, dy)| (ms + offset, *dx, *dy))
+            .collect();
+        for (ms, dx, dy) in &burst {
+            let update =
+                detector.record(MotionSample::new(t0 + Duration::from_millis(*ms), *dx, *dy));
+            assert!(
+                !matches!(update.event, Some(ScaleEvent::Restored)),
+                "burst must regrow before the cursor fully restores"
+            );
+        }
+        assert!(
+            detector.growing,
+            "short burst while shrinking must regrow via the relaxed threshold"
+        );
+
+        let mut rested = ShakeDetector::new(&config());
+        let grew = feed(&mut rested, Instant::now(), &wiggle(160, 64, 300));
+        assert_eq!(grew, None, "same burst from rest must not trigger");
     }
 
     #[test]
