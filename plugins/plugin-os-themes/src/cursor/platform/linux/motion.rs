@@ -40,14 +40,12 @@ struct Thresholds {
     reversals: usize,
     regrow_reversals: usize,
     swing_min: u32,
-    swing_max: u32,
     speed_min: f64,
 }
 
 #[derive(Clone, Copy)]
 struct SwingRules {
     travel_min: u32,
-    travel_max: u32,
     speed_min: f64,
 }
 
@@ -59,38 +57,23 @@ struct AxisSwing {
 }
 
 impl AxisSwing {
-    fn advance(&mut self, delta: i32, speed: f64, rules: SwingRules) -> SwingOutcome {
+    fn advance(&mut self, delta: i32, speed: f64, rules: SwingRules) -> bool {
         if delta == 0 {
-            return SwingOutcome::Continuing;
+            return false;
         }
         let sign = delta.signum();
         if sign == self.direction {
             self.travel = self.travel.saturating_add(delta.unsigned_abs());
             self.peak_speed = self.peak_speed.max(speed);
-            return SwingOutcome::Continuing;
+            return false;
         }
         let completed = self.travel;
         let completed_speed = self.peak_speed;
         self.direction = sign;
         self.travel = delta.unsigned_abs();
         self.peak_speed = speed;
-        if completed == 0 {
-            return SwingOutcome::Continuing;
-        }
-        if completed > rules.travel_max {
-            return SwingOutcome::Sweep;
-        }
-        if completed < rules.travel_min || completed_speed < rules.speed_min {
-            return SwingOutcome::Continuing;
-        }
-        SwingOutcome::Reversal
+        completed >= rules.travel_min && completed_speed >= rules.speed_min
     }
-}
-
-enum SwingOutcome {
-    Continuing,
-    Reversal,
-    Sweep,
 }
 
 impl ShakeDetector {
@@ -126,15 +109,12 @@ impl ShakeDetector {
             .unwrap_or(f64::INFINITY);
         let rules = SwingRules {
             travel_min: self.thresholds.swing_min,
-            travel_max: self.thresholds.swing_max,
             speed_min: self.thresholds.speed_min,
         };
         for (axis, delta) in [(0, sample.dx), (1, sample.dy)] {
             let speed = axis_speed(delta, elapsed);
-            match self.axes[axis].advance(delta, speed, rules) {
-                SwingOutcome::Continuing => {}
-                SwingOutcome::Reversal => self.reversals.push_back(sample.at),
-                SwingOutcome::Sweep => self.reversals.clear(),
+            if self.axes[axis].advance(delta, speed, rules) {
+                self.reversals.push_back(sample.at);
             }
         }
     }
@@ -214,7 +194,6 @@ impl From<&Config> for Thresholds {
             reversals: config.shake_reversals as usize,
             regrow_reversals: config.regrow_reversals as usize,
             swing_min: config.swing_min_px,
-            swing_max: config.swing_max_px,
             speed_min: config.swing_min_speed,
         }
     }
@@ -254,10 +233,9 @@ mod tests {
         Config {
             shake_reversals: 5,
             regrow_reversals: 3,
-            shake_window_ms: 500,
-            swing_min_px: 30,
+            shake_window_ms: 900,
+            swing_min_px: 40,
             swing_min_speed: 1200.0,
-            swing_max_px: 600,
             scale_factor: 4,
             calm_duration_ms: 650,
             restore_steps: 18,
@@ -293,9 +271,10 @@ mod tests {
 
     #[test]
     fn shake_trigger_table() {
-        let cases: [ShakeCase; 7] = [
+        let cases: [ShakeCase; 8] = [
             ("brisk wiggle triggers", wiggle(120, 96, 2000), true),
             ("vigorous wide shake triggers", wiggle(240, 64, 2000), true),
+            ("big fast arm shake triggers", wiggle(700, 125, 2000), true),
             ("slow fiddling never triggers", wiggle(60, 96, 3000), false),
             (
                 "straight glide never triggers",
@@ -303,7 +282,7 @@ mod tests {
                 false,
             ),
             (
-                "screen-wide sweeps never trigger",
+                "wide 2Hz scrubbing never triggers",
                 wiggle(800, 250, 3000),
                 false,
             ),
@@ -342,8 +321,8 @@ mod tests {
 
     #[test]
     fn slow_reversals_outside_window_never_trigger() {
-        // Direction changes 700ms apart: each reversal ages out of the 500ms
-        // window before the next arrives.
+        // Direction changes 700ms apart: five reversals span far more than the
+        // 900ms window, so the count never accumulates.
         let mut detector = ShakeDetector::new(&config());
         let grew_at = feed(&mut detector, Instant::now(), &wiggle(60, 700, 6000));
         assert_eq!(grew_at, None, "leisurely back-and-forth must not trigger");

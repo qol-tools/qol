@@ -10,7 +10,6 @@ pub struct Config {
     pub shake_window_ms: u64,
     pub swing_min_px: u32,
     pub swing_min_speed: f64,
-    pub swing_max_px: u32,
     pub scale_factor: u32,
     pub calm_duration_ms: u64,
     pub restore_steps: u32,
@@ -49,12 +48,11 @@ fn persist(config: &Config) {
 
 fn log_config(config: &Config) {
     eprintln!(
-        "[shake-to-grow] config: reversals={} regrow_reversals={} window_ms={} swing_px={}..{} speed={}px/s scale={} calm_ms={} steps={}",
+        "[shake-to-grow] config: reversals={} regrow_reversals={} window_ms={} swing_px>={} speed={}px/s scale={} calm_ms={} steps={}",
         config.shake_reversals,
         config.regrow_reversals,
         config.shake_window_ms,
         config.swing_min_px,
-        config.swing_max_px,
         config.swing_min_speed,
         config.scale_factor,
         config.calm_duration_ms,
@@ -76,7 +74,7 @@ mod tests {
 
         let defaults = contract_defaults();
         assert_eq!(defaults.shake_reversals, 5);
-        assert_eq!(defaults.shake_window_ms, 500);
+        assert_eq!(defaults.shake_window_ms, 900);
         assert_eq!(defaults.swing_min_speed, 1200.0);
         assert_eq!(defaults.restore_steps, 18);
     }
