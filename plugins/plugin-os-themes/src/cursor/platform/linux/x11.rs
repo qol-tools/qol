@@ -11,7 +11,7 @@ const MAX_CURSOR_DIMENSION: u32 = 512;
 const XFIXES_CURSOR_NOTIFY: i32 = 1;
 const XFIXES_DISPLAY_CURSOR_NOTIFY: i32 = 0;
 const XFIXES_DISPLAY_CURSOR_NOTIFY_MASK: libc::c_ulong = 1;
-const SHAPE_CACHE_CAP: usize = 64;
+const FRAME_TABLE_CAP: usize = 4;
 
 const CATALOG_SHAPE_NAMES: [&CStr; 45] = [
     c"text",
@@ -84,13 +84,15 @@ pub struct CursorSession {
 }
 
 struct ShapeCatalog {
-    cache: HashMap<u64, Option<CursorRaster>>,
+    frame_tables: HashMap<u32, HashMap<u64, usize>>,
+    sources: HashMap<usize, Option<CursorRaster>>,
 }
 
 impl ShapeCatalog {
     fn new() -> Self {
         Self {
-            cache: HashMap::new(),
+            frame_tables: HashMap::new(),
+            sources: HashMap::new(),
         }
     }
 
@@ -100,42 +102,59 @@ impl ShapeCatalog {
         image: &CursorImage,
         preferred_source_size: u32,
     ) -> Option<CursorRaster> {
-        let key = cursor_hash(image);
-        if let Some(cached) = self.cache.get(&key) {
-            return cached.clone();
+        let request_size = image.width.max(image.height);
+        if self.frame_tables.len() >= FRAME_TABLE_CAP
+            && !self.frame_tables.contains_key(&request_size)
+        {
+            return None;
         }
-        let source = identify_shape_source(display, image, preferred_source_size);
-        if self.cache.len() >= SHAPE_CACHE_CAP {
-            self.cache.clear();
-        }
-        self.cache.insert(key, source.clone());
-        source
+        let table = self
+            .frame_tables
+            .entry(request_size)
+            .or_insert_with(|| build_frame_table(display, request_size));
+        let name_index = *table.get(&cursor_hash(image))?;
+        self.sources
+            .entry(name_index)
+            .or_insert_with(|| {
+                load_named_cursor_raster(
+                    display,
+                    CATALOG_SHAPE_NAMES[name_index],
+                    preferred_source_size,
+                )
+            })
+            .clone()
     }
 }
 
-fn identify_shape_source(
-    display: *mut xlib::Display,
-    image: &CursorImage,
-    preferred_source_size: u32,
-) -> Option<CursorRaster> {
-    let request_size = image.width.max(image.height);
-    for name in CATALOG_SHAPE_NAMES {
-        let Some(candidate) = load_named_cursor_raster(display, name, request_size) else {
+fn build_frame_table(display: *mut xlib::Display, request_size: u32) -> HashMap<u64, usize> {
+    let mut table = HashMap::new();
+    let theme = unsafe { xcursor::XcursorGetTheme(display) };
+    for (name_index, name) in CATALOG_SHAPE_NAMES.iter().enumerate() {
+        let images =
+            unsafe { xcursor::XcursorLibraryLoadImages(name.as_ptr(), theme, request_size as i32) };
+        if images.is_null() {
             continue;
-        };
-        if raster_matches_image(&candidate, image) {
-            return load_named_cursor_raster(display, name, preferred_source_size);
         }
+        for raster in cursor_rasters_from_images(images) {
+            table.entry(raster_hash(&raster)).or_insert(name_index);
+        }
+        unsafe { xcursor::XcursorImagesDestroy(images) };
     }
-    None
+    table
 }
 
-fn raster_matches_image(raster: &CursorRaster, image: &CursorImage) -> bool {
-    raster.width == image.width
-        && raster.height == image.height
-        && raster.xhot == image.xhot
-        && raster.yhot == image.yhot
-        && raster.pixels == image.pixels
+fn cursor_rasters_from_images(images: *mut xcursor::XcursorImages) -> Vec<CursorRaster> {
+    let images_ref = unsafe { &*images };
+    let Ok(image_count) = usize::try_from(images_ref.nimage) else {
+        return Vec::new();
+    };
+    let image_pointers = unsafe { std::slice::from_raw_parts(images_ref.images, image_count) };
+    image_pointers
+        .iter()
+        .copied()
+        .filter(|pointer| !pointer.is_null())
+        .filter_map(|pointer| cursor_raster_from_xcursor_image(unsafe { &*pointer }))
+        .collect()
 }
 
 struct BaseCursor {
@@ -282,6 +301,10 @@ impl CursorSession {
             sample,
             self.preferred_source_size,
         );
+        if self.same_grow_source(&sample) {
+            self.grow_cursor = Some(sample);
+            return self.reapply_active_cursor();
+        }
         log_cursor_image("live refresh adopt", &sample);
         self.grow_cursor = Some(sample);
         self.apply_grow_cursor()
@@ -343,6 +366,24 @@ impl CursorSession {
             unsafe { xlib::XFreeCursor(self.display, old_cursor) };
         }
         true
+    }
+
+    fn same_grow_source(&self, sample: &CursorImage) -> bool {
+        let Some(new_source) = sample.source.as_ref() else {
+            return false;
+        };
+        let Some(current_source) = self
+            .grow_cursor
+            .as_ref()
+            .and_then(|grow_cursor| grow_cursor.source.as_ref())
+        else {
+            return false;
+        };
+        new_source.width == current_source.width
+            && new_source.height == current_source.height
+            && new_source.xhot == current_source.xhot
+            && new_source.yhot == current_source.yhot
+            && new_source.pixels == current_source.pixels
     }
 
     fn reapply_active_cursor(&mut self) -> bool {
@@ -764,12 +805,32 @@ fn log_cursor_image(prefix: &str, image: &CursorImage) {
 }
 
 fn cursor_hash(image: &CursorImage) -> u64 {
+    pixel_signature(
+        image.width,
+        image.height,
+        image.xhot,
+        image.yhot,
+        &image.pixels,
+    )
+}
+
+fn raster_hash(raster: &CursorRaster) -> u64 {
+    pixel_signature(
+        raster.width,
+        raster.height,
+        raster.xhot,
+        raster.yhot,
+        &raster.pixels,
+    )
+}
+
+fn pixel_signature(width: u32, height: u32, xhot: u32, yhot: u32, pixels: &[u32]) -> u64 {
     let mut hash = 1469598103934665603u64;
-    hash = hash_cursor_value(hash, u64::from(image.width));
-    hash = hash_cursor_value(hash, u64::from(image.height));
-    hash = hash_cursor_value(hash, u64::from(image.xhot));
-    hash = hash_cursor_value(hash, u64::from(image.yhot));
-    for pixel in &image.pixels {
+    hash = hash_cursor_value(hash, u64::from(width));
+    hash = hash_cursor_value(hash, u64::from(height));
+    hash = hash_cursor_value(hash, u64::from(xhot));
+    hash = hash_cursor_value(hash, u64::from(yhot));
+    for pixel in pixels {
         hash = hash_cursor_value(hash, u64::from(*pixel));
     }
     hash
