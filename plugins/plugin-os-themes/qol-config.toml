@@ -19,7 +19,7 @@ step = 1
 type = "number"
 label = "Reversals To Regrow"
 section = "thresholds"
-default = 2
+default = 3
 min = 1
 step = 1
 
@@ -35,9 +35,17 @@ step = 50
 type = "number"
 label = "Min Swing Travel"
 section = "thresholds"
-default = 10
+default = 30
 min = 1
 step = 1
+
+[field.swing_min_speed]
+type = "number"
+label = "Min Swing Speed"
+section = "thresholds"
+default = 1200
+min = 100
+step = 100
 
 [field.swing_max_px]
 type = "number"

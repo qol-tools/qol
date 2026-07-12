@@ -6,6 +6,7 @@ use crate::config::Config;
 pub struct ShakeDetector {
     axes: [AxisSwing; 2],
     reversals: VecDeque<Instant>,
+    last_at: Option<Instant>,
     thresholds: Thresholds,
     window: Duration,
     calm_duration: Duration,
@@ -40,36 +41,47 @@ struct Thresholds {
     regrow_reversals: usize,
     swing_min: u32,
     swing_max: u32,
+    speed_min: f64,
+}
+
+#[derive(Clone, Copy)]
+struct SwingRules {
+    travel_min: u32,
+    travel_max: u32,
+    speed_min: f64,
 }
 
 #[derive(Default)]
 struct AxisSwing {
     direction: i32,
     travel: u32,
+    peak_speed: f64,
 }
 
 impl AxisSwing {
-    fn advance(&mut self, delta: i32, bounds: (u32, u32)) -> SwingOutcome {
+    fn advance(&mut self, delta: i32, speed: f64, rules: SwingRules) -> SwingOutcome {
         if delta == 0 {
             return SwingOutcome::Continuing;
         }
         let sign = delta.signum();
         if sign == self.direction {
             self.travel = self.travel.saturating_add(delta.unsigned_abs());
+            self.peak_speed = self.peak_speed.max(speed);
             return SwingOutcome::Continuing;
         }
         let completed = self.travel;
+        let completed_speed = self.peak_speed;
         self.direction = sign;
         self.travel = delta.unsigned_abs();
-        let (min, max) = bounds;
+        self.peak_speed = speed;
         if completed == 0 {
             return SwingOutcome::Continuing;
         }
-        if completed < min {
-            return SwingOutcome::Continuing;
-        }
-        if completed > max {
+        if completed > rules.travel_max {
             return SwingOutcome::Sweep;
+        }
+        if completed < rules.travel_min || completed_speed < rules.speed_min {
+            return SwingOutcome::Continuing;
         }
         SwingOutcome::Reversal
     }
@@ -87,6 +99,7 @@ impl ShakeDetector {
         Self {
             axes: [AxisSwing::default(), AxisSwing::default()],
             reversals: VecDeque::new(),
+            last_at: None,
             thresholds: Thresholds::from(config),
             window: Duration::from_millis(config.shake_window_ms),
             calm_duration: Duration::from_millis(config.calm_duration_ms),
@@ -101,14 +114,24 @@ impl ShakeDetector {
 
     pub fn record(&mut self, sample: MotionSample) -> ScaleUpdate {
         self.track_reversals(sample);
+        self.last_at = Some(sample.at);
         self.trim(sample.at);
         self.update(sample.at)
     }
 
     fn track_reversals(&mut self, sample: MotionSample) {
-        let bounds = (self.thresholds.swing_min, self.thresholds.swing_max);
+        let elapsed = self
+            .last_at
+            .map(|last| (sample.at - last).as_secs_f64())
+            .unwrap_or(f64::INFINITY);
+        let rules = SwingRules {
+            travel_min: self.thresholds.swing_min,
+            travel_max: self.thresholds.swing_max,
+            speed_min: self.thresholds.speed_min,
+        };
         for (axis, delta) in [(0, sample.dx), (1, sample.dy)] {
-            match self.axes[axis].advance(delta, bounds) {
+            let speed = axis_speed(delta, elapsed);
+            match self.axes[axis].advance(delta, speed, rules) {
                 SwingOutcome::Continuing => {}
                 SwingOutcome::Reversal => self.reversals.push_back(sample.at),
                 SwingOutcome::Sweep => self.reversals.clear(),
@@ -192,8 +215,16 @@ impl From<&Config> for Thresholds {
             regrow_reversals: config.regrow_reversals as usize,
             swing_min: config.swing_min_px,
             swing_max: config.swing_max_px,
+            speed_min: config.swing_min_speed,
         }
     }
+}
+
+fn axis_speed(delta: i32, elapsed_secs: f64) -> f64 {
+    if !elapsed_secs.is_finite() || elapsed_secs <= 0.0 {
+        return 0.0;
+    }
+    f64::from(delta.unsigned_abs()) / elapsed_secs
 }
 
 fn scale_changed(previous: f32, current: f32) -> Option<f32> {
@@ -217,12 +248,15 @@ fn scale_event(previous: f32, current: f32, reversals: usize) -> Option<ScaleEve
 mod tests {
     use super::*;
 
+    type ShakeCase = (&'static str, Vec<(u64, i32, i32)>, bool);
+
     fn config() -> Config {
         Config {
             shake_reversals: 5,
-            regrow_reversals: 2,
+            regrow_reversals: 3,
             shake_window_ms: 500,
-            swing_min_px: 10,
+            swing_min_px: 30,
+            swing_min_speed: 1200.0,
             swing_max_px: 600,
             scale_factor: 4,
             calm_duration_ms: 650,
@@ -259,9 +293,10 @@ mod tests {
 
     #[test]
     fn shake_trigger_table() {
-        let cases: [(&str, Vec<(u64, i32, i32)>, bool); 6] = [
-            ("moderate wiggle triggers", wiggle(60, 96, 2000), true),
+        let cases: [ShakeCase; 7] = [
+            ("brisk wiggle triggers", wiggle(120, 96, 2000), true),
             ("vigorous wide shake triggers", wiggle(240, 64, 2000), true),
+            ("slow fiddling never triggers", wiggle(60, 96, 3000), false),
             (
                 "straight glide never triggers",
                 (1..60).map(|i| (i * 16, 40, 0)).collect(),
@@ -279,7 +314,7 @@ mod tests {
             ),
             (
                 "vertical wiggle triggers too",
-                wiggle(60, 96, 2000)
+                wiggle(120, 96, 2000)
                     .iter()
                     .map(|(t, dx, dy)| (*t, *dy, *dx))
                     .collect(),
@@ -300,8 +335,8 @@ mod tests {
     #[test]
     fn moderate_wiggle_triggers_within_a_second() {
         let mut detector = ShakeDetector::new(&config());
-        let grew_at = feed(&mut detector, Instant::now(), &wiggle(60, 96, 2000));
-        let at = grew_at.expect("moderate wiggle must trigger");
+        let grew_at = feed(&mut detector, Instant::now(), &wiggle(120, 96, 2000));
+        let at = grew_at.expect("brisk wiggle must trigger");
         assert!(at <= 1000, "trigger should land within 1s, got {at}ms");
     }
 
@@ -315,10 +350,10 @@ mod tests {
     }
 
     #[test]
-    fn cursor_shrinks_after_calm_and_regrows_on_two_reversals() {
+    fn cursor_shrinks_after_calm_and_regrows_on_three_reversals() {
         let mut detector = ShakeDetector::new(&config());
         let t0 = Instant::now();
-        feed(&mut detector, t0, &wiggle(60, 96, 1200)).expect("initial grow");
+        feed(&mut detector, t0, &wiggle(120, 96, 1200)).expect("initial grow");
         let mut t = Duration::from_millis(1200);
         let mut restored = false;
         for _ in 0..200 {
@@ -332,9 +367,9 @@ mod tests {
                 panic!("idle ticks must not regrow");
             }
             if update.scale_changed.is_some_and(|scale| scale < 4.0) && !detector.growing {
-                // shrinking has begun: two quick swings must regrow
-                for (i, dx) in [(1u64, 40), (2, -40), (3, 40), (4, -40)] {
-                    t += Duration::from_millis(16 * i);
+                // shrinking has begun: three quick reversals must regrow
+                for dx in [40, -40, 40, -40, 40, -40] {
+                    t += Duration::from_millis(16);
                     let update = detector.record(MotionSample::new(t0 + t, dx, 0));
                     if let Some(ScaleEvent::Grew { .. }) = update.event {
                         return;
@@ -342,7 +377,7 @@ mod tests {
                 }
                 assert!(
                     detector.growing,
-                    "two reversals while shrinking must regrow"
+                    "three reversals while shrinking must regrow"
                 );
                 return;
             }
