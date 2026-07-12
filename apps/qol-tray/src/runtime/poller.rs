@@ -21,7 +21,7 @@ impl PollStrategy for BasicStrategy {
         max: Duration,
     ) -> Duration {
         let next = if changed {
-            current / 2
+            min
         } else {
             current.saturating_mul(2)
         };
@@ -69,23 +69,19 @@ mod tests {
 
     type StrategyCase = (&'static str, Duration, bool, Duration, Duration, Duration);
 
-    fn us(n: u64) -> Duration {
-        Duration::from_micros(n)
-    }
-
     #[test]
     fn basic_strategy_next_interval_table() {
         let cases: &[StrategyCase] = &[
             (
-                "changed halves even ms",
+                "changed snaps straight to min",
                 ms(100),
                 true,
                 ms(16),
                 ms(500),
-                ms(50),
+                ms(16),
             ),
             (
-                "changed clamps to min when half below min",
+                "changed snaps to min from just above",
                 ms(20),
                 true,
                 ms(16),
@@ -157,20 +153,20 @@ mod tests {
                 ms(16),
             ),
             (
-                "changed odd ms divides into half-ms (sub-ms precision)",
+                "changed snaps to min from odd ms",
                 ms(33),
                 true,
                 ms(16),
                 ms(500),
-                us(16_500),
+                ms(16),
             ),
             (
-                "changed even-multiple-of-min halves cleanly",
-                ms(64),
+                "changed snaps to min from a large interval",
+                ms(500),
                 true,
                 ms(16),
                 ms(500),
-                ms(32),
+                ms(16),
             ),
             (
                 "min equals max forces output to that value (changed)",
@@ -355,16 +351,15 @@ mod tests {
         }
 
         #[test]
-        fn prop_basic_strategy_changed_halves_when_in_range(
-            half_target in 16u64..2000,
-            min in 0u64..16,
+        fn prop_basic_strategy_changed_snaps_to_min(
+            current in duration_ms_strategy(),
+            min in 0u64..1000,
             max_extra in 0u64..2000,
         ) {
-            let current = half_target * 2;
-            let max = current + max_extra;
+            let max = min + max_extra;
             let mut s = BasicStrategy;
             let got = s.next_interval(ms(current), true, ms(min), ms(max));
-            prop_assert_eq!(got, ms(half_target));
+            prop_assert_eq!(got, ms(min));
         }
 
         #[test]
