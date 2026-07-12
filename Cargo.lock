@@ -5398,7 +5398,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-os-themes"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "anyhow",
  "libc",
@@ -5944,7 +5944,7 @@ dependencies = [
 
 [[package]]
 name = "qol-shot"
-version = "1.21.2"
+version = "1.21.3"
 dependencies = [
  "anyhow",
  "chrono",
