@@ -10,6 +10,7 @@ use std::sync::mpsc::Sender;
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 const ACK_TIMEOUT_MS: u64 = 80;
+const HOST_DEATH_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 const REPLACE_EXISTING_ENV: &str = qol_conventions::ENV_DAEMON_REPLACE_EXISTING;
 
 pub struct DaemonConfig {
@@ -131,7 +132,15 @@ pub fn start_listener<C: Send + 'static>(
         return false;
     };
 
-    qol_runtime::spawn_host_death_watchdog();
+    let host_death_tx = tx.clone();
+    qol_runtime::spawn_host_death_watchdog_with(move || {
+        if let ReadResult::Command(cmd) = parser("kill") {
+            if host_death_tx.send(cmd).is_ok() {
+                std::thread::sleep(HOST_DEATH_GRACE);
+            }
+        }
+        std::process::exit(0);
+    });
 
     std::thread::spawn(move || {
         for stream in listener.incoming() {

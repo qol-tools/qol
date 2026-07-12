@@ -6,6 +6,10 @@ use qol_conventions::{ENV_PLUGIN_ID, ENV_STATE_SOCKET};
 const RECONNECT_BACKOFF: Duration = Duration::from_millis(250);
 
 pub fn spawn_host_death_watchdog() {
+    spawn_host_death_watchdog_with(|| std::process::exit(0));
+}
+
+pub fn spawn_host_death_watchdog_with(on_host_death: impl FnOnce() + Send + 'static) {
     if std::env::var_os(ENV_STATE_SOCKET).is_none() {
         return;
     }
@@ -13,7 +17,7 @@ pub fn spawn_host_death_watchdog() {
     let plugin_id = std::env::var(ENV_PLUGIN_ID).unwrap_or_else(|_| "unknown".to_string());
     let _ = std::thread::Builder::new()
         .name("qol-host-watchdog".into())
-        .spawn(move || watch_host(&client, &plugin_id, is_orphaned, || std::process::exit(0)));
+        .spawn(move || watch_host(&client, &plugin_id, is_orphaned, on_host_death));
 }
 
 fn is_orphaned() -> bool {

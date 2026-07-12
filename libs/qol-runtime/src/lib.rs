@@ -22,4 +22,4 @@ pub use pane_field::PaneField;
 pub use client::{PlatformStateClient, Subscription};
 pub use types::{CursorPos, MonitorBounds, PlatformState, WindowBounds};
 #[cfg(unix)]
-pub use watchdog::spawn_host_death_watchdog;
+pub use watchdog::{spawn_host_death_watchdog, spawn_host_death_watchdog_with};
