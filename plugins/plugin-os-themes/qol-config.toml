@@ -3,49 +3,49 @@ title = "OS Themes"
 description = "Cursor growth behavior for the shake-to-grow effect."
 
 [section.thresholds]
-label = "Thresholds"
-description = "Motion thresholds that determine when the cursor grows and regrows."
+label = "Shake Detection"
+description = "A shake is counted in direction reversals: quick swings between the minimum and maximum travel, all inside the detection window."
 actions = ["run"]
 
-[field.velocity_threshold]
+[field.shake_reversals]
 type = "number"
-label = "Grow Velocity"
+label = "Reversals To Grow"
 section = "thresholds"
-default = 4500.0
-min = 100.0
-step = 100.0
+default = 5
+min = 2
+step = 1
 
-[field.shakiness_threshold]
+[field.regrow_reversals]
 type = "number"
-label = "Grow Shakiness"
+label = "Reversals To Regrow"
 section = "thresholds"
-default = 75.0
-min = 1.0
-step = 1.0
+default = 2
+min = 1
+step = 1
 
-[field.regrow_velocity_threshold]
+[field.shake_window_ms]
 type = "number"
-label = "Regrow Velocity"
+label = "Detection Window"
 section = "thresholds"
-default = 1500.0
-min = 100.0
-step = 100.0
+default = 500
+min = 100
+step = 50
 
-[field.regrow_shakiness_threshold]
+[field.swing_min_px]
 type = "number"
-label = "Regrow Shakiness"
+label = "Min Swing Travel"
 section = "thresholds"
-default = 3.0
-min = 0.5
-step = 0.5
+default = 10
+min = 1
+step = 1
 
-[field.post_trigger_threshold]
+[field.swing_max_px]
 type = "number"
-label = "Post Trigger"
+label = "Max Swing Travel"
 section = "thresholds"
-default = 1000.0
-min = 100.0
-step = 50.0
+default = 600
+min = 20
+step = 10
 
 [section.animation]
 label = "Animation"
