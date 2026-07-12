@@ -3,7 +3,7 @@ id = "plugin-controllers"
 uid = "eb274823-d360-47bb-a668-6bf047ba8baf"
 name = "Controllers"
 description = "Detect game controllers with known driver defects and apply fixes"
-version = "0.1.0"
+version = "0.1.1"
 author = "KMRH47"
 platforms = ["linux"]
 
