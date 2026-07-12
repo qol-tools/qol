@@ -12,6 +12,7 @@ use crate::cursor::{CursorEffect, RunControl};
 use super::motion::{MotionSample, ScaleEvent, ScaleUpdate, ShakeDetector};
 
 const TICK_INTERVAL: Duration = Duration::from_millis(16);
+const IDLE_WAKE_INTERVAL: Duration = Duration::from_millis(250);
 
 pub fn create_effect() -> Box<dyn CursorEffect> {
     Box::new(LinuxCursorEffect)
@@ -37,17 +38,15 @@ impl CursorEffect for LinuxCursorEffect {
             let timeout = if scaled {
                 TICK_INTERVAL
             } else {
-                Duration::from_secs(86400)
+                IDLE_WAKE_INTERVAL
             };
-            let result = rx.recv_timeout(timeout);
-            let now = Instant::now();
-            let sample = match result {
-                Ok((x, y)) => {
+            let sample = match rx.recv_timeout(timeout) {
+                Ok((at, x, y)) => {
                     let (dx, dy) = delta(last_pos, x, y);
                     last_pos = Some((x, y));
-                    MotionSample::new(now, dx, dy)
+                    MotionSample::new(at, dx, dy)
                 }
-                Err(RecvTimeoutError::Timeout) => MotionSample::new(now, 0, 0),
+                Err(RecvTimeoutError::Timeout) => MotionSample::new(Instant::now(), 0, 0),
                 Err(RecvTimeoutError::Disconnected) => break,
             };
             let update = detector.record(sample);
@@ -64,14 +63,14 @@ impl CursorEffect for LinuxCursorEffect {
     }
 }
 
-fn spawn_reader(mut subscription: Subscription) -> mpsc::Receiver<(f32, f32)> {
+fn spawn_reader(mut subscription: Subscription) -> mpsc::Receiver<(Instant, f32, f32)> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         while let Some(event) = subscription.next_event() {
             let RuntimeEvent::CursorMoved { x, y } = event else {
                 continue;
             };
-            if tx.send((x, y)).is_err() {
+            if tx.send((Instant::now(), x, y)).is_err() {
                 break;
             }
         }
