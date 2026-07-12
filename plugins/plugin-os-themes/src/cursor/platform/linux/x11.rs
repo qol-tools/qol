@@ -13,7 +13,8 @@ const XFIXES_DISPLAY_CURSOR_NOTIFY: i32 = 0;
 const XFIXES_DISPLAY_CURSOR_NOTIFY_MASK: libc::c_ulong = 1;
 const FRAME_TABLE_CAP: usize = 4;
 
-const CATALOG_SHAPE_NAMES: [&CStr; 45] = [
+const CATALOG_SHAPE_NAMES: [&CStr; 46] = [
+    c"left_ptr",
     c"text",
     c"xterm",
     c"pointer",
@@ -557,8 +558,14 @@ fn clear_tree(display: *mut xlib::Display, window: xlib::Window) {
 }
 
 fn restore_root_cursor(display: *mut xlib::Display, root: xlib::Window, base: &BaseCursor) {
-    let Some(cursor) = make_cursor_at_scale(display, root, base, 1.0) else {
-        return;
+    let themed = unsafe { xcursor::XcursorLibraryLoadCursor(display, c"left_ptr".as_ptr()) };
+    let cursor = if themed != 0 {
+        themed
+    } else {
+        let Some(fallback) = make_cursor_at_scale(display, root, base, 1.0) else {
+            return;
+        };
+        fallback
     };
     unsafe { xlib::XDefineCursor(display, root, cursor) };
     unsafe { xlib::XFreeCursor(display, cursor) };
