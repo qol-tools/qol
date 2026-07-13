@@ -1,0 +1,14 @@
+[package]
+name = "ravif"
+version = "0.13.0"
+edition = "2021"
+license = "PolyForm-Noncommercial-1.0.0"
+description = "API-compatible stub of ravif that drops the rav1e AV1 encoder; AVIF encoding errors at runtime"
+publish = false
+
+[dependencies]
+imgref = "1.12.0"
+rgb = { version = "0.8.52", default-features = false }
+
+[features]
+threading = []

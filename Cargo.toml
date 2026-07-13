@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["apps/*", "libs/*", "plugins/*", "tools/*"]
-exclude = ["tools/__pycache__"]
+exclude = ["tools/__pycache__", "vendor"]
 
 [workspace.package]
 version = "1.0.0"
@@ -49,6 +49,9 @@ objc2-core-graphics = { version = "0.3", features = ["CGImage", "CGDataProvider"
 
 # macOS only: align zed-font-kit core-graphics versions
 [patch.crates-io]
+# gpui forces image's "avif" feature (an encoder nothing can call); the stub
+# drops the rav1e stack until zed#60897 ships in a gpui release
+ravif = { path = "vendor/ravif" }
 core-text = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
 core-graphics = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
 core-foundation = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
