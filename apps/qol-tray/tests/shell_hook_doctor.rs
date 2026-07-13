@@ -64,7 +64,7 @@ fn doctor_warns_when_block_missing_from_existing_zshrc() {
     let home = HomeGuard::new();
     write_rc(&home.home.join(".zshrc"), "alias g=git\n");
 
-    let report = doctor::check();
+    let report = doctor::check_single("shell_hook_present");
     let outcome = shell_hook_outcome(&report);
     assert_eq!(outcome.status, OutcomeStatus::Warn);
     assert!(outcome.fix_available);
@@ -79,7 +79,7 @@ fn doctor_ok_when_block_present_in_zshrc() {
         &format!("alias g=git\n\n{}\n", canonical_block()),
     );
 
-    let report = doctor::check();
+    let report = doctor::check_single("shell_hook_present");
     let outcome = shell_hook_outcome(&report);
     assert_eq!(outcome.status, OutcomeStatus::Ok);
     assert!(!outcome.fix_available);
@@ -90,7 +90,7 @@ fn doctor_ok_when_no_rc_files_exist() {
     let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
     let _home = HomeGuard::new();
 
-    let report = doctor::check();
+    let report = doctor::check_single("shell_hook_present");
     let outcome = shell_hook_outcome(&report);
     assert_eq!(outcome.status, OutcomeStatus::Ok);
     assert!(!outcome.fix_available);
@@ -103,7 +103,7 @@ fn doctor_fix_safe_installs_block_into_existing_zshrc() {
     let zshrc = home.home.join(".zshrc");
     write_rc(&zshrc, "alias g=git\n");
 
-    let fix_report = doctor::fix_safe();
+    let fix_report = doctor::fix_single("shell_hook_present");
     let outcome = shell_hook_outcome(&fix_report.after);
     assert_eq!(outcome.status, OutcomeStatus::Ok);
 
