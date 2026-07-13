@@ -23,11 +23,10 @@ gpui.workspace = true
 qol-gpui.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-dirs = "5"
+dirs = "6"
 libc = "0.2"
 trash = "5"
 objc2 = { workspace = true }
-objc2-foundation = { workspace = true, features = ["NSString", "NSArray"] }
 objc2-app-kit = { workspace = true, features = ["NSWorkspace", "NSRunningApplication"] }
 wait-timeout = "0.2"
 
