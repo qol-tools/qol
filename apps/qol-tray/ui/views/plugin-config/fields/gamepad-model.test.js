@@ -2,11 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     activeInputs,
+    appendSignalHistory,
     chooseGamepad,
     connectionPresentation,
     gamepadSnapshot,
     mergeNativeInputs,
     monitorSignature,
+    signalHistorySample,
+    signalHistorySummary,
 } from './gamepad-model.js';
 
 function pad({
@@ -150,6 +153,68 @@ test('connection presentation distinguishes real signal, unavailable signal, and
         );
     }
     assert.equal(connectionPresentation(null), null);
+});
+
+test('signal history samples Bluetooth strength and preserves unavailable readings', () => {
+    const cases = [
+        [{ transport: 'bluetooth', signalDbm: -35 }, false, [-35, 100, 'excellent']],
+        [{ transport: 'bluetooth', signalDbm: -65 }, false, [-65, 56, 'good']],
+        [{ transport: 'bluetooth', signalDbm: -95 }, false, [-95, 12, 'weak']],
+        [{ transport: 'bluetooth', signalDbm: null }, false, [null, null, 'neutral']],
+        [null, true, [null, null, 'neutral']],
+    ];
+
+    for (const [connection, bluetoothKnown, expected] of cases) {
+        const sample = signalHistorySample(connection, bluetoothKnown);
+        assert.deepEqual(
+            [sample.signalDbm, sample.strength, sample.tone],
+            expected,
+            JSON.stringify({ connection, bluetoothKnown }),
+        );
+    }
+    assert.equal(signalHistorySample(null, false), null);
+    assert.equal(signalHistorySample({ transport: 'usb', signalDbm: null }), null);
+});
+
+test('signal history trims oldest samples and summarizes range and unavailable gaps', () => {
+    const samples = [
+        signalHistorySample({ transport: 'bluetooth', signalDbm: -72 }),
+        signalHistorySample({ transport: 'bluetooth', signalDbm: null }),
+        signalHistorySample({ transport: 'bluetooth', signalDbm: -58 }),
+        signalHistorySample({ transport: 'bluetooth', signalDbm: -64 }),
+    ];
+    const history = samples.reduce(
+        (current, sample) => appendSignalHistory(current, sample, 3),
+        [],
+    );
+
+    assert.deepEqual(history, samples.slice(1));
+    assert.deepEqual(signalHistorySummary(history), {
+        count: 3,
+        unavailableCount: 1,
+        minimumDbm: -64,
+        maximumDbm: -58,
+        rangeLabel: '-64 to -58 dBm',
+        gapLabel: '1 unavailable',
+        label: 'Bluetooth signal history: 3 samples, -64 to -58 dBm, 1 measurement unavailable',
+    });
+    assert.equal(
+        signalHistorySummary([samples[0], samples[2]]).label,
+        'Bluetooth signal history: 2 samples, -72 to -58 dBm, no measurements unavailable',
+    );
+    assert.deepEqual(
+        signalHistorySummary([samples[1], samples[1]]),
+        {
+            count: 2,
+            unavailableCount: 2,
+            minimumDbm: null,
+            maximumDbm: null,
+            rangeLabel: 'RSSI unavailable',
+            gapLabel: '2 unavailable',
+            label: 'Bluetooth signal history: 2 samples, RSSI unavailable, 2 measurements unavailable',
+        },
+    );
+    assert.equal(signalHistorySummary([]), null);
 });
 
 test('controller selection honors preference and otherwise follows latest activity', () => {

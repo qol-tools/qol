@@ -26,6 +26,12 @@ export const STANDARD_AXIS_NAMES = Object.freeze([
 ]);
 
 export const INPUT_DEADZONE = 0.08;
+export const SIGNAL_HISTORY_LIMIT = 30;
+export const SIGNAL_SAMPLE_INTERVAL_MS = 2000;
+
+const SIGNAL_FLOOR_DBM = -95;
+const SIGNAL_CEILING_DBM = -35;
+const SIGNAL_MINIMUM_HEIGHT = 12;
 
 const GULIKIT_FIREFOX_BUTTON_MAP = Object.freeze([
     0,
@@ -181,6 +187,54 @@ export function connectionPresentation(connection) {
     };
 }
 
+export function signalHistorySample(connection, bluetoothKnown = false) {
+    const signal = connectionPresentation(connection);
+    if (signal?.transport === 'Bluetooth') {
+        return {
+            signalDbm: signal.signalDbm,
+            strength: signalStrength(signal.signalDbm),
+            tone: signal.tone,
+        };
+    }
+    if (!connection && bluetoothKnown) {
+        return { signalDbm: null, strength: null, tone: 'neutral' };
+    }
+    return null;
+}
+
+export function appendSignalHistory(history, sample, limit = SIGNAL_HISTORY_LIMIT) {
+    const current = Array.isArray(history) ? history : [];
+    if (!sample) return current;
+    const maximum = Number.isInteger(limit) && limit > 0 ? limit : SIGNAL_HISTORY_LIMIT;
+    return [...current, sample].slice(-maximum);
+}
+
+export function signalHistorySummary(history) {
+    if (!Array.isArray(history) || history.length === 0) return null;
+    const readings = history
+        .map(sample => Number(sample?.signalDbm))
+        .filter((value, index) => history[index]?.signalDbm !== null && Number.isFinite(value));
+    const unavailableCount = history.length - readings.length;
+    const minimumDbm = readings.length > 0 ? Math.min(...readings) : null;
+    const maximumDbm = readings.length > 0 ? Math.max(...readings) : null;
+    const rangeLabel = signalRangeLabel(minimumDbm, maximumDbm);
+    const gapLabel = unavailableCount === 0 ? 'No gaps' : `${unavailableCount} unavailable`;
+    const unavailableLabel = unavailableCount === 0
+        ? 'no measurements unavailable'
+        : unavailableCount === 1
+            ? '1 measurement unavailable'
+            : `${unavailableCount} measurements unavailable`;
+    return {
+        count: history.length,
+        unavailableCount,
+        minimumDbm,
+        maximumDbm,
+        rangeLabel,
+        gapLabel,
+        label: `Bluetooth signal history: ${history.length} samples, ${rangeLabel}, ${unavailableLabel}`,
+    };
+}
+
 export function activeInputs(snapshot, deadzone = INPUT_DEADZONE) {
     if (!snapshot) return [];
     const buttons = snapshot.buttons
@@ -284,6 +338,22 @@ function normalizeConnection(connection) {
 function finiteNumber(value) {
     const number = Number(value);
     return Number.isFinite(number) ? number : 0;
+}
+
+function signalStrength(signalDbm) {
+    if (!Number.isFinite(signalDbm)) return null;
+    const normalized = clamp(
+        (signalDbm - SIGNAL_FLOOR_DBM) / (SIGNAL_CEILING_DBM - SIGNAL_FLOOR_DBM),
+        0,
+        1,
+    );
+    return Math.round(SIGNAL_MINIMUM_HEIGHT + normalized * (100 - SIGNAL_MINIMUM_HEIGHT));
+}
+
+function signalRangeLabel(minimumDbm, maximumDbm) {
+    if (minimumDbm === null || maximumDbm === null) return 'RSSI unavailable';
+    if (minimumDbm === maximumDbm) return `${minimumDbm} dBm`;
+    return `${minimumDbm} to ${maximumDbm} dBm`;
 }
 
 function clamp(value, minimum, maximum) {

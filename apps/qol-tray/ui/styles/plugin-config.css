@@ -1013,6 +1013,91 @@
     box-shadow: 0 0 0.35rem color-mix(in srgb, var(--gamepad-signal-color) 60%, transparent);
 }
 
+.gamepad-signal-history {
+    display: grid;
+    align-self: stretch;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.14);
+    border-radius: var(--radius-sm);
+    background: rgba(var(--ink-rgb), 0.1);
+}
+
+.gamepad-signal-history-heading {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: baseline;
+    gap: var(--space-3);
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+}
+
+.gamepad-signal-history-heading > span:first-child {
+    overflow: hidden;
+    text-transform: uppercase;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    letter-spacing: 0.08em;
+}
+
+.gamepad-signal-history-heading strong {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-weight: var(--fw-medium);
+}
+
+.gamepad-signal-history-heading [data-gaps="true"] {
+    color: var(--danger);
+}
+
+.gamepad-signal-history-track {
+    display: grid;
+    grid-template-columns: repeat(30, minmax(2px, 1fr));
+    align-items: end;
+    gap: 2px;
+    height: 2.25rem;
+    padding-top: 0.2rem;
+    border-bottom: var(--border-w-1) solid rgba(var(--accent-rgb), 0.12);
+}
+
+.gamepad-signal-history-track i {
+    display: block;
+    min-width: 0;
+    height: 0.15rem;
+    border-radius: 2px 2px 0 0;
+    background: rgba(var(--accent-rgb), 0.08);
+}
+
+.gamepad-signal-history-track i[data-state="reading"] {
+    height: var(--signal-strength);
+    background: var(--success);
+    opacity: 0.76;
+}
+
+.gamepad-signal-history-track i[data-tone="fair"] {
+    background: var(--warning);
+}
+
+.gamepad-signal-history-track i[data-tone="weak"] {
+    background: var(--danger);
+}
+
+.gamepad-signal-history-track i[data-state="unavailable"] {
+    height: 32%;
+    border: var(--border-w-1) solid rgba(var(--danger-rgb), 0.72);
+    background: repeating-linear-gradient(
+        -45deg,
+        rgba(var(--danger-rgb), 0.68) 0 2px,
+        rgba(var(--danger-rgb), 0.12) 2px 4px
+    );
+    box-shadow: 0 0 0.35rem rgba(var(--danger-rgb), 0.2);
+}
+
+.gamepad-signal-history-track i:last-child[data-state="reading"] {
+    opacity: 1;
+    box-shadow: 0 0 0.45rem currentColor;
+}
+
 .gamepad-compatibility-note {
     align-self: stretch;
     padding: var(--space-2) var(--space-3);

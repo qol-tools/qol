@@ -9,12 +9,15 @@ import {
     connectionPresentation,
     formatSigned,
     formatValue,
+    SIGNAL_HISTORY_LIMIT,
+    signalHistorySummary,
 } from './gamepad-model.js';
 import {
     controllerProfile,
     unmappedProfileButtons,
 } from './gamepad-profiles.js';
 import { useGamepadMonitor } from './useGamepadMonitor.js';
+import { useGamepadSignalHistory } from './useGamepadSignalHistory.js';
 
 export function GamepadField({ field }) {
     const ctx = usePluginConfigContext();
@@ -26,6 +29,7 @@ export function GamepadField({ field }) {
         queryName: field.query,
         intervalMs: queryDef?.poll_interval_ms,
     });
+    const signalHistory = useGamepadSignalHistory(containerRef, monitor.selected);
     const onSelect = useCallback(() => ctx.setSelectedFieldId(field.id), [ctx, field.id]);
     const selector = useMemo(() => gamepadSelector(monitor.gamepads), [monitor.gamepads]);
     const effectivePreference = selector.options.includes(preference) ? preference : 'auto';
@@ -55,14 +59,14 @@ export function GamepadField({ field }) {
                 </div>
             `}
             ${monitor.selected
-                ? html`<${GamepadTester} snapshot=${monitor.selected} />`
+                ? html`<${GamepadTester} snapshot=${monitor.selected} signalHistory=${signalHistory} />`
                 : html`<${GamepadWaiting} status=${monitor.status} message=${monitor.message} />`
             }
         </div>
     `;
 }
 
-function GamepadTester({ snapshot }) {
+function GamepadTester({ snapshot, signalHistory }) {
     const active = activeInputs(snapshot);
     const profile = controllerProfile(snapshot);
     const unmappedButtons = unmappedProfileButtons(snapshot, profile);
@@ -81,6 +85,7 @@ function GamepadTester({ snapshot }) {
                     ${snapshot.haptics && html`<span>Haptics</span>`}
                 </div>
             </div>
+            <${SignalHistory} history=${signalHistory} />
             ${snapshot.mappingProfile && !snapshot.nativeInput && html`
                 <div class="gamepad-compatibility-note">
                     Button layout corrected. L3/R3 still depend on native controller access.
@@ -94,6 +99,38 @@ function GamepadTester({ snapshot }) {
             `}
             <${GamepadDiagram} snapshot=${snapshot} profile=${profile} unmappedButtons=${unmappedButtons} />
             <${GamepadReadout} snapshot=${snapshot} active=${active} unmappedButtons=${unmappedButtons} />
+        </div>
+    `;
+}
+
+function SignalHistory({ history }) {
+    const summary = signalHistorySummary(history);
+    if (!summary) return null;
+    const slots = [
+        ...Array(Math.max(0, SIGNAL_HISTORY_LIMIT - history.length)).fill(null),
+        ...history.slice(-SIGNAL_HISTORY_LIMIT),
+    ];
+    return html`
+        <div class="gamepad-signal-history" role="img" aria-label=${summary.label}>
+            <div class="gamepad-signal-history-heading">
+                <span>Signal history · 60 s</span>
+                <strong>${summary.rangeLabel}</strong>
+                <span data-gaps=${summary.unavailableCount > 0}>${summary.gapLabel}</span>
+            </div>
+            <div class="gamepad-signal-history-track" aria-hidden="true">
+                ${slots.map((sample, index) => {
+                    const state = !sample
+                        ? 'empty'
+                        : sample.signalDbm === null ? 'unavailable' : 'reading';
+                    const style = state === 'reading'
+                        ? `--signal-strength:${sample.strength}%`
+                        : '';
+                    return html`
+                        <i key=${index} data-state=${state} data-tone=${sample?.tone || ''}
+                            style=${style}></i>
+                    `;
+                })}
+            </div>
         </div>
     `;
 }
