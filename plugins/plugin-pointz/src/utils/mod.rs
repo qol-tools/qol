@@ -13,10 +13,9 @@ pub fn get_local_ip() -> Option<IpAddr> {
 }
 
 pub fn get_hostname() -> String {
-    hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| ServerConfig::UNKNOWN_HOSTNAME.to_string())
+    gethostname::gethostname()
+        .into_string()
+        .unwrap_or_else(|_| ServerConfig::UNKNOWN_HOSTNAME.to_string())
 }
 
 /// Adopts the UDP socket qol-tray pre-bound for the named port (matching a
