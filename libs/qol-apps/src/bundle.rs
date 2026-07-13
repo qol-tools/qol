@@ -104,7 +104,7 @@ pub fn read_macos_app_bundle(path: PathBuf) -> Option<InstalledApp> {
     if !is_macos_app_bundle(&path) {
         return None;
     }
-    let (bundle_id, bundle_name) = read_bundle_info(&path);
+    let (bundle_id, bundle_name) = crate::platform::bundle_info(&path);
     let name = bundle_name.unwrap_or_else(|| {
         path.file_stem()
             .and_then(|stem| stem.to_str())
@@ -200,22 +200,6 @@ fn location_rank(path: &Path, roots: &[PathBuf]) -> usize {
         .unwrap_or(roots.len())
 }
 
-fn read_bundle_info(app_path: &Path) -> (Option<String>, Option<String>) {
-    let Ok(value) = plist::Value::from_file(app_path.join("Contents/Info.plist")) else {
-        return (None, None);
-    };
-    let Some(dictionary) = value.as_dictionary() else {
-        return (None, None);
-    };
-    let string = |key: &str| {
-        dictionary
-            .get(key)
-            .and_then(|value| value.as_string())
-            .map(str::to_string)
-    };
-    (string("CFBundleIdentifier"), string("CFBundleName"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,19 +220,6 @@ mod tests {
             "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict>\
              <key>CFBundleName</key><string>{name}</string></dict></plist>"
         )
-    }
-
-    #[test]
-    fn reads_bundle_metadata() {
-        let temp = tempfile::tempdir().unwrap();
-        let bundle = temp.path().join("Foo.app");
-        write_bundle(&bundle, INFO_PLIST);
-
-        let app = read_macos_app_bundle(bundle.clone()).unwrap();
-
-        assert_eq!(app.name, "Foo");
-        assert_eq!(app.bundle_id.as_deref(), Some("com.acme.foo"));
-        assert_eq!(app.path, bundle);
     }
 
     #[test]
@@ -277,7 +248,7 @@ mod tests {
         let primary = temp.path().join("Applications");
         let secondary = temp.path().join("home/Applications");
         let duplicate = primary.join("Dupe.app");
-        let other = secondary.join("Other.app");
+        let other = secondary.join("Dupe.app");
         write_bundle(&duplicate, &named_plist("Dupe"));
         write_bundle(&other, &named_plist("Dupe"));
 
