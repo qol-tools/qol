@@ -5,13 +5,13 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
-serde_json = "1"
+serde_json.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
 qol-apps.workspace = true
-serde = { version = "1.0", features = ["derive"] }
+serde.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11 = { version = "2", features = ["xlib", "xcursor", "xfixes"] }

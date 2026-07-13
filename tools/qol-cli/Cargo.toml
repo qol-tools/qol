@@ -21,8 +21,8 @@ qol-dev-build.workspace = true
 qol-fs.workspace = true
 qol-process.workspace = true
 qol-workspace.workspace = true
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde.workspace = true
+serde_json.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
 ratatui = { version = "0.30", default-features = false, features = [

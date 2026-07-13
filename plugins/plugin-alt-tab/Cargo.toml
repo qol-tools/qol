@@ -6,10 +6,10 @@ description = "Alt-Tab window switcher plugin for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
-gpui = "0.2"
+gpui.workspace = true
 image = { version = "0.25", default-features = false }
 qol-apps.workspace = true
-serde = { version = "1.0", features = ["derive"] }
+serde.workspace = true
 serde_json.workspace = true
 smallvec = "1.13"
 qol-config.workspace = true
@@ -24,7 +24,7 @@ qol-conventions.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
-x11rb = { version = "0.13", features = [
+x11rb = { workspace = true, features = [
   "allow-unsafe-code",
   "xinput",
   "composite",
@@ -35,7 +35,7 @@ x11rb = { version = "0.13", features = [
 block2 = "0.6"
 core-foundation = "0.10"
 core-video = { version = "0.4.3", features = ["metal"] }
-objc2 = "0.6"
+objc2 = { workspace = true }
 objc2-foundation = { version = "0.3", features = [
   "NSString",
   "NSArray",

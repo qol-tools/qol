@@ -8,8 +8,8 @@ qol-config.workspace = true
 qol-conventions.workspace = true
 qol-fs.workspace = true
 qol-runtime.workspace = true
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde.workspace = true
+serde_json.workspace = true
 
 [build-dependencies]
 qol-conventions.workspace = true
@@ -17,4 +17,4 @@ qol-conventions.workspace = true
 [dev-dependencies]
 proptest = "1"
 qol-plugin-api.workspace = true
-toml = "0.9.8"
+toml.workspace = true

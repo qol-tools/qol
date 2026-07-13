@@ -11,7 +11,7 @@ examples = []
 
 [dependencies]
 gpui.workspace = true
-serde = { version = "1.0", features = ["derive"] }
+serde.workspace = true
 notify = { version = "8", default-features = false, features = [
   "macos_fsevent",
 ] }
@@ -25,7 +25,7 @@ qol-platform.workspace = true
 qol-process.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
-toml = "0.9"
+toml.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
@@ -44,7 +44,6 @@ qol-conventions.workspace = true
 [dev-dependencies]
 proptest = "1.0"
 qol-plugin-api.workspace = true
-toml = "0.9.8"
 
 [[example]]
 name = "01_minimal_window"

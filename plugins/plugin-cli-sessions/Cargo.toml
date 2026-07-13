@@ -11,7 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
-serde = { version = "1.0", features = ["derive"] }
+serde.workspace = true
 serde_json.workspace = true
 gpui.workspace = true
 qol-gpui.workspace = true
@@ -26,4 +26,4 @@ qol-conventions.workspace = true
 [dev-dependencies]
 proptest = "1"
 qol-plugin-api.workspace = true
-toml = "0.9"
+toml.workspace = true
