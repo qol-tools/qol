@@ -19,6 +19,9 @@ pub(super) struct ParsedArgs {
     pub(super) source: Option<PathBuf>,
     pub(super) skip_shell_hook: bool,
     pub(super) dev_mode: bool,
+    pub(super) dry_run: bool,
+    pub(super) json: bool,
+    pub(super) purge_data: bool,
     pub(super) help: bool,
 }
 
@@ -31,6 +34,9 @@ fn parse_args_from_iter<I: IntoIterator<Item = String>>(iter: I) -> Result<Parse
     let mut source = None;
     let mut skip_shell_hook = false;
     let mut dev_mode = false;
+    let mut dry_run = false;
+    let mut json = false;
+    let mut purge_data = false;
     let mut help = false;
 
     let mut iter = iter.into_iter();
@@ -45,18 +51,44 @@ fn parse_args_from_iter<I: IntoIterator<Item = String>>(iter: I) -> Result<Parse
             "--uninstall" => mode = Mode::Uninstall,
             "--skip-shell-hook" => skip_shell_hook = true,
             "--dev" => dev_mode = true,
+            "--dry-run" => dry_run = true,
+            "--json" => json = true,
+            "--purge-data" => purge_data = true,
             "--help" | "-h" => help = true,
             _ => return Err(anyhow!("Unknown argument: {}", arg)),
         }
     }
 
-    Ok(ParsedArgs {
+    let parsed = ParsedArgs {
         mode,
         source,
         skip_shell_hook,
         dev_mode,
+        dry_run,
+        json,
+        purge_data,
         help,
-    })
+    };
+    validate_combinations(&parsed)?;
+    Ok(parsed)
+}
+
+fn validate_combinations(args: &ParsedArgs) -> Result<()> {
+    if args.help {
+        return Ok(());
+    }
+    if args.mode == Mode::Install && (args.dry_run || args.json || args.purge_data) {
+        return Err(anyhow!(
+            "--dry-run, --json, and --purge-data require --uninstall"
+        ));
+    }
+    if args.mode == Mode::Uninstall && args.source.is_some() {
+        return Err(anyhow!("--source cannot be combined with --uninstall"));
+    }
+    if args.mode == Mode::Uninstall && args.dev_mode {
+        return Err(anyhow!("--dev cannot be combined with --uninstall"));
+    }
+    Ok(())
 }
 
 pub(super) fn resolve_source_binary(
@@ -210,6 +242,9 @@ mod tests {
         source: Option<&'static str>,
         skip_shell_hook: bool,
         dev_mode: bool,
+        dry_run: bool,
+        json: bool,
+        purge_data: bool,
         help: bool,
     }
 
@@ -222,6 +257,9 @@ mod tests {
                 source: None,
                 skip_shell_hook: false,
                 dev_mode: false,
+                dry_run: false,
+                json: false,
+                purge_data: false,
                 help: false,
             },
             Case {
@@ -230,6 +268,9 @@ mod tests {
                 source: None,
                 skip_shell_hook: false,
                 dev_mode: false,
+                dry_run: false,
+                json: false,
+                purge_data: false,
                 help: false,
             },
             Case {
@@ -238,6 +279,9 @@ mod tests {
                 source: None,
                 skip_shell_hook: true,
                 dev_mode: false,
+                dry_run: false,
+                json: false,
+                purge_data: false,
                 help: false,
             },
             Case {
@@ -246,6 +290,9 @@ mod tests {
                 source: None,
                 skip_shell_hook: true,
                 dev_mode: false,
+                dry_run: false,
+                json: false,
+                purge_data: false,
                 help: false,
             },
             Case {
@@ -254,6 +301,9 @@ mod tests {
                 source: Some("/tmp/binary"),
                 skip_shell_hook: false,
                 dev_mode: false,
+                dry_run: false,
+                json: false,
+                purge_data: false,
                 help: false,
             },
             Case {
@@ -262,6 +312,9 @@ mod tests {
                 source: None,
                 skip_shell_hook: false,
                 dev_mode: true,
+                dry_run: false,
+                json: false,
+                purge_data: false,
                 help: false,
             },
             Case {
@@ -270,6 +323,9 @@ mod tests {
                 source: None,
                 skip_shell_hook: false,
                 dev_mode: false,
+                dry_run: false,
+                json: false,
+                purge_data: false,
                 help: true,
             },
             Case {
@@ -278,14 +334,20 @@ mod tests {
                 source: None,
                 skip_shell_hook: false,
                 dev_mode: false,
+                dry_run: false,
+                json: false,
+                purge_data: false,
                 help: true,
             },
             Case {
-                input: &["--source", "/x", "--uninstall", "--skip-shell-hook"],
+                input: &["--json", "--uninstall", "--dry-run", "--purge-data"],
                 mode: Mode::Uninstall,
-                source: Some("/x"),
-                skip_shell_hook: true,
+                source: None,
+                skip_shell_hook: false,
                 dev_mode: false,
+                dry_run: true,
+                json: true,
+                purge_data: true,
                 help: false,
             },
             Case {
@@ -294,6 +356,9 @@ mod tests {
                 source: Some("/y"),
                 skip_shell_hook: true,
                 dev_mode: true,
+                dry_run: false,
+                json: false,
+                purge_data: false,
                 help: false,
             },
         ];
@@ -316,6 +381,17 @@ mod tests {
                 "dev_mode for input={:?}",
                 case.input
             );
+            assert_eq!(
+                parsed.dry_run, case.dry_run,
+                "dry_run for input={:?}",
+                case.input
+            );
+            assert_eq!(parsed.json, case.json, "json for input={:?}", case.input);
+            assert_eq!(
+                parsed.purge_data, case.purge_data,
+                "purge_data for input={:?}",
+                case.input
+            );
             assert_eq!(parsed.help, case.help, "help for input={:?}", case.input);
         }
     }
@@ -330,6 +406,32 @@ mod tests {
     fn parse_args_rejects_source_without_value() {
         let err = parse(&["--source"]).unwrap_err();
         assert!(err.to_string().contains("--source requires a path"));
+    }
+
+    #[test]
+    fn parse_args_rejects_uninstall_only_flags_during_install() {
+        for flag in ["--dry-run", "--json", "--purge-data"] {
+            let err = parse(&[flag]).unwrap_err();
+            assert!(
+                err.to_string().contains("require --uninstall"),
+                "flag={flag}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_args_rejects_install_inputs_during_uninstall() {
+        let cases: &[&[&str]] = &[
+            &["--uninstall", "--source", "/x"],
+            &["--uninstall", "--dev"],
+        ];
+        for args in cases {
+            let err = parse(args).unwrap_err();
+            assert!(
+                err.to_string().contains("cannot be combined"),
+                "args={args:?}"
+            );
+        }
     }
 
     #[test]

@@ -83,6 +83,7 @@ fn is_generated_artifact(path: &Path) -> bool {
     };
     name == "overlay.qcow2"
         || name == "usb-stick.raw"
+        || name == "usb-stick.raw.pending"
         || (name.starts_with("overlay-snap-") && name.ends_with(".qcow2"))
 }
 
@@ -157,6 +158,7 @@ mod tests {
             "overlay.qcow2",
             "overlay-snap-1.qcow2",
             "usb-stick.raw",
+            "usb-stick.raw.pending",
             "manual.qcow2",
             "installer.iso",
             "report.json",
@@ -174,6 +176,7 @@ mod tests {
                 dir.path().join("overlay-snap-1.qcow2"),
                 dir.path().join("overlay.qcow2"),
                 dir.path().join("usb-stick.raw"),
+                dir.path().join("usb-stick.raw.pending"),
             ]
         );
         assert!(dir.path().join("installer.iso").is_file());

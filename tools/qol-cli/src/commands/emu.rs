@@ -400,7 +400,7 @@ fn cmd_check(args: &[OsString], verbose: bool) -> Result<()> {
 }
 
 fn run_workflow(workflow_id: &str, target: &str, command_name: &str, verbose: bool) -> Result<()> {
-    let Some(workflow_fn) = workflow::find(workflow_id) else {
+    let Some(workflow) = workflow::find(workflow_id) else {
         bail!(
             "unknown workflow `{workflow_id}`; available: {}",
             workflow::ids().join(", ")
@@ -409,13 +409,14 @@ fn run_workflow(workflow_id: &str, target: &str, command_name: &str, verbose: bo
     print_title(&format!("qol emu {command_name}"));
     print_hint(verbose);
     let mut vm = boot_vm(target, command_name, verbose)?;
-    let outcome = drive_workflow(&vm, workflow_fn);
+    let outcome = drive_workflow(&vm, workflow, verbose);
     let exit = shutdown_vm(&mut vm)?;
     let workflow_report = match &outcome {
         Ok(verdict) => json!({
             "id": workflow_id,
             "verdict": if verdict.pass { "pass" } else { "fail" },
             "traces": verdict.traces,
+            "evidence": verdict.evidence,
         }),
         Err(error) => json!({
             "id": workflow_id,
@@ -441,13 +442,24 @@ fn run_workflow(workflow_id: &str, target: &str, command_name: &str, verbose: bo
     Ok(())
 }
 
-fn drive_workflow(vm: &BootedVm, workflow_fn: workflow::Workflow) -> Result<workflow::Verdict> {
+fn drive_workflow(
+    vm: &BootedVm,
+    workflow: &workflow::Workflow,
+    verbose: bool,
+) -> Result<workflow::Verdict> {
     let qemu_img = vm
         .resolution
         .qemu_img
         .clone()
         .ok_or_else(|| anyhow!("ready environment has no qemu-img path"))?;
-    let stick = machine::ensure_usb_stick(&vm.run_dir, &qemu_img)?;
+    let root = repo_root()?;
+    let stick = workflow.prepare(&workflow::PrepareContext {
+        root: &root,
+        run_dir: &vm.run_dir,
+        qemu_img: &qemu_img,
+        guest_arch: vm.environment.arch,
+        verbose,
+    })?;
     let mut qmp = qmp::connect(vm.qmp_port, Duration::from_secs(10))?;
     let mut serial = serial::connect(vm.serial_port, Duration::from_secs(10))?;
     let os = guest::DebianNocloud;
@@ -460,7 +472,7 @@ fn drive_workflow(vm: &BootedVm, workflow_fn: workflow::Workflow) -> Result<work
         os: &os,
         stick: &stick,
     };
-    workflow_fn(&mut run)
+    workflow.run(&mut run)
 }
 
 fn shutdown_vm(vm: &mut BootedVm) -> Result<ExitStatus> {

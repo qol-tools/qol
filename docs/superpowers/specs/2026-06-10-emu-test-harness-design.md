@@ -22,13 +22,20 @@ through insert / launch / pull / reboot / list-traces and writes
 `workflow.verdict` into `report.json`. Clean runs pass with no traces; a
 temporary `/root/.qol-residue` self-test fails with that path listed.
 
+The Linux verified-uninstall extension was implemented and live-verified on
+2026-07-13 with Debian 13 nocloud amd64 under KVM. The host now preloads the
+release `qol-tray-install` binary and an inert tray payload onto the USB image.
+The guest performs a real install followed by `--uninstall --purge-data --json`,
+validates required schema-v1 action evidence, detaches the medium, reboots, and
+requires the residue scan to return zero paths. The complete uninstall report is
+retained under `workflow.evidence` in `report.json`.
+
 M3 MVP deviations from the long-term contract:
 
-- The USB stick is provisioned inside the guest (`mkfs`, mounted script write)
-  instead of pre-loaded on the host.
 - Trace listing runs guest-side `find / -xdev -iname '*qol*'` after reboot
   instead of host-reading a `DiskSnapshot`.
-- The injected artifact is a stub shell script, not the real qol payload.
+- The installer is real, but the staged tray payload is inert; this isolates the
+  install/uninstall contract from GUI and desktop-session availability.
 - The adapter registry is deferred; workflows currently use the hardcoded
   Debian nocloud adapter.
 

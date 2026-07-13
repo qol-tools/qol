@@ -12,6 +12,7 @@ mod files;
 pub(crate) mod platform;
 mod shell_hook;
 mod source;
+mod uninstall;
 
 pub use boot_environment::BootEnvironment;
 pub(crate) use platform::binary_filename;
@@ -76,7 +77,12 @@ pub fn run() -> Result<()> {
         source::Mode::Install => {
             run_install(args.source.as_deref(), args.skip_shell_hook, args.dev_mode)
         }
-        source::Mode::Uninstall => run_uninstall(args.skip_shell_hook),
+        source::Mode::Uninstall => uninstall::run(
+            args.dry_run,
+            args.json,
+            args.purge_data,
+            args.skip_shell_hook,
+        ),
     }
 }
 
@@ -130,20 +136,6 @@ fn run_install(
     print_summary(&installed_binary, &install_id, &plugins_dir, &install_dir)
 }
 
-fn run_uninstall(skip_shell_hook: bool) -> Result<()> {
-    println!("Uninstalling QoL Tray shell hook...");
-    if skip_shell_hook {
-        println!("Skipping shell hook removal (--skip-shell-hook).");
-        return Ok(());
-    }
-    if let Err(error) = shell_hook::uninstall() {
-        eprintln!("Warning: failed to remove shell hook: {error}");
-        return Err(error);
-    }
-    println!("Shell hook removed. Open a new terminal for changes to take effect.");
-    Ok(())
-}
-
 fn write_mode_config(dev_mode: bool) -> Result<()> {
     let target = if dev_mode {
         ModeFlag::Dev
@@ -175,12 +167,15 @@ fn print_help() {
          \n\
          Usage:\n  \
            qol-tray-install [--source <path>] [--skip-shell-hook] [--dev]\n  \
-           qol-tray-install --uninstall [--skip-shell-hook]\n  \
+           qol-tray-install --uninstall [--dry-run] [--json] [--purge-data] [--skip-shell-hook]\n  \
            qol-tray-install --help\n\
          \n\
          Flags:\n  \
            --source <path>      Use the binary at <path> as the install source.\n  \
-           --uninstall          Remove the qol-tools shell hook from rc files.\n  \
+           --uninstall          Remove the QoL Tray installation and host integration.\n  \
+           --dry-run            Inspect the uninstall plan without changing the host.\n  \
+           --json               Print the stable uninstall report as JSON.\n  \
+           --purge-data         Also remove profiles, plugins, settings, logs, and app data.\n  \
            --skip-shell-hook    Do not touch ~/.zshrc or ~/.bashrc.\n  \
            --dev                Write runtime mode = dev. Requires --features dev.\n  \
            --help, -h           Print this help message.\n"

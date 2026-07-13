@@ -42,6 +42,7 @@ fn run(args: Vec<OsString>) -> Result<()> {
         "check" => commands::check::run(rest, args.verbose),
         "clean" => commands::clean::run(rest, args.verbose),
         "install" => commands::install::run(args.verbose),
+        "uninstall" => commands::uninstall::run(rest, args.verbose),
         "trace" => commands::trace::run(rest),
         "trace-rs" => commands::trace_rs::run(rest),
         "doctor" => commands::doctor::run(rest, args.verbose),

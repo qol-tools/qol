@@ -8,3 +8,4 @@ pub(crate) mod emu;
 pub(crate) mod install;
 pub(crate) mod trace;
 pub(crate) mod trace_rs;
+pub(crate) mod uninstall;

@@ -67,4 +67,18 @@ mod tests {
         let expected = "sdl";
         assert_eq!(display(), expected);
     }
+
+    #[test]
+    fn native_linux_payload_requires_a_linux_host_with_matching_architecture() {
+        let matching = GuestArch::parse(std::env::consts::ARCH).unwrap();
+        assert_eq!(
+            supports_native_linux_payload(matching),
+            cfg!(target_os = "linux")
+        );
+        let other = match matching {
+            GuestArch::X86_64 => GuestArch::Aarch64,
+            GuestArch::Aarch64 => GuestArch::X86_64,
+        };
+        assert!(!supports_native_linux_payload(other));
+    }
 }

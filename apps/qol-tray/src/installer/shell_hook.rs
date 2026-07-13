@@ -25,11 +25,20 @@ pub(crate) fn install() -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn uninstall() -> Result<()> {
     for rc in existing_rc_files()? {
         uninstall_in_file(&rc)?;
     }
     Ok(())
+}
+
+pub(crate) fn contains_managed_block(path: &Path) -> Result<bool> {
+    Ok(locate_block(&read_rc_file(path)?).is_some())
+}
+
+pub(crate) fn uninstall_managed_block(path: &Path) -> Result<()> {
+    uninstall_in_file(path)
 }
 
 pub(crate) fn is_installed() -> Result<ShellHookStatus> {

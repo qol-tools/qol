@@ -40,6 +40,69 @@ pub(crate) fn ensure_usb_stick(run_dir: &Path, qemu_img: &Path) -> Result<PathBu
     Ok(stick)
 }
 
+pub(crate) fn ensure_payload_stick(
+    run_dir: &Path,
+    qemu_img: &Path,
+    payload_root: &Path,
+) -> Result<PathBuf> {
+    let stick = run_dir.join("usb-stick.raw");
+    let pending = run_dir.join("usb-stick.raw.pending");
+    remove_if_present(&pending)?;
+    create_raw_stick(qemu_img, &pending, "128M")?;
+    let mke2fs = super::find_on_path("mke2fs")
+        .or_else(|| super::find_on_path("mkfs.ext2"))
+        .context("mke2fs is required to build the verified-uninstall payload")?;
+    let status = Command::new(&mke2fs)
+        .args(payload_mkfs_args(payload_root, &pending))
+        .status()
+        .with_context(|| format!("failed to run {}", mke2fs.display()))?;
+    if !status.success() {
+        let _ = std::fs::remove_file(&pending);
+        bail!("mke2fs failed for {} with {status}", pending.display())
+    }
+    remove_if_present(&stick)?;
+    std::fs::rename(&pending, &stick).with_context(|| {
+        format!(
+            "failed to publish payload stick {} as {}",
+            pending.display(),
+            stick.display()
+        )
+    })?;
+    Ok(stick)
+}
+
+fn remove_if_present(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
+    }
+}
+
+fn create_raw_stick(qemu_img: &Path, stick: &Path, size: &str) -> Result<()> {
+    let status = Command::new(qemu_img)
+        .args(["create", "-f", "raw"])
+        .arg(stick)
+        .arg(size)
+        .status()
+        .with_context(|| format!("failed to run {}", qemu_img.display()))?;
+    if status.success() {
+        return Ok(());
+    }
+    bail!("qemu-img create failed for {}", stick.display())
+}
+
+fn payload_mkfs_args(payload_root: &Path, stick: &Path) -> Vec<std::ffi::OsString> {
+    ["-q", "-F", "-t", "ext2", "-d"]
+        .into_iter()
+        .map(std::ffi::OsString::from)
+        .chain([
+            payload_root.as_os_str().to_owned(),
+            stick.as_os_str().to_owned(),
+        ])
+        .collect()
+}
+
 pub(crate) fn teardown(run_dir: &Path) -> Result<Vec<PathBuf>> {
     media::cleanup_artifacts(run_dir)
 }
@@ -67,6 +130,15 @@ mod tests {
     }
 
     #[test]
+    fn payload_mkfs_args_populate_the_stick_from_the_staging_directory() {
+        assert_eq!(
+            payload_mkfs_args(Path::new("/payload"), Path::new("/run/stick.raw")),
+            ["-q", "-F", "-t", "ext2", "-d", "/payload", "/run/stick.raw"]
+                .map(std::ffi::OsString::from)
+        );
+    }
+
+    #[test]
     fn teardown_removes_disk_images_and_keeps_evidence() {
         let dir = std::env::temp_dir().join(format!("qol-emu-teardown-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
@@ -74,6 +146,7 @@ mod tests {
             "overlay.qcow2",
             "overlay-snap-1.qcow2",
             "usb-stick.raw",
+            "usb-stick.raw.pending",
             "manual.qcow2",
             "report.json",
             "qemu-command.txt",
@@ -87,6 +160,7 @@ mod tests {
             dir.join("overlay-snap-1.qcow2"),
             dir.join("overlay.qcow2"),
             dir.join("usb-stick.raw"),
+            dir.join("usb-stick.raw.pending"),
         ];
         expected_removed.sort();
         assert_eq!(removed, expected_removed);
@@ -94,6 +168,7 @@ mod tests {
             ("overlay.qcow2", false),
             ("overlay-snap-1.qcow2", false),
             ("usb-stick.raw", false),
+            ("usb-stick.raw.pending", false),
             ("manual.qcow2", true),
             ("report.json", true),
             ("qemu-command.txt", true),
