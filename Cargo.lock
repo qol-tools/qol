@@ -81,7 +81,6 @@ dependencies = [
  "objc2-foundation",
  "qol-app-icon",
  "qol-apps",
- "qol-color",
  "qol-config",
  "qol-conventions",
  "qol-gpui",
