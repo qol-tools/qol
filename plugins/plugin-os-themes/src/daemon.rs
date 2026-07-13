@@ -10,6 +10,7 @@ const CONFIG: DaemonConfig = DaemonConfig {
 pub enum Command {
     Kill,
     Reload,
+    ToggleTheme,
 }
 
 pub fn send_ping() -> bool {
@@ -34,6 +35,7 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
         "run" | "open" => ReadResult::Handled,
         "kill" => ReadResult::Command(Command::Kill),
         "reload" => ReadResult::Command(Command::Reload),
+        "toggle_theme" => ReadResult::Command(Command::ToggleTheme),
         _ => ReadResult::Fallback,
     }
 }

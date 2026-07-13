@@ -49,6 +49,10 @@ fn handle_daemon_commands(rx: mpsc::Receiver<daemon::Command>, control: Arc<RunS
                 break;
             }
             daemon::Command::Reload => control.request_reload(),
+            daemon::Command::ToggleTheme => match crate::theme::toggle() {
+                Ok(scheme) => eprintln!("[os-themes] applied {scheme:?} theme"),
+                Err(error) => eprintln!("[os-themes] toggle-theme failed: {error:#}"),
+            },
         }
     }
 }

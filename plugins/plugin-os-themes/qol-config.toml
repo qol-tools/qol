@@ -75,3 +75,15 @@ section = "animation"
 default = 18
 min = 1
 step = 1
+
+[section.theme]
+label = "Light/Dark Theme"
+description = "Switch the desktop between the light and dark variant of the current theme."
+actions = ["toggle_theme"]
+
+[field.toggle_theme]
+type = "action"
+label = "Toggle Light/Dark"
+section = "theme"
+action = "toggle_theme"
+variant = "primary"

@@ -1,0 +1,4 @@
+schema_version = 1
+
+[action.toggle_theme]
+description = "Switch the desktop between light and dark"

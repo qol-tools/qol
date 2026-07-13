@@ -1,13 +1,17 @@
 use anyhow::{anyhow, Result};
 
+use crate::theme::ColorScheme;
+
 use super::ThemePlatform;
 
 pub struct Platform;
 
 impl ThemePlatform for Platform {
-    fn apply_theme(&self, _name: &str) -> Result<()> {
-        Err(anyhow!(
-            "plugin-os-themes: OS-wide theming is not implemented on macOS"
-        ))
+    fn current_scheme(&self) -> Result<ColorScheme> {
+        Err(anyhow!("theme switching is not implemented on macOS"))
+    }
+
+    fn apply_scheme(&self, _target: ColorScheme) -> Result<()> {
+        Err(anyhow!("theme switching is not implemented on macOS"))
     }
 }
