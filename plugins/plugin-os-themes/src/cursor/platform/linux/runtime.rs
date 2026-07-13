@@ -22,6 +22,9 @@ struct LinuxCursorEffect;
 
 impl CursorEffect for LinuxCursorEffect {
     fn run(&self, config: &Config, control: &dyn RunControl) -> Result<()> {
+        if !config.enabled {
+            return idle_until_stopped(control);
+        }
         let mut session = open_session(config)?;
         let client = PlatformStateClient::from_env();
         let subscription = client
@@ -61,6 +64,14 @@ impl CursorEffect for LinuxCursorEffect {
         session.restore();
         Ok(())
     }
+}
+
+fn idle_until_stopped(control: &dyn RunControl) -> Result<()> {
+    eprintln!("[shake-to-grow] disabled, idling");
+    while !control.should_stop() {
+        std::thread::sleep(IDLE_WAKE_INTERVAL);
+    }
+    Ok(())
 }
 
 fn spawn_reader(mut subscription: Subscription) -> mpsc::Receiver<(Instant, f32, f32)> {

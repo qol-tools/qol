@@ -5,6 +5,7 @@ pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
+    pub enabled: bool,
     pub shake_strictness: f64,
     pub regrow_strictness: f64,
     pub shake_min_extent_px: u32,
@@ -48,7 +49,8 @@ fn persist(config: &Config) {
 
 fn log_config(config: &Config) {
     eprintln!(
-        "[shake-to-grow] config: strictness={} regrow={} min_extent={}px regrow_extent={}px window_ms={} scale={} calm_ms={} steps={}",
+        "[shake-to-grow] config: enabled={} strictness={} regrow={} min_extent={}px regrow_extent={}px window_ms={} scale={} calm_ms={} steps={}",
+        config.enabled,
         config.shake_strictness,
         config.regrow_strictness,
         config.shake_min_extent_px,
@@ -73,6 +75,7 @@ mod tests {
         qol_config::validate_contract_defaults_match_type::<Config>(CONFIG_CONTRACT).unwrap();
 
         let defaults = contract_defaults();
+        assert!(defaults.enabled, "shake-to-grow defaults to enabled");
         assert_eq!(defaults.shake_strictness, 6.5);
         assert_eq!(defaults.regrow_strictness, 2.5);
         assert_eq!(defaults.shake_min_extent_px, 150);

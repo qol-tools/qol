@@ -7,6 +7,12 @@ label = "Shake to Grow"
 description = "Shake the cursor to enlarge it, macOS style. A shake must retrace its own ground: inside the detection window the cursor path must be several times longer than the area it covers, and at least the minimum shake size. The cursor shrinks back after the calm duration."
 actions = ["run"]
 
+[field.enabled]
+type = "boolean"
+label = "Enabled"
+section = "shake_to_grow"
+default = true
+
 [field.shake_strictness]
 type = "number"
 label = "Shake Strictness"
@@ -14,6 +20,10 @@ section = "shake_to_grow"
 default = 6.5
 min = 1
 step = 0.5
+
+[field.shake_strictness.show_when]
+field = "enabled"
+equals = true
 
 [field.regrow_strictness]
 type = "number"
@@ -23,6 +33,10 @@ default = 2.5
 min = 1
 step = 0.5
 
+[field.regrow_strictness.show_when]
+field = "enabled"
+equals = true
+
 [field.regrow_min_extent_px]
 type = "number"
 label = "Regrow Min Size"
@@ -30,6 +44,10 @@ section = "shake_to_grow"
 default = 60
 min = 10
 step = 10
+
+[field.regrow_min_extent_px.show_when]
+field = "enabled"
+equals = true
 
 [field.shake_min_extent_px]
 type = "number"
@@ -39,6 +57,10 @@ default = 150
 min = 20
 step = 10
 
+[field.shake_min_extent_px.show_when]
+field = "enabled"
+equals = true
+
 [field.shake_window_ms]
 type = "number"
 label = "Detection Window"
@@ -46,6 +68,10 @@ section = "shake_to_grow"
 default = 1000
 min = 100
 step = 50
+
+[field.shake_window_ms.show_when]
+field = "enabled"
+equals = true
 
 [field.scale_factor]
 type = "number"
@@ -55,6 +81,10 @@ default = 4
 min = 1
 step = 1
 
+[field.scale_factor.show_when]
+field = "enabled"
+equals = true
+
 [field.calm_duration_ms]
 type = "number"
 label = "Calm Duration"
@@ -63,6 +93,10 @@ default = 650
 min = 50
 step = 25
 
+[field.calm_duration_ms.show_when]
+field = "enabled"
+equals = true
+
 [field.restore_steps]
 type = "number"
 label = "Restore Steps"
@@ -70,6 +104,10 @@ section = "shake_to_grow"
 default = 18
 min = 1
 step = 1
+
+[field.restore_steps.show_when]
+field = "enabled"
+equals = true
 
 [section.theme]
 label = "Light/Dark Theme"

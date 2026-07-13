@@ -252,6 +252,7 @@ mod tests {
 
     fn config() -> Config {
         Config {
+            enabled: true,
             shake_strictness: 6.5,
             regrow_strictness: 3.0,
             shake_min_extent_px: 150,
