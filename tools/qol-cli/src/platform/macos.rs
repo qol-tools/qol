@@ -18,6 +18,13 @@ impl PlatformOps for Platform {
         Ok(())
     }
 
+    fn qol_tray_running(&self) -> bool {
+        Command::new("pgrep")
+            .args(["-x", "qol-tray"])
+            .output()
+            .is_ok_and(|output| output.status.success())
+    }
+
     fn copy_to_clipboard(&self, text: &str) -> Result<()> {
         super::pipe_to_clipboard("pbcopy", &[], text)
     }

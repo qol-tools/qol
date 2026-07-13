@@ -400,9 +400,8 @@ A plugin links this to receive actions while running (`src/daemon.rs`):
 
 - Daemon spawn (`daemon_lifecycle/spawn.rs`) sets env (below), `setsid()` so the
   daemon leads its own process group (teardown signals the negative PID to kill the
-  whole group), and registers the PID in three places: in-memory `Child`, an
-  async-signal-safe atomic table (for the SIGINT handler), and on-disk
-  `<id>.pid` files.
+  whole group), and registers the PID in-memory as a `Child` and on-disk as an
+  `<id>.pid` file.
 - Stop paths: graceful `terminate_daemon` (SIGTERM to `-pid`, 2s, escalate to
   SIGKILL); `kill_all_plugin_processes` for short-lived action procs;
   `stop_all_plugins` on reload/exit (kill actions -> stop daemons -> clear map ->

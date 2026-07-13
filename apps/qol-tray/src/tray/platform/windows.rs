@@ -41,7 +41,7 @@ pub(super) fn run_event_loop() {
     let _guard = condvar.wait_while(guard, |quit| !*quit);
 }
 
-fn signal_quit() {
+pub(super) fn signal_quit() {
     if let (Some(mutex), Some(condvar)) = (QUIT_MUTEX.get(), QUIT_SIGNAL.get()) {
         let mut quit = mutex.lock().unwrap();
         *quit = true;

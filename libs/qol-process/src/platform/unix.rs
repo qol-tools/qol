@@ -10,7 +10,33 @@ pub(crate) fn is_pid_alive(pid: u32) -> bool {
     let Ok(pid) = pid_t(pid) else {
         return false;
     };
-    if unsafe { libc::kill(pid, 0) } == 0 {
+    signal_target_alive(pid)
+}
+
+pub(crate) fn is_group_alive(pid: u32) -> bool {
+    let Ok(pid) = pid_t(pid) else {
+        return false;
+    };
+    signal_target_alive(-pid)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn is_pid_zombie(pid: u32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    stat.rsplit_once(") ")
+        .and_then(|(_, fields)| fields.chars().next())
+        == Some('Z')
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn is_pid_zombie(_pid: u32) -> bool {
+    false
+}
+
+fn signal_target_alive(target: libc::pid_t) -> bool {
+    if unsafe { libc::kill(target, 0) } == 0 {
         return true;
     }
     io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
@@ -66,7 +92,7 @@ pub(crate) fn terminate_group(pid: u32, grace: Duration) {
     let Ok(pid) = pid_t(pid) else {
         return;
     };
-    escalate(pid, -pid, grace);
+    escalate_group(pid, grace);
 }
 
 fn escalate(pid: libc::pid_t, signal_target: libc::pid_t, grace: Duration) {
@@ -76,6 +102,23 @@ fn escalate(pid: libc::pid_t, signal_target: libc::pid_t, grace: Duration) {
     let _ = signal(signal_target, libc::SIGTERM);
     std::thread::sleep(grace);
     if is_pid_alive(pid as u32) {
+        let _ = signal(signal_target, libc::SIGKILL);
+    }
+    std::thread::sleep(REAP_DELAY);
+    let _ = try_wait_pid(pid as u32);
+}
+
+fn escalate_group(pid: libc::pid_t, grace: Duration) {
+    let signal_target = -pid;
+    if !signal_target_alive(signal_target) {
+        return;
+    }
+    let _ = signal(signal_target, libc::SIGTERM);
+    let deadline = Instant::now() + grace;
+    while signal_target_alive(signal_target) && Instant::now() < deadline {
+        std::thread::sleep(WAIT_INTERVAL);
+    }
+    if signal_target_alive(signal_target) {
         let _ = signal(signal_target, libc::SIGKILL);
     }
     std::thread::sleep(REAP_DELAY);

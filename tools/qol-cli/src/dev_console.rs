@@ -45,7 +45,6 @@ const DOCTOR_BASE_INTERVAL: Duration = Duration::from_secs(10);
 const DOCTOR_CAP_INTERVAL: Duration = Duration::from_secs(60);
 const ENDPOINTS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const STOP_GRACE: Duration = Duration::from_secs(5);
-const HANDOFF_STOP_GRACE: Duration = Duration::from_millis(750);
 const HANDOFF_STOP_INTERVAL: Duration = Duration::from_millis(50);
 const SHADOW_READY_TIMEOUT: Duration = Duration::from_secs(20);
 const SHADOW_READY_INTERVAL: Duration = Duration::from_millis(100);

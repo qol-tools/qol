@@ -62,6 +62,7 @@ const PROMOTED_DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(8);
 pub(crate) async fn start_ui_server(
     plugin_manager: Arc<Mutex<PluginManager>>,
     daemon: &Daemon,
+    shutdown_tx: tokio::sync::broadcast::Sender<()>,
     sync_service: Arc<crate::features::profile::sync::SyncService>,
     #[cfg(feature = "dev")] daemon_health: tokio::sync::watch::Receiver<
         crate::plugins::daemon_health::HealthSnapshot,
@@ -72,6 +73,7 @@ pub(crate) async fn start_ui_server(
     let (app_state, plugins_dir) = AppState::new(
         plugin_manager,
         daemon,
+        shutdown_tx,
         github_auth_service,
         sync_service,
         #[cfg(feature = "dev")]
@@ -100,14 +102,10 @@ pub(crate) async fn start_ui_server(
 
 #[cfg(feature = "dev")]
 async fn promote_shadow_to_stable(app_state: AppState) -> Result<u16> {
-    if !crate::dev_generation::is_shadow() {
-        anyhow::bail!("only a shadow dev generation can be promoted");
-    }
-    if app_state
-        .promoted_to_stable
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
+    if !claim_promotion(
+        crate::dev_generation::is_shadow(),
+        &app_state.promoted_to_stable,
+    )? {
         return Ok(qol_conventions::DEFAULT_PORT);
     }
     let app = assemble_app(app_state.clone(), app_state.plugins_dir.clone());
@@ -136,34 +134,54 @@ async fn promote_shadow_to_stable(app_state: AppState) -> Result<u16> {
     });
     crate::dev_generation::promote_to_stable();
     tokio::task::spawn_blocking(repair_boot_selection_after_promotion);
-    let plugin_manager = app_state.plugin_manager.clone();
-    let missing_daemons = tokio::task::spawn_blocking(move || match plugin_manager.lock() {
-        Ok(mut manager) => {
-            manager.autostart_daemons();
-            manager.wait_for_autostart_daemons_ready(PROMOTED_DAEMON_READY_TIMEOUT)
-        }
-        Err(_) => {
-            log::error!("plugin manager lock poisoned during promoted daemon autostart");
-            Vec::new()
-        }
-    })
-    .await
-    .unwrap_or_else(|error| {
-        log::error!("promoted daemon autostart task failed: {}", error);
-        Vec::new()
-    });
-    if missing_daemons.is_empty() {
-        log::info!("Promoted dev generation: daemon autostart ready");
-    } else {
-        log::warn!(
-            "Promoted dev generation: daemon(s) not ready before handoff: {}",
-            missing_daemons.join(", ")
-        );
-    }
-    crate::hotkeys::start_capture_with_fallback(app_state.plugin_manager.clone());
-    start_sync_loop(&app_state);
-    start_dev_discovery(&app_state);
+    complete_promotion_in_background(app_state);
     Ok(port)
+}
+
+#[cfg(feature = "dev")]
+fn claim_promotion(is_shadow: bool, promoted: &std::sync::atomic::AtomicBool) -> Result<bool> {
+    if promoted.load(Ordering::Acquire) {
+        return Ok(false);
+    }
+    if !is_shadow {
+        anyhow::bail!("only a shadow dev generation can be promoted");
+    }
+    Ok(promoted
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok())
+}
+
+#[cfg(feature = "dev")]
+fn complete_promotion_in_background(app_state: AppState) {
+    tokio::spawn(async move {
+        let plugin_manager = app_state.plugin_manager.clone();
+        let missing_daemons = tokio::task::spawn_blocking(move || match plugin_manager.lock() {
+            Ok(mut manager) => {
+                manager.autostart_daemons();
+                manager.wait_for_autostart_daemons_ready(PROMOTED_DAEMON_READY_TIMEOUT)
+            }
+            Err(_) => {
+                log::error!("plugin manager lock poisoned during promoted daemon autostart");
+                Vec::new()
+            }
+        })
+        .await
+        .unwrap_or_else(|error| {
+            log::error!("promoted daemon autostart task failed: {}", error);
+            Vec::new()
+        });
+        if missing_daemons.is_empty() {
+            log::info!("Promoted dev generation: daemon autostart ready");
+        } else {
+            log::warn!(
+                "Promoted dev generation: daemon(s) not ready before handoff: {}",
+                missing_daemons.join(", ")
+            );
+        }
+        crate::hotkeys::start_capture_with_fallback(app_state.plugin_manager.clone());
+        start_sync_loop(&app_state);
+        start_dev_discovery(&app_state);
+    });
 }
 
 #[cfg(feature = "dev")]
@@ -291,4 +309,27 @@ async fn bind_listener_at(port: u16) -> Result<(tokio::net::TcpListener, u16)> {
     let listener = tokio::net::TcpListener::bind(&address).await?;
     let port = listener.local_addr()?.port();
     Ok((listener, port))
+}
+
+#[cfg(all(test, feature = "dev"))]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn promotion_claim_is_idempotent_after_the_role_changes() {
+        let promoted = AtomicBool::new(false);
+
+        assert!(claim_promotion(true, &promoted).unwrap());
+        assert!(!claim_promotion(false, &promoted).unwrap());
+        assert!(!claim_promotion(true, &promoted).unwrap());
+    }
+
+    #[test]
+    fn stable_generation_cannot_claim_a_new_promotion() {
+        let promoted = AtomicBool::new(false);
+
+        assert!(claim_promotion(false, &promoted).is_err());
+        assert!(!promoted.load(Ordering::Acquire));
+    }
 }

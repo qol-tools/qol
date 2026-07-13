@@ -123,6 +123,7 @@ core-graphics = "0.25"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+signal-hook = "0.3"
 
 [dev-dependencies]
 proptest = "1.6"

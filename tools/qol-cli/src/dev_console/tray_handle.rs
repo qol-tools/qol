@@ -4,7 +4,7 @@ use std::process::{Child, ExitStatus};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 
 use super::STOP_GRACE;
 
@@ -61,16 +61,30 @@ pub(super) fn try_wait(child: &mut TrayHandle) -> Result<Option<ExitStatus>> {
 }
 
 pub(super) fn stop_child(child: &mut TrayHandle) -> Result<()> {
-    terminate_child(child);
+    let daemons = crate::dev_shutdown::snapshot_runtime_daemon_pids();
+    if crate::dev_server::post_shutdown().is_err() {
+        terminate_child(child);
+    }
     let deadline = Instant::now() + STOP_GRACE;
+    let mut exited = false;
     while Instant::now() < deadline {
         if try_wait(child)?.is_some() {
-            return Ok(());
+            exited = true;
+            break;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    let _ = child.kill();
-    child.wait().context("failed to reap qol-tray after kill")?;
+    if !exited {
+        let _ = child.kill();
+        child.wait().context("failed to reap qol-tray after kill")?;
+    }
+    let remaining = crate::dev_shutdown::finish_daemon_shutdown(daemons);
+    if !remaining.is_empty() {
+        bail!(
+            "qol-tray stopped but daemon groups remained alive: {}",
+            crate::dev_shutdown::format_daemon_pids(&remaining)
+        );
+    }
     Ok(())
 }
 

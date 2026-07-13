@@ -343,16 +343,12 @@ where
     }
 
     let trimmed = line.trim();
-    #[cfg(debug_assertions)]
-    eprintln!("[daemon] read line: {:?}", trimmed);
 
     if trimmed.is_empty() {
         return ReadResult::Ignore;
     }
 
     if let Ok(request) = serde_json::from_str::<DaemonRequest>(trimmed) {
-        #[cfg(debug_assertions)]
-        eprintln!("[daemon] parsed DaemonRequest action: {:?}", request.action);
         return parser(&request.action);
     }
 

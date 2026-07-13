@@ -8,6 +8,14 @@ pub fn is_pid_alive(pid: u32) -> bool {
     platform::is_pid_alive(pid)
 }
 
+pub fn is_group_alive(pid: u32) -> bool {
+    platform::is_group_alive(pid)
+}
+
+pub fn is_pid_zombie(pid: u32) -> bool {
+    platform::is_pid_zombie(pid)
+}
+
 pub fn signal_term_pid(pid: u32) -> io::Result<()> {
     platform::signal_term_pid(pid)
 }
@@ -59,10 +67,52 @@ mod tests {
     #[test]
     fn zero_pid_is_never_a_process_target() {
         assert!(!is_pid_alive(0));
+        assert!(!is_group_alive(0));
+        assert!(!is_pid_zombie(0));
         assert!(signal_term_pid(0).is_err());
         assert!(kill_pid(0).is_err());
         assert!(try_wait_pid(0).is_err());
         assert!(wait_pid(0).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::zombie_processes)]
+    fn terminate_group_stops_the_leader_and_descendants() {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30 & wait"]);
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let child = command.spawn().unwrap();
+        let pid = child.id();
+        assert!(is_group_alive(pid));
+
+        terminate_group(pid, Duration::from_secs(1));
+
+        assert!(!is_group_alive(pid));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exited_unreaped_process_is_a_zombie_until_waited() {
+        let mut child = Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap();
+        let pid = child.id();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !is_pid_zombie(pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(is_pid_zombie(pid));
+        child.wait().unwrap();
+        assert!(!is_pid_zombie(pid));
     }
 
     #[test]

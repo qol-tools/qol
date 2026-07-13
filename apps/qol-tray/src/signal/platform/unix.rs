@@ -1,39 +1,44 @@
-use std::sync::atomic::Ordering;
+use signal_hook::consts::{SIGINT, SIGTERM};
+use signal_hook::iterator::{Handle, Signals};
+use std::thread::JoinHandle;
 
-use crate::plugins::daemon_tracker::registry::OWNED_DAEMON_PIDS;
+pub(crate) struct SignalListener {
+    handle: Handle,
+    thread: Option<JoinHandle<()>>,
+}
 
-pub(super) fn install_signal_handler() {
-    let handler: extern "C" fn(libc::c_int) = sigint_handler;
-    unsafe {
-        libc::signal(libc::SIGINT, handler as libc::sighandler_t);
+impl Drop for SignalListener {
+    fn drop(&mut self) {
+        self.handle.close();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
-extern "C" fn sigint_handler(_sig: libc::c_int) {
-    for slot in &OWNED_DAEMON_PIDS {
-        let pid = slot.load(Ordering::Relaxed);
-        if pid > 0 {
-            unsafe {
-                libc::kill(-pid, libc::SIGTERM);
+pub(super) fn install_signal_handler(
+    shutdown_tx: tokio::sync::broadcast::Sender<()>,
+) -> std::io::Result<SignalListener> {
+    let mut signals = Signals::new([SIGINT, SIGTERM])?;
+    let handle = signals.handle();
+    let thread_handle = handle.clone();
+    let thread = std::thread::Builder::new()
+        .name("qol-signals".to_string())
+        .spawn(move || {
+            if let Some(signal) = signals.forever().next() {
+                log::info!("[lifecycle] graceful shutdown requested by signal {signal}");
+                crate::tray::platform::request_shutdown(&shutdown_tx);
             }
+        });
+    let thread = match thread {
+        Ok(thread) => thread,
+        Err(error) => {
+            thread_handle.close();
+            return Err(error);
         }
-    }
-    let grace = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 50_000_000,
     };
-    unsafe {
-        libc::nanosleep(&grace, std::ptr::null_mut());
-    }
-    for slot in &OWNED_DAEMON_PIDS {
-        let pid = slot.load(Ordering::Relaxed);
-        if pid > 0 {
-            unsafe {
-                libc::kill(-pid, libc::SIGKILL);
-            }
-        }
-    }
-    unsafe {
-        libc::_exit(130);
-    }
+    Ok(SignalListener {
+        handle,
+        thread: Some(thread),
+    })
 }

@@ -17,6 +17,7 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/check-update", get(check_update))
         .route("/self-update", post(self_update))
         .route("/navigate", post(navigate))
+        .route(qol_conventions::SHUTDOWN_ROUTE, post(shutdown))
 }
 
 #[derive(Deserialize)]
@@ -88,6 +89,12 @@ pub(super) async fn self_update(State(state): State<AppState>) -> impl IntoRespo
             });
         }
     });
+    StatusCode::ACCEPTED
+}
+
+async fn shutdown(State(state): State<AppState>) -> StatusCode {
+    log::info!("[lifecycle] graceful shutdown requested by local API");
+    crate::tray::platform::request_shutdown(&state.shutdown_tx);
     StatusCode::ACCEPTED
 }
 

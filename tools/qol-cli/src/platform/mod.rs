@@ -24,6 +24,7 @@ pub(crate) trait PlatformOps {
     fn os_name(&self) -> &'static str;
     fn exe_name(&self, name: &str) -> String;
     fn stop_qol_tray(&self) -> Result<()>;
+    fn qol_tray_running(&self) -> bool;
     fn copy_to_clipboard(&self, text: &str) -> Result<()>;
 }
 

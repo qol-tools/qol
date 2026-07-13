@@ -30,6 +30,14 @@ pub enum PlatformTray {
     Windows { _tray_icon: TrayIcon },
 }
 
+pub(crate) fn request_shutdown(shutdown_tx: &broadcast::Sender<()>) {
+    let _ = shutdown_tx.send(());
+    #[cfg(target_os = "macos")]
+    macos::stop_event_loop();
+    #[cfg(target_os = "windows")]
+    windows::signal_quit();
+}
+
 pub fn create_tray(
     feature_registry: Arc<FeatureRegistry>,
     shutdown_tx: broadcast::Sender<()>,
@@ -135,16 +143,18 @@ pub fn run_app<F>(init: F) -> Result<()>
 where
     F: FnOnce() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)>,
 {
-    #[cfg(unix)]
-    crate::signal::install_signal_handler();
-
-    let (_tray, plugin_manager) = init()?;
+    let (tray, plugin_manager) = init()?;
 
     #[cfg(target_os = "macos")]
     {
         let pm = plugin_manager.clone();
         macos::register_shutdown_fn(move || shutdown_plugins(&pm));
     }
+
+    #[cfg(unix)]
+    let _signal_listener = crate::signal::install_signal_handler(tray.shutdown_sender())?;
+
+    let _tray = tray;
 
     #[cfg(target_os = "linux")]
     linux::run_event_loop();

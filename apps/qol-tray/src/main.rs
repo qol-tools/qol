@@ -519,6 +519,7 @@ async fn async_init_inner(
     let ui_port = features::plugin_store::Plugins::start_server(
         plugin_manager.clone(),
         &daemon,
+        shutdown_tx.clone(),
         sync_service,
         #[cfg(feature = "dev")]
         health_rx,

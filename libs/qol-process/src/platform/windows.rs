@@ -42,6 +42,14 @@ pub(crate) fn is_pid_alive(pid: u32) -> bool {
     unsafe { WaitForSingleObject(handle.0, 0) == WAIT_TIMEOUT }
 }
 
+pub(crate) fn is_group_alive(pid: u32) -> bool {
+    is_pid_alive(pid)
+}
+
+pub(crate) fn is_pid_zombie(_pid: u32) -> bool {
+    false
+}
+
 pub(crate) fn signal_term_pid(pid: u32) -> io::Result<()> {
     kill_pid(pid)
 }

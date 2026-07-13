@@ -1,9 +1,10 @@
 use crate::cli::optional_single_arg;
 use crate::dev_console;
 use crate::dev_server::{
-    fetch_dev_links, post_dev_link, post_reload_plugins, wait_for_health_or_exit,
-    wait_for_shutdown_best_effort, DevLink, DevLinkOutcome,
+    fetch_dev_links, post_dev_link, post_reload_plugins, wait_for_health_or_exit, DevLink,
+    DevLinkOutcome,
 };
+use crate::dev_shutdown::ShutdownMethod;
 use crate::host_facade;
 use crate::progress::{print_title, run_status, step_label, StepKind};
 use crate::workspace::{
@@ -15,6 +16,7 @@ use qol_dev_build::core::CoreEvent;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 const RELOAD_ENV: &str = "QOL_DEV_RELOAD";
@@ -60,8 +62,12 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     let run_root = dev_run_root(&target.root);
     build_qol_tray_dev(&target.root, verbose)?;
     apply_marker_update(&plan.marker_update)?;
-    host_facade::stop_qol_tray()?;
-    wait_for_shutdown_best_effort();
+    let shutdown_method = crate::dev_shutdown::stop_existing_tray()?;
+    let shutdown_detail = match shutdown_method {
+        ShutdownMethod::Graceful => "previous tray stopped gracefully",
+        ShutdownMethod::Forced => "previous tray required fallback cleanup",
+    };
+    dev_step_label("stop", StepKind::Info, shutdown_detail, verbose);
     dev_step_label(
         "run",
         StepKind::Pending,
@@ -80,7 +86,17 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     let mut child = dev_console::TrayHandle::Owned(child);
 
     let plugin_names: Vec<String> = buildable.iter().map(|p| display_name(&p.dir)).collect();
-    finish_boot(&mut child, &buildable, verbose, target.branch.as_deref())?;
+    if let Err(error) = finish_boot(
+        &mut child,
+        &lines,
+        &buildable,
+        verbose,
+        target.branch.as_deref(),
+    ) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
     let end = dev_console::run_session(
         &mut child,
         verbose,
@@ -94,7 +110,8 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
 
 fn run_attached(tray_pid: u32, verbose: bool, branch: Option<String>) -> Result<()> {
     let mut child = dev_console::TrayHandle::Attached(tray_pid);
-    wait_for_health_or_exit(&mut child).context("dev server did not become healthy on reattach")?;
+    wait_for_health_or_exit(&mut child, None)
+        .context("dev server did not become healthy on reattach")?;
     let (tx, lines) = std::sync::mpsc::channel();
     let _ = tx.send(format!(
         "[qol dev] reattached to existing qol-tray (pid {tray_pid}) - live tray console \
@@ -124,11 +141,12 @@ fn handle_session_end(end: dev_console::SessionEnd) -> Result<()> {
 
 fn finish_boot(
     child: &mut dev_console::TrayHandle,
+    lines: &Receiver<String>,
     buildable: &[BuildablePlugin],
     verbose: bool,
     branch: Option<&str>,
 ) -> Result<()> {
-    wait_for_health_or_exit(child).context("dev server did not become healthy")?;
+    wait_for_health_or_exit(child, Some(lines)).context("dev server did not become healthy")?;
     if !buildable.is_empty() {
         register_dev_links(buildable, verbose);
         request_plugin_reload(verbose, branch)?;

@@ -10,12 +10,15 @@ use serde::Deserialize;
 
 use super::{
     spawn_forwarders, terminate_child, try_wait, Dash, RebuildState, Reload, ReloadOutcome,
-    TrayHandle, WorktreeSelection, CRASH_TAIL, HANDOFF_STOP_GRACE, HANDOFF_STOP_INTERVAL,
-    PROMOTION_INTERVAL, PROMOTION_TIMEOUT, SHADOW_READY_INTERVAL, SHADOW_READY_TIMEOUT,
+    TrayHandle, WorktreeSelection, CRASH_TAIL, HANDOFF_STOP_INTERVAL, PROMOTION_INTERVAL,
+    PROMOTION_TIMEOUT, SHADOW_READY_INTERVAL, SHADOW_READY_TIMEOUT, STOP_GRACE,
 };
 use crate::dev_server::{
-    health_ok, post_promote_generation, post_recompile_current, post_reload_plugins,
-    wait_for_shutdown_best_effort,
+    health_ok, post_promote_generation, post_recompile_current, post_reload_plugins, post_shutdown,
+};
+use crate::dev_shutdown::{
+    format_daemon_pids, snapshot_runtime_daemon_pids, terminate_daemon_groups,
+    wait_for_daemons_to_exit, TrackedDaemonPid,
 };
 
 #[derive(Debug, Deserialize)]
@@ -25,12 +28,6 @@ struct ShadowGenerationReady {
     port: u16,
     #[serde(rename = "stateSocket")]
     state_socket: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TrackedDaemonPid {
-    plugin_id: String,
-    pid: u32,
 }
 
 const PREDECESSOR_DAEMON_STOP_GRACE: Duration = Duration::from_secs(2);
@@ -240,8 +237,10 @@ fn hand_off_to_prebuilt(
         let _ = next.wait();
         return Err(error);
     }
-    wait_for_shutdown_best_effort();
-    wait_for_predecessor_daemons(predecessor_daemons, dash);
+    if let Err(error) = wait_for_predecessor_daemons(predecessor_daemons, dash) {
+        abandon_failed_successor(&mut next);
+        return Err(error);
+    }
     if let Err(error) = promote_shadow_generation(ready.port, &mut next, &next_lines, dash) {
         dash.push_log(format!("[qol dev] successor promotion failed: {error:#}"));
         abandon_failed_successor(&mut next);
@@ -465,47 +464,12 @@ fn read_shadow_ready(path: &Path) -> Result<ShadowGenerationReady> {
     Ok(ready)
 }
 
-#[cfg(any(unix, test))]
-fn runtime_daemon_pids_from_dir(pids_dir: &Path) -> Vec<TrackedDaemonPid> {
-    let mut daemons: Vec<_> = fs::read_dir(pids_dir)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path.extension()?.to_str()? != "pid" {
-                return None;
-            }
-            let plugin_id = path.file_stem()?.to_str()?.to_string();
-            let pid = fs::read_to_string(&path).ok()?.trim().parse().ok()?;
-            Some(TrackedDaemonPid { plugin_id, pid })
-        })
-        .collect();
-    daemons.sort_by(|left, right| {
-        left.plugin_id
-            .cmp(&right.plugin_id)
-            .then(left.pid.cmp(&right.pid))
-    });
-    daemons.dedup();
-    daemons
-}
-
-#[cfg(unix)]
-fn snapshot_runtime_daemon_pids() -> Vec<TrackedDaemonPid> {
-    runtime_daemon_pids_from_dir(Path::new(qol_conventions::RUNTIME_PIDS_DIR_PATH))
-        .into_iter()
-        .filter(|daemon| process_holds_handoff_resources(daemon.pid))
-        .collect()
-}
-
-#[cfg(not(unix))]
-fn snapshot_runtime_daemon_pids() -> Vec<TrackedDaemonPid> {
-    Vec::new()
-}
-
-fn wait_for_predecessor_daemons(predecessor_daemons: Vec<TrackedDaemonPid>, dash: &mut Dash) {
+fn wait_for_predecessor_daemons(
+    predecessor_daemons: Vec<TrackedDaemonPid>,
+    dash: &mut Dash,
+) -> Result<()> {
     if predecessor_daemons.is_empty() {
-        return;
+        return Ok(());
     }
     dash.push_log(format!(
         "[qol dev] waiting for predecessor daemons to exit: {}",
@@ -514,61 +478,22 @@ fn wait_for_predecessor_daemons(predecessor_daemons: Vec<TrackedDaemonPid>, dash
     let remaining = wait_for_daemons_to_exit(predecessor_daemons, PREDECESSOR_DAEMON_STOP_GRACE);
     if remaining.is_empty() {
         dash.push_log("[qol dev] predecessor daemons exited cleanly");
-        return;
+        return Ok(());
     }
     dash.push_log(format!(
-        "[qol dev] predecessor daemons still alive; promoted tray will drain: {}",
+        "[qol dev] predecessor daemons still alive; terminating groups: {}",
         format_daemon_pids(&remaining)
     ));
-}
-
-fn wait_for_daemons_to_exit(
-    mut daemons: Vec<TrackedDaemonPid>,
-    timeout: Duration,
-) -> Vec<TrackedDaemonPid> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        daemons.retain(|daemon| process_holds_handoff_resources(daemon.pid));
-        if daemons.is_empty() || Instant::now() >= deadline {
-            return daemons;
-        }
-        std::thread::sleep(HANDOFF_STOP_INTERVAL);
+    let remaining = terminate_daemon_groups(remaining);
+    let remaining = wait_for_daemons_to_exit(remaining, PREDECESSOR_DAEMON_STOP_GRACE);
+    if !remaining.is_empty() {
+        bail!(
+            "predecessor daemon groups did not exit: {}",
+            format_daemon_pids(&remaining)
+        );
     }
-}
-
-fn format_daemon_pids(daemons: &[TrackedDaemonPid]) -> String {
-    daemons
-        .iter()
-        .map(|daemon| format!("{}={}", daemon.plugin_id, daemon.pid))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-#[cfg(unix)]
-fn process_holds_handoff_resources(pid: u32) -> bool {
-    qol_process::is_pid_alive(pid) && !process_is_zombie(pid)
-}
-
-#[cfg(not(unix))]
-fn process_holds_handoff_resources(_pid: u32) -> bool {
-    false
-}
-
-#[cfg(unix)]
-fn process_is_zombie(pid: u32) -> bool {
-    let pid_arg = pid.to_string();
-    let output = Command::new("ps")
-        .args(["-p", pid_arg.as_str(), "-o", "stat="])
-        .output();
-    let Ok(output) = output else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .trim_start()
-        .starts_with('Z')
+    dash.push_log("[qol dev] predecessor daemon groups terminated");
+    Ok(())
 }
 
 fn abandon_failed_successor(next: &mut TrayHandle) {
@@ -577,8 +502,10 @@ fn abandon_failed_successor(next: &mut TrayHandle) {
 }
 
 fn retire_child_for_handoff(child: &mut TrayHandle) -> Result<()> {
-    terminate_child(child);
-    let deadline = Instant::now() + HANDOFF_STOP_GRACE;
+    if post_shutdown().is_err() {
+        terminate_child(child);
+    }
+    let deadline = Instant::now() + STOP_GRACE;
     while Instant::now() < deadline {
         if try_wait(child)?.is_some() {
             return Ok(());
@@ -771,47 +698,6 @@ mod tests {
             shadow_crash_detail(&recent),
             "\nlast shadow logs:\n[qol dev:shadow] first\n[qol dev:shadow] Error: daemon missing"
         );
-    }
-
-    #[test]
-    fn runtime_daemon_pids_from_dir_reads_valid_pid_files() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        fs::write(tmp.path().join("plugin-z.pid"), "222").unwrap();
-        fs::write(tmp.path().join("plugin-a.pid"), "111\n").unwrap();
-        fs::write(tmp.path().join("plugin-b.pid"), "not a pid").unwrap();
-        fs::write(tmp.path().join("plugin-c.txt"), "333").unwrap();
-
-        let daemons = runtime_daemon_pids_from_dir(tmp.path());
-
-        assert_eq!(
-            daemons,
-            vec![
-                TrackedDaemonPid {
-                    plugin_id: "plugin-a".to_string(),
-                    pid: 111
-                },
-                TrackedDaemonPid {
-                    plugin_id: "plugin-z".to_string(),
-                    pid: 222
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn format_daemon_pids_matches_handoff_logs() {
-        let daemons = vec![
-            TrackedDaemonPid {
-                plugin_id: "plugin-a".to_string(),
-                pid: 111,
-            },
-            TrackedDaemonPid {
-                plugin_id: "plugin-z".to_string(),
-                pid: 222,
-            },
-        ];
-
-        assert_eq!(format_daemon_pids(&daemons), "plugin-a=111, plugin-z=222");
     }
 
     #[test]

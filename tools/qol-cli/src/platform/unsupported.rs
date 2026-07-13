@@ -16,6 +16,10 @@ impl PlatformOps for Platform {
         Ok(())
     }
 
+    fn qol_tray_running(&self) -> bool {
+        false
+    }
+
     fn copy_to_clipboard(&self, _text: &str) -> Result<()> {
         Err(anyhow!("clipboard not supported on this platform"))
     }

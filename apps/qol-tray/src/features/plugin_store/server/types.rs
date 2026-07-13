@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
+use tokio::sync::broadcast;
 
 use super::super::github::PluginCache;
 
@@ -36,6 +37,7 @@ pub(super) struct AppState {
     pub(super) plugins_dir: PathBuf,
     pub(super) plugin_manager: Arc<Mutex<PluginManager>>,
     pub(super) daemon: Daemon,
+    pub(super) shutdown_tx: broadcast::Sender<()>,
     pub(super) github_auth_service: Arc<crate::features::github_auth::GitHubAuthService>,
     pub(super) sync_service: Arc<crate::features::profile::sync::SyncService>,
     pub(super) installed_cache: InstalledCache,
@@ -63,6 +65,7 @@ impl AppState {
     pub(super) fn new(
         plugin_manager: Arc<Mutex<PluginManager>>,
         daemon: &Daemon,
+        shutdown_tx: broadcast::Sender<()>,
         github_auth_service: Arc<crate::features::github_auth::GitHubAuthService>,
         sync_service: Arc<crate::features::profile::sync::SyncService>,
         #[cfg(feature = "dev")] daemon_health: tokio::sync::watch::Receiver<
@@ -79,6 +82,7 @@ impl AppState {
             plugin_cpu: DevPluginCpuService::start(plugin_manager.clone(), daemon.events.clone()),
             plugin_manager,
             daemon: daemon.clone(),
+            shutdown_tx,
             github_auth_service,
             sync_service,
             #[cfg(feature = "dev")]

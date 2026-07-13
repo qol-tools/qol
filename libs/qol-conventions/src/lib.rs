@@ -28,6 +28,7 @@ pub const ENV_DEV_READY_FILE: &str = "QOL_DEV_READY_FILE";
 pub const ENV_DEV_UI_PORT: &str = "QOL_DEV_UI_PORT";
 pub const ENV_DEV_ROLLING_RESTART: &str = "QOL_DEV_ROLLING_RESTART";
 pub const DEV_GENERATION_MODE_SHADOW: &str = "shadow";
+pub const SHUTDOWN_ROUTE: &str = "/shutdown";
 pub const DEV_RESTART_PREBUILT_ROUTE: &str = dev_routes::RESTART_PREBUILT;
 pub const DEV_PROMOTE_GENERATION_ROUTE: &str = dev_routes::PROMOTE_GENERATION;
 

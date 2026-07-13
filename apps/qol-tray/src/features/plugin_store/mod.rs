@@ -37,6 +37,7 @@ impl Plugins {
     pub async fn start_server(
         plugin_manager: Arc<Mutex<PluginManager>>,
         daemon: &Daemon,
+        shutdown_tx: tokio::sync::broadcast::Sender<()>,
         sync_service: Arc<crate::features::profile::sync::SyncService>,
         #[cfg(feature = "dev")] daemon_health: tokio::sync::watch::Receiver<
             crate::plugins::daemon_health::HealthSnapshot,
@@ -47,6 +48,7 @@ impl Plugins {
         let port = server::start_ui_server(
             plugin_manager,
             daemon,
+            shutdown_tx,
             sync_service,
             #[cfg(feature = "dev")]
             daemon_health,

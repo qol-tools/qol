@@ -18,6 +18,18 @@ impl PlatformOps for Platform {
         Ok(())
     }
 
+    fn qol_tray_running(&self) -> bool {
+        let Ok(output) = Command::new("pgrep").args(["-x", "qol-tray"]).output() else {
+            return false;
+        };
+        output
+            .stdout
+            .split(|byte| *byte == b'\n')
+            .filter_map(|line| std::str::from_utf8(line).ok())
+            .filter_map(|line| line.trim().parse::<u32>().ok())
+            .any(|pid| qol_process::is_pid_alive(pid) && !qol_process::is_pid_zombie(pid))
+    }
+
     fn copy_to_clipboard(&self, text: &str) -> Result<()> {
         super::pipe_to_clipboard("wl-copy", &[], text)
             .or_else(|_| super::pipe_to_clipboard("xclip", &["-selection", "clipboard"], text))

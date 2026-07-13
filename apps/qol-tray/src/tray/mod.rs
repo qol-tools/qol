@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 
 pub struct TrayManager {
     _tray: platform::PlatformTray,
+    shutdown_tx: broadcast::Sender<()>,
 }
 
 impl TrayManager {
@@ -26,12 +27,19 @@ impl TrayManager {
         };
         let tray = platform::create_tray(
             feature_registry,
-            shutdown_tx,
+            shutdown_tx.clone(),
             shutdown_rx,
             icon,
             update_available,
             events,
         )?;
-        Ok(Self { _tray: tray })
+        Ok(Self {
+            _tray: tray,
+            shutdown_tx,
+        })
+    }
+
+    pub(crate) fn shutdown_sender(&self) -> broadcast::Sender<()> {
+        self.shutdown_tx.clone()
     }
 }

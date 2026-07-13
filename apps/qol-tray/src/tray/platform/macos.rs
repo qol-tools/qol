@@ -111,7 +111,7 @@ mod url_scheme {
     }
 }
 
-fn stop_event_loop() {
+pub(super) fn stop_event_loop() {
     use objc2_app_kit::NSApplication;
     use objc2_foundation::MainThreadMarker;
 

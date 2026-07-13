@@ -1,31 +1,16 @@
 use std::collections::HashSet;
 use std::path::Path;
-#[cfg(unix)]
-use std::sync::atomic::{AtomicI32, Ordering};
-
-#[cfg(unix)]
-const MAX_DAEMONS: usize = 16;
-
-#[cfg(unix)]
-pub(crate) static OWNED_DAEMON_PIDS: [AtomicI32; MAX_DAEMONS] =
-    [const { AtomicI32::new(0) }; MAX_DAEMONS];
 
 pub(crate) fn register(pids_dir: &Path, plugin_id: &str, pid: u32) {
     write_pid_file(pids_dir, plugin_id, pid);
-    #[cfg(unix)]
-    remember_signal_pid(pid);
 }
 
-pub(crate) fn unregister(pids_dir: &Path, plugin_id: &str, pid: u32) {
+pub(crate) fn unregister(pids_dir: &Path, plugin_id: &str, _pid: u32) {
     remove_pid_file(pids_dir, plugin_id);
-    #[cfg(unix)]
-    forget_signal_pid(pid);
 }
 
 pub(crate) fn clear_all(pids_dir: &Path) {
     clear_pid_files(pids_dir);
-    #[cfg(unix)]
-    clear_signal_pids();
 }
 
 pub(crate) fn tracked_pids(pids_dir: &Path) -> impl Iterator<Item = (String, u32)> {
@@ -68,38 +53,6 @@ fn clear_pid_files(pids_dir: &Path) {
         if path.extension().is_some_and(|ext| ext == "pid") {
             let _ = std::fs::remove_file(&path);
         }
-    }
-}
-
-#[cfg(unix)]
-fn remember_signal_pid(pid: u32) {
-    let pid = pid as i32;
-    for slot in &OWNED_DAEMON_PIDS {
-        if slot
-            .compare_exchange(0, pid, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
-        {
-            return;
-        }
-    }
-    log::warn!(
-        "Signal handler PID table full, daemon pid {} not tracked",
-        pid
-    );
-}
-
-#[cfg(unix)]
-fn forget_signal_pid(pid: u32) {
-    let pid = pid as i32;
-    for slot in &OWNED_DAEMON_PIDS {
-        let _ = slot.compare_exchange(pid, 0, Ordering::AcqRel, Ordering::Relaxed);
-    }
-}
-
-#[cfg(unix)]
-fn clear_signal_pids() {
-    for slot in &OWNED_DAEMON_PIDS {
-        slot.store(0, Ordering::Release);
     }
 }
 

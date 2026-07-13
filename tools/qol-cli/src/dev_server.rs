@@ -1,8 +1,10 @@
 use crate::dev_console::TrayHandle;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::json;
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 pub(crate) use qol_conventions::dev_health::{
@@ -55,11 +57,13 @@ fn auth_health_url() -> String {
 fn logs_health_url() -> String {
     api_url("/api/logs/entries")
 }
+fn shutdown_url() -> String {
+    api_url(&format!("/api{}", qol_conventions::SHUTDOWN_ROUTE))
+}
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 const HEALTH_INTERVAL: Duration = Duration::from_millis(250);
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
-const SHUTDOWN_INTERVAL: Duration = Duration::from_millis(100);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(1);
+const BOOT_FAILURE_TAIL: usize = 40;
 
 #[derive(Debug)]
 pub(crate) enum DevLinkOutcome {
@@ -241,17 +245,10 @@ pub(crate) fn delete_dev_link(id: &str) -> Result<()> {
     bail!("unlink request failed with HTTP {status}")
 }
 
-pub(crate) fn wait_for_shutdown_best_effort() {
-    let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
-    while Instant::now() < deadline {
-        if !api_port_open() {
-            return;
-        }
-        std::thread::sleep(SHUTDOWN_INTERVAL);
-    }
-}
-
-pub(crate) fn wait_for_health_or_exit(child: &mut TrayHandle) -> Result<()> {
+pub(crate) fn wait_for_health_or_exit(
+    child: &mut TrayHandle,
+    lines: Option<&Receiver<String>>,
+) -> Result<()> {
     let deadline = Instant::now() + HEALTH_TIMEOUT;
     while Instant::now() < deadline {
         if health_ok() {
@@ -261,7 +258,8 @@ pub(crate) fn wait_for_health_or_exit(child: &mut TrayHandle) -> Result<()> {
             .try_wait()
             .context("failed to inspect qol-tray dev process")?
         {
-            bail!("qol-tray dev process exited before server became healthy: {status}");
+            let output = lines.map(drain_boot_output).unwrap_or_default();
+            bail!("{}", format_boot_failure(&status.to_string(), &output));
         }
         std::thread::sleep(HEALTH_INTERVAL);
     }
@@ -310,6 +308,15 @@ pub(crate) fn post_reload_plugins(branch: Option<&str>) -> Result<()> {
         return Ok(());
     }
     bail!("plugin reload request failed with HTTP {status}");
+}
+
+pub(crate) fn post_shutdown() -> Result<()> {
+    let url = shutdown_url();
+    let status = http_request("POST", &url, Some("{}"))?;
+    if status / 100 == 2 {
+        return Ok(());
+    }
+    bail!("shutdown request failed with HTTP {status}")
 }
 
 fn reload_request_body(branch: Option<&str>) -> String {
@@ -386,13 +393,38 @@ fn http_exchange(method: &str, url: &str, body: Option<&str>) -> Result<(u16, St
     Ok((status, response_body(&response)))
 }
 
-fn api_port_open() -> bool {
+pub(crate) fn api_port_open() -> bool {
     let target = HttpTarget {
         host: "127.0.0.1".to_string(),
         port: qol_conventions::DEFAULT_PORT,
         path: "/".to_string(),
     };
     connect_http_target(&target, Duration::from_millis(100)).is_ok()
+}
+
+fn drain_boot_output(lines: &Receiver<String>) -> Vec<String> {
+    std::thread::sleep(Duration::from_millis(50));
+    let mut tail = VecDeque::new();
+    for line in lines.try_iter() {
+        tail.push_back(line);
+        while tail.len() > BOOT_FAILURE_TAIL {
+            tail.pop_front();
+        }
+    }
+    tail.into_iter().collect()
+}
+
+fn format_boot_failure(status: &str, output: &[String]) -> String {
+    let mut message = format!("qol-tray dev process exited before server became healthy: {status}");
+    if output.is_empty() {
+        return message;
+    }
+    message.push_str("\nqol-tray boot output:");
+    for line in output.iter().rev().take(BOOT_FAILURE_TAIL).rev() {
+        message.push('\n');
+        message.push_str(line);
+    }
+    message
 }
 
 fn connect_http_target(target: &HttpTarget, timeout: Duration) -> Result<TcpStream> {
@@ -535,6 +567,24 @@ mod tests {
         assert_eq!(parse_json_bool("true"), Some(true));
         assert_eq!(parse_json_bool(" false\n"), Some(false));
         assert_eq!(parse_json_bool(r#"{"ok":true}"#), None);
+    }
+
+    #[test]
+    fn boot_failure_includes_only_the_recent_output() {
+        let lines: Vec<String> = (0..45).map(|index| format!("line {index}")).collect();
+        let message = format_boot_failure("exit status: 1", &lines);
+
+        assert!(!message.contains("line 4\n"));
+        assert!(message.contains("qol-tray boot output:\nline 5"));
+        assert!(message.ends_with("line 44"));
+    }
+
+    #[test]
+    fn boot_failure_without_output_stays_compact() {
+        assert_eq!(
+            format_boot_failure("exit status: 1", &[]),
+            "qol-tray dev process exited before server became healthy: exit status: 1"
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@ mod cli;
 mod commands;
 mod dev_console;
 mod dev_server;
+mod dev_shutdown;
 mod host_facade;
 mod platform;
 mod poller;
