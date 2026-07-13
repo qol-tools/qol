@@ -214,6 +214,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn field_order_follows_declaration_not_alphabet() {
+        let spec_str = "
+schema_version = 1
+
+[field.zeta]
+type = \"boolean\"
+default = true
+
+[field.alpha]
+type = \"number\"
+default = 1
+";
+        let spec = parse_spec_str(spec_str).expect("valid spec");
+        let order: Vec<&str> = spec.fields.keys().map(String::as_str).collect();
+        assert_eq!(order, ["zeta", "alpha"]);
+    }
+
+    #[test]
     fn parses_color_field() {
         let spec_str = "
 schema_version = 1
