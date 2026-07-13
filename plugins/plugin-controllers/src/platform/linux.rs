@@ -8,7 +8,8 @@ use evdev::{Device, KeyCode};
 use crate::detect;
 use crate::fixes::{DetectedDevice, Mac};
 use crate::platform::{
-    NativeButtonInput, NativeConnection, NativeControllerInput, NativeInputSnapshot,
+    NativeAdapter, NativeButtonInput, NativeConnection, NativeControllerInput, NativeInputSnapshot,
+    NativeSignal,
 };
 
 const INPUT_DEVICES_PATH: &str = "/proc/bus/input/devices";
@@ -24,7 +25,9 @@ pub struct InputMonitor {
     devices: Vec<TrackedInput>,
     refreshed_at: Option<Instant>,
     signal_refreshed_at: Option<Instant>,
-    signals: HashMap<Mac, Option<i16>>,
+    signals: HashMap<Mac, Option<NativeSignal>>,
+    adapters: HashMap<String, NativeAdapter>,
+    device_adapters: HashMap<Mac, String>,
 }
 
 struct TrackedInput {
@@ -55,7 +58,7 @@ impl InputMonitor {
         let items = self
             .devices
             .iter()
-            .filter_map(|device| device.snapshot(&self.signals))
+            .filter_map(|device| device.snapshot(&self.signals, &self.adapters))
             .collect();
         NativeInputSnapshot {
             available: true,
@@ -74,6 +77,38 @@ impl InputMonitor {
             .iter()
             .filter_map(TrackedInput::open)
             .collect();
+        let active_addresses = self
+            .devices
+            .iter()
+            .filter_map(|device| device.bluetooth.as_ref().map(|target| target.address))
+            .collect::<HashSet<_>>();
+        self.device_adapters
+            .retain(|address, _| active_addresses.contains(address));
+        for device in &mut self.devices {
+            let Some(target) = device.bluetooth.as_mut() else {
+                continue;
+            };
+            let adapter = target
+                .adapter
+                .clone()
+                .or_else(|| self.device_adapters.get(&target.address).cloned())
+                .or_else(|| connected_bluez_adapter(target.address, Path::new(SYSFS_ROOT)));
+            if let Some(adapter) = adapter {
+                self.device_adapters.insert(target.address, adapter.clone());
+                target.adapter = Some(adapter);
+            }
+        }
+        let active = self
+            .devices
+            .iter()
+            .filter_map(|device| device.bluetooth.as_ref()?.adapter.clone())
+            .collect::<HashSet<_>>();
+        self.adapters.retain(|name, _| active.contains(name));
+        for name in active {
+            self.adapters
+                .entry(name.clone())
+                .or_insert_with(|| read_bluetooth_adapter(name, Path::new(SYSFS_ROOT)));
+        }
         self.refreshed_at = Some(Instant::now());
     }
 
@@ -121,19 +156,30 @@ impl TrackedInput {
         })
     }
 
-    fn snapshot(&self, signals: &HashMap<Mac, Option<i16>>) -> Option<NativeControllerInput> {
+    fn snapshot(
+        &self,
+        signals: &HashMap<Mac, Option<NativeSignal>>,
+        adapters: &HashMap<String, NativeAdapter>,
+    ) -> Option<NativeControllerInput> {
         let keys = self.device.get_key_state().ok()?;
-        let signal_dbm = self
+        let signal = self
             .bluetooth
             .as_ref()
             .and_then(|target| signals.get(&target.address).copied().flatten());
+        let adapter = self
+            .bluetooth
+            .as_ref()
+            .and_then(|target| target.adapter.as_ref())
+            .and_then(|name| adapters.get(name))
+            .cloned();
         Some(NativeControllerInput {
             name: self.name.clone(),
             vendor: self.vendor,
             product: self.product,
             connection: NativeConnection {
                 transport: self.transport,
-                signal_dbm,
+                signal,
+                adapter,
             },
             buttons: vec![
                 NativeButtonInput {
@@ -172,16 +218,54 @@ fn bluetooth_target(device: &DetectedDevice) -> Option<BluetoothTarget> {
 fn bluetooth_adapter_name(sysfs_path: &str) -> Option<String> {
     sysfs_path
         .split('/')
-        .find(|part| {
-            part.strip_prefix("hci").is_some_and(|suffix| {
-                !suffix.is_empty() && suffix.chars().all(|char| char.is_ascii_digit())
-            })
-        })
+        .find(|part| is_bluetooth_adapter_name(part))
         .map(str::to_string)
 }
 
-fn bluetooth_rssi(target: &BluetoothTarget) -> Option<i16> {
-    bluez_advertised_rssi(target).or_else(|| connected_link_rssi(target))
+fn connected_bluez_adapter(address: Mac, sysfs_root: &Path) -> Option<String> {
+    let mut adapters = std::fs::read_dir(sysfs_root.join("class/bluetooth"))
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| is_bluetooth_adapter_name(name))
+        .collect::<Vec<_>>();
+    adapters.sort();
+    adapters
+        .into_iter()
+        .find(|adapter| bluez_device_connected(adapter, address))
+}
+
+fn is_bluetooth_adapter_name(name: &str) -> bool {
+    name.strip_prefix("hci").is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.chars().all(|char| char.is_ascii_digit())
+    })
+}
+
+fn bluez_device_connected(adapter: &str, address: Mac) -> bool {
+    let address = address.to_string().to_ascii_uppercase().replace(':', "_");
+    let object_path = format!("/org/bluez/{adapter}/dev_{address}");
+    let output = Command::new("busctl")
+        .args([
+            "--system",
+            "--timeout=1s",
+            "get-property",
+            "org.bluez",
+            &object_path,
+            "org.bluez.Device1",
+            "Connected",
+        ])
+        .output();
+    output
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| parse_busctl_bool(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or(false)
+}
+
+fn bluetooth_rssi(target: &BluetoothTarget) -> Option<NativeSignal> {
+    bluez_advertised_rssi(target)
+        .map(NativeSignal::AdvertisedDbm)
+        .or_else(|| connected_link_rssi(target).map(NativeSignal::BredrLinkMarginDb))
 }
 
 fn bluez_advertised_rssi(target: &BluetoothTarget) -> Option<i16> {
@@ -212,12 +296,12 @@ fn bluez_advertised_rssi(target: &BluetoothTarget) -> Option<i16> {
 }
 
 fn connected_link_rssi(target: &BluetoothTarget) -> Option<i16> {
+    let adapter = target.adapter.as_deref()?;
     let address = target.address.to_string();
-    let mut command = Command::new("hcitool");
-    if let Some(adapter) = target.adapter.as_deref() {
-        command.args(["-i", adapter]);
-    }
-    let output = command.args(["rssi", &address]).output().ok()?;
+    let output = Command::new("hcitool")
+        .args(["-i", adapter, "rssi", &address])
+        .output()
+        .ok()?;
     output
         .status
         .success()
@@ -225,11 +309,117 @@ fn connected_link_rssi(target: &BluetoothTarget) -> Option<i16> {
         .flatten()
 }
 
+fn read_bluetooth_adapter(name: String, sysfs_root: &Path) -> NativeAdapter {
+    let adapter_path = sysfs_root.join("class/bluetooth").join(&name);
+    let address =
+        read_trimmed(adapter_path.join("address")).or_else(|| bluez_adapter_address(&name));
+    let properties = std::fs::canonicalize(adapter_path.join("device"))
+        .ok()
+        .and_then(|path| read_udev_properties(&path))
+        .unwrap_or_default();
+    adapter_from_properties(name, address, &properties)
+}
+
+fn bluez_adapter_address(adapter: &str) -> Option<String> {
+    let object_path = format!("/org/bluez/{adapter}");
+    let output = Command::new("busctl")
+        .args([
+            "--system",
+            "--timeout=1s",
+            "get-property",
+            "org.bluez",
+            &object_path,
+            "org.bluez.Adapter1",
+            "Address",
+        ])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| parse_busctl_string(&String::from_utf8_lossy(&output.stdout)))
+        .flatten()
+}
+
+fn read_udev_properties(path: &Path) -> Option<String> {
+    let output = Command::new("udevadm")
+        .args(["info", "--query=property", "--path"])
+        .arg(path)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn adapter_from_properties(
+    name: String,
+    address: Option<String>,
+    properties: &str,
+) -> NativeAdapter {
+    NativeAdapter {
+        name,
+        address,
+        vendor: first_property(properties, &["ID_VENDOR_FROM_DATABASE", "ID_VENDOR"]),
+        model: first_property(properties, &["ID_MODEL_FROM_DATABASE", "ID_MODEL"]),
+        hardware_id: usb_hardware_id(properties),
+        path: property(properties, "ID_PATH").map(str::to_string),
+    }
+}
+
+fn first_property(properties: &str, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| property(properties, key))
+        .map(str::to_string)
+}
+
+fn property<'a>(properties: &'a str, key: &str) -> Option<&'a str> {
+    properties.lines().find_map(|line| {
+        let (candidate, value) = line.split_once('=')?;
+        (candidate == key && !value.is_empty()).then_some(value)
+    })
+}
+
+fn usb_hardware_id(properties: &str) -> Option<String> {
+    let explicit = property(properties, "ID_VENDOR_ID")
+        .zip(property(properties, "ID_MODEL_ID"))
+        .map(|(vendor, product)| format!("{vendor}:{product}"));
+    if explicit.is_some() {
+        return explicit;
+    }
+    let mut fields = property(properties, "PRODUCT")?.split('/');
+    let vendor = u16::from_str_radix(fields.next()?, 16).ok()?;
+    let product = u16::from_str_radix(fields.next()?, 16).ok()?;
+    Some(format!("{vendor:04x}:{product:04x}"))
+}
+
+fn read_trimmed(path: impl AsRef<Path>) -> Option<String> {
+    let value = std::fs::read_to_string(path).ok()?;
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 fn parse_busctl_rssi(output: &str) -> Option<i16> {
     let mut fields = output.split_whitespace();
     (fields.next()? == "n")
         .then(|| fields.next()?.parse().ok())
         .flatten()
+}
+
+fn parse_busctl_bool(output: &str) -> Option<bool> {
+    let mut fields = output.split_whitespace();
+    (fields.next()? == "b")
+        .then(|| fields.next()?.parse().ok())
+        .flatten()
+}
+
+fn parse_busctl_string(output: &str) -> Option<String> {
+    let mut fields = output.split_whitespace();
+    if fields.next()? != "s" {
+        return None;
+    }
+    Some(fields.next()?.trim_matches('"').to_string())
 }
 
 fn parse_hcitool_rssi(output: &str) -> Option<i16> {
@@ -345,6 +535,19 @@ mod tests {
             bluetooth_adapter_name("/devices/pci0000:00/bluetooth/hci2/input/input39").as_deref(),
             Some("hci2")
         );
+        assert_eq!(
+            bluetooth_adapter_name("/devices/virtual/misc/uhid/input/input39"),
+            None
+        );
+        for (name, expected) in [
+            ("hci0", true),
+            ("hci27", true),
+            ("hci", false),
+            ("hci2:69", false),
+            ("foo", false),
+        ] {
+            assert_eq!(is_bluetooth_adapter_name(name), expected, "{name}");
+        }
         assert_eq!(bluetooth_adapter_name("/devices/usb/input/input4"), None);
 
         let cases = [
@@ -355,6 +558,26 @@ mod tests {
         ];
         for (output, expected) in cases {
             assert_eq!(parse_busctl_rssi(output), expected, "busctl: {output:?}");
+        }
+        for (output, expected) in [
+            ("b true\n", Some(true)),
+            ("b false\n", Some(false)),
+            ("s true\n", None),
+            ("", None),
+        ] {
+            assert_eq!(parse_busctl_bool(output), expected, "busctl: {output:?}");
+        }
+        for (output, expected) in [
+            ("s \"00:11:22:33:44:55\"\n", Some("00:11:22:33:44:55")),
+            ("s \"\"\n", Some("")),
+            ("b true\n", None),
+            ("", None),
+        ] {
+            assert_eq!(
+                parse_busctl_string(output).as_deref(),
+                expected,
+                "busctl: {output:?}"
+            );
         }
 
         let cases = [
@@ -367,6 +590,43 @@ mod tests {
         ];
         for (output, expected) in cases {
             assert_eq!(parse_hcitool_rssi(output), expected, "hcitool: {output:?}");
+        }
+
+        let adapter = adapter_from_properties(
+            "hci7".into(),
+            Some("00:11:22:33:44:55".into()),
+            "PRODUCT=1234/abcd/1\n\
+             ID_VENDOR_FROM_DATABASE=Foo Corp.\n\
+             ID_MODEL_FROM_DATABASE=Bar Radio\n\
+             ID_PATH=pci-0000:00:01.0-usb-0:2:1.0\n",
+        );
+        assert_eq!(
+            adapter,
+            NativeAdapter {
+                name: "hci7".into(),
+                address: Some("00:11:22:33:44:55".into()),
+                vendor: Some("Foo Corp.".into()),
+                model: Some("Bar Radio".into()),
+                hardware_id: Some("1234:abcd".into()),
+                path: Some("pci-0000:00:01.0-usb-0:2:1.0".into()),
+            }
+        );
+
+        let cases = [
+            (
+                "ID_VENDOR_ID=0123\nID_MODEL_ID=0045\nPRODUCT=ffff/eeee/1\n",
+                Some("0123:0045"),
+            ),
+            ("PRODUCT=a/2b/1\n", Some("000a:002b")),
+            ("PRODUCT=invalid\n", None),
+            ("", None),
+        ];
+        for (properties, expected) in cases {
+            assert_eq!(
+                usb_hardware_id(properties).as_deref(),
+                expected,
+                "properties: {properties:?}"
+            );
         }
     }
 }

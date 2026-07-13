@@ -237,10 +237,7 @@ fn native_input_payload(snapshot: platform::NativeInputSnapshot) -> serde_json::
                 "name": item.name,
                 "vendor": item.vendor,
                 "product": item.product,
-                "connection": {
-                    "transport": item.connection.transport,
-                    "signal_dbm": item.connection.signal_dbm,
-                },
+                "connection": native_connection_payload(item.connection),
                 "buttons": buttons,
             })
         })
@@ -249,6 +246,36 @@ fn native_input_payload(snapshot: platform::NativeInputSnapshot) -> serde_json::
         "available": snapshot.available,
         "source": snapshot.source,
         "items": items,
+    })
+}
+
+fn native_connection_payload(connection: platform::NativeConnection) -> serde_json::Value {
+    let signal = connection.signal.map(|signal| match signal {
+        platform::NativeSignal::AdvertisedDbm(value) => serde_json::json!({
+            "kind": "absolute_dbm",
+            "source": "bluez_device",
+            "value": value,
+        }),
+        platform::NativeSignal::BredrLinkMarginDb(value) => serde_json::json!({
+            "kind": "bredr_link_margin_db",
+            "source": "hci_link",
+            "value": value,
+        }),
+    });
+    let adapter = connection.adapter.map(|adapter| {
+        serde_json::json!({
+            "name": adapter.name,
+            "address": adapter.address,
+            "vendor": adapter.vendor,
+            "model": adapter.model,
+            "hardware_id": adapter.hardware_id,
+            "path": adapter.path,
+        })
+    });
+    serde_json::json!({
+        "transport": connection.transport,
+        "signal": signal,
+        "adapter": adapter,
     })
 }
 
@@ -394,7 +421,15 @@ mod tests {
                 product: 0xabcd,
                 connection: platform::NativeConnection {
                     transport: "bluetooth",
-                    signal_dbm: Some(-58),
+                    signal: Some(platform::NativeSignal::BredrLinkMarginDb(-11)),
+                    adapter: Some(platform::NativeAdapter {
+                        name: "hci7".into(),
+                        address: Some("00:11:22:33:44:55".into()),
+                        vendor: Some("Foo Corp.".into()),
+                        model: Some("Bar Radio".into()),
+                        hardware_id: Some("1234:abcd".into()),
+                        path: Some("pci-0000:00:01.0-usb-0:2:1.0".into()),
+                    }),
                 },
                 buttons: vec![platform::NativeButtonInput {
                     index: 10,
@@ -414,7 +449,19 @@ mod tests {
                     "product": 0xabcd,
                     "connection": {
                         "transport": "bluetooth",
-                        "signal_dbm": -58,
+                        "signal": {
+                            "kind": "bredr_link_margin_db",
+                            "source": "hci_link",
+                            "value": -11,
+                        },
+                        "adapter": {
+                            "name": "hci7",
+                            "address": "00:11:22:33:44:55",
+                            "vendor": "Foo Corp.",
+                            "model": "Bar Radio",
+                            "hardware_id": "1234:abcd",
+                            "path": "pci-0000:00:01.0-usb-0:2:1.0",
+                        },
                     },
                     "buttons": [{"index": 10, "pressed": true}],
                 }],

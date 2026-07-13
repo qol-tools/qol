@@ -988,6 +988,50 @@
     font-family: var(--font-mono);
 }
 
+.gamepad-adapter {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: baseline;
+    gap: var(--space-1) var(--space-3);
+    align-self: stretch;
+    padding: var(--space-2) var(--space-3);
+    border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.16);
+    border-radius: var(--radius-sm);
+    background: rgba(var(--accent-rgb), 0.035);
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+}
+
+.gamepad-adapter > span {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.gamepad-adapter > strong {
+    overflow: hidden;
+    color: var(--text-primary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gamepad-adapter > div {
+    display: flex;
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.gamepad-adapter code {
+    overflow: hidden;
+    max-width: 100%;
+    padding: 0.12rem 0.35rem;
+    border-radius: var(--radius-xs);
+    background: rgba(var(--ink-rgb), 0.16);
+    color: var(--text-secondary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .gamepad-signal-bars {
     display: inline-flex;
     align-items: flex-end;
@@ -1132,6 +1176,79 @@
     width: min(100%, 45rem);
     margin: -0.75rem auto -0.5rem;
     filter: drop-shadow(0 1.35rem 1.8rem rgba(var(--ink-rgb), 0.38));
+}
+
+.gamepad-rumble {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    align-self: stretch;
+    padding: var(--space-3);
+    border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.2);
+    border-radius: var(--radius-md);
+    background:
+        radial-gradient(circle at 50% 0%, rgba(var(--accent-rgb), 0.08), transparent 48%),
+        rgba(var(--ink-rgb), 0.1);
+}
+
+.gamepad-rumble-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-3);
+}
+
+.gamepad-rumble-heading > div {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.gamepad-rumble-heading strong {
+    color: var(--text-primary);
+    font-size: var(--fs-sm);
+}
+
+.gamepad-rumble-heading span,
+.gamepad-rumble-safety {
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+}
+
+.gamepad-rumble-heading output {
+    flex-shrink: 0;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+}
+
+.gamepad-rumble-sliders {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-4);
+}
+
+.gamepad-rumble-sliders[data-single="true"] {
+    grid-template-columns: 1fr;
+}
+
+.gamepad-rumble-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+    gap: var(--space-2);
+}
+
+.gamepad-rumble-actions .btn {
+    width: 100%;
+}
+
+.gamepad-rumble-actions .btn.is-active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0.55rem rgba(var(--accent-rgb), 0.2);
+}
+
+.gamepad-rumble-safety {
+    line-height: var(--lh-relaxed);
 }
 
 .gamepad-vector {
@@ -1567,6 +1684,18 @@
 
     .gamepad-axis-grid {
         grid-template-columns: 1fr;
+    }
+
+    .gamepad-rumble-sliders {
+        grid-template-columns: 1fr;
+    }
+
+    .gamepad-adapter {
+        grid-template-columns: 1fr;
+    }
+
+    .gamepad-adapter > div {
+        grid-column: 1;
     }
 
     .gamepad-device-control-note,

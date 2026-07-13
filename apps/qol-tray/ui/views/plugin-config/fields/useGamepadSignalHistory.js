@@ -69,7 +69,9 @@ export function useGamepadSignalHistory(containerRef, snapshot) {
 
 function controllerIdentity(snapshot) {
     if (!snapshot) return '';
-    return `${snapshot.index}:${snapshot.id}`;
+    const adapter = snapshot.connection?.adapter?.name || '';
+    const signalKind = snapshot.connection?.signal?.kind || '';
+    return `${snapshot.index}:${snapshot.id}:${adapter}:${signalKind}`;
 }
 
 function createVisibilityObserver(element, onChange) {

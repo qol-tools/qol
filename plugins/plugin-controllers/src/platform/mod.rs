@@ -30,7 +30,24 @@ pub struct NativeControllerInput {
 
 pub struct NativeConnection {
     pub transport: &'static str,
-    pub signal_dbm: Option<i16>,
+    pub signal: Option<NativeSignal>,
+    pub adapter: Option<NativeAdapter>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeSignal {
+    AdvertisedDbm(i16),
+    BredrLinkMarginDb(i16),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeAdapter {
+    pub name: String,
+    pub address: Option<String>,
+    pub vendor: Option<String>,
+    pub model: Option<String>,
+    pub hardware_id: Option<String>,
+    pub path: Option<String>,
 }
 
 pub struct NativeButtonInput {

@@ -16,6 +16,7 @@ import {
     controllerProfile,
     unmappedProfileButtons,
 } from './gamepad-profiles.js';
+import { GamepadRumbleLab } from './GamepadRumbleLab.js';
 import { useGamepadMonitor } from './useGamepadMonitor.js';
 import { useGamepadSignalHistory } from './useGamepadSignalHistory.js';
 
@@ -85,6 +86,7 @@ function GamepadTester({ snapshot, signalHistory }) {
                     ${snapshot.haptics && html`<span>Haptics</span>`}
                 </div>
             </div>
+            <${AdapterIdentity} adapter=${snapshot.connection?.adapter} />
             <${SignalHistory} history=${signalHistory} />
             ${snapshot.mappingProfile && !snapshot.nativeInput && html`
                 <div class="gamepad-compatibility-note">
@@ -98,7 +100,24 @@ function GamepadTester({ snapshot, signalHistory }) {
                 </div>
             `}
             <${GamepadDiagram} snapshot=${snapshot} profile=${profile} unmappedButtons=${unmappedButtons} />
+            ${snapshot.haptics && html`<${GamepadRumbleLab} snapshot=${snapshot} />`}
             <${GamepadReadout} snapshot=${snapshot} active=${active} unmappedButtons=${unmappedButtons} />
+        </div>
+    `;
+}
+
+function AdapterIdentity({ adapter }) {
+    if (!adapter) return null;
+    const hardware = [adapter.vendor, adapter.model].filter(Boolean).join(' ') || 'Unknown hardware';
+    return html`
+        <div class="gamepad-adapter">
+            <span>Bluetooth adapter</span>
+            <strong>${adapter.name} · ${hardware}</strong>
+            <div>
+                ${adapter.address && html`<code>${adapter.address}</code>`}
+                ${adapter.hardwareId && html`<code>${adapter.hardwareId}</code>`}
+                ${adapter.path && html`<code title=${adapter.path}>${adapter.path}</code>`}
+            </div>
         </div>
     `;
 }
@@ -113,7 +132,7 @@ function SignalHistory({ history }) {
     return html`
         <div class="gamepad-signal-history" role="img" aria-label=${summary.label}>
             <div class="gamepad-signal-history-heading">
-                <span>Signal history · 60 s</span>
+                <span>${summary.title}</span>
                 <strong>${summary.rangeLabel}</strong>
                 <span data-gaps=${summary.unavailableCount > 0}>${summary.gapLabel}</span>
             </div>
@@ -121,7 +140,7 @@ function SignalHistory({ history }) {
                 ${slots.map((sample, index) => {
                     const state = !sample
                         ? 'empty'
-                        : sample.signalDbm === null ? 'unavailable' : 'reading';
+                        : sample.value === null ? 'unavailable' : 'reading';
                     const style = state === 'reading'
                         ? `--signal-strength:${sample.strength}%`
                         : '';
@@ -151,7 +170,7 @@ function ConnectionIndicator({ connection }) {
             `}
             <span>${signal.transport}</span>
             <strong>${signal.detail}</strong>
-            ${signal.signalDbm !== null && html`<output>${signal.signalDbm} dBm</output>`}
+            ${signal.valueLabel && html`<output>${signal.valueLabel}</output>`}
         </div>
     `;
 }

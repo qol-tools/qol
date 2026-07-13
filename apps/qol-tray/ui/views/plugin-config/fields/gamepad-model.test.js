@@ -119,7 +119,22 @@ test('native input supplements matching standard pads without leaking across dev
         source: 'linux-evdev',
         items: [{
             name: 'GuliKit Controller XW',
-            connection: { transport: 'bluetooth', signal_dbm: -58 },
+            connection: {
+                transport: 'bluetooth',
+                signal: {
+                    kind: 'bredr_link_margin_db',
+                    source: 'hci_link',
+                    value: -11,
+                },
+                adapter: {
+                    name: 'hci7',
+                    address: '00:11:22:33:44:55',
+                    vendor: 'Foo Corp.',
+                    model: 'Bar Radio',
+                    hardware_id: '1234:abcd',
+                    path: 'pci-0000:00:01.0-usb-0:2:1.0',
+                },
+            },
             buttons: [
                 { index: 10, pressed: true },
                 { index: 11, pressed: false },
@@ -130,58 +145,82 @@ test('native input supplements matching standard pads without leaking across dev
     assert.equal(merged[0].buttons[10].pressed, true);
     assert.equal(merged[0].buttons[11].pressed, false);
     assert.equal(merged[0].nativeInput, 'linux-evdev');
-    assert.deepEqual(merged[0].connection, { transport: 'bluetooth', signalDbm: -58 });
+    assert.deepEqual(merged[0].connection, {
+        transport: 'bluetooth',
+        signal: {
+            kind: 'bredr_link_margin_db',
+            source: 'hci_link',
+            value: -11,
+        },
+        adapter: {
+            name: 'hci7',
+            address: '00:11:22:33:44:55',
+            vendor: 'Foo Corp.',
+            model: 'Bar Radio',
+            hardwareId: '1234:abcd',
+            path: 'pci-0000:00:01.0-usb-0:2:1.0',
+        },
+    });
     assert.equal(merged[1].buttons[10].pressed, false);
     assert.equal(merged[1].nativeInput, null);
 });
 
-test('connection presentation distinguishes real signal, unavailable signal, and wired pads', () => {
+test('connection presentation keeps absolute RSSI and BR/EDR link margin semantically separate', () => {
     const cases = [
-        [{ transport: 'bluetooth', signalDbm: -40 }, ['Excellent', 4, 'excellent', -40]],
-        [{ transport: 'bluetooth', signalDbm: -60 }, ['Good', 3, 'good', -60]],
-        [{ transport: 'bluetooth', signalDbm: -72 }, ['Fair', 2, 'fair', -72]],
-        [{ transport: 'bluetooth', signalDbm: -88 }, ['Weak', 1, 'weak', -88]],
-        [{ transport: 'bluetooth', signalDbm: null }, ['Signal unavailable', 0, 'neutral', null]],
-        [{ transport: 'usb', signalDbm: null }, ['Wired', null, 'wired', null]],
+        [absoluteSignal(-40), ['Strong RSSI', 4, 'excellent', -40, '-40 dBm']],
+        [absoluteSignal(-60), ['Usable RSSI', 3, 'good', -60, '-60 dBm']],
+        [absoluteSignal(-72), ['Low RSSI', 2, 'fair', -72, '-72 dBm']],
+        [absoluteSignal(-88), ['Very low RSSI', 1, 'weak', -88, '-88 dBm']],
+        [relativeSignal(7), ['Above target range', 4, 'excellent', 7, '7 dB above target']],
+        [relativeSignal(0), ['In target range', 4, 'excellent', 0, 'Target range']],
+        [relativeSignal(-3), ['Below target range', 2, 'fair', -3, '3 dB below target']],
+        [relativeSignal(-11), ['Well below target range', 1, 'weak', -11, '11 dB below target']],
+        [{ transport: 'bluetooth', signal: null }, ['Signal unavailable', 0, 'neutral', null, null]],
+        [{ transport: 'usb', signal: null }, ['Wired', null, 'wired', null, null]],
     ];
     for (const [connection, expected] of cases) {
         const result = connectionPresentation(connection);
         assert.deepEqual(
-            [result.detail, result.level, result.tone, result.signalDbm],
+            [result.detail, result.level, result.tone, result.signalValue, result.valueLabel],
             expected,
             JSON.stringify(connection),
         );
     }
+    assert.match(connectionPresentation(relativeSignal(-11)).label, /relative dB, not dBm/);
+    assert.match(connectionPresentation(absoluteSignal(-40)).label, /does not measure packet delivery/);
     assert.equal(connectionPresentation(null), null);
 });
 
-test('signal history samples Bluetooth strength and preserves unavailable readings', () => {
+test('signal history scales each measurement kind without mixing their units', () => {
     const cases = [
-        [{ transport: 'bluetooth', signalDbm: -35 }, false, [-35, 100, 'excellent']],
-        [{ transport: 'bluetooth', signalDbm: -65 }, false, [-65, 56, 'good']],
-        [{ transport: 'bluetooth', signalDbm: -95 }, false, [-95, 12, 'weak']],
-        [{ transport: 'bluetooth', signalDbm: null }, false, [null, null, 'neutral']],
-        [null, true, [null, null, 'neutral']],
+        [absoluteSignal(-35), false, [-35, 'absolute_dbm', 100, 'excellent']],
+        [absoluteSignal(-65), false, [-65, 'absolute_dbm', 56, 'good']],
+        [absoluteSignal(-95), false, [-95, 'absolute_dbm', 12, 'weak']],
+        [relativeSignal(0), false, [0, 'bredr_link_margin_db', 100, 'excellent']],
+        [relativeSignal(-10), false, [-10, 'bredr_link_margin_db', 56, 'weak']],
+        [relativeSignal(-20), false, [-20, 'bredr_link_margin_db', 12, 'weak']],
+        [{ transport: 'bluetooth', signal: null }, false, [null, null, null, 'neutral']],
+        [null, true, [null, null, null, 'neutral']],
     ];
 
     for (const [connection, bluetoothKnown, expected] of cases) {
         const sample = signalHistorySample(connection, bluetoothKnown);
         assert.deepEqual(
-            [sample.signalDbm, sample.strength, sample.tone],
+            [sample.value, sample.kind, sample.strength, sample.tone],
             expected,
             JSON.stringify({ connection, bluetoothKnown }),
         );
     }
     assert.equal(signalHistorySample(null, false), null);
-    assert.equal(signalHistorySample({ transport: 'usb', signalDbm: null }), null);
+    assert.equal(signalHistorySample({ transport: 'usb', signal: null }), null);
 });
 
 test('signal history trims oldest samples and summarizes range and unavailable gaps', () => {
     const samples = [
-        signalHistorySample({ transport: 'bluetooth', signalDbm: -72 }),
-        signalHistorySample({ transport: 'bluetooth', signalDbm: null }),
-        signalHistorySample({ transport: 'bluetooth', signalDbm: -58 }),
-        signalHistorySample({ transport: 'bluetooth', signalDbm: -64 }),
+        signalHistorySample(absoluteSignal(-72)),
+        signalHistorySample({ transport: 'bluetooth', signal: null }),
+        signalHistorySample(absoluteSignal(-58)),
+        signalHistorySample(absoluteSignal(-64)),
     ];
     const history = samples.reduce(
         (current, sample) => appendSignalHistory(current, sample, 3),
@@ -191,29 +230,39 @@ test('signal history trims oldest samples and summarizes range and unavailable g
     assert.deepEqual(history, samples.slice(1));
     assert.deepEqual(signalHistorySummary(history), {
         count: 3,
+        kind: 'absolute_dbm',
+        title: 'RSSI history · 60 s',
         unavailableCount: 1,
-        minimumDbm: -64,
-        maximumDbm: -58,
+        minimum: -64,
+        maximum: -58,
         rangeLabel: '-64 to -58 dBm',
         gapLabel: '1 unavailable',
-        label: 'Bluetooth signal history: 3 samples, -64 to -58 dBm, 1 measurement unavailable',
+        label: 'Bluetooth link history: 3 samples, -64 to -58 dBm, 1 measurement unavailable',
     });
     assert.equal(
         signalHistorySummary([samples[0], samples[2]]).label,
-        'Bluetooth signal history: 2 samples, -72 to -58 dBm, no measurements unavailable',
+        'Bluetooth link history: 2 samples, -72 to -58 dBm, no measurements unavailable',
     );
     assert.deepEqual(
         signalHistorySummary([samples[1], samples[1]]),
         {
             count: 2,
+            kind: null,
+            title: 'RSSI history · 60 s',
             unavailableCount: 2,
-            minimumDbm: null,
-            maximumDbm: null,
-            rangeLabel: 'RSSI unavailable',
+            minimum: null,
+            maximum: null,
+            rangeLabel: 'Signal unavailable',
             gapLabel: '2 unavailable',
-            label: 'Bluetooth signal history: 2 samples, RSSI unavailable, 2 measurements unavailable',
+            label: 'Bluetooth link history: 2 samples, Signal unavailable, 2 measurements unavailable',
         },
     );
+    const relative = [
+        signalHistorySample(relativeSignal(-11)),
+        signalHistorySample(relativeSignal(-2)),
+    ];
+    assert.equal(signalHistorySummary(relative).rangeLabel, '2 to 11 dB below target');
+    assert.equal(signalHistorySummary(relative).title, 'BR/EDR margin · 60 s');
     assert.equal(signalHistorySummary([]), null);
 });
 
@@ -240,7 +289,7 @@ test('monitor signature changes for inventory, connection, buttons, and axes', (
     const neutral = pad();
     const pressed = pad({ buttons: [{ pressed: true, value: 1 }] });
     const moved = pad({ axes: [0.5, 0, 0, 0] });
-    const signalChanged = { ...neutral, connection: { transport: 'bluetooth', signalDbm: -70 } };
+    const signalChanged = { ...neutral, connection: absoluteSignal(-70) };
 
     assert.notEqual(monitorSignature([neutral], neutral), monitorSignature([pressed], pressed));
     assert.notEqual(monitorSignature([neutral], neutral), monitorSignature([moved], moved));
@@ -250,3 +299,17 @@ test('monitor signature changes for inventory, connection, buttons, and axes', (
     );
     assert.notEqual(monitorSignature([neutral], neutral), monitorSignature([neutral, moved], neutral));
 });
+
+function absoluteSignal(value) {
+    return {
+        transport: 'bluetooth',
+        signal: { kind: 'absolute_dbm', source: 'bluez_device', value },
+    };
+}
+
+function relativeSignal(value) {
+    return {
+        transport: 'bluetooth',
+        signal: { kind: 'bredr_link_margin_db', source: 'hci_link', value },
+    };
+}
