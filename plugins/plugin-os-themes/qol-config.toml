@@ -1,16 +1,16 @@
 schema_version = 1
 title = "OS Themes"
-description = "Cursor growth behavior for the shake-to-grow effect."
+description = "Desktop theming and cursor effects."
 
-[section.thresholds]
-label = "Shake Detection"
-description = "A shake must retrace its own ground: inside the detection window the cursor path must be several times longer than the area it covers, and that area must be at least the minimum shake size."
+[section.shake_to_grow]
+label = "Shake to Grow"
+description = "Shake the cursor to enlarge it, macOS style. A shake must retrace its own ground: inside the detection window the cursor path must be several times longer than the area it covers, and at least the minimum shake size. The cursor shrinks back after the calm duration."
 actions = ["run"]
 
 [field.shake_strictness]
 type = "number"
 label = "Shake Strictness"
-section = "thresholds"
+section = "shake_to_grow"
 default = 6.5
 min = 1
 step = 0.5
@@ -18,7 +18,7 @@ step = 0.5
 [field.regrow_strictness]
 type = "number"
 label = "Regrow Strictness"
-section = "thresholds"
+section = "shake_to_grow"
 default = 2.5
 min = 1
 step = 0.5
@@ -26,7 +26,7 @@ step = 0.5
 [field.regrow_min_extent_px]
 type = "number"
 label = "Regrow Min Size"
-section = "thresholds"
+section = "shake_to_grow"
 default = 60
 min = 10
 step = 10
@@ -34,7 +34,7 @@ step = 10
 [field.shake_min_extent_px]
 type = "number"
 label = "Min Shake Size"
-section = "thresholds"
+section = "shake_to_grow"
 default = 150
 min = 20
 step = 10
@@ -42,20 +42,15 @@ step = 10
 [field.shake_window_ms]
 type = "number"
 label = "Detection Window"
-section = "thresholds"
+section = "shake_to_grow"
 default = 1000
 min = 100
 step = 50
 
-[section.animation]
-label = "Animation"
-description = "Size and recovery behavior after the cursor grows."
-actions = ["run"]
-
 [field.scale_factor]
 type = "number"
 label = "Scale Factor"
-section = "animation"
+section = "shake_to_grow"
 default = 4
 min = 1
 step = 1
@@ -63,7 +58,7 @@ step = 1
 [field.calm_duration_ms]
 type = "number"
 label = "Calm Duration"
-section = "animation"
+section = "shake_to_grow"
 default = 650
 min = 50
 step = 25
@@ -71,7 +66,7 @@ step = 25
 [field.restore_steps]
 type = "number"
 label = "Restore Steps"
-section = "animation"
+section = "shake_to_grow"
 default = 18
 min = 1
 step = 1
