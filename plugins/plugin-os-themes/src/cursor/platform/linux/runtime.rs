@@ -86,8 +86,9 @@ fn delta(last: Option<(f32, f32)>, x: f32, y: f32) -> (i32, i32) {
 }
 
 fn open_session(config: &Config) -> Result<Session> {
+    super::display::ensure_cursor_support()?;
     eprintln!("[shake-to-grow] started mode=tree");
-    Ok(Session::Tree(super::x11::CursorSession::open(
+    Ok(Session::Tree(super::display::x11::CursorSession::open(
         config.scale_factor,
     )?))
 }
@@ -103,7 +104,7 @@ fn apply_update(session: &mut Session, update: ScaleUpdate) -> bool {
 }
 
 enum Session {
-    Tree(super::x11::CursorSession),
+    Tree(super::display::x11::CursorSession),
 }
 
 impl Session {

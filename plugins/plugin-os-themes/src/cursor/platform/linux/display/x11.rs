@@ -5,7 +5,7 @@ use std::ptr;
 use anyhow::{ensure, Result};
 use x11::{xcursor, xfixes, xlib};
 
-use super::scale::scale_bilinear;
+use crate::cursor::platform::linux::scale::scale_bilinear;
 
 const MAX_CURSOR_DIMENSION: u32 = 512;
 const XFIXES_CURSOR_NOTIFY: i32 = 1;

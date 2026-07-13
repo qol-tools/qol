@@ -1,7 +1,7 @@
+mod display;
 mod motion;
 mod runtime;
 mod scale;
-mod x11;
 
 use anyhow::{Context, Result};
 
