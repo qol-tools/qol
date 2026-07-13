@@ -151,13 +151,14 @@ pub enum FieldKind {
     List,
     Status,
     QrCode,
+    Gamepad,
 }
 
 impl FieldKind {
     pub fn has_stored_value(self) -> bool {
         !matches!(
             self,
-            Self::Action | Self::List | Self::Status | Self::QrCode
+            Self::Action | Self::List | Self::Status | Self::QrCode | Self::Gamepad
         )
     }
 
@@ -175,6 +176,7 @@ impl FieldKind {
             Self::List => "list",
             Self::Status => "status",
             Self::QrCode => "qr_code",
+            Self::Gamepad => "gamepad",
         }
     }
 }
@@ -424,5 +426,22 @@ placeholder = "Waiting for session..."
         assert_eq!(field.query.as_deref(), Some("pair_url"));
         assert_eq!(field.value_from.as_deref(), Some("url"));
         assert_eq!(field.placeholder.as_deref(), Some("Waiting for session..."));
+    }
+
+    #[test]
+    fn parses_gamepad_field() {
+        let spec_str = r#"
+schema_version = 1
+
+[field.input_test]
+type = "gamepad"
+label = "Input Test"
+description = "Press a button to begin."
+"#;
+        let spec = parse_spec_str(spec_str).expect("parse");
+        let field = spec.fields.get("input_test").expect("field present");
+        assert_eq!(field.kind, FieldKind::Gamepad);
+        assert!(!field.kind.has_stored_value());
+        assert_eq!(field.label.as_deref(), Some("Input Test"));
     }
 }

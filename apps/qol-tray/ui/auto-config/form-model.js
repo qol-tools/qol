@@ -1,6 +1,6 @@
 import { setVal } from '../lib/qol-config.js';
 
-const RUNTIME_ONLY_KINDS = new Set(['action', 'list', 'status', 'qr_code']);
+const RUNTIME_ONLY_KINDS = new Set(['action', 'list', 'status', 'qr_code', 'gamepad']);
 
 export function configFromForm(form, existingConfig = {}) {
     const base = cloneValue(existingConfig);

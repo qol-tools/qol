@@ -510,7 +510,11 @@ fn default_matches_kind(default: &FieldDefault, kind: FieldKind) -> bool {
             | FieldDefault::ObjectMap(_) => false,
         },
         FieldKind::ObjectMap => matches!(default, FieldDefault::ObjectMap(_)),
-        FieldKind::Action | FieldKind::List | FieldKind::Status | FieldKind::QrCode => false,
+        FieldKind::Action
+        | FieldKind::List
+        | FieldKind::Status
+        | FieldKind::QrCode
+        | FieldKind::Gamepad => false,
     }
 }
 

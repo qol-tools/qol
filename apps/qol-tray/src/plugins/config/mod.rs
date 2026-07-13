@@ -427,6 +427,10 @@ fn field_default_matches_kind(
         FieldKind::StringArray => matches!(value, FieldDefault::StringArray(_)),
         FieldKind::ObjectArray => matches!(value, FieldDefault::ObjectArray(_)),
         FieldKind::ObjectMap => matches!(value, FieldDefault::ObjectMap(_)),
-        FieldKind::Action | FieldKind::List | FieldKind::Status | FieldKind::QrCode => false,
+        FieldKind::Action
+        | FieldKind::List
+        | FieldKind::Status
+        | FieldKind::QrCode
+        | FieldKind::Gamepad => false,
     }
 }

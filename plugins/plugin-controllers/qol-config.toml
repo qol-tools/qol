@@ -1,29 +1,40 @@
 schema_version = 1
 title = "Controllers"
-description = "Connected game controllers and known driver defects."
+description = "Connected game controllers, active drivers, and available capabilities."
 
 [section.controllers]
 label = "Controllers"
+
+[section.input_test]
+label = "Input Test"
+description = "Live browser-level input from the controller you are testing."
 
 [field.fixes_status]
 type = "status"
 label = "Status"
 section = "controllers"
-query = "controllers_status"
+query = "controllers_snapshot"
 value_from = "state"
-label_map = { none = "No Controllers Detected", ok = "All controllers healthy", pending = "Fix available", driver_missing = "Driver missing" }
-tone_map = { ok = "success", pending = "danger", driver_missing = "danger" }
+label_map = { none = "No Controllers Detected", ok = "Controllers ready", optional_fix = "Optional fix available" }
+tone_map = { ok = "success", optional_fix = "warning" }
 
 [field.detected_pads]
 type = "list"
 label = "Connected Controllers"
 section = "controllers"
-query = "list_controllers"
+query = "controllers_snapshot"
 row_label = "{name}"
-row_subtitle = "{transport} - {verdict}"
+row_subtitle = "{transport} · {driver} · {verdict}"
 empty_message = "No controllers detected."
 
 [field.detected_pads.row_action]
 action = "apply_fixes"
 label = "Fix"
 when = "fixable"
+
+[field.input_test]
+type = "gamepad"
+label = "Controller Input"
+description = "Press a controller button, then move every stick, trigger, D-pad direction, and face button."
+section = "input_test"
+query = "controller_input"

@@ -9,7 +9,7 @@ use crate::state::desired_quirk;
 fn quirks_by_driver(targets: &[FixTarget]) -> BTreeMap<&'static str, Vec<String>> {
     let mut map: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
     for target in targets {
-        let quirks = map.entry(target.entry.driver).or_default();
+        let quirks = map.entry(target.entry.module).or_default();
         let quirk = desired_quirk(target);
         if !quirks.contains(&quirk) {
             quirks.push(quirk);
@@ -74,9 +74,14 @@ mod tests {
             bus: 0x0005,
             vendor: 0x045e,
             product: 0x028e,
+            version: 0x0903,
             name: "GuliKit Controller XW".into(),
             uniq: Some("06:71:10:20:26:b4".into()),
+            sysfs_path: None,
+            event_handler: None,
+            driver: Some("xpadneo".into()),
             is_gamepad: true,
+            has_force_feedback: true,
         };
         match_devices(&[device])
     }

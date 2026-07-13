@@ -2,7 +2,7 @@
 id = "plugin-controllers"
 uid = "eb274823-d360-47bb-a668-6bf047ba8baf"
 name = "Controllers"
-description = "Detect game controllers with known driver defects and apply fixes"
+description = "Inspect connected game controllers and apply relevant driver-specific fixes"
 version = "0.1.1"
 author = "KMRH47"
 platforms = ["linux"]
@@ -11,7 +11,7 @@ platforms = ["linux"]
 command = "plugin-controllers"
 
 [action.apply_fixes]
-label = "Apply Controller Fixes"
+label = "Apply Relevant Controller Fixes"
 args = ["apply_fixes"]
 
 [action.settings]

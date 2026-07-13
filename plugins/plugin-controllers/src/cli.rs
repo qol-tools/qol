@@ -3,7 +3,6 @@ use std::process::ExitCode;
 use anyhow::Result;
 use qol_headless::{Command, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTextOutput};
 
-use crate::state::FixState;
 use crate::{daemon, PLUGIN_ID};
 
 const BINARY_NAME: &str = "plugin-controllers";
@@ -14,7 +13,7 @@ pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
 
 fn app() -> HeadlessApp {
     HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
-        .about("Detect game controllers with known driver defects and apply fixes.")
+        .about("Inspect connected game controllers and apply relevant driver-specific fixes.")
         .default_command(["status"])
         .command(apply_command())
         .command(status_command())
@@ -24,12 +23,14 @@ fn app() -> HeadlessApp {
 
 fn apply_command() -> Command {
     Command::new("apply_fixes")
-        .about("Apply fixes for connected known-broken controllers.")
+        .about("Apply fixes that match each controller's currently bound driver.")
         .usage(format!("{BINARY_NAME} apply_fixes"))
+        .detail("The current compatibility fix applies only when xpadneo is active.")
+        .detail("xpadneo is optional and is never installed by this command.")
         .detail("Writes /etc/modprobe.d/qol-controllers.conf and the live sysfs quirk.")
         .detail("Runs one pkexec authorization prompt.")
         .output("No stdout on success.")
-        .exit_behavior("Exits non-zero if no known controller is connected or pkexec fails.")
+        .exit_behavior("Exits non-zero if no driver-specific fix applies or pkexec fails.")
         .run_plain_text(|_| {
             daemon::execute_action_once("apply_fixes")?;
             Ok(PlainTextOutput::empty())
@@ -43,11 +44,15 @@ fn status_command() -> Command {
         .output("One line per connected controller.")
         .exit_behavior("Exits zero even when no controller is connected.")
         .run_plain_text(|_| {
-            let rows = daemon::snapshot();
-            if rows.is_empty() {
+            let snapshot = daemon::snapshot();
+            if snapshot.rows.is_empty() {
                 return Ok(PlainTextOutput::text("no controllers detected"));
             }
-            Ok(PlainTextOutput::text(summary_lines(&rows)))
+            Ok(PlainTextOutput::text(summary_lines(&snapshot.rows)))
+        })
+        .run_json(|_| {
+            let snapshot = daemon::snapshot();
+            Ok(daemon::snapshot_payload(&snapshot))
         })
 }
 
@@ -79,6 +84,13 @@ fn doctor_checks() -> Vec<DoctorCheck> {
 }
 
 fn pkexec_check() -> Result<DoctorCheckResult> {
+    let snapshot = daemon::snapshot();
+    if !snapshot.rows.iter().any(|row| row.fixable) {
+        return Ok(DoctorCheckResult::ok(
+            "pkexec_available",
+            "no privileged controller fixes currently apply",
+        ));
+    }
     let found = std::process::Command::new("pkexec")
         .arg("--version")
         .stdout(std::process::Stdio::null())
@@ -95,8 +107,8 @@ fn pkexec_check() -> Result<DoctorCheckResult> {
 }
 
 fn fixes_check() -> Result<DoctorCheckResult> {
-    let rows = daemon::snapshot();
-    if rows.is_empty() {
+    let snapshot = daemon::snapshot();
+    if snapshot.rows.is_empty() {
         return Ok(DoctorCheckResult::ok(
             "controller_fixes",
             format!(
@@ -105,27 +117,22 @@ fn fixes_check() -> Result<DoctorCheckResult> {
             ),
         ));
     }
-    let summary = summary_lines(&rows);
-    let mut result = DoctorCheckResult::ok("controller_fixes", summary.clone());
-    for row in &rows {
-        match row.fix_state {
-            Some(FixState::DriverMissing) => {
-                return Ok(DoctorCheckResult::fail("controller_fixes", summary)
-                    .with_fix("install xpadneo: https://github.com/atar-axis/xpadneo"));
-            }
-            Some(FixState::Pending | FixState::LiveOnly) => {
-                result = DoctorCheckResult::warn("controller_fixes", summary.clone())
-                    .with_fix(format!("run: {BINARY_NAME} apply_fixes"));
-            }
-            Some(FixState::Applied) | None => {}
-        }
+    let summary = summary_lines(&snapshot.rows);
+    if snapshot.rows.iter().any(|row| row.fixable) {
+        return Ok(DoctorCheckResult::warn("controller_fixes", summary)
+            .with_fix(format!("run: {BINARY_NAME} apply_fixes")));
     }
-    Ok(result)
+    Ok(DoctorCheckResult::ok("controller_fixes", summary))
 }
 
 fn summary_lines(rows: &[daemon::ControllerRow]) -> String {
     rows.iter()
-        .map(|row| format!("{} [{}]: {}", row.name, row.transport, row.verdict))
+        .map(|row| {
+            format!(
+                "{} [{}; {}]: {}",
+                row.name, row.transport, row.driver, row.verdict
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }

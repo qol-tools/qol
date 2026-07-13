@@ -1,12 +1,12 @@
 schema_version = 1
 
 [action.apply_fixes]
-description = "Apply driver fixes for connected known-broken controllers"
+description = "Apply fixes only when they match a controller's active driver"
 
-[query.controllers_status]
-description = "Aggregate verdict across connected controllers"
+[query.controllers_snapshot]
+description = "One coherent controller inventory and health snapshot"
 poll_interval_ms = 3000
 
-[query.list_controllers]
-description = "Connected controllers with per-pad verdicts"
-poll_interval_ms = 3000
+[query.controller_input]
+description = "Native button overrides and connection metadata omitted by the browser gamepad mapping"
+poll_interval_ms = 32

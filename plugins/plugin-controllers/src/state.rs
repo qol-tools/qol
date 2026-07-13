@@ -4,7 +4,6 @@ use crate::fixes::FixTarget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixState {
-    DriverMissing,
     Pending,
     LiveOnly,
     Applied,
@@ -28,15 +27,12 @@ pub fn desired_quirk(target: &FixTarget) -> String {
     format!("{}:{}", target.mac, target.entry.quirk_value)
 }
 
-pub fn compute(paths: &SystemPaths, target: &FixTarget, driver_installed: bool) -> FixState {
-    if !driver_installed {
-        return FixState::DriverMissing;
-    }
+pub fn compute(paths: &SystemPaths, target: &FixTarget) -> FixState {
     let quirk = desired_quirk(target);
-    if persisted(paths, target.entry.driver, &quirk) {
+    if persisted(paths, target.entry.module, &quirk) {
         return FixState::Applied;
     }
-    if live(paths, target.entry.driver, &quirk) {
+    if live(paths, target.entry.module, &quirk) {
         return FixState::LiveOnly;
     }
     FixState::Pending
@@ -89,9 +85,14 @@ mod tests {
             bus: 0x0005,
             vendor: 0x045e,
             product: 0x028e,
+            version: 0x0903,
             name: "GuliKit Controller XW".into(),
             uniq: Some("06:71:10:20:26:b4".into()),
+            sysfs_path: None,
+            event_handler: None,
+            driver: Some("xpadneo".into()),
             is_gamepad: true,
+            has_force_feedback: true,
         };
         match_devices(&[device]).remove(0)
     }
@@ -104,44 +105,33 @@ mod tests {
     #[test]
     fn state_reflects_filesystem() {
         let cases = [
-            ("nothing anywhere", None, None, true, FixState::Pending),
-            (
-                "driver missing wins",
-                None,
-                None,
-                false,
-                FixState::DriverMissing,
-            ),
+            ("nothing anywhere", None, None, FixState::Pending),
             (
                 "persisted in any conf",
                 Some("options hid_xpadneo quirks=06:71:10:20:26:b4:263"),
                 None,
-                true,
                 FixState::Applied,
             ),
             (
                 "persisted with dash driver name",
                 Some("options hid-xpadneo quirks=06:71:10:20:26:b4:263"),
                 None,
-                true,
                 FixState::Applied,
             ),
             (
                 "live only",
                 None,
                 Some("06:71:10:20:26:b4:263"),
-                true,
                 FixState::LiveOnly,
             ),
             (
                 "other mac does not count",
                 Some("options hid_xpadneo quirks=aa:bb:cc:dd:ee:ff:263"),
                 None,
-                true,
                 FixState::Pending,
             ),
         ];
-        for (label, conf_line, sysfs_value, driver_installed, expected) in cases {
+        for (label, conf_line, sysfs_value, expected) in cases {
             let root = tempfile::tempdir().expect("tempdir");
             let modprobe_dir = root.path().join("modprobe.d");
             let sys_module_dir = root.path().join("module");
@@ -158,11 +148,7 @@ mod tests {
                 modprobe_dir,
                 sys_module_dir,
             };
-            assert_eq!(
-                compute(&paths, &target(), driver_installed),
-                expected,
-                "case: {label}"
-            );
+            assert_eq!(compute(&paths, &target()), expected, "case: {label}");
         }
     }
 }

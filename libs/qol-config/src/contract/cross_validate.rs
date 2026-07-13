@@ -47,7 +47,7 @@ fn validate_runable_ref(
                 format!("references undeclared action: {ref_name}"),
             ));
         }
-        FieldKind::List | FieldKind::Status | FieldKind::QrCode
+        FieldKind::List | FieldKind::Status | FieldKind::QrCode | FieldKind::Gamepad
             if !rt.queries.contains_key(ref_name) =>
         {
             errors.push(ValidationError::new(
@@ -117,7 +117,9 @@ fn validate_row_action_ref(
 fn runable_reference_for(field: &FieldSpec) -> Option<&str> {
     match field.kind {
         FieldKind::Action => field.action.as_deref(),
-        FieldKind::List | FieldKind::Status | FieldKind::QrCode => field.query.as_deref(),
+        FieldKind::List | FieldKind::Status | FieldKind::QrCode | FieldKind::Gamepad => {
+            field.query.as_deref()
+        }
         _ => None,
     }
 }
@@ -296,6 +298,32 @@ description = "Remove a device"
 "#,
         )
         .expect("parse runtime");
+        assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+    }
+
+    #[test]
+    fn accepts_gamepad_with_native_input_query() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.input_test]
+type = "gamepad"
+query = "controller_input"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.controller_input]
+description = "Native controller input supplement"
+poll_interval_ms = 32
+"#,
+        )
+        .expect("parse runtime");
+
         assert!(validate_contracts(&config, Some(&runtime)).is_ok());
     }
 

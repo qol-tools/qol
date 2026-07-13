@@ -33,25 +33,54 @@ pub struct DetectedDevice {
     pub bus: u16,
     pub vendor: u16,
     pub product: u16,
+    pub version: u16,
     pub name: String,
     pub uniq: Option<String>,
+    pub sysfs_path: Option<String>,
+    pub event_handler: Option<String>,
+    pub driver: Option<String>,
     pub is_gamepad: bool,
+    pub has_force_feedback: bool,
 }
 
 impl DetectedDevice {
     pub fn transport(&self) -> &'static str {
+        if self.is_virtual() {
+            return "Virtual";
+        }
         match self.bus {
             0x0005 => "Bluetooth",
             0x0003 => "USB",
             _ => "Other",
         }
     }
+
+    pub fn is_virtual(&self) -> bool {
+        self.sysfs_path
+            .as_deref()
+            .is_some_and(|path| path.starts_with("/devices/virtual/"))
+    }
+
+    pub fn driver_label(&self) -> &str {
+        if let Some(driver) = self.driver.as_deref() {
+            return driver;
+        }
+        if self.is_virtual() {
+            return "userspace";
+        }
+        "unknown"
+    }
+
+    pub fn version_label(&self) -> String {
+        format!("{:04x}", self.version)
+    }
 }
 
 pub struct FixEntry {
     pub id: &'static str,
     pub summary: &'static str,
-    pub driver: &'static str,
+    pub module: &'static str,
+    pub bound_driver: &'static str,
     pub bus: u16,
     pub vendor: u16,
     pub products: &'static [u16],
@@ -61,8 +90,9 @@ pub struct FixEntry {
 
 pub const FIXES: &[FixEntry] = &[FixEntry {
     id: "gulikit-xw-bt-rumble",
-    summary: "Rumble never stops over Bluetooth",
-    driver: "hid_xpadneo",
+    summary: "Optional xpadneo rumble workaround",
+    module: "hid_xpadneo",
+    bound_driver: "xpadneo",
     bus: 0x0005,
     vendor: 0x045e,
     products: &[0x02e0, 0x028e],
@@ -82,6 +112,10 @@ pub fn match_device(device: &DetectedDevice) -> Option<FixTarget> {
             || device.vendor != entry.vendor
             || !entry.products.contains(&device.product)
             || device.name != entry.name
+            || !device
+                .driver
+                .as_deref()
+                .is_some_and(|driver| driver_names_match(driver, entry.bound_driver))
         {
             continue;
         }
@@ -89,6 +123,10 @@ pub fn match_device(device: &DetectedDevice) -> Option<FixTarget> {
         return Some(FixTarget { entry, mac });
     }
     None
+}
+
+fn driver_names_match(actual: &str, expected: &str) -> bool {
+    actual.replace('-', "_") == expected.replace('-', "_")
 }
 
 pub fn match_devices(devices: &[DetectedDevice]) -> Vec<FixTarget> {
@@ -136,14 +174,20 @@ mod tests {
         product: u16,
         name: &str,
         uniq: Option<&str>,
+        driver: Option<&str>,
     ) -> DetectedDevice {
         DetectedDevice {
             bus,
             vendor,
             product,
+            version: 0x0903,
             name: name.into(),
             uniq: uniq.map(str::to_string),
+            sysfs_path: None,
+            event_handler: None,
+            driver: driver.map(str::to_string),
             is_gamepad: true,
+            has_force_feedback: false,
         }
     }
 
@@ -155,6 +199,7 @@ mod tests {
             0x028e,
             "GuliKit Controller XW",
             Some("06:71:10:20:26:b4"),
+            Some("xpadneo"),
         );
         let gulikit_alt_pid = device(
             0x0005,
@@ -162,6 +207,7 @@ mod tests {
             0x02e0,
             "GuliKit Controller XW",
             Some("06:71:10:20:26:b4"),
+            Some("xpadneo"),
         );
         let usb_clone = device(
             0x0003,
@@ -169,11 +215,34 @@ mod tests {
             0x028e,
             "GuliKit Controller XW",
             Some("06:71:10:20:26:b4"),
+            Some("xpadneo"),
         );
-        let no_mac = device(0x0005, 0x045e, 0x028e, "GuliKit Controller XW", None);
-        let other = device(0x0005, 0x054c, 0x0ce6, "foo pad", Some("aa:bb:cc:dd:ee:ff"));
+        let no_mac = device(
+            0x0005,
+            0x045e,
+            0x028e,
+            "GuliKit Controller XW",
+            None,
+            Some("xpadneo"),
+        );
+        let other = device(
+            0x0005,
+            0x054c,
+            0x0ce6,
+            "foo pad",
+            Some("aa:bb:cc:dd:ee:ff"),
+            Some("xpadneo"),
+        );
+        let native_driver = device(
+            0x0005,
+            0x045e,
+            0x02e0,
+            "GuliKit Controller XW",
+            Some("06:71:10:20:26:b4"),
+            Some("hid-generic"),
+        );
 
-        let cases: [(&str, Vec<DetectedDevice>, usize); 4] = [
+        let cases: [(&str, Vec<DetectedDevice>, usize); 5] = [
             ("single match", vec![gulikit.clone()], 1),
             (
                 "same pad twice dedupes",
@@ -186,6 +255,11 @@ mod tests {
                 0,
             ),
             ("missing mac ignored", vec![no_mac], 0),
+            (
+                "fix for optional driver ignores native driver",
+                vec![native_driver],
+                0,
+            ),
         ];
         for (label, devices, expected) in cases {
             let targets = match_devices(&devices);
@@ -195,5 +269,25 @@ mod tests {
         let targets = match_devices(&[gulikit]);
         assert_eq!(targets[0].entry.id, "gulikit-xw-bt-rumble");
         assert_eq!(targets[0].mac.to_string(), "06:71:10:20:26:b4");
+    }
+
+    #[test]
+    fn device_labels_virtual_and_physical_paths() {
+        let mut virtual_pad = device(0x0003, 0x28de, 0x11ff, "Virtual pad", None, None);
+        virtual_pad.sysfs_path = Some("/devices/virtual/input/input40".into());
+        assert_eq!(virtual_pad.transport(), "Virtual");
+        assert_eq!(virtual_pad.driver_label(), "userspace");
+
+        let physical_pad = device(
+            0x0005,
+            0x045e,
+            0x02e0,
+            "Physical pad",
+            None,
+            Some("hid-generic"),
+        );
+        assert_eq!(physical_pad.transport(), "Bluetooth");
+        assert_eq!(physical_pad.driver_label(), "hid-generic");
+        assert_eq!(physical_pad.version_label(), "0903");
     }
 }

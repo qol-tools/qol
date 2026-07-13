@@ -10,6 +10,7 @@ import { ActionField } from './fields/ActionField.js';
 import { ListField } from './fields/ListField.js';
 import { StatusField } from './fields/StatusField.js';
 import { QrCodeField } from './fields/QrCodeField.js';
+import { GamepadField } from './fields/GamepadField.js';
 import { SliderField } from './fields/SliderField.js';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
 import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
@@ -30,6 +31,7 @@ export const FIELD_MAP = {
     list: ListField,
     status: StatusField,
     qr_code: QrCodeField,
+    gamepad: GamepadField,
 };
 
 export const SUPPORTED_FIELD_KINDS = Object.freeze(Object.keys(FIELD_MAP));

@@ -260,6 +260,7 @@ fn field_default_from_override(kind: FieldKind, raw: &serde_json::Value) -> Opti
         FieldKind::List => None,
         FieldKind::Status => None,
         FieldKind::QrCode => None,
+        FieldKind::Gamepad => None,
     }
 }
 
