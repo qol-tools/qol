@@ -215,7 +215,7 @@ fn resolve_serial_port(configured: &str) -> Result<String> {
 fn resolve_network_key(configured: &str) -> Result<[u8; 16]> {
     if configured == "auto" {
         let mut key = [0u8; 16];
-        getrandom::getrandom(&mut key)
+        getrandom::fill(&mut key)
             .map_err(|e| anyhow!("failed to generate random network key: {}", e))?;
         return Ok(key);
     }
