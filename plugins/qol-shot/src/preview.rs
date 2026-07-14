@@ -650,11 +650,14 @@ impl PreviewView {
     }
 
     fn pin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let started_at = Instant::now();
+        qol_runtime::probe!("SHOT_PIN_ACTION", "seq={}", self.seq);
         let content = crate::pinned::PinnedContent {
             path: self.path.clone(),
             image: self.image.clone(),
             size: self.thumb,
             file_ready: self.file_ready.clone(),
+            started_at,
         };
         let window_origin = match self.mode {
             DismissMode::Quit => window.bounds().origin,

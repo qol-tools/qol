@@ -24,7 +24,8 @@ pub use preview::{capture_frozen_frame, configure_preview_window, grab_preview_r
 use system::resolve_command;
 pub use system::{open_url, platform_supported_check, required_binaries_check, show_notification};
 pub use window::{
-    configure_pin_window, pin_focus, pin_release_focus, pin_resize_session, PinResizeSession,
+    configure_pin_window, pin_focus, pin_release_focus, pin_resize_session, prepare_pin_window,
+    PinResizeSession,
 };
 use window::{configure_selector_window, prepare_selector_window};
 

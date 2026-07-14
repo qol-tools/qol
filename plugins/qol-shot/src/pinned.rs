@@ -1,3 +1,7 @@
+#[cfg(target_os = "linux")]
+use std::cell::RefCell;
+#[cfg(target_os = "linux")]
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -23,8 +27,18 @@ const RESIZE_TICK: std::time::Duration = std::time::Duration::from_millis(8);
 const REVEAL_TICK: std::time::Duration = std::time::Duration::from_millis(16);
 const REVEAL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
 const SCROLL_COMMIT: std::time::Duration = std::time::Duration::from_millis(200);
+#[cfg(target_os = "linux")]
+const PIN_CACHE_CAPACITY: usize = 2;
+#[cfg(target_os = "linux")]
+const PIN_CACHE_SIZE: (f32, f32) = (360.0, 240.0);
 
 static PIN_SEQ: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(target_os = "linux")]
+thread_local! {
+    static PIN_CACHE: RefCell<VecDeque<WindowHandle<PinnedView>>> =
+        const { RefCell::new(VecDeque::new()) };
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PinnedDismiss {
@@ -32,11 +46,67 @@ pub enum PinnedDismiss {
     Remove,
 }
 
+#[derive(Clone)]
 pub struct PinnedContent {
     pub path: PathBuf,
     pub image: Option<Arc<RenderImage>>,
     pub size: (f32, f32),
     pub file_ready: CaptureFileReady,
+    pub started_at: Instant,
+}
+
+struct PinnedWindowSpec {
+    title: String,
+    bounds: Bounds<Pixels>,
+    dismiss: PinnedDismiss,
+    border: bool,
+    copy_command: ShotAction,
+    placed: Arc<AtomicBool>,
+    active: bool,
+    focus: bool,
+    cacheable: bool,
+}
+
+#[cfg(target_os = "linux")]
+pub fn pre_create(cx: &mut App) {
+    for _ in 0..PIN_CACHE_CAPACITY {
+        let seq = PIN_SEQ.fetch_add(1, Ordering::Relaxed);
+        let title = format!("qol-shot-pin-{}-{seq}", std::process::id());
+        let origin = point(px(-100.0), px(-100.0));
+        let bounds = Bounds {
+            origin,
+            size: size(px(PIN_CACHE_SIZE.0), px(PIN_CACHE_SIZE.1)),
+        };
+        let content = PinnedContent {
+            path: PathBuf::new(),
+            image: None,
+            size: PIN_CACHE_SIZE,
+            file_ready: CaptureFileReady::ready(),
+            started_at: Instant::now(),
+        };
+        let spec = PinnedWindowSpec {
+            title: title.clone(),
+            bounds,
+            dismiss: PinnedDismiss::Remove,
+            border: false,
+            copy_command: ShotAction::Copy,
+            placed: Arc::new(AtomicBool::new(false)),
+            active: false,
+            focus: false,
+            cacheable: true,
+        };
+        let Some(handle) = open_window(content, spec, cx) else {
+            continue;
+        };
+        if !platform::prepare_pin_window(&title, (-100.0, -100.0)) {
+            let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+            continue;
+        }
+        PIN_CACHE.with(|cache| cache.borrow_mut().push_back(handle));
+    }
+    PIN_CACHE.with(|cache| {
+        qol_runtime::probe!("SHOT_PIN_PRECREATE", "windows={}", cache.borrow().len());
+    });
 }
 
 pub fn open(
@@ -45,51 +115,120 @@ pub fn open(
     dismiss: PinnedDismiss,
     cx: &mut App,
 ) -> bool {
+    #[cfg(target_os = "linux")]
+    if open_cached(content.clone(), origin, dismiss, cx) {
+        return true;
+    }
     let seq = PIN_SEQ.fetch_add(1, Ordering::Relaxed);
     let title = format!("qol-shot-pin-{}-{seq}", std::process::id());
     let bounds = Bounds {
         origin,
         size: size(px(content.size.0), px(content.size.1)),
     };
+    let config = crate::config::load();
+    let border = config.capture.pin_border;
+    let copy_command = resolve_copy_command(config.shortcuts.copy_command);
+    let placed = Arc::new(AtomicBool::new(false));
+    let spec = PinnedWindowSpec {
+        title: title.clone(),
+        bounds,
+        dismiss,
+        border,
+        copy_command,
+        placed: placed.clone(),
+        active: true,
+        focus: true,
+        cacheable: false,
+    };
+    let opened_at = Instant::now();
+    if open_window(content, spec, cx).is_none() {
+        eprintln!("[qol-shot] pinned window open failed");
+        return false;
+    }
+    qol_runtime::probe!(
+        "SHOT_PIN_OPEN",
+        "path=create ms={}",
+        opened_at.elapsed().as_millis()
+    );
+    platform::configure_pin_window(title, (origin.x.to_f64(), origin.y.to_f64()), placed);
+    true
+}
+
+fn open_window(
+    content: PinnedContent,
+    spec: PinnedWindowSpec,
+    cx: &mut App,
+) -> Option<WindowHandle<PinnedView>> {
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_bounds: Some(WindowBounds::Windowed(spec.bounds)),
         titlebar: None,
         window_decorations: Some(WindowDecorations::Client),
         kind: WindowKind::Normal,
-        focus: true,
+        focus: spec.focus,
+        show: true,
         is_movable: true,
         window_background: WindowBackgroundAppearance::Transparent,
         app_id: Some(PREVIEW_APP_ID.to_string()),
         ..Default::default()
     };
+    let focus = spec.focus;
+    let handle = cx
+        .open_window(options, move |window, cx| {
+            window.set_window_title(&spec.title);
+            let view = cx.new(|cx| PinnedView::new(content, spec, cx));
+            if focus {
+                window.focus(&view.focus_handle(cx));
+                window.activate_window();
+            }
+            view
+        })
+        .ok()?;
+    #[cfg(target_os = "linux")]
+    let _ = handle.update(cx, |view, _window, _cx| view.handle = Some(handle));
+    Some(handle)
+}
+
+#[cfg(target_os = "linux")]
+fn open_cached(
+    content: PinnedContent,
+    origin: Point<Pixels>,
+    dismiss: PinnedDismiss,
+    cx: &mut App,
+) -> bool {
+    let opened_at = Instant::now();
+    let Some(handle) = PIN_CACHE.with(|cache| cache.borrow_mut().pop_front()) else {
+        return false;
+    };
     let config = crate::config::load();
     let border = config.capture.pin_border;
     let copy_command = resolve_copy_command(config.shortcuts.copy_command);
     let placed = Arc::new(AtomicBool::new(false));
-    let window_title = title.clone();
-    let view_placed = placed.clone();
-    let opened = cx.open_window(options, move |window, cx| {
-        window.set_window_title(&window_title);
-        let view = cx.new(|cx| {
-            PinnedView::new(
-                content,
-                window_title,
-                dismiss,
-                border,
-                copy_command,
-                view_placed,
-                cx,
-            )
-        });
-        window.focus(&view.focus_handle(cx));
-        window.activate_window();
-        view
-    });
-    if opened.is_err() {
-        eprintln!("[qol-shot] pinned window open failed");
+    let content_size = content.size;
+    let title = handle
+        .update(cx, |view, window, cx| {
+            let title = view.title.clone();
+            view.reset(content, dismiss, border, copy_command, placed.clone(), cx);
+            qol_gpui::popup_window::sync_window_layout(
+                &title,
+                window,
+                origin,
+                size(px(content_size.0), px(content_size.1)),
+            );
+            window.focus(&view.focus_handle(cx));
+            window.activate_window();
+            title
+        })
+        .ok();
+    let Some(title) = title else {
         return false;
-    }
+    };
+    qol_runtime::probe!(
+        "SHOT_PIN_OPEN",
+        "path=reuse ms={}",
+        opened_at.elapsed().as_millis()
+    );
     platform::configure_pin_window(title, (origin.x.to_f64(), origin.y.to_f64()), placed);
+    cx.activate(true);
     true
 }
 
@@ -133,19 +272,20 @@ pub struct PinnedView {
     resize_loop_epoch: u64,
     placed: Arc<AtomicBool>,
     reveal_deadline: Instant,
+    started_at: Instant,
+    active: bool,
+    first_paint: bool,
+    #[cfg(target_os = "linux")]
+    cacheable: bool,
+    #[cfg(target_os = "linux")]
+    handle: Option<WindowHandle<PinnedView>>,
     focus_handle: FocusHandle,
 }
 
 impl PinnedView {
-    fn new(
-        content: PinnedContent,
-        title: String,
-        dismiss: PinnedDismiss,
-        border: bool,
-        copy_command: ShotAction,
-        placed: Arc<AtomicBool>,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    fn new(content: PinnedContent, spec: PinnedWindowSpec, cx: &mut Context<Self>) -> Self {
+        #[cfg(not(target_os = "linux"))]
+        let _ = spec.cacheable;
         let ratio = if content.size.1 > 0.0 {
             content.size.0 / content.size.1
         } else {
@@ -155,10 +295,10 @@ impl PinnedView {
             path: content.path,
             image: content.image,
             file_ready: content.file_ready,
-            title,
-            dismiss,
-            border,
-            copy_command,
+            title: spec.title,
+            dismiss: spec.dismiss,
+            border: spec.border,
+            copy_command: spec.copy_command,
             hovered: false,
             ratio,
             resize_drag: None,
@@ -166,12 +306,51 @@ impl PinnedView {
             scroll_remainder: 0.0,
             resize_loop_armed: false,
             resize_loop_epoch: 0,
-            placed,
+            placed: spec.placed,
             reveal_deadline: Instant::now() + REVEAL_TIMEOUT,
+            started_at: content.started_at,
+            active: spec.active,
+            first_paint: true,
+            #[cfg(target_os = "linux")]
+            cacheable: spec.cacheable,
+            #[cfg(target_os = "linux")]
+            handle: None,
             focus_handle: cx.focus_handle(),
         };
-        view.spawn_reveal_poll(cx);
+        if view.active {
+            view.spawn_reveal_poll(cx);
+        }
         view
+    }
+
+    fn reset(
+        &mut self,
+        content: PinnedContent,
+        dismiss: PinnedDismiss,
+        border: bool,
+        copy_command: ShotAction,
+        placed: Arc<AtomicBool>,
+        cx: &mut Context<Self>,
+    ) {
+        self.path = content.path;
+        self.image = content.image;
+        self.file_ready = content.file_ready;
+        self.dismiss = dismiss;
+        self.border = border;
+        self.copy_command = copy_command;
+        self.hovered = false;
+        self.ratio = if content.size.1 > 0.0 {
+            content.size.0 / content.size.1
+        } else {
+            1.0
+        };
+        self.placed = placed;
+        self.reveal_deadline = Instant::now() + REVEAL_TIMEOUT;
+        self.started_at = content.started_at;
+        self.active = true;
+        self.first_paint = true;
+        self.spawn_reveal_poll(cx);
+        cx.notify();
     }
 
     fn revealed(&self) -> bool {
@@ -189,8 +368,9 @@ impl PinnedView {
                         if revealed {
                             qol_runtime::probe!(
                                 "SHOT_PIN_REVEAL",
-                                "placed={} title={}",
+                                "placed={} action_ms={} title={}",
                                 view.placed.load(Ordering::Relaxed),
+                                view.started_at.elapsed().as_millis(),
                                 view.title,
                             );
                             cx.notify();
@@ -418,10 +598,55 @@ impl PinnedView {
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         platform::pin_release_focus(&self.title);
         qol_gpui::popup_window::restore_composite(&self.title);
+        #[cfg(target_os = "linux")]
+        if self.dismiss == PinnedDismiss::Remove && self.cacheable {
+            self.recycle(window, cx);
+            return;
+        }
         match self.dismiss {
             PinnedDismiss::Quit => cx.quit(),
             PinnedDismiss::Remove => window.remove_window(),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn recycle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(handle) = self.handle else {
+            window.remove_window();
+            return;
+        };
+        self.active = false;
+        self.image = None;
+        self.path.clear();
+        self.resize_drag = None;
+        self.scroll_resize = None;
+        self.resize_loop_armed = false;
+        self.resize_loop_epoch = self.resize_loop_epoch.wrapping_add(1);
+        let origin = point(px(-100.0), px(-100.0));
+        qol_gpui::popup_window::sync_window_layout(
+            &self.title,
+            window,
+            origin,
+            size(px(PIN_CACHE_SIZE.0), px(PIN_CACHE_SIZE.1)),
+        );
+        if !platform::prepare_pin_window(&self.title, (-100.0, -100.0)) {
+            window.remove_window();
+            return;
+        }
+        let cached = PIN_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache.len() >= PIN_CACHE_CAPACITY {
+                return false;
+            }
+            cache.push_back(handle);
+            true
+        });
+        if !cached {
+            window.remove_window();
+            return;
+        }
+        qol_runtime::probe!("SHOT_PIN_RECYCLE", "title={} result=ok", self.title);
+        cx.notify();
     }
 
     fn perform(&mut self, action: ShotAction, window: &mut Window, cx: &mut Context<Self>) {
@@ -624,8 +849,17 @@ impl Focusable for PinnedView {
 
 impl Render for PinnedView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.revealed() {
+        if !self.active || !self.revealed() {
             return div().id("shot-pin").size_full();
+        }
+        if self.first_paint {
+            self.first_paint = false;
+            qol_runtime::probe!(
+                "SHOT_PIN_RENDER",
+                "action_ms={} title={}",
+                self.started_at.elapsed().as_millis(),
+                self.title
+            );
         }
         let palette = current_palette();
         if let Some((canvas, image)) = self.canvas_drag_rects() {

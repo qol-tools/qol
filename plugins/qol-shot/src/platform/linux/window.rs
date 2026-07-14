@@ -66,10 +66,27 @@ pub fn configure_pin_window(
             return false;
         }
         qol_gpui::popup_window::present_topmost(title);
+        if !qol_gpui::popup_window::show_window_by_title(title) {
+            return false;
+        }
         qol_gpui::popup_window::focus_window_by_title(title);
         placed.store(true, std::sync::atomic::Ordering::Relaxed);
         true
     });
+}
+
+pub fn prepare_pin_window(title: &str, origin: (f64, f64)) -> bool {
+    if !qol_gpui::popup_window::configure_pinned_window(title) {
+        return false;
+    }
+    let Some(session) = qol_gpui::popup_window::window_geometry_session(title) else {
+        return false;
+    };
+    if !qol_gpui::popup_window::make_override_redirect(title) {
+        return false;
+    }
+    session.set_position(origin.0.round() as i32, origin.1.round() as i32);
+    qol_gpui::popup_window::hide_invisible(title)
 }
 
 pub(super) fn configure_selector_window(title: String, bounds: Rect) {
