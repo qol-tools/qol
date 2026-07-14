@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Context, Result};
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -12,9 +11,10 @@ pub struct MarkerFile {
     pub schema_version: u32,
 }
 
-pub fn generate_install_id() -> String {
-    let bytes: [u8; INSTALL_ID_BYTES] = rand::rng().random();
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+pub fn generate_install_id() -> Result<String> {
+    let mut bytes = [0u8; INSTALL_ID_BYTES];
+    getrandom::fill(&mut bytes).map_err(|err| anyhow!("generating install ID: {err}"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 pub fn read_marker(path: &Path) -> Result<Option<MarkerFile>> {
@@ -52,7 +52,7 @@ pub fn ensure_marker_or_create(
     }
     let install_id = match expected_install_id {
         Some(id) => id.to_string(),
-        None => generate_install_id(),
+        None => generate_install_id()?,
     };
     let marker = MarkerFile {
         install_id,
@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn generate_install_id_returns_32_char_lowercase_hex() {
-        let id = generate_install_id();
+        let id = generate_install_id().unwrap();
         assert_eq!(id.len(), 32, "id: {id}");
         for c in id.chars() {
             assert!(
@@ -115,8 +115,8 @@ mod tests {
 
     #[test]
     fn generate_install_id_is_unique_across_calls() {
-        let a = generate_install_id();
-        let b = generate_install_id();
+        let a = generate_install_id().unwrap();
+        let b = generate_install_id().unwrap();
         assert_ne!(a, b, "two generate_install_id calls collided: {a}");
     }
 

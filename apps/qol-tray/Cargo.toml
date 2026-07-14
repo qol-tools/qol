@@ -48,7 +48,7 @@ serde_json.workspace = true
 toml.workspace = true
 base64 = "0.22"
 sha2 = "0.10"
-rand = "0.9"
+getrandom.workspace = true
 
 # Error handling
 anyhow = "1.0"

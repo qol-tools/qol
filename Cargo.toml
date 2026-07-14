@@ -34,6 +34,7 @@ qol-workspace = { path = "libs/qol-workspace" }
 qol-tray = { path = "apps/qol-tray" }
 
 # shared external deps (hoisted from the ex-qol-libs workspace)
+getrandom = "0.3"
 gpui = "0.2"
 open = "5"
 raw-window-handle = "0.6"

@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use fs4::fs_std::FileExt;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
@@ -22,7 +21,7 @@ impl MigrationLock {
             .truncate(false)
             .open(&path)
             .with_context(|| format!("opening lock file {}", path.display()))?;
-        file.lock_exclusive()
+        file.lock()
             .with_context(|| format!("acquiring exclusive lock on {}", path.display()))?;
         Ok(Self { file, path })
     }
@@ -30,7 +29,7 @@ impl MigrationLock {
 
 impl Drop for MigrationLock {
     fn drop(&mut self) {
-        if let Err(err) = FileExt::unlock(&self.file) {
+        if let Err(err) = self.file.unlock() {
             log::warn!(
                 "[qol-migrations] failed to release migration lock {}: {err}",
                 self.path.display()

@@ -2193,16 +2193,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fs4"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8640e34b88f7652208ce9e88b1a37a2ae95227d84abec377ccd3c5cfeb141ed4"
-dependencies = [
- "rustix 1.1.4",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "fsevent-sys"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5565,10 +5555,9 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "fs4",
+ "getrandom 0.3.4",
  "log",
  "qol-fs",
- "rand 0.9.4",
  "reqwest",
  "serde",
  "serde_json",
@@ -5685,6 +5674,7 @@ dependencies = [
  "evdev",
  "flate2",
  "gethostname",
+ "getrandom 0.3.4",
  "git2",
  "global-hotkey",
  "gtk",
@@ -5709,7 +5699,6 @@ dependencies = [
  "qol-runtime",
  "qol-theme",
  "qol-workspace",
- "rand 0.9.4",
  "reqwest",
  "rust-embed",
  "semver",

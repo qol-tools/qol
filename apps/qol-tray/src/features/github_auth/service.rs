@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -86,7 +86,7 @@ impl GitHubAuthService {
         }
 
         let body: DeviceCodeResponse = response.json().await?;
-        let session_id = session_id();
+        let session_id = session_id()?;
         let interval = body.interval.unwrap_or(5);
 
         let mut sessions = self
@@ -344,15 +344,12 @@ fn retain_live_sessions(sessions: &mut HashMap<String, DeviceAuthSession>) {
     sessions.retain(|_, session| session.created_at.elapsed() < SESSION_TTL);
 }
 
-fn session_id() -> String {
+fn session_id() -> Result<String> {
     use base64::Engine;
-    use rand::TryRngCore;
 
     let mut raw = [0u8; 24];
-    rand::rngs::OsRng
-        .try_fill_bytes(&mut raw)
-        .expect("OS random number generator failed");
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw)
+    getrandom::fill(&mut raw).map_err(|err| anyhow!("generating GitHub auth session ID: {err}"))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw))
 }
 
 #[cfg(test)]
