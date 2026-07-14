@@ -8,6 +8,7 @@ use gpui::*;
 use crate::actions::ShotAction;
 use crate::platform;
 use crate::preview::{current_palette, PREVIEW_APP_ID};
+use crate::screenshot::CaptureFileReady;
 use crate::shortcuts::{resolve_copy_command, shot_action_for_keystroke};
 
 const MIN_DIM: f32 = 48.0;
@@ -35,6 +36,7 @@ pub struct PinnedContent {
     pub path: PathBuf,
     pub image: Option<Arc<RenderImage>>,
     pub size: (f32, f32),
+    pub file_ready: CaptureFileReady,
 }
 
 pub fn open(
@@ -117,6 +119,7 @@ struct ScrollResize {
 pub struct PinnedView {
     path: PathBuf,
     image: Option<Arc<RenderImage>>,
+    file_ready: CaptureFileReady,
     title: String,
     dismiss: PinnedDismiss,
     border: bool,
@@ -151,6 +154,7 @@ impl PinnedView {
         let view = Self {
             path: content.path,
             image: content.image,
+            file_ready: content.file_ready,
             title,
             dismiss,
             border,
@@ -421,7 +425,11 @@ impl PinnedView {
     }
 
     fn perform(&mut self, action: ShotAction, window: &mut Window, cx: &mut Context<Self>) {
-        match action.perform(&self.path) {
+        match self
+            .file_ready
+            .wait()
+            .and_then(|()| action.perform(&self.path))
+        {
             Ok(()) => platform::show_notification(
                 action.done_message(),
                 &self.path.display().to_string(),

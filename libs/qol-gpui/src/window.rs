@@ -4,6 +4,9 @@ use gpui::*;
 
 use crate::monitor::{ActiveMonitor, MonitorTracker};
 
+const CURSOR_WINDOW_GAP: f32 = 20.0;
+const CURSOR_WINDOW_MARGIN: f32 = 12.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct MonitorKey {
     pub x: i32,
@@ -232,6 +235,52 @@ pub fn centered_window_placement(
     }
 }
 
+pub fn cursor_window_placement(
+    monitor: Option<&ActiveMonitor>,
+    cursor: Option<Point<Pixels>>,
+    win_size: Size<Pixels>,
+    cx: &App,
+) -> WindowPlacement {
+    let (Some(monitor), Some(cursor)) = (monitor, cursor) else {
+        return centered_window_placement(monitor, win_size, cx);
+    };
+    WindowPlacement {
+        target: target_monitor_key(Some(monitor)),
+        bounds: cursor_adjacent_bounds(monitor.bounds(), cursor, win_size),
+        display_id: display_id_for_monitor(Some(monitor), cx),
+    }
+}
+
+fn cursor_adjacent_bounds(
+    monitor: Bounds<Pixels>,
+    cursor: Point<Pixels>,
+    win_size: Size<Pixels>,
+) -> Bounds<Pixels> {
+    let x = cursor_adjacent_axis(
+        monitor.origin.x.to_f64() as f32,
+        monitor.size.width.to_f64() as f32,
+        cursor.x.to_f64() as f32,
+        win_size.width.to_f64() as f32,
+    );
+    let y = cursor_adjacent_axis(
+        monitor.origin.y.to_f64() as f32,
+        monitor.size.height.to_f64() as f32,
+        cursor.y.to_f64() as f32,
+        win_size.height.to_f64() as f32,
+    );
+    Bounds::new(point(px(x), px(y)), win_size)
+}
+
+fn cursor_adjacent_axis(origin: f32, available: f32, cursor: f32, window: f32) -> f32 {
+    let minimum = origin + CURSOR_WINDOW_MARGIN;
+    let maximum = (origin + available - CURSOR_WINDOW_MARGIN - window).max(minimum);
+    let forward = cursor + CURSOR_WINDOW_GAP;
+    if forward <= maximum {
+        return forward.max(minimum);
+    }
+    (cursor - CURSOR_WINDOW_GAP - window).clamp(minimum, maximum)
+}
+
 fn display_id_for_monitor(monitor: Option<&ActiveMonitor>, cx: &App) -> Option<DisplayId> {
     let monitor = monitor?;
     let target_bounds = monitor.bounds();
@@ -252,4 +301,46 @@ fn bounds_match(a: &Bounds<Pixels>, b: &Bounds<Pixels>) -> bool {
 
 fn coord_diff(a: i32, b: i32) -> bool {
     (a - b).abs() <= 4
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cursor_adjacent_bounds;
+    use gpui::{point, px, size, Bounds};
+
+    #[test]
+    fn cursor_adjacent_bounds_flips_and_clamps_at_monitor_edges() {
+        let monitor = Bounds::new(point(px(1920.0), px(0.0)), size(px(2560.0), px(1440.0)));
+        let window = size(px(400.0), px(300.0));
+        let cases = [
+            (point(px(3000.0), px(700.0)), (3020.0, 720.0)),
+            (point(px(4460.0), px(700.0)), (4040.0, 720.0)),
+            (point(px(3000.0), px(1420.0)), (3020.0, 1100.0)),
+            (point(px(1920.0), px(0.0)), (1940.0, 20.0)),
+        ];
+
+        for (cursor, expected) in cases {
+            let bounds = cursor_adjacent_bounds(monitor, cursor, window);
+            assert_eq!(
+                (
+                    bounds.origin.x.to_f64() as f32,
+                    bounds.origin.y.to_f64() as f32
+                ),
+                expected,
+                "cursor: {cursor:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cursor_adjacent_bounds_supports_negative_monitor_origins() {
+        let bounds = cursor_adjacent_bounds(
+            Bounds::new(point(px(-1920.0), px(-200.0)), size(px(1920.0), px(1080.0))),
+            point(px(-10.0), px(870.0)),
+            size(px(360.0), px(240.0)),
+        );
+
+        assert_eq!(bounds.origin.x.to_f64(), -390.0);
+        assert_eq!(bounds.origin.y.to_f64(), 610.0);
+    }
 }

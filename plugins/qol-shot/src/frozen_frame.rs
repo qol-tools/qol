@@ -11,7 +11,8 @@ pub(crate) struct FrozenFrame {
     image: Arc<RenderImage>,
 }
 
-pub(crate) struct RgbaCrop {
+#[derive(Clone)]
+pub(crate) struct FrozenCrop {
     pixels: Vec<u8>,
     width: u32,
     height: u32,
@@ -48,10 +49,9 @@ impl FrozenFrame {
         ])))
     }
 
-    pub(crate) fn rgba_crop(&self, rect: Rect) -> Option<RgbaCrop> {
-        let (mut pixels, width, height) = self.crop_pixels(rect)?;
-        bgra_to_rgba(&mut pixels);
-        Some(RgbaCrop {
+    pub(crate) fn crop(&self, rect: Rect) -> Option<FrozenCrop> {
+        let (pixels, width, height) = self.crop_pixels(rect)?;
+        Some(FrozenCrop {
             pixels,
             width,
             height,
@@ -92,8 +92,9 @@ fn bgra_to_rgba(data: &mut [u8]) {
     }
 }
 
-impl RgbaCrop {
-    pub(crate) fn save_png(&self, path: &Path) -> Result<()> {
+impl FrozenCrop {
+    pub(crate) fn save_png(mut self, path: &Path) -> Result<()> {
+        bgra_to_rgba(&mut self.pixels);
         image::save_buffer_with_format(
             path,
             &self.pixels,
@@ -105,7 +106,7 @@ impl RgbaCrop {
         .with_context(|| format!("failed to save frozen screenshot: {}", path.display()))
     }
 
-    pub(crate) fn into_parts(self) -> (Vec<u8>, u32, u32) {
+    pub(crate) fn into_bgra_parts(self) -> (Vec<u8>, u32, u32) {
         (self.pixels, self.width, self.height)
     }
 }
@@ -133,36 +134,64 @@ mod tests {
     #[test]
     fn crop_uses_global_bounds_and_preserves_rows() {
         let crop = frame()
-            .rgba_crop(Rect {
+            .crop(Rect {
                 x: 11,
                 y: 21,
                 w: 2,
                 h: 2,
             })
             .unwrap();
-        let (pixels, width, height) = crop.into_parts();
+        let (pixels, width, height) = crop.into_bgra_parts();
 
         assert_eq!((width, height), (2, 2));
         assert_eq!(
             pixels,
-            vec![5, 25, 45, 255, 6, 26, 46, 255, 9, 29, 49, 255, 10, 30, 50, 255]
+            vec![45, 25, 5, 255, 46, 26, 6, 255, 49, 29, 9, 255, 50, 30, 10, 255]
         );
     }
 
     #[test]
-    fn rgba_crop_preserves_channel_order() {
+    fn crop_preserves_render_channel_order() {
         let crop = frame()
-            .rgba_crop(Rect {
+            .crop(Rect {
                 x: 10,
                 y: 20,
                 w: 1,
                 h: 1,
             })
             .unwrap();
-        let (pixels, width, height) = crop.into_parts();
+        let (pixels, width, height) = crop.into_bgra_parts();
 
         assert_eq!((width, height), (1, 1));
-        assert_eq!(pixels, vec![0, 20, 40, 255]);
+        assert_eq!(pixels, vec![40, 20, 0, 255]);
+    }
+
+    #[test]
+    fn saved_crop_converts_render_pixels_to_png_channels() {
+        let path = std::env::temp_dir().join(format!(
+            "qol-shot-frozen-crop-{}-{}.png",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        frame()
+            .crop(Rect {
+                x: 10,
+                y: 20,
+                w: 1,
+                h: 1,
+            })
+            .unwrap()
+            .save_png(&path)
+            .unwrap();
+
+        let saved = image::open(&path).unwrap().to_rgba8();
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(saved.dimensions(), (1, 1));
+        assert_eq!(saved.into_raw(), vec![0, 20, 40, 255]);
     }
 
     #[test]
@@ -195,7 +224,7 @@ mod tests {
             },
         ];
         for rect in cases {
-            assert!(frame().rgba_crop(rect).is_none(), "rect: {rect:?}");
+            assert!(frame().crop(rect).is_none(), "rect: {rect:?}");
         }
     }
 }

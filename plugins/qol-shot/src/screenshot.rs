@@ -1,7 +1,9 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
-use crate::frozen_frame::{FrozenFrame, RgbaCrop};
+use crate::frozen_frame::{FrozenCrop, FrozenFrame};
 use crate::{geometry, platform, Rect};
 
 pub fn capture_screenshot() -> Result<Option<PathBuf>> {
@@ -28,8 +30,83 @@ pub fn capture_to_file() -> Result<Option<PathBuf>> {
 }
 
 pub struct PreviewCapture {
-    pub path: PathBuf,
-    pub rgba: Option<(Vec<u8>, u32, u32)>,
+    pub(crate) path: PathBuf,
+    pub(crate) pixels: Option<PreviewPixels>,
+    pub(crate) file_ready: CaptureFileReady,
+    pub(crate) started_at: Instant,
+}
+
+pub(crate) enum PreviewPixels {
+    Rgba(Vec<u8>, u32, u32),
+    Bgra(Vec<u8>, u32, u32),
+}
+
+impl PreviewPixels {
+    fn rgba(pixels: Vec<u8>, width: u32, height: u32) -> Self {
+        Self::Rgba(pixels, width, height)
+    }
+
+    fn bgra(pixels: Vec<u8>, width: u32, height: u32) -> Self {
+        Self::Bgra(pixels, width, height)
+    }
+
+    pub(crate) fn into_bgra_parts(self) -> (Vec<u8>, u32, u32) {
+        match self {
+            Self::Rgba(mut pixels, width, height) => {
+                swap_red_blue(&mut pixels);
+                (pixels, width, height)
+            }
+            Self::Bgra(pixels, width, height) => (pixels, width, height),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CaptureFileReady {
+    state: Arc<FileReadyState>,
+}
+
+type FileWriteResult = std::result::Result<(), String>;
+type FileReadyState = (Mutex<Option<FileWriteResult>>, Condvar);
+
+impl CaptureFileReady {
+    pub(crate) fn ready() -> Self {
+        Self {
+            state: Arc::new((Mutex::new(Some(Ok(()))), Condvar::new())),
+        }
+    }
+
+    fn pending() -> Self {
+        Self {
+            state: Arc::new((Mutex::new(None), Condvar::new())),
+        }
+    }
+
+    fn complete(&self, result: FileWriteResult) {
+        let (state, wake) = &*self.state;
+        if let Ok(mut state) = state.lock() {
+            *state = Some(result);
+            wake.notify_all();
+        }
+    }
+
+    pub(crate) fn wait(&self) -> Result<()> {
+        let (state, wake) = &*self.state;
+        let state = state
+            .lock()
+            .map_err(|_| anyhow!("screenshot file readiness lock poisoned"))?;
+        let (state, timeout) = wake
+            .wait_timeout_while(state, Duration::from_secs(10), |state| state.is_none())
+            .map_err(|_| anyhow!("screenshot file readiness lock poisoned"))?;
+        if timeout.timed_out() && state.is_none() {
+            return Err(anyhow!("timed out waiting for screenshot file"));
+        }
+        match state.as_ref() {
+            Some(Ok(())) => Ok(()),
+            Some(Err(error)) => Err(anyhow!(error.clone())),
+            None => Err(anyhow!("screenshot file did not become ready")),
+        }
+    }
 }
 
 pub fn capture_for_preview() -> Result<Option<PreviewCapture>> {
@@ -137,11 +214,12 @@ fn capture_rect_for_preview(
     rect: Rect,
     frozen_frame: Option<&FrozenFrame>,
 ) -> Result<PreviewCapture> {
+    let started_at = Instant::now();
     let output_file = crate::output::screenshot_output_file_path()?;
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     if let Some(crop) = frozen_crop(frozen_frame, rect)? {
-        crop.save_png(&output_file)?;
-        let (rgba, width, height) = crop.into_parts();
+        let (bgra, width, height) = crop.clone().into_bgra_parts();
+        let file_ready = spawn_frozen_file_write(crop, output_file.clone());
         qol_runtime::probe!(
             "SHOT_CAPTURE",
             "source=frozen ms={} rect={}x{}",
@@ -151,20 +229,24 @@ fn capture_rect_for_preview(
         );
         return Ok(PreviewCapture {
             path: output_file,
-            rgba: Some((rgba, width, height)),
+            pixels: Some(PreviewPixels::bgra(bgra, width, height)),
+            file_ready,
+            started_at,
         });
     }
-    let grabbed = std::time::Instant::now();
+    let grabbed = Instant::now();
     if let Some((rgba, w, h)) = platform::grab_preview_rgba(&rect) {
         qol_runtime::probe!(
             "SHOT_GRAB",
             "ms={} dims={w}x{h}",
             grabbed.elapsed().as_millis()
         );
-        spawn_file_write(rect, output_file.clone());
+        let file_ready = spawn_file_write(rect, output_file.clone());
         return Ok(PreviewCapture {
             path: output_file,
-            rgba: Some((rgba, w, h)),
+            pixels: Some(PreviewPixels::rgba(rgba, w, h)),
+            file_ready,
+            started_at,
         });
     }
 
@@ -178,14 +260,16 @@ fn capture_rect_for_preview(
     );
     Ok(PreviewCapture {
         path: output_file,
-        rgba: None,
+        pixels: None,
+        file_ready: CaptureFileReady::ready(),
+        started_at,
     })
 }
 
-fn frozen_crop(frozen_frame: Option<&FrozenFrame>, rect: Rect) -> Result<Option<RgbaCrop>> {
+fn frozen_crop(frozen_frame: Option<&FrozenFrame>, rect: Rect) -> Result<Option<FrozenCrop>> {
     frozen_frame
         .map(|frame| {
-            frame.rgba_crop(rect).ok_or_else(|| {
+            frame.crop(rect).ok_or_else(|| {
                 let bounds = frame.bounds();
                 anyhow!(
                     "selected screenshot {}x{}+{},{} falls outside frozen frame {}x{}+{},{}",
@@ -203,14 +287,56 @@ fn frozen_crop(frozen_frame: Option<&FrozenFrame>, rect: Rect) -> Result<Option<
         .transpose()
 }
 
-fn spawn_file_write(rect: Rect, path: PathBuf) {
+fn spawn_frozen_file_write(crop: FrozenCrop, path: PathBuf) -> CaptureFileReady {
+    let ready = CaptureFileReady::pending();
+    let worker_ready = ready.clone();
     std::thread::spawn(move || {
-        let started = std::time::Instant::now();
-        match platform::capture_screenshot(&rect, &path) {
+        let started = Instant::now();
+        let result = save_frozen_crop_atomic(crop, &path);
+        match &result {
+            Ok(()) => qol_runtime::probe!(
+                "SHOT_FILE",
+                "source=frozen ms={} result=ok",
+                started.elapsed().as_millis()
+            ),
+            Err(error) => eprintln!("[qol-shot] background screenshot file failed: {error:#}"),
+        }
+        worker_ready.complete(result.map_err(|error| format!("{error:#}")));
+    });
+    ready
+}
+
+fn save_frozen_crop_atomic(crop: FrozenCrop, path: &Path) -> Result<()> {
+    let temporary = path.with_extension(format!("png.{}.part", std::process::id()));
+    let result = crop.save_png(&temporary).and_then(|()| {
+        std::fs::rename(&temporary, path)
+            .with_context(|| format!("failed to publish frozen screenshot: {}", path.display()))
+    });
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
+}
+
+fn spawn_file_write(rect: Rect, path: PathBuf) -> CaptureFileReady {
+    let ready = CaptureFileReady::pending();
+    let worker_ready = ready.clone();
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let result = platform::capture_screenshot(&rect, &path);
+        match &result {
             Ok(()) => qol_runtime::probe!("SHOT_FILE", "ms={}", started.elapsed().as_millis()),
             Err(error) => eprintln!("[qol-shot] background screenshot file failed: {error:#}"),
         }
+        worker_ready.complete(result.map_err(|error| format!("{error:#}")));
     });
+    ready
+}
+
+fn swap_red_blue(data: &mut [u8]) {
+    for pixel in data.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
 }
 
 fn present_capture(output_file: &Path) {
@@ -231,4 +357,31 @@ fn show_preview(output_file: &Path) -> Result<()> {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn show_preview(_output_file: &Path) -> Result<()> {
     Err(anyhow!("preview is not supported on this platform"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_pixels_normalize_both_input_orders_for_rendering() {
+        let cases = [
+            PreviewPixels::rgba(vec![10, 20, 30, 255], 1, 1),
+            PreviewPixels::bgra(vec![30, 20, 10, 255], 1, 1),
+        ];
+
+        for pixels in cases {
+            let (pixels, width, height) = pixels.into_bgra_parts();
+            assert_eq!((width, height), (1, 1));
+            assert_eq!(pixels, vec![30, 20, 10, 255]);
+        }
+    }
+
+    #[test]
+    fn capture_file_readiness_preserves_background_errors() {
+        let ready = CaptureFileReady::pending();
+        ready.complete(Err("encode failed".to_string()));
+
+        assert_eq!(ready.wait().unwrap_err().to_string(), "encode failed");
+    }
 }

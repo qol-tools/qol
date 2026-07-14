@@ -14,9 +14,11 @@ use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
 use qol_gpui::theme::{shot_preview_runtime, ShotPreviewPalette};
-use qol_gpui::window::{centered_window_placement, ActiveWindows, MonitorKey, WindowPlacement};
+use qol_gpui::window::{
+    centered_window_placement, cursor_window_placement, ActiveWindows, MonitorKey, WindowPlacement,
+};
 
-use crate::screenshot::PreviewCapture;
+use crate::screenshot::{CaptureFileReady, PreviewCapture};
 use crate::shortcuts::{resolve_copy_command, shot_action_for_keystroke};
 use crate::{actions::ShotAction, platform};
 
@@ -208,10 +210,21 @@ pub fn show_capture(
 ) -> Result<()> {
     let content = GhostContent::from_capture(capture)?;
     let (win_w, win_h) = window_dims(content.thumb.0, content.thumb.1, control_count());
-    let placement = centered_window_placement(
-        tracker.snapshot_monitor().as_ref(),
-        size(px(win_w), px(win_h)),
-        cx,
+    let snapshot = tracker.snapshot_cursor();
+    let monitor = snapshot.as_ref().map(|(monitor, _)| monitor);
+    let cursor = snapshot.as_ref().and_then(|(_, cursor)| *cursor);
+    let placement = cursor_window_placement(monitor, cursor, size(px(win_w), px(win_h)), cx);
+    let cursor_label = cursor
+        .map(|cursor| format!("{:.0},{:.0}", cursor.x.to_f64(), cursor.y.to_f64()))
+        .unwrap_or_else(|| "none".to_string());
+    qol_runtime::probe!(
+        "SHOT_PREVIEW_PLACE",
+        "cursor={} origin={:.0},{:.0} size={:.0}x{:.0}",
+        cursor_label,
+        placement.bounds.origin.x.to_f64(),
+        placement.bounds.origin.y.to_f64(),
+        placement.bounds.size.width.to_f64(),
+        placement.bounds.size.height.to_f64()
     );
     let target = placement.target;
     let seq = PREVIEW_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -228,6 +241,8 @@ struct GhostContent {
     path: PathBuf,
     thumb: (f32, f32),
     image: Option<Arc<RenderImage>>,
+    file_ready: CaptureFileReady,
+    started_at: Instant,
     ready: bool,
 }
 
@@ -237,13 +252,16 @@ impl GhostContent {
             path: PathBuf::new(),
             thumb: window_thumb_default(),
             image: None,
+            file_ready: CaptureFileReady::ready(),
+            started_at: Instant::now(),
             ready: false,
         }
     }
 
     fn from_capture(capture: PreviewCapture) -> Result<Self> {
-        let image = capture.rgba.and_then(|(data, w, h)| {
-            rgba_to_render_image(data, w, h).map(|render_image| (render_image, w, h))
+        let image = capture.pixels.and_then(|pixels| {
+            let (data, w, h) = pixels.into_bgra_parts();
+            bgra_to_render_image(data, w, h).map(|render_image| (render_image, w, h))
         });
         let (thumb, render_image) = match image {
             Some((render_image, w, h)) => (thumbnail_size(w as f32, h as f32), Some(render_image)),
@@ -253,6 +271,8 @@ impl GhostContent {
             path: capture.path,
             thumb,
             image: render_image,
+            file_ready: capture.file_ready,
+            started_at: capture.started_at,
             ready: true,
         })
     }
@@ -429,6 +449,8 @@ fn open_quit_window(
         path,
         thumb,
         image,
+        file_ready: CaptureFileReady::ready(),
+        started_at: Instant::now(),
         ready: true,
     };
     let window_title = title.clone();
@@ -447,10 +469,11 @@ fn open_quit_window(
 }
 
 fn preview_bounds(window_size: Size<Pixels>, cx: &mut App) -> Bounds<Pixels> {
-    if let Some(monitor) = MonitorTracker::start(cx).snapshot_monitor() {
-        return monitor.centered_bounds(window_size);
-    }
-    Bounds::centered(None, window_size, cx)
+    let tracker = MonitorTracker::start(cx);
+    let snapshot = tracker.snapshot_cursor();
+    let monitor = snapshot.as_ref().map(|(monitor, _)| monitor);
+    let cursor = snapshot.as_ref().and_then(|(_, cursor)| *cursor);
+    cursor_window_placement(monitor, cursor, window_size, cx).bounds
 }
 
 fn monitors_or_snapshot(tracker: &MonitorTracker) -> Vec<ActiveMonitor> {
@@ -461,13 +484,17 @@ fn monitors_or_snapshot(tracker: &MonitorTracker) -> Vec<ActiveMonitor> {
     tracker.snapshot_monitor().into_iter().collect()
 }
 
+fn bgra_to_render_image(data: Vec<u8>, w: u32, h: u32) -> Option<Arc<RenderImage>> {
+    let buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(w, h, data)?;
+    let frame = image::Frame::new(buffer);
+    Some(Arc::new(RenderImage::new(smallvec::smallvec![frame])))
+}
+
 fn rgba_to_render_image(mut data: Vec<u8>, w: u32, h: u32) -> Option<Arc<RenderImage>> {
     for pixel in data.chunks_exact_mut(4) {
         pixel.swap(0, 2);
     }
-    let buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(w, h, data)?;
-    let frame = image::Frame::new(buffer);
-    Some(Arc::new(RenderImage::new(smallvec::smallvec![frame])))
+    bgra_to_render_image(data, w, h)
 }
 
 fn read_thumb(path: &Path) -> Result<(f32, f32)> {
@@ -503,6 +530,8 @@ pub struct PreviewView {
     path: PathBuf,
     thumb: (f32, f32),
     image: Option<Arc<RenderImage>>,
+    file_ready: CaptureFileReady,
+    preview_started_at: Instant,
     ready: bool,
     mode: DismissMode,
     title: String,
@@ -567,6 +596,8 @@ impl PreviewView {
             path: content.path,
             thumb: content.thumb,
             image: content.image,
+            file_ready: content.file_ready,
+            preview_started_at: content.started_at,
             ready: content.ready,
             mode,
             title,
@@ -591,6 +622,8 @@ impl PreviewView {
         self.path = content.path;
         self.thumb = content.thumb;
         self.image = content.image;
+        self.file_ready = content.file_ready;
+        self.preview_started_at = content.started_at;
         self.ready = content.ready;
         self.selected = 0;
         self.seq = seq;
@@ -621,6 +654,7 @@ impl PreviewView {
             path: self.path.clone(),
             image: self.image.clone(),
             size: self.thumb,
+            file_ready: self.file_ready.clone(),
         };
         let window_origin = match self.mode {
             DismissMode::Quit => window.bounds().origin,
@@ -656,7 +690,10 @@ impl PreviewView {
             return;
         }
 
-        let result = action.perform(&self.path);
+        let result = self
+            .file_ready
+            .wait()
+            .and_then(|()| action.perform(&self.path));
         if let Err(error) = &result {
             eprintln!("[qol-shot] preview action failed: {error:#}");
         }
@@ -758,7 +795,12 @@ impl Render for PreviewView {
 
         if self.first_paint {
             self.first_paint = false;
-            qol_runtime::probe!("SHOT_RENDER", "seq={}", self.seq);
+            qol_runtime::probe!(
+                "SHOT_RENDER",
+                "seq={} preview_ms={}",
+                self.seq,
+                self.preview_started_at.elapsed().as_millis()
+            );
         }
 
         let controls = preview_controls();

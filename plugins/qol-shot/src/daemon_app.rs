@@ -218,7 +218,16 @@ async fn preview_latest(cx: &AsyncApp, state: &State) {
         .background_spawn(async { crate::output::latest_screenshot() })
         .await
     {
-        Ok(path) => present(cx, state, PreviewCapture { path, rgba: None }),
+        Ok(path) => present(
+            cx,
+            state,
+            PreviewCapture {
+                path,
+                pixels: None,
+                file_ready: crate::screenshot::CaptureFileReady::ready(),
+                started_at: std::time::Instant::now(),
+            },
+        ),
         Err(error) => eprintln!("[qol-shot] no screenshot to preview: {error:#}"),
     }
 }
