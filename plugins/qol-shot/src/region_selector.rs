@@ -166,6 +166,105 @@ where
     Ok(rx.recv().ok().flatten())
 }
 
+#[derive(Clone, Default)]
+pub struct SelectorCache {
+    handle: Rc<RefCell<Option<WindowHandle<RegionSelector>>>>,
+}
+
+pub fn pre_create_cached(
+    cache: &SelectorCache,
+    selector: SelectorWindow,
+    kind: CaptureKind,
+    cx: &mut App,
+) -> Option<String> {
+    if cache.handle.borrow().is_some() {
+        return None;
+    }
+    let title = selector.title.clone();
+    let (tx, _rx) = mpsc::channel();
+    let active_bounds = selector.active_bounds;
+    let default_target = selector.default_target;
+    let monitor_bounds = vec![selector.bounds];
+    let titles = vec![selector.title.clone()];
+    let state = Rc::new(RefCell::new(SelectionState::new(
+        tx,
+        active_bounds,
+        default_target,
+        monitor_bounds,
+        titles,
+        kind,
+    )));
+    let Some(handle) = open_window(selector, state.clone(), false, true, true, cx) else {
+        qol_runtime::probe!("SHOT_SELECT_PRECREATE", "result=failed");
+        return None;
+    };
+    state.borrow_mut().handles = vec![handle];
+    let hidden = handle
+        .update(cx, |view, window, _cx| {
+            view.handle = Some(handle);
+            let _reason = qol_gpui::popup_window::reason_scope("shot-selector-precreate");
+            qol_gpui::popup_window::hide_for_capture(&view.title, window)
+        })
+        .unwrap_or(false);
+    *cache.handle.borrow_mut() = Some(handle);
+    qol_runtime::probe!("SHOT_SELECT_PRECREATE", "result=ok hidden={hidden}");
+    Some(title)
+}
+
+pub fn open_cached(
+    cache: &SelectorCache,
+    tx: &mut Option<mpsc::Sender<Option<Rect>>>,
+    selector: &mut Option<SelectorWindow>,
+    kind: CaptureKind,
+    cx: &mut App,
+) -> Option<String> {
+    let handle = (*cache.handle.borrow())?;
+    let result = handle.update(cx, |view, window, cx| {
+        let tx = tx.take()?;
+        let selector = selector.take()?;
+        let title = view.title.clone();
+        let window_bounds = selector.bounds;
+        let state = Rc::new(RefCell::new(SelectionState::new(
+            tx,
+            selector.active_bounds,
+            selector.default_target,
+            vec![window_bounds],
+            vec![title.clone()],
+            kind,
+        )));
+        state.borrow_mut().handles = vec![handle];
+        state.borrow_mut().record_display(
+            rect_from_bounds(window_bounds),
+            window.scale_factor() as f64,
+        );
+        view.handle = Some(handle);
+        view.reset(state, false, window_bounds, selector.sources, cx);
+        let _ = qol_gpui::popup_window::sync_window_layout(
+            &title,
+            window,
+            window_bounds.origin,
+            window_bounds.size,
+        );
+        window.focus(&view.focus_handle(cx));
+        window.activate_window();
+        view.start_active_monitor_poll(cx);
+        qol_runtime::probe!("SHOT_SELECT_WINDOW", "title={title} state=reuse");
+        Some(title)
+    });
+    match result {
+        Ok(Some(title)) => {
+            qol_runtime::probe!("SHOT_SELECT_OPEN", "selectors=1 windows=1 result=reuse");
+            Some(title)
+        }
+        Ok(None) => None,
+        Err(_) => {
+            *cache.handle.borrow_mut() = None;
+            qol_runtime::probe!("SHOT_SELECT_OPEN", "selectors=1 result=stale-cache");
+            None
+        }
+    }
+}
+
 pub fn open_all(
     tx: mpsc::Sender<Option<Rect>>,
     quit_on_finish: bool,
@@ -196,7 +295,8 @@ pub fn open_all(
     )));
     let mut handles = Vec::new();
     for selector in selectors {
-        let Some(handle) = open_window(selector, state.clone(), quit_on_finish, cx) else {
+        let Some(handle) = open_window(selector, state.clone(), quit_on_finish, false, true, cx)
+        else {
             continue;
         };
         handles.push(handle);
@@ -224,10 +324,14 @@ fn open_window(
     selector: SelectorWindow,
     state: Rc<RefCell<SelectionState>>,
     quit_on_finish: bool,
+    reusable: bool,
+    show: bool,
     cx: &mut App,
 ) -> Option<WindowHandle<RegionSelector>> {
-    let options = selector.options();
-    let focus = selector.focus;
+    let mut options = selector.options();
+    options.show = show;
+    options.focus = show && selector.focus && !reusable;
+    let focus = options.focus;
     let window_bounds = selector.bounds;
     let sources = selector.sources;
     let window_title = selector.title;
@@ -245,10 +349,11 @@ fn open_window(
                 quit_on_finish,
                 window_bounds,
                 sources,
+                reusable,
                 cx,
             )
         });
-        if focus {
+        if show && focus {
             window.focus(&view.focus_handle(cx));
             window.activate_window();
         }
@@ -421,6 +526,7 @@ enum SelectorPollResult {
     Finish {
         handles: Vec<WindowHandle<RegionSelector>>,
         completion: SelectionCompletion,
+        retain_windows: bool,
     },
 }
 
@@ -457,6 +563,7 @@ struct RegionSelector {
     hover_target: Option<HoverTargetSource>,
     frozen_image: Option<Arc<RenderImage>>,
     focus_handle: FocusHandle,
+    reusable: bool,
 }
 
 impl RegionSelector {
@@ -466,6 +573,7 @@ impl RegionSelector {
         quit_on_finish: bool,
         window_bounds: Bounds<Pixels>,
         sources: SelectorWindowSources,
+        reusable: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         qol_runtime::probe!("SHOT_SELECT_START", "path=gpui");
@@ -493,7 +601,39 @@ impl RegionSelector {
             hover_target: sources.hover_target,
             frozen_image,
             focus_handle: cx.focus_handle(),
+            reusable,
         }
+    }
+
+    fn reset(
+        &mut self,
+        state: Rc<RefCell<SelectionState>>,
+        quit_on_finish: bool,
+        window_bounds: Bounds<Pixels>,
+        sources: SelectorWindowSources,
+        cx: &mut Context<Self>,
+    ) {
+        let image_started = std::time::Instant::now();
+        let frozen_image = sources
+            .frozen_frame
+            .as_ref()
+            .and_then(|frame| frame.render_image(rect_from_bounds(window_bounds)));
+        qol_runtime::probe!(
+            "SHOT_FREEZE_IMAGE",
+            "ms={} ready={}",
+            image_started.elapsed().as_millis(),
+            frozen_image.is_some()
+        );
+        self.state = state;
+        self.quit_on_finish = quit_on_finish;
+        self.window_bounds = window_bounds;
+        self.map_rect = sources.map_rect;
+        self.global_pointer = sources.global_pointer;
+        self.cancel_signal = sources.cancel_signal;
+        self.active_bounds = sources.active_bounds;
+        self.hover_target = sources.hover_target;
+        self.frozen_image = frozen_image;
+        cx.notify();
     }
 
     fn on_mouse_down(
@@ -577,8 +717,11 @@ impl RegionSelector {
         let completion = self.take_completion(rect);
         self.hide_window_before_remove(window);
         self.hide_all_before_remove();
-        self.remove_peer_windows(cx);
-        window.remove_window();
+        self.frozen_image = None;
+        if !self.reusable {
+            self.remove_peer_windows(cx);
+            window.remove_window();
+        }
         if let Some(completion) = completion {
             schedule_completion(completion, cx);
         }
@@ -734,9 +877,11 @@ impl RegionSelector {
             return SelectorPollResult::Stop;
         };
         self.hide_all_before_remove();
+        self.frozen_image = None;
         SelectorPollResult::Finish {
             handles: self.state.borrow().handles.clone(),
             completion,
+            retain_windows: self.reusable,
         }
     }
 
@@ -935,11 +1080,14 @@ async fn continue_selector_poll(result: SelectorPollResult, cx: &mut AsyncApp) -
         SelectorPollResult::Finish {
             handles,
             completion,
+            retain_windows,
         } => {
             for handle in handles {
                 let _ = handle.update(cx, |view, window, _cx| {
                     view.hide_window_before_remove(window);
-                    window.remove_window();
+                    if !retain_windows {
+                        window.remove_window();
+                    }
                 });
             }
             wait_for_selector_hide_barrier(cx).await;

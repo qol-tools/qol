@@ -89,6 +89,27 @@ pub(super) fn configure_selector_window(title: String, bounds: Rect) {
     });
 }
 
+pub(super) fn prepare_selector_window(title: &str, bounds: Rect) {
+    let Some(expected) = exact_window_bounds(bounds) else {
+        qol_runtime::probe!("SHOT_SELECT_PREPARE", "title={title} result=invalid");
+        return;
+    };
+    let prepared = qol_gpui::popup_window::configure_overlay_window(title)
+        && qol_gpui::popup_window::window_geometry_session(title).is_some_and(|session| {
+            if !qol_gpui::popup_window::make_override_redirect(title) {
+                return false;
+            }
+            session.set_bounds(expected.0, expected.1, expected.2, expected.3);
+            selector_bounds_match(expected, session.bounds())
+        })
+        && qol_gpui::popup_window::hide_invisible(title);
+    qol_runtime::probe!(
+        "SHOT_SELECT_PREPARE",
+        "title={title} result={}",
+        if prepared { "ok" } else { "failed" }
+    );
+}
+
 fn configure_selector_window_once(title: &str, expected: (i32, i32, u32, u32)) -> bool {
     if !qol_gpui::popup_window::configure_overlay_window(title) {
         return false;
@@ -105,10 +126,11 @@ fn configure_selector_window_once(title: &str, expected: (i32, i32, u32, u32)) -
     let actual = actual
         .map(|(x, y, width, height)| format!("{width}x{height}+{x},{y}"))
         .unwrap_or_else(|| "none".to_string());
-    let focused = aligned && qol_gpui::popup_window::focus_window_by_title(title);
+    let shown = aligned && qol_gpui::popup_window::show_window_by_title(title);
+    let focused = shown && qol_gpui::popup_window::focus_window_by_title(title);
     qol_runtime::probe!(
         "SHOT_SELECT_VIEWPORT",
-        "title={title} expected={}x{}+{},{} actual={actual} aligned={aligned} focused={focused}",
+        "title={title} expected={}x{}+{},{} actual={actual} aligned={aligned} shown={shown} focused={focused}",
         expected.2,
         expected.3,
         expected.0,

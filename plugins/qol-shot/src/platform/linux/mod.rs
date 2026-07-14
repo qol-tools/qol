@@ -23,12 +23,30 @@ pub use display::{full_screen_bounds, get_monitors};
 pub use preview::{capture_frozen_frame, configure_preview_window, grab_preview_rgba};
 use system::resolve_command;
 pub use system::{open_url, platform_supported_check, required_binaries_check, show_notification};
-use window::configure_selector_window;
 pub use window::{
     configure_pin_window, pin_focus, pin_release_focus, pin_resize_session, PinResizeSession,
 };
+use window::{configure_selector_window, prepare_selector_window};
 
 const MIN_DETECTED_TARGET_PX: i32 = 24;
+
+thread_local! {
+    static SELECTOR_CACHE: crate::region_selector::SelectorCache =
+        crate::region_selector::SelectorCache::default();
+}
+
+pub fn pre_create_selector(cx: &mut gpui::App) {
+    let bounds = selector_bounds(None);
+    let selector = selector_window(bounds, None, None, None, None, None);
+    SELECTOR_CACHE.with(|cache| {
+        let Some(title) =
+            crate::region_selector::pre_create_cached(cache, selector, CaptureKind::Screenshot, cx)
+        else {
+            return;
+        };
+        prepare_selector_window(&title, rect_from_bounds(bounds));
+    });
+}
 
 pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Result<Option<Rect>> {
     crate::region_selector::select_region_blocking_with(move |tx, cx| {
@@ -96,8 +114,29 @@ fn open_region_selector_with_sender(
         default_target,
         frozen_frame,
     );
+    if !quit_on_finish {
+        let mut tx = Some(tx);
+        let mut selector = Some(selector);
+        let title = SELECTOR_CACHE.with(|cache| {
+            crate::region_selector::open_cached(cache, &mut tx, &mut selector, kind, cx)
+        });
+        if let Some(title) = title {
+            configure_selector_window(title, rect_from_bounds(bounds));
+            cx.activate(true);
+            return;
+        }
+        let (Some(tx), Some(selector)) = (tx, selector) else {
+            return;
+        };
+        let title = selector.title().to_string();
+        if crate::region_selector::open_all(tx, false, vec![selector], kind, cx) {
+            configure_selector_window(title, rect_from_bounds(bounds));
+            cx.activate(true);
+        }
+        return;
+    }
     let title = selector.title().to_string();
-    if crate::region_selector::open_all(tx, quit_on_finish, vec![selector], kind, cx) {
+    if crate::region_selector::open_all(tx, true, vec![selector], kind, cx) {
         configure_selector_window(title, rect_from_bounds(bounds));
         cx.activate(true);
     }

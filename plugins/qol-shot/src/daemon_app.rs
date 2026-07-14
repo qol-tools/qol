@@ -78,6 +78,8 @@ pub fn run() {
         };
         spawn_active_monitor_cache(cx);
         crate::preview::pre_create(&state.windows, &state.tracker, cx);
+        #[cfg(target_os = "linux")]
+        crate::platform::pre_create_selector(cx);
         spawn_screenshot_loop(rx, state, cx);
         qol_runtime::probe!("SHOT_DAEMON_APP", "state=ready");
     });

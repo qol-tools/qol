@@ -59,15 +59,64 @@ fn grab_bgra(conn: &RustConnection, root: u32, rect: &Rect) -> Result<Vec<u8>> {
             "wire",
         ),
     };
+    let alpha_started = std::time::Instant::now();
+    force_opaque_bgra(&mut data);
+    qol_runtime::probe!(
+        "SHOT_X11_GRAB",
+        "path={path} ms={} alpha_ms={} dims={width}x{height}",
+        started.elapsed().as_millis(),
+        alpha_started.elapsed().as_millis()
+    );
+    Ok(data)
+}
+
+fn force_opaque_bgra(data: &mut [u8]) {
+    #[cfg(target_arch = "x86_64")]
+    if std::arch::is_x86_feature_detected!("avx2") {
+        unsafe { force_opaque_bgra_avx2(data) };
+        return;
+    }
+    force_opaque_bgra_scalar(data);
+}
+
+fn force_opaque_bgra_scalar(data: &mut [u8]) {
     for pixel in data.chunks_exact_mut(4) {
         pixel[3] = 255;
     }
-    qol_runtime::probe!(
-        "SHOT_X11_GRAB",
-        "path={path} ms={} dims={width}x{height}",
-        started.elapsed().as_millis()
-    );
-    Ok(data)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn force_opaque_bgra_avx2(data: &mut [u8]) {
+    use std::arch::x86_64::_mm256_storeu_si256;
+    use std::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_or_si256, _mm256_set1_epi32};
+
+    let mask = _mm256_set1_epi32(0xff00_0000_u32 as i32);
+    let mut offset = 0;
+    while offset + 256 <= data.len() {
+        unsafe {
+            opaque_avx2_block(data.as_mut_ptr().add(offset), mask);
+            opaque_avx2_block(data.as_mut_ptr().add(offset + 32), mask);
+            opaque_avx2_block(data.as_mut_ptr().add(offset + 64), mask);
+            opaque_avx2_block(data.as_mut_ptr().add(offset + 96), mask);
+            opaque_avx2_block(data.as_mut_ptr().add(offset + 128), mask);
+            opaque_avx2_block(data.as_mut_ptr().add(offset + 160), mask);
+            opaque_avx2_block(data.as_mut_ptr().add(offset + 192), mask);
+            opaque_avx2_block(data.as_mut_ptr().add(offset + 224), mask);
+        }
+        offset += 256;
+    }
+    while offset + 32 <= data.len() {
+        unsafe { opaque_avx2_block(data.as_mut_ptr().add(offset), mask) };
+        offset += 32;
+    }
+    force_opaque_bgra_scalar(&mut data[offset..]);
+
+    #[target_feature(enable = "avx2")]
+    unsafe fn opaque_avx2_block(data: *mut u8, mask: __m256i) {
+        let pixels = unsafe { _mm256_loadu_si256(data.cast()) };
+        unsafe { _mm256_storeu_si256(data.cast(), _mm256_or_si256(pixels, mask)) };
+    }
 }
 
 fn grab_bgra_shm(
@@ -79,6 +128,7 @@ fn grab_bgra_shm(
     height: u16,
     expected: usize,
 ) -> Result<Vec<u8>> {
+    let version_started = std::time::Instant::now();
     let version = conn
         .shm_query_version()
         .context("failed to query X11 SHM")?
@@ -87,7 +137,11 @@ fn grab_bgra_shm(
     if !shm_supports_fd_segments(version.major_version, version.minor_version) {
         return Err(anyhow!("X11 SHM fd segments are unavailable"));
     }
+    let version_ms = version_started.elapsed().as_millis();
+    let segment_started = std::time::Instant::now();
     let segment = MappedSegment::new(conn, expected)?;
+    let segment_ms = segment_started.elapsed().as_millis();
+    let image_started = std::time::Instant::now();
     let reply = conn
         .shm_get_image(
             root,
@@ -103,13 +157,21 @@ fn grab_bgra_shm(
         .context("failed to request X11 SHM image")?
         .reply()
         .context("failed to read X11 SHM image")?;
+    let image_ms = image_started.elapsed().as_millis();
     if usize::try_from(reply.size).ok() != Some(expected) {
         return Err(anyhow!(
             "X11 SHM image returned {} bytes, expected {expected}",
             reply.size
         ));
     }
-    Ok(segment.bytes().to_vec())
+    let copy_started = std::time::Instant::now();
+    let data = segment.bytes().to_vec();
+    qol_runtime::probe!(
+        "SHOT_X11_SHM",
+        "version_ms={version_ms} segment_ms={segment_ms} image_ms={image_ms} copy_ms={}",
+        copy_started.elapsed().as_millis()
+    );
+    Ok(data)
 }
 
 fn grab_bgra_wire(
@@ -206,7 +268,27 @@ pub fn configure_preview_window(title: String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{bgra_to_rgba, capture_frozen_frame, shm_supports_fd_segments};
+    use super::{bgra_to_rgba, capture_frozen_frame, force_opaque_bgra, shm_supports_fd_segments};
+
+    #[test]
+    fn x11_bgra_alpha_is_normalized_without_changing_color_channels() {
+        let cases = [
+            (vec![], vec![]),
+            (vec![1, 2, 3, 0], vec![1, 2, 3, 255]),
+            (
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+                vec![1, 2, 3, 255, 5, 6, 7, 255, 9, 10, 11, 255],
+            ),
+            (
+                (0..65).flat_map(|value| [value, 2, 3, 4]).collect(),
+                (0..65).flat_map(|value| [value, 2, 3, 255]).collect(),
+            ),
+        ];
+        for (mut pixels, expected) in cases {
+            force_opaque_bgra(&mut pixels);
+            assert_eq!(pixels, expected);
+        }
+    }
 
     #[test]
     fn x11_bgra_is_normalized_to_rgba() {
