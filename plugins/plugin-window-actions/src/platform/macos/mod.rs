@@ -4,13 +4,40 @@ mod objc;
 mod screen;
 mod trace;
 
+use std::path::PathBuf;
 use std::process::Command;
 
+use crate::config::WindowActionsConfig;
 use crate::restore::WindowSystem;
+use crate::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
 
-pub use geometry::{
+use geometry::{
     center, maximize, move_monitor_left, move_monitor_right, snap_bottom, snap_left, snap_right,
 };
+
+pub(crate) fn execute_action(
+    action: &str,
+    store: &FileMinimizedStateStore,
+    config: &WindowActionsConfig,
+) -> Result<(), String> {
+    let system = MacWindowSystem;
+    match action {
+        "snap-left" => snap_left(config),
+        "snap-right" => snap_right(config),
+        "snap-bottom" => snap_bottom(config),
+        "maximize" => maximize(),
+        "minimize" => crate::restore::minimize_window(&system, store),
+        "restore" => crate::restore::restore_window(&system, store),
+        "center" => center(config),
+        "move-monitor-left" => move_monitor_left(),
+        "move-monitor-right" => move_monitor_right(),
+        _ => Err(format!("Unknown action: {action}")),
+    }
+}
+
+pub(crate) fn state_file_path() -> PathBuf {
+    std::env::temp_dir().join(LAST_MINIMIZED_WINDOW_FILE_NAME)
+}
 
 pub struct MacWindowSystem;
 

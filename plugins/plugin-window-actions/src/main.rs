@@ -8,7 +8,7 @@ use std::env;
 use std::process::ExitCode;
 
 use config::load_config;
-use state_store::{default_state_file_path, FileMinimizedStateStore};
+use state_store::FileMinimizedStateStore;
 
 fn main() -> ExitCode {
     let action = match env::args().nth(1) {
@@ -19,7 +19,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let store = FileMinimizedStateStore::new(default_state_file_path());
+    let store = FileMinimizedStateStore::new(platform::state_file_path());
     let config = load_config();
 
     let timer = trace::ActionTimer::start(&action);

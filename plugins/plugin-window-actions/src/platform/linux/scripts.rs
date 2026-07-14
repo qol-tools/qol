@@ -1,4 +1,11 @@
-pub fn snap_left_script(fraction: f64) -> String {
+fn snap_script(
+    edge: &str,
+    fraction: f64,
+    requested_width: &str,
+    requested_height: &str,
+    target_x: &str,
+    target_y: &str,
+) -> String {
     format!(
         r#"
     const win = global.display.focus_window;
@@ -11,65 +18,61 @@ pub fn snap_left_script(fraction: f64) -> String {
 
         const workArea = win.get_work_area_current_monitor();
         const fraction = {fraction};
-        const newWidth = Math.floor(workArea.width * fraction);
-        const newHeight = workArea.height;
-        const newX = workArea.x;
-        const newY = workArea.y;
+        const requestedWidth = {requested_width};
+        const requestedHeight = {requested_height};
+        const before = win.get_frame_rect();
 
-        win.move_resize_frame(true, newX, newY, newWidth, newHeight);
-        'Snapped to left region';
+        win.move_resize_frame(true, before.x, before.y, requestedWidth, requestedHeight);
+
+        const resized = win.get_frame_rect();
+        const targetX = {target_x};
+        const targetY = {target_y};
+
+        win.move_frame(true, targetX, targetY);
+
+        const actual = win.get_frame_rect();
+        if (actual.x !== targetX || actual.y !== targetY) {{
+            throw new Error('Failed to snap {edge}');
+        }}
+
+        'snap edge={edge} requested=' + requestedWidth + 'x' + requestedHeight
+            + ' actual=' + actual.width + 'x' + actual.height
+            + ' position=' + actual.x + ',' + actual.y;
     }}
 "#
+    )
+}
+
+pub fn snap_left_script(fraction: f64) -> String {
+    snap_script(
+        "left",
+        fraction,
+        "Math.floor(workArea.width * fraction)",
+        "workArea.height",
+        "workArea.x",
+        "workArea.y",
     )
 }
 
 pub fn snap_right_script(fraction: f64) -> String {
-    format!(
-        r#"
-    const win = global.display.focus_window;
-    if (!win) {{
-        'ERROR: No focused window';
-    }} else {{
-        if (win.maximized_horizontally || win.maximized_vertically) {{
-            win.unmaximize(3);
-        }}
-
-        const workArea = win.get_work_area_current_monitor();
-        const fraction = {fraction};
-        const newWidth = Math.floor(workArea.width * fraction);
-        const newHeight = workArea.height;
-        const newX = workArea.x + (workArea.width - newWidth);
-        const newY = workArea.y;
-
-        win.move_resize_frame(true, newX, newY, newWidth, newHeight);
-        'Snapped to right region';
-    }}
-"#
+    snap_script(
+        "right",
+        fraction,
+        "Math.floor(workArea.width * fraction)",
+        "workArea.height",
+        "workArea.x + workArea.width - resized.width",
+        "workArea.y",
     )
 }
 
 pub fn snap_bottom_script(fraction: f64) -> String {
-    format!(
-        r#"
-    const win = global.display.focus_window;
-    if (!win) {{
-        'ERROR: No focused window';
-    }} else {{
-        if (win.maximized_horizontally || win.maximized_vertically) {{
-            win.unmaximize(3);
-        }}
-
-        const workArea = win.get_work_area_current_monitor();
-        const fraction = {fraction};
-        const newWidth = workArea.width;
-        const newHeight = Math.floor(workArea.height * fraction);
-        const newX = workArea.x;
-        const newY = workArea.y + (workArea.height - newHeight);
-
-        win.move_resize_frame(true, newX, newY, newWidth, newHeight);
-        'Snapped to bottom region';
-    }}
-"#
+    snap_script(
+        "bottom",
+        fraction,
+        "workArea.width",
+        "Math.floor(workArea.height * fraction)",
+        "workArea.x",
+        "workArea.y + workArea.height - resized.height",
     )
 }
 
@@ -222,6 +225,48 @@ mod tests {
             assert!(
                 no_focused_window_is_guarded(&script),
                 "{name}: `win` must not be dereferenced outside the `else` branch of the focus_window null check\n{script}",
+            );
+        }
+    }
+
+    #[test]
+    fn snap_scripts_anchor_the_constrained_frame() {
+        let cases = [
+            (
+                "left",
+                snap_left_script(0.5),
+                "const targetX = workArea.x;",
+                "const targetY = workArea.y;",
+            ),
+            (
+                "right",
+                snap_right_script(0.5),
+                "const targetX = workArea.x + workArea.width - resized.width;",
+                "const targetY = workArea.y;",
+            ),
+            (
+                "bottom",
+                snap_bottom_script(0.5),
+                "const targetX = workArea.x;",
+                "const targetY = workArea.y + workArea.height - resized.height;",
+            ),
+        ];
+        for (edge, script, target_x, target_y) in cases {
+            assert!(
+                script.contains("win.move_resize_frame(true, before.x, before.y"),
+                "{edge}: resize must preserve position until Muffin applies size constraints\n{script}",
+            );
+            assert!(
+                script.contains(target_x),
+                "{edge}: constrained width must determine the horizontal anchor\n{script}",
+            );
+            assert!(
+                script.contains(target_y),
+                "{edge}: constrained height must determine the vertical anchor\n{script}",
+            );
+            assert!(
+                script.contains("win.move_frame(true, targetX, targetY);"),
+                "{edge}: constrained frame must be moved separately\n{script}",
             );
         }
     }

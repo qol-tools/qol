@@ -1,11 +1,10 @@
-use std::env;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 
 use crate::restore::{MinimizedStateStore, MinimizedWindowRecord};
 
-const LAST_MINIMIZED_WINDOW_FILE_NAME: &str = "qol-window-actions-last-minimized";
+pub(crate) const LAST_MINIMIZED_WINDOW_FILE_NAME: &str = "qol-window-actions-last-minimized";
 
 pub struct FileMinimizedStateStore {
     path: PathBuf,
@@ -47,18 +46,6 @@ impl MinimizedStateStore for FileMinimizedStateStore {
         }
         Ok(last)
     }
-}
-
-pub fn default_state_file_path() -> PathBuf {
-    #[cfg(target_os = "macos")]
-    let base = env::var_os("TMPDIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
-    #[cfg(not(target_os = "macos"))]
-    let base = env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
-    base.join(LAST_MINIMIZED_WINDOW_FILE_NAME)
 }
 
 fn read_lines(path: &PathBuf) -> Result<Vec<String>, Option<String>> {

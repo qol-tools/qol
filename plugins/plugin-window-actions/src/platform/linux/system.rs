@@ -128,14 +128,32 @@ pub fn run_cinnamon_eval(script: &str) -> Result<String, String> {
         .output()
         .map_err(|error| format!("Failed to run gdbus: {error}"))?;
 
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        Err(format!(
+    if !output.status.success() {
+        return Err(format!(
             "gdbus failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
-        ))
+        ));
     }
+
+    let response = String::from_utf8_lossy(&output.stdout).to_string();
+    let result = parse_cinnamon_eval_response(response);
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "WINACT_EVAL",
+        "outcome={} detail={:?}",
+        if result.is_ok() { "ok" } else { "err" },
+        result.as_deref().unwrap_or_else(|error| error)
+    );
+    result
+}
+
+fn parse_cinnamon_eval_response(response: String) -> Result<String, String> {
+    let trimmed = response.trim();
+    if trimmed.starts_with("(true,") && !trimmed.contains("ERROR:") {
+        return Ok(response);
+    }
+
+    Err(format!("Cinnamon Eval failed: {trimmed}"))
 }
 
 pub fn run_status(command: &str, args: &[&str]) -> Result<(), String> {
@@ -253,4 +271,26 @@ fn process_start_ticks(pid: u32) -> Option<u64> {
     let (_, rest) = stat.split_once(") ")?;
     let fields: Vec<&str> = rest.split_whitespace().collect();
     fields.get(19)?.parse::<u64>().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cinnamon_eval_response_requires_successful_action() {
+        let cases = [
+            ("(true, '\"snap edge=left\"')\n", true),
+            ("(true, '\"ERROR: No focused window\"')\n", false),
+            ("(false, 'Error: Failed to snap right')\n", false),
+            ("unexpected response\n", false),
+        ];
+        for (response, expected_success) in cases {
+            assert_eq!(
+                parse_cinnamon_eval_response(response.to_string()).is_ok(),
+                expected_success,
+                "response: {response:?}",
+            );
+        }
+    }
 }
