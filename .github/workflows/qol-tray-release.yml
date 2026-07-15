@@ -42,7 +42,7 @@ jobs:
           shared-key: qol-tray-linux
 
       - name: Install cargo-deb
-        uses: taiki-e/install-action@15449e3094499af05d8d964a1c884208e4b8b595 # v2
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
         with:
           tool: cargo-deb
 
