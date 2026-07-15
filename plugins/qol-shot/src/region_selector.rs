@@ -81,6 +81,7 @@ pub trait GlobalPointer {
 
 pub type GlobalPointerSource = Rc<dyn GlobalPointer>;
 pub type CancelSignalSource = Rc<dyn Fn() -> bool>;
+pub type SelectorReveal = Rc<dyn Fn(String)>;
 
 #[derive(Clone)]
 pub struct SelectorWindowSources {
@@ -216,6 +217,7 @@ pub fn open_cached(
     tx: &mut Option<mpsc::Sender<Option<Rect>>>,
     selector: &mut Option<SelectorWindow>,
     kind: CaptureKind,
+    reveal: SelectorReveal,
     cx: &mut App,
 ) -> Option<String> {
     let handle = (*cache.handle.borrow())?;
@@ -238,7 +240,7 @@ pub fn open_cached(
             window.scale_factor() as f64,
         );
         view.handle = Some(handle);
-        view.reset(state, false, window_bounds, selector.sources, cx);
+        view.reset(state, false, window_bounds, selector.sources, reveal, cx);
         let _ = qol_gpui::popup_window::sync_window_layout(
             &title,
             window,
@@ -564,6 +566,9 @@ struct RegionSelector {
     frozen_image: Option<Arc<RenderImage>>,
     focus_handle: FocusHandle,
     reusable: bool,
+    reveal_generation: u64,
+    scheduled_reveal_generation: Option<u64>,
+    pending_reveal: Option<SelectorReveal>,
 }
 
 impl RegionSelector {
@@ -602,6 +607,9 @@ impl RegionSelector {
             frozen_image,
             focus_handle: cx.focus_handle(),
             reusable,
+            reveal_generation: 0,
+            scheduled_reveal_generation: None,
+            pending_reveal: None,
         }
     }
 
@@ -611,6 +619,7 @@ impl RegionSelector {
         quit_on_finish: bool,
         window_bounds: Bounds<Pixels>,
         sources: SelectorWindowSources,
+        reveal: SelectorReveal,
         cx: &mut Context<Self>,
     ) {
         let image_started = std::time::Instant::now();
@@ -633,7 +642,48 @@ impl RegionSelector {
         self.active_bounds = sources.active_bounds;
         self.hover_target = sources.hover_target;
         self.frozen_image = frozen_image;
+        self.reveal_generation = self.reveal_generation.wrapping_add(1);
+        self.scheduled_reveal_generation = None;
+        self.pending_reveal = Some(reveal);
         cx.notify();
+    }
+
+    fn schedule_reveal_after_present(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let generation = self.reveal_generation;
+        if self.pending_reveal.is_none() || self.scheduled_reveal_generation == Some(generation) {
+            return;
+        }
+        self.scheduled_reveal_generation = Some(generation);
+        qol_runtime::probe!(
+            "SHOT_SELECT_REVEAL",
+            "title={} generation={generation} state=scheduled",
+            self.title
+        );
+        cx.on_next_frame(window, move |view, _window, _cx| {
+            view.reveal_presented_generation(generation);
+        });
+    }
+
+    fn reveal_presented_generation(&mut self, generation: u64) {
+        if generation != self.reveal_generation {
+            qol_runtime::probe!(
+                "SHOT_SELECT_REVEAL",
+                "title={} generation={generation} current={} state=stale",
+                self.title,
+                self.reveal_generation
+            );
+            return;
+        }
+        self.scheduled_reveal_generation = None;
+        let Some(reveal) = self.pending_reveal.take() else {
+            return;
+        };
+        qol_runtime::probe!(
+            "SHOT_SELECT_REVEAL",
+            "title={} generation={generation} state=presented",
+            self.title
+        );
+        reveal(self.title.clone());
     }
 
     fn on_mouse_down(
@@ -1145,7 +1195,8 @@ impl Focusable for RegionSelector {
 }
 
 impl Render for RegionSelector {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.schedule_reveal_after_present(window, cx);
         let guide_frame = self.guide_frame();
         let selection = self.selection_bounds();
         let mut root = div()

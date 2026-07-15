@@ -294,7 +294,7 @@ async fn select_region(
             crate::platform::select_region_in_app(
                 cx,
                 kind,
-                tracker.snapshot_monitor(),
+                tracker.snapshot_cursor(),
                 tracker.all_monitors(),
                 in_app_frame,
             )

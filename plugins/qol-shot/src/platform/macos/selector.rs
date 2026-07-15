@@ -39,35 +39,35 @@ extern "C" {
 pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Result<Option<Rect>> {
     crate::region_selector::select_region_blocking_with(move |tx, cx| {
         let tracker = MonitorTracker::start(cx);
-        let monitor = tracker.snapshot_monitor();
+        let cursor = tracker.snapshot_cursor();
         let monitors = selector_monitors(&tracker);
         qol_runtime::probe!(
             "SHOT_SELECT_PLATFORM",
             "mode=blocking monitor={} monitors={}",
-            monitor.is_some(),
+            cursor.is_some(),
             monitors.len()
         );
-        open_region_selector_with_sender(tx, true, kind, monitor, monitors, frozen_frame, cx);
+        open_region_selector_with_sender(tx, true, kind, cursor, monitors, frozen_frame, cx);
     })
 }
 
 pub fn select_region_in_app(
     cx: &mut gpui::App,
     kind: CaptureKind,
-    monitor: Option<ActiveMonitor>,
+    cursor: Option<(ActiveMonitor, Option<gpui::Point<Pixels>>)>,
     monitors: Vec<ActiveMonitor>,
     frozen_frame: Option<FrozenFrame>,
 ) -> Option<mpsc::Receiver<Option<Rect>>> {
     qol_runtime::probe!(
         "SHOT_SELECT_PLATFORM",
         "mode=in-app monitor={} monitors={}",
-        monitor.is_some(),
+        cursor.is_some(),
         monitors.len()
     );
     Some(open_region_selector(
         cx,
         kind,
-        monitor,
+        cursor,
         monitors,
         frozen_frame,
     ))
@@ -76,12 +76,12 @@ pub fn select_region_in_app(
 fn open_region_selector(
     cx: &mut gpui::App,
     kind: CaptureKind,
-    monitor: Option<ActiveMonitor>,
+    cursor: Option<(ActiveMonitor, Option<gpui::Point<Pixels>>)>,
     monitors: Vec<ActiveMonitor>,
     frozen_frame: Option<FrozenFrame>,
 ) -> mpsc::Receiver<Option<Rect>> {
     let (tx, rx) = mpsc::channel();
-    open_region_selector_with_sender(tx, false, kind, monitor, monitors, frozen_frame, cx);
+    open_region_selector_with_sender(tx, false, kind, cursor, monitors, frozen_frame, cx);
     rx
 }
 
@@ -89,12 +89,13 @@ fn open_region_selector_with_sender(
     tx: mpsc::Sender<Option<Rect>>,
     quit_on_finish: bool,
     kind: CaptureKind,
-    monitor: Option<ActiveMonitor>,
+    cursor: Option<(ActiveMonitor, Option<gpui::Point<Pixels>>)>,
     monitors: Vec<ActiveMonitor>,
     frozen_frame: Option<FrozenFrame>,
     cx: &mut gpui::App,
 ) {
-    let selectors = selector_windows(monitor.as_ref(), monitors, frozen_frame.as_ref(), cx);
+    let monitor = cursor.as_ref().map(|(monitor, _)| monitor);
+    let selectors = selector_windows(monitor, monitors, frozen_frame.as_ref(), cx);
     let titles = selectors
         .iter()
         .map(|selector| selector.title().to_string())

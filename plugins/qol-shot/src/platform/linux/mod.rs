@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use gpui::{Bounds, Pixels, WindowDecorations, WindowKind};
+use gpui::{Bounds, Pixels, Point, WindowDecorations, WindowKind};
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use std::fs::File;
 use std::path::Path;
@@ -52,16 +52,16 @@ pub fn pre_create_selector(cx: &mut gpui::App) {
 pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Result<Option<Rect>> {
     crate::region_selector::select_region_blocking_with(move |tx, cx| {
         let tracker = MonitorTracker::start(cx);
-        let monitor = tracker.snapshot_monitor();
+        let cursor = tracker.snapshot_cursor();
         let active_bounds = Some(tracker_active_bounds_source(tracker));
-        open_region_selector_with_sender(tx, true, kind, monitor, active_bounds, frozen_frame, cx);
+        open_region_selector_with_sender(tx, true, kind, cursor, active_bounds, frozen_frame, cx);
     })
 }
 
 pub fn select_region_in_app(
     cx: &mut gpui::App,
     kind: CaptureKind,
-    monitor: Option<ActiveMonitor>,
+    cursor: Option<(ActiveMonitor, Option<Point<Pixels>>)>,
     _monitors: Vec<ActiveMonitor>,
     frozen_frame: Option<FrozenFrame>,
 ) -> Option<mpsc::Receiver<Option<Rect>>> {
@@ -69,7 +69,7 @@ pub fn select_region_in_app(
     Some(open_region_selector(
         cx,
         kind,
-        monitor,
+        cursor,
         active_bounds,
         frozen_frame,
     ))
@@ -78,12 +78,12 @@ pub fn select_region_in_app(
 fn open_region_selector(
     cx: &mut gpui::App,
     kind: CaptureKind,
-    monitor: Option<ActiveMonitor>,
+    cursor: Option<(ActiveMonitor, Option<Point<Pixels>>)>,
     active_bounds: Option<crate::region_selector::ActiveBoundsSource>,
     frozen_frame: Option<FrozenFrame>,
 ) -> mpsc::Receiver<Option<Rect>> {
     let (tx, rx) = mpsc::channel();
-    open_region_selector_with_sender(tx, false, kind, monitor, active_bounds, frozen_frame, cx);
+    open_region_selector_with_sender(tx, false, kind, cursor, active_bounds, frozen_frame, cx);
     rx
 }
 
@@ -91,22 +91,26 @@ fn open_region_selector_with_sender(
     tx: mpsc::Sender<Option<Rect>>,
     quit_on_finish: bool,
     kind: CaptureKind,
-    monitor: Option<ActiveMonitor>,
+    cursor: Option<(ActiveMonitor, Option<Point<Pixels>>)>,
     active_bounds: Option<crate::region_selector::ActiveBoundsSource>,
     frozen_frame: Option<FrozenFrame>,
     cx: &mut gpui::App,
 ) {
+    let (monitor, pointer) = match cursor {
+        Some((monitor, pointer)) => (Some(monitor), pointer),
+        None => (None, None),
+    };
     let bounds = selector_bounds(frozen_frame.as_ref());
-    let default_target = default_window_target(bounds)
-        .map(crate::region_selector::DetectedTarget::Window)
-        .or_else(|| {
-            monitor
-                .as_ref()
-                .map(|monitor| rect_from_bounds(monitor.bounds()))
-                .map(crate::region_selector::DetectedTarget::Monitor)
-        });
-    trace_default_target(default_target, bounds);
     let hover_target = snapshot_hover_target(bounds);
+    let default_target = initial_default_target(
+        pointer,
+        hover_target.as_deref(),
+        default_window_target(bounds),
+        monitor
+            .as_ref()
+            .map(|monitor| rect_from_bounds(monitor.bounds())),
+    );
+    trace_default_target(default_target, bounds);
     let selector = selector_window(
         bounds,
         monitor,
@@ -118,11 +122,14 @@ fn open_region_selector_with_sender(
     if !quit_on_finish {
         let mut tx = Some(tx);
         let mut selector = Some(selector);
-        let title = SELECTOR_CACHE.with(|cache| {
-            crate::region_selector::open_cached(cache, &mut tx, &mut selector, kind, cx)
+        let reveal_bounds = rect_from_bounds(bounds);
+        let reveal: crate::region_selector::SelectorReveal = Rc::new(move |title| {
+            configure_selector_window(title, reveal_bounds);
         });
-        if let Some(title) = title {
-            configure_selector_window(title, rect_from_bounds(bounds));
+        let title = SELECTOR_CACHE.with(|cache| {
+            crate::region_selector::open_cached(cache, &mut tx, &mut selector, kind, reveal, cx)
+        });
+        if title.is_some() {
             cx.activate(true);
             return;
         }
@@ -141,6 +148,22 @@ fn open_region_selector_with_sender(
         configure_selector_window(title, rect_from_bounds(bounds));
         cx.activate(true);
     }
+}
+
+fn initial_default_target(
+    pointer: Option<Point<Pixels>>,
+    hover_target: Option<&dyn crate::region_selector::HoverTarget>,
+    focused_window: Option<Rect>,
+    monitor: Option<Rect>,
+) -> Option<crate::region_selector::DetectedTarget> {
+    let pointer_target = pointer.and_then(|point| hover_target?.target_at(point));
+    let pointer_monitor = pointer
+        .zip(monitor)
+        .map(|(_, rect)| crate::region_selector::DetectedTarget::Monitor(rect));
+    pointer_target
+        .or(pointer_monitor)
+        .or_else(|| focused_window.map(crate::region_selector::DetectedTarget::Window))
+        .or_else(|| monitor.map(crate::region_selector::DetectedTarget::Monitor))
 }
 
 fn selector_window(
@@ -507,8 +530,8 @@ impl crate::region_selector::ActiveBounds for TrackerActiveBounds {
         }
         let bounds = self
             .tracker
-            .snapshot_monitor()
-            .map(|monitor| monitor.bounds());
+            .snapshot_cursor()
+            .map(|(monitor, _)| monitor.bounds());
         *self.cache.borrow_mut() = Some((std::time::Instant::now(), bounds));
         bounds
     }
@@ -673,7 +696,10 @@ pub fn process_alive(pid: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{framed_rect, parse_xdotool_geometry, usable_target, SnapshotHoverTarget};
+    use super::{
+        framed_rect, initial_default_target, parse_xdotool_geometry, usable_target,
+        SnapshotHoverTarget,
+    };
     use crate::region_selector::{DetectedTarget, HoverTarget};
     use crate::Rect;
     use gpui::{point, px, size, Bounds};
@@ -727,6 +753,69 @@ mod tests {
         ];
         for (pointer, expected) in cases {
             assert_eq!(source.target_at(pointer), expected, "pointer: {pointer:?}");
+        }
+    }
+
+    #[test]
+    fn initial_target_follows_cursor_before_focus_fallbacks() {
+        let hovered = Rect {
+            x: 2560,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        };
+        let focused = Rect {
+            x: 0,
+            y: 32,
+            w: 2560,
+            h: 1366,
+        };
+        let cursor_monitor = Rect {
+            x: 2560,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        };
+        let source = SnapshotHoverTarget {
+            windows: vec![hovered],
+            monitors: vec![cursor_monitor],
+        };
+        let cases = [
+            (
+                Some(point(px(3500.0), px(500.0))),
+                Some(&source as &dyn HoverTarget),
+                Some(focused),
+                Some(cursor_monitor),
+                Some(DetectedTarget::Window(hovered)),
+            ),
+            (
+                Some(point(px(5000.0), px(500.0))),
+                Some(&source as &dyn HoverTarget),
+                Some(focused),
+                Some(cursor_monitor),
+                Some(DetectedTarget::Monitor(cursor_monitor)),
+            ),
+            (
+                None,
+                Some(&source as &dyn HoverTarget),
+                Some(focused),
+                Some(cursor_monitor),
+                Some(DetectedTarget::Window(focused)),
+            ),
+            (
+                None,
+                None,
+                None,
+                Some(cursor_monitor),
+                Some(DetectedTarget::Monitor(cursor_monitor)),
+            ),
+            (None, None, None, None, None),
+        ];
+        for (pointer, hover, focused, monitor, expected) in cases {
+            assert_eq!(
+                initial_default_target(pointer, hover, focused, monitor),
+                expected
+            );
         }
     }
 
