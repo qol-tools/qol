@@ -143,6 +143,7 @@ pub fn pre_create(windows: &PreviewWindows, tracker: &MonitorTracker, cx: &mut A
             &title,
             &placement,
             GhostOpenMode::Hidden,
+            None,
         ) else {
             continue;
         };
@@ -322,12 +323,15 @@ fn reuse_existing(
     let all_titles = windows.borrow().titles(PREVIEW_TITLE);
     let opened_at = Instant::now();
     let bounds = placement.bounds;
+    let reveal = PreviewReveal {
+        title: title.clone(),
+        all_titles,
+    };
     let ok = handle
         .update(cx, |view, window, cx| {
             view.window_origin = bounds.origin;
-            view.reset_for_show(content, seq);
+            view.reset_for_show(content, seq, reveal);
             sync_window_layout(&title, window, bounds.origin, bounds.size);
-            show_ghost_window_topmost(&title, &all_titles);
             window.activate_window();
             window.focus(&view.focus_handle(cx));
             cx.notify();
@@ -356,6 +360,14 @@ fn create_and_show(
 ) {
     let _reason = reason_scope("create");
     let title = ghost_window_title(PREVIEW_TITLE, target);
+    let mut all_titles = windows.borrow().titles(PREVIEW_TITLE);
+    if !all_titles.contains(&title) {
+        all_titles.push(title.clone());
+    }
+    let reveal = PreviewReveal {
+        title: title.clone(),
+        all_titles,
+    };
     let opened_at = Instant::now();
     let Some(handle) = open_ghost_window(
         cx,
@@ -364,16 +376,16 @@ fn create_and_show(
         &title,
         placement,
         GhostOpenMode::Interactive,
+        Some(reveal),
     ) else {
         eprintln!("[qol-shot] preview window open failed");
         return;
     };
     windows.borrow_mut().insert(target, handle);
-    let all_titles = windows.borrow().titles(PREVIEW_TITLE);
     configure_popup_window(&title);
+    hide_invisible(&title);
     let _ = handle.update(cx, |view, window, cx| {
         view.set_showing(true);
-        show_ghost_window_topmost(&title, &all_titles);
         window.activate_window();
         window.focus(&view.focus_handle(cx));
         cx.notify();
@@ -393,13 +405,15 @@ fn open_ghost_window(
     title: &str,
     placement: &WindowPlacement,
     mode: GhostOpenMode,
+    reveal: Option<PreviewReveal>,
 ) -> Option<WindowHandle<PreviewView>> {
     let options = ghost_window_options(placement, mode);
     let title = title.to_string();
     let origin = placement.bounds.origin;
     cx.open_window(options, move |window, cx| {
         window.set_window_title(&title);
-        let view = cx.new(|cx| PreviewView::new_ghost(content, seq, title.clone(), origin, cx));
+        let view =
+            cx.new(|cx| PreviewView::new_ghost(content, seq, title.clone(), origin, reveal, cx));
         if mode.requests_focus() {
             window.focus(&view.focus_handle(cx));
             window.activate_window();
@@ -544,7 +558,19 @@ pub struct PreviewView {
     window_origin: Point<Pixels>,
     dismiss_sub: Option<DismissSub>,
     copy_command: ShotAction,
+    scheduled_reveal_seq: Option<u64>,
+    pending_reveal: Option<PreviewReveal>,
     focus_handle: FocusHandle,
+}
+
+struct PreviewReveal {
+    title: String,
+    all_titles: Vec<String>,
+}
+
+struct PreviewPresentation {
+    seq: u64,
+    reveal: Option<PreviewReveal>,
 }
 
 impl PreviewView {
@@ -553,6 +579,7 @@ impl PreviewView {
         seq: u64,
         title: String,
         origin: Point<Pixels>,
+        reveal: Option<PreviewReveal>,
         cx: &mut Context<Self>,
     ) -> Self {
         Self::new(
@@ -560,7 +587,7 @@ impl PreviewView {
             DismissMode::Ghost,
             title,
             Arc::default(),
-            seq,
+            PreviewPresentation { seq, reveal },
             origin,
             cx,
         )
@@ -577,7 +604,7 @@ impl PreviewView {
             DismissMode::Quit,
             String::new(),
             completion,
-            seq,
+            PreviewPresentation { seq, reveal: None },
             point(px(0.0), px(0.0)),
             cx,
         )
@@ -588,7 +615,7 @@ impl PreviewView {
         mode: DismissMode,
         title: String,
         completion: Completion,
-        seq: u64,
+        presentation: PreviewPresentation,
         origin: Point<Pixels>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -603,13 +630,15 @@ impl PreviewView {
             title,
             completion,
             selected: 0,
-            seq,
+            seq: presentation.seq,
             first_paint: true,
             is_showing: content.ready,
             blur_guard_until: Instant::now() + BLUR_GUARD,
             window_origin: origin,
             dismiss_sub: None,
             copy_command: resolve_copy_command(crate::config::load().shortcuts.copy_command),
+            scheduled_reveal_seq: None,
+            pending_reveal: presentation.reveal,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -618,7 +647,7 @@ impl PreviewView {
         self.is_showing = showing;
     }
 
-    fn reset_for_show(&mut self, content: GhostContent, seq: u64) {
+    fn reset_for_show(&mut self, content: GhostContent, seq: u64, reveal: PreviewReveal) {
         self.path = content.path;
         self.thumb = content.thumb;
         self.image = content.image;
@@ -631,9 +660,40 @@ impl PreviewView {
         self.is_showing = true;
         self.blur_guard_until = Instant::now() + BLUR_GUARD;
         self.copy_command = resolve_copy_command(crate::config::load().shortcuts.copy_command);
+        self.scheduled_reveal_seq = None;
+        self.pending_reveal = Some(reveal);
         if let Ok(mut slot) = self.completion.lock() {
             *slot = None;
         }
+    }
+
+    fn schedule_reveal_after_present(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_reveal.is_none() || self.scheduled_reveal_seq == Some(self.seq) {
+            return;
+        }
+        let seq = self.seq;
+        self.scheduled_reveal_seq = Some(seq);
+        qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=scheduled");
+        cx.on_next_frame(window, move |view, _window, _cx| {
+            view.reveal_presented_seq(seq);
+        });
+    }
+
+    fn reveal_presented_seq(&mut self, seq: u64) {
+        if seq != self.seq {
+            qol_runtime::probe!(
+                "SHOT_PREVIEW_REVEAL",
+                "seq={seq} current={} state=stale",
+                self.seq
+            );
+            return;
+        }
+        self.scheduled_reveal_seq = None;
+        let Some(reveal) = self.pending_reveal.take() else {
+            return;
+        };
+        qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=presented");
+        show_ghost_window_topmost(&reveal.title, &reveal.all_titles);
     }
 
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -668,7 +728,11 @@ impl PreviewView {
             DismissMode::Quit => crate::pinned::PinnedDismiss::Quit,
             DismissMode::Ghost => crate::pinned::PinnedDismiss::Remove,
         };
-        if !crate::pinned::open(content, origin, dismiss, cx) {
+        let source_preview = match self.mode {
+            DismissMode::Quit => None,
+            DismissMode::Ghost => Some(self.title.clone()),
+        };
+        if !crate::pinned::open(content, origin, dismiss, source_preview, cx) {
             return;
         }
         match self.mode {
@@ -680,7 +744,7 @@ impl PreviewView {
                 }
                 window.remove_window();
             }
-            DismissMode::Ghost => self.hide_to_ghost(window),
+            DismissMode::Ghost => self.set_showing(false),
         }
     }
 
@@ -782,6 +846,7 @@ impl Focusable for PreviewView {
 impl Render for PreviewView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_dismiss_tracking(window, cx);
+        self.schedule_reveal_after_present(window, cx);
         let palette = current_palette();
 
         let mut root = div()

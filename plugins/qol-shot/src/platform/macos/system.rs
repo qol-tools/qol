@@ -71,13 +71,12 @@ pub fn pin_focus(_title: &str) {}
 
 pub fn pin_release_focus(_title: &str) {}
 
-pub fn configure_pin_window(
-    title: String,
-    _origin: (f64, f64),
-    placed: std::sync::Arc<std::sync::atomic::AtomicBool>,
-) {
-    placed.store(true, std::sync::atomic::Ordering::Relaxed);
+pub fn configure_pin_window(title: String, _origin: (f64, f64), source_preview: Option<String>) {
     qol_gpui::popup_window::configure_pinned_window(&title);
+    if let Some(source_preview) = source_preview {
+        qol_gpui::popup_window::hide_invisible(&source_preview);
+        qol_gpui::popup_window::restore_composite(&source_preview);
+    }
 }
 
 pub fn platform_supported_check() -> DoctorCheckResult {

@@ -297,7 +297,7 @@ pub fn show_window_by_title(title: &str) -> bool {
     let after = show_window_state(&conn, root, wid, active_after);
     qol_runtime::probe!(
         "SHOW_WIN_STATE",
-        "reason={reason} phase=after title={title} wid={wid} frame={} clear_opacity={clear_ok} input_passthrough_false={input_ok} map={map_ok} stack_client={} stack_frame={} activate={activate_ok} focus={focus_ok} timestamp={timestamp} flush={flush_ok} {after}",
+        "reason={reason} phase=after title={title} wid={wid} frame={} clear_opacity={clear_ok} input_shape_default={input_ok} map={map_ok} stack_client={} stack_frame={} activate={activate_ok} focus={focus_ok} timestamp={timestamp} flush={flush_ok} {after}",
         stack.frame,
         stack.client,
         stack.frame_ok,
@@ -1210,24 +1210,18 @@ fn compositor_running(conn: &impl Connection, screen_num: usize) -> bool {
 }
 
 fn set_input_passthrough(conn: &impl Connection, wid: u32, passthrough: bool) -> bool {
-    let full_rect;
-    let rectangles: &[Rectangle] = if passthrough {
-        &[]
-    } else {
-        let Ok(cookie) = conn.get_geometry(wid) else {
-            return false;
-        };
-        let Ok(geometry) = cookie.reply() else {
-            return false;
-        };
-        full_rect = [Rectangle {
-            x: 0,
-            y: 0,
-            width: geometry.width,
-            height: geometry.height,
-        }];
-        &full_rect
-    };
+    if !passthrough {
+        return shape::mask(
+            conn,
+            shape::SO::SET,
+            shape::SK::INPUT,
+            wid,
+            0,
+            0,
+            x11rb::NONE,
+        )
+        .is_ok();
+    }
     shape::rectangles(
         conn,
         shape::SO::SET,
@@ -1236,7 +1230,7 @@ fn set_input_passthrough(conn: &impl Connection, wid: u32, passthrough: bool) ->
         wid,
         0,
         0,
-        rectangles,
+        &[],
     )
     .is_ok()
 }

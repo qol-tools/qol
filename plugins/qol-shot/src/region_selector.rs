@@ -167,105 +167,113 @@ where
     Ok(rx.recv().ok().flatten())
 }
 
-#[derive(Clone, Default)]
-pub struct SelectorCache {
-    handle: Rc<RefCell<Option<WindowHandle<RegionSelector>>>>,
-}
+#[cfg(target_os = "linux")]
+mod cache {
+    use super::*;
 
-pub fn pre_create_cached(
-    cache: &SelectorCache,
-    selector: SelectorWindow,
-    kind: CaptureKind,
-    cx: &mut App,
-) -> Option<String> {
-    if cache.handle.borrow().is_some() {
-        return None;
+    #[derive(Clone, Default)]
+    pub struct SelectorCache {
+        handle: Rc<RefCell<Option<WindowHandle<RegionSelector>>>>,
     }
-    let title = selector.title.clone();
-    let (tx, _rx) = mpsc::channel();
-    let active_bounds = selector.active_bounds;
-    let default_target = selector.default_target;
-    let monitor_bounds = vec![selector.bounds];
-    let titles = vec![selector.title.clone()];
-    let state = Rc::new(RefCell::new(SelectionState::new(
-        tx,
-        active_bounds,
-        default_target,
-        monitor_bounds,
-        titles,
-        kind,
-    )));
-    let Some(handle) = open_window(selector, state.clone(), false, true, true, cx) else {
-        qol_runtime::probe!("SHOT_SELECT_PRECREATE", "result=failed");
-        return None;
-    };
-    state.borrow_mut().handles = vec![handle];
-    let hidden = handle
-        .update(cx, |view, window, _cx| {
-            view.handle = Some(handle);
-            let _reason = qol_gpui::popup_window::reason_scope("shot-selector-precreate");
-            qol_gpui::popup_window::hide_for_capture(&view.title, window)
-        })
-        .unwrap_or(false);
-    *cache.handle.borrow_mut() = Some(handle);
-    qol_runtime::probe!("SHOT_SELECT_PRECREATE", "result=ok hidden={hidden}");
-    Some(title)
-}
 
-pub fn open_cached(
-    cache: &SelectorCache,
-    tx: &mut Option<mpsc::Sender<Option<Rect>>>,
-    selector: &mut Option<SelectorWindow>,
-    kind: CaptureKind,
-    reveal: SelectorReveal,
-    cx: &mut App,
-) -> Option<String> {
-    let handle = (*cache.handle.borrow())?;
-    let result = handle.update(cx, |view, window, cx| {
-        let tx = tx.take()?;
-        let selector = selector.take()?;
-        let title = view.title.clone();
-        let window_bounds = selector.bounds;
+    pub fn pre_create(
+        cache: &SelectorCache,
+        selector: SelectorWindow,
+        kind: CaptureKind,
+        cx: &mut App,
+    ) -> Option<String> {
+        if cache.handle.borrow().is_some() {
+            return None;
+        }
+        let title = selector.title.clone();
+        let (tx, _rx) = mpsc::channel();
+        let active_bounds = selector.active_bounds;
+        let default_target = selector.default_target;
+        let monitor_bounds = vec![selector.bounds];
+        let titles = vec![selector.title.clone()];
         let state = Rc::new(RefCell::new(SelectionState::new(
             tx,
-            selector.active_bounds,
-            selector.default_target,
-            vec![window_bounds],
-            vec![title.clone()],
+            active_bounds,
+            default_target,
+            monitor_bounds,
+            titles,
             kind,
         )));
+        let Some(handle) = open_window(selector, state.clone(), false, true, true, cx) else {
+            qol_runtime::probe!("SHOT_SELECT_PRECREATE", "result=failed");
+            return None;
+        };
         state.borrow_mut().handles = vec![handle];
-        state.borrow_mut().record_display(
-            rect_from_bounds(window_bounds),
-            window.scale_factor() as f64,
-        );
-        view.handle = Some(handle);
-        view.reset(state, false, window_bounds, selector.sources, reveal, cx);
-        let _ = qol_gpui::popup_window::sync_window_layout(
-            &title,
-            window,
-            window_bounds.origin,
-            window_bounds.size,
-        );
-        window.focus(&view.focus_handle(cx));
-        window.activate_window();
-        view.start_active_monitor_poll(cx);
-        qol_runtime::probe!("SHOT_SELECT_WINDOW", "title={title} state=reuse");
+        let hidden = handle
+            .update(cx, |view, window, _cx| {
+                view.handle = Some(handle);
+                let _reason = qol_gpui::popup_window::reason_scope("shot-selector-precreate");
+                qol_gpui::popup_window::hide_for_capture(&view.title, window)
+            })
+            .unwrap_or(false);
+        *cache.handle.borrow_mut() = Some(handle);
+        qol_runtime::probe!("SHOT_SELECT_PRECREATE", "result=ok hidden={hidden}");
         Some(title)
-    });
-    match result {
-        Ok(Some(title)) => {
-            qol_runtime::probe!("SHOT_SELECT_OPEN", "selectors=1 windows=1 result=reuse");
+    }
+
+    pub fn open(
+        cache: &SelectorCache,
+        tx: &mut Option<mpsc::Sender<Option<Rect>>>,
+        selector: &mut Option<SelectorWindow>,
+        kind: CaptureKind,
+        reveal: SelectorReveal,
+        cx: &mut App,
+    ) -> Option<String> {
+        let handle = (*cache.handle.borrow())?;
+        let result = handle.update(cx, |view, window, cx| {
+            let tx = tx.take()?;
+            let selector = selector.take()?;
+            let title = view.title.clone();
+            let window_bounds = selector.bounds;
+            let state = Rc::new(RefCell::new(SelectionState::new(
+                tx,
+                selector.active_bounds,
+                selector.default_target,
+                vec![window_bounds],
+                vec![title.clone()],
+                kind,
+            )));
+            state.borrow_mut().handles = vec![handle];
+            state.borrow_mut().record_display(
+                rect_from_bounds(window_bounds),
+                window.scale_factor() as f64,
+            );
+            view.handle = Some(handle);
+            view.reset(state, false, window_bounds, selector.sources, reveal, cx);
+            let _ = qol_gpui::popup_window::sync_window_layout(
+                &title,
+                window,
+                window_bounds.origin,
+                window_bounds.size,
+            );
+            window.focus(&view.focus_handle(cx));
+            window.activate_window();
+            view.start_active_monitor_poll(cx);
+            qol_runtime::probe!("SHOT_SELECT_WINDOW", "title={title} state=reuse");
             Some(title)
-        }
-        Ok(None) => None,
-        Err(_) => {
-            *cache.handle.borrow_mut() = None;
-            qol_runtime::probe!("SHOT_SELECT_OPEN", "selectors=1 result=stale-cache");
-            None
+        });
+        match result {
+            Ok(Some(title)) => {
+                qol_runtime::probe!("SHOT_SELECT_OPEN", "selectors=1 windows=1 result=reuse");
+                Some(title)
+            }
+            Ok(None) => None,
+            Err(_) => {
+                *cache.handle.borrow_mut() = None;
+                qol_runtime::probe!("SHOT_SELECT_OPEN", "selectors=1 result=stale-cache");
+                None
+            }
         }
     }
 }
+
+#[cfg(target_os = "linux")]
+pub use cache::{open as open_cached, pre_create as pre_create_cached, SelectorCache};
 
 pub fn open_all(
     tx: mpsc::Sender<Option<Rect>>,
