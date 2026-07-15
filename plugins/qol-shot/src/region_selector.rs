@@ -621,6 +621,7 @@ impl RegionSelector {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn reset(
         &mut self,
         state: Rc<RefCell<SelectionState>>,
