@@ -34,7 +34,7 @@ export const SIGNAL_SAMPLE_INTERVAL_MS = 2000;
 const SIGNAL_FLOOR_DBM = -95;
 const SIGNAL_CEILING_DBM = -35;
 const SIGNAL_MINIMUM_HEIGHT = 12;
-const BREDR_MARGIN_FLOOR_DB = -20;
+const SIGNAL_MAXIMUM_HEIGHT = 100;
 
 const GULIKIT_FIREFOX_BUTTON_MAP = Object.freeze([
     0,
@@ -169,13 +169,13 @@ export function connectionPresentation(connection) {
     if (!signal) {
         return {
             transport: 'Bluetooth',
-            detail: 'Signal unavailable',
-            level: 0,
-            tone: 'neutral',
+            detail: 'Connected',
+            level: null,
+            tone: 'connected',
             signalValue: null,
             signalKind: null,
             valueLabel: null,
-            label: 'Bluetooth signal unavailable',
+            label: 'Bluetooth is connected. Signal telemetry is unavailable.',
         };
     }
     if (signal.kind === 'bredr_link_margin_db') return bredrConnectionPresentation(signal);
@@ -205,22 +205,15 @@ function absoluteConnectionPresentation(signal) {
 
 function bredrConnectionPresentation(signal) {
     const value = Math.round(signal.value);
-    const [detail, level, tone] = value > 0
-        ? ['Above target range', 4, 'excellent']
-        : value === 0
-            ? ['In target range', 4, 'excellent']
-            : value >= -5
-                ? ['Below target range', 2, 'fair']
-                : ['Well below target range', 1, 'weak'];
     return {
         transport: 'Bluetooth',
-        detail,
-        level,
-        tone,
+        detail: 'Connected',
+        level: null,
+        tone: 'connected',
         signalValue: value,
         signalKind: signal.kind,
-        valueLabel: relativeValueLabel(value),
-        label: `Bluetooth BR/EDR link margin ${detail.toLowerCase()}, ${relativeValueLabel(value)}. This is relative dB, not dBm.`,
+        valueLabel: `HCI ${relativeValueLabel(value)}`,
+        label: `Bluetooth is connected. HCI BR/EDR relative RSSI is ${relativeValueLabel(value)}. This is vendor-defined, ungraded telemetry rather than a connection quality score.`,
     };
 }
 
@@ -230,8 +223,12 @@ export function signalHistorySample(connection, bluetoothKnown = false) {
         return {
             value: signal.signalValue,
             kind: signal.signalKind,
-            strength: signalStrength(signal.signalKind, signal.signalValue),
-            tone: signal.tone,
+            strength: signal.signalKind === 'bredr_link_margin_db'
+                ? null
+                : absoluteSignalStrength(signal.signalValue),
+            tone: !signal.signalKind || signal.signalKind === 'bredr_link_margin_db'
+                ? 'neutral'
+                : signal.tone,
         };
     }
     if (!connection && bluetoothKnown) {
@@ -245,6 +242,26 @@ export function appendSignalHistory(history, sample, limit = SIGNAL_HISTORY_LIMI
     if (!sample) return current;
     const maximum = Number.isInteger(limit) && limit > 0 ? limit : SIGNAL_HISTORY_LIMIT;
     return [...current, sample].slice(-maximum);
+}
+
+export function plotSignalHistory(history) {
+    if (!Array.isArray(history)) return [];
+    const readings = history
+        .filter(sample => sample?.kind === 'bredr_link_margin_db'
+            && sample?.value !== null
+            && Number.isFinite(Number(sample?.value)))
+        .map(sample => Number(sample.value));
+    if (readings.length === 0) return history;
+    const minimum = Math.min(...readings);
+    const maximum = Math.max(...readings);
+    return history.map(sample => {
+        const value = Number(sample?.value);
+        if (sample?.kind !== 'bredr_link_margin_db' || !Number.isFinite(value)) return sample;
+        return {
+            ...sample,
+            strength: trendStrength(value, minimum, maximum),
+        };
+    });
 }
 
 export function signalHistorySummary(history) {
@@ -268,13 +285,15 @@ export function signalHistorySummary(history) {
     return {
         count: history.length,
         kind,
-        title: kind === 'bredr_link_margin_db' ? 'BR/EDR margin · 60 s' : 'RSSI history · 60 s',
+        title: kind === 'bredr_link_margin_db'
+            ? 'Relative RSSI trend · 60 s · ungraded'
+            : 'RSSI history · 60 s',
         unavailableCount,
         minimum,
         maximum,
         rangeLabel,
         gapLabel,
-        label: `Bluetooth link history: ${history.length} samples, ${rangeLabel}, ${unavailableLabel}`,
+        label: historyLabel(kind, history.length, rangeLabel, unavailableLabel),
     };
 }
 
@@ -411,16 +430,26 @@ function finiteNumber(value) {
     return Number.isFinite(number) ? number : 0;
 }
 
-function signalStrength(kind, value) {
+function absoluteSignalStrength(value) {
     if (!Number.isFinite(value)) return null;
-    const floor = kind === 'bredr_link_margin_db' ? BREDR_MARGIN_FLOOR_DB : SIGNAL_FLOOR_DBM;
-    const ceiling = kind === 'bredr_link_margin_db' ? 0 : SIGNAL_CEILING_DBM;
     const normalized = clamp(
-        (value - floor) / (ceiling - floor),
+        (value - SIGNAL_FLOOR_DBM) / (SIGNAL_CEILING_DBM - SIGNAL_FLOOR_DBM),
         0,
         1,
     );
-    return Math.round(SIGNAL_MINIMUM_HEIGHT + normalized * (100 - SIGNAL_MINIMUM_HEIGHT));
+    return Math.round(
+        SIGNAL_MINIMUM_HEIGHT + normalized * (SIGNAL_MAXIMUM_HEIGHT - SIGNAL_MINIMUM_HEIGHT),
+    );
+}
+
+function trendStrength(value, minimum, maximum) {
+    if (minimum === maximum) {
+        return Math.round((SIGNAL_MINIMUM_HEIGHT + SIGNAL_MAXIMUM_HEIGHT) / 2);
+    }
+    const normalized = clamp((value - minimum) / (maximum - minimum), 0, 1);
+    return Math.round(
+        SIGNAL_MINIMUM_HEIGHT + normalized * (SIGNAL_MAXIMUM_HEIGHT - SIGNAL_MINIMUM_HEIGHT),
+    );
 }
 
 function signalRangeLabel(kind, minimum, maximum) {
@@ -430,15 +459,21 @@ function signalRangeLabel(kind, minimum, maximum) {
         return `${minimum} to ${maximum} dBm`;
     }
     if (minimum === maximum) return relativeValueLabel(minimum);
-    if (maximum <= 0) return `${Math.abs(maximum)} to ${Math.abs(minimum)} dB below target`;
-    if (minimum >= 0) return `${minimum} to ${maximum} dB above target`;
-    return `${formatSigned(minimum)} to ${formatSigned(maximum)} dB relative`;
+    return `${signedInteger(minimum)} to ${signedInteger(maximum)} dB relative`;
 }
 
 function relativeValueLabel(value) {
-    if (value < 0) return `${Math.abs(value)} dB below target`;
-    if (value > 0) return `${value} dB above target`;
-    return 'Target range';
+    return `${signedInteger(value)} dB relative`;
+}
+
+function historyLabel(kind, count, rangeLabel, unavailableLabel) {
+    const description = `Bluetooth link history: ${count} samples, ${rangeLabel}, ${unavailableLabel}`;
+    if (kind !== 'bredr_link_margin_db') return description;
+    return `${description}. BR/EDR relative RSSI is not a connection quality grade`;
+}
+
+function signedInteger(value) {
+    return `${value > 0 ? '+' : ''}${value}`;
 }
 
 function clamp(value, minimum, maximum) {

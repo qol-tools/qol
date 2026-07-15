@@ -966,6 +966,7 @@
 
 .gamepad-connection--excellent,
 .gamepad-connection--good,
+.gamepad-connection--connected,
 .gamepad-connection--wired {
     --gamepad-signal-color: var(--success);
 }
@@ -1116,6 +1117,10 @@
     height: var(--signal-strength);
     background: var(--success);
     opacity: 0.76;
+}
+
+.gamepad-signal-history-track i[data-tone="neutral"] {
+    background: var(--text-muted);
 }
 
 .gamepad-signal-history-track i[data-tone="fair"] {

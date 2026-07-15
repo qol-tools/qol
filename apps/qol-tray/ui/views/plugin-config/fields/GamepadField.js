@@ -9,6 +9,7 @@ import {
     connectionPresentation,
     formatSigned,
     formatValue,
+    plotSignalHistory,
     SIGNAL_HISTORY_LIMIT,
     signalHistorySummary,
 } from './gamepad-model.js';
@@ -125,9 +126,10 @@ function AdapterIdentity({ adapter }) {
 function SignalHistory({ history }) {
     const summary = signalHistorySummary(history);
     if (!summary) return null;
+    const plottedHistory = plotSignalHistory(history);
     const slots = [
-        ...Array(Math.max(0, SIGNAL_HISTORY_LIMIT - history.length)).fill(null),
-        ...history.slice(-SIGNAL_HISTORY_LIMIT),
+        ...Array(Math.max(0, SIGNAL_HISTORY_LIMIT - plottedHistory.length)).fill(null),
+        ...plottedHistory.slice(-SIGNAL_HISTORY_LIMIT),
     ];
     return html`
         <div class="gamepad-signal-history" role="img" aria-label=${summary.label}>

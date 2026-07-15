@@ -18,6 +18,7 @@ pub(crate) use tracking::kill_plugin_processes;
 
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(3);
 const DAEMON_READY_INTERVAL: Duration = Duration::from_millis(25);
+const QUERY_DAEMON_READY_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[cfg(feature = "dev")]
 pub fn action_processes_snapshot() -> std::collections::HashMap<String, Vec<u32>> {
@@ -123,23 +124,80 @@ pub fn dispatch_query(
     query_name: &str,
 ) -> Result<serde_json::Value, ActionExecutionError> {
     let socket_path = resolve_plugin_daemon_socket(plugin_manager, plugin_id)?;
-    let dispatch =
+    let initial_dispatch =
         crate::plugins::action_transport::dispatch_daemon_action(&socket_path, query_name);
+    #[cfg(debug_assertions)]
+    trace_query_dispatch(plugin_id, query_name, "initial", &initial_dispatch);
+    if !matches!(&initial_dispatch, DaemonActionDispatch::Unavailable) {
+        return query_dispatch_result(initial_dispatch, plugin_id, query_name);
+    }
+
+    if let Err(error) = ensure_daemon_ready(
+        plugin_manager,
+        plugin_id,
+        query_name,
+        &socket_path,
+        query_daemon_socket_ready,
+    ) {
+        #[cfg(debug_assertions)]
+        qol_runtime::probe!(
+            "QUERY_DISPATCH",
+            "plugin={} query={} attempt=recovery outcome=not_ready error={}",
+            plugin_id,
+            query_name,
+            error
+        );
+        return Err(error);
+    }
+
+    let retry_dispatch =
+        crate::plugins::action_transport::dispatch_daemon_action(&socket_path, query_name);
+    #[cfg(debug_assertions)]
+    trace_query_dispatch(plugin_id, query_name, "retry", &retry_dispatch);
+    query_dispatch_result(retry_dispatch, plugin_id, query_name)
+}
+
+fn query_dispatch_result(
+    dispatch: DaemonActionDispatch,
+    plugin_id: &str,
+    query_name: &str,
+) -> Result<serde_json::Value, ActionExecutionError> {
     match dispatch {
-        crate::plugins::action_transport::DaemonActionDispatch::Handled { payload } => {
-            Ok(payload.unwrap_or(serde_json::Value::Null))
-        }
-        crate::plugins::action_transport::DaemonActionDispatch::Fallback => {
-            Err(ActionExecutionError::ActionRejected(format!(
-                "query {query_name} rejected by {plugin_id} daemon"
-            )))
-        }
-        crate::plugins::action_transport::DaemonActionDispatch::Error(message) => {
-            Err(ActionExecutionError::ActionRejected(message))
-        }
-        crate::plugins::action_transport::DaemonActionDispatch::Unavailable => Err(
-            ActionExecutionError::ActionRejected(format!("daemon unavailable for {plugin_id}")),
-        ),
+        DaemonActionDispatch::Handled { payload } => Ok(payload.unwrap_or(serde_json::Value::Null)),
+        DaemonActionDispatch::Fallback => Err(ActionExecutionError::ActionRejected(format!(
+            "query {query_name} rejected by {plugin_id} daemon"
+        ))),
+        DaemonActionDispatch::Error(message) => Err(ActionExecutionError::ActionRejected(message)),
+        DaemonActionDispatch::Unavailable => Err(ActionExecutionError::ActionRejected(format!(
+            "daemon unavailable for {plugin_id}"
+        ))),
+    }
+}
+
+#[cfg(debug_assertions)]
+fn trace_query_dispatch(
+    plugin_id: &str,
+    query_name: &str,
+    attempt: &str,
+    dispatch: &DaemonActionDispatch,
+) {
+    qol_runtime::probe!(
+        "QUERY_DISPATCH",
+        "plugin={} query={} attempt={} outcome={}",
+        plugin_id,
+        query_name,
+        attempt,
+        dispatch_outcome(dispatch)
+    );
+}
+
+#[cfg(debug_assertions)]
+fn dispatch_outcome(dispatch: &DaemonActionDispatch) -> &'static str {
+    match dispatch {
+        DaemonActionDispatch::Handled { .. } => "handled",
+        DaemonActionDispatch::Fallback => "fallback",
+        DaemonActionDispatch::Unavailable => "unavailable",
+        DaemonActionDispatch::Error(_) => "error",
     }
 }
 
@@ -204,7 +262,23 @@ fn ensure_daemon_ready_for_action(
         return Ok(());
     };
 
-    if daemon_socket_ready(socket_path) {
+    ensure_daemon_ready(
+        plugin_manager,
+        resolved.plugin_id.as_str(),
+        &resolved.action_id,
+        socket_path,
+        daemon_socket_ready,
+    )
+}
+
+fn ensure_daemon_ready(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_id: &str,
+    request_id: &str,
+    socket_path: &Path,
+    readiness_probe: fn(&Path) -> bool,
+) -> Result<(), ActionExecutionError> {
+    if readiness_probe(socket_path) {
         return Ok(());
     }
 
@@ -213,24 +287,24 @@ fn ensure_daemon_ready_for_action(
             .lock()
             .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
         plugins
-            .ensure_plugin_daemon_running(resolved.plugin_id.as_str())
+            .ensure_plugin_daemon_running(plugin_id)
             .map_err(|error| ActionExecutionError::SpawnFailed(error.to_string()))?;
     }
 
-    wait_for_daemon_socket(socket_path)
+    wait_for_daemon_socket(socket_path, readiness_probe)
         .then_some(())
         .ok_or_else(|| {
             ActionExecutionError::SpawnFailed(format!(
                 "daemon socket did not become ready for {}::{}",
-                resolved.plugin_id, resolved.action_id
+                plugin_id, request_id
             ))
         })
 }
 
-fn wait_for_daemon_socket(socket_path: &Path) -> bool {
+fn wait_for_daemon_socket(socket_path: &Path, readiness_probe: fn(&Path) -> bool) -> bool {
     let deadline = Instant::now() + DAEMON_READY_TIMEOUT;
     loop {
-        if daemon_socket_ready(socket_path) {
+        if readiness_probe(socket_path) {
             return true;
         }
         if Instant::now() >= deadline {
@@ -243,6 +317,17 @@ fn wait_for_daemon_socket(socket_path: &Path) -> bool {
 fn daemon_socket_ready(socket_path: &Path) -> bool {
     matches!(
         crate::plugins::action_transport::dispatch_daemon_action(socket_path, "ping"),
+        DaemonActionDispatch::Handled { .. }
+    )
+}
+
+fn query_daemon_socket_ready(socket_path: &Path) -> bool {
+    matches!(
+        crate::plugins::action_transport::dispatch_daemon_action_with_timeout(
+            socket_path,
+            "ping",
+            QUERY_DAEMON_READY_PROBE_TIMEOUT,
+        ),
         DaemonActionDispatch::Handled { .. }
     )
 }

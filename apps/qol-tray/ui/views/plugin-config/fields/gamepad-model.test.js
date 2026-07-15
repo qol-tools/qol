@@ -8,6 +8,7 @@ import {
     gamepadSnapshot,
     mergeNativeInputs,
     monitorSignature,
+    plotSignalHistory,
     signalHistorySample,
     signalHistorySummary,
 } from './gamepad-model.js';
@@ -165,17 +166,17 @@ test('native input supplements matching standard pads without leaking across dev
     assert.equal(merged[1].nativeInput, null);
 });
 
-test('connection presentation keeps absolute RSSI and BR/EDR link margin semantically separate', () => {
+test('connection presentation grades absolute RSSI and leaves BR/EDR relative RSSI ungraded', () => {
     const cases = [
         [absoluteSignal(-40), ['Strong RSSI', 4, 'excellent', -40, '-40 dBm']],
         [absoluteSignal(-60), ['Usable RSSI', 3, 'good', -60, '-60 dBm']],
         [absoluteSignal(-72), ['Low RSSI', 2, 'fair', -72, '-72 dBm']],
         [absoluteSignal(-88), ['Very low RSSI', 1, 'weak', -88, '-88 dBm']],
-        [relativeSignal(7), ['Above target range', 4, 'excellent', 7, '7 dB above target']],
-        [relativeSignal(0), ['In target range', 4, 'excellent', 0, 'Target range']],
-        [relativeSignal(-3), ['Below target range', 2, 'fair', -3, '3 dB below target']],
-        [relativeSignal(-11), ['Well below target range', 1, 'weak', -11, '11 dB below target']],
-        [{ transport: 'bluetooth', signal: null }, ['Signal unavailable', 0, 'neutral', null, null]],
+        [relativeSignal(7), ['Connected', null, 'connected', 7, 'HCI +7 dB relative']],
+        [relativeSignal(0), ['Connected', null, 'connected', 0, 'HCI 0 dB relative']],
+        [relativeSignal(-3), ['Connected', null, 'connected', -3, 'HCI -3 dB relative']],
+        [relativeSignal(-11), ['Connected', null, 'connected', -11, 'HCI -11 dB relative']],
+        [{ transport: 'bluetooth', signal: null }, ['Connected', null, 'connected', null, null]],
         [{ transport: 'usb', signal: null }, ['Wired', null, 'wired', null, null]],
     ];
     for (const [connection, expected] of cases) {
@@ -186,19 +187,19 @@ test('connection presentation keeps absolute RSSI and BR/EDR link margin semanti
             JSON.stringify(connection),
         );
     }
-    assert.match(connectionPresentation(relativeSignal(-11)).label, /relative dB, not dBm/);
+    assert.match(connectionPresentation(relativeSignal(-11)).label, /ungraded telemetry/);
     assert.match(connectionPresentation(absoluteSignal(-40)).label, /does not measure packet delivery/);
     assert.equal(connectionPresentation(null), null);
 });
 
-test('signal history scales each measurement kind without mixing their units', () => {
+test('signal history only assigns absolute measurements to a fixed quality scale', () => {
     const cases = [
         [absoluteSignal(-35), false, [-35, 'absolute_dbm', 100, 'excellent']],
         [absoluteSignal(-65), false, [-65, 'absolute_dbm', 56, 'good']],
         [absoluteSignal(-95), false, [-95, 'absolute_dbm', 12, 'weak']],
-        [relativeSignal(0), false, [0, 'bredr_link_margin_db', 100, 'excellent']],
-        [relativeSignal(-10), false, [-10, 'bredr_link_margin_db', 56, 'weak']],
-        [relativeSignal(-20), false, [-20, 'bredr_link_margin_db', 12, 'weak']],
+        [relativeSignal(0), false, [0, 'bredr_link_margin_db', null, 'neutral']],
+        [relativeSignal(-10), false, [-10, 'bredr_link_margin_db', null, 'neutral']],
+        [relativeSignal(-20), false, [-20, 'bredr_link_margin_db', null, 'neutral']],
         [{ transport: 'bluetooth', signal: null }, false, [null, null, null, 'neutral']],
         [null, true, [null, null, null, 'neutral']],
     ];
@@ -213,6 +214,25 @@ test('signal history scales each measurement kind without mixing their units', (
     }
     assert.equal(signalHistorySample(null, false), null);
     assert.equal(signalHistorySample({ transport: 'usb', signal: null }), null);
+});
+
+test('relative RSSI history plots variation inside its own window without grading quality', () => {
+    const relative = [-10, -6, -2].map(value => signalHistorySample(relativeSignal(value)));
+    const plotted = plotSignalHistory(relative);
+
+    assert.deepEqual(plotted.map(sample => sample.strength), [12, 56, 100]);
+    assert.deepEqual(plotted.map(sample => sample.value), [-10, -6, -2]);
+    assert.deepEqual(
+        plotSignalHistory([signalHistorySample(relativeSignal(-6))])
+            .map(sample => sample.strength),
+        [56],
+    );
+
+    const unavailable = signalHistorySample({ transport: 'bluetooth', signal: null });
+    assert.equal(plotSignalHistory([relative[0], unavailable])[1].strength, null);
+
+    const absolute = signalHistorySample(absoluteSignal(-65));
+    assert.strictEqual(plotSignalHistory([absolute])[0], absolute);
 });
 
 test('signal history trims oldest samples and summarizes range and unavailable gaps', () => {
@@ -261,8 +281,9 @@ test('signal history trims oldest samples and summarizes range and unavailable g
         signalHistorySample(relativeSignal(-11)),
         signalHistorySample(relativeSignal(-2)),
     ];
-    assert.equal(signalHistorySummary(relative).rangeLabel, '2 to 11 dB below target');
-    assert.equal(signalHistorySummary(relative).title, 'BR/EDR margin · 60 s');
+    assert.equal(signalHistorySummary(relative).rangeLabel, '-11 to -2 dB relative');
+    assert.equal(signalHistorySummary(relative).title, 'Relative RSSI trend · 60 s · ungraded');
+    assert.match(signalHistorySummary(relative).label, /not a connection quality grade/);
     assert.equal(signalHistorySummary([]), null);
 });
 

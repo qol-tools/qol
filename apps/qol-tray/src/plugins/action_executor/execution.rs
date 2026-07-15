@@ -29,7 +29,7 @@ fn execute_via_daemon(
         "plugin={} action={} outcome={}",
         resolved.plugin_id,
         resolved.action_id,
-        dispatch_outcome(&dispatch)
+        super::dispatch_outcome(&dispatch)
     );
     if matches!(dispatch, DaemonActionDispatch::Handled { .. }) {
         log::info!(
@@ -48,16 +48,6 @@ fn execute_via_daemon(
         "{} {}::{}",
         reason, resolved.plugin_id, resolved.action_id
     )))
-}
-
-#[cfg(debug_assertions)]
-fn dispatch_outcome(dispatch: &DaemonActionDispatch) -> &'static str {
-    match dispatch {
-        DaemonActionDispatch::Handled { .. } => "handled",
-        DaemonActionDispatch::Fallback => "fallback",
-        DaemonActionDispatch::Unavailable => "unavailable",
-        DaemonActionDispatch::Error(_) => "error",
-    }
 }
 
 fn daemon_failure_reason(

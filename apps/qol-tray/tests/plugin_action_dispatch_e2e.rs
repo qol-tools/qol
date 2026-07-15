@@ -110,38 +110,58 @@ impl FakeDaemon {
         let listener = UnixListener::bind(socket_path).expect("bind fake daemon socket");
         let handle = thread::Builder::new()
             .name("fake-daemon".into())
-            .spawn(move || {
-                for _ in 0..4 {
-                    let Ok((mut stream, _)) = listener.accept() else {
-                        return;
-                    };
-                    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                    let mut reader =
-                        BufReader::new(stream.try_clone().expect("clone fake daemon stream"));
-                    let mut line = String::new();
-                    let Ok(_) = reader.read_line(&mut line) else {
-                        return;
-                    };
-                    if line.is_empty() {
-                        return;
-                    }
-
-                    if line.contains(r#""action":"ping""#) {
-                        let _ = stream.write_all(br#"{"status":"handled"}"#);
-                        let _ = stream.write_all(b"\n");
-                        continue;
-                    }
-
-                    let _ = stream.write_all(response_line.as_bytes());
-                    let _ = stream.write_all(b"\n");
-                    return;
-                }
-            })
+            .spawn(move || serve_fake_daemon(listener, response_line))
             .expect("spawn fake daemon thread");
         Self {
             handle: Some(handle),
             socket_path: socket_path.to_path_buf(),
         }
+    }
+
+    fn start_after(socket_path: &Path, response_line: &'static str, delay: Duration) -> Self {
+        let socket_path = socket_path.to_path_buf();
+        let thread_socket_path = socket_path.clone();
+        let handle = thread::Builder::new()
+            .name("delayed-fake-daemon".into())
+            .spawn(move || {
+                thread::sleep(delay);
+                let _ = fs::remove_file(&thread_socket_path);
+                let listener = UnixListener::bind(&thread_socket_path)
+                    .expect("bind delayed fake daemon socket");
+                serve_fake_daemon(listener, response_line);
+            })
+            .expect("spawn delayed fake daemon thread");
+        Self {
+            handle: Some(handle),
+            socket_path,
+        }
+    }
+}
+
+fn serve_fake_daemon(listener: UnixListener, response_line: &str) {
+    for _ in 0..4 {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        let mut reader = BufReader::new(stream.try_clone().expect("clone fake daemon stream"));
+        let mut line = String::new();
+        let Ok(_) = reader.read_line(&mut line) else {
+            return;
+        };
+        if line.is_empty() {
+            return;
+        }
+
+        if line.contains(r#""action":"ping""#) {
+            let _ = stream.write_all(br#"{"status":"handled"}"#);
+            let _ = stream.write_all(b"\n");
+            continue;
+        }
+
+        let _ = stream.write_all(response_line.as_bytes());
+        let _ = stream.write_all(b"\n");
+        return;
     }
 }
 
@@ -211,5 +231,36 @@ async fn action_dispatch_skips_runtime_when_daemon_replies_handled() {
         !marker.exists(),
         "runtime must NOT run when daemon replies handled (marker={})",
         marker.display(),
+    );
+}
+
+#[tokio::test]
+async fn query_dispatch_recovers_when_daemon_socket_becomes_ready_after_request() {
+    let _serial = lock_tests().await;
+    let plugin_id = "delayed-query-case";
+    let marker = shared_root().path().join(format!("{plugin_id}.marker"));
+    let _ = fs::remove_file(&marker);
+
+    let (_plugin_dir, socket_path) = install_plugin(plugin_id, &marker);
+    let server = FakeDaemon::start_after(
+        &socket_path,
+        r#"{"status":"handled","data":{"items":[{"name":"controller"}]}}"#,
+        Duration::from_millis(200),
+    );
+    let manager = loaded_manager();
+    let started = Instant::now();
+
+    let result = action_executor::dispatch_query(&manager, plugin_id, "controllers_snapshot");
+    let elapsed = started.elapsed();
+    drop(server);
+    manager.lock().unwrap().shutdown();
+
+    assert_eq!(
+        result.unwrap(),
+        serde_json::json!({"items": [{"name": "controller"}]}),
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "readiness probes must not inherit the 10-second action timeout"
     );
 }
