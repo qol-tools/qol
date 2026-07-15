@@ -10,7 +10,13 @@ pub fn capture_screenshot() -> Result<Option<PathBuf>> {
     let Some(output_file) = capture_to_file()? else {
         return Ok(None);
     };
-    present_capture(&output_file);
+    let config = crate::config::load();
+    let completion = crate::completion::PreviewCompletion::new(
+        &output_file,
+        config.capture.open_folder_after_save,
+    );
+    completion.announce_saved();
+    present_capture(&output_file, completion);
     Ok(Some(output_file))
 }
 
@@ -34,6 +40,7 @@ pub struct PreviewCapture {
     pub(crate) pixels: Option<PreviewPixels>,
     pub(crate) file_ready: CaptureFileReady,
     pub(crate) started_at: Instant,
+    pub(crate) completion: Option<crate::completion::PreviewCompletion>,
 }
 
 pub(crate) enum PreviewPixels {
@@ -228,6 +235,7 @@ fn capture_rect_for_preview(
             rect.h
         );
         return Ok(PreviewCapture {
+            completion: Some(preview_completion(&output_file)),
             path: output_file,
             pixels: Some(PreviewPixels::bgra(bgra, width, height)),
             file_ready,
@@ -243,6 +251,7 @@ fn capture_rect_for_preview(
         );
         let file_ready = spawn_file_write(rect, output_file.clone());
         return Ok(PreviewCapture {
+            completion: Some(preview_completion(&output_file)),
             path: output_file,
             pixels: Some(PreviewPixels::rgba(rgba, w, h)),
             file_ready,
@@ -259,11 +268,17 @@ fn capture_rect_for_preview(
         rect.h
     );
     Ok(PreviewCapture {
+        completion: Some(preview_completion(&output_file)),
         path: output_file,
         pixels: None,
         file_ready: CaptureFileReady::ready(),
         started_at,
     })
+}
+
+fn preview_completion(path: &Path) -> crate::completion::PreviewCompletion {
+    let config = crate::config::load();
+    crate::completion::PreviewCompletion::new(path, config.capture.open_folder_after_save)
 }
 
 fn frozen_crop(frozen_frame: Option<&FrozenFrame>, rect: Rect) -> Result<Option<FrozenCrop>> {
@@ -339,23 +354,31 @@ fn swap_red_blue(data: &mut [u8]) {
     }
 }
 
-fn present_capture(output_file: &Path) {
-    if let Err(error) = show_preview(output_file) {
+fn present_capture(output_file: &Path, completion: crate::completion::PreviewCompletion) {
+    let fallback = completion.clone();
+    if let Err(error) = show_preview(output_file, completion) {
         eprintln!("[qol-shot] preview unavailable, copying instead: {error:#}");
         if let Err(error) = platform::copy_image_to_clipboard(output_file) {
             eprintln!("[qol-shot] failed to copy screenshot to clipboard: {error:#}");
         }
         platform::show_notification("Screenshot saved", &output_file.display().to_string(), 1800);
+        fallback.finish(crate::completion::PreviewExit::Unavailable);
     }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn show_preview(output_file: &Path) -> Result<()> {
-    crate::preview::show(output_file)
+fn show_preview(
+    output_file: &Path,
+    completion: crate::completion::PreviewCompletion,
+) -> Result<()> {
+    crate::preview::show_saved(output_file, completion)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn show_preview(_output_file: &Path) -> Result<()> {
+fn show_preview(
+    _output_file: &Path,
+    _completion: crate::completion::PreviewCompletion,
+) -> Result<()> {
     Err(anyhow!("preview is not supported on this platform"))
 }
 

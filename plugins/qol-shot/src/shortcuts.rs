@@ -61,6 +61,10 @@ mod tests {
             shot_action_for_keystroke(&keystroke("p", Modifiers::none()), ShotAction::Copy),
             Some(ShotAction::CopyPath)
         );
+        assert_eq!(
+            shot_action_for_keystroke(&keystroke("o", Modifiers::none()), ShotAction::Copy),
+            Some(ShotAction::OpenFolder)
+        );
     }
 
     #[test]

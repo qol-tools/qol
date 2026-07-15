@@ -2,6 +2,9 @@ pub mod cli;
 
 mod actions;
 mod capture_gate;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod capture_status;
+mod completion;
 mod config;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod daemon;

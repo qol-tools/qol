@@ -2,10 +2,11 @@ use anyhow::{anyhow, Context, Result};
 use gpui::{Bounds, Pixels, Point, WindowDecorations, WindowKind};
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use crate::frozen_frame::FrozenFrame;
 use crate::platform::{CaptureProcess, CaptureSession};
@@ -15,14 +16,19 @@ use crate::{Config, Monitor, Rect};
 mod clipboard;
 mod display;
 mod preview;
+mod status;
 mod system;
 mod window;
 
 pub use clipboard::{copy_image_to_clipboard, copy_path_to_clipboard};
 pub use display::{full_screen_bounds, get_monitors};
 pub use preview::{capture_frozen_frame, configure_preview_window, grab_preview_rgba};
+pub use status::{hide_capture_status, show_capture_status};
 use system::resolve_command;
-pub use system::{open_url, platform_supported_check, required_binaries_check, show_notification};
+pub use system::{
+    open_url, platform_supported_check, required_binaries_check, show_notification,
+    show_saved_notification,
+};
 pub use window::{
     configure_pin_window, pin_focus, pin_release_focus, pin_resize_session, prepare_pin_window,
     PinResizeSession,
@@ -678,8 +684,63 @@ pub fn recording_started(_session: &CaptureSession) {
     show_notification("Recording started", "Press your hotkey to stop", 1200);
 }
 
-pub fn recording_stopped(_session: &CaptureSession, _config: &Config) {
-    show_notification("Recording stopped", "Saved to ~/Videos", 2000);
+pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<PathBuf> {
+    show_notification("Recording stopped", "Saving recording...", 1800);
+    let output_file = session.output_file.as_deref()?;
+    if let Err(error) = wait_for_recording_file(session, output_file) {
+        eprintln!("[qol-shot] recording finalization failed: {error:#}");
+        show_notification(
+            "Recording save delayed",
+            "The recorder is still finalizing the file",
+            3000,
+        );
+        return None;
+    }
+    let message = output_file
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Saved in Videos");
+    crate::completion::background_saved(
+        "Recording saved",
+        message,
+        output_file,
+        config.capture.open_folder_after_save,
+    );
+    Some(output_file.to_path_buf())
+}
+
+fn wait_for_recording_file(session: &CaptureSession, output_file: &Path) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let mut previous_len = None;
+    let mut stable_samples = 0;
+    while Instant::now() < deadline {
+        let recording = session
+            .processes
+            .iter()
+            .any(|process| process_alive(process.pid));
+        let len = output_file.metadata().ok().map(|metadata| metadata.len());
+        if !recording && len.is_some_and(|len| len > 0) {
+            if len == previous_len {
+                stable_samples += 1;
+                if stable_samples >= 2 {
+                    qol_runtime::probe!(
+                        "SHOT_RECORD_FINALIZE",
+                        "stage=file-ready len={}",
+                        len.unwrap_or_default()
+                    );
+                    return Ok(());
+                }
+            } else {
+                previous_len = len;
+                stable_samples = 0;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err(anyhow!(
+        "recording file did not finish writing: {}",
+        output_file.display()
+    ))
 }
 
 pub fn stop_capture(session: &CaptureSession) -> Result<()> {

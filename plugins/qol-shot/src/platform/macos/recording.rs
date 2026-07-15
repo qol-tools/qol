@@ -21,7 +21,7 @@ use super::swift::{
 };
 use super::system::{
     capture_work_dir, ensure_capture_work_dir, move_file, open_path, output_format_label,
-    path_extension_is, paths_match, reveal_path, show_notification, signal_process, videos_dir,
+    path_extension_is, paths_match, show_notification, signal_process, videos_dir,
     wait_for_process_exit,
 };
 
@@ -109,7 +109,7 @@ pub fn recording_started(session: &CaptureSession) {
     prewarm_recording_helpers();
 }
 
-pub fn recording_stopped(session: &CaptureSession, config: &Config) {
+pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<PathBuf> {
     dismiss_recording_region_overlay();
     qol_runtime::probe!(
         "SHOT_RECORD_FINALIZE",
@@ -129,31 +129,33 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) {
             session.segments.len()
         );
         show_recording_ended(output_file, reencode_needed);
-        let reveal_file = match finalize_recording(session, output_file, capture_file, config) {
-            Ok(reveal_file) => {
-                qol_runtime::probe!(
-                    "SHOT_RECORD_FINALIZE",
-                    "stage=ok reveal={} reencoded={}",
-                    path_label(&reveal_file),
-                    reencode_needed
-                );
-                show_recording_saved(&reveal_file, reencode_needed);
-                reveal_file
-            }
-            Err(error) => {
-                qol_runtime::probe!("SHOT_RECORD_FINALIZE", "stage=error result=fallback");
-                finalization_fallback(error, session, output_file, capture_file)
-            }
-        };
-        let revealed = reveal_recording(&reveal_file);
-        qol_runtime::probe!(
-            "SHOT_RECORD_FINALIZE",
-            "stage=reveal file={} result={revealed}",
-            path_label(&reveal_file)
+        let (reveal_file, message) =
+            match finalize_recording(session, output_file, capture_file, config) {
+                Ok(reveal_file) => {
+                    qol_runtime::probe!(
+                        "SHOT_RECORD_FINALIZE",
+                        "stage=ok reveal={} reencoded={}",
+                        path_label(&reveal_file),
+                        reencode_needed
+                    );
+                    let message = show_recording_saved(&reveal_file, reencode_needed);
+                    (reveal_file, message)
+                }
+                Err(error) => {
+                    qol_runtime::probe!("SHOT_RECORD_FINALIZE", "stage=error result=fallback");
+                    let reveal_file =
+                        finalization_fallback(error, session, output_file, capture_file);
+                    let message = format!("Saved native recording as {}", path_label(&reveal_file));
+                    (reveal_file, message)
+                }
+            };
+        crate::completion::background_saved(
+            "Recording saved",
+            &message,
+            &reveal_file,
+            config.capture.open_folder_after_save,
         );
-        if revealed {
-            return;
-        }
+        return Some(reveal_file);
     }
 
     qol_runtime::probe!("SHOT_RECORD_FINALIZE", "stage=open-videos");
@@ -163,9 +165,15 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) {
         1800,
         StatusOverlayLifecycle::ExitAfterHide,
     );
-    if let Some(videos_dir) = videos_dir() {
+    let videos_dir = config
+        .capture
+        .open_folder_after_save
+        .then(videos_dir)
+        .flatten();
+    if let Some(videos_dir) = videos_dir {
         open_path(&videos_dir);
     }
+    None
 }
 
 pub fn stop_capture(session: &CaptureSession) -> Result<()> {
@@ -684,7 +692,7 @@ fn show_recording_ended(output_file: &Path, conversion_needed: bool) {
     show_notification("Recording stopped", &message, 2200);
 }
 
-fn show_recording_saved(output_file: &Path, converted: bool) {
+fn show_recording_saved(output_file: &Path, converted: bool) -> String {
     qol_runtime::probe!(
         "SHOT_RECORD_STATUS",
         "stage=saved output={} converted={converted}",
@@ -702,7 +710,7 @@ fn show_recording_saved(output_file: &Path, converted: bool) {
         2400,
         StatusOverlayLifecycle::ExitAfterHide,
     );
-    show_notification("Recording saved", &message, 2200);
+    message
 }
 
 fn prewarm_recording_helpers() {
@@ -721,25 +729,6 @@ fn prewarm_recording_helpers() {
         VIDEO_COMPOSER_SWIFT,
         VIDEO_COMPOSER_HELPER,
     );
-}
-
-fn reveal_recording(output_file: &Path) -> bool {
-    wait_for_file(output_file);
-
-    if reveal_path(output_file) {
-        return true;
-    }
-
-    output_file.parent().map(open_path).unwrap_or(false)
-}
-
-fn wait_for_file(output_file: &Path) {
-    for _ in 0..20 {
-        if output_file.symlink_metadata().is_ok() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
 }
 
 fn wait_for_stable_file(output_file: &Path) -> Result<()> {

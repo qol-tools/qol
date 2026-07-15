@@ -1,0 +1,31 @@
+use gpui::*;
+use std::rc::Rc;
+
+pub fn show_capture_status(
+    monitor_bounds: Bounds<Pixels>,
+    title: String,
+    subtitle: String,
+    cx: &mut App,
+) -> bool {
+    let bounds = crate::region_selector::guide_panel_bounds(monitor_bounds);
+    let reveal: crate::region_selector::SelectorReveal = Rc::new(|title| {
+        super::window::configure_status_window(&title);
+    });
+    super::SELECTOR_CACHE.with(|cache| {
+        crate::region_selector::show_cached_guide(
+            cache,
+            bounds,
+            title.into(),
+            subtitle.into(),
+            reveal,
+            cx,
+        )
+        .is_some()
+    })
+}
+
+pub fn hide_capture_status(cx: &mut App) {
+    super::SELECTOR_CACHE.with(|cache| {
+        crate::region_selector::hide_cached_guide(cache, cx);
+    });
+}

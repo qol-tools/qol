@@ -270,10 +270,46 @@ mod cache {
             }
         }
     }
+
+    pub fn show_guide(
+        cache: &SelectorCache,
+        bounds: Bounds<Pixels>,
+        title: SharedString,
+        subtitle: SharedString,
+        reveal: SelectorReveal,
+        cx: &mut App,
+    ) -> Option<String> {
+        let handle = (*cache.handle.borrow())?;
+        let window_title = handle
+            .update(cx, |view, window, cx| {
+                let window_title = view.title.clone();
+                view.show_guide(bounds, title, subtitle, reveal);
+                qol_gpui::popup_window::sync_window_layout(
+                    &window_title,
+                    window,
+                    bounds.origin,
+                    bounds.size,
+                );
+                cx.notify();
+                window_title
+            })
+            .ok()?;
+        Some(window_title)
+    }
+
+    pub fn hide_guide(cache: &SelectorCache, cx: &mut App) {
+        let Some(handle) = *cache.handle.borrow() else {
+            return;
+        };
+        let _ = handle.update(cx, |view, window, _cx| view.hide_guide(window));
+    }
 }
 
 #[cfg(target_os = "linux")]
-pub use cache::{open as open_cached, pre_create as pre_create_cached, SelectorCache};
+pub use cache::{
+    hide_guide as hide_cached_guide, open as open_cached, pre_create as pre_create_cached,
+    show_guide as show_cached_guide, SelectorCache,
+};
 
 pub fn open_all(
     tx: mpsc::Sender<Option<Rect>>,
@@ -577,6 +613,13 @@ struct RegionSelector {
     reveal_generation: u64,
     scheduled_reveal_generation: Option<u64>,
     pending_reveal: Option<SelectorReveal>,
+    guide_override: Option<GuideContent>,
+}
+
+#[derive(Clone)]
+struct GuideContent {
+    title: SharedString,
+    subtitle: SharedString,
 }
 
 impl RegionSelector {
@@ -618,6 +661,7 @@ impl RegionSelector {
             reveal_generation: 0,
             scheduled_reveal_generation: None,
             pending_reveal: None,
+            guide_override: None,
         }
     }
 
@@ -654,7 +698,32 @@ impl RegionSelector {
         self.reveal_generation = self.reveal_generation.wrapping_add(1);
         self.scheduled_reveal_generation = None;
         self.pending_reveal = Some(reveal);
+        self.guide_override = None;
         cx.notify();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn show_guide(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        title: SharedString,
+        subtitle: SharedString,
+        reveal: SelectorReveal,
+    ) {
+        self.window_bounds = bounds;
+        self.frozen_image = None;
+        self.guide_override = Some(GuideContent { title, subtitle });
+        self.reveal_generation = self.reveal_generation.wrapping_add(1);
+        self.pending_reveal = Some(reveal);
+        self.scheduled_reveal_generation = None;
+    }
+
+    #[cfg(target_os = "linux")]
+    fn hide_guide(&mut self, window: &mut Window) {
+        if self.guide_override.take().is_none() {
+            return;
+        }
+        qol_gpui::popup_window::hide_for_capture(&self.title, window);
     }
 
     fn schedule_reveal_after_present(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1042,14 +1111,14 @@ impl RegionSelector {
 
     fn guide_frame(&self) -> Option<(f32, f32, f32)> {
         let window_bounds = self.window_bounds;
-        let bounds = self.state.borrow().active_bounds.unwrap_or(window_bounds);
-        intersect_bounds(bounds, window_bounds)?;
-        let local_x = f32::from(bounds.origin.x) - f32::from(window_bounds.origin.x);
-        let local_y = f32::from(bounds.origin.y) - f32::from(window_bounds.origin.y);
-        let monitor_width = f32::from(bounds.size.width);
-        let guide_width = (monitor_width - GUIDE_MARGIN_X * 2.0).clamp(1.0, GUIDE_W);
-        let guide_left = local_x + (monitor_width - guide_width) / 2.0;
-        Some((guide_left, local_y + GUIDE_TOP, guide_width))
+        let region = self.state.borrow().active_bounds.unwrap_or(window_bounds);
+        let region = intersect_bounds(region, window_bounds)?;
+        let bounds = guide_panel_bounds(region);
+        Some((
+            f32::from(bounds.origin.x - window_bounds.origin.x),
+            f32::from(bounds.origin.y - window_bounds.origin.y),
+            f32::from(bounds.size.width),
+        ))
     }
 
     fn chip_frame(&self) -> Option<(f32, f32, f32)> {
@@ -1206,6 +1275,26 @@ impl Focusable for RegionSelector {
 impl Render for RegionSelector {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.schedule_reveal_after_present(window, cx);
+        if let Some(guide) = self.guide_override.clone() {
+            return div()
+                .id("shot-region-selector")
+                .size_full()
+                .relative()
+                .child(
+                    OverlayText {
+                        title: guide.title,
+                        subtitle: Some(guide.subtitle),
+                        title_size: 22.0,
+                        subtitle_size: 14.0,
+                    }
+                    .panel(
+                        0.0,
+                        0.0,
+                        self.window_bounds.size.width.to_f64() as f32,
+                        self.window_bounds.size.height.to_f64() as f32,
+                    ),
+                );
+        }
         let guide_frame = self.guide_frame();
         let selection = self.selection_bounds();
         let mut root = div()
@@ -1237,8 +1326,8 @@ impl Render for RegionSelector {
         if let Some((guide_left, guide_top, guide_width)) = guide_frame {
             root = root.child(
                 OverlayText {
-                    title: self.guide_title(),
-                    subtitle: Some(self.guide_subtitle()),
+                    title: self.guide_title().into(),
+                    subtitle: Some(self.guide_subtitle().into()),
                     title_size: 22.0,
                     subtitle_size: 14.0,
                 }
@@ -1256,7 +1345,7 @@ impl Render for RegionSelector {
                     f32::from(bounds.origin.y) + f32::from(bounds.size.height) / 2.0 - 13.0;
                 root = root.child(
                     OverlayText {
-                        title: self.selection_label_title(),
+                        title: self.selection_label_title().into(),
                         subtitle: None,
                         title_size: 18.0,
                         subtitle_size: 14.0,
@@ -1440,6 +1529,18 @@ fn chip_frame_in(
     Some((left, local_y + CHIP_TOP, width))
 }
 
+pub(crate) fn guide_panel_bounds(region: Bounds<Pixels>) -> Bounds<Pixels> {
+    let region_width = f32::from(region.size.width);
+    let width = (region_width - GUIDE_MARGIN_X * 2.0).clamp(1.0, GUIDE_W);
+    Bounds::new(
+        point(
+            region.origin.x + px((region_width - width) / 2.0),
+            region.origin.y + px(GUIDE_TOP),
+        ),
+        size(px(width), px(GUIDE_H)),
+    )
+}
+
 fn chip_element(left: f32, top: f32, width: f32, text: String, level: Level) -> Div {
     let palette = current_palette();
     let (border, foreground) = chip_colors(level);
@@ -1581,8 +1682,8 @@ impl Drop for RegionSelector {
 }
 
 struct OverlayText {
-    title: &'static str,
-    subtitle: Option<&'static str>,
+    title: SharedString,
+    subtitle: Option<SharedString>,
     title_size: f32,
     subtitle_size: f32,
 }
@@ -1721,9 +1822,10 @@ fn bounds_contains_point(bounds: Bounds<Pixels>, point: Point<Pixels>) -> bool {
 mod tests {
     use super::{
         backdrop_segments, capture_estimate, chip_frame_in, format_bytes, format_duration,
-        intersect_bounds, kind_label, local_from_global, monitor_bounds_for_point, selected_rect,
-        selection_bounds_in_window, selection_global_rect, shift_rect, ChipModel, DetectedTarget,
-        SelectionState, CHIP_TOP,
+        guide_panel_bounds, intersect_bounds, kind_label, local_from_global,
+        monitor_bounds_for_point, selected_rect, selection_bounds_in_window, selection_global_rect,
+        shift_rect, ChipModel, DetectedTarget, SelectionState, CHIP_TOP, GUIDE_H, GUIDE_TOP,
+        GUIDE_W,
     };
     use crate::space::{CaptureKind, DisplayScale, Quality};
     use crate::Rect;
@@ -1851,6 +1953,33 @@ mod tests {
             chip_frame_in(Some(monitor), window),
             Some((2106.0, CHIP_TOP, 300.0))
         );
+    }
+
+    #[test]
+    fn guide_override_reuses_the_active_monitor_panel_geometry() {
+        let cases = [
+            (
+                Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0))),
+                Bounds::new(
+                    point(px((1920.0 - GUIDE_W) / 2.0), px(GUIDE_TOP)),
+                    size(px(GUIDE_W), px(GUIDE_H)),
+                ),
+            ),
+            (
+                Bounds::new(point(px(1920.0), px(-240.0)), size(px(2560.0), px(1440.0))),
+                Bounds::new(
+                    point(
+                        px(1920.0 + (2560.0 - GUIDE_W) / 2.0),
+                        px(-240.0 + GUIDE_TOP),
+                    ),
+                    size(px(GUIDE_W), px(GUIDE_H)),
+                ),
+            ),
+        ];
+
+        for (monitor, expected) in cases {
+            assert_eq!(guide_panel_bounds(monitor), expected);
+        }
     }
 
     #[test]

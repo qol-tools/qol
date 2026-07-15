@@ -58,8 +58,8 @@ pub struct FinalizeJob {
 }
 
 impl FinalizeJob {
-    pub fn run(self) {
-        platform::recording_stopped(&self.session, &self.config);
+    pub fn run(self) -> Option<PathBuf> {
+        platform::recording_stopped(&self.session, &self.config)
     }
 }
 
@@ -67,7 +67,7 @@ pub fn stop_active_recording_if_any(config: &Config) -> Result<bool> {
     match begin_stop_active_recording(config)? {
         StopOutcome::Idle => Ok(false),
         StopOutcome::Stopped(job) => {
-            job.run();
+            let _ = job.run();
             Ok(true)
         }
     }

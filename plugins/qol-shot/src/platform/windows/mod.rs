@@ -64,8 +64,15 @@ pub fn recording_started(_session: &CaptureSession) {
     show_notification("Recording started", "Press your hotkey to stop", 1200);
 }
 
-pub fn recording_stopped(_session: &CaptureSession, _config: &Config) {
-    show_notification("Recording stopped", "Saved to ~/Videos", 2000);
+pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<std::path::PathBuf> {
+    let output_file = session.output_file.clone()?;
+    crate::completion::background_saved(
+        "Recording saved",
+        "Saved to Videos",
+        &output_file,
+        config.capture.open_folder_after_save,
+    );
+    Some(output_file)
 }
 
 pub fn stop_capture(_session: &CaptureSession) -> Result<()> {
@@ -78,8 +85,15 @@ pub fn process_alive(_pid: u32) -> bool {
     false
 }
 
-pub fn show_notification(_title: &str, _message: &str, _timeout_ms: u32) {
-    // Notifications are fire-and-forget UX; silently no-op on Windows.
+pub fn show_notification(_title: &str, _message: &str, _timeout_ms: u32) {}
+
+pub fn show_saved_notification(
+    title: &str,
+    message: &str,
+    timeout_ms: u32,
+    _target: crate::completion::RevealTarget,
+) {
+    show_notification(title, message, timeout_ms);
 }
 
 pub fn open_url(url: &str) -> Result<()> {

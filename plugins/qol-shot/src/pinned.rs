@@ -778,7 +778,7 @@ impl PinnedView {
             .justify_center()
             .gap(px(CIRCLE_GAP))
             .children(
-                ShotAction::ALL
+                ShotAction::PINNED
                     .iter()
                     .copied()
                     .enumerate()
@@ -1124,7 +1124,7 @@ fn resize_rect(start: PinRect, edge: ResizeEdge, dx: f32, dy: f32, ratio: f32) -
 }
 
 fn action_row_fits(width: f32, height: f32) -> bool {
-    let count = ShotAction::ALL.len() as f32;
+    let count = ShotAction::PINNED.len() as f32;
     let needed_width = count * CIRCLE + (count - 1.0) * CIRCLE_GAP + 2.0 * EDGE;
     let needed_height = CIRCLE + CLOSE_CIRCLE + 3.0 * EDGE;
     width >= needed_width && height >= needed_height

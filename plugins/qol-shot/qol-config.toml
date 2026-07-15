@@ -106,6 +106,14 @@ description = "Draw a thin border around pinned screenshot previews to keep them
 section = "capture"
 default = true
 
+[field.capture_open_folder_after_save]
+type = "boolean"
+config_key = "capture.open_folder_after_save"
+label = "Open Folder After Saving"
+description = "Open the containing folder after a capture is saved. Screenshot navigation waits until you finish the preview so it cannot take focus from it. Completion notifications remain clickable when disabled."
+section = "capture"
+default = true
+
 [section.shortcuts]
 label = "Shortcuts"
 description = "Actions used by standard commands in screenshot previews."

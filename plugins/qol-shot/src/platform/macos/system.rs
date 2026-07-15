@@ -30,6 +30,15 @@ pub fn show_notification(title: &str, message: &str, _timeout_ms: u32) {
         .status();
 }
 
+pub fn show_saved_notification(
+    title: &str,
+    message: &str,
+    timeout_ms: u32,
+    _target: crate::completion::RevealTarget,
+) {
+    show_notification(title, message, timeout_ms);
+}
+
 pub fn open_url(url: &str) -> Result<()> {
     qol_apps::desktop_integration::open_with_default_app(url).context("failed to open URL")
 }
@@ -137,10 +146,6 @@ pub(super) fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
         thread::sleep(Duration::from_millis(150));
     }
     !process_alive(pid)
-}
-
-pub(super) fn reveal_path(path: &Path) -> bool {
-    qol_apps::desktop_integration::reveal_in_file_manager(path).is_ok()
 }
 
 pub(super) fn open_path(path: &Path) -> bool {
