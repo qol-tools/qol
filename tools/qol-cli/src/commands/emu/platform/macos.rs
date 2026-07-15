@@ -3,7 +3,18 @@ pub(crate) fn hypervisor() -> &'static str {
 }
 
 pub(crate) fn hypervisor_available() -> bool {
-    true
+    let mut supported = 0i32;
+    let mut size = std::mem::size_of_val(&supported);
+    let status = unsafe {
+        libc::sysctlbyname(
+            c"kern.hv_support".as_ptr(),
+            (&mut supported as *mut i32).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    status == 0 && size == std::mem::size_of_val(&supported) && supported == 1
 }
 
 pub(crate) fn display() -> &'static str {

@@ -2,7 +2,90 @@ mod platform;
 
 use std::io;
 use std::process::{Child, Command, ExitStatus};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
+
+#[derive(Clone, Debug)]
+pub struct CancellationToken {
+    local: Arc<AtomicBool>,
+    observe_process_signals: bool,
+}
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self {
+            local: Arc::new(AtomicBool::new(false)),
+            observe_process_signals: false,
+        }
+    }
+
+    pub fn install() -> io::Result<Self> {
+        platform::install_cancellation_handler()?;
+        Ok(Self {
+            local: Arc::new(AtomicBool::new(false)),
+            observe_process_signals: true,
+        })
+    }
+
+    pub fn cancel(&self) {
+        self.local.store(true, Ordering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.local.load(Ordering::Acquire)
+            || self.observe_process_signals && platform::cancellation_requested()
+    }
+}
+
+impl Default for CancellationToken {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct ProcessTreeGuard {
+    _inner: platform::ProcessTreeGuard,
+}
+
+#[derive(Debug)]
+#[must_use]
+pub struct TerminatedProcessTree {
+    _private: (),
+}
+
+pub struct CurrentProcessTreeGuard {
+    inner: platform::CurrentProcessTreeGuard,
+}
+
+impl ProcessTreeGuard {
+    pub fn assign(&self, child: &Child) -> io::Result<()> {
+        self._inner.assign(child)
+    }
+
+    pub fn terminate_and_wait(&self, timeout: Duration) -> io::Result<TerminatedProcessTree> {
+        self._inner.terminate_and_wait(timeout)?;
+        Ok(TerminatedProcessTree { _private: () })
+    }
+}
+
+impl CurrentProcessTreeGuard {
+    pub fn disarm(&mut self) -> io::Result<()> {
+        self.inner.disarm()
+    }
+}
+
+pub fn own_current_process_tree() -> io::Result<ProcessTreeGuard> {
+    Ok(ProcessTreeGuard {
+        _inner: platform::own_current_process_tree()?,
+    })
+}
+
+pub fn guard_current_process_tree() -> io::Result<CurrentProcessTreeGuard> {
+    Ok(CurrentProcessTreeGuard {
+        inner: platform::guard_current_process_tree()?,
+    })
+}
 
 pub fn is_pid_alive(pid: u32) -> bool {
     platform::is_pid_alive(pid)
@@ -62,6 +145,63 @@ mod tests {
     #[test]
     fn current_process_is_alive() {
         assert!(is_pid_alive(std::process::id()));
+    }
+
+    #[test]
+    fn manual_cancellation_is_shared_and_idempotent() {
+        let token = CancellationToken::new();
+        let peer = token.clone();
+        assert!(!token.is_cancelled());
+        peer.cancel();
+        peer.cancel();
+        assert!(token.is_cancelled());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_signal_child_helper() {
+        let Some(root) = std::env::var_os("QOL_PROCESS_CANCELLATION_TEST_ROOT") else {
+            return;
+        };
+        let root = std::path::PathBuf::from(root);
+        let token = CancellationToken::install().unwrap();
+        std::fs::write(root.join("ready"), "ready").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !token.is_cancelled() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(token.is_cancelled());
+        std::fs::write(root.join("cancelled"), "cancelled").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installed_handler_turns_sigterm_into_observable_cancellation() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::cancellation_signal_child_helper"])
+            .env("QOL_PROCESS_CANCELLATION_TEST_ROOT", temp.path())
+            .spawn()
+            .unwrap();
+        let ready_deadline = Instant::now() + Duration::from_secs(2);
+        while !temp.path().join("ready").exists() && Instant::now() < ready_deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(temp.path().join("ready").exists());
+        signal_term_pid(child.id()).unwrap();
+        let exit_deadline = Instant::now() + Duration::from_secs(2);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            assert!(Instant::now() < exit_deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(status.success());
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("cancelled")).unwrap(),
+            "cancelled"
+        );
     }
 
     #[test]

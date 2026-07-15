@@ -28,3 +28,13 @@ pub(crate) fn open_path(dir: &std::path::Path) {
 pub(crate) fn copy_to_clipboard(text: &str) -> Result<()> {
     Platform.copy_to_clipboard(text)
 }
+
+pub(crate) fn available_memory_mb() -> Option<u64> {
+    Platform.available_memory_mb()
+}
+
+pub(crate) fn available_cpus() -> Option<u64> {
+    std::thread::available_parallelism()
+        .ok()
+        .and_then(|cpus| u64::try_from(cpus.get()).ok())
+}

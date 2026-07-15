@@ -26,6 +26,7 @@ pub(crate) trait PlatformOps {
     fn stop_qol_tray(&self) -> Result<()>;
     fn qol_tray_running(&self) -> bool;
     fn copy_to_clipboard(&self, text: &str) -> Result<()>;
+    fn available_memory_mb(&self) -> Option<u64>;
 }
 
 pub(super) fn pipe_to_clipboard(program: &str, args: &[&str], text: &str) -> Result<()> {

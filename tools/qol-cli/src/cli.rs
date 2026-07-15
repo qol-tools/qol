@@ -37,8 +37,15 @@ pub(crate) fn print_help() -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn help_only(args: &[OsString]) -> bool {
+    args.len() == 1
+        && args[0]
+            .to_str()
+            .is_some_and(|argument| matches!(argument, "help" | "-h" | "--help"))
+}
+
 pub(crate) fn help_text() -> &'static str {
-    "qol commands:\n  qol setup\n  qol dev [worktree|--base]\n  qol emu <list|doctor|up>\n  qol cat [--no-less] [--plain|--color=auto|always|never] <path|->\n  qol build [name]\n  qol check\n  qol clean [name]\n  qol install\n  qol sync\n  qol trace [name]\n  qol doctor [step]\n\nOptions:\n  -v, --verbose     show child command output\n  -n, --no-plugins  qol dev: skip plugin rebuilds\n"
+    "qol commands:\n  qol setup\n  qol dev [worktree|--base]\n  qol env <list|doctor|up|runs|down|shot>\n  qol flow <run|runs>\n  qol emu <list|doctor|up|run|down>\n  qol cat [--no-less] [--plain|--color=auto|always|never] <path|->\n  qol build [name]\n  qol check\n  qol clean [name]\n  qol install\n  qol sync\n  qol trace [name]\n  qol doctor [step]\n\nOptions:\n  -v, --verbose     show child command output\n  -n, --no-plugins  qol dev: skip plugin rebuilds\n"
 }
 
 pub(crate) fn optional_single_arg<'a>(
@@ -74,5 +81,15 @@ mod tests {
         let args = parse_cli(vec!["install".into(), "-v".into()]);
         assert!(args.verbose);
         assert_eq!(args.values, vec![OsString::from("install")]);
+    }
+
+    #[test]
+    fn recognizes_only_a_single_help_argument() {
+        for argument in ["help", "-h", "--help"] {
+            assert!(help_only(&[OsString::from(argument)]));
+        }
+        assert!(!help_only(&[]));
+        assert!(!help_only(&["--help".into(), "extra".into()]));
+        assert!(!help_only(&["other".into()]));
     }
 }

@@ -5425,6 +5425,7 @@ dependencies = [
  "qol-conventions",
  "qol-dev-build",
  "qol-fs",
+ "qol-platform",
  "qol-process",
  "qol-workspace",
  "ratatui",

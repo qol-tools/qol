@@ -1,22 +1,260 @@
 use anyhow::{bail, Context, Result};
+use std::fs::{File, OpenOptions};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::Duration;
 
 use super::media;
 
-pub(crate) fn free_qmp_port() -> Result<u16> {
-    let listener = TcpListener::bind("127.0.0.1:0").context("failed to probe a free qmp port")?;
-    Ok(listener
+const BOOT_LOCK_FILE: &str = "emu-boot-reservation.lock";
+const PROCESS_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BootPorts {
+    pub(crate) qmp: u16,
+    pub(crate) serial: u16,
+}
+
+pub(crate) struct BootReservation {
+    _lock_file: File,
+    qmp_probe: Option<TcpListener>,
+    serial_probe: Option<TcpListener>,
+    ports: BootPorts,
+}
+
+pub(crate) struct VmLifecycle {
+    run_dir: PathBuf,
+    child: Option<Child>,
+    process_tree: Option<qol_process::ProcessTreeGuard>,
+    current_process_tree: Option<qol_process::CurrentProcessTreeGuard>,
+    exit_verified: bool,
+    armed: bool,
+}
+
+impl VmLifecycle {
+    pub(crate) fn new(run_dir: &Path) -> Self {
+        Self {
+            run_dir: run_dir.to_path_buf(),
+            child: None,
+            process_tree: None,
+            current_process_tree: None,
+            exit_verified: false,
+            armed: true,
+        }
+    }
+
+    pub(crate) fn spawn(&mut self, qemu_system: &Path, args: &[String]) -> Result<u32> {
+        if !self.armed {
+            bail!("cannot spawn qemu from a completed VM lifecycle");
+        }
+        if self.child.is_some() {
+            bail!("qemu is already owned by this VM lifecycle");
+        }
+        let mut current_process_tree = qol_process::guard_current_process_tree()
+            .context("failed to guard the qemu supervisor process tree")?;
+        let process_tree = qol_process::own_current_process_tree()
+            .context("failed to create qemu process-tree ownership")?;
+        let mut child = spawn_qemu(qemu_system, args, &self.run_dir)?;
+        if let Err(assign_error) = process_tree.assign(&child) {
+            let cleanup = qol_process::terminate_owned(&mut child, PROCESS_SHUTDOWN_GRACE);
+            if let Err(cleanup_error) = cleanup {
+                self.child = Some(child);
+                self.current_process_tree = Some(current_process_tree);
+                bail!(
+                    "failed to own qemu process tree: {assign_error}; qemu cleanup also failed: {cleanup_error}"
+                );
+            }
+            current_process_tree
+                .disarm()
+                .context("failed to disarm qemu supervisor process-tree ownership")?;
+            return Err(assign_error).context("failed to own qemu process tree");
+        }
+        let pid = child.id();
+        self.child = Some(child);
+        self.process_tree = Some(process_tree);
+        self.current_process_tree = Some(current_process_tree);
+        Ok(pid)
+    }
+
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self.child.as_ref().map(Child::id)
+    }
+
+    pub(crate) fn wait(&mut self) -> Result<ExitStatus> {
+        if self.exit_verified {
+            bail!("qemu exit was already verified");
+        }
+        let child = self
+            .child
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("VM lifecycle has no qemu process"))?;
+        let exit = child.wait().context("failed to wait for qemu")?;
+        self.verify_process_tree_exit()?;
+        self.exit_verified = true;
+        Ok(exit)
+    }
+
+    pub(crate) fn terminate(&mut self) -> Result<ExitStatus> {
+        if self.exit_verified {
+            bail!("qemu exit was already verified");
+        }
+        let child = self
+            .child
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("VM lifecycle has no qemu process"))?;
+        qol_process::terminate_owned(child, PROCESS_SHUTDOWN_GRACE)
+            .context("failed to terminate qemu")?;
+        let exit = child.wait().context("failed to verify qemu exit")?;
+        self.verify_process_tree_exit()?;
+        self.exit_verified = true;
+        Ok(exit)
+    }
+
+    pub(crate) fn finish<T>(
+        &mut self,
+        commit_terminal_report: impl FnOnce(&[PathBuf]) -> Result<T>,
+    ) -> Result<(T, Vec<PathBuf>)> {
+        if self.child.is_some() && !self.exit_verified {
+            bail!("cannot finish VM lifecycle before qemu exit is verified");
+        }
+        let removed = teardown(&self.run_dir)?;
+        let committed = commit_terminal_report(&removed)?;
+        if let Some(guard) = self.current_process_tree.as_mut() {
+            guard
+                .disarm()
+                .context("failed to disarm qemu supervisor process-tree ownership")?;
+        }
+        self.armed = false;
+        Ok((committed, removed))
+    }
+
+    fn verify_process_tree_exit(&self) -> Result<()> {
+        let process_tree = self
+            .process_tree
+            .as_ref()
+            .context("qemu process tree is not owned")?;
+        let _proof = process_tree
+            .terminate_and_wait(PROCESS_SHUTDOWN_GRACE)
+            .context("qemu process tree did not terminate")?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn adopt(&mut self, child: Child) -> u32 {
+        let pid = child.id();
+        self.child = Some(child);
+        pid
+    }
+}
+
+impl Drop for VmLifecycle {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let mut tree_exit_verified = self.child.is_none() || self.exit_verified;
+        if !tree_exit_verified {
+            if let Some(child) = self.child.as_mut() {
+                tree_exit_verified = qol_process::terminate_owned(child, PROCESS_SHUTDOWN_GRACE)
+                    .and_then(|_| child.wait().map(|_| ()))
+                    .is_ok();
+            }
+            if tree_exit_verified && self.process_tree.is_some() {
+                tree_exit_verified = self.verify_process_tree_exit().is_ok();
+            } else if self.current_process_tree.is_some() {
+                tree_exit_verified = false;
+            }
+        }
+        if tree_exit_verified {
+            let _ = teardown(&self.run_dir);
+            if let Some(guard) = self.current_process_tree.as_mut() {
+                let _ = guard.disarm();
+            }
+        }
+    }
+}
+
+impl BootReservation {
+    pub(crate) fn acquire(runs_root: &Path) -> Result<Self> {
+        std::fs::create_dir_all(runs_root).with_context(|| {
+            format!(
+                "failed to create emulator runs root {}",
+                runs_root.display()
+            )
+        })?;
+        let lock_path = boot_lock_path();
+        let lock_parent = lock_path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("boot lock has no parent: {}", lock_path.display()))?;
+        std::fs::create_dir_all(lock_parent)
+            .with_context(|| format!("failed to create {}", lock_parent.display()))?;
+        let lock_file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .with_context(|| format!("failed to open boot lock {}", lock_path.display()))?;
+        lock_file
+            .lock()
+            .with_context(|| format!("failed to acquire boot lock {}", lock_path.display()))?;
+        let qmp_probe = bind_port_probe("qmp")?;
+        let serial_probe = bind_port_probe("serial")?;
+        let ports = BootPorts {
+            qmp: probe_port(&qmp_probe, "qmp")?,
+            serial: probe_port(&serial_probe, "serial")?,
+        };
+        Ok(Self {
+            _lock_file: lock_file,
+            qmp_probe: Some(qmp_probe),
+            serial_probe: Some(serial_probe),
+            ports,
+        })
+    }
+
+    pub(crate) fn ports(&self) -> BootPorts {
+        self.ports
+    }
+
+    pub(crate) fn release_ports(&mut self) {
+        self.qmp_probe = None;
+        self.serial_probe = None;
+    }
+}
+
+fn boot_lock_path() -> PathBuf {
+    qol_config::data_subdir("runtime")
+        .unwrap_or_else(std::env::temp_dir)
+        .join(BOOT_LOCK_FILE)
+}
+
+fn bind_port_probe(kind: &str) -> Result<TcpListener> {
+    TcpListener::bind("127.0.0.1:0").with_context(|| format!("failed to probe a free {kind} port"))
+}
+
+fn probe_port(probe: &TcpListener, kind: &str) -> Result<u16> {
+    Ok(probe
         .local_addr()
-        .context("failed to read qmp probe address")?
+        .with_context(|| format!("failed to read {kind} probe address"))?
         .port())
 }
 
-pub(crate) fn spawn_qemu(qemu_system: &Path, args: &[String]) -> Result<Child> {
+fn spawn_qemu(qemu_system: &Path, args: &[String], run_dir: &Path) -> Result<Child> {
+    let logs_dir = run_dir.join("logs");
+    std::fs::create_dir_all(&logs_dir)
+        .with_context(|| format!("failed to create {}", logs_dir.display()))?;
+    let log_path = logs_dir.join("qemu.log");
+    let stdout = File::create(&log_path)
+        .with_context(|| format!("failed to create {}", log_path.display()))?;
+    let stderr = stdout
+        .try_clone()
+        .with_context(|| format!("failed to clone {}", log_path.display()))?;
     Command::new(qemu_system)
         .args(args)
         .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
         .spawn()
         .with_context(|| format!("failed to spawn {}", qemu_system.display()))
 }
@@ -48,11 +286,70 @@ pub(crate) fn teardown(run_dir: &Path) -> Result<Vec<PathBuf>> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::process::Command;
+    use std::time::{Duration, Instant};
 
     #[test]
-    fn free_qmp_port_returns_bindable_port() {
-        let port = free_qmp_port().unwrap();
-        assert_ne!(port, 0);
+    fn reservation_holds_two_distinct_ports() {
+        let dir = tempfile::tempdir().unwrap();
+        let reservation = BootReservation::acquire(dir.path()).unwrap();
+        let ports = reservation.ports();
+
+        assert_ne!(ports.qmp, ports.serial);
+        assert!(TcpListener::bind(("127.0.0.1", ports.qmp)).is_err());
+        assert!(TcpListener::bind(("127.0.0.1", ports.serial)).is_err());
+    }
+
+    #[test]
+    fn releasing_ports_keeps_the_boot_lock_owned() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut reservation = BootReservation::acquire(dir.path()).unwrap();
+        let ports = reservation.ports();
+        reservation.release_ports();
+
+        let qmp = TcpListener::bind(("127.0.0.1", ports.qmp)).unwrap();
+        let serial = TcpListener::bind(("127.0.0.1", ports.serial)).unwrap();
+        assert_eq!(qmp.local_addr().unwrap().port(), ports.qmp);
+        assert_eq!(serial.local_addr().unwrap().port(), ports.serial);
+        assert!(boot_lock_path().is_file());
+    }
+
+    #[test]
+    fn reservation_child_helper() {
+        let Some(root) = std::env::var_os("QOL_EMU_BOOT_LOCK_TEST_ROOT") else {
+            return;
+        };
+        let marker = std::env::var_os("QOL_EMU_BOOT_LOCK_TEST_MARKER").unwrap();
+        let _reservation = BootReservation::acquire(Path::new(&root)).unwrap();
+        fs::write(marker, b"acquired").unwrap();
+    }
+
+    #[test]
+    fn reservation_serializes_processes_across_run_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("child-acquired");
+        let first = BootReservation::acquire(&dir.path().join("parent-runs")).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "commands::emu::machine::tests::reservation_child_helper",
+            ])
+            .env("QOL_EMU_BOOT_LOCK_TEST_ROOT", dir.path().join("child-runs"))
+            .env("QOL_EMU_BOOT_LOCK_TEST_MARKER", &marker)
+            .spawn()
+            .unwrap();
+
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!marker.exists());
+        assert!(child.try_wait().unwrap().is_none());
+        drop(first);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(child.wait().unwrap().success());
+        assert_eq!(fs::read(marker).unwrap(), b"acquired");
     }
 
     #[test]
@@ -103,5 +400,101 @@ mod tests {
             assert_eq!(dir.join(name).exists(), should_exist, "file: {name}");
         }
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn lifecycle_drop_removes_disposable_artifacts_and_keeps_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("overlay.qcow2"), b"overlay").unwrap();
+        fs::write(dir.path().join("usb-stick.raw"), b"stick").unwrap();
+        fs::write(dir.path().join("logs.txt"), b"evidence").unwrap();
+
+        drop(VmLifecycle::new(dir.path()));
+
+        assert!(!dir.path().join("overlay.qcow2").exists());
+        assert!(!dir.path().join("usb-stick.raw").exists());
+        assert_eq!(fs::read(dir.path().join("logs.txt")).unwrap(), b"evidence");
+    }
+
+    #[test]
+    fn lifecycle_disarms_after_teardown_and_terminal_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let overlay = dir.path().join("overlay.qcow2");
+        let report = dir.path().join("report.json");
+        fs::write(&overlay, b"overlay").unwrap();
+        let mut lifecycle = VmLifecycle::new(dir.path());
+
+        let ((), removed) = lifecycle
+            .finish(|removed| {
+                assert_eq!(removed, std::slice::from_ref(&overlay));
+                fs::write(&report, b"terminal").unwrap();
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(removed, vec![overlay.clone()]);
+        fs::write(&overlay, b"post-commit").unwrap();
+        drop(lifecycle);
+
+        assert_eq!(fs::read(report).unwrap(), b"terminal");
+        assert_eq!(fs::read(overlay).unwrap(), b"post-commit");
+    }
+
+    #[test]
+    fn lifecycle_stays_armed_when_terminal_commit_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let overlay = dir.path().join("overlay.qcow2");
+        let evidence = dir.path().join("qemu.log");
+        fs::write(&overlay, b"first").unwrap();
+        fs::write(&evidence, b"evidence").unwrap();
+        let mut lifecycle = VmLifecycle::new(dir.path());
+
+        let failure = lifecycle.finish::<()>(|_| {
+            fs::write(&overlay, b"recreated").unwrap();
+            anyhow::bail!("injected report failure")
+        });
+        assert!(failure.unwrap_err().to_string().contains("injected"));
+        drop(lifecycle);
+
+        assert!(!overlay.exists());
+        assert_eq!(fs::read(evidence).unwrap(), b"evidence");
+    }
+
+    #[test]
+    fn lifecycle_drop_terminates_and_reaps_an_owned_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let overlay = dir.path().join("overlay.qcow2");
+        fs::write(&overlay, b"overlay").unwrap();
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "commands::emu::machine::tests::lifecycle_process_helper",
+            ])
+            .env("QOL_EMU_LIFECYCLE_TEST_CHILD", "1")
+            .spawn()
+            .unwrap();
+        let mut lifecycle = VmLifecycle::new(dir.path());
+        let pid = lifecycle.adopt(child);
+        assert_eq!(lifecycle.pid(), Some(pid));
+        assert!(qol_process::is_pid_alive(pid));
+        let commit_called = std::cell::Cell::new(false);
+        let finish = lifecycle.finish::<()>(|_| {
+            commit_called.set(true);
+            Ok(())
+        });
+        assert!(finish.unwrap_err().to_string().contains("before qemu exit"));
+        assert!(!commit_called.get());
+
+        drop(lifecycle);
+
+        assert!(!qol_process::is_pid_alive(pid));
+        assert!(!overlay.exists());
+    }
+
+    #[test]
+    fn lifecycle_process_helper() {
+        if std::env::var_os("QOL_EMU_LIFECYCLE_TEST_CHILD").is_none() {
+            return;
+        }
+        std::thread::sleep(Duration::from_secs(30));
     }
 }

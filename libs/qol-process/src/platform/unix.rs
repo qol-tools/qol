@@ -1,10 +1,148 @@
 use std::io;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const WAIT_INTERVAL: Duration = Duration::from_millis(50);
 const REAP_DELAY: Duration = Duration::from_millis(10);
+static CANCELLATION_REQUESTED: AtomicBool = AtomicBool::new(false);
+static CANCELLATION_INSTALL: OnceLock<Result<(), i32>> = OnceLock::new();
+
+pub(crate) struct ProcessTreeGuard {
+    target: Mutex<Option<ProcessTreeTarget>>,
+}
+
+#[derive(Clone, Copy)]
+enum ProcessTreeTarget {
+    Process(libc::pid_t),
+    ProcessGroup(libc::pid_t),
+}
+
+impl ProcessTreeGuard {
+    pub(crate) fn assign(&self, child: &Child) -> io::Result<()> {
+        let pid = pid_t(child.id())?;
+        let process_group = unsafe { libc::getpgid(pid) };
+        if process_group == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut target = self
+            .target
+            .lock()
+            .map_err(|_| io::Error::other("process-tree assignment state is unavailable"))?;
+        if target.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "process tree already owns a process",
+            ));
+        }
+        *target = Some(if process_group == pid {
+            ProcessTreeTarget::ProcessGroup(process_group)
+        } else {
+            ProcessTreeTarget::Process(pid)
+        });
+        Ok(())
+    }
+
+    pub(crate) fn terminate_and_wait(&self, timeout: Duration) -> io::Result<()> {
+        let target = self
+            .target
+            .lock()
+            .map_err(|_| io::Error::other("process-tree assignment state is unavailable"))?
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "process tree has no assigned process",
+                )
+            })?;
+        let started = Instant::now();
+        let deadline = started.checked_add(timeout).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "process-tree timeout is too large",
+            )
+        })?;
+        match target {
+            ProcessTreeTarget::Process(pid) => wait_for_process_exit(pid, deadline, timeout),
+            ProcessTreeTarget::ProcessGroup(process_group) => {
+                terminate_process_group(process_group, started, deadline, timeout)
+            }
+        }
+    }
+}
+
+pub(crate) struct CurrentProcessTreeGuard;
+
+impl CurrentProcessTreeGuard {
+    pub(crate) fn disarm(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+pub(crate) fn guard_current_process_tree() -> io::Result<CurrentProcessTreeGuard> {
+    Ok(CurrentProcessTreeGuard)
+}
+
+fn terminate_process_group(
+    process_group: libc::pid_t,
+    started: Instant,
+    deadline: Instant,
+    timeout: Duration,
+) -> io::Result<()> {
+    let graceful_deadline = started.checked_add(timeout / 2).unwrap_or(deadline);
+    signal_group(process_group, libc::SIGTERM)?;
+    if wait_for_group_exit(process_group, graceful_deadline) {
+        return Ok(());
+    }
+    signal_group(process_group, libc::SIGKILL)?;
+    if wait_for_group_exit(process_group, deadline) {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("process group {process_group} did not exit within {timeout:?}"),
+    ))
+}
+
+pub(crate) fn own_current_process_tree() -> io::Result<ProcessTreeGuard> {
+    Ok(ProcessTreeGuard {
+        target: Mutex::new(None),
+    })
+}
+
+pub(crate) fn install_cancellation_handler() -> io::Result<()> {
+    let result = CANCELLATION_INSTALL.get_or_init(install_signal_handlers);
+    match result {
+        Ok(()) => Ok(()),
+        Err(code) => Err(io::Error::from_raw_os_error(*code)),
+    }
+}
+
+pub(crate) fn cancellation_requested() -> bool {
+    CANCELLATION_REQUESTED.load(Ordering::Acquire)
+}
+
+fn install_signal_handlers() -> Result<(), i32> {
+    for signal in [libc::SIGINT, libc::SIGTERM] {
+        let previous = unsafe {
+            libc::signal(
+                signal,
+                cancellation_signal_handler as *const () as libc::sighandler_t,
+            )
+        };
+        if previous == libc::SIG_ERR {
+            return Err(io::Error::last_os_error()
+                .raw_os_error()
+                .unwrap_or(libc::EINVAL));
+        }
+    }
+    Ok(())
+}
+
+extern "C" fn cancellation_signal_handler(_: libc::c_int) {
+    CANCELLATION_REQUESTED.store(true, Ordering::Release);
+}
 
 pub(crate) fn is_pid_alive(pid: u32) -> bool {
     let Ok(pid) = pid_t(pid) else {
@@ -198,6 +336,43 @@ fn signal(target: libc::pid_t, signal: libc::c_int) -> io::Result<()> {
         return Ok(());
     }
     Err(io::Error::last_os_error())
+}
+
+fn signal_group(process_group: libc::pid_t, signal_number: libc::c_int) -> io::Result<()> {
+    let result = signal(-process_group, signal_number);
+    match result {
+        Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+        other => other,
+    }
+}
+
+fn wait_for_group_exit(process_group: libc::pid_t, deadline: Instant) -> bool {
+    loop {
+        if !signal_target_alive(-process_group) {
+            return true;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        std::thread::sleep(WAIT_INTERVAL.min(deadline.duration_since(now)));
+    }
+}
+
+fn wait_for_process_exit(pid: libc::pid_t, deadline: Instant, timeout: Duration) -> io::Result<()> {
+    loop {
+        if !signal_target_alive(pid) {
+            return Ok(());
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("process {pid} did not exit within {timeout:?}"),
+            ));
+        }
+        std::thread::sleep(WAIT_INTERVAL.min(deadline.duration_since(now)));
+    }
 }
 
 fn owned_signal_target(pid: libc::pid_t) -> libc::pid_t {

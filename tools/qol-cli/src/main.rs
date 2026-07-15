@@ -37,6 +37,8 @@ fn run(args: Vec<OsString>) -> Result<()> {
             commands::dev::prebuild(rest, args.verbose, args.skip_plugins)
         }
         "emu" => commands::emu::run(rest, args.verbose),
+        "env" => commands::env::run(rest, args.verbose),
+        "flow" => commands::flow::run(rest, args.verbose),
         "cat" => commands::cat::run(rest),
         "build" => commands::build::run(rest, args.verbose),
         "check" => commands::check::run(rest, args.verbose),

@@ -19,6 +19,7 @@ qol-apps.workspace = true
 qol-conventions.workspace = true
 qol-dev-build.workspace = true
 qol-fs.workspace = true
+qol-platform.workspace = true
 qol-process.workspace = true
 qol-workspace.workspace = true
 serde.workspace = true

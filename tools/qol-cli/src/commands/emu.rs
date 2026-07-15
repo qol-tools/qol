@@ -1,7 +1,8 @@
+use crate::host_facade;
 use crate::progress::{begin_run_log, print_hint, print_title, step_label, StepKind};
 use crate::workspace::repo_root;
 use anyhow::{anyhow, bail, Context, Result};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
@@ -16,6 +17,7 @@ mod control;
 mod desktop;
 mod discovery;
 mod guest;
+mod launch;
 mod live;
 mod machine;
 mod media;
@@ -28,8 +30,29 @@ mod workflow;
 #[allow(unused_imports)]
 pub(crate) use arch::{ArchGuess, Firmware, GuestArch};
 pub(crate) use discovery::{parse_emu_dir, Discovered, DiscoveryContext, ImageCandidate};
+pub(crate) use launch::{
+    child_args as child_launch_args, ChildLaunch, ChildOperation, DisplayMode,
+};
+pub(crate) use live::{LiveRun, OwnedRunCleanup};
 pub(crate) use media::BootMedia;
 pub(crate) use registry::register_image;
+
+pub(crate) fn new_run_id(environment_id: &str) -> Result<String> {
+    live::new_run_id(environment_id)
+}
+
+pub(crate) fn live_runs_in_roots(roots: &[PathBuf]) -> Vec<LiveRun> {
+    live::list_in_roots(roots.iter().map(PathBuf::as_path))
+}
+
+pub(crate) fn reconcile_owned_terminated(
+    run_dir: &Path,
+    run_id: &str,
+    reason: &str,
+    proof: &qol_process::TerminatedProcessTree,
+) -> Result<OwnedRunCleanup> {
+    live::reconcile_owned_terminated(run_dir, run_id, reason, proof)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Environment {
@@ -86,12 +109,151 @@ struct Resolution {
     firmware: Option<PathBuf>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum AccelerationRequirement {
+    Hardware,
+    #[default]
+    AllowTcg,
+}
+
+impl AccelerationRequirement {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "hardware" => Some(Self::Hardware),
+            "allow-tcg" => Some(Self::AllowTcg),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Hardware => "hardware",
+            Self::AllowTcg => "allow-tcg",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BackendImageKind {
+    Qcow2,
+    Raw,
+    Img,
+    Iso,
+}
+
+impl BackendImageKind {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "qcow2" => Some(Self::Qcow2),
+            "raw" => Some(Self::Raw),
+            "img" => Some(Self::Img),
+            "iso" => Some(Self::Iso),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Qcow2 => "qcow2",
+            Self::Raw => "raw",
+            Self::Img => "img",
+            Self::Iso => "iso",
+        }
+    }
+
+    fn from_media(media: BootMedia) -> Self {
+        match media {
+            BootMedia::Disk => Self::Qcow2,
+            BootMedia::Iso => Self::Iso,
+        }
+    }
+
+    fn media(self) -> BootMedia {
+        match self {
+            Self::Qcow2 | Self::Raw | Self::Img => BootMedia::Disk,
+            Self::Iso => BootMedia::Iso,
+        }
+    }
+
+    fn requires_overlay(self) -> bool {
+        self.media().requires_qemu_img()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BackendSpec {
+    arch: GuestArch,
+    firmware: Firmware,
+    image_kind: BackendImageKind,
+    acceleration: AccelerationRequirement,
+}
+
+impl BackendSpec {
+    pub(crate) fn from_manifest(
+        backend: &str,
+        image_kind: &str,
+        arch: Option<&str>,
+        firmware: Option<&str>,
+        acceleration: Option<&str>,
+    ) -> std::result::Result<Self, String> {
+        if backend != "qemu" {
+            return Err(format!("backend `{backend}` is unsupported on this host"));
+        }
+        let arch = arch.unwrap_or("x86_64");
+        let arch = GuestArch::parse(arch)
+            .ok_or_else(|| format!("unsupported image architecture `{arch}`"))?;
+        let firmware = match firmware {
+            Some(value) => {
+                Firmware::parse(value).ok_or_else(|| format!("unsupported firmware `{value}`"))?
+            }
+            None => Firmware::for_arch(arch),
+        };
+        let image_kind = BackendImageKind::parse(image_kind)
+            .ok_or_else(|| format!("unsupported image kind `{image_kind}`"))?;
+        let acceleration = acceleration.unwrap_or("allow-tcg");
+        let acceleration = AccelerationRequirement::parse(acceleration)
+            .ok_or_else(|| format!("unsupported acceleration requirement `{acceleration}`"))?;
+        Ok(Self {
+            arch,
+            firmware,
+            image_kind,
+            acceleration,
+        })
+    }
+
+    fn from_launch(
+        arch: GuestArch,
+        firmware: Firmware,
+        image_kind: BackendImageKind,
+        acceleration: AccelerationRequirement,
+    ) -> Self {
+        Self {
+            arch,
+            firmware,
+            image_kind,
+            acceleration,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReadyBackend {
+    qemu_system: PathBuf,
+    qemu_img: Option<PathBuf>,
+    acceleration: &'static str,
+    firmware: Option<PathBuf>,
+}
+
 pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
     let Some(command) = args.first().and_then(|arg| arg.to_str()) else {
         print_emu_help();
         return Ok(());
     };
     let rest = &args[1..];
+    if crate::cli::help_only(rest) {
+        print_emu_help();
+        return Ok(());
+    }
     match command {
         "list" => cmd_list(rest, verbose),
         "add" => cmd_add(rest, verbose),
@@ -348,21 +510,20 @@ fn cmd_doctor(args: &[OsString], verbose: bool) -> Result<()> {
 }
 
 fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
-    if args.len() != 1 {
-        bail!("usage: qol emu up <environment>");
-    }
-    let target = args[0]
-        .to_str()
-        .ok_or_else(|| anyhow!("environment id is not valid UTF-8"))?;
+    let options = launch::parse_launch_options(
+        args,
+        "qol emu up <environment|image> [--headless] [--memory-mb N] [--cpus N]",
+    )?;
     print_title("qol emu up");
     print_hint(verbose);
-    let mut vm = boot_vm(target, "up", verbose)?;
-    step_label(
-        "running",
-        StepKind::Success,
-        "close the VM window to end the run",
-    );
-    let exit = vm.child.wait().context("failed to wait for qemu")?;
+    let mut vm = boot_vm_with_options(options, "up", verbose)?;
+    let running = if vm.launch.display == launch::DisplayMode::None {
+        format!("{} · headless", vm.run_id)
+    } else {
+        format!("{} · close the VM window to end", vm.run_id)
+    };
+    step_label("running", StepKind::Success, &running);
+    let exit = vm.wait()?;
     let (report_path, removed) = finalize_vm(vm, exit, None, "up")?;
     step_label(
         "clean",
@@ -377,29 +538,33 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
 }
 
 fn cmd_run(args: &[OsString], verbose: bool) -> Result<()> {
-    if args.len() != 2 {
+    let Some((workflow, launch_args)) = args.split_first() else {
         bail!("usage: qol emu run <workflow> <environment>");
-    }
-    let workflow_id = args[0]
+    };
+    let workflow_id = workflow
         .to_str()
         .ok_or_else(|| anyhow!("workflow id is not valid UTF-8"))?;
-    let target = args[1]
-        .to_str()
-        .ok_or_else(|| anyhow!("environment id is not valid UTF-8"))?;
-    run_workflow(workflow_id, target, "run", verbose)
+    let options = launch::parse_launch_options(
+        launch_args,
+        "qol emu run <workflow> <environment|image> [--headless] [--memory-mb N] [--cpus N]",
+    )?;
+    run_workflow(workflow_id, options, "run", verbose)
 }
 
 fn cmd_check(args: &[OsString], verbose: bool) -> Result<()> {
-    if args.len() != 1 {
-        bail!("usage: qol emu check <environment>");
-    }
-    let target = args[0]
-        .to_str()
-        .ok_or_else(|| anyhow!("environment id is not valid UTF-8"))?;
-    run_workflow("leaves-no-trace", target, "check", verbose)
+    let options = launch::parse_launch_options(
+        args,
+        "qol emu check <environment|image> [--headless] [--memory-mb N] [--cpus N]",
+    )?;
+    run_workflow("leaves-no-trace", options, "check", verbose)
 }
 
-fn run_workflow(workflow_id: &str, target: &str, command_name: &str, verbose: bool) -> Result<()> {
+fn run_workflow(
+    workflow_id: &str,
+    options: launch::LaunchOptions,
+    command_name: &str,
+    verbose: bool,
+) -> Result<()> {
     let Some(workflow_fn) = workflow::find(workflow_id) else {
         bail!(
             "unknown workflow `{workflow_id}`; available: {}",
@@ -408,7 +573,7 @@ fn run_workflow(workflow_id: &str, target: &str, command_name: &str, verbose: bo
     };
     print_title(&format!("qol emu {command_name}"));
     print_hint(verbose);
-    let mut vm = boot_vm(target, command_name, verbose)?;
+    let mut vm = boot_vm_with_options(options, command_name, verbose)?;
     let outcome = drive_workflow(&vm, workflow_fn);
     let exit = shutdown_vm(&mut vm)?;
     let workflow_report = match &outcome {
@@ -448,7 +613,7 @@ fn drive_workflow(vm: &BootedVm, workflow_fn: workflow::Workflow) -> Result<work
         .clone()
         .ok_or_else(|| anyhow!("ready environment has no qemu-img path"))?;
     let stick = machine::ensure_usb_stick(&vm.run_dir, &qemu_img)?;
-    let mut qmp = qmp::connect(vm.qmp_port, Duration::from_secs(10))?;
+    let mut qmp = qmp::connect_verified(vm.qmp_port, Duration::from_secs(10), &vm.run_id)?;
     let mut serial = serial::connect(vm.serial_port, Duration::from_secs(10))?;
     let os = guest::DebianNocloud;
     step_label("login", StepKind::Pending, "waiting for a root shell");
@@ -464,18 +629,17 @@ fn drive_workflow(vm: &BootedVm, workflow_fn: workflow::Workflow) -> Result<work
 }
 
 fn shutdown_vm(vm: &mut BootedVm) -> Result<ExitStatus> {
-    match qmp::connect(vm.qmp_port, Duration::from_secs(5)) {
-        Ok(mut client) => {
-            let _ = client.fire("quit");
-        }
-        Err(_) => {
-            let _ = vm.child.kill();
-        }
+    let graceful = qmp::connect_verified(vm.qmp_port, Duration::from_secs(5), &vm.run_id)
+        .and_then(|mut client| client.fire("quit"));
+    if graceful.is_err() {
+        return vm.terminate();
     }
-    vm.child.wait().context("failed to wait for qemu")
+    vm.wait()
 }
 
 struct BootedVm {
+    run_id: String,
+    launch: launch::LaunchOptions,
     environment: Environment,
     resolution: Resolution,
     run_dir: PathBuf,
@@ -485,8 +649,18 @@ struct BootedVm {
     serial_port: u16,
     qemu_version: String,
     vm_status: String,
-    child: std::process::Child,
+    child: machine::VmLifecycle,
     started_at: u64,
+}
+
+impl BootedVm {
+    fn wait(&mut self) -> Result<ExitStatus> {
+        self.child.wait()
+    }
+
+    fn terminate(&mut self) -> Result<ExitStatus> {
+        self.child.terminate()
+    }
 }
 
 struct PreparedBootMedia {
@@ -565,32 +739,104 @@ fn environment_from_candidate(candidate: &ImageCandidate) -> Environment {
 }
 
 fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> {
+    boot_vm_with_options(launch::LaunchOptions::new(target), command_name, verbose)
+}
+
+fn boot_vm_with_options(
+    launch: launch::LaunchOptions,
+    command_name: &str,
+    verbose: bool,
+) -> Result<BootedVm> {
     let root = repo_root()?;
     let discovered = discover_all()?;
-    if discovered.environments.is_empty() && discovered.candidates.is_empty() {
+    let target_path = Path::new(&launch.target);
+    if discovered.environments.is_empty()
+        && discovered.candidates.is_empty()
+        && !target_path.is_file()
+    {
         bail!("no emus found; drop a disk image or .iso into the emu dir (`qol emu open`), create a libvirt/QEMU VM, or add [images] to ~/.config/qol-tray/emu.toml");
     }
-    let (environment, arch_guess) = discovered
+    let direct_candidate = target_path
+        .is_file()
+        .then(|| discovery::infer_candidate(target_path));
+    let (mut environment, mut arch_guess) = discovered
         .environments
         .iter()
-        .find(|environment| environment.id == target)
+        .find(|environment| environment.id == launch.target)
         .cloned()
         .map(|environment| (environment, None))
         .or_else(|| {
             discovered
                 .candidates
                 .iter()
-                .find(|candidate| candidate.id == target)
+                .find(|candidate| candidate.id == launch.target)
                 .map(|candidate| (environment_from_candidate(candidate), Some(candidate.arch)))
         })
-        .ok_or_else(|| anyhow!("unknown emu `{target}`; run `qol emu list`"))?;
-    let resolution = resolve_environment(&environment);
+        .or_else(|| {
+            direct_candidate
+                .as_ref()
+                .map(|candidate| (environment_from_candidate(candidate), Some(candidate.arch)))
+        })
+        .ok_or_else(|| anyhow!("unknown emu `{}`; run `qol emu list`", launch.target))?;
+    if let Some(arch) = launch.arch {
+        environment.arch = arch;
+        environment.firmware = Firmware::for_arch(arch);
+        arch_guess = Some(ArchGuess::known(arch));
+    }
+    if let Some(firmware) = launch.firmware {
+        environment.firmware = firmware;
+    }
+    if let Some(image_kind) = launch.image_kind {
+        environment.media = image_kind.media();
+    }
+    if let Some(environment_id) = &launch.environment_id {
+        environment.id = environment_id.clone();
+        environment.name = humanize_id(environment_id);
+        environment.source = "registry".to_string();
+    }
+    let image_kind = launch
+        .image_kind
+        .unwrap_or_else(|| BackendImageKind::from_media(environment.media));
+    let resolution = resolve_environment_with(&environment, image_kind, launch.acceleration);
     let started_at = unix_millis()?;
-    let run_dir = root
-        .join("target/qol-emu")
-        .join(format!("{}-{started_at}", environment.id));
-    fs::create_dir_all(&run_dir)
-        .with_context(|| format!("failed to create {}", run_dir.display()))?;
+    let run_id = match &launch.run_id {
+        Some(run_id) => run_id.clone(),
+        None => live::new_run_id(&environment.id)?,
+    };
+    let runs_root = launch
+        .run_root
+        .clone()
+        .unwrap_or_else(|| root.join("target/qol-emu"));
+    fs::create_dir_all(&runs_root)
+        .with_context(|| format!("failed to create {}", runs_root.display()))?;
+    let run_dir = runs_root.join(&run_id);
+    fs::create_dir(&run_dir).with_context(|| format!("failed to create {}", run_dir.display()))?;
+    let mut lifecycle = machine::VmLifecycle::new(&run_dir);
+    let pidfile_path = run_dir.join("qemu.pid");
+    let preparing_report = with_spawn_state(
+        report_json(ReportInput {
+            run_id: &run_id,
+            command_name,
+            launch: &launch,
+            environment: &environment,
+            resolution: &resolution,
+            run_dir: &run_dir,
+            status: "preparing",
+            overlay: None,
+            qemu_command: None,
+            commands: Vec::new(),
+            qmp: None,
+            serial: None,
+            runtime: Some(json!({ "supervisor_pid": std::process::id() })),
+            workflow: None,
+            teardown: None,
+            next: vec!["Wait for the disposable machine to finish preparing.".to_string()],
+            started_at,
+        })?,
+        "not-started",
+        &pidfile_path,
+    );
+    write_report(&run_dir, &preparing_report)?;
     begin_run_log(&run_dir.join("run.log"));
 
     step_label(
@@ -600,22 +846,28 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
     );
 
     if resolution.state != ResolveState::Ready {
-        let report = report_json(ReportInput {
-            environment: &environment,
-            resolution: &resolution,
-            run_dir: &run_dir,
-            status: "skipped",
-            overlay: None,
-            qemu_command: None,
-            commands: Vec::new(),
-            qmp: None,
-            serial: None,
-            workflow: None,
-            teardown: None,
-            next: next_for_resolution(&environment, &resolution),
-            started_at,
+        lifecycle.finish(|removed| {
+            let report = report_json(ReportInput {
+                run_id: &run_id,
+                command_name,
+                launch: &launch,
+                environment: &environment,
+                resolution: &resolution,
+                run_dir: &run_dir,
+                status: "skipped",
+                overlay: None,
+                qemu_command: None,
+                commands: Vec::new(),
+                qmp: None,
+                serial: None,
+                runtime: None,
+                workflow: None,
+                teardown: Some(json!({ "removed": removed })),
+                next: next_for_resolution(&environment, &resolution),
+                started_at,
+            })?;
+            write_report(&run_dir, &report)
         })?;
-        write_report(&run_dir, &report)?;
         step_label(
             "report",
             StepKind::Info,
@@ -627,24 +879,30 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
     let prepared = match environment.media.prepare(&resolution, &run_dir, verbose) {
         Ok(prepared) => prepared,
         Err(error) => {
-            let report = report_json(ReportInput {
-                environment: &environment,
-                resolution: &resolution,
-                run_dir: &run_dir,
-                status: "failed",
-                overlay: None,
-                qemu_command: None,
-                commands: Vec::new(),
-                qmp: None,
-                serial: None,
-                workflow: None,
-                teardown: None,
-                next: vec![format!(
-                    "Inspect the qemu-img output, remove the run directory if needed, then rerun `qol emu {command_name}`."
-                )],
-                started_at,
+            lifecycle.finish(|removed| {
+                let report = report_json(ReportInput {
+                    run_id: &run_id,
+                    command_name,
+                    launch: &launch,
+                    environment: &environment,
+                    resolution: &resolution,
+                    run_dir: &run_dir,
+                    status: "failed",
+                    overlay: None,
+                    qemu_command: None,
+                    commands: Vec::new(),
+                    qmp: None,
+                    serial: None,
+                    runtime: None,
+                    workflow: None,
+                    teardown: Some(json!({ "removed": removed })),
+                    next: vec![format!(
+                        "Inspect the qemu-img output, remove the run directory if needed, then rerun `qol emu {command_name}`."
+                    )],
+                    started_at,
+                })?;
+                write_report(&run_dir, &report)
             })?;
-            write_report(&run_dir, &report)?;
             return Err(error);
         }
     };
@@ -653,17 +911,21 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
         .qemu_system
         .clone()
         .ok_or_else(|| anyhow!("ready environment has no qemu-system path"))?;
-    let qmp_port = machine::free_qmp_port()?;
-    let serial_port = machine::free_qmp_port()?;
-    let qemu_args = qemu_args(
-        &environment,
-        &prepared.boot_path,
-        resolution.acceleration,
-        platform::display(),
-        qmp_port,
-        serial_port,
-        resolution.firmware.as_deref(),
-    );
+    let mut reservation = machine::BootReservation::acquire(&runs_root)?;
+    let ports = reservation.ports();
+    let qmp_port = ports.qmp;
+    let serial_port = ports.serial;
+    let mut qemu_args = qemu_args(QemuArgsInput {
+        environment: &environment,
+        run_id: &run_id,
+        launch: &launch,
+        boot_disk: &prepared.boot_path,
+        acceleration: resolution.acceleration,
+        display: platform::display(),
+        ports,
+        firmware: resolution.firmware.as_deref(),
+    });
+    qemu_args.extend(["-pidfile".to_string(), pidfile_path.display().to_string()]);
     let qemu_command = command_line(&qemu_system, &qemu_args);
     let qemu_command_path = run_dir.join("qemu-command.txt");
     fs::write(&qemu_command_path, format!("{qemu_command}\n"))
@@ -673,64 +935,175 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
         "program": qemu_system,
         "args": qemu_args,
     }));
+    let launching_report = with_spawn_state(
+        report_json(ReportInput {
+            run_id: &run_id,
+            command_name,
+            launch: &launch,
+            environment: &environment,
+            resolution: &resolution,
+            run_dir: &run_dir,
+            status: "preparing",
+            overlay: prepared.overlay_artifact.as_deref(),
+            qemu_command: Some(&qemu_command_path),
+            commands: commands.clone(),
+            qmp: Some(json!({ "port": qmp_port })),
+            serial: Some(json!({ "port": serial_port })),
+            runtime: Some(json!({ "supervisor_pid": std::process::id() })),
+            workflow: None,
+            teardown: None,
+            next: vec!["Wait for QEMU to publish its process identity.".to_string()],
+            started_at,
+        })?,
+        "launching",
+        &pidfile_path,
+    );
+    write_report(&run_dir, &launching_report)?;
 
     step_label(
         "boot",
         StepKind::Pending,
         &format!("{} · qmp 127.0.0.1:{qmp_port}", environment.id),
     );
-    let mut child = machine::spawn_qemu(&qemu_system, &qemu_args)?;
-    let handshake = qmp::connect(qmp_port, Duration::from_secs(10)).and_then(|mut client| {
-        let status = client.query_status()?;
-        Ok((client.qemu_version.clone(), status))
-    });
+    reservation.release_ports();
+    let qemu_pid = match lifecycle.spawn(&qemu_system, &qemu_args) {
+        Ok(pid) => pid,
+        Err(error) => {
+            lifecycle.finish(|removed| {
+                let report = report_json(ReportInput {
+                    run_id: &run_id,
+                    command_name,
+                    launch: &launch,
+                    environment: &environment,
+                    resolution: &resolution,
+                    run_dir: &run_dir,
+                    status: "failed",
+                    overlay: prepared.overlay_artifact.as_deref(),
+                    qemu_command: Some(&qemu_command_path),
+                    commands,
+                    qmp: Some(json!({ "port": qmp_port })),
+                    serial: Some(json!({ "port": serial_port })),
+                    runtime: Some(json!({ "supervisor_pid": std::process::id() })),
+                    workflow: None,
+                    teardown: Some(json!({ "removed": removed })),
+                    next: boot_failure_next(command_name, arch_guess),
+                    started_at,
+                })?;
+                write_report(&run_dir, &report)
+            })?;
+            return Err(error);
+        }
+    };
+    let starting_report = with_spawn_state(
+        report_json(ReportInput {
+            run_id: &run_id,
+            command_name,
+            launch: &launch,
+            environment: &environment,
+            resolution: &resolution,
+            run_dir: &run_dir,
+            status: "starting",
+            overlay: prepared.overlay_artifact.as_deref(),
+            qemu_command: Some(&qemu_command_path),
+            commands: commands.clone(),
+            qmp: Some(json!({ "port": qmp_port })),
+            serial: Some(json!({ "port": serial_port })),
+            runtime: Some(json!({
+                "supervisor_pid": std::process::id(),
+                "qemu_pid": qemu_pid,
+            })),
+            workflow: None,
+            teardown: None,
+            next: vec!["Wait for the QMP handshake to complete.".to_string()],
+            started_at,
+        })?,
+        "spawned",
+        &pidfile_path,
+    );
+    write_report(&run_dir, &starting_report)?;
+    let handshake =
+        qmp::connect_verified(qmp_port, Duration::from_secs(10), &run_id).and_then(|mut client| {
+            let status = client.query_status()?;
+            Ok((client.qemu_version.clone(), status))
+        });
     let (qemu_version, vm_status) = match handshake {
         Ok(values) => values,
         Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            let removed = machine::teardown(&run_dir)?;
-            let report = report_json(ReportInput {
-                environment: &environment,
-                resolution: &resolution,
-                run_dir: &run_dir,
-                status: "failed",
-                overlay: prepared.overlay_artifact.as_deref(),
-                qemu_command: Some(&qemu_command_path),
-                commands,
-                qmp: Some(json!({ "port": qmp_port, "error": error.to_string() })),
-                serial: Some(json!({ "port": serial_port })),
-                workflow: None,
-                teardown: Some(json!({ "removed": removed })),
-                next: boot_failure_next(command_name, arch_guess),
-                started_at,
+            let exit = lifecycle.terminate()?;
+            lifecycle.finish(|removed| {
+                let report = report_json(ReportInput {
+                    run_id: &run_id,
+                    command_name,
+                    launch: &launch,
+                    environment: &environment,
+                    resolution: &resolution,
+                    run_dir: &run_dir,
+                    status: "failed",
+                    overlay: prepared.overlay_artifact.as_deref(),
+                    qemu_command: Some(&qemu_command_path),
+                    commands,
+                    qmp: Some(json!({ "port": qmp_port, "error": error.to_string() })),
+                    serial: Some(json!({ "port": serial_port })),
+                    runtime: Some(json!({
+                        "supervisor_pid": std::process::id(),
+                        "qemu_pid": qemu_pid,
+                    })),
+                    workflow: None,
+                    teardown: Some(json!({ "removed": removed, "exit": exit.to_string() })),
+                    next: boot_failure_next(command_name, arch_guess),
+                    started_at,
+                })?;
+                write_report(&run_dir, &report)
             })?;
-            write_report(&run_dir, &report)?;
             bail!("qmp handshake failed: {error:#}");
         }
     };
+    drop(reservation);
     step_label(
         "qmp",
         StepKind::Success,
         &format!("qemu {qemu_version} · {vm_status}"),
     );
-    let report = report_json(ReportInput {
-        environment: &environment,
-        resolution: &resolution,
-        run_dir: &run_dir,
-        status: "running",
-        overlay: prepared.overlay_artifact.as_deref(),
-        qemu_command: Some(&qemu_command_path),
-        commands: commands.clone(),
-        qmp: Some(json!({ "port": qmp_port, "qemu_version": qemu_version, "status": vm_status })),
-        serial: Some(json!({ "port": serial_port })),
-        workflow: None,
-        teardown: None,
-        next: vec!["Close the VM window (or shut the guest down) to end the run.".to_string()],
-        started_at,
-    })?;
+    let next = if launch.display == launch::DisplayMode::None {
+        vec![
+            format!("Capture evidence with `qol emu shot {run_id}`."),
+            format!("Stop the environment with `qol emu down {run_id}`."),
+        ]
+    } else {
+        vec!["Close the VM window (or shut the guest down) to end the run.".to_string()]
+    };
+    let report = with_spawn_state(
+        report_json(ReportInput {
+            run_id: &run_id,
+            command_name,
+            launch: &launch,
+            environment: &environment,
+            resolution: &resolution,
+            run_dir: &run_dir,
+            status: "running",
+            overlay: prepared.overlay_artifact.as_deref(),
+            qemu_command: Some(&qemu_command_path),
+            commands: commands.clone(),
+            qmp: Some(
+                json!({ "port": qmp_port, "qemu_version": qemu_version, "status": vm_status }),
+            ),
+            serial: Some(json!({ "port": serial_port })),
+            runtime: Some(json!({
+                "supervisor_pid": std::process::id(),
+                "qemu_pid": qemu_pid,
+            })),
+            workflow: None,
+            teardown: None,
+            next,
+            started_at,
+        })?,
+        "spawned",
+        &pidfile_path,
+    );
     write_report(&run_dir, &report)?;
     Ok(BootedVm {
+        run_id,
+        launch,
         environment,
         resolution,
         run_dir,
@@ -740,7 +1113,7 @@ fn boot_vm(target: &str, command_name: &str, verbose: bool) -> Result<BootedVm> 
         serial_port,
         qemu_version,
         vm_status,
-        child,
+        child: lifecycle,
         started_at,
     })
 }
@@ -751,29 +1124,69 @@ fn finalize_vm(
     workflow: Option<serde_json::Value>,
     command_name: &str,
 ) -> Result<(PathBuf, Vec<PathBuf>)> {
-    let removed = machine::teardown(&vm.run_dir)?;
-    let final_status = if exit.success() { "pass" } else { "failed" };
-    let report = report_json(ReportInput {
-        environment: &vm.environment,
-        resolution: &vm.resolution,
-        run_dir: &vm.run_dir,
-        status: final_status,
-        overlay: None,
-        qemu_command: Some(&vm.qemu_command_path),
-        commands: vm.commands.clone(),
-        qmp: Some(
-            json!({ "port": vm.qmp_port, "qemu_version": vm.qemu_version, "status": vm.vm_status }),
-        ),
-        serial: Some(json!({ "port": vm.serial_port })),
-        workflow,
-        teardown: Some(json!({ "removed": removed, "exit": exit.to_string() })),
-        next: vec![format!(
-            "Rerun `qol emu {command_name}` for a fresh disposable clone."
-        )],
-        started_at: vm.started_at,
+    let BootedVm {
+        run_id,
+        launch,
+        environment,
+        resolution,
+        run_dir,
+        qemu_command_path,
+        commands,
+        qmp_port,
+        serial_port,
+        qemu_version,
+        vm_status,
+        child: mut lifecycle,
+        started_at,
+    } = vm;
+    let qemu_pid = lifecycle
+        .pid()
+        .ok_or_else(|| anyhow!("booted VM has no qemu process"))?;
+    let final_status = final_status(exit.success(), workflow.as_ref());
+    let report_path = run_dir.join("report.json");
+    let ((), removed) = lifecycle.finish(|removed| {
+        let report = report_json(ReportInput {
+            run_id: &run_id,
+            command_name,
+            launch: &launch,
+            environment: &environment,
+            resolution: &resolution,
+            run_dir: &run_dir,
+            status: final_status,
+            overlay: None,
+            qemu_command: Some(&qemu_command_path),
+            commands,
+            qmp: Some(
+                json!({ "port": qmp_port, "qemu_version": qemu_version, "status": vm_status }),
+            ),
+            serial: Some(json!({ "port": serial_port })),
+            runtime: Some(json!({
+                "supervisor_pid": std::process::id(),
+                "qemu_pid": qemu_pid,
+            })),
+            workflow,
+            teardown: Some(json!({ "removed": removed, "exit": exit.to_string() })),
+            next: vec![format!(
+                "Rerun `qol emu {command_name}` for a fresh disposable clone."
+            )],
+            started_at,
+        })?;
+        write_report(&run_dir, &report)
     })?;
-    write_report(&vm.run_dir, &report)?;
-    Ok((vm.run_dir.join("report.json"), removed))
+    Ok((report_path, removed))
+}
+
+fn final_status(exit_success: bool, workflow: Option<&serde_json::Value>) -> &'static str {
+    if !exit_success {
+        return "failed";
+    }
+    let Some(workflow) = workflow else {
+        return "pass";
+    };
+    if workflow.get("verdict").and_then(serde_json::Value::as_str) == Some("pass") {
+        return "pass";
+    }
+    "failed"
 }
 
 fn boot_failure_next(command_name: &str, arch_guess: Option<ArchGuess>) -> Vec<String> {
@@ -910,7 +1323,7 @@ fn print_emu_help() {
 }
 
 fn emu_help_text() -> String {
-    format!("qol emu commands:\n  qol emu list\n  {ADD_SYNTAX}\n  qol emu open\n  qol emu doctor\n  qol emu desktop mintish <environment>\n  qol emu up <environment>\n  qol emu run <workflow> <environment>\n  qol emu check <environment>\n  qol emu shot <environment>\n  qol emu key <environment> <qcode>...\n  qol emu insert <environment>\n  qol emu pull <environment>\n  qol emu snap <environment>\n  qol emu sh <environment> <command>...\n  qol emu down <environment>\n\nControl verbs target the newest running `qol emu up` for that environment.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nDrop a disk image or .iso into the emu dir (`qol emu open`) and it appears in\n`qol emu list`; `qol emu up <id>` boots it (an .iso boots as a disposable live CD).\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n")
+    format!("qol emu commands:\n  qol emu list\n  {ADD_SYNTAX}\n  qol emu open\n  qol emu doctor\n  qol emu desktop mintish <environment>\n  qol emu up <environment|image> [launch options]\n  qol emu run <workflow> <environment|image> [launch options]\n  qol emu check <environment|image> [launch options]\n  qol emu shot [--run-root PATH]... <run-id|environment>\n  qol emu key [--run-root PATH]... <run-id|environment> <qcode>...\n  qol emu insert [--run-root PATH]... <run-id|environment>\n  qol emu pull [--run-root PATH]... <run-id|environment>\n  qol emu snap [--run-root PATH]... <run-id|environment>\n  qol emu sh [--run-root PATH]... <run-id|environment> <command>...\n  qol emu down [--run-root PATH]... <run-id|environment>\n\nLaunch options:\n  --headless --memory-mb N --cpus N --run-id ID --run-root PATH\n  --environment-id ID --image-kind qcow2|raw|img|iso\n  --acceleration hardware|allow-tcg --arch x86_64|aarch64\n  --firmware bios|uefi\n\nControl verbs prefer an exact run ID. An environment ID works only when one\nmatching run is live. Control --run-root is repeatable; without it, control uses\ntarget/qol-emu.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nDrop a disk image or .iso into the emu dir (`qol emu open`) and it appears in\n`qol emu list`; `qol emu up <id>` boots it (an .iso boots as a disposable live CD).\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n")
 }
 
 pub(crate) fn discover_all() -> Result<Discovered> {
@@ -928,80 +1341,111 @@ fn discover_environments() -> Result<Vec<Environment>> {
 }
 
 fn resolve_environment(environment: &Environment) -> Resolution {
-    let qemu_system = find_on_path(environment.arch.qemu_system_binary());
-    let qemu_img = find_on_path("qemu-img");
-    let acceleration = platform::acceleration(environment.arch);
-    if qemu_system.is_none() {
-        return Resolution {
-            state: ResolveState::Unsupported,
-            reason: format!("missing {}", environment.arch.qemu_system_binary()),
-            image_path: environment.image_path.clone(),
-            qemu_system,
-            qemu_img,
-            acceleration,
-            firmware: None,
-        };
-    }
-    if environment.media.requires_qemu_img() && qemu_img.is_none() {
-        return Resolution {
-            state: ResolveState::Unsupported,
-            reason: "missing qemu-img".to_string(),
-            image_path: environment.image_path.clone(),
-            qemu_system,
-            qemu_img,
-            acceleration,
-            firmware: None,
-        };
-    }
-    let firmware = match qemu_system.as_deref() {
-        Some(path) => match locate_firmware(path, environment.arch, environment.firmware) {
-            Ok(firmware) => firmware,
-            Err(reason) => {
-                return Resolution {
-                    state: ResolveState::Unsupported,
-                    reason,
-                    image_path: environment.image_path.clone(),
-                    qemu_system,
-                    qemu_img,
-                    acceleration,
-                    firmware: None,
-                }
+    resolve_environment_with(
+        environment,
+        BackendImageKind::from_media(environment.media),
+        AccelerationRequirement::AllowTcg,
+    )
+}
+
+fn resolve_environment_with(
+    environment: &Environment,
+    image_kind: BackendImageKind,
+    acceleration_requirement: AccelerationRequirement,
+) -> Resolution {
+    let spec = BackendSpec::from_launch(
+        environment.arch,
+        environment.firmware,
+        image_kind,
+        acceleration_requirement,
+    );
+    let backend = match resolve_backend(spec) {
+        Ok(backend) => backend,
+        Err(reason) => {
+            return Resolution {
+                state: ResolveState::Unsupported,
+                reason,
+                image_path: environment.image_path.clone(),
+                qemu_system: None,
+                qemu_img: None,
+                acceleration: platform::acceleration(environment.arch),
+                firmware: None,
             }
-        },
-        None => None,
+        }
     };
     match image_path_status(&environment.image_path) {
         Ok(canonical) => Resolution {
             state: ResolveState::Ready,
             reason: format!("{} · {}", environment.source, canonical.display()),
             image_path: canonical,
-            qemu_system,
-            qemu_img,
-            acceleration,
-            firmware,
+            qemu_system: Some(backend.qemu_system),
+            qemu_img: backend.qemu_img,
+            acceleration: backend.acceleration,
+            firmware: backend.firmware,
         },
         Err((state, reason)) => Resolution {
             state,
             reason,
             image_path: environment.image_path.clone(),
-            qemu_system,
-            qemu_img,
-            acceleration,
-            firmware,
+            qemu_system: Some(backend.qemu_system),
+            qemu_img: backend.qemu_img,
+            acceleration: backend.acceleration,
+            firmware: backend.firmware,
         },
     }
 }
 
+pub(crate) fn resolve_backend(spec: BackendSpec) -> std::result::Result<ReadyBackend, String> {
+    let qemu_system = find_on_path(spec.arch.qemu_system_binary());
+    let qemu_img = find_on_path("qemu-img");
+    let acceleration = platform::acceleration(spec.arch);
+    resolve_backend_with(
+        spec,
+        qemu_system,
+        qemu_img,
+        acceleration,
+        &FIRMWARE_FALLBACK_DIRS,
+    )
+}
+
+fn resolve_backend_with(
+    spec: BackendSpec,
+    qemu_system: Option<PathBuf>,
+    qemu_img: Option<PathBuf>,
+    acceleration: &'static str,
+    firmware_fallback_dirs: &[&str],
+) -> std::result::Result<ReadyBackend, String> {
+    let qemu_system = qemu_system.ok_or_else(|| {
+        format!(
+            "missing {}",
+            host_facade::exe_name(spec.arch.qemu_system_binary())
+        )
+    })?;
+    if spec.image_kind.requires_overlay() && qemu_img.is_none() {
+        return Err(format!("missing {}", host_facade::exe_name("qemu-img")));
+    }
+    if spec.acceleration == AccelerationRequirement::Hardware && acceleration == "tcg" {
+        return Err(format!(
+            "hardware acceleration is unavailable for {}",
+            spec.arch.as_str()
+        ));
+    }
+    let firmware = locate_firmware_in(
+        &qemu_system,
+        spec.arch,
+        spec.firmware,
+        firmware_fallback_dirs,
+    )?;
+    Ok(ReadyBackend {
+        qemu_system,
+        qemu_img,
+        acceleration,
+        firmware,
+    })
+}
+
 const FIRMWARE_FALLBACK_DIRS: [&str; 3] =
     ["/usr/share/qemu", "/usr/share/OVMF", "/usr/share/edk2/x64"];
-
-fn locate_firmware(
-    qemu_system: &Path,
-    arch: GuestArch,
-    firmware: Firmware,
-) -> std::result::Result<Option<PathBuf>, String> {
-    locate_firmware_in(qemu_system, arch, firmware, &FIRMWARE_FALLBACK_DIRS)
-}
 
 fn locate_firmware_in(
     qemu_system: &Path,
@@ -1016,7 +1460,7 @@ fn locate_firmware_in(
     let Some(bin_dir) = qemu_system.parent() else {
         return Err(format!("{} has no parent directory", qemu_system.display()));
     };
-    let mut search_dirs = vec![bin_dir.join("../share/qemu")];
+    let mut search_dirs = vec![bin_dir.to_path_buf(), bin_dir.join("../share/qemu")];
     search_dirs.extend(fallback_dirs.iter().map(PathBuf::from));
     for dir in &search_dirs {
         for file in &candidates {
@@ -1060,10 +1504,24 @@ fn image_path_status(path: &Path) -> std::result::Result<PathBuf, (ResolveState,
 }
 
 pub(crate) fn find_on_path(program: &str) -> Option<PathBuf> {
+    let executable = host_facade::exe_name(program);
     let paths = env::var_os("PATH")?;
     env::split_paths(&paths)
-        .map(|path| path.join(program))
-        .find(|candidate| candidate.is_file())
+        .map(|path| path.join(&executable))
+        .find(|candidate| path_is_executable(candidate))
+}
+
+#[cfg(unix)]
+fn path_is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn path_is_executable(path: &Path) -> bool {
+    path.is_file()
 }
 
 fn detect_image_format(program: &Path, image_path: &Path, verbose: bool) -> Result<String> {
@@ -1080,27 +1538,37 @@ fn detect_image_format(program: &Path, image_path: &Path, verbose: bool) -> Resu
     Ok(registry::parse_qemu_img_info(&stdout)?.format)
 }
 
-fn qemu_args(
-    environment: &Environment,
-    boot_disk: &Path,
-    acceleration: &str,
-    display: &str,
-    qmp_port: u16,
-    serial_port: u16,
-    firmware: Option<&Path>,
-) -> Vec<String> {
+struct QemuArgsInput<'a> {
+    environment: &'a Environment,
+    run_id: &'a str,
+    launch: &'a launch::LaunchOptions,
+    boot_disk: &'a Path,
+    acceleration: &'a str,
+    display: &'a str,
+    ports: machine::BootPorts,
+    firmware: Option<&'a Path>,
+}
+
+fn qemu_args(input: QemuArgsInput<'_>) -> Vec<String> {
+    let QemuArgsInput {
+        environment,
+        run_id,
+        launch,
+        boot_disk,
+        acceleration,
+        display,
+        ports,
+        firmware,
+    } = input;
     let mut args = vec![
         "-name".to_string(),
-        format!("qol-emu-{}", environment.id),
+        format!("qol-emu-{run_id}"),
         "-machine".to_string(),
         environment.arch.machine_type().to_string(),
         "-accel".to_string(),
         acceleration.to_string(),
-        "-m".to_string(),
-        "4096".to_string(),
-        "-smp".to_string(),
-        "2".to_string(),
     ];
+    args.extend(launch.qemu_args(display));
     match environment.arch {
         GuestArch::X86_64 => {}
         GuestArch::Aarch64 => {
@@ -1126,12 +1594,10 @@ fn qemu_args(
         "qemu-xhci,id=xhci".to_string(),
         "-device".to_string(),
         "virtio-rng-pci".to_string(),
-        "-display".to_string(),
-        display.to_string(),
         "-qmp".to_string(),
-        format!("tcp:127.0.0.1:{qmp_port},server,nowait"),
+        format!("tcp:127.0.0.1:{},server,nowait", ports.qmp),
         "-serial".to_string(),
-        format!("tcp:127.0.0.1:{serial_port},server,nowait"),
+        format!("tcp:127.0.0.1:{},server,nowait", ports.serial),
     ]);
     args
 }
@@ -1157,6 +1623,9 @@ fn run_child_output(
 }
 
 struct ReportInput<'a> {
+    run_id: &'a str,
+    command_name: &'a str,
+    launch: &'a launch::LaunchOptions,
     environment: &'a Environment,
     resolution: &'a Resolution,
     run_dir: &'a Path,
@@ -1166,18 +1635,27 @@ struct ReportInput<'a> {
     commands: Vec<serde_json::Value>,
     qmp: Option<serde_json::Value>,
     serial: Option<serde_json::Value>,
+    runtime: Option<serde_json::Value>,
     workflow: Option<serde_json::Value>,
     teardown: Option<serde_json::Value>,
     next: Vec<String>,
     started_at: u64,
 }
 
+fn with_spawn_state(mut report: Value, state: &str, pidfile: &Path) -> Value {
+    report["spawn"] = json!({
+        "state": state,
+        "pidfile": pidfile,
+    });
+    report
+}
+
 fn report_json(input: ReportInput<'_>) -> Result<serde_json::Value> {
-    let finished_at = unix_millis()?;
-    Ok(json!({
-        "name": "qol-emu-up",
+    let mut report = json!({
+        "name": format!("qol-emu-{}", input.command_name),
+        "kind": if matches!(input.command_name, "run" | "check") { "flow" } else { "environment" },
+        "run_id": input.run_id,
         "started_at_unix_ms": input.started_at,
-        "finished_at_unix_ms": finished_at,
         "status": input.status,
         "environment": {
             "id": input.environment.id,
@@ -1197,25 +1675,39 @@ fn report_json(input: ReportInput<'_>) -> Result<serde_json::Value> {
             "qemu_img": input.resolution.qemu_img,
             "acceleration": input.resolution.acceleration,
         },
+        "launch": {
+            "display": input.launch.display.qemu_value(platform::display()),
+            "memory_mb": input.launch.memory_mb,
+            "cpus": input.launch.cpus,
+        },
         "artifacts": {
             "run_dir": input.run_dir,
             "overlay": input.overlay,
             "qemu_command": input.qemu_command,
+            "qemu_log": input.run_dir.join("logs/qemu.log"),
             "report": input.run_dir.join("report.json"),
         },
         "commands": input.commands,
         "qmp": input.qmp,
         "serial": input.serial,
+        "runtime": input.runtime,
         "workflow": input.workflow,
         "teardown": input.teardown,
         "next": input.next,
-    }))
+    });
+    if !matches!(
+        input.status,
+        "preparing" | "starting" | "running" | "stopping"
+    ) {
+        report["finished_at_unix_ms"] = json!(unix_millis()?);
+    }
+    Ok(report)
 }
 
 fn write_report(run_dir: &Path, report: &serde_json::Value) -> Result<()> {
     let path = run_dir.join("report.json");
     let content = serde_json::to_string_pretty(report).context("failed to serialize report")?;
-    fs::write(&path, format!("{content}\n"))
+    qol_fs::atomic_write(&path, format!("{content}\n").as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))
 }
 
@@ -1311,6 +1803,20 @@ mod tests {
         assert_eq!(sanitize_id("!!!"), "emu");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn executable_probe_rejects_non_executable_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tool");
+        fs::write(&path, b"tool").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!path_is_executable(&path));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(path_is_executable(&path));
+    }
+
     #[test]
     fn report_json_serializes_firmware() {
         let environment = Environment {
@@ -1332,23 +1838,53 @@ mod tests {
             acceleration: "kvm",
             firmware: None,
         };
-        let report = report_json(ReportInput {
-            environment: &environment,
-            resolution: &resolution,
-            run_dir: Path::new("/a/b/run"),
-            status: "ok",
-            overlay: None,
-            qemu_command: None,
-            commands: Vec::new(),
-            qmp: None,
-            serial: None,
-            workflow: None,
-            teardown: None,
-            next: Vec::new(),
-            started_at: 0,
-        })
-        .unwrap();
-        assert_eq!(report["environment"]["firmware"], "uefi");
+        let launch = launch::LaunchOptions::new("foo");
+        let make_report = |status| {
+            report_json(ReportInput {
+                run_id: "foo-run",
+                command_name: "up",
+                launch: &launch,
+                environment: &environment,
+                resolution: &resolution,
+                run_dir: Path::new("/a/b/run"),
+                status,
+                overlay: None,
+                qemu_command: None,
+                commands: Vec::new(),
+                qmp: None,
+                serial: None,
+                runtime: None,
+                workflow: None,
+                teardown: None,
+                next: Vec::new(),
+                started_at: 0,
+            })
+            .unwrap()
+        };
+        let running = make_report("running");
+        assert_eq!(running["run_id"], "foo-run");
+        assert_eq!(running["environment"]["firmware"], "uefi");
+        assert!(running.get("finished_at_unix_ms").is_none());
+        let terminal = make_report("pass");
+        assert!(terminal.get("finished_at_unix_ms").is_some());
+    }
+
+    #[test]
+    fn final_status_requires_both_qemu_and_workflow_success() {
+        let pass = json!({"verdict": "pass"});
+        let fail = json!({"verdict": "fail"});
+        let error = json!({"verdict": "error"});
+        let cases = [
+            (true, None, "pass"),
+            (false, None, "failed"),
+            (true, Some(&pass), "pass"),
+            (true, Some(&fail), "failed"),
+            (true, Some(&error), "failed"),
+            (false, Some(&pass), "failed"),
+        ];
+        for (exit_success, workflow, expected) in cases {
+            assert_eq!(final_status(exit_success, workflow), expected);
+        }
     }
 
     #[test]
@@ -1419,15 +1955,20 @@ mod tests {
             firmware: Firmware::Bios,
             media: BootMedia::Disk,
         };
-        let args = qemu_args(
-            &environment,
-            Path::new("/a/b/overlay.qcow2"),
-            "kvm",
-            "gtk,zoom-to-fit=on",
-            4444,
-            5555,
-            None,
-        );
+        let launch = launch::LaunchOptions::new("foo");
+        let args = qemu_args(QemuArgsInput {
+            environment: &environment,
+            run_id: "foo-run",
+            launch: &launch,
+            boot_disk: Path::new("/a/b/overlay.qcow2"),
+            acceleration: "kvm",
+            display: "gtk,zoom-to-fit=on",
+            ports: machine::BootPorts {
+                qmp: 4444,
+                serial: 5555,
+            },
+            firmware: None,
+        });
         let joined = args.join(" ");
         let expected = [
             "-accel kvm",
@@ -1445,6 +1986,10 @@ mod tests {
             );
         }
         assert!(joined.contains("-machine q35"), "machine in: {joined}");
+        assert!(
+            joined.contains("-name qol-emu-foo-run"),
+            "name in: {joined}"
+        );
         assert!(!joined.contains("-cpu"), "unexpected -cpu in: {joined}");
         assert!(
             !joined.contains("virtio-gpu-pci"),
@@ -1465,15 +2010,20 @@ mod tests {
             firmware: Firmware::Uefi,
             media: BootMedia::Disk,
         };
-        let accelerated = qemu_args(
-            &environment,
-            Path::new("/a/b/overlay.qcow2"),
-            "hvf",
-            "cocoa,zoom-to-fit=on",
-            4444,
-            5555,
-            Some(Path::new("/fw/edk2-aarch64-code.fd")),
-        )
+        let launch = launch::LaunchOptions::new("foo");
+        let accelerated = qemu_args(QemuArgsInput {
+            environment: &environment,
+            run_id: "foo-run",
+            launch: &launch,
+            boot_disk: Path::new("/a/b/overlay.qcow2"),
+            acceleration: "hvf",
+            display: "cocoa,zoom-to-fit=on",
+            ports: machine::BootPorts {
+                qmp: 4444,
+                serial: 5555,
+            },
+            firmware: Some(Path::new("/fw/edk2-aarch64-code.fd")),
+        })
         .join(" ");
         let expected = [
             "-machine virt",
@@ -1487,15 +2037,19 @@ mod tests {
                 "missing `{fragment}` in: {accelerated}"
             );
         }
-        let emulated = qemu_args(
-            &environment,
-            Path::new("/a/b/overlay.qcow2"),
-            "tcg",
-            "cocoa,zoom-to-fit=on",
-            4444,
-            5555,
-            None,
-        )
+        let emulated = qemu_args(QemuArgsInput {
+            environment: &environment,
+            run_id: "foo-run",
+            launch: &launch,
+            boot_disk: Path::new("/a/b/overlay.qcow2"),
+            acceleration: "tcg",
+            display: "cocoa,zoom-to-fit=on",
+            ports: machine::BootPorts {
+                qmp: 4444,
+                serial: 5555,
+            },
+            firmware: None,
+        })
         .join(" ");
         assert!(emulated.contains("-cpu max"), "cpu in: {emulated}");
         assert!(
@@ -1516,15 +2070,20 @@ mod tests {
             firmware: Firmware::Bios,
             media: BootMedia::Iso,
         };
-        let joined = qemu_args(
-            &environment,
-            Path::new("/a/b/mint.iso"),
-            "tcg",
-            "cocoa",
-            4444,
-            5555,
-            None,
-        )
+        let launch = launch::LaunchOptions::new("mint");
+        let joined = qemu_args(QemuArgsInput {
+            environment: &environment,
+            run_id: "mint-run",
+            launch: &launch,
+            boot_disk: Path::new("/a/b/mint.iso"),
+            acceleration: "tcg",
+            display: "cocoa",
+            ports: machine::BootPorts {
+                qmp: 4444,
+                serial: 5555,
+            },
+            firmware: None,
+        })
         .join(" ");
         assert!(
             joined.contains("-cdrom /a/b/mint.iso"),
@@ -1600,6 +2159,107 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(x86_found.ends_with("OVMF_CODE.fd"), "found: {x86_found:?}");
+    }
+
+    #[test]
+    fn backend_spec_parses_manifest_values_into_typed_launch_inputs() {
+        let spec = BackendSpec::from_manifest(
+            "qemu",
+            "raw",
+            Some("aarch64"),
+            Some("uefi"),
+            Some("hardware"),
+        )
+        .unwrap();
+        assert_eq!(spec.arch, GuestArch::Aarch64);
+        assert_eq!(spec.firmware, Firmware::Uefi);
+        assert_eq!(spec.image_kind, BackendImageKind::Raw);
+        assert_eq!(spec.acceleration, AccelerationRequirement::Hardware);
+
+        let invalid = [
+            ("hyperv", "qcow2", "x86_64", "bios", "hardware"),
+            ("qemu", "vhdx", "x86_64", "bios", "hardware"),
+            ("qemu", "qcow2", "amd64", "bios", "hardware"),
+            ("qemu", "qcow2", "x86_64", "efi", "hardware"),
+            ("qemu", "qcow2", "x86_64", "bios", "kvm"),
+        ];
+        for (backend, kind, arch, firmware, acceleration) in invalid {
+            assert!(
+                BackendSpec::from_manifest(
+                    backend,
+                    kind,
+                    Some(arch),
+                    Some(firmware),
+                    Some(acceleration),
+                )
+                .is_err(),
+                "values: {backend} {kind} {arch} {firmware} {acceleration}"
+            );
+        }
+    }
+
+    #[test]
+    fn backend_preflight_requires_qemu_img_only_for_overlay_images() {
+        let root = tempfile::tempdir().unwrap();
+        let qemu_system = root.path().join("qemu-system-x86_64");
+        fs::write(&qemu_system, b"qemu").unwrap();
+        let disk = BackendSpec::from_launch(
+            GuestArch::X86_64,
+            Firmware::Bios,
+            BackendImageKind::Qcow2,
+            AccelerationRequirement::AllowTcg,
+        );
+        let iso = BackendSpec::from_launch(
+            GuestArch::X86_64,
+            Firmware::Bios,
+            BackendImageKind::Iso,
+            AccelerationRequirement::AllowTcg,
+        );
+
+        let disk_error =
+            resolve_backend_with(disk, Some(qemu_system.clone()), None, "tcg", &[]).unwrap_err();
+        assert!(disk_error.contains("qemu-img"), "error: {disk_error}");
+        let ready = resolve_backend_with(iso, Some(qemu_system), None, "tcg", &[]).unwrap();
+        assert_eq!(ready.qemu_img, None);
+        assert_eq!(ready.acceleration, "tcg");
+    }
+
+    #[test]
+    fn manifest_and_boot_preflight_reject_the_same_hardware_gap() {
+        let root = tempfile::tempdir().unwrap();
+        let qemu_system = root.path().join("qemu-system-x86_64");
+        let qemu_img = root.path().join("qemu-img");
+        fs::write(&qemu_system, b"qemu").unwrap();
+        fs::write(&qemu_img, b"qemu-img").unwrap();
+        let manifest = BackendSpec::from_manifest(
+            "qemu",
+            "qcow2",
+            Some("x86_64"),
+            Some("bios"),
+            Some("hardware"),
+        )
+        .unwrap();
+        let boot = BackendSpec::from_launch(
+            GuestArch::X86_64,
+            Firmware::Bios,
+            BackendImageKind::Qcow2,
+            AccelerationRequirement::Hardware,
+        );
+        let resolve = |spec| {
+            resolve_backend_with(
+                spec,
+                Some(qemu_system.clone()),
+                Some(qemu_img.clone()),
+                "tcg",
+                &[],
+            )
+        };
+
+        assert_eq!(resolve(manifest), resolve(boot));
+        assert_eq!(
+            resolve(manifest).unwrap_err(),
+            "hardware acceleration is unavailable for x86_64"
+        );
     }
 
     #[test]

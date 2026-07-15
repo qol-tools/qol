@@ -1,0 +1,28 @@
+id = "linux/mint-cinnamon"
+name = "Linux Mint Cinnamon"
+family = "linux"
+backend = "qemu"
+
+[image]
+kind = "qcow2"
+base = "linux-mint-cinnamon.qcow2"
+recommended_size_gb = 40
+arch = "x86_64"
+firmware = "uefi"
+
+[boot]
+memory_mb = 3072
+cpus = 2
+display = "headless"
+
+[mounts]
+workspace = false
+
+[capabilities]
+acceleration = "hardware"
+kernel = "full"
+reboot = "true"
+desktop = "cinnamon"
+display_protocol = "x11"
+virtual_input = "qmp"
+manual_only = "true"

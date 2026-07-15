@@ -1,11 +1,15 @@
-use std::path::Path;
+use std::fs::OpenOptions;
 
 pub(crate) fn hypervisor() -> &'static str {
     "kvm"
 }
 
 pub(crate) fn hypervisor_available() -> bool {
-    Path::new("/dev/kvm").exists()
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/kvm")
+        .is_ok()
 }
 
 pub(crate) fn display() -> &'static str {

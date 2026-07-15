@@ -1,5 +1,6 @@
 use super::PlatformOps;
 use anyhow::{anyhow, Result};
+use std::fs;
 use std::process::Command;
 
 pub(crate) struct Platform;
@@ -35,5 +36,39 @@ impl PlatformOps for Platform {
             .or_else(|_| super::pipe_to_clipboard("xclip", &["-selection", "clipboard"], text))
             .or_else(|_| super::pipe_to_clipboard("xsel", &["--clipboard", "--input"], text))
             .map_err(|_| anyhow!("no clipboard tool found (install wl-copy, xclip, or xsel)"))
+    }
+
+    fn available_memory_mb(&self) -> Option<u64> {
+        fs::read_to_string("/proc/meminfo")
+            .ok()
+            .and_then(|content| parse_available_memory_mb(&content))
+    }
+}
+
+fn parse_available_memory_mb(content: &str) -> Option<u64> {
+    content.lines().find_map(|line| {
+        let value = line.strip_prefix("MemAvailable:")?.trim();
+        let kib = value.strip_suffix("kB")?.trim().parse::<u64>().ok()?;
+        Some(kib / 1024)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_available_memory_from_proc_meminfo() {
+        let cases = [
+            ("MemTotal: 100 kB\nMemAvailable: 2048 kB\n", Some(2)),
+            ("MemAvailable: 1048576 kB\n", Some(1024)),
+            ("MemAvailable: nope kB\n", None),
+            ("MemAvailable: 100 bytes\n", None),
+            ("MemTotal: 2048 kB\n", None),
+            ("", None),
+        ];
+        for (content, expected) in cases {
+            assert_eq!(parse_available_memory_mb(content), expected, "{content:?}");
+        }
     }
 }

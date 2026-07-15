@@ -76,6 +76,12 @@ pub(crate) fn connect(port: u16, timeout: Duration) -> Result<QmpClient> {
     }
 }
 
+pub(crate) fn connect_verified(port: u16, timeout: Duration, run_id: &str) -> Result<QmpClient> {
+    let mut client = connect(port, timeout)?;
+    client.verify_run_identity(run_id)?;
+    Ok(client)
+}
+
 impl<S: Read + Write> QmpClient<S> {
     fn handshake(stream: S) -> Result<Self> {
         let mut client = Self {
@@ -206,6 +212,25 @@ impl<S: Read + Write> QmpClient<S> {
             .and_then(Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| anyhow!("query-status returned no status: {value}"))
+    }
+
+    pub(crate) fn query_machine_name(&mut self) -> Result<String> {
+        let value = self.execute("query-name", None)?;
+        value
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("query-name returned no machine name: {value}"))
+    }
+
+    pub(crate) fn verify_run_identity(&mut self, run_id: &str) -> Result<()> {
+        let expected = format!("qol-emu-{run_id}");
+        let actual = self.query_machine_name()?;
+        if actual != expected {
+            bail!("qmp machine identity mismatch: expected `{expected}`, got `{actual}`");
+        }
+        Ok(())
     }
 
     fn read_line(&mut self) -> Result<String> {
@@ -410,6 +435,41 @@ mod tests {
         let reqs = requests(&client);
         assert_eq!(reqs[0]["execute"], "qmp_capabilities");
         assert_eq!(reqs[1]["execute"], "query-status");
+    }
+
+    #[test]
+    fn verifies_exact_run_identity() {
+        let mut client = client(&[r#"{"return":{"name":"qol-emu-mint-a"}}"#]);
+        client.verify_run_identity("mint-a").unwrap();
+        let request = &requests(&client)[1];
+        assert_eq!(request["execute"], "query-name");
+    }
+
+    #[test]
+    fn rejects_mismatched_run_identity_before_other_commands() {
+        let mut client = client(&[r#"{"return":{"name":"qol-emu-another-run"}}"#]);
+        let error = client.verify_run_identity("mint-a").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "qmp machine identity mismatch: expected `qol-emu-mint-a`, got `qol-emu-another-run`"
+        );
+        let reqs = requests(&client);
+        assert_eq!(reqs.len(), 2);
+        assert_eq!(reqs[1]["execute"], "query-name");
+    }
+
+    #[test]
+    fn rejects_missing_machine_name() {
+        for response in [r#"{"return":{}}"#, r#"{"return":{"name":""}}"#] {
+            let mut client = client(&[response]);
+            let error = client.verify_run_identity("mint-a").unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .starts_with("query-name returned no machine name:"),
+                "response: {response}, error: {error:#}"
+            );
+        }
     }
 
     #[test]

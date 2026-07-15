@@ -23,4 +23,8 @@ impl PlatformOps for Platform {
     fn copy_to_clipboard(&self, _text: &str) -> Result<()> {
         Err(anyhow!("clipboard not supported on this platform"))
     }
+
+    fn available_memory_mb(&self) -> Option<u64> {
+        None
+    }
 }
