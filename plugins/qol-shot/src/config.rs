@@ -49,7 +49,7 @@ pub struct CaptureConfig {
         )
     )]
     pub pin_border: bool,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub open_folder_after_save: bool,
 }
 
@@ -58,7 +58,7 @@ impl Default for CaptureConfig {
         Self {
             include_window_frame: true,
             pin_border: true,
-            open_folder_after_save: true,
+            open_folder_after_save: false,
         }
     }
 }
@@ -212,7 +212,7 @@ mod tests {
         assert_eq!(defaults.video.preset, default_preset());
         assert_eq!(defaults.video.framerate, default_framerate());
         assert_eq!(defaults.video.format, default_format());
-        assert!(defaults.capture.open_folder_after_save);
+        assert!(!defaults.capture.open_folder_after_save);
         assert_eq!(defaults.shortcuts.copy_command, CopyCommand::CopyImage);
     }
 }

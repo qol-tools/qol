@@ -208,17 +208,30 @@ fn debug_ghost_color() -> Option<Retained<NSColor>> {
 }
 
 pub fn show_window_by_title(title: &str) -> bool {
+    show_window_by_title_with_focus(title, true)
+}
+
+pub fn show_window_passive_by_title(title: &str) -> bool {
+    show_window_by_title_with_focus(title, false)
+}
+
+fn show_window_by_title_with_focus(title: &str, focus: bool) -> bool {
     let Some(window) = resolve_window(title) else {
         return false;
     };
     window.setLevel(NSPopUpMenuWindowLevel);
     window.setBackgroundColor(Some(&NSColor::clearColor()));
     window.setAlphaValue(1.0);
-    window.setIgnoresMouseEvents(false);
-    window.makeKeyAndOrderFront(None);
+    window.setIgnoresMouseEvents(!focus);
+    if focus {
+        window.makeKeyAndOrderFront(None);
+    }
+    if !focus {
+        window.orderFrontRegardless();
+    }
     qol_runtime::probe!(
         "SHOW_WIN",
-        "title={title} reason={}",
+        "title={title} focus_requested={focus} reason={}",
         crate::popup_window::change_reason()
     );
     true

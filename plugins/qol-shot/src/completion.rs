@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RevealSource {
     Automatic,
+    #[cfg(target_os = "linux")]
     Notification,
     PreviewAction,
 }
@@ -14,6 +15,7 @@ impl RevealSource {
     fn label(self) -> &'static str {
         match self {
             Self::Automatic => "automatic",
+            #[cfg(target_os = "linux")]
             Self::Notification => "notification",
             Self::PreviewAction => "preview-action",
         }
@@ -76,7 +78,7 @@ pub(crate) enum PreviewExit {
 
 impl PreviewExit {
     fn allows_automatic_reveal(self) -> bool {
-        matches!(self, Self::Intentional | Self::Unavailable)
+        matches!(self, Self::Intentional)
     }
 }
 
@@ -227,7 +229,7 @@ mod tests {
     fn preview_exit_controls_automatic_reveal() {
         let cases = [
             (PreviewExit::Intentional, true),
-            (PreviewExit::Unavailable, true),
+            (PreviewExit::Unavailable, false),
             (PreviewExit::OpenFolder, false),
             (PreviewExit::Pinned, false),
             (PreviewExit::LostFocus, false),
@@ -240,17 +242,20 @@ mod tests {
     }
 
     #[test]
-    fn saved_announcement_cannot_reveal_an_active_preview() {
-        let lifecycle = lifecycle();
-        assert_eq!(lifecycle.announce(), Some(false));
-        assert_eq!(
-            lifecycle.finish(true, PreviewExit::LostFocus),
-            AutomaticReveal::Suppressed
-        );
-        assert_eq!(
-            lifecycle.finish(true, PreviewExit::Superseded),
-            AutomaticReveal::Suppressed
-        );
+    fn non_user_exit_cannot_reveal_after_saved_announcement() {
+        for exit in [
+            PreviewExit::LostFocus,
+            PreviewExit::Superseded,
+            PreviewExit::Unavailable,
+        ] {
+            let lifecycle = lifecycle();
+            assert_eq!(lifecycle.announce(), Some(false));
+            assert_eq!(
+                lifecycle.finish(true, exit),
+                AutomaticReveal::Suppressed,
+                "{exit:?}"
+            );
+        }
     }
 
     #[test]

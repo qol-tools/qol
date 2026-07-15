@@ -110,9 +110,9 @@ default = true
 type = "boolean"
 config_key = "capture.open_folder_after_save"
 label = "Open Folder After Saving"
-description = "Open the containing folder after a capture is saved. Screenshot navigation waits until you finish the preview so it cannot take focus from it. Completion notifications remain clickable when disabled."
+description = "Open the containing folder after you finish a saved capture preview. Completion notifications remain clickable when disabled."
 section = "capture"
-default = true
+default = false
 
 [section.shortcuts]
 label = "Shortcuts"

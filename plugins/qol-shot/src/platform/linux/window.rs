@@ -121,7 +121,7 @@ pub(super) fn configure_status_window(title: &str) -> bool {
     if configured {
         qol_gpui::popup_window::present_topmost(title);
     }
-    let shown = configured && qol_gpui::popup_window::show_window_by_title(title);
+    let shown = configured && qol_gpui::popup_window::show_window_passive_by_title(title);
     qol_runtime::probe!(
         "SHOT_STATUS_OVERLAY",
         "title={title} result={}",

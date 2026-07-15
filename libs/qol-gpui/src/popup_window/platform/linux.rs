@@ -265,6 +265,14 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
 }
 
 pub fn show_window_by_title(title: &str) -> bool {
+    show_window_by_title_with_focus(title, true)
+}
+
+pub fn show_window_passive_by_title(title: &str) -> bool {
+    show_window_by_title_with_focus(title, false)
+}
+
+fn show_window_by_title_with_focus(title: &str, focus: bool) -> bool {
     let reason = crate::popup_window::change_reason();
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
@@ -282,7 +290,7 @@ pub fn show_window_by_title(title: &str) -> bool {
     );
     let clear_ok = clear_window_opacity(&conn, wid);
     store_card(title, wid, None);
-    let input_ok = set_input_passthrough(&conn, wid, false);
+    let input_ok = set_input_passthrough(&conn, wid, !focus);
     let map_ok = conn
         .map_window(wid)
         .ok()
@@ -290,21 +298,26 @@ pub fn show_window_by_title(title: &str) -> bool {
         .is_some();
     add_window_state(&conn, root, wid);
     let stack = raise_window(&conn, root, wid);
-    let (activate_ok, timestamp) = activate_window(&conn, root, wid);
-    let focus_ok = take_input_focus(&conn, root, wid, active_before);
+    let (activate_ok, timestamp, focus_ok) = if focus {
+        let (activate_ok, timestamp) = activate_window(&conn, root, wid);
+        let focus_ok = take_input_focus(&conn, root, wid, active_before);
+        (activate_ok, timestamp, focus_ok)
+    } else {
+        (true, 0, true)
+    };
     let flush_ok = conn.flush().is_ok();
     let active_after = active_window(&conn, root);
     let after = show_window_state(&conn, root, wid, active_after);
     qol_runtime::probe!(
         "SHOW_WIN_STATE",
-        "reason={reason} phase=after title={title} wid={wid} frame={} clear_opacity={clear_ok} input_shape_default={input_ok} map={map_ok} stack_client={} stack_frame={} activate={activate_ok} focus={focus_ok} timestamp={timestamp} flush={flush_ok} {after}",
+        "reason={reason} phase=after title={title} wid={wid} frame={} clear_opacity={clear_ok} input_shape_ok={input_ok} map={map_ok} stack_client={} stack_frame={} focus_requested={focus} activate={activate_ok} focus={focus_ok} timestamp={timestamp} flush={flush_ok} {after}",
         stack.frame,
         stack.client,
         stack.frame_ok,
     );
     qol_runtime::probe!(
         "SHOW_WIN",
-        "title={title} wid={wid} cleared_opacity={clear_ok} source=2 timestamp={timestamp} requester_active=0 reason={reason}",
+        "title={title} wid={wid} cleared_opacity={clear_ok} source=2 focus_requested={focus} timestamp={timestamp} requester_active=0 reason={reason}",
     );
     true
 }
