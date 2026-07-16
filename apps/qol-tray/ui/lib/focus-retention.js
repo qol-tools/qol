@@ -6,6 +6,7 @@ const log = createDebug('qol:focus-retention');
 const SURFACE_SELECTOR = '[data-selected-surface]';
 const CONTAINER_SELECTOR = '[data-surface-container]';
 const SLOT_SELECTOR = '.world-view-slot';
+const ANCHORED_SLOT_SELECTOR = '.world-view-slot[data-anchor]';
 const VIEWPORT_SELECTOR = '#viewport';
 
 export function pickFallbackSurface({ lostContainer, lostSlot, viewport }) {
@@ -127,6 +128,11 @@ export function createFocusRetention(doc = typeof document !== 'undefined' ? doc
         const lost = tracked.surface;
         if (!lost) return;
         if (hasModalCapturingFocus(doc)) return;
+        if (anchoredPageHasNoSurfaces(doc)) {
+            log('recover: skipped, anchored page has no surfaces', elLabel(lost));
+            tracked.surface = null;
+            return;
+        }
         const fallback = pickFallbackSurface({
             lostContainer: tracked.container,
             lostSlot: tracked.slot,
@@ -173,6 +179,12 @@ export function createFocusRetention(doc = typeof document !== 'undefined' ? doc
             if (pendingRaf) cancelAnimationFrame(pendingRaf);
         },
     };
+}
+
+function anchoredPageHasNoSurfaces(doc) {
+    const slot = typeof doc.querySelector === 'function' ? doc.querySelector(ANCHORED_SLOT_SELECTOR) : null;
+    if (!isUsable(slot)) return false;
+    return visibleSurfaces(slot).length === 0;
 }
 
 export function hasModalCapturingFocus(doc) {

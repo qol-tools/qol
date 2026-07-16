@@ -111,6 +111,34 @@ test('focus retention restores a surviving surface when its focused child disapp
     }
 });
 
+test('focus retention respects the anchored page instead of bouncing focus back', () => {
+    const cases = [
+        ['anchored page has no surfaces', [], 'body'],
+        ['anchored page has surfaces', [makeSurface({ id: 'anchored' })], 'surface'],
+    ];
+    for (const [label, anchorSurfaces, expected] of cases) {
+        const runtime = installFocusRuntime();
+        const harness = makeNestedFocusHarness(runtime.FakeHTMLElement);
+        const anchorSlot = { isConnected: true, querySelectorAll: () => anchorSurfaces };
+        harness.doc.querySelector = sel => sel === '.world-view-slot[data-anchor]' ? anchorSlot : null;
+        let retention;
+        try {
+            retention = createFocusRetention(harness.doc);
+            harness.doc.activeElement = harness.body;
+            harness.focusOut();
+            runtime.flush();
+            assert.equal(
+                harness.doc.activeElement,
+                expected === 'body' ? harness.body : harness.surface,
+                label,
+            );
+        } finally {
+            retention?.dispose();
+            runtime.restore();
+        }
+    }
+});
+
 test('pickFallbackSurface picks selected surface in lost container first', () => {
     const a = makeSurface({ id: 'a' });
     const b = makeSurface({ id: 'b', selected: true });
