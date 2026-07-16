@@ -1,6 +1,7 @@
 import { html } from '../../lib/html.js';
 import { useState } from 'preact/hooks';
 import { Card, CardGrid } from '../../lib/components/Card.js';
+import { Surface } from '../../lib/components/Surface.js';
 import { useModifierState } from '../../lib/hooks/use-modifier-state.js';
 import { PluginVersion } from '../../components/PluginVersion.js';
 
@@ -98,25 +99,25 @@ function pluginStatusChip(plugin) {
 
 function PluginUpdateButton({ plugin, updating }) {
     return html`
-        <button class="plugin-update ${updating.has(plugin.id) ? 'updating' : ''}"
+        <${Surface} as="button" className=${`plugin-update ${updating.has(plugin.id) ? 'updating' : ''}`}
                 aria-label="Update plugin"
                 disabled=${updating.has(plugin.id)}>
             ${updating.has(plugin.id)
                 ? html`<span class="refresh-btn spinning update-spinner"></span>`
                 : `↑ ${plugin.available_version}`}
-        </button>
+        <//>
     `;
 }
 
 function PluginCogButton({ onClick }) {
     return html`
-        <button class="plugin-cog" aria-label="Plugin options" onClick=${onClick}>
+        <${Surface} as="button" className="plugin-cog" aria-label="Plugin options" onActivate=${onClick}>
             <svg class="plugin-cog-icon" viewBox="0 0 12 20" fill="currentColor" aria-hidden="true" focusable="false">
                 <circle cx="6" cy="3.5" r="1.8"></circle>
                 <circle cx="6" cy="10" r="1.8"></circle>
                 <circle cx="6" cy="16.5" r="1.8"></circle>
             </svg>
-        </button>
+        <//>
     `;
 }
 
