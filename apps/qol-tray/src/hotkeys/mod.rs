@@ -22,6 +22,14 @@ use std::collections::HashSet;
 
 type ContinuousActions = HashSet<(crate::plugins::PluginUid, String)>;
 
+pub fn start_recording(session_id: u64, events: std::sync::Arc<crate::daemon::EventBus>) -> bool {
+    capture::start_recording(session_id, events)
+}
+
+pub fn cancel_recording(session_id: u64) {
+    capture::cancel_recording(session_id);
+}
+
 pub(crate) fn build_capture_bindings(
     config: HotkeyConfig,
     continuous_actions: &ContinuousActions,

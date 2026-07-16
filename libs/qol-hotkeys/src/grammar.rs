@@ -64,6 +64,52 @@ pub fn parse(input: &str) -> Option<Hotkey> {
     Some(Hotkey { mods, key: key? })
 }
 
+pub fn format(hotkey: &Hotkey) -> Option<String> {
+    let mut parts = hotkey
+        .mods
+        .iter()
+        .map(|modifier| match modifier {
+            Modifier::Ctrl => "Ctrl".to_string(),
+            Modifier::Alt => "Alt".to_string(),
+            Modifier::Shift => "Shift".to_string(),
+            Modifier::Super => "Super".to_string(),
+        })
+        .collect::<Vec<_>>();
+    parts.push(format_key(hotkey.key)?);
+    Some(parts.join("+"))
+}
+
+fn format_key(key: Key) -> Option<String> {
+    match key {
+        Key::Letter(index) if index < 26 => Some(char::from(b'A' + index).to_string()),
+        Key::Digit(index) if index < 10 => Some(char::from(b'0' + index).to_string()),
+        Key::Function(number) if (1..=12).contains(&number) => Some(format!("F{number}")),
+        Key::Named(named) => Some(
+            match named {
+                NamedKey::Space => "Space",
+                NamedKey::Enter => "Enter",
+                NamedKey::Escape => "Escape",
+                NamedKey::Tab => "Tab",
+                NamedKey::Backspace => "Backspace",
+                NamedKey::Delete => "Delete",
+                NamedKey::Insert => "Insert",
+                NamedKey::Home => "Home",
+                NamedKey::End => "End",
+                NamedKey::PageUp => "PageUp",
+                NamedKey::PageDown => "PageDown",
+                NamedKey::Up => "Up",
+                NamedKey::Down => "Down",
+                NamedKey::Left => "Left",
+                NamedKey::Right => "Right",
+                NamedKey::PrintScreen => "PrintScreen",
+                NamedKey::Pause => "Pause",
+            }
+            .to_string(),
+        ),
+        _ => None,
+    }
+}
+
 pub fn parse_key(token: &str) -> Option<Key> {
     if let Some(letter) = letter_index(token) {
         return Some(Key::Letter(letter));
@@ -213,6 +259,47 @@ mod tests {
         ];
         for input in cases {
             assert!(parse(input).is_none(), "input: {input} should not parse");
+        }
+    }
+
+    #[test]
+    fn formats_every_modifier_mask_in_canonical_order() {
+        let modifiers = [
+            Modifier::Ctrl,
+            Modifier::Alt,
+            Modifier::Shift,
+            Modifier::Super,
+        ];
+        for mask in 0..16 {
+            let mods = modifiers
+                .iter()
+                .enumerate()
+                .filter_map(|(index, modifier)| ((mask & (1 << index)) != 0).then_some(*modifier))
+                .collect();
+            let hotkey = Hotkey {
+                mods,
+                key: Key::Named(NamedKey::Left),
+            };
+            let formatted = format(&hotkey).unwrap();
+            assert_eq!(parse(&formatted), Some(hotkey), "mask: {mask}");
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_public_key_variants_while_formatting() {
+        for key in [
+            Key::Letter(26),
+            Key::Digit(10),
+            Key::Function(0),
+            Key::Function(13),
+        ] {
+            assert_eq!(
+                format(&Hotkey {
+                    mods: BTreeSet::new(),
+                    key
+                }),
+                None
+            );
         }
     }
 }

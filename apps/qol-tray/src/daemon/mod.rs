@@ -107,6 +107,13 @@ pub enum DaemonEvent {
     Navigate {
         route: String,
     },
+    HotkeyRecorded {
+        session_id: u64,
+        key: String,
+    },
+    HotkeyRecordingCanceled {
+        session_id: u64,
+    },
     #[cfg(feature = "dev")]
     BootTargetHealed {
         report: crate::dev::boot_contract::HealReport,
@@ -133,6 +140,26 @@ mod tests {
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "navigate");
         assert_eq!(json["route"], "shortcuts/add?type=url");
+    }
+
+    #[test]
+    fn hotkey_recorded_serializes_the_native_capture() {
+        let event = DaemonEvent::HotkeyRecorded {
+            session_id: 42,
+            key: "Ctrl+Alt+Shift+Left".to_string(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "hotkey_recorded");
+        assert_eq!(json["session_id"], 42);
+        assert_eq!(json["key"], "Ctrl+Alt+Shift+Left");
+    }
+
+    #[test]
+    fn hotkey_recording_canceled_serializes_the_native_escape() {
+        let event = DaemonEvent::HotkeyRecordingCanceled { session_id: 42 };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "hotkey_recording_canceled");
+        assert_eq!(json["session_id"], 42);
     }
 }
 

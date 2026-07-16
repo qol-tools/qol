@@ -1,8 +1,9 @@
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use serde::Serialize;
 
 use crate::daemon::ConfigKind;
 use crate::hotkeys::{get_registration_errors, HotkeyConfig, HotkeyManager};
@@ -11,6 +12,11 @@ use super::super::types::{AppState, MAX_CONFIG_SIZE};
 use super::http_json;
 
 type HttpResult<T> = Result<T, Box<Response>>;
+
+#[derive(Serialize)]
+pub(in super::super) struct HotkeyRecordingStatus {
+    native: bool,
+}
 
 pub(in super::super) async fn get_hotkeys() -> impl IntoResponse {
     blocking(get_hotkeys_inner).await
@@ -31,6 +37,20 @@ pub(in super::super) async fn open_hotkeys_file() -> impl IntoResponse {
 pub(in super::super) async fn open_shortcuts_file() -> impl IntoResponse {
     let path = crate::paths::shortcuts_path();
     blocking_open(move || open_config_file(path)).await
+}
+
+pub(in super::super) async fn start_hotkey_recording(
+    Path(session_id): Path<u64>,
+    State(state): State<AppState>,
+) -> axum::Json<HotkeyRecordingStatus> {
+    axum::Json(HotkeyRecordingStatus {
+        native: crate::hotkeys::start_recording(session_id, state.daemon.events.clone()),
+    })
+}
+
+pub(in super::super) async fn cancel_hotkey_recording(Path(session_id): Path<u64>) -> StatusCode {
+    crate::hotkeys::cancel_recording(session_id);
+    StatusCode::NO_CONTENT
 }
 
 async fn blocking<F>(work: F) -> Response

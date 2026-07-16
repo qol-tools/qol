@@ -24,6 +24,12 @@ struct MacCombo {
     key: u16,
 }
 
+pub(crate) fn start_recording(_session_id: u64, _events: Arc<crate::daemon::EventBus>) -> bool {
+    false
+}
+
+pub(crate) fn cancel_recording(_session_id: u64) {}
+
 pub(crate) fn install(
     bindings: Vec<Binding>,
     on_fire: OnFire,

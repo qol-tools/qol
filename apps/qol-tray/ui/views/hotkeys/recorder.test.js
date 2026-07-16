@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyRecordingKey } from './recorder.js';
+import { applyRecordingKey, isNativeRecordingCancel, recordedNativeKey } from './recorder.js';
 
 const baseModal = { key: '', recording: true };
 
@@ -61,48 +61,19 @@ test('applyRecordingKey: lone Shift+Ctrl shows partial chord, stays recording', 
     assert.equal(result.advance, false);
 });
 
-test('applyRecordingKey: staged modifiers survive release before a desktop-reserved arrow', () => {
-    const staged = applyRecordingKey(baseModal, ev({
-        key: 'Shift', code: 'ShiftLeft', ctrlKey: true, altKey: true, shiftKey: true,
-    }));
-    const completed = applyRecordingKey(staged.modal, ev({
-        key: 'ArrowLeft', code: 'ArrowLeft',
-    }));
-
-    assert.equal(staged.modal.key, 'Ctrl+Alt+Shift');
-    assert.equal(staged.modal.recording, true);
-    assert.equal(completed.modal.key, 'Ctrl+Alt+Shift+Left');
-    assert.equal(completed.modal.recording, false);
-    assert.equal(completed.advance, true);
+test('recordedNativeKey accepts the active held chord capture only', () => {
+    const active = { type: 'hotkey_recorded', session_id: 42, key: 'Ctrl+Alt+Shift+Left' };
+    assert.equal(recordedNativeKey(active, 42), 'Ctrl+Alt+Shift+Left');
+    assert.equal(recordedNativeKey(active, 41), null);
+    assert.equal(recordedNativeKey({ ...active, type: 'plugins_changed' }, 42), null);
+    assert.equal(recordedNativeKey({ ...active, key: '' }, 42), null);
 });
 
-test('applyRecordingKey: modifiers can be staged one at a time', () => {
-    const ctrl = applyRecordingKey(baseModal, ev({
-        key: 'Control', code: 'ControlLeft', ctrlKey: true,
-    }));
-    const alt = applyRecordingKey(ctrl.modal, ev({
-        key: 'Alt', code: 'AltLeft', altKey: true,
-    }));
-    const shift = applyRecordingKey(alt.modal, ev({
-        key: 'Shift', code: 'ShiftLeft', shiftKey: true,
-    }));
-    const completed = applyRecordingKey(shift.modal, ev({
-        key: 'ArrowRight', code: 'ArrowRight',
-    }));
-
-    assert.equal(completed.modal.key, 'Ctrl+Alt+Shift+Right');
-    assert.equal(completed.modal.recording, false);
-    assert.equal(completed.advance, true);
-});
-
-test('applyRecordingKey: staged modifiers do not complete on an unknown key', () => {
-    const modal = { key: 'Ctrl+Alt+Shift', recording: true };
-    const result = applyRecordingKey(modal, ev({
-        key: 'Unidentified', code: 'Unidentified',
-    }));
-
-    assert.equal(result.modal, modal);
-    assert.equal(result.advance, false);
+test('isNativeRecordingCancel accepts Escape from the active native session only', () => {
+    const active = { type: 'hotkey_recording_canceled', session_id: 42 };
+    assert.equal(isNativeRecordingCancel(active, 42), true);
+    assert.equal(isNativeRecordingCancel(active, 41), false);
+    assert.equal(isNativeRecordingCancel({ ...active, type: 'hotkey_recorded' }, 42), false);
 });
 
 test('applyRecordingKey: unknown code with only modifiers does not advance', () => {

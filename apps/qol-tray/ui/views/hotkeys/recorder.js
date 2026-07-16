@@ -16,12 +16,12 @@ export function applyRecordingKey(modal, event) {
         return { modal: { ...modal, recording: false }, advance: false };
     }
     if (MODIFIER_KEYS.includes(event.key)) {
-        const key = formatKeyEvent(event, modal.key);
+        const key = formatKeyEvent(event);
         return { modal: key ? { ...modal, key } : modal, advance: false };
     }
 
-    const key = formatKeyEvent(event, modal.key);
-    if (!key || isModifierChord(key)) {
+    const key = formatKeyEvent(event);
+    if (!key || MODIFIER_NAMES.includes(key)) {
         return { modal, advance: false };
     }
 
@@ -31,31 +31,30 @@ export function applyRecordingKey(modal, event) {
     };
 }
 
-function formatKeyEvent(event, stagedKey) {
-    const modifiers = new Set(getStagedModifiers(stagedKey));
-    if (event.ctrlKey) modifiers.add('Ctrl');
-    if (event.altKey) modifiers.add('Alt');
-    if (event.shiftKey) modifiers.add('Shift');
-    if (event.metaKey) modifiers.add('Super');
+export function recordedNativeKey(event, sessionId) {
+    if (event?.type !== 'hotkey_recorded') return null;
+    if (event.session_id !== sessionId) return null;
+    if (typeof event.key !== 'string' || !event.key) return null;
+    return event.key;
+}
 
-    const parts = MODIFIER_NAMES.filter(name => modifiers.has(name));
+export function isNativeRecordingCancel(event, sessionId) {
+    return event?.type === 'hotkey_recording_canceled' && event.session_id === sessionId;
+}
+
+function formatKeyEvent(event) {
+    const parts = [];
+    if (event.ctrlKey) parts.push('Ctrl');
+    if (event.altKey) parts.push('Alt');
+    if (event.shiftKey) parts.push('Shift');
+    if (event.metaKey) parts.push('Super');
     if (MODIFIER_KEYS.includes(event.key)) {
-        return parts.join('+');
+        return parts.join('+') || '';
     }
 
     const key = getKeyName(event.code);
     if (key) parts.push(key);
     return parts.join('+');
-}
-
-function getStagedModifiers(key) {
-    if (!isModifierChord(key)) return [];
-    return key.split('+');
-}
-
-function isModifierChord(key) {
-    if (!key) return false;
-    return key.split('+').every(part => MODIFIER_NAMES.includes(part));
 }
 
 function getKeyName(code) {
