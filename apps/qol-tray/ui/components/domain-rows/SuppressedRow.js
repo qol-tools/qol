@@ -15,8 +15,8 @@ export function SuppressedRow({ sigKey, entry, expanded, index, selected, onSele
                 <span class="suppressed-expand-icon">${expanded ? '\u25be' : '\u25b8'}</span>
                 <span class="suppressed-key">${sigKey}</span>
                 <span class="suppressed-count-badge">${'\u00d7'}${entry.count}</span>
-                ${onUnsuppress && html`<button class="btn btn-sm suppressed-unsuppress" tabIndex="-1"
-                    onClick=${(e) => { e.stopPropagation(); onUnsuppress(sigKey); }}>Unsuppress</button>`}
+                ${onUnsuppress && html`<${Surface} as="button" className="btn btn-sm suppressed-unsuppress"
+                    onActivate=${() => onUnsuppress(sigKey)}>Unsuppress<//>`}
             </div>
             ${expanded && html`
                 ${entry.last_message && html`<div class="suppressed-msg">${entry.last_message}</div>`}
