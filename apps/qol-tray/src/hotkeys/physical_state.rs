@@ -4,13 +4,6 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub(super) use linux::PhysicalHotkeyState;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum PhysicalChordState {
-    Pressed,
-    TerminalReleased,
-    ChordReleased,
-}
-
 #[cfg(target_os = "linux")]
 pub(super) const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(8);
 
@@ -46,8 +39,8 @@ impl PhysicalHotkeySnapshot {
         false
     }
 
-    pub(super) fn chord_state(&self, _chord: &super::capture::Combo) -> PhysicalChordState {
-        PhysicalChordState::Pressed
+    pub(super) fn chord_is_pressed(&self, _chord: &super::capture::Combo) -> bool {
+        true
     }
 
     pub(super) fn trace_summary(&self) -> String {

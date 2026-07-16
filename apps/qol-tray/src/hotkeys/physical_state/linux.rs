@@ -3,7 +3,6 @@ use x11rb::protocol::xproto::ConnectionExt;
 use x11rb::rust_connection::RustConnection;
 
 use crate::hotkeys::capture::Combo;
-use crate::hotkeys::physical_state::PhysicalChordState;
 
 const X11_EVDEV_OFFSET: u16 = 8;
 
@@ -37,20 +36,15 @@ impl PhysicalHotkeySnapshot {
         true
     }
 
-    pub(in crate::hotkeys) fn chord_state(&self, combo: &Combo) -> PhysicalChordState {
-        let modifiers_pressed = combo.mods.iter().all(|modifier| {
+    pub(in crate::hotkeys) fn chord_is_pressed(&self, combo: &Combo) -> bool {
+        if !self.evdev_key_is_pressed(combo.key) {
+            return false;
+        }
+        combo.mods.iter().all(|modifier| {
             evdev::modifier_keycodes(*modifier)
                 .into_iter()
                 .any(|keycode| self.evdev_key_is_pressed(keycode))
-        });
-        if !modifiers_pressed {
-            return PhysicalChordState::ChordReleased;
-        }
-        if self.evdev_key_is_pressed(combo.key) {
-            PhysicalChordState::Pressed
-        } else {
-            PhysicalChordState::TerminalReleased
-        }
+        })
     }
 
     pub(in crate::hotkeys) fn trace_summary(&self) -> String {
@@ -123,10 +117,7 @@ mod tests {
             evdev::KEY_LEFTMETA,
             evdev::KEY_LEFT,
         ];
-        assert_eq!(
-            snapshot(&chord).chord_state(&combo),
-            PhysicalChordState::Pressed
-        );
+        assert!(snapshot(&chord).chord_is_pressed(&combo));
 
         for released in chord {
             let pressed = chord
@@ -134,7 +125,7 @@ mod tests {
                 .filter(|keycode| *keycode != released)
                 .collect::<Vec<_>>();
             assert!(
-                snapshot(&pressed).chord_state(&combo) != PhysicalChordState::Pressed,
+                !snapshot(&pressed).chord_is_pressed(&combo),
                 "released evdev keycode {released}"
             );
         }
@@ -149,29 +140,7 @@ mod tests {
             evdev::KEY_RIGHTMETA,
             evdev::KEY_RIGHT,
         ];
-        assert_eq!(
-            snapshot(&chord).chord_state(&combo),
-            PhysicalChordState::Pressed
-        );
-    }
-
-    #[test]
-    fn distinguishes_terminal_repeat_gaps_from_modifier_release() {
-        let combo = crate::hotkeys::capture::parse_combo("Ctrl+Shift+Super+Down").unwrap();
-        let modifiers = [
-            evdev::KEY_LEFTCTRL,
-            evdev::KEY_LEFTSHIFT,
-            evdev::KEY_LEFTMETA,
-        ];
-
-        assert_eq!(
-            snapshot(&modifiers).chord_state(&combo),
-            PhysicalChordState::TerminalReleased
-        );
-        assert_eq!(
-            snapshot(&[evdev::KEY_LEFTCTRL, evdev::KEY_LEFTSHIFT]).chord_state(&combo),
-            PhysicalChordState::ChordReleased
-        );
+        assert!(snapshot(&chord).chord_is_pressed(&combo));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use super::catalog::load_available_actions;
 use super::manager::RegisteredHotkey;
-use super::physical_state::{PhysicalChordState, PhysicalHotkeyState};
+use super::physical_state::PhysicalHotkeyState;
 use super::reload;
 use super::{HotkeyAction, HotkeyManager};
 use crate::plugins::PluginManager;
@@ -198,8 +198,7 @@ impl<'a> HotkeyListenerLoop<'a> {
                     registration
                         .physical_chord
                         .as_ref()
-                        .map(|chord| snapshot.chord_state(chord))
-                        .unwrap_or(PhysicalChordState::ChordReleased)
+                        .is_some_and(|chord| snapshot.chord_is_pressed(chord))
                 },
             )
         } else {
@@ -457,23 +456,15 @@ impl HeldActions {
     fn reconcile_physical<'a>(
         &mut self,
         registrations: impl Iterator<Item = (u32, &'a RegisteredHotkey)>,
-        chord_state: impl Fn(&RegisteredHotkey) -> PhysicalChordState,
+        is_pressed: impl Fn(&RegisteredHotkey) -> bool,
     ) -> Vec<HotkeyDispatch> {
         let mut dispatches = Vec::new();
-        let mut retained_ids = HashSet::new();
+        let mut pressed_ids = HashSet::new();
         for (id, registration) in registrations {
-            match chord_state(registration) {
-                PhysicalChordState::Pressed => {
-                    retained_ids.insert(id);
-                }
-                PhysicalChordState::TerminalReleased if self.actions.contains_key(&id) => {
-                    retained_ids.insert(id);
-                    continue;
-                }
-                PhysicalChordState::TerminalReleased | PhysicalChordState::ChordReleased => {
-                    continue;
-                }
+            if !is_pressed(registration) {
+                continue;
             }
+            pressed_ids.insert(id);
             if self.actions.contains_key(&id) {
                 continue;
             }
@@ -486,7 +477,7 @@ impl HeldActions {
         let released = self
             .actions
             .keys()
-            .filter(|id| !retained_ids.contains(id))
+            .filter(|id| !pressed_ids.contains(id))
             .copied()
             .collect::<Vec<_>>();
         for id in released {
@@ -615,9 +606,7 @@ mod tests {
         held.handle_event(event(7, HotKeyState::Pressed), Some(&glide));
 
         assert_eq!(
-            held.reconcile_physical(std::iter::empty(), |_| {
-                PhysicalChordState::ChordReleased
-            }),
+            held.reconcile_physical(std::iter::empty(), |_| false),
             vec![HotkeyDispatch::Continuous {
                 action: glide.action,
                 phase: ContinuousPhase::Stop,
@@ -634,9 +623,7 @@ mod tests {
         held.handle_event(event(9, HotKeyState::Pressed), Some(&right));
 
         assert_eq!(
-            held.reconcile_physical([(9, &right), (7, &left)].into_iter(), |_| {
-                PhysicalChordState::Pressed
-            }),
+            held.reconcile_physical([(9, &right), (7, &left)].into_iter(), |_| true),
             vec![HotkeyDispatch::Continuous {
                 action: left.action,
                 phase: ContinuousPhase::Start,
@@ -650,59 +637,13 @@ mod tests {
         let left = registration("glide-left", true);
 
         assert_eq!(
-            held.reconcile_physical([(7, &left)].into_iter(), |_| PhysicalChordState::Pressed),
+            held.reconcile_physical([(7, &left)].into_iter(), |_| true),
             vec![HotkeyDispatch::Continuous {
                 action: left.action,
                 phase: ContinuousPhase::Start,
             }]
         );
         assert!(!held.is_empty());
-    }
-
-    #[test]
-    fn terminal_repeat_gap_keeps_held_direction_active() {
-        let mut held = HeldActions::default();
-        let down = registration("glide-down", true);
-        held.handle_event(event(8, HotKeyState::Pressed), Some(&down));
-
-        assert!(held
-            .reconcile_physical([(8, &down)].into_iter(), |_| {
-                PhysicalChordState::TerminalReleased
-            })
-            .is_empty());
-        assert_eq!(held.trace_active_directions(), "down");
-    }
-
-    #[test]
-    fn horizontal_replacement_preserves_repeating_down_direction() {
-        let mut held = HeldActions::default();
-        let down = registration("glide-down", true);
-        let left = registration("glide-left", true);
-        let right = registration("glide-right", true);
-        held.handle_event(event(8, HotKeyState::Pressed), Some(&down));
-        held.handle_event(event(7, HotKeyState::Pressed), Some(&left));
-
-        assert_eq!(
-            held.reconcile_physical(
-                [(8, &down), (7, &left), (9, &right)].into_iter(),
-                |registration| match registration.action.action.as_str() {
-                    "glide-down" => PhysicalChordState::TerminalReleased,
-                    "glide-right" => PhysicalChordState::Pressed,
-                    _ => PhysicalChordState::ChordReleased,
-                },
-            ),
-            vec![
-                HotkeyDispatch::Continuous {
-                    action: right.action,
-                    phase: ContinuousPhase::Start,
-                },
-                HotkeyDispatch::Continuous {
-                    action: left.action,
-                    phase: ContinuousPhase::Stop,
-                },
-            ]
-        );
-        assert_eq!(held.trace_active_directions(), "down,right");
     }
 
     #[cfg(target_os = "linux")]
@@ -721,11 +662,7 @@ mod tests {
 
         assert_eq!(
             held.reconcile_physical([(9, &right), (7, &left)].into_iter(), |registration| {
-                if registration.action.action == "glide-left" {
-                    PhysicalChordState::Pressed
-                } else {
-                    PhysicalChordState::ChordReleased
-                }
+                registration.action.action == "glide-left"
             }),
             vec![
                 HotkeyDispatch::Continuous {
