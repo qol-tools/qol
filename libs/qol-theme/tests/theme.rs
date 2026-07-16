@@ -357,9 +357,13 @@ fn tray_css_layers_tray_tokens_without_polluting_core() {
     assert!(!core.contains("--qol-tray-"));
     assert!(!core.contains("--qol-accent-"));
     assert!(!core.contains("--qol-reference-"));
+    assert!(!core.contains("--qol-system-overlay-"));
 
     let tray = css::tray_css();
-    assert!(tray.starts_with(&core));
+    for line in core.lines().filter(|line| line.contains("--qol-system-")) {
+        assert!(tray.contains(line), "tray css must carry core token {line}");
+    }
+    assert!(tray.contains("    --qol-system-overlay-surface-rgb: 18, 22, 30;\n"));
     assert!(tray.contains("    --qol-reference-slate-750: #2f3644;\n"));
     assert!(tray.contains("    --qol-tray-blue-500: #4a9eff;\n"));
     assert!(tray.contains("    --qol-tray-border-default-2: #3e485b;\n"));
@@ -1021,6 +1025,38 @@ fn tray_theme_presets_have_unique_keys_and_a_default() {
     assert_eq!(keys.len(), presets.len(), "duplicate theme keys");
     assert!(qol_theme::tray_theme_preset(qol_theme::DEFAULT_TRAY_THEME_KEY).is_some());
     assert!(qol_theme::tray_theme_preset("nope").is_none());
+}
+
+#[test]
+fn tray_css_emits_theme_override_blocks() {
+    let css = css::tray_css();
+    assert!(css.contains("--qol-system-overlay-surface-rgb: 18, 22, 30;"));
+    assert!(css.contains("--qol-system-scrim-rgb: 4, 5, 8;"));
+    assert!(
+        !css.contains(":root[data-qol-theme=\"slate\"]"),
+        "default theme needs no block"
+    );
+    for key in ["graphite", "void"] {
+        let marker = format!(":root[data-qol-theme=\"{key}\"]");
+        assert!(css.contains(&marker), "missing {marker}");
+    }
+    let void_block = css.split(":root[data-qol-theme=\"void\"]").nth(1).unwrap();
+    let void_block = void_block.split('}').next().unwrap();
+    assert!(void_block.contains("--qol-system-surface-canvas: #000000;"));
+    assert!(
+        !void_block.contains("--qol-system-accent-rgb"),
+        "themes must not override accent"
+    );
+}
+
+#[test]
+fn tray_theme_js_emits_theme_metadata() {
+    let js = css::tray_theme_js();
+    assert!(js.contains("export const QOL_THEMES = ["));
+    assert!(js.contains("{ key: \"slate\", label: \"Slate\" },"));
+    assert!(js.contains("{ key: \"graphite\", label: \"Graphite\" },"));
+    assert!(js.contains("{ key: \"void\", label: \"Void\" },"));
+    assert!(js.contains("export const QOL_DEFAULT_THEME = \"slate\";"));
 }
 
 #[test]

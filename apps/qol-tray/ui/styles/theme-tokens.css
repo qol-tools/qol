@@ -45,10 +45,10 @@
     --warning-rgb: var(--qol-system-warning-rgb);
     --ink-rgb: var(--qol-system-ink-rgb);
     --paper-rgb: var(--qol-system-paper-rgb);
-    --overlay-surface-rgb: 18, 22, 30;
-    --overlay-deep-rgb: 17, 20, 25;
-    --overlay-ink-rgb: 7, 10, 14;
-    --scrim-rgb: 4, 5, 8;
+    --overlay-surface-rgb: var(--qol-system-overlay-surface-rgb);
+    --overlay-deep-rgb: var(--qol-system-overlay-deep-rgb);
+    --overlay-ink-rgb: var(--qol-system-overlay-ink-rgb);
+    --scrim-rgb: var(--qol-system-scrim-rgb);
 
     --surface-canvas: var(--qol-system-surface-canvas);
     --surface-elevated: var(--qol-system-surface-elevated);

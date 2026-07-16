@@ -25,3 +25,9 @@ export const QOL_TRAY_INTERNAL_COLORS = {
     configColorThumbStroke: "#ffffff",
     configColorThumbShadow: "rgba(0, 0, 0, 0.5)",
 };
+export const QOL_THEMES = [
+    { key: "slate", label: "Slate" },
+    { key: "graphite", label: "Graphite" },
+    { key: "void", label: "Void" },
+];
+export const QOL_DEFAULT_THEME = "slate";
