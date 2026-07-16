@@ -142,6 +142,7 @@ test('theme switch re-tints an auto accent to the theme accent', async () => {
         await themeSync.setTheme('midnight');
 
         assert.equal(harness.attributes.get('data-qol-theme'), 'midnight');
+        assert.equal(harness.attributes.get('data-qol-identity'), 'modern');
         assert.equal(harness.styles.get('--accent-rgb'), '138, 147, 247');
         assert.equal(harness.styles.get('--accent-hover'), '#a5afff');
     } finally {

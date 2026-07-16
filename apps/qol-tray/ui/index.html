@@ -28,6 +28,13 @@
             }
             if (boot && boot.theme && boot.theme.defaultKey) {
                 document.documentElement.setAttribute('data-qol-theme', boot.theme.defaultKey);
+                var themes = boot.theme.themes || [];
+                for (var j = 0; j < themes.length; j++) {
+                    if (themes[j].key === boot.theme.defaultKey && themes[j].identityKey) {
+                        document.documentElement.setAttribute('data-qol-identity', themes[j].identityKey);
+                        break;
+                    }
+                }
             }
         } catch (e) {}
     </script>
