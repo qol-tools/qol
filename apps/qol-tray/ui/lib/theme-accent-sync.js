@@ -19,6 +19,14 @@ export function subscribeThemeAccent(listener) {
     return () => listeners.delete(listener);
 }
 
+export function refreshAutoAccent(themeAccentKey) {
+    if (selectedAccentKey !== null || !themeAccentKey) return;
+    const resolved = resolveAccent(themeAccentKey);
+    if (resolved === effectiveAccentKey) return;
+    effectiveAccentKey = resolved;
+    applyAccent(effectiveAccentKey);
+}
+
 export async function setThemeAccent(key) {
     const response = await apiJson('/api/theme/accent', jsonRequest('PUT', { key }, { qolSuppressErrorToast: true }));
     return commitThemeAccent(response.selectedKey ?? null, response.key);

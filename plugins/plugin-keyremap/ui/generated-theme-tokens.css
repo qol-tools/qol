@@ -129,3 +129,19 @@
     --qol-keyremap-save-bg-start: #4a9eff;
     --qol-keyremap-save-bg-end: #418be0;
 }
+:root[data-qol-accent="violet"] {
+    --qol-system-accent-rgb: 138, 147, 247;
+    --qol-keyremap-bg-glow-primary: #252a3f;
+    --qol-keyremap-bg-glow-secondary: #141621;
+    --qol-keyremap-text-heading: #d4dafa;
+    --qol-keyremap-accent: #8a93f7;
+    --qol-keyremap-accent-bg: rgba(138, 147, 247, 0.3);
+    --qol-keyremap-accent-bg-strong: rgba(138, 147, 247, 0.5);
+    --qol-keyremap-accent-bg-active: rgba(138, 147, 247, 0.4);
+    --qol-keyremap-accent-bg-tab: rgba(138, 147, 247, 0.25);
+    --qol-keyremap-accent-bg-hover: rgba(138, 147, 247, 0.2);
+    --qol-keyremap-accent-border: rgba(138, 147, 247, 0.3);
+    --qol-keyremap-accent-border-strong: rgba(138, 147, 247, 0.35);
+    --qol-keyremap-save-bg-start: #8a93f7;
+    --qol-keyremap-save-bg-end: #7981d9;
+}

@@ -95,6 +95,8 @@
     --qol-accent-magenta-hover: #f49ad6;
     --qol-accent-blue-rgb: 74, 158, 255;
     --qol-accent-blue-hover: #68b0ff;
+    --qol-accent-violet-rgb: 138, 147, 247;
+    --qol-accent-violet-hover: #a5afff;
 }
 :root[data-qol-theme="graphite"] {
     --qol-system-surface-canvas: #0f0e0d;

@@ -1035,6 +1035,19 @@ fn tray_theme_presets_have_unique_keys_and_a_default() {
 }
 
 #[test]
+fn tray_theme_accents_reference_valid_presets() {
+    for preset in qol_theme::tray_theme_presets() {
+        let accent = qol_theme::dark_accent_preset(preset.accent_key)
+            .unwrap_or_else(|| panic!("{}: unknown accent {}", preset.key, preset.accent_key));
+        assert_eq!(
+            preset.system.accent, accent.rgb,
+            "{}: system.accent must match accent preset {}",
+            preset.key, preset.accent_key
+        );
+    }
+}
+
+#[test]
 fn tray_css_emits_theme_override_blocks() {
     let css = css::tray_css();
     assert!(css.contains("--qol-system-overlay-surface-rgb: 18, 22, 30;"));
@@ -1060,9 +1073,10 @@ fn tray_css_emits_theme_override_blocks() {
 fn tray_theme_js_emits_theme_metadata() {
     let js = css::tray_theme_js();
     assert!(js.contains("export const QOL_THEMES = ["));
-    assert!(js.contains("{ key: \"slate\", label: \"Slate\" },"));
-    assert!(js.contains("{ key: \"graphite\", label: \"Graphite\" },"));
-    assert!(js.contains("{ key: \"void\", label: \"Void\" },"));
+    assert!(js.contains("{ key: \"slate\", label: \"Slate\", accentKey: \"amber\" },"));
+    assert!(js.contains("{ key: \"graphite\", label: \"Graphite\", accentKey: \"amber\" },"));
+    assert!(js.contains("{ key: \"void\", label: \"Void\", accentKey: \"cyan\" },"));
+    assert!(js.contains("{ key: \"midnight\", label: \"Midnight\", accentKey: \"violet\" },"));
     assert!(js.contains("export const QOL_DEFAULT_THEME = \"slate\";"));
 }
 

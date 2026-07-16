@@ -72,15 +72,21 @@ pub fn selected_accent_key() -> Result<Option<String>> {
     }
 }
 
-pub fn resolved_accent_key(dev: bool) -> String {
+pub fn resolved_accent_key() -> String {
     selected_accent_key()
         .ok()
         .flatten()
-        .unwrap_or_else(|| default_accent_key(dev).to_string())
+        .unwrap_or_else(theme_accent_key)
+}
+
+fn theme_accent_key() -> String {
+    qol_theme::tray_theme_preset(&current_theme_key())
+        .map(|preset| preset.accent_key.to_string())
+        .unwrap_or_else(|| qol_theme::PROD_ACCENT_KEY.to_string())
 }
 
 pub fn current_accent_key() -> String {
-    resolved_accent_key(current_dev_mode())
+    resolved_accent_key()
 }
 
 pub fn apply_accent_env(command: &mut Command) {
@@ -98,17 +104,6 @@ fn validated_accent_key(key: &str) -> Result<&str> {
     Err(anyhow!("unknown theme accent: {key}"))
 }
 
-fn default_accent_key(dev: bool) -> &'static str {
-    if dev {
-        return qol_theme::DEV_ACCENT_KEY;
-    }
-    qol_theme::PROD_ACCENT_KEY
-}
-
-fn current_dev_mode() -> bool {
-    cfg!(feature = "dev") && crate::mode::ModeConfig::load().unwrap_or_default().is_dev()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,7 +117,7 @@ mod tests {
         save_selected_accent_key("blue").unwrap();
 
         assert_eq!(selected_accent_key().unwrap().as_deref(), Some("blue"));
-        assert_eq!(resolved_accent_key(false), "blue");
+        assert_eq!(resolved_accent_key(), "blue");
     }
 
     #[test]
@@ -134,7 +129,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_accent_can_clear_to_mode_default() {
+    fn selected_accent_can_clear_to_theme_default() {
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
 
@@ -142,16 +137,19 @@ mod tests {
         clear_selected_accent_key().unwrap();
 
         assert_eq!(selected_accent_key().unwrap(), None);
-        assert_eq!(resolved_accent_key(false), qol_theme::PROD_ACCENT_KEY);
+        assert_eq!(resolved_accent_key(), "amber");
     }
 
     #[test]
-    fn resolved_accent_uses_mode_default_without_saved_key() {
+    fn resolved_accent_follows_theme_without_saved_key() {
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
 
-        assert_eq!(resolved_accent_key(false), qol_theme::PROD_ACCENT_KEY);
-        assert_eq!(resolved_accent_key(true), qol_theme::DEV_ACCENT_KEY);
+        assert_eq!(resolved_accent_key(), "amber");
+        save_selected_theme_key("midnight").unwrap();
+        assert_eq!(resolved_accent_key(), "violet");
+        save_selected_accent_key("blue").unwrap();
+        assert_eq!(resolved_accent_key(), "blue");
     }
 
     #[test]

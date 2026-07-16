@@ -198,8 +198,8 @@ pub fn tray_theme_js() -> String {
     for preset in tray_theme_presets() {
         let _ = writeln!(
             out,
-            "    {{ key: \"{}\", label: \"{}\" }},",
-            preset.key, preset.label
+            "    {{ key: \"{}\", label: \"{}\", accentKey: \"{}\" }},",
+            preset.key, preset.label, preset.accent_key
         );
     }
     out.push_str("];\n");

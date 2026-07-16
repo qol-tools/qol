@@ -151,7 +151,7 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
             <div class="wsp-section">
                 <div class="wsp-heading">Appearance</div>
                 <${ThemeRow} value=${theme} onPick=${updateTheme} />
-                <${AccentRow} value=${themeAccent} isDevMode=${isDevMode} onPick=${updateThemeAccent} />
+                <${AccentRow} value=${themeAccent} onPick=${updateThemeAccent} />
             </div>
             ${isDevMode && branches && branches.length > 0 && html`
                 <${WorktreeSection} branches=${branches} defaultBranch=${defaultBranch}
@@ -163,8 +163,8 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
     `;
 }
 
-function AccentRow({ value, isDevMode, onPick }) {
-    const autoLabel = `Auto (${isDevMode ? 'dev: green' : 'amber'})`;
+function AccentRow({ value, onPick }) {
+    const autoLabel = 'Auto (theme accent)';
     return html`
         <div class="wsp-accent">
             <span class="wsp-label">Accent</span>

@@ -75,3 +75,10 @@
     --qol-lights-accent-btn-end: #418be0;
     --qol-lights-accent-btn-shadow: rgba(74, 158, 255, 0.3);
 }
+:root[data-qol-accent="violet"] {
+    --qol-system-accent-rgb: 138, 147, 247;
+    --qol-lights-accent-btn: #8a93f7;
+    --qol-lights-accent-btn-hover: #828ae8;
+    --qol-lights-accent-btn-end: #7981d9;
+    --qol-lights-accent-btn-shadow: rgba(138, 147, 247, 0.3);
+}

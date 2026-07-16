@@ -10,6 +10,7 @@ function installBrowserGlobals(fetchImpl) {
     const originalCustomEvent = globalThis.CustomEvent;
     const events = [];
     const attributes = new Map();
+    const styles = new Map();
 
     globalThis.fetch = fetchImpl;
     globalThis.dispatchEvent = (event) => {
@@ -21,6 +22,11 @@ function installBrowserGlobals(fetchImpl) {
         documentElement: {
             setAttribute(name, value) {
                 attributes.set(name, value);
+            },
+            style: {
+                setProperty(name, value) {
+                    styles.set(name, value);
+                },
             },
         },
     };
@@ -35,6 +41,7 @@ function installBrowserGlobals(fetchImpl) {
     return {
         events,
         attributes,
+        styles,
         restore() {
             if (originalWindow === undefined) delete globalThis.window;
             else globalThis.window = originalWindow;
@@ -117,6 +124,26 @@ test('theme save failures preserve local state and defer feedback to caller', as
         assert.equal(themeSync.getTheme(), null);
         assert.deepEqual(seen, []);
         assert.deepEqual(harness.events, []);
+    } finally {
+        harness.restore();
+    }
+});
+
+test('theme switch re-tints an auto accent to the theme accent', async () => {
+    const harness = installBrowserGlobals(async () => {
+        return new Response(JSON.stringify({ key: 'midnight', selectedKey: 'midnight' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+        });
+    });
+    try {
+        const themeSync = await import(freshModuleUrl());
+
+        await themeSync.setTheme('midnight');
+
+        assert.equal(harness.attributes.get('data-qol-theme'), 'midnight');
+        assert.equal(harness.styles.get('--accent-rgb'), '138, 147, 247');
+        assert.equal(harness.styles.get('--accent-hover'), '#a5afff');
     } finally {
         harness.restore();
     }

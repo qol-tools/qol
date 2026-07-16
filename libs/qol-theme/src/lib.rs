@@ -15,7 +15,7 @@ pub struct AccentPreset {
 pub const PROD_ACCENT_KEY: &str = "amber";
 pub const DEV_ACCENT_KEY: &str = "green";
 
-pub const DARK_ACCENT_PRESETS: [AccentPreset; 5] = [
+pub const DARK_ACCENT_PRESETS: [AccentPreset; 6] = [
     AccentPreset {
         key: "amber",
         label: "Amber",
@@ -45,6 +45,12 @@ pub const DARK_ACCENT_PRESETS: [AccentPreset; 5] = [
         label: "Blue",
         rgb: DARK_TRAY_RAMP.blue_500,
         hover: 0x68b0ff,
+    },
+    AccentPreset {
+        key: "violet",
+        label: "Violet",
+        rgb: 0x8a93f7,
+        hover: 0xa5afff,
     },
 ];
 
@@ -228,6 +234,7 @@ pub struct TuiBackgroundPalette {
 pub struct TrayThemePreset {
     pub key: &'static str,
     pub label: &'static str,
+    pub accent_key: &'static str,
     pub system: SystemPalette,
     pub overlay: OverlayPalette,
     pub tui: TuiBackgroundPalette,
@@ -239,6 +246,7 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 4] = [
     TrayThemePreset {
         key: "slate",
         label: "Slate",
+        accent_key: "amber",
         system: SystemPalette {
             surface_canvas: 0x0b0d12,
             surface_elevated: 0x151a23,
@@ -271,6 +279,7 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 4] = [
     TrayThemePreset {
         key: "graphite",
         label: "Graphite",
+        accent_key: "amber",
         system: SystemPalette {
             surface_canvas: 0x0f0e0d,
             surface_elevated: 0x1a1815,
@@ -303,6 +312,7 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 4] = [
     TrayThemePreset {
         key: "void",
         label: "Void",
+        accent_key: "cyan",
         system: SystemPalette {
             surface_canvas: 0x000000,
             surface_elevated: 0x0b0d12,
@@ -313,7 +323,7 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 4] = [
             text_muted: 0x76829c,
             text_faint: 0x4f5a72,
             border_subtle: 0x272e3c,
-            accent: DARK_REFERENCE.orange_400,
+            accent: 0x56d6e0,
             success: DARK_REFERENCE.green_400,
             danger: DARK_REFERENCE.red_500,
             info: DARK_REFERENCE.blue_400,
@@ -335,6 +345,7 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 4] = [
     TrayThemePreset {
         key: "midnight",
         label: "Midnight",
+        accent_key: "violet",
         system: SystemPalette {
             surface_canvas: 0x090b19,
             surface_elevated: 0x141626,
@@ -345,7 +356,7 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 4] = [
             text_muted: 0x777b97,
             text_faint: 0x555974,
             border_subtle: 0x34374d,
-            accent: DARK_REFERENCE.orange_400,
+            accent: 0x8a93f7,
             success: DARK_REFERENCE.green_400,
             danger: DARK_REFERENCE.red_500,
             info: DARK_REFERENCE.blue_400,

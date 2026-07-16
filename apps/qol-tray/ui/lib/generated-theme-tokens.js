@@ -5,6 +5,7 @@ export const QOL_ACCENT_PRESETS = [
     { key: "cyan", label: "Cyan", rgb: "86, 214, 224", hover: "#8fe8f0" },
     { key: "magenta", label: "Magenta", rgb: "232, 121, 198", hover: "#f49ad6" },
     { key: "blue", label: "Blue", rgb: "74, 158, 255", hover: "#68b0ff" },
+    { key: "violet", label: "Violet", rgb: "138, 147, 247", hover: "#a5afff" },
 ];
 export const QOL_DEFAULT_ACCENT = "amber";
 export const QOL_DEV_ACCENT = "green";
@@ -26,9 +27,9 @@ export const QOL_TRAY_INTERNAL_COLORS = {
     configColorThumbShadow: "rgba(0, 0, 0, 0.5)",
 };
 export const QOL_THEMES = [
-    { key: "slate", label: "Slate" },
-    { key: "graphite", label: "Graphite" },
-    { key: "void", label: "Void" },
-    { key: "midnight", label: "Midnight" },
+    { key: "slate", label: "Slate", accentKey: "amber" },
+    { key: "graphite", label: "Graphite", accentKey: "amber" },
+    { key: "void", label: "Void", accentKey: "cyan" },
+    { key: "midnight", label: "Midnight", accentKey: "violet" },
 ];
 export const QOL_DEFAULT_THEME = "slate";

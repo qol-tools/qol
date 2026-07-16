@@ -1,5 +1,6 @@
 import { apiJson, jsonRequest } from '../api/client.js';
-import { applyTheme, DEFAULT_THEME, resolveTheme, SELECTED_THEME } from './theme-presets.js';
+import { applyTheme, DEFAULT_THEME, resolveTheme, SELECTED_THEME, themeAccentKey } from './theme-presets.js';
+import { refreshAutoAccent } from './theme-accent-sync.js';
 
 let selectedThemeKey = SELECTED_THEME;
 let effectiveThemeKey = resolveTheme(selectedThemeKey ?? DEFAULT_THEME);
@@ -33,6 +34,7 @@ function commitTheme(nextSelectedKey, nextEffectiveKey) {
     selectedThemeKey = resolvedSelectedKey;
     effectiveThemeKey = resolvedEffectiveKey;
     applyTheme(effectiveThemeKey);
+    refreshAutoAccent(themeAccentKey(effectiveThemeKey));
     if (changed) {
         for (const listener of listeners) listener(selectedThemeKey);
     }

@@ -46,6 +46,8 @@ const PLATFORM_LABEL: &str = "Windows";
 struct ThemeEntry {
     key: &'static str,
     label: &'static str,
+    #[serde(rename = "accentKey")]
+    accent_key: &'static str,
 }
 
 #[derive(Serialize)]
@@ -64,6 +66,7 @@ fn theme_boot() -> ThemeBoot {
             .map(|preset| ThemeEntry {
                 key: preset.key,
                 label: preset.label,
+                accent_key: preset.accent_key,
             })
             .collect(),
         default_key: crate::features::theme::current_theme_key(),
@@ -97,7 +100,7 @@ pub(super) fn boot_json(dev: bool) -> String {
         dev,
         accent: AccentBoot {
             palette: accent_palette(),
-            default_key: crate::features::theme::resolved_accent_key(dev),
+            default_key: crate::features::theme::resolved_accent_key(),
             selected_key: crate::features::theme::selected_accent_key().ok().flatten(),
         },
         theme: theme_boot(),
@@ -136,23 +139,20 @@ mod tests {
     }
 
     #[test]
-    fn dev_resolves_default_to_green() {
+    fn auto_accent_follows_theme_in_both_modes() {
         let root = tempfile::TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
 
-        assert_eq!(default_key(&boot_json(true)), "green");
-    }
-
-    #[test]
-    fn prod_resolves_default_to_amber() {
-        let root = tempfile::TempDir::new().unwrap();
-        let _guard = crate::paths::push_test_path_root(root.path());
-
+        assert_eq!(default_key(&boot_json(true)), "amber");
         assert_eq!(default_key(&boot_json(false)), "amber");
+
+        crate::features::theme::save_selected_theme_key("midnight").unwrap();
+        assert_eq!(default_key(&boot_json(true)), "violet");
+        assert_eq!(default_key(&boot_json(false)), "violet");
     }
 
     #[test]
-    fn boot_json_prefers_saved_accent_over_mode_default() {
+    fn boot_json_prefers_saved_accent_over_theme_default() {
         let root = tempfile::TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
         crate::features::theme::save_selected_accent_key("blue").unwrap();
@@ -171,7 +171,7 @@ mod tests {
         let _guard = crate::paths::push_test_path_root(root.path());
 
         let dev: serde_json::Value = serde_json::from_str(&boot_json(true)).unwrap();
-        assert_eq!(dev["accent"]["defaultKey"], "green");
+        assert_eq!(dev["accent"]["defaultKey"], "amber");
         assert_eq!(dev["accent"]["selectedKey"], serde_json::Value::Null);
     }
 
@@ -226,6 +226,7 @@ mod tests {
         assert_eq!(themes.len(), qol_theme::tray_theme_presets().len());
         assert_eq!(themes[0]["key"], "slate");
         assert_eq!(themes[0]["label"], "Slate");
+        assert_eq!(themes[0]["accentKey"], "amber");
     }
 
     #[test]
