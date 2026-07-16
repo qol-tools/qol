@@ -4,6 +4,9 @@ import { usePluginConfigContext } from '../context.js';
 import { FieldLabel } from './FieldLabel.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
 import { ToggleSwitch } from '../../../lib/components/ToggleSwitch.js';
+import { TextInput } from '../../../lib/components/TextInput.js';
+import { Button } from '../../../lib/components/Button.js';
+import { Surface } from '../../../lib/components/Surface.js';
 import {
     declaredFieldsToSchema,
     getObjectArraySchema,
@@ -61,7 +64,7 @@ function RuleList({ items, remove }) {
             ${items.map((item, i) => html`
                 <div key=${i} class="rule-row" data-wedge-root="" data-selection-tint-root="">
                     <${RuleRowContent} item=${item} />
-                    <button type="button" class="btn-remove" onClick=${() => remove(i)}>\u00d7</button>
+                    <${Surface} as="button" type="button" className="btn-remove" onActivate=${() => remove(i)}>\u00d7<//>
                 </div>
             `)}
         </div>
@@ -141,8 +144,8 @@ function AddRuleForm({ schema, onAdd }) {
             `}
             ${rest.map(([k, t]) => html`<${FormField} key=${k} fieldKey=${k} fieldType=${t} formRef=${formRef} />`)}
             ${booleans.map(([k]) => html`<${BooleanToggle} key=${k} fieldKey=${k} formRef=${formRef} />`)}
-            <button type="button" class="btn btn-ghost btn-sm btn-add"
-                data-wedge-root="" onClick=${handleAdd}>+ Add</button>
+            <${Button} small variant="btn-ghost" className="btn-add" type="button"
+                data-wedge-root="" onActivate=${handleAdd}>+ Add<//>
         </div>
     `;
 }
@@ -171,10 +174,10 @@ function ModToggleGroup({ fieldKey, formRef }) {
             <div class="field-label">${prettyLabel(fieldKey)}</div>
             <div class="mod-toggles">
                 ${KNOWN_MODS.map(mod => html`
-                    <button key=${mod} type="button"
-                        class="mod-chip ${active.has(mod) ? 'active' : ''}"
+                    <${Surface} as="button" key=${mod} type="button"
+                        className=${`mod-chip ${active.has(mod) ? 'active' : ''}`}
                         data-wedge-root=""
-                        onClick=${() => toggle(mod)}>${mod}</button>
+                        onActivate=${() => toggle(mod)}>${mod}<//>
                 `)}
             </div>
         </div>
@@ -188,8 +191,8 @@ function StringArrayInput({ fieldKey, formRef }) {
         get: () => ref.current?.value.split(',').map(v => v.trim().toLowerCase()).filter(Boolean) || [],
         reset: () => { if (ref.current) ref.current.value = ''; },
     };
-    return html`<input ref=${ref} type="text"
-        class="key-input keys-input" data-wedge-root="" data-selection-tint-root=""
+    return html`<${TextInput} inputRef=${ref}
+        className="key-input keys-input" data-wedge-root="" data-selection-tint-root=""
         placeholder="${prettyLabel(fieldKey)} (comma-separated)" />`;
 }
 
@@ -200,8 +203,8 @@ function ScalarInput({ fieldKey, fieldType, formRef }) {
         get: () => ref.current?.value.trim() || '',
         reset: () => { if (ref.current) ref.current.value = ''; },
     };
-    return html`<input ref=${ref} type=${fieldType === 'number' ? 'number' : 'text'}
-        class="key-input" data-wedge-root="" data-selection-tint-root=""
+    return html`<${TextInput} inputRef=${ref} type=${fieldType === 'number' ? 'number' : 'text'}
+        className="key-input" data-wedge-root="" data-selection-tint-root=""
         placeholder=${prettyLabel(fieldKey)} />`;
 }
 
