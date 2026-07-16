@@ -51,7 +51,7 @@ function ProfileInputField({ id, fieldId, label, hint = '', value, placeholder, 
         <${Surface} className=${cls} ...${sel}
             onActivate=${() => document.getElementById(id)?.focus?.()}>
             <label for=${id}>${label}${hint && html`<span class="hint"> ${hint}</span>`}</label>
-            <input id=${id} type=${type} class="profile-field-input" value=${value} placeholder=${placeholder} data-profile-editable="" onInput=${onInput} />
+            <${TextInput} id=${id} type=${type} className="profile-field-input" value=${value} placeholder=${placeholder} data-profile-editable="" onInput=${onInput} />
         <//>
     `;
 }
