@@ -8,15 +8,10 @@ const uiRoot = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 const SCAN_DIRS = ['views', 'components', 'app'];
 const RAW_INTERACTIVE = /<(button|select|textarea|input)\b/;
 
-const GRANDFATHERED = new Set([
+const SANCTIONED_RAW_INTERNALS = new Set([
     'app/views.js',
-    'components/ApiErrorToast.js',
-    'components/BootHealedBanner.js',
-    'components/CommandPalette.js',
     'components/domain-rows/PluginRow.js',
     'components/domain-rows/StoreCard.js',
-    'components/domain-rows/SuppressedRow.js',
-    'components/shell/Minimap.js',
     'components/shell/PeripheralPreview.js',
     'views/profile/view.js',
 ]);
@@ -29,13 +24,13 @@ function jsFiles(dir) {
 
 test('views compose gallery components instead of raw interactive elements', () => {
     const offenders = [];
-    const cleanGrandfathered = [];
+    const cleanSanctioned = [];
     for (const dir of SCAN_DIRS) {
         for (const file of jsFiles(join(uiRoot, dir))) {
             const rel = relative(uiRoot, file).split(sep).join('/');
             const raw = RAW_INTERACTIVE.test(readFileSync(file, 'utf8'));
-            if (raw && !GRANDFATHERED.has(rel)) offenders.push(rel);
-            if (!raw && GRANDFATHERED.has(rel)) cleanGrandfathered.push(rel);
+            if (raw && !SANCTIONED_RAW_INTERNALS.has(rel)) offenders.push(rel);
+            if (!raw && SANCTIONED_RAW_INTERNALS.has(rel)) cleanSanctioned.push(rel);
         }
     }
     assert.deepEqual(
@@ -44,8 +39,8 @@ test('views compose gallery components instead of raw interactive elements', () 
         `raw <button>/<select>/<input>/<textarea> outside lib/components; compose gallery primitives or extend them: ${offenders.join(', ')}`,
     );
     assert.deepEqual(
-        cleanGrandfathered,
+        cleanSanctioned,
         [],
-        `now clean; remove from GRANDFATHERED: ${cleanGrandfathered.join(', ')}`,
+        `now clean; remove from SANCTIONED_RAW_INTERNALS: ${cleanSanctioned.join(', ')}`,
     );
 });
