@@ -2,6 +2,7 @@ import { html } from '../../lib/html.js';
 import { useCallback } from 'preact/hooks';
 import { usePluginConfigContext } from './context.js';
 import { NumberField } from './fields/NumberField.js';
+import { TextInput } from '../../lib/components/TextInput.js';
 import { StringArrayField } from './fields/StringArrayField.js';
 import { ObjectArrayField } from './fields/ObjectArrayField.js';
 import { ObjectMapField } from './fields/ObjectMapField.js';
@@ -90,7 +91,7 @@ function StringField({ field }) {
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
             <${FieldLabel} text=${field.label} description=${field.description || ''} />
-            <input type="text" class="text-input" data-wedge-root=""
+            <${TextInput} className="text-input" data-wedge-root=""
                 value=${ctx.getFieldValue(field) || ''}
                 placeholder=${field.placeholder || ''}
                 onInput=${onInput} />

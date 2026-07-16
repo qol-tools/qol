@@ -12,6 +12,7 @@ import {
 import { renderField, fieldSurfaceAttrs } from './field-map.js';
 import { dissolveIn, DISSOLVE_PRESETS } from '../../fx/dissolve/index.js';
 import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
+import { Surface } from '../../lib/components/Surface.js';
 import { PageShell } from '../../components/PageShell.js';
 import { PluginVersion } from '../../components/PluginVersion.js';
 import { findPluginById, readInstalledCache } from '../plugins/data.js';
@@ -137,11 +138,11 @@ function VariantPanel({ group }) {
                 <div class="variant-selector-card">
                     <div class="variant-selector-options segmented-control" style=${widthStyle}>
                         ${group.selector.options.map(option => html`
-                            <button key=${option} type="button"
-                                class="variant-option segmented-control__option ${option === activeOption ? 'active is-active' : ''}"
-                                onClick=${() => onSelect(option)}>
+                            <${Surface} as="button" key=${option} type="button"
+                                className=${`variant-option segmented-control__option ${option === activeOption ? 'active is-active' : ''}`}
+                                onActivate=${() => onSelect(option)}>
                                 ${optionLabel(group.selector, option)}
-                            </button>
+                            <//>
                         `)}
                     </div>
                 </div>

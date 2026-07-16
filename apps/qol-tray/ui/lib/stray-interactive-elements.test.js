@@ -24,8 +24,6 @@ const GRANDFATHERED = new Set([
     'views/dev/gpui-subpage.js',
     'views/dev/log-filters-subpage.js',
     'views/hotkeys/modal.js',
-    'views/plugin-config/field-map.js',
-    'views/plugin-config/view.js',
     'views/plugins/grid.js',
     'views/profile/components.js',
     'views/profile/view.js',
