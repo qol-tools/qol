@@ -237,10 +237,10 @@ function DropdownShowcase() {
                     <${CustomSelect} value="folder" options=${options} labels=${labels} onChange=${() => {}} compact=${true} />
                     <${StateLabel}>open<//>
                     <div class="custom-select" style="position:relative">
-                        <button class="btn btn-dropdown custom-select-trigger" type="button" aria-expanded="true">
+                        <${Surface} as="button" type="button" className="btn btn-dropdown custom-select-trigger" aria-expanded="true">
                             <span class="custom-select-value">GitHub</span>
                             <span class="custom-select-arrow">${'\u25BE'}</span>
-                        </button>
+                        <//>
                         <div class="custom-select-popover" style="position:relative; display:block;">
                             <div class="custom-select-list" style="position:relative;">
                                 <div class="custom-select-option selected highlighted">GitHub</div>
