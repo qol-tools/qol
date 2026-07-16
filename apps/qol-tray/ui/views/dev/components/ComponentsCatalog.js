@@ -1,5 +1,5 @@
 import { html } from '../../../lib/html.js';
-import { useCallback, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { SurfaceContainer } from '../../../lib/components/SurfaceContainer.js';
 import { directSurfaces } from '../../../lib/surface-traits.js';
 import { ToggleSwitch } from '../../../lib/components/ToggleSwitch.js';
@@ -28,8 +28,11 @@ import { StoreCard, StoreCardGrid } from '../../../components/domain-rows/StoreC
 import { KeyLegend } from '../../../lib/components/KeyLegend.js';
 import { SearchableActionList } from '../../../lib/components/SearchableActionList.js';
 import { ActionMenu } from '../../../lib/components/ActionMenu.js';
+import { ThemeRow } from '../../../lib/components/ThemeRow.js';
+import { getTheme, setTheme, subscribeTheme } from '../../../lib/theme-sync.js';
 
 const SHOWCASES = {
+    theme: ThemeShowcase,
     buttons: ButtonShowcase,
     status: StatusShowcase,
     spinner: SpinnerShowcase,
@@ -97,6 +100,25 @@ function MockControls({ actions }) {
         <div class="catalog-mock-controls">
             ${actions.map(a => html`<${Button} key=${a.label} small variant="btn-ghost" onActivate=${a.run}>${a.label}<//>`)}
         </div>
+    `;
+}
+
+function ThemeShowcase() {
+    const [theme, setThemeState] = useState(getTheme);
+    useEffect(() => subscribeTheme(setThemeState), []);
+    const pick = useCallback((key) => {
+        setTheme(key).catch((error) => {
+            toast('error', error?.message || 'Failed to save theme');
+        });
+    }, []);
+    return html`
+        <${CatalogSection} title="Theme">
+            <div class="catalog-showcase">
+                <${Interactive}>
+                    <${ThemeRow} value=${theme} onPick=${pick} />
+                <//>
+            </div>
+        <//>
     `;
 }
 

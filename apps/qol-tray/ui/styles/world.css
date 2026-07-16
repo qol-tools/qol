@@ -402,6 +402,18 @@ html.qol-bootstrapping-dive #app {
     box-shadow: 0 0 0 2px var(--surface-elevated), 0 0 0 3px rgba(var(--paper-rgb), 0.85);
 }
 
+.wsp-theme-swatch[data-qol-theme-preview="slate"] {
+    background: linear-gradient(135deg, #0c0e13 0%, #0c0e13 34%, #171c26 34%, #171c26 67%, #1f2531 67%);
+}
+
+.wsp-theme-swatch[data-qol-theme-preview="graphite"] {
+    background: linear-gradient(135deg, #121110 0%, #121110 34%, #201d1a 34%, #201d1a 67%, #282420 67%);
+}
+
+.wsp-theme-swatch[data-qol-theme-preview="void"] {
+    background: linear-gradient(135deg, #000000 0%, #000000 34%, #10131a 34%, #10131a 67%, #181c26 67%);
+}
+
 .world-settings-panel select {
     background: var(--tui-bg-screen);
     border: var(--border-w-1) solid var(--tui-line);

@@ -6,6 +6,8 @@ import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { getWorldSettings, setWorldSetting, subscribeWorldSettings } from '../../lib/world-settings.js';
 import { ACCENT_PRESETS } from '../../lib/accent-presets.js';
 import { getThemeAccent, setThemeAccent, subscribeThemeAccent } from '../../lib/theme-accent-sync.js';
+import { getTheme, setTheme, subscribeTheme } from '../../lib/theme-sync.js';
+import { ThemeRow } from '../../lib/components/ThemeRow.js';
 import { toast } from '../../lib/toast.js';
 import { IconCog } from '../../assets/icon-cog.js';
 import { useClickOutside } from '../../lib/hooks/useClickOutside.js';
@@ -96,6 +98,7 @@ export const MINIMAP_NEIGHBOURS_MAX = 12;
 
 function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction, branches, defaultBranch, setDefaultBranch, repoBranch, containerRef, onKeyDown }) {
     const [themeAccent, setThemeAccentState] = useState(getThemeAccent);
+    const [theme, setThemeState] = useState(getTheme);
     const updateRange = (key) => (e) => setWorldSetting(key, Number(e.target.value));
     const updateToggle = (key) => (value) => setWorldSetting(key, value);
     const updateSelect = (key) => (value) => setWorldSetting(key, value);
@@ -104,8 +107,14 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
             toast('error', error?.message || 'Failed to save theme accent');
         });
     }, []);
+    const updateTheme = useCallback((key) => {
+        setTheme(key).catch((error) => {
+            toast('error', error?.message || 'Failed to save theme');
+        });
+    }, []);
 
     useEffect(() => subscribeThemeAccent(setThemeAccentState), []);
+    useEffect(() => subscribeTheme(setThemeState), []);
 
     const minimapZoom = Number(settings.minimapZoomFactor ?? 4);
     const minimapZoomLabel = minimapZoom >= MINIMAP_NEIGHBOURS_MAX ? 'all' : `±${minimapZoom | 0}`;
@@ -140,6 +149,7 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
             </div>
             <div class="wsp-section">
                 <div class="wsp-heading">Appearance</div>
+                <${ThemeRow} value=${theme} onPick=${updateTheme} />
                 <${AccentRow} value=${themeAccent} isDevMode=${isDevMode} onPick=${updateThemeAccent} />
             </div>
             ${isDevMode && branches && branches.length > 0 && html`
