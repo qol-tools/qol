@@ -7,6 +7,7 @@ import { fieldSurfaceAttrs } from '../field-map.js';
 import { isActionRuntimeGated } from '../field-rules.js';
 import { queryFlag } from './query-data.js';
 import { actionLabel, selectedActionName } from './action-state.js';
+import { Button } from '../../../lib/components/Button.js';
 
 const PAIR_DURATION_S = 60;
 const DEFAULT_POLL_MS = 2000;
@@ -87,11 +88,11 @@ export function ActionField({ field }) {
             onKeyDown=${gated ? undefined : onKeyDown}>
             <div class="field-action-row">
                 ${active && html`<span class="refresh-btn spinning"></span>`}
-                <button type="button" class="btn btn-${active ? 'ghost' : variant}"
+                <${Button} type="button" variant=${`btn-${active ? 'ghost' : variant}`}
                         disabled=${busy || gated}
-                        onClick=${gated ? undefined : run}>
+                        onActivate=${gated ? undefined : run}>
                     ${label}
-                </button>
+                <//>
             </div>
             ${field.description && html`<div class="field-help">${field.description}</div>`}
             ${gatedMessage && html`<div class="field-action-error">${gatedMessage}</div>`}
