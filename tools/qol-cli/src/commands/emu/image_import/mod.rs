@@ -275,15 +275,50 @@ fn import_reserved(
         Err(error) => Verification::failed(Vec::new(), format!("{error:#}")),
     };
     let mut vm = vm;
-    let exit = super::shutdown_vm(&mut vm).with_context(|| {
-        format!(
-            "failed to stop verified image-import VM `{}`; cleanup remains unresolved",
-            plan.run_id
-        )
-    })?;
     let active_workflow =
         report::workflow_json(plan, &verification, Some(&staged), "pending", None);
-    super::finish_image_import_vm(vm, exit, active_workflow)?;
+    let stopping_report = vm.write_stopping_report(Some(active_workflow.clone()), "image-import");
+    let shutdown = super::shutdown_after_report_attempt(stopping_report, || {
+        super::shutdown_vm(&mut vm).with_context(|| {
+            format!(
+                "failed to stop verified image-import VM `{}`; cleanup remains unresolved",
+                plan.run_id
+            )
+        })
+    });
+    let (exit, stopping_report_error) = match shutdown {
+        Ok(shutdown) => shutdown,
+        Err(shutdown_error) => {
+            return match verification.error.as_deref() {
+                Some(verification_error) => {
+                    Err(anyhow::anyhow!("{verification_error}; {shutdown_error:#}"))
+                }
+                None => Err(shutdown_error),
+            }
+        }
+    };
+    if let Err(error) = super::finish_image_import_vm(vm, exit, active_workflow) {
+        let error = super::with_stopping_report_error(error, stopping_report_error.as_ref());
+        return match verification.error.as_deref() {
+            Some(verification_error) => Err(anyhow::anyhow!("{verification_error}; {error:#}")),
+            None => Err(error),
+        };
+    }
+    if let Some(report_error) = stopping_report_error {
+        let error = verification.error.as_deref().map_or_else(
+            || format!("failed to persist pre-shutdown image verification evidence: {report_error:#}"),
+            |verification_error| {
+                format!(
+                    "{verification_error}; failed to persist pre-shutdown image verification evidence: {report_error:#}"
+                )
+            },
+        );
+        return finish_verification_failure(
+            plan,
+            &staged,
+            Verification::failed(verification.probes, error),
+        );
+    }
     if cancellation.is_requested() {
         return finish_verification_failure(
             plan,

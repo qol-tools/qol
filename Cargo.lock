@@ -5588,6 +5588,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "shell-words",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "toml_edit 0.25.12+spec-1.1.0",

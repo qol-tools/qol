@@ -1,5 +1,7 @@
 use anyhow::{bail, Context, Result};
-use std::fs::{File, OpenOptions};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::fs::{File, OpenOptions, TryLockError};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -9,6 +11,9 @@ use std::time::Duration;
 use super::media;
 
 const BOOT_LOCK_FILE: &str = "emu-boot-reservation.lock";
+const BOOT_SLOT_STATE_VERSION: u8 = 1;
+const ENDPOINT_RESERVATION_ATTEMPTS: usize = 128;
+const MAX_BOOT_LEASE_SLOTS: u32 = qol_dev_env::resources::MAX_CONCURRENT_LANES;
 const PROCESS_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19,11 +24,54 @@ pub(crate) struct BootPorts {
 }
 
 pub(crate) struct BootReservation {
-    _lock_file: File,
+    _lease: BootLease,
     qmp_probe: Option<TcpListener>,
     serial_probe: Option<TcpListener>,
     guest_control_probe: Option<TcpListener>,
     ports: BootPorts,
+}
+
+struct BootLease {
+    _slot: u32,
+    _file: File,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BootSlotState {
+    version: u8,
+    slot: u32,
+    qmp: u16,
+    serial: u16,
+    guest_control: u16,
+}
+
+impl BootSlotState {
+    fn ports(self) -> [u16; 3] {
+        [self.qmp, self.serial, self.guest_control]
+    }
+
+    fn validate(self, expected_slot: u32) -> Result<()> {
+        if self.version != BOOT_SLOT_STATE_VERSION {
+            bail!("unsupported boot slot sidecar version {}", self.version);
+        }
+        if self.slot != expected_slot {
+            bail!(
+                "boot slot sidecar identity mismatch: expected {expected_slot}, got {}",
+                self.slot
+            );
+        }
+        if self.ports().contains(&0) {
+            bail!("boot slot sidecar contains port zero");
+        }
+        if self.qmp == self.serial
+            || self.qmp == self.guest_control
+            || self.serial == self.guest_control
+        {
+            bail!("boot slot sidecar contains duplicate endpoint ports");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -141,6 +189,24 @@ impl VmLifecycle {
         }
     }
 
+    fn retain_pending_spawn(
+        &mut self,
+        process_tree: qol_process::ProcessTreeGuard,
+        current_process_tree: qol_process::CurrentProcessTreeGuard,
+        error: String,
+    ) {
+        self.cleanup_tracker.mark_started();
+        self.cleanup_tracker.record(LifecycleCleanupProof {
+            qemu_started: true,
+            qemu_exit_verified: false,
+            tree_exit_verified: false,
+            artifacts_removed: false,
+            error: Some(error),
+        });
+        self.process_tree = Some(process_tree);
+        self.current_process_tree = Some(current_process_tree);
+    }
+
     pub(crate) fn spawn(
         &mut self,
         qemu_system: &Path,
@@ -155,31 +221,39 @@ impl VmLifecycle {
         }
         let mut current_process_tree = qol_process::guard_current_process_tree()
             .context("failed to guard the qemu supervisor process tree")?;
-        let process_tree = qol_process::own_current_process_tree()
+        let process_tree = crate::process_guardian::own_process_tree()
             .context("failed to create qemu process-tree ownership")?;
-        let mut child = spawn_qemu(qemu_system, args, &self.run_dir, isolate_host_session)?;
-        self.cleanup_tracker.mark_started();
-        if let Err(assign_error) = process_tree.assign(&child) {
-            let cleanup = qol_process::terminate_owned(&mut child, PROCESS_SHUTDOWN_GRACE);
-            if let Err(cleanup_error) = cleanup {
-                self.child = Some(child);
-                self.current_process_tree = Some(current_process_tree);
-                bail!(
-                    "failed to own qemu process tree: {assign_error}; qemu cleanup also failed: {cleanup_error}"
-                );
+        let child = match spawn_qemu(
+            qemu_system,
+            args,
+            &self.run_dir,
+            isolate_host_session,
+            &process_tree,
+        ) {
+            Ok(child) => child,
+            Err(error) => {
+                let cleanup_pending = error
+                    .downcast_ref::<qol_process::PreparedSpawnError>()
+                    .is_some_and(|error| {
+                        error.cleanup() == qol_process::PreparedSpawnCleanup::RecoveryPending
+                    });
+                if cleanup_pending {
+                    self.retain_pending_spawn(
+                        process_tree,
+                        current_process_tree,
+                        error.to_string(),
+                    );
+                    return Err(error);
+                }
+                return match current_process_tree.disarm() {
+                    Ok(()) => Err(error),
+                    Err(disarm_error) => Err(anyhow::anyhow!(
+                        "{error:#}; failed to disarm qemu supervisor after spawn failure: {disarm_error:#}"
+                    )),
+                };
             }
-            current_process_tree
-                .disarm()
-                .context("failed to disarm qemu supervisor process-tree ownership")?;
-            self.cleanup_tracker.record(LifecycleCleanupProof {
-                qemu_started: true,
-                qemu_exit_verified: true,
-                tree_exit_verified: true,
-                artifacts_removed: false,
-                error: Some("VM lifecycle artifact cleanup has not completed".to_string()),
-            });
-            return Err(assign_error).context("failed to own qemu process tree");
-        }
+        };
+        self.cleanup_tracker.mark_started();
         let pid = child.id();
         self.child = Some(child);
         self.process_tree = Some(process_tree);
@@ -187,6 +261,7 @@ impl VmLifecycle {
         Ok(pid)
     }
 
+    #[cfg(test)]
     pub(crate) fn pid(&self) -> Option<u32> {
         self.child.as_ref().map(Child::id)
     }
@@ -221,11 +296,40 @@ impl VmLifecycle {
         Ok(exit)
     }
 
+    pub(crate) fn spawn_cleanup_pending(&self) -> bool {
+        self.cleanup_tracker.snapshot().qemu_started
+            && self.child.is_none()
+            && self.process_tree.is_some()
+            && !self.exit_verified
+    }
+
+    pub(crate) fn recover_spawn_failure(&mut self) -> Result<()> {
+        if !self.spawn_cleanup_pending() {
+            bail!("VM lifecycle has no pending spawn cleanup");
+        }
+        let process_tree = self
+            .process_tree
+            .as_ref()
+            .context("pending qemu process tree is not owned")?;
+        let _proof = process_tree
+            .recover_pending_spawn(PROCESS_SHUTDOWN_GRACE)
+            .context("pending qemu process tree did not terminate")?;
+        self.exit_verified = true;
+        self.cleanup_tracker.record(LifecycleCleanupProof {
+            qemu_started: true,
+            qemu_exit_verified: true,
+            tree_exit_verified: true,
+            artifacts_removed: false,
+            error: None,
+        });
+        Ok(())
+    }
+
     pub(crate) fn finish<T>(
         &mut self,
         commit_terminal_report: impl FnOnce(&[PathBuf]) -> Result<T>,
     ) -> Result<(T, Vec<PathBuf>)> {
-        if self.child.is_some() && !self.exit_verified {
+        if self.cleanup_tracker.snapshot().qemu_started && !self.exit_verified {
             bail!("cannot finish VM lifecycle before qemu exit is verified");
         }
         let removed = teardown(&self.run_dir)?;
@@ -286,8 +390,18 @@ impl Drop for VmLifecycle {
                     Ok(()) => qemu_exit_verified = true,
                     Err(error) => errors.push(format!("failed to terminate qemu: {error}")),
                 }
+            } else if let Some(process_tree) = self.process_tree.as_ref() {
+                match process_tree.recover_pending_spawn(PROCESS_SHUTDOWN_GRACE) {
+                    Ok(_) => {
+                        qemu_exit_verified = true;
+                        tree_exit_verified = true;
+                    }
+                    Err(error) => {
+                        errors.push(format!("failed to recover pending qemu spawn: {error}"))
+                    }
+                }
             }
-            if qemu_exit_verified && self.process_tree.is_some() {
+            if qemu_exit_verified && !tree_exit_verified && self.process_tree.is_some() {
                 match self.verify_process_tree_exit() {
                     Ok(()) => tree_exit_verified = true,
                     Err(error) => {
@@ -327,18 +441,19 @@ impl Drop for VmLifecycle {
 
 impl BootReservation {
     pub(crate) fn acquire(runs_root: &Path) -> Result<Self> {
+        Self::acquire_in(runs_root, &boot_lock_root())
+    }
+
+    fn acquire_in(runs_root: &Path, lock_root: &Path) -> Result<Self> {
         std::fs::create_dir_all(runs_root).with_context(|| {
             format!(
                 "failed to create emulator runs root {}",
                 runs_root.display()
             )
         })?;
-        let lock_path = boot_lock_path();
-        let lock_parent = lock_path
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("boot lock has no parent: {}", lock_path.display()))?;
-        std::fs::create_dir_all(lock_parent)
-            .with_context(|| format!("failed to create {}", lock_parent.display()))?;
+        std::fs::create_dir_all(lock_root)
+            .with_context(|| format!("failed to create {}", lock_root.display()))?;
+        let lock_path = boot_lock_path(lock_root);
         let lock_file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -349,16 +464,22 @@ impl BootReservation {
         lock_file
             .lock()
             .with_context(|| format!("failed to acquire boot lock {}", lock_path.display()))?;
-        let qmp_probe = bind_port_probe("qmp")?;
-        let serial_probe = bind_port_probe("serial")?;
-        let guest_control_probe = bind_port_probe("guest control")?;
+        let mut occupied_ports = BTreeSet::new();
+        let lease = reserve_boot_slot(lock_root, &mut occupied_ports)?;
+        let qmp_probe = reserve_endpoint("qmp", &occupied_ports)?;
+        occupied_ports.insert(probe_port(&qmp_probe, "qmp")?);
+        let serial_probe = reserve_endpoint("serial", &occupied_ports)?;
+        occupied_ports.insert(probe_port(&serial_probe, "serial")?);
+        let guest_control_probe = reserve_endpoint("guest control", &occupied_ports)?;
         let ports = BootPorts {
             qmp: probe_port(&qmp_probe, "qmp")?,
             serial: probe_port(&serial_probe, "serial")?,
             guest_control: probe_port(&guest_control_probe, "guest control")?,
         };
+        write_boot_slot_state(lock_root, lease._slot, ports)?;
+        drop(lock_file);
         Ok(Self {
-            _lock_file: lock_file,
+            _lease: lease,
             qmp_probe: Some(qmp_probe),
             serial_probe: Some(serial_probe),
             guest_control_probe: Some(guest_control_probe),
@@ -377,14 +498,116 @@ impl BootReservation {
     }
 }
 
-fn boot_lock_path() -> PathBuf {
-    qol_config::data_subdir("runtime")
-        .unwrap_or_else(std::env::temp_dir)
-        .join(BOOT_LOCK_FILE)
+fn boot_lock_root() -> PathBuf {
+    qol_config::data_subdir("runtime").unwrap_or_else(std::env::temp_dir)
 }
 
-fn bind_port_probe(kind: &str) -> Result<TcpListener> {
-    TcpListener::bind("127.0.0.1:0").with_context(|| format!("failed to probe a free {kind} port"))
+fn boot_lock_path(lock_root: &Path) -> PathBuf {
+    lock_root.join(BOOT_LOCK_FILE)
+}
+
+fn boot_slot_lock_path(lock_root: &Path, slot: u32) -> PathBuf {
+    lock_root.join(format!("emu-boot-slot-{slot}.lock"))
+}
+
+fn boot_slot_state_path(lock_root: &Path, slot: u32) -> PathBuf {
+    lock_root.join(format!("emu-boot-slot-{slot}.json"))
+}
+
+fn reserve_boot_slot(lock_root: &Path, occupied_ports: &mut BTreeSet<u16>) -> Result<BootLease> {
+    let mut available = None;
+    for slot in 0..MAX_BOOT_LEASE_SLOTS {
+        let lock_path = boot_slot_lock_path(lock_root, slot);
+        if !lock_path
+            .try_exists()
+            .with_context(|| format!("failed to inspect boot slot {}", lock_path.display()))?
+            && available.is_some()
+        {
+            continue;
+        }
+        let candidate = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .with_context(|| format!("failed to open boot slot {}", lock_path.display()))?;
+        match candidate.try_lock() {
+            Ok(()) if available.is_none() => {
+                available = Some(BootLease {
+                    _slot: slot,
+                    _file: candidate,
+                });
+            }
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => {
+                let state = load_active_boot_slot_state(lock_root, slot)?;
+                for port in state.ports() {
+                    if !occupied_ports.insert(port) {
+                        bail!(
+                            "active boot slot {slot} reuses endpoint port {port}; wait for active boots to finish, then retry"
+                        );
+                    }
+                }
+            }
+            Err(TryLockError::Error(error)) => {
+                return Err(error).with_context(|| {
+                    format!("failed to inspect boot slot {}", lock_path.display())
+                })
+            }
+        }
+    }
+    available.ok_or_else(|| anyhow::anyhow!("all {MAX_BOOT_LEASE_SLOTS} boot slots are active"))
+}
+
+fn load_active_boot_slot_state(lock_root: &Path, slot: u32) -> Result<BootSlotState> {
+    let path = boot_slot_state_path(lock_root, slot);
+    let state = std::fs::read(&path)
+        .with_context(|| format!("failed to read {}", path.display()))
+        .and_then(|content| {
+            serde_json::from_slice::<BootSlotState>(&content)
+                .with_context(|| format!("failed to parse {}", path.display()))
+        })
+        .with_context(|| {
+            format!(
+                "boot slot {slot} is active but its endpoint sidecar cannot prove ownership; wait for the active boot to finish, then retry"
+            )
+        })?;
+    state.validate(slot).with_context(|| {
+        format!(
+            "boot slot {slot} is active but its endpoint sidecar cannot prove ownership; wait for the active boot to finish, then retry"
+        )
+    })?;
+    Ok(state)
+}
+
+fn write_boot_slot_state(lock_root: &Path, slot: u32, ports: BootPorts) -> Result<()> {
+    let path = boot_slot_state_path(lock_root, slot);
+    let content = serde_json::to_vec(&BootSlotState {
+        version: BOOT_SLOT_STATE_VERSION,
+        slot,
+        qmp: ports.qmp,
+        serial: ports.serial,
+        guest_control: ports.guest_control,
+    })
+    .context("failed to serialize boot slot sidecar")?;
+    qol_fs::atomic_write(&path, &content)
+        .with_context(|| format!("failed to write boot slot sidecar {}", path.display()))
+}
+
+fn reserve_endpoint(kind: &str, occupied_ports: &BTreeSet<u16>) -> Result<TcpListener> {
+    for _ in 0..ENDPOINT_RESERVATION_ATTEMPTS {
+        let probe = TcpListener::bind("127.0.0.1:0")
+            .with_context(|| format!("failed to probe a free {kind} port"))?;
+        let port = probe_port(&probe, kind)?;
+        if occupied_ports.contains(&port) {
+            continue;
+        }
+        return Ok(probe);
+    }
+    bail!(
+        "failed to reserve an unleased {kind} port after {ENDPOINT_RESERVATION_ATTEMPTS} attempts"
+    )
 }
 
 fn probe_port(probe: &TcpListener, kind: &str) -> Result<u16> {
@@ -399,6 +622,7 @@ fn spawn_qemu(
     args: &[String],
     run_dir: &Path,
     isolate_host_session: bool,
+    process_tree: &qol_process::ProcessTreeGuard,
 ) -> Result<Child> {
     let logs_dir = run_dir.join("logs");
     std::fs::create_dir_all(&logs_dir)
@@ -418,7 +642,12 @@ fn spawn_qemu(
     if isolate_host_session {
         crate::commands::dev_env::clear_host_session(&mut command);
     }
-    command
+    qol_process::isolate_owned_command(&mut command)
+        .context("failed to isolate qemu process-tree ownership")?;
+    let prepared = process_tree
+        .prepare_command(command)
+        .context("failed to contain qemu before exec")?;
+    prepared
         .spawn()
         .with_context(|| format!("failed to spawn {}", qemu_system.display()))
 }
@@ -453,10 +682,18 @@ mod tests {
     use std::process::Command;
     use std::time::{Duration, Instant};
 
+    fn test_lock_root(root: &Path) -> PathBuf {
+        root.join("locks")
+    }
+
+    fn test_reservation(root: &Path) -> BootReservation {
+        BootReservation::acquire_in(&root.join("runs"), &test_lock_root(root)).unwrap()
+    }
+
     #[test]
     fn reservation_holds_three_distinct_ports() {
         let dir = tempfile::tempdir().unwrap();
-        let reservation = BootReservation::acquire(dir.path()).unwrap();
+        let reservation = test_reservation(dir.path());
         let ports = reservation.ports();
 
         assert_ne!(ports.qmp, ports.serial);
@@ -468,60 +705,168 @@ mod tests {
     }
 
     #[test]
-    fn releasing_ports_keeps_the_boot_lock_owned() {
+    fn releasing_ports_keeps_boot_slot_owned() {
         let dir = tempfile::tempdir().unwrap();
-        let mut reservation = BootReservation::acquire(dir.path()).unwrap();
-        let ports = reservation.ports();
+        let lock_root = test_lock_root(dir.path());
+        let mut reservation = test_reservation(dir.path());
         reservation.release_ports();
 
-        let qmp = TcpListener::bind(("127.0.0.1", ports.qmp)).unwrap();
-        let serial = TcpListener::bind(("127.0.0.1", ports.serial)).unwrap();
-        let guest_control = TcpListener::bind(("127.0.0.1", ports.guest_control)).unwrap();
-        assert_eq!(qmp.local_addr().unwrap().port(), ports.qmp);
-        assert_eq!(serial.local_addr().unwrap().port(), ports.serial);
-        assert_eq!(
-            guest_control.local_addr().unwrap().port(),
-            ports.guest_control
-        );
-        assert!(boot_lock_path().is_file());
+        assert!(reservation.qmp_probe.is_none());
+        assert!(reservation.serial_probe.is_none());
+        assert!(reservation.guest_control_probe.is_none());
+        let candidate = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(boot_slot_lock_path(&lock_root, reservation._lease._slot))
+            .unwrap();
+        assert!(matches!(
+            candidate.try_lock(),
+            Err(TryLockError::WouldBlock)
+        ));
     }
 
     #[test]
     fn reservation_child_helper() {
-        let Some(root) = std::env::var_os("QOL_EMU_BOOT_LOCK_TEST_ROOT") else {
+        let Some(run_root) = std::env::var_os("QOL_EMU_BOOT_LOCK_TEST_RUN_ROOT") else {
             return;
         };
+        let lock_root = std::env::var_os("QOL_EMU_BOOT_LOCK_TEST_LOCK_ROOT").unwrap();
         let marker = std::env::var_os("QOL_EMU_BOOT_LOCK_TEST_MARKER").unwrap();
-        let _reservation = BootReservation::acquire(Path::new(&root)).unwrap();
-        fs::write(marker, b"acquired").unwrap();
+        let reservation =
+            BootReservation::acquire_in(Path::new(&run_root), Path::new(&lock_root)).unwrap();
+        let ports = reservation.ports();
+        fs::write(
+            marker,
+            serde_json::to_vec(&[ports.qmp, ports.serial, ports.guest_control]).unwrap(),
+        )
+        .unwrap();
     }
 
     #[test]
-    fn reservation_serializes_processes_across_run_roots() {
+    fn reservation_admission_does_not_serialize_processes_across_run_roots() {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("child-acquired");
-        let first = BootReservation::acquire(&dir.path().join("parent-runs")).unwrap();
+        let lock_root = test_lock_root(dir.path());
+        let mut first =
+            BootReservation::acquire_in(&dir.path().join("parent-runs"), &lock_root).unwrap();
+        let first_ports = first.ports();
+        first.release_ports();
+        let started = Instant::now();
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "commands::emu::machine::tests::reservation_child_helper",
             ])
-            .env("QOL_EMU_BOOT_LOCK_TEST_ROOT", dir.path().join("child-runs"))
+            .env(
+                "QOL_EMU_BOOT_LOCK_TEST_RUN_ROOT",
+                dir.path().join("child-runs"),
+            )
+            .env("QOL_EMU_BOOT_LOCK_TEST_LOCK_ROOT", &lock_root)
             .env("QOL_EMU_BOOT_LOCK_TEST_MARKER", &marker)
             .spawn()
             .unwrap();
 
-        std::thread::sleep(Duration::from_millis(100));
-        assert!(!marker.exists());
-        assert!(child.try_wait().unwrap().is_none());
-        drop(first);
-
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = started + Duration::from_secs(5);
         while !marker.exists() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(child.wait().unwrap().success());
-        assert_eq!(fs::read(marker).unwrap(), b"acquired");
+        let admitted_concurrently = marker.exists();
+        if !admitted_concurrently {
+            let _ = child.kill();
+        }
+        let status = child.wait().unwrap();
+        drop(first);
+
+        assert!(
+            admitted_concurrently,
+            "second reservation was blocked for {:?}",
+            started.elapsed()
+        );
+        assert!(status.success());
+        let second_ports: [u16; 3] = serde_json::from_slice(&fs::read(marker).unwrap()).unwrap();
+        let first_ports = [
+            first_ports.qmp,
+            first_ports.serial,
+            first_ports.guest_control,
+        ];
+        assert!(
+            first_ports.iter().all(|port| !second_ports.contains(port)),
+            "concurrent reservations reused an endpoint: {first_ports:?} and {second_ports:?}"
+        );
+    }
+
+    #[test]
+    fn boot_slot_artifacts_never_exceed_configured_concurrency() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_root = test_lock_root(dir.path());
+        for _ in 0..64 {
+            drop(test_reservation(dir.path()));
+        }
+
+        let names = fs::read_dir(&lock_root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let locks = names
+            .iter()
+            .filter(|name| name.starts_with("emu-boot-slot-") && name.ends_with(".lock"))
+            .count();
+        let sidecars = names
+            .iter()
+            .filter(|name| name.starts_with("emu-boot-slot-") && name.ends_with(".json"))
+            .count();
+        assert_eq!(sidecars, locks);
+        assert!(locks <= usize::try_from(MAX_BOOT_LEASE_SLOTS).unwrap());
+    }
+
+    #[test]
+    fn stale_corrupt_boot_slot_sidecar_is_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_root = test_lock_root(dir.path());
+        fs::create_dir_all(&lock_root).unwrap();
+        fs::write(boot_slot_lock_path(&lock_root, 0), b"").unwrap();
+        fs::write(boot_slot_state_path(&lock_root, 0), b"not json").unwrap();
+
+        let reservation = test_reservation(dir.path());
+        assert_eq!(reservation._lease._slot, 0);
+        let state: BootSlotState =
+            serde_json::from_slice(&fs::read(boot_slot_state_path(&lock_root, 0)).unwrap())
+                .unwrap();
+        state.validate(0).unwrap();
+        assert_eq!(
+            state.ports(),
+            [
+                reservation.ports().qmp,
+                reservation.ports().serial,
+                reservation.ports().guest_control,
+            ]
+        );
+    }
+
+    #[test]
+    fn active_corrupt_boot_slot_sidecar_refuses_admission() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock_root = test_lock_root(dir.path());
+        fs::create_dir_all(&lock_root).unwrap();
+        let lock_path = boot_slot_lock_path(&lock_root, 0);
+        fs::write(&lock_path, b"").unwrap();
+        fs::write(boot_slot_state_path(&lock_root, 0), b"not json").unwrap();
+        let active = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+        active.lock().unwrap();
+
+        let error = match BootReservation::acquire_in(&dir.path().join("runs"), &lock_root) {
+            Ok(_) => panic!("active corrupt sidecar was accepted"),
+            Err(error) => error,
+        };
+        assert!(
+            format!("{error:#}").contains("cannot prove ownership"),
+            "{error:#}"
+        );
     }
 
     #[test]
@@ -666,6 +1011,65 @@ mod tests {
             cleanup_tracker.snapshot(),
             LifecycleCleanupProof::verified_vm()
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pending_spawn_cleanup_cannot_finish_before_exact_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let overlay = dir.path().join("overlay.qcow2");
+        fs::write(&overlay, b"overlay").unwrap();
+        let process_tree = crate::process_guardian::own_process_tree().unwrap();
+        let current_process_tree = qol_process::guard_current_process_tree().unwrap();
+        let mut command = Command::new("sh");
+        command.args(["-c", "exec sleep 30"]);
+        qol_process::isolate_owned_session(&mut command).unwrap();
+        let child = process_tree
+            .prepare_command(command)
+            .unwrap()
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let waiter = std::thread::spawn(move || {
+            let mut child = child;
+            child.wait().unwrap()
+        });
+        let cleanup_tracker = LifecycleCleanupTracker::new();
+        let mut lifecycle = VmLifecycle::tracked(dir.path(), cleanup_tracker.clone());
+        lifecycle.retain_pending_spawn(
+            process_tree,
+            current_process_tree,
+            "injected pending cleanup".to_string(),
+        );
+
+        let finish = lifecycle.finish::<()>(|_| panic!("terminal commit ran before cleanup proof"));
+        assert!(finish.unwrap_err().to_string().contains("before qemu exit"));
+        assert!(overlay.exists());
+        lifecycle.recover_spawn_failure().unwrap();
+        let (_, removed) = lifecycle.finish(|_| Ok(())).unwrap();
+        let status = waiter.join().unwrap();
+
+        assert!(!status.success());
+        assert!(!qol_process::is_pid_alive(pid));
+        assert_eq!(removed, vec![overlay]);
+        assert_eq!(
+            cleanup_tracker.snapshot(),
+            LifecycleCleanupProof::verified_vm()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn qemu_spawn_uses_a_distinct_owned_process_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = ["-c".to_string(), "exec sleep 30".to_string()];
+        let process_tree = crate::process_guardian::own_process_tree().unwrap();
+        let mut child =
+            spawn_qemu(Path::new("sh"), &args, dir.path(), false, &process_tree).unwrap();
+        let pid = child.id();
+
+        assert_eq!(unsafe { libc::getpgid(pid as i32) }, pid as i32);
+        qol_process::terminate_owned(&mut child, Duration::from_millis(20)).unwrap();
     }
 
     #[test]

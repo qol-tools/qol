@@ -100,7 +100,8 @@ fn backend_supported(definition: &EnvironmentDefinition) -> std::result::Result<
             .get("acceleration")
             .map(String::as_str),
     )?;
-    emu::resolve_backend(spec).map(|_| ())
+    emu::resolve_backend(spec)?;
+    emu::process_containment_supported()
 }
 
 fn with_defaults_in(mut config: LocalConfig, root: &Path) -> LocalConfig {

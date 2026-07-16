@@ -25,7 +25,9 @@ pub(crate) struct LiveRun {
     pub(crate) qmp_port: u16,
     pub(crate) serial_port: Option<u16>,
     pub(crate) supervisor_pid: u32,
+    pub(crate) supervisor_process_identity: String,
     pub(crate) qemu_pid: u32,
+    pub(crate) qemu_process_identity: String,
     pub(crate) machine_name: String,
 }
 
@@ -54,7 +56,9 @@ struct RunningCandidate {
     qmp_port: Option<u16>,
     serial_port: Option<u16>,
     supervisor_pid: Option<u32>,
+    supervisor_process_identity: Option<String>,
     qemu_pid: Option<u32>,
+    qemu_process_identity: Option<String>,
 }
 
 enum CandidateSelection<'a> {
@@ -99,9 +103,9 @@ trait OrphanControl {
 }
 
 trait OrphanRuntime {
-    fn pid_alive(&self, pid: u32) -> bool;
+    fn process_identity_matches(&self, pid: u32, identity: &str) -> bool;
     fn connect(&self, run: &LiveRun, timeout: Duration) -> Result<Box<dyn OrphanControl>>;
-    fn wait_for_exit(&self, pid: u32, timeout: Duration) -> Result<()>;
+    fn wait_for_exit(&self, pid: u32, identity: &str, timeout: Duration) -> Result<()>;
     fn wait_for_tree_exit(&self, process_group: u32, timeout: Duration) -> Result<()>;
     fn teardown(&self, run_dir: &Path) -> Result<Vec<PathBuf>>;
 }
@@ -119,18 +123,18 @@ impl OrphanControl for QmpClient {
 }
 
 impl OrphanRuntime for SystemOrphanRuntime {
-    fn pid_alive(&self, pid: u32) -> bool {
-        pid_alive(pid)
+    fn process_identity_matches(&self, pid: u32, identity: &str) -> bool {
+        process_identity_matches(pid, identity)
     }
 
     fn connect(&self, run: &LiveRun, timeout: Duration) -> Result<Box<dyn OrphanControl>> {
         Ok(Box::new(qmp::connect(run.qmp_port, timeout)?))
     }
 
-    fn wait_for_exit(&self, pid: u32, timeout: Duration) -> Result<()> {
+    fn wait_for_exit(&self, pid: u32, identity: &str, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            if !pid_alive(pid) {
+            if !process_identity_matches(pid, identity) {
                 return Ok(());
             }
             thread::sleep(ORPHAN_EXIT_POLL_INTERVAL);
@@ -283,7 +287,9 @@ pub(crate) fn reconcile_exact_image_import_vm(
     }
     let candidate = running_candidate_from_dir(run_dir.to_path_buf())
         .context("image-import VM report has no recoverable runtime identity")?;
-    if candidate.supervisor_pid != Some(expected_owner_pid) {
+    if candidate.supervisor_pid != Some(expected_owner_pid)
+        || candidate.supervisor_process_identity.as_deref() != Some(expected_owner_identity)
+    {
         bail!("image-import VM supervisor identity does not match its owner journal");
     }
     record_stale_with(
@@ -303,19 +309,20 @@ struct ExactOwnerRuntime<'a> {
 }
 
 impl OrphanRuntime for ExactOwnerRuntime<'_> {
-    fn pid_alive(&self, pid: u32) -> bool {
+    fn process_identity_matches(&self, pid: u32, identity: &str) -> bool {
         if pid == self.owner_pid {
-            return qol_process::process_identity_matches(pid, self.owner_identity);
+            return identity == self.owner_identity
+                && process_identity_matches(pid, self.owner_identity);
         }
-        SystemOrphanRuntime.pid_alive(pid)
+        SystemOrphanRuntime.process_identity_matches(pid, identity)
     }
 
     fn connect(&self, run: &LiveRun, timeout: Duration) -> Result<Box<dyn OrphanControl>> {
         SystemOrphanRuntime.connect(run, timeout)
     }
 
-    fn wait_for_exit(&self, pid: u32, timeout: Duration) -> Result<()> {
-        SystemOrphanRuntime.wait_for_exit(pid, timeout)
+    fn wait_for_exit(&self, pid: u32, identity: &str, timeout: Duration) -> Result<()> {
+        SystemOrphanRuntime.wait_for_exit(pid, identity, timeout)
     }
 
     fn wait_for_tree_exit(&self, process_group: u32, timeout: Duration) -> Result<()> {
@@ -348,70 +355,62 @@ pub(crate) fn reconcile_owned_terminated(
         .with_context(|| format!("failed to lock {}", lock_path.display()))?;
 
     let report_path = run_dir.join("report.json");
-    let existing_content = match fs::read_to_string(&report_path) {
-        Ok(content) => Some(content),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            return Err(error).with_context(|| format!("failed to read {}", report_path.display()))
-        }
-    };
-    let existing_report = existing_content
-        .as_deref()
-        .and_then(|content| serde_json::from_str::<Value>(content).ok())
-        .filter(Value::is_object);
-    let existing_status = existing_report
+    let existing = qol_dev_env::read_report_checked(
+        &report_path,
+        expected_run_id,
+        &qol_dev_env::ReportKind::Flow,
+    )?;
+    let existing_content = existing
         .as_ref()
-        .and_then(|report| report.get("status"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    if let Some(report_run_id) = existing_report
+        .map(|report| {
+            serde_json::to_string_pretty(report.document())
+                .map(|content| format!("{content}\n"))
+                .context("failed to serialize existing owned run report")
+        })
+        .transpose()?;
+    let existing_report = existing.as_ref().map(|report| report.document().clone());
+    let existing_status = existing
         .as_ref()
-        .and_then(|report| report.get("run_id"))
-        .and_then(Value::as_str)
-    {
-        if report_run_id != expected_run_id {
-            bail!(
-                "owned run report identity mismatch: expected `{expected_run_id}`, got `{report_run_id}`"
-            );
-        }
-    }
-    for (label, pid) in existing_report
+        .map(|report| report.status.as_str().to_string());
+    for (label, pid, identity) in existing_report
         .as_ref()
         .and_then(|report| report.get("runtime"))
         .into_iter()
         .flat_map(|runtime| {
             [
-                ("supervisor", runtime.get("supervisor_pid")),
-                ("QEMU", runtime.get("qemu_pid")),
+                (
+                    "supervisor",
+                    runtime.get("supervisor_pid"),
+                    runtime.get("supervisor_process_identity"),
+                ),
+                (
+                    "QEMU",
+                    runtime.get("qemu_pid"),
+                    runtime.get("qemu_process_identity"),
+                ),
             ]
         })
-        .filter_map(|(label, value)| {
-            value
-                .and_then(Value::as_u64)
+        .filter_map(|(label, pid, identity)| {
+            pid.and_then(Value::as_u64)
                 .and_then(|pid| u32::try_from(pid).ok())
                 .filter(|pid| *pid != 0)
-                .map(|pid| (label, pid))
+                .map(|pid| (label, pid, identity.and_then(Value::as_str)))
         })
     {
-        if pid_alive(pid) {
+        let identity = identity.with_context(|| {
+            format!("owned run {label} PID {pid} has no exact process identity")
+        })?;
+        if process_identity_matches(pid, identity) {
             bail!("owned run {label} PID {pid} is still alive");
         }
     }
     let removed = machine::teardown(run_dir)?;
-    let already_terminal = existing_status
-        .as_deref()
-        .is_some_and(owned_report_status_is_terminal);
-    let already_verified_cleanup = existing_report.as_ref().is_some_and(|report| {
-        let status = report
-            .get("status")
-            .and_then(Value::as_str)
-            .map(qol_dev_env::ReportStatus::parse)
-            .unwrap_or_else(|| qol_dev_env::ReportStatus::Unknown(String::new()));
-        matches!(
-            qol_dev_env::report::child_cleanup(report, &status),
-            qol_dev_env::CleanupState::Complete
-        )
-    });
+    let already_terminal = existing
+        .as_ref()
+        .is_some_and(|report| report.status.is_terminal());
+    let already_verified_cleanup = existing
+        .as_ref()
+        .is_some_and(|report| report.cleanup.is_complete());
     if already_terminal && already_verified_cleanup && removed.is_empty() {
         return Ok(OwnedRunCleanup {
             report_status: existing_status.unwrap_or_default(),
@@ -493,10 +492,6 @@ fn ensure_owned_run_directory(run_dir: &Path, expected_run_id: &str) -> Result<(
         bail!("owned run path is not a directory: {}", run_dir.display());
     }
     Ok(())
-}
-
-fn owned_report_status_is_terminal(status: &str) -> bool {
-    qol_dev_env::ReportStatus::parse(status).is_terminal()
 }
 
 fn candidates_in_roots<'a>(
@@ -581,6 +576,12 @@ fn running_candidate_from_report(
         .and_then(Value::as_u64)
         .and_then(|pid| u32::try_from(pid).ok())
         .filter(|pid| *pid != 0);
+    let supervisor_process_identity = report
+        .get("runtime")
+        .and_then(|runtime| runtime.get("supervisor_process_identity"))
+        .and_then(Value::as_str)
+        .filter(|identity| !identity.is_empty())
+        .map(str::to_string);
     let qemu_pid = report
         .get("runtime")
         .and_then(|runtime| runtime.get("qemu_pid"))
@@ -588,6 +589,12 @@ fn running_candidate_from_report(
         .and_then(|pid| u32::try_from(pid).ok())
         .filter(|pid| *pid != 0)
         .or_else(|| qemu_pid_from_pidfile(&run_dir));
+    let qemu_process_identity = report
+        .get("runtime")
+        .and_then(|runtime| runtime.get("qemu_process_identity"))
+        .and_then(Value::as_str)
+        .filter(|identity| !identity.is_empty())
+        .map(str::to_string);
     let spawn_state = report
         .get("spawn")
         .and_then(|spawn| spawn.get("state"))
@@ -605,7 +612,9 @@ fn running_candidate_from_report(
         qmp_port,
         serial_port,
         supervisor_pid,
+        supervisor_process_identity,
         qemu_pid,
+        qemu_process_identity,
     })
 }
 
@@ -638,7 +647,10 @@ fn verify_for_control(candidate: &RunningCandidate) -> Result<VerifiedRun> {
 
 fn verify_for_listing(candidate: &RunningCandidate, timeout: Duration) -> Option<VerifiedRun> {
     if candidate.status == "preparing"
-        && candidate.supervisor_pid.is_some_and(pid_alive)
+        && candidate
+            .supervisor_pid
+            .zip(candidate.supervisor_process_identity.as_deref())
+            .is_some_and(|(pid, identity)| process_identity_matches(pid, identity))
         && candidate.qemu_pid.is_none()
     {
         return None;
@@ -657,8 +669,9 @@ fn verify_candidate(
     timeout: Duration,
 ) -> Result<VerifiedRun, StaleReason> {
     let run = candidate.live_run()?;
-    let supervisor_alive = pid_alive(run.supervisor_pid);
-    let qemu_alive = pid_alive(run.qemu_pid);
+    let supervisor_alive =
+        process_identity_matches(run.supervisor_pid, &run.supervisor_process_identity);
+    let qemu_alive = process_identity_matches(run.qemu_pid, &run.qemu_process_identity);
     let process_observation = RuntimeObservation {
         supervisor_alive,
         qemu_alive,
@@ -696,9 +709,16 @@ impl RunningCandidate {
         let supervisor_pid = self.supervisor_pid.ok_or_else(|| {
             StaleReason::Contract("report has no valid supervisor PID".to_string())
         })?;
+        let supervisor_process_identity =
+            self.supervisor_process_identity.clone().ok_or_else(|| {
+                StaleReason::Contract("report has no valid supervisor process identity".to_string())
+            })?;
         let qemu_pid = self
             .qemu_pid
             .ok_or_else(|| StaleReason::Contract("report has no valid QEMU PID".to_string()))?;
+        let qemu_process_identity = self.qemu_process_identity.clone().ok_or_else(|| {
+            StaleReason::Contract("report has no valid QEMU process identity".to_string())
+        })?;
         let machine_name = format!("qol-emu-{}", self.run_id);
         Ok(LiveRun {
             run_id: self.run_id.clone(),
@@ -707,7 +727,9 @@ impl RunningCandidate {
             qmp_port,
             serial_port: self.serial_port,
             supervisor_pid,
+            supervisor_process_identity,
             qemu_pid,
+            qemu_process_identity,
             machine_name,
         })
     }
@@ -738,8 +760,8 @@ fn verify_runtime(run: &LiveRun, observation: &RuntimeObservation) -> Result<(),
     Ok(())
 }
 
-fn pid_alive(pid: u32) -> bool {
-    qol_process::is_pid_alive(pid) && !qol_process::is_pid_zombie(pid)
+fn process_identity_matches(pid: u32, identity: &str) -> bool {
+    !qol_process::is_pid_zombie(pid) && qol_process::process_identity_matches(pid, identity)
 }
 
 fn record_stale(candidate: &RunningCandidate, reason: &StaleReason) -> Result<PathBuf> {
@@ -765,12 +787,16 @@ fn record_stale_with(
         .with_context(|| format!("failed to lock {}", lock_path.display()))?;
     let supervisor_dead = candidate
         .supervisor_pid
-        .is_some_and(|pid| !runtime.pid_alive(pid));
+        .zip(candidate.supervisor_process_identity.as_deref())
+        .is_some_and(|(pid, identity)| !runtime.process_identity_matches(pid, identity));
     if !supervisor_dead {
         let cleanup = OrphanCleanup::Incomplete {
             phase: "supervisor",
             error: "supervisor death could not be verified".to_string(),
-            qemu_was_alive: candidate.qemu_pid.map(|pid| runtime.pid_alive(pid)),
+            qemu_was_alive: candidate
+                .qemu_pid
+                .zip(candidate.qemu_process_identity.as_deref())
+                .map(|(pid, identity)| runtime.process_identity_matches(pid, identity)),
             machine_name: None,
         };
         write_stale_marker(candidate, reason, observed_at, &marker_path, &cleanup)?;
@@ -816,20 +842,25 @@ fn reconcile_orphan(candidate: &RunningCandidate, runtime: &impl OrphanRuntime) 
             return OrphanCleanup::Incomplete {
                 phase: "contract",
                 error: error.message(),
-                qemu_was_alive: candidate.qemu_pid.map(|pid| runtime.pid_alive(pid)),
+                qemu_was_alive: candidate
+                    .qemu_pid
+                    .zip(candidate.qemu_process_identity.as_deref())
+                    .map(|(pid, identity)| runtime.process_identity_matches(pid, identity)),
                 machine_name: None,
             }
         }
     };
-    if runtime.pid_alive(run.supervisor_pid) {
+    if runtime.process_identity_matches(run.supervisor_pid, &run.supervisor_process_identity) {
         return OrphanCleanup::Incomplete {
             phase: "supervisor",
             error: format!("supervisor PID {} became live", run.supervisor_pid),
-            qemu_was_alive: Some(runtime.pid_alive(run.qemu_pid)),
+            qemu_was_alive: Some(
+                runtime.process_identity_matches(run.qemu_pid, &run.qemu_process_identity),
+            ),
             machine_name: None,
         };
     }
-    let qemu_was_alive = runtime.pid_alive(run.qemu_pid);
+    let qemu_was_alive = runtime.process_identity_matches(run.qemu_pid, &run.qemu_process_identity);
     let mut machine_name = None;
     if qemu_was_alive {
         let mut control = match runtime.connect(&run, CONTROL_TIMEOUT) {
@@ -856,7 +887,7 @@ fn reconcile_orphan(candidate: &RunningCandidate, runtime: &impl OrphanRuntime) 
             );
         }
         machine_name = Some(actual);
-        if runtime.pid_alive(run.supervisor_pid) {
+        if runtime.process_identity_matches(run.supervisor_pid, &run.supervisor_process_identity) {
             return incomplete_cleanup(
                 "supervisor",
                 anyhow!("supervisor PID {} became live", run.supervisor_pid),
@@ -864,16 +895,20 @@ fn reconcile_orphan(candidate: &RunningCandidate, runtime: &impl OrphanRuntime) 
                 machine_name,
             );
         }
-        if runtime.pid_alive(run.qemu_pid) {
+        if runtime.process_identity_matches(run.qemu_pid, &run.qemu_process_identity) {
             if let Err(error) = control.quit() {
                 return incomplete_cleanup("shutdown", error, true, machine_name);
             }
-            if let Err(error) = runtime.wait_for_exit(run.qemu_pid, ORPHAN_EXIT_TIMEOUT) {
+            if let Err(error) = runtime.wait_for_exit(
+                run.qemu_pid,
+                &run.qemu_process_identity,
+                ORPHAN_EXIT_TIMEOUT,
+            ) {
                 return incomplete_cleanup("exit", error, true, machine_name);
             }
         }
     }
-    if runtime.pid_alive(run.qemu_pid) {
+    if runtime.process_identity_matches(run.qemu_pid, &run.qemu_process_identity) {
         return incomplete_cleanup(
             "exit",
             anyhow!("QEMU PID {} exit could not be verified", run.qemu_pid),
@@ -1116,7 +1151,7 @@ mod tests {
     }
 
     impl OrphanRuntime for FakeRuntime {
-        fn pid_alive(&self, pid: u32) -> bool {
+        fn process_identity_matches(&self, pid: u32, _: &str) -> bool {
             match pid {
                 10 => self.supervisor_alive.get(),
                 11 => self.qemu_alive.get(),
@@ -1135,7 +1170,7 @@ mod tests {
             }))
         }
 
-        fn wait_for_exit(&self, _: u32, _: Duration) -> Result<()> {
+        fn wait_for_exit(&self, _: u32, _: &str, _: Duration) -> Result<()> {
             self.wait_called.set(true);
             if let Some(error) = self.wait_error.clone() {
                 bail!(error);
@@ -1167,14 +1202,29 @@ mod tests {
         supervisor_pid: Option<u64>,
         qemu_pid: Option<u64>,
     ) -> Value {
+        let supervisor_process_identity = supervisor_pid.and_then(|pid| {
+            u32::try_from(pid)
+                .ok()
+                .and_then(|pid| qol_process::process_identity(pid).ok())
+                .or_else(|| Some(format!("test-supervisor-{pid}")))
+        });
+        let qemu_process_identity = qemu_pid.and_then(|pid| {
+            u32::try_from(pid)
+                .ok()
+                .and_then(|pid| qol_process::process_identity(pid).ok())
+                .or_else(|| Some(format!("test-qemu-{pid}")))
+        });
         let mut report = json!({
+            "kind": "environment",
             "environment": {"id": environment_id},
             "status": "running",
             "qmp": {"port": qmp_port},
             "serial": {"port": qmp_port + 100},
             "runtime": {
                 "supervisor_pid": supervisor_pid,
+                "supervisor_process_identity": supervisor_process_identity,
                 "qemu_pid": qemu_pid,
+                "qemu_process_identity": qemu_process_identity,
             },
         });
         if let Some(run_id) = run_id {
@@ -1205,10 +1255,12 @@ mod tests {
     }
 
     fn terminated_tree_proof() -> (qol_process::TerminatedProcessTree, u32) {
-        let process_tree = qol_process::own_current_process_tree().unwrap();
-        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        let process_tree = crate::process_guardian::own_process_tree().unwrap();
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        let prepared = process_tree.prepare_command(command).unwrap();
+        let mut child = prepared.spawn().unwrap();
         let pid = child.id();
-        process_tree.assign(&child).unwrap();
         qol_process::terminate_owned(&mut child, Duration::from_millis(100)).unwrap();
         let proof = process_tree
             .terminate_and_wait(Duration::from_secs(1))
@@ -1225,7 +1277,9 @@ mod tests {
             qmp_port: 4400,
             serial_port: Some(4500),
             supervisor_pid: 10,
+            supervisor_process_identity: "test-supervisor-10".to_string(),
             qemu_pid: 11,
+            qemu_process_identity: "test-qemu-11".to_string(),
             machine_name: "qol-emu-mint-a".to_string(),
         }
     }
@@ -1332,6 +1386,33 @@ mod tests {
                 "directory: {directory}, error: {actual:?}"
             );
         }
+    }
+
+    #[test]
+    fn live_control_requires_and_matches_exact_process_identities() {
+        let pid = u64::from(std::process::id());
+        let mut missing_supervisor = report("mint", Some("mint-a"), 4400, Some(pid), Some(pid));
+        missing_supervisor["runtime"]
+            .as_object_mut()
+            .unwrap()
+            .remove("supervisor_process_identity");
+        let error = candidate("mint-a", missing_supervisor)
+            .live_run()
+            .unwrap_err();
+        assert!(error
+            .message()
+            .contains("no valid supervisor process identity"));
+
+        let mut reused = report("mint", Some("mint-a"), 4400, Some(pid), Some(pid));
+        reused["runtime"]["supervisor_process_identity"] = json!("stale-supervisor");
+        reused["runtime"]["qemu_process_identity"] = json!("stale-qemu");
+        let candidate = candidate("mint-a", reused);
+
+        let error = match verify_candidate(&candidate, LIST_TIMEOUT) {
+            Ok(_) => panic!("stale process identities were accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(error, StaleReason::SupervisorDead(std::process::id()));
     }
 
     #[test]
@@ -1527,10 +1608,14 @@ mod tests {
             root.path(),
             "mint-preparing",
             json!({
+                "kind": "environment",
                 "run_id": "mint-preparing",
                 "status": "preparing",
                 "environment": { "id": "mint" },
-                "runtime": { "supervisor_pid": dead_pid },
+                "runtime": {
+                    "supervisor_pid": dead_pid,
+                    "supervisor_process_identity": format!("dead-supervisor-{dead_pid}"),
+                },
                 "spawn": { "state": "not-started", "pidfile": "qemu.pid" },
             }),
         );
@@ -1554,10 +1639,14 @@ mod tests {
             root.path(),
             "mint-preparing",
             json!({
+                "kind": "environment",
                 "run_id": "mint-preparing",
                 "status": "preparing",
                 "environment": { "id": "mint" },
-                "runtime": { "supervisor_pid": std::process::id() },
+                "runtime": {
+                    "supervisor_pid": std::process::id(),
+                    "supervisor_process_identity": qol_process::process_identity(std::process::id()).unwrap(),
+                },
                 "spawn": { "state": "not-started", "pidfile": "qemu.pid" },
             }),
         );
@@ -1577,11 +1666,15 @@ mod tests {
             root.path(),
             "mint-launching",
             json!({
+                "kind": "environment",
                 "run_id": "mint-launching",
                 "status": "preparing",
                 "environment": { "id": "mint" },
                 "qmp": { "port": 4400 },
-                "runtime": { "supervisor_pid": current_pid },
+                "runtime": {
+                    "supervisor_pid": current_pid,
+                    "supervisor_process_identity": qol_process::process_identity(current_pid).unwrap(),
+                },
                 "spawn": { "state": "launching", "pidfile": "/untrusted/path" },
             }),
         );
@@ -1603,11 +1696,15 @@ mod tests {
             root.path(),
             "mint-launching",
             json!({
+                "kind": "environment",
                 "run_id": "mint-launching",
                 "status": "preparing",
                 "environment": { "id": "mint" },
                 "qmp": { "port": 4400 },
-                "runtime": { "supervisor_pid": dead_pid },
+                "runtime": {
+                    "supervisor_pid": dead_pid,
+                    "supervisor_process_identity": format!("dead-supervisor-{dead_pid}"),
+                },
                 "spawn": { "state": "launching", "pidfile": "qemu.pid" },
             }),
         );
@@ -1636,6 +1733,7 @@ mod tests {
                 Some(u64::from(dead_pid)),
                 Some(u64::from(dead_pid)),
             );
+            active_report["kind"] = json!("flow");
             active_report["status"] = json!(status);
             let run_dir = write_report(root.path(), "debian-owned", active_report);
             let artifact = run_dir.join("overlay.qcow2");
@@ -1731,6 +1829,8 @@ mod tests {
             Some(u64::from(dead_pid)),
             Some(u64::from(dead_pid)),
         );
+        let mut mismatched_report = mismatched_report;
+        mismatched_report["kind"] = json!("flow");
         let run_dir = write_report(root.path(), "debian-owned", mismatched_report);
         let report_before = fs::read(run_dir.join("report.json")).unwrap();
         let artifact = run_dir.join("overlay.qcow2");
@@ -1742,7 +1842,7 @@ mod tests {
 
         assert!(error
             .to_string()
-            .contains("expected `debian-owned`, got `different-run`"));
+            .contains("belongs to run `different-run`, expected `debian-owned`"));
         assert_eq!(fs::read(&artifact).unwrap(), b"must-remain");
         assert_eq!(
             fs::read(run_dir.join("report.json")).unwrap(),
@@ -1750,6 +1850,52 @@ mod tests {
         );
         assert!(!run_dir.join("report.interrupted.json").exists());
         assert!(!run_dir.join("owner-cleanup.json").exists());
+    }
+
+    #[test]
+    fn owned_tree_recovery_rejects_wrong_kind_and_missing_run_identity() {
+        let (proof, dead_pid) = terminated_tree_proof();
+        let mut missing_identity = report(
+            "debian",
+            Some("debian-owned"),
+            4400,
+            Some(u64::from(dead_pid)),
+            Some(u64::from(dead_pid)),
+        );
+        missing_identity["kind"] = json!("flow");
+        missing_identity.as_object_mut().unwrap().remove("run_id");
+        let cases = [
+            (
+                report(
+                    "debian",
+                    Some("debian-owned"),
+                    4400,
+                    Some(u64::from(dead_pid)),
+                    Some(u64::from(dead_pid)),
+                ),
+                "expected `flow`",
+            ),
+            (missing_identity, "has no run_id"),
+        ];
+        for (report, expected) in cases {
+            let root = TempDir::new().unwrap();
+            let run_dir = write_report(root.path(), "debian-owned", report);
+            let artifact = run_dir.join("overlay.qcow2");
+            fs::write(&artifact, b"must-remain").unwrap();
+
+            let error = reconcile_owned_terminated(
+                &run_dir,
+                "debian-owned",
+                "flow supervisor exited",
+                &proof,
+            )
+            .unwrap_err();
+
+            assert!(error.to_string().contains(expected));
+            assert_eq!(fs::read(&artifact).unwrap(), b"must-remain");
+            assert!(!run_dir.join("report.interrupted.json").exists());
+            assert!(!run_dir.join("owner-cleanup.json").exists());
+        }
     }
 
     #[test]

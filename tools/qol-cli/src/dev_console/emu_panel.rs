@@ -1846,6 +1846,11 @@ mod tests {
     use serde_json::json;
     use std::sync::{mpsc, Arc, Condvar, Mutex};
 
+    #[cfg(target_os = "linux")]
+    fn process_guardian_command() -> std::process::Command {
+        crate::process_guardian::command(&std::env::current_exe().unwrap())
+    }
+
     fn report_summary(status: &str, teardown: Option<serde_json::Value>) -> RunSummary {
         let mut document = serde_json::json!({
             "kind": "environment",
@@ -2094,7 +2099,7 @@ mod tests {
         assert!(start.validate().is_ok());
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn active_typed_flow_finishes_from_its_checked_report_and_worker_exit() {
         use std::os::unix::fs::PermissionsExt;
@@ -2132,7 +2137,13 @@ mod tests {
             plan_fingerprint: "a".repeat(64),
             verbose: false,
         };
-        let handle = qol_dev_orchestrator::start_flow_worker(&executable, request, ticket).unwrap();
+        let handle = qol_dev_orchestrator::start_flow_worker(
+            &executable,
+            process_guardian_command(),
+            request,
+            ticket,
+        )
+        .unwrap();
         let mut run = ActiveSandboxRun::flow(handle);
 
         assert!(run.is_live());
@@ -2146,7 +2157,7 @@ mod tests {
             .is_some_and(|line| line.contains("done") && line.contains("pass")));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn reportless_typed_coordinator_can_be_stopped_with_owned_tree_proof() {
         use std::os::unix::fs::PermissionsExt;
@@ -2172,7 +2183,13 @@ mod tests {
             plan_fingerprint: "a".repeat(64),
             verbose: false,
         };
-        let handle = qol_dev_orchestrator::start_flow_worker(&executable, request, ticket).unwrap();
+        let handle = qol_dev_orchestrator::start_flow_worker(
+            &executable,
+            process_guardian_command(),
+            request,
+            ticket,
+        )
+        .unwrap();
         let mut run = ActiveSandboxRun::flow(handle);
 
         let reason = run.terminate_typed_coordinator_if_safe().unwrap();
@@ -2181,7 +2198,7 @@ mod tests {
         assert!(!run.is_live());
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn completed_typed_image_import_refreshes_inventory_from_its_exact_report() {
         use std::os::unix::fs::PermissionsExt;
@@ -2225,8 +2242,13 @@ mod tests {
             plan_fingerprint: "a".repeat(64),
             verbose: false,
         };
-        let handle =
-            qol_dev_orchestrator::start_image_import_worker(&executable, request, ticket).unwrap();
+        let handle = qol_dev_orchestrator::start_image_import_worker(
+            &executable,
+            process_guardian_command(),
+            request,
+            ticket,
+        )
+        .unwrap();
         let run = ActiveSandboxRun::image_import(handle);
         let mut dash = Dash::new(Vec::new());
         dash.active_runs

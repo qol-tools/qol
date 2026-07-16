@@ -6,7 +6,10 @@ use std::time::Duration;
 use crate::progress::{print_hint, print_title, step_label, StepKind};
 
 use super::guest::{DebianNocloud, GuestOs};
-use super::{boot_vm, finalize_vm, serial, shutdown_vm};
+use super::{
+    boot_vm, finalize_vm, passive_wait_then_record_stopping, serial, shutdown_after_report_attempt,
+    shutdown_vm, with_stopping_report_error,
+};
 
 const SYNTAX: &str = "qol emu desktop mintish <environment>";
 const SERIAL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -39,15 +42,39 @@ pub(crate) fn cmd_desktop(args: &[OsString], verbose: bool) -> Result<()> {
     let setup = prepare_mintish(vm.serial_port);
     if let Err(error) = setup {
         let detail = error.to_string();
-        let exit = shutdown_vm(&mut vm).context("desktop setup failed and qemu did not stop")?;
         let report = desktop_report("error", Some(&detail));
-        let (report_path, removed) = finalize_vm(vm, exit, Some(report), "desktop")?;
+        let stopping_report = vm.write_stopping_report(Some(report.clone()), "desktop");
+        let shutdown = shutdown_after_report_attempt(stopping_report, || {
+            shutdown_vm(&mut vm).context("desktop setup failed and qemu did not stop")
+        });
+        let (exit, stopping_report_error) = match shutdown {
+            Ok(shutdown) => shutdown,
+            Err(shutdown_error) => return Err(anyhow::anyhow!("{detail}; {shutdown_error:#}")),
+        };
+        let finalized = finalize_vm(vm, exit, Some(report), "desktop");
+        let (report_path, removed) = match finalized {
+            Ok(finalized) => finalized,
+            Err(finalize_error) => {
+                return Err(with_stopping_report_error(
+                    anyhow::anyhow!(
+                        "{detail}; desktop setup finalization failed: {finalize_error:#}"
+                    ),
+                    stopping_report_error.as_ref(),
+                ))
+            }
+        };
         step_label(
             "clean",
             StepKind::Success,
             &format!("removed {} disposable file(s)", removed.len()),
         );
         step_label("report", StepKind::Info, &report_path.display().to_string());
+        if let Some(report_error) = stopping_report_error {
+            bail!(
+                "{detail}; failed to persist pre-shutdown desktop evidence: {report_error:#}; terminal report: {}",
+                report_path.display()
+            );
+        }
         bail!("{detail}");
     }
     step_label(
@@ -60,9 +87,27 @@ pub(crate) fn cmd_desktop(args: &[OsString], verbose: bool) -> Result<()> {
         StepKind::Success,
         "close the VM window to end the run",
     );
-    let exit = vm.child.wait().context("failed to wait for qemu")?;
-    let (report_path, removed) =
-        finalize_vm(vm, exit, Some(desktop_report("pass", None)), "desktop")?;
+    let report = desktop_report("pass", None);
+    let (exit, stopping_report_error) = passive_wait_then_record_stopping(
+        &mut vm,
+        |vm| vm.child.wait().context("failed to wait for qemu"),
+        |vm| vm.write_stopping_report(Some(report.clone()), "desktop"),
+    )?;
+    let finalized = finalize_vm(vm, exit, Some(report), "desktop");
+    let (report_path, removed) = match finalized {
+        Ok(finalized) => finalized,
+        Err(finalize_error) => {
+            let finalize_error = if exit.success() {
+                finalize_error
+            } else {
+                anyhow::anyhow!("qemu exited with {exit}; finalization failed: {finalize_error:#}")
+            };
+            return Err(with_stopping_report_error(
+                finalize_error,
+                stopping_report_error.as_ref(),
+            ));
+        }
+    };
     step_label(
         "clean",
         StepKind::Success,
@@ -70,7 +115,16 @@ pub(crate) fn cmd_desktop(args: &[OsString], verbose: bool) -> Result<()> {
     );
     step_label("report", StepKind::Info, &report_path.display().to_string());
     if !exit.success() {
-        bail!("qemu exited with {exit}");
+        return Err(with_stopping_report_error(
+            anyhow::anyhow!("qemu exited with {exit}"),
+            stopping_report_error.as_ref(),
+        ));
+    }
+    if let Some(report_error) = stopping_report_error {
+        bail!(
+            "failed to persist post-exit desktop evidence: {report_error:#}; terminal report: {}",
+            report_path.display()
+        );
     }
     Ok(())
 }

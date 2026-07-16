@@ -38,6 +38,12 @@ the registry in `commands/emu/workflow.rs`, and `check` is sugar for
 environment, Enter boots it, a space-armed Enter runs the check, Enter
 while active sends `down`. Remaining: adapter registry, the grid.
 
+The isolated parallel workflow amendment of 2026-07-16 makes verified host
+process-tree containment a launch capability. Linux cgroup v2 and Windows Job
+Objects satisfy it. macOS environments remain discoverable, but launches fail
+closed until an owner-death-safe containment backend replaces the former
+process-group-only behavior.
+
 ## Purpose
 
 qol-tools promises: walk up to any machine, inject qol-tray, it becomes yours, pull the
@@ -177,10 +183,10 @@ screenshot comparison.
 
 ## Substrate is a strategy
 
-- `Machine` is a trait. **QEMU is the default impl** and the only universal one:
-  cross-host (Linux / macOS / Windows), cross-guest (widest arch range), uniformly
-  controllable through QMP (one protocol on every host), free, and disposable via qcow2
-  overlays.
+- `Machine` is a trait. **QEMU is the default impl**: cross-guest (widest arch range),
+  uniformly controllable through QMP, free, and disposable via qcow2 overlays. A host
+  supports launch only when both QEMU and verified owner-death-safe process-tree
+  containment are available; discovery remains cross-host even when launch is unsupported.
 - **Cheapest-honest-substrate rule:** a workflow's required verbs choose the substrate.
   Container / microVM (Firecracker) / Apple Virtualization.framework are deferred,
   specialized impls. They cannot be chosen for verbs they cannot honestly provide (a

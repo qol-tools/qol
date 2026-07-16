@@ -541,8 +541,25 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
         format!("{} · close the VM window to end", vm.run_id)
     };
     step_label("running", StepKind::Success, &running);
-    let exit = vm.wait()?;
-    let (report_path, removed) = finalize_vm(vm, exit, None, "up")?;
+    let (exit, stopping_report_error) =
+        passive_wait_then_record_stopping(&mut vm, BootedVm::wait, |vm| {
+            vm.write_stopping_report(None, "up")
+        })?;
+    let finalized = finalize_vm(vm, exit, None, "up");
+    let (report_path, removed) = match finalized {
+        Ok(finalized) => finalized,
+        Err(finalize_error) => {
+            let finalize_error = if exit.success() {
+                finalize_error
+            } else {
+                anyhow!("qemu exited with {exit}; finalization failed: {finalize_error:#}")
+            };
+            return Err(with_stopping_report_error(
+                finalize_error,
+                stopping_report_error.as_ref(),
+            ));
+        }
+    };
     step_label(
         "clean",
         StepKind::Success,
@@ -550,7 +567,16 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
     );
     step_label("report", StepKind::Info, &report_path.display().to_string());
     if !exit.success() {
-        bail!("qemu exited with {exit}");
+        return Err(with_stopping_report_error(
+            anyhow!("qemu exited with {exit}"),
+            stopping_report_error.as_ref(),
+        ));
+    }
+    if let Some(report_error) = stopping_report_error {
+        bail!(
+            "failed to persist post-exit lifecycle evidence: {report_error:#}; terminal report: {}",
+            report_path.display()
+        );
     }
     Ok(())
 }
@@ -622,7 +648,6 @@ fn run_workflow(
         }
         workflow::Definition::Desktop { run, .. } => workflow::run_desktop(&vm, run),
     };
-    let exit = shutdown_vm(&mut vm)?;
     let workflow_report = match &outcome {
         Ok(verdict) => json!({
             "id": workflow_id,
@@ -636,13 +661,44 @@ fn run_workflow(
             "error": error.to_string(),
         }),
     };
-    let (report_path, removed) = finalize_vm(vm, exit, Some(workflow_report), command_name)?;
+    let stopping_report = vm.write_stopping_report(Some(workflow_report.clone()), command_name);
+    let shutdown = shutdown_after_report_attempt(stopping_report, || shutdown_vm(&mut vm));
+    let (exit, stopping_report_error) = match shutdown {
+        Ok(shutdown) => shutdown,
+        Err(shutdown_error) => {
+            return match &outcome {
+                Ok(_) => Err(shutdown_error),
+                Err(workflow_error) => Err(anyhow!("{workflow_error:#}; {shutdown_error:#}")),
+            }
+        }
+    };
+    let finalized = finalize_vm(vm, exit, Some(workflow_report), command_name);
+    let (report_path, removed) = match finalized {
+        Ok(finalized) => finalized,
+        Err(error) => {
+            let error = with_stopping_report_error(error, stopping_report_error.as_ref());
+            return match &outcome {
+                Ok(_) => Err(error),
+                Err(workflow_error) => Err(anyhow!("{workflow_error:#}; {error:#}")),
+            };
+        }
+    };
     step_label(
         "clean",
         StepKind::Success,
         &format!("removed {} disposable file(s)", removed.len()),
     );
     step_label("report", StepKind::Info, &report_path.display().to_string());
+    if let Some(report_error) = stopping_report_error {
+        let error = anyhow!(
+            "failed to persist pre-shutdown workflow evidence: {report_error:#}; terminal report: {}",
+            report_path.display()
+        );
+        return match outcome {
+            Ok(_) => Err(error),
+            Err(workflow_error) => Err(anyhow!("{workflow_error:#}; {error:#}")),
+        };
+    }
     let verdict = outcome?;
     if !verdict.pass {
         bail!(
@@ -702,6 +758,38 @@ fn shutdown_vm(vm: &mut BootedVm) -> Result<ExitStatus> {
     vm.wait()
 }
 
+fn shutdown_after_report_attempt<T>(
+    report: Result<()>,
+    shutdown: impl FnOnce() -> Result<T>,
+) -> Result<(T, Option<anyhow::Error>)> {
+    let report_error = report.err();
+    match shutdown() {
+        Ok(output) => Ok((output, report_error)),
+        Err(error) => Err(with_stopping_report_error(error, report_error.as_ref())),
+    }
+}
+
+fn passive_wait_then_record_stopping<V, T>(
+    value: &mut V,
+    wait: impl FnOnce(&mut V) -> Result<T>,
+    record_stopping: impl FnOnce(&V) -> Result<()>,
+) -> Result<(T, Option<anyhow::Error>)> {
+    let output = wait(value)?;
+    Ok((output, record_stopping(value).err()))
+}
+
+fn with_stopping_report_error(
+    error: anyhow::Error,
+    report_error: Option<&anyhow::Error>,
+) -> anyhow::Error {
+    match report_error {
+        Some(report_error) => anyhow!(
+            "{error:#}; failed to persist pre-shutdown lifecycle evidence: {report_error:#}"
+        ),
+        None => error,
+    }
+}
+
 struct BootedVm {
     run_id: String,
     launch: launch::LaunchOptions,
@@ -715,6 +803,7 @@ struct BootedVm {
     guest_control_port: u16,
     qemu_version: String,
     vm_status: String,
+    runtime: RuntimeEvidence,
     child: machine::VmLifecycle,
     admission: EmuAdmission,
     started_at: u64,
@@ -727,6 +816,42 @@ impl BootedVm {
 
     fn terminate(&mut self) -> Result<ExitStatus> {
         self.child.terminate()
+    }
+
+    fn write_stopping_report(
+        &self,
+        workflow: Option<serde_json::Value>,
+        command_name: &str,
+    ) -> Result<()> {
+        let report = with_spawn_state(
+            report_json(ReportInput {
+                run_id: &self.run_id,
+                command_name,
+                launch: &self.launch,
+                environment: &self.environment,
+                resolution: &self.resolution,
+                run_dir: &self.run_dir,
+                status: "stopping",
+                overlay: None,
+                qemu_command: Some(&self.qemu_command_path),
+                commands: self.commands.clone(),
+                qmp: Some(json!({
+                    "port": self.qmp_port,
+                    "qemu_version": self.qemu_version,
+                    "status": self.vm_status,
+                })),
+                serial: Some(json!({ "port": self.serial_port })),
+                guest_control: Some(json!({ "port": self.guest_control_port })),
+                runtime: Some(&self.runtime),
+                workflow,
+                teardown: None,
+                next: vec!["Wait for verified VM cleanup to complete.".to_string()],
+                started_at: self.started_at,
+            })?,
+            "spawned",
+            &self.run_dir.join("qemu.pid"),
+        );
+        write_report(&self.run_dir, &report)
     }
 }
 
@@ -1000,6 +1125,7 @@ fn boot_vm_with_admission(
         Some(cleanup_tracker) => machine::VmLifecycle::tracked(&run_dir, cleanup_tracker),
         None => machine::VmLifecycle::new(&run_dir),
     };
+    let supervisor_runtime = RuntimeEvidence::capture_supervisor()?;
     let pidfile_path = run_dir.join("qemu.pid");
     let preparing_report = with_spawn_state(
         report_json(ReportInput {
@@ -1016,7 +1142,7 @@ fn boot_vm_with_admission(
             qmp: None,
             serial: None,
             guest_control: None,
-            runtime: Some(json!({ "supervisor_pid": std::process::id() })),
+            runtime: Some(&supervisor_runtime),
             workflow: None,
             teardown: None,
             next: vec!["Wait for the disposable machine to finish preparing.".to_string()],
@@ -1206,7 +1332,7 @@ fn boot_vm_with_admission(
             qmp: Some(json!({ "port": qmp_port })),
             serial: Some(json!({ "port": serial_port })),
             guest_control: Some(json!({ "port": guest_control_port })),
-            runtime: Some(json!({ "supervisor_pid": std::process::id() })),
+            runtime: Some(&supervisor_runtime),
             workflow: None,
             teardown: None,
             next: vec!["Wait for QEMU to publish its process identity.".to_string()],
@@ -1230,6 +1356,72 @@ fn boot_vm_with_admission(
     ) {
         Ok(pid) => pid,
         Err(error) => {
+            let cleanup_pending = lifecycle.spawn_cleanup_pending();
+            let stopping_report_error = if cleanup_pending {
+                let report = with_spawn_state(
+                    report_json(ReportInput {
+                        run_id: &run_id,
+                        command_name,
+                        launch: &launch,
+                        environment: &environment,
+                        resolution: &resolution,
+                        run_dir: &run_dir,
+                        status: "stopping",
+                        overlay: prepared.overlay_artifact.as_deref(),
+                        qemu_command: Some(&qemu_command_path),
+                        commands: commands.clone(),
+                        qmp: Some(json!({ "port": qmp_port })),
+                        serial: Some(json!({ "port": serial_port })),
+                        guest_control: Some(json!({ "port": guest_control_port })),
+                        runtime: Some(&supervisor_runtime),
+                        workflow: None,
+                        teardown: None,
+                        next: vec!["Wait for pending QEMU spawn cleanup.".to_string()],
+                        started_at,
+                    })?,
+                    "cleanup-pending",
+                    &pidfile_path,
+                );
+                write_report(&run_dir, &report).err()
+            } else {
+                None
+            };
+            if cleanup_pending {
+                if let Err(cleanup_error) = lifecycle.recover_spawn_failure() {
+                    let report = spawn_cleanup_incomplete_report(
+                        report_json(ReportInput {
+                            run_id: &run_id,
+                            command_name,
+                            launch: &launch,
+                            environment: &environment,
+                            resolution: &resolution,
+                            run_dir: &run_dir,
+                            status: "stopping",
+                            overlay: prepared.overlay_artifact.as_deref(),
+                            qemu_command: Some(&qemu_command_path),
+                            commands,
+                            qmp: Some(json!({ "port": qmp_port })),
+                            serial: Some(json!({ "port": serial_port })),
+                            guest_control: Some(json!({ "port": guest_control_port })),
+                            runtime: Some(&supervisor_runtime),
+                            workflow: None,
+                            teardown: None,
+                            next: Vec::new(),
+                            started_at,
+                        })?,
+                        &pidfile_path,
+                        &error,
+                        &cleanup_error,
+                    );
+                    let report_error = write_report(&run_dir, &report).err();
+                    return Err(spawn_cleanup_error(
+                        error,
+                        cleanup_error,
+                        stopping_report_error,
+                        report_error,
+                    ));
+                }
+            }
             lifecycle.finish(|removed| {
                 let report = report_json(ReportInput {
                     run_id: &run_id,
@@ -1245,7 +1437,7 @@ fn boot_vm_with_admission(
                     qmp: Some(json!({ "port": qmp_port })),
                     serial: Some(json!({ "port": serial_port })),
                     guest_control: Some(json!({ "port": guest_control_port })),
-                    runtime: Some(json!({ "supervisor_pid": std::process::id() })),
+                    runtime: Some(&supervisor_runtime),
                     workflow: None,
                     teardown: Some(CompletedTeardown::verified(removed)),
                     next: boot_failure_next(command_name, arch_guess),
@@ -1253,9 +1445,13 @@ fn boot_vm_with_admission(
                 })?;
                 write_report(&run_dir, &report)
             })?;
-            return Err(error);
+            return Err(with_stopping_report_error(
+                error,
+                stopping_report_error.as_ref(),
+            ));
         }
     };
+    let (runtime, runtime_identity_error) = supervisor_runtime.with_qemu(qemu_pid);
     let starting_report = with_spawn_state(
         report_json(ReportInput {
             run_id: &run_id,
@@ -1271,10 +1467,7 @@ fn boot_vm_with_admission(
             qmp: Some(json!({ "port": qmp_port })),
             serial: Some(json!({ "port": serial_port })),
             guest_control: Some(json!({ "port": guest_control_port })),
-            runtime: Some(json!({
-                "supervisor_pid": std::process::id(),
-                "qemu_pid": qemu_pid,
-            })),
+            runtime: Some(&runtime),
             workflow: None,
             teardown: None,
             next: vec!["Wait for the QMP handshake to complete.".to_string()],
@@ -1284,16 +1477,47 @@ fn boot_vm_with_admission(
         &pidfile_path,
     );
     write_report(&run_dir, &starting_report)?;
-    let handshake =
-        qmp::connect_verified(qmp_port, Duration::from_secs(10), &run_id).and_then(|mut client| {
-            let status = client.query_status()?;
-            Ok((client.qemu_version.clone(), status))
-        });
+    let handshake = match runtime_identity_error {
+        Some(error) => Err(error),
+        None => qmp::connect_verified(qmp_port, Duration::from_secs(10), &run_id).and_then(
+            |mut client| {
+                let status = client.query_status()?;
+                Ok((client.qemu_version.clone(), status))
+            },
+        ),
+    };
     let (qemu_version, vm_status) = match handshake {
         Ok(values) => values,
         Err(error) => {
-            let exit = lifecycle.terminate()?;
-            lifecycle.finish(|removed| {
+            let stopping_report = with_spawn_state(
+                report_json(ReportInput {
+                    run_id: &run_id,
+                    command_name,
+                    launch: &launch,
+                    environment: &environment,
+                    resolution: &resolution,
+                    run_dir: &run_dir,
+                    status: "stopping",
+                    overlay: prepared.overlay_artifact.as_deref(),
+                    qemu_command: Some(&qemu_command_path),
+                    commands: commands.clone(),
+                    qmp: Some(json!({ "port": qmp_port, "error": error.to_string() })),
+                    serial: Some(json!({ "port": serial_port })),
+                    guest_control: Some(json!({ "port": guest_control_port })),
+                    runtime: Some(&runtime),
+                    workflow: None,
+                    teardown: None,
+                    next: boot_failure_next(command_name, arch_guess),
+                    started_at,
+                })?,
+                "spawned",
+                &pidfile_path,
+            );
+            let stopping_report = write_report(&run_dir, &stopping_report);
+            let (exit, stopping_report_error) =
+                shutdown_after_report_attempt(stopping_report, || lifecycle.terminate())
+                    .context("qmp handshake failed and qemu cleanup did not complete")?;
+            let terminal = lifecycle.finish(|removed| {
                 let report = report_json(ReportInput {
                     run_id: &run_id,
                     command_name,
@@ -1308,17 +1532,25 @@ fn boot_vm_with_admission(
                     qmp: Some(json!({ "port": qmp_port, "error": error.to_string() })),
                     serial: Some(json!({ "port": serial_port })),
                     guest_control: Some(json!({ "port": guest_control_port })),
-                    runtime: Some(json!({
-                        "supervisor_pid": std::process::id(),
-                        "qemu_pid": qemu_pid,
-                    })),
+                    runtime: Some(&runtime),
                     workflow: None,
                     teardown: Some(CompletedTeardown::verified(removed).with_exit(exit)),
                     next: boot_failure_next(command_name, arch_guess),
                     started_at,
                 })?;
                 write_report(&run_dir, &report)
-            })?;
+            });
+            if let Err(terminal_error) = terminal {
+                return Err(with_stopping_report_error(
+                    terminal_error.context(format!("qmp handshake failed: {error:#}")),
+                    stopping_report_error.as_ref(),
+                ));
+            }
+            if let Some(report_error) = stopping_report_error {
+                bail!(
+                    "qmp handshake failed: {error:#}; pre-shutdown report failed: {report_error:#}"
+                );
+            }
             bail!("qmp handshake failed: {error:#}");
         }
     };
@@ -1353,10 +1585,7 @@ fn boot_vm_with_admission(
             ),
             serial: Some(json!({ "port": serial_port })),
             guest_control: Some(json!({ "port": guest_control_port })),
-            runtime: Some(json!({
-                "supervisor_pid": std::process::id(),
-                "qemu_pid": qemu_pid,
-            })),
+            runtime: Some(&runtime),
             workflow: None,
             teardown: None,
             next,
@@ -1379,6 +1608,7 @@ fn boot_vm_with_admission(
         guest_control_port,
         qemu_version,
         vm_status,
+        runtime,
         child: lifecycle,
         admission,
         started_at,
@@ -1489,13 +1719,11 @@ fn finalize_vm_with_status(
         guest_control_port,
         qemu_version,
         vm_status,
+        runtime,
         child: mut lifecycle,
         admission,
         started_at,
     } = vm;
-    let qemu_pid = lifecycle
-        .pid()
-        .ok_or_else(|| anyhow!("booted VM has no qemu process"))?;
     let report_path = run_dir.join("report.json");
     let ((), removed) = lifecycle.finish(|removed| {
         let report = report_json(ReportInput {
@@ -1514,10 +1742,7 @@ fn finalize_vm_with_status(
             ),
             serial: Some(json!({ "port": serial_port })),
             guest_control: Some(json!({ "port": guest_control_port })),
-            runtime: Some(json!({
-                "supervisor_pid": std::process::id(),
-                "qemu_pid": qemu_pid,
-            })),
+            runtime: Some(&runtime),
             workflow,
             teardown: Some(CompletedTeardown::verified(removed).with_exit(exit)),
             next: vec![format!(
@@ -1680,7 +1905,7 @@ fn print_emu_help() {
 }
 
 fn emu_help_text() -> String {
-    format!("qol emu commands:\n  qol emu list\n  {ADD_SYNTAX}\n  qol emu open\n  qol emu doctor\n  qol emu desktop mintish <environment>\n  qol emu up <environment|image> [launch options]\n  qol emu run <workflow> <environment|image> [launch options]\n  qol emu check <environment|image> [launch options]\n  qol emu shot [--run-root PATH]... <run-id|environment>\n  qol emu key [--run-root PATH]... <run-id|environment> <qcode>...\n  qol emu insert [--run-root PATH]... <run-id|environment>\n  qol emu pull [--run-root PATH]... <run-id|environment>\n  qol emu snap [--run-root PATH]... <run-id|environment>\n  qol emu sh [--run-root PATH]... <run-id|environment> <command>...\n  qol emu down [--run-root PATH]... <run-id|environment>\n\nLaunch options:\n  --windowed --headless --offline --memory-mb N --cpus N\n  --run-id ID --run-root PATH --environment-id ID\n  --image-kind qcow2|raw|img|iso\n  --guest-adapter debian-nocloud|mint-cinnamon\n  --acceleration hardware|allow-tcg --arch x86_64|aarch64\n  --firmware bios|uefi\n\nLaunches are headless unless --windowed is explicit. --offline disconnects the\nguest from host networking. Control verbs prefer an exact run ID. An\nenvironment ID works only when one matching run is live. Control --run-root is\nrepeatable; without it, control uses target/qol-emu.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nDrop a disk image or .iso into the emu dir (`qol emu open`) and it appears in\n`qol emu list`; `qol emu up <id>` boots it headlessly (an .iso boots as a\ndisposable live CD). Pass --windowed for an interactive VM window.\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n")
+    format!("qol emu commands:\n  qol emu list\n  {ADD_SYNTAX}\n  qol emu open\n  qol emu doctor\n  qol emu desktop mintish <environment>\n  qol emu up <environment|image> [launch options]\n  qol emu run <workflow> <environment|image> [launch options]\n  qol emu check <environment|image> [launch options]\n  qol emu shot [--run-root PATH]... <run-id|environment>\n  qol emu key [--run-root PATH]... <run-id|environment> <qcode>...\n  qol emu insert [--run-root PATH]... <run-id|environment>\n  qol emu pull [--run-root PATH]... <run-id|environment>\n  qol emu snap [--run-root PATH]... <run-id|environment>\n  qol emu sh [--run-root PATH]... [--] <run-id|environment> <command>...\n  qol emu down [--run-root PATH]... <run-id|environment>\n\nLaunch options:\n  --windowed --headless --offline --memory-mb N --cpus N\n  --run-id ID --run-root PATH --environment-id ID\n  --image-kind qcow2|raw|img|iso\n  --guest-adapter debian-nocloud|mint-cinnamon\n  --acceleration hardware|allow-tcg --arch x86_64|aarch64\n  --firmware bios|uefi\n\nLaunches are headless unless --windowed is explicit. --offline disconnects the\nguest from host networking. Control verbs prefer an exact run ID. An\nenvironment ID works only when one matching run is live. Control --run-root is\nrepeatable, must precede the selector, and defaults to target/qol-emu. Sandbox\nlaunches require verified host process-tree containment; unsupported hosts stay\nvisible but cannot start a VM. For sh,\nevery word after the selector is forwarded literally, including a leading --.\nPlace -- before the selector to stop global option parsing without forwarding it.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nDrop a disk image or .iso into the emu dir (`qol emu open`) and it appears in\n`qol emu list`; `qol emu up <id>` boots it headlessly (an .iso boots as a\ndisposable live CD). Pass --windowed for an interactive VM window.\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n")
 }
 
 pub(crate) fn discover_all() -> Result<Discovered> {
@@ -1730,6 +1955,17 @@ fn resolve_environment_with(
             }
         }
     };
+    if let Err(reason) = process_containment_supported() {
+        return Resolution {
+            state: ResolveState::Unsupported,
+            reason,
+            image_path: environment.image_path.clone(),
+            qemu_system: Some(backend.qemu_system),
+            qemu_img: backend.qemu_img,
+            acceleration: backend.acceleration,
+            firmware: backend.firmware,
+        };
+    }
     match image_path_status(&environment.image_path) {
         Ok(canonical) => Resolution {
             state: ResolveState::Ready,
@@ -1750,6 +1986,11 @@ fn resolve_environment_with(
             firmware: backend.firmware,
         },
     }
+}
+
+pub(crate) fn process_containment_supported() -> std::result::Result<(), String> {
+    qol_process::process_tree_containment_support()
+        .map_err(|error| format!("process containment unavailable: {error}"))
 }
 
 pub(crate) fn resolve_backend(spec: BackendSpec) -> std::result::Result<ReadyBackend, String> {
@@ -2034,11 +2275,53 @@ struct ReportInput<'a> {
     qmp: Option<serde_json::Value>,
     serial: Option<serde_json::Value>,
     guest_control: Option<serde_json::Value>,
-    runtime: Option<serde_json::Value>,
+    runtime: Option<&'a RuntimeEvidence>,
     workflow: Option<serde_json::Value>,
     teardown: Option<CompletedTeardown<'a>>,
     next: Vec<String>,
     started_at: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct RuntimeEvidence {
+    supervisor_pid: u32,
+    supervisor_process_identity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qemu_pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qemu_process_identity: Option<String>,
+}
+
+impl RuntimeEvidence {
+    fn capture_supervisor() -> Result<Self> {
+        let supervisor_pid = std::process::id();
+        let supervisor_process_identity = qol_process::process_identity(supervisor_pid)
+            .context("failed to capture the emu supervisor process identity")?;
+        Ok(Self {
+            supervisor_pid,
+            supervisor_process_identity,
+            qemu_pid: None,
+            qemu_process_identity: None,
+        })
+    }
+
+    fn with_qemu(&self, qemu_pid: u32) -> (Self, Option<anyhow::Error>) {
+        let identity = qol_process::process_identity(qemu_pid)
+            .with_context(|| format!("failed to capture qemu process identity for PID {qemu_pid}"));
+        let (qemu_process_identity, error) = match identity {
+            Ok(identity) => (Some(identity), None),
+            Err(error) => (None, Some(error)),
+        };
+        (
+            Self {
+                supervisor_pid: self.supervisor_pid,
+                supervisor_process_identity: self.supervisor_process_identity.clone(),
+                qemu_pid: Some(qemu_pid),
+                qemu_process_identity,
+            },
+            error,
+        )
+    }
 }
 
 #[derive(Serialize)]
@@ -2074,6 +2357,49 @@ fn with_spawn_state(mut report: Value, state: &str, pidfile: &Path) -> Value {
         "pidfile": pidfile,
     });
     report
+}
+
+fn spawn_cleanup_incomplete_report(
+    mut report: Value,
+    pidfile: &Path,
+    spawn_error: &anyhow::Error,
+    cleanup_error: &anyhow::Error,
+) -> Value {
+    report["status"] = json!("cleanup-incomplete");
+    report["spawn"] = json!({
+        "state": "cleanup-pending",
+        "pidfile": pidfile,
+    });
+    report["teardown"] = json!({
+        "status": "incomplete",
+        "phase": "spawn-cleanup",
+        "error": format!("qemu spawn failed: {spawn_error:#}; cleanup failed: {cleanup_error:#}"),
+        "qemu_exit_verified": false,
+        "tree_exit_verified": false,
+        "removed": [],
+    });
+    report["next"] = json!(["Run `qol env doctor` after the process guardian finishes recovery."]);
+    if report.get("owner").is_some() {
+        report["owner"]["state"] = json!("orphaned");
+    }
+    report
+}
+
+fn spawn_cleanup_error(
+    spawn_error: anyhow::Error,
+    cleanup_error: anyhow::Error,
+    stopping_report_error: Option<anyhow::Error>,
+    incomplete_report_error: Option<anyhow::Error>,
+) -> anyhow::Error {
+    let mut detail =
+        format!("{spawn_error:#}; pending qemu spawn cleanup failed: {cleanup_error:#}");
+    if let Some(error) = stopping_report_error {
+        detail.push_str(&format!("; stopping report failed: {error:#}"));
+    }
+    if let Some(error) = incomplete_report_error {
+        detail.push_str(&format!("; cleanup-incomplete report failed: {error:#}"));
+    }
+    anyhow!(detail)
 }
 
 fn report_json(input: ReportInput<'_>) -> Result<serde_json::Value> {
@@ -2160,7 +2486,7 @@ fn report_json(input: ReportInput<'_>) -> Result<serde_json::Value> {
 fn write_report(run_dir: &Path, report: &serde_json::Value) -> Result<()> {
     let path = run_dir.join("report.json");
     let content = serde_json::to_string_pretty(report).context("failed to serialize report")?;
-    qol_fs::atomic_write(&path, format!("{content}\n").as_bytes())
+    qol_fs::atomic_write_durable(&path, format!("{content}\n").as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))
 }
 
@@ -2243,9 +2569,74 @@ mod tests {
     use super::*;
 
     #[test]
+    fn passive_wait_keeps_running_status_until_exit_is_observed() {
+        let mut states = vec!["running"];
+
+        let (_, report_error) = passive_wait_then_record_stopping(
+            &mut states,
+            |states| {
+                assert_eq!(states.last(), Some(&"running"));
+                states.push("exited");
+                Ok(())
+            },
+            |states| {
+                assert_eq!(states.last(), Some(&"exited"));
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(report_error.is_none());
+        assert_eq!(states, ["running", "exited"]);
+    }
+
+    fn report_environment() -> Environment {
+        Environment {
+            id: "foo".to_string(),
+            name: "Foo".to_string(),
+            backend: "qemu".to_string(),
+            arch: GuestArch::X86_64,
+            image_path: PathBuf::from("/a/b/base.qcow2"),
+            source: "config".to_string(),
+            firmware: Firmware::Uefi,
+            media: BootMedia::Disk,
+        }
+    }
+
+    fn report_resolution() -> Resolution {
+        Resolution {
+            state: ResolveState::Ready,
+            reason: "ready".to_string(),
+            image_path: PathBuf::from("/a/b/base.qcow2"),
+            qemu_system: None,
+            qemu_img: None,
+            acceleration: "kvm",
+            firmware: None,
+        }
+    }
+
+    fn report_launch() -> launch::LaunchOptions {
+        let mut launch = launch::LaunchOptions::new("foo");
+        launch.guest_adapter = Some(GuestAdapter::DebianNocloud);
+        launch
+    }
+
+    #[test]
     fn sanitizes_domain_names_for_cli_ids() {
         assert_eq!(sanitize_id("Windows 11 Pro"), "windows-11-pro");
         assert_eq!(sanitize_id("!!!"), "emu");
+    }
+
+    #[test]
+    fn help_documents_control_and_containment_contracts() {
+        let help = emu_help_text();
+        assert!(help.contains("[--] <run-id|environment> <command>..."));
+        assert!(help.contains(
+            "every word after the selector is forwarded literally, including a leading --"
+        ));
+        assert!(help.contains(
+            "launches require verified host process-tree containment; unsupported hosts stay"
+        ));
     }
 
     #[cfg(unix)]
@@ -2264,27 +2655,9 @@ mod tests {
 
     #[test]
     fn report_json_serializes_firmware_and_guest_adapter() {
-        let environment = Environment {
-            id: "foo".to_string(),
-            name: "Foo".to_string(),
-            backend: "qemu".to_string(),
-            arch: GuestArch::X86_64,
-            image_path: PathBuf::from("/a/b/base.qcow2"),
-            source: "config".to_string(),
-            firmware: Firmware::Uefi,
-            media: BootMedia::Disk,
-        };
-        let resolution = Resolution {
-            state: ResolveState::Ready,
-            reason: "ready".to_string(),
-            image_path: PathBuf::from("/a/b/base.qcow2"),
-            qemu_system: None,
-            qemu_img: None,
-            acceleration: "kvm",
-            firmware: None,
-        };
-        let mut launch = launch::LaunchOptions::new("foo");
-        launch.guest_adapter = Some(GuestAdapter::DebianNocloud);
+        let environment = report_environment();
+        let resolution = report_resolution();
+        let launch = report_launch();
         let removed = vec![PathBuf::from("/a/b/run/disk.qcow2")];
         let make_report = |status, teardown| {
             report_json(ReportInput {
@@ -2313,6 +2686,9 @@ mod tests {
         assert_eq!(running["environment"]["firmware"], "uefi");
         assert_eq!(running["launch"]["guest_adapter"], "debian-nocloud");
         assert!(running.get("finished_at_unix_ms").is_none());
+        let stopping = make_report("stopping", None).unwrap();
+        assert!(stopping.get("finished_at_unix_ms").is_none());
+        assert!(stopping["teardown"].is_null());
         let terminal = make_report("pass", Some(CompletedTeardown::verified(&removed))).unwrap();
         assert!(terminal.get("finished_at_unix_ms").is_some());
         assert_eq!(terminal["teardown"]["status"], "complete");
@@ -2378,6 +2754,172 @@ mod tests {
         for (exit_success, workflow, expected) in cases {
             assert_eq!(final_status(exit_success, workflow), expected);
         }
+    }
+
+    #[test]
+    fn shutdown_is_attempted_after_pre_shutdown_report_failure() {
+        let attempts = std::cell::Cell::new(0);
+        let report = Err(anyhow!("report unavailable"));
+
+        let (output, report_error) = shutdown_after_report_attempt(report, || {
+            attempts.set(attempts.get() + 1);
+            Ok(42)
+        })
+        .unwrap();
+
+        assert_eq!(output, 42);
+        assert_eq!(attempts.get(), 1);
+        assert!(report_error
+            .unwrap()
+            .to_string()
+            .contains("report unavailable"));
+
+        let report = Err(anyhow!("report unavailable"));
+        let error = shutdown_after_report_attempt::<()>(report, || {
+            attempts.set(attempts.get() + 1);
+            Err(anyhow!("shutdown failed"))
+        })
+        .unwrap_err();
+
+        assert_eq!(attempts.get(), 2);
+        let detail = format!("{error:#}");
+        assert!(detail.contains("report unavailable"));
+        assert!(detail.contains("shutdown failed"));
+    }
+
+    #[test]
+    fn pending_spawn_cleanup_report_never_claims_verified_teardown() {
+        let report = json!({
+            "status": "stopping",
+            "owner": { "state": "stopping" }
+        });
+        let report = spawn_cleanup_incomplete_report(
+            report,
+            Path::new("/runs/foo/qemu.pid"),
+            &anyhow!("spawn failed"),
+            &anyhow!("cleanup failed"),
+        );
+
+        assert_eq!(report["status"], "cleanup-incomplete");
+        assert_eq!(report["spawn"]["state"], "cleanup-pending");
+        assert_eq!(report["teardown"]["status"], "incomplete");
+        assert_eq!(report["teardown"]["qemu_exit_verified"], false);
+        assert_eq!(report["teardown"]["tree_exit_verified"], false);
+        assert_eq!(report["owner"]["state"], "orphaned");
+    }
+
+    fn spawn_runtime_qemu_helper(wait_ms: u64) -> std::process::Child {
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "commands::emu::tests::runtime_qemu_process_helper",
+            ])
+            .env("QOL_EMU_RUNTIME_HELPER_WAIT_MS", wait_ms.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    #[test]
+    fn runtime_qemu_process_helper() {
+        let Some(wait_ms) = std::env::var_os("QOL_EMU_RUNTIME_HELPER_WAIT_MS") else {
+            return;
+        };
+        let wait_ms = wait_ms.to_string_lossy().parse().unwrap();
+        std::thread::sleep(Duration::from_millis(wait_ms));
+    }
+
+    #[test]
+    fn starting_report_survives_qemu_exit_before_identity_capture() {
+        let root = tempfile::tempdir().unwrap();
+        let run_dir = root.path().join("run");
+        fs::create_dir(&run_dir).unwrap();
+        let mut qemu = spawn_runtime_qemu_helper(0);
+        let qemu_pid = qemu.id();
+        assert!(qemu.wait().unwrap().success());
+        let supervisor_runtime = RuntimeEvidence::capture_supervisor().unwrap();
+        let (runtime, identity_error) = supervisor_runtime.with_qemu(qemu_pid);
+        assert!(identity_error.is_some());
+        let environment = report_environment();
+        let resolution = report_resolution();
+        let launch = report_launch();
+
+        let report = report_json(ReportInput {
+            run_id: "qemu-exited-before-starting",
+            command_name: "up",
+            launch: &launch,
+            environment: &environment,
+            resolution: &resolution,
+            run_dir: &run_dir,
+            status: "starting",
+            overlay: None,
+            qemu_command: None,
+            commands: Vec::new(),
+            qmp: Some(json!({ "port": 1 })),
+            serial: Some(json!({ "port": 2 })),
+            guest_control: Some(json!({ "port": 3 })),
+            runtime: Some(&runtime),
+            workflow: None,
+            teardown: None,
+            next: Vec::new(),
+            started_at: 1,
+        })
+        .unwrap();
+        write_report(&run_dir, &report).unwrap();
+
+        let persisted: Value =
+            serde_json::from_slice(&fs::read(run_dir.join("report.json")).unwrap()).unwrap();
+        assert_eq!(persisted["status"], "starting");
+        assert_eq!(persisted["runtime"]["qemu_pid"], qemu_pid);
+        assert!(persisted["runtime"].get("qemu_process_identity").is_none());
+    }
+
+    #[test]
+    fn finish_image_import_vm_reuses_identity_captured_before_qemu_exit() {
+        let root = tempfile::tempdir().unwrap();
+        let run_dir = root.path().join("run");
+        fs::create_dir(&run_dir).unwrap();
+        let overlay = run_dir.join("overlay.qcow2");
+        fs::write(&overlay, b"overlay").unwrap();
+        let mut qemu = spawn_runtime_qemu_helper(200);
+        let qemu_pid = qemu.id();
+        let supervisor_runtime = RuntimeEvidence::capture_supervisor().unwrap();
+        let (runtime, identity_error) = supervisor_runtime.with_qemu(qemu_pid);
+        assert!(identity_error.is_none());
+        let qemu_identity = runtime.qemu_process_identity.clone().unwrap();
+        let exit = qemu.wait().unwrap();
+        assert!(exit.success());
+        let mut launch = report_launch();
+        launch.worktree = Some(root.path().to_path_buf());
+        let vm = BootedVm {
+            run_id: "image-import-runtime-reuse".to_string(),
+            launch,
+            environment: report_environment(),
+            resolution: report_resolution(),
+            run_dir: run_dir.clone(),
+            qemu_command_path: run_dir.join("qemu-command.txt"),
+            commands: Vec::new(),
+            qmp_port: 1,
+            serial_port: 2,
+            guest_control_port: 3,
+            qemu_version: "test".to_string(),
+            vm_status: "shutdown".to_string(),
+            runtime,
+            child: machine::VmLifecycle::new(&run_dir),
+            admission: EmuAdmission::ExternallyReserved,
+            started_at: 1,
+        };
+
+        let (report_path, removed) =
+            finish_image_import_vm(vm, exit, json!({ "verdict": "pass" })).unwrap();
+
+        assert_eq!(removed, vec![overlay]);
+        let persisted: Value = serde_json::from_slice(&fs::read(report_path).unwrap()).unwrap();
+        assert_eq!(persisted["status"], "stopping");
+        assert_eq!(persisted["runtime"]["qemu_pid"], qemu_pid);
+        assert_eq!(persisted["runtime"]["qemu_process_identity"], qemu_identity);
+        assert_eq!(persisted["teardown"]["status"], "complete");
     }
 
     #[test]

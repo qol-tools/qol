@@ -282,60 +282,49 @@ fn convert_sparse(
         .args(&args)
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr));
+    let process_tree = crate::process_guardian::own_process_tree()
+        .context("failed to create qemu-img process-tree ownership")?;
     qol_process::isolate_owned_command(&mut command)
         .context("failed to isolate qemu-img process tree")?;
-    let process_tree = qol_process::own_current_process_tree()
-        .context("failed to create qemu-img process-tree ownership")?;
-    let mut child = match command.spawn() {
+    let prepared = process_tree
+        .prepare_command(command)
+        .context("failed to contain qemu-img before exec")?;
+    let mut child = match prepared.spawn() {
         Ok(child) => child,
         Err(error) => {
-            let error = anyhow!(error).context(format!("failed to spawn {}", qemu_img.display()));
-            let detail = format!("{error:#}");
+            let cleanup_pending =
+                error.cleanup() == qol_process::PreparedSpawnCleanup::RecoveryPending;
+            let failure = anyhow!(error).context(format!("failed to spawn {}", qemu_img.display()));
+            let detail = format!("{failure:#}");
             write_conversion_journal(ConversionJournal {
                 run_id,
                 program: qemu_img,
                 source,
                 destination,
-                state: "failed",
+                state: if cleanup_pending {
+                    "cleanup-incomplete"
+                } else {
+                    "failed"
+                },
                 pid: None,
                 process_identity: None,
-                tree_exit_verified: true,
+                tree_exit_verified: !cleanup_pending,
                 error: Some(&detail),
             })
-            .map_err(StageSourceFailure::complete)?;
-            return Err(StageSourceFailure::complete(error));
+            .map_err(|journal| {
+                StageSourceFailure::incomplete(anyhow!(
+                    "{failure:#}; conversion journal update failed: {journal:#}"
+                ))
+            })?;
+            return Err(if cleanup_pending {
+                StageSourceFailure::incomplete(failure)
+            } else {
+                StageSourceFailure::complete(failure)
+            });
         }
     };
     let child_pid = child.id();
     let child_identity = qol_process::process_identity(child_pid).ok();
-    if let Err(error) = process_tree.assign(&child) {
-        let cleanup = terminate_conversion_process(&mut child, None);
-        let failure = anyhow!(
-            "failed to own qemu-img process tree: {error}; fallback cleanup: {}",
-            cleanup.err().map_or_else(
-                || "direct child stopped without tree proof".to_string(),
-                |error| { format!("{error:#}") }
-            )
-        );
-        let detail = format!("{failure:#}");
-        write_conversion_journal(ConversionJournal {
-            run_id,
-            program: qemu_img,
-            source,
-            destination,
-            state: "cleanup-incomplete",
-            pid: Some(child_pid),
-            process_identity: child_identity.as_deref(),
-            tree_exit_verified: false,
-            error: Some(&detail),
-        })
-        .map_err(|journal| {
-            StageSourceFailure::incomplete(anyhow!(
-                "{failure:#}; conversion journal update failed: {journal:#}"
-            ))
-        })?;
-        return Err(StageSourceFailure::incomplete(failure));
-    }
     if let Err(journal) = write_conversion_journal(ConversionJournal {
         run_id,
         program: qemu_img,

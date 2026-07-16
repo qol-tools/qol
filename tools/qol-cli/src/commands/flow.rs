@@ -209,6 +209,89 @@ struct FlowPreparation {
     iso_cleanup: PreparationCleanup,
 }
 
+#[derive(Clone, Debug)]
+struct PreparationCommandJournal {
+    run_id: String,
+    phase: &'static str,
+    path: PathBuf,
+}
+
+struct PreparationJournals {
+    build: PreparationCommandJournal,
+    iso: PreparationCommandJournal,
+}
+
+impl PreparationJournals {
+    fn initialize(run_dir: &Path) -> Result<Self> {
+        let run_id = run_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("flow preparation run directory has no UTF-8 identity")?;
+        if !safe_run_id(run_id) {
+            bail!("flow preparation run directory has an unsafe identity");
+        }
+        let root = run_dir.join("preparation");
+        let build = PreparationCommandJournal {
+            run_id: run_id.to_string(),
+            phase: "build",
+            path: root.join("build.json"),
+        };
+        let iso = PreparationCommandJournal {
+            run_id: run_id.to_string(),
+            phase: "iso",
+            path: root.join("iso.json"),
+        };
+        build.record(
+            "not-started",
+            None,
+            None,
+            None,
+            &PreparationCleanup::not_required(),
+        )?;
+        iso.record(
+            "not-started",
+            None,
+            None,
+            None,
+            &PreparationCleanup::not_required(),
+        )?;
+        Ok(Self { build, iso })
+    }
+}
+
+impl PreparationCommandJournal {
+    fn record(
+        &self,
+        state: &str,
+        process_id: Option<u32>,
+        process_identity: Option<&str>,
+        process_status: Option<&str>,
+        cleanup: &PreparationCleanup,
+    ) -> Result<()> {
+        atomic_json_durable(
+            &self.path,
+            &json!({
+                "kind": "flow-preparation-process",
+                "run_id": self.run_id,
+                "phase": self.phase,
+                "state": state,
+                "process": {
+                    "pid": process_id,
+                    "identity": process_identity,
+                    "status": process_status,
+                },
+                "cleanup": {
+                    "status": cleanup.status,
+                    "complete": cleanup.complete,
+                    "verification": cleanup.verification,
+                    "error": cleanup.error,
+                },
+                "observed_at_unix_ms": qol_dev_env::unix_millis()?,
+            }),
+        )
+    }
+}
+
 impl FlowPreparation {
     fn pending(requires_payload: bool) -> Self {
         if !requires_payload {
@@ -617,8 +700,10 @@ pub(crate) fn start_typed_flow(
 ) -> Result<RunHandle> {
     let plan = plan_flow(start)?;
     let plan_fingerprint = plan.fingerprint()?;
+    let guardian = qol_process::process_tree_guardian_command(executable);
     qol_dev_orchestrator::start_flow_worker(
         executable,
+        guardian,
         FlowWorkerRequest {
             start: plan.start,
             run_root: plan.run_root,
@@ -647,10 +732,19 @@ fn wait_for_typed_flow(
     let mut cancellation_requested = false;
     let mut previous_status = None;
     loop {
+        let mut cancellation_error = None;
         if cancellation.is_cancelled() && !cancellation_requested {
-            handle.cancel()?;
             cancellation_requested = true;
-            step_label("cancel", StepKind::Info, "requested");
+            match handle.cancel() {
+                Ok(_) => step_label("cancel", StepKind::Info, "requested"),
+                Err(error) => cancellation_error = Some(format!("{error:#}")),
+            }
+        }
+        if cancellation.escalation_requested() {
+            return escalate_typed_flow(handle, cancellation_error.as_deref());
+        }
+        if let Some(error) = cancellation_error {
+            bail!("failed to request graceful flow cancellation: {error}");
         }
         match handle.poll()? {
             WaitState::Starting => {}
@@ -680,6 +774,58 @@ fn wait_for_typed_flow(
             }
         }
         thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn escalate_typed_flow(handle: &mut RunHandle, cancellation_error: Option<&str>) -> Result<()> {
+    step_label(
+        "cancel",
+        StepKind::Info,
+        "second signal · terminating owned worker tree",
+    );
+    let terminated = handle
+        .terminate_worker(SUPERVISOR_SHUTDOWN_GRACE)
+        .context("failed to terminate the verified flow worker process tree")?;
+    if terminated.is_some() {
+        reconcile_flow_report_file(&handle.ticket().report_path)
+            .context("flow worker tree stopped, but its report could not be reconciled")?;
+        dev_env::reconcile_resources()
+            .context("flow worker tree stopped, but its resource lease could not be reconciled")?;
+    }
+    match handle.poll()? {
+        WaitState::Terminal {
+            report,
+            worker_success,
+        } => {
+            let result = finish_typed_flow(report, worker_success)
+                .context("flow stopped after second-signal escalation");
+            match cancellation_error {
+                Some(error) => result.context(format!(
+                    "graceful cancellation could not be persisted before escalation: {error}"
+                )),
+                None => result,
+            }
+        }
+        WaitState::Failed {
+            report,
+            worker_exit,
+        } => {
+            let status = report
+                .as_ref()
+                .map(|report| report.status.as_str())
+                .unwrap_or("missing");
+            let graceful = cancellation_error
+                .map(|error| format!("; graceful cancellation error: {error}"))
+                .unwrap_or_default();
+            bail!(
+                "second signal terminated the verified flow worker tree; worker exit: {worker_exit}; report status: {status}; evidence: {}{graceful}",
+                handle.ticket().report_path.display(),
+            )
+        }
+        WaitState::Starting | WaitState::Running(_) => bail!(
+            "verified flow worker tree terminated, but its worker still appears active; evidence: {}",
+            handle.ticket().report_path.display()
+        ),
     }
 }
 
@@ -1456,9 +1602,11 @@ fn reconcile_flow_report_file(path: &Path) -> Result<Option<FlowRunSummary>> {
         }));
     };
     let owner_process_state = recorded_process_state(owner_pid, owner_process_identity, false);
-    if matches!(owner_state.as_str(), "running" | "cancelling")
-        && !matches!(owner_process_state, RecordedProcessState::VerifiedDead)
-    {
+    let owner_claims_live = matches!(owner_state.as_str(), "running" | "cancelling");
+    let owner_identity_uncertain =
+        matches!(owner_state.as_str(), "running" | "cancelling" | "orphaned")
+            && matches!(owner_process_state, RecordedProcessState::Uncertain);
+    if owner_claims_live && matches!(owner_process_state, RecordedProcessState::VerifiedAlive) {
         return Ok(Some(FlowRunSummary {
             run_id,
             status,
@@ -1471,6 +1619,14 @@ fn reconcile_flow_report_file(path: &Path) -> Result<Option<FlowRunSummary>> {
         atomic_write(&interrupted_path, content.as_bytes())?;
     }
     let mut recovered_status = reconcile_flow_lanes(run_dir, &run_id, &mut report, &owner_state)?;
+    if owner_identity_uncertain {
+        recovered_status = if owner_state == "cancelling" {
+            "cancellation-cleanup-incomplete"
+        } else {
+            "cleanup-incomplete"
+        };
+    }
+    reconcile_preparation_evidence(run_dir, &mut report);
     let preparation_cleanup_complete = report.get("preparation").is_none_or(|preparation| {
         ["build", "iso"].into_iter().all(|phase| {
             preparation
@@ -1495,18 +1651,28 @@ fn reconcile_flow_report_file(path: &Path) -> Result<Option<FlowRunSummary>> {
         };
     }
     report["status"] = json!(recovered_status);
+    let recovered_report_status = qol_dev_env::ReportStatus::parse(recovered_status);
+    let reconciliation_status = match &recovered_report_status {
+        qol_dev_env::ReportStatus::CleanupIncomplete
+        | qol_dev_env::ReportStatus::RollbackIncomplete
+        | qol_dev_env::ReportStatus::CancellationCleanupIncomplete => recovered_status,
+        status if status.is_terminal() => "complete",
+        _ => "in-progress",
+    };
     report["reconciliation"] = json!({
-        "status": if flow_status_is_terminal(recovered_status) { "complete" } else { "in-progress" },
+        "status": reconciliation_status,
         "previous_status": status,
         "owner_pid": owner_pid,
         "owner_state": owner_state,
         "observed_at_unix_ms": observed_at,
         "interrupted_report": interrupted_path,
     });
-    report["owner"]["state"] = json!(if flow_status_is_terminal(recovered_status) {
-        "released"
-    } else {
+    report["owner"]["state"] = json!(if recovered_report_status.is_active()
+        || owner_identity_uncertain
+    {
         "orphaned"
+    } else {
+        "released"
     });
     update_recovered_flow_lifecycle(&mut report, recovered_status, observed_at);
     atomic_json(&run_dir.join("steps/lifecycle.json"), &report["steps"])?;
@@ -1516,6 +1682,125 @@ fn reconcile_flow_report_file(path: &Path) -> Result<Option<FlowRunSummary>> {
         status: recovered_status.to_string(),
         report_path: path.to_path_buf(),
     }))
+}
+
+fn reconcile_preparation_evidence(run_dir: &Path, report: &mut Value) {
+    let Some(preparation) = report.get_mut("preparation").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let Some(run_id) = run_dir.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    for phase in ["build", "iso"] {
+        let Some(phase_report) = preparation.get_mut(phase).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        let already_complete = phase_report
+            .get("cleanup")
+            .and_then(|cleanup| cleanup.get("complete"))
+            .and_then(Value::as_bool)
+            == Some(true);
+        if already_complete {
+            continue;
+        }
+        let path = run_dir.join("preparation").join(format!("{phase}.json"));
+        let evidence = match read_optional_json(&path) {
+            Ok(Some(evidence)) => evidence,
+            Ok(None) => continue,
+            Err(error) => {
+                phase_report.insert("cleanup".to_string(), preparation_cleanup_error(error));
+                continue;
+            }
+        };
+        let valid = evidence.get("kind").and_then(Value::as_str)
+            == Some("flow-preparation-process")
+            && evidence.get("run_id").and_then(Value::as_str) == Some(run_id)
+            && evidence.get("phase").and_then(Value::as_str) == Some(phase);
+        if !valid {
+            phase_report.insert(
+                "cleanup".to_string(),
+                preparation_cleanup_error(format!(
+                    "preparation evidence identity mismatch: {}",
+                    path.display()
+                )),
+            );
+            continue;
+        }
+        let cleanup = match validated_preparation_evidence_cleanup(&evidence, &path) {
+            Ok(cleanup) => cleanup,
+            Err(error) => {
+                phase_report.insert("cleanup".to_string(), preparation_cleanup_error(error));
+                continue;
+            }
+        };
+        phase_report.insert("cleanup".to_string(), cleanup);
+        let process_status = evidence
+            .get("process")
+            .and_then(|process| process.get("status"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        phase_report.insert("process_status".to_string(), process_status);
+        if evidence.get("state").and_then(Value::as_str) == Some("not-started") {
+            phase_report.insert("status".to_string(), json!("skipped"));
+        }
+    }
+}
+
+fn validated_preparation_evidence_cleanup(
+    evidence: &Value,
+    path: &Path,
+) -> std::result::Result<Value, String> {
+    let state = evidence
+        .get("state")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("preparation evidence has no state: {}", path.display()))?;
+    let cleanup = evidence
+        .get("cleanup")
+        .filter(|cleanup| cleanup.is_object())
+        .ok_or_else(|| {
+            format!(
+                "preparation evidence has no cleanup state: {}",
+                path.display()
+            )
+        })?;
+    let status = cleanup.get("status").and_then(Value::as_str);
+    let complete = cleanup.get("complete").and_then(Value::as_bool);
+    let verification = cleanup.get("verification").and_then(Value::as_str);
+    let valid = match state {
+        "not-started" => {
+            status == Some("not-required")
+                && complete == Some(true)
+                && verification == Some("no-process-spawned")
+                && evidence
+                    .get("process")
+                    .and_then(|process| process.get("pid"))
+                    .is_none_or(Value::is_null)
+        }
+        "complete" => {
+            status == Some("complete")
+                && complete == Some(true)
+                && verification == Some("owned-process-tree-exit")
+        }
+        "launching" | "running" => status == Some("pending") && complete == Some(false),
+        "cleanup-incomplete" => status == Some("incomplete") && complete == Some(false),
+        _ => false,
+    };
+    if valid {
+        return Ok(cleanup.clone());
+    }
+    Err(format!(
+        "preparation evidence cleanup contract is invalid: {}",
+        path.display()
+    ))
+}
+
+fn preparation_cleanup_error(error: String) -> Value {
+    json!({
+        "status": "incomplete",
+        "complete": false,
+        "verification": null,
+        "error": error,
+    })
 }
 
 fn reconcile_recovered_payload(run_dir: &Path, report: &mut Value) -> Result<()> {
@@ -1795,7 +2080,7 @@ fn reconcile_flow_lane(
             return Ok(LaneRecovery::Incomplete);
         }
     }
-    let child = match read_optional_json(&report_path) {
+    let child = match read_optional_flow_report(&report_path, &run_id) {
         Ok(child) => child,
         Err(error) => {
             mark_lane_incomplete(lane, None, error.clone())?;
@@ -1811,33 +2096,56 @@ fn reconcile_flow_lane(
         .as_ref()
         .and_then(|journal| journal.get("supervisor_process_identity"))
         .and_then(Value::as_str);
-    let supervisor_alive = !matches!(
-        recorded_process_state(supervisor_pid, supervisor_process_identity, true),
-        RecordedProcessState::VerifiedDead
-    );
+    let supervisor_state =
+        recorded_process_state(supervisor_pid, supervisor_process_identity, true);
     let Some(child) = child else {
-        if supervisor_alive {
-            mark_lane_active(lane, None)?;
-            return Ok(LaneRecovery::Active);
+        match supervisor_state {
+            RecordedProcessState::VerifiedAlive => {
+                mark_lane_active(lane, None)?;
+                return Ok(LaneRecovery::Active);
+            }
+            RecordedProcessState::Uncertain => {
+                mark_lane_incomplete(
+                    lane,
+                    None,
+                    "lane supervisor liveness is uncertain and no child report proves cleanup"
+                        .to_string(),
+                )?;
+                return Ok(LaneRecovery::Incomplete);
+            }
+            RecordedProcessState::VerifiedDead => {}
         }
         let phase = journal
             .as_ref()
             .and_then(|journal| journal.get("phase"))
             .and_then(Value::as_str)
             .or_else(|| lane.get("phase").and_then(Value::as_str));
-        if phase == Some("planned") {
-            mark_lane_not_started(lane, "flow owner exited before this lane launched")?;
-            return Ok(LaneRecovery::Resolved {
-                passed: false,
-                completed: false,
-            });
+        match phase {
+            Some("planned") => mark_lane_unspawned(
+                lane,
+                "not-started",
+                "not started",
+                "flow owner exited before this lane launched",
+            )?,
+            Some("spawn-failed") => mark_lane_unspawned(
+                lane,
+                "spawn-failed",
+                "spawn failed",
+                "lane spawn failed without leaving an owned child process",
+            )?,
+            _ => {
+                mark_lane_incomplete(
+                    lane,
+                    None,
+                    "lane may have spawned but has no child report or verified cleanup".to_string(),
+                )?;
+                return Ok(LaneRecovery::Incomplete);
+            }
         }
-        mark_lane_incomplete(
-            lane,
-            None,
-            "lane may have spawned but has no child report or verified cleanup".to_string(),
-        )?;
-        return Ok(LaneRecovery::Incomplete);
+        return Ok(LaneRecovery::Resolved {
+            passed: false,
+            completed: false,
+        });
     };
     if child.get("run_id").and_then(Value::as_str) != Some(run_id.as_str()) {
         mark_lane_incomplete(lane, None, "child report identity mismatch".to_string())?;
@@ -1847,11 +2155,24 @@ fn reconcile_flow_lane(
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let child_alive = supervisor_alive || child_process_alive(&child);
     if matches!(child_status, "starting" | "running" | "stopping") {
-        if child_alive {
-            mark_lane_active(lane, Some(child_status))?;
-            return Ok(LaneRecovery::Active);
+        let child_process_state =
+            combine_process_states(supervisor_state, child_process_state(&child));
+        match child_process_state {
+            RecordedProcessState::VerifiedAlive => {
+                mark_lane_active(lane, Some(child_status))?;
+                return Ok(LaneRecovery::Active);
+            }
+            RecordedProcessState::Uncertain => {
+                mark_lane_incomplete(
+                    lane,
+                    Some(child_status),
+                    "active child report has uncertain process identity and no verified cleanup"
+                        .to_string(),
+                )?;
+                return Ok(LaneRecovery::Incomplete);
+            }
+            RecordedProcessState::VerifiedDead => {}
         }
         mark_lane_incomplete(
             lane,
@@ -1859,10 +2180,6 @@ fn reconcile_flow_lane(
             "active child report has no live owner and no verified cleanup".to_string(),
         )?;
         return Ok(LaneRecovery::Incomplete);
-    }
-    if child_alive {
-        mark_lane_active(lane, Some(child_status))?;
-        return Ok(LaneRecovery::Active);
     }
     if let Some(error) = child_cleanup_complete(&child, child_status).err() {
         mark_lane_incomplete(lane, Some(child_status), error)?;
@@ -1891,23 +2208,55 @@ fn read_optional_json(path: &Path) -> std::result::Result<Option<Value>, String>
         .map_err(|error| format!("failed to parse {}: {error}", path.display()))
 }
 
-fn process_tree_alive(pid: u32) -> bool {
-    qol_process::is_pid_alive(pid) || qol_process::is_group_alive(pid)
+fn read_optional_flow_report(
+    path: &Path,
+    run_id: &str,
+) -> std::result::Result<Option<Value>, String> {
+    qol_dev_env::read_report_checked(path, run_id, &qol_dev_env::ReportKind::Flow)
+        .map(|report| report.map(|report| report.document().clone()))
+        .map_err(|error| format!("{error:#}"))
 }
 
-fn child_process_alive(report: &Value) -> bool {
+fn child_process_state(report: &Value) -> RecordedProcessState {
     let runtime = report.get("runtime");
-    let supervisor_alive = runtime
-        .and_then(|runtime| runtime.get("supervisor_pid"))
-        .and_then(Value::as_u64)
-        .and_then(|pid| u32::try_from(pid).ok())
-        .is_some_and(process_tree_alive);
-    let qemu_alive = runtime
-        .and_then(|runtime| runtime.get("qemu_pid"))
-        .and_then(Value::as_u64)
-        .and_then(|pid| u32::try_from(pid).ok())
-        .is_some_and(qol_process::is_pid_alive);
-    supervisor_alive || qemu_alive
+    let supervisor = recorded_process_state(
+        runtime
+            .and_then(|runtime| runtime.get("supervisor_pid"))
+            .and_then(Value::as_u64)
+            .and_then(|pid| u32::try_from(pid).ok()),
+        runtime
+            .and_then(|runtime| runtime.get("supervisor_process_identity"))
+            .and_then(Value::as_str),
+        true,
+    );
+    let qemu = recorded_process_state(
+        runtime
+            .and_then(|runtime| runtime.get("qemu_pid"))
+            .and_then(Value::as_u64)
+            .and_then(|pid| u32::try_from(pid).ok()),
+        runtime
+            .and_then(|runtime| runtime.get("qemu_process_identity"))
+            .and_then(Value::as_str),
+        false,
+    );
+    combine_process_states(supervisor, qemu)
+}
+
+fn combine_process_states(
+    first: RecordedProcessState,
+    second: RecordedProcessState,
+) -> RecordedProcessState {
+    if matches!(first, RecordedProcessState::VerifiedAlive)
+        || matches!(second, RecordedProcessState::VerifiedAlive)
+    {
+        return RecordedProcessState::VerifiedAlive;
+    }
+    if matches!(first, RecordedProcessState::Uncertain)
+        || matches!(second, RecordedProcessState::Uncertain)
+    {
+        return RecordedProcessState::Uncertain;
+    }
+    RecordedProcessState::VerifiedDead
 }
 
 fn child_cleanup_complete(report: &Value, status: &str) -> std::result::Result<(), String> {
@@ -1966,12 +2315,17 @@ fn mark_lane_incomplete(
     Ok(())
 }
 
-fn mark_lane_not_started(lane: &mut Value, error: &str) -> Result<()> {
+fn mark_lane_unspawned(
+    lane: &mut Value,
+    phase: &str,
+    process_status: &str,
+    error: &str,
+) -> Result<()> {
     let object = lane.as_object_mut().context("flow lane is not an object")?;
-    object.insert("phase".to_string(), json!("not-started"));
+    object.insert("phase".to_string(), json!(phase));
     object.insert("passed".to_string(), json!(false));
     object.insert("completed".to_string(), json!(false));
-    object.insert("process_status".to_string(), json!("not started"));
+    object.insert("process_status".to_string(), json!(process_status));
     object.insert("report_status".to_string(), Value::Null);
     object.insert("verdict".to_string(), Value::Null);
     object.insert(
@@ -2127,6 +2481,8 @@ fn prepare_workflow_payload(
             true,
         ));
     }
+    let journals = PreparationJournals::initialize(run_dir)
+        .map_err(|error| PayloadPreparationFailure::before_spawn(error, false))?;
     let cargo = emu::find_on_path("cargo")
         .context("missing cargo on PATH")
         .map_err(|error| PayloadPreparationFailure::before_spawn(error, false))?;
@@ -2153,13 +2509,14 @@ fn prepare_workflow_payload(
         build.arg("--quiet");
     }
     dev_env::clear_host_session(&mut build);
-    let status =
-        run_owned_preparation_command(&mut build, cancellation).map_err(|mut failure| {
+    let status = run_owned_preparation_command(build, cancellation, &journals.build).map_err(
+        |mut failure| {
             failure.error = failure
                 .error
                 .context(format!("failed to run {}", cargo.display()));
             failure
-        })?;
+        },
+    )?;
     if !status.success() {
         return Err(PayloadPreparationFailure {
             error: anyhow!("sandbox payload build exited with {status}"),
@@ -2252,9 +2609,9 @@ fn prepare_workflow_payload(
         &prepared,
         &payload_dir,
         iso_tool.as_os_str(),
-        |command| {
-            dev_env::clear_host_session(command);
-            match run_owned_preparation_command(command, cancellation) {
+        |mut command| {
+            dev_env::clear_host_session(&mut command);
+            match run_owned_preparation_command(command, cancellation, &journals.iso) {
                 Ok(status) => {
                     iso_process_status = Some(status);
                     Ok(status)
@@ -2341,8 +2698,9 @@ fn failed_preparation(mut preparation: FlowPreparation, cancelled: bool) -> Flow
 }
 
 fn run_owned_preparation_command(
-    command: &mut Command,
+    mut command: Command,
     cancellation: &impl CancellationSource,
+    journal: &PreparationCommandJournal,
 ) -> std::result::Result<ExitStatus, PayloadPreparationFailure> {
     if cancellation.is_cancelled() {
         return Err(PayloadPreparationFailure::before_spawn(
@@ -2350,42 +2708,92 @@ fn run_owned_preparation_command(
             true,
         ));
     }
-    qol_process::isolate_owned_command(command)
-        .context("failed to isolate preparation command process tree")
-        .map_err(|error| PayloadPreparationFailure::before_spawn(error, false))?;
-    let process_tree = qol_process::own_current_process_tree()
+    let process_tree = crate::process_guardian::own_process_tree()
         .context("failed to create preparation command process-tree ownership")
         .map_err(|error| PayloadPreparationFailure::before_spawn(error, false))?;
-    let mut child = command
-        .spawn()
-        .context("failed to spawn preparation command")
+    qol_process::isolate_owned_command(&mut command)
+        .context("failed to isolate preparation command process tree")
         .map_err(|error| PayloadPreparationFailure::before_spawn(error, false))?;
-    if let Err(error) = process_tree.assign(&child) {
-        let direct_cleanup = qol_process::terminate_owned(&mut child, SUPERVISOR_SHUTDOWN_GRACE)
-            .context("failed to stop unowned preparation child");
-        let detail = direct_cleanup.err().map_or_else(
-            || "direct child stopped, but descendant cleanup cannot be proven".to_string(),
-            |cleanup| format!("direct child cleanup also failed: {cleanup:#}"),
+    journal
+        .record(
+            "launching",
+            None,
+            None,
+            None,
+            &PreparationCleanup::pending(),
+        )
+        .map_err(|error| PayloadPreparationFailure::before_spawn(error, false))?;
+    let prepared = match process_tree.prepare_command(command) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            let mut error =
+                anyhow!(error).context("failed to contain preparation command before exec");
+            if let Err(evidence_error) = journal.record(
+                "not-started",
+                None,
+                None,
+                Some("prepare-failed"),
+                &PreparationCleanup::not_required(),
+            ) {
+                error = error.context(format!(
+                    "failed to persist preparation failure evidence: {evidence_error:#}"
+                ));
+            }
+            return Err(PayloadPreparationFailure::before_spawn(error, false));
+        }
+    };
+    let mut child = match prepared.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            let mut failure = preparation_spawn_failure(error, cancellation.is_cancelled());
+            let cleanup = &failure.preparation.cleanup;
+            let state = if cleanup.complete {
+                "complete"
+            } else {
+                "cleanup-incomplete"
+            };
+            if let Err(error) = journal.record(state, None, None, Some("spawn-failed"), cleanup) {
+                failure.error = failure.error.context(format!(
+                    "failed to persist preparation spawn cleanup: {error:#}"
+                ));
+            }
+            return Err(failure);
+        }
+    };
+    let child_pid = child.id();
+    let child_identity = qol_process::process_identity(child_pid).ok();
+    if let Err(error) = journal.record(
+        "running",
+        Some(child_pid),
+        child_identity.as_deref(),
+        None,
+        &PreparationCleanup::pending(),
+    ) {
+        let cleanup = terminate_preparation_process_recorded(
+            &mut child,
+            &process_tree,
+            journal,
+            child_pid,
+            child_identity.as_deref(),
+            "journal-failed",
         );
-        return Err(PayloadPreparationFailure {
-            error: anyhow!("failed to own preparation process tree: {error}; {detail}"),
-            cancelled: cancellation.is_cancelled(),
-            preparation: Box::new(FlowPreparation {
-                status: "cleanup-incomplete".to_string(),
-                build_status: "failed".to_string(),
-                process_status: Some("ownership-assignment-failed".to_string()),
-                cleanup: PreparationCleanup::incomplete(
-                    "preparation process descendants lack verified cleanup",
-                ),
-                iso_status: "skipped".to_string(),
-                iso_process_status: None,
-                iso_cleanup: PreparationCleanup::not_required(),
-            }),
-        });
+        return Err(preparation_process_failure(
+            error.context("failed to persist preparation process ownership"),
+            cancellation.is_cancelled(),
+            "journal-failed",
+            cleanup,
+        ));
     }
     loop {
         if cancellation.is_cancelled() {
-            let cleanup = terminate_preparation_process(&mut child, &process_tree);
+            let cleanup = terminate_preparation_process_recorded(
+                &mut child,
+                &process_tree,
+                journal,
+                child_pid,
+                child_identity.as_deref(),
+                "cancelled",
+            );
             return Err(preparation_process_failure(
                 anyhow!("flow execution cancelled while running a preparation command"),
                 true,
@@ -2395,12 +2803,20 @@ fn run_owned_preparation_command(
         }
         match child.try_wait() {
             Ok(Some(status)) => {
-                let cleanup = terminate_preparation_process(&mut child, &process_tree);
+                let process_status = status.to_string();
+                let cleanup = terminate_preparation_process_recorded(
+                    &mut child,
+                    &process_tree,
+                    journal,
+                    child_pid,
+                    child_identity.as_deref(),
+                    &process_status,
+                );
                 if let Err(error) = cleanup {
                     return Err(preparation_process_failure(
                         anyhow!("preparation command exited with {status}"),
                         false,
-                        &status.to_string(),
+                        &process_status,
                         Err(error),
                     ));
                 }
@@ -2408,7 +2824,14 @@ fn run_owned_preparation_command(
             }
             Ok(None) => thread::sleep(PREPARATION_POLL_INTERVAL),
             Err(error) => {
-                let cleanup = terminate_preparation_process(&mut child, &process_tree);
+                let cleanup = terminate_preparation_process_recorded(
+                    &mut child,
+                    &process_tree,
+                    journal,
+                    child_pid,
+                    child_identity.as_deref(),
+                    "wait-failed",
+                );
                 return Err(preparation_process_failure(
                     anyhow!(error).context("failed to poll preparation command"),
                     cancellation.is_cancelled(),
@@ -2417,6 +2840,90 @@ fn run_owned_preparation_command(
                 ));
             }
         }
+    }
+}
+
+fn terminate_preparation_process_recorded(
+    child: &mut Child,
+    process_tree: &qol_process::ProcessTreeGuard,
+    journal: &PreparationCommandJournal,
+    child_pid: u32,
+    child_identity: Option<&str>,
+    process_status: &str,
+) -> Result<()> {
+    let interrupted_cleanup = PreparationCleanup::incomplete(
+        "preparation cleanup began but terminal process-tree proof was not persisted",
+    );
+    let intent = journal
+        .record(
+            "cleanup-incomplete",
+            Some(child_pid),
+            child_identity,
+            Some(process_status),
+            &interrupted_cleanup,
+        )
+        .context("failed to persist terminal preparation cleanup intent");
+    let cleanup = terminate_preparation_process(child, process_tree);
+    let cleanup_evidence = match &cleanup {
+        Ok(()) => PreparationCleanup::verified(),
+        Err(error) => PreparationCleanup::incomplete(format!("{error:#}")),
+    };
+    let state = if cleanup_evidence.complete {
+        "complete"
+    } else {
+        "cleanup-incomplete"
+    };
+    let terminal = journal
+        .record(
+            state,
+            Some(child_pid),
+            child_identity,
+            Some(process_status),
+            &cleanup_evidence,
+        )
+        .context("failed to persist terminal preparation cleanup evidence");
+    let errors = [intent.err(), cleanup.err(), terminal.err()]
+        .into_iter()
+        .flatten()
+        .map(|error| format!("{error:#}"))
+        .collect::<Vec<_>>();
+    if errors.is_empty() {
+        return Ok(());
+    }
+    bail!(errors.join("; "))
+}
+
+fn preparation_spawn_failure(
+    error: qol_process::PreparedSpawnError,
+    cancelled: bool,
+) -> PayloadPreparationFailure {
+    let cleanup = match error.cleanup() {
+        qol_process::PreparedSpawnCleanup::NotStarted => PreparationCleanup::not_required(),
+        qol_process::PreparedSpawnCleanup::Verified => PreparationCleanup::verified(),
+        qol_process::PreparedSpawnCleanup::RecoveryPending => {
+            PreparationCleanup::incomplete(error.to_string())
+        }
+    };
+    let cleanup_pending = !cleanup.complete;
+    PayloadPreparationFailure {
+        error: anyhow!(error).context("failed to spawn preparation command"),
+        cancelled,
+        preparation: Box::new(FlowPreparation {
+            status: if cleanup_pending {
+                "cleanup-incomplete"
+            } else if cancelled {
+                "cancelled"
+            } else {
+                "failed"
+            }
+            .to_string(),
+            build_status: if cancelled { "cancelled" } else { "failed" }.to_string(),
+            process_status: Some("spawn-failed".to_string()),
+            cleanup,
+            iso_status: "skipped".to_string(),
+            iso_process_status: None,
+            iso_cleanup: PreparationCleanup::not_required(),
+        }),
     }
 }
 
@@ -2754,35 +3261,31 @@ impl LaneSpawner for ProcessLaneSpawner {
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
         dev_env::clear_host_session(&mut command);
+        let process_tree = crate::process_guardian::own_process_tree()
+            .context("failed to create supervisor process-tree ownership")?;
         qol_process::isolate_owned_command(&mut command).with_context(|| {
             format!(
                 "failed to isolate flow lane supervisor `{}`",
                 pending.run_id
             )
         })?;
-        let process_tree = qol_process::own_current_process_tree()
-            .context("failed to create supervisor process-tree ownership")?;
+        let prepared = process_tree.prepare_command(command).with_context(|| {
+            format!(
+                "failed to contain flow lane supervisor `{}` before exec",
+                pending.run_id
+            )
+        })?;
         write_lane_owner(launch, pending, "launching", None)?;
-        let mut child = match command.spawn() {
+        let child = match prepared.spawn() {
             Ok(child) => child,
             Err(error) => {
-                let _ = write_lane_owner(launch, pending, "spawn-failed", None);
-                return Err(error)
+                if error.cleanup() != qol_process::PreparedSpawnCleanup::RecoveryPending {
+                    let _ = write_lane_owner(launch, pending, "spawn-failed", None);
+                }
+                return Err(anyhow!(error))
                     .with_context(|| format!("failed to start flow lane `{}`", pending.run_id));
             }
         };
-        if let Err(assign_error) = process_tree.assign(&child) {
-            let cleanup = qol_process::terminate_owned(&mut child, SUPERVISOR_SHUTDOWN_GRACE);
-            if let Err(cleanup_error) = cleanup {
-                bail!(
-                    "failed to own flow lane `{}`: {assign_error}; supervisor cleanup also failed: {cleanup_error}",
-                    pending.run_id
-                );
-            }
-            let _ = write_lane_owner(launch, pending, "spawn-failed", None);
-            return Err(assign_error)
-                .with_context(|| format!("failed to own flow lane `{}`", pending.run_id));
-        }
         if let Err(journal_error) = write_lane_owner(launch, pending, "spawned", Some(child.id())) {
             let mut supervisor = ChildSupervisor {
                 executable: launch.executable.to_path_buf(),
@@ -3051,7 +3554,7 @@ fn abort_lanes(active: &mut Vec<ActiveLane>, results: &mut Vec<LaneResult>, reas
 
 fn abort_lane(mut lane: ActiveLane, reason: &str) -> LaneResult {
     let shutdown = lane.supervisor.shutdown(reason);
-    let (report_status, verdict) = report_outcome(&lane.report_path);
+    let (report_status, verdict) = report_outcome(&lane.report_path, &lane.run_id);
     LaneResult {
         run_id: lane.run_id,
         report_path: lane.report_path,
@@ -3089,13 +3592,18 @@ fn spawn_failure_cleanup(
     pending: &PendingLane,
     report_path: &Path,
 ) -> LaneCleanup {
-    match read_optional_json(report_path) {
+    match read_optional_flow_report(report_path, &pending.run_id) {
         Ok(Some(report)) => {
             let status = report
                 .get("status")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            if child_cleanup_complete(&report, status).is_ok() && !child_process_alive(&report) {
+            if child_cleanup_complete(&report, status).is_ok()
+                && matches!(
+                    child_process_state(&report),
+                    RecordedProcessState::VerifiedDead
+                )
+            {
                 let removed = report
                     .get("teardown")
                     .and_then(|teardown| teardown.get("removed"))
@@ -3174,7 +3682,16 @@ fn planned_lane(launch: &LaneLaunch<'_>, pending: &PendingLane) -> LaneResult {
 }
 
 fn finish_lane(lane: ActiveLane, exit: SupervisorExit) -> LaneResult {
-    let report = read_json(&lane.report_path);
+    let report = read_optional_flow_report(&lane.report_path, &lane.run_id);
+    let report_error = match &report {
+        Ok(Some(_)) => None,
+        Ok(None) => Some(format!(
+            "child report is missing: {}",
+            lane.report_path.display()
+        )),
+        Err(error) => Some(format!("child report is invalid: {error}")),
+    };
+    let report = report.ok().flatten();
     let report_status = report
         .as_ref()
         .and_then(|value| value.get("status"))
@@ -3188,12 +3705,6 @@ fn finish_lane(lane: ActiveLane, exit: SupervisorExit) -> LaneResult {
         .map(str::to_string);
     let passed = exit.cleanup.complete
         && lane_passed(exit.success, report_status.as_deref(), verdict.as_deref());
-    let report_error = report.is_none().then(|| {
-        format!(
-            "child report is missing or invalid: {}",
-            lane.report_path.display()
-        )
-    });
     let error = combine_errors(report_error, exit.cleanup.error.clone());
     LaneResult {
         run_id: lane.run_id.clone(),
@@ -3239,13 +3750,8 @@ fn terminal_error(
     None
 }
 
-fn read_json(path: &Path) -> Option<Value> {
-    let content = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
-}
-
-fn report_outcome(path: &Path) -> (Option<String>, Option<String>) {
-    let report = read_json(path);
+fn report_outcome(path: &Path, run_id: &str) -> (Option<String>, Option<String>) {
+    let report = read_optional_flow_report(path, run_id).ok().flatten();
     let status = report
         .as_ref()
         .and_then(|value| value.get("status"))
@@ -3925,11 +4431,13 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     struct CancelAfterPoll {
         polls: AtomicUsize,
         cancel_at: usize,
     }
 
+    #[cfg(unix)]
     impl CancellationSource for CancelAfterPoll {
         fn is_cancelled(&self) -> bool {
             self.polls.fetch_add(1, Ordering::SeqCst) + 1 >= self.cancel_at
@@ -4120,7 +4628,13 @@ mod tests {
                 FakePlan::Fail(error) => bail!(error),
             };
             let report_path = launch.case_root.join(&pending.run_id).join("report.json");
-            if let Some(report) = report {
+            if let Some(mut report) = report {
+                if report.get("kind").is_none() {
+                    report["kind"] = json!("flow");
+                }
+                if report.get("run_id").is_none() {
+                    report["run_id"] = json!(pending.run_id.as_str());
+                }
                 fs::create_dir_all(report_path.parent().unwrap()).unwrap();
                 fs::write(&report_path, serde_json::to_vec(&report).unwrap()).unwrap();
             }
@@ -4342,6 +4856,56 @@ mod tests {
     }
 
     #[test]
+    fn finished_lane_rejects_wrong_kind_and_missing_run_identity() {
+        let cases = [
+            (
+                json!({
+                    "kind": "environment",
+                    "run_id": "lane-1",
+                    "status": "pass",
+                    "workflow": { "verdict": "pass" },
+                }),
+                "expected `flow`",
+            ),
+            (
+                json!({
+                    "kind": "flow",
+                    "status": "pass",
+                    "workflow": { "verdict": "pass" },
+                }),
+                "has no run_id",
+            ),
+        ];
+        for (report, expected) in cases {
+            let temp = tempfile::tempdir().unwrap();
+            let report_path = temp.path().join("lane-1/report.json");
+            fs::create_dir_all(report_path.parent().unwrap()).unwrap();
+            fs::write(&report_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+            let lane = ActiveLane {
+                run_id: "lane-1".to_string(),
+                report_path,
+                log_path: temp.path().join("lane-1.log"),
+                supervisor: Box::new(FakeSupervisor {
+                    wait: None,
+                    live: false,
+                    shutdowns: Arc::new(AtomicUsize::new(0)),
+                    abandoned: Arc::new(AtomicUsize::new(0)),
+                }),
+            };
+
+            let result = finish_lane(lane, passing_exit());
+
+            assert!(!result.passed);
+            assert!(result
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains(expected)));
+            assert!(result.report_status.is_none());
+            assert!(result.verdict.is_none());
+        }
+    }
+
+    #[test]
     fn cancellation_stops_active_lanes_and_records_unstarted_lanes() {
         let temp = tempfile::tempdir().unwrap();
         let executable = temp.path().join("qol");
@@ -4381,6 +4945,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cancellation_stops_the_owned_payload_build_tree_with_verified_cleanup() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_dir = temp.path().join("flow-test");
+        fs::create_dir_all(&run_dir).unwrap();
+        let journals = PreparationJournals::initialize(&run_dir).unwrap();
         let mut command = Command::new("sh");
         command.args(["-c", "sleep 30 & wait"]);
         let cancellation = CancelAfterPoll {
@@ -4388,7 +4956,8 @@ mod tests {
             cancel_at: 2,
         };
 
-        let failure = run_owned_preparation_command(&mut command, &cancellation).unwrap_err();
+        let failure =
+            run_owned_preparation_command(command, &cancellation, &journals.build).unwrap_err();
 
         assert!(failure.cancelled);
         assert_eq!(failure.preparation.status, "cancelled");
@@ -4403,13 +4972,21 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn successful_payload_build_waits_for_owned_tree_cleanup_proof() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_dir = temp.path().join("flow-test");
+        fs::create_dir_all(&run_dir).unwrap();
+        let journals = PreparationJournals::initialize(&run_dir).unwrap();
         let mut command = Command::new("sh");
         command.args(["-c", "exit 0"]);
 
         let status =
-            run_owned_preparation_command(&mut command, &FixedCancellation(false)).unwrap();
+            run_owned_preparation_command(command, &FixedCancellation(false), &journals.build)
+                .unwrap();
 
         assert!(status.success());
+        let evidence = read_value(&journals.build.path);
+        assert_eq!(evidence["state"], "complete");
+        assert_eq!(evidence["cleanup"]["complete"], true);
     }
 
     #[test]
@@ -4440,6 +5017,99 @@ mod tests {
             "owned-process-tree-exit"
         );
         assert!(verified_report.get("os_security_boundary").is_none());
+    }
+
+    #[test]
+    fn durable_preparation_evidence_repairs_a_pending_aggregate_after_owner_loss() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_dir = temp.path().join("flow-test");
+        fs::create_dir_all(&run_dir).unwrap();
+        let journals = PreparationJournals::initialize(&run_dir).unwrap();
+        journals
+            .build
+            .record(
+                "complete",
+                Some(42),
+                Some("process-identity"),
+                Some("exit status: 0"),
+                &PreparationCleanup::verified(),
+            )
+            .unwrap();
+        let mut report = json!({
+            "preparation": preparation_report(&FlowPreparation::pending(true)),
+        });
+
+        reconcile_preparation_evidence(&run_dir, &mut report);
+
+        assert_eq!(report["preparation"]["build"]["cleanup"]["complete"], true);
+        assert_eq!(
+            report["preparation"]["build"]["cleanup"]["verification"],
+            "owned-process-tree-exit"
+        );
+        assert_eq!(report["preparation"]["iso"]["cleanup"]["complete"], true);
+        assert_eq!(report["preparation"]["iso"]["status"], "skipped");
+    }
+
+    #[test]
+    fn preparation_terminal_intent_is_durable_before_cleanup_proof() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_dir = temp.path().join("flow-test");
+        fs::create_dir_all(&run_dir).unwrap();
+        let journals = PreparationJournals::initialize(&run_dir).unwrap();
+
+        journals
+            .build
+            .record(
+                "cleanup-incomplete",
+                Some(42),
+                Some("process-identity"),
+                Some("cancelled"),
+                &PreparationCleanup::incomplete(
+                    "preparation cleanup began but terminal process-tree proof was not persisted",
+                ),
+            )
+            .unwrap();
+
+        let evidence = read_value(&journals.build.path);
+        assert_eq!(evidence["state"], "cleanup-incomplete");
+        assert_eq!(evidence["cleanup"]["complete"], false);
+        assert_eq!(evidence["process"]["pid"], 42);
+        assert_eq!(evidence["process"]["identity"], "process-identity");
+    }
+
+    #[test]
+    fn malformed_preparation_evidence_cannot_become_cleanup_proof() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_dir = temp.path().join("flow-test");
+        fs::create_dir_all(run_dir.join("preparation")).unwrap();
+        atomic_json_durable(
+            &run_dir.join("preparation/build.json"),
+            &json!({
+                "kind": "flow-preparation-process",
+                "run_id": "flow-test",
+                "phase": "build",
+                "state": "running",
+                "process": { "pid": 42, "identity": "process-identity" },
+                "cleanup": {
+                    "status": "complete",
+                    "complete": true,
+                    "verification": "owned-process-tree-exit",
+                    "error": null,
+                },
+            }),
+        )
+        .unwrap();
+        let mut report = json!({
+            "preparation": preparation_report(&FlowPreparation::pending(true)),
+        });
+
+        reconcile_preparation_evidence(&run_dir, &mut report);
+
+        assert_eq!(report["preparation"]["build"]["cleanup"]["complete"], false);
+        assert!(report["preparation"]["build"]["cleanup"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("contract is invalid"));
     }
 
     #[test]
@@ -4676,6 +5346,59 @@ mod tests {
     }
 
     #[test]
+    fn dead_owner_with_spawn_failed_lane_reconciles_to_abandoned() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = recovery_fixture(&temp, u32::MAX, "running", "spawn-failed");
+
+        let summary = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+        let report = read_value(&fixture.report_path);
+
+        assert_eq!(summary.status, "abandoned");
+        assert_eq!(report["status"], "abandoned");
+        assert_eq!(report["lanes"][0]["phase"], "spawn-failed");
+        assert_eq!(report["lanes"][0]["process_status"], "spawn failed");
+        assert_eq!(report["lanes"][0]["cleanup"]["complete"], true);
+    }
+
+    #[test]
+    fn released_owner_with_unspawned_lane_becomes_terminal_without_a_child_report() {
+        for (phase, recovered_phase) in
+            [("planned", "not-started"), ("spawn-failed", "spawn-failed")]
+        {
+            let temp = tempfile::tempdir().unwrap();
+            let fixture = recovery_fixture(&temp, std::process::id(), "released", phase);
+
+            let summary = reconcile_flow_report_file(&fixture.report_path)
+                .unwrap()
+                .unwrap();
+            let reconciled = fs::read(&fixture.report_path).unwrap();
+            let repeated = reconcile_flow_report_file(&fixture.report_path)
+                .unwrap()
+                .unwrap();
+            let report = read_value(&fixture.report_path);
+            let parsed = qol_dev_env::read_report(&fixture.report_path)
+                .unwrap()
+                .unwrap();
+
+            assert_eq!(summary.status, "failed");
+            assert_eq!(repeated.status, "failed");
+            assert_eq!(fs::read(&fixture.report_path).unwrap(), reconciled);
+            assert_eq!(report["status"], "failed");
+            assert_eq!(report["owner"]["state"], "released");
+            assert_eq!(report["reconciliation"]["status"], "complete");
+            assert_eq!(report["lanes"][0]["phase"], recovered_phase);
+            assert_eq!(report["lanes"][0]["cleanup"]["complete"], true);
+            assert!(!parsed.status.is_active());
+            assert!(matches!(
+                parsed.cleanup,
+                qol_dev_env::CleanupState::Complete
+            ));
+        }
+    }
+
+    #[test]
     fn dead_owner_with_unverified_preparation_cleanup_stays_incomplete() {
         let temp = tempfile::tempdir().unwrap();
         let fixture = recovery_fixture(&temp, u32::MAX, "running", "planned");
@@ -4715,9 +5438,76 @@ mod tests {
     }
 
     #[test]
+    fn released_owner_with_uncertain_supervisor_stabilizes_as_cleanup_incomplete() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = recovery_fixture(&temp, std::process::id(), "released", "spawned");
+        let journal_path = lane_owner_path(&fixture.flow_dir, &fixture.lane_id);
+        let mut journal = read_value(&journal_path);
+        journal["supervisor_pid"] = json!(std::process::id());
+        fs::write(&journal_path, serde_json::to_vec_pretty(&journal).unwrap()).unwrap();
+
+        let summary = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+        let repeated = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+        let report = read_value(&fixture.report_path);
+        let parsed = qol_dev_env::read_report(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(summary.status, "cleanup-incomplete");
+        assert_eq!(repeated.status, "cleanup-incomplete");
+        assert_eq!(report["status"], "cleanup-incomplete");
+        assert_eq!(report["owner"]["state"], "released");
+        assert_eq!(report["reconciliation"]["status"], "cleanup-incomplete");
+        assert!(!parsed.status.is_active());
+        assert!(matches!(
+            parsed.cleanup,
+            qol_dev_env::CleanupState::Incomplete(_)
+        ));
+        assert!(report["lanes"][0]["cleanup"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("liveness is uncertain"));
+    }
+
+    #[test]
+    fn released_owner_with_verified_live_supervisor_stays_recovering() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = recovery_fixture(&temp, std::process::id(), "released", "spawned");
+        let journal_path = lane_owner_path(&fixture.flow_dir, &fixture.lane_id);
+        let mut journal = read_value(&journal_path);
+        journal["supervisor_pid"] = json!(std::process::id());
+        journal["supervisor_process_identity"] =
+            json!(qol_process::process_identity(std::process::id()).unwrap());
+        fs::write(&journal_path, serde_json::to_vec_pretty(&journal).unwrap()).unwrap();
+
+        let summary = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+        let report = read_value(&fixture.report_path);
+
+        assert_eq!(summary.status, "recovering");
+        assert_eq!(report["status"], "recovering");
+        assert_eq!(report["owner"]["state"], "orphaned");
+        assert_eq!(report["reconciliation"]["status"], "in-progress");
+        assert_eq!(report["lanes"][0]["process_status"], "active");
+    }
+
+    #[test]
     fn live_owner_keeps_active_report_byte_identical() {
         let temp = tempfile::tempdir().unwrap();
         let fixture = recovery_fixture(&temp, std::process::id(), "running", "planned");
+        let mut report = read_value(&fixture.report_path);
+        report["owner"]["process_identity"] =
+            json!(qol_process::process_identity(std::process::id()).unwrap());
+        fs::write(
+            &fixture.report_path,
+            format!("{}\n", serde_json::to_string_pretty(&report).unwrap()),
+        )
+        .unwrap();
         let before = fs::read(&fixture.report_path).unwrap();
 
         let summary = reconcile_flow_report_file(&fixture.report_path)
@@ -4726,6 +5516,26 @@ mod tests {
 
         assert_eq!(summary.status, "running");
         assert_eq!(fs::read(&fixture.report_path).unwrap(), before);
+    }
+
+    #[test]
+    fn unidentified_live_owner_stabilizes_as_cleanup_incomplete() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = recovery_fixture(&temp, std::process::id(), "running", "planned");
+
+        let summary = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+        let repeated = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+        let report = read_value(&fixture.report_path);
+
+        assert_eq!(summary.status, "cleanup-incomplete");
+        assert_eq!(repeated.status, "cleanup-incomplete");
+        assert_eq!(report["status"], "cleanup-incomplete");
+        assert_eq!(report["reconciliation"]["status"], "cleanup-incomplete");
+        assert!(report.get("finished_at_unix_ms").is_none());
     }
 
     #[test]
@@ -4770,6 +5580,111 @@ mod tests {
     }
 
     #[test]
+    fn reused_child_pid_with_mismatched_identity_is_not_treated_as_active() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = recovery_fixture(&temp, u32::MAX, "released", "spawned");
+        fs::write(
+            fixture.lane_dir.join("report.json"),
+            serde_json::to_vec_pretty(&json!({
+                "kind": "flow",
+                "run_id": fixture.lane_id,
+                "status": "failed",
+                "runtime": {
+                    "supervisor_pid": std::process::id(),
+                    "supervisor_process_identity": "stale-process-identity",
+                },
+                "teardown": {
+                    "status": "complete",
+                    "qemu_exit_verified": true,
+                    "tree_exit_verified": true,
+                    "removed": []
+                },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let summary = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+        let report = read_value(&fixture.report_path);
+
+        assert_eq!(summary.status, "failed");
+        assert_eq!(report["status"], "failed");
+        assert_eq!(report["lanes"][0]["completed"], true);
+        assert_eq!(report["lanes"][0]["process_status"], "reconciled");
+    }
+
+    #[test]
+    fn recovery_rejects_a_non_flow_lane_report() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = recovery_fixture(&temp, u32::MAX, "released", "spawned");
+        fs::write(
+            fixture.lane_dir.join("report.json"),
+            serde_json::to_vec_pretty(&json!({
+                "kind": "environment",
+                "run_id": fixture.lane_id,
+                "status": "pass",
+                "teardown": {
+                    "status": "complete",
+                    "qemu_exit_verified": true,
+                    "tree_exit_verified": true,
+                    "removed": []
+                },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let summary = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+        let report = read_value(&fixture.report_path);
+
+        assert_eq!(summary.status, "cleanup-incomplete");
+        assert_eq!(report["status"], "cleanup-incomplete");
+        assert!(report["lanes"][0]["cleanup"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("kind `environment`, expected `flow`"));
+    }
+
+    #[test]
+    fn unidentified_live_child_pid_stabilizes_as_cleanup_incomplete() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = recovery_fixture(&temp, u32::MAX, "released", "spawned");
+        fs::write(
+            fixture.lane_dir.join("report.json"),
+            serde_json::to_vec_pretty(&json!({
+                "kind": "flow",
+                "run_id": fixture.lane_id,
+                "status": "running",
+                "runtime": { "supervisor_pid": std::process::id() },
+                "teardown": { "status": "pending" },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let summary = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+        let repeated = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+        let report = read_value(&fixture.report_path);
+
+        assert_eq!(summary.status, "cleanup-incomplete");
+        assert_eq!(repeated.status, "cleanup-incomplete");
+        assert_eq!(report["status"], "cleanup-incomplete");
+        assert_eq!(report["lanes"][0]["process_status"], "cleanup incomplete");
+        assert!(report["lanes"][0]["cleanup"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("uncertain process identity"));
+    }
+
+    #[test]
     fn completed_child_pass_after_parent_crash_is_still_abandoned() {
         let temp = tempfile::tempdir().unwrap();
         let fixture = recovery_fixture(&temp, u32::MAX, "running", "spawned");
@@ -4779,6 +5694,7 @@ mod tests {
                 "kind": "flow",
                 "run_id": fixture.lane_id,
                 "status": "pass",
+                "runtime": { "supervisor_pid": std::process::id() },
                 "workflow": { "verdict": "pass" },
                 "teardown": {
                     "status": "complete",

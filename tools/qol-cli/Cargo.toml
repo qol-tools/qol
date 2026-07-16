@@ -28,6 +28,7 @@ qol-workspace.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+shell-words = "1.1"
 toml.workspace = true
 toml_edit.workspace = true
 ratatui = { version = "0.30", default-features = false, features = [

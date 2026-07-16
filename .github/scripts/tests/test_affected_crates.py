@@ -60,15 +60,95 @@ class LocalPlannerContract(unittest.TestCase):
     def test_emit_writes_structured_local_output(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "affected.json"
+            github_output = Path(directory) / "github-output"
             with patch.dict(
-                os.environ, {"QOL_AFFECTED_OUTPUT": str(output)}, clear=True
+                os.environ,
+                {
+                    "GITHUB_OUTPUT": str(github_output),
+                    "QOL_AFFECTED_OUTPUT": str(output),
+                },
+                clear=True,
             ):
-                ac.emit({"ubuntu_skip": "true", "ubuntu_test": ""})
+                ac.emit(
+                    {
+                        "ubuntu_skip": "true",
+                        "ubuntu_test": "",
+                        "windows_process": True,
+                        "windows_qol": False,
+                    }
+                )
 
             self.assertEqual(
                 json.loads(output.read_text()),
-                {"ubuntu_skip": "true", "ubuntu_test": ""},
+                {
+                    "ubuntu_skip": "true",
+                    "ubuntu_test": "",
+                    "windows_process": True,
+                    "windows_qol": False,
+                },
             )
+            self.assertEqual(
+                github_output.read_text(),
+                "ubuntu_skip=true\nubuntu_test=\n"
+                "windows_process=true\nwindows_qol=false\n",
+            )
+
+    def test_terminal_plans_set_windows_targets(self):
+        cases = [(ac.full_workspace, True), (ac.skip_all, False)]
+        for planner, expected in cases:
+            with self.subTest(planner=planner.__name__):
+                with patch.object(ac, "emit") as emit:
+                    planner("test")
+
+                    self.assertIs(
+                        emit.call_args.args[0]["windows_process"], expected
+                    )
+                    self.assertIs(
+                        emit.call_args.args[0]["windows_qol"], expected
+                    )
+
+    @patch.object(ac, "full_workspace")
+    @patch.object(ac, "changed_files")
+    def test_global_change_uses_full_workspace(self, changed_files, full_workspace):
+        changed_files.return_value = [".github/workflows/ci.yml"]
+        with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
+            ac.main()
+
+        full_workspace.assert_called_once_with(
+            "global file changed: .github/workflows/ci.yml"
+        )
+
+    @patch.object(ac, "emit")
+    @patch.object(ac, "workspace_graph")
+    @patch.object(ac, "changed_files")
+    def test_windows_targets_track_affected_packages(self, changed_files, graph, emit):
+        graph.return_value = {
+            "foundation": {"dir": "libs/foundation", "deps": set()},
+            "qol-process": {"dir": "libs/qol-process", "deps": {"foundation"}},
+            "qol": {"dir": "tools/qol-cli", "deps": {"qol-process"}},
+            "unrelated": {"dir": "libs/unrelated", "deps": set()},
+        }
+        cases = [
+            ("libs/qol-process/src/lib.rs", True, True),
+            ("libs/foundation/src/lib.rs", True, True),
+            ("tools/qol-cli/src/main.rs", False, True),
+            ("libs/unrelated/src/lib.rs", False, False),
+        ]
+        with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
+            for path, process_expected, qol_expected in cases:
+                with self.subTest(path=path):
+                    changed_files.return_value = [path]
+                    emit.reset_mock()
+
+                    ac.main()
+
+                    self.assertIs(
+                        emit.call_args.args[0]["windows_process"],
+                        process_expected,
+                    )
+                    self.assertIs(
+                        emit.call_args.args[0]["windows_qol"], qol_expected
+                    )
 
 
 if __name__ == "__main__":

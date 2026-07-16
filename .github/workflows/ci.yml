@@ -28,6 +28,8 @@ jobs:
       macos_clippy: ${{ steps.affected.outputs.macos_clippy }}
       macos_test: ${{ steps.affected.outputs.macos_test }}
       macos_skip: ${{ steps.affected.outputs.macos_skip }}
+      windows_process: ${{ steps.affected.outputs.windows_process }}
+      windows_qol: ${{ steps.affected.outputs.windows_qol }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -111,7 +113,94 @@ jobs:
         run: cargo clippy $CLIPPY_ARGS -- -D warnings
 
       - name: Test
-        if: matrix.skip != 'true'
+        if: runner.os == 'Linux' && matrix.skip != 'true'
+        env:
+          TEST_ARGS: ${{ matrix.test_args }}
+        run: |
+          cgroup_mount=/sys/fs/cgroup
+          [[ $(stat -fc '%T' "$cgroup_mount") == cgroup2fs ]] || {
+            echo '::error::qol-process tests require unified cgroup v2'
+            exit 1
+          }
+          cgroup_path=$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup)
+          [[ -n "$cgroup_path" ]] || {
+            echo '::error::current cgroup v2 path is unavailable'
+            exit 1
+          }
+          cgroup_origin="$cgroup_mount$cgroup_path"
+          cgroup_root="$cgroup_origin/qol-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-$$"
+          journal_root="$RUNNER_TEMP/qol-process-cgroups-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-$$"
+          mkdir -m 700 "$journal_root"
+          cleanup_cgroup() {
+            status=$?
+            trap - EXIT
+            set +e
+            printf '%s\n' "$$" | sudo tee "$cgroup_origin/cgroup.procs" >/dev/null
+            restored=$?
+            killed=0
+            removed=0
+            journal_removed=0
+            if ((restored == 0)); then
+              printf '1\n' | sudo tee "$cgroup_root/cgroup.kill" >/dev/null
+              killed=$?
+              if ((killed == 0)); then
+                for _ in {1..100}; do
+                  grep -q '^populated 0$' "$cgroup_root/cgroup.events" && break
+                  sleep 0.05
+                done
+              fi
+              while IFS= read -r cgroup; do
+                sudo rmdir "$cgroup" || removed=1
+              done < <(sudo find "$cgroup_root" -depth -type d -print)
+              sudo test ! -d "$cgroup_root" || removed=1
+              rm -f "$journal_root/registry.guard" || journal_removed=1
+              rmdir "$journal_root" || journal_removed=1
+            fi
+            if ((status == 0 && (restored != 0 || killed != 0 || removed != 0 || journal_removed != 0))); then
+              status=1
+            fi
+            exit "$status"
+          }
+          trap cleanup_cgroup EXIT
+          sudo mkdir "$cgroup_root"
+          sudo chown "$(id -u):$(id -g)" \
+            "$cgroup_root" \
+            "$cgroup_root/cgroup.procs" \
+            "$cgroup_root/cgroup.subtree_control" \
+            "$cgroup_root/cgroup.threads"
+          printf '%s\n' "$$" | sudo tee "$cgroup_root/cgroup.procs" >/dev/null
+          export QOL_PROCESS_CGROUP_ROOT="$cgroup_root"
+          export QOL_PROCESS_CGROUP_JOURNAL_ROOT="$journal_root"
+          cargo test $TEST_ARGS
+
+      - name: Test
+        if: runner.os == 'macOS' && matrix.skip != 'true'
         env:
           TEST_ARGS: ${{ matrix.test_args }}
         run: cargo test $TEST_ARGS
+
+  process-windows:
+    name: sandbox lifecycle (windows)
+    needs: plan
+    if: >-
+      ${{ fromJSON(needs.plan.outputs.windows_process || 'false') ||
+      fromJSON(needs.plan.outputs.windows_qol || 'false') }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: ci-windows-sandbox
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Check production CLI
+        if: ${{ fromJSON(needs.plan.outputs.windows_qol) }}
+        run: cargo check -p qol --bin qol --all-targets
+
+      - name: Test process containment
+        if: ${{ fromJSON(needs.plan.outputs.windows_process) }}
+        run: cargo test -p qol-process --all-targets

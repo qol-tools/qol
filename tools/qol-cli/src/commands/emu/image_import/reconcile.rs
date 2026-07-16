@@ -881,7 +881,7 @@ mod tests {
         assert_eq!(recovered.status, ReportStatus::CleanupIncomplete);
         assert!(matches!(recovered.cleanup, CleanupState::Incomplete(_)));
         assert!(layout.stage_path.is_file());
-        assert_eq!(recovered.document()["teardown"]["phase"], "identity");
+        assert_eq!(recovered.document()["teardown"]["phase"], "vm-identity");
     }
 
     #[test]

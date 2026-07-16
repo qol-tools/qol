@@ -11,8 +11,16 @@ pub(crate) fn parse_cli(args: Vec<OsString>) -> CliArgs {
     let mut values = Vec::new();
     let mut verbose = false;
     let mut skip_plugins = false;
+    let mut options = true;
     for arg in args {
-        match arg.to_str() {
+        if options && arg == "--" {
+            options = false;
+            if !values.is_empty() {
+                values.push(arg);
+            }
+            continue;
+        }
+        match options.then(|| arg.to_str()).flatten() {
             Some("--verbose" | "-v") => {
                 verbose = true;
                 continue;
@@ -45,7 +53,7 @@ pub(crate) fn help_only(args: &[OsString]) -> bool {
 }
 
 pub(crate) fn help_text() -> &'static str {
-    "qol commands:\n  qol setup\n  qol dev [worktree|--base]\n  qol env <list|doctor|up|image|runs|down|shot>\n  qol flow <run|runs>\n  qol emu <list|doctor|up|run|down>\n  qol cat [--no-less] [--plain|--color=auto|always|never] <path|->\n  qol build [name]\n  qol check\n  qol clean [name]\n  qol install\n  qol sync\n  qol trace [name]\n  qol doctor [step]\n\nOptions:\n  -v, --verbose     show child command output\n  -n, --no-plugins  qol dev: skip plugin rebuilds\n"
+    "qol commands:\n  qol setup\n  qol dev [worktree|--base]\n  qol env <list|doctor|up|image|runs|down|shot>\n  qol flow <run|runs>\n  qol emu <list|doctor|up|run|down>\n  qol cat [--no-less] [--plain|--color=auto|always|never] <path|->\n  qol build [name]\n  qol check\n  qol clean [name]\n  qol install\n  qol sync\n  qol trace [name]\n  qol doctor [step]\n\nOptions:\n  -v, --verbose     show child command output\n  -n, --no-plugins  qol dev: skip plugin rebuilds\n  --                 stop parsing global options; keep following command arguments\n"
 }
 
 pub(crate) fn optional_single_arg<'a>(
@@ -81,6 +89,32 @@ mod tests {
         let args = parse_cli(vec!["install".into(), "-v".into()]);
         assert!(args.verbose);
         assert_eq!(args.values, vec![OsString::from("install")]);
+    }
+
+    #[test]
+    fn preserves_delimiter_and_arguments_after_command() {
+        let args = parse_cli(vec![
+            "emu".into(),
+            "sh".into(),
+            "run-a".into(),
+            "--".into(),
+            "echo".into(),
+            "-v".into(),
+            "--no-plugins".into(),
+        ]);
+        assert!(!args.verbose);
+        assert!(!args.skip_plugins);
+        assert_eq!(
+            args.values,
+            ["emu", "sh", "run-a", "--", "echo", "-v", "--no-plugins"].map(OsString::from)
+        );
+    }
+
+    #[test]
+    fn leading_delimiter_stops_global_parsing_without_becoming_the_command() {
+        let args = parse_cli(vec!["--".into(), "install".into(), "-v".into()]);
+        assert!(!args.verbose);
+        assert_eq!(args.values, ["install", "-v"].map(OsString::from));
     }
 
     #[test]

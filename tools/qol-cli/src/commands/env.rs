@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const TEARDOWN_TIMEOUT: Duration = Duration::from_secs(15);
+const TYPED_WORKER_TERMINATION_GRACE: Duration = Duration::from_secs(2);
 const UP_USAGE: &str =
     "qol env up <environment> [--count N] [--memory-mb N] [--cpus N] [--windowed] [--force]";
 const IMAGE_IMPORT_USAGE: &str =
@@ -73,6 +74,7 @@ impl LanePhase {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Lane {
     run_id: String,
+    case_root: PathBuf,
     run_dir: PathBuf,
     report_path: PathBuf,
     phase: LanePhase,
@@ -84,6 +86,7 @@ impl Lane {
         let report_path = run_dir.join("report.json");
         Self {
             run_id,
+            case_root: runs_root.to_path_buf(),
             run_dir,
             report_path,
             phase: LanePhase::Attempting,
@@ -148,11 +151,19 @@ enum BatchExecution {
 
 trait CancellationSource {
     fn is_cancelled(&self) -> bool;
+
+    fn escalation_requested(&self) -> bool {
+        false
+    }
 }
 
 impl CancellationSource for qol_process::CancellationToken {
     fn is_cancelled(&self) -> bool {
         self.is_cancelled()
+    }
+
+    fn escalation_requested(&self) -> bool {
+        self.escalation_requested()
     }
 }
 
@@ -164,6 +175,10 @@ struct EnvironmentCancellation<'a> {
 impl CancellationSource for EnvironmentCancellation<'_> {
     fn is_cancelled(&self) -> bool {
         self.signals.is_cancelled() || self.inbox.is_requested().unwrap_or(true)
+    }
+
+    fn escalation_requested(&self) -> bool {
+        self.signals.escalation_requested()
     }
 }
 
@@ -295,8 +310,10 @@ pub(crate) fn start_typed_image_import(
         bail!("image-import plan produced a mismatched report path");
     }
     let plan_fingerprint = plan.fingerprint()?;
+    let guardian = qol_process::process_tree_guardian_command(executable);
     qol_dev_orchestrator::start_image_import_worker(
         executable,
+        guardian,
         ImageImportWorkerRequest {
             start: canonical_start,
             image_root: plan.image_root,
@@ -313,9 +330,18 @@ fn wait_for_typed_image_import(
 ) -> Result<emu::image_import::ImageImportReceipt> {
     let mut cancellation_requested = false;
     loop {
+        let mut cancellation_error = None;
         if cancellation.is_cancelled() && !cancellation_requested {
-            handle.cancel()?;
             cancellation_requested = true;
+            if let Err(error) = handle.cancel() {
+                cancellation_error = Some(format!("{error:#}"));
+            }
+        }
+        if cancellation.escalation_requested() {
+            return escalate_typed_image_import(handle, cancellation_error.as_deref());
+        }
+        if let Some(error) = cancellation_error {
+            bail!("failed to request graceful image-import cancellation: {error}");
         }
         match handle.poll()? {
             WaitState::Starting | WaitState::Running(_) => {}
@@ -339,6 +365,58 @@ fn wait_for_typed_image_import(
             }
         }
         thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn escalate_typed_image_import(
+    handle: &mut RunHandle,
+    cancellation_error: Option<&str>,
+) -> Result<emu::image_import::ImageImportReceipt> {
+    let terminated = handle
+        .terminate_worker(TYPED_WORKER_TERMINATION_GRACE)
+        .context("failed to terminate the verified image-import worker process tree")?;
+    if terminated.is_some() {
+        emu::image_import::reconcile_leased_imports()
+            .context("image-import worker tree stopped, but its report could not be reconciled")?;
+        dev_env::reconcile_resources().context(
+            "image-import worker tree stopped, but its resource lease could not be reconciled",
+        )?;
+    }
+    match handle.poll()? {
+        WaitState::Terminal {
+            report,
+            worker_success,
+        } => {
+            let result = image_import_receipt(handle.ticket(), report, worker_success)
+                .context("image import stopped after second-signal escalation");
+            match cancellation_error {
+                Some(error) => result.context(format!(
+                    "graceful cancellation could not be persisted before escalation: {error}"
+                )),
+                None => result,
+            }
+        }
+        WaitState::Failed {
+            report,
+            worker_exit,
+        } => {
+            let status = report
+                .as_ref()
+                .map(|report| report.status.as_str())
+                .unwrap_or("missing");
+            let graceful = cancellation_error
+                .map(|error| format!("; graceful cancellation error: {error}"))
+                .unwrap_or_default();
+            bail!(
+                "second signal terminated the verified image-import worker tree; worker exit: {worker_exit}; report status: {status}; evidence: {}; worker log: {}{graceful}",
+                handle.ticket().report_path.display(),
+                handle.ticket().worker_log_path()?.display(),
+            )
+        }
+        WaitState::Starting | WaitState::Running(_) => bail!(
+            "verified image-import worker tree terminated, but its worker still appears active; evidence: {}",
+            handle.ticket().report_path.display()
+        ),
     }
 }
 
@@ -683,7 +761,7 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
                 finished_at_unix_ms: None,
             })
         },
-        |lanes| teardown_lanes(lanes, verbose),
+        |lanes| teardown_lanes_cancellable(lanes, verbose, &cancellation),
     );
     let lanes = match execution {
         BatchExecution::Running(lanes) => {
@@ -974,13 +1052,21 @@ fn cmd_down(args: &[OsString], verbose: bool) -> Result<()> {
     }
     let lanes = runs
         .into_iter()
-        .map(|run| Lane {
-            run_id: run.run_id,
-            run_dir: run.run_dir.clone(),
-            report_path: run.run_dir.join("report.json"),
-            phase: LanePhase::Running,
+        .map(|run| {
+            let case_root = run
+                .run_dir
+                .parent()
+                .map(Path::to_path_buf)
+                .context("verified environment run has no case root")?;
+            Ok(Lane {
+                run_id: run.run_id,
+                case_root,
+                run_dir: run.run_dir.clone(),
+                report_path: run.run_dir.join("report.json"),
+                phase: LanePhase::Running,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
     let teardown = teardown_lanes(&lanes, verbose);
     let reconciliation = reconcile_batch_reports(&teardown, true)
         .and_then(|()| dev_env::reconcile_resources().map(|_| ()));
@@ -1433,12 +1519,12 @@ fn wait_until_running(lane: &Lane, cancellation: &impl CancellationSource) -> Re
         if cancellation.is_cancelled() {
             bail!("environment launch cancelled");
         }
-        if let Some(state) = read_report_state(&lane.report_path)? {
-            if state == "running" {
+        if let Some(report) = read_report_lifecycle(lane)? {
+            if report.status == "running" {
                 return Ok(());
             }
-            if matches!(state.as_str(), "failed" | "skipped" | "pass") {
-                bail!("emu `{}` reported status `{state}`", lane.run_id);
+            if matches!(report.status.as_str(), "failed" | "skipped" | "pass") {
+                bail!("emu `{}` reported status `{}`", lane.run_id, report.status);
             }
         }
         thread::sleep(READY_POLL_INTERVAL);
@@ -1450,58 +1536,143 @@ fn wait_until_running(lane: &Lane, cancellation: &impl CancellationSource) -> Re
     )
 }
 
-fn read_report_state(path: &Path) -> Result<Option<String>> {
-    Ok(read_report(path)?
-        .as_ref()
-        .and_then(|report| report.get("status"))
-        .and_then(Value::as_str)
-        .map(str::to_string))
-}
-
-fn read_report_lifecycle(path: &Path) -> Result<Option<ReportLifecycle>> {
-    let Some(report) = read_report(path)? else {
+fn read_report_lifecycle(lane: &Lane) -> Result<Option<ReportLifecycle>> {
+    validate_lane_paths(lane)?;
+    let Some(report) = qol_dev_env::read_report_checked(
+        &lane.report_path,
+        &lane.run_id,
+        &qol_dev_env::ReportKind::Environment,
+    )?
+    else {
         return Ok(None);
     };
-    let status = report
-        .get("status")
-        .and_then(Value::as_str)
-        .context("run report has no status")?
-        .to_string();
-    let cleanup = cleanup_verification(&report, &status);
-    Ok(Some(ReportLifecycle { status, cleanup }))
-}
-
-fn read_report(path: &Path) -> Result<Option<Value>> {
-    let content = match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error).with_context(|| format!("failed to read {}", path.display()))
-        }
-    };
-    let report = serde_json::from_str(&content)
-        .with_context(|| format!("failed to parse {}", path.display()))?;
-    Ok(Some(report))
-}
-
-fn cleanup_verification(report: &Value, status: &str) -> CleanupVerification {
-    let status = qol_dev_env::ReportStatus::parse(status);
-    match qol_dev_env::report::child_cleanup(report, &status) {
+    let status = report.status.as_str().to_string();
+    let cleanup = match report.cleanup {
         qol_dev_env::CleanupState::Pending => CleanupVerification::Pending,
         qol_dev_env::CleanupState::Complete => CleanupVerification::Complete,
         qol_dev_env::CleanupState::Incomplete(error) => CleanupVerification::Incomplete(error),
+    };
+    Ok(Some(ReportLifecycle { status, cleanup }))
+}
+
+fn validate_lane_paths(lane: &Lane) -> Result<()> {
+    if !safe_run_id(&lane.run_id) {
+        bail!("environment lane has unsafe run ID `{}`", lane.run_id);
     }
+    let cases_root = &lane.case_root;
+    if cases_root.file_name().and_then(|name| name.to_str()) != Some("cases") {
+        bail!("environment lane is outside the canonical cases directory");
+    }
+    let run_root = cases_root
+        .parent()
+        .context("environment lane has no run root")?;
+    let expected_run_dir = cases_root.join(&lane.run_id);
+    let expected_report = expected_run_dir.join("report.json");
+    if lane.run_dir != expected_run_dir || lane.report_path != expected_report {
+        bail!(
+            "environment lane `{}` path contract does not match its canonical location",
+            lane.run_id
+        );
+    }
+    let canonical_root = run_root
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize run root {}", run_root.display()))?;
+    let canonical_cases = match cases_root.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to canonicalize {}", cases_root.display()))
+        }
+    };
+    if canonical_cases != canonical_root.join("cases") {
+        bail!("environment cases directory escapes its canonical run root");
+    }
+    let canonical_run_dir = match lane.run_dir.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to canonicalize {}", lane.run_dir.display()))
+        }
+    };
+    if canonical_run_dir != canonical_cases.join(&lane.run_id) {
+        bail!("environment lane directory escapes its canonical cases root");
+    }
+    match lane.report_path.canonicalize() {
+        Ok(path) if path == canonical_run_dir.join("report.json") => Ok(()),
+        Ok(_) => bail!("environment lane report escapes its canonical run directory"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to canonicalize {}", lane.report_path.display())),
+    }
+}
+
+fn safe_run_id(run_id: &str) -> bool {
+    !run_id.is_empty()
+        && run_id != "."
+        && run_id != ".."
+        && !run_id.contains('/')
+        && !run_id.contains('\\')
 }
 
 fn teardown_lanes(lanes: &[Lane], verbose: bool) -> Vec<TeardownResult> {
     lanes
         .iter()
         .rev()
-        .map(|lane| teardown_lane(lane, verbose))
+        .map(|lane| teardown_lane(lane, verbose, &|| false, &shutdown_exact_lane))
         .collect()
 }
 
-fn teardown_lane(lane: &Lane, verbose: bool) -> TeardownResult {
+fn teardown_lanes_cancellable(
+    lanes: &[Lane],
+    verbose: bool,
+    cancellation: &(impl CancellationSource + Sync),
+) -> Vec<TeardownResult> {
+    teardown_lanes_concurrently(lanes, verbose, cancellation, &shutdown_exact_lane)
+}
+
+fn teardown_lanes_concurrently<C, S>(
+    lanes: &[Lane],
+    verbose: bool,
+    cancellation: &C,
+    shutdown: &S,
+) -> Vec<TeardownResult>
+where
+    C: CancellationSource + Sync,
+    S: Fn(&Lane, bool) -> Result<()> + Sync,
+{
+    thread::scope(|scope| {
+        lanes
+            .iter()
+            .rev()
+            .map(|lane| {
+                scope.spawn(move || {
+                    teardown_lane(
+                        lane,
+                        verbose,
+                        &|| cancellation.escalation_requested(),
+                        shutdown,
+                    )
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|worker| worker.join().expect("environment lane teardown panicked"))
+            .collect()
+    })
+}
+
+fn teardown_lane<E, S>(
+    lane: &Lane,
+    verbose: bool,
+    escalation_requested: &E,
+    shutdown: &S,
+) -> TeardownResult
+where
+    E: Fn() -> bool,
+    S: Fn(&Lane, bool) -> Result<()>,
+{
     if lane.phase == LanePhase::Attempting {
         return TeardownResult {
             run_id: lane.run_id.clone(),
@@ -1516,7 +1687,7 @@ fn teardown_lane(lane: &Lane, verbose: bool) -> TeardownResult {
     let mut stop_error = None;
     let mut last_report_status = None;
     while Instant::now() < deadline {
-        match read_report_lifecycle(&lane.report_path) {
+        match read_report_lifecycle(lane) {
             Ok(Some(report)) => {
                 last_report_status = Some(report.status.clone());
                 if report.cleanup == CleanupVerification::Complete {
@@ -1531,29 +1702,23 @@ fn teardown_lane(lane: &Lane, verbose: bool) -> TeardownResult {
                 if let CleanupVerification::Incomplete(error) = report.cleanup {
                     if !stop_attempted {
                         stop_attempted = true;
-                        if let Err(stop) =
-                            forward_emu("down", &lane.run_id, verbose, &lane_control_roots(lane))
-                        {
+                        if let Err(stop) = shutdown(lane, verbose) {
                             stop_error = Some(format!("cleanup retry failed: {stop:#}"));
                         }
                         thread::sleep(READY_POLL_INTERVAL);
                         continue;
                     }
-                    let error = append_error(stop_error, error);
                     return TeardownResult {
                         run_id: lane.run_id.clone(),
                         status: "failed",
                         verification: "cleanup-incomplete",
                         report_status: Some(report.status),
-                        stop_error: Some(error),
+                        stop_error: Some(append_error(stop_error, error)),
                     };
                 }
-                let running = report.status == "running";
-                if running && !stop_attempted {
+                if report.status == "running" && !stop_attempted {
                     stop_attempted = true;
-                    if let Err(error) =
-                        forward_emu("down", &lane.run_id, verbose, &lane_control_roots(lane))
-                    {
+                    if let Err(error) = shutdown(lane, verbose) {
                         stop_error = Some(format!("stop request failed: {error:#}"));
                     }
                 }
@@ -1563,10 +1728,29 @@ fn teardown_lane(lane: &Lane, verbose: bool) -> TeardownResult {
                 stop_error = Some(format!("report inspection failed: {error:#}"));
             }
         }
+        if escalation_requested() {
+            if !stop_attempted {
+                if let Err(error) = shutdown(lane, verbose) {
+                    stop_error = Some(append_error(
+                        stop_error,
+                        format!("stop request failed: {error:#}"),
+                    ));
+                }
+            }
+            let escalation_error =
+                "second signal stopped waiting before terminal cleanup was verified".to_string();
+            return TeardownResult {
+                run_id: lane.run_id.clone(),
+                status: "failed",
+                verification: "second-signal-unverified",
+                report_status: last_report_status,
+                stop_error: Some(append_error(stop_error, escalation_error)),
+            };
+        }
         thread::sleep(READY_POLL_INTERVAL);
     }
     if !stop_attempted {
-        if let Err(error) = forward_emu("down", &lane.run_id, verbose, &lane_control_roots(lane)) {
+        if let Err(error) = shutdown(lane, verbose) {
             stop_error = Some(format!("stop request failed: {error:#}"));
         }
     }
@@ -1584,6 +1768,10 @@ fn teardown_lane(lane: &Lane, verbose: bool) -> TeardownResult {
         report_status: last_report_status,
         stop_error,
     }
+}
+
+fn shutdown_exact_lane(lane: &Lane, verbose: bool) -> Result<()> {
+    forward_emu("down", &lane.run_id, verbose, &lane_control_roots(lane))
 }
 
 fn append_error(existing: Option<String>, error: String) -> String {
@@ -1682,6 +1870,9 @@ fn reconcile_batch_report_file(
     if batch_owner_active(&report) {
         return Ok(());
     }
+    let run_root = run_dir
+        .parent()
+        .context("environment batch has no canonical run root")?;
     let mut lane_states = BTreeMap::new();
     for run in report
         .get("runs")
@@ -1692,13 +1883,16 @@ fn reconcile_batch_report_file(
         let Some(run_id) = run.get("run_id").and_then(Value::as_str) else {
             continue;
         };
-        let lifecycle = run
-            .get("report")
-            .and_then(Value::as_str)
-            .map(PathBuf::from)
-            .map(|report_path| read_report_lifecycle(&report_path))
-            .transpose()?
-            .flatten();
+        let lifecycle = match recorded_lane(run_root, run).and_then(|lane| {
+            read_report_lifecycle(&lane)
+                .with_context(|| format!("invalid environment lane `{run_id}` report"))
+        }) {
+            Ok(lifecycle) => lifecycle,
+            Err(error) => Some(ReportLifecycle {
+                status: "invalid-report".to_string(),
+                cleanup: CleanupVerification::Incomplete(format!("{error:#}")),
+            }),
+        };
         lane_states.insert(run_id.to_string(), lifecycle);
     }
     let reconciled =
@@ -1721,6 +1915,38 @@ fn reconcile_batch_report_file(
     Ok(())
 }
 
+fn recorded_lane(run_root: &Path, run: &Value) -> Result<Lane> {
+    let run_id = run
+        .get("run_id")
+        .and_then(Value::as_str)
+        .context("environment lane has no run ID")?;
+    if !safe_run_id(run_id) {
+        bail!("environment lane has unsafe run ID `{run_id}`");
+    }
+    let run_dir = run_root.join("cases").join(run_id);
+    let report_path = run_dir.join("report.json");
+    let recorded_run_dir = run
+        .get("run_dir")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .context("environment lane has no recorded run directory")?;
+    let recorded_report = run
+        .get("report")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .context("environment lane has no recorded report path")?;
+    if recorded_run_dir != run_dir || recorded_report != report_path {
+        bail!("environment lane `{run_id}` recorded path escapes its canonical location");
+    }
+    Ok(Lane {
+        run_id: run_id.to_string(),
+        case_root: run_root.join("cases"),
+        run_dir,
+        report_path,
+        phase: LanePhase::Running,
+    })
+}
+
 fn reconciled_batch_report(
     report: &Value,
     lane_states: &BTreeMap<String, Option<ReportLifecycle>>,
@@ -1732,6 +1958,12 @@ fn reconciled_batch_report(
         return reconciled;
     };
     let owner_interrupted = batch_owner_interrupted(object);
+    let owner_released = object
+        .get("owner")
+        .and_then(|owner| owner.get("state"))
+        .and_then(Value::as_str)
+        == Some("released");
+    let owner_inactive = owner_interrupted || owner_released;
     let mut active = false;
     let mut incomplete = false;
     let mut affected = false;
@@ -1754,7 +1986,7 @@ fn reconciled_batch_report(
             let planned_not_started = owner_interrupted
                 && lifecycle.is_none()
                 && phase == Some(LanePhase::Attempting.as_str());
-            let uncertain_launch = owner_interrupted && lifecycle.is_none() && !planned_not_started;
+            let uncertain_launch = owner_inactive && lifecycle.is_none() && !planned_not_started;
             let mut state = lifecycle.as_ref().map(|lifecycle| lifecycle.status.clone());
             let mut cleanup_complete = lifecycle
                 .as_ref()
@@ -2266,7 +2498,22 @@ mod tests {
     use super::*;
     use qol_dev_env::{BootDefinition, EnvironmentDefinition, ImageDefinition, MountDefinition};
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tempfile::tempdir;
+
+    struct TestCancellation {
+        escalated: AtomicBool,
+    }
+
+    impl CancellationSource for TestCancellation {
+        fn is_cancelled(&self) -> bool {
+            self.escalated.load(Ordering::Acquire)
+        }
+
+        fn escalation_requested(&self) -> bool {
+            self.escalated.load(Ordering::Acquire)
+        }
+    }
 
     fn os_args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
@@ -2599,6 +2846,7 @@ mod tests {
         let run_dir = prepare_batch_dir(temp.path(), "batch-1").unwrap();
         let lane = Lane {
             run_id: "lane-1".to_string(),
+            case_root: PathBuf::from("/runs"),
             run_dir: PathBuf::from("/runs/lane-1"),
             report_path: PathBuf::from("/runs/lane-1/report.json"),
             phase: LanePhase::Running,
@@ -2873,7 +3121,121 @@ mod tests {
     }
 
     #[test]
-    fn terminal_cleanup_requires_complete_orphan_evidence() {
+    fn second_signal_stops_all_lane_waits_after_exact_shutdown_attempts() {
+        let temp = tempdir().unwrap();
+        let lanes = (0..3)
+            .map(|index| {
+                let run_id = format!("lane-{index}");
+                let run_dir = temp.path().join("cases").join(&run_id);
+                fs::create_dir_all(&run_dir).unwrap();
+                let report_path = run_dir.join("report.json");
+                write_json(
+                    &report_path,
+                    &json!({
+                        "kind": "environment",
+                        "run_id": run_id,
+                        "status": "running",
+                        "teardown": null,
+                    }),
+                )
+                .unwrap();
+                Lane {
+                    run_id,
+                    case_root: temp.path().join("cases"),
+                    run_dir,
+                    report_path,
+                    phase: LanePhase::Running,
+                }
+            })
+            .collect::<Vec<_>>();
+        let cancellation = TestCancellation {
+            escalated: AtomicBool::new(false),
+        };
+        let shutdowns = AtomicUsize::new(0);
+
+        let teardown = teardown_lanes_concurrently(&lanes, false, &cancellation, &|_, _| {
+            shutdowns.fetch_add(1, Ordering::AcqRel);
+            cancellation.escalated.store(true, Ordering::Release);
+            Ok(())
+        });
+
+        assert_eq!(shutdowns.load(Ordering::Acquire), lanes.len());
+        assert_eq!(
+            teardown
+                .iter()
+                .map(|result| result.run_id.as_str())
+                .collect::<Vec<_>>(),
+            ["lane-2", "lane-1", "lane-0"]
+        );
+        assert!(teardown.iter().all(|result| {
+            !result.succeeded()
+                && result.verification == "second-signal-unverified"
+                && result.report_status.as_deref() == Some("running")
+                && result
+                    .stop_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("terminal cleanup was verified"))
+        }));
+        let evidence = teardown_json(&teardown);
+        assert_eq!(evidence["status"], "incomplete");
+        assert!(evidence["lanes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|lane| lane["verification"] == "second-signal-unverified"));
+        assert_eq!(
+            rollback_status(true, false),
+            "cancellation-cleanup-incomplete"
+        );
+    }
+
+    #[test]
+    fn verified_cleanup_wins_when_second_signal_arrives() {
+        let temp = tempdir().unwrap();
+        let run_dir = temp.path().join("cases/lane-terminal");
+        fs::create_dir_all(&run_dir).unwrap();
+        let report_path = run_dir.join("report.json");
+        write_json(
+            &report_path,
+            &json!({
+                "kind": "environment",
+                "run_id": "lane-terminal",
+                "status": "pass",
+                "teardown": {
+                    "status": "complete",
+                    "qemu_exit_verified": true,
+                    "tree_exit_verified": true,
+                    "removed": [],
+                },
+            }),
+        )
+        .unwrap();
+        let lane = Lane {
+            run_id: "lane-terminal".to_string(),
+            case_root: temp.path().join("cases"),
+            run_dir,
+            report_path,
+            phase: LanePhase::Running,
+        };
+        let cancellation = TestCancellation {
+            escalated: AtomicBool::new(true),
+        };
+        let shutdowns = AtomicUsize::new(0);
+
+        let teardown = teardown_lanes_concurrently(&[lane], false, &cancellation, &|_, _| {
+            shutdowns.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        });
+
+        assert_eq!(shutdowns.load(Ordering::Acquire), 0);
+        assert_eq!(teardown.len(), 1);
+        assert!(teardown[0].succeeded());
+        assert_eq!(teardown[0].verification, "verified-cleanup");
+        assert_eq!(teardown[0].report_status.as_deref(), Some("pass"));
+    }
+
+    #[test]
+    fn typed_lane_loader_requires_complete_orphan_evidence() {
         let cases = [
             (
                 "preparing",
@@ -2950,9 +3312,122 @@ mod tests {
                 CleanupVerification::Pending,
             ),
         ];
-        for (status, report, expected) in cases {
-            assert_eq!(cleanup_verification(&report, status), expected);
+        for (status, mut report, expected) in cases {
+            let temp = tempdir().unwrap();
+            let run_dir = temp.path().join("cases/lane-1");
+            fs::create_dir_all(&run_dir).unwrap();
+            let report_path = run_dir.join("report.json");
+            report["kind"] = json!("environment");
+            report["run_id"] = json!("lane-1");
+            write_json(&report_path, &report).unwrap();
+            let lane = Lane {
+                run_id: "lane-1".to_string(),
+                case_root: temp.path().join("cases"),
+                run_dir,
+                report_path,
+                phase: LanePhase::Running,
+            };
+
+            let lifecycle = read_report_lifecycle(&lane).unwrap().unwrap();
+
+            assert_eq!(lifecycle.status, status);
+            assert_eq!(lifecycle.cleanup, expected);
         }
+    }
+
+    #[test]
+    fn readiness_rejects_wrong_kind_and_missing_run_identity() {
+        let cases = [
+            (
+                json!({
+                    "kind": "flow",
+                    "run_id": "lane-1",
+                    "status": "running",
+                }),
+                "expected `environment`",
+            ),
+            (
+                json!({
+                    "kind": "environment",
+                    "status": "running",
+                }),
+                "has no run_id",
+            ),
+        ];
+        for (report, expected) in cases {
+            let temp = tempdir().unwrap();
+            let run_dir = temp.path().join("cases/lane-1");
+            fs::create_dir_all(&run_dir).unwrap();
+            let report_path = run_dir.join("report.json");
+            write_json(&report_path, &report).unwrap();
+            let lane = Lane {
+                run_id: "lane-1".to_string(),
+                case_root: temp.path().join("cases"),
+                run_dir,
+                report_path,
+                phase: LanePhase::Spawned,
+            };
+
+            let cancellation = TestCancellation {
+                escalated: AtomicBool::new(false),
+            };
+            let error = wait_until_running(&lane, &cancellation).unwrap_err();
+
+            assert!(error.to_string().contains(expected));
+        }
+    }
+
+    #[test]
+    fn typed_lane_loader_accepts_multiple_explicit_trusted_case_roots() {
+        let temp = tempdir().unwrap();
+        for root in [temp.path().join("first"), temp.path().join("second")] {
+            let case_root = root.join("cases");
+            let lane = Lane::attempted("lane-1".to_string(), &case_root);
+            fs::create_dir_all(&lane.run_dir).unwrap();
+            write_json(
+                &lane.report_path,
+                &json!({
+                    "kind": "environment",
+                    "run_id": "lane-1",
+                    "status": "running",
+                }),
+            )
+            .unwrap();
+
+            let lifecycle = read_report_lifecycle(&lane).unwrap().unwrap();
+
+            assert_eq!(lifecycle.status, "running");
+        }
+    }
+
+    #[test]
+    fn typed_lane_loader_rejects_a_self_consistent_untrusted_case_root() {
+        let temp = tempdir().unwrap();
+        let trusted_case_root = temp.path().join("trusted/cases");
+        let untrusted_run_dir = temp.path().join("untrusted/cases/lane-1");
+        fs::create_dir_all(&trusted_case_root).unwrap();
+        fs::create_dir_all(&untrusted_run_dir).unwrap();
+        let report_path = untrusted_run_dir.join("report.json");
+        write_json(
+            &report_path,
+            &json!({
+                "kind": "environment",
+                "run_id": "lane-1",
+                "status": "running",
+            }),
+        )
+        .unwrap();
+        let lane = Lane {
+            run_id: "lane-1".to_string(),
+            case_root: trusted_case_root,
+            run_dir: untrusted_run_dir,
+            report_path,
+            phase: LanePhase::Running,
+        };
+
+        let error = read_report_lifecycle(&lane).unwrap_err();
+
+        assert!(error.to_string().contains("canonical location"));
     }
 
     #[test]
@@ -3129,6 +3604,35 @@ mod tests {
     }
 
     #[test]
+    fn released_batch_owner_with_missing_report_is_nonactive_and_incomplete() {
+        let report = json!({
+            "kind": "environment-batch",
+            "run_id": "batch-1",
+            "status": "running",
+            "owner": { "state": "released" },
+            "runs": [{
+                "run_id": "lane-1",
+                "phase": "running",
+                "run_dir": "/runs/cases/lane-1",
+                "report": "/runs/cases/lane-1/report.json",
+            }],
+        });
+        let states = BTreeMap::from([("lane-1".to_string(), None)]);
+
+        let reconciled = reconciled_batch_report(&report, &states, &BTreeMap::new(), 302);
+
+        assert_eq!(reconciled["status"], "rollback-incomplete");
+        assert_eq!(reconciled["owner"]["state"], "released");
+        assert_eq!(reconciled["teardown"]["status"], "incomplete");
+        assert_eq!(
+            reconciled["teardown"]["lanes"][0]["verification"],
+            "cleanup-incomplete"
+        );
+        assert!(reconciled.get("finished_at_unix_ms").is_none());
+        assert!(!ReportStatus::parse(reconciled["status"].as_str().unwrap()).is_active());
+    }
+
+    #[test]
     fn cleanup_incomplete_child_can_never_produce_successful_batch_teardown() {
         let report = json!({
             "kind": "environment-batch",
@@ -3167,6 +3671,8 @@ mod tests {
         write_json(
             &child_report,
             &json!({
+                "kind": "environment",
+                "run_id": "lane-1",
                 "status": "cleanup-incomplete",
                 "teardown": { "status": "incomplete", "error": "historic failure" },
             }),
@@ -3183,6 +3689,7 @@ mod tests {
                 "runs": [{
                     "run_id": "lane-1",
                     "phase": "running",
+                    "run_dir": child_dir,
                     "report": child_report,
                 }],
                 "teardown": { "status": "incomplete" },
@@ -3202,5 +3709,58 @@ mod tests {
 
         assert!(reconcile_batch_report_file(&batch_report, &teardown, false).is_ok());
         assert!(reconcile_batch_report_file(&batch_report, &teardown, true).is_err());
+    }
+
+    #[test]
+    fn recovery_rejects_recorded_lane_path_escape_as_cleanup_incomplete() {
+        let temp = tempfile::tempdir().unwrap();
+        let batch_dir = temp.path().join("batch-1");
+        let outside_dir = temp.path().join("outside/lane-1");
+        fs::create_dir_all(&batch_dir).unwrap();
+        fs::create_dir_all(&outside_dir).unwrap();
+        let outside_report = outside_dir.join("report.json");
+        write_json(
+            &outside_report,
+            &json!({
+                "kind": "environment",
+                "run_id": "lane-1",
+                "status": "pass",
+                "teardown": {
+                    "status": "complete",
+                    "qemu_exit_verified": true,
+                    "tree_exit_verified": true,
+                    "removed": [],
+                },
+            }),
+        )
+        .unwrap();
+        let batch_report = batch_dir.join("report.json");
+        write_json(
+            &batch_report,
+            &json!({
+                "kind": "environment-batch",
+                "run_id": "batch-1",
+                "status": "running",
+                "owner": { "state": "released" },
+                "runs": [{
+                    "run_id": "lane-1",
+                    "phase": "running",
+                    "run_dir": outside_dir,
+                    "report": outside_report,
+                }],
+            }),
+        )
+        .unwrap();
+
+        reconcile_batch_report_file(&batch_report, &BTreeMap::new(), false).unwrap();
+
+        let reconciled: Value = serde_json::from_slice(&fs::read(&batch_report).unwrap()).unwrap();
+        assert_eq!(reconciled["status"], "rollback-incomplete");
+        assert_eq!(reconciled["teardown"]["status"], "incomplete");
+        assert!(reconciled["teardown"]["lanes"][0]["verification"]
+            .as_str()
+            .unwrap()
+            .contains("cleanup-incomplete"));
+        assert!(outside_report.is_file());
     }
 }

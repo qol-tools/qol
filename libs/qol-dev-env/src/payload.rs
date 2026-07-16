@@ -146,7 +146,7 @@ pub fn create_read_only_iso(
     output_dir: &Path,
     iso_program: &OsStr,
 ) -> Result<PayloadImage> {
-    create_read_only_iso_with_runner(payload, output_dir, iso_program, |command| {
+    create_read_only_iso_with_runner(payload, output_dir, iso_program, |mut command| {
         command.status().map_err(anyhow::Error::from)
     })
 }
@@ -155,7 +155,7 @@ pub fn create_read_only_iso_with_runner(
     payload: &PreparedPayload,
     output_dir: &Path,
     iso_program: &OsStr,
-    run: impl FnOnce(&mut Command) -> Result<std::process::ExitStatus>,
+    run: impl FnOnce(Command) -> Result<std::process::ExitStatus>,
 ) -> Result<PayloadImage> {
     let verified = verify_payload(&payload.root)?;
     if verified != *payload {
@@ -194,7 +194,7 @@ pub fn create_read_only_iso_with_runner(
     ));
     let mut command = Command::new(iso_program);
     command.args(iso_arguments(&temporary_path, &payload.root));
-    let status = run(&mut command).with_context(|| {
+    let status = run(command).with_context(|| {
         format!(
             "failed to run payload ISO tool `{}`",
             iso_program.to_string_lossy()

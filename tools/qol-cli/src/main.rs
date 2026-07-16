@@ -6,6 +6,7 @@ mod dev_shutdown;
 mod host_facade;
 mod platform;
 mod poller;
+mod process_guardian;
 mod progress;
 mod self_exec;
 mod setup;
@@ -31,6 +32,7 @@ fn run(args: Vec<OsString>) -> Result<()> {
     };
     let rest = &args.values[1..];
     match command {
+        qol_process::PROCESS_TREE_GUARDIAN_COMMAND => process_guardian::run(),
         qol_dev_orchestrator::FLOW_WORKER_COMMAND => {
             commands::flow::run_worker(rest, &env::current_exe()?)
         }

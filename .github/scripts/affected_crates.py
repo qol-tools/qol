@@ -57,7 +57,10 @@ def run(cmd):
 
 
 def emit(outputs):
-    text = "".join(f"{k}={v}\n" for k, v in outputs.items())
+    text = "".join(
+        f"{key}={json.dumps(value) if isinstance(value, bool) else value}\n"
+        for key, value in outputs.items()
+    )
     path = os.environ.get("GITHUB_OUTPUT")
     if path:
         with open(path, "a") as handle:
@@ -73,6 +76,8 @@ def full_workspace(reason):
     emit(
         {
             "full": "true",
+            "windows_process": True,
+            "windows_qol": True,
             "ubuntu_clippy": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)} --all-targets",
             "ubuntu_test": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}",
             "ubuntu_skip": "false",
@@ -88,6 +93,8 @@ def skip_all(reason):
     emit(
         {
             "full": "false",
+            "windows_process": False,
+            "windows_qol": False,
             "ubuntu_clippy": "",
             "ubuntu_test": "",
             "ubuntu_skip": "true",
@@ -209,6 +216,8 @@ def main():
     emit(
         {
             "full": "false",
+            "windows_process": "qol-process" in affected,
+            "windows_qol": "qol" in affected,
             "ubuntu_clippy": args(ubuntu, True),
             "ubuntu_test": args(ubuntu, False),
             "ubuntu_skip": "true" if not ubuntu else "false",

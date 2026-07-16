@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+pub const PROCESS_TREE_GUARDIAN_COMMAND: &str = "__process-tree-guardian";
+
 #[derive(Clone, Debug)]
 pub struct CancellationToken {
     local: Arc<AtomicBool>,
@@ -36,6 +38,10 @@ impl CancellationToken {
         self.local.load(Ordering::Acquire)
             || self.observe_process_signals && platform::cancellation_requested()
     }
+
+    pub fn escalation_requested(&self) -> bool {
+        self.observe_process_signals && platform::cancellation_signal_count() >= 2
+    }
 }
 
 impl Default for CancellationToken {
@@ -46,6 +52,31 @@ impl Default for CancellationToken {
 
 pub struct ProcessTreeGuard {
     _inner: platform::ProcessTreeGuard,
+}
+
+#[must_use]
+pub struct PreparedCommand<'guard> {
+    guard: &'guard ProcessTreeGuard,
+    command: Option<Command>,
+    prepared: Option<platform::PreparedSpawn>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreparedSpawnCleanup {
+    NotStarted,
+    Verified,
+    RecoveryPending,
+}
+
+#[derive(Debug)]
+pub struct PreparedSpawnError {
+    source: io::Error,
+    cleanup: PreparedSpawnCleanup,
+}
+
+pub(crate) struct PlatformSpawnFailure {
+    pub(crate) source: io::Error,
+    pub(crate) cleanup: PreparedSpawnCleanup,
 }
 
 #[derive(Debug)]
@@ -59,13 +90,83 @@ pub struct CurrentProcessTreeGuard {
 }
 
 impl ProcessTreeGuard {
-    pub fn assign(&self, child: &Child) -> io::Result<()> {
-        self._inner.assign(child)
+    pub fn prepare_command(&self, mut command: Command) -> io::Result<PreparedCommand<'_>> {
+        let prepared = self._inner.prepare_command(&mut command)?;
+        Ok(PreparedCommand {
+            guard: self,
+            command: Some(command),
+            prepared: Some(prepared),
+        })
     }
 
     pub fn terminate_and_wait(&self, timeout: Duration) -> io::Result<TerminatedProcessTree> {
         self._inner.terminate_and_wait(timeout)?;
         Ok(TerminatedProcessTree { _private: () })
+    }
+
+    pub fn recover_pending_spawn(&self, timeout: Duration) -> io::Result<TerminatedProcessTree> {
+        self._inner.recover_pending_spawn(timeout)?;
+        Ok(TerminatedProcessTree { _private: () })
+    }
+
+    pub fn terminate_root_and_wait(&self, timeout: Duration) -> io::Result<()> {
+        self._inner.terminate_root_and_wait(timeout)
+    }
+
+    pub fn root_has_exited(&self) -> io::Result<bool> {
+        self._inner.root_has_exited()
+    }
+}
+
+impl PreparedCommand<'_> {
+    pub fn spawn(mut self) -> Result<Child, PreparedSpawnError> {
+        let command = self.command.as_mut().ok_or_else(|| PreparedSpawnError {
+            source: io::Error::other("prepared command was already consumed"),
+            cleanup: PreparedSpawnCleanup::RecoveryPending,
+        })?;
+        let prepared = self.prepared.take().ok_or_else(|| PreparedSpawnError {
+            source: io::Error::other("prepared process ownership was already consumed"),
+            cleanup: PreparedSpawnCleanup::RecoveryPending,
+        })?;
+        self.guard
+            ._inner
+            .spawn_prepared(command, prepared)
+            .map_err(PreparedSpawnError::from)
+    }
+}
+
+impl PreparedSpawnError {
+    pub fn cleanup(&self) -> PreparedSpawnCleanup {
+        self.cleanup
+    }
+}
+
+impl From<PlatformSpawnFailure> for PreparedSpawnError {
+    fn from(failure: PlatformSpawnFailure) -> Self {
+        Self {
+            source: failure.source,
+            cleanup: failure.cleanup,
+        }
+    }
+}
+
+impl std::fmt::Display for PreparedSpawnError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.source.fmt(formatter)
+    }
+}
+
+impl std::error::Error for PreparedSpawnError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+impl Drop for PreparedCommand<'_> {
+    fn drop(&mut self) {
+        if self.prepared.take().is_some() {
+            self.guard._inner.abort_prepared();
+        }
     }
 }
 
@@ -75,10 +176,26 @@ impl CurrentProcessTreeGuard {
     }
 }
 
-pub fn own_current_process_tree() -> io::Result<ProcessTreeGuard> {
+pub fn own_current_process_tree_with_guardian(
+    guardian_command: Command,
+) -> io::Result<ProcessTreeGuard> {
     Ok(ProcessTreeGuard {
-        _inner: platform::own_current_process_tree()?,
+        _inner: platform::own_current_process_tree_with_guardian(guardian_command)?,
     })
+}
+
+pub fn process_tree_guardian_command(executable: &std::path::Path) -> Command {
+    let mut command = Command::new(executable);
+    command.arg(PROCESS_TREE_GUARDIAN_COMMAND);
+    command
+}
+
+pub fn run_process_tree_guardian_entry() -> io::Result<()> {
+    platform::run_process_tree_guardian_entry()
+}
+
+pub fn process_tree_containment_support() -> io::Result<()> {
+    platform::process_tree_containment_support()
 }
 
 pub fn guard_current_process_tree() -> io::Result<CurrentProcessTreeGuard> {
@@ -89,6 +206,10 @@ pub fn guard_current_process_tree() -> io::Result<CurrentProcessTreeGuard> {
 
 pub fn isolate_owned_command(command: &mut Command) -> io::Result<()> {
     platform::isolate_owned_command(command)
+}
+
+pub fn isolate_owned_session(command: &mut Command) -> io::Result<()> {
+    platform::isolate_owned_session(command)
 }
 
 pub fn is_pid_alive(pid: u32) -> bool {
@@ -177,6 +298,7 @@ mod tests {
         peer.cancel();
         peer.cancel();
         assert!(token.is_cancelled());
+        assert!(!token.escalation_requested());
     }
 
     #[cfg(unix)]
@@ -194,6 +316,15 @@ mod tests {
         }
         assert!(token.is_cancelled());
         std::fs::write(root.join("cancelled"), "cancelled").unwrap();
+        if std::env::var_os("QOL_PROCESS_EXPECT_ESCALATION").is_none() {
+            return;
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !token.escalation_requested() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(token.escalation_requested());
+        std::fs::write(root.join("escalated"), "escalated").unwrap();
     }
 
     #[cfg(unix)]
@@ -224,6 +355,39 @@ mod tests {
             std::fs::read_to_string(temp.path().join("cancelled")).unwrap(),
             "cancelled"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn second_signal_requests_escalation_after_graceful_cancellation() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::cancellation_signal_child_helper"])
+            .env("QOL_PROCESS_CANCELLATION_TEST_ROOT", temp.path())
+            .env("QOL_PROCESS_EXPECT_ESCALATION", "1")
+            .spawn()
+            .unwrap();
+        wait_for_path(&temp.path().join("ready"));
+        signal_term_pid(child.id()).unwrap();
+        wait_for_path(&temp.path().join("cancelled"));
+        assert!(child.try_wait().unwrap().is_none());
+        assert!(!temp.path().join("escalated").exists());
+        signal_term_pid(child.id()).unwrap();
+        let status = child.wait().unwrap();
+        assert!(status.success());
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("escalated")).unwrap(),
+            "escalated"
+        );
+    }
+
+    #[cfg(unix)]
+    fn wait_for_path(path: &std::path::Path) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !path.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(path.exists(), "timed out waiting for {}", path.display());
     }
 
     #[test]
