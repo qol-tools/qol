@@ -1,4 +1,5 @@
 import { html } from '../lib/html.js';
+import { Surface } from '../lib/components/Surface.js';
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import { IconCopy } from '../assets/icon-copy.js';
 import { IconClose } from '../assets/icon-close.js';
@@ -56,8 +57,8 @@ export function GlobalToast() {
                     <span class="toast-message">${t.message}</span>
                     ${t.count > 1 && html`<span class="toast-count">${t.count}</span>`}
                     ${t.hovered && html`<span class="toast-actions">
-                        <button class="toast-btn" onClick=${(e) => copy(e, t.message)} title="Copy"><${IconCopy} /></button>
-                        <button class="toast-btn" onClick=${() => dismiss(t.key)} title="Close"><${IconClose} /></button>
+                        <${Surface} as="button" className="toast-btn" onActivate=${(e) => copy(e, t.message)} title="Copy"><${IconCopy} /><//>
+                        <${Surface} as="button" className="toast-btn" onActivate=${() => dismiss(t.key)} title="Close"><${IconClose} /><//>
                     </span>`}
                 </div>
             `)}

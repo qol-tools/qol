@@ -1,4 +1,5 @@
 import { html } from '../lib/html.js';
+import { Surface } from '../lib/components/Surface.js';
 import { useState } from '../lib/hooks.module.js';
 import { useSSE } from '../hooks/useSSE.js';
 
@@ -26,12 +27,12 @@ export function BootHealedBanner() {
         <div class=${'boot-healed-banner banner-' + tone} role="status" aria-live="polite">
             <span class="banner-text">${summary}</span>
             <a href="#/doctor" class="banner-action">Open doctor</a>
-            <button
-                class="banner-dismiss"
+            <${Surface} as="button"
+                className="banner-dismiss"
                 type="button"
-                onClick=${() => setDismissed(true)}
+                onActivate=${() => setDismissed(true)}
                 aria-label="Dismiss"
-            >×</button>
+            >×<//>
         </div>
     `;
 }
