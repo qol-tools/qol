@@ -66,7 +66,7 @@ pub fn connection_ready(device: &DeviceInfo) -> bool {
     if !is_audio_device(device) {
         return true;
     }
-    device.services_resolved && supports_audio_sink(device)
+    supports_audio_sink(device)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -207,17 +207,43 @@ pub fn devices_payload(
             let status = device_action
                 .map(|action| action.status.as_str())
                 .unwrap_or(device_status);
+            let action_failed = device_action.is_some_and(|action| !action.pending);
+            let accent = if action_failed {
+                "danger"
+            } else if device.connected {
+                "success"
+            } else if device.paired {
+                "accent"
+            } else {
+                "muted"
+            };
+            let badge = if action_pending {
+                "Working"
+            } else if action_failed {
+                "Needs attention"
+            } else {
+                device_status
+            };
+            let detail = if device_action.is_some() {
+                format!("{status} · {signal} · {}", device.address)
+            } else {
+                format!("{signal} · {}", device.address)
+            };
             serde_json::json!({
+                "accent": accent,
                 "address": device.address,
                 "action_pending": action_pending,
                 "audio": audio,
-                "can_connect": !ready,
+                "badge": badge,
+                "badge_tone": accent,
+                "can_connect": !device.connected,
                 "can_disconnect": device.connected,
                 "can_pair": !device.paired,
                 "can_remove": device.paired,
                 "can_trust": device.paired && !device.trusted,
                 "can_untrust": device.paired && device.trusted,
                 "connected": device.connected,
+                "detail": detail,
                 "managed": managed.contains(&device.address),
                 "name": device.alias,
                 "paired": device.paired,
@@ -297,9 +323,12 @@ mod tests {
                 "count": 3,
                 "items": [
                     {
+                        "accent": "success",
                         "address": "AA:BB:CC:DD:EE:01",
                         "action_pending": false,
                         "audio": false,
+                        "badge": "Connected",
+                        "badge_tone": "success",
                         "can_connect": false,
                         "can_disconnect": true,
                         "can_pair": false,
@@ -307,6 +336,7 @@ mod tests {
                         "can_trust": false,
                         "can_untrust": true,
                         "connected": true,
+                        "detail": "-30 dBm · AA:BB:CC:DD:EE:01",
                         "managed": true,
                         "name": "Alpha",
                         "paired": true,
@@ -319,9 +349,12 @@ mod tests {
                         "uuids": [],
                     },
                     {
+                        "accent": "accent",
                         "address": "AA:BB:CC:DD:EE:02",
                         "action_pending": false,
                         "audio": false,
+                        "badge": "Paired",
+                        "badge_tone": "accent",
                         "can_connect": true,
                         "can_disconnect": false,
                         "can_pair": false,
@@ -329,6 +362,7 @@ mod tests {
                         "can_trust": false,
                         "can_untrust": true,
                         "connected": false,
+                        "detail": "Signal unavailable · AA:BB:CC:DD:EE:02",
                         "managed": false,
                         "name": "Luna 2",
                         "paired": true,
@@ -341,9 +375,12 @@ mod tests {
                         "uuids": [],
                     },
                     {
+                        "accent": "muted",
                         "address": "AA:BB:CC:DD:EE:03",
                         "action_pending": false,
                         "audio": false,
+                        "badge": "Available",
+                        "badge_tone": "muted",
                         "can_connect": true,
                         "can_disconnect": false,
                         "can_pair": true,
@@ -351,6 +388,7 @@ mod tests {
                         "can_trust": false,
                         "can_untrust": false,
                         "connected": false,
+                        "detail": "-42 dBm · AA:BB:CC:DD:EE:03",
                         "managed": false,
                         "name": "Nearby Speaker",
                         "paired": false,
@@ -424,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn audio_connection_requires_the_a2dp_sink_profile() {
+    fn audio_connection_requires_a_connected_a2dp_sink_profile() {
         let cases = [
             ("BLE-only speaker", audio_device(true, true, &[]), false),
             (
@@ -435,7 +473,7 @@ mod tests {
             (
                 "unresolved A2DP speaker",
                 audio_device(true, false, &[AUDIO_SINK_UUID]),
-                false,
+                true,
             ),
             (
                 "disconnected speaker",
@@ -451,6 +489,17 @@ mod tests {
         for (label, device, expected) in cases {
             assert_eq!(connection_ready(&device), expected, "case: {label}");
         }
+    }
+
+    #[test]
+    fn connected_audio_device_never_exposes_connect_again() {
+        let device = audio_device(true, false, &[AUDIO_SINK_UUID]);
+        let payload = devices_payload(&[device], &[], &DiscoveryState::default(), None);
+        let item = &payload["items"][0];
+        assert_eq!(item["status"], "Connected");
+        assert_eq!(item["can_connect"], false);
+        assert_eq!(item["can_disconnect"], true);
+        assert_eq!(item["ready"], true);
     }
 
     fn audio_device(connected: bool, services_resolved: bool, uuids: &[&str]) -> DeviceInfo {

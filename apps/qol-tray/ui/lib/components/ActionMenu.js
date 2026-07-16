@@ -108,7 +108,7 @@ export function ActionMenu({ actions = [], label = 'More actions', pendingId, on
             <${Button} variant="btn-ghost" small className="action-menu-trigger"
                 aria-label=${label} aria-haspopup="menu" aria-expanded=${open ? 'true' : 'false'}
                 onActivate=${toggle} onKeyDown=${onTriggerKeyDown} type="button">
-                <span aria-hidden="true">${'⋯'}</span>
+                <span class="action-menu-trigger-mark" aria-hidden="true">${'⋮'}</span>
             <//>
             ${open && html`
                 <${SurfaceContainer} className="action-menu-popover">

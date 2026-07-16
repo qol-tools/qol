@@ -376,6 +376,7 @@ function KeyLegendShowcase() {
 }
 
 function SearchableActionListShowcase() {
+    const [layout, setLayout] = useState('comfortable');
     const [devices, setDevices] = useState([
         { id: 'luna', label: 'Luna 2', description: 'Available · -42 dBm', state: 'available' },
         { id: 'headphones', label: 'Headphones', description: 'Paired', state: 'paired' },
@@ -383,6 +384,8 @@ function SearchableActionListShowcase() {
     ]);
     const items = devices.map(device => ({
         ...device,
+        badge: device.state === 'connected' ? 'Connected' : device.state === 'paired' ? 'Paired' : 'Available',
+        badgeTone: device.state === 'connected' ? 'success' : device.state === 'paired' ? 'accent' : 'muted',
         actionLabel: device.state === 'available'
             ? 'Connect'
             : device.state === 'paired' ? 'Connect' : 'Disconnect',
@@ -410,15 +413,21 @@ function SearchableActionListShowcase() {
     }, []);
     return html`
         <${CatalogSection} title="Searchable action list">
-            <div class="catalog-showcase">
+            <div class="catalog-showcase catalog-showcase-wide">
                 <${Interactive}>
                     <${SearchableActionList}
                         label="Bluetooth devices"
                         description="Search, navigate, and run the action exposed by each result."
                         items=${items}
+                        layout=${layout}
                         placeholder="Search Bluetooth devices..."
                         onActivate=${activate}
                         onAction=${activate} />
+                    <${MockControls} actions=${[
+                        { label: 'Spacious rows', run: () => setLayout('comfortable') },
+                        { label: 'Device cards', run: () => setLayout('cards') },
+                        { label: 'Compact rows', run: () => setLayout('compact') },
+                    ]} />
                 <//>
                 <${States}>
                     <${StateLabel}>empty<//>

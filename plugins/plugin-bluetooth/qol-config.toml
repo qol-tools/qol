@@ -23,7 +23,7 @@ label = "Bluetooth devices"
 section = "devices"
 query = "devices"
 row_label = "{name}"
-row_subtitle = "{status} · {signal} · {address}"
+row_subtitle = "{detail}"
 search = true
 empty_message = "No paired devices. Start search to discover nearby devices."
 

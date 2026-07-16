@@ -1,6 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import { filterSearchableItems, firstSearchableItemId } from './searchable-action-list.js';
+
+const componentSource = readFileSync(
+    resolve(fileURLToPath(new URL('.', import.meta.url)), 'components/SearchableActionList.js'),
+    'utf8',
+);
+const componentCss = readFileSync(
+    resolve(fileURLToPath(new URL('.', import.meta.url)), '../styles/searchable-action-list.css'),
+    'utf8',
+);
 
 const items = [
     {
@@ -42,4 +54,18 @@ test('searchable action list filters every user-visible result attribute', () =>
 test('firstSearchableItemId safely resolves navigation entry', () => {
     assert.equal(firstSearchableItemId(items), 'speaker');
     assert.equal(firstSearchableItemId([]), null);
+});
+
+test('search input only receives focus styling from real focus', () => {
+    assert.match(componentSource, /const selection = useListSelection\(\);/);
+    assert.doesNotMatch(componentSource, /selected: selection\.selected\('search'\)/);
+});
+
+test('searchable action list exposes generic presentation layouts', () => {
+    assert.match(componentSource, /layout = 'comfortable'/);
+    assert.match(componentSource, /data-layout=\$\{layout\}/);
+});
+
+test('searchable action list content fills the component width', () => {
+    assert.match(componentCss, /\.searchable-action-list-content\s*\{[^}]*width:\s*100%;/s);
 });

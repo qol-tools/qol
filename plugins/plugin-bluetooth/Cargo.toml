@@ -19,7 +19,7 @@ qol-plugin-daemon.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 bluer = { version = "0.17.4", features = ["bluetoothd"] }
 futures = "0.3"
-tokio = { version = "1.35", features = ["rt", "signal", "sync", "time"] }
+tokio = { version = "1.35", features = ["process", "rt", "signal", "sync", "time"] }
 
 [build-dependencies]
 qol-conventions.workspace = true

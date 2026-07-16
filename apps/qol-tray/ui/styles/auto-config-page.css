@@ -571,6 +571,11 @@ select.field-select:focus {
     justify-self: start;
 }
 
+.field-group.field-list {
+    width: 100%;
+    justify-self: stretch;
+}
+
 .field-group-number {
     width: 100%;
     max-width: 100%;

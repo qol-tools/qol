@@ -13,6 +13,7 @@ import {
 import { useListSelection } from '../hooks/useListSelection.js';
 import { filterSearchableItems, firstSearchableItemId } from '../searchable-action-list.js';
 import { ActionMenu } from './ActionMenu.js';
+import { Badge } from './StatusIndicators.js';
 
 export function SearchableActionList({
     label,
@@ -27,18 +28,21 @@ export function SearchableActionList({
     searchable = true,
     onActivate,
     onAction,
+    layout = 'comfortable',
     className,
     ...surfaceProps
 }) {
     const [query, setQuery] = useState('');
-    const selection = useListSelection('search');
+    const selection = useListSelection();
     const visibleItems = filterSearchableItems(items, query);
     const inputSurface = useInputSurface({
         selectValue: 'search',
-        selected: selection.selected('search'),
         onSelect: selection.select,
     });
     const cls = ['searchable-action-list', className].filter(Boolean).join(' ');
+    const resultCount = query.trim()
+        ? `${visibleItems.length}/${items.length}`
+        : String(visibleItems.length);
 
     const handleInputKeyDown = (event) => {
         if (event.key === 'Escape') {
@@ -59,19 +63,29 @@ export function SearchableActionList({
     };
 
     return html`
-        <${Surface} className=${cls} data-searchable-action-list="" ...${surfaceProps}>
-            ${label && html`<div class="searchable-action-list-label">${label}</div>`}
+        <${Surface} className=${cls} data-searchable-action-list="" data-layout=${layout} ...${surfaceProps}>
+            ${label && html`
+                <div class="searchable-action-list-header">
+                    <div class="searchable-action-list-label">${label}</div>
+                    <span class="searchable-action-list-count" aria-label=${`${visibleItems.length} results`}>
+                        ${resultCount}
+                    </span>
+                </div>
+            `}
             ${description && html`<div class="searchable-action-list-description">${description}</div>`}
             <${SurfaceContainer} className="searchable-action-list-content">
                 ${searchable && html`
-                    <input ref=${inputSurface.ref} ...${inputSurface.attrs}
-                        class="text-input searchable-action-list-input"
-                        type="search"
-                        value=${query}
-                        aria-label=${label ? `Search ${label}` : 'Search results'}
-                        placeholder=${placeholder}
-                        onInput=${event => setQuery(event.currentTarget.value)}
-                        onKeyDown=${handleInputKeyDown} />
+                    <div class="searchable-action-list-search">
+                        <span class="searchable-action-list-search-mark" aria-hidden="true">${'>'}</span>
+                        <input ref=${inputSurface.ref} ...${inputSurface.attrs}
+                            class="text-input searchable-action-list-input"
+                            type="search"
+                            value=${query}
+                            aria-label=${label ? `Search ${label}` : 'Search results'}
+                            placeholder=${placeholder}
+                            onInput=${event => setQuery(event.currentTarget.value)}
+                            onKeyDown=${handleInputKeyDown} />
+                    </div>
                 `}
                 <${ListGroup} className="searchable-action-list-results" role="list"
                     onDeselect=${selection.deselect}>
@@ -103,6 +117,11 @@ export function SearchableActionList({
                             aria-disabled=${item.disabled ? 'true' : undefined}>
                             <${ListRowHeader}>
                                 <${ListRowTitle}>${item.label}<//>
+                                ${item.badge && html`
+                                    <${Badge} className=${`searchable-action-list-badge tone-${item.badgeTone || item.accent || 'muted'}`}>
+                                        ${item.badge}
+                                    <//>
+                                `}
                             <//>
                             ${item.description && html`
                                 <${ListRowBody}>

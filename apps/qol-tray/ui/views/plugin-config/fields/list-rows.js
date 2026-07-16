@@ -27,6 +27,9 @@ export function listItem(field, row, index) {
     const hasRowActions = Boolean(field.row_action || field.row_actions?.length);
     const id = row.id ?? row.address ?? index;
     return {
+        accent: row.accent,
+        badge: row.badge,
+        badgeTone: row.badge_tone,
         id: String(id),
         label: interpolate(field.row_label, row),
         description: interpolate(field.row_subtitle, row),

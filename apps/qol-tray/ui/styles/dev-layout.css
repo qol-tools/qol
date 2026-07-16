@@ -119,6 +119,17 @@
     align-items: start;
 }
 
+.catalog-showcase-wide {
+    grid-template-columns: 1fr;
+}
+
+.catalog-showcase-wide .catalog-column + .catalog-column {
+    padding-top: var(--space-5);
+    padding-left: 0;
+    border-top: var(--border-w-1) solid var(--border-subtle);
+    border-left: none;
+}
+
 .catalog-column {
     display: flex;
     flex-direction: column;
