@@ -8,6 +8,7 @@ import { createNavigation, selectorFor, animateTransition } from '../lib/world-n
 import { setAscend, setDiveFromSurface, setDiveViaSelector } from '../lib/world-navigation-singleton.js';
 import { getWorldSettings, subscribeWorldSettings } from '../lib/world-settings.js';
 import { applyThemeAccent } from '../lib/theme-accent-sync.js';
+import { applyThemeSelection } from '../lib/theme-sync.js';
 import { installCrtBandSync } from '../lib/crt-band-sync.js';
 
 const log = createDebug('qol:app');
@@ -324,6 +325,7 @@ function AppShell() {
 
     useEffect(() => {
         applyThemeAccent();
+        applyThemeSelection();
     }, []);
 
     useEffect(() => {
