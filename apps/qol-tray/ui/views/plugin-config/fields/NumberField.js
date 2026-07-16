@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { FieldLabel } from './FieldLabel.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
+import { TextInput } from '../../../lib/components/TextInput.js';
 
 export function NumberField({ field }) {
     const ctx = usePluginConfigContext();
@@ -88,7 +89,7 @@ export function NumberField({ field }) {
             onFocus=${onSelect}>
             <${FieldLabel} text=${field.label} description=${field.description || ''} />
             ${editing
-                ? html`<input ref=${inputRef} type="text" class="number-edit" tabIndex="0" data-wedge-root=""
+                ? html`<${TextInput} inputRef=${inputRef} className="number-edit" tabIndex="0" data-wedge-root=""
                     value=${formatValue(value)} onBlur=${commitEdit} onKeyDown=${onEditKeyDown} />`
                 : html`<div ref=${displayRef} class="number-display" tabIndex="0" data-wedge-root="" onKeyDown=${onKeyDown}
                     onWheel=${onWheel} onClick=${() => { editInitRef.current = null; setEditing(true); }}>
