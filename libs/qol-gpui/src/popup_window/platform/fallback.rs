@@ -64,3 +64,7 @@ pub fn window_backing_scale(_title: &str) -> Option<f32> {
 }
 
 pub fn dump_ghost_windows(_context: &str) {}
+
+pub fn window_holds_input_focus(_title: &str) -> Option<bool> {
+    None
+}

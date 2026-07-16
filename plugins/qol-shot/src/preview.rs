@@ -900,12 +900,13 @@ impl PreviewView {
         if self.mode != DismissMode::Ghost || self.dismiss_sub.is_some() {
             return;
         }
-        self.dismiss_sub = Some(qol_gpui::ghost::track_dismiss(
+        self.dismiss_sub = Some(qol_gpui::ghost::track_dismiss_confirmed(
             "qol-shot",
             &self.focus_handle,
             window,
             |this: &Self| this.blur_guard_until,
             |this: &Self| this.is_showing,
+            |this: &Self| qol_gpui::popup_window::window_holds_input_focus(&this.title),
             cx,
             |this, window, _cx| this.dismiss(crate::completion::PreviewExit::LostFocus, window),
         ));

@@ -331,3 +331,7 @@ fn sync_backing_properties(window: &NSWindow) {
     };
     gpui_view.viewDidChangeBackingProperties();
 }
+
+pub fn window_holds_input_focus(_title: &str) -> Option<bool> {
+    None
+}

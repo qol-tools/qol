@@ -584,6 +584,13 @@ pub fn focus_window_by_title(title: &str) -> bool {
     take_input_focus(&conn, root, wid, None)
 }
 
+pub fn window_holds_input_focus(title: &str) -> Option<bool> {
+    let (conn, _screen_num, root, list_atom, name_atom, utf8_atom) = connect_with_atoms()?;
+    let wid = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title)?;
+    let focus = conn.get_input_focus().ok()?.reply().ok()?.focus;
+    Some(focus == wid)
+}
+
 pub fn release_focus_by_title(title: &str) {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {

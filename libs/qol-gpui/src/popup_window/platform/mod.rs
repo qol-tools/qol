@@ -11,7 +11,7 @@ pub use fallback::{
     disable_window_shadow, dump_ghost_windows, hide_for_capture, hide_invisible,
     hide_window_by_title, hide_windows_by_title_prefix, reposition_window_by_title,
     set_ghost_debug, show_window_by_title, show_window_passive_by_title, sync_window_layout,
-    visible_windows_by_title_prefix, window_backing_scale,
+    visible_windows_by_title_prefix, window_backing_scale, window_holds_input_focus,
 };
 #[cfg(target_os = "linux")]
 pub use linux::{
@@ -21,7 +21,7 @@ pub use linux::{
     make_override_redirect, release_focus_by_title, reposition_window_by_title, restore_composite,
     set_ghost_debug, show_window_by_title, show_window_passive_by_title, sync_window_layout,
     visible_windows_by_title_prefix, window_backing_scale, window_geometry_session,
-    window_position_by_title, WindowGeometrySession,
+    window_holds_input_focus, window_position_by_title, WindowGeometrySession,
 };
 #[cfg(target_os = "macos")]
 pub use macos::{
@@ -29,5 +29,5 @@ pub use macos::{
     disable_window_shadow, dump_ghost_windows, hide_for_capture, hide_invisible,
     hide_window_by_title, hide_windows_by_title_prefix, reposition_window_by_title,
     set_ghost_debug, show_window_by_title, show_window_passive_by_title, sync_window_layout,
-    visible_windows_by_title_prefix, window_backing_scale,
+    visible_windows_by_title_prefix, window_backing_scale, window_holds_input_focus,
 };

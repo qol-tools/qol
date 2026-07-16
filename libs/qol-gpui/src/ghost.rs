@@ -196,8 +196,12 @@ fn rearm_on_new_show(
 
 const DISMISS_DEBOUNCE_MS: u64 = 120;
 
-fn should_dismiss_after_debounce(showing: bool, still_active: bool) -> bool {
-    showing && !still_active
+fn should_dismiss_after_debounce(
+    showing: bool,
+    gpui_active: bool,
+    platform_focus: Option<bool>,
+) -> bool {
+    showing && !platform_focus.unwrap_or(gpui_active)
 }
 
 fn schedule_debounced_dismiss<V: 'static>(
@@ -205,6 +209,7 @@ fn schedule_debounced_dismiss<V: 'static>(
     event: &'static str,
     window_handle: gpui::AnyWindowHandle,
     is_showing: std::rc::Rc<impl Fn(&V) -> bool + 'static>,
+    platform_focus: std::rc::Rc<impl Fn(&V) -> Option<bool> + 'static>,
     on_dismiss: std::rc::Rc<
         std::cell::RefCell<impl FnMut(&mut V, &mut gpui::Window, &mut gpui::Context<V>) + 'static>,
     >,
@@ -214,6 +219,7 @@ fn schedule_debounced_dismiss<V: 'static>(
         move |view_handle: gpui::WeakEntity<V>, cx: &mut gpui::AsyncApp| {
             let mut cx = cx.clone();
             let is_showing = is_showing.clone();
+            let platform_focus = platform_focus.clone();
             let on_dismiss = on_dismiss.clone();
             async move {
                 cx.background_executor()
@@ -224,13 +230,15 @@ fn schedule_debounced_dismiss<V: 'static>(
                         return;
                     };
                     let showing = is_showing(handle.read(cx));
-                    let still_active = window.is_window_active();
-                    if !should_dismiss_after_debounce(showing, still_active) {
+                    let gpui_active = window.is_window_active();
+                    let focus_truth = platform_focus(handle.read(cx));
+                    if !should_dismiss_after_debounce(showing, gpui_active, focus_truth) {
+                        let active = format!("{gpui_active} platform={focus_truth:?}");
                         trace_dismiss_decision(
                             label,
                             event,
                             showing,
-                            if still_active { "true" } else { "false" },
+                            &active,
                             std::time::Instant::now(),
                             "debounce_recovered",
                         );
@@ -267,15 +275,44 @@ pub fn track_dismiss<V: gpui::Focusable + 'static>(
     gpui::Subscription,
     Option<gpui::Task<()>>,
 ) {
+    track_dismiss_confirmed(
+        label,
+        focus_handle,
+        window,
+        get_blur_guard,
+        is_showing,
+        |_| None,
+        cx,
+        on_dismiss,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn track_dismiss_confirmed<V: gpui::Focusable + 'static>(
+    label: &'static str,
+    focus_handle: &gpui::FocusHandle,
+    window: &mut gpui::Window,
+    get_blur_guard: impl Fn(&V) -> std::time::Instant + 'static,
+    is_showing: impl Fn(&V) -> bool + 'static,
+    platform_focus: impl Fn(&V) -> Option<bool> + 'static,
+    cx: &mut gpui::Context<V>,
+    on_dismiss: impl FnMut(&mut V, &mut gpui::Window, &mut gpui::Context<V>) + 'static,
+) -> (
+    gpui::Subscription,
+    gpui::Subscription,
+    Option<gpui::Task<()>>,
+) {
     let on_dismiss_cell = std::rc::Rc::new(std::cell::RefCell::new(on_dismiss));
     let get_blur_guard = std::rc::Rc::new(get_blur_guard);
     let is_showing = std::rc::Rc::new(is_showing);
+    let platform_focus = std::rc::Rc::new(platform_focus);
     let has_been_active = std::rc::Rc::new(std::cell::Cell::new(false));
     let armed_for = std::rc::Rc::new(std::cell::Cell::new(None::<std::time::Instant>));
     let window_handle = window.to_async(cx).window_handle();
 
     let get_blur_guard_1 = get_blur_guard.clone();
     let is_showing_1 = is_showing.clone();
+    let platform_focus_1 = platform_focus.clone();
     let on_dismiss_1 = on_dismiss_cell.clone();
     let has_been_active_1 = has_been_active.clone();
     let armed_for_1 = armed_for.clone();
@@ -301,6 +338,7 @@ pub fn track_dismiss<V: gpui::Focusable + 'static>(
             "blur",
             window_handle,
             is_showing_1.clone(),
+            platform_focus_1.clone(),
             on_dismiss_1.clone(),
             cx,
         );
@@ -308,6 +346,7 @@ pub fn track_dismiss<V: gpui::Focusable + 'static>(
 
     let get_blur_guard_2 = get_blur_guard.clone();
     let is_showing_2 = is_showing.clone();
+    let platform_focus_2 = platform_focus.clone();
     let on_dismiss_2 = on_dismiss_cell.clone();
     let has_been_active_2 = has_been_active.clone();
     let armed_for_2 = armed_for.clone();
@@ -350,6 +389,7 @@ pub fn track_dismiss<V: gpui::Focusable + 'static>(
             "activation",
             window_handle,
             is_showing_2.clone(),
+            platform_focus_2.clone(),
             on_dismiss_2.clone(),
             cx,
         );
@@ -429,31 +469,54 @@ mod tests {
     use super::should_dismiss_after_debounce;
 
     #[test]
-    fn debounce_recheck_only_dismisses_if_still_hidden_and_still_inactive() {
+    fn debounce_recheck_dismisses_only_when_truly_inactive() {
         let cases = [
-            ("still showing, still inactive: dismiss", true, false, true),
             (
-                "still showing, became active again: recovered",
-                true,
+                "showing, gpui inactive, no platform truth: dismiss",
                 true,
                 false,
+                None,
+                true,
+            ),
+            (
+                "showing, gpui active, no platform truth: recovered",
+                true,
+                true,
+                None,
+                false,
+            ),
+            (
+                "showing, gpui inactive, platform holds focus: recovered",
+                true,
+                false,
+                Some(true),
+                false,
+            ),
+            (
+                "showing, gpui active, platform lost focus: dismiss",
+                true,
+                true,
+                Some(false),
+                true,
             ),
             (
                 "no longer showing, still inactive: nothing to dismiss",
                 false,
                 false,
+                Some(false),
                 false,
             ),
             (
-                "no longer showing, became active: nothing to dismiss",
+                "no longer showing, focus held: nothing to dismiss",
                 false,
                 true,
+                Some(true),
                 false,
             ),
         ];
-        for (case, showing, still_active, expected) in cases {
+        for (case, showing, gpui_active, platform_focus, expected) in cases {
             assert_eq!(
-                should_dismiss_after_debounce(showing, still_active),
+                should_dismiss_after_debounce(showing, gpui_active, platform_focus),
                 expected,
                 "case: {case}"
             );

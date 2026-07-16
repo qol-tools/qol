@@ -36,7 +36,7 @@ pub use platform::{
     disable_window_shadow, dump_ghost_windows, hide_for_capture, hide_invisible,
     hide_window_by_title, hide_windows_by_title_prefix, reposition_window_by_title,
     show_window_by_title, show_window_passive_by_title, sync_window_layout,
-    visible_windows_by_title_prefix, window_backing_scale,
+    visible_windows_by_title_prefix, window_backing_scale, window_holds_input_focus,
 };
 
 const ENV_GHOST_OPACITY: &str = "QOL_TRAY_GHOST_OPACITY";
