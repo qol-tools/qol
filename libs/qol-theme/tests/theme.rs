@@ -1048,6 +1048,23 @@ fn tray_theme_accents_reference_valid_presets() {
 }
 
 #[test]
+fn tray_theme_identities_are_assigned() {
+    for preset in qol_theme::tray_theme_presets() {
+        let expected = if preset.key == "midnight" {
+            "modern"
+        } else {
+            "retro"
+        };
+        assert_eq!(preset.identity.key, expected, "{}", preset.key);
+    }
+    assert_eq!(
+        qol_theme::RETRO_IDENTITY.font_data,
+        qol_theme::RETRO_IDENTITY.font_ui
+    );
+    assert_eq!(qol_theme::MODERN_IDENTITY.font_data, "var(--font-mono)");
+}
+
+#[test]
 fn tray_css_emits_theme_override_blocks() {
     let css = css::tray_css();
     assert!(css.contains("--qol-system-overlay-surface-rgb: 18, 22, 30;"));
