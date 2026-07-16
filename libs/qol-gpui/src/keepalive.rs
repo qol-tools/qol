@@ -21,8 +21,20 @@ pub fn open_keepalive(cx: &mut App, app_id: Option<&str>) -> Option<AnyWindowHan
         })
         .ok()?;
     let _reason = crate::popup_window::reason_scope("keepalive-open");
-    let hidden = crate::popup_window::hide_invisible(&title);
-    qol_runtime::probe!("KEEPALIVE", "title={title} hidden={hidden}");
+    let configured = crate::popup_window::configure_keepalive_window(&title);
+    qol_runtime::probe!(
+        "KEEPALIVE",
+        "title={title} configured={configured} phase=initial contract=non_focusable_unmapped"
+    );
+
+    cx.defer(move |_| {
+        let _reason = crate::popup_window::reason_scope("keepalive-open");
+        let configured = crate::popup_window::configure_keepalive_window(&title);
+        qol_runtime::probe!(
+            "KEEPALIVE",
+            "title={title} configured={configured} phase=settled contract=non_focusable_unmapped"
+        );
+    });
     Some(handle.into())
 }
 

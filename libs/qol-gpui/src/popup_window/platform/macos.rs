@@ -103,6 +103,10 @@ pub fn hide_invisible(title: &str) -> bool {
     true
 }
 
+pub fn configure_keepalive_window(title: &str) -> bool {
+    hide_invisible(title)
+}
+
 pub fn hide_windows_by_title_prefix(prefix: &str) -> usize {
     let Some(mtm) = MainThreadMarker::new() else {
         return 0;

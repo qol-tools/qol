@@ -1,4 +1,5 @@
 use x11rb::connection::Connection;
+use x11rb::properties::WmHints;
 use x11rb::protocol::shape;
 use x11rb::protocol::xproto::*;
 use x11rb::protocol::Event;
@@ -210,6 +211,33 @@ pub fn hide_window_by_title(title: &str) -> bool {
 
 pub fn hide_invisible(title: &str) -> bool {
     hide_window_with_opacity(title, 0.0)
+}
+
+pub fn configure_keepalive_window(title: &str) -> bool {
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
+    else {
+        return false;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        return false;
+    };
+
+    let input_hint = set_keepalive_input_hint(&conn, wid);
+    let input_shape = set_input_passthrough(&conn, wid, true);
+    let unmapped = conn
+        .unmap_window(wid)
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some();
+    let flushed = conn.flush().is_ok();
+    store_card(title, wid, None);
+
+    let configured = input_hint && input_shape && unmapped && flushed;
+    qol_runtime::probe!(
+        "KEEPALIVE",
+        "title={title} wid={wid} input_hint=false input_hint_applied={input_hint} input_passthrough={input_shape} map=unmapped unmap={unmapped} flush={flushed}"
+    );
+    configured
 }
 
 pub fn hide_windows_by_title_prefix(prefix: &str) -> usize {
@@ -1300,6 +1328,25 @@ fn set_input_passthrough(conn: &impl Connection, wid: u32, passthrough: bool) ->
     .is_ok()
 }
 
+fn set_keepalive_input_hint(conn: &impl Connection, wid: u32) -> bool {
+    let existing = WmHints::get(conn, wid)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .flatten()
+        .unwrap_or_default();
+    let hints = keepalive_wm_hints(existing);
+    hints
+        .set(conn, wid)
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some()
+}
+
+fn keepalive_wm_hints(mut hints: WmHints) -> WmHints {
+    hints.input = Some(false);
+    hints
+}
+
 fn root_window_ids(conn: &impl Connection, root: u32, list_atom: u32) -> Vec<u32> {
     let Ok(reply) = conn.get_property(false, root, list_atom, AtomEnum::WINDOW, 0, 1024) else {
         return Vec::new();
@@ -1334,7 +1381,36 @@ fn intern(conn: &impl Connection, name: &[u8]) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_opacity, opacity_to_cardinal, CompositeLease};
+    use super::{keepalive_wm_hints, normalize_opacity, opacity_to_cardinal, CompositeLease};
+    use x11rb::properties::{WmHints, WmHintsState};
+
+    #[test]
+    fn keepalive_hints_refuse_focus_without_clobbering_other_hints() {
+        let original = WmHints {
+            input: Some(true),
+            initial_state: Some(WmHintsState::Iconic),
+            icon_pixmap: Some(1),
+            icon_window: Some(2),
+            icon_position: Some((3, 4)),
+            icon_mask: Some(5),
+            window_group: Some(6),
+            urgent: true,
+        };
+
+        let configured = keepalive_wm_hints(original);
+
+        assert_eq!(configured.input, Some(false));
+        assert!(matches!(
+            configured.initial_state,
+            Some(WmHintsState::Iconic)
+        ));
+        assert_eq!(configured.icon_pixmap, Some(1));
+        assert_eq!(configured.icon_window, Some(2));
+        assert_eq!(configured.icon_position, Some((3, 4)));
+        assert_eq!(configured.icon_mask, Some(5));
+        assert_eq!(configured.window_group, Some(6));
+        assert!(configured.urgent);
+    }
 
     #[test]
     fn composite_lease_restores_only_after_last_holder_releases() {

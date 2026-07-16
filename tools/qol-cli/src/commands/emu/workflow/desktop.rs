@@ -120,6 +120,7 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
         "state=ready",
         DESKTOP_READY_TIMEOUT,
     )?;
+    let keepalive = verify_keepalive_window(&mut guest)?;
     step_label(
         "ready",
         StepKind::Success,
@@ -317,6 +318,7 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
         .lines()
         .map(str::to_string)
         .collect::<Vec<_>>();
+    traces.push(format!("keepalive={keepalive}"));
     traces.push(format!("captured={}", captured.stdout.trim()));
     traces.push(format!(
         "pin_move={},{}->{},{}",
@@ -515,6 +517,62 @@ fn wait_for_window_id_matching(
         .context("xdotool returned no numeric window id")
 }
 
+fn verify_keepalive_window(guest: &mut GuestControlClient) -> Result<String> {
+    let tree = require_exec(
+        guest,
+        command("/usr/bin/xwininfo", &["-root", "-tree"]),
+        GUEST_COMMAND_TIMEOUT,
+    )?;
+    let window_id = keepalive_window_id(&tree.stdout)
+        .context("qol-shot daemon keepalive was not present in the X11 window tree")?;
+    let hints = require_exec(
+        guest,
+        command("/usr/bin/xprop", &["-id", &window_id, "WM_HINTS"]),
+        GUEST_COMMAND_TIMEOUT,
+    )?;
+    if !keepalive_refuses_input_focus(&hints.stdout) {
+        bail!(
+            "qol-shot daemon keepalive {window_id} does not declare WM_HINTS input: False: {}",
+            hints.stdout.trim()
+        );
+    }
+    let details = require_exec(
+        guest,
+        command("/usr/bin/xwininfo", &["-id", &window_id]),
+        GUEST_COMMAND_TIMEOUT,
+    )?;
+    if !keepalive_is_unmapped(&details.stdout) {
+        bail!(
+            "qol-shot daemon keepalive {window_id} is still mapped: {}",
+            details.stdout.trim()
+        );
+    }
+    Ok(format!("id={window_id} input=false map=unmapped"))
+}
+
+fn keepalive_window_id(tree: &str) -> Option<String> {
+    tree.lines()
+        .find(|line| line.contains("\"qol-tray-shot-keepalive-"))
+        .and_then(|line| line.split_ascii_whitespace().next())
+        .filter(|window_id| window_id.starts_with("0x"))
+        .map(str::to_owned)
+}
+
+fn keepalive_refuses_input_focus(hints: &str) -> bool {
+    hints.lines().map(str::trim).any(|line| {
+        matches!(
+            line,
+            "input: False" | "Client accepts input or input focus: False"
+        )
+    })
+}
+
+fn keepalive_is_unmapped(details: &str) -> bool {
+    details
+        .lines()
+        .any(|line| line.trim() == "Map State: IsUnMapped")
+}
+
 fn parse_window_id(output: &str) -> Option<u64> {
     output
         .lines()
@@ -688,6 +746,25 @@ mod tests {
             parse_window_geometry("X=0\nY=0\nWIDTH=0\nHEIGHT=480\n"),
             None
         );
+    }
+
+    #[test]
+    fn keepalive_evidence_requires_the_nonfocusable_unmapped_contract() {
+        let tree = concat!(
+            "  0x4800001 \"qol-tray-shot-keepalive-1502\": (\"qol-tray-shot\" \"qol-tray-shot\")  1x1+0+0  +0+0\n",
+            "  0x4800002 \"qol-shot-preview-1502\": (\"qol-tray-shot\" \"qol-tray-shot\")  370x329+0+0  +0+0\n",
+        );
+        let hints = "WM_HINTS(WM_HINTS):\n\tinput: False\n";
+        let mint_hints = "WM_HINTS(WM_HINTS):\n\tClient accepts input or input focus: False\n";
+        let mapped = "  Map State: IsViewable\n";
+        let unmapped = "  Map State: IsUnMapped\n";
+
+        assert_eq!(keepalive_window_id(tree).as_deref(), Some("0x4800001"));
+        assert!(keepalive_refuses_input_focus(hints));
+        assert!(keepalive_refuses_input_focus(mint_hints));
+        assert!(!keepalive_refuses_input_focus("WM_HINTS:  not found."));
+        assert!(keepalive_is_unmapped(unmapped));
+        assert!(!keepalive_is_unmapped(mapped));
     }
 
     #[test]
