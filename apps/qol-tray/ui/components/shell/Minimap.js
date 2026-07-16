@@ -8,6 +8,7 @@ import { ACCENT_PRESETS } from '../../lib/accent-presets.js';
 import { getThemeAccent, setThemeAccent, subscribeThemeAccent } from '../../lib/theme-accent-sync.js';
 import { getTheme, setTheme, subscribeTheme } from '../../lib/theme-sync.js';
 import { ThemeRow } from '../../lib/components/ThemeRow.js';
+import { TextInput } from '../../lib/components/TextInput.js';
 import { toast } from '../../lib/toast.js';
 import { IconCog } from '../../assets/icon-cog.js';
 import { useClickOutside } from '../../lib/hooks/useClickOutside.js';
@@ -74,9 +75,9 @@ export function MinimapContainer({ camera, registry, viewportRef, diveDepth, nav
         <//>
         <${Peripheral} camera=${camera} navigation=${navigation} edge="bl"
             alwaysVisible=${settingsOpen} className="world-cog-anchor" elementRef=${cogRef}>
-            <button class="world-cog-btn ${settingsOpen ? 'is-open' : ''}" onClick=${toggle} title="Settings">
+            <${Surface} as="button" className=${`world-cog-btn ${settingsOpen ? 'is-open' : ''}`} onActivate=${toggle} title="Settings">
                 <${IconCog} size=${28} />
-            </button>
+            <//>
             ${settingsOpen && html`<${WorldSettingsPanel} settings=${settings}
                 version=${version} updateState=${updateState} isDevMode=${isDevMode} onAction=${onAction}
                 branches=${branches} defaultBranch=${defaultBranch} setDefaultBranch=${setDefaultBranch}
@@ -192,7 +193,7 @@ function RangeRow({ label, settingKey, min, max, step, value, onInput, display, 
     return html`
         <${Surface} className="wsp-range-row" onActivate=${focusInput} selected=${selected}>
             <span class="wsp-label">${label}</span>
-            <input ref=${inputRef} class="wsp-range" type="range" min=${min} max=${max} step=${step ?? 'any'}
+            <${TextInput} inputRef=${inputRef} className="wsp-range" type="range" min=${min} max=${max} step=${step ?? 'any'}
                 value=${value} onInput=${onInput} onKeyDown=${onInputKeyDown} aria-label=${label} data-setting=${settingKey} />
             <span class="wsp-value">${display ?? ''}</span>
         <//>
