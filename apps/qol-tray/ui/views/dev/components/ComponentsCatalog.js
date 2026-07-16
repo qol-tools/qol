@@ -131,7 +131,7 @@ function TextInputShowcase() {
         <${CatalogSection} title="Text input">
             <div class="catalog-showcase">
                 <${Interactive}>
-                    <${TextInput} placeholder="Type and press Enter" value=${value}
+                    <${TextInput} className="text-input" placeholder="Type and press Enter" value=${value}
                         onInput=${e => setValue(e.target.value)}
                         onSubmit=${() => setSubmitted(value)}
                         onCancel=${() => setValue('')} />
@@ -139,7 +139,7 @@ function TextInputShowcase() {
                 <//>
                 <${States}>
                     <${StateLabel}>disabled<//>
-                    <${TextInput} value="Disabled" disabled />
+                    <${TextInput} className="text-input" value="Disabled" disabled />
                 <//>
             </div>
         <//>
