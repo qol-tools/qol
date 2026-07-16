@@ -235,7 +235,7 @@ pub struct TrayThemePreset {
 
 pub const DEFAULT_TRAY_THEME_KEY: &str = "slate";
 
-pub const TRAY_THEME_PRESETS: [TrayThemePreset; 3] = [
+pub const TRAY_THEME_PRESETS: [TrayThemePreset; 4] = [
     TrayThemePreset {
         key: "slate",
         label: "Slate",
@@ -330,6 +330,38 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 3] = [
             screen: 0x000000,
             panel: 0x080a0f,
             card: 0x04050a,
+        },
+    },
+    TrayThemePreset {
+        key: "midnight",
+        label: "Midnight",
+        system: SystemPalette {
+            surface_canvas: 0x090b19,
+            surface_elevated: 0x141626,
+            surface_raised: 0x1b1e30,
+            surface_hovered: 0x26283c,
+            text_primary: 0xe5e7f4,
+            text_secondary: 0xb2b6cc,
+            text_muted: 0x777b97,
+            text_faint: 0x555974,
+            border_subtle: 0x34374d,
+            accent: DARK_REFERENCE.orange_400,
+            success: DARK_REFERENCE.green_400,
+            danger: DARK_REFERENCE.red_500,
+            info: DARK_REFERENCE.blue_400,
+            warning: DARK_REFERENCE.amber_500,
+        },
+        overlay: OverlayPalette {
+            surface_rgb: 0x0f1121,
+            deep_rgb: 0x0b0d1b,
+            ink_rgb: 0x03030b,
+            scrim_rgb: 0x010105,
+        },
+        tui: TuiBackgroundPalette {
+            desktop: 0x04040e,
+            screen: 0x03030b,
+            panel: 0x080916,
+            card: 0x050510,
         },
     },
 ];

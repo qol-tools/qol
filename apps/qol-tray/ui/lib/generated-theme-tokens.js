@@ -29,5 +29,6 @@ export const QOL_THEMES = [
     { key: "slate", label: "Slate" },
     { key: "graphite", label: "Graphite" },
     { key: "void", label: "Void" },
+    { key: "midnight", label: "Midnight" },
 ];
 export const QOL_DEFAULT_THEME = "slate";

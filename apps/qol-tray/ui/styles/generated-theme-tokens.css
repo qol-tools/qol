@@ -134,3 +134,22 @@
     --qol-tray-tui-bg-panel: #080a0f;
     --qol-tray-tui-bg-card: #04050a;
 }
+:root[data-qol-theme="midnight"] {
+    --qol-system-surface-canvas: #090b19;
+    --qol-system-surface-elevated: #141626;
+    --qol-system-surface-raised: #1b1e30;
+    --qol-system-surface-hovered: #26283c;
+    --qol-system-text-primary: #e5e7f4;
+    --qol-system-text-secondary: #b2b6cc;
+    --qol-system-text-muted: #777b97;
+    --qol-system-text-faint: #555974;
+    --qol-system-border-subtle: #34374d;
+    --qol-system-overlay-surface-rgb: 15, 17, 33;
+    --qol-system-overlay-deep-rgb: 11, 13, 27;
+    --qol-system-overlay-ink-rgb: 3, 3, 11;
+    --qol-system-scrim-rgb: 1, 1, 5;
+    --qol-tray-tui-bg-desktop: #04040e;
+    --qol-tray-tui-bg-screen: #03030b;
+    --qol-tray-tui-bg-panel: #080916;
+    --qol-tray-tui-bg-card: #050510;
+}
