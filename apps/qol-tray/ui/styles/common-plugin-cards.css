@@ -79,7 +79,7 @@
     letter-spacing: var(--ls-md);
     line-height: var(--lh-tight);
     color: rgba(var(--accent-rgb), 0.72);
-    text-shadow: var(--tui-glow-text);
+    text-shadow: var(--glow-text);
     font-family: var(--font-ui);
     user-select: none;
     position: relative;

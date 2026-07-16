@@ -63,14 +63,15 @@ html.qol-bootstrapping-dive #app {
 .view-container.content-shell {
     position: relative;
     isolation: isolate;
-    border: var(--border-w-3) double var(--tui-line);
+    border: var(--frame-border);
     border-radius: var(--radius-md);
-    background-color: var(--tui-bg-screen);
-    background-image: var(--tui-scanline);
+    background-color: var(--frame-bg);
+    background-image: var(--frame-texture);
 }
 
 .view-container.content-shell::before {
     content: "";
+    display: var(--crt-band-display);
     position: absolute;
     left: 0;
     top: -160px;
@@ -647,7 +648,7 @@ html.qol-bootstrapping-dive #app {
     pointer-events: none;
     user-select: none;
     white-space: nowrap;
-    text-shadow: var(--tui-glow-text);
+    text-shadow: var(--glow-text);
     box-shadow: 0 6px 22px var(--layer-ink-45), 0 0 24px rgba(var(--accent-rgb), 0.12);
 }
 

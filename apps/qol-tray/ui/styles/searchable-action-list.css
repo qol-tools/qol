@@ -236,7 +236,7 @@
     border-color: rgba(var(--accent-rgb), 0.62);
     background: rgba(var(--accent-rgb), 0.14);
     color: var(--text-primary);
-    text-shadow: var(--tui-glow-text);
+    text-shadow: var(--glow-text);
 }
 
 .searchable-action-list-empty {
