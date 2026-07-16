@@ -119,11 +119,16 @@ fn loaded_plugin_info(
     resolution: Option<&ResolvedPlugin>,
     cached_versions: &HashMap<String, String>,
 ) -> InstalledPlugin {
-    let (available_version, update_available) = check_update(
-        cached_versions,
-        plugin.id.as_str(),
-        &plugin.manifest.plugin.version,
-    );
+    let dev_linked = resolution.is_some_and(|r| matches!(r.source, PluginSource::DevLinked));
+    let (available_version, update_available) = if dev_linked {
+        (None, false)
+    } else {
+        check_update(
+            cached_versions,
+            plugin.id.as_str(),
+            &plugin.manifest.plugin.version,
+        )
+    };
     InstalledPlugin {
         id: plugin.id.clone(),
         uid: plugin.uid().as_str().to_string(),
