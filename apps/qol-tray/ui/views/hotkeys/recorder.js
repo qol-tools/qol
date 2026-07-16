@@ -16,12 +16,12 @@ export function applyRecordingKey(modal, event) {
         return { modal: { ...modal, recording: false }, advance: false };
     }
     if (MODIFIER_KEYS.includes(event.key)) {
-        const key = formatKeyEvent(event);
+        const key = formatKeyEvent(event, modal.key);
         return { modal: key ? { ...modal, key } : modal, advance: false };
     }
 
-    const key = formatKeyEvent(event);
-    if (!key || MODIFIER_NAMES.includes(key)) {
+    const key = formatKeyEvent(event, modal.key);
+    if (!key || isModifierChord(key)) {
         return { modal, advance: false };
     }
 
@@ -31,19 +31,31 @@ export function applyRecordingKey(modal, event) {
     };
 }
 
-function formatKeyEvent(event) {
-    const parts = [];
-    if (event.ctrlKey) parts.push('Ctrl');
-    if (event.altKey) parts.push('Alt');
-    if (event.shiftKey) parts.push('Shift');
-    if (event.metaKey) parts.push('Super');
+function formatKeyEvent(event, stagedKey) {
+    const modifiers = new Set(getStagedModifiers(stagedKey));
+    if (event.ctrlKey) modifiers.add('Ctrl');
+    if (event.altKey) modifiers.add('Alt');
+    if (event.shiftKey) modifiers.add('Shift');
+    if (event.metaKey) modifiers.add('Super');
+
+    const parts = MODIFIER_NAMES.filter(name => modifiers.has(name));
     if (MODIFIER_KEYS.includes(event.key)) {
-        return parts.join('+') || '';
+        return parts.join('+');
     }
 
     const key = getKeyName(event.code);
     if (key) parts.push(key);
     return parts.join('+');
+}
+
+function getStagedModifiers(key) {
+    if (!isModifierChord(key)) return [];
+    return key.split('+');
+}
+
+function isModifierChord(key) {
+    if (!key) return false;
+    return key.split('+').every(part => MODIFIER_NAMES.includes(part));
 }
 
 function getKeyName(code) {
