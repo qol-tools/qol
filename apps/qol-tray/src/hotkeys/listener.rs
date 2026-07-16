@@ -1,15 +1,17 @@
 use super::catalog::load_available_actions;
 use super::reload;
-use super::HotkeyManager;
+use super::{HotkeyAction, HotkeyManager};
 use crate::plugins::PluginManager;
 use anyhow::{anyhow, Result};
-use crossbeam_channel::{select, Receiver};
+use crossbeam_channel::{after, never, select, Receiver};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyEventReceiver, HotKeyState};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
 
 type SharedPluginManager = Arc<Mutex<PluginManager>>;
 
@@ -89,6 +91,7 @@ fn run_listener_once(plugin_manager: &SharedPluginManager, reload_rx: &Receiver<
         manager,
         plugin_manager: plugin_manager.clone(),
         reload_rx,
+        held_actions: HeldActions::default(),
     }
     .run();
     Err(anyhow!("hotkey listener loop returned unexpectedly"))
@@ -98,6 +101,7 @@ struct HotkeyListenerLoop<'a> {
     manager: HotkeyManager,
     plugin_manager: SharedPluginManager,
     reload_rx: &'a Receiver<()>,
+    held_actions: HeldActions,
 }
 
 impl<'a> HotkeyListenerLoop<'a> {
@@ -118,20 +122,27 @@ impl<'a> HotkeyListenerLoop<'a> {
         let hotkey_receiver: &GlobalHotKeyEventReceiver = GlobalHotKeyEvent::receiver();
 
         loop {
+            let heartbeat_rx: Receiver<Instant> = if self.held_actions.is_empty() {
+                never()
+            } else {
+                after(HEARTBEAT_INTERVAL)
+            };
             select! {
                 recv(self.reload_rx) -> reload => {
                     if reload.is_err() {
-                        return;
+                        break;
                     }
                     self.drain_reload_signals();
                     self.handle_reload();
                 }
                 recv(hotkey_receiver) -> event => {
-                    let Ok(event) = event else { return };
+                    let Ok(event) = event else { break };
                     self.handle_hotkey_event(event);
                 }
+                recv(heartbeat_rx) -> _ => self.send_heartbeats(),
             }
         }
+        self.stop_held_actions();
     }
 
     fn drain_reload_signals(&self) {
@@ -140,26 +151,38 @@ impl<'a> HotkeyListenerLoop<'a> {
 
     fn handle_reload(&mut self) {
         log::info!("Reloading hotkeys...");
+        self.stop_held_actions();
         match self.reload_hotkeys() {
             Ok(()) => log::info!("Hotkeys reloaded successfully"),
             Err(error) => log::error!("Failed to register hotkeys: {}", error),
         }
     }
 
-    fn handle_hotkey_event(&self, event: GlobalHotKeyEvent) {
-        if event.state != HotKeyState::Pressed {
-            return;
-        }
-
-        let Some(action) = self.manager.get_action(&event) else {
+    fn handle_hotkey_event(&mut self, event: GlobalHotKeyEvent) {
+        let action = self.manager.get_action(&event).cloned();
+        let Some(dispatch) = self.held_actions.handle_event(event, action.as_ref()) else {
             return;
         };
+        self.dispatch(dispatch);
+    }
 
-        log::info!(
-            "Hotkey triggered: {}::{}",
-            action.plugin_uid.as_str(),
-            action.action
-        );
+    fn send_heartbeats(&self) {
+        for action in self.held_actions.heartbeat_actions() {
+            self.dispatch(HotkeyDispatch::Continuous {
+                action,
+                phase: ContinuousPhase::Heartbeat,
+            });
+        }
+    }
+
+    fn stop_held_actions(&mut self) {
+        for dispatch in self.held_actions.stop_all() {
+            self.dispatch(dispatch);
+        }
+    }
+
+    fn dispatch(&self, dispatch: HotkeyDispatch) {
+        let action = dispatch.action();
 
         let plugin_id = match self.plugin_manager.lock() {
             Ok(manager) => manager
@@ -180,17 +203,232 @@ impl<'a> HotkeyListenerLoop<'a> {
             return;
         };
 
-        crate::plugins::action_executor::execute_action(
-            &self.plugin_manager,
-            &plugin_id,
-            &action.action,
-        );
+        match dispatch {
+            HotkeyDispatch::OneShot(action) => {
+                log::info!(
+                    "Hotkey triggered: {}::{}",
+                    action.plugin_uid.as_str(),
+                    action.action
+                );
+                crate::plugins::action_executor::execute_action(
+                    &self.plugin_manager,
+                    &plugin_id,
+                    &action.action,
+                );
+            }
+            HotkeyDispatch::Continuous { action, phase } => {
+                if phase == ContinuousPhase::Heartbeat {
+                    log::trace!(
+                        "Continuous hotkey phase: {}::{} phase={}",
+                        action.plugin_uid.as_str(),
+                        action.action,
+                        phase.as_str()
+                    );
+                } else {
+                    log::info!(
+                        "Continuous hotkey phase: {}::{} phase={}",
+                        action.plugin_uid.as_str(),
+                        action.action,
+                        phase.as_str()
+                    );
+                }
+                crate::plugins::action_executor::execute_action_with_input(
+                    &self.plugin_manager,
+                    &plugin_id,
+                    &action.action,
+                    serde_json::json!({ "phase": phase.as_str() }),
+                );
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContinuousPhase {
+    Start,
+    Heartbeat,
+    Stop,
+}
+
+impl ContinuousPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Heartbeat => "heartbeat",
+            Self::Stop => "stop",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum HotkeyDispatch {
+    OneShot(HotkeyAction),
+    Continuous {
+        action: HotkeyAction,
+        phase: ContinuousPhase,
+    },
+}
+
+impl HotkeyDispatch {
+    fn action(&self) -> &HotkeyAction {
+        match self {
+            Self::OneShot(action) | Self::Continuous { action, .. } => action,
+        }
+    }
+}
+
+#[derive(Default)]
+struct HeldActions {
+    actions: HashMap<u32, HotkeyAction>,
+}
+
+impl HeldActions {
+    fn is_empty(&self) -> bool {
+        self.actions.is_empty()
+    }
+
+    fn handle_event(
+        &mut self,
+        event: GlobalHotKeyEvent,
+        registered_action: Option<&HotkeyAction>,
+    ) -> Option<HotkeyDispatch> {
+        match event.state {
+            HotKeyState::Pressed => {
+                let action = registered_action?.clone();
+                if !action.continuous {
+                    return Some(HotkeyDispatch::OneShot(action));
+                }
+                if self.actions.contains_key(&event.id) {
+                    return None;
+                }
+                self.actions.insert(event.id, action.clone());
+                Some(HotkeyDispatch::Continuous {
+                    action,
+                    phase: ContinuousPhase::Start,
+                })
+            }
+            HotKeyState::Released => {
+                let action = self.actions.remove(&event.id)?;
+                Some(HotkeyDispatch::Continuous {
+                    action,
+                    phase: ContinuousPhase::Stop,
+                })
+            }
+        }
+    }
+
+    fn heartbeat_actions(&self) -> Vec<HotkeyAction> {
+        self.actions.values().cloned().collect()
+    }
+
+    fn stop_all(&mut self) -> Vec<HotkeyDispatch> {
+        self.actions
+            .drain()
+            .map(|(_, action)| HotkeyDispatch::Continuous {
+                action,
+                phase: ContinuousPhase::Stop,
+            })
+            .collect()
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::PluginUid;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    fn action(name: &str, continuous: bool) -> HotkeyAction {
+        HotkeyAction {
+            plugin_uid: PluginUid::new("uid-window-actions"),
+            action: name.to_string(),
+            continuous,
+        }
+    }
+
+    fn event(id: u32, state: HotKeyState) -> GlobalHotKeyEvent {
+        GlobalHotKeyEvent { id, state }
+    }
+
+    #[test]
+    fn one_shot_actions_dispatch_only_on_press() {
+        let mut held = HeldActions::default();
+        let center = action("center", false);
+
+        assert_eq!(
+            held.handle_event(event(1, HotKeyState::Pressed), Some(&center)),
+            Some(HotkeyDispatch::OneShot(center))
+        );
+        assert_eq!(
+            held.handle_event(event(1, HotKeyState::Released), None),
+            None
+        );
+        assert!(held.is_empty());
+    }
+
+    #[test]
+    fn continuous_actions_dispatch_start_heartbeats_and_stop() {
+        let mut held = HeldActions::default();
+        let glide = action("glide-left", true);
+
+        assert_eq!(
+            held.handle_event(event(7, HotKeyState::Pressed), Some(&glide)),
+            Some(HotkeyDispatch::Continuous {
+                action: glide.clone(),
+                phase: ContinuousPhase::Start,
+            })
+        );
+        assert_eq!(held.heartbeat_actions(), vec![glide.clone()]);
+        assert_eq!(
+            held.handle_event(event(7, HotKeyState::Released), Some(&glide)),
+            Some(HotkeyDispatch::Continuous {
+                action: glide,
+                phase: ContinuousPhase::Stop,
+            })
+        );
+        assert!(held.is_empty());
+    }
+
+    #[test]
+    fn continuous_actions_ignore_duplicate_press_events() {
+        let mut held = HeldActions::default();
+        let glide = action("glide-right", true);
+
+        assert!(held
+            .handle_event(event(9, HotKeyState::Pressed), Some(&glide))
+            .is_some());
+        assert_eq!(
+            held.handle_event(event(9, HotKeyState::Pressed), Some(&glide)),
+            None
+        );
+        assert_eq!(held.heartbeat_actions(), vec![glide]);
+    }
+
+    #[test]
+    fn stop_all_releases_every_held_continuous_action() {
+        let mut held = HeldActions::default();
+        let left = action("glide-left", true);
+        let up = action("glide-up", true);
+        held.handle_event(event(1, HotKeyState::Pressed), Some(&left));
+        held.handle_event(event(2, HotKeyState::Pressed), Some(&up));
+
+        let mut stopped = held.stop_all();
+        stopped.sort_by(|a, b| a.action().action.cmp(&b.action().action));
+
+        assert_eq!(
+            stopped,
+            vec![
+                HotkeyDispatch::Continuous {
+                    action: left,
+                    phase: ContinuousPhase::Stop,
+                },
+                HotkeyDispatch::Continuous {
+                    action: up,
+                    phase: ContinuousPhase::Stop,
+                },
+            ]
+        );
+        assert!(held.is_empty());
+    }
 
     #[test]
     fn next_backoff_doubles_until_cap() {

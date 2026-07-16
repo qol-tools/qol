@@ -22,4 +22,5 @@ pub struct HotkeyBinding {
 pub struct HotkeyAction {
     pub plugin_uid: PluginUid,
     pub action: String,
+    pub continuous: bool,
 }

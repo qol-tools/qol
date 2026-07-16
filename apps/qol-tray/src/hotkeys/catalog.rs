@@ -1,8 +1,8 @@
 use crate::plugins::{Plugin, PluginManager, PluginUid};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
-pub(super) type AvailableActions = HashMap<PluginUid, BTreeSet<String>>;
+pub(super) type AvailableActions = HashMap<PluginUid, BTreeMap<String, bool>>;
 
 pub(super) fn load_available_actions(
     plugin_manager: &Arc<Mutex<PluginManager>>,
@@ -23,7 +23,22 @@ where
 {
     plugins
         .into_iter()
-        .map(|plugin| (plugin.uid(), plugin.manifest.executable_action_ids()))
+        .map(|plugin| {
+            let actions = plugin
+                .manifest
+                .executable_action_ids()
+                .into_iter()
+                .map(|action_id| {
+                    let continuous = plugin
+                        .manifest
+                        .actions
+                        .get(&action_id)
+                        .is_some_and(|action| action.continuous);
+                    (action_id, continuous)
+                })
+                .collect();
+            (plugin.uid(), actions)
+        })
         .collect()
 }
 
@@ -63,8 +78,8 @@ mod tests {
         }
     }
 
-    fn sorted_set(ids: BTreeSet<String>) -> Vec<String> {
-        ids.into_iter().collect()
+    fn sorted_ids(actions: BTreeMap<String, bool>) -> Vec<String> {
+        actions.into_keys().collect()
     }
 
     fn manifest(daemon: Option<DaemonConfig>, items: Vec<MenuItem>) -> PluginManifest {
@@ -114,7 +129,11 @@ mod tests {
             checkbox("gamma"),
         ];
         assert_eq!(
-            sorted_set(manifest(None, items).executable_action_ids()),
+            sorted_ids(
+                catalog_for_plugins(std::iter::once(&make_plugin("plugin-foo", None, items,)))
+                    .remove(&PluginUid::new("plugin-foo"))
+                    .unwrap()
+            ),
             vec!["alpha", "beta"]
         );
     }
@@ -129,7 +148,11 @@ mod tests {
             ],
         )];
         assert_eq!(
-            sorted_set(manifest(None, items).executable_action_ids()),
+            sorted_ids(
+                catalog_for_plugins(std::iter::once(&make_plugin("plugin-foo", None, items,)))
+                    .remove(&PluginUid::new("plugin-foo"))
+                    .unwrap()
+            ),
             vec!["deepest", "inner"]
         );
     }
@@ -154,7 +177,7 @@ mod tests {
             .get(&PluginUid::new("plugin-foo"))
             .expect("daemon-backed plugin must be in the catalog");
         assert!(
-            actions.contains("toggle"),
+            actions.contains_key("toggle"),
             "daemon-backed action must remain registered when a socket path is configured; got {:?}",
             actions
         );
@@ -184,7 +207,7 @@ mod tests {
         let catalog = catalog_for_plugins(plugins.iter());
 
         assert_eq!(
-            sorted_set(
+            sorted_ids(
                 catalog
                     .get(&PluginUid::new("plugin-no-daemon"))
                     .unwrap()
@@ -193,7 +216,7 @@ mod tests {
             vec!["alpha", "beta"]
         );
         assert_eq!(
-            sorted_set(
+            sorted_ids(
                 catalog
                     .get(&PluginUid::new("plugin-disabled-daemon"))
                     .unwrap()
@@ -215,5 +238,25 @@ mod tests {
             Some(true),
             "plugin with no menu actions appears with an empty action set"
         );
+    }
+
+    #[test]
+    fn catalog_marks_continuous_action_declarations() {
+        let mut plugin = make_plugin("plugin-foo", None, vec![]);
+        plugin.manifest.actions.insert(
+            "glide-left".to_string(),
+            crate::plugins::manifest::ActionDeclaration {
+                label: "Glide Left".to_string(),
+                kind: ActionType::Run,
+                continuous: true,
+                args: Some(vec!["glide-left".to_string()]),
+                config_key: None,
+                checked: false,
+            },
+        );
+
+        let catalog = catalog_for_plugins(std::iter::once(&plugin));
+
+        assert!(catalog[&PluginUid::new("plugin-foo")]["glide-left"]);
     }
 }

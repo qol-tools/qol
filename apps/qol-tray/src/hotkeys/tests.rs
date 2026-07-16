@@ -4,7 +4,7 @@ use super::types::{HotkeyBinding, HotkeyConfig};
 use crate::plugins::manifest::is_valid_action_id;
 use crate::plugins::PluginUid;
 use global_hotkey::hotkey::{Code, Modifiers};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[test]
 fn parse_key_code_letters() {
@@ -254,8 +254,8 @@ fn make_available(uid: &str, actions: &[&str]) -> super::catalog::AvailableActio
         PluginUid::new(uid),
         actions
             .iter()
-            .map(|s| s.to_string())
-            .collect::<BTreeSet<_>>(),
+            .map(|s| (s.to_string(), false))
+            .collect::<BTreeMap<_, _>>(),
     );
     map
 }
@@ -301,6 +301,30 @@ fn plan_registrations_includes_binding_when_uid_and_action_match() {
     );
     assert_eq!(plan[0].action.plugin_uid.as_str(), "uid-foo");
     assert_eq!(plan[0].action.action, "run");
+    assert!(!plan[0].action.continuous);
+}
+
+#[test]
+fn plan_registrations_preserves_continuous_action_metadata() {
+    let mut available = make_available("uid-window-actions", &["glide-left"]);
+    *available
+        .get_mut(&PluginUid::new("uid-window-actions"))
+        .unwrap()
+        .get_mut("glide-left")
+        .unwrap() = true;
+    let config = HotkeyConfig {
+        hotkeys: vec![binding(
+            "uid-window-actions",
+            "glide-left",
+            "Ctrl+Shift+Super+Left",
+            true,
+        )],
+    };
+
+    let plan = plan_registrations(&config, &available);
+
+    assert_eq!(plan.len(), 1);
+    assert!(plan[0].action.continuous);
 }
 
 #[test]

@@ -28,19 +28,26 @@ fn plan_binding(
     if !binding.enabled {
         return None;
     }
-    if !binding_available(available_actions, binding) {
+    let Some(available_action) = available_action(available_actions, binding) else {
         warn_unavailable_binding(binding);
         return None;
-    }
+    };
 
     let hotkey = parse_planned_hotkey(binding)?;
-    Some(PlannedRegistration::from_binding(binding, hotkey))
+    Some(PlannedRegistration::from_binding(
+        binding,
+        hotkey,
+        *available_action,
+    ))
 }
 
-fn binding_available(available_actions: &AvailableActions, binding: &HotkeyBinding) -> bool {
+fn available_action<'a>(
+    available_actions: &'a AvailableActions,
+    binding: &HotkeyBinding,
+) -> Option<&'a bool> {
     available_actions
         .get(&binding.plugin_uid)
-        .is_some_and(|actions| actions.contains(&binding.action))
+        .and_then(|actions| actions.get(&binding.action))
 }
 
 fn parse_planned_hotkey(binding: &HotkeyBinding) -> Option<HotKey> {
@@ -65,13 +72,14 @@ fn warn_invalid_binding(binding: &HotkeyBinding) {
 }
 
 impl PlannedRegistration {
-    fn from_binding(binding: &HotkeyBinding, hotkey: HotKey) -> Self {
+    fn from_binding(binding: &HotkeyBinding, hotkey: HotKey, continuous: bool) -> Self {
         Self {
             binding_key: binding.key.clone(),
             hotkey,
             action: HotkeyAction {
                 plugin_uid: binding.plugin_uid.clone(),
                 action: binding.action.clone(),
+                continuous,
             },
         }
     }
