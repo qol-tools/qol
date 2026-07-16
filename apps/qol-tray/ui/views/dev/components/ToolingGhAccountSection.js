@@ -1,5 +1,7 @@
 import { html } from '../../../lib/html.js';
 import { useEffect, useState, useCallback } from 'preact/hooks';
+import { TextInput } from '../../../lib/components/TextInput.js';
+import { Button } from '../../../lib/components/Button.js';
 
 const ENDPOINT = '/api/dev/tooling-gh-account';
 
@@ -84,22 +86,22 @@ export function ToolingGhAccountSection() {
                 to scope <code>GH_TOKEN</code> to qol-tools repos. Leave blank to disable.
             </p>
             <div class="link-input-row">
-                <input type="text" id="tooling-gh-account-input"
+                <${TextInput} id="tooling-gh-account-input"
                     placeholder="example-user"
                     value=${draft}
                     onInput=${(e) => setDraft(e.target.value)}
                     onKeyDown=${onKeyDown}
                     disabled=${status === 'saving'} />
-                <button class="btn btn-sm btn-primary"
-                    onClick=${onSave}
+                <${Button} small variant="btn-primary"
+                    onActivate=${onSave}
                     disabled=${status === 'saving' || !dirty}>
                     Save
-                </button>
-                <button class="btn btn-sm btn-ghost"
-                    onClick=${onClear}
+                <//>
+                <${Button} small variant="btn-ghost"
+                    onActivate=${onClear}
                     disabled=${status === 'saving' || empty}>
                     Clear
-                </button>
+                <//>
             </div>
             ${error && html`<p class="error-msg">${error}</p>`}
             ${status === 'saved' && !error && html`<p class="last-action">Saved</p>`}
