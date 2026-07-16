@@ -18,16 +18,27 @@ pub use registration_status::{get_registration_errors, RegistrationError};
 pub use reload::trigger_reload;
 pub use types::{HotkeyAction, HotkeyBinding, HotkeyConfig};
 
-pub(crate) fn build_capture_bindings(config: HotkeyConfig) -> Vec<capture::Binding> {
+use std::collections::HashSet;
+
+type ContinuousActions = HashSet<(crate::plugins::PluginUid, String)>;
+
+pub(crate) fn build_capture_bindings(
+    config: HotkeyConfig,
+    continuous_actions: &ContinuousActions,
+) -> Vec<capture::Binding> {
     config
         .hotkeys
         .into_iter()
         .filter(|h| h.enabled)
-        .map(|h| capture::Binding {
-            combo: capture::parse_combo(&h.key),
-            plugin_uid: h.plugin_uid,
-            action: h.action,
-            raw_key: h.key,
+        .map(|h| {
+            let continuous = continuous_actions.contains(&(h.plugin_uid.clone(), h.action.clone()));
+            capture::Binding {
+                combo: capture::parse_combo(&h.key),
+                plugin_uid: h.plugin_uid,
+                action: h.action,
+                raw_key: h.key,
+                continuous,
+            }
         })
         .collect()
 }
@@ -37,7 +48,7 @@ pub fn start_capture(
 ) -> anyhow::Result<()> {
     use crate::plugins::action_executor;
 
-    let bindings = load_bindings_for_capture().unwrap_or_else(|error| {
+    let bindings = load_bindings_for_capture(&plugin_manager).unwrap_or_else(|error| {
         log::error!(
             "hotkey config failed to load at startup; installing with no hotkeys until corrected: {error:#}"
         );
@@ -45,11 +56,11 @@ pub fn start_capture(
     });
 
     let plugin_manager_for_fire = plugin_manager.clone();
-    let on_fire: capture::OnFire = Box::new(move |binding| {
+    let on_fire: capture::OnFire = Box::new(move |event| {
         let plugin_id = match plugin_manager_for_fire.lock() {
             Ok(manager) => manager
                 .identity_index()
-                .display_for(&binding.plugin_uid)
+                .display_for(&event.binding.plugin_uid)
                 .map(|d| d.id.as_str().to_owned()),
             Err(_) => {
                 log::error!("hotkey capture: plugin manager lock failed");
@@ -59,15 +70,35 @@ pub fn start_capture(
         let Some(plugin_id) = plugin_id else {
             log::warn!(
                 "hotkey capture: no plugin found for uid {}",
-                binding.plugin_uid.as_str()
+                event.binding.plugin_uid.as_str()
             );
             return;
         };
-        action_executor::execute_action(&plugin_manager_for_fire, &plugin_id, &binding.action);
+        if event.binding.continuous {
+            let phase = match event.phase {
+                capture::Phase::Start => "start",
+                capture::Phase::Heartbeat => "heartbeat",
+                capture::Phase::Stop => "stop",
+            };
+            action_executor::execute_action_with_input(
+                &plugin_manager_for_fire,
+                &plugin_id,
+                &event.binding.action,
+                serde_json::json!({ "phase": phase }),
+            );
+        } else if event.phase == capture::Phase::Start {
+            action_executor::execute_action(
+                &plugin_manager_for_fire,
+                &plugin_id,
+                &event.binding.action,
+            );
+        }
     });
 
     let reload_rx = reload::subscribe();
-    let rebuild: capture::RebuildBindings = Box::new(load_bindings_for_capture);
+    let plugin_manager_for_rebuild = plugin_manager.clone();
+    let rebuild: capture::RebuildBindings =
+        Box::new(move || load_bindings_for_capture(&plugin_manager_for_rebuild));
 
     capture::install(bindings, on_fire, reload_rx, rebuild)
 }
@@ -91,8 +122,24 @@ pub fn start_capture_with_fallback(
     }
 }
 
-fn load_bindings_for_capture() -> anyhow::Result<Vec<capture::Binding>> {
+fn load_bindings_for_capture(
+    plugin_manager: &std::sync::Arc<std::sync::Mutex<crate::plugins::PluginManager>>,
+) -> anyhow::Result<Vec<capture::Binding>> {
     let manager = HotkeyManager::new()?;
     let config = manager.load_config()?;
-    Ok(build_capture_bindings(config))
+    let continuous_actions = plugin_manager
+        .lock()
+        .map_err(|_| anyhow::anyhow!("plugin manager lock failed"))?
+        .plugins()
+        .flat_map(|plugin| {
+            let uid = plugin.uid();
+            plugin
+                .manifest
+                .actions
+                .iter()
+                .filter(|(_, action)| action.continuous)
+                .map(move |(action_id, _)| (uid.clone(), action_id.clone()))
+        })
+        .collect();
+    Ok(build_capture_bindings(config, &continuous_actions))
 }

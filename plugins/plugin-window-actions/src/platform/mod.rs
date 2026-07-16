@@ -6,8 +6,8 @@ mod macos;
 mod windows;
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::{execute_action, state_file_path};
+pub(crate) use linux::{execute_action, state_file_path, GlideController};
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{execute_action, state_file_path};
+pub(crate) use macos::{execute_action, state_file_path, GlideController};
 #[cfg(target_os = "windows")]
-pub(crate) use windows::{execute_action, state_file_path};
+pub(crate) use windows::{execute_action, state_file_path, GlideController};

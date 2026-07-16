@@ -205,6 +205,7 @@ mod tests {
             center_height_percent: 0.79,
             snap_fraction: 0.5,
             reveal_taskbar_after_move: true,
+            glide_speed_px_per_second: 1200.0,
         };
         let cases = [
             ("snap_left_script", snap_left_script(0.5)),

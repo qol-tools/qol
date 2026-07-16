@@ -81,6 +81,7 @@ fn make_catalog_plugin(
         ActionDeclaration {
             label: "Action".to_string(),
             kind: ActionType::Run,
+            continuous: false,
             args: Some(args),
             config_key: None,
             checked: false,

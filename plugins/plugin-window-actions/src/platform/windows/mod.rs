@@ -4,6 +4,27 @@ use crate::config::WindowActionsConfig;
 use crate::restore::{self, WindowSystem};
 use crate::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
 
+pub(crate) struct GlideController;
+
+impl GlideController {
+    pub(crate) fn connect() -> Result<Self, String> {
+        Err(unsupported("continuous window movement"))
+    }
+
+    pub(crate) fn update(
+        &mut self,
+        _direction: crate::movement::Direction,
+        _phase: crate::movement::Phase,
+        _speed: f64,
+    ) -> Result<(), String> {
+        Err(unsupported("continuous window movement"))
+    }
+
+    pub(crate) fn stop_all(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 pub(crate) fn execute_action(
     action: &str,
     store: &FileMinimizedStateStore,

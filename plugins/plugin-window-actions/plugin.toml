@@ -46,6 +46,31 @@ args = ["move-monitor-left"]
 label = "Move to Right Monitor"
 args = ["move-monitor-right"]
 
+[action.glide-left]
+label = "Glide Left"
+args = ["glide-left"]
+continuous = true
+
+[action.glide-right]
+label = "Glide Right"
+args = ["glide-right"]
+continuous = true
+
+[action.glide-up]
+label = "Glide Up"
+args = ["glide-up"]
+continuous = true
+
+[action.glide-down]
+label = "Glide Down"
+args = ["glide-down"]
+continuous = true
+
+[daemon]
+enabled = true
+command = "window-actions"
+socket = "/tmp/qol-window-actions.sock"
+
 [menu]
 label = "Window Actions"
 items = []

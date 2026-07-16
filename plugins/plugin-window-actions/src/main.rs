@@ -1,4 +1,6 @@
 mod config;
+mod daemon;
+mod movement;
 mod platform;
 mod restore;
 mod state_store;
@@ -14,10 +16,13 @@ fn main() -> ExitCode {
     let action = match env::args().nth(1) {
         Some(action) => action,
         None => {
-            eprintln!("Usage: window-actions <action>");
-            return ExitCode::from(1);
+            return exit_for(daemon::run());
         }
     };
+
+    if action == "daemon" || action == "run" {
+        return exit_for(daemon::run());
+    }
 
     let store = FileMinimizedStateStore::new(platform::state_file_path());
     let config = load_config();
@@ -31,6 +36,14 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
+    ExitCode::SUCCESS
+}
+
+fn exit_for(result: Result<(), String>) -> ExitCode {
+    if let Err(error) = result {
+        eprintln!("{error}");
+        return ExitCode::from(1);
+    }
     ExitCode::SUCCESS
 }
 

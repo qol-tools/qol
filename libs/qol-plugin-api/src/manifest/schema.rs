@@ -213,6 +213,8 @@ pub struct ActionDeclaration {
     #[serde(default = "default_action_kind")]
     pub kind: ActionType,
     #[serde(default)]
+    pub continuous: bool,
+    #[serde(default)]
     pub args: Option<Vec<String>>,
     #[serde(default)]
     pub config_key: Option<String>,

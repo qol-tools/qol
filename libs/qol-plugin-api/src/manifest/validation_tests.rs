@@ -65,6 +65,63 @@ mod manifest_rules {
     }
 }
 
+mod continuous_action_rules {
+    use super::*;
+
+    #[test]
+    fn validate_accepts_continuous_action_with_socket_daemon() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "runner"
+
+            [daemon]
+            enabled = true
+            command = "runner"
+            socket = "/tmp/test-plugin.sock"
+
+            [action.glide]
+            label = "Glide"
+            continuous = true
+        "#;
+
+        assert!(validate_toml(toml).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_continuous_action_without_socket_daemon() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "runner"
+
+            [action.glide]
+            label = "Glide"
+            continuous = true
+        "#;
+
+        assert!(validate_toml(toml).is_err());
+    }
+}
+
 mod command_rules {
     use super::*;
 
@@ -505,6 +562,7 @@ mod shortcut_rules {
                 ActionDeclaration {
                     label: "Open".to_string(),
                     kind: ActionType::Run,
+                    continuous: false,
                     args: Some(vec!["open".to_string()]),
                     config_key: None,
                     checked: false,

@@ -1,4 +1,4 @@
-use super::super::binding::Binding;
+use super::super::binding::{Binding, CaptureEvent, Phase};
 use super::super::{OnFire, RebuildBindings};
 use anyhow::{bail, Result};
 use core_foundation::base::TCFType;
@@ -13,7 +13,7 @@ use qol_hotkeys::grammar;
 use qol_hotkeys::grammar::Modifier as Mod;
 use qol_hotkeys::macos_keycode;
 use qol_runtime::keyremap_marker::{self, KeyRemapMarker};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
@@ -31,12 +31,12 @@ pub(crate) fn install(
     rebuild: RebuildBindings,
 ) -> Result<()> {
     let matcher = Arc::new(RwLock::new(MacBindingMatcher::new(bindings)));
-    let (fire_tx, fire_rx) = mpsc::channel::<Binding>();
+    let (fire_tx, fire_rx) = mpsc::channel::<CaptureEvent>();
     std::thread::Builder::new()
         .name("hotkey-capture-macos-actions".into())
         .spawn(move || {
-            while let Ok(binding) = fire_rx.recv() {
-                on_fire(&binding);
+            while let Ok(event) = fire_rx.recv() {
+                on_fire(&event);
             }
         })?;
 
@@ -118,12 +118,12 @@ extern "C" {
 
 fn run_tap(
     matcher: Arc<RwLock<MacBindingMatcher>>,
-    fire_tx: Sender<Binding>,
+    fire_tx: Sender<CaptureEvent>,
     ready_tx: Sender<Result<(), String>>,
 ) {
     let reenable: Arc<OnceLock<ReenablePort>> = Arc::new(OnceLock::new());
     let cb_reenable = Arc::clone(&reenable);
-    let events = vec![CGEventType::KeyDown];
+    let events = vec![CGEventType::KeyDown, CGEventType::KeyUp];
     let tap = CGEventTap::new(
         CGEventTapLocation::HID,
         CGEventTapPlacement::TailAppendEventTap,
@@ -137,21 +137,21 @@ fn run_tap(
                 }
                 return CallbackResult::Keep;
             }
-            if !matches!(event_type, CGEventType::KeyDown) {
+            if !matches!(event_type, CGEventType::KeyDown | CGEventType::KeyUp) {
                 return CallbackResult::Keep;
             }
-            if is_auto_repeat(event) {
+            if event_type == CGEventType::KeyDown && is_auto_repeat(event) {
                 return CallbackResult::Keep;
             }
             let observed = observed_combo(event);
-            let fired = match matcher.read() {
-                Ok(guard) => guard.match_combo(&observed).cloned(),
-                Err(poisoned) => poisoned.into_inner().match_combo(&observed).cloned(),
+            let fired = match matcher.write() {
+                Ok(mut guard) => guard.match_event(event_type, &observed),
+                Err(poisoned) => poisoned.into_inner().match_event(event_type, &observed),
             };
-            let Some(binding) = fired else {
+            let Some((binding, phase)) = fired else {
                 return CallbackResult::Keep;
             };
-            let _ = fire_tx.send(binding);
+            let _ = fire_tx.send(CaptureEvent { binding, phase });
             CallbackResult::Drop
         },
     );
@@ -186,6 +186,7 @@ fn run_tap(
 #[derive(Debug)]
 struct MacBindingMatcher {
     bindings: Vec<(MacCombo, Binding)>,
+    active_continuous: HashMap<u16, Binding>,
 }
 
 impl MacBindingMatcher {
@@ -195,6 +196,7 @@ impl MacBindingMatcher {
                 .into_iter()
                 .filter_map(|binding| parse_mac_combo(&binding).map(|combo| (combo, binding)))
                 .collect(),
+            active_continuous: HashMap::new(),
         }
     }
 
@@ -202,6 +204,24 @@ impl MacBindingMatcher {
         self.bindings
             .iter()
             .find_map(|(combo, binding)| (combo == observed).then_some(binding))
+    }
+
+    fn match_event(
+        &mut self,
+        event_type: CGEventType,
+        observed: &MacCombo,
+    ) -> Option<(Binding, Phase)> {
+        if event_type == CGEventType::KeyUp {
+            return self
+                .active_continuous
+                .remove(&observed.key)
+                .map(|binding| (binding, Phase::Stop));
+        }
+        let binding = self.match_combo(observed)?.clone();
+        if binding.continuous {
+            self.active_continuous.insert(observed.key, binding.clone());
+        }
+        Some((binding, Phase::Start))
     }
 }
 
@@ -283,6 +303,7 @@ mod tests {
             plugin_uid: crate::plugins::PluginUid::new("plugin"),
             action: "open".into(),
             raw_key: key.into(),
+            continuous: false,
         }
     }
 
@@ -292,6 +313,7 @@ mod tests {
             plugin_uid: crate::plugins::PluginUid::new(plugin),
             action: action.into(),
             raw_key: key.into(),
+            continuous: false,
         }
     }
 

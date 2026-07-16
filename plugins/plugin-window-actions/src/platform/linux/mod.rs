@@ -1,3 +1,4 @@
+mod glide;
 mod monitor_move;
 mod scripts;
 mod system;
@@ -10,6 +11,8 @@ use crate::restore;
 use crate::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
 
 use system::{run_cinnamon_eval, X11WindowSystem};
+
+pub(crate) use glide::GlideController;
 
 pub(crate) fn execute_action(
     action: &str,

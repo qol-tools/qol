@@ -1,6 +1,6 @@
-use super::super::super::Binding;
+use super::super::super::{Binding, CaptureEvent};
 use super::super::super::{OnFire, RebuildBindings};
-use super::matcher::{BindingMatcher, CaptureDecision};
+use super::matcher::BindingMatcher;
 use anyhow::{Context, Result};
 use crossbeam_channel::Receiver;
 use evdev::{uinput::VirtualDevice, AttributeSet, Device, EventSummary, InputEvent, KeyCode};
@@ -50,7 +50,7 @@ pub(super) fn install(
     }
     let keyboard_count = keyboards.len();
 
-    let on_fire: Arc<dyn Fn(&Binding) + Send + Sync> = Arc::from(on_fire);
+    let on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync> = Arc::from(on_fire);
 
     let mut grabbed = 0usize;
     for (path, mut device) in keyboards {
@@ -126,7 +126,7 @@ fn run_reader(
     mut device: Device,
     matcher: Arc<Mutex<BindingMatcher>>,
     virtual_device: Arc<Mutex<VirtualDevice>>,
-    on_fire: Arc<dyn Fn(&Binding) + Send + Sync>,
+    on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync>,
 ) {
     loop {
         let events = match device.fetch_events() {
@@ -149,7 +149,7 @@ fn process_event(
     event: InputEvent,
     matcher: &Mutex<BindingMatcher>,
     virtual_device: &Mutex<VirtualDevice>,
-    on_fire: &dyn Fn(&Binding),
+    on_fire: &dyn Fn(&CaptureEvent),
 ) {
     let EventSummary::Key(_, key_code, value) = event.destructure() else {
         forward(event, virtual_device);
@@ -157,19 +157,23 @@ fn process_event(
     };
     let decision = match matcher.lock() {
         Ok(mut m) => m.observe(key_code.0, value),
-        Err(_) => CaptureDecision::Forward,
-    };
-    match decision {
-        CaptureDecision::Forward => forward(event, virtual_device),
-        CaptureDecision::Fire(binding) => {
-            log::info!(
-                "evdev: hotkey fired {} -> {}::{}",
-                binding.raw_key,
-                binding.plugin_uid.as_str(),
-                binding.action
-            );
-            on_fire(&binding);
+        Err(_) => {
+            forward(event, virtual_device);
+            return;
         }
+    };
+    if decision.forward {
+        forward(event, virtual_device);
+    }
+    for capture_event in decision.events {
+        log::info!(
+            "evdev: hotkey phase {:?} {} -> {}::{}",
+            capture_event.phase,
+            capture_event.binding.raw_key,
+            capture_event.binding.plugin_uid.as_str(),
+            capture_event.binding.action
+        );
+        on_fire(&capture_event);
     }
 }
 

@@ -46,6 +46,13 @@ fn validate_args(action_id: &str, args: Option<&[String]>) -> Result<()> {
 }
 
 fn validate_kind_contract(action_id: &str, action: &ActionDeclaration) -> Result<()> {
+    if action.continuous && !action.kind.is_executable() {
+        bail!(
+            "action catalog entry {:?} cannot be continuous unless it is executable",
+            action_id
+        );
+    }
+
     match action.kind {
         ActionType::Run | ActionType::Settings => {
             if action.config_key.is_none() {
@@ -58,6 +65,21 @@ fn validate_kind_contract(action_id: &str, action: &ActionDeclaration) -> Result
         }
         ActionType::ToggleConfig => validate_toggle_config(action_id, action),
     }
+}
+
+pub(super) fn validate_continuous_action_transport(
+    actions: &ActionCatalog,
+    daemon: Option<&crate::manifest::DaemonConfig>,
+) -> Result<()> {
+    if !actions.values().any(|action| action.continuous) {
+        return Ok(());
+    }
+
+    if daemon.is_some_and(|daemon| daemon.enabled && daemon.socket.is_some()) {
+        return Ok(());
+    }
+
+    bail!("continuous actions require an enabled daemon with a socket")
 }
 
 fn validate_toggle_config(action_id: &str, action: &ActionDeclaration) -> Result<()> {

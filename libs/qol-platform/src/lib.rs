@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+pub mod cinnamon;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinuxDisplayBackend {
     X11,

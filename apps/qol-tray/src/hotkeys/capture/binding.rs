@@ -15,6 +15,20 @@ pub(crate) struct Binding {
     pub(crate) plugin_uid: PluginUid,
     pub(crate) action: String,
     pub(crate) raw_key: String,
+    pub(crate) continuous: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Phase {
+    Start,
+    Heartbeat,
+    Stop,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CaptureEvent {
+    pub(crate) binding: Binding,
+    pub(crate) phase: Phase,
 }
 
 /// Parse a qol-tray combo string ("Super+Space", "Shift+Super+R", "Ctrl+Alt+Shift+F12")

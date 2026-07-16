@@ -15,6 +15,27 @@ use geometry::{
     center, maximize, move_monitor_left, move_monitor_right, snap_bottom, snap_left, snap_right,
 };
 
+pub(crate) struct GlideController;
+
+impl GlideController {
+    pub(crate) fn connect() -> Result<Self, String> {
+        Err("continuous window movement is not yet available on macOS".into())
+    }
+
+    pub(crate) fn update(
+        &mut self,
+        _direction: crate::movement::Direction,
+        _phase: crate::movement::Phase,
+        _speed: f64,
+    ) -> Result<(), String> {
+        Err("continuous window movement is not yet available on macOS".into())
+    }
+
+    pub(crate) fn stop_all(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 pub(crate) fn execute_action(
     action: &str,
     store: &FileMinimizedStateStore,

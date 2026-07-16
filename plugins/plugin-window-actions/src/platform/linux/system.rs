@@ -113,30 +113,7 @@ impl WindowSystem for X11WindowSystem {
 }
 
 pub fn run_cinnamon_eval(script: &str) -> Result<String, String> {
-    let output = Command::new("gdbus")
-        .args([
-            "call",
-            "--session",
-            "--dest",
-            "org.Cinnamon",
-            "--object-path",
-            "/org/Cinnamon",
-            "--method",
-            "org.Cinnamon.Eval",
-            script,
-        ])
-        .output()
-        .map_err(|error| format!("Failed to run gdbus: {error}"))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "gdbus failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-
-    let response = String::from_utf8_lossy(&output.stdout).to_string();
-    let result = parse_cinnamon_eval_response(response);
+    let result = qol_platform::cinnamon::Session::connect()?.eval(script);
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
         "WINACT_EVAL",
@@ -145,15 +122,6 @@ pub fn run_cinnamon_eval(script: &str) -> Result<String, String> {
         result.as_deref().unwrap_or_else(|error| error)
     );
     result
-}
-
-fn parse_cinnamon_eval_response(response: String) -> Result<String, String> {
-    let trimmed = response.trim();
-    if trimmed.starts_with("(true,") && !trimmed.contains("ERROR:") {
-        return Ok(response);
-    }
-
-    Err(format!("Cinnamon Eval failed: {trimmed}"))
 }
 
 pub fn run_status(command: &str, args: &[&str]) -> Result<(), String> {
@@ -271,26 +239,4 @@ fn process_start_ticks(pid: u32) -> Option<u64> {
     let (_, rest) = stat.split_once(") ")?;
     let fields: Vec<&str> = rest.split_whitespace().collect();
     fields.get(19)?.parse::<u64>().ok()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cinnamon_eval_response_requires_successful_action() {
-        let cases = [
-            ("(true, '\"snap edge=left\"')\n", true),
-            ("(true, '\"ERROR: No focused window\"')\n", false),
-            ("(false, 'Error: Failed to snap right')\n", false),
-            ("unexpected response\n", false),
-        ];
-        for (response, expected_success) in cases {
-            assert_eq!(
-                parse_cinnamon_eval_response(response.to_string()).is_ok(),
-                expected_success,
-                "response: {response:?}",
-            );
-        }
-    }
 }

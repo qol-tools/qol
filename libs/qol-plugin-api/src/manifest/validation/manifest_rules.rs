@@ -20,6 +20,10 @@ impl PluginManifest {
         )?;
         super::shortcut_rules::validate_shortcuts(&self.shortcuts, executable_action_ids)?;
         super::command_rules::validate_optional_daemon_config(self.daemon.as_ref())?;
+        super::action_rules::validate_continuous_action_transport(
+            &self.actions,
+            self.daemon.as_ref(),
+        )?;
         super::dependency_rules::validate_optional_dependencies(self.dependencies.as_ref())?;
         Ok(())
     }

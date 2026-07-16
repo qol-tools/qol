@@ -19,6 +19,7 @@ pub struct WindowActionsConfig {
     pub center_height_percent: f64,
     pub snap_fraction: f64,
     pub reveal_taskbar_after_move: bool,
+    pub glide_speed_px_per_second: f64,
 }
 
 pub fn load_config() -> WindowActionsConfig {
@@ -74,6 +75,7 @@ mod tests {
         assert_eq!(defaults.center_height_percent, 0.79);
         assert_eq!(defaults.snap_fraction, 0.5);
         assert!(defaults.reveal_taskbar_after_move);
+        assert_eq!(defaults.glide_speed_px_per_second, 1200.0);
     }
 
     proptest! {
@@ -87,7 +89,8 @@ mod tests {
             width_percent in 0.1f64..1.0,
             height_percent in 0.1f64..1.0,
             snap in 0.1f64..1.0,
-            reveal in any::<bool>()
+            reveal in any::<bool>(),
+            glide_speed in 100.0f64..4000.0
         ) {
             let json = serde_json::json!({
                 "center_mode": if use_percent { "percent" } else { "pixels" },
@@ -96,7 +99,8 @@ mod tests {
                 "center_width_percent": width_percent,
                 "center_height_percent": height_percent,
                 "snap_fraction": snap,
-                "reveal_taskbar_after_move": reveal
+                "reveal_taskbar_after_move": reveal,
+                "glide_speed_px_per_second": glide_speed
             });
 
             let config: WindowActionsConfig = serde_json::from_value(json).unwrap();
@@ -111,6 +115,7 @@ mod tests {
             prop_assert_eq!(config.center_height_percent, height_percent);
             prop_assert_eq!(config.snap_fraction, snap);
             prop_assert_eq!(config.reveal_taskbar_after_move, reveal);
+            prop_assert_eq!(config.glide_speed_px_per_second, glide_speed);
         }
     }
 
@@ -132,6 +137,7 @@ mod tests {
                 center_height_percent: height_percent,
                 snap_fraction: 0.5,
                 reveal_taskbar_after_move: true,
+                glide_speed_px_per_second: 1200.0,
             };
 
             let (width, height) = config.center_size_for_monitor(monitor_width, monitor_height);

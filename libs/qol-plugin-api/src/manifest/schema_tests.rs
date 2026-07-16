@@ -157,6 +157,7 @@ fn parse_action_catalog_entries() {
         [action.record]
         label = "Record"
         args = ["record"]
+        continuous = true
 
         [action.settings]
         label = "Settings"
@@ -173,11 +174,13 @@ fn parse_action_catalog_entries() {
     let manifest: PluginManifest = toml::from_str(toml).unwrap();
     assert_eq!(manifest.actions.len(), 3);
     assert_eq!(manifest.actions["record"].kind, ActionType::Run);
+    assert!(manifest.actions["record"].continuous);
     assert_eq!(
         manifest.actions["record"].args,
         Some(vec!["record".to_string()])
     );
     assert_eq!(manifest.actions["settings"].kind, ActionType::Settings);
+    assert!(!manifest.actions["settings"].continuous);
     assert_eq!(
         manifest.actions["audio_enable"].config_key.as_deref(),
         Some("audio.enabled")

@@ -4,7 +4,7 @@ use super::types::{HotkeyBinding, HotkeyConfig};
 use crate::plugins::manifest::is_valid_action_id;
 use crate::plugins::PluginUid;
 use global_hotkey::hotkey::{Code, Modifiers};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 #[test]
 fn parse_key_code_letters() {
@@ -268,6 +268,23 @@ fn binding(uid: &str, action: &str, key: &str, enabled: bool) -> HotkeyBinding {
         action: action.to_string(),
         enabled,
     }
+}
+
+#[test]
+fn capture_bindings_inherit_continuous_action_metadata() {
+    let uid = PluginUid::new("uid-window-actions");
+    let config = HotkeyConfig {
+        hotkeys: vec![
+            binding(uid.as_str(), "glide-left", "Ctrl+Alt+Shift+Left", true),
+            binding(uid.as_str(), "center", "Ctrl+Alt+C", true),
+        ],
+    };
+    let continuous = HashSet::from([(uid, "glide-left".to_string())]);
+
+    let bindings = super::build_capture_bindings(config, &continuous);
+
+    assert!(bindings[0].continuous);
+    assert!(!bindings[1].continuous);
 }
 
 #[test]

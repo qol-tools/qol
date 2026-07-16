@@ -91,7 +91,21 @@ pub fn execute_action(
     plugin_id: &str,
     action_id: &str,
 ) {
-    if let Err(error) = try_execute_action(plugin_manager, plugin_id, action_id) {
+    execute_action_with_input(
+        plugin_manager,
+        plugin_id,
+        action_id,
+        serde_json::Value::Null,
+    );
+}
+
+pub fn execute_action_with_input(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_id: &str,
+    action_id: &str,
+    input: serde_json::Value,
+) {
+    if let Err(error) = try_execute_action_with_input(plugin_manager, plugin_id, action_id, input) {
         log::error!(
             "Plugin action execution failed for {}::{}: {}",
             plugin_id,
