@@ -29,8 +29,6 @@ const LABEL_MIN_H: f32 = 80.0;
 const CHIP_W: f32 = 300.0;
 const CHIP_H: f32 = 30.0;
 const CHIP_TOP: f32 = 12.0;
-const HIDE_BARRIER_CLEAR_SAMPLES: usize = 3;
-const HIDE_BARRIER_MAX_MS: u64 = 750;
 const SELECTOR_STATE_POLL_MS: u64 = 16;
 static SELECTOR_SEQ: AtomicU64 = AtomicU64::new(0);
 static CURRENT_PALETTE: LazyLock<ShotSelectorPalette> = LazyLock::new(shot_selector_runtime);
@@ -1226,44 +1224,15 @@ async fn continue_selector_poll(result: SelectorPollResult, cx: &mut AsyncApp) -
 }
 
 async fn wait_for_selector_hide_barrier(cx: &mut AsyncApp) {
-    let started = std::time::Instant::now();
-    let mut clear_samples = 0;
-
-    loop {
-        cx.background_executor()
-            .timer(Duration::from_millis(16))
-            .await;
-        let visible = cx
-            .update(|_| {
-                qol_gpui::popup_window::visible_windows_by_title_prefix(SELECTOR_TITLE_PREFIX)
-            })
-            .unwrap_or(0);
-        if visible == 0 {
-            clear_samples += 1;
-            if clear_samples >= HIDE_BARRIER_CLEAR_SAMPLES {
-                qol_runtime::probe!(
-                    "SHOT_SELECT_BARRIER",
-                    "result=clear samples={} ms={}",
-                    clear_samples,
-                    started.elapsed().as_millis()
-                );
-                return;
-            }
-        } else {
-            clear_samples = 0;
-        }
-
-        if started.elapsed() >= Duration::from_millis(HIDE_BARRIER_MAX_MS) {
-            qol_runtime::probe!(
-                "SHOT_SELECT_BARRIER",
-                "result=timeout visible={} samples={} ms={}",
-                visible,
-                clear_samples,
-                started.elapsed().as_millis()
-            );
-            return;
-        }
-    }
+    let barrier = qol_gpui::popup_window::wait_for_hidden_windows(cx, SELECTOR_TITLE_PREFIX).await;
+    qol_runtime::probe!(
+        "SHOT_SELECT_BARRIER",
+        "result={} visible={} samples={} ms={}",
+        if barrier.cleared { "clear" } else { "timeout" },
+        barrier.visible,
+        barrier.clear_samples,
+        barrier.elapsed.as_millis()
+    );
 }
 
 impl Focusable for RegionSelector {

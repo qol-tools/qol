@@ -29,7 +29,7 @@ const CIRCLE: f32 = 46.0;
 const CIRCLE_GAP: f32 = 14.0;
 const LABEL_H: f32 = 30.0;
 const BLUR_GUARD: Duration = Duration::from_millis(400);
-const PREVIEW_TITLE: &str = "qol-shot-preview";
+pub(crate) const PREVIEW_TITLE: &str = "qol-shot-preview";
 pub(crate) const PREVIEW_APP_ID: &str = "qol-tray-shot";
 
 static PREVIEW_SEQ: AtomicU64 = AtomicU64::new(0);

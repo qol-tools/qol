@@ -286,6 +286,8 @@ fn x11_stacked_window_rects_impl(include_frame: bool) -> Option<Vec<Rect>> {
     let stacking = atom("_NET_CLIENT_LIST_STACKING")?;
     let wm_type = atom("_NET_WM_WINDOW_TYPE")?;
     let type_normal = atom("_NET_WM_WINDOW_TYPE_NORMAL")?;
+    let type_dialog = atom("_NET_WM_WINDOW_TYPE_DIALOG")?;
+    let type_utility = atom("_NET_WM_WINDOW_TYPE_UTILITY")?;
     let wm_state = atom("_NET_WM_STATE")?;
     let state_hidden = atom("_NET_WM_STATE_HIDDEN")?;
     let wm_desktop = atom("_NET_WM_DESKTOP")?;
@@ -328,22 +330,32 @@ fn x11_stacked_window_rects_impl(include_frame: bool) -> Option<Vec<Rect>> {
         .value32()?
         .collect();
     let desktop = cardinal(root, current_desktop);
+    let capturable_types = [type_normal, type_dialog, type_utility];
+    let total = ids.len();
+    let mut type_rejected = 0;
+    let mut hidden = 0;
+    let mut off_desktop = 0;
+    let mut unresolved = 0;
 
     let mut rects = Vec::new();
     for &id in ids.iter().rev() {
         let types = atom_list(id, wm_type);
-        if !types.is_empty() && !types.contains(&type_normal) {
+        if !capturable_window_type(&types, &capturable_types) {
+            type_rejected += 1;
             continue;
         }
         if atom_list(id, wm_state).contains(&state_hidden) {
+            hidden += 1;
             continue;
         }
         if let (Some(current), Some(window_desktop)) = (desktop, cardinal(id, wm_desktop)) {
             if window_desktop != current && window_desktop != u32::MAX {
+                off_desktop += 1;
                 continue;
             }
         }
         let Some(geometry) = conn.get_geometry(id).ok().and_then(|c| c.reply().ok()) else {
+            unresolved += 1;
             continue;
         };
         let Some(origin) = conn
@@ -351,6 +363,7 @@ fn x11_stacked_window_rects_impl(include_frame: bool) -> Option<Vec<Rect>> {
             .ok()
             .and_then(|c| c.reply().ok())
         else {
+            unresolved += 1;
             continue;
         };
         let mut rect = Rect {
@@ -364,7 +377,19 @@ fn x11_stacked_window_rects_impl(include_frame: bool) -> Option<Vec<Rect>> {
         }
         rects.push(rect);
     }
+    qol_runtime::probe!(
+        "SHOT_SELECT_DISCOVERY",
+        "total={total} accepted={} type_rejected={type_rejected} hidden={hidden} off_desktop={off_desktop} unresolved={unresolved}",
+        rects.len()
+    );
     Some(rects)
+}
+
+fn capturable_window_type(types: &[u32], accepted: &[u32]) -> bool {
+    types.is_empty()
+        || types
+            .iter()
+            .any(|window_type| accepted.contains(window_type))
 }
 
 fn framed_rect(client: Rect, wm_extents: Option<[i32; 4]>, csd_shadow: Option<[i32; 4]>) -> Rect {
@@ -758,12 +783,42 @@ pub fn process_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        framed_rect, initial_default_target, parse_xdotool_geometry, usable_target,
-        SnapshotHoverTarget,
+        capturable_window_type, framed_rect, initial_default_target, parse_xdotool_geometry,
+        usable_target, SnapshotHoverTarget,
     };
     use crate::region_selector::{DetectedTarget, HoverTarget};
     use crate::Rect;
     use gpui::{point, px, size, Bounds};
+
+    #[test]
+    fn window_type_filter_accepts_capture_surfaces() {
+        let normal = 1;
+        let dialog = 2;
+        let utility = 3;
+        let dock = 4;
+        let menu = 5;
+        let tooltip = 6;
+        let accepted = [normal, dialog, utility];
+        let cases: &[(&[u32], bool)] = &[
+            (&[], true),
+            (&[normal], true),
+            (&[dialog], true),
+            (&[utility], true),
+            (&[99, dialog], true),
+            (&[dock], false),
+            (&[menu], false),
+            (&[tooltip], false),
+            (&[dock, tooltip], false),
+        ];
+
+        for (types, expected) in cases {
+            assert_eq!(
+                capturable_window_type(types, &accepted),
+                *expected,
+                "types: {types:?}"
+            );
+        }
+    }
 
     #[test]
     fn hover_target_picks_topmost_window_containing_the_pointer() {

@@ -1,6 +1,7 @@
 mod platform;
 
 use std::cell::RefCell;
+use std::time::{Duration, Instant};
 
 use crate::runtime_config::load_gpui_runtime_config;
 
@@ -9,6 +10,58 @@ pub use platform::{
     focus_window_by_title, make_override_redirect, release_focus_by_title, window_geometry_session,
     window_position_by_title, WindowGeometrySession,
 };
+
+const COMPOSITOR_SAMPLE_INTERVAL: Duration = Duration::from_millis(16);
+const COMPOSITOR_CLEAR_SAMPLES: usize = 3;
+const COMPOSITOR_MAX_WAIT: Duration = Duration::from_millis(750);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HiddenWindowsBarrier {
+    pub cleared: bool,
+    pub visible: usize,
+    pub clear_samples: usize,
+    pub elapsed: Duration,
+}
+
+pub async fn wait_for_hidden_windows(
+    cx: &mut gpui::AsyncApp,
+    title_prefix: &str,
+) -> HiddenWindowsBarrier {
+    let started = Instant::now();
+    let mut clear_samples = 0;
+
+    loop {
+        cx.background_executor()
+            .timer(COMPOSITOR_SAMPLE_INTERVAL)
+            .await;
+        let visible = cx
+            .update(|_| visible_windows_by_title_prefix(title_prefix))
+            .unwrap_or(usize::MAX);
+        if visible == 0 {
+            clear_samples += 1;
+        }
+        if visible != 0 {
+            clear_samples = 0;
+        }
+        let elapsed = started.elapsed();
+        if clear_samples >= COMPOSITOR_CLEAR_SAMPLES {
+            return HiddenWindowsBarrier {
+                cleared: true,
+                visible,
+                clear_samples,
+                elapsed,
+            };
+        }
+        if elapsed >= COMPOSITOR_MAX_WAIT {
+            return HiddenWindowsBarrier {
+                cleared: false,
+                visible,
+                clear_samples,
+                elapsed,
+            };
+        }
+    }
+}
 
 #[cfg(target_os = "linux")]
 pub fn present_topmost(title: &str) {

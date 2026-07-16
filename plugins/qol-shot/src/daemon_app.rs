@@ -189,7 +189,7 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
     let Some(_flow) = begin_shot_flow(state, "screenshot") else {
         return;
     };
-    park_preview(cx, state, "screenshot");
+    park_preview_before_capture(cx, state, "screenshot").await;
     let frozen_frame = cx
         .background_spawn(async { crate::screenshot::freeze_frame() })
         .await;
@@ -343,14 +343,43 @@ fn preview_showing(cx: &AsyncApp, state: &State) -> bool {
         .unwrap_or(false)
 }
 
-fn park_preview(cx: &AsyncApp, state: &State, action: &str) {
+fn park_preview(cx: &AsyncApp, state: &State, action: &str) -> bool {
+    let visible_windows =
+        qol_gpui::popup_window::visible_windows_by_title_prefix(crate::preview::PREVIEW_TITLE);
     let windows = state.windows.clone();
-    let _ = cx.update(|cx| {
-        if crate::preview::any_showing(&windows, cx) {
-            qol_runtime::probe!("SHOT_PREVIEW_CLOSE", "action={action}");
+    cx.update(|cx| {
+        let showing = crate::preview::any_showing(&windows, cx);
+        if showing || visible_windows != 0 {
+            qol_runtime::probe!(
+                "SHOT_PREVIEW_CLOSE",
+                "action={action} state={} visible={visible_windows}",
+                if showing { "showing" } else { "stale" }
+            );
         }
         crate::preview::park_idle(&windows, cx);
-    });
+        showing || visible_windows != 0
+    })
+    .unwrap_or(false)
+}
+
+async fn park_preview_before_capture(cx: &AsyncApp, state: &State, action: &str) {
+    if !park_preview(cx, state, action) {
+        return;
+    }
+    let mut barrier_cx = cx.clone();
+    let barrier = qol_gpui::popup_window::wait_for_hidden_windows(
+        &mut barrier_cx,
+        crate::preview::PREVIEW_TITLE,
+    )
+    .await;
+    qol_runtime::probe!(
+        "SHOT_PREVIEW_BARRIER",
+        "action={action} result={} visible={} samples={} ms={}",
+        if barrier.cleared { "clear" } else { "timeout" },
+        barrier.visible,
+        barrier.clear_samples,
+        barrier.elapsed.as_millis()
+    );
 }
 
 fn spawn_active_monitor_cache(cx: &mut App) {
@@ -496,6 +525,7 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
     let Some(_flow) = begin_shot_flow(state, "record") else {
         return;
     };
+    park_preview_before_capture(cx, state, "record").await;
     let Some(selected) = select_region(cx, state, crate::space::CaptureKind::Recording, None).await
     else {
         qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon result=select-cancel");

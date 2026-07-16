@@ -212,12 +212,48 @@ pub fn hide_invisible(title: &str) -> bool {
     hide_window_with_opacity(title, 0.0)
 }
 
-pub fn hide_windows_by_title_prefix(_prefix: &str) -> usize {
-    0
+pub fn hide_windows_by_title_prefix(prefix: &str) -> usize {
+    cached_titles_by_prefix(prefix)
+        .iter()
+        .filter(|title| hide_invisible(title))
+        .count()
 }
 
-pub fn visible_windows_by_title_prefix(_prefix: &str) -> usize {
-    0
+pub fn visible_windows_by_title_prefix(prefix: &str) -> usize {
+    let entries = cached_windows_by_prefix(prefix);
+    let Ok((conn, _screen_num)) = x11rb::connect(None) else {
+        return entries.len();
+    };
+    entries
+        .into_iter()
+        .filter(|wid| window_is_visible(&conn, *wid))
+        .count()
+}
+
+fn cached_titles_by_prefix(prefix: &str) -> Vec<String> {
+    OPACITY_CACHE
+        .lock()
+        .map(|cache| {
+            cache
+                .keys()
+                .filter(|title| title.starts_with(prefix))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn cached_windows_by_prefix(prefix: &str) -> Vec<u32> {
+    OPACITY_CACHE
+        .lock()
+        .map(|cache| {
+            cache
+                .iter()
+                .filter(|(title, _)| title.starts_with(prefix))
+                .map(|(_, (wid, _))| *wid)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub fn hide_for_capture(title: &str, _window: &mut gpui::Window) -> bool {
@@ -1180,6 +1216,15 @@ fn window_opacity(conn: &impl Connection, wid: u32) -> Option<f32> {
         .ok()?;
     let raw = reply.value32()?.next()?;
     Some(raw as f32 / u32::MAX as f32)
+}
+
+fn window_is_visible(conn: &impl Connection, wid: u32) -> bool {
+    let viewable = conn
+        .get_window_attributes(wid)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .is_some_and(|attributes| attributes.map_state == MapState::VIEWABLE);
+    viewable && window_opacity(conn, wid).unwrap_or(1.0) > 0.01
 }
 
 fn map_state(conn: &impl Connection, wid: u32) -> &'static str {
