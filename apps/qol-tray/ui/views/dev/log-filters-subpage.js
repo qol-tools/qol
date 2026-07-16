@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import { PageHeader } from '../../components/PageHeader.js';
 import { PageShell } from '../../components/PageShell.js';
 import { Button } from '../../lib/components/Button.js';
+import { TextInput } from '../../lib/components/TextInput.js';
 import { Surface } from '../../lib/components/Surface.js';
 import { createSharedSlot } from '../../lib/shared-slot.js';
 import { patternsFromInput, patternsToInput } from '../../lib/log-filter-patterns.js';
@@ -78,10 +79,9 @@ export function LogFiltersSubPage({ slot }) {
                     as="label"
                     className="log-filters-input-row"
                     onActivate=${() => inputRef.current?.focus()}>
-                    <input
-                        ref=${inputRef}
-                        type="text"
-                        class="text-input"
+                    <${TextInput}
+                        inputRef=${inputRef}
+                        className="text-input"
                         value=${draft}
                         placeholder="error, warn, deprecated"
                         onInput=${(e) => setDraft(e.currentTarget.value)}
