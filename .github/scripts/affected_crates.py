@@ -24,6 +24,8 @@ GLOBAL_FILES = {
     "clippy.toml",
     "rustfmt.toml",
     ".rustfmt.toml",
+    ".gitattributes",
+    ".gitmodules",
 }
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKTREE_HEAD = "WORKTREE"
@@ -75,15 +77,15 @@ def full_workspace(reason):
     sys.stderr.write(f"[affected] full workspace: {reason}\n")
     emit(
         {
-            "full": "true",
+            "full": True,
             "windows_process": True,
             "windows_qol": True,
             "ubuntu_clippy": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)} --all-targets",
             "ubuntu_test": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}",
-            "ubuntu_skip": "false",
+            "ubuntu_skip": False,
             "macos_clippy": f"--workspace{exclude_flags(MACOS_EXCLUDE)} --all-targets",
             "macos_test": f"--workspace{exclude_flags(MACOS_EXCLUDE)}",
-            "macos_skip": "false",
+            "macos_skip": False,
         }
     )
 
@@ -92,15 +94,15 @@ def skip_all(reason):
     sys.stderr.write(f"[affected] nothing to build: {reason}\n")
     emit(
         {
-            "full": "false",
+            "full": False,
             "windows_process": False,
             "windows_qol": False,
             "ubuntu_clippy": "",
             "ubuntu_test": "",
-            "ubuntu_skip": "true",
+            "ubuntu_skip": True,
             "macos_clippy": "",
             "macos_test": "",
-            "macos_skip": "true",
+            "macos_skip": True,
         }
     )
 
@@ -129,7 +131,9 @@ def with_untracked(files, head):
 
 
 def workspace_graph():
-    meta = run(["cargo", "metadata", "--no-deps", "--format-version", "1"])
+    meta = run(
+        ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"]
+    )
     if meta.returncode != 0:
         return None
     data = json.loads(meta.stdout)
@@ -215,15 +219,15 @@ def main():
     sys.stderr.write(f"[affected] changed={sorted(seeds)} affected={macos}\n")
     emit(
         {
-            "full": "false",
+            "full": False,
             "windows_process": "qol-process" in affected,
             "windows_qol": "qol" in affected,
             "ubuntu_clippy": args(ubuntu, True),
             "ubuntu_test": args(ubuntu, False),
-            "ubuntu_skip": "true" if not ubuntu else "false",
+            "ubuntu_skip": not ubuntu,
             "macos_clippy": args(macos, True),
             "macos_test": args(macos, False),
-            "macos_skip": "true" if not macos else "false",
+            "macos_skip": not macos,
         }
     )
 

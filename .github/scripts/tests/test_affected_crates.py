@@ -71,7 +71,8 @@ class LocalPlannerContract(unittest.TestCase):
             ):
                 ac.emit(
                     {
-                        "ubuntu_skip": "true",
+                        "full": False,
+                        "ubuntu_skip": True,
                         "ubuntu_test": "",
                         "windows_process": True,
                         "windows_qol": False,
@@ -81,7 +82,8 @@ class LocalPlannerContract(unittest.TestCase):
             self.assertEqual(
                 json.loads(output.read_text()),
                 {
-                    "ubuntu_skip": "true",
+                    "full": False,
+                    "ubuntu_skip": True,
                     "ubuntu_test": "",
                     "windows_process": True,
                     "windows_qol": False,
@@ -89,7 +91,7 @@ class LocalPlannerContract(unittest.TestCase):
             )
             self.assertEqual(
                 github_output.read_text(),
-                "ubuntu_skip=true\nubuntu_test=\n"
+                "full=false\nubuntu_skip=true\nubuntu_test=\n"
                 "windows_process=true\nwindows_qol=false\n",
             )
 
@@ -100,22 +102,43 @@ class LocalPlannerContract(unittest.TestCase):
                 with patch.object(ac, "emit") as emit:
                     planner("test")
 
+                    self.assertIs(emit.call_args.args[0]["full"], expected)
                     self.assertIs(
                         emit.call_args.args[0]["windows_process"], expected
                     )
                     self.assertIs(
                         emit.call_args.args[0]["windows_qol"], expected
                     )
+                    self.assertIs(
+                        emit.call_args.args[0]["ubuntu_skip"], not expected
+                    )
+                    self.assertIs(
+                        emit.call_args.args[0]["macos_skip"], not expected
+                    )
 
     @patch.object(ac, "full_workspace")
     @patch.object(ac, "changed_files")
     def test_global_change_uses_full_workspace(self, changed_files, full_workspace):
-        changed_files.return_value = [".github/workflows/ci.yml"]
-        with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
-            ac.main()
+        for path in [".github/workflows/ci.yml", ".gitattributes", ".gitmodules"]:
+            with self.subTest(path=path):
+                changed_files.return_value = [path]
+                full_workspace.reset_mock()
+                with patch.dict(
+                    os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}
+                ):
+                    ac.main()
 
-        full_workspace.assert_called_once_with(
-            "global file changed: .github/workflows/ci.yml"
+                full_workspace.assert_called_once_with(f"global file changed: {path}")
+
+    @patch.object(ac, "run")
+    def test_workspace_metadata_is_locked(self, run):
+        run.return_value.returncode = 1
+
+        self.assertIsNone(ac.workspace_graph())
+
+        self.assertEqual(
+            run.call_args.args[0],
+            ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"],
         )
 
     @patch.object(ac, "emit")

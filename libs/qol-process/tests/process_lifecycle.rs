@@ -245,10 +245,13 @@ fn spawn_prepared_descendant_tree() -> (qol_process::ProcessTreeGuard, std::proc
 fn prepared_tree_terminates_its_root_and_ordinary_descendant() {
     let (guard, mut root, root_pid, descendant_pid) = spawn_prepared_descendant_tree();
 
-    let _proof = guard.terminate_and_wait(Duration::from_secs(2)).unwrap();
+    assert!(!guard.tree_has_exited().unwrap());
+    guard.request_stop().unwrap();
+    let _proof = guard.force_stop_and_wait(Duration::from_secs(2)).unwrap();
     let status = root.wait().unwrap();
 
     assert!(!status.success());
+    assert!(guard.tree_has_exited().unwrap());
     assert!(!qol_process::is_pid_alive(root_pid));
     assert!(!qol_process::is_pid_alive(descendant_pid));
 }
@@ -751,10 +754,7 @@ fn stale_guardian_recovery_helper() {
 }
 
 #[cfg(target_os = "linux")]
-fn recover_stale_guardian_journal(
-    journal: &std::path::Path,
-    cgroup_root: Option<&std::path::Path>,
-) {
+fn recover_stale_guardian_journal(journal: &std::path::Path, cgroup_root: &std::path::Path) {
     let journal_path = std::fs::read_dir(journal)
         .unwrap()
         .filter_map(Result::ok)
@@ -772,10 +772,8 @@ fn recover_stale_guardian_journal(
     recovery
         .args(["--exact", "stale_guardian_recovery_helper", "--nocapture"])
         .env("QOL_PROCESS_GUARDIAN_RECOVERY", "1")
+        .env("QOL_PROCESS_CGROUP_ROOT", cgroup_root)
         .env("QOL_PROCESS_CGROUP_JOURNAL_ROOT", journal);
-    if let Some(cgroup_root) = cgroup_root {
-        recovery.env("QOL_PROCESS_CGROUP_ROOT", cgroup_root);
-    }
     let status = recovery.spawn().unwrap().wait().unwrap();
     assert!(status.success());
     assert!(!cgroup_path.exists());
@@ -787,10 +785,12 @@ fn recover_stale_guardian_journal(
 fn abrupt_owner_death_kills_an_ordinary_descendant_before_recovery() {
     let temp = tempfile::tempdir().unwrap();
     let journal = private_journal_root(temp.path(), "journal");
+    let cgroup_root = linux_cgroup_path(std::process::id());
     let mut owner = Command::new(std::env::current_exe().unwrap());
     owner
         .args(["--exact", "abrupt_guarded_owner_helper", "--nocapture"])
         .env("QOL_PROCESS_ABRUPT_GUARD_ROOT", temp.path())
+        .env("QOL_PROCESS_CGROUP_ROOT", &cgroup_root)
         .env("QOL_PROCESS_CGROUP_JOURNAL_ROOT", &journal);
     let mut owner = owner.spawn().unwrap();
     wait_for_path(&temp.path().join("ready"));
@@ -809,7 +809,7 @@ fn abrupt_owner_death_kills_an_ordinary_descendant_before_recovery() {
     qol_process::kill_pid(inherited_pid).unwrap();
     let inherited_died = wait_for_pids_to_exit(&[inherited_pid], Duration::from_secs(2));
 
-    recover_stale_guardian_journal(&journal, None);
+    recover_stale_guardian_journal(&journal, &cgroup_root);
     assert!(fork_drop_preserved);
     assert!(owner_failed);
     assert!(tree_died_before_recovery);
@@ -862,7 +862,7 @@ fn containing_scope_kill_recursively_cleans_the_guarded_tree() {
     let owner_failed = !owner.wait().unwrap().success();
     let tree_died_before_recovery =
         wait_for_pids_to_exit(&[root, descendant], Duration::from_secs(3));
-    recover_stale_guardian_journal(&journal, Some(&stable));
+    recover_stale_guardian_journal(&journal, &stable);
     std::fs::remove_dir(&scope).unwrap();
 
     assert!(owner_was_moved);
@@ -938,7 +938,10 @@ fn process_tree_escalates_and_verifies_for_a_term_resistant_group() {
         child.wait().unwrap()
     });
 
-    let _proof = guard.terminate_and_wait(Duration::from_secs(1)).unwrap();
+    guard.request_stop().unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(!guard.tree_has_exited().unwrap());
+    let _proof = guard.force_stop_and_wait(Duration::from_secs(1)).unwrap();
     let status = waiter.join().unwrap();
 
     assert!(!status.success());

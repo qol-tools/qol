@@ -103,7 +103,6 @@ fn kill_pid_if_managed(line: &str, roots: &ManagedRoots) {
         return;
     };
     if !crate::process_utils::is_pid_alive(pid) {
-        crate::process_utils::reap_children_nonblocking();
         return;
     }
     let exe = super::platform::pid_exe_path(pid);
@@ -124,7 +123,6 @@ fn kill_pid_if_managed(line: &str, roots: &ManagedRoots) {
         );
     }
     crate::process_utils::terminate_group(pid, std::time::Duration::from_millis(100));
-    crate::process_utils::reap_children_nonblocking();
 }
 
 #[cfg(all(test, unix))]

@@ -104,6 +104,15 @@ impl ProcessTreeGuard {
         Ok(TerminatedProcessTree { _private: () })
     }
 
+    pub fn request_stop(&self) -> io::Result<()> {
+        self._inner.request_stop()
+    }
+
+    pub fn force_stop_and_wait(&self, timeout: Duration) -> io::Result<TerminatedProcessTree> {
+        self._inner.force_stop_and_wait(timeout)?;
+        Ok(TerminatedProcessTree { _private: () })
+    }
+
     pub fn recover_pending_spawn(&self, timeout: Duration) -> io::Result<TerminatedProcessTree> {
         self._inner.recover_pending_spawn(timeout)?;
         Ok(TerminatedProcessTree { _private: () })
@@ -115,6 +124,10 @@ impl ProcessTreeGuard {
 
     pub fn root_has_exited(&self) -> io::Result<bool> {
         self._inner.root_has_exited()
+    }
+
+    pub fn tree_has_exited(&self) -> io::Result<bool> {
+        self._inner.tree_has_exited()
     }
 }
 
@@ -229,15 +242,23 @@ pub fn process_identity(pid: u32) -> io::Result<String> {
 }
 
 pub fn process_identity_matches(pid: u32, expected: &str) -> bool {
-    process_identity(pid).is_ok_and(|actual| actual == expected)
+    process_identity(pid).is_ok_and(|actual| platform::process_identity_matches(&actual, expected))
 }
 
 pub fn signal_term_pid(pid: u32) -> io::Result<()> {
     platform::signal_term_pid(pid)
 }
 
+pub fn signal_term_group(pid: u32) -> io::Result<()> {
+    platform::signal_term_group(pid)
+}
+
 pub fn kill_pid(pid: u32) -> io::Result<()> {
     platform::kill_pid(pid)
+}
+
+pub fn kill_group(pid: u32) -> io::Result<()> {
+    platform::kill_group(pid)
 }
 
 pub fn try_wait_pid(pid: u32) -> io::Result<Option<ExitStatus>> {
@@ -258,10 +279,6 @@ pub fn terminate_group(pid: u32, grace: Duration) {
 
 pub fn terminate_owned(child: &mut Child, grace: Duration) -> io::Result<()> {
     platform::terminate_owned(child, grace)
-}
-
-pub fn reap_children_nonblocking() {
-    platform::reap_children_nonblocking();
 }
 
 /// Spawns a command without inherited standard streams or a parent-owned child
@@ -288,6 +305,22 @@ mod tests {
         assert!(process_identity_matches(pid, &identity));
         assert!(!process_identity_matches(pid, "stale-process-identity"));
         assert!(process_identity(0).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn process_identity_matches_the_persisted_linux_legacy_generation() {
+        let pid = std::process::id();
+        let identity = process_identity(pid).unwrap();
+        let fields = identity.split(':').collect::<Vec<_>>();
+        let legacy = format!("{}:{}:{}", fields[0], fields[1], fields[4]);
+        let wrong_boot = format!("linux:wrong-boot:{}", fields[4]);
+        let wrong_start_ticks = fields[4].parse::<u64>().unwrap() + 1;
+        let wrong_start = format!("linux:{}:{wrong_start_ticks}", fields[1]);
+
+        assert!(process_identity_matches(pid, &legacy));
+        assert!(!process_identity_matches(pid, &wrong_boot));
+        assert!(!process_identity_matches(pid, &wrong_start));
     }
 
     #[test]
@@ -396,7 +429,9 @@ mod tests {
         assert!(!is_group_alive(0));
         assert!(!is_pid_zombie(0));
         assert!(signal_term_pid(0).is_err());
+        assert!(signal_term_group(0).is_err());
         assert!(kill_pid(0).is_err());
+        assert!(kill_group(0).is_err());
         assert!(try_wait_pid(0).is_err());
         assert!(wait_pid(0).is_err());
     }

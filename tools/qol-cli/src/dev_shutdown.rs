@@ -305,10 +305,12 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn managed_executable_rejects_an_unrelated_system_process() {
-        let current = std::env::current_exe().unwrap();
+    fn managed_executable_accepts_workspace_artifacts_and_rejects_unrelated_processes() {
+        let workspace_artifact = crate::workspace::repo_root()
+            .unwrap()
+            .join("target/debug/plugin-test");
 
-        assert!(is_managed_executable(&current));
+        assert!(is_managed_executable(&workspace_artifact));
         assert!(!is_managed_executable(Path::new("/usr/bin/sleep")));
         assert!(!is_managed_executable(Path::new("/tmp/qol-tray")));
     }

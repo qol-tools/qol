@@ -421,6 +421,26 @@ fn kill_all_plugin_processes_clears_tracking_map() {
     });
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn plugin_cleanup_does_not_reap_an_untracked_child() {
+    with_process_tracking_lock(|| {
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !qol_process::is_pid_zombie(child.id()) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(qol_process::is_pid_zombie(child.id()));
+
+        kill_all_plugin_processes();
+
+        assert!(child.wait().unwrap().success());
+    });
+}
+
 #[test]
 fn kill_plugin_processes_preserves_other_plugins_tracking() {
     with_process_tracking_lock(|| {

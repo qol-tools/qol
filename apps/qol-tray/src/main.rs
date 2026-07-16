@@ -1,6 +1,6 @@
 mod already_running_notification;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use qol_tray::daemon::Daemon;
 
 #[cfg(feature = "dev")]
@@ -21,6 +21,11 @@ use qol_conventions::DEFAULT_PORT;
 const DEV_GENERATION_DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(8);
 
 fn main() -> Result<()> {
+    if process_guardian_requested() {
+        qol_process::run_process_tree_guardian_entry()
+            .context("task command process-tree guardian failed")?;
+        return Ok(());
+    }
     qol_tray::console_guard::guard_console_pipes();
 
     if let Some(code) = try_handle_cli_flag() {
@@ -137,6 +142,13 @@ fn main() -> Result<()> {
 
     #[cfg(not(feature = "dev"))]
     tray::platform::run_app(app_init)
+}
+
+fn process_guardian_requested() -> bool {
+    std::env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new(
+            qol_process::PROCESS_TREE_GUARDIAN_COMMAND,
+        ))
 }
 
 fn try_handle_cli_flag() -> Option<i32> {

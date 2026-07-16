@@ -266,6 +266,18 @@ impl ProcessTreeGuard {
         }
     }
 
+    pub(crate) fn request_stop(&self) -> io::Result<()> {
+        self.assigned_process_id()?;
+        if unsafe { TerminateJobObject(self.job.0, 1) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn force_stop_and_wait(&self, timeout: Duration) -> io::Result<()> {
+        self.terminate_and_wait(timeout)
+    }
+
     pub(crate) fn recover_pending_spawn(&self, timeout: Duration) -> io::Result<()> {
         let assigned_process = self
             .assigned_process
@@ -348,6 +360,24 @@ impl ProcessTreeGuard {
                 "unexpected process wait result {other}"
             ))),
         }
+    }
+
+    pub(crate) fn tree_has_exited(&self) -> io::Result<bool> {
+        active_processes(self.job.0).map(|count| count == 0)
+    }
+
+    fn assigned_process_id(&self) -> io::Result<u32> {
+        self.assigned_process
+            .lock()
+            .map_err(|_| io::Error::other("process-tree assignment state is unavailable"))?
+            .as_ref()
+            .map(|process| process.id)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "process tree has no assigned process",
+                )
+            })
     }
 }
 
@@ -693,8 +723,19 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
     Ok(format!("windows:{created}"))
 }
 
+pub(crate) fn process_identity_matches(actual: &str, expected: &str) -> bool {
+    actual == expected
+}
+
 pub(crate) fn signal_term_pid(pid: u32) -> io::Result<()> {
     kill_pid(pid)
+}
+
+pub(crate) fn signal_term_group(_pid: u32) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Windows process groups do not provide verified tree termination",
+    ))
 }
 
 pub(crate) fn kill_pid(pid: u32) -> io::Result<()> {
@@ -703,6 +744,13 @@ pub(crate) fn kill_pid(pid: u32) -> io::Result<()> {
         return Ok(());
     }
     Err(io::Error::last_os_error())
+}
+
+pub(crate) fn kill_group(_pid: u32) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Windows process groups do not provide verified tree termination",
+    ))
 }
 
 pub(crate) fn try_wait_pid(pid: u32) -> io::Result<Option<ExitStatus>> {
@@ -766,8 +814,6 @@ pub(crate) fn terminate_owned(child: &mut Child, _: Duration) -> io::Result<()> 
     child.wait()?;
     Ok(())
 }
-
-pub(crate) fn reap_children_nonblocking() {}
 
 pub(crate) fn spawn_detached(command: &mut Command) -> io::Result<()> {
     command

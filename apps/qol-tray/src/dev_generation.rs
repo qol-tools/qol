@@ -174,7 +174,6 @@ pub fn drain_predecessor_daemons_for_promotion() -> anyhow::Result<()> {
     );
     for daemon in &remaining {
         crate::process_utils::terminate_group(daemon.pid as i32, PREDECESSOR_DAEMON_TERM_GRACE);
-        crate::process_utils::reap_children_nonblocking();
     }
     let remaining = wait_for_predecessor_daemons_to_exit(remaining, PREDECESSOR_DAEMON_TERM_GRACE);
     if remaining.is_empty() {

@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use qol_dev_env::{CleanupState, RunSummary};
 
+#[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
+use super::lifecycle::CleanupFn;
 use super::lifecycle::{terminate_process_tree, LifecycleEvent, LifecycleHandle, TerminationFn};
 use super::{RunTicket, BACKGROUND_CLEANUP_TIMEOUT};
 
@@ -131,6 +133,21 @@ impl RunHandle {
             return Ok(None);
         };
         let events = worker.terminate(timeout, terminate);
+        self.receive_termination_event(events, wait_budget)
+    }
+
+    #[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
+    pub(super) fn terminate_worker_with_cleanup(
+        &mut self,
+        timeout: Duration,
+        terminate: TerminationFn,
+        cleanup: CleanupFn,
+    ) -> Result<Option<qol_process::TerminatedProcessTree>> {
+        let wait_budget = termination_wait_budget(timeout)?;
+        let Some(mut worker) = self.take_running_worker()? else {
+            return Ok(None);
+        };
+        let events = worker.terminate_with_cleanup(timeout, terminate, cleanup);
         self.receive_termination_event(events, wait_budget)
     }
 

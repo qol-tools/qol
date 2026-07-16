@@ -53,7 +53,7 @@ pub(crate) fn help_only(args: &[OsString]) -> bool {
 }
 
 pub(crate) fn help_text() -> &'static str {
-    "qol commands:\n  qol setup\n  qol dev [worktree|--base]\n  qol env <list|doctor|up|image|runs|down|shot>\n  qol flow <run|runs>\n  qol emu <list|doctor|up|run|down>\n  qol cat [--no-less] [--plain|--color=auto|always|never] <path|->\n  qol build [name]\n  qol check\n  qol clean [name]\n  qol install\n  qol sync\n  qol trace [name]\n  qol doctor [step]\n\nOptions:\n  -v, --verbose     show child command output\n  -n, --no-plugins  qol dev: skip plugin rebuilds\n  --                 stop parsing global options; keep following command arguments\n"
+    "qol commands:\n  qol setup\n  qol dev [worktree|--base]\n  qol env <list|doctor|up|image|runs|down|shot>\n  qol flow <run|runs>\n  qol emu <list|doctor|up|run|down>\n  qol cat [--no-less] [--plain|--color=auto|always|never] <path|->\n  qol build [name]\n  qol check [--staged]\n  qol clean [name]\n  qol install\n  qol sync\n  qol trace [name]\n  qol doctor [step]\n\nOptions:\n  -v, --verbose     show child command output\n  -n, --no-plugins  qol dev: skip plugin rebuilds\n  --                 stop parsing global options; keep following command arguments\n"
 }
 
 pub(crate) fn optional_single_arg<'a>(
@@ -125,5 +125,10 @@ mod tests {
         assert!(!help_only(&[]));
         assert!(!help_only(&["--help".into(), "extra".into()]));
         assert!(!help_only(&["other".into()]));
+    }
+
+    #[test]
+    fn help_advertises_exact_staged_checks() {
+        assert!(help_text().contains("qol check [--staged]"));
     }
 }

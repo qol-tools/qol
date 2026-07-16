@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-pub use qol_process::{reap_children_nonblocking, terminate_owned};
+pub use qol_process::terminate_owned;
 
 pub fn is_pid_alive(pid: i32) -> bool {
     u32::try_from(pid).is_ok_and(qol_process::is_pid_alive)

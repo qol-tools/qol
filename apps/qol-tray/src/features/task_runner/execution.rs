@@ -1,9 +1,12 @@
+mod command_task;
+
 use super::config::ActionConfig;
 use super::interpolation::{interpolate, interpolate_shell};
 use super::platform;
+use command_task::CommandTask;
 use std::collections::HashMap;
+use std::process::Command;
 use std::process::{Output, Stdio};
-use tokio::process::Command;
 
 pub(super) struct ExecutionRequest<'a> {
     action_id: &'a str,
@@ -59,8 +62,9 @@ fn execution_spec(request: &ExecutionRequest<'_>) -> ExecutionSpec {
 }
 
 async fn command_output(spec: &ExecutionSpec) -> Result<Output, String> {
-    let mut command = command(spec);
-    run_command(&mut command, spec.timeout).await
+    let command = command(spec);
+    let task = CommandTask::start(command, spec.timeout).map_err(task_error)?;
+    task.wait().await.map_err(task_error)
 }
 
 fn command(spec: &ExecutionSpec) -> Command {
@@ -82,23 +86,9 @@ fn configure_cwd(command: &mut Command, cwd: Option<&str>) {
     command.current_dir(dir);
 }
 
-async fn run_command(command: &mut Command, timeout: u64) -> Result<Output, String> {
-    let duration = std::time::Duration::from_secs(timeout);
-    let result = tokio::time::timeout(duration, command.output())
-        .await
-        .map_err(|_| timeout_error(timeout))?;
-    result.map_err(command_error)
-}
-
-fn command_error(error: std::io::Error) -> String {
-    let message = format!("Command failed: {error}");
+fn task_error(error: command_task::TaskError) -> String {
+    let message = error.to_string();
     log::error!("[task-runner] {message}");
-    message
-}
-
-fn timeout_error(timeout: u64) -> String {
-    let message = format!("Timeout after {timeout}s");
-    log::error!("[task-runner] Command timed out after {}s", timeout);
     message
 }
 
@@ -156,14 +146,18 @@ mod tests {
 
     #[test]
     fn timeout_error_message_includes_timeout_in_seconds() {
-        assert!(timeout_error(5).contains("5s"));
-        assert!(timeout_error(0).contains("0s"));
+        let error = command_task::TaskError::Timeout {
+            seconds: 5,
+            cleanup: Vec::new(),
+        };
+        assert!(error.to_string().contains("5s"));
     }
 
     #[test]
     fn command_error_prefixes_with_command_failed() {
         let err = std::io::Error::new(std::io::ErrorKind::NotFound, "not found");
-        assert!(command_error(err).starts_with("Command failed:"));
+        let error = command_task::TaskError::Command(err.to_string());
+        assert!(error.to_string().starts_with("Command failed:"));
     }
 
     #[cfg(unix)]
@@ -208,12 +202,94 @@ mod tests {
 
         #[tokio::test]
         async fn execute_times_out_when_command_outlasts_timeout() {
-            let cfg = action("sleep 5", 1, None);
+            let root = tempfile::tempdir().unwrap();
+            let pid_path = root.path().join("descendant.pid");
+            let command = format!(
+                "setsid sh -c 'echo $$ > \"$1\"; exec sleep 5' qol '{}' & wait",
+                pid_path.display()
+            );
+            let cfg = action(&command, 1, None);
             let err = execute(ExecutionRequest::new("t", &cfg, &no_params()))
                 .await
                 .unwrap_err();
             assert!(err.contains("Timeout"), "err: {err}");
             assert!(err.contains("1s"), "err: {err}");
+            let pid = std::fs::read_to_string(pid_path)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            assert!(!qol_process::is_pid_alive(pid));
+        }
+
+        #[cfg(target_os = "linux")]
+        #[tokio::test]
+        async fn dropping_execution_reaps_an_escaped_descendant() {
+            let root = tempfile::tempdir().unwrap();
+            let leader_path = root.path().join("leader.pid");
+            let descendant_path = root.path().join("descendant.pid");
+            let command = format!(
+                "echo $$ > '{}'; setsid sh -c 'trap \"\" TERM; echo $$ > \"$1\"; exec sleep 30' qol '{}' & wait",
+                leader_path.display(),
+                descendant_path.display()
+            );
+            let cfg = action(&command, 30, None);
+            let params = no_params();
+            let mut execution = Box::pin(execute(ExecutionRequest::new("t", &cfg, &params)));
+
+            assert!(tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                execution.as_mut()
+            )
+            .await
+            .is_err());
+            let leader = read_pid(&leader_path);
+            let descendant = read_pid(&descendant_path);
+            drop(execution);
+
+            wait_for_process_exit(leader).await;
+            wait_for_process_exit(descendant).await;
+        }
+
+        #[cfg(target_os = "linux")]
+        #[tokio::test]
+        async fn successful_root_reports_and_cleans_residual_descendants() {
+            let root = tempfile::tempdir().unwrap();
+            let descendant_path = root.path().join("descendant.pid");
+            let command = format!(
+                "setsid sh -c 'echo $$ > \"$1\"; exec sleep 30' qol '{}' >/dev/null 2>&1 & while [ ! -s '{}' ]; do sleep 0.01; done",
+                descendant_path.display(),
+                descendant_path.display(),
+            );
+            let cfg = action(&command, 5, None);
+
+            let error = execute(ExecutionRequest::new("t", &cfg, &no_params()))
+                .await
+                .unwrap_err();
+
+            assert!(error.contains("descendants remained"), "error: {error}");
+            assert!(!qol_process::is_pid_alive(read_pid(&descendant_path)));
+        }
+
+        #[cfg(target_os = "linux")]
+        fn read_pid(path: &std::path::Path) -> u32 {
+            std::fs::read_to_string(path)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap()
+        }
+
+        #[cfg(target_os = "linux")]
+        async fn wait_for_process_exit(pid: u32) {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(4);
+            while qol_process::is_pid_alive(pid) && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            assert!(
+                !qol_process::is_pid_alive(pid),
+                "PID {pid} survived cleanup"
+            );
         }
 
         #[tokio::test]

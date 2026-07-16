@@ -27,17 +27,13 @@ pub(super) fn clear_tracking() {
 }
 
 pub fn kill_all_plugin_processes() {
-    crate::process_utils::reap_children_nonblocking();
     kill_tracked_processes();
     clear_running_actions();
-    crate::process_utils::reap_children_nonblocking();
 }
 
 pub(crate) fn kill_plugin_processes(plugin_id: &str) {
-    crate::process_utils::reap_children_nonblocking();
     kill_tracked_processes_for_plugin(plugin_id);
     clear_running_actions_for_plugin(plugin_id);
-    crate::process_utils::reap_children_nonblocking();
 }
 
 pub(super) fn reserve_runtime_spawn(plugin_id: &str, action_id: &str) -> bool {

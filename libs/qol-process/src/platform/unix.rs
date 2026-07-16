@@ -42,6 +42,8 @@ const STALE_RECOVERY_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_STALE_RECOVERY_RECORDS: usize = 256;
 #[cfg(target_os = "linux")]
 const MAX_STALE_RECOVERY_WORK: usize = 8192;
+#[cfg(target_os = "linux")]
+const MAX_QUARANTINED_JOURNALS: usize = 256;
 static CANCELLATION_SIGNAL_COUNT: AtomicUsize = AtomicUsize::new(0);
 static CANCELLATION_INSTALL: OnceLock<Result<(), i32>> = OnceLock::new();
 static NEXT_PROCESS_GENERATION: AtomicU64 = AtomicU64::new(1);
@@ -135,6 +137,20 @@ struct CgroupJournal {
     path: std::path::PathBuf,
     device: u64,
     inode: u64,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LinuxProcessIdentityVersion {
+    Legacy,
+    ProcDirectory,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxProcessIdentity<'a> {
+    boot_id: &'a str,
+    start_ticks: u64,
+    version: LinuxProcessIdentityVersion,
 }
 
 #[cfg(target_os = "linux")]
@@ -438,6 +454,35 @@ impl ProcessTreeGuard {
         }
     }
 
+    pub(crate) fn request_stop(&self) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            let target = self.assigned_target()?;
+            let observed = cgroup_members(&self.cgroup, &BTreeSet::new())?
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            signal_new_members(&target, &observed, libc::SIGTERM, &mut BTreeSet::new())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(unsupported_process_tree_containment())
+        }
+    }
+
+    pub(crate) fn force_stop_and_wait(&self, timeout: Duration) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            self.assigned_target()?;
+            self.cgroup.force_kill_and_seal(timeout)?;
+            self.disarm_guardian()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = timeout;
+            Err(unsupported_process_tree_containment())
+        }
+    }
+
     pub(crate) fn recover_pending_spawn(&self, timeout: Duration) -> io::Result<()> {
         #[cfg(target_os = "linux")]
         {
@@ -470,8 +515,28 @@ impl ProcessTreeGuard {
     }
 
     pub(crate) fn root_has_exited(&self) -> io::Result<bool> {
-        let target = self
-            .target
+        let target = self.assigned_target()?;
+        target.root.as_ref().map_or(Ok(true), |root| {
+            owned_process_alive(root).map(|alive| !alive)
+        })
+    }
+
+    pub(crate) fn tree_has_exited(&self) -> io::Result<bool> {
+        #[cfg(target_os = "linux")]
+        {
+            if self.cgroup.sealed.load(Ordering::Acquire) {
+                return Ok(true);
+            }
+            self.cgroup.populated().map(|populated| !populated)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(unsupported_process_tree_containment())
+        }
+    }
+
+    fn assigned_target(&self) -> io::Result<ProcessTreeTarget> {
+        self.target
             .lock()
             .map_err(|_| io::Error::other("process-tree assignment state is unavailable"))?
             .clone()
@@ -480,10 +545,7 @@ impl ProcessTreeGuard {
                     io::ErrorKind::NotConnected,
                     "process tree has no assigned process",
                 )
-            })?;
-        target.root.as_ref().map_or(Ok(true), |root| {
-            owned_process_alive(root).map(|alive| !alive)
-        })
+            })
     }
 
     #[cfg(target_os = "linux")]
@@ -1237,6 +1299,13 @@ impl LinuxCgroup {
         Ok(())
     }
 
+    #[cfg(test)]
+    fn abandon_for_recovery(self) -> io::Result<()> {
+        unlock_journal(&self._journal_lock)?;
+        self.sealed.store(true, Ordering::Release);
+        Ok(())
+    }
+
     fn prepare_command(&self, command: &mut Command) -> io::Result<PreparedSpawn> {
         self.open_control("cgroup.procs", libc::O_WRONLY)?;
         let failed_child_reaper = FailedChildReaper::start()?;
@@ -1310,6 +1379,9 @@ impl LinuxCgroup {
     }
 
     fn force_kill_and_seal_until(&self, deadline: Instant, timeout: Duration) -> io::Result<()> {
+        if self.sealed.load(Ordering::Acquire) {
+            return Ok(());
+        }
         let mut last_error = None;
         loop {
             if let Err(error) = self.kill() {
@@ -1382,6 +1454,7 @@ impl LinuxCgroupAllocation {
         let mut recovery_budget = CgroupRecoveryBudget::standard()?;
         let registry_lock = lock_cgroup_registry(&journal_root, &recovery_budget)?;
         recover_stale_cgroups(&root, &journal_root, &mut recovery_budget)?;
+        prune_quarantined_journals(&journal_root, None)?;
         let parent = owned_cgroup_parent(&root, &journal_root)?;
         let namespace = journal_namespace(&journal_root)?;
         let timestamp = std::time::SystemTime::now()
@@ -2142,7 +2215,48 @@ fn quarantine_journal(path: &std::path::Path) -> io::Result<()> {
         .and_then(|name| name.to_str())
         .unwrap_or("unknown.lock");
     let quarantine = path.with_file_name(format!("{file_name}.quarantine-{timestamp}"));
-    std::fs::rename(path, quarantine)
+    std::fs::rename(path, &quarantine)?;
+    let Some(root) = quarantine.parent() else {
+        return Ok(());
+    };
+    prune_quarantined_journals(root, Some(&quarantine))
+}
+
+#[cfg(target_os = "linux")]
+fn prune_quarantined_journals(
+    root: &std::path::Path,
+    retained: Option<&std::path::Path>,
+) -> io::Result<()> {
+    let mut candidates = Vec::new();
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if retained.is_some_and(|retained| path == retained) || !entry.file_type()?.is_file() {
+            continue;
+        }
+        let Some(timestamp) = quarantined_journal_timestamp(&path) else {
+            continue;
+        };
+        candidates.push((timestamp, path));
+    }
+    candidates.sort_unstable();
+    let candidate_limit = MAX_QUARANTINED_JOURNALS.saturating_sub(usize::from(retained.is_some()));
+    let excess = candidates.len().saturating_sub(candidate_limit);
+    for (_, path) in candidates.into_iter().take(excess) {
+        remove_file_if_present(&path)?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn quarantined_journal_timestamp(path: &std::path::Path) -> Option<u128> {
+    let name = path.file_name()?.to_str()?;
+    let (journal, timestamp) = name.rsplit_once(".quarantine-")?;
+    if !journal.ends_with(".lock") {
+        return None;
+    }
+    let parsed = timestamp.parse::<u128>().ok()?;
+    (parsed.to_string() == timestamp).then_some(parsed)
 }
 
 #[cfg(target_os = "linux")]
@@ -2214,6 +2328,14 @@ fn try_lock_journal(file: &File) -> io::Result<bool> {
         return Ok(false);
     }
     Err(error)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+fn unlock_journal(file: &File) -> io::Result<()> {
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) } == 0 {
+        return Ok(());
+    }
+    Err(io::Error::last_os_error())
 }
 
 #[cfg(target_os = "linux")]
@@ -2679,6 +2801,60 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
     ))
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn process_identity_matches(actual: &str, expected: &str) -> bool {
+    let exact = actual == expected;
+    let Some(actual_identity) = parse_linux_process_identity(actual) else {
+        return false;
+    };
+    if actual_identity.version != LinuxProcessIdentityVersion::ProcDirectory {
+        return false;
+    }
+    if exact {
+        return true;
+    }
+    let Some(expected_identity) = parse_linux_process_identity(expected) else {
+        return false;
+    };
+    expected_identity.version == LinuxProcessIdentityVersion::Legacy
+        && actual_identity.boot_id == expected_identity.boot_id
+        && actual_identity.start_ticks == expected_identity.start_ticks
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_process_identity(identity: &str) -> Option<LinuxProcessIdentity<'_>> {
+    let fields = identity.split(':').collect::<Vec<_>>();
+    let (boot_id, start_ticks, version) = match fields.as_slice() {
+        ["linux", boot_id, start_ticks] => {
+            (*boot_id, *start_ticks, LinuxProcessIdentityVersion::Legacy)
+        }
+        ["linux", boot_id, device, inode, start_ticks] => {
+            canonical_decimal(device)?;
+            canonical_decimal(inode)?;
+            (
+                *boot_id,
+                *start_ticks,
+                LinuxProcessIdentityVersion::ProcDirectory,
+            )
+        }
+        _ => return None,
+    };
+    if boot_id.is_empty() {
+        return None;
+    }
+    Some(LinuxProcessIdentity {
+        boot_id,
+        start_ticks: canonical_decimal(start_ticks)?,
+        version,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn canonical_decimal(value: &str) -> Option<u64> {
+    let parsed = value.parse::<u64>().ok()?;
+    (parsed.to_string() == value).then_some(parsed)
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
     let pid = pid_t(pid)?;
@@ -2702,6 +2878,11 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
     ))
 }
 
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn process_identity_matches(actual: &str, expected: &str) -> bool {
+    actual == expected
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn process_identity(_pid: u32) -> io::Result<String> {
     Err(io::Error::new(
@@ -2721,8 +2902,16 @@ pub(crate) fn signal_term_pid(pid: u32) -> io::Result<()> {
     signal(pid_t(pid)?, libc::SIGTERM)
 }
 
+pub(crate) fn signal_term_group(pid: u32) -> io::Result<()> {
+    signal(-pid_t(pid)?, libc::SIGTERM)
+}
+
 pub(crate) fn kill_pid(pid: u32) -> io::Result<()> {
     signal(pid_t(pid)?, libc::SIGKILL)
+}
+
+pub(crate) fn kill_group(pid: u32) -> io::Result<()> {
+    signal(-pid_t(pid)?, libc::SIGKILL)
 }
 
 pub(crate) fn try_wait_pid(pid: u32) -> io::Result<Option<ExitStatus>> {
@@ -2785,16 +2974,15 @@ fn escalate(pid: libc::pid_t, signal_target: libc::pid_t, grace: Duration) {
 
 fn escalate_group(pid: libc::pid_t, grace: Duration) {
     let signal_target = -pid;
-    if !signal_target_alive(signal_target) {
-        return;
-    }
-    let _ = signal(signal_target, libc::SIGTERM);
-    let deadline = Instant::now() + grace;
-    while signal_target_alive(signal_target) && Instant::now() < deadline {
-        std::thread::sleep(WAIT_INTERVAL);
-    }
     if signal_target_alive(signal_target) {
-        let _ = signal(signal_target, libc::SIGKILL);
+        let _ = signal(signal_target, libc::SIGTERM);
+        let deadline = Instant::now() + grace;
+        while signal_target_alive(signal_target) && Instant::now() < deadline {
+            std::thread::sleep(WAIT_INTERVAL);
+        }
+        if signal_target_alive(signal_target) {
+            let _ = signal(signal_target, libc::SIGKILL);
+        }
     }
     std::thread::sleep(REAP_DELAY);
     let _ = try_wait_pid(pid as u32);
@@ -2817,20 +3005,6 @@ pub(crate) fn terminate_owned(child: &mut Child, grace: Duration) -> io::Result<
     let _ = signal(signal_target, libc::SIGKILL);
     child.wait()?;
     Ok(())
-}
-
-pub(crate) fn reap_children_nonblocking() {
-    loop {
-        let mut status = 0;
-        let result = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
-        if result > 0 {
-            continue;
-        }
-        if result < 0 && io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
-            continue;
-        }
-        return;
-    }
 }
 
 pub(crate) fn spawn_detached(command: &mut Command) -> io::Result<()> {
@@ -3045,6 +3219,54 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn quarantine_retention_only_prunes_old_generated_evidence() {
+        let journals = tempfile::tempdir().unwrap();
+        let active = journals.path().join("active.lock");
+        let unrelated = [
+            journals.path().join("notes.lock.quarantine-invalid"),
+            journals.path().join("notes.lock.quarantine-01"),
+        ];
+        std::fs::write(&active, "recoverable").unwrap();
+        for path in &unrelated {
+            std::fs::write(path, "diagnostic").unwrap();
+        }
+        for index in 0..MAX_QUARANTINED_JOURNALS + 3 {
+            let path = journals
+                .path()
+                .join(format!("old-{index}.lock.quarantine-{index}"));
+            std::fs::write(path, "quarantined").unwrap();
+        }
+        let incoming = journals.path().join("incoming.lock");
+        std::fs::write(&incoming, "invalid").unwrap();
+
+        prune_quarantined_journals(journals.path(), None).unwrap();
+        quarantine_journal(&incoming).unwrap();
+
+        let retained = std::fs::read_dir(journals.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| quarantined_journal_timestamp(&entry.path()).is_some())
+            .count();
+        assert_eq!(retained, MAX_QUARANTINED_JOURNALS);
+        assert!(active.exists());
+        assert!(unrelated.iter().all(|path| path.exists()));
+        for index in 0..4 {
+            let path = journals
+                .path()
+                .join(format!("old-{index}.lock.quarantine-{index}"));
+            assert!(!path.exists(), "old quarantine {index} was retained");
+        }
+        assert!(journals.path().join("old-4.lock.quarantine-4").exists());
+        assert!(std::fs::read_dir(journals.path()).unwrap().any(|entry| {
+            entry
+                .ok()
+                .and_then(|entry| entry.file_name().into_string().ok())
+                .is_some_and(|name| name.starts_with("incoming.lock.quarantine-"))
+        }));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn linux_process_identity_includes_proc_directory_generation() {
         let identity = process_identity(std::process::id()).unwrap();
         let fields = identity.split(':').collect::<Vec<_>>();
@@ -3054,6 +3276,31 @@ mod tests {
         assert!(fields[2].parse::<u64>().is_ok());
         assert!(fields[3].parse::<u64>().is_ok());
         assert!(fields[4].parse::<u64>().is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_identity_migration_only_accepts_the_same_legacy_generation() {
+        let cases = [
+            ("linux:boot:10:20:30", "linux:boot:10:20:30", true),
+            ("linux:boot:10:20:30", "linux:boot:30", true),
+            ("linux:boot:10:20:30", "linux:other:30", false),
+            ("linux:boot:10:20:30", "linux:boot:31", false),
+            ("linux:boot:30", "linux:boot:30", false),
+            ("linux:boot:30", "linux:boot:10:20:30", false),
+            ("linux:boot:device:20:30", "linux:boot:30", false),
+            ("linux:boot:10:inode:30", "linux:boot:30", false),
+            ("linux:boot:10:20:30", "linux:boot:030", false),
+            ("linux:boot:10:20:30", "linux:boot:not-ticks", false),
+        ];
+
+        for (actual, expected, matches) in cases {
+            assert_eq!(
+                process_identity_matches(actual, expected),
+                matches,
+                "actual={actual}, expected={expected}"
+            );
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -3075,7 +3322,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn stale_journal_recovery_kills_and_removes_the_exact_recorded_cgroup() {
-        let stale = std::mem::ManuallyDrop::new(LinuxCgroup::create().unwrap());
+        let stale = LinuxCgroup::create().unwrap();
         let stale_path = stale.path.clone();
         let stale_journal = stale.journal_path.clone();
         let mut command = Command::new("sleep");
@@ -3087,8 +3334,7 @@ mod tests {
             pid_t(child.id()).unwrap()
         );
         let pid = child.id();
-        let journal_lock = unsafe { std::ptr::read(&stale._journal_lock) };
-        drop(journal_lock);
+        stale.abandon_for_recovery().unwrap();
 
         let replacement = LinuxCgroup::create().unwrap();
         let status = child.wait().unwrap();

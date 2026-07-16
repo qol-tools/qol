@@ -1,5 +1,5 @@
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-use super::lifecycle::{LifecycleHandle, LifecycleRegistration, TerminationAttempt};
+use super::lifecycle::{CleanupFn, LifecycleHandle, LifecycleRegistration, TerminationAttempt};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use super::run::WorkerState;
 #[cfg(target_os = "linux")]
@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::process::Stdio;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use std::sync::{Arc, Mutex};
 use std::thread;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::time::Instant;
@@ -497,6 +499,52 @@ fn termination_timeout_becomes_a_sticky_terminal_failure_after_proof() {
     wait_for_terminal_worker_failure(&mut handle, Duration::from_secs(3));
     assert!(!qol_process::is_pid_alive(pid));
     assert_sticky_terminal_failure(&mut handle);
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[test]
+fn pending_cleanup_moves_from_the_owner_to_the_recovery_coordinator() {
+    let temp = tempfile::tempdir().unwrap();
+    let ticket = ticket(temp.path(), "flow-background-recovery");
+    let mut handle = handle(ticket, child("bounded-exit", None));
+    let pid = worker_pid(&handle);
+    let cleanup_threads = Arc::new(Mutex::new(Vec::new()));
+    let observed_threads = Arc::clone(&cleanup_threads);
+    let cleanup: CleanupFn = Arc::new(move |process_tree, timeout| {
+        let thread = thread::current();
+        let name = thread.name().unwrap_or("unnamed").to_string();
+        let mut threads = observed_threads.lock().unwrap();
+        threads.push(name);
+        let first = threads.len() == 1;
+        drop(threads);
+        if first {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "injected owner cleanup timeout",
+            ));
+        }
+        process_tree.terminate_and_wait(timeout)
+    });
+    let error = handle
+        .terminate_worker_with_cleanup(
+            Duration::from_millis(10),
+            Box::new(|_, _| TerminationAttempt {
+                proof: Err(anyhow!("injected process-tree timeout")),
+                root_stop: Err(anyhow!("injected exact-root timeout")),
+            }),
+            cleanup,
+        )
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("injected process-tree timeout"));
+    wait_for_terminal_worker_failure(&mut handle, Duration::from_secs(3));
+    assert!(!qol_process::is_pid_alive(pid));
+    let threads = cleanup_threads.lock().unwrap();
+    assert_eq!(threads[0], "qol-worker-owner-bounded-exit");
+    assert_eq!(threads[1], "qol-worker-recovery");
+    let WaitState::Failed { worker_exit, .. } = handle.poll().unwrap() else {
+        panic!("background recovery did not reach a proof-complete failure");
+    };
+    assert!(worker_exit.contains("background recovery coordinator"));
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]

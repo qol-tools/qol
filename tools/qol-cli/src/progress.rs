@@ -126,6 +126,25 @@ pub(crate) fn run_status(command: &mut Command, verbose: bool) -> Result<()> {
     run_status_inner(command, cargo_progress)
 }
 
+pub(crate) fn run_status_with<S, W>(
+    command: &mut Command,
+    verbose: bool,
+    spawn: S,
+    wait: W,
+) -> Result<()>
+where
+    S: FnOnce(&mut Command) -> Result<std::process::Child>,
+    W: FnOnce(&mut std::process::Child) -> Result<std::process::ExitStatus>,
+{
+    let cargo_progress = (!verbose).then(|| cargo_progress(command)).flatten();
+    if verbose {
+        let mut child = spawn(command)?;
+        let status = wait(&mut child)?;
+        return require_success(status);
+    }
+    run_status_inner_with(command, cargo_progress, spawn, wait)
+}
+
 pub(crate) fn run_silent(command: &mut Command) -> Result<()> {
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn().context("failed to spawn command")?;
@@ -285,11 +304,29 @@ fn color_enabled() -> bool {
 }
 
 fn run_status_inner(command: &mut Command, cargo_progress: Option<CargoProgress>) -> Result<()> {
+    run_status_inner_with(
+        command,
+        cargo_progress,
+        |command| command.spawn().context("failed to spawn command"),
+        |child| child.wait().context("failed waiting for command"),
+    )
+}
+
+fn run_status_inner_with<S, W>(
+    command: &mut Command,
+    cargo_progress: Option<CargoProgress>,
+    spawn: S,
+    wait: W,
+) -> Result<()>
+where
+    S: FnOnce(&mut Command) -> Result<std::process::Child>,
+    W: FnOnce(&mut std::process::Child) -> Result<std::process::ExitStatus>,
+{
     if let Some(progress) = &cargo_progress {
         configure_cargo_progress(command, progress);
     }
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command.spawn().context("failed to spawn command")?;
+    let mut child = spawn(command)?;
     let stdout = child.stdout.take().map(|pipe| {
         let cargo_progress = cargo_progress.clone();
         thread::spawn(move || read_stdout(pipe, cargo_progress))
@@ -299,18 +336,25 @@ fn run_status_inner(command: &mut Command, cargo_progress: Option<CargoProgress>
         .take()
         .map(|pipe| thread::spawn(move || read_pipe(pipe)));
     let spinner = start_progress(&cargo_progress);
-    let status = child.wait().context("failed waiting for command")?;
+    let status = wait(&mut child);
     drop(spinner);
     let stdout = join_pipe(stdout)?;
     let stderr = join_pipe(stderr)?;
-    if status.success() {
+    if status.as_ref().is_ok_and(|status| status.success()) {
         finish_progress(&cargo_progress);
         return Ok(());
     }
     clear_progress(&cargo_progress);
     replay_bytes(&stdout);
     replay_bytes(&stderr);
-    bail!("command failed with {status}");
+    require_success(status?)
+}
+
+fn require_success(status: std::process::ExitStatus) -> Result<()> {
+    if status.success() {
+        return Ok(());
+    }
+    bail!("command failed with {status}")
 }
 
 fn start_progress(cargo_progress: &Option<CargoProgress>) -> Option<ProgressSpinner> {
@@ -451,6 +495,7 @@ fn cargo_progress(command: &Command) -> Option<CargoProgress> {
         &dependency_dir,
         &args,
         cargo_progress_includes_dev(subcommand),
+        &command_environment(command),
     )
     .ok()?;
     if total == 0 {
@@ -514,17 +559,44 @@ fn cargo_dependency_total(
     path: &Path,
     cargo_args: &[OsString],
     include_dev: bool,
+    environment: &[(OsString, Option<OsString>)],
 ) -> Result<usize> {
-    let output = Command::new("cargo")
+    let mut command = Command::new("cargo");
+    command
         .current_dir(path)
         .args(cargo_tree_args(cargo_args, include_dev))
-        .stderr(Stdio::null())
-        .output()
-        .context("failed to run cargo tree")?;
+        .stderr(Stdio::null());
+    apply_command_environment(&mut command, environment);
+    let output = command.output().context("failed to run cargo tree")?;
     if !output.status.success() {
         bail!("cargo tree failed with {}", output.status);
     }
     cargo_tree_count(&output.stdout)
+}
+
+fn command_environment(command: &Command) -> Vec<(OsString, Option<OsString>)> {
+    command
+        .get_envs()
+        .map(|(name, value)| {
+            (
+                name.to_os_string(),
+                value.map(std::ffi::OsStr::to_os_string),
+            )
+        })
+        .collect()
+}
+
+fn apply_command_environment(command: &mut Command, environment: &[(OsString, Option<OsString>)]) {
+    for (name, value) in environment {
+        match value {
+            Some(value) => {
+                command.env(name, value);
+            }
+            None => {
+                command.env_remove(name);
+            }
+        }
+    }
 }
 
 fn cargo_tree_args(cargo_args: &[OsString], include_dev: bool) -> Vec<OsString> {

@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::io::{self, BufWriter, Write};
 use std::process::{Child, ExitStatus};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -16,6 +17,15 @@ pub(super) struct TerminationAttempt {
 
 pub(super) type TerminationFn = Box<
     dyn FnOnce(&qol_process::ProcessTreeGuard, Duration) -> TerminationAttempt + Send + 'static,
+>;
+pub(super) type CleanupFn = Arc<
+    dyn Fn(
+            &qol_process::ProcessTreeGuard,
+            Duration,
+        ) -> io::Result<qol_process::TerminatedProcessTree>
+        + Send
+        + Sync
+        + 'static,
 >;
 
 pub(super) enum LifecycleEvent {
@@ -65,18 +75,46 @@ enum LifecycleAction {
         timeout: Duration,
         known_status: Option<ExitStatus>,
         events: Option<Sender<LifecycleEvent>>,
+        cleanup: CleanupFn,
     },
     Terminate {
         timeout: Duration,
         terminate: TerminationFn,
         events: Sender<LifecycleEvent>,
+        cleanup: CleanupFn,
     },
 }
 
 struct RecoveryContext {
     timeout: Duration,
     events: Option<Sender<LifecycleEvent>>,
+    cleanup: CleanupFn,
 }
+
+struct PendingRecovery {
+    timeout: Duration,
+    status: RootStatus,
+    failure: Option<String>,
+    events: Option<Sender<LifecycleEvent>>,
+    cleanup: CleanupFn,
+}
+
+struct RecoveryJob {
+    worker: OwnedWorker,
+    pending: PendingRecovery,
+}
+
+struct RecoveryQueue {
+    jobs: Mutex<VecDeque<RecoveryJob>>,
+    wake: Condvar,
+}
+
+enum RootStatus {
+    Pending,
+    Reaped(Option<ExitStatus>),
+}
+
+static RECOVERY_QUEUE: Mutex<Option<Arc<RecoveryQueue>>> = Mutex::new(None);
 
 impl LifecycleRegistration {
     pub(super) fn new(run_id: &str) -> Result<Self> {
@@ -156,6 +194,7 @@ impl LifecycleHandle {
             timeout,
             known_status,
             events: Some(events),
+            cleanup: process_tree_cleanup(),
         };
         self.active = !schedule_action(&self.shared, action);
         receiver
@@ -166,11 +205,21 @@ impl LifecycleHandle {
         timeout: Duration,
         terminate: TerminationFn,
     ) -> Receiver<LifecycleEvent> {
+        self.terminate_with_cleanup(timeout, terminate, process_tree_cleanup())
+    }
+
+    pub(super) fn terminate_with_cleanup(
+        &mut self,
+        timeout: Duration,
+        terminate: TerminationFn,
+        cleanup: CleanupFn,
+    ) -> Receiver<LifecycleEvent> {
         let (events, receiver) = mpsc::channel();
         let action = LifecycleAction::Terminate {
             timeout,
             terminate,
             events,
+            cleanup,
         };
         self.active = !schedule_action(&self.shared, action);
         receiver
@@ -194,6 +243,7 @@ impl Drop for LifecycleHandle {
             timeout: super::BACKGROUND_CLEANUP_TIMEOUT,
             known_status: None,
             events: None,
+            cleanup: process_tree_cleanup(),
         };
         self.active = !schedule_action(&self.shared, action);
     }
@@ -274,55 +324,82 @@ fn wait_for_action(shared: &LifecycleShared) -> MutexGuard<'_, LifecycleState> {
 }
 
 fn run_owner(shared: Arc<LifecycleShared>) {
-    let mut state = wait_for_action(&shared);
-    let LifecycleState::Scheduled { worker, action } = &mut *state else {
+    let Some((mut worker, action)) = take_scheduled_action(&shared) else {
         return;
     };
-    let action = action.take().unwrap_or(LifecycleAction::Finalize {
+    let recovery = action.recovery_context();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_action(&mut worker, action)
+    }));
+    let pending = match result {
+        Ok(pending) => pending,
+        Err(_) => recover_owner_panic(&mut worker, recovery),
+    };
+    if let Some(pending) = pending {
+        transfer_recovery(RecoveryJob { worker, pending });
+    }
+}
+
+fn take_scheduled_action(shared: &LifecycleShared) -> Option<(OwnedWorker, LifecycleAction)> {
+    let mut state = wait_for_action(shared);
+    let previous = std::mem::replace(&mut *state, LifecycleState::Closed);
+    let LifecycleState::Scheduled { worker, action } = previous else {
+        return None;
+    };
+    let action = action.unwrap_or_else(background_finalize_action);
+    Some((worker, action))
+}
+
+fn background_finalize_action() -> LifecycleAction {
+    LifecycleAction::Finalize {
         timeout: super::BACKGROUND_CLEANUP_TIMEOUT,
         known_status: None,
         events: None,
-    });
-    let recovery = action.recovery_context();
-    let result =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_action(worker, action)));
-    if result.is_err() {
-        recover_owner_panic(worker, recovery);
+        cleanup: process_tree_cleanup(),
     }
-    *state = LifecycleState::Closed;
 }
 
 impl LifecycleAction {
     fn recovery_context(&self) -> RecoveryContext {
         match self {
             Self::Finalize {
-                timeout, events, ..
+                timeout,
+                events,
+                cleanup,
+                ..
             } => RecoveryContext {
                 timeout: *timeout,
                 events: events.clone(),
+                cleanup: Arc::clone(cleanup),
             },
             Self::Terminate {
-                timeout: _, events, ..
+                timeout: _,
+                events,
+                cleanup,
+                ..
             } => RecoveryContext {
                 timeout: super::BACKGROUND_CLEANUP_TIMEOUT,
                 events: Some(events.clone()),
+                cleanup: Arc::clone(cleanup),
             },
         }
     }
 }
 
-fn run_action(worker: &mut OwnedWorker, action: LifecycleAction) {
+fn run_action(worker: &mut OwnedWorker, action: LifecycleAction) -> Option<PendingRecovery> {
     match action {
         LifecycleAction::Finalize {
             timeout,
             known_status,
             events,
-        } => finalize_worker(worker, timeout, known_status, events),
+            cleanup,
+        } => finalize_worker(worker, timeout, known_status, events, cleanup),
         LifecycleAction::Terminate {
             timeout,
             terminate,
             events,
-        } => terminate_worker(worker, timeout, terminate, events),
+            cleanup,
+        } => terminate_worker(worker, timeout, terminate, events, cleanup),
     }
 }
 
@@ -331,11 +408,20 @@ fn finalize_worker(
     timeout: Duration,
     known_status: Option<ExitStatus>,
     events: Option<Sender<LifecycleEvent>>,
-) {
+    cleanup: CleanupFn,
+) -> Option<PendingRecovery> {
     let mut failure = None;
     let status = known_status.or_else(|| wait_for_root(worker, &mut failure, events.as_ref()));
-    let proof = prove_tree_exit(worker, timeout, &mut failure, events.as_ref());
-    publish_completion(proof, status, failure, events);
+    finish_or_defer(
+        worker,
+        PendingRecovery {
+            timeout,
+            status: RootStatus::Reaped(status),
+            failure,
+            events,
+            cleanup,
+        },
+    )
 }
 
 fn terminate_worker(
@@ -343,14 +429,19 @@ fn terminate_worker(
     timeout: Duration,
     terminate: TerminationFn,
     events: Sender<LifecycleEvent>,
-) {
+    cleanup: CleanupFn,
+) -> Option<PendingRecovery> {
     match terminate(&worker.process_tree, timeout).into_result() {
-        Ok(proof) => publish_terminated_worker(worker, proof, None, events),
+        Ok(proof) => {
+            publish_terminated_worker(worker, proof, None, events);
+            None
+        }
         Err(error) => recover_termination(
             worker,
             super::BACKGROUND_CLEANUP_TIMEOUT,
             format!("{error:#}"),
             events,
+            cleanup,
         ),
     }
 }
@@ -370,28 +461,39 @@ fn recover_termination(
     timeout: Duration,
     message: String,
     events: Sender<LifecycleEvent>,
-) {
+    cleanup: CleanupFn,
+) -> Option<PendingRecovery> {
     let _ = events.send(LifecycleEvent::Failed(message.clone()));
-    let mut failure = Some(message);
-    let proof = prove_tree_exit(worker, timeout, &mut failure, Some(&events));
-    let status = wait_for_root(worker, &mut failure, Some(&events));
-    publish_completion(proof, status, failure, Some(events));
+    finish_or_defer(
+        worker,
+        PendingRecovery {
+            timeout,
+            status: RootStatus::Pending,
+            failure: Some(message),
+            events: Some(events),
+            cleanup,
+        },
+    )
 }
 
-fn recover_owner_panic(worker: &mut OwnedWorker, recovery: RecoveryContext) {
+fn recover_owner_panic(
+    worker: &mut OwnedWorker,
+    recovery: RecoveryContext,
+) -> Option<PendingRecovery> {
     let message = "typed worker lifecycle owner panicked".to_string();
     if let Some(events) = recovery.events.as_ref() {
         let _ = events.send(LifecycleEvent::Failed(message.clone()));
     }
-    let mut failure = Some(message);
-    let proof = prove_tree_exit(
+    finish_or_defer(
         worker,
-        recovery.timeout,
-        &mut failure,
-        recovery.events.as_ref(),
-    );
-    let status = wait_for_root(worker, &mut failure, recovery.events.as_ref());
-    publish_completion(proof, status, failure, recovery.events);
+        PendingRecovery {
+            timeout: recovery.timeout,
+            status: RootStatus::Pending,
+            failure: Some(message),
+            events: recovery.events,
+            cleanup: recovery.cleanup,
+        },
+    )
 }
 
 fn wait_for_root(
@@ -412,21 +514,164 @@ fn wait_for_root(
     }
 }
 
-fn prove_tree_exit(
+fn finish_or_defer(
+    worker: &mut OwnedWorker,
+    mut pending: PendingRecovery,
+) -> Option<PendingRecovery> {
+    match attempt_tree_exit(worker, pending.timeout, &pending.cleanup) {
+        Ok(proof) => {
+            finish_recovery(worker, pending, proof);
+            None
+        }
+        Err(message) => {
+            record_failure(&mut pending.failure, message, pending.events.as_ref());
+            Some(pending)
+        }
+    }
+}
+
+fn attempt_tree_exit(
     worker: &OwnedWorker,
     timeout: Duration,
-    failure: &mut Option<String>,
-    events: Option<&Sender<LifecycleEvent>>,
-) -> qol_process::TerminatedProcessTree {
+    cleanup: &CleanupFn,
+) -> Result<qol_process::TerminatedProcessTree, String> {
+    match cleanup(&worker.process_tree, timeout) {
+        Ok(proof) => Ok(proof),
+        Err(tree_error) => {
+            let root_error = worker.process_tree.terminate_root_and_wait(timeout).err();
+            Err(cleanup_failure_message(&tree_error, root_error.as_ref()))
+        }
+    }
+}
+
+fn finish_recovery(
+    worker: &mut OwnedWorker,
+    mut pending: PendingRecovery,
+    proof: qol_process::TerminatedProcessTree,
+) {
+    let status = match pending.status {
+        RootStatus::Pending => wait_for_root(worker, &mut pending.failure, pending.events.as_ref()),
+        RootStatus::Reaped(status) => status,
+    };
+    publish_completion(proof, status, pending.failure, pending.events);
+}
+
+fn process_tree_cleanup() -> CleanupFn {
+    Arc::new(|process_tree, timeout| process_tree.terminate_and_wait(timeout))
+}
+
+fn transfer_recovery(job: RecoveryJob) {
+    send_recovery_state(
+        job.pending.events.as_ref(),
+        "typed worker cleanup remains pending under the background recovery coordinator",
+    );
+    let queue = match recovery_queue() {
+        Ok(queue) => queue,
+        Err(error) => {
+            send_recovery_state(
+                job.pending.events.as_ref(),
+                &format!(
+                    "background recovery coordinator is unavailable; lifecycle owner retained cleanup: {error}"
+                ),
+            );
+            run_inline_recovery(job);
+            return;
+        }
+    };
+    queue.push(job);
+}
+
+fn recovery_queue() -> io::Result<Arc<RecoveryQueue>> {
+    let mut slot = RECOVERY_QUEUE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if let Some(queue) = slot.as_ref() {
+        return Ok(Arc::clone(queue));
+    }
+    let queue = Arc::new(RecoveryQueue {
+        jobs: Mutex::new(VecDeque::new()),
+        wake: Condvar::new(),
+    });
+    let coordinator = Arc::clone(&queue);
+    thread::Builder::new()
+        .name("qol-worker-recovery".into())
+        .spawn(move || run_background_recovery(coordinator))?;
+    *slot = Some(Arc::clone(&queue));
+    Ok(queue)
+}
+
+fn run_background_recovery(queue: Arc<RecoveryQueue>) {
     loop {
-        match worker.process_tree.terminate_and_wait(timeout) {
-            Ok(proof) => return proof,
-            Err(tree_error) => {
-                let root_error = worker.process_tree.terminate_root_and_wait(timeout).err();
-                let message = cleanup_failure_message(&tree_error, root_error.as_ref());
-                record_failure(failure, message, events);
-                thread::sleep(CLEANUP_RETRY_INTERVAL);
+        let job = queue.take();
+        let Some(job) = run_recovery_attempt(job) else {
+            continue;
+        };
+        thread::sleep(CLEANUP_RETRY_INTERVAL);
+        queue.push(job);
+    }
+}
+
+fn run_inline_recovery(mut job: RecoveryJob) {
+    loop {
+        let Some(pending) = run_recovery_attempt(job) else {
+            return;
+        };
+        job = pending;
+        thread::sleep(CLEANUP_RETRY_INTERVAL);
+    }
+}
+
+fn run_recovery_attempt(mut job: RecoveryJob) -> Option<RecoveryJob> {
+    let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        attempt_tree_exit(&job.worker, job.pending.timeout, &job.pending.cleanup)
+    }));
+    match attempt {
+        Ok(Ok(proof)) => {
+            finish_recovery(&mut job.worker, job.pending, proof);
+            None
+        }
+        Ok(Err(message)) => {
+            record_failure(
+                &mut job.pending.failure,
+                message,
+                job.pending.events.as_ref(),
+            );
+            Some(job)
+        }
+        Err(_) => {
+            send_recovery_state(
+                job.pending.events.as_ref(),
+                "background typed worker recovery panicked and will retry",
+            );
+            Some(job)
+        }
+    }
+}
+
+fn send_recovery_state(events: Option<&Sender<LifecycleEvent>>, message: &str) {
+    if let Some(events) = events {
+        let _ = events.send(LifecycleEvent::Failed(message.to_string()));
+    }
+}
+
+impl RecoveryQueue {
+    fn push(&self, job: RecoveryJob) {
+        let mut jobs = self.jobs.lock().unwrap_or_else(|error| error.into_inner());
+        jobs.push_back(job);
+        drop(jobs);
+        self.wake.notify_one();
+    }
+
+    fn take(&self) -> RecoveryJob {
+        let mut jobs = self.jobs.lock().unwrap_or_else(|error| error.into_inner());
+        loop {
+            if let Some(job) = jobs.pop_front() {
+                return job;
             }
+            jobs = self
+                .wake
+                .wait(jobs)
+                .unwrap_or_else(|error| error.into_inner());
         }
     }
 }
