@@ -30,10 +30,12 @@ import { SearchableActionList } from '../../../lib/components/SearchableActionLi
 import { ActionMenu } from '../../../lib/components/ActionMenu.js';
 import { ThemeRow } from '../../../lib/components/ThemeRow.js';
 import { getTheme, setTheme, subscribeTheme } from '../../../lib/theme-sync.js';
+import { TextInput } from '../../../lib/components/TextInput.js';
 
 const SHOWCASES = {
     theme: ThemeShowcase,
     buttons: ButtonShowcase,
+    'text-input': TextInputShowcase,
     status: StatusShowcase,
     spinner: SpinnerShowcase,
     'empty-state': EmptyStateShowcase,
@@ -116,6 +118,28 @@ function ThemeShowcase() {
             <div class="catalog-showcase">
                 <${Interactive}>
                     <${ThemeRow} value=${theme} onPick=${pick} />
+                <//>
+            </div>
+        <//>
+    `;
+}
+
+function TextInputShowcase() {
+    const [value, setValue] = useState('');
+    const [submitted, setSubmitted] = useState('');
+    return html`
+        <${CatalogSection} title="Text input">
+            <div class="catalog-showcase">
+                <${Interactive}>
+                    <${TextInput} placeholder="Type and press Enter" value=${value}
+                        onInput=${e => setValue(e.target.value)}
+                        onSubmit=${() => setSubmitted(value)}
+                        onCancel=${() => setValue('')} />
+                    ${submitted && html`<div class="catalog-state-label">submitted: ${submitted}</div>`}
+                <//>
+                <${States}>
+                    <${StateLabel}>disabled<//>
+                    <${TextInput} value="Disabled" disabled />
                 <//>
             </div>
         <//>

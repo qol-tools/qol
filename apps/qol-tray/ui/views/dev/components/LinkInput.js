@@ -1,20 +1,17 @@
 import { html } from '../../../lib/html.js';
+import { TextInput } from '../../../lib/components/TextInput.js';
+import { Button } from '../../../lib/components/Button.js';
 
 export function LinkInput({ showLinkInput, linkPath, linkError, onInput, onConfirm, onCancel }) {
     if (!showLinkInput) return null;
 
-    const onKeyDown = e => {
-        if (e.key === 'Enter') onConfirm();
-        if (e.key === 'Escape') onCancel();
-    };
-
     return html`
         <div>
             <div class="link-input-row">
-                <input type="text" id="link-path" placeholder="/path/to/plugin" value=${linkPath}
-                    onInput=${e => onInput(e.target.value)} onKeyDown=${onKeyDown} />
-                <button class="btn btn-sm btn-primary" onClick=${onConfirm}>Link</button>
-                <button class="btn btn-sm btn-ghost" onClick=${onCancel}>Cancel</button>
+                <${TextInput} id="link-path" placeholder="/path/to/plugin" value=${linkPath}
+                    onInput=${e => onInput(e.target.value)} onSubmit=${onConfirm} onCancel=${onCancel} />
+                <${Button} small variant="btn-primary" onActivate=${onConfirm}>Link<//>
+                <${Button} small variant="btn-ghost" onActivate=${onCancel}>Cancel<//>
             </div>
             ${linkError && html`<p class="error-msg">${linkError}</p>`}
         </div>

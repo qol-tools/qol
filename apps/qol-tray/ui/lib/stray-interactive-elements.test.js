@@ -19,7 +19,6 @@ const GRANDFATHERED = new Set([
     'components/shell/Minimap.js',
     'components/shell/PeripheralPreview.js',
     'views/dev/components/ComponentsCatalog.js',
-    'views/dev/components/LinkInput.js',
     'views/dev/components/PluginsSection.js',
     'views/dev/components/ToolingGhAccountSection.js',
     'views/dev/gpui-subpage.js',
