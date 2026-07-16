@@ -1,6 +1,6 @@
 import { html } from '../../../lib/html.js';
 import { Table } from '../../../lib/components/TableRow.js';
-import { RefreshButton } from '../../../lib/components/Button.js';
+import { Button, RefreshButton } from '../../../lib/components/Button.js';
 import { PluginRow } from './PluginRow.js';
 import { LinkInput } from './LinkInput.js';
 
@@ -10,7 +10,7 @@ function PluginsSectionHeader({ ctrl }) {
             <h2>Plugins</h2>
             <div class="section-actions">
                 <${RefreshButton} spinning=${ctrl.discovering} onClick=${ctrl.triggerDiscovery} title="Rescan" aria-label="Rescan" />
-                <button class="btn btn-sm btn-ghost" onClick=${ctrl.openLinkInput}>+ Link Path</button>
+                <${Button} small variant="btn-ghost" onActivate=${ctrl.openLinkInput}>+ Link Path<//>
             </div>
         </div>
     `;
