@@ -685,7 +685,7 @@ function handleGenericFieldActivation(event, detail, fieldId) {
     event.preventDefault();
     const fieldElement = queryFieldElement(detail, fieldId);
     const target = firstFieldEntryPoint(fieldElement);
-    if (target instanceof HTMLElement) target.focus();
+    if (target instanceof HTMLElement) target.focus({ preventScroll: true });
     return true;
 }
 
@@ -703,7 +703,7 @@ function handleTextFieldActivation(event, detail, fieldId) {
     event.preventDefault();
     const input = queryFieldElement(detail, fieldId)?.querySelector('.text-input');
     if (!isInteractable(input)) return true;
-    input.focus();
+    input.focus({ preventScroll: true });
     input.select();
     return true;
 }
@@ -713,7 +713,7 @@ function handleNumberFieldActivation(event, detail, fieldId) {
     event.preventDefault();
     const display = queryFieldElement(detail, fieldId)?.querySelector('.number-display');
     if (!isInteractable(display)) return true;
-    display.focus();
+    display.focus({ preventScroll: true });
     dispatchFieldKey(display, 'Enter');
     return true;
 }
@@ -783,7 +783,7 @@ function startNumberFieldEdit(event, detail, fieldId) {
     event.preventDefault();
     const display = queryFieldElement(detail, fieldId)?.querySelector('.number-display');
     if (!isInteractable(display)) return true;
-    display.focus();
+    display.focus({ preventScroll: true });
     dispatchFieldKey(display, event.key);
     return true;
 }
@@ -801,7 +801,7 @@ function handleFieldSubmode(event, detail, fieldId) {
 
     if (event.key === 'Escape') {
         event.preventDefault();
-        fieldElement.focus();
+        fieldElement.focus({ preventScroll: true });
         return true;
     }
 
@@ -820,7 +820,7 @@ function handleFieldSubmode(event, detail, fieldId) {
         const idx = stops.indexOf(btn);
         const next = stops[idx + 1] || stops[idx - 1];
         btn.click();
-        if (next instanceof HTMLElement) requestAnimationFrame(() => next.focus());
+        if (next instanceof HTMLElement) requestAnimationFrame(() => next.focus({ preventScroll: true }));
         return true;
     }
 
@@ -839,7 +839,7 @@ function handleFieldSubmode(event, detail, fieldId) {
     event.preventDefault();
     const rows = focusGridRows(genericFieldStops(fieldElement));
     const nextStop = nextFocusGridElement(rows, active || target, direction);
-    if (nextStop instanceof HTMLElement) nextStop.focus();
+    if (nextStop instanceof HTMLElement) nextStop.focus({ preventScroll: true });
     return true;
 }
 
@@ -873,7 +873,7 @@ function shouldKeepHorizontalCaret(event, active) {
 }
 
 function focusTextInput(input, key) {
-    input.focus();
+    input.focus({ preventScroll: true });
     const nextValue = key === 'Backspace' ? '' : key;
     input.value = nextValue;
     input.dispatchEvent(new Event('input', { bubbles: true }));

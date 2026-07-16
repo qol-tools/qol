@@ -39,6 +39,10 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, rend
         const vp = viewportRef.current;
         if (!vp) return;
 
+        function onNativeScroll() {
+            if (vp.scrollLeft || vp.scrollTop) vp.scrollTo(0, 0);
+        }
+
         function onPointerDown(e) {
             const isMiddleClick = e.button === 1;
             const isAltLeftClick = e.button === 0 && e.altKey;
@@ -198,6 +202,7 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, rend
             return true;
         }
 
+        vp.addEventListener('scroll', onNativeScroll, { passive: true });
         vp.addEventListener('pointerdown', onPointerDown);
         vp.addEventListener('pointermove', onPointerMove);
         vp.addEventListener('pointerup', onPointerUp);
@@ -208,6 +213,7 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, rend
         rafId = requestAnimationFrame(ctrlPanLoop);
 
         return () => {
+            vp.removeEventListener('scroll', onNativeScroll);
             vp.removeEventListener('pointerdown', onPointerDown);
             vp.removeEventListener('pointermove', onPointerMove);
             vp.removeEventListener('pointerup', onPointerUp);
