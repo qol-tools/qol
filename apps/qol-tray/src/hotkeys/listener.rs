@@ -7,7 +7,7 @@ use crate::plugins::PluginManager;
 use anyhow::{anyhow, Result};
 use crossbeam_channel::{after, never, select, Receiver};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyEventReceiver, HotKeyState};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -97,6 +97,7 @@ fn run_listener_once(plugin_manager: &SharedPluginManager, reload_rx: &Receiver<
         reload_rx,
         held_actions: HeldActions::default(),
         physical_state,
+        last_heartbeat: Instant::now(),
     }
     .run();
     Err(anyhow!("hotkey listener loop returned unexpectedly"))
@@ -108,6 +109,7 @@ struct HotkeyListenerLoop<'a> {
     reload_rx: &'a Receiver<()>,
     held_actions: HeldActions,
     physical_state: PhysicalHotkeyState,
+    last_heartbeat: Instant,
 }
 
 impl<'a> HotkeyListenerLoop<'a> {
@@ -128,10 +130,10 @@ impl<'a> HotkeyListenerLoop<'a> {
         let hotkey_receiver: &GlobalHotKeyEventReceiver = GlobalHotKeyEvent::receiver();
 
         loop {
-            let heartbeat_rx: Receiver<Instant> = if self.held_actions.is_empty() {
+            let physical_state_rx: Receiver<Instant> = if self.held_actions.is_empty() {
                 never()
             } else {
-                after(HEARTBEAT_INTERVAL)
+                after(super::physical_state::POLL_INTERVAL)
             };
             select! {
                 recv(self.reload_rx) -> reload => {
@@ -145,7 +147,7 @@ impl<'a> HotkeyListenerLoop<'a> {
                     let Ok(event) = event else { break };
                     self.handle_hotkey_event(event);
                 }
-                recv(heartbeat_rx) -> _ => self.send_heartbeats(),
+                recv(physical_state_rx) -> _ => self.poll_physical_state(),
             }
         }
         self.stop_held_actions();
@@ -172,7 +174,7 @@ impl<'a> HotkeyListenerLoop<'a> {
         self.dispatch(dispatch);
     }
 
-    fn send_heartbeats(&mut self) {
+    fn poll_physical_state(&mut self) {
         let snapshot = match self.physical_state.snapshot() {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -181,20 +183,42 @@ impl<'a> HotkeyListenerLoop<'a> {
                 return;
             }
         };
-        let dispatches = self
-            .held_actions
-            .heartbeat_dispatches(|registration| snapshot.chord_is_pressed(&registration.raw_key));
+        let dispatches = if snapshot.supports_reconciliation() {
+            self.held_actions.reconcile_physical(
+                self.manager.continuous_registrations(),
+                |registration| {
+                    registration
+                        .physical_chord
+                        .as_ref()
+                        .is_some_and(|chord| snapshot.chord_is_pressed(chord))
+                },
+            )
+        } else {
+            Vec::new()
+        };
         for dispatch in dispatches {
-            if dispatch.is_stop() {
-                let action = dispatch.action();
-                log::info!(
-                    "Continuous hotkey chord released: {}::{} source=physical-state",
-                    action.plugin_uid.as_str(),
-                    action.action
-                );
-            }
+            self.log_physical_transition(&dispatch);
             self.dispatch(dispatch);
         }
+        if self.held_actions.is_empty() || self.last_heartbeat.elapsed() < HEARTBEAT_INTERVAL {
+            return;
+        }
+        self.last_heartbeat = Instant::now();
+        for dispatch in self.held_actions.heartbeat_dispatches() {
+            self.dispatch(dispatch);
+        }
+    }
+
+    fn log_physical_transition(&self, dispatch: &HotkeyDispatch) {
+        let HotkeyDispatch::Continuous { action, phase } = dispatch else {
+            return;
+        };
+        log::info!(
+            "Continuous hotkey chord transition: {}::{} phase={} source=physical-state",
+            action.plugin_uid.as_str(),
+            action.action,
+            phase.as_str()
+        );
     }
 
     fn stop_held_actions(&mut self) {
@@ -297,16 +321,6 @@ impl HotkeyDispatch {
             Self::OneShot(action) | Self::Continuous { action, .. } => action,
         }
     }
-
-    fn is_stop(&self) -> bool {
-        matches!(
-            self,
-            Self::Continuous {
-                phase: ContinuousPhase::Stop,
-                ..
-            }
-        )
-    }
 }
 
 #[derive(Default)]
@@ -349,24 +363,53 @@ impl HeldActions {
         }
     }
 
-    fn heartbeat_dispatches(
+    fn reconcile_physical<'a>(
         &mut self,
+        registrations: impl Iterator<Item = (u32, &'a RegisteredHotkey)>,
         is_pressed: impl Fn(&RegisteredHotkey) -> bool,
     ) -> Vec<HotkeyDispatch> {
-        let mut dispatches = Vec::with_capacity(self.actions.len());
-        self.actions.retain(|_, action| {
-            let pressed = is_pressed(action);
+        let mut dispatches = Vec::new();
+        let mut pressed_ids = HashSet::new();
+        for (id, registration) in registrations {
+            if !is_pressed(registration) {
+                continue;
+            }
+            pressed_ids.insert(id);
+            if self.actions.contains_key(&id) {
+                continue;
+            }
+            self.actions.insert(id, registration.clone());
             dispatches.push(HotkeyDispatch::Continuous {
-                action: action.action.clone(),
-                phase: if pressed {
-                    ContinuousPhase::Heartbeat
-                } else {
-                    ContinuousPhase::Stop
-                },
+                action: registration.action.clone(),
+                phase: ContinuousPhase::Start,
             });
-            pressed
-        });
+        }
+        let released = self
+            .actions
+            .keys()
+            .filter(|id| !pressed_ids.contains(id))
+            .copied()
+            .collect::<Vec<_>>();
+        for id in released {
+            let Some(registration) = self.actions.remove(&id) else {
+                continue;
+            };
+            dispatches.push(HotkeyDispatch::Continuous {
+                action: registration.action,
+                phase: ContinuousPhase::Stop,
+            });
+        }
         dispatches
+    }
+
+    fn heartbeat_dispatches(&self) -> Vec<HotkeyDispatch> {
+        self.actions
+            .values()
+            .map(|registration| HotkeyDispatch::Continuous {
+                action: registration.action.clone(),
+                phase: ContinuousPhase::Heartbeat,
+            })
+            .collect()
     }
 
     fn stop_all(&mut self) -> Vec<HotkeyDispatch> {
@@ -392,7 +435,7 @@ mod tests {
                 action: name.to_string(),
                 continuous,
             },
-            raw_key: "Ctrl+Shift+Super+Left".to_string(),
+            physical_chord: crate::hotkeys::capture::parse_combo("Ctrl+Shift+Super+Left"),
         }
     }
 
@@ -429,7 +472,7 @@ mod tests {
             })
         );
         assert_eq!(
-            held.heartbeat_dispatches(|_| true),
+            held.heartbeat_dispatches(),
             vec![HotkeyDispatch::Continuous {
                 action: glide.action.clone(),
                 phase: ContinuousPhase::Heartbeat,
@@ -458,7 +501,7 @@ mod tests {
             None
         );
         assert_eq!(
-            held.heartbeat_dispatches(|_| true),
+            held.heartbeat_dispatches(),
             vec![HotkeyDispatch::Continuous {
                 action: glide.action,
                 phase: ContinuousPhase::Heartbeat,
@@ -473,13 +516,53 @@ mod tests {
         held.handle_event(event(7, HotKeyState::Pressed), Some(&glide));
 
         assert_eq!(
-            held.heartbeat_dispatches(|_| false),
+            held.reconcile_physical(std::iter::empty(), |_| false),
             vec![HotkeyDispatch::Continuous {
                 action: glide.action,
                 phase: ContinuousPhase::Stop,
             }]
         );
         assert!(held.is_empty());
+    }
+
+    #[test]
+    fn physical_reconciliation_starts_new_chord_during_existing_hold() {
+        let mut held = HeldActions::default();
+        let right = registration("glide-right", true);
+        let left = registration("glide-left", true);
+        held.handle_event(event(9, HotKeyState::Pressed), Some(&right));
+
+        assert_eq!(
+            held.reconcile_physical([(9, &right), (7, &left)].into_iter(), |_| true),
+            vec![HotkeyDispatch::Continuous {
+                action: left.action,
+                phase: ContinuousPhase::Start,
+            }]
+        );
+    }
+
+    #[test]
+    fn physical_reconciliation_starts_replacement_before_stopping_old_chord() {
+        let mut held = HeldActions::default();
+        let right = registration("glide-right", true);
+        let left = registration("glide-left", true);
+        held.handle_event(event(9, HotKeyState::Pressed), Some(&right));
+
+        assert_eq!(
+            held.reconcile_physical([(9, &right), (7, &left)].into_iter(), |registration| {
+                registration.action.action == "glide-left"
+            }),
+            vec![
+                HotkeyDispatch::Continuous {
+                    action: left.action,
+                    phase: ContinuousPhase::Start,
+                },
+                HotkeyDispatch::Continuous {
+                    action: right.action,
+                    phase: ContinuousPhase::Stop,
+                },
+            ]
+        );
     }
 
     #[test]

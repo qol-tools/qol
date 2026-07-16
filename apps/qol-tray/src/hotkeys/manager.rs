@@ -1,3 +1,4 @@
+use super::capture::{parse_combo, Combo};
 use super::catalog::AvailableActions;
 use super::planning::{plan_registrations, PlannedRegistration};
 use super::registration_status::{self, RegistrationError};
@@ -25,7 +26,7 @@ struct AppliedHotkey {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RegisteredHotkey {
     pub(super) action: HotkeyAction,
-    pub(super) raw_key: String,
+    pub(super) physical_chord: Option<Combo>,
 }
 
 impl HotkeyManager {
@@ -56,6 +57,15 @@ impl HotkeyManager {
 
     pub(super) fn get_registration(&self, event: &GlobalHotKeyEvent) -> Option<&RegisteredHotkey> {
         self.bindings.get(&event.id())
+    }
+
+    pub(super) fn continuous_registrations(
+        &self,
+    ) -> impl Iterator<Item = (u32, &RegisteredHotkey)> {
+        self.bindings
+            .iter()
+            .filter(|(_, registration)| registration.action.continuous)
+            .map(|(id, registration)| (*id, registration))
     }
 
     fn with_config_path(config_path: PathBuf) -> Self {
@@ -118,7 +128,7 @@ impl HotkeyManager {
             existing.hotkey.id(),
             RegisteredHotkey {
                 action: planned.action.clone(),
-                raw_key: key.to_string(),
+                physical_chord: parse_combo(key),
             },
         );
         existing.action = planned.action;
@@ -176,7 +186,7 @@ fn register_via(
         hotkey.id(),
         RegisteredHotkey {
             action: action.clone(),
-            raw_key: binding_key.clone(),
+            physical_chord: parse_combo(&binding_key),
         },
     );
     log_registered_hotkey(&binding_key, &action);

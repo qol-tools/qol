@@ -67,12 +67,28 @@ fn start_script(direction: Direction, speed: f64, watchdog_ms: u64) -> String {
     const GLib = imports.gi.GLib;
     const key = '__qolWindowActionsGlide';
     const now = Date.now();
-    let state = global[key];
-    if (!state) {{
-        const win = global.display.focus_window;
-        if (!win) {{
-            'ERROR: No focused window';
-        }} else {{
+    const applyMotion = (state, elapsed) => {{
+        const left = state.directions.left || 0;
+        const right = state.directions.right || 0;
+        const up = state.directions.up || 0;
+        const down = state.directions.down || 0;
+        let dx = right === left ? 0 : (right > left ? 1 : -1);
+        let dy = down === up ? 0 : (down > up ? 1 : -1);
+        if (dx !== 0 && dy !== 0) {{
+            dx *= 0.70710678118;
+            dy *= 0.70710678118;
+        }}
+        state.x += dx * state.speed * elapsed;
+        state.y += dy * state.speed * elapsed;
+        state.win.move_frame(true, Math.round(state.x), Math.round(state.y));
+    }};
+    (() => {{
+        let state = global[key];
+        if (!state) {{
+            const win = global.display.focus_window;
+            if (!win) {{
+                return 'ERROR: No focused window';
+            }}
             if (win.maximized_horizontally || win.maximized_vertically) {{
                 win.unmaximize(3);
             }}
@@ -80,6 +96,7 @@ fn start_script(direction: Direction, speed: f64, watchdog_ms: u64) -> String {
             state = {{
                 win: win,
                 directions: {{}},
+                sequence: 0,
                 x: rect.x,
                 y: rect.y,
                 speed: {speed},
@@ -100,26 +117,18 @@ fn start_script(direction: Direction, speed: f64, watchdog_ms: u64) -> String {
                 }}
                 const elapsed = Math.min((tick - state.lastTick) / 1000, 0.05);
                 state.lastTick = tick;
-                let dx = (state.directions.right ? 1 : 0) - (state.directions.left ? 1 : 0);
-                let dy = (state.directions.down ? 1 : 0) - (state.directions.up ? 1 : 0);
-                if (dx !== 0 && dy !== 0) {{
-                    dx *= 0.70710678118;
-                    dy *= 0.70710678118;
-                }}
-                state.x += dx * state.speed * elapsed;
-                state.y += dy * state.speed * elapsed;
-                state.win.move_frame(true, Math.round(state.x), Math.round(state.y));
+                applyMotion(state, elapsed);
                 return GLib.SOURCE_CONTINUE;
             }});
-            state.directions.{direction} = true;
-            'Glide started';
         }}
-    }} else {{
-        state.directions.{direction} = true;
+        state.sequence = (state.sequence || 0) + 1;
+        state.directions.{direction} = state.sequence;
         state.speed = {speed};
         state.expiresAt = now + {watchdog_ms};
-        'Glide updated';
-    }}
+        applyMotion(state, 1 / 60);
+        state.lastTick = now;
+        return 'Glide updated';
+    }})()
 "#,
         direction = direction.as_str(),
     )
@@ -186,6 +195,7 @@ mod tests {
             "tick > state.expiresAt",
             "delete global[key]",
             "move_frame(true",
+            "applyMotion(state, 1 / 60)",
         ];
         for fragment in required {
             assert!(script.contains(fragment), "missing {fragment}\n{script}");
@@ -195,7 +205,7 @@ mod tests {
     #[test]
     fn scripts_target_the_requested_direction_and_clamp_speed() {
         let left = start_script(Direction::Left, 10_000.0, WATCHDOG_MS);
-        assert!(left.contains("state.directions.left = true"));
+        assert!(left.contains("state.directions.left = state.sequence"));
         assert!(left.contains("speed: 4000"));
 
         let stop = stop_script(Direction::Up);
@@ -203,5 +213,19 @@ mod tests {
 
         let heartbeat = heartbeat_script(1.0, WATCHDOG_MS);
         assert!(heartbeat.contains("state.speed = 100"));
+    }
+
+    #[test]
+    fn most_recent_direction_wins_on_each_axis() {
+        let script = start_script(Direction::Right, 1200.0, WATCHDOG_MS);
+        let required = [
+            "sequence: 0",
+            "state.sequence = (state.sequence || 0) + 1",
+            "right === left ? 0 : (right > left ? 1 : -1)",
+            "down === up ? 0 : (down > up ? 1 : -1)",
+        ];
+        for fragment in required {
+            assert!(script.contains(fragment), "missing {fragment}\n{script}");
+        }
     }
 }

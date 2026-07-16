@@ -2,7 +2,7 @@ use qol_hotkeys::evdev;
 use x11rb::protocol::xproto::ConnectionExt;
 use x11rb::rust_connection::RustConnection;
 
-use crate::hotkeys::capture::parse_combo;
+use crate::hotkeys::capture::Combo;
 
 const X11_EVDEV_OFFSET: u16 = 8;
 
@@ -32,10 +32,11 @@ impl PhysicalHotkeyState {
 }
 
 impl PhysicalHotkeySnapshot {
-    pub(in crate::hotkeys) fn chord_is_pressed(&self, raw_key: &str) -> bool {
-        let Some(combo) = parse_combo(raw_key) else {
-            return false;
-        };
+    pub(in crate::hotkeys) fn supports_reconciliation(&self) -> bool {
+        true
+    }
+
+    pub(in crate::hotkeys) fn chord_is_pressed(&self, combo: &Combo) -> bool {
         if !self.evdev_key_is_pressed(combo.key) {
             return false;
         }
@@ -74,13 +75,14 @@ mod tests {
 
     #[test]
     fn requires_terminal_key_and_every_bound_modifier() {
+        let combo = crate::hotkeys::capture::parse_combo("Ctrl+Shift+Super+Left").unwrap();
         let chord = [
             evdev::KEY_LEFTCTRL,
             evdev::KEY_LEFTSHIFT,
             evdev::KEY_LEFTMETA,
             evdev::KEY_LEFT,
         ];
-        assert!(snapshot(&chord).chord_is_pressed("Ctrl+Shift+Super+Left"));
+        assert!(snapshot(&chord).chord_is_pressed(&combo));
 
         for released in chord {
             let pressed = chord
@@ -88,7 +90,7 @@ mod tests {
                 .filter(|keycode| *keycode != released)
                 .collect::<Vec<_>>();
             assert!(
-                !snapshot(&pressed).chord_is_pressed("Ctrl+Shift+Super+Left"),
+                !snapshot(&pressed).chord_is_pressed(&combo),
                 "released evdev keycode {released}"
             );
         }
@@ -96,12 +98,13 @@ mod tests {
 
     #[test]
     fn accepts_either_side_of_each_modifier() {
+        let combo = crate::hotkeys::capture::parse_combo("Ctrl+Shift+Super+Right").unwrap();
         let chord = [
             evdev::KEY_RIGHTCTRL,
             evdev::KEY_RIGHTSHIFT,
             evdev::KEY_RIGHTMETA,
             evdev::KEY_RIGHT,
         ];
-        assert!(snapshot(&chord).chord_is_pressed("Ctrl+Shift+Super+Right"));
+        assert!(snapshot(&chord).chord_is_pressed(&combo));
     }
 }
