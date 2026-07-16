@@ -1,4 +1,5 @@
 use crate::cli::optional_single_arg;
+use crate::commands::dev_bundle::{self, ARTIFACT_ROOT_ENV};
 use crate::dev_console;
 use crate::dev_server::{
     fetch_dev_links, post_dev_link, post_reload_plugins, wait_for_health_or_exit, DevLink,
@@ -35,6 +36,9 @@ pub(crate) struct TrayTarget {
 }
 
 pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
+    if let Some(root) = std::env::var_os(ARTIFACT_ROOT_ENV) {
+        return run_artifact(args, verbose, PathBuf::from(root));
+    }
     let directive = tray_directive(optional_single_arg(args, "qol dev [worktree|--base]")?);
     let root = repo_root()?;
     if let Some(tray_pid) = crate::self_exec::resume_tray_pid() {
@@ -106,6 +110,49 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         run_root,
         None,
     )?;
+    handle_session_end(end)
+}
+
+fn run_artifact(args: &[OsString], verbose: bool, root: PathBuf) -> Result<()> {
+    if !args.is_empty() {
+        bail!("artifact-backed qol dev does not accept a worktree selector");
+    }
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("failed to resolve development bundle {}", root.display()))?;
+    let bundle = dev_bundle::DevBundleDescriptor::read(&root)?;
+    let binary = root
+        .join("bin")
+        .join(crate::workspace::exe_name("qol-tray"));
+    let shutdown_method = crate::dev_shutdown::stop_existing_tray()?;
+    let shutdown_detail = match shutdown_method {
+        ShutdownMethod::Graceful => "previous tray stopped gracefully",
+        ShutdownMethod::Forced => "previous tray required fallback cleanup",
+    };
+    dev_step_label("stop", StepKind::Info, shutdown_detail, verbose);
+    dev_step_label(
+        "run",
+        StepKind::Pending,
+        &binary.display().to_string(),
+        verbose,
+    );
+    let mut child = Command::new(&binary)
+        .current_dir(&root)
+        .arg("--write-mode=dev")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to start artifact-backed qol-tray dev process")?;
+    let lines = dev_console::spawn_forwarders(&mut child);
+    let mut child = dev_console::TrayHandle::Owned(child);
+    if let Err(error) = finish_boot(&mut child, &lines, &[], verbose, None) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
+    let plugin_names = bundle.plugins.into_iter().map(|plugin| plugin.id).collect();
+    let end = dev_console::run_session(&mut child, verbose, plugin_names, lines, None, root, None)?;
     handle_session_end(end)
 }
 

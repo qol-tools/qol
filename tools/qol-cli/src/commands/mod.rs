@@ -3,6 +3,7 @@ pub(crate) mod cat;
 pub(crate) mod check;
 pub(crate) mod clean;
 pub(crate) mod dev;
+pub(crate) mod dev_bundle;
 pub(crate) mod dev_env;
 pub(crate) mod doctor;
 pub(crate) mod emu;

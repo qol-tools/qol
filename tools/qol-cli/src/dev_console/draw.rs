@@ -78,7 +78,7 @@ pub(super) fn page_description(view: View) -> Option<&'static str> {
         View::Trace => Some("runtime trace events"),
         View::Doctor => Some("install health checks"),
         View::Plugins => Some("workspace plugins · enter to link/unlink"),
-        View::Emu => Some("headless guest flows · enter opens a manual VM"),
+        View::Emu => Some("isolated guest development · enter runs qol dev"),
         View::Endpoints => Some("local service endpoints"),
         View::Dashboard | View::EmuDetail => None,
     }
@@ -910,7 +910,7 @@ mod tests {
     fn keys_hud_renders_with_view_keys_and_globals() {
         let cases = [
             (View::Dashboard, "arm, then enter"),
-            (View::Emu, "boot · stop"),
+            (View::Emu, "run qol dev · stop"),
         ];
         for (view, expected) in cases {
             let mut dash = Dash::new(Vec::new());

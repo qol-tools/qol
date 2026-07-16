@@ -20,6 +20,7 @@ EXPECTED_FILES = {
     "plugins/qol-shot/qol-config.toml": False,
     "plugins/qol-shot/qol-shot": True,
 }
+DEV_BUNDLE_ID = "qol-dev-session"
 
 
 class ContractError(Exception):
@@ -102,11 +103,12 @@ def read_manifest(root):
         executable = entry["executable"]
         require(type(executable) is bool, f"invalid executable flag: {relative}")
         validated[relative] = (parts, size, digest, executable)
-    require(
-        {path: entry[3] for path, entry in validated.items()} == EXPECTED_FILES,
-        "payload file set does not match the Mint Cinnamon sandbox contract",
-    )
-    return validated
+    if workflow_id != DEV_BUNDLE_ID:
+        require(
+            {path: entry[3] for path, entry in validated.items()} == EXPECTED_FILES,
+            "payload file set does not match the Mint Cinnamon sandbox contract",
+        )
+    return workflow_id, validated
 
 
 def verify_mount(root):
@@ -205,6 +207,108 @@ def publish(staged, stage):
     shutil.rmtree(backup)
 
 
+def validate_dev_bundle(staged, files):
+    bundle_path = staged / "bundle.json"
+    try:
+        bundle = json.loads(bundle_path.read_bytes())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ContractError(f"invalid development bundle: {error}") from error
+    require(set(bundle) == {"schema", "plugins"}, "invalid development bundle fields")
+    require(bundle["schema"] == 1, "unsupported development bundle schema")
+    plugins = bundle["plugins"]
+    require(isinstance(plugins, list) and plugins, "development bundle has no plugins")
+    expected = {
+        "bin/qol",
+        "bin/qol-tray",
+        "bundle.json",
+        "installer/qol-sandbox-payload",
+    }
+    plugin_ids = set()
+    for plugin in plugins:
+        require(
+            isinstance(plugin, dict) and set(plugin) == {"id", "command"},
+            "invalid development bundle plugin",
+        )
+        plugin_id = plugin["id"]
+        command = plugin["command"]
+        require(
+            isinstance(plugin_id, str)
+            and isinstance(command, str)
+            and plugin_id
+            and command
+            and "/" not in plugin_id
+            and "/" not in command
+            and plugin_id not in (".", "..")
+            and command not in (".", ".."),
+            "unsafe development bundle plugin",
+        )
+        require(plugin_id not in plugin_ids, f"duplicate development plugin: {plugin_id}")
+        plugin_ids.add(plugin_id)
+        root = f"plugins/{plugin_id}/"
+        expected.add(f"{root}plugin.toml")
+        expected.add(f"{root}{command}")
+    present = set(files)
+    require(expected <= present, "development bundle is missing required files")
+    require(files["bin/qol"][3], "development qol binary is not executable")
+    require(files["bin/qol-tray"][3], "development tray binary is not executable")
+    for path in present - expected:
+        parts = path.split("/")
+        require(
+            len(parts) >= 3 and parts[0] == "plugins" and parts[1] in plugin_ids,
+            f"development bundle contains an unowned path: {path}",
+        )
+    for plugin in plugins:
+        command_path = f"plugins/{plugin['id']}/{plugin['command']}"
+        require(files[command_path][3], f"plugin command is not executable: {command_path}")
+
+
+def mirror_tree(source, destination):
+    destination.mkdir(mode=0o700)
+    for root, directories, files in os.walk(source):
+        root_path = Path(root)
+        relative = root_path.relative_to(source)
+        target_root = destination / relative
+        for directory in directories:
+            (target_root / directory).mkdir(mode=0o700)
+        for filename in files:
+            source_file = root_path / filename
+            require(
+                source_file.is_file() and not source_file.is_symlink(),
+                f"unsafe plugin file: {source_file}",
+            )
+            os.link(source_file, target_root / filename)
+
+
+def publish_dev(staged, stage):
+    mirror = stage / "plugins"
+    mirror_tree(staged / "plugins", mirror)
+    destinations = [
+        (staged, QOL_HOME / ".local/share/qol-dev/current"),
+        (mirror, QOL_HOME / ".config/qol-tray/plugins"),
+    ]
+    for _, destination in destinations:
+        ensure_directory(destination.parent)
+    backup = stage / "backup"
+    backup.mkdir(mode=0o700)
+    saved = []
+    published = []
+    try:
+        for index, (source, destination) in enumerate(destinations):
+            if destination.exists() or destination.is_symlink():
+                previous = backup / str(index)
+                os.replace(destination, previous)
+                saved.append((previous, destination))
+            os.replace(source, destination)
+            published.append(destination)
+    except BaseException:
+        for destination in reversed(published):
+            remove_path(destination)
+        for previous, destination in reversed(saved):
+            os.replace(previous, destination)
+        raise
+    shutil.rmtree(backup)
+
+
 def clear_stale_state():
     for path in [
         QOL_HOME / ".config/qol-tray/plugin-registry.json",
@@ -221,12 +325,17 @@ def install(root):
     require(account.pw_name == "qol", "payload installer must run as user qol")
     require(Path(account.pw_dir) == QOL_HOME, f"user qol home must be {QOL_HOME}")
     require(QOL_HOME.is_dir() and not QOL_HOME.is_symlink(), f"unsafe home: {QOL_HOME}")
-    files = read_manifest(root)
+    workflow_id, files = read_manifest(root)
     verify_mount(root)
     stage = Path(tempfile.mkdtemp(prefix=".qol-payload-stage-", dir=QOL_HOME))
     try:
         staged = stage_payload(root, files, stage)
-        publish(staged, stage)
+        if workflow_id == DEV_BUNDLE_ID:
+            validate_dev_bundle(staged, files)
+            shutil.rmtree(staged / "installer")
+            publish_dev(staged, stage)
+        else:
+            publish(staged, stage)
         clear_stale_state()
     except BaseException:
         shutil.rmtree(stage, ignore_errors=True)

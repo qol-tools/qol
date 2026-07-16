@@ -1,3 +1,4 @@
+use crate::commands::dev_bundle::{self, PreparedDevBundle};
 use crate::commands::dev_env;
 use crate::commands::dev_env::resources::{self as dev_resources, Admission};
 use crate::commands::emu;
@@ -17,12 +18,14 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const READY_TIMEOUT: Duration = Duration::from_secs(15);
+mod dev_session;
+
+const READY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const TEARDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 const TYPED_WORKER_TERMINATION_GRACE: Duration = Duration::from_secs(2);
 const UP_USAGE: &str =
-    "qol env up <environment> [--count N] [--memory-mb N] [--cpus N] [--windowed] [--force]";
+    "qol env up <environment> [--count N] [--memory-mb N] [--cpus N] [--windowed] [--dev-worktree PATH] [--force]";
 const IMAGE_IMPORT_USAGE: &str =
     "qol env image import <environment> <source> --worktree <absolute-path> [--run-id ID]";
 
@@ -34,6 +37,7 @@ struct UpArgs {
     memory_mb: Option<u64>,
     cpus: Option<u16>,
     windowed: bool,
+    dev_worktree: Option<PathBuf>,
     force: bool,
 }
 
@@ -78,6 +82,7 @@ struct Lane {
     run_dir: PathBuf,
     report_path: PathBuf,
     phase: LanePhase,
+    dev_session: Option<dev_session::DevSessionEvidence>,
 }
 
 impl Lane {
@@ -90,6 +95,7 @@ impl Lane {
             run_dir,
             report_path,
             phase: LanePhase::Attempting,
+            dev_session: None,
         }
     }
 }
@@ -130,6 +136,7 @@ struct Batch<'a> {
     memory_mb: u64,
     cpus: u16,
     windowed: bool,
+    dev_bundle: Option<&'a PreparedDevBundle>,
     admission: Admission,
     lanes: &'a [Lane],
     teardown: &'a [TeardownResult],
@@ -616,6 +623,24 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
     let environment = dev_env::find(&parsed.environment_id)?
         .ok_or_else(|| unknown_environment(&parsed.environment_id))?;
     ensure_ready(&environment)?;
+    if parsed.dev_worktree.is_some()
+        && environment
+            .definition
+            .capabilities
+            .get("flow_adapter")
+            .map(String::as_str)
+            != Some("mint-cinnamon")
+    {
+        bail!("artifact-backed qol dev currently requires the Mint Cinnamon guest adapter");
+    }
+    if parsed.dev_worktree.is_some()
+        && !environment
+            .definition
+            .capabilities
+            .contains_key("image_revision")
+    {
+        bail!("artifact-backed qol dev requires a verified guest image revision");
+    }
     let image_path = environment
         .image_path
         .as_deref()
@@ -664,6 +689,18 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
             return Err(combine_unpublished_errors(error, cleanup, None));
         }
     };
+    let dev_bundle = match parsed
+        .dev_worktree
+        .as_deref()
+        .map(|worktree| dev_bundle::prepare(worktree, &batch_dir))
+        .transpose()
+    {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            let cleanup = remove_unpublished_batch_dir(&batch_dir).err();
+            return Err(combine_unpublished_errors(error, cleanup, None));
+        }
+    };
     let batch_report_path = run_root.join(&batch_id).join("report.json");
     let (admission, resource_lease) = match dev_resources::reserve(
         &batch_id,
@@ -701,6 +738,7 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
         memory_mb,
         cpus,
         windowed: parsed.windowed,
+        dev_bundle: dev_bundle.as_ref(),
         admission,
         lanes: &planned_lanes,
         teardown: &[],
@@ -733,6 +771,7 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
                 cpus,
                 windowed: parsed.windowed,
                 case_root: &case_root,
+                dev_bundle: dev_bundle.as_ref(),
             })?;
             if let Err(error) = spawn_lane(&child_args, parsed.windowed) {
                 lane.phase = LanePhase::Attempting;
@@ -740,6 +779,22 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
             }
             lane.phase = LanePhase::Spawned;
             wait_until_running(lane, &cancellation)?;
+            if let Some(bundle) = dev_bundle.as_ref() {
+                let revision = environment
+                    .definition
+                    .capabilities
+                    .get("image_revision")
+                    .context("development sandbox has no guest image revision")?;
+                lane.dev_session = Some(dev_session::start(
+                    &lane.report_path,
+                    &lane.run_id,
+                    &environment.definition.id,
+                    revision,
+                    &bundle.image.manifest_sha256,
+                    &bundle.descriptor,
+                    || cancellation.is_cancelled(),
+                )?);
+            }
             lane.phase = LanePhase::Running;
             Ok(())
         },
@@ -752,6 +807,7 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
                 memory_mb,
                 cpus,
                 windowed: parsed.windowed,
+                dev_bundle: dev_bundle.as_ref(),
                 admission,
                 lanes,
                 teardown: &[],
@@ -789,6 +845,7 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
                 memory_mb,
                 cpus,
                 windowed: parsed.windowed,
+                dev_bundle: dev_bundle.as_ref(),
                 admission,
                 lanes: &lanes,
                 teardown: &teardown,
@@ -1064,6 +1121,7 @@ fn cmd_down(args: &[OsString], verbose: bool) -> Result<()> {
                 run_dir: run.run_dir.clone(),
                 report_path: run.run_dir.join("report.json"),
                 phase: LanePhase::Running,
+                dev_session: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1161,6 +1219,7 @@ fn parse_up_args(args: &[OsString]) -> Result<UpArgs> {
     let mut memory_mb = None;
     let mut cpus = None;
     let mut windowed = false;
+    let mut dev_worktree = None;
     let mut force = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -1191,6 +1250,13 @@ fn parse_up_args(args: &[OsString]) -> Result<UpArgs> {
                 dev_resources::ParentLeaseClaim::parse(value)?;
                 set_once(&mut run_id, value.to_string(), "--run-id")?;
             }
+            Some("--dev-worktree") => {
+                let value = PathBuf::from(next_value(&mut iter, "--dev-worktree")?);
+                if !value.is_absolute() {
+                    bail!("--dev-worktree requires an absolute path");
+                }
+                set_once(&mut dev_worktree, value, "--dev-worktree")?;
+            }
             Some("--windowed") => set_flag(&mut windowed, "--windowed")?,
             Some("--force") => set_flag(&mut force, "--force")?,
             Some(value) if value.starts_with('-') => {
@@ -1206,6 +1272,9 @@ fn parse_up_args(args: &[OsString]) -> Result<UpArgs> {
     if count == 0 || count > maximum {
         bail!("--count must be between 1 and {maximum}");
     }
+    if windowed && dev_worktree.is_some() {
+        bail!("artifact-backed development sandboxes must remain headless");
+    }
     Ok(UpArgs {
         environment_id,
         run_id,
@@ -1213,6 +1282,7 @@ fn parse_up_args(args: &[OsString]) -> Result<UpArgs> {
         memory_mb,
         cpus,
         windowed,
+        dev_worktree,
         force,
     })
 }
@@ -1459,6 +1529,7 @@ struct EmuUpRequest<'a> {
     cpus: u16,
     windowed: bool,
     case_root: &'a Path,
+    dev_bundle: Option<&'a PreparedDevBundle>,
 }
 
 fn emu_up_args(request: EmuUpRequest<'_>) -> Result<Vec<OsString>> {
@@ -1471,17 +1542,26 @@ fn emu_up_args(request: EmuUpRequest<'_>) -> Result<Vec<OsString>> {
         cpus,
         windowed,
         case_root,
+        dev_bundle,
     } = request;
+    let guest_adapter = dev_bundle.map(|_| emu::GuestAdapter::MintCinnamon);
+    let guest_image_revision = dev_bundle.and_then(|_| {
+        environment
+            .definition
+            .capabilities
+            .get("image_revision")
+            .map(String::as_str)
+    });
     emu::child_launch_args(emu::ChildLaunch {
         operation: emu::ChildOperation::Up,
         target: image_path,
         environment_id: &environment.definition.id,
         run_id,
         parent_lease,
-        guest_adapter: None,
-        guest_image_revision: None,
-        payload_manifest: None,
-        payload_image: None,
+        guest_adapter,
+        guest_image_revision,
+        payload_manifest: dev_bundle.map(|bundle| bundle.payload.manifest_path.as_path()),
+        payload_image: dev_bundle.map(|bundle| bundle.image.path.as_path()),
         run_root: Some(case_root),
         image_kind: Some(environment.definition.image.kind.as_str()),
         display: if windowed {
@@ -1489,7 +1569,7 @@ fn emu_up_args(request: EmuUpRequest<'_>) -> Result<Vec<OsString>> {
         } else {
             emu::DisplayMode::None
         },
-        offline: false,
+        offline: dev_bundle.is_some(),
         resources: dev_resources::profile(memory_mb, u64::from(cpus))?,
         acceleration: environment
             .definition
@@ -1944,6 +2024,7 @@ fn recorded_lane(run_root: &Path, run: &Value) -> Result<Lane> {
         run_dir,
         report_path,
         phase: LanePhase::Running,
+        dev_session: None,
     })
 }
 
@@ -2256,6 +2337,7 @@ fn batch_report(batch: &Batch<'_>) -> Value {
                 "run_dir": lane.run_dir,
                 "report": lane.report_path,
                 "phase": lane.phase.as_str(),
+                "dev_session": lane.dev_session,
             })
         })
         .collect::<Vec<_>>();
@@ -2297,7 +2379,21 @@ fn batch_report(batch: &Batch<'_>) -> Value {
             "memory_mb": batch.memory_mb,
             "cpus": batch.cpus,
             "display": if batch.windowed { "windowed" } else { "none" },
+            "mode": if batch.dev_bundle.is_some() { "qol-dev" } else { "environment" },
         },
+        "dev_bundle": batch.dev_bundle.map(|bundle| json!({
+            "workflow_id": dev_bundle::DEV_BUNDLE_ID,
+            "manifest": bundle.payload.manifest_path,
+            "manifest_sha256": bundle.image.manifest_sha256,
+            "image": bundle.image.path,
+            "plugin_count": bundle.descriptor.plugins.len(),
+            "transport": "read-only-iso",
+            "build": "host-artifacts",
+        })),
+        "payload": batch.dev_bundle.map(|bundle| json!({
+            "manifest": bundle.payload.manifest_path,
+            "image": bundle.image.path,
+        })),
         "admission": {
             "available_memory_mb": batch.admission.available_memory_mb,
             "budget_percent": dev_resources::MEMORY_BUDGET_PERCENT,
@@ -2332,6 +2428,7 @@ fn batch_report(batch: &Batch<'_>) -> Value {
             "logs": batch.run_dir.join("logs"),
             "steps": batch.run_dir.join("steps"),
             "artifacts": batch.run_dir.join("artifacts"),
+            "dev_bundle": batch.dev_bundle.map(|bundle| bundle.image.path.as_path()),
         },
         "next": [
             "Inspect live lanes with `qol env runs`.",
@@ -2383,6 +2480,7 @@ fn effective_environment(batch: &Batch<'_>) -> Value {
             "memory_mb": batch.memory_mb,
             "cpus": batch.cpus,
             "display": if batch.windowed { "windowed" } else { "none" },
+            "mode": if batch.dev_bundle.is_some() { "qol-dev" } else { "environment" },
         },
         "mounts": {
             "workspace": batch.environment.definition.mounts.workspace,
@@ -2403,9 +2501,15 @@ fn host_preflight(batch: &Batch<'_>) -> String {
     } else {
         "passed"
     };
+    let mode = if batch.dev_bundle.is_some() {
+        "qol-dev"
+    } else {
+        "environment"
+    };
     format!(
-        "environment={}\ncount={}\nmemory_mb={}\ncpus={}\navailable_memory_mb={}\nmemory_budget_percent={}\nbudget_memory_mb={}\nrequested_memory_mb={}\nreserved_lanes={}\nreserved_memory_mb={}\navailable_cpus={}\ncpu_budget_percent={}\nbudget_cpus={}\nrequested_cpus={}\nreserved_cpus={}\navailable_disk_bytes={}\ndisk_budget_percent={}\nbudget_disk_bytes={}\nrequested_disk_bytes={}\nreserved_disk_bytes={}\nadmission={}\n",
+        "environment={}\nmode={}\ncount={}\nmemory_mb={}\ncpus={}\navailable_memory_mb={}\nmemory_budget_percent={}\nbudget_memory_mb={}\nrequested_memory_mb={}\nreserved_lanes={}\nreserved_memory_mb={}\navailable_cpus={}\ncpu_budget_percent={}\nbudget_cpus={}\nrequested_cpus={}\nreserved_cpus={}\navailable_disk_bytes={}\ndisk_budget_percent={}\nbudget_disk_bytes={}\nrequested_disk_bytes={}\nreserved_disk_bytes={}\nadmission={}\n",
         batch.environment.definition.id,
+        mode,
         batch.count,
         batch.memory_mb,
         batch.cpus,
@@ -2486,7 +2590,7 @@ fn display_optional_memory(memory_mb: Option<u64>) -> String {
 }
 
 fn help_text() -> &'static str {
-    "qol env\n\n  list\n  doctor [--repair|--fix|--lease-clear <run-id|--all>]\n  up <environment> [--count N] [--memory-mb N] [--cpus N] [--windowed] [--force]\n  image import <environment> <source> --worktree <absolute-path> [--run-id ID]\n  cancel <batch-run-id>\n  runs\n  down <run-id|environment|--all>\n  shot <run-id|environment>\n\nDefinitions live in flows/envs/*.toml. Local image_root, run_root, and [images]\noverrides live in the dev-envs.toml path shown by `qol env doctor`. Environment\ncapabilities select the required acceleration policy."
+    "qol env\n\n  list\n  doctor [--repair|--fix|--lease-clear <run-id|--all>]\n  up <environment> [--count N] [--memory-mb N] [--cpus N] [--windowed] [--dev-worktree PATH] [--force]\n  image import <environment> <source> --worktree <absolute-path> [--run-id ID]\n  cancel <batch-run-id>\n  runs\n  down <run-id|environment|--all>\n  shot <run-id|environment>\n\nDefinitions live in flows/envs/*.toml. Local image_root, run_root, and [images]\noverrides live in the dev-envs.toml path shown by `qol env doctor`. Environment\ncapabilities select the required acceleration policy."
 }
 
 fn print_help() {
@@ -2572,6 +2676,7 @@ mod tests {
                     memory_mb: None,
                     cpus: None,
                     windowed: false,
+                    dev_worktree: None,
                     force: false,
                 },
             ),
@@ -2596,12 +2701,37 @@ mod tests {
                     memory_mb: Some(768),
                     cpus: Some(2),
                     windowed: true,
+                    dev_worktree: None,
                     force: true,
                 },
             ),
         ];
         for (args, expected) in cases {
             assert_eq!(parse_up_args(&os_args(&args)).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn parses_artifact_backed_development_sandbox() {
+        let parsed = parse_up_args(&os_args(&[
+            "linux/mint-cinnamon",
+            "--dev-worktree",
+            "/worktrees/qol",
+        ]))
+        .unwrap();
+        assert_eq!(parsed.dev_worktree, Some(PathBuf::from("/worktrees/qol")));
+        assert!(!parsed.windowed);
+
+        for args in [
+            vec!["linux/mint-cinnamon", "--dev-worktree", "relative/qol"],
+            vec![
+                "linux/mint-cinnamon",
+                "--dev-worktree",
+                "/worktrees/qol",
+                "--windowed",
+            ],
+        ] {
+            assert!(parse_up_args(&os_args(&args)).is_err(), "args: {args:?}");
         }
     }
 
@@ -2789,6 +2919,7 @@ mod tests {
             cpus: 2,
             windowed: false,
             case_root: &case_root,
+            dev_bundle: None,
         })
         .unwrap();
         let actual = args
@@ -2833,6 +2964,7 @@ mod tests {
             cpus: 2,
             windowed: true,
             case_root: &case_root,
+            dev_bundle: None,
         })
         .unwrap();
         assert!(windowed.contains(&OsString::from("--windowed")));
@@ -2850,6 +2982,7 @@ mod tests {
             run_dir: PathBuf::from("/runs/lane-1"),
             report_path: PathBuf::from("/runs/lane-1/report.json"),
             phase: LanePhase::Running,
+            dev_session: None,
         };
         let batch = Batch {
             run_id: "batch-1",
@@ -2859,6 +2992,7 @@ mod tests {
             memory_mb: 1024,
             cpus: 1,
             windowed: false,
+            dev_bundle: None,
             admission: Admission {
                 available_memory_mb: Some(4096),
                 budget_memory_mb: Some(3072),
@@ -3145,6 +3279,7 @@ mod tests {
                     run_dir,
                     report_path,
                     phase: LanePhase::Running,
+                    dev_session: None,
                 }
             })
             .collect::<Vec<_>>();
@@ -3216,6 +3351,7 @@ mod tests {
             run_dir,
             report_path,
             phase: LanePhase::Running,
+            dev_session: None,
         };
         let cancellation = TestCancellation {
             escalated: AtomicBool::new(true),
@@ -3326,6 +3462,7 @@ mod tests {
                 run_dir,
                 report_path,
                 phase: LanePhase::Running,
+                dev_session: None,
             };
 
             let lifecycle = read_report_lifecycle(&lane).unwrap().unwrap();
@@ -3366,6 +3503,7 @@ mod tests {
                 run_dir,
                 report_path,
                 phase: LanePhase::Spawned,
+                dev_session: None,
             };
 
             let cancellation = TestCancellation {
@@ -3423,6 +3561,7 @@ mod tests {
             run_dir: untrusted_run_dir,
             report_path,
             phase: LanePhase::Running,
+            dev_session: None,
         };
 
         let error = read_report_lifecycle(&lane).unwrap_err();

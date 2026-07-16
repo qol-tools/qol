@@ -587,7 +587,7 @@ fn launch_environment(dash: &mut Dash, id: String, run_root: Option<PathBuf>) {
             return;
         }
     };
-    match spawn_env_up(&id, &batch_id) {
+    match spawn_env_up(&id, &batch_id, &dash.running_worktree) {
         Some((child, rx)) => pane.attach(child, rx),
         None => pane.push(emu_run_line(
             "error",
@@ -731,8 +731,20 @@ fn spawn_emu_verb(verb: &str, id: &str) -> Option<(Child, Receiver<String>)> {
     Some((child, rx))
 }
 
-fn spawn_env_up(id: &str, batch_id: &str) -> Option<(Child, Receiver<String>)> {
-    spawn_qol(&["env", "up", id, "--windowed", "--run-id", batch_id])
+fn spawn_env_up(id: &str, batch_id: &str, worktree: &Path) -> Option<(Child, Receiver<String>)> {
+    let exe = std::env::current_exe().ok()?;
+    let root = crate::workspace::repo_root().ok()?;
+    let mut command = Command::new(exe);
+    command
+        .args(["env", "up", id, "--run-id", batch_id, "--dev-worktree"])
+        .arg(worktree)
+        .current_dir(&root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().ok()?;
+    let rx = spawn_forwarders(&mut child);
+    Some((child, rx))
 }
 
 fn spawn_env_down(run_id: &str) -> Option<(Child, Receiver<String>)> {

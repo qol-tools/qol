@@ -222,7 +222,7 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
             ),
             binding(
                 "enter",
-                "boot · stop one",
+                "run qol dev · stop one",
                 Action::Activate,
                 vec![KeyStroke::plain(KeyCode::Enter)],
             ),
