@@ -7,8 +7,14 @@ pub(super) use linux::PhysicalHotkeyState;
 #[cfg(target_os = "linux")]
 pub(super) const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(8);
 
+#[cfg(target_os = "linux")]
+pub(super) const POLL_WHILE_IDLE: bool = true;
+
 #[cfg(not(target_os = "linux"))]
 pub(super) const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+#[cfg(not(target_os = "linux"))]
+pub(super) const POLL_WHILE_IDLE: bool = false;
 
 #[cfg(not(target_os = "linux"))]
 pub(super) struct PhysicalHotkeyState;

@@ -136,11 +136,12 @@ impl<'a> HotkeyListenerLoop<'a> {
         let hotkey_receiver: &GlobalHotKeyEventReceiver = GlobalHotKeyEvent::receiver();
 
         loop {
-            let physical_state_rx: Receiver<Instant> = if self.held_actions.is_empty() {
-                never()
-            } else {
-                after(super::physical_state::POLL_INTERVAL)
-            };
+            let physical_state_rx: Receiver<Instant> =
+                if self.held_actions.is_empty() && !super::physical_state::POLL_WHILE_IDLE {
+                    never()
+                } else {
+                    after(super::physical_state::POLL_INTERVAL)
+                };
             select! {
                 recv(self.reload_rx) -> reload => {
                     if reload.is_err() {
@@ -628,6 +629,28 @@ mod tests {
                 phase: ContinuousPhase::Start,
             }]
         );
+    }
+
+    #[test]
+    fn physical_reconciliation_recovers_a_missed_initial_press() {
+        let mut held = HeldActions::default();
+        let left = registration("glide-left", true);
+
+        assert_eq!(
+            held.reconcile_physical([(7, &left)].into_iter(), |_| true),
+            vec![HotkeyDispatch::Continuous {
+                action: left.action,
+                phase: ContinuousPhase::Start,
+            }]
+        );
+        assert!(!held.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_keeps_physical_reconciliation_available_while_idle() {
+        assert!(super::super::physical_state::POLL_WHILE_IDLE);
+        assert_eq!(super::super::physical_state::POLL_INTERVAL.as_millis(), 8);
     }
 
     #[test]
