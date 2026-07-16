@@ -27,9 +27,9 @@ export const QOL_TRAY_INTERNAL_COLORS = {
     configColorThumbShadow: "rgba(0, 0, 0, 0.5)",
 };
 export const QOL_THEMES = [
-    { key: "slate", label: "Slate", accentKey: "amber" },
-    { key: "graphite", label: "Graphite", accentKey: "amber" },
-    { key: "void", label: "Void", accentKey: "cyan" },
-    { key: "midnight", label: "Midnight", accentKey: "violet" },
+    { key: "slate", label: "Slate", accentKey: "amber", identityKey: "retro" },
+    { key: "graphite", label: "Graphite", accentKey: "amber", identityKey: "retro" },
+    { key: "void", label: "Void", accentKey: "cyan", identityKey: "retro" },
+    { key: "midnight", label: "Midnight", accentKey: "violet", identityKey: "modern" },
 ];
 export const QOL_DEFAULT_THEME = "slate";

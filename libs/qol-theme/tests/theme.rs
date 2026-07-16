@@ -1090,11 +1090,44 @@ fn tray_css_emits_theme_override_blocks() {
 fn tray_theme_js_emits_theme_metadata() {
     let js = css::tray_theme_js();
     assert!(js.contains("export const QOL_THEMES = ["));
-    assert!(js.contains("{ key: \"slate\", label: \"Slate\", accentKey: \"amber\" },"));
-    assert!(js.contains("{ key: \"graphite\", label: \"Graphite\", accentKey: \"amber\" },"));
-    assert!(js.contains("{ key: \"void\", label: \"Void\", accentKey: \"cyan\" },"));
-    assert!(js.contains("{ key: \"midnight\", label: \"Midnight\", accentKey: \"violet\" },"));
+    assert!(js.contains(
+        "{ key: \"slate\", label: \"Slate\", accentKey: \"amber\", identityKey: \"retro\" },"
+    ));
+    assert!(js.contains(
+        "{ key: \"graphite\", label: \"Graphite\", accentKey: \"amber\", identityKey: \"retro\" },"
+    ));
+    assert!(js.contains(
+        "{ key: \"void\", label: \"Void\", accentKey: \"cyan\", identityKey: \"retro\" },"
+    ));
+    assert!(js.contains(
+        "{ key: \"midnight\", label: \"Midnight\", accentKey: \"violet\", identityKey: \"modern\" },"
+    ));
     assert!(js.contains("export const QOL_DEFAULT_THEME = \"slate\";"));
+}
+
+#[test]
+fn tray_css_emits_identity_tokens_per_theme() {
+    let css = css::tray_css();
+    let base = css.split(":root[data-qol-theme").next().unwrap();
+    assert!(base.contains("--qol-identity-font-ui: var(--font-mono);"));
+    assert!(base.contains("--qol-identity-radius-md: 6px;"));
+    let midnight = css
+        .split(":root[data-qol-theme=\"midnight\"]")
+        .nth(1)
+        .unwrap();
+    let midnight = midnight.split('}').next().unwrap();
+    assert!(midnight.contains("--qol-identity-font-ui: var(--font-sans);"));
+    assert!(midnight.contains("--qol-identity-radius-md: 10px;"));
+    assert!(midnight.contains("--qol-identity-crt-band-display: none;"));
+    let graphite = css
+        .split(":root[data-qol-theme=\"graphite\"]")
+        .nth(1)
+        .unwrap();
+    let graphite = graphite.split('}').next().unwrap();
+    assert!(
+        !graphite.contains("--qol-identity-font-ui"),
+        "retro themes emit no identity diff"
+    );
 }
 
 #[test]

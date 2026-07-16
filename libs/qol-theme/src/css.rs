@@ -4,9 +4,9 @@ use qol_color::mix_rgb;
 
 use crate::{
     alt_tab_preview_plane_dark, dark_accent_preset, dark_accent_presets, dark_theme,
-    dark_theme_with_accent_key, tray_theme_preset, tray_theme_presets, CssRgba, Theme, ThemeMode,
-    TrayThemePreset, DARK_REFERENCE, DARK_TRAY_INTERNAL, DARK_TRAY_RAMP, DEFAULT_TRAY_THEME_KEY,
-    DEV_ACCENT_KEY, PROD_ACCENT_KEY,
+    dark_theme_with_accent_key, tray_theme_preset, tray_theme_presets, CssRgba, Theme,
+    ThemeIdentity, ThemeMode, TrayThemePreset, DARK_REFERENCE, DARK_TRAY_INTERNAL, DARK_TRAY_RAMP,
+    DEFAULT_TRAY_THEME_KEY, DEV_ACCENT_KEY, PROD_ACCENT_KEY,
 };
 
 pub fn dark_css() -> String {
@@ -70,8 +70,67 @@ fn tray_theme_base_css(selector: &str, preset: TrayThemePreset) -> String {
     push_hex(&mut out, "qol-tray-tui-bg-screen", preset.tui.screen);
     push_hex(&mut out, "qol-tray-tui-bg-panel", preset.tui.panel);
     push_hex(&mut out, "qol-tray-tui-bg-card", preset.tui.card);
+    push_identity(&mut out, preset.identity);
     out.push_str("}\n");
     out
+}
+
+fn push_identity(out: &mut String, identity: &ThemeIdentity) {
+    let strings = [
+        ("font-ui", identity.font_ui),
+        ("font-data", identity.font_data),
+        ("case-label", identity.case_label),
+        ("tracking-label", identity.tracking_label),
+    ];
+    for (name, value) in strings {
+        let _ = writeln!(out, "    --qol-identity-{name}: {value};");
+    }
+    let radii = [
+        ("radius-2xs", identity.radius_2xs),
+        ("radius-xs", identity.radius_xs),
+        ("radius-sm", identity.radius_sm),
+        ("radius-chip", identity.radius_chip),
+        ("radius-md", identity.radius_md),
+        ("radius-lg", identity.radius_lg),
+        ("radius-lg-plus", identity.radius_lg_plus),
+        ("radius-xl", identity.radius_xl),
+    ];
+    for (name, value) in radii {
+        let _ = writeln!(out, "    --qol-identity-{name}: {value}px;");
+    }
+    let surfaces = [
+        ("glow-text", identity.glow_text),
+        ("frame-border", identity.frame_border),
+        ("frame-texture", identity.frame_texture),
+        ("frame-bg", identity.frame_bg),
+        ("crt-band-display", identity.crt_band_display),
+        ("card-border", identity.card_border),
+        ("card-bg", identity.card_bg),
+        ("card-shadow", identity.card_shadow),
+        ("cover-bg", identity.cover_bg),
+        ("cover-texture", identity.cover_texture),
+        ("sel-outline", identity.sel_outline),
+        ("sel-outline-offset", identity.sel_outline_offset),
+        ("ghost-btn-bg", identity.ghost_btn_bg),
+        ("ghost-btn-radius", identity.ghost_btn_radius),
+        ("hint-bg", identity.hint_bg),
+        ("hint-border", identity.hint_border),
+        ("hint-shadow", identity.hint_shadow),
+        ("panel-bg", identity.panel_bg),
+        ("panel-border", identity.panel_border),
+        ("panel-radius", identity.panel_radius),
+        ("panel-shadow", identity.panel_shadow),
+        ("heading-size", identity.heading_size),
+        ("heading-weight", identity.heading_weight),
+    ];
+    for (name, value) in surfaces {
+        let _ = writeln!(out, "    --qol-identity-{name}: {value};");
+    }
+    let _ = writeln!(
+        out,
+        "    --qol-identity-minimap-slab-radius: {};",
+        identity.minimap_slab_radius
+    );
 }
 
 pub fn plugin_lights_css() -> String {
@@ -198,8 +257,8 @@ pub fn tray_theme_js() -> String {
     for preset in tray_theme_presets() {
         let _ = writeln!(
             out,
-            "    {{ key: \"{}\", label: \"{}\", accentKey: \"{}\" }},",
-            preset.key, preset.label, preset.accent_key
+            "    {{ key: \"{}\", label: \"{}\", accentKey: \"{}\", identityKey: \"{}\" }},",
+            preset.key, preset.label, preset.accent_key, preset.identity.key
         );
     }
     out.push_str("];\n");

@@ -176,14 +176,14 @@
     --dev-build-overlay-complete-saturate: 1.2;
     --dev-build-overlay-complete-brightness: 1.12;
 
-    --radius-2xs: 2px;
-    --radius-xs: 3px;
-    --radius-sm: 4px;
-    --radius-chip: 5px;
-    --radius-md: 6px;
-    --radius-lg: 8px;
-    --radius-lg-plus: 10px;
-    --radius-xl: 12px;
+    --radius-2xs: var(--qol-identity-radius-2xs);
+    --radius-xs: var(--qol-identity-radius-xs);
+    --radius-sm: var(--qol-identity-radius-sm);
+    --radius-chip: var(--qol-identity-radius-chip);
+    --radius-md: var(--qol-identity-radius-md);
+    --radius-lg: var(--qol-identity-radius-lg);
+    --radius-lg-plus: var(--qol-identity-radius-lg-plus);
+    --radius-xl: var(--qol-identity-radius-xl);
     --radius-2xl: 16px;
     --radius-pill: 999px;
 
@@ -356,6 +356,35 @@
     --tui-sign-bg: linear-gradient(180deg, rgba(var(--accent-rgb), 0.08), transparent), var(--tui-bg-panel);
     --tui-glow-text: 0 0 22px rgba(var(--accent-rgb), 0.45);
     --tui-desktop-bg: radial-gradient(125% 95% at 50% 0%, rgba(var(--accent-rgb), 0.05), transparent 58%), var(--tui-bg-desktop);
+
+    --font-ui: var(--qol-identity-font-ui);
+    --font-data: var(--qol-identity-font-data);
+    --case-label: var(--qol-identity-case-label);
+    --tracking-label: var(--qol-identity-tracking-label);
+    --glow-text: var(--qol-identity-glow-text);
+    --frame-border: var(--qol-identity-frame-border);
+    --frame-texture: var(--qol-identity-frame-texture);
+    --frame-bg: var(--qol-identity-frame-bg);
+    --crt-band-display: var(--qol-identity-crt-band-display);
+    --card-border: var(--qol-identity-card-border);
+    --card-bg: var(--qol-identity-card-bg);
+    --card-shadow: var(--qol-identity-card-shadow);
+    --cover-bg: var(--qol-identity-cover-bg);
+    --cover-texture: var(--qol-identity-cover-texture);
+    --sel-outline: var(--qol-identity-sel-outline);
+    --sel-outline-offset: var(--qol-identity-sel-outline-offset);
+    --ghost-btn-bg: var(--qol-identity-ghost-btn-bg);
+    --ghost-btn-radius: var(--qol-identity-ghost-btn-radius);
+    --hint-bg: var(--qol-identity-hint-bg);
+    --hint-border: var(--qol-identity-hint-border);
+    --hint-shadow: var(--qol-identity-hint-shadow);
+    --panel-bg: var(--qol-identity-panel-bg);
+    --panel-border: var(--qol-identity-panel-border);
+    --panel-radius: var(--qol-identity-panel-radius);
+    --panel-shadow: var(--qol-identity-panel-shadow);
+    --heading-size: var(--qol-identity-heading-size);
+    --heading-weight: var(--qol-identity-heading-weight);
+    --minimap-slab-radius: var(--qol-identity-minimap-slab-radius);
 }
 
 @keyframes slide-in {

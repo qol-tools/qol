@@ -48,6 +48,8 @@ struct ThemeEntry {
     label: &'static str,
     #[serde(rename = "accentKey")]
     accent_key: &'static str,
+    #[serde(rename = "identityKey")]
+    identity_key: &'static str,
 }
 
 #[derive(Serialize)]
@@ -67,6 +69,7 @@ fn theme_boot() -> ThemeBoot {
                 key: preset.key,
                 label: preset.label,
                 accent_key: preset.accent_key,
+                identity_key: preset.identity.key,
             })
             .collect(),
         default_key: crate::features::theme::current_theme_key(),
@@ -227,6 +230,7 @@ mod tests {
         assert_eq!(themes[0]["key"], "slate");
         assert_eq!(themes[0]["label"], "Slate");
         assert_eq!(themes[0]["accentKey"], "amber");
+        assert_eq!(themes[0]["identityKey"], "retro");
     }
 
     #[test]
