@@ -4,6 +4,9 @@ import { usePluginConfigContext } from '../context.js';
 import { FieldLabel } from './FieldLabel.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
 import { prettyLabel } from '../../../lib/qol-config.js';
+import { TextInput } from '../../../lib/components/TextInput.js';
+import { Button } from '../../../lib/components/Button.js';
+import { Surface } from '../../../lib/components/Surface.js';
 
 export function ObjectMapField({ field }) {
     const ctx = usePluginConfigContext();
@@ -52,7 +55,7 @@ function EntryList({ field, entries, remove }) {
                     ${Object.entries(value || {}).map(([name, entryValue]) => html`
                         <span key=${name} class="key-label">${prettyLabel(name)}: ${formatValue(entryValue)}</span>
                     `)}
-                    <button type="button" class="btn-remove" onClick=${() => remove(key)}>\u00d7</button>
+                    <${Surface} as="button" type="button" className="btn-remove" onActivate=${() => remove(key)}>\u00d7<//>
                 </div>
             `)}
         </div>
@@ -83,13 +86,13 @@ function AddEntryForm({ field, onAdd }) {
 
     return html`
         <div class="add-rule-row object-map-add-row">
-            <input ref=${keyRef} type="text" class="key-input" data-wedge-root="" data-selection-tint-root=""
+            <${TextInput} inputRef=${keyRef} className="key-input" data-wedge-root="" data-selection-tint-root=""
                 placeholder=${field.key_label || 'Key'} onKeyDown=${onKeyDown} />
             ${entryFields.map(([name, kind]) => html`
                 <${EntryInput} key=${name} name=${name} kind=${kind} refs=${fieldRefs} onKeyDown=${onKeyDown} />
             `)}
-            <button type="button" class="btn btn-ghost btn-sm btn-add"
-                data-wedge-root="" onClick=${handleAdd}>+ Add</button>
+            <${Button} small variant="btn-ghost" className="btn-add" type="button"
+                data-wedge-root="" onActivate=${handleAdd}>+ Add<//>
         </div>
     `;
 }
@@ -97,8 +100,8 @@ function AddEntryForm({ field, onAdd }) {
 function EntryInput({ name, kind, refs, onKeyDown }) {
     const ref = useRef(null);
     refs.current[name] = { kind, ref };
-    return html`<input ref=${ref} type=${kind === 'number' ? 'number' : 'text'}
-        class=${kind === 'string_array' ? 'key-input keys-input' : 'key-input'}
+    return html`<${TextInput} inputRef=${ref} type=${kind === 'number' ? 'number' : 'text'}
+        className=${kind === 'string_array' ? 'key-input keys-input' : 'key-input'}
         data-wedge-root="" data-selection-tint-root=""
         placeholder=${prettyLabel(name)} onKeyDown=${onKeyDown} />`;
 }
