@@ -1,6 +1,7 @@
 import { html } from '../../lib/html.js';
 import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
+import { TextInput } from '../../lib/components/TextInput.js';
 import { ModalActions } from '../../lib/components/ModalPreact.js';
 
 const ACTION_TYPES = [
@@ -82,7 +83,7 @@ function NameField({ value, onChange, fp }) {
     return html`
         <div class="form-group" ...${fp}>
             <label>Name</label>
-            <input type="text" value=${value}
+            <${TextInput} value=${value}
                    placeholder="My Shortcut"
                    onInput=${(e) => onChange(e.target.value)} />
         </div>
@@ -102,7 +103,7 @@ function UrlField({ url, onChange, fp }) {
     return html`
         <div class="form-group" ...${fp}>
             <label>URL</label>
-            <input type="text" value=${url}
+            <${TextInput} value=${url}
                    placeholder="https://example.com"
                    onInput=${(e) => onChange(e.target.value)} />
         </div>
@@ -138,7 +139,7 @@ function BrowserOverrideValue({ browser, onChange, fp }) {
     return html`
         <div class="form-group" ...${fp}>
             <label>Browser value</label>
-            <input type="text" value=${extractRefValue(browser)}
+            <${TextInput} value=${extractRefValue(browser)}
                    placeholder=${type === 'bundle_id' ? 'com.google.Chrome' : type === 'path' ? '/Applications/Firefox.app' : 'Firefox'}
                    onInput=${(e) => onChange({ type, [refKey(type)]: e.target.value })} />
         </div>
@@ -162,7 +163,7 @@ function AppRefValue({ app, onChange, fp }) {
     return html`
         <div class="form-group" ...${fp}>
             <label>App value</label>
-            <input type="text" value=${extractRefValue(app)}
+            <${TextInput} value=${extractRefValue(app)}
                    placeholder=${type === 'bundle_id' ? 'com.apple.Safari' : type === 'path' ? '/Applications/App.app' : 'App Name'}
                    onInput=${(e) => onChange({ type, [refKey(type)]: e.target.value })} />
         </div>
