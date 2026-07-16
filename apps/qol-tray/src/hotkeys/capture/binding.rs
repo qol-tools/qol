@@ -21,7 +21,15 @@ pub(crate) struct Binding {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Phase {
     Start,
+    #[cfg_attr(
+        not(all(target_os = "linux", feature = "linux_evdev")),
+        allow(dead_code)
+    )]
     Heartbeat,
+    #[cfg_attr(
+        not(any(target_os = "macos", all(target_os = "linux", feature = "linux_evdev"))),
+        allow(dead_code)
+    )]
     Stop,
 }
 
