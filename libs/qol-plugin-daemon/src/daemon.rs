@@ -76,6 +76,7 @@ pub fn send_action(config: &DaemonConfig, action: &str, expect_reply: bool) -> b
 
     let request = DaemonRequest {
         action: action.to_string(),
+        input: serde_json::Value::Null,
     };
     let Ok(mut payload) = serde_json::to_string(&request) else {
         return false;
@@ -128,13 +129,33 @@ pub fn start_listener<C: Send + 'static>(
     tx: Sender<C>,
     parser: fn(&str) -> ReadResult<C>,
 ) -> bool {
+    start_listener_with(config, tx, move |request| parser(&request.action))
+}
+
+pub fn start_request_listener<C: Send + 'static>(
+    config: &DaemonConfig,
+    tx: Sender<C>,
+    parser: fn(&DaemonRequest) -> ReadResult<C>,
+) -> bool {
+    start_listener_with(config, tx, parser)
+}
+
+fn start_listener_with<C, F>(config: &DaemonConfig, tx: Sender<C>, parser: F) -> bool
+where
+    C: Send + 'static,
+    F: Fn(&DaemonRequest) -> ReadResult<C> + Copy + Send + 'static,
+{
     let Ok((listener, socket_path)) = bind_listener(config) else {
         return false;
     };
 
     let host_death_tx = tx.clone();
     qol_runtime::spawn_host_death_watchdog_with(move || {
-        if let ReadResult::Command(cmd) = parser("kill") {
+        let request = DaemonRequest {
+            action: "kill".into(),
+            input: serde_json::Value::Null,
+        };
+        if let ReadResult::Command(cmd) = parser(&request) {
             if host_death_tx.send(cmd).is_ok() {
                 std::thread::sleep(HOST_DEATH_GRACE);
             }
@@ -146,7 +167,7 @@ pub fn start_listener<C: Send + 'static>(
         for stream in listener.incoming() {
             match stream {
                 Ok(mut s) => {
-                    let result = read_and_parse(&mut s, parser);
+                    let result = read_request_and_parse(&mut s, parser);
                     let should_continue = handle_read_result(&mut s, result, |cmd| {
                         if tx.send(cmd).is_ok() {
                             DaemonResponse::Handled { data: None }
@@ -321,6 +342,13 @@ fn read_and_parse<C, F>(stream: &mut UnixStream, mut parser: F) -> ReadResult<C>
 where
     F: FnMut(&str) -> ReadResult<C>,
 {
+    read_request_and_parse(stream, |request| parser(&request.action))
+}
+
+fn read_request_and_parse<C, F>(stream: &mut UnixStream, mut parser: F) -> ReadResult<C>
+where
+    F: FnMut(&DaemonRequest) -> ReadResult<C>,
+{
     let timeout = std::time::Duration::from_millis(ACK_TIMEOUT_MS);
     let _ = stream.set_read_timeout(Some(timeout));
 
@@ -349,14 +377,17 @@ where
     }
 
     if let Ok(request) = serde_json::from_str::<DaemonRequest>(trimmed) {
-        return parser(&request.action);
+        return parser(&request);
     }
 
     let cmd = match trimmed.strip_prefix("action:") {
         Some(a) => a,
         None => trimmed,
     };
-    parser(cmd)
+    parser(&DaemonRequest {
+        action: cmd.to_string(),
+        input: serde_json::Value::Null,
+    })
 }
 
 fn handle_read_result<C, F>(
@@ -465,6 +496,22 @@ mod tests {
 
         match result {
             ReadResult::Command(action) => assert_eq!(action, "open"),
+            _ => panic!("expected command"),
+        }
+    }
+
+    #[test]
+    fn parses_json_request_input() {
+        let mut stream =
+            stream_with_line(r#"{"action":"pair_device","input":{"address":"AA:BB"}}"#);
+        let result = read_request_and_parse(&mut stream, |request| {
+            ReadResult::<serde_json::Value>::Command(request.input.clone())
+        });
+
+        match result {
+            ReadResult::Command(input) => {
+                assert_eq!(input, serde_json::json!({"address": "AA:BB"}));
+            }
             _ => panic!("expected command"),
         }
     }

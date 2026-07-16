@@ -19,9 +19,10 @@ pub(super) fn default_io_timeout() -> Duration {
 pub(super) fn dispatch_action(
     endpoint: &Path,
     action_id: &str,
+    input: &serde_json::Value,
     timeout: Duration,
 ) -> DaemonActionDispatch {
-    unix_common::dispatch_action(endpoint, action_id, timeout)
+    unix_common::dispatch_action(endpoint, action_id, input, timeout)
 }
 
 #[cfg(unix)]
@@ -38,6 +39,7 @@ pub(super) fn default_io_timeout() -> Duration {
 pub(super) fn dispatch_action(
     _endpoint: &Path,
     _action_id: &str,
+    _input: &serde_json::Value,
     _timeout: Duration,
 ) -> DaemonActionDispatch {
     DaemonActionDispatch::Unavailable

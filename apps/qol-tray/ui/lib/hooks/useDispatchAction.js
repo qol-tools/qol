@@ -3,18 +3,18 @@ import { useCallback, useState } from 'preact/hooks';
 export function useDispatchAction(pluginId, actionName) {
     const [state, setState] = useState({ pending: false, error: null, result: null });
 
-    const dispatch = useCallback(async () => {
-        if (!pluginId || !actionName) {
+    const dispatch = useCallback(async (input = {}, actionOverride = actionName) => {
+        if (!pluginId || !actionOverride) {
             return null;
         }
         setState({ pending: true, error: null, result: null });
         try {
             const response = await fetch(
-                `/api/plugins/${encodeURIComponent(pluginId)}/actions/${encodeURIComponent(actionName)}`,
+                `/api/plugins/${encodeURIComponent(pluginId)}/actions/${encodeURIComponent(actionOverride)}`,
                 {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: '{}',
+                    body: JSON.stringify(input),
                     qolSuppressErrorToast: true,
                 },
             );

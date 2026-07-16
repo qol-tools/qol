@@ -1,0 +1,8 @@
+config.json
+*.log
+.DS_Store
+target/
+plugin-bluetooth
+plugin-bluetooth.new
+.cargo/config.toml
+reports/

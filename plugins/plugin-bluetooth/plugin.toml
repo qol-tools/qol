@@ -1,0 +1,71 @@
+[plugin]
+id = "plugin-bluetooth"
+uid = "c30275fa-eb76-42af-bdce-2e7596976fba"
+name = "Bluetooth"
+description = "Reliably reconnect selected Bluetooth devices through BlueZ"
+version = "0.1.0"
+author = "KMRH47"
+platforms = ["linux"]
+
+[runtime]
+command = "plugin-bluetooth"
+
+[action.reconnect]
+label = "Reconnect Managed Devices"
+args = ["reconnect"]
+
+[action.reconnect_trusted]
+label = "Reconnect Paired and Trusted Devices"
+args = ["reconnect_trusted"]
+
+[action.start_search]
+label = "Start Bluetooth Search"
+args = ["search"]
+
+[action.stop_search]
+label = "Stop Bluetooth Search"
+args = ["stop_search"]
+
+[action.pair_device]
+label = "Pair Bluetooth Device"
+args = ["pair"]
+
+[action.trust_device]
+label = "Trust Bluetooth Device"
+args = ["trust"]
+
+[action.untrust_device]
+label = "Untrust Bluetooth Device"
+args = ["untrust"]
+
+[action.connect_device]
+label = "Connect Bluetooth Device"
+args = ["connect"]
+
+[action.disconnect_device]
+label = "Disconnect Bluetooth Device"
+args = ["disconnect"]
+
+[action.remove_device]
+label = "Remove Bluetooth Device"
+args = ["remove"]
+
+[action.settings]
+label = "Settings"
+kind = "settings"
+args = ["settings"]
+
+[daemon]
+enabled = true
+command = "plugin-bluetooth"
+socket = "/tmp/plugin-bluetooth.sock"
+port = 42740
+
+[menu]
+label = "Bluetooth"
+items = []
+
+[[dependencies.binaries]]
+name = "plugin-bluetooth"
+repo = "qol-tools/plugin-bluetooth"
+pattern = "plugin-bluetooth-{os}-{arch}"

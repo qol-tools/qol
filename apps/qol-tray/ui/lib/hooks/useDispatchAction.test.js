@@ -59,3 +59,20 @@ test('dispatch suppresses global fetch error toast for inline action errors', as
     assert.equal(seen.length, 1);
     assert.equal(seen[0].qolSuppressErrorToast, true);
 });
+
+test('dispatch carries row input to an action selected at activation time', async () => {
+    const seen = [];
+    await withFetch(
+        async (url, options) => {
+            seen.push({ url, options });
+            return new Response('{"success":true}', { status: 200 });
+        },
+        async () => {
+            const action = useDispatchAction('plugin-bluetooth', null);
+            await action.dispatch({ address: 'AA:BB' }, 'pair_device');
+        },
+    );
+
+    assert.equal(seen[0].url, '/api/plugins/plugin-bluetooth/actions/pair_device');
+    assert.equal(seen[0].options.body, '{"address":"AA:BB"}');
+});

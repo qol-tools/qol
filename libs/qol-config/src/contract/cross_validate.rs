@@ -11,6 +11,7 @@ pub fn validate_contracts(
     let mut errors = Vec::new();
     for (id, field) in &config.fields {
         validate_runable_ref(id, field, runtime, &mut errors);
+        validate_active_action_refs(id, field, runtime, &mut errors);
         validate_stream_ref(id, field, runtime, &mut errors);
         validate_row_action_ref(id, field, runtime, &mut errors);
     }
@@ -18,6 +19,67 @@ pub fn validate_contracts(
         Ok(())
     } else {
         Err(errors)
+    }
+}
+
+fn validate_active_action_refs(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if field.active_action.is_none()
+        && field.active_query.is_none()
+        && field.active_value_from.is_none()
+    {
+        return;
+    }
+    if field.kind != FieldKind::Action {
+        errors.push(ValidationError::new(
+            format!("field.{id}"),
+            "runtime active state is only valid for action fields",
+        ));
+        return;
+    }
+    let Some(action) = field.active_action.as_deref() else {
+        errors.push(ValidationError::new(
+            format!("field.{id}.active_action"),
+            "is required when runtime active state is configured",
+        ));
+        return;
+    };
+    let Some(query) = field.active_query.as_deref() else {
+        errors.push(ValidationError::new(
+            format!("field.{id}.active_query"),
+            "is required when active_action is configured",
+        ));
+        return;
+    };
+    if field.active_value_from.as_deref().is_none_or(str::is_empty) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.active_value_from"),
+            "is required when active_action is configured",
+        ));
+        return;
+    }
+    let Some(runtime) = runtime else {
+        errors.push(ValidationError::new(
+            format!("field.{id}"),
+            "runtime active state requires qol-runtime.toml",
+        ));
+        return;
+    };
+    if !runtime.actions.contains_key(action) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.active_action"),
+            format!("references undeclared action: {action}"),
+        ));
+    }
+    if !runtime.queries.contains_key(query) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.active_query"),
+            format!("references undeclared query: {query}"),
+        ));
     }
 }
 
@@ -96,9 +158,14 @@ fn validate_row_action_ref(
     runtime: Option<&RuntimeSpec>,
     errors: &mut Vec<ValidationError>,
 ) {
-    let Some(ref ra) = field.row_action else {
+    let actions = field
+        .row_action
+        .iter()
+        .chain(field.row_actions.iter())
+        .collect::<Vec<_>>();
+    if actions.is_empty() {
         return;
-    };
+    }
     let Some(rt) = runtime else {
         errors.push(ValidationError::new(
             format!("field.{id}.row_action"),
@@ -106,10 +173,18 @@ fn validate_row_action_ref(
         ));
         return;
     };
-    if !rt.actions.contains_key(ra.action.as_str()) {
+    for (index, action) in actions.into_iter().enumerate() {
+        if rt.actions.contains_key(action.action.as_str()) {
+            continue;
+        }
+        let path = if index == 0 && field.row_action.is_some() {
+            format!("field.{id}.row_action.action")
+        } else {
+            format!("field.{id}.row_actions.action")
+        };
         errors.push(ValidationError::new(
-            format!("field.{id}.row_action.action"),
-            format!("references undeclared action: {}", ra.action),
+            path,
+            format!("references undeclared action: {}", action.action),
         ));
     }
 }
@@ -156,6 +231,57 @@ description = "Pair device"
             validate_contracts(&config, Some(&runtime)).is_ok(),
             "consistent contracts should validate"
         );
+    }
+
+    #[test]
+    fn validates_action_runtime_active_state_references() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.search]
+type = "action"
+action = "start_search"
+active_action = "stop_search"
+active_query = "search_status"
+active_value_from = "searching"
+"#,
+        )
+        .expect("parse config");
+        let valid_runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[action.start_search]
+description = "Start searching"
+
+[action.stop_search]
+description = "Stop searching"
+
+[query.search_status]
+description = "Search status"
+poll_interval_ms = 500
+"#,
+        )
+        .expect("parse runtime");
+        assert!(validate_contracts(&config, Some(&valid_runtime)).is_ok());
+
+        let invalid_runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[action.start_search]
+description = "Start searching"
+"#,
+        )
+        .expect("parse runtime");
+        let errors = validate_contracts(&config, Some(&invalid_runtime)).unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|error| error.path == "field.search.active_action"));
+        assert!(errors
+            .iter()
+            .any(|error| error.path == "field.search.active_query"));
     }
 
     #[test]
@@ -299,6 +425,46 @@ description = "Remove a device"
         )
         .expect("parse runtime");
         assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+    }
+
+    #[test]
+    fn validates_every_state_driven_row_action() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.devices]
+type = "list"
+query = "devices"
+
+[[field.devices.row_actions]]
+action = "pair_device"
+when = "can_pair"
+
+[[field.devices.row_actions]]
+action = "connect_device"
+when = "can_connect"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.devices]
+description = "Devices"
+poll_interval_ms = 1000
+
+[action.pair_device]
+description = "Pair"
+"#,
+        )
+        .expect("parse runtime");
+        let errors = validate_contracts(&config, Some(&runtime)).unwrap_err();
+        assert!(errors.iter().any(|error| {
+            error.path == "field.devices.row_actions.action"
+                && error.message.contains("connect_device")
+        }));
     }
 
     #[test]

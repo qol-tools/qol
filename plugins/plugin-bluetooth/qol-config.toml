@@ -1,0 +1,111 @@
+schema_version = 1
+title = "Bluetooth"
+description = "Choose devices that qol should keep connected through BlueZ."
+
+[section.devices]
+label = "Devices"
+description = "Search for nearby devices and inspect the devices currently paired with BlueZ."
+
+[field.search]
+type = "action"
+label = "Start search"
+active_label = "Stop search"
+description = "Discover Bluetooth devices for up to 60 seconds, or stop the search early."
+section = "devices"
+action = "start_search"
+active_action = "stop_search"
+active_query = "search_status"
+active_value_from = "searching"
+
+[field.devices]
+type = "list"
+label = "Bluetooth devices"
+section = "devices"
+query = "devices"
+row_label = "{name}"
+row_subtitle = "{status} · {signal} · {address}"
+search = true
+empty_message = "No paired devices. Start search to discover nearby devices."
+
+[[field.devices.row_actions]]
+action = "connect_device"
+label = "Connect"
+when = "can_connect"
+input = { address = "{address}" }
+
+[[field.devices.row_actions]]
+action = "disconnect_device"
+label = "Disconnect"
+when = "can_disconnect"
+input = { address = "{address}" }
+
+[[field.devices.row_actions]]
+action = "pair_device"
+label = "Pair"
+when = "can_pair"
+input = { address = "{address}" }
+
+[[field.devices.row_actions]]
+action = "trust_device"
+label = "Trust"
+when = "can_trust"
+input = { address = "{address}" }
+
+[[field.devices.row_actions]]
+action = "untrust_device"
+label = "Untrust"
+when = "can_untrust"
+input = { address = "{address}" }
+
+[[field.devices.row_actions]]
+action = "remove_device"
+label = "Remove"
+when = "can_remove"
+input = { address = "{address}" }
+
+[section.reconnection]
+label = "Reconnection"
+description = "Automatic retries run only while a managed device is disconnected."
+actions = ["reconnect", "reconnect_trusted"]
+
+[field.managed_devices]
+type = "string_array"
+label = "Managed device addresses"
+description = "Paired Bluetooth MAC addresses to reconnect automatically."
+section = "reconnection"
+placeholder = "AA:BB:CC:DD:EE:FF"
+default = []
+
+[field.auto_reconnect]
+type = "boolean"
+label = "Reconnect automatically"
+description = "Keep retrying managed devices while they are disconnected."
+section = "reconnection"
+default = true
+
+[field.power_on_adapter]
+type = "boolean"
+label = "Power on the adapter"
+description = "Allow the plugin to power on the default adapter before reconnecting."
+section = "reconnection"
+default = true
+
+[field.retry_initial_seconds]
+type = "number"
+label = "Initial retry delay"
+description = "Seconds before the first retry after a failed connection."
+section = "reconnection"
+default = 1
+min = 1
+max = 60
+step = 1
+
+[field.retry_max_seconds]
+type = "number"
+label = "Maximum retry delay"
+description = "Maximum seconds between retries while a managed device remains disconnected."
+section = "reconnection"
+default = 60
+min = 5
+max = 600
+step = 5

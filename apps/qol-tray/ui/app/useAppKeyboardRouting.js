@@ -691,7 +691,9 @@ function handleGenericFieldActivation(event, detail, fieldId) {
 
 function firstFieldEntryPoint(fieldElement) {
     if (!(fieldElement instanceof HTMLElement)) return null;
-    const input = fieldElement.querySelector('input:not([type="hidden"]):not(.btn-remove), select, [tabindex="0"]');
+    const input = fieldElement.querySelector(
+        'input:not([type="hidden"]):not(.btn-remove), select, [data-selected-surface], [tabindex="0"]'
+    );
     if (isInteractable(input)) return input;
     const button = fieldElement.querySelector('button:not(.btn-remove)');
     if (isInteractable(button)) return button;
@@ -812,6 +814,12 @@ function handleFieldSubmode(event, detail, fieldId) {
         return true;
     }
 
+    if ((event.key === 'Enter' || event.key === ' ') && active?.matches('[data-selected-surface]')) {
+        event.preventDefault();
+        active.click();
+        return true;
+    }
+
     const matchesRemove = (el) => el?.matches('.btn-remove');
     if ((event.key === 'Delete' || event.key === 'Backspace') && (matchesRemove(active) || matchesRemove(target))) {
         event.preventDefault();
@@ -846,7 +854,7 @@ function handleFieldSubmode(event, detail, fieldId) {
 function genericFieldStops(fieldElement) {
     if (!(fieldElement instanceof HTMLElement)) return [];
     return Array.from(fieldElement.querySelectorAll(
-        'input:not([type="hidden"]), select, button, [tabindex="0"]'
+        'input:not([type="hidden"]), select, button, [data-selected-surface], [tabindex="0"]'
     )).filter(isInteractable);
 }
 

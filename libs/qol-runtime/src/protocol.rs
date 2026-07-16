@@ -9,6 +9,8 @@ use crate::MonitorBounds;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonRequest {
     pub action: String,
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub input: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -26,6 +26,8 @@ import { useGalleryShortcutEditorController } from '../gallery-shortcut-editor-s
 import { DevPluginRow } from '../../../components/domain-rows/DevPluginRow.js';
 import { StoreCard, StoreCardGrid } from '../../../components/domain-rows/StoreCard.js';
 import { KeyLegend } from '../../../lib/components/KeyLegend.js';
+import { SearchableActionList } from '../../../lib/components/SearchableActionList.js';
+import { ActionMenu } from '../../../lib/components/ActionMenu.js';
 
 const SHOWCASES = {
     buttons: ButtonShowcase,
@@ -33,11 +35,13 @@ const SHOWCASES = {
     spinner: SpinnerShowcase,
     'empty-state': EmptyStateShowcase,
     dropdown: DropdownShowcase,
+    'action-menu': ActionMenuShowcase,
     expander: ExpanderShowcase,
     toggle: ToggleShowcase,
     slider: SliderShowcase,
     'depth-diver': DepthDiver,
     'key-legend': KeyLegendShowcase,
+    'searchable-action-list': SearchableActionListShowcase,
     'dev-plugin-row': DevPluginRowShowcase,
     'log-row': LogRowShowcase,
     'suppressed-row': SuppressedRowShowcase,
@@ -205,6 +209,32 @@ function DropdownShowcase() {
     `;
 }
 
+function ActionMenuShowcase() {
+    const actions = [
+        { id: 'connect', label: 'Connect' },
+        { id: 'trust', label: 'Trust' },
+        { id: 'remove', label: 'Remove', tone: 'danger' },
+    ];
+    return html`
+        <${CatalogSection} title="Action menu">
+            <div class="catalog-showcase">
+                <${Interactive}>
+                    <${ActionMenu} actions=${actions}
+                        label="Device actions"
+                        onAction=${action => toast('info', `${action.label} selected`)} />
+                <//>
+                <${States}>
+                    <${StateLabel}>disabled item<//>
+                    <${ActionMenu} actions=${[
+                        { id: 'connect', label: 'Connect', disabled: true },
+                        { id: 'remove', label: 'Remove', tone: 'danger' },
+                    ]} label="Example actions" />
+                <//>
+            </div>
+        <//>
+    `;
+}
+
 function ExpanderShowcase() {
     const [open, setOpen] = useState(false);
     return html`
@@ -339,6 +369,60 @@ function KeyLegendShowcase() {
                     ]} />
                     <${StateLabel}>empty (renders nothing)<//>
                     <${KeyLegend} bindings=${[]} />
+                <//>
+            </div>
+        <//>
+    `;
+}
+
+function SearchableActionListShowcase() {
+    const [devices, setDevices] = useState([
+        { id: 'luna', label: 'Luna 2', description: 'Available · -42 dBm', state: 'available' },
+        { id: 'headphones', label: 'Headphones', description: 'Paired', state: 'paired' },
+        { id: 'controller', label: 'Controller', description: 'Connected', state: 'connected' },
+    ]);
+    const items = devices.map(device => ({
+        ...device,
+        actionLabel: device.state === 'available'
+            ? 'Connect'
+            : device.state === 'paired' ? 'Connect' : 'Disconnect',
+        accent: device.state === 'connected' ? 'success' : device.state === 'paired' ? 'accent' : 'muted',
+        actions: [
+            {
+                id: device.state === 'connected' ? 'disconnect' : 'connect',
+                label: device.state === 'connected' ? 'Disconnect' : 'Connect',
+            },
+            { id: 'trust', label: 'Trust' },
+            { id: 'remove', label: 'Remove', tone: 'danger' },
+        ],
+    }));
+    const activate = useCallback((item, action = item.actions[0]) => {
+        if (action.id === 'trust' || action.id === 'remove') {
+            toast('info', `${action.label} ${item.label}`);
+            return;
+        }
+        setDevices(current => current.map(device => {
+            if (device.id !== item.id) return device;
+            if (device.state === 'available') return { ...device, description: 'Connected', state: 'connected' };
+            if (device.state === 'paired') return { ...device, description: 'Connected', state: 'connected' };
+            return { ...device, description: 'Paired', state: 'paired' };
+        }));
+    }, []);
+    return html`
+        <${CatalogSection} title="Searchable action list">
+            <div class="catalog-showcase">
+                <${Interactive}>
+                    <${SearchableActionList}
+                        label="Bluetooth devices"
+                        description="Search, navigate, and run the action exposed by each result."
+                        items=${items}
+                        placeholder="Search Bluetooth devices..."
+                        onActivate=${activate}
+                        onAction=${activate} />
+                <//>
+                <${States}>
+                    <${StateLabel}>empty<//>
+                    <${SearchableActionList} label="Devices" items=${[]} emptyMessage="No devices found." />
                 <//>
             </div>
         <//>

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { useQueryPoll } from '../../../lib/hooks/useQueryPoll.js';
 import { fieldLayoutAttrs } from '../field-map.js';
+import { extractPath } from './query-data.js';
 
 const DEFAULT_POLL_MS = 2000;
 const FAILURE_THRESHOLD = 2;
@@ -45,16 +46,4 @@ export function StatusField({ field }) {
             ${error && html`<div class="field-status-error">${error}</div>`}
         </div>
     `;
-}
-
-function extractPath(obj, path) {
-    const parts = path.split('.');
-    let current = obj;
-    for (const part of parts) {
-        if (current == null || typeof current !== 'object') {
-            return null;
-        }
-        current = current[part];
-    }
-    return current;
 }

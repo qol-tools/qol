@@ -1,0 +1,39 @@
+schema_version = 1
+
+[action.start_search]
+description = "Start Bluetooth discovery for up to 60 seconds"
+
+[action.stop_search]
+description = "Stop the active Bluetooth discovery session"
+
+[action.pair_device]
+description = "Pair a discovered Bluetooth device using its appropriate transport"
+input = { address = "string" }
+
+[action.connect_device]
+description = "Pair, trust, and connect a Bluetooth device in one verified operation"
+input = { address = "string" }
+
+[action.disconnect_device]
+description = "Disconnect a connected Bluetooth device"
+input = { address = "string" }
+
+[action.trust_device]
+description = "Trust a paired Bluetooth device"
+input = { address = "string" }
+
+[action.untrust_device]
+description = "Remove trust from a paired Bluetooth device"
+input = { address = "string" }
+
+[action.remove_device]
+description = "Remove a Bluetooth device and its pairing information"
+input = { address = "string" }
+
+[query.search_status]
+description = "Whether Bluetooth discovery is currently active"
+poll_interval_ms = 500
+
+[query.devices]
+description = "Unified paired and discovered Bluetooth device inventory"
+poll_interval_ms = 1000

@@ -113,9 +113,23 @@ pub fn try_execute_action(
     plugin_id: &str,
     action_id: &str,
 ) -> Result<(), ActionExecutionError> {
+    try_execute_action_with_input(
+        plugin_manager,
+        plugin_id,
+        action_id,
+        serde_json::Value::Null,
+    )
+}
+
+pub fn try_execute_action_with_input(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_id: &str,
+    action_id: &str,
+    input: serde_json::Value,
+) -> Result<(), ActionExecutionError> {
     let resolved = resolve_plugin_action(plugin_manager, plugin_id, action_id)?;
     ensure_daemon_ready_for_action(plugin_manager, &resolved)?;
-    execution::execute_resolved_action(&resolved)
+    execution::execute_resolved_action(&resolved, &input)
 }
 
 pub fn dispatch_query(

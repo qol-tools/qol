@@ -2,17 +2,27 @@ import { html } from '../../../lib/html.js';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { useDispatchAction } from '../../../lib/hooks/useDispatchAction.js';
+import { useQueryPoll } from '../../../lib/hooks/useQueryPoll.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
 import { isActionRuntimeGated } from '../field-rules.js';
+import { queryFlag } from './query-data.js';
+import { actionLabel, selectedActionName } from './action-state.js';
 
 const PAIR_DURATION_S = 60;
+const DEFAULT_POLL_MS = 2000;
 
 export function ActionField({ field }) {
     const ctx = usePluginConfigContext();
-    const { dispatch, pending, error } = useDispatchAction(ctx.pluginId, field.action);
+    const primaryAction = useDispatchAction(ctx.pluginId, field.action);
+    const activeAction = useDispatchAction(ctx.pluginId, field.active_action);
+    const queryDef = ctx.runtime?.query?.[field.active_query];
+    const interval = queryDef?.poll_interval_ms || DEFAULT_POLL_MS;
+    const activeState = useQueryPoll(ctx.pluginId, field.active_query, interval);
+    const runtimeActive = queryFlag(activeState.data, field.active_value_from);
     const isPairAction = field.action === 'pair';
     const stopPair = useDispatchAction(ctx.pluginId, 'stop_pair');
     const [pairing, setPairing] = useState(false);
+    const [syncing, setSyncing] = useState(false);
     const timerRef = useRef(0);
 
     useEffect(() => () => clearTimeout(timerRef.current), []);
@@ -22,7 +32,18 @@ export function ActionField({ field }) {
     }, [ctx, field.id]);
 
     const run = useCallback(() => {
-        if (pending || stopPair.pending) return;
+        if (primaryAction.pending || activeAction.pending || stopPair.pending || syncing) return;
+
+        if (field.active_action) {
+            const actionName = selectedActionName(field, runtimeActive);
+            const action = actionName === field.active_action ? activeAction : primaryAction;
+            setSyncing(true);
+            action.dispatch()
+                .then(() => activeState.refresh())
+                .catch(() => {})
+                .finally(() => setSyncing(false));
+            return;
+        }
 
         if (isPairAction && pairing) {
             stopPair.dispatch()
@@ -34,7 +55,7 @@ export function ActionField({ field }) {
             return;
         }
 
-        dispatch()
+        primaryAction.dispatch()
             .then(() => {
                 if (!isPairAction) return;
                 setPairing(true);
@@ -42,7 +63,7 @@ export function ActionField({ field }) {
                 timerRef.current = setTimeout(() => setPairing(false), PAIR_DURATION_S * 1000);
             })
             .catch(() => {});
-    }, [dispatch, pending, isPairAction, pairing, stopPair]);
+    }, [primaryAction, activeAction, stopPair, field.active_action, runtimeActive, isPairAction, pairing, syncing, activeState]);
 
     const onKeyDown = useCallback((event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -53,17 +74,11 @@ export function ActionField({ field }) {
 
     const variant = field.variant || 'primary';
     const gated = isActionRuntimeGated(field, ctx.isRuntimeDisabled);
-    const busy = pending || stopPair.pending;
+    const busy = primaryAction.pending || activeAction.pending || stopPair.pending || syncing;
+    const active = runtimeActive || (isPairAction && pairing);
     const gatedMessage = gated ? 'Unavailable until the plugin connection is healthy.' : null;
-
-    let label;
-    if (isPairAction && pairing) {
-        label = 'Stop Pairing';
-    } else if (busy) {
-        label = 'Working...';
-    } else {
-        label = field.label || 'Run';
-    }
+    const label = actionLabel(field, busy, runtimeActive, pairing);
+    const error = primaryAction.error || activeAction.error || stopPair.error || activeState.error;
 
     return html`
         <div ...${fieldSurfaceAttrs(field, ctx, 'field-group field-action')}
@@ -71,8 +86,8 @@ export function ActionField({ field }) {
             onFocus=${onSelect}
             onKeyDown=${gated ? undefined : onKeyDown}>
             <div class="field-action-row">
-                ${isPairAction && pairing && html`<span class="refresh-btn spinning"></span>`}
-                <button type="button" class="btn btn-${pairing ? 'ghost' : variant}"
+                ${active && html`<span class="refresh-btn spinning"></span>`}
+                <button type="button" class="btn btn-${active ? 'ghost' : variant}"
                         disabled=${busy || gated}
                         onClick=${gated ? undefined : run}>
                     ${label}

@@ -249,29 +249,6 @@
     align-self: stretch;
 }
 
-.field-list .list-row {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
-    align-self: stretch;
-    padding: var(--space-2) 0;
-}
-
-.field-list .list-row-main {
-    min-width: 0;
-}
-
-.field-list .list-row-subtitle {
-    color: var(--text-muted);
-    font-size: var(--fs-sm);
-}
-
-.field-list .list-row-action {
-    flex-shrink: 0;
-}
-
 .field-group:hover {
     border-color: rgba(var(--accent-rgb), 0.12);
 }

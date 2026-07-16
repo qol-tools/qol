@@ -1,0 +1,375 @@
+use std::process::ExitCode;
+
+use anyhow::{bail, Result};
+use qol_headless::{Command, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTextOutput};
+
+use crate::bluetooth::{normalize_address, DeviceInfo, ReconnectReport, ReconnectSelection};
+use crate::{config, platform, PLUGIN_ID};
+
+const BINARY_NAME: &str = "plugin-bluetooth";
+
+pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
+    app().run(args)
+}
+
+fn app() -> HeadlessApp {
+    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+        .about("Inspect and reliably reconnect Bluetooth devices through the platform backend.")
+        .default_command(["list"])
+        .command(list_command())
+        .command(search_command())
+        .command(stop_search_command())
+        .command(pair_command())
+        .command(trust_command())
+        .command(untrust_command())
+        .command(connect_command())
+        .command(disconnect_command())
+        .command(remove_command())
+        .command(reconnect_command())
+        .command(reconnect_trusted_command())
+        .command(settings_command())
+        .doctor_checks(doctor_checks())
+}
+
+fn stop_search_command() -> Command {
+    Command::new("stop_search")
+        .about("Stop discovery in the running Bluetooth daemon.")
+        .usage(format!("{BINARY_NAME} stop_search"))
+        .output("No stdout on success.")
+        .exit_behavior("Exits non-zero when the Bluetooth daemon is not reachable.")
+        .run_plain_text(|context| {
+            reject_args(context.args())?;
+            platform::stop_search()?;
+            Ok(PlainTextOutput::empty())
+        })
+}
+
+fn search_command() -> Command {
+    Command::new("search")
+        .about("Search for Bluetooth devices for up to 60 seconds.")
+        .usage(format!("{BINARY_NAME} search"))
+        .detail("Press Ctrl+C to stop discovery early and print the devices found.")
+        .output("Paired and discovered devices ordered by connection state and signal strength.")
+        .exit_behavior("Exits non-zero when BlueZ discovery cannot run.")
+        .run_plain_text(|context| {
+            reject_args(context.args())?;
+            let devices = platform::search_devices(&config::load())?;
+            if devices.is_empty() {
+                return Ok(PlainTextOutput::text("no Bluetooth devices found"));
+            }
+            Ok(PlainTextOutput::text(device_lines(&devices)))
+        })
+        .run_json(|context| {
+            reject_args(context.args())?;
+            Ok(serde_json::to_value(platform::search_devices(
+                &config::load(),
+            )?)?)
+        })
+}
+
+fn list_command() -> Command {
+    Command::new("list")
+        .about("List Bluetooth devices known to the default adapter.")
+        .usage(format!("{BINARY_NAME} list"))
+        .output("One line per known device, or a JSON array with --json.")
+        .exit_behavior("Exits non-zero when BlueZ or the default adapter is unavailable.")
+        .run_plain_text(|context| {
+            reject_args(context.args())?;
+            let devices = platform::list_devices()?;
+            if devices.is_empty() {
+                return Ok(PlainTextOutput::text("no Bluetooth devices known to BlueZ"));
+            }
+            Ok(PlainTextOutput::text(device_lines(&devices)))
+        })
+        .run_json(|context| {
+            reject_args(context.args())?;
+            Ok(serde_json::to_value(platform::list_devices()?)?)
+        })
+}
+
+fn connect_command() -> Command {
+    Command::new("connect")
+        .about("Pair, trust, and connect one Bluetooth device in a verified operation.")
+        .usage(format!("{BINARY_NAME} connect AA:BB:CC:DD:EE:FF"))
+        .detail(
+            "Powers on the adapter first when enabled and repairs audio devices that BlueZ only knows through Bluetooth LE.",
+        )
+        .output("The resulting device state.")
+        .exit_behavior("Exits non-zero when the address is invalid or the connection fails.")
+        .run_plain_text(|context| {
+            let address = one_address("connect", context.args())?;
+            let device = platform::connect_device(&address, config::load().power_on_adapter)?;
+            Ok(PlainTextOutput::text(device_line(&device)))
+        })
+        .run_json(|context| {
+            let address = one_address("connect", context.args())?;
+            let device = platform::connect_device(&address, config::load().power_on_adapter)?;
+            Ok(serde_json::to_value(device)?)
+        })
+}
+
+fn pair_command() -> Command {
+    Command::new("pair")
+        .about("Pair one Bluetooth device using its appropriate transport.")
+        .usage(format!("{BINARY_NAME} pair AA:BB:CC:DD:EE:FF"))
+        .output("The resulting device state.")
+        .exit_behavior("Exits non-zero when pairing or profile discovery fails.")
+        .run_plain_text(|context| {
+            let address = one_address("pair", context.args())?;
+            let device = platform::pair_device(&address, config::load().power_on_adapter)?;
+            Ok(PlainTextOutput::text(device_line(&device)))
+        })
+        .run_json(|context| {
+            let address = one_address("pair", context.args())?;
+            let device = platform::pair_device(&address, config::load().power_on_adapter)?;
+            Ok(serde_json::to_value(device)?)
+        })
+}
+
+fn trust_command() -> Command {
+    trust_state_command("trust", true)
+}
+
+fn untrust_command() -> Command {
+    trust_state_command("untrust", false)
+}
+
+fn trust_state_command(name: &'static str, trusted: bool) -> Command {
+    Command::new(name)
+        .about(if trusted {
+            "Trust one paired Bluetooth device."
+        } else {
+            "Remove trust from one paired Bluetooth device."
+        })
+        .usage(format!("{BINARY_NAME} {name} AA:BB:CC:DD:EE:FF"))
+        .output("The resulting device state.")
+        .exit_behavior("Exits non-zero when BlueZ cannot update the trust state.")
+        .run_plain_text(move |context| {
+            let address = one_address(name, context.args())?;
+            let device = platform::set_device_trusted(&address, trusted)?;
+            Ok(PlainTextOutput::text(device_line(&device)))
+        })
+        .run_json(move |context| {
+            let address = one_address(name, context.args())?;
+            let device = platform::set_device_trusted(&address, trusted)?;
+            Ok(serde_json::to_value(device)?)
+        })
+}
+
+fn disconnect_command() -> Command {
+    Command::new("disconnect")
+        .about("Disconnect every active profile for one Bluetooth device.")
+        .usage(format!("{BINARY_NAME} disconnect AA:BB:CC:DD:EE:FF"))
+        .output("The resulting device state.")
+        .exit_behavior("Exits non-zero when BlueZ cannot disconnect the device.")
+        .run_plain_text(|context| {
+            let address = one_address("disconnect", context.args())?;
+            let device = platform::disconnect_device(&address)?;
+            Ok(PlainTextOutput::text(device_line(&device)))
+        })
+        .run_json(|context| {
+            let address = one_address("disconnect", context.args())?;
+            let device = platform::disconnect_device(&address)?;
+            Ok(serde_json::to_value(device)?)
+        })
+}
+
+fn remove_command() -> Command {
+    Command::new("remove")
+        .about("Remove one Bluetooth device and its pairing information.")
+        .usage(format!("{BINARY_NAME} remove AA:BB:CC:DD:EE:FF"))
+        .output("No stdout on success.")
+        .exit_behavior("Exits non-zero when BlueZ cannot remove the device.")
+        .run_plain_text(|context| {
+            let address = one_address("remove", context.args())?;
+            platform::remove_device(&address)?;
+            Ok(PlainTextOutput::empty())
+        })
+}
+
+fn reconnect_command() -> Command {
+    Command::new("reconnect")
+        .about("Reconnect every device in the managed-device allowlist.")
+        .usage(format!("{BINARY_NAME} reconnect"))
+        .output("A connection result for each managed device.")
+        .exit_behavior("Exits non-zero only when BlueZ itself is unavailable.")
+        .run_plain_text(|context| {
+            reject_args(context.args())?;
+            let report = platform::reconnect_devices(&config::load(), ReconnectSelection::Managed)?;
+            Ok(PlainTextOutput::text(report_lines(&report)))
+        })
+        .run_json(|context| {
+            reject_args(context.args())?;
+            let report = platform::reconnect_devices(&config::load(), ReconnectSelection::Managed)?;
+            Ok(serde_json::to_value(report)?)
+        })
+}
+
+fn reconnect_trusted_command() -> Command {
+    Command::new("reconnect_trusted")
+        .about("Reconnect every paired, trusted, disconnected device known to BlueZ.")
+        .usage(format!("{BINARY_NAME} reconnect_trusted"))
+        .detail("This is an explicit recovery action and does not alter the automatic allowlist.")
+        .output("A connection result for each eligible device.")
+        .exit_behavior("Exits non-zero only when BlueZ itself is unavailable.")
+        .run_plain_text(|context| {
+            reject_args(context.args())?;
+            let report = platform::reconnect_devices(&config::load(), ReconnectSelection::Trusted)?;
+            Ok(PlainTextOutput::text(report_lines(&report)))
+        })
+        .run_json(|context| {
+            reject_args(context.args())?;
+            let report = platform::reconnect_devices(&config::load(), ReconnectSelection::Trusted)?;
+            Ok(serde_json::to_value(report)?)
+        })
+}
+
+fn settings_command() -> Command {
+    Command::new("settings")
+        .about("Open the plugin settings page.")
+        .usage(format!("{BINARY_NAME} settings"))
+        .output("No stdout on success.")
+        .exit_behavior("Exits non-zero if the settings URL cannot be opened.")
+        .run_plain_text(|context| {
+            reject_args(context.args())?;
+            platform::open_settings()?;
+            Ok(PlainTextOutput::empty())
+        })
+}
+
+fn doctor_checks() -> Vec<DoctorCheck> {
+    vec![
+        DoctorCheck::new(
+            "bluez_available",
+            "Verify the BlueZ system service and default adapter are available.",
+            bluez_check,
+        ),
+        DoctorCheck::new(
+            "adapter_powered",
+            "Verify the default Bluetooth adapter is powered.",
+            adapter_powered_check,
+        ),
+        DoctorCheck::new(
+            "managed_devices",
+            "Verify the automatic reconnect allowlist contains valid addresses.",
+            managed_devices_check,
+        ),
+    ]
+}
+
+fn bluez_check() -> Result<DoctorCheckResult> {
+    let health = platform::adapter_health()?;
+    Ok(DoctorCheckResult::ok(
+        "bluez_available",
+        format!("BlueZ adapter {} is available", health.name),
+    )
+    .with_details(serde_json::to_value(health)?))
+}
+
+fn adapter_powered_check() -> Result<DoctorCheckResult> {
+    let health = platform::adapter_health()?;
+    if health.powered {
+        return Ok(DoctorCheckResult::ok(
+            "adapter_powered",
+            format!("adapter {} is powered", health.name),
+        ));
+    }
+    Ok(DoctorCheckResult::warn(
+        "adapter_powered",
+        format!("adapter {} is powered off", health.name),
+    )
+    .with_fix(format!("run: {BINARY_NAME} reconnect_trusted")))
+}
+
+fn managed_devices_check() -> Result<DoctorCheckResult> {
+    let config = config::load();
+    let invalid = config
+        .managed_devices
+        .iter()
+        .filter(|address| normalize_address(address).is_err())
+        .cloned()
+        .collect::<Vec<_>>();
+    if !invalid.is_empty() {
+        return Ok(DoctorCheckResult::fail(
+            "managed_devices",
+            format!("invalid managed device addresses: {}", invalid.join(", ")),
+        )
+        .with_fix("use six colon-separated hex octets per address"));
+    }
+    if config.managed_devices.is_empty() {
+        return Ok(DoctorCheckResult::warn(
+            "managed_devices",
+            "automatic reconnect has no managed devices",
+        )
+        .with_fix("add paired device addresses in Bluetooth settings"));
+    }
+    Ok(DoctorCheckResult::ok(
+        "managed_devices",
+        format!(
+            "{} managed device(s) configured",
+            config.managed_devices.len()
+        ),
+    ))
+}
+
+fn reject_args(args: &[String]) -> Result<()> {
+    if args.is_empty() {
+        return Ok(());
+    }
+    bail!("unexpected arguments: {}", args.join(" "))
+}
+
+fn one_address(command: &str, args: &[String]) -> Result<String> {
+    if args.len() != 1 {
+        bail!("{command} requires exactly one Bluetooth address")
+    }
+    normalize_address(&args[0])
+}
+
+fn device_lines(devices: &[DeviceInfo]) -> String {
+    devices
+        .iter()
+        .map(device_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn device_line(device: &DeviceInfo) -> String {
+    format!(
+        "{}  {}  paired={} trusted={} connected={} ready={} rssi={}",
+        device.address,
+        device.alias,
+        device.paired,
+        device.trusted,
+        device.connected,
+        crate::bluetooth::connection_ready(device),
+        device
+            .rssi
+            .map(|rssi| rssi.to_string())
+            .unwrap_or_else(|| "unavailable".into())
+    )
+}
+
+fn report_lines(report: &ReconnectReport) -> String {
+    let mut lines = report
+        .connected
+        .iter()
+        .map(|device| format!("connected: {} ({})", device.alias, device.address))
+        .collect::<Vec<_>>();
+    lines.extend(
+        report
+            .already_connected
+            .iter()
+            .map(|device| format!("already connected: {} ({})", device.alias, device.address)),
+    );
+    lines.extend(report.failures.iter().map(|failure| {
+        format!(
+            "failed: {} ({}) - {}",
+            failure.alias, failure.address, failure.error
+        )
+    }));
+    if lines.is_empty() {
+        return "no eligible Bluetooth devices".to_string();
+    }
+    lines.join("\n")
+}

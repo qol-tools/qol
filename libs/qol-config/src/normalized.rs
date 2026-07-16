@@ -44,6 +44,14 @@ pub struct ResolvedField {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_query: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_value_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub variant: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
@@ -55,6 +63,10 @@ pub struct ResolvedField {
     pub row_subtitle: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub row_action: Option<RowActionSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub row_actions: Vec<RowActionSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub empty_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -133,12 +145,18 @@ pub fn resolve_config(
             number: field.number.clone(),
             alpha: field.alpha,
             action: field.action.clone(),
+            active_action: field.active_action.clone(),
+            active_query: field.active_query.clone(),
+            active_value_from: field.active_value_from.clone(),
+            active_label: field.active_label.clone(),
             variant: field.variant.clone(),
             query: field.query.clone(),
             stream: field.stream.clone(),
             row_label: field.row_label.clone(),
             row_subtitle: field.row_subtitle.clone(),
             row_action: field.row_action.clone(),
+            row_actions: field.row_actions.clone(),
+            search: field.search,
             empty_message: field.empty_message.clone(),
             value_from: field.value_from.clone(),
             label_map: field.label_map.clone(),

@@ -9,9 +9,16 @@ use std::path::Path;
 
 pub(super) fn execute_resolved_action(
     resolved: &ResolvedAction,
+    input: &serde_json::Value,
 ) -> Result<(), ActionExecutionError> {
     if let Some(socket_path) = &resolved.daemon_socket {
-        return execute_via_daemon(resolved, socket_path);
+        return execute_via_daemon(resolved, socket_path, input);
+    }
+
+    if has_action_input(input) {
+        return Err(ActionExecutionError::ActionRejected(
+            "action input requires a daemon-backed plugin".into(),
+        ));
     }
 
     execute_via_runtime(resolved)
@@ -20,9 +27,13 @@ pub(super) fn execute_resolved_action(
 fn execute_via_daemon(
     resolved: &ResolvedAction,
     socket_path: &Path,
+    input: &serde_json::Value,
 ) -> Result<(), ActionExecutionError> {
-    let dispatch =
-        crate::plugins::action_transport::dispatch_daemon_action(socket_path, &resolved.action_id);
+    let dispatch = crate::plugins::action_transport::dispatch_daemon_action_with_input(
+        socket_path,
+        &resolved.action_id,
+        input,
+    );
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
         "ACTION_DISPATCH",
@@ -42,12 +53,21 @@ fn execute_via_daemon(
     let reason = daemon_failure_reason(resolved, &dispatch)?;
     log::warn!("{} {}::{}", reason, resolved.plugin_id, resolved.action_id);
     if resolved.runtime_fallback_allowed {
+        if has_action_input(input) {
+            return Err(ActionExecutionError::ActionRejected(
+                "action input requires an available plugin daemon".into(),
+            ));
+        }
         return execute_via_runtime(resolved);
     }
     Err(ActionExecutionError::SpawnFailed(format!(
         "{} {}::{}",
         reason, resolved.plugin_id, resolved.action_id
     )))
+}
+
+fn has_action_input(input: &serde_json::Value) -> bool {
+    !input.is_null() && !input.as_object().is_some_and(serde_json::Map::is_empty)
 }
 
 fn daemon_failure_reason(

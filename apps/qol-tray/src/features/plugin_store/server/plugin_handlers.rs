@@ -115,6 +115,7 @@ pub(super) async fn uninstall_plugin(
 pub(super) async fn execute_plugin_action(
     Path((id, action)): Path<(String, String)>,
     State(state): State<AppState>,
+    input: Option<Json<serde_json::Value>>,
 ) -> (StatusCode, Json<ExecuteActionResult>) {
     if validate_plugin_id(&id).is_err() {
         return invalid_plugin_id_action_result();
@@ -122,11 +123,13 @@ pub(super) async fn execute_plugin_action(
     let plugin_manager = state.plugin_manager.clone();
     let worker_id = id.clone();
     let worker_action = action.clone();
+    let worker_input = input.map(|Json(value)| value).unwrap_or_default();
     match tokio::task::spawn_blocking(move || {
-        crate::plugins::action_executor::try_execute_action(
+        crate::plugins::action_executor::try_execute_action_with_input(
             &plugin_manager,
             &worker_id,
             &worker_action,
+            worker_input,
         )
     })
     .await

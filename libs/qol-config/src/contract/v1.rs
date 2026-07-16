@@ -76,6 +76,14 @@ pub struct FieldSpec {
     #[serde(default)]
     pub action: Option<String>,
     #[serde(default)]
+    pub active_action: Option<String>,
+    #[serde(default)]
+    pub active_query: Option<String>,
+    #[serde(default)]
+    pub active_value_from: Option<String>,
+    #[serde(default)]
+    pub active_label: Option<String>,
+    #[serde(default)]
     pub variant: Option<String>,
     #[serde(default)]
     pub query: Option<String>,
@@ -85,6 +93,10 @@ pub struct FieldSpec {
     pub row_subtitle: Option<String>,
     #[serde(default)]
     pub row_action: Option<RowActionSpec>,
+    #[serde(default)]
+    pub row_actions: Vec<RowActionSpec>,
+    #[serde(default)]
+    pub search: Option<bool>,
     #[serde(default)]
     pub empty_message: Option<String>,
     #[serde(default)]
@@ -313,6 +325,29 @@ variant = "danger"
     }
 
     #[test]
+    fn parses_action_field_with_runtime_active_state() {
+        let spec_str = r#"
+schema_version = 1
+
+[field.search]
+type = "action"
+label = "Start search"
+action = "start_search"
+active_action = "stop_search"
+active_query = "search_status"
+active_value_from = "searching"
+active_label = "Stop search"
+"#;
+        let spec = parse_spec_str(spec_str).expect("parse");
+        let field = spec.fields.get("search").expect("field present");
+        assert_eq!(field.action.as_deref(), Some("start_search"));
+        assert_eq!(field.active_action.as_deref(), Some("stop_search"));
+        assert_eq!(field.active_query.as_deref(), Some("search_status"));
+        assert_eq!(field.active_value_from.as_deref(), Some("searching"));
+        assert_eq!(field.active_label.as_deref(), Some("Stop search"));
+    }
+
+    #[test]
     fn parses_list_field() {
         let spec_str = r#"
 schema_version = 1
@@ -323,6 +358,7 @@ label = "Paired Devices"
 query = "list_devices"
 row_label = "{name}"
 row_subtitle = "{ieee}"
+search = true
 empty_message = "No devices paired yet."
 "#;
         let spec = parse_spec_str(spec_str).expect("parse");
@@ -339,6 +375,7 @@ empty_message = "No devices paired yet."
             Some("{ieee}"),
             "row_subtitle"
         );
+        assert_eq!(field.search, Some(true), "search");
         assert_eq!(
             field.empty_message.as_deref(),
             Some("No devices paired yet."),
@@ -367,6 +404,41 @@ when = "fixable"
         assert_eq!(row_action.action, "apply_fixes", "action");
         assert_eq!(row_action.label.as_deref(), Some("Fix"), "label");
         assert_eq!(row_action.when.as_deref(), Some("fixable"), "when");
+    }
+
+    #[test]
+    fn parses_list_with_state_driven_row_actions() {
+        let spec = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.devices]
+type = "list"
+query = "devices"
+
+[[field.devices.row_actions]]
+action = "pair_device"
+label = "Pair"
+when = "can_pair"
+input = { address = "{address}" }
+
+[[field.devices.row_actions]]
+action = "connect_device"
+label = "Connect"
+when = "can_connect"
+input = { address = "{address}" }
+"#,
+        )
+        .expect("parse config");
+        let actions = &spec
+            .fields
+            .get("devices")
+            .expect("devices field")
+            .row_actions;
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[0].action, "pair_device");
+        assert_eq!(actions[0].input.as_ref().unwrap()["address"], "{address}");
+        assert_eq!(actions[1].when.as_deref(), Some("can_connect"));
     }
 
     #[test]
