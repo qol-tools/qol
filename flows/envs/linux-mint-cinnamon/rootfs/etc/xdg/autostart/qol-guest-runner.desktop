@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=QoL Guest Runner
+Exec=/usr/local/libexec/qol-guest-runner --run-id-path /sys/firmware/qemu_fw_cfg/by_name/opt/qol/run-id/raw
+TryExec=/usr/local/libexec/qol-guest-runner
+OnlyShowIn=X-Cinnamon;
+NoDisplay=true
+Terminal=false
+X-GNOME-Autostart-enabled=true

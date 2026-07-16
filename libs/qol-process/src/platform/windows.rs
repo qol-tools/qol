@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, BOOL, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, HANDLE, WAIT_FAILED,
+    CloseHandle, BOOL, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, FILETIME, HANDLE, WAIT_FAILED,
     WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::System::Console::{
@@ -21,8 +21,8 @@ use windows_sys::Win32::System::JobObjects::{
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetExitCodeProcess, OpenProcess, TerminateProcess, WaitForSingleObject,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, TerminateProcess,
+    WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
 };
 
 const QUERY_AND_WAIT_ACCESS: u32 = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE;
@@ -35,6 +35,8 @@ static CANCELLATION_REQUESTED: AtomicBool = AtomicBool::new(false);
 static CANCELLATION_INSTALL: OnceLock<Result<(), i32>> = OnceLock::new();
 
 struct JobHandle(HANDLE);
+
+unsafe impl Send for JobHandle {}
 
 impl Drop for JobHandle {
     fn drop(&mut self) {
@@ -141,6 +143,11 @@ pub(crate) fn own_current_process_tree() -> io::Result<ProcessTreeGuard> {
         job: create_kill_on_close_job()?,
         assigned_process: Mutex::new(None),
     })
+}
+
+pub(crate) fn isolate_owned_command(command: &mut Command) -> io::Result<()> {
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    Ok(())
 }
 
 pub(crate) fn guard_current_process_tree() -> io::Result<CurrentProcessTreeGuard> {
@@ -260,6 +267,20 @@ pub(crate) fn is_group_alive(pid: u32) -> bool {
 
 pub(crate) fn is_pid_zombie(_pid: u32) -> bool {
     false
+}
+
+pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
+    let process = open_process(pid, QUERY_AND_WAIT_ACCESS)?;
+    let mut creation: FILETIME = unsafe { std::mem::zeroed() };
+    let mut exit: FILETIME = unsafe { std::mem::zeroed() };
+    let mut kernel: FILETIME = unsafe { std::mem::zeroed() };
+    let mut user: FILETIME = unsafe { std::mem::zeroed() };
+    if unsafe { GetProcessTimes(process.0, &mut creation, &mut exit, &mut kernel, &mut user) } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let created = (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime);
+    Ok(format!("windows:{created}"))
 }
 
 pub(crate) fn signal_term_pid(pid: u32) -> io::Result<()> {

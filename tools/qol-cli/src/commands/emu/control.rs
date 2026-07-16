@@ -7,7 +7,7 @@ use crate::progress::{print_hint, print_title, step_label, StepKind};
 use crate::workspace::repo_root;
 
 use super::guest::{DebianNocloud, GuestOs};
-use super::{find_on_path, live, machine, serial, unix_millis};
+use super::{find_on_path, live, machine, serial};
 
 const SH_TIMEOUT: Duration = Duration::from_secs(30);
 const SERIAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -19,7 +19,7 @@ pub(crate) fn cmd_shot(args: &[OsString], verbose: bool) -> Result<()> {
     let live::VerifiedRun { run, mut qmp } = find_run(&run_roots, &id)?;
     let path = run
         .run_dir
-        .join(format!("screenshot-{}.ppm", unix_millis()?));
+        .join(format!("screenshot-{}.ppm", qol_dev_env::unix_millis()?));
     qmp.screendump(&path)?;
     step_label("shot", StepKind::Success, &path.display().to_string());
     Ok(())
@@ -97,9 +97,10 @@ pub(crate) fn cmd_snap(args: &[OsString], verbose: bool) -> Result<()> {
     print_title("qol emu snap");
     print_hint(verbose);
     let live::VerifiedRun { run, mut qmp } = find_run(&run_roots, &id)?;
-    let snapshot = run
-        .run_dir
-        .join(format!("overlay-snap-{}.qcow2", unix_millis()?));
+    let snapshot = run.run_dir.join(format!(
+        "overlay-snap-{}.qcow2",
+        qol_dev_env::unix_millis()?
+    ));
     qmp.disk_snapshot(&snapshot)?;
     step_label("snap", StepKind::Success, &snapshot.display().to_string());
     step_label(

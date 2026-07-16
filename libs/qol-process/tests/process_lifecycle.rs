@@ -104,31 +104,30 @@ fn wait_for_path(path: &std::path::Path) {
 
 #[cfg(unix)]
 fn isolated_command(script: &str) -> Command {
-    use std::os::unix::process::CommandExt;
-
     let mut command = Command::new("sh");
-    command.args(["-c", script]).process_group(0);
+    command.args(["-c", script]);
+    qol_process::isolate_owned_command(&mut command).unwrap();
     command
 }
 
 #[cfg(unix)]
 #[test]
-fn process_tree_accepts_a_child_in_the_callers_group_without_claiming_it() {
-    let mut child = long_running_command().spawn().unwrap();
+fn process_tree_terminates_only_its_child_in_the_callers_group() {
+    let child = long_running_command().spawn().unwrap();
+    let child_pid = child.id();
     let guard = qol_process::own_current_process_tree().unwrap();
 
     guard.assign(&child).unwrap();
-    assert_eq!(
-        guard
-            .terminate_and_wait(Duration::from_millis(20))
-            .unwrap_err()
-            .kind(),
-        std::io::ErrorKind::TimedOut
-    );
-    assert!(qol_process::is_pid_alive(child.id()));
+    let waiter = std::thread::spawn(move || {
+        let mut child = child;
+        child.wait().unwrap()
+    });
+    let _proof = guard.terminate_and_wait(Duration::from_secs(1)).unwrap();
+    let status = waiter.join().unwrap();
+
+    assert!(!status.success());
+    assert!(!qol_process::is_pid_alive(child_pid));
     assert!(qol_process::is_pid_alive(std::process::id()));
-    qol_process::terminate_owned(&mut child, Duration::from_millis(20)).unwrap();
-    let _proof = guard.terminate_and_wait(Duration::from_millis(20)).unwrap();
 }
 
 #[cfg(unix)]

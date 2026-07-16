@@ -5,6 +5,8 @@ use std::net::TcpStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+const QMP_ABSOLUTE_MAX: u64 = 0x7fff;
+
 #[derive(Debug)]
 pub(crate) enum QmpLine {
     Greeting { qemu_version: String },
@@ -80,6 +82,20 @@ pub(crate) fn connect_verified(port: u16, timeout: Duration, run_id: &str) -> Re
     let mut client = connect(port, timeout)?;
     client.verify_run_identity(run_id)?;
     Ok(client)
+}
+
+pub(crate) fn pixel_to_qmp_absolute(pixel: u32, extent: u32) -> Result<u16> {
+    if extent == 0 {
+        bail!("pointer extent must be positive");
+    }
+    if pixel >= extent {
+        bail!("pointer pixel {pixel} is outside extent {extent}");
+    }
+    if extent == 1 {
+        return Ok(0);
+    }
+    let scaled = u64::from(pixel) * QMP_ABSOLUTE_MAX / u64::from(extent - 1);
+    u16::try_from(scaled).context("absolute pointer coordinate exceeds the QMP range")
 }
 
 impl<S: Read + Write> QmpClient<S> {
@@ -205,6 +221,37 @@ impl<S: Read + Write> QmpClient<S> {
         Ok(())
     }
 
+    pub(crate) fn move_pointer_absolute(
+        &mut self,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        let x = pixel_to_qmp_absolute(x, width)?;
+        let y = pixel_to_qmp_absolute(y, height)?;
+        self.send_input_events(vec![
+            serde_json::json!({"type": "abs", "data": {"axis": "x", "value": x}}),
+            serde_json::json!({"type": "abs", "data": {"axis": "y", "value": y}}),
+        ])
+    }
+
+    pub(crate) fn set_left_button(&mut self, down: bool) -> Result<()> {
+        self.send_input_events(vec![left_button_event(down)])
+    }
+
+    pub(crate) fn click_left(&mut self) -> Result<()> {
+        self.send_input_events(vec![left_button_event(true), left_button_event(false)])
+    }
+
+    fn send_input_events(&mut self, events: Vec<Value>) -> Result<()> {
+        self.execute(
+            "input-send-event",
+            Some(serde_json::json!({"events": events})),
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn query_status(&mut self) -> Result<String> {
         let value = self.execute("query-status", None)?;
         value
@@ -244,6 +291,10 @@ impl<S: Read + Write> QmpClient<S> {
         }
         Ok(line)
     }
+}
+
+fn left_button_event(down: bool) -> Value {
+    serde_json::json!({"type": "btn", "data": {"button": "left", "down": down}})
 }
 
 #[cfg(test)]
@@ -321,6 +372,104 @@ mod tests {
             .map(|key| (key["type"].as_str().unwrap(), key["data"].as_str().unwrap()))
             .collect();
         assert_eq!(chord, [("qcode", "ctrl"), ("qcode", "c")]);
+    }
+
+    #[test]
+    fn pixel_coordinates_cover_the_full_qmp_absolute_range() {
+        let cases = [
+            (0, 1920, 0),
+            (1919, 1920, 0x7fff),
+            (1, 3, 0x3fff),
+            (0, 1, 0),
+            (u32::MAX - 1, u32::MAX, 0x7fff),
+        ];
+        for (pixel, extent, expected) in cases {
+            assert_eq!(
+                pixel_to_qmp_absolute(pixel, extent).unwrap(),
+                expected,
+                "pixel: {pixel}, extent: {extent}"
+            );
+        }
+    }
+
+    #[test]
+    fn pixel_coordinates_reject_empty_extents_and_out_of_bounds_pixels() {
+        let cases = [(0, 0), (1, 1), (1920, 1920), (u32::MAX, u32::MAX)];
+        for (pixel, extent) in cases {
+            assert!(
+                pixel_to_qmp_absolute(pixel, extent).is_err(),
+                "pixel: {pixel}, extent: {extent}"
+            );
+        }
+    }
+
+    #[test]
+    fn absolute_pointer_move_sends_scaled_axes_in_one_qmp_request() {
+        let mut client = client(&[r#"{"return":{}}"#]);
+        client.move_pointer_absolute(0, 1079, 1920, 1080).unwrap();
+
+        let request = &requests(&client)[1];
+        assert_eq!(request["execute"], "input-send-event");
+        assert_eq!(
+            request["arguments"]["events"],
+            serde_json::json!([
+                {"type": "abs", "data": {"axis": "x", "value": 0}},
+                {"type": "abs", "data": {"axis": "y", "value": 0x7fff}}
+            ])
+        );
+    }
+
+    #[test]
+    fn invalid_absolute_pointer_move_sends_no_input_request() {
+        let mut client = client(&[]);
+        let error = client
+            .move_pointer_absolute(1920, 0, 1920, 1080)
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "pointer pixel 1920 is outside extent 1920"
+        );
+        assert_eq!(requests(&client).len(), 1);
+    }
+
+    #[test]
+    fn left_button_state_sends_down_and_up_events() {
+        let mut client = client(&[r#"{"return":{}}"#, r#"{"return":{}}"#]);
+        client.set_left_button(true).unwrap();
+        client.set_left_button(false).unwrap();
+
+        let requests = requests(&client);
+        assert_eq!(requests[1]["execute"], "input-send-event");
+        assert_eq!(requests[2]["execute"], "input-send-event");
+        assert_eq!(
+            requests[1]["arguments"]["events"],
+            serde_json::json!([
+                {"type": "btn", "data": {"button": "left", "down": true}}
+            ])
+        );
+        assert_eq!(
+            requests[2]["arguments"]["events"],
+            serde_json::json!([
+                {"type": "btn", "data": {"button": "left", "down": false}}
+            ])
+        );
+    }
+
+    #[test]
+    fn click_left_sends_a_complete_click_in_one_qmp_request() {
+        let mut client = client(&[r#"{"return":{}}"#]);
+        client.click_left().unwrap();
+
+        let request = &requests(&client)[1];
+        assert_eq!(request["execute"], "input-send-event");
+        assert_eq!(
+            request["arguments"]["events"],
+            serde_json::json!([
+                {"type": "btn", "data": {"button": "left", "down": true}},
+                {"type": "btn", "data": {"button": "left", "down": false}}
+            ])
+        );
     }
 
     #[test]

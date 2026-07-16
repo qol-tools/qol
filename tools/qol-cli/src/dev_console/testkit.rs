@@ -3,8 +3,12 @@ use std::sync::mpsc::channel;
 
 use ratatui::text::Span;
 
-use crate::commands::emu::{EnvironmentStatus, ImageCandidate, ResolveState};
+use crate::commands::emu::{ImageCandidate, ResolveState};
 use crate::dev_server::WorkspacePlugin;
+use qol_dev_env::{
+    BootDefinition, EnvironmentDefinition, EnvironmentSnapshot, ImageDefinition, Inventory,
+    MountDefinition, ResolvedEnvironment,
+};
 
 use super::dash::Dash;
 use super::draw::draw;
@@ -42,13 +46,46 @@ pub(super) fn workspace_plugin(name: &str, linked: bool, needs_rebuild: bool) ->
     }
 }
 
-pub(super) fn emu_env(id: &str, state: ResolveState) -> EnvironmentStatus {
-    EnvironmentStatus {
-        id: id.to_string(),
-        backend: "qemu".to_string(),
-        state,
-        reason: String::new(),
-        last_run: None,
+pub(super) fn emu_env(id: &str, state: ResolveState) -> EnvironmentSnapshot {
+    EnvironmentSnapshot {
+        resolved: ResolvedEnvironment {
+            definition: EnvironmentDefinition {
+                id: id.to_string(),
+                name: id.to_string(),
+                family: "linux".to_string(),
+                backend: "qemu".to_string(),
+                image: ImageDefinition {
+                    kind: "qcow2".to_string(),
+                    base: format!("{id}.qcow2").into(),
+                    recommended_size_gb: 16,
+                    arch: Some("x86_64".to_string()),
+                    firmware: Some("bios".to_string()),
+                },
+                boot: BootDefinition {
+                    memory_mb: 1024,
+                    cpus: 1,
+                    display: "gtk".to_string(),
+                },
+                mounts: MountDefinition { workspace: false },
+                capabilities: Default::default(),
+                source: format!("flows/envs/{id}.toml").into(),
+            },
+            state,
+            image_path: Some(format!("/a/b/{id}.qcow2").into()),
+            verified_image: None,
+            run_root: Some("/runs".into()),
+            messages: Vec::new(),
+        },
+        runs: Vec::new(),
+    }
+}
+
+pub(super) fn emu_inventory(environments: Vec<EnvironmentSnapshot>) -> Inventory {
+    Inventory {
+        environments,
+        flows: Vec::new(),
+        unassigned_runs: Vec::new(),
+        issues: Vec::new(),
     }
 }
 

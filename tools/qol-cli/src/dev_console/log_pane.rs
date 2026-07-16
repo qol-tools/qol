@@ -6,7 +6,7 @@ use std::process::Child;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use super::{core_log_dir, emu_run_line, strip_ansi, LOG_CAP, STOP_GRACE};
+use super::{core_log_dir, emu_run_line, strip_ansi, LOG_CAP};
 
 pub(super) struct LogRing {
     pub(super) lines: VecDeque<String>,
@@ -234,19 +234,25 @@ impl LogPane {
         }
     }
 
-    pub(super) fn stop_graceful(&mut self) {
-        let Some(mut source) = self.source.take() else {
-            return;
+    pub(super) fn wait_for_exit_until(&mut self, deadline: Instant) -> bool {
+        let Some(source) = self.source.as_mut() else {
+            return true;
         };
-        let deadline = Instant::now() + STOP_GRACE;
-        while Instant::now() < deadline {
-            if matches!(source.child.try_wait(), Ok(Some(_))) {
-                return;
+        loop {
+            match source.child.try_wait() {
+                Ok(Some(_)) => {
+                    self.source = None;
+                    return true;
+                }
+                Ok(None) => {}
+                Err(_) => return false,
             }
-            std::thread::sleep(Duration::from_millis(100));
+            if Instant::now() >= deadline {
+                return false;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            std::thread::sleep(remaining.min(Duration::from_millis(100)));
         }
-        let _ = source.child.kill();
-        let _ = source.child.wait();
     }
 }
 
@@ -310,6 +316,41 @@ mod tests {
     use super::*;
 
     use crate::dev_console::*;
+
+    #[test]
+    fn coordinator_wait_child_fixture() {
+        if std::env::var_os("QOL_LOG_PANE_WAIT_FIXTURE").is_some() {
+            std::thread::sleep(Duration::from_secs(30));
+        }
+    }
+
+    #[test]
+    fn bounded_wait_does_not_kill_coordinator_without_guest_proof() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "dev_console::log_pane::tests::coordinator_wait_child_fixture",
+                "--nocapture",
+            ])
+            .env("QOL_LOG_PANE_WAIT_FIXTURE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let mut pane = LogPane::new();
+        pane.attach(child, rx);
+
+        assert!(!pane.wait_for_exit_until(Instant::now() + Duration::from_millis(50)));
+        assert!(pane.is_live());
+        assert!(matches!(
+            pane.source.as_mut().unwrap().child.try_wait(),
+            Ok(None)
+        ));
+
+        pane.stop();
+    }
 
     #[test]
     fn collapse_key_ignores_timestamp_and_ansi() {

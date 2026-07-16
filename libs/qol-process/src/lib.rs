@@ -87,6 +87,10 @@ pub fn guard_current_process_tree() -> io::Result<CurrentProcessTreeGuard> {
     })
 }
 
+pub fn isolate_owned_command(command: &mut Command) -> io::Result<()> {
+    platform::isolate_owned_command(command)
+}
+
 pub fn is_pid_alive(pid: u32) -> bool {
     platform::is_pid_alive(pid)
 }
@@ -97,6 +101,14 @@ pub fn is_group_alive(pid: u32) -> bool {
 
 pub fn is_pid_zombie(pid: u32) -> bool {
     platform::is_pid_zombie(pid)
+}
+
+pub fn process_identity(pid: u32) -> io::Result<String> {
+    platform::process_identity(pid)
+}
+
+pub fn process_identity_matches(pid: u32, expected: &str) -> bool {
+    process_identity(pid).is_ok_and(|actual| actual == expected)
 }
 
 pub fn signal_term_pid(pid: u32) -> io::Result<()> {
@@ -145,6 +157,16 @@ mod tests {
     #[test]
     fn current_process_is_alive() {
         assert!(is_pid_alive(std::process::id()));
+    }
+
+    #[test]
+    fn process_identity_distinguishes_the_current_process_from_stale_evidence() {
+        let pid = std::process::id();
+        let identity = process_identity(pid).unwrap();
+        assert!(!identity.is_empty());
+        assert!(process_identity_matches(pid, &identity));
+        assert!(!process_identity_matches(pid, "stale-process-identity"));
+        assert!(process_identity(0).is_err());
     }
 
     #[test]

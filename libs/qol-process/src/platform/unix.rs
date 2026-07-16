@@ -64,7 +64,7 @@ impl ProcessTreeGuard {
             )
         })?;
         match target {
-            ProcessTreeTarget::Process(pid) => wait_for_process_exit(pid, deadline, timeout),
+            ProcessTreeTarget::Process(pid) => terminate_process(pid, started, deadline, timeout),
             ProcessTreeTarget::ProcessGroup(process_group) => {
                 terminate_process_group(process_group, started, deadline, timeout)
             }
@@ -105,10 +105,36 @@ fn terminate_process_group(
     ))
 }
 
+fn terminate_process(
+    pid: libc::pid_t,
+    started: Instant,
+    deadline: Instant,
+    timeout: Duration,
+) -> io::Result<()> {
+    let graceful_deadline = started.checked_add(timeout / 2).unwrap_or(deadline);
+    signal_process(pid, libc::SIGTERM)?;
+    if wait_for_process_exit(pid, graceful_deadline) {
+        return Ok(());
+    }
+    signal_process(pid, libc::SIGKILL)?;
+    if wait_for_process_exit(pid, deadline) {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("process {pid} did not exit within {timeout:?}"),
+    ))
+}
+
 pub(crate) fn own_current_process_tree() -> io::Result<ProcessTreeGuard> {
     Ok(ProcessTreeGuard {
         target: Mutex::new(None),
     })
+}
+
+pub(crate) fn isolate_owned_command(command: &mut Command) -> io::Result<()> {
+    command.process_group(0);
+    Ok(())
 }
 
 pub(crate) fn install_cancellation_handler() -> io::Result<()> {
@@ -171,6 +197,67 @@ pub(crate) fn is_pid_zombie(pid: u32) -> bool {
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn is_pid_zombie(_pid: u32) -> bool {
     false
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
+    let pid = pid_t(pid)?;
+    let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?
+        .trim()
+        .to_string();
+    if boot_id.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Linux boot id is empty",
+        ));
+    }
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    let fields = stat
+        .rsplit_once(") ")
+        .map(|(_, fields)| fields)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid Linux process stat"))?;
+    let start_ticks = fields
+        .split_whitespace()
+        .nth(19)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing process start time"))?;
+    start_ticks.parse::<u64>().map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid process start time: {error}"),
+        )
+    })?;
+    Ok(format!("linux:{boot_id}:{start_ticks}"))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
+    let pid = pid_t(pid)?;
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>();
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            std::ptr::from_mut(&mut info).cast(),
+            i32::try_from(size).map_err(|_| io::Error::other("process info is too large"))?,
+        )
+    };
+    if read != i32::try_from(size).unwrap_or(i32::MAX) {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(format!(
+        "macos:{}:{}",
+        info.pbi_start_tvsec, info.pbi_start_tvusec
+    ))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn process_identity(_pid: u32) -> io::Result<String> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "durable process identity is unsupported on this Unix platform",
+    ))
 }
 
 fn signal_target_alive(target: libc::pid_t) -> bool {
@@ -359,17 +446,22 @@ fn wait_for_group_exit(process_group: libc::pid_t, deadline: Instant) -> bool {
     }
 }
 
-fn wait_for_process_exit(pid: libc::pid_t, deadline: Instant, timeout: Duration) -> io::Result<()> {
+fn signal_process(pid: libc::pid_t, signal_number: libc::c_int) -> io::Result<()> {
+    let result = signal(pid, signal_number);
+    match result {
+        Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+        other => other,
+    }
+}
+
+fn wait_for_process_exit(pid: libc::pid_t, deadline: Instant) -> bool {
     loop {
         if !signal_target_alive(pid) {
-            return Ok(());
+            return true;
         }
         let now = Instant::now();
         if now >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("process {pid} did not exit within {timeout:?}"),
-            ));
+            return false;
         }
         std::thread::sleep(WAIT_INTERVAL.min(deadline.duration_since(now)));
     }

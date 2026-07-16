@@ -19,8 +19,8 @@ use super::dash::{
 use super::doctor::{apply_doctor_outcome, open_doctor, spawn_doctor_probe, DoctorMode};
 use super::draw::{accent_state_line, draw, filterable_view, plugin_row_count, resolve_base_label};
 use super::emu_panel::{
-    act_emu, confirm_selected_candidate, drain_emu_runs, emu_detail_ring, emu_env_count, open_emu,
-    open_emu_detail, open_emu_dir, selected_candidate_mut, stop_emu_runs, EmuState,
+    act_emu, drain_emu_runs, emu_detail_ring, emu_env_count, open_emu, open_emu_detail,
+    open_emu_dir, run_selected_flow, stop_emu_runs, verify_selected_image, EmuState,
 };
 use super::filters::{line_matches_filters, FilterState};
 use super::key_bindings::{
@@ -52,13 +52,14 @@ pub(crate) fn run_session(
     plugins: Vec<String>,
     lines: Receiver<String>,
     worktree_branch: Option<String>,
+    running_worktree: PathBuf,
     boot: Option<Receiver<String>>,
 ) -> Result<SessionEnd> {
     if verbose || !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
         return plain_session(child, &lines, boot);
     }
-    let mut probes = Probes::spawn();
-    let mut dash = Dash::new_for_startup(plugins, worktree_branch);
+    let mut probes = Probes::spawn(running_worktree.clone());
+    let mut dash = Dash::new_for_startup(plugins, worktree_branch, running_worktree);
     dash.base_label = resolve_base_label();
     dash.apply_state(load_console_state());
     dash.start_log_file();
@@ -557,25 +558,27 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
         Action::OpenCurrentLogRaw => open_current_log_editor(dash, true),
         Action::OpenEmuDir => {
             if dash.view == View::Emu {
-                open_emu_dir();
+                open_emu_dir(dash);
             }
         }
-        Action::ToggleArch => {
+        Action::RunSandboxFlow => {
             if dash.view == View::Emu {
-                let notice = selected_candidate_mut(dash).map(|candidate| {
-                    candidate.arch = candidate.arch.toggled();
-                    candidate.firmware =
-                        crate::commands::emu::Firmware::for_arch(candidate.arch.arch());
-                    format!("{} arch {}", candidate.id, candidate.arch.as_str())
-                });
-                if let Some(notice) = notice {
-                    dash.notice = Some((Instant::now(), notice));
-                }
+                run_selected_flow(dash);
             }
         }
-        Action::Confirm => {
+        Action::DecreaseSandboxFlowLanes => {
             if dash.view == View::Emu {
-                confirm_selected_candidate(dash);
+                dash.decrease_sandbox_flow_lanes();
+            }
+        }
+        Action::IncreaseSandboxFlowLanes => {
+            if dash.view == View::Emu {
+                dash.increase_sandbox_flow_lanes();
+            }
+        }
+        Action::VerifySandboxImage => {
+            if dash.view == View::Emu {
+                verify_selected_image(dash);
             }
         }
         Action::Quit | Action::Ignore => {}
@@ -708,7 +711,7 @@ mod tests {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
     use crate::commands::emu::ResolveState;
-    use crate::dev_console::emu_panel::{is_running, live_verb};
+    use crate::dev_console::emu_panel::{is_running, live_verb, ActiveSandboxRun};
     use crate::dev_console::filters::FilterStrategy;
     use crate::dev_console::key_bindings::Action;
 
@@ -750,10 +753,10 @@ mod tests {
     fn emu_cursor_moves_and_clamps_without_scrolling() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Emu;
-        dash.emu = EmuState::Done(vec![
+        dash.emu = EmuState::Done(emu_inventory(vec![
             emu_env("foo", ResolveState::Ready),
             emu_env("bar", ResolveState::Ready),
-        ]);
+        ]));
         let moves = [
             (Action::ScrollDown, 1),
             (Action::ScrollDown, 1),
@@ -771,10 +774,10 @@ mod tests {
     fn emu_cursor_extends_into_candidate_rows_and_clamps() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Emu;
-        dash.emu = EmuState::Done(vec![
+        dash.emu = EmuState::Done(emu_inventory(vec![
             emu_env("foo", ResolveState::Ready),
             emu_env("bar", ResolveState::Ready),
-        ]);
+        ]));
         dash.emu_candidates = vec![emu_candidate("baz"), emu_candidate("qux")];
         let moves = [
             (Action::ScrollDown, 1),
@@ -789,72 +792,55 @@ mod tests {
     }
 
     #[test]
-    fn toggle_arch_flips_selected_candidate_only() {
-        use crate::commands::emu::{ArchGuess, Firmware, GuestArch};
+    fn verification_refuses_candidate_without_an_exact_missing_environment() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Emu;
-        dash.emu = EmuState::Done(vec![
-            emu_env("foo", ResolveState::Ready),
-            emu_env("bar", ResolveState::Ready),
-        ]);
-        dash.emu_candidates = vec![emu_candidate("baz"), emu_candidate("qux")];
-
-        dash.emu_cursor = 0;
-        apply_action(&mut dash, Action::ToggleArch, false);
-        assert_eq!(
-            dash.emu_candidates
-                .iter()
-                .map(|candidate| candidate.arch)
-                .collect::<Vec<_>>(),
-            vec![
-                ArchGuess::assumed(GuestArch::X86_64),
-                ArchGuess::assumed(GuestArch::X86_64)
-            ],
-            "cursor on an env row must not mutate any candidate"
-        );
-
-        dash.emu_cursor = 3;
-        apply_action(&mut dash, Action::ToggleArch, false);
-        assert_eq!(
-            dash.emu_candidates[0].arch,
-            ArchGuess::assumed(GuestArch::X86_64),
-            "untouched"
-        );
-        assert_eq!(
-            dash.emu_candidates[1].arch,
-            ArchGuess::known(GuestArch::Aarch64),
-            "selected candidate becomes known"
-        );
-        assert_eq!(
-            dash.emu_candidates[1].firmware,
-            Firmware::Uefi,
-            "toggle refreshes firmware for the selected arch"
-        );
-    }
-
-    #[test]
-    fn confirm_refuses_assumed_candidate_without_refreshing_emu_list() {
-        let mut dash = Dash::new(Vec::new());
-        dash.view = View::Emu;
-        dash.emu = EmuState::Done(vec![emu_env("foo", ResolveState::Ready)]);
+        dash.emu = EmuState::Done(emu_inventory(vec![emu_env("foo", ResolveState::Ready)]));
         dash.emu_candidates = vec![emu_candidate("tokenless")];
         dash.emu_cursor = 1;
 
-        apply_action(&mut dash, Action::Confirm, false);
+        apply_action(&mut dash, Action::VerifySandboxImage, false);
 
         assert!(!dash.pokes.emu, "refusal must not refresh registered envs");
         let notice = dash.notice.as_ref().map(|(_, message)| message.as_str());
         assert_eq!(
             notice,
-            Some("arch unconfirmed · press t to set arch, then a")
+            Some("no missing environment exactly expects /a/b/tokenless.qcow2")
         );
+    }
+
+    #[test]
+    fn image_import_start_failure_is_visible_in_notice_and_environment_log() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Emu;
+        dash.emu = EmuState::Done(emu_inventory(vec![emu_env(
+            "linux/mint",
+            ResolveState::Missing,
+        )]));
+        dash.emu_candidates = vec![emu_candidate("mint")];
+
+        apply_action(&mut dash, Action::VerifySandboxImage, false);
+
+        let notice = dash.notice.as_ref().map(|(_, message)| message.as_str());
+        assert!(notice.is_some_and(|message| {
+            message.starts_with("image verification failed to start:")
+                && message.ends_with("· → opens error log")
+        }));
+        let run = dash.active_runs.get("linux/mint").unwrap();
+        assert!(!is_running(&dash, "linux/mint"));
+        assert!(run
+            .pane
+            .ring
+            .lines
+            .back()
+            .is_some_and(|line| line.contains("error")));
     }
 
     #[test]
     fn act_emu_refuses_envs_that_are_not_ready() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Emu;
-        dash.emu = EmuState::Done(vec![emu_env("foo", ResolveState::Missing)]);
+        dash.emu = EmuState::Done(emu_inventory(vec![emu_env("foo", ResolveState::Missing)]));
         act_emu(&mut dash, false);
         assert!(
             dash.active_runs.is_empty(),
@@ -863,10 +849,54 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_flow_action_requires_a_manifest_selected_workflow() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Emu;
+        dash.emu = EmuState::Done(emu_inventory(vec![emu_env("foo", ResolveState::Ready)]));
+
+        apply_action(&mut dash, Action::RunSandboxFlow, false);
+
+        assert!(dash.active_runs.is_empty());
+        assert_eq!(
+            dash.notice.as_ref().map(|(_, notice)| notice.as_str()),
+            Some("foo has no manifest-selected default workflow")
+        );
+    }
+
+    #[test]
+    fn sandbox_flow_lane_actions_start_at_one_and_clamp_to_resource_limit() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Emu;
+        assert_eq!(dash.sandbox_flow_lanes, 1);
+
+        apply_action(&mut dash, Action::DecreaseSandboxFlowLanes, false);
+        assert_eq!(dash.sandbox_flow_lanes, 1);
+
+        for _ in 0..=qol_dev_env::resources::MAX_CONCURRENT_LANES {
+            apply_action(&mut dash, Action::IncreaseSandboxFlowLanes, false);
+        }
+        assert_eq!(
+            dash.sandbox_flow_lanes,
+            qol_dev_env::resources::MAX_CONCURRENT_LANES
+        );
+
+        apply_action(&mut dash, Action::IncreaseSandboxFlowLanes, false);
+        assert_eq!(
+            dash.sandbox_flow_lanes,
+            qol_dev_env::resources::MAX_CONCURRENT_LANES
+        );
+        apply_action(&mut dash, Action::DecreaseSandboxFlowLanes, false);
+        assert_eq!(
+            dash.sandbox_flow_lanes,
+            qol_dev_env::resources::MAX_CONCURRENT_LANES - 1
+        );
+    }
+
+    #[test]
     fn diving_into_an_emu_opens_its_detail() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Emu;
-        dash.emu = EmuState::Done(vec![emu_env("foo", ResolveState::Ready)]);
+        dash.emu = EmuState::Done(emu_inventory(vec![emu_env("foo", ResolveState::Ready)]));
         apply_action(&mut dash, Action::Dive, false);
         assert!(
             matches!(dash.view, View::EmuDetail),
@@ -885,12 +915,12 @@ mod tests {
     fn diving_into_candidate_opens_its_live_log() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Emu;
-        dash.emu = EmuState::Done(vec![emu_env("foo", ResolveState::Ready)]);
+        dash.emu = EmuState::Done(emu_inventory(vec![emu_env("foo", ResolveState::Ready)]));
         dash.emu_candidates = vec![emu_candidate("linuxmint")];
         dash.emu_cursor = 1;
         dash.active_runs.insert(
             "linuxmint".to_string(),
-            live_pane("  boot     linuxmint · qmp"),
+            ActiveSandboxRun::candidate(live_pane("  boot     linuxmint · qmp")),
         );
 
         apply_action(&mut dash, Action::Dive, false);
@@ -912,9 +942,11 @@ mod tests {
     fn live_run_state_exposes_running_detail() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Emu;
-        dash.emu = EmuState::Done(vec![emu_env("foo", ResolveState::Ready)]);
-        dash.active_runs
-            .insert("foo".to_string(), live_pane("  boot     foo · qmp"));
+        dash.emu = EmuState::Done(emu_inventory(vec![emu_env("foo", ResolveState::Ready)]));
+        dash.active_runs.insert(
+            "foo".to_string(),
+            ActiveSandboxRun::environment(live_pane("  boot     foo · qmp"), "foo-batch"),
+        );
         assert!(is_running(&dash, "foo"));
         assert_eq!(live_verb(&dash, "foo").as_deref(), Some("boot"));
     }
@@ -1007,7 +1039,11 @@ mod tests {
 
     #[test]
     fn worktree_panel_arms_base_without_building() {
-        let mut dash = Dash::new_for_startup(Vec::new(), Some("feat/argv".to_string()));
+        let mut dash = Dash::new_for_startup(
+            Vec::new(),
+            Some("feat/argv".to_string()),
+            PathBuf::from("/qol/feat-argv"),
+        );
         dash.worktree_panel.open = true;
         dash.worktree_panel.targets = vec![worktrees_panel::WorktreeTarget {
             branch: None,
@@ -1024,7 +1060,11 @@ mod tests {
 
     #[test]
     fn worktree_panel_closes_without_changing_target() {
-        let mut dash = Dash::new_for_startup(Vec::new(), Some("feat/argv".to_string()));
+        let mut dash = Dash::new_for_startup(
+            Vec::new(),
+            Some("feat/argv".to_string()),
+            PathBuf::from("/qol/feat-argv"),
+        );
         dash.worktree_panel.open = true;
         dash.worktree_panel.targets = vec![worktrees_panel::WorktreeTarget {
             branch: None,
@@ -1104,7 +1144,7 @@ mod tests {
 
     #[test]
     fn plain_arm_disarm_stays_green_when_running_branch_updates() {
-        let mut dash = Dash::new_for_startup(Vec::new(), None);
+        let mut dash = Dash::new_for_startup(Vec::new(), None, PathBuf::from("/qol/base"));
         handle_key(&mut dash, KeyCode::Char(' '), KeyModifiers::NONE);
         assert_eq!(frame_accent(&dash), Color::Yellow);
 

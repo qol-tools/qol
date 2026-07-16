@@ -22,13 +22,6 @@ impl GuestArch {
         }
     }
 
-    pub(crate) fn toggled(self) -> GuestArch {
-        match self {
-            GuestArch::X86_64 => GuestArch::Aarch64,
-            GuestArch::Aarch64 => GuestArch::X86_64,
-        }
-    }
-
     pub(crate) fn qemu_system_binary(self) -> &'static str {
         match self {
             GuestArch::X86_64 => "qemu-system-x86_64",
@@ -82,14 +75,6 @@ impl ArchGuess {
             Self::Known(arch) => Some(arch),
             Self::Assumed(_) => None,
         }
-    }
-
-    pub(crate) fn toggled(self) -> Self {
-        Self::Known(self.arch().toggled())
-    }
-
-    pub(crate) fn as_str(self) -> &'static str {
-        self.arch().as_str()
     }
 }
 
@@ -176,17 +161,6 @@ mod tests {
     }
 
     #[test]
-    fn toggled_swaps_between_arches() {
-        let cases = [
-            (GuestArch::X86_64, GuestArch::Aarch64),
-            (GuestArch::Aarch64, GuestArch::X86_64),
-        ];
-        for (arch, expected) in cases {
-            assert_eq!(arch.toggled(), expected, "arch: {arch:?}");
-        }
-    }
-
-    #[test]
     fn arch_guess_tracks_persistence_readiness() {
         let known = ArchGuess::known(GuestArch::Aarch64);
         let assumed = ArchGuess::assumed(GuestArch::X86_64);
@@ -195,7 +169,6 @@ mod tests {
         assert_eq!(known.known_arch(), Some(GuestArch::Aarch64));
         assert_eq!(assumed.arch(), GuestArch::X86_64);
         assert_eq!(assumed.known_arch(), None);
-        assert_eq!(assumed.toggled(), ArchGuess::known(GuestArch::Aarch64));
     }
 
     #[test]

@@ -24,11 +24,13 @@ pub(super) enum Action {
     Filter,
     Copy,
     OpenEmuDir,
+    RunSandboxFlow,
+    DecreaseSandboxFlowLanes,
+    IncreaseSandboxFlowLanes,
     OpenCurrentLogFolder,
     OpenCurrentLogEditor,
     OpenCurrentLogRaw,
-    ToggleArch,
-    Confirm,
+    VerifySandboxImage,
     Ignore,
 }
 
@@ -208,19 +210,19 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
         View::Emu => vec![
             binding(
                 "↑/↓",
-                "select emu",
+                "select sandbox",
                 Action::ScrollUp,
                 vec![KeyStroke::plain(KeyCode::Up)],
             ),
             binding(
                 "↑/↓",
-                "select emu",
+                "select sandbox",
                 Action::ScrollDown,
                 vec![KeyStroke::plain(KeyCode::Down)],
             ),
             binding(
                 "enter",
-                "boot · stop",
+                "boot · stop one",
                 Action::Activate,
                 vec![KeyStroke::plain(KeyCode::Enter)],
             ),
@@ -230,15 +232,24 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
                 Action::Dive,
                 vec![KeyStroke::plain(KeyCode::Right)],
             ),
+            char_binding("o", "open run folder", Action::OpenEmuDir, 'o'),
+            char_binding("r", "run default flow", Action::RunSandboxFlow, 'r'),
             binding(
-                "space",
-                "arm: checks",
-                Action::ToggleArm,
-                vec![KeyStroke::plain(KeyCode::Char(' '))],
+                "-",
+                "fewer flow lanes",
+                Action::DecreaseSandboxFlowLanes,
+                vec![KeyStroke::plain(KeyCode::Char('-'))],
             ),
-            char_binding("o", "open emu dir", Action::OpenEmuDir, 'o'),
-            char_binding("t", "set arch", Action::ToggleArch, 't'),
-            char_binding("a", "add image", Action::Confirm, 'a'),
+            binding(
+                "+",
+                "more flow lanes",
+                Action::IncreaseSandboxFlowLanes,
+                vec![
+                    KeyStroke::plain(KeyCode::Char('+')),
+                    KeyStroke::plain(KeyCode::Char('=')),
+                ],
+            ),
+            char_binding("a", "verify image", Action::VerifySandboxImage, 'a'),
             binding(
                 "←",
                 "back",
@@ -578,13 +589,16 @@ mod tests {
     }
 
     #[test]
-    fn emu_keys_map_open_toggle_and_confirm() {
+    fn emu_keys_map_flow_lanes_and_verified_import() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Emu;
         let cases = [
             (KeyCode::Char('o'), Action::OpenEmuDir),
-            (KeyCode::Char('t'), Action::ToggleArch),
-            (KeyCode::Char('a'), Action::Confirm),
+            (KeyCode::Char('r'), Action::RunSandboxFlow),
+            (KeyCode::Char('-'), Action::DecreaseSandboxFlowLanes),
+            (KeyCode::Char('+'), Action::IncreaseSandboxFlowLanes),
+            (KeyCode::Char('='), Action::IncreaseSandboxFlowLanes),
+            (KeyCode::Char('a'), Action::VerifySandboxImage),
         ];
         for (code, expected) in cases {
             assert_eq!(
@@ -593,5 +607,25 @@ mod tests {
                 "code: {code:?}"
             );
         }
+        assert_eq!(
+            action_for(&dash, KeyCode::Char('+'), KeyModifiers::SHIFT),
+            Action::IncreaseSandboxFlowLanes
+        );
+        let hints = unique_hints(context_action_bindings(&dash));
+        assert!(hints.iter().any(|hint| hint.key == "-"));
+        assert!(hints.iter().any(|hint| hint.key == "+"));
+        assert!(hints
+            .iter()
+            .any(|hint| hint.key == "a" && hint.desc == "verify image"));
+        assert_eq!(
+            action_for(&dash, KeyCode::Char('t'), KeyModifiers::NONE),
+            Action::Ignore,
+            "the removed Dash-only architecture toggle must stay unwired"
+        );
+        assert_eq!(
+            action_for(&dash, KeyCode::Char(' '), KeyModifiers::NONE),
+            Action::Ignore,
+            "sandboxes do not advertise an unwired armed action"
+        );
     }
 }

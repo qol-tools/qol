@@ -1,0 +1,12 @@
+[Unit]
+Description=QoL read-only development payload
+After=dev-disk-by\x2dlabel-QOL_PAYLOAD.device
+BindsTo=dev-disk-by\x2dlabel-QOL_PAYLOAD.device
+
+[Mount]
+What=/dev/disk/by-label/QOL_PAYLOAD
+Where=/run/qol-payload
+Type=iso9660
+Options=ro,nosuid,nodev,noexec
+DirectoryMode=0555
+TimeoutSec=10s

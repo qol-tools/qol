@@ -246,6 +246,7 @@ fn hand_off_to_prebuilt(
         abandon_failed_successor(&mut next);
         return Err(error);
     }
+    dash.adopt_running_worktree(run_root);
     *child = next;
     *lines = next_lines;
     repair_autostart_after_promotion(dash, &root);

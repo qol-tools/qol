@@ -103,12 +103,19 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         plugin_names,
         lines,
         target.branch.clone(),
+        run_root,
         None,
     )?;
     handle_session_end(end)
 }
 
 fn run_attached(tray_pid: u32, verbose: bool, branch: Option<String>) -> Result<()> {
+    let root = repo_root()?;
+    let (target, note) = marker_tray_target(&root, branch);
+    if let Some(note) = note {
+        eprintln!("{note}");
+    }
+    let worktree = dev_run_root(&target.root);
     let mut child = dev_console::TrayHandle::Attached(tray_pid);
     wait_for_health_or_exit(&mut child, None)
         .context("dev server did not become healthy on reattach")?;
@@ -117,7 +124,15 @@ fn run_attached(tray_pid: u32, verbose: bool, branch: Option<String>) -> Result<
         "[qol dev] reattached to existing qol-tray (pid {tray_pid}) - live tray console \
          unavailable until the next full restart"
     ));
-    let end = dev_console::run_session(&mut child, verbose, Vec::new(), lines, branch, None)?;
+    let end = dev_console::run_session(
+        &mut child,
+        verbose,
+        Vec::new(),
+        lines,
+        target.branch,
+        worktree,
+        None,
+    )?;
     handle_session_end(end)
 }
 

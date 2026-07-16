@@ -1,0 +1,251 @@
+#!/usr/bin/python3
+
+import hashlib
+import json
+import os
+import pwd
+import re
+import shutil
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+
+PAYLOAD_ROOT = Path("/run/qol-payload")
+QOL_HOME = Path("/home/qol")
+EXPECTED_FILES = {
+    "bin/qol-tray": True,
+    "plugins/qol-shot/plugin.toml": False,
+    "plugins/qol-shot/qol-config.toml": False,
+    "plugins/qol-shot/qol-shot": True,
+}
+
+
+class ContractError(Exception):
+    pass
+
+
+def require(condition, message):
+    if not condition:
+        raise ContractError(message)
+
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def validated_relative_path(value):
+    require(isinstance(value, str) and value, "payload path must be a nonempty string")
+    require("\\" not in value and "\0" not in value, f"unsafe payload path: {value!r}")
+    parts = value.split("/")
+    require(
+        all(part and part not in (".", "..") for part in parts),
+        f"unsafe payload path: {value!r}",
+    )
+    require(not value.startswith("/"), f"absolute payload path: {value!r}")
+    return parts
+
+
+def read_manifest(root):
+    manifest_path = root / "manifest.json"
+    require(manifest_path.is_file(), f"payload manifest is missing: {manifest_path}")
+    require(not manifest_path.is_symlink(), "payload manifest must not be a symlink")
+    require(
+        stat.S_IMODE(manifest_path.lstat().st_mode) == 0o444,
+        "payload manifest mode must be 0444",
+    )
+    try:
+        manifest = json.loads(manifest_path.read_bytes())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ContractError(f"invalid payload manifest: {error}") from error
+    require(isinstance(manifest, dict), "payload manifest must be an object")
+    require(
+        set(manifest) == {"schema", "workflow_id", "created_at_unix_ms", "files"},
+        "payload manifest fields do not match schema 1",
+    )
+    require(
+        type(manifest["schema"]) is int and manifest["schema"] == 1,
+        "unsupported payload manifest schema",
+    )
+    workflow_id = manifest["workflow_id"]
+    require(
+        isinstance(workflow_id, str)
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", workflow_id),
+        "invalid payload workflow id",
+    )
+    created_at = manifest["created_at_unix_ms"]
+    require(type(created_at) is int and created_at >= 0, "invalid payload timestamp")
+    entries = manifest["files"]
+    require(isinstance(entries, list) and entries, "payload manifest contains no files")
+    validated = {}
+    for entry in entries:
+        require(isinstance(entry, dict), "payload file entry must be an object")
+        require(
+            set(entry) == {"path", "size_bytes", "sha256", "executable"},
+            "payload file fields do not match schema 1",
+        )
+        parts = validated_relative_path(entry["path"])
+        relative = "/".join(parts)
+        require(relative not in validated, f"duplicate payload path: {relative}")
+        size = entry["size_bytes"]
+        require(type(size) is int and size >= 0, f"invalid payload size: {relative}")
+        digest = entry["sha256"]
+        require(
+            isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest),
+            f"invalid payload digest: {relative}",
+        )
+        executable = entry["executable"]
+        require(type(executable) is bool, f"invalid executable flag: {relative}")
+        validated[relative] = (parts, size, digest, executable)
+    require(
+        {path: entry[3] for path, entry in validated.items()} == EXPECTED_FILES,
+        "payload file set does not match the Mint Cinnamon sandbox contract",
+    )
+    return validated
+
+
+def verify_mount(root):
+    require(root == PAYLOAD_ROOT, f"payload must be mounted at {PAYLOAD_ROOT}")
+    require(root.is_mount(), f"payload path is not a mount point: {root}")
+    flags = os.statvfs(root).f_flag
+    required = os.ST_RDONLY | os.ST_NOSUID | os.ST_NODEV | os.ST_NOEXEC
+    require(flags & required == required, "payload mount must be ro,nosuid,nodev,noexec")
+
+
+def stage_payload(root, files, stage):
+    staged = stage / "payload"
+    staged.mkdir(mode=0o700)
+    for relative, (parts, size, digest, executable) in files.items():
+        source = root.joinpath(*parts)
+        metadata = source.lstat()
+        require(stat.S_ISREG(metadata.st_mode), f"payload entry is not a file: {relative}")
+        source_mode = stat.S_IMODE(metadata.st_mode)
+        expected_source_mode = 0o555 if executable else 0o444
+        require(
+            source_mode == expected_source_mode,
+            f"payload mode mismatch for {relative}: {source_mode:o}",
+        )
+        require(metadata.st_size == size, f"payload size mismatch: {relative}")
+        require(sha256(source) == digest, f"payload digest mismatch: {relative}")
+        destination = staged.joinpath(*parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        os.chmod(destination, 0o755 if executable else 0o644)
+        require(destination.stat().st_size == size, f"staged size mismatch: {relative}")
+        require(sha256(destination) == digest, f"staged digest mismatch: {relative}")
+    return staged
+
+
+def ensure_directory(path):
+    missing = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    require(current.is_dir() and not current.is_symlink(), f"unsafe directory: {current}")
+    for directory in reversed(missing):
+        directory.mkdir(mode=0o755)
+    require(path.is_dir() and not path.is_symlink(), f"unsafe directory: {path}")
+
+
+def remove_path(path):
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def publish(staged, stage):
+    generated = stage / "generated"
+    generated.mkdir(mode=0o700)
+    mode_file = generated / "mode.json"
+    mode_file.write_bytes(b'{"mode":"prod"}')
+    os.chmod(mode_file, 0o644)
+    first_run = generated / ".first-run-done"
+    first_run.touch(mode=0o644)
+    os.chmod(first_run, 0o644)
+    destinations = [
+        (staged / "bin/qol-tray", QOL_HOME / ".local/bin/qol-tray"),
+        (
+            staged / "plugins/qol-shot",
+            QOL_HOME / ".config/qol-tray/plugins/qol-shot",
+        ),
+        (mode_file, QOL_HOME / ".config/qol-tray/mode.json"),
+        (first_run, QOL_HOME / ".config/qol-tray/.first-run-done"),
+    ]
+    for _, destination in destinations:
+        ensure_directory(destination.parent)
+    backup = stage / "backup"
+    backup.mkdir(mode=0o700)
+    saved = []
+    published = []
+    try:
+        for index, (source, destination) in enumerate(destinations):
+            if destination.exists() or destination.is_symlink():
+                previous = backup / str(index)
+                os.replace(destination, previous)
+                saved.append((previous, destination))
+            os.replace(source, destination)
+            published.append(destination)
+    except BaseException:
+        for destination in reversed(published):
+            remove_path(destination)
+        for previous, destination in reversed(saved):
+            os.replace(previous, destination)
+        raise
+    shutil.rmtree(backup)
+
+
+def clear_stale_state():
+    for path in [
+        QOL_HOME / ".config/qol-tray/plugin-registry.json",
+        Path("/tmp/qol-shot.sock"),
+        Path("/tmp/qol-tray-state.sock"),
+        Path("/tmp/qol-altmon.log"),
+        Path("/tmp/qol-tray"),
+    ]:
+        remove_path(path)
+
+
+def install(root):
+    account = pwd.getpwuid(os.geteuid())
+    require(account.pw_name == "qol", "payload installer must run as user qol")
+    require(Path(account.pw_dir) == QOL_HOME, f"user qol home must be {QOL_HOME}")
+    require(QOL_HOME.is_dir() and not QOL_HOME.is_symlink(), f"unsafe home: {QOL_HOME}")
+    files = read_manifest(root)
+    verify_mount(root)
+    stage = Path(tempfile.mkdtemp(prefix=".qol-payload-stage-", dir=QOL_HOME))
+    try:
+        staged = stage_payload(root, files, stage)
+        publish(staged, stage)
+        clear_stale_state()
+    except BaseException:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    shutil.rmtree(stage)
+
+
+def main():
+    require(
+        len(sys.argv) == 3 and sys.argv[1] == "install",
+        f"usage: {Path(sys.argv[0]).name} install {PAYLOAD_ROOT}",
+    )
+    root = Path(sys.argv[2])
+    install(root)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ContractError, OSError, KeyError, TypeError, ValueError) as error:
+        print(f"qol-sandbox-payload: {error}", file=sys.stderr)
+        raise SystemExit(1)

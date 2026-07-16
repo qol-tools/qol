@@ -1,32 +1,114 @@
-use crate::commands::dev_env::registry::{EnvironmentState, ResolvedEnvironment};
 use crate::commands::dev_env::resources as dev_resources;
 use crate::commands::{dev_env, emu};
 use crate::progress::{print_hint, print_title, step_label, StepKind};
 use crate::workspace::repo_root;
 use anyhow::{anyhow, bail, Context, Result};
+use qol_dev_env::{ResolutionState, ResolvedEnvironment};
+use qol_dev_orchestrator::{
+    FlowStart, FlowWorkerRequest, RunHandle, RunTicket, WaitState, MAX_FLOW_REPEATS,
+};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-const MAX_REPEAT: u32 = 128;
+const MAX_REPEAT: u32 = MAX_FLOW_REPEATS;
 const SUPERVISOR_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 const SUPERVISOR_WAIT_INTERVAL: Duration = Duration::from_millis(25);
+const PREPARATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const LANE_OWNERS_DIR: &str = "lanes";
+const PAYLOAD_TRANSPORT: &str = "read-only-iso9660";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FlowOptions {
     workflow: String,
     environment_id: String,
+    run_id: Option<String>,
+    worktree: Option<PathBuf>,
     repeat: u32,
     jobs: u32,
     memory_mb: Option<u32>,
     cpus: Option<u16>,
     force: bool,
+}
+
+#[derive(Clone)]
+struct FlowPlan {
+    start: FlowStart,
+    environment: ResolvedEnvironment,
+    workflow: emu::WorkflowDefinition,
+    guest_adapter: emu::GuestAdapter,
+    image_path: PathBuf,
+    resources: dev_resources::ResourceProfile,
+    concurrent: u32,
+    run_root: PathBuf,
+    ticket: RunTicket,
+}
+
+impl FlowPlan {
+    fn fingerprint(&self) -> Result<String> {
+        let workflow_kind = if self.workflow.requires_payload() {
+            "desktop"
+        } else {
+            "serial"
+        };
+        let identity = json!({
+            "schema": 1,
+            "start": self.start,
+            "ticket": {
+                "run_id": self.ticket.run_id,
+                "kind": self.ticket.kind.as_str(),
+                "report_path": self.ticket.report_path,
+            },
+            "run_root": self.run_root,
+            "environment": {
+                "definition": {
+                    "id": self.environment.definition.id,
+                    "name": self.environment.definition.name,
+                    "family": self.environment.definition.family,
+                    "backend": self.environment.definition.backend,
+                    "image": {
+                        "kind": self.environment.definition.image.kind,
+                        "base": self.environment.definition.image.base,
+                        "recommended_size_gb": self.environment.definition.image.recommended_size_gb,
+                        "arch": self.environment.definition.image.arch,
+                        "firmware": self.environment.definition.image.firmware,
+                    },
+                    "boot": {
+                        "memory_mb": self.environment.definition.boot.memory_mb,
+                        "cpus": self.environment.definition.boot.cpus,
+                        "display": self.environment.definition.boot.display,
+                    },
+                    "mounts": { "workspace": self.environment.definition.mounts.workspace },
+                    "capabilities": self.environment.definition.capabilities,
+                    "source": self.environment.definition.source,
+                },
+                "image_path": self.image_path,
+                "verified_image": self.environment.verified_image,
+                "run_root": self.environment.run_root,
+            },
+            "workflow": {
+                "id": self.workflow.id(),
+                "kind": workflow_kind,
+                "requires_payload": self.workflow.requires_payload(),
+            },
+            "guest_adapter": self.guest_adapter.as_str(),
+            "resources": {
+                "memory_mb": self.resources.memory_mb,
+                "cpus": self.resources.cpus,
+                "concurrent": self.concurrent,
+            },
+            "payload_transport": PAYLOAD_TRANSPORT,
+        });
+        let encoded =
+            serde_json::to_vec(&identity).context("failed to encode the immutable flow plan")?;
+        Ok(format!("{:x}", Sha256::digest(encoded)))
+    }
 }
 
 struct ActiveLane {
@@ -38,16 +120,158 @@ struct ActiveLane {
 
 struct LaneLaunch<'a> {
     executable: &'a Path,
+    worktree: &'a Path,
     logs_dir: &'a Path,
     case_root: &'a Path,
     flow_run_id: &'a str,
     flow_report_path: &'a Path,
     owner_pid: u32,
+    owner_process_identity: Option<String>,
 }
 
 struct PendingLane {
     run_id: String,
     args: Vec<OsString>,
+}
+
+#[derive(Debug)]
+struct FlowPayload {
+    root: PathBuf,
+    manifest_path: PathBuf,
+    image_path: PathBuf,
+    manifest_sha256: String,
+    cleanup: PayloadCleanup,
+}
+
+#[derive(Debug)]
+struct PayloadCleanup {
+    status: String,
+    complete: bool,
+    removed: Vec<PathBuf>,
+    error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct PreparationCleanup {
+    status: String,
+    complete: bool,
+    verification: Option<String>,
+    error: Option<String>,
+}
+
+impl PreparationCleanup {
+    fn pending() -> Self {
+        Self {
+            status: "pending".to_string(),
+            complete: false,
+            verification: None,
+            error: None,
+        }
+    }
+
+    fn not_required() -> Self {
+        Self {
+            status: "not-required".to_string(),
+            complete: true,
+            verification: Some("no-process-spawned".to_string()),
+            error: None,
+        }
+    }
+
+    fn verified() -> Self {
+        Self {
+            status: "complete".to_string(),
+            complete: true,
+            verification: Some("owned-process-tree-exit".to_string()),
+            error: None,
+        }
+    }
+
+    fn incomplete(error: impl Into<String>) -> Self {
+        let error = error.into();
+        Self {
+            status: "incomplete".to_string(),
+            complete: false,
+            verification: None,
+            error: Some(error),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct FlowPreparation {
+    status: String,
+    build_status: String,
+    process_status: Option<String>,
+    cleanup: PreparationCleanup,
+    iso_status: String,
+    iso_process_status: Option<String>,
+    iso_cleanup: PreparationCleanup,
+}
+
+impl FlowPreparation {
+    fn pending(requires_payload: bool) -> Self {
+        if !requires_payload {
+            return Self {
+                status: "complete".to_string(),
+                build_status: "skipped".to_string(),
+                process_status: None,
+                cleanup: PreparationCleanup::not_required(),
+                iso_status: "skipped".to_string(),
+                iso_process_status: None,
+                iso_cleanup: PreparationCleanup::not_required(),
+            };
+        }
+        Self {
+            status: "preparing".to_string(),
+            build_status: "pending".to_string(),
+            process_status: None,
+            cleanup: PreparationCleanup::pending(),
+            iso_status: "pending".to_string(),
+            iso_process_status: None,
+            iso_cleanup: PreparationCleanup::pending(),
+        }
+    }
+
+    fn cleanup_complete(&self) -> bool {
+        self.cleanup.complete && self.iso_cleanup.complete
+    }
+}
+
+#[derive(Debug)]
+struct PayloadPreparationFailure {
+    error: anyhow::Error,
+    cancelled: bool,
+    preparation: Box<FlowPreparation>,
+}
+
+impl PayloadPreparationFailure {
+    fn before_spawn(error: anyhow::Error, cancelled: bool) -> Self {
+        Self {
+            error,
+            cancelled,
+            preparation: Box::new(FlowPreparation {
+                status: if cancelled { "cancelled" } else { "failed" }.to_string(),
+                build_status: if cancelled { "cancelled" } else { "failed" }.to_string(),
+                process_status: None,
+                cleanup: PreparationCleanup::not_required(),
+                iso_status: "skipped".to_string(),
+                iso_process_status: None,
+                iso_cleanup: PreparationCleanup::not_required(),
+            }),
+        }
+    }
+}
+
+impl PayloadCleanup {
+    fn pending() -> Self {
+        Self {
+            status: "pending".to_string(),
+            complete: false,
+            removed: Vec::new(),
+            error: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -78,13 +302,40 @@ struct GracefulShutdown {
     error: Option<String>,
 }
 
-trait Supervisor {
+trait Supervisor: Send {
     fn try_wait(&mut self) -> Result<Option<SupervisorExit>>;
     fn shutdown(&mut self, reason: &str) -> ShutdownOutcome;
 }
 
 trait LaneSpawner {
     fn spawn(&mut self, launch: &LaneLaunch<'_>, pending: &PendingLane) -> Result<ActiveLane>;
+}
+
+trait CancellationSource {
+    fn is_cancelled(&self) -> bool;
+}
+
+impl CancellationSource for qol_process::CancellationToken {
+    fn is_cancelled(&self) -> bool {
+        self.is_cancelled()
+    }
+}
+
+impl CancellationSource for qol_dev_env::CancellationInbox {
+    fn is_cancelled(&self) -> bool {
+        self.is_requested().unwrap_or(true)
+    }
+}
+
+struct FlowCancellation<'a> {
+    signals: &'a dyn CancellationSource,
+    inbox: &'a dyn CancellationSource,
+}
+
+impl CancellationSource for FlowCancellation<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.signals.is_cancelled() || self.inbox.is_cancelled()
+    }
 }
 
 struct ProcessLaneSpawner;
@@ -329,146 +580,562 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
 }
 
 fn run_flow(options: &FlowOptions, verbose: bool) -> Result<()> {
+    let start = flow_start(options)?;
+    let executable = std::env::current_exe().context("failed to resolve the qol executable")?;
+    let signal_cancellation = qol_process::CancellationToken::install()
+        .context("failed to install flow adapter cancellation handlers")?;
+    let mut handle = start_typed_flow(&executable, start, verbose)?;
+    print_title("qol flow run");
+    print_hint(verbose);
+    step_label(
+        "start",
+        StepKind::Info,
+        &format!(
+            "worker log {}",
+            handle.ticket().worker_log_path()?.display()
+        ),
+    );
+    wait_for_typed_flow(&mut handle, &signal_cancellation)
+}
+
+pub(crate) fn run_worker(args: &[OsString], executable: &Path) -> Result<()> {
+    if !args.is_empty() {
+        bail!("internal flow worker accepts typed standard input only");
+    }
+    qol_dev_env::require_host_session_cleared()
+        .context("internal flow worker refused host session access")?;
+    let request = qol_dev_orchestrator::read_flow_worker_request(std::io::stdin().lock())?;
+    let plan = plan_flow(request.start.clone())?;
+    validate_flow_worker_plan(&request, &plan)?;
+    run_flow_coordinator(plan, executable, request.verbose)
+}
+
+pub(crate) fn start_typed_flow(
+    executable: &Path,
+    start: FlowStart,
+    verbose: bool,
+) -> Result<RunHandle> {
+    let plan = plan_flow(start)?;
+    let plan_fingerprint = plan.fingerprint()?;
+    qol_dev_orchestrator::start_flow_worker(
+        executable,
+        FlowWorkerRequest {
+            start: plan.start,
+            run_root: plan.run_root,
+            plan_fingerprint,
+            verbose,
+        },
+        plan.ticket,
+    )
+}
+
+fn validate_flow_worker_plan(request: &FlowWorkerRequest, plan: &FlowPlan) -> Result<()> {
+    let expected_ticket = request.start.ticket(&request.run_root)?;
+    if plan.run_root != request.run_root || plan.ticket != expected_ticket {
+        bail!("flow configuration changed after the worker ticket was issued");
+    }
+    if plan.fingerprint()? != request.plan_fingerprint {
+        bail!("flow plan changed before the typed worker started; retry the flow");
+    }
+    Ok(())
+}
+
+fn wait_for_typed_flow(
+    handle: &mut RunHandle,
+    cancellation: &qol_process::CancellationToken,
+) -> Result<()> {
+    let mut cancellation_requested = false;
+    let mut previous_status = None;
+    loop {
+        if cancellation.is_cancelled() && !cancellation_requested {
+            handle.cancel()?;
+            cancellation_requested = true;
+            step_label("cancel", StepKind::Info, "requested");
+        }
+        match handle.poll()? {
+            WaitState::Starting => {}
+            WaitState::Running(report) => {
+                let status = report.status.as_str().to_string();
+                if previous_status.as_ref() != Some(&status) {
+                    step_label("status", StepKind::Info, &status);
+                    previous_status = Some(status);
+                }
+            }
+            WaitState::Terminal {
+                report,
+                worker_success,
+            } => return finish_typed_flow(report, worker_success),
+            WaitState::Failed {
+                report,
+                worker_exit,
+            } => {
+                let status = report
+                    .as_ref()
+                    .map(|report| report.status.as_str())
+                    .unwrap_or("missing");
+                bail!(
+                    "flow worker exited {worker_exit} without terminal cleanup proof; report status: {status}; evidence: {}",
+                    handle.ticket().report_path.display()
+                );
+            }
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn finish_typed_flow(report: qol_dev_env::RunSummary, worker_success: bool) -> Result<()> {
+    step_label(
+        "report",
+        StepKind::Info,
+        &report.report_path.display().to_string(),
+    );
+    if report.status == qol_dev_env::ReportStatus::Pass && worker_success {
+        step_label("verdict", StepKind::Success, "all lanes passed");
+        return Ok(());
+    }
+    if report.status == qol_dev_env::ReportStatus::Pass {
+        bail!(
+            "flow worker exited unsuccessfully after publishing a passing report: {}",
+            report.report_path.display()
+        );
+    }
+    let error = report
+        .error
+        .as_deref()
+        .unwrap_or_else(|| report.status.as_str());
+    bail!("flow finished with {}: {error}", report.status.as_str())
+}
+
+fn flow_start(options: &FlowOptions) -> Result<FlowStart> {
+    let worktree = resolve_flow_worktree(options)?;
+    let run_id = match &options.run_id {
+        Some(run_id) => run_id.clone(),
+        None => emu::new_run_id(&format!("flow-{}", options.workflow))?,
+    };
+    let start = FlowStart {
+        workflow: options.workflow.clone(),
+        environment_id: options.environment_id.clone(),
+        worktree,
+        run_id,
+        repeat: options.repeat,
+        jobs: options.jobs,
+        memory_mb: options.memory_mb,
+        cpus: options.cpus,
+        force: options.force,
+    };
+    start.validate()?;
+    Ok(start)
+}
+
+impl From<FlowStart> for FlowOptions {
+    fn from(start: FlowStart) -> Self {
+        Self {
+            workflow: start.workflow,
+            environment_id: start.environment_id,
+            run_id: Some(start.run_id),
+            worktree: Some(start.worktree),
+            repeat: start.repeat,
+            jobs: start.jobs,
+            memory_mb: start.memory_mb,
+            cpus: start.cpus,
+            force: start.force,
+        }
+    }
+}
+
+fn plan_flow(mut start: FlowStart) -> Result<FlowPlan> {
+    start.validate()?;
+    let worktree = resolve_flow_worktree(&FlowOptions::from(start.clone()))?;
+    start.worktree = worktree.clone();
+    let environment = environment(&worktree, &start.environment_id)?;
+    let workflow = emu::workflow_definition(&start.workflow)?;
+    let guest_adapter = require_flow_adapter(&environment)?;
+    emu::validate_workflow_adapter(workflow, guest_adapter)?;
+    if workflow.requires_payload() && environment.definition.mounts.workspace {
+        bail!(
+            "environment `{}` must disable the workspace mount before running desktop workflows",
+            start.environment_id
+        );
+    }
+    if workflow.requires_payload()
+        && !environment
+            .definition
+            .capabilities
+            .contains_key("image_revision")
+    {
+        bail!(
+            "environment `{}` must declare image_revision before running desktop workflows",
+            start.environment_id
+        );
+    }
+    let image_path = environment
+        .image_path
+        .clone()
+        .ok_or_else(|| anyhow!("environment `{}` has no image path", start.environment_id))?;
+    let configured_memory_mb = start.memory_mb.unwrap_or(
+        u32::try_from(environment.definition.boot.memory_mb).with_context(|| {
+            format!(
+                "environment `{}` memory does not fit in u32",
+                start.environment_id
+            )
+        })?,
+    );
+    let configured_cpus = start.cpus.unwrap_or(environment.definition.boot.cpus);
+    let resources =
+        dev_resources::profile(u64::from(configured_memory_mb), u64::from(configured_cpus))?;
+    let concurrent = start.jobs.min(start.repeat);
+    let run_root = environment
+        .run_root
+        .clone()
+        .unwrap_or_else(|| worktree.join("target/qol-env"));
+    let ticket = start.ticket(&run_root)?;
+    Ok(FlowPlan {
+        start,
+        environment,
+        workflow,
+        guest_adapter,
+        image_path,
+        resources,
+        concurrent,
+        run_root,
+        ticket,
+    })
+}
+
+fn run_flow_coordinator(plan: FlowPlan, executable: &Path, verbose: bool) -> Result<()> {
     let mut process_tree = qol_process::guard_current_process_tree()
         .context("failed to guard the flow process tree")?;
-    let result = run_flow_inner(options, verbose);
-    result?;
+    run_flow_inner(plan, executable, verbose)?;
     process_tree
         .disarm()
         .context("failed to disarm flow process-tree ownership")
 }
 
-fn run_flow_inner(options: &FlowOptions, verbose: bool) -> Result<()> {
-    let cancellation = qol_process::CancellationToken::install()
+fn resolve_flow_worktree(options: &FlowOptions) -> Result<PathBuf> {
+    let root = match options.worktree.as_deref() {
+        Some(worktree) => qol_workspace::workspace_root_from(worktree)
+            .with_context(|| format!("invalid flow worktree {}", worktree.display()))?,
+        None => repo_root()?,
+    };
+    root.canonicalize()
+        .with_context(|| format!("failed to resolve flow worktree {}", root.display()))
+}
+
+fn run_flow_inner(plan: FlowPlan, executable: &Path, verbose: bool) -> Result<()> {
+    let FlowPlan {
+        start,
+        environment,
+        workflow,
+        guest_adapter,
+        image_path,
+        resources,
+        concurrent,
+        run_root,
+        ticket,
+    } = plan;
+    let options = FlowOptions::from(start.clone());
+    let worktree = start.worktree;
+    let memory_mb = resources.memory_mb;
+    let cpus = resources.cpus;
+    let batch_id = ticket.run_id;
+    let flow_report_path = ticket.report_path;
+    let signal_cancellation = qol_process::CancellationToken::install()
         .context("failed to install flow cancellation handlers")?;
     crate::commands::env::reconcile_for_admission()?;
     reconcile_all()?;
-    dev_resources::reconcile()?;
-    let environment = environment(&options.environment_id)?;
-    let image_path = environment
-        .image_path
-        .as_deref()
-        .ok_or_else(|| anyhow!("environment `{}` has no image path", options.environment_id))?;
-    let configured_memory_mb = options.memory_mb.unwrap_or(
-        u32::try_from(environment.definition.boot.memory_mb).with_context(|| {
-            format!(
-                "environment `{}` memory does not fit in u32",
-                options.environment_id
-            )
-        })?,
-    );
-    let configured_cpus = options.cpus.unwrap_or(environment.definition.boot.cpus);
-    let resources =
-        dev_resources::profile(u64::from(configured_memory_mb), u64::from(configured_cpus))?;
-    let memory_mb = resources.memory_mb;
-    let cpus = resources.cpus;
-    let concurrent = options.jobs.min(options.repeat);
-    let run_root = environment
-        .run_root
-        .clone()
-        .unwrap_or(repo_root()?.join("target/qol-env"));
+    dev_env::reconcile_resources()?;
     let case_root = run_root.join("cases");
-    let batch_id = emu::new_run_id(&format!("flow-{}", options.workflow))?;
-    let run_dir = run_root.join("flows").join(&batch_id);
-    let flow_report_path = run_dir.join("report.json");
-    let (admission, resource_lease) = dev_resources::reserve(
+    let cancellation_inbox = qol_dev_env::CancellationInbox::for_run(&batch_id)?;
+    let cancellation = FlowCancellation {
+        signals: &signal_cancellation,
+        inbox: &cancellation_inbox,
+    };
+    if cancellation.is_cancelled() {
+        bail!("flow execution cancelled before admission");
+    }
+    let run_dir = flow_report_path
+        .parent()
+        .context("flow ticket report has no run directory")?
+        .to_path_buf();
+    let logs_dir = run_dir.join("logs");
+    let artifacts_dir = run_dir.join("artifacts");
+    let steps_dir = run_dir.join("steps");
+    let flows_dir = run_dir
+        .parent()
+        .context("flow run has no flows directory")?;
+    fs::create_dir_all(flows_dir)
+        .with_context(|| format!("failed to create {}", flows_dir.display()))?;
+    fs::create_dir(&run_dir).with_context(|| {
+        format!(
+            "flow run `{batch_id}` already exists or {} could not be created",
+            run_dir.display()
+        )
+    })?;
+    let directories = (|| -> Result<()> {
+        fs::create_dir(&logs_dir)
+            .with_context(|| format!("failed to create {}", logs_dir.display()))?;
+        fs::create_dir(&artifacts_dir)
+            .with_context(|| format!("failed to create {}", artifacts_dir.display()))?;
+        fs::create_dir(&steps_dir)
+            .with_context(|| format!("failed to create {}", steps_dir.display()))
+    })();
+    if let Err(error) = directories {
+        let cleanup = remove_unpublished_run_dir(&run_dir).err();
+        return Err(combine_setup_errors(error, cleanup));
+    }
+    let (admission, resource_lease) = match dev_resources::reserve(
         &batch_id,
         &flow_report_path,
         dev_resources::AdmissionRequest {
             concurrent_lanes: u64::from(concurrent),
             profile: resources,
             recommended_size_gb: environment.definition.image.recommended_size_gb,
-            capacity: dev_resources::host_capacity(&run_root),
+            capacity: dev_env::host_capacity(&run_root),
             force: options.force,
         },
-    )?;
-
-    let mut pending = Vec::with_capacity(options.repeat as usize);
-    for index in 0..options.repeat {
-        let run_id = emu::new_run_id(&format!("{}-lane-{}", options.environment_id, index + 1))?;
-        let args = emu::child_launch_args(emu::ChildLaunch {
-            operation: emu::ChildOperation::Run(&options.workflow),
-            target: image_path,
-            environment_id: &options.environment_id,
-            run_id: &run_id,
-            run_root: Some(&case_root),
-            image_kind: Some(environment.definition.image.kind.as_str()),
-            display: emu::DisplayMode::None,
-            resources,
-            acceleration: environment
-                .definition
-                .capabilities
-                .get("acceleration")
-                .map(String::as_str),
-            arch: environment.definition.image.arch.as_deref(),
-            firmware: environment.definition.image.firmware.as_deref(),
-        })?;
-        pending.push(PendingLane { run_id, args });
-    }
-
-    let logs_dir = run_dir.join("logs");
-    let artifacts_dir = run_dir.join("artifacts");
-    let steps_dir = run_dir.join("steps");
-    fs::create_dir_all(&logs_dir)
-        .with_context(|| format!("failed to create {}", logs_dir.display()))?;
-    fs::create_dir_all(&artifacts_dir)
-        .with_context(|| format!("failed to create {}", artifacts_dir.display()))?;
-    fs::create_dir_all(&steps_dir)
-        .with_context(|| format!("failed to create {}", steps_dir.display()))?;
-    let executable = std::env::current_exe().context("failed to resolve the qol executable")?;
-    let started_at = unix_millis()?;
+    ) {
+        Ok(reservation) => reservation,
+        Err(error) => {
+            let cleanup = remove_unpublished_run_dir(&run_dir).err();
+            return Err(combine_setup_errors(error, cleanup));
+        }
+    };
+    let mut payload = None;
+    let unpublished_setup = (|| -> Result<_> {
+        let started_at = qol_dev_env::unix_millis()?;
+        let parent_lease = resource_lease.child_claim()?;
+        let mut pending = Vec::with_capacity(options.repeat as usize);
+        for index in 0..options.repeat {
+            let run_id =
+                emu::new_run_id(&format!("{}-lane-{}", options.environment_id, index + 1))?;
+            pending.push(PendingLane {
+                run_id,
+                args: Vec::new(),
+            });
+        }
+        Ok((pending, parent_lease, started_at))
+    })();
+    let (mut pending, parent_lease, started_at) = match unpublished_setup {
+        Ok(setup) => setup,
+        Err(error) => {
+            return Err(rollback_unpublished_flow(
+                resource_lease,
+                &mut payload,
+                &run_dir,
+                &batch_id,
+                &worktree,
+                error,
+            ))
+        }
+    };
     let lane_launch = LaneLaunch {
-        executable: &executable,
+        executable,
+        worktree: &worktree,
         logs_dir: &logs_dir,
         case_root: &case_root,
         flow_run_id: &batch_id,
         flow_report_path: &flow_report_path,
         owner_pid: std::process::id(),
+        owner_process_identity: qol_process::process_identity(std::process::id()).ok(),
     };
     let planned = pending
         .iter()
         .map(|lane| planned_lane(&lane_launch, lane))
         .collect::<Vec<_>>();
-    write_preflight(&run_dir, options, memory_mb, cpus, concurrent, admission)?;
-    write_effective_environment(&run_dir, &environment, image_path, memory_mb, cpus)?;
-    write_aggregate_report(
+    let mut preparation = FlowPreparation::pending(workflow.requires_payload());
+    if let Err(error) = write_aggregate_report(
         &run_dir,
         &batch_id,
-        options,
+        &options,
+        &worktree,
         &environment,
-        image_path,
+        &image_path,
         memory_mb,
         cpus,
         admission,
         started_at,
-        "running",
+        payload.as_ref(),
+        &preparation,
+        "preparing",
         None,
         &planned,
-    )?;
-    if let Err(error) = prepare_lane_owners(&lane_launch, &pending) {
-        let message = format!("failed to persist flow lane ownership: {error:#}");
-        let results = pending
-            .iter()
-            .map(|lane| not_started(&lane_launch, lane, &message))
-            .collect::<Vec<_>>();
-        write_aggregate_report(
+    ) {
+        return Err(rollback_unpublished_flow(
+            resource_lease,
+            &mut payload,
             &run_dir,
             &batch_id,
-            options,
+            &worktree,
+            error.context("failed to publish flow preparation ownership"),
+        ));
+    }
+    match prepare_workflow_payload(workflow, &worktree, &run_dir, verbose, &cancellation) {
+        Ok((prepared_payload, prepared_state)) => {
+            payload = prepared_payload;
+            preparation = prepared_state;
+        }
+        Err(failure) => {
+            preparation = *failure.preparation;
+            let message = format!("failed to prepare workflow payload: {:#}", failure.error);
+            return Err(finalize_pre_fanout_failure(
+                resource_lease,
+                &run_dir,
+                &batch_id,
+                &options,
+                &worktree,
+                &environment,
+                &image_path,
+                memory_mb,
+                cpus,
+                admission,
+                started_at,
+                &lane_launch,
+                &pending,
+                &mut payload,
+                &preparation,
+                failure.cancelled,
+                message,
+            ));
+        }
+    }
+    let launch_arguments = (|| -> Result<()> {
+        for pending in &mut pending {
+            pending.args = emu::child_launch_args(emu::ChildLaunch {
+                operation: emu::ChildOperation::Run(&options.workflow),
+                target: &image_path,
+                environment_id: &options.environment_id,
+                run_id: &pending.run_id,
+                parent_lease: &parent_lease,
+                guest_adapter: Some(guest_adapter),
+                guest_image_revision: environment
+                    .definition
+                    .capabilities
+                    .get("image_revision")
+                    .map(String::as_str),
+                payload_manifest: payload
+                    .as_ref()
+                    .map(|payload| payload.manifest_path.as_path()),
+                payload_image: payload.as_ref().map(|payload| payload.image_path.as_path()),
+                run_root: Some(&case_root),
+                image_kind: Some(environment.definition.image.kind.as_str()),
+                display: emu::DisplayMode::None,
+                offline: workflow.requires_payload(),
+                resources,
+                acceleration: environment
+                    .definition
+                    .capabilities
+                    .get("acceleration")
+                    .map(String::as_str),
+                arch: environment.definition.image.arch.as_deref(),
+                firmware: environment.definition.image.firmware.as_deref(),
+            })?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = launch_arguments {
+        return Err(finalize_pre_fanout_failure(
+            resource_lease,
+            &run_dir,
+            &batch_id,
+            &options,
+            &worktree,
             &environment,
-            image_path,
+            &image_path,
             memory_mb,
             cpus,
             admission,
             started_at,
-            "failed",
-            Some(&message),
-            &results,
-        )?;
-        resource_lease
-            .release()
-            .context("failed to release the flow resource lease")?;
-        bail!(message);
+            &lane_launch,
+            &pending,
+            &mut payload,
+            &preparation,
+            cancellation.is_cancelled(),
+            format!("failed to prepare flow launch arguments: {error:#}"),
+        ));
+    }
+    if cancellation.is_cancelled() {
+        return Err(finalize_pre_fanout_failure(
+            resource_lease,
+            &run_dir,
+            &batch_id,
+            &options,
+            &worktree,
+            &environment,
+            &image_path,
+            memory_mb,
+            cpus,
+            admission,
+            started_at,
+            &lane_launch,
+            &pending,
+            &mut payload,
+            &preparation,
+            true,
+            "flow execution cancelled during preparation".to_string(),
+        ));
+    }
+    if let Err(error) = write_aggregate_report(
+        &run_dir,
+        &batch_id,
+        &options,
+        &worktree,
+        &environment,
+        &image_path,
+        memory_mb,
+        cpus,
+        admission,
+        started_at,
+        payload.as_ref(),
+        &preparation,
+        "running",
+        None,
+        &planned,
+    ) {
+        return Err(finalize_pre_fanout_failure(
+            resource_lease,
+            &run_dir,
+            &batch_id,
+            &options,
+            &worktree,
+            &environment,
+            &image_path,
+            memory_mb,
+            cpus,
+            admission,
+            started_at,
+            &lane_launch,
+            &pending,
+            &mut payload,
+            &preparation,
+            cancellation.is_cancelled(),
+            format!("failed to publish runnable flow ownership: {error:#}"),
+        ));
+    }
+    let pre_spawn = write_preflight(&run_dir, &options, memory_mb, cpus, concurrent, admission)
+        .and_then(|()| {
+            write_effective_environment(&run_dir, &environment, &image_path, memory_mb, cpus)
+        })
+        .and_then(|()| prepare_lane_owners(&lane_launch, &pending));
+    if let Err(error) = pre_spawn {
+        return Err(finalize_pre_fanout_failure(
+            resource_lease,
+            &run_dir,
+            &batch_id,
+            &options,
+            &worktree,
+            &environment,
+            &image_path,
+            memory_mb,
+            cpus,
+            admission,
+            started_at,
+            &lane_launch,
+            &pending,
+            &mut payload,
+            &preparation,
+            cancellation.is_cancelled(),
+            format!("failed to prepare flow launch: {error:#}"),
+        ));
     }
 
     print_title("qol flow run");
@@ -505,24 +1172,43 @@ fn run_flow_inner(options: &FlowOptions, verbose: bool) -> Result<()> {
             .position(|lane| lane.run_id == result.run_id)
             .unwrap_or(usize::MAX)
     });
-    let passed = !cancelled
+    let workflows_passed = !cancelled
         && execution_error.is_none()
         && results.len() == options.repeat as usize
         && results.iter().all(|result| result.passed);
-    let cleanup_complete = results.len() == options.repeat as usize
+    let lane_cleanup_complete = results.len() == options.repeat as usize
         && results.iter().all(|result| result.cleanup.complete);
+    let payload_cleanup_error = if lane_cleanup_complete {
+        cleanup_workflow_payload(&mut payload)
+            .err()
+            .map(|error| format!("payload cleanup failed: {error:#}"))
+    } else {
+        retain_payload_for_recovery(
+            &mut payload,
+            "payload retained because one or more lanes lack verified cleanup",
+        );
+        None
+    };
+    let cleanup_complete = lane_cleanup_complete && payload_cleanup_complete(payload.as_ref());
+    let passed = workflows_passed && cleanup_complete;
     let status = flow_status(passed, cancelled, cleanup_complete);
-    let terminal_error = terminal_error(execution_error.as_deref(), &results, options.repeat);
+    let terminal_error = combine_errors(
+        terminal_error(execution_error.as_deref(), &results, options.repeat),
+        payload_cleanup_error.clone(),
+    );
     write_aggregate_report(
         &run_dir,
         &batch_id,
-        options,
+        &options,
+        &worktree,
         &environment,
-        image_path,
+        &image_path,
         memory_mb,
         cpus,
         admission,
         started_at,
+        payload.as_ref(),
+        &preparation,
         status,
         terminal_error.as_deref(),
         &results,
@@ -549,6 +1235,9 @@ fn run_flow_inner(options: &FlowOptions, verbose: bool) -> Result<()> {
         }
         if let Some(error) = execution_error {
             bail!("flow execution failed: {error}");
+        }
+        if let Some(error) = payload_cleanup_error {
+            bail!("flow cleanup failed: {error}");
         }
         bail!(
             "{} flow lane(s) failed: {}",
@@ -587,6 +1276,38 @@ enum LaneRecovery {
     Incomplete,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecordedProcessState {
+    VerifiedAlive,
+    VerifiedDead,
+    Uncertain,
+}
+
+fn recorded_process_state(
+    pid: Option<u32>,
+    identity: Option<&str>,
+    process_group_counts_as_live: bool,
+) -> RecordedProcessState {
+    let Some(pid) = pid else {
+        return RecordedProcessState::VerifiedDead;
+    };
+    let pid_alive = qol_process::is_pid_alive(pid);
+    let group_alive = process_group_counts_as_live && qol_process::is_group_alive(pid);
+    if !pid_alive && !group_alive {
+        return RecordedProcessState::VerifiedDead;
+    }
+    let Some(identity) = identity else {
+        return RecordedProcessState::Uncertain;
+    };
+    if pid_alive && qol_process::process_identity_matches(pid, identity) {
+        return RecordedProcessState::VerifiedAlive;
+    }
+    if group_alive && !pid_alive {
+        return RecordedProcessState::Uncertain;
+    }
+    RecordedProcessState::VerifiedDead
+}
+
 fn cmd_runs(args: &[OsString]) -> Result<()> {
     if !args.is_empty() {
         bail!("usage: qol flow runs");
@@ -595,7 +1316,7 @@ fn cmd_runs(args: &[OsString]) -> Result<()> {
         .into_iter()
         .filter(|run| !flow_status_is_terminal(&run.status))
         .collect::<Vec<_>>();
-    dev_resources::reconcile()?;
+    dev_env::reconcile_resources()?;
     if runs.is_empty() {
         println!("No active or incomplete flows.");
         return Ok(());
@@ -701,7 +1422,10 @@ fn reconcile_flow_report_file(path: &Path) -> Result<Option<FlowRunSummary>> {
         .and_then(Value::as_str)
         .context("flow report has no status")?
         .to_string();
-    if flow_status_is_terminal(&status) {
+    let cleanup_complete = qol_dev_env::parse_report(path, content.as_bytes())?
+        .cleanup
+        .is_complete();
+    if flow_status_is_terminal(&status) && cleanup_complete {
         return Ok(Some(FlowRunSummary {
             run_id,
             status,
@@ -720,6 +1444,10 @@ fn reconcile_flow_report_file(path: &Path) -> Result<Option<FlowRunSummary>> {
         .and_then(Value::as_u64)
         .and_then(|pid| u32::try_from(pid).ok())
         .filter(|pid| *pid != 0);
+    let owner_process_identity = report
+        .get("owner")
+        .and_then(|owner| owner.get("process_identity"))
+        .and_then(Value::as_str);
     let Some(owner_state) = owner_state else {
         return Ok(Some(FlowRunSummary {
             run_id,
@@ -727,21 +1455,45 @@ fn reconcile_flow_report_file(path: &Path) -> Result<Option<FlowRunSummary>> {
             report_path: path.to_path_buf(),
         }));
     };
-    let owner_is_active = matches!(owner_state.as_str(), "running" | "cancelling")
-        && owner_pid.is_some_and(qol_process::is_pid_alive);
-    if owner_is_active {
+    let owner_process_state = recorded_process_state(owner_pid, owner_process_identity, false);
+    if matches!(owner_state.as_str(), "running" | "cancelling")
+        && !matches!(owner_process_state, RecordedProcessState::VerifiedDead)
+    {
         return Ok(Some(FlowRunSummary {
             run_id,
             status,
             report_path: path.to_path_buf(),
         }));
     }
-    let observed_at = unix_millis()?;
+    let observed_at = qol_dev_env::unix_millis()?;
     let interrupted_path = run_dir.join("report.interrupted.json");
     if fs::symlink_metadata(&interrupted_path).is_err() {
         atomic_write(&interrupted_path, content.as_bytes())?;
     }
-    let recovered_status = reconcile_flow_lanes(run_dir, &run_id, &mut report, &owner_state)?;
+    let mut recovered_status = reconcile_flow_lanes(run_dir, &run_id, &mut report, &owner_state)?;
+    let preparation_cleanup_complete = report.get("preparation").is_none_or(|preparation| {
+        ["build", "iso"].into_iter().all(|phase| {
+            preparation
+                .get(phase)
+                .and_then(|phase| phase.get("cleanup"))
+                .and_then(|cleanup| cleanup.get("complete"))
+                .and_then(Value::as_bool)
+                == Some(true)
+        })
+    });
+    let terminal_candidate = matches!(
+        recovered_status,
+        "abandoned" | "cancelled" | "failed" | "pass"
+    );
+    let payload_cleanup_complete =
+        !terminal_candidate || reconcile_recovered_payload(run_dir, &mut report).is_ok();
+    if terminal_candidate && (!preparation_cleanup_complete || !payload_cleanup_complete) {
+        recovered_status = if recovered_status == "cancelled" {
+            "cancellation-cleanup-incomplete"
+        } else {
+            "cleanup-incomplete"
+        };
+    }
     report["status"] = json!(recovered_status);
     report["reconciliation"] = json!({
         "status": if flow_status_is_terminal(recovered_status) { "complete" } else { "in-progress" },
@@ -764,6 +1516,79 @@ fn reconcile_flow_report_file(path: &Path) -> Result<Option<FlowRunSummary>> {
         status: recovered_status.to_string(),
         report_path: path.to_path_buf(),
     }))
+}
+
+fn reconcile_recovered_payload(run_dir: &Path, report: &mut Value) -> Result<()> {
+    let Some(payload) = report.get("payload").filter(|payload| !payload.is_null()) else {
+        return Ok(());
+    };
+    if payload
+        .get("cleanup")
+        .and_then(|cleanup| cleanup.get("complete"))
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Ok(());
+    }
+    let run_dir = run_dir
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize flow run {}", run_dir.display()))?;
+    let payload_dir = run_dir.join("payload");
+    let root = payload_dir.join("root");
+    let manifest_path = payload
+        .get("manifest")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .context("flow payload has no manifest path")?;
+    if manifest_path != root.join("manifest.json") {
+        bail!("flow payload manifest is outside its owned run directory");
+    }
+    let manifest_sha256 = payload
+        .get("manifest_sha256")
+        .and_then(Value::as_str)
+        .context("flow payload has no manifest digest")?
+        .to_string();
+    if manifest_sha256.len() != 64
+        || !manifest_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        bail!("flow payload manifest digest is invalid");
+    }
+    let image_path = payload
+        .get("image")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .context("flow payload has no image path")?;
+    if image_path != payload_dir.join(format!("{manifest_sha256}.iso")) {
+        bail!("flow payload image is outside its owned run directory");
+    }
+    if root
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        bail!("flow payload root is a symlink");
+    }
+    let mut recovered = Some(FlowPayload {
+        root,
+        manifest_path,
+        image_path,
+        manifest_sha256,
+        cleanup: PayloadCleanup::pending(),
+    });
+    let cleanup = cleanup_workflow_payload(&mut recovered);
+    report["payload"]["cleanup"] = recovered
+        .as_ref()
+        .map(|payload| {
+            json!({
+                "status": payload.cleanup.status,
+                "complete": payload.cleanup.complete,
+                "removed": payload.cleanup.removed,
+                "error": payload.cleanup.error,
+            })
+        })
+        .unwrap_or(Value::Null);
+    cleanup
 }
 
 fn lock_flow_run(run_dir: &Path) -> Result<File> {
@@ -923,6 +1748,12 @@ fn reconcile_flow_lanes(
     if cancellation {
         return Ok("cancelled");
     }
+    if prior_status == "abandoned" {
+        return Ok("abandoned");
+    }
+    if prior_status == "failed" {
+        return Ok("failed");
+    }
     if matches!(owner_state, "running" | "orphaned") {
         return Ok("abandoned");
     }
@@ -971,12 +1802,19 @@ fn reconcile_flow_lane(
             return Ok(LaneRecovery::Incomplete);
         }
     };
-    let supervisor_alive = journal
+    let supervisor_pid = journal
         .as_ref()
         .and_then(|journal| journal.get("supervisor_pid"))
         .and_then(Value::as_u64)
-        .and_then(|pid| u32::try_from(pid).ok())
-        .is_some_and(process_tree_alive);
+        .and_then(|pid| u32::try_from(pid).ok());
+    let supervisor_process_identity = journal
+        .as_ref()
+        .and_then(|journal| journal.get("supervisor_process_identity"))
+        .and_then(Value::as_str);
+    let supervisor_alive = !matches!(
+        recorded_process_state(supervisor_pid, supervisor_process_identity, true),
+        RecordedProcessState::VerifiedDead
+    );
     let Some(child) = child else {
         if supervisor_alive {
             mark_lane_active(lane, None)?;
@@ -1073,37 +1911,14 @@ fn child_process_alive(report: &Value) -> bool {
 }
 
 fn child_cleanup_complete(report: &Value, status: &str) -> std::result::Result<(), String> {
-    if matches!(
-        status,
-        "cleanup-incomplete" | "rollback-incomplete" | "cancellation-cleanup-incomplete"
-    ) {
-        return Err(report
-            .get("teardown")
-            .and_then(|teardown| teardown.get("error"))
-            .and_then(Value::as_str)
-            .unwrap_or("child cleanup is incomplete")
-            .to_string());
+    let parsed_status = qol_dev_env::ReportStatus::parse(status);
+    match qol_dev_env::report::child_cleanup(report, &parsed_status) {
+        qol_dev_env::CleanupState::Complete => Ok(()),
+        qol_dev_env::CleanupState::Incomplete(error) => Err(error),
+        qol_dev_env::CleanupState::Pending => {
+            Err(format!("child report has nonterminal status `{status}`"))
+        }
     }
-    if !matches!(
-        status,
-        "pass" | "failed" | "skipped" | "abandoned" | "cancelled"
-    ) {
-        return Err(format!("child report has unknown status `{status}`"));
-    }
-    let teardown = report
-        .get("teardown")
-        .filter(|teardown| !teardown.is_null())
-        .ok_or_else(|| "terminal child report has no teardown evidence".to_string())?;
-    if status != "abandoned" {
-        return Ok(());
-    }
-    let complete = teardown.get("status").and_then(Value::as_str) == Some("complete");
-    let qemu_exit = teardown.get("qemu_exit_verified").and_then(Value::as_bool) == Some(true);
-    let tree_exit = teardown.get("tree_exit_verified").and_then(Value::as_bool) == Some(true);
-    if complete && qemu_exit && tree_exit {
-        return Ok(());
-    }
-    Err("abandoned child lacks verified process-tree exit or artifact cleanup".to_string())
 }
 
 fn mark_lane_active(lane: &mut Value, report_status: Option<&str>) -> Result<()> {
@@ -1256,34 +2071,670 @@ fn update_recovered_flow_lifecycle(report: &mut Value, status: &str, observed_at
     }
 }
 
-fn environment(id: &str) -> Result<ResolvedEnvironment> {
-    let environment = dev_env::find(id)?
+fn environment(worktree: &Path, id: &str) -> Result<ResolvedEnvironment> {
+    let environment = dev_env::find_in(worktree, id)?
         .ok_or_else(|| anyhow!("unknown environment `{id}`; run `qol env list`"))?;
-    if environment.state != EnvironmentState::Ready {
+    if environment.state != ResolutionState::Ready {
         let detail = environment.messages.join("; ");
         bail!(
             "environment `{id}` is {}: {detail}",
             environment.state.as_str()
         );
     }
-    require_flow_adapter(&environment)?;
     Ok(environment)
 }
 
-fn require_flow_adapter(environment: &ResolvedEnvironment) -> Result<()> {
-    if supported_flow_adapter(&environment.definition.capabilities) {
-        return Ok(());
-    }
-    bail!(
-        "environment `{}` supports manual `qol env up` sessions but has no automated flow adapter",
-        environment.definition.id
-    )
+fn require_flow_adapter(environment: &ResolvedEnvironment) -> Result<emu::GuestAdapter> {
+    configured_flow_adapter(&environment.definition.capabilities).with_context(|| {
+        format!(
+            "environment `{}` cannot run automated flows",
+            environment.definition.id
+        )
+    })
 }
 
-fn supported_flow_adapter(capabilities: &std::collections::BTreeMap<String, String>) -> bool {
-    capabilities
+fn prepare_workflow_payload(
+    workflow: emu::WorkflowDefinition,
+    worktree: &Path,
+    run_dir: &Path,
+    verbose: bool,
+    cancellation: &impl CancellationSource,
+) -> std::result::Result<(Option<FlowPayload>, FlowPreparation), PayloadPreparationFailure> {
+    if !workflow.requires_payload() {
+        return Ok((None, FlowPreparation::pending(false)));
+    }
+    if workflow.id() != "qol-shot-capture" {
+        return Err(PayloadPreparationFailure::before_spawn(
+            anyhow!(
+                "workflow `{}` declares a payload but has no payload recipe",
+                workflow.id()
+            ),
+            false,
+        ));
+    }
+    if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        return Err(PayloadPreparationFailure::before_spawn(
+            anyhow!(
+                "workflow `{}` currently requires an x86_64 Linux build host",
+                workflow.id()
+            ),
+            false,
+        ));
+    }
+    if cancellation.is_cancelled() {
+        return Err(PayloadPreparationFailure::before_spawn(
+            anyhow!("flow execution cancelled before payload build"),
+            true,
+        ));
+    }
+    let cargo = emu::find_on_path("cargo")
+        .context("missing cargo on PATH")
+        .map_err(|error| PayloadPreparationFailure::before_spawn(error, false))?;
+    step_label(
+        "build",
+        StepKind::Pending,
+        "qol-tray + qol-shot · optimized probe-enabled sandbox profile",
+    );
+    let mut build = Command::new(&cargo);
+    build.current_dir(worktree).args([
+        "build",
+        "--profile",
+        "sandbox",
+        "-p",
+        "qol-tray",
+        "--bin",
+        "qol-tray",
+        "-p",
+        "qol-shot",
+        "--bin",
+        "qol-shot",
+    ]);
+    if !verbose {
+        build.arg("--quiet");
+    }
+    dev_env::clear_host_session(&mut build);
+    let status =
+        run_owned_preparation_command(&mut build, cancellation).map_err(|mut failure| {
+            failure.error = failure
+                .error
+                .context(format!("failed to run {}", cargo.display()));
+            failure
+        })?;
+    if !status.success() {
+        return Err(PayloadPreparationFailure {
+            error: anyhow!("sandbox payload build exited with {status}"),
+            cancelled: false,
+            preparation: Box::new(FlowPreparation {
+                status: "failed".to_string(),
+                build_status: "failed".to_string(),
+                process_status: Some(status.to_string()),
+                cleanup: PreparationCleanup::verified(),
+                iso_status: "skipped".to_string(),
+                iso_process_status: None,
+                iso_cleanup: PreparationCleanup::not_required(),
+            }),
+        });
+    }
+    step_label("build", StepKind::Success, "sandbox binaries are ready");
+    let mut preparation = FlowPreparation {
+        status: "complete".to_string(),
+        build_status: "pass".to_string(),
+        process_status: Some(status.to_string()),
+        cleanup: PreparationCleanup::verified(),
+        iso_status: "pending".to_string(),
+        iso_process_status: None,
+        iso_cleanup: PreparationCleanup::pending(),
+    };
+    if cancellation.is_cancelled() {
+        preparation.status = "cancelled".to_string();
+        preparation.iso_status = "skipped".to_string();
+        preparation.iso_cleanup = PreparationCleanup::not_required();
+        return Err(PayloadPreparationFailure {
+            error: anyhow!("flow execution cancelled after payload build"),
+            cancelled: true,
+            preparation: Box::new(preparation),
+        });
+    }
+
+    let target_root = match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(target) if Path::new(&target).is_absolute() => PathBuf::from(target),
+        Some(target) => worktree.join(target),
+        None => worktree.join("target"),
+    };
+    let binary_dir = target_root.join("sandbox");
+    let files = [
+        qol_dev_env::payload::PayloadFileSpec {
+            source: binary_dir.join(crate::workspace::exe_name("qol-tray")),
+            relative_path: PathBuf::from("bin/qol-tray"),
+            executable: true,
+        },
+        qol_dev_env::payload::PayloadFileSpec {
+            source: worktree.join("plugins/qol-shot/plugin.toml"),
+            relative_path: PathBuf::from("plugins/qol-shot/plugin.toml"),
+            executable: false,
+        },
+        qol_dev_env::payload::PayloadFileSpec {
+            source: worktree.join("plugins/qol-shot/qol-config.toml"),
+            relative_path: PathBuf::from("plugins/qol-shot/qol-config.toml"),
+            executable: false,
+        },
+        qol_dev_env::payload::PayloadFileSpec {
+            source: binary_dir.join(crate::workspace::exe_name("qol-shot")),
+            relative_path: PathBuf::from("plugins/qol-shot/qol-shot"),
+            executable: true,
+        },
+    ];
+    let payload_dir = run_dir.join("payload");
+    let prepared =
+        qol_dev_env::payload::stage_payload(&payload_dir.join("root"), workflow.id(), &files)
+            .map_err(|error| {
+                let cancelled = cancellation.is_cancelled();
+                PayloadPreparationFailure {
+                    error,
+                    cancelled,
+                    preparation: Box::new(failed_preparation(preparation.clone(), cancelled)),
+                }
+            })?;
+    let iso_tool = emu::find_on_path("genisoimage")
+        .or_else(|| emu::find_on_path("mkisofs"))
+        .context("missing genisoimage or mkisofs on PATH")
+        .map_err(|error| {
+            let cancelled = cancellation.is_cancelled();
+            PayloadPreparationFailure {
+                error,
+                cancelled,
+                preparation: Box::new(failed_preparation(preparation.clone(), cancelled)),
+            }
+        })?;
+    let mut iso_process_failure = None;
+    let mut iso_process_status = None;
+    let image = match qol_dev_env::payload::create_read_only_iso_with_runner(
+        &prepared,
+        &payload_dir,
+        iso_tool.as_os_str(),
+        |command| {
+            dev_env::clear_host_session(command);
+            match run_owned_preparation_command(command, cancellation) {
+                Ok(status) => {
+                    iso_process_status = Some(status);
+                    Ok(status)
+                }
+                Err(failure) => {
+                    let detail = format!("{:#}", failure.error);
+                    iso_process_failure = Some(failure);
+                    Err(anyhow!(detail))
+                }
+            }
+        },
+    ) {
+        Ok(image) => {
+            if let Some(status) = iso_process_status {
+                preparation.iso_status = "pass".to_string();
+                preparation.iso_process_status = Some(status.to_string());
+                preparation.iso_cleanup = PreparationCleanup::verified();
+            } else {
+                preparation.iso_status = "reused".to_string();
+                preparation.iso_cleanup = PreparationCleanup::not_required();
+            }
+            image
+        }
+        Err(error) => {
+            if let Some(failure) = iso_process_failure {
+                let process_preparation = *failure.preparation;
+                preparation.status = process_preparation.status;
+                preparation.iso_status = process_preparation.build_status;
+                preparation.iso_process_status = process_preparation.process_status;
+                preparation.iso_cleanup = process_preparation.cleanup;
+                return Err(PayloadPreparationFailure {
+                    error: failure
+                        .error
+                        .context("immutable payload ISO process failed"),
+                    cancelled: failure.cancelled,
+                    preparation: Box::new(preparation),
+                });
+            }
+            let cancelled = cancellation.is_cancelled();
+            if let Some(status) = iso_process_status {
+                preparation.iso_status = "failed".to_string();
+                preparation.iso_process_status = Some(status.to_string());
+                preparation.iso_cleanup = PreparationCleanup::verified();
+            }
+            return Err(PayloadPreparationFailure {
+                error: error.context("failed to create the immutable workflow payload"),
+                cancelled,
+                preparation: Box::new(failed_preparation(preparation, cancelled)),
+            });
+        }
+    };
+    if cancellation.is_cancelled() {
+        preparation.status = "cancelled".to_string();
+        return Err(PayloadPreparationFailure {
+            error: anyhow!("flow execution cancelled after payload ISO creation"),
+            cancelled: true,
+            preparation: Box::new(preparation),
+        });
+    }
+    step_label(
+        "payload",
+        StepKind::Success,
+        &format!("{} · shared read-only by every lane", image.path.display()),
+    );
+    Ok((
+        Some(FlowPayload {
+            root: prepared.root,
+            manifest_path: prepared.manifest_path,
+            image_path: image.path,
+            manifest_sha256: image.manifest_sha256,
+            cleanup: PayloadCleanup::pending(),
+        }),
+        preparation,
+    ))
+}
+
+fn failed_preparation(mut preparation: FlowPreparation, cancelled: bool) -> FlowPreparation {
+    preparation.status = if cancelled { "cancelled" } else { "failed" }.to_string();
+    if preparation.iso_status == "pending" {
+        preparation.iso_status = "skipped".to_string();
+        preparation.iso_cleanup = PreparationCleanup::not_required();
+    }
+    preparation
+}
+
+fn run_owned_preparation_command(
+    command: &mut Command,
+    cancellation: &impl CancellationSource,
+) -> std::result::Result<ExitStatus, PayloadPreparationFailure> {
+    if cancellation.is_cancelled() {
+        return Err(PayloadPreparationFailure::before_spawn(
+            anyhow!("flow execution cancelled before preparation command"),
+            true,
+        ));
+    }
+    qol_process::isolate_owned_command(command)
+        .context("failed to isolate preparation command process tree")
+        .map_err(|error| PayloadPreparationFailure::before_spawn(error, false))?;
+    let process_tree = qol_process::own_current_process_tree()
+        .context("failed to create preparation command process-tree ownership")
+        .map_err(|error| PayloadPreparationFailure::before_spawn(error, false))?;
+    let mut child = command
+        .spawn()
+        .context("failed to spawn preparation command")
+        .map_err(|error| PayloadPreparationFailure::before_spawn(error, false))?;
+    if let Err(error) = process_tree.assign(&child) {
+        let direct_cleanup = qol_process::terminate_owned(&mut child, SUPERVISOR_SHUTDOWN_GRACE)
+            .context("failed to stop unowned preparation child");
+        let detail = direct_cleanup.err().map_or_else(
+            || "direct child stopped, but descendant cleanup cannot be proven".to_string(),
+            |cleanup| format!("direct child cleanup also failed: {cleanup:#}"),
+        );
+        return Err(PayloadPreparationFailure {
+            error: anyhow!("failed to own preparation process tree: {error}; {detail}"),
+            cancelled: cancellation.is_cancelled(),
+            preparation: Box::new(FlowPreparation {
+                status: "cleanup-incomplete".to_string(),
+                build_status: "failed".to_string(),
+                process_status: Some("ownership-assignment-failed".to_string()),
+                cleanup: PreparationCleanup::incomplete(
+                    "preparation process descendants lack verified cleanup",
+                ),
+                iso_status: "skipped".to_string(),
+                iso_process_status: None,
+                iso_cleanup: PreparationCleanup::not_required(),
+            }),
+        });
+    }
+    loop {
+        if cancellation.is_cancelled() {
+            let cleanup = terminate_preparation_process(&mut child, &process_tree);
+            return Err(preparation_process_failure(
+                anyhow!("flow execution cancelled while running a preparation command"),
+                true,
+                "cancelled",
+                cleanup,
+            ));
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let cleanup = terminate_preparation_process(&mut child, &process_tree);
+                if let Err(error) = cleanup {
+                    return Err(preparation_process_failure(
+                        anyhow!("preparation command exited with {status}"),
+                        false,
+                        &status.to_string(),
+                        Err(error),
+                    ));
+                }
+                return Ok(status);
+            }
+            Ok(None) => thread::sleep(PREPARATION_POLL_INTERVAL),
+            Err(error) => {
+                let cleanup = terminate_preparation_process(&mut child, &process_tree);
+                return Err(preparation_process_failure(
+                    anyhow!(error).context("failed to poll preparation command"),
+                    cancellation.is_cancelled(),
+                    "wait-failed",
+                    cleanup,
+                ));
+            }
+        }
+    }
+}
+
+fn preparation_process_failure(
+    error: anyhow::Error,
+    cancelled: bool,
+    process_status: &str,
+    cleanup: Result<()>,
+) -> PayloadPreparationFailure {
+    let (status, cleanup) = match cleanup {
+        Ok(()) => (
+            if cancelled { "cancelled" } else { "failed" },
+            PreparationCleanup::verified(),
+        ),
+        Err(cleanup) => (
+            if cancelled {
+                "cancellation-cleanup-incomplete"
+            } else {
+                "cleanup-incomplete"
+            },
+            PreparationCleanup::incomplete(format!("{cleanup:#}")),
+        ),
+    };
+    PayloadPreparationFailure {
+        error,
+        cancelled,
+        preparation: Box::new(FlowPreparation {
+            status: status.to_string(),
+            build_status: if cancelled { "cancelled" } else { "failed" }.to_string(),
+            process_status: Some(process_status.to_string()),
+            cleanup,
+            iso_status: "skipped".to_string(),
+            iso_process_status: None,
+            iso_cleanup: PreparationCleanup::not_required(),
+        }),
+    }
+}
+
+fn terminate_preparation_process(
+    child: &mut Child,
+    process_tree: &qol_process::ProcessTreeGuard,
+) -> Result<()> {
+    let direct = qol_process::terminate_owned(child, SUPERVISOR_SHUTDOWN_GRACE)
+        .context("failed to stop preparation child");
+    let reaped = child.wait().context("failed to reap preparation child");
+    let tree = process_tree
+        .terminate_and_wait(SUPERVISOR_SHUTDOWN_GRACE)
+        .map(|_proof| ())
+        .context("preparation command descendants survived cleanup");
+    let errors = [direct.err(), reaped.err(), tree.err()]
+        .into_iter()
+        .flatten()
+        .map(|error| format!("{error:#}"))
+        .collect::<Vec<_>>();
+    if errors.is_empty() {
+        return Ok(());
+    }
+    bail!(errors.join("; "))
+}
+
+fn retain_payload_for_recovery(payload: &mut Option<FlowPayload>, reason: &str) {
+    if let Some(payload) = payload {
+        payload.cleanup.status = "retained".to_string();
+        payload.cleanup.complete = false;
+        payload.cleanup.error = Some(reason.to_string());
+    }
+}
+
+fn cleanup_workflow_payload(payload: &mut Option<FlowPayload>) -> Result<()> {
+    let Some(payload) = payload else {
+        return Ok(());
+    };
+    let mut removed = Vec::new();
+    let cleanup = (|| -> Result<()> {
+        match fs::remove_file(&payload.image_path) {
+            Ok(()) => removed.push(payload.image_path.clone()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to remove payload image {}",
+                        payload.image_path.display()
+                    )
+                })
+            }
+        }
+        if payload.root.exists() {
+            removed.push(qol_dev_env::payload::remove_payload(&payload.root)?);
+        }
+        if let Some(parent) = payload.root.parent() {
+            match fs::remove_dir(parent) {
+                Ok(()) => removed.push(parent.to_path_buf()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("failed to remove payload directory {}", parent.display())
+                    })
+                }
+            }
+        }
+        Ok(())
+    })();
+    payload.cleanup.removed = removed;
+    match cleanup {
+        Ok(()) => {
+            payload.cleanup.status = "complete".to_string();
+            payload.cleanup.complete = true;
+            payload.cleanup.error = None;
+            Ok(())
+        }
+        Err(error) => {
+            payload.cleanup.status = "incomplete".to_string();
+            payload.cleanup.complete = false;
+            payload.cleanup.error = Some(format!("{error:#}"));
+            Err(error)
+        }
+    }
+}
+
+fn payload_cleanup_complete(payload: Option<&FlowPayload>) -> bool {
+    payload.is_none_or(|payload| payload.cleanup.complete)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finalize_pre_fanout_failure(
+    resource_lease: dev_resources::ResourceLease,
+    run_dir: &Path,
+    batch_id: &str,
+    options: &FlowOptions,
+    worktree: &Path,
+    environment: &ResolvedEnvironment,
+    image_path: &Path,
+    memory_mb: u32,
+    cpus: u16,
+    admission: dev_resources::Admission,
+    started_at: u64,
+    lane_launch: &LaneLaunch<'_>,
+    pending: &[PendingLane],
+    payload: &mut Option<FlowPayload>,
+    preparation: &FlowPreparation,
+    cancelled: bool,
+    mut message: String,
+) -> anyhow::Error {
+    let results = pending
+        .iter()
+        .map(|lane| not_started(lane_launch, lane, &message))
+        .collect::<Vec<_>>();
+    let payload_cleanup = cleanup_workflow_payload(payload);
+    if let Err(error) = &payload_cleanup {
+        message = format!("{message}; payload cleanup failed: {error:#}");
+    }
+    let preparation_artifacts_cleanup = if payload.is_none() {
+        cleanup_payload_preparation_artifacts(run_dir)
+    } else {
+        Ok(())
+    };
+    if let Err(error) = &preparation_artifacts_cleanup {
+        message = format!("{message}; preparation artifact cleanup failed: {error:#}");
+    }
+    let cleanup_complete = preparation.cleanup_complete()
+        && payload_cleanup.is_ok()
+        && preparation_artifacts_cleanup.is_ok()
+        && payload_cleanup_complete(payload.as_ref());
+    let status = flow_status(false, cancelled, cleanup_complete);
+    if let Err(error) = write_aggregate_report(
+        run_dir,
+        batch_id,
+        options,
+        worktree,
+        environment,
+        image_path,
+        memory_mb,
+        cpus,
+        admission,
+        started_at,
+        payload.as_ref(),
+        preparation,
+        status,
+        Some(&message),
+        &results,
+    ) {
+        resource_lease.retain();
+        return anyhow!("{message}; failed to persist terminal flow report: {error:#}");
+    }
+    if cleanup_complete {
+        if let Err(error) = resource_lease
+            .release()
+            .context("failed to release the flow resource lease")
+        {
+            return anyhow!("{message}; {error:#}");
+        }
+    } else {
+        resource_lease.retain();
+    }
+    anyhow!(message)
+}
+
+fn cleanup_payload_preparation_artifacts(run_dir: &Path) -> Result<()> {
+    let payload_dir = run_dir.join("payload");
+    let root = payload_dir.join("root");
+    if root.exists() {
+        qol_dev_env::payload::remove_payload(&root)?;
+    }
+    match fs::remove_dir_all(&payload_dir) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to remove payload directory {}",
+                payload_dir.display()
+            )
+        }),
+    }
+}
+
+fn rollback_unpublished_flow(
+    resource_lease: dev_resources::ResourceLease,
+    payload: &mut Option<FlowPayload>,
+    run_dir: &Path,
+    batch_id: &str,
+    worktree: &Path,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let mut failures = vec![format!("{error:#}")];
+    let payload_cleanup = cleanup_workflow_payload(payload);
+    if let Err(error) = &payload_cleanup {
+        failures.push(format!("payload cleanup failed: {error:#}"));
+    }
+    let run_cleanup = payload_cleanup
+        .is_ok()
+        .then(|| remove_unpublished_run_dir(run_dir))
+        .transpose();
+    if let Err(error) = &run_cleanup {
+        failures.push(format!("run directory cleanup failed: {error:#}"));
+    }
+    if payload_cleanup.is_err() || run_cleanup.is_err() {
+        let evidence_error = write_unpublished_flow_failure(
+            run_dir,
+            batch_id,
+            payload.as_ref(),
+            worktree,
+            &failures.join("; "),
+        )
+        .err();
+        if let Some(error) = evidence_error {
+            failures.push(format!(
+                "failed to persist unresolved cleanup evidence: {error:#}"
+            ));
+        }
+        resource_lease.retain();
+        return anyhow!(failures.join("; "));
+    }
+    if let Err(error) = resource_lease.rollback_unpublished() {
+        failures.push(format!("resource reservation rollback failed: {error:#}"));
+    }
+    anyhow!(failures.join("; "))
+}
+
+fn write_unpublished_flow_failure(
+    run_dir: &Path,
+    batch_id: &str,
+    payload: Option<&FlowPayload>,
+    worktree: &Path,
+    error: &str,
+) -> Result<()> {
+    let report_path = run_dir.join("report.json");
+    let report = json!({
+        "name": "qol-flow-setup-failure",
+        "kind": "flow",
+        "run_id": batch_id,
+        "status": "cleanup-incomplete",
+        "owner": dev_env::run_owner_in("flow-setup", "released", worktree),
+        "payload": payload.map(payload_report),
+        "teardown": {
+            "status": "incomplete",
+            "error": error,
+        },
+        "artifacts": {
+            "run_dir": run_dir,
+            "report": report_path,
+        },
+        "error": error,
+        "next": [
+            format!("Inspect retained setup artifacts under {}.", run_dir.display()),
+            format!("After verifying no sandbox process is live, run qol env doctor --lease-clear {batch_id}."),
+        ],
+    });
+    let content = serde_json::to_vec_pretty(&report).context("failed to serialize JSON")?;
+    qol_fs::atomic_write_durable(&report_path, &content)
+        .with_context(|| format!("failed to write {}", report_path.display()))
+}
+
+fn remove_unpublished_run_dir(run_dir: &Path) -> Result<()> {
+    match fs::remove_dir_all(run_dir) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to remove unpublished flow {}", run_dir.display())),
+    }
+}
+
+fn combine_setup_errors(error: anyhow::Error, cleanup: Option<anyhow::Error>) -> anyhow::Error {
+    match cleanup {
+        Some(cleanup) => anyhow!("{error:#}; setup cleanup failed: {cleanup:#}"),
+        None => error,
+    }
+}
+
+fn configured_flow_adapter(
+    capabilities: &std::collections::BTreeMap<String, String>,
+) -> Result<emu::GuestAdapter> {
+    let adapter_id = capabilities
         .get("flow_adapter")
-        .is_some_and(|adapter| adapter == "debian-nocloud")
+        .context("manual sessions are available, but no automated flow adapter is declared")?;
+    let adapter = emu::GuestAdapter::parse(adapter_id).ok_or_else(|| {
+        anyhow!("unknown flow adapter `{adapter_id}` declared by the environment manifest")
+    })?;
+    Ok(adapter)
 }
 
 impl LaneSpawner for ProcessLaneSpawner {
@@ -1298,12 +2749,17 @@ impl LaneSpawner for ProcessLaneSpawner {
         let mut command = Command::new(launch.executable);
         command
             .args(&pending.args)
-            .current_dir(repo_root()?)
+            .current_dir(launch.worktree)
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
         dev_env::clear_host_session(&mut command);
-        isolate_supervisor(&mut command);
+        qol_process::isolate_owned_command(&mut command).with_context(|| {
+            format!(
+                "failed to isolate flow lane supervisor `{}`",
+                pending.run_id
+            )
+        })?;
         let process_tree = qol_process::own_current_process_tree()
             .context("failed to create supervisor process-tree ownership")?;
         write_lane_owner(launch, pending, "launching", None)?;
@@ -1383,17 +2839,21 @@ fn write_lane_owner(
     fs::create_dir_all(&owners_dir)
         .with_context(|| format!("failed to create {}", owners_dir.display()))?;
     let path = owners_dir.join(format!("{}.json", pending.run_id));
+    let supervisor_process_identity =
+        supervisor_pid.and_then(|pid| qol_process::process_identity(pid).ok());
     let journal = json!({
         "kind": "flow-lane-owner",
         "run_id": pending.run_id,
         "flow_run_id": launch.flow_run_id,
         "flow_report": launch.flow_report_path,
         "owner_pid": launch.owner_pid,
+        "owner_process_identity": launch.owner_process_identity.as_deref(),
         "supervisor_pid": supervisor_pid,
+        "supervisor_process_identity": supervisor_process_identity,
         "phase": phase,
-        "observed_at_unix_ms": unix_millis()?,
+        "observed_at_unix_ms": qol_dev_env::unix_millis()?,
     });
-    atomic_json(&path, &journal)?;
+    atomic_json_durable(&path, &journal)?;
     Ok(path)
 }
 
@@ -1437,23 +2897,13 @@ impl FlowJournal {
     }
 }
 
-#[cfg(unix)]
-fn isolate_supervisor(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-
-    command.process_group(0);
-}
-
-#[cfg(not(unix))]
-fn isolate_supervisor(_: &mut Command) {}
-
 fn execute_lanes(
     spawner: &mut impl LaneSpawner,
     launch: &LaneLaunch<'_>,
     pending: &[PendingLane],
     concurrent: usize,
     progress: bool,
-    cancellation: &qol_process::CancellationToken,
+    cancellation: &impl CancellationSource,
     journal: Option<&FlowJournal>,
 ) -> ExecutionOutcome {
     let mut active = Vec::<ActiveLane>::new();
@@ -1586,9 +3036,17 @@ fn show_lane_finished(progress: bool, result: &LaneResult) {
 }
 
 fn abort_lanes(active: &mut Vec<ActiveLane>, results: &mut Vec<LaneResult>, reason: &str) {
-    while let Some(lane) = active.pop() {
-        results.push(abort_lane(lane, reason));
-    }
+    let lanes = std::mem::take(active);
+    let mut aborted = thread::scope(|scope| {
+        lanes
+            .into_iter()
+            .map(|lane| scope.spawn(move || abort_lane(lane, reason)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|worker| worker.join().expect("flow lane shutdown worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    results.append(&mut aborted);
 }
 
 fn abort_lane(mut lane: ActiveLane, reason: &str) -> LaneResult {
@@ -1969,32 +3427,112 @@ fn write_effective_environment(
     atomic_json(&run_dir.join("effective-env.json"), &content)
 }
 
+fn payload_report(payload: &FlowPayload) -> Value {
+    json!({
+        "manifest": payload.manifest_path,
+        "image": payload.image_path,
+        "manifest_sha256": payload.manifest_sha256,
+        "transport": PAYLOAD_TRANSPORT,
+        "cleanup": {
+            "status": payload.cleanup.status,
+            "complete": payload.cleanup.complete,
+            "removed": payload.cleanup.removed,
+            "error": payload.cleanup.error,
+        },
+    })
+}
+
+fn preparation_report(preparation: &FlowPreparation) -> Value {
+    json!({
+        "status": preparation.status,
+        "build": {
+            "status": preparation.build_status,
+            "process_status": preparation.process_status,
+            "cleanup": {
+                "status": preparation.cleanup.status,
+                "complete": preparation.cleanup.complete,
+                "verification": preparation.cleanup.verification,
+                "error": preparation.cleanup.error,
+            },
+        },
+        "iso": {
+            "status": preparation.iso_status,
+            "process_status": preparation.iso_process_status,
+            "cleanup": {
+                "status": preparation.iso_cleanup.status,
+                "complete": preparation.iso_cleanup.complete,
+                "verification": preparation.iso_cleanup.verification,
+                "error": preparation.iso_cleanup.error,
+            },
+        },
+    })
+}
+
+fn add_payload_runtime_boundary_evidence(report: &mut Value, payload: Option<&FlowPayload>) {
+    let Some(payload) = payload else {
+        return;
+    };
+    report["desktop_runtime_boundary"] = json!({
+        "scope": "guest-runtime-only",
+        "host_worker": {
+            "session_environment_cleared": true,
+            "os_security_boundary": false,
+        },
+        "guest": {
+            "headless": true,
+            "offline": true,
+            "workspace_mounted": false,
+        },
+        "guest_payload": {
+            "identity": {
+                "kind": "manifest-sha256",
+                "value": payload.manifest_sha256,
+                "immutable": true,
+            },
+            "transport": PAYLOAD_TRANSPORT,
+            "read_only": true,
+        },
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 fn write_aggregate_report(
     run_dir: &Path,
     batch_id: &str,
     options: &FlowOptions,
+    worktree: &Path,
     environment: &ResolvedEnvironment,
     image_path: &Path,
     memory_mb: u32,
     cpus: u16,
     admission: dev_resources::Admission,
     started_at: u64,
+    payload: Option<&FlowPayload>,
+    preparation: &FlowPreparation,
     status: &str,
     error: Option<&str>,
     results: &[LaneResult],
 ) -> Result<()> {
     let lanes = lane_reports(results);
+    let active = qol_dev_env::ReportStatus::parse(status).is_active();
+    let preflight_status = if run_dir.join("host-preflight.txt").is_file() {
+        "pass"
+    } else if active {
+        "pending"
+    } else {
+        "failed"
+    };
     let mut report = json!({
         "name": "qol-flow-run",
         "kind": "flow-fanout",
         "run_id": batch_id,
         "started_at_unix_ms": started_at,
         "status": status,
-        "owner": {
-            "pid": std::process::id(),
-            "state": if status == "running" { "running" } else { "released" },
-        },
+        "owner": dev_env::run_owner_in(
+            &options.workflow,
+            if active { "running" } else { "released" },
+            worktree,
+        ),
         "workflow": {
             "id": options.workflow,
             "repeat": options.repeat,
@@ -2005,6 +3543,8 @@ fn write_aggregate_report(
             "source": environment.definition.source,
             "image_path": image_path,
         },
+        "preparation": preparation_report(preparation),
+        "payload": payload.map(payload_report),
         "resources": {
             "memory_mb_each": memory_mb,
             "cpus_each": cpus,
@@ -2037,8 +3577,12 @@ fn write_aggregate_report(
         },
         "steps": [
             {
+                "name": "preparation",
+                "status": preparation.status,
+            },
+            {
                 "name": "preflight",
-                "status": "pass",
+                "status": preflight_status,
                 "artifact": run_dir.join("host-preflight.txt"),
             },
             {
@@ -2052,16 +3596,17 @@ fn write_aggregate_report(
         "lanes": lanes,
         "next": [
             format!("Inspect each child report and log under `{}`.", run_dir.display()),
-            format!("Rerun with `qol flow run {} --env {} --repeat {} --jobs {}`.", options.workflow, options.environment_id, options.repeat, options.jobs),
+            format!("Rerun with `qol flow run {} --env {} --repeat {} --jobs {} --worktree {}`.", options.workflow, options.environment_id, options.repeat, options.jobs, worktree.display()),
         ],
     });
+    add_payload_runtime_boundary_evidence(&mut report, payload);
     let finished_at = flow_status_is_terminal(status)
-        .then(unix_millis)
+        .then(qol_dev_env::unix_millis)
         .transpose()?;
     apply_report_lifecycle(&mut report, error, finished_at);
     let _lock = lock_flow_run(run_dir)?;
     atomic_json(&run_dir.join("steps/lifecycle.json"), &report["steps"])?;
-    atomic_json(&run_dir.join("report.json"), &report)
+    atomic_json_durable(&run_dir.join("report.json"), &report)
 }
 
 fn lane_reports(results: &[LaneResult]) -> Vec<Value> {
@@ -2115,6 +3660,12 @@ fn atomic_json(path: &Path, value: &Value) -> Result<()> {
     atomic_write(path, format!("{content}\n").as_bytes())
 }
 
+fn atomic_json_durable(path: &Path, value: &Value) -> Result<()> {
+    let content = serde_json::to_vec_pretty(value).context("failed to serialize JSON")?;
+    qol_fs::atomic_write_durable(path, &content)
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
 fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
     qol_fs::atomic_write(path, content)
         .with_context(|| format!("failed to write {}", path.display()))
@@ -2123,6 +3674,8 @@ fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
 fn parse_options(args: &[OsString]) -> Result<FlowOptions> {
     let mut workflow = None;
     let mut environment_id = None;
+    let mut run_id = None;
+    let mut worktree = None;
     let mut repeat = None;
     let mut jobs = None;
     let mut memory_mb = None;
@@ -2145,6 +3698,22 @@ fn parse_options(args: &[OsString]) -> Result<FlowOptions> {
                     1,
                     u64::from(MAX_REPEAT),
                 )? as u32);
+                index += 2;
+            }
+            "--run-id" => {
+                reject_duplicate(run_id.is_some(), "--run-id")?;
+                let value = option_value(args, index, "--run-id")?;
+                qol_dev_env::validate_run_id(value)?;
+                run_id = Some(value.to_string());
+                index += 2;
+            }
+            "--worktree" => {
+                reject_duplicate(worktree.is_some(), "--worktree")?;
+                let path = PathBuf::from(option_os_value(args, index, "--worktree")?);
+                if !path.is_absolute() {
+                    bail!("--worktree requires an absolute path");
+                }
+                worktree = Some(path);
                 index += 2;
             }
             "--jobs" => {
@@ -2198,6 +3767,8 @@ fn parse_options(args: &[OsString]) -> Result<FlowOptions> {
         workflow: workflow
             .ok_or_else(|| anyhow!("usage: qol flow run <workflow> --env <environment>"))?,
         environment_id: environment_id.ok_or_else(|| anyhow!("--env is required"))?,
+        run_id,
+        worktree,
         repeat: repeat.unwrap_or(1),
         jobs: jobs.unwrap_or(1),
         memory_mb,
@@ -2206,15 +3777,18 @@ fn parse_options(args: &[OsString]) -> Result<FlowOptions> {
     })
 }
 
-fn option_value<'a>(args: &'a [OsString], index: usize, option: &str) -> Result<&'a str> {
+fn option_os_value<'a>(args: &'a [OsString], index: usize, option: &str) -> Result<&'a OsString> {
     let value = args
         .get(index + 1)
         .ok_or_else(|| anyhow!("{option} requires a value"))?;
-    let value = utf8(value)?;
-    if value.starts_with('-') {
+    if value.to_str().is_some_and(|value| value.starts_with('-')) {
         bail!("{option} requires a value");
     }
     Ok(value)
+}
+
+fn option_value<'a>(args: &'a [OsString], index: usize, option: &str) -> Result<&'a str> {
+    utf8(option_os_value(args, index, option)?)
 }
 
 fn utf8(value: &OsString) -> Result<&str> {
@@ -2243,20 +3817,12 @@ fn parse_bounded(value: &str, option: &str, minimum: u64, maximum: u64) -> Resul
     Ok(parsed)
 }
 
-fn unix_millis() -> Result<u64> {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system time is before UNIX_EPOCH")?
-        .as_millis();
-    u64::try_from(millis).context("timestamp does not fit in u64")
-}
-
 fn print_help() {
     print!("{}", help_text());
 }
 
 fn help_text() -> &'static str {
-    "qol flow commands:\n  qol flow run <workflow> --env <environment> [--repeat N] [--jobs N]\n               [--memory-mb N] [--cpus N] [--force]\n  qol flow runs\n\nFlows run headlessly in disposable environment lanes. --jobs bounds concurrent\nVMs; --repeat controls the total number of independent runs. `qol flow runs`\nreconciles interrupted fan-outs and lists active or incomplete flow reports.\nRun placement and acceleration come from the selected environment definition.\n"
+    "qol flow commands:\n  qol flow run <workflow> --env <environment> [--repeat N] [--jobs N]\n               [--memory-mb N] [--cpus N] [--worktree PATH] [--force]\n  qol flow runs\n\nFlows run headlessly in disposable environment lanes. --jobs bounds concurrent\nVMs; --repeat controls the total number of independent runs. `qol flow runs`\nreconciles interrupted fan-outs and lists active or incomplete flow reports.\nRun placement and acceleration come from the selected environment definition.\n"
 }
 
 #[cfg(test)]
@@ -2264,10 +3830,110 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{mpsc, Arc, Condvar, Mutex};
 
     fn argv(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
+    }
+
+    fn immutable_flow_plan(root: &Path) -> FlowPlan {
+        let worktree = root.join("worktree");
+        let run_root = root.join("runs");
+        let image_path = root.join("images/mint.qcow2");
+        let definition = qol_dev_env::registry::parse_definition(
+            include_str!("../../../../flows/envs/linux-mint-cinnamon.toml"),
+            Path::new("flows/envs/linux-mint-cinnamon.toml"),
+        )
+        .unwrap();
+        let start = FlowStart {
+            workflow: "qol-shot-capture".to_string(),
+            environment_id: definition.id.clone(),
+            worktree,
+            run_id: "flow-plan-test".to_string(),
+            repeat: 3,
+            jobs: 2,
+            memory_mb: Some(4096),
+            cpus: Some(4),
+            force: false,
+        };
+        let ticket = start.ticket(&run_root).unwrap();
+        FlowPlan {
+            start,
+            environment: ResolvedEnvironment {
+                definition,
+                state: ResolutionState::Ready,
+                image_path: Some(image_path.clone()),
+                verified_image: None,
+                run_root: Some(run_root.clone()),
+                messages: Vec::new(),
+            },
+            workflow: emu::workflow_definition("qol-shot-capture").unwrap(),
+            guest_adapter: emu::GuestAdapter::MintCinnamon,
+            image_path,
+            resources: dev_resources::profile(4096, 4).unwrap(),
+            concurrent: 2,
+            run_root,
+            ticket,
+        }
+    }
+
+    #[test]
+    fn flow_plan_fingerprint_covers_semantic_config_and_ticket() {
+        let temp = tempfile::tempdir().unwrap();
+        let plan = immutable_flow_plan(temp.path());
+        let fingerprint = plan.fingerprint().unwrap();
+        assert_eq!(fingerprint.len(), 64);
+
+        let mut changed_config = plan.clone();
+        changed_config
+            .environment
+            .definition
+            .capabilities
+            .insert("image_revision".to_string(), "changed-revision".to_string());
+        assert_ne!(changed_config.fingerprint().unwrap(), fingerprint);
+
+        let mut changed_ticket = plan;
+        changed_ticket.ticket.report_path = temp.path().join("other/report.json");
+        assert_ne!(changed_ticket.fingerprint().unwrap(), fingerprint);
+    }
+
+    #[test]
+    fn typed_worker_plan_rejects_drift_before_creating_a_report() {
+        let temp = tempfile::tempdir().unwrap();
+        let plan = immutable_flow_plan(temp.path());
+        let run_dir = plan.ticket.report_path.parent().unwrap().to_path_buf();
+        let mut request = FlowWorkerRequest {
+            start: plan.start.clone(),
+            run_root: plan.run_root.clone(),
+            plan_fingerprint: plan.fingerprint().unwrap(),
+            verbose: false,
+        };
+        validate_flow_worker_plan(&request, &plan).unwrap();
+
+        request.plan_fingerprint = "b".repeat(64);
+        let error = validate_flow_worker_plan(&request, &plan).unwrap_err();
+
+        assert!(error.to_string().contains("plan changed"));
+        assert!(!run_dir.exists());
+    }
+
+    struct FixedCancellation(bool);
+
+    impl CancellationSource for FixedCancellation {
+        fn is_cancelled(&self) -> bool {
+            self.0
+        }
+    }
+
+    struct CancelAfterPoll {
+        polls: AtomicUsize,
+        cancel_at: usize,
+    }
+
+    impl CancellationSource for CancelAfterPoll {
+        fn is_cancelled(&self) -> bool {
+            self.polls.fetch_add(1, Ordering::SeqCst) + 1 >= self.cancel_at
+        }
     }
 
     struct RecoveryFixture {
@@ -2411,6 +4077,31 @@ mod tests {
         }
     }
 
+    struct CoordinatedShutdown {
+        started: mpsc::Sender<()>,
+        release: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl Supervisor for CoordinatedShutdown {
+        fn try_wait(&mut self) -> Result<Option<SupervisorExit>> {
+            Ok(None)
+        }
+
+        fn shutdown(&mut self, _: &str) -> ShutdownOutcome {
+            self.started.send(()).unwrap();
+            let (released, wake) = &*self.release;
+            let mut released = released.lock().unwrap();
+            while !*released {
+                released = wake.wait(released).unwrap();
+            }
+            ShutdownOutcome {
+                process_status: "terminated".to_string(),
+                error: None,
+                cleanup: LaneCleanup::not_required(),
+            }
+        }
+    }
+
     struct FakeSpawner {
         plans: VecDeque<FakePlan>,
         shutdowns: Arc<AtomicUsize>,
@@ -2469,11 +4160,13 @@ mod tests {
     fn fake_launch<'a>(temp: &'a tempfile::TempDir, executable: &'a Path) -> LaneLaunch<'a> {
         LaneLaunch {
             executable,
+            worktree: temp.path(),
             logs_dir: temp.path(),
             case_root: temp.path(),
             flow_run_id: "flow-test",
             flow_report_path: temp.path(),
             owner_pid: std::process::id(),
+            owner_process_identity: qol_process::process_identity(std::process::id()).ok(),
         }
     }
 
@@ -2502,6 +4195,42 @@ mod tests {
                 "verdict": "pass",
             },
         })
+    }
+
+    #[test]
+    fn abort_starts_every_active_lane_shutdown_concurrently() {
+        let (started, starts) = mpsc::channel();
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+        let mut active = ["lane-1", "lane-2"]
+            .into_iter()
+            .map(|run_id| ActiveLane {
+                run_id: run_id.to_string(),
+                report_path: PathBuf::from(format!("/runs/{run_id}/report.json")),
+                log_path: PathBuf::from(format!("/runs/{run_id}/run.log")),
+                supervisor: Box::new(CoordinatedShutdown {
+                    started: started.clone(),
+                    release: Arc::clone(&release),
+                }),
+            })
+            .collect::<Vec<_>>();
+        let worker = std::thread::spawn(move || {
+            let mut results = Vec::new();
+            abort_lanes(&mut active, &mut results, "test cancellation");
+            results
+        });
+
+        let first = starts.recv_timeout(Duration::from_secs(1));
+        let second = starts.recv_timeout(Duration::from_secs(1));
+        {
+            let (released, wake) = &*release;
+            *released.lock().unwrap() = true;
+            wake.notify_all();
+        }
+        let results = worker.join().unwrap();
+
+        assert!(first.is_ok(), "first lane did not begin shutdown");
+        assert!(second.is_ok(), "second lane shutdown waited for the first");
+        assert_eq!(results.len(), 2);
     }
 
     #[test]
@@ -2649,6 +4378,70 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_stops_the_owned_payload_build_tree_with_verified_cleanup() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30 & wait"]);
+        let cancellation = CancelAfterPoll {
+            polls: AtomicUsize::new(0),
+            cancel_at: 2,
+        };
+
+        let failure = run_owned_preparation_command(&mut command, &cancellation).unwrap_err();
+
+        assert!(failure.cancelled);
+        assert_eq!(failure.preparation.status, "cancelled");
+        assert_eq!(failure.preparation.build_status, "cancelled");
+        assert!(failure.preparation.cleanup.complete);
+        assert_eq!(
+            failure.preparation.cleanup.verification.as_deref(),
+            Some("owned-process-tree-exit")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_payload_build_waits_for_owned_tree_cleanup_proof() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 0"]);
+
+        let status =
+            run_owned_preparation_command(&mut command, &FixedCancellation(false)).unwrap();
+
+        assert!(status.success());
+    }
+
+    #[test]
+    fn preparation_report_distinguishes_pending_and_verified_process_cleanup() {
+        let pending = FlowPreparation::pending(true);
+        let pending_report = preparation_report(&pending);
+        assert_eq!(pending_report["status"], "preparing");
+        assert_eq!(pending_report["build"]["status"], "pending");
+        assert_eq!(pending_report["build"]["cleanup"]["complete"], false);
+
+        let verified = FlowPreparation {
+            status: "complete".to_string(),
+            build_status: "pass".to_string(),
+            process_status: Some("exit status: 0".to_string()),
+            cleanup: PreparationCleanup::verified(),
+            iso_status: "pass".to_string(),
+            iso_process_status: Some("exit status: 0".to_string()),
+            iso_cleanup: PreparationCleanup::verified(),
+        };
+        let verified_report = preparation_report(&verified);
+        assert_eq!(verified_report["build"]["cleanup"]["complete"], true);
+        assert_eq!(
+            verified_report["build"]["cleanup"]["verification"],
+            "owned-process-tree-exit"
+        );
+        assert_eq!(
+            verified_report["iso"]["cleanup"]["verification"],
+            "owned-process-tree-exit"
+        );
+        assert!(verified_report.get("os_security_boundary").is_none());
+    }
+
     #[test]
     fn only_terminal_reports_receive_error_and_finish_timestamp() {
         let mut active = json!({"status": "running"});
@@ -2660,6 +4453,208 @@ mod tests {
         apply_report_lifecycle(&mut terminal, Some("injected failure"), Some(42));
         assert_eq!(terminal["finished_at_unix_ms"], 42);
         assert_eq!(terminal["error"], "injected failure");
+    }
+
+    #[test]
+    fn aggregate_runtime_boundary_is_payload_scoped_and_content_bound() {
+        let mut report = json!({"kind": "flow-fanout"});
+        add_payload_runtime_boundary_evidence(&mut report, None);
+        assert!(report.get("desktop_runtime_boundary").is_none());
+
+        let payload = FlowPayload {
+            root: PathBuf::from("/runs/payload/root"),
+            manifest_path: PathBuf::from("/runs/payload/root/manifest.json"),
+            image_path: PathBuf::from("/runs/payload/digest.iso"),
+            manifest_sha256: "digest".to_string(),
+            cleanup: PayloadCleanup::pending(),
+        };
+        add_payload_runtime_boundary_evidence(&mut report, Some(&payload));
+
+        assert_eq!(
+            report["desktop_runtime_boundary"],
+            json!({
+                "scope": "guest-runtime-only",
+                "host_worker": {
+                    "session_environment_cleared": true,
+                    "os_security_boundary": false,
+                },
+                "guest": {
+                    "headless": true,
+                    "offline": true,
+                    "workspace_mounted": false,
+                },
+                "guest_payload": {
+                    "identity": {
+                        "kind": "manifest-sha256",
+                        "value": "digest",
+                        "immutable": true,
+                    },
+                    "transport": "read-only-iso9660",
+                    "read_only": true,
+                },
+            })
+        );
+        assert_eq!(
+            payload_report(&payload)["transport"],
+            report["desktop_runtime_boundary"]["guest_payload"]["transport"]
+        );
+    }
+
+    #[test]
+    fn flow_cancellation_observes_either_signals_or_the_owner_inbox() {
+        for (signals, inbox, expected) in [
+            (false, false, false),
+            (true, false, true),
+            (false, true, true),
+            (true, true, true),
+        ] {
+            let signals = FixedCancellation(signals);
+            let inbox = FixedCancellation(inbox);
+            let cancellation = FlowCancellation {
+                signals: &signals,
+                inbox: &inbox,
+            };
+            assert_eq!(cancellation.is_cancelled(), expected);
+        }
+    }
+
+    #[test]
+    fn successful_payload_cleanup_removes_image_root_and_payload_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("qol-shot");
+        fs::write(&source, b"sandbox binary").unwrap();
+        let payload_dir = temp.path().join("flow/payload");
+        let prepared = qol_dev_env::payload::stage_payload(
+            &payload_dir.join("root"),
+            "qol-shot-capture",
+            &[qol_dev_env::payload::PayloadFileSpec {
+                source,
+                relative_path: PathBuf::from("bin/qol-shot"),
+                executable: true,
+            }],
+        )
+        .unwrap();
+        let image_path = payload_dir.join("payload.iso");
+        fs::write(&image_path, b"iso").unwrap();
+        let root = prepared.root.clone();
+        let mut payload = Some(FlowPayload {
+            root: prepared.root,
+            manifest_path: prepared.manifest_path,
+            image_path: image_path.clone(),
+            manifest_sha256: "digest".to_string(),
+            cleanup: PayloadCleanup::pending(),
+        });
+
+        cleanup_workflow_payload(&mut payload).unwrap();
+
+        let payload = payload.unwrap();
+        assert_eq!(payload.cleanup.status, "complete");
+        assert!(payload.cleanup.complete);
+        assert_eq!(
+            payload.cleanup.removed,
+            vec![image_path.clone(), root.clone(), payload_dir.clone()]
+        );
+        assert!(!image_path.exists());
+        assert!(!root.exists());
+        assert!(!payload_dir.exists());
+    }
+
+    #[test]
+    fn unresolved_unpublished_flow_cleanup_writes_durable_quarantine_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_dir = temp.path().join("flows/quarantined");
+
+        write_unpublished_flow_failure(
+            &run_dir,
+            "quarantined",
+            None,
+            temp.path(),
+            "cleanup failed",
+        )
+        .unwrap();
+
+        let report_path = run_dir.join("report.json");
+        let report = qol_dev_env::read_report(&report_path).unwrap().unwrap();
+        assert_eq!(report.run_id, "quarantined");
+        assert_eq!(report.kind, qol_dev_env::ReportKind::Flow);
+        assert_eq!(report.status, qol_dev_env::ReportStatus::CleanupIncomplete);
+        assert_eq!(report.owner.worktree.as_deref(), Some(temp.path()));
+        assert!(matches!(
+            report.cleanup,
+            qol_dev_env::CleanupState::Incomplete(_)
+        ));
+    }
+
+    #[test]
+    fn dead_flow_owner_reconciles_its_owned_payload_before_becoming_terminal() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = recovery_fixture(&temp, u32::MAX, "running", "planned");
+        let source = temp.path().join("payload-source");
+        fs::write(&source, b"sandbox binary").unwrap();
+        let payload_dir = fixture.flow_dir.join("payload");
+        let prepared = qol_dev_env::payload::stage_payload(
+            &payload_dir.join("root"),
+            "qol-shot-capture",
+            &[qol_dev_env::payload::PayloadFileSpec {
+                source,
+                relative_path: PathBuf::from("bin/qol-shot"),
+                executable: true,
+            }],
+        )
+        .unwrap();
+        let digest = "a".repeat(64);
+        let image_path = payload_dir.join(format!("{digest}.iso"));
+        fs::write(&image_path, b"iso").unwrap();
+        let mut report = read_value(&fixture.report_path);
+        report["payload"] = json!({
+            "manifest": prepared.manifest_path,
+            "image": image_path,
+            "manifest_sha256": digest,
+            "cleanup": { "status": "pending", "complete": false },
+        });
+        fs::write(
+            &fixture.report_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let summary = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+        let report = read_value(&fixture.report_path);
+
+        assert_eq!(summary.status, "abandoned");
+        assert_eq!(report["payload"]["cleanup"]["status"], "complete");
+        assert_eq!(report["payload"]["cleanup"]["complete"], true);
+        assert!(!payload_dir.exists());
+    }
+
+    #[test]
+    fn recovery_refuses_payload_paths_outside_the_owned_flow_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = recovery_fixture(&temp, u32::MAX, "running", "planned");
+        let outside = temp.path().join("outside-manifest.json");
+        fs::write(&outside, b"keep").unwrap();
+        let digest = "a".repeat(64);
+        let mut report = read_value(&fixture.report_path);
+        report["payload"] = json!({
+            "manifest": outside,
+            "image": fixture.flow_dir.join("payload").join(format!("{digest}.iso")),
+            "manifest_sha256": digest,
+            "cleanup": { "status": "pending", "complete": false },
+        });
+        fs::write(
+            &fixture.report_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let summary = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(summary.status, "cleanup-incomplete");
+        assert_eq!(fs::read(&outside).unwrap(), b"keep");
     }
 
     #[test]
@@ -2678,6 +4673,28 @@ mod tests {
         assert_eq!(report["lanes"][0]["cleanup"]["complete"], true);
         assert!(report.get("finished_at_unix_ms").is_some());
         assert!(fixture.flow_dir.join("report.interrupted.json").is_file());
+    }
+
+    #[test]
+    fn dead_owner_with_unverified_preparation_cleanup_stays_incomplete() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = recovery_fixture(&temp, u32::MAX, "running", "planned");
+        let mut report = read_value(&fixture.report_path);
+        report["preparation"] = preparation_report(&FlowPreparation::pending(true));
+        fs::write(
+            &fixture.report_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let summary = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+        let report = read_value(&fixture.report_path);
+
+        assert_eq!(summary.status, "cleanup-incomplete");
+        assert_eq!(report["status"], "cleanup-incomplete");
+        assert_eq!(report["preparation"]["build"]["cleanup"]["complete"], false);
     }
 
     #[test]
@@ -2712,7 +4729,81 @@ mod tests {
     }
 
     #[test]
+    fn reused_owner_pid_with_mismatched_identity_is_not_treated_as_live() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = recovery_fixture(&temp, std::process::id(), "running", "planned");
+        let mut report = read_value(&fixture.report_path);
+        report["owner"]["process_identity"] = json!("stale-process-identity");
+        fs::write(
+            &fixture.report_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let summary = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(summary.status, "abandoned");
+    }
+
+    #[test]
+    fn recorded_process_state_requires_identity_but_keeps_legacy_liveness_uncertain() {
+        let pid = std::process::id();
+        let identity = qol_process::process_identity(pid).unwrap();
+        assert_eq!(
+            recorded_process_state(Some(pid), Some(&identity), false),
+            RecordedProcessState::VerifiedAlive
+        );
+        assert_eq!(
+            recorded_process_state(Some(pid), Some("stale-process-identity"), false),
+            RecordedProcessState::VerifiedDead
+        );
+        assert_eq!(
+            recorded_process_state(Some(pid), None, false),
+            RecordedProcessState::Uncertain
+        );
+        assert_eq!(
+            recorded_process_state(Some(u32::MAX), None, false),
+            RecordedProcessState::VerifiedDead
+        );
+    }
+
+    #[test]
     fn completed_child_pass_after_parent_crash_is_still_abandoned() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = recovery_fixture(&temp, u32::MAX, "running", "spawned");
+        fs::write(
+            fixture.lane_dir.join("report.json"),
+            serde_json::to_vec_pretty(&json!({
+                "kind": "flow",
+                "run_id": fixture.lane_id,
+                "status": "pass",
+                "workflow": { "verdict": "pass" },
+                "teardown": {
+                    "status": "complete",
+                    "qemu_exit_verified": true,
+                    "tree_exit_verified": true,
+                    "removed": []
+                },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let summary = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+        let report = read_value(&fixture.report_path);
+
+        assert_eq!(summary.status, "abandoned");
+        assert_eq!(report["lanes"][0]["passed"], true);
+        assert_eq!(report["lanes"][0]["cleanup"]["complete"], true);
+        assert_eq!(report["status"], "abandoned");
+    }
+
+    #[test]
+    fn terminal_child_without_explicit_cleanup_proof_stays_incomplete() {
         let temp = tempfile::tempdir().unwrap();
         let fixture = recovery_fixture(&temp, u32::MAX, "running", "spawned");
         fs::write(
@@ -2733,10 +4824,13 @@ mod tests {
             .unwrap();
         let report = read_value(&fixture.report_path);
 
-        assert_eq!(summary.status, "abandoned");
-        assert_eq!(report["lanes"][0]["passed"], true);
-        assert_eq!(report["lanes"][0]["cleanup"]["complete"], true);
-        assert_eq!(report["status"], "abandoned");
+        assert_eq!(summary.status, "cleanup-incomplete");
+        assert_eq!(report["status"], "cleanup-incomplete");
+        assert_eq!(report["lanes"][0]["cleanup"]["complete"], false);
+        assert!(report["lanes"][0]["cleanup"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("verified process-tree exit"));
     }
 
     #[test]
@@ -2749,7 +4843,12 @@ mod tests {
                 "kind": "flow",
                 "run_id": fixture.lane_id,
                 "status": "failed",
-                "teardown": { "removed": [] },
+                "teardown": {
+                    "status": "complete",
+                    "qemu_exit_verified": true,
+                    "tree_exit_verified": true,
+                    "removed": []
+                },
             }))
             .unwrap(),
         )
@@ -2790,13 +4889,18 @@ mod tests {
         assert_eq!(defaults.jobs, 1);
         assert_eq!(defaults.memory_mb, None);
         assert_eq!(defaults.cpus, None);
+        assert_eq!(defaults.run_id, None);
+        assert_eq!(defaults.worktree, None);
         assert!(!defaults.force);
 
-        let complete = parse_options(&argv(&[
+        let worktree = std::env::temp_dir().join("qol-worktrees/feat-x");
+        let mut complete_args = argv(&[
             "--jobs",
             "10",
             "--env",
             "linux/debian",
+            "--run-id",
+            "dev-flow-1",
             "--force",
             "leaves-no-trace",
             "--repeat",
@@ -2805,13 +4909,19 @@ mod tests {
             "2",
             "--memory-mb",
             "1536",
-        ]))
-        .unwrap();
+        ]);
+        complete_args.extend([
+            OsString::from("--worktree"),
+            worktree.clone().into_os_string(),
+        ]);
+        let complete = parse_options(&complete_args).unwrap();
         assert_eq!(
             complete,
             FlowOptions {
                 workflow: "leaves-no-trace".to_string(),
                 environment_id: "linux/debian".to_string(),
+                run_id: Some("dev-flow-1".to_string()),
+                worktree: Some(worktree),
                 repeat: 12,
                 jobs: 10,
                 memory_mb: Some(1536),
@@ -2828,6 +4938,16 @@ mod tests {
             (vec!["flow"], "--env"),
             (vec!["flow", "--env"], "requires a value"),
             (vec!["flow", "--env", "a", "--env", "b"], "duplicate"),
+            (vec!["flow", "--env", "a", "--run-id", "bad/run"], "invalid"),
+            (
+                vec!["flow", "--env", "a", "--run-id", "one", "--run-id", "two"],
+                "duplicate",
+            ),
+            (vec!["flow", "--env", "a", "--worktree"], "requires a value"),
+            (
+                vec!["flow", "--env", "a", "--worktree", "relative"],
+                "absolute path",
+            ),
             (
                 vec!["flow", "--env", "a", "--force", "--force"],
                 "duplicate",
@@ -2845,6 +4965,21 @@ mod tests {
                 "arguments: {arguments:?}, error: {error:#}"
             );
         }
+        let first = std::env::temp_dir().join("qol-worktree-one");
+        let second = std::env::temp_dir().join("qol-worktree-two");
+        let duplicate = vec![
+            OsString::from("flow"),
+            OsString::from("--env"),
+            OsString::from("a"),
+            OsString::from("--worktree"),
+            first.into_os_string(),
+            OsString::from("--worktree"),
+            second.into_os_string(),
+        ];
+        assert!(parse_options(&duplicate)
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate"));
     }
 
     #[test]
@@ -2863,11 +4998,12 @@ mod tests {
     }
 
     #[test]
-    fn only_declared_debian_nocloud_guests_run_automated_flows() {
+    fn manifest_adapter_selection_accepts_typed_prepared_adapters_and_rejects_unknowns() {
         let cases = [
-            (Some("debian-nocloud"), true),
-            (Some("mint"), false),
-            (None, false),
+            (Some("debian-nocloud"), Ok(emu::GuestAdapter::DebianNocloud)),
+            (Some("mint-cinnamon"), Ok(emu::GuestAdapter::MintCinnamon)),
+            (Some("mint"), Err("unknown flow adapter")),
+            (None, Err("no automated flow adapter")),
         ];
         for (adapter, expected) in cases {
             let capabilities = adapter
@@ -2878,7 +5014,38 @@ mod tests {
                     )])
                 })
                 .unwrap_or_default();
-            assert_eq!(supported_flow_adapter(&capabilities), expected);
+            match expected {
+                Ok(expected) => {
+                    assert_eq!(configured_flow_adapter(&capabilities).unwrap(), expected)
+                }
+                Err(expected) => {
+                    let error = configured_flow_adapter(&capabilities).unwrap_err();
+                    assert!(error.to_string().contains(expected), "error: {error:#}");
+                }
+            }
         }
+    }
+
+    #[test]
+    fn mint_manifest_selects_only_automated_desktop_workflows() {
+        let definition = qol_dev_env::registry::parse_definition(
+            include_str!("../../../../flows/envs/linux-mint-cinnamon.toml"),
+            Path::new("flows/envs/linux-mint-cinnamon.toml"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            definition
+                .capabilities
+                .get("flow_adapter")
+                .map(String::as_str),
+            Some("mint-cinnamon")
+        );
+        assert!(!definition.mounts.workspace);
+        let adapter = configured_flow_adapter(&definition.capabilities).unwrap();
+        let serial = emu::workflow_definition("leaves-no-trace").unwrap();
+        let desktop = emu::workflow_definition("qol-shot-capture").unwrap();
+        assert!(emu::validate_workflow_adapter(serial, adapter).is_err());
+        emu::validate_workflow_adapter(desktop, adapter).unwrap();
     }
 }

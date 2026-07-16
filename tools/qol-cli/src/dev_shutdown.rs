@@ -1,5 +1,7 @@
 use anyhow::{bail, Result};
+#[cfg(unix)]
 use std::fs;
+#[cfg(unix)]
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -137,6 +139,7 @@ fn merge_current_daemons(daemons: &mut Vec<TrackedDaemonPid>) {
     daemons.dedup();
 }
 
+#[cfg(unix)]
 fn runtime_daemon_pids_from_dir(pids_dir: &Path) -> Vec<TrackedDaemonPid> {
     let mut daemons: Vec<_> = fs::read_dir(pids_dir)
         .into_iter()
@@ -197,7 +200,7 @@ fn running_executable(pid: u32) -> Option<std::path::PathBuf> {
     fs::read_link(Path::new("/proc").join(pid.to_string()).join("exe")).ok()
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(unix, not(target_os = "linux")))]
 fn running_executable(_pid: u32) -> Option<std::path::PathBuf> {
     None
 }
@@ -253,6 +256,7 @@ fn managed_roots() -> &'static [std::path::PathBuf] {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn runtime_daemon_pids_from_dir_reads_valid_pid_files() {
         let tmp = tempfile::TempDir::new().unwrap();

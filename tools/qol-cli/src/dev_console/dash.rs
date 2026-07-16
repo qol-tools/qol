@@ -1,12 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::process::Child;
-use std::sync::mpsc::Receiver;
+use std::sync::{mpsc::Receiver, Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::commands::emu::{emu_scan, EnvironmentStatus, ImageCandidate};
+use crate::commands::emu::ImageCandidate;
+use crate::commands::{dev_env, emu};
 use crate::dev_server::{
     fetch_active_worktree, fetch_plugin_health_rows, fetch_workspace_plugins, health_ok, web_ok,
     ActiveWorktreeResponse, EndpointStatus, PluginHealthRow, WorkspacePlugin,
@@ -15,7 +17,7 @@ use crate::poller::Poller;
 
 use super::console_state::ConsoleState;
 use super::doctor::{spawn_doctor, spawn_doctor_probe, DoctorMode, DoctorPanel, DoctorRun};
-use super::emu_panel::{EmuDetail, EmuState};
+use super::emu_panel::{ActiveSandboxRun, EmuDetail, EmuState};
 use super::feature_flags::{
     feature_flag_brick_layout, toggle_feature_flag, FeatureFlagPanel, FeatureFlags, FEATURE_FLAGS,
 };
@@ -123,10 +125,33 @@ pub(super) struct HealthSnapshot {
     pub(super) web: bool,
 }
 
-pub(super) type EmuScanResult = Result<(Vec<EnvironmentStatus>, Vec<ImageCandidate>), String>;
+pub(super) type EmuScanResult = Result<(qol_dev_env::Inventory, Vec<ImageCandidate>), String>;
 pub(super) type LinksProbeResult =
     Result<(Vec<WorkspacePlugin>, Option<Vec<PluginHealthRow>>), String>;
 pub(super) type ActiveWorktreeResult = Result<ActiveWorktreeResponse, String>;
+
+#[derive(Clone)]
+struct ProbeWorktree(Arc<Mutex<PathBuf>>);
+
+impl ProbeWorktree {
+    fn new(root: PathBuf) -> Self {
+        Self(Arc::new(Mutex::new(root)))
+    }
+
+    fn current(&self) -> PathBuf {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn replace(&self, root: &Path) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = root.to_path_buf();
+    }
+}
 
 pub(super) struct Probes {
     pub(super) health: Poller<HealthSnapshot>,
@@ -135,10 +160,13 @@ pub(super) struct Probes {
     pub(super) links: Poller<LinksProbeResult>,
     pub(super) doctor: Poller<Result<DoctorRun, String>>,
     pub(super) endpoints: Option<Poller<Vec<EndpointStatus>>>,
+    emu_worktree: ProbeWorktree,
 }
 
 impl Probes {
-    pub(super) fn spawn() -> Self {
+    pub(super) fn spawn(running_worktree: PathBuf) -> Self {
+        let emu_worktree = ProbeWorktree::new(running_worktree);
+        let emu_probe_worktree = emu_worktree.clone();
         Self {
             health: Poller::spawn(HEALTH_PROBE_INTERVAL, || HealthSnapshot {
                 api: health_ok(),
@@ -147,8 +175,22 @@ impl Probes {
             active_worktree: Poller::spawn(HEALTH_PROBE_INTERVAL, || {
                 fetch_active_worktree().map_err(|error| format!("{error:#}"))
             }),
-            emu: Poller::spawn(EMU_REFRESH_INTERVAL, || {
-                emu_scan().map_err(|error| format!("{error:#}"))
+            emu: Poller::spawn(EMU_REFRESH_INTERVAL, move || {
+                let root = emu_probe_worktree.current();
+                let mut inventory =
+                    dev_env::snapshot_in(&root).map_err(|error| format!("{error:#}"))?;
+                let candidates = match emu::discover_all() {
+                    Ok(discovered) => discovered.candidates,
+                    Err(error) => {
+                        inventory.issues.push(qol_dev_env::InventoryIssue {
+                            path: emu::emu_config_path().unwrap_or_default(),
+                            message: format!("unregistered image discovery failed: {error:#}"),
+                        });
+                        Vec::new()
+                    }
+                };
+                let candidates = without_registered_candidates(&inventory, candidates);
+                Ok((inventory, candidates))
             }),
             links: Poller::spawn(LINKS_REFRESH_INTERVAL, || {
                 fetch_workspace_plugins()
@@ -157,8 +199,30 @@ impl Probes {
             }),
             doctor: spawn_doctor_probe(),
             endpoints: None,
+            emu_worktree,
         }
     }
+}
+
+fn without_registered_candidates(
+    inventory: &qol_dev_env::Inventory,
+    candidates: Vec<ImageCandidate>,
+) -> Vec<ImageCandidate> {
+    let registered = inventory
+        .environments
+        .iter()
+        .filter(|environment| environment.resolved.state == qol_dev_env::ResolutionState::Ready)
+        .filter_map(|environment| environment.resolved.image_path.as_deref())
+        .map(canonical_or_self)
+        .collect::<HashSet<_>>();
+    candidates
+        .into_iter()
+        .filter(|candidate| !registered.contains(&canonical_or_self(&candidate.path)))
+        .collect()
+}
+
+fn canonical_or_self(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[derive(Default)]
@@ -170,6 +234,7 @@ pub(super) struct Pokes {
 
 pub(super) fn flush_pokes(dash: &mut Dash, probes: &Probes) {
     if std::mem::take(&mut dash.pokes.emu) {
+        sync_emu_probe_worktree(dash, &probes.emu_worktree);
         probes.emu.poke();
     }
     if std::mem::take(&mut dash.pokes.links) {
@@ -178,6 +243,10 @@ pub(super) fn flush_pokes(dash: &mut Dash, probes: &Probes) {
     if std::mem::take(&mut dash.pokes.doctor) {
         probes.doctor.poke();
     }
+}
+
+fn sync_emu_probe_worktree(dash: &Dash, probe_worktree: &ProbeWorktree) {
+    probe_worktree.replace(&dash.running_worktree);
 }
 
 pub(super) enum LinksState {
@@ -215,9 +284,10 @@ pub(super) struct Dash {
     pub(super) plugin_reload: RebuildState,
     pub(super) plugin_names: Vec<String>,
     pub(super) emu: EmuState,
-    pub(super) active_runs: HashMap<String, LogPane>,
+    pub(super) active_runs: HashMap<String, ActiveSandboxRun>,
     pub(super) emu_detail: Option<EmuDetail>,
     pub(super) emu_cursor: usize,
+    pub(super) sandbox_flow_lanes: u32,
     pub(super) emu_candidates: Vec<ImageCandidate>,
     pub(super) log_height: usize,
     pub(super) cursor: usize,
@@ -233,6 +303,7 @@ pub(super) struct Dash {
     pub(super) worktree_selection: WorktreeSelection,
     pub(super) startup_branch: Option<String>,
     pub(super) running_branch: Option<String>,
+    pub(super) running_worktree: PathBuf,
     pub(super) base_label: String,
     pub(super) boot_rx: Option<Receiver<String>>,
     pub(super) keys_hidden: bool,
@@ -255,12 +326,13 @@ pub(super) struct Dash {
 impl Dash {
     #[cfg(test)]
     pub(super) fn new(plugin_names: Vec<String>) -> Self {
-        Self::new_for_startup(plugin_names, None)
+        Self::new_for_startup(plugin_names, None, PathBuf::from("/qol/base"))
     }
 
     pub(super) fn new_for_startup(
         plugin_names: Vec<String>,
         startup_branch: Option<String>,
+        running_worktree: PathBuf,
     ) -> Self {
         Self {
             view: View::Dashboard,
@@ -278,6 +350,7 @@ impl Dash {
             active_runs: HashMap::new(),
             emu_detail: None,
             emu_cursor: 0,
+            sandbox_flow_lanes: 1,
             emu_candidates: Vec::new(),
             log_height: 0,
             cursor: 0,
@@ -304,6 +377,7 @@ impl Dash {
             worktree_selection: WorktreeSelection::Follow,
             startup_branch: startup_branch.clone(),
             running_branch: startup_branch,
+            running_worktree,
             base_label: "base".to_string(),
             boot_rx: None,
             keys_hidden: false,
@@ -355,6 +429,22 @@ impl Dash {
 
     pub(super) fn mark_state_dirty(&mut self) {
         self.state_dirty = true;
+    }
+
+    pub(super) fn adopt_running_worktree(&mut self, running_worktree: PathBuf) {
+        self.running_worktree = running_worktree;
+        self.pokes.emu = true;
+    }
+
+    pub(super) fn decrease_sandbox_flow_lanes(&mut self) {
+        self.sandbox_flow_lanes = self.sandbox_flow_lanes.saturating_sub(1).max(1);
+    }
+
+    pub(super) fn increase_sandbox_flow_lanes(&mut self) {
+        self.sandbox_flow_lanes = self
+            .sandbox_flow_lanes
+            .saturating_add(1)
+            .min(qol_dev_env::resources::MAX_CONCURRENT_LANES);
     }
 
     pub(super) fn apply_state(&mut self, state: ConsoleState) {
@@ -573,6 +663,65 @@ mod tests {
 
     use crate::dev_console::session::{apply_action, edit_filters};
     use crate::dev_console::stream_view::set_trace_details;
+
+    #[test]
+    fn emu_probe_worktree_switches_from_base_to_named_checkout() {
+        let root = ProbeWorktree::new(PathBuf::from("/qol/base"));
+        assert_eq!(root.current(), Path::new("/qol/base"));
+
+        let mut dash = Dash::new(Vec::new());
+        dash.running_worktree = PathBuf::from("/qol/worktrees/shot-speed");
+        sync_emu_probe_worktree(&dash, &root);
+
+        assert_eq!(root.current(), Path::new("/qol/worktrees/shot-speed"));
+    }
+
+    #[test]
+    fn adopting_running_worktree_schedules_its_inventory_refresh() {
+        let mut dash = Dash::new(Vec::new());
+        assert!(!dash.pokes.emu);
+
+        dash.adopt_running_worktree(PathBuf::from("/qol/worktrees/shot-speed"));
+
+        assert_eq!(
+            dash.running_worktree,
+            Path::new("/qol/worktrees/shot-speed")
+        );
+        assert!(dash.pokes.emu);
+    }
+
+    #[test]
+    fn typed_inventory_images_are_not_repeated_as_legacy_candidates() {
+        let inventory = emu_inventory(vec![emu_env(
+            "managed",
+            crate::commands::emu::ResolveState::Ready,
+        )]);
+        let candidates = vec![emu_candidate("managed"), emu_candidate("fresh")];
+
+        let candidates = without_registered_candidates(&inventory, candidates);
+
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["fresh"]
+        );
+    }
+
+    #[test]
+    fn missing_unverified_images_remain_available_for_verified_import() {
+        let inventory = emu_inventory(vec![emu_env(
+            "managed",
+            crate::commands::emu::ResolveState::Missing,
+        )]);
+        let candidates = vec![emu_candidate("managed")];
+
+        let candidates = without_registered_candidates(&inventory, candidates);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].id, "managed");
+    }
 
     #[test]
     fn dash_applies_saved_state_without_marking_dirty_and_exports_it_back() {

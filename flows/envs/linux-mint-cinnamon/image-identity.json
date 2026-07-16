@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "environment_id": "linux/mint-cinnamon",
+  "revision": "mint-22.3-cinnamon-6.6.7-qol-1",
+  "desktop": "cinnamon",
+  "display_protocol": "x11",
+  "user": "qol"
+}

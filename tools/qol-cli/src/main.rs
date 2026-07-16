@@ -31,6 +31,12 @@ fn run(args: Vec<OsString>) -> Result<()> {
     };
     let rest = &args.values[1..];
     match command {
+        qol_dev_orchestrator::FLOW_WORKER_COMMAND => {
+            commands::flow::run_worker(rest, &env::current_exe()?)
+        }
+        qol_dev_orchestrator::IMAGE_IMPORT_WORKER_COMMAND => {
+            commands::env::run_image_import_worker(rest)
+        }
         "setup" => setup::cmd_setup(rest, args.verbose),
         "dev" => commands::dev::run(rest, args.verbose, args.skip_plugins),
         command if command == commands::dev::DEV_PREBUILD_COMMAND => {

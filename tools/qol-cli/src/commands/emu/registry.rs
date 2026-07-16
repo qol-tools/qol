@@ -12,6 +12,7 @@ use super::discovery::{parse_image_overrides, ImageCandidate};
 pub(crate) struct QemuImgInfo {
     pub(crate) format: String,
     pub(crate) virtual_size: u64,
+    pub(crate) backing_filename: Option<PathBuf>,
 }
 
 const KNOWN_FORMATS: &[&str] = &["qcow2", "qcow", "raw", "vhd", "vhdx", "vmdk", "vpc"];
@@ -109,9 +110,14 @@ pub(crate) fn parse_qemu_img_info(json: &str) -> Result<QemuImgInfo> {
         .get("virtual-size")
         .and_then(serde_json::Value::as_u64)
         .ok_or_else(|| anyhow!("qemu-img info missing `virtual-size`"))?;
+    let backing_filename = value
+        .get("backing-filename")
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from);
     Ok(QemuImgInfo {
         format,
         virtual_size,
+        backing_filename,
     })
 }
 
@@ -125,6 +131,14 @@ mod tests {
         let info = parse_qemu_img_info(json).unwrap();
         assert_eq!(info.format, "qcow2");
         assert_eq!(info.virtual_size, 21474836480);
+        assert_eq!(info.backing_filename, None);
+    }
+
+    #[test]
+    fn parses_backing_filename_for_import_rejection() {
+        let json = r#"{"virtual-size":1024,"format":"qcow2","backing-filename":"base.qcow2"}"#;
+        let info = parse_qemu_img_info(json).unwrap();
+        assert_eq!(info.backing_filename, Some(PathBuf::from("base.qcow2")));
     }
 
     #[test]

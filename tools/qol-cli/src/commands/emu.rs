@@ -1,7 +1,9 @@
+use crate::commands::dev_env;
 use crate::host_facade;
 use crate::progress::{begin_run_log, print_hint, print_title, step_label, StepKind};
 use crate::workspace::repo_root;
 use anyhow::{anyhow, bail, Context, Result};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
@@ -10,13 +12,16 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+
+const BYTES_PER_GIB: u64 = 1_073_741_824;
 
 mod arch;
 mod control;
 mod desktop;
 mod discovery;
 mod guest;
+pub(crate) mod image_import;
 mod launch;
 mod live;
 mod machine;
@@ -30,12 +35,42 @@ mod workflow;
 #[allow(unused_imports)]
 pub(crate) use arch::{ArchGuess, Firmware, GuestArch};
 pub(crate) use discovery::{parse_emu_dir, Discovered, DiscoveryContext, ImageCandidate};
+pub(crate) use guest::GuestAdapter;
 pub(crate) use launch::{
     child_args as child_launch_args, ChildLaunch, ChildOperation, DisplayMode,
 };
 pub(crate) use live::{LiveRun, OwnedRunCleanup};
 pub(crate) use media::BootMedia;
+pub(crate) use qol_dev_env::ResolutionState as ResolveState;
 pub(crate) use registry::register_image;
+pub(crate) use workflow::Definition as WorkflowDefinition;
+
+pub(crate) fn workflow_definition(id: &str) -> Result<WorkflowDefinition> {
+    workflow::find(id).ok_or_else(|| {
+        anyhow!(
+            "unknown workflow `{id}`; available: {}",
+            workflow::ids().join(", ")
+        )
+    })
+}
+
+pub(crate) fn validate_workflow_adapter(
+    workflow: WorkflowDefinition,
+    adapter: GuestAdapter,
+) -> Result<()> {
+    match (workflow, adapter) {
+        (workflow::Definition::Serial { .. }, GuestAdapter::DebianNocloud)
+        | (workflow::Definition::Desktop { .. }, GuestAdapter::MintCinnamon) => Ok(()),
+        (workflow::Definition::Serial { .. }, GuestAdapter::MintCinnamon) => bail!(
+            "workflow `{}` requires the verified serial guest adapter, not `mint-cinnamon`",
+            workflow.id()
+        ),
+        (workflow::Definition::Desktop { .. }, GuestAdapter::DebianNocloud) => bail!(
+            "workflow `{}` requires the isolated Cinnamon desktop adapter, not `debian-nocloud`",
+            workflow.id()
+        ),
+    }
+}
 
 pub(crate) fn new_run_id(environment_id: &str) -> Result<String> {
     live::new_run_id(environment_id)
@@ -64,23 +99,6 @@ pub(crate) struct Environment {
     source: String,
     firmware: Firmware,
     media: BootMedia,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ResolveState {
-    Ready,
-    Missing,
-    Unsupported,
-}
-
-impl ResolveState {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Ready => "ready",
-            Self::Missing => "missing",
-            Self::Unsupported => "unsupported",
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -512,7 +530,7 @@ fn cmd_doctor(args: &[OsString], verbose: bool) -> Result<()> {
 fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
     let options = launch::parse_launch_options(
         args,
-        "qol emu up <environment|image> [--headless] [--memory-mb N] [--cpus N]",
+        "qol emu up <environment|image> [--windowed] [--memory-mb N] [--cpus N]",
     )?;
     print_title("qol emu up");
     print_hint(verbose);
@@ -546,7 +564,7 @@ fn cmd_run(args: &[OsString], verbose: bool) -> Result<()> {
         .ok_or_else(|| anyhow!("workflow id is not valid UTF-8"))?;
     let options = launch::parse_launch_options(
         launch_args,
-        "qol emu run <workflow> <environment|image> [--headless] [--memory-mb N] [--cpus N]",
+        "qol emu run <workflow> <environment|image> [--windowed] [--memory-mb N] [--cpus N]",
     )?;
     run_workflow(workflow_id, options, "run", verbose)
 }
@@ -554,7 +572,7 @@ fn cmd_run(args: &[OsString], verbose: bool) -> Result<()> {
 fn cmd_check(args: &[OsString], verbose: bool) -> Result<()> {
     let options = launch::parse_launch_options(
         args,
-        "qol emu check <environment|image> [--headless] [--memory-mb N] [--cpus N]",
+        "qol emu check <environment|image> [--windowed] [--memory-mb N] [--cpus N]",
     )?;
     run_workflow("leaves-no-trace", options, "check", verbose)
 }
@@ -565,22 +583,52 @@ fn run_workflow(
     command_name: &str,
     verbose: bool,
 ) -> Result<()> {
-    let Some(workflow_fn) = workflow::find(workflow_id) else {
+    let workflow = workflow_definition(workflow_id)?;
+    validate_workflow_isolation(workflow, &options)?;
+    let guest_adapter = options.guest_adapter.ok_or_else(|| {
+        anyhow!("automated workflows require a manifest-selected --guest-adapter")
+    })?;
+    validate_workflow_adapter(workflow, guest_adapter)?;
+    if workflow.requires_payload() != options.payload_manifest.is_some() {
         bail!(
-            "unknown workflow `{workflow_id}`; available: {}",
-            workflow::ids().join(", ")
+            "workflow `{workflow_id}` {} a parent-covered immutable payload",
+            if workflow.requires_payload() {
+                "requires"
+            } else {
+                "does not accept"
+            }
         );
-    };
+    }
+    if matches!(workflow, workflow::Definition::Desktop { .. })
+        && options.guest_image_revision.is_none()
+    {
+        bail!("desktop workflow `{workflow_id}` requires a manifest-selected image revision");
+    }
+    if let Some(manifest_path) = &options.payload_manifest {
+        let manifest = qol_dev_env::payload::read_manifest(manifest_path)?;
+        if manifest.workflow_id != workflow_id {
+            bail!(
+                "payload workflow mismatch: expected `{workflow_id}`, got `{}`",
+                manifest.workflow_id
+            );
+        }
+    }
     print_title(&format!("qol emu {command_name}"));
     print_hint(verbose);
     let mut vm = boot_vm_with_options(options, command_name, verbose)?;
-    let outcome = drive_workflow(&vm, workflow_fn);
+    let outcome = match workflow {
+        workflow::Definition::Serial { run, .. } => {
+            drive_serial_workflow(&vm, run, guest_adapter.guest()?)
+        }
+        workflow::Definition::Desktop { run, .. } => workflow::run_desktop(&vm, run),
+    };
     let exit = shutdown_vm(&mut vm)?;
     let workflow_report = match &outcome {
         Ok(verdict) => json!({
             "id": workflow_id,
             "verdict": if verdict.pass { "pass" } else { "fail" },
             "traces": verdict.traces,
+            "artifacts": verdict.artifacts,
         }),
         Err(error) => json!({
             "id": workflow_id,
@@ -602,11 +650,29 @@ fn run_workflow(
             verdict.traces.join(", ")
         );
     }
-    step_label("verdict", StepKind::Success, "pass · no qol traces survive");
+    step_label(
+        "verdict",
+        StepKind::Success,
+        "pass · guest workflow verified",
+    );
     Ok(())
 }
 
-fn drive_workflow(vm: &BootedVm, workflow_fn: workflow::Workflow) -> Result<workflow::Verdict> {
+fn validate_workflow_isolation(
+    workflow: workflow::Definition,
+    options: &launch::LaunchOptions,
+) -> Result<()> {
+    if !workflow.requires_payload() {
+        return Ok(());
+    }
+    options.validate_payload_isolation()
+}
+
+fn drive_serial_workflow(
+    vm: &BootedVm,
+    workflow_fn: workflow::SerialWorkflow,
+    os: &dyn guest::GuestOs,
+) -> Result<workflow::Verdict> {
     let qemu_img = vm
         .resolution
         .qemu_img
@@ -615,14 +681,13 @@ fn drive_workflow(vm: &BootedVm, workflow_fn: workflow::Workflow) -> Result<work
     let stick = machine::ensure_usb_stick(&vm.run_dir, &qemu_img)?;
     let mut qmp = qmp::connect_verified(vm.qmp_port, Duration::from_secs(10), &vm.run_id)?;
     let mut serial = serial::connect(vm.serial_port, Duration::from_secs(10))?;
-    let os = guest::DebianNocloud;
     step_label("login", StepKind::Pending, "waiting for a root shell");
-    guest::GuestOs::ensure_root_shell(&os, &mut serial)?;
+    os.ensure_root_shell(&mut serial)?;
     step_label("login", StepKind::Success, "root shell over serial");
     let mut run = workflow::Run {
         qmp: &mut qmp,
         serial: &mut serial,
-        os: &os,
+        os,
         stick: &stick,
     };
     workflow_fn(&mut run)
@@ -647,9 +712,11 @@ struct BootedVm {
     commands: Vec<serde_json::Value>,
     qmp_port: u16,
     serial_port: u16,
+    guest_control_port: u16,
     qemu_version: String,
     vm_status: String,
     child: machine::VmLifecycle,
+    admission: EmuAdmission,
     started_at: u64,
 }
 
@@ -660,6 +727,43 @@ impl BootedVm {
 
     fn terminate(&mut self) -> Result<ExitStatus> {
         self.child.terminate()
+    }
+}
+
+enum EmuAdmission {
+    Standalone {
+        lease: Option<dev_env::resources::ResourceLease>,
+    },
+    ParentCovered,
+    ExternallyReserved,
+}
+
+impl EmuAdmission {
+    fn parent_covered() -> Self {
+        Self::ParentCovered
+    }
+
+    fn standalone(lease: dev_env::resources::ResourceLease) -> Self {
+        Self::Standalone { lease: Some(lease) }
+    }
+
+    fn release(mut self) -> Result<()> {
+        if let Self::Standalone { lease } = &mut self {
+            if let Some(lease) = lease.take() {
+                lease.release()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for EmuAdmission {
+    fn drop(&mut self) {
+        if let Self::Standalone { lease } = self {
+            if let Some(lease) = lease.take() {
+                let _ = lease.release();
+            }
+        }
     }
 }
 
@@ -674,6 +778,7 @@ impl BootMedia {
         self,
         resolution: &Resolution,
         run_dir: &Path,
+        image_info: Option<&registry::QemuImgInfo>,
         verbose: bool,
     ) -> Result<PreparedBootMedia> {
         match self {
@@ -687,7 +792,11 @@ impl BootMedia {
                     .qemu_img
                     .clone()
                     .ok_or_else(|| anyhow!("ready environment has no qemu-img path"))?;
-                let image_format = detect_image_format(&qemu_img, &resolution.image_path, verbose)?;
+                let image_info = match image_info {
+                    Some(image_info) => image_info.clone(),
+                    None => inspect_image(&qemu_img, &resolution.image_path, verbose)?,
+                };
+                let image_format = image_info.format;
                 let overlay = run_dir.join("overlay.qcow2");
                 let create_args = vec![
                     "create".to_string(),
@@ -747,6 +856,63 @@ fn boot_vm_with_options(
     command_name: &str,
     verbose: bool,
 ) -> Result<BootedVm> {
+    boot_vm_with_admission(
+        launch,
+        command_name,
+        verbose,
+        AdmissionMode::Standalone,
+        None,
+    )
+}
+
+fn boot_vm_with_external_admission(
+    launch: launch::LaunchOptions,
+    command_name: &str,
+    verbose: bool,
+) -> std::result::Result<BootedVm, ExternalBootFailure> {
+    let cleanup_tracker = machine::LifecycleCleanupTracker::new();
+    match boot_vm_with_admission(
+        launch,
+        command_name,
+        verbose,
+        AdmissionMode::ExternallyReserved,
+        Some(cleanup_tracker.clone()),
+    ) {
+        Ok(vm) => Ok(vm),
+        Err(error) => Err(ExternalBootFailure {
+            error,
+            cleanup: cleanup_tracker.snapshot(),
+        }),
+    }
+}
+
+struct ExternalBootFailure {
+    error: anyhow::Error,
+    cleanup: machine::LifecycleCleanupProof,
+}
+
+#[derive(Clone, Copy)]
+enum AdmissionMode {
+    Standalone,
+    ExternallyReserved,
+}
+
+impl AdmissionMode {
+    fn failure_status(self, default: &'static str) -> &'static str {
+        match self {
+            Self::Standalone => default,
+            Self::ExternallyReserved => "stopping",
+        }
+    }
+}
+
+fn boot_vm_with_admission(
+    mut launch: launch::LaunchOptions,
+    command_name: &str,
+    verbose: bool,
+    admission_mode: AdmissionMode,
+    cleanup_tracker: Option<machine::LifecycleCleanupTracker>,
+) -> Result<BootedVm> {
     let root = repo_root()?;
     let discovered = discover_all()?;
     let target_path = Path::new(&launch.target);
@@ -794,24 +960,46 @@ fn boot_vm_with_options(
         environment.name = humanize_id(environment_id);
         environment.source = "registry".to_string();
     }
+    canonicalize_payload_transport(&mut launch)?;
     let image_kind = launch
         .image_kind
         .unwrap_or_else(|| BackendImageKind::from_media(environment.media));
     let resolution = resolve_environment_with(&environment, image_kind, launch.acceleration);
-    let started_at = unix_millis()?;
+    let mut started_at = qol_dev_env::unix_millis()?;
     let run_id = match &launch.run_id {
         Some(run_id) => run_id.clone(),
         None => live::new_run_id(&environment.id)?,
     };
+    launch.run_id = Some(run_id.clone());
     let runs_root = launch
         .run_root
         .clone()
         .unwrap_or_else(|| root.join("target/qol-emu"));
+    let report_path = runs_root.join(&run_id).join("report.json");
     fs::create_dir_all(&runs_root)
         .with_context(|| format!("failed to create {}", runs_root.display()))?;
     let run_dir = runs_root.join(&run_id);
-    fs::create_dir(&run_dir).with_context(|| format!("failed to create {}", run_dir.display()))?;
-    let mut lifecycle = machine::VmLifecycle::new(&run_dir);
+    match fs::create_dir(&run_dir) {
+        Ok(()) => {}
+        Err(error)
+            if error.kind() == ErrorKind::AlreadyExists
+                && matches!(admission_mode, AdmissionMode::ExternallyReserved) =>
+        {
+            started_at = require_external_image_import_run(
+                &report_path,
+                &run_id,
+                &environment.id,
+                launch.worktree.as_deref(),
+            )?;
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to create {}", run_dir.display()))
+        }
+    }
+    let mut lifecycle = match cleanup_tracker {
+        Some(cleanup_tracker) => machine::VmLifecycle::tracked(&run_dir, cleanup_tracker),
+        None => machine::VmLifecycle::new(&run_dir),
+    };
     let pidfile_path = run_dir.join("qemu.pid");
     let preparing_report = with_spawn_state(
         report_json(ReportInput {
@@ -827,6 +1015,7 @@ fn boot_vm_with_options(
             commands: Vec::new(),
             qmp: None,
             serial: None,
+            guest_control: None,
             runtime: Some(json!({ "supervisor_pid": std::process::id() })),
             workflow: None,
             teardown: None,
@@ -854,15 +1043,16 @@ fn boot_vm_with_options(
                 environment: &environment,
                 resolution: &resolution,
                 run_dir: &run_dir,
-                status: "skipped",
+                status: admission_mode.failure_status("skipped"),
                 overlay: None,
                 qemu_command: None,
                 commands: Vec::new(),
                 qmp: None,
                 serial: None,
+                guest_control: None,
                 runtime: None,
                 workflow: None,
-                teardown: Some(json!({ "removed": removed })),
+                teardown: Some(CompletedTeardown::verified(removed)),
                 next: next_for_resolution(&environment, &resolution),
                 started_at,
             })?;
@@ -876,7 +1066,71 @@ fn boot_vm_with_options(
         bail!("emu `{}` is {}", environment.id, resolution.state.as_str());
     }
 
-    let prepared = match environment.media.prepare(&resolution, &run_dir, verbose) {
+    if launch.parent_lease.is_none() && matches!(admission_mode, AdmissionMode::Standalone) {
+        let _ = live_runs_in_roots(std::slice::from_ref(&runs_root));
+        crate::commands::env::reconcile_for_admission()?;
+        crate::commands::flow::reconcile_all()?;
+        dev_env::reconcile_resources()?;
+    }
+    let image_info = match environment.media {
+        BootMedia::Disk => {
+            let qemu_img = resolution
+                .qemu_img
+                .as_deref()
+                .context("ready disk environment has no qemu-img path")?;
+            Some(inspect_image(qemu_img, &resolution.image_path, verbose)?)
+        }
+        BootMedia::Iso => None,
+    };
+    let disk_bytes = image_info
+        .as_ref()
+        .map_or(0, |image_info| image_info.virtual_size);
+    let resources =
+        dev_env::resources::profile(u64::from(launch.memory_mb), u64::from(launch.cpus))?;
+    let admission = match launch.parent_lease.as_ref() {
+        Some(parent_lease) => {
+            let canonical_image_path = resolution.image_path.canonicalize().with_context(|| {
+                format!(
+                    "failed to canonicalize sandbox image {}",
+                    resolution.image_path.display()
+                )
+            })?;
+            dev_env::resources::verify_parent_coverage(dev_env::resources::ChildCoverageRequest {
+                claim: parent_lease,
+                child_run_id: &run_id,
+                child_report_path: &report_path,
+                environment_id: &environment.id,
+                canonical_image_path: &canonical_image_path,
+                payload_manifest_path: launch.payload_manifest.as_deref(),
+                payload_image_path: launch.payload_image.as_deref(),
+                profile: resources,
+                disk_bytes,
+            })?;
+            EmuAdmission::parent_covered()
+        }
+        None if matches!(admission_mode, AdmissionMode::Standalone) => {
+            let (_, lease) = dev_env::resources::reserve(
+                &run_id,
+                &report_path,
+                dev_env::resources::AdmissionRequest {
+                    concurrent_lanes: 1,
+                    profile: resources,
+                    recommended_size_gb: bytes_to_gib_ceil(disk_bytes),
+                    capacity: dev_env::host_capacity(&runs_root),
+                    force: false,
+                },
+            )?;
+            EmuAdmission::standalone(lease)
+        }
+        None => EmuAdmission::ExternallyReserved,
+    };
+
+    let prepared = match environment.media.prepare(
+        &resolution,
+        &run_dir,
+        image_info.as_ref(),
+        verbose,
+    ) {
         Ok(prepared) => prepared,
         Err(error) => {
             lifecycle.finish(|removed| {
@@ -887,15 +1141,16 @@ fn boot_vm_with_options(
                     environment: &environment,
                     resolution: &resolution,
                     run_dir: &run_dir,
-                    status: "failed",
+                    status: admission_mode.failure_status("failed"),
                     overlay: None,
                     qemu_command: None,
                     commands: Vec::new(),
                     qmp: None,
                     serial: None,
+                    guest_control: None,
                     runtime: None,
                     workflow: None,
-                    teardown: Some(json!({ "removed": removed })),
+                    teardown: Some(CompletedTeardown::verified(removed)),
                     next: vec![format!(
                         "Inspect the qemu-img output, remove the run directory if needed, then rerun `qol emu {command_name}`."
                     )],
@@ -915,6 +1170,7 @@ fn boot_vm_with_options(
     let ports = reservation.ports();
     let qmp_port = ports.qmp;
     let serial_port = ports.serial;
+    let guest_control_port = ports.guest_control;
     let mut qemu_args = qemu_args(QemuArgsInput {
         environment: &environment,
         run_id: &run_id,
@@ -949,6 +1205,7 @@ fn boot_vm_with_options(
             commands: commands.clone(),
             qmp: Some(json!({ "port": qmp_port })),
             serial: Some(json!({ "port": serial_port })),
+            guest_control: Some(json!({ "port": guest_control_port })),
             runtime: Some(json!({ "supervisor_pid": std::process::id() })),
             workflow: None,
             teardown: None,
@@ -966,7 +1223,11 @@ fn boot_vm_with_options(
         &format!("{} · qmp 127.0.0.1:{qmp_port}", environment.id),
     );
     reservation.release_ports();
-    let qemu_pid = match lifecycle.spawn(&qemu_system, &qemu_args) {
+    let qemu_pid = match lifecycle.spawn(
+        &qemu_system,
+        &qemu_args,
+        launch.display == launch::DisplayMode::None,
+    ) {
         Ok(pid) => pid,
         Err(error) => {
             lifecycle.finish(|removed| {
@@ -977,15 +1238,16 @@ fn boot_vm_with_options(
                     environment: &environment,
                     resolution: &resolution,
                     run_dir: &run_dir,
-                    status: "failed",
+                    status: admission_mode.failure_status("failed"),
                     overlay: prepared.overlay_artifact.as_deref(),
                     qemu_command: Some(&qemu_command_path),
                     commands,
                     qmp: Some(json!({ "port": qmp_port })),
                     serial: Some(json!({ "port": serial_port })),
+                    guest_control: Some(json!({ "port": guest_control_port })),
                     runtime: Some(json!({ "supervisor_pid": std::process::id() })),
                     workflow: None,
-                    teardown: Some(json!({ "removed": removed })),
+                    teardown: Some(CompletedTeardown::verified(removed)),
                     next: boot_failure_next(command_name, arch_guess),
                     started_at,
                 })?;
@@ -1008,6 +1270,7 @@ fn boot_vm_with_options(
             commands: commands.clone(),
             qmp: Some(json!({ "port": qmp_port })),
             serial: Some(json!({ "port": serial_port })),
+            guest_control: Some(json!({ "port": guest_control_port })),
             runtime: Some(json!({
                 "supervisor_pid": std::process::id(),
                 "qemu_pid": qemu_pid,
@@ -1038,18 +1301,19 @@ fn boot_vm_with_options(
                     environment: &environment,
                     resolution: &resolution,
                     run_dir: &run_dir,
-                    status: "failed",
+                    status: admission_mode.failure_status("failed"),
                     overlay: prepared.overlay_artifact.as_deref(),
                     qemu_command: Some(&qemu_command_path),
                     commands,
                     qmp: Some(json!({ "port": qmp_port, "error": error.to_string() })),
                     serial: Some(json!({ "port": serial_port })),
+                    guest_control: Some(json!({ "port": guest_control_port })),
                     runtime: Some(json!({
                         "supervisor_pid": std::process::id(),
                         "qemu_pid": qemu_pid,
                     })),
                     workflow: None,
-                    teardown: Some(json!({ "removed": removed, "exit": exit.to_string() })),
+                    teardown: Some(CompletedTeardown::verified(removed).with_exit(exit)),
                     next: boot_failure_next(command_name, arch_guess),
                     started_at,
                 })?;
@@ -1088,6 +1352,7 @@ fn boot_vm_with_options(
                 json!({ "port": qmp_port, "qemu_version": qemu_version, "status": vm_status }),
             ),
             serial: Some(json!({ "port": serial_port })),
+            guest_control: Some(json!({ "port": guest_control_port })),
             runtime: Some(json!({
                 "supervisor_pid": std::process::id(),
                 "qemu_pid": qemu_pid,
@@ -1111,11 +1376,79 @@ fn boot_vm_with_options(
         commands,
         qmp_port,
         serial_port,
+        guest_control_port,
         qemu_version,
         vm_status,
         child: lifecycle,
+        admission,
         started_at,
     })
+}
+
+fn require_external_image_import_run(
+    report_path: &Path,
+    run_id: &str,
+    environment_id: &str,
+    worktree: Option<&Path>,
+) -> Result<u64> {
+    let report = qol_dev_env::read_report_checked(
+        report_path,
+        run_id,
+        &qol_dev_env::ReportKind::ImageImport,
+    )?
+    .context("externally reserved image import has no preparing report")?;
+    if report.status != qol_dev_env::ReportStatus::Preparing {
+        bail!(
+            "externally reserved image import `{run_id}` is `{}`, expected `preparing`",
+            report.status.as_str()
+        );
+    }
+    if report.environment_id.as_deref() != Some(environment_id) {
+        bail!("externally reserved image import environment identity mismatch");
+    }
+    if report.owner.pid != Some(std::process::id()) {
+        bail!("externally reserved image import owner identity mismatch");
+    }
+    let process_identity = qol_process::process_identity(std::process::id())
+        .context("failed to resolve the image-import owner process identity")?;
+    if report.owner.process_identity.as_deref() != Some(process_identity.as_str()) {
+        bail!("externally reserved image import process identity mismatch");
+    }
+    if report.owner.worktree.as_deref() != worktree {
+        bail!("externally reserved image import worktree identity mismatch");
+    }
+    report
+        .started_at_unix_ms
+        .context("externally reserved image import has no start timestamp")
+}
+
+fn canonicalize_payload_transport(launch: &mut launch::LaunchOptions) -> Result<()> {
+    let (Some(manifest), Some(image)) = (&launch.payload_manifest, &launch.payload_image) else {
+        return Ok(());
+    };
+    let manifest = manifest.canonicalize().with_context(|| {
+        format!(
+            "failed to canonicalize payload manifest {}",
+            manifest.display()
+        )
+    })?;
+    if !manifest.is_file() {
+        bail!("payload manifest is not a file: {}", manifest.display());
+    }
+    qol_dev_env::payload::read_manifest(&manifest)?;
+    let image = image
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize payload image {}", image.display()))?;
+    if !image.is_file() {
+        bail!("payload image is not a file: {}", image.display());
+    }
+    let image_text = image.to_string_lossy();
+    if image_text.contains([',', '\n', '\r']) {
+        bail!("payload image path contains characters unsafe for QEMU drive options");
+    }
+    launch.payload_manifest = Some(manifest);
+    launch.payload_image = Some(image);
+    Ok(())
 }
 
 fn finalize_vm(
@@ -1123,6 +1456,25 @@ fn finalize_vm(
     exit: ExitStatus,
     workflow: Option<serde_json::Value>,
     command_name: &str,
+) -> Result<(PathBuf, Vec<PathBuf>)> {
+    let status = final_status(exit.success(), workflow.as_ref());
+    finalize_vm_with_status(vm, exit, workflow, command_name, status)
+}
+
+fn finish_image_import_vm(
+    vm: BootedVm,
+    exit: ExitStatus,
+    workflow: serde_json::Value,
+) -> Result<(PathBuf, Vec<PathBuf>)> {
+    finalize_vm_with_status(vm, exit, Some(workflow), "image-import", "stopping")
+}
+
+fn finalize_vm_with_status(
+    vm: BootedVm,
+    exit: ExitStatus,
+    workflow: Option<serde_json::Value>,
+    command_name: &str,
+    status: &str,
 ) -> Result<(PathBuf, Vec<PathBuf>)> {
     let BootedVm {
         run_id,
@@ -1134,15 +1486,16 @@ fn finalize_vm(
         commands,
         qmp_port,
         serial_port,
+        guest_control_port,
         qemu_version,
         vm_status,
         child: mut lifecycle,
+        admission,
         started_at,
     } = vm;
     let qemu_pid = lifecycle
         .pid()
         .ok_or_else(|| anyhow!("booted VM has no qemu process"))?;
-    let final_status = final_status(exit.success(), workflow.as_ref());
     let report_path = run_dir.join("report.json");
     let ((), removed) = lifecycle.finish(|removed| {
         let report = report_json(ReportInput {
@@ -1152,7 +1505,7 @@ fn finalize_vm(
             environment: &environment,
             resolution: &resolution,
             run_dir: &run_dir,
-            status: final_status,
+            status,
             overlay: None,
             qemu_command: Some(&qemu_command_path),
             commands,
@@ -1160,12 +1513,13 @@ fn finalize_vm(
                 json!({ "port": qmp_port, "qemu_version": qemu_version, "status": vm_status }),
             ),
             serial: Some(json!({ "port": serial_port })),
+            guest_control: Some(json!({ "port": guest_control_port })),
             runtime: Some(json!({
                 "supervisor_pid": std::process::id(),
                 "qemu_pid": qemu_pid,
             })),
             workflow,
-            teardown: Some(json!({ "removed": removed, "exit": exit.to_string() })),
+            teardown: Some(CompletedTeardown::verified(removed).with_exit(exit)),
             next: vec![format!(
                 "Rerun `qol emu {command_name}` for a fresh disposable clone."
             )],
@@ -1173,6 +1527,9 @@ fn finalize_vm(
         })?;
         write_report(&run_dir, &report)
     })?;
+    admission
+        .release()
+        .context("failed to release the emulation resource lease")?;
     Ok((report_path, removed))
 }
 
@@ -1323,7 +1680,7 @@ fn print_emu_help() {
 }
 
 fn emu_help_text() -> String {
-    format!("qol emu commands:\n  qol emu list\n  {ADD_SYNTAX}\n  qol emu open\n  qol emu doctor\n  qol emu desktop mintish <environment>\n  qol emu up <environment|image> [launch options]\n  qol emu run <workflow> <environment|image> [launch options]\n  qol emu check <environment|image> [launch options]\n  qol emu shot [--run-root PATH]... <run-id|environment>\n  qol emu key [--run-root PATH]... <run-id|environment> <qcode>...\n  qol emu insert [--run-root PATH]... <run-id|environment>\n  qol emu pull [--run-root PATH]... <run-id|environment>\n  qol emu snap [--run-root PATH]... <run-id|environment>\n  qol emu sh [--run-root PATH]... <run-id|environment> <command>...\n  qol emu down [--run-root PATH]... <run-id|environment>\n\nLaunch options:\n  --headless --memory-mb N --cpus N --run-id ID --run-root PATH\n  --environment-id ID --image-kind qcow2|raw|img|iso\n  --acceleration hardware|allow-tcg --arch x86_64|aarch64\n  --firmware bios|uefi\n\nControl verbs prefer an exact run ID. An environment ID works only when one\nmatching run is live. Control --run-root is repeatable; without it, control uses\ntarget/qol-emu.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nDrop a disk image or .iso into the emu dir (`qol emu open`) and it appears in\n`qol emu list`; `qol emu up <id>` boots it (an .iso boots as a disposable live CD).\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n")
+    format!("qol emu commands:\n  qol emu list\n  {ADD_SYNTAX}\n  qol emu open\n  qol emu doctor\n  qol emu desktop mintish <environment>\n  qol emu up <environment|image> [launch options]\n  qol emu run <workflow> <environment|image> [launch options]\n  qol emu check <environment|image> [launch options]\n  qol emu shot [--run-root PATH]... <run-id|environment>\n  qol emu key [--run-root PATH]... <run-id|environment> <qcode>...\n  qol emu insert [--run-root PATH]... <run-id|environment>\n  qol emu pull [--run-root PATH]... <run-id|environment>\n  qol emu snap [--run-root PATH]... <run-id|environment>\n  qol emu sh [--run-root PATH]... <run-id|environment> <command>...\n  qol emu down [--run-root PATH]... <run-id|environment>\n\nLaunch options:\n  --windowed --headless --offline --memory-mb N --cpus N\n  --run-id ID --run-root PATH --environment-id ID\n  --image-kind qcow2|raw|img|iso\n  --guest-adapter debian-nocloud|mint-cinnamon\n  --acceleration hardware|allow-tcg --arch x86_64|aarch64\n  --firmware bios|uefi\n\nLaunches are headless unless --windowed is explicit. --offline disconnects the\nguest from host networking. Control verbs prefer an exact run ID. An\nenvironment ID works only when one matching run is live. Control --run-root is\nrepeatable; without it, control uses target/qol-emu.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nDrop a disk image or .iso into the emu dir (`qol emu open`) and it appears in\n`qol emu list`; `qol emu up <id>` boots it headlessly (an .iso boots as a\ndisposable live CD). Pass --windowed for an interactive VM window.\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n")
 }
 
 pub(crate) fn discover_all() -> Result<Discovered> {
@@ -1524,7 +1881,11 @@ fn path_is_executable(path: &Path) -> bool {
     path.is_file()
 }
 
-fn detect_image_format(program: &Path, image_path: &Path, verbose: bool) -> Result<String> {
+fn inspect_image(
+    program: &Path,
+    image_path: &Path,
+    verbose: bool,
+) -> Result<registry::QemuImgInfo> {
     let args = vec![
         "info".to_string(),
         "--output=json".to_string(),
@@ -1535,7 +1896,11 @@ fn detect_image_format(program: &Path, image_path: &Path, verbose: bool) -> Resu
         bail!("qemu-img info failed with {}", output.status);
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(registry::parse_qemu_img_info(&stdout)?.format)
+    registry::parse_qemu_img_info(&stdout)
+}
+
+fn bytes_to_gib_ceil(bytes: u64) -> u64 {
+    bytes / BYTES_PER_GIB + u64::from(!bytes.is_multiple_of(BYTES_PER_GIB))
 }
 
 struct QemuArgsInput<'a> {
@@ -1563,6 +1928,8 @@ fn qemu_args(input: QemuArgsInput<'_>) -> Vec<String> {
     let mut args = vec![
         "-name".to_string(),
         format!("qol-emu-{run_id}"),
+        "-fw_cfg".to_string(),
+        format!("name=opt/qol/run-id,string={run_id}"),
         "-machine".to_string(),
         environment.arch.machine_type().to_string(),
         "-accel".to_string(),
@@ -1589,16 +1956,47 @@ fn qemu_args(input: QemuArgsInput<'_>) -> Vec<String> {
     environment.media.append_qemu_args(&mut args, boot_disk);
     args.extend([
         "-nic".to_string(),
-        "user,model=virtio-net-pci".to_string(),
+        if launch.offline {
+            "none".to_string()
+        } else {
+            "user,model=virtio-net-pci".to_string()
+        },
+    ]);
+    args.extend([
         "-device".to_string(),
         "qemu-xhci,id=xhci".to_string(),
         "-device".to_string(),
         "virtio-rng-pci".to_string(),
+        "-device".to_string(),
+        "usb-tablet,bus=xhci.0,id=qol-tablet".to_string(),
         "-qmp".to_string(),
         format!("tcp:127.0.0.1:{},server,nowait", ports.qmp),
         "-serial".to_string(),
         format!("tcp:127.0.0.1:{},server,nowait", ports.serial),
+        "-device".to_string(),
+        "virtio-serial-pci,id=qol-guest-serial".to_string(),
+        "-chardev".to_string(),
+        format!(
+            "socket,id=qol-guest-control,host=127.0.0.1,port={},server=on,wait=off",
+            ports.guest_control
+        ),
+        "-device".to_string(),
+        format!(
+            "virtserialport,chardev=qol-guest-control,name={}",
+            qol_dev_guest::VIRTIO_PORT_NAME
+        ),
     ]);
+    if let Some(payload_image) = &launch.payload_image {
+        args.extend([
+            "-drive".to_string(),
+            format!(
+                "if=none,file={},format=raw,readonly=on,id=qolpayload",
+                payload_image.display()
+            ),
+            "-device".to_string(),
+            "virtio-blk-pci,drive=qolpayload,serial=qolpayload".to_string(),
+        ]);
+    }
     args
 }
 
@@ -1635,11 +2033,39 @@ struct ReportInput<'a> {
     commands: Vec<serde_json::Value>,
     qmp: Option<serde_json::Value>,
     serial: Option<serde_json::Value>,
+    guest_control: Option<serde_json::Value>,
     runtime: Option<serde_json::Value>,
     workflow: Option<serde_json::Value>,
-    teardown: Option<serde_json::Value>,
+    teardown: Option<CompletedTeardown<'a>>,
     next: Vec<String>,
     started_at: u64,
+}
+
+#[derive(Serialize)]
+struct CompletedTeardown<'a> {
+    status: &'static str,
+    qemu_exit_verified: bool,
+    tree_exit_verified: bool,
+    removed: &'a [PathBuf],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit: Option<String>,
+}
+
+impl<'a> CompletedTeardown<'a> {
+    fn verified(removed: &'a [PathBuf]) -> Self {
+        Self {
+            status: "complete",
+            qemu_exit_verified: true,
+            tree_exit_verified: true,
+            removed,
+            exit: None,
+        }
+    }
+
+    fn with_exit(mut self, exit: ExitStatus) -> Self {
+        self.exit = Some(exit.to_string());
+        self
+    }
 }
 
 fn with_spawn_state(mut report: Value, state: &str, pidfile: &Path) -> Value {
@@ -1651,9 +2077,29 @@ fn with_spawn_state(mut report: Value, state: &str, pidfile: &Path) -> Value {
 }
 
 fn report_json(input: ReportInput<'_>) -> Result<serde_json::Value> {
+    let terminal = !matches!(
+        input.status,
+        "preparing" | "starting" | "running" | "stopping"
+    );
+    if terminal && input.teardown.is_none() {
+        bail!("terminal child report requires verified teardown evidence");
+    }
+    let payload = input
+        .launch
+        .payload_manifest
+        .as_ref()
+        .zip(input.launch.payload_image.as_ref())
+        .map(|(manifest, image)| json!({ "manifest": manifest, "image": image }));
+    let kind = if input.command_name == "image-import" {
+        "image-import"
+    } else if matches!(input.command_name, "run" | "check") {
+        "flow"
+    } else {
+        "environment"
+    };
     let mut report = json!({
         "name": format!("qol-emu-{}", input.command_name),
-        "kind": if matches!(input.command_name, "run" | "check") { "flow" } else { "environment" },
+        "kind": kind,
         "run_id": input.run_id,
         "started_at_unix_ms": input.started_at,
         "status": input.status,
@@ -1677,8 +2123,11 @@ fn report_json(input: ReportInput<'_>) -> Result<serde_json::Value> {
         },
         "launch": {
             "display": input.launch.display.qemu_value(platform::display()),
+            "network": if input.launch.offline { "none" } else { "user" },
             "memory_mb": input.launch.memory_mb,
             "cpus": input.launch.cpus,
+            "guest_adapter": input.launch.guest_adapter.map(GuestAdapter::as_str),
+            "guest_image_revision": input.launch.guest_image_revision,
         },
         "artifacts": {
             "run_dir": input.run_dir,
@@ -1686,20 +2135,24 @@ fn report_json(input: ReportInput<'_>) -> Result<serde_json::Value> {
             "qemu_command": input.qemu_command,
             "qemu_log": input.run_dir.join("logs/qemu.log"),
             "report": input.run_dir.join("report.json"),
+            "image_import_config": input.launch.image_import_config,
         },
         "commands": input.commands,
         "qmp": input.qmp,
         "serial": input.serial,
+        "guest_control": input.guest_control,
+        "payload": payload,
         "runtime": input.runtime,
         "workflow": input.workflow,
         "teardown": input.teardown,
         "next": input.next,
     });
-    if !matches!(
-        input.status,
-        "preparing" | "starting" | "running" | "stopping"
-    ) {
-        report["finished_at_unix_ms"] = json!(unix_millis()?);
+    if let Some(worktree) = input.launch.worktree.as_deref() {
+        report["owner"] =
+            dev_env::run_owner_in("image-import-verification", input.status, worktree);
+    }
+    if terminal {
+        report["finished_at_unix_ms"] = json!(qol_dev_env::unix_millis()?);
     }
     Ok(report)
 }
@@ -1730,14 +2183,6 @@ fn kind_for_resolution(state: ResolveState) -> StepKind {
         ResolveState::Missing => StepKind::Info,
         ResolveState::Unsupported => StepKind::Info,
     }
-}
-
-pub(crate) fn unix_millis() -> Result<u64> {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system time is before UNIX_EPOCH")?
-        .as_millis();
-    u64::try_from(millis).context("system time overflowed u64 milliseconds")
 }
 
 fn command_line(program: &Path, args: &[String]) -> String {
@@ -1818,7 +2263,7 @@ mod tests {
     }
 
     #[test]
-    fn report_json_serializes_firmware() {
+    fn report_json_serializes_firmware_and_guest_adapter() {
         let environment = Environment {
             id: "foo".to_string(),
             name: "Foo".to_string(),
@@ -1838,8 +2283,10 @@ mod tests {
             acceleration: "kvm",
             firmware: None,
         };
-        let launch = launch::LaunchOptions::new("foo");
-        let make_report = |status| {
+        let mut launch = launch::LaunchOptions::new("foo");
+        launch.guest_adapter = Some(GuestAdapter::DebianNocloud);
+        let removed = vec![PathBuf::from("/a/b/run/disk.qcow2")];
+        let make_report = |status, teardown| {
             report_json(ReportInput {
                 run_id: "foo-run",
                 command_name: "up",
@@ -1853,20 +2300,66 @@ mod tests {
                 commands: Vec::new(),
                 qmp: None,
                 serial: None,
+                guest_control: None,
                 runtime: None,
                 workflow: None,
-                teardown: None,
+                teardown,
                 next: Vec::new(),
                 started_at: 0,
             })
-            .unwrap()
         };
-        let running = make_report("running");
+        let running = make_report("running", None).unwrap();
         assert_eq!(running["run_id"], "foo-run");
         assert_eq!(running["environment"]["firmware"], "uefi");
+        assert_eq!(running["launch"]["guest_adapter"], "debian-nocloud");
         assert!(running.get("finished_at_unix_ms").is_none());
-        let terminal = make_report("pass");
+        let terminal = make_report("pass", Some(CompletedTeardown::verified(&removed))).unwrap();
         assert!(terminal.get("finished_at_unix_ms").is_some());
+        assert_eq!(terminal["teardown"]["status"], "complete");
+        assert_eq!(terminal["teardown"]["qemu_exit_verified"], true);
+        assert_eq!(terminal["teardown"]["tree_exit_verified"], true);
+        assert_eq!(
+            terminal["teardown"]["removed"][0],
+            removed[0].display().to_string()
+        );
+        assert!(make_report("failed", None).is_err());
+    }
+
+    #[test]
+    fn external_image_import_preserves_the_authoritative_start_timestamp() {
+        let root = tempfile::tempdir().unwrap();
+        let worktree = root.path().join("worktree");
+        let report_path = root.path().join("image-import-1/report.json");
+        fs::create_dir_all(report_path.parent().unwrap()).unwrap();
+        fs::write(
+            &report_path,
+            serde_json::to_vec(&json!({
+                "kind": "image-import",
+                "run_id": "image-import-1",
+                "started_at_unix_ms": 42,
+                "status": "preparing",
+                "environment": { "id": "linux/mint-cinnamon" },
+                "owner": {
+                    "pid": std::process::id(),
+                    "process_identity": qol_process::process_identity(std::process::id()).unwrap(),
+                    "state": "preparing",
+                    "worktree": worktree,
+                    "task": "image-import-verification"
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let started_at = require_external_image_import_run(
+            &report_path,
+            "image-import-1",
+            "linux/mint-cinnamon",
+            Some(&worktree),
+        )
+        .unwrap();
+
+        assert_eq!(started_at, 42);
     }
 
     #[test]
@@ -1885,6 +2378,34 @@ mod tests {
         for (exit_success, workflow, expected) in cases {
             assert_eq!(final_status(exit_success, workflow), expected);
         }
+    }
+
+    #[test]
+    fn desktop_workflow_validation_rejects_host_visible_or_networked_payload_guests() {
+        let workflow = workflow::find("qol-shot-capture").unwrap();
+        let mut options = launch::LaunchOptions::new("mint");
+        options.parent_lease =
+            Some(qol_dev_env::resources::ParentLeaseClaim::parse("mint-batch-1").unwrap());
+        options.payload_manifest = Some(PathBuf::from("/runs/flow/payload/manifest.json"));
+        options.payload_image = Some(PathBuf::from("/runs/flow/payload.iso"));
+        options.offline = true;
+        validate_workflow_isolation(workflow, &options).unwrap();
+
+        options.display = launch::DisplayMode::Host;
+        assert_eq!(
+            validate_workflow_isolation(workflow, &options)
+                .unwrap_err()
+                .to_string(),
+            "parent-covered payload launches must be headless"
+        );
+        options.display = launch::DisplayMode::None;
+        options.offline = false;
+        assert_eq!(
+            validate_workflow_isolation(workflow, &options)
+                .unwrap_err()
+                .to_string(),
+            "parent-covered payload launches must be offline"
+        );
     }
 
     #[test]
@@ -1955,7 +2476,8 @@ mod tests {
             firmware: Firmware::Bios,
             media: BootMedia::Disk,
         };
-        let launch = launch::LaunchOptions::new("foo");
+        let mut launch = launch::LaunchOptions::new("foo");
+        launch.display = launch::DisplayMode::Host;
         let args = qemu_args(QemuArgsInput {
             environment: &environment,
             run_id: "foo-run",
@@ -1966,18 +2488,23 @@ mod tests {
             ports: machine::BootPorts {
                 qmp: 4444,
                 serial: 5555,
+                guest_control: 6666,
             },
             firmware: None,
         });
         let joined = args.join(" ");
         let expected = [
             "-accel kvm",
+            "-fw_cfg name=opt/qol/run-id,string=foo-run",
             "-display gtk,zoom-to-fit=on",
             "-qmp tcp:127.0.0.1:4444,server,nowait",
             "-serial tcp:127.0.0.1:5555,server,nowait",
+            "-chardev socket,id=qol-guest-control,host=127.0.0.1,port=6666,server=on,wait=off",
+            "-device virtserialport,chardev=qol-guest-control,name=org.qol-tools.guest-control",
             "-drive file=/a/b/overlay.qcow2,id=qoldisk,if=virtio,format=qcow2",
             "-device qemu-xhci,id=xhci",
             "-device virtio-rng-pci",
+            "-device usb-tablet,bus=xhci.0,id=qol-tablet",
         ];
         for fragment in expected {
             assert!(
@@ -1996,6 +2523,47 @@ mod tests {
             "x86 guests should keep the default video path: {joined}"
         );
         assert!(!joined.contains("pflash"), "unexpected pflash in: {joined}");
+        assert!(joined.contains("-nic user,model=virtio-net-pci"));
+    }
+
+    #[test]
+    fn qemu_args_attach_only_the_parent_covered_payload_image_read_only() {
+        let environment = Environment {
+            id: "mint".to_string(),
+            name: "Mint".to_string(),
+            backend: "qemu".to_string(),
+            arch: GuestArch::X86_64,
+            image_path: PathBuf::from("/images/mint.qcow2"),
+            source: "registry".to_string(),
+            firmware: Firmware::Uefi,
+            media: BootMedia::Disk,
+        };
+        let mut launch = launch::LaunchOptions::new("mint");
+        launch.payload_image = Some(PathBuf::from("/runs/flow/payload.iso"));
+        launch.offline = true;
+        let joined = qemu_args(QemuArgsInput {
+            environment: &environment,
+            run_id: "mint-run",
+            launch: &launch,
+            boot_disk: Path::new("/runs/mint-run/overlay.qcow2"),
+            acceleration: "kvm",
+            display: "none",
+            ports: machine::BootPorts {
+                qmp: 4444,
+                serial: 5555,
+                guest_control: 6666,
+            },
+            firmware: None,
+        })
+        .join(" ");
+        assert!(joined.contains(
+            "-drive if=none,file=/runs/flow/payload.iso,format=raw,readonly=on,id=qolpayload"
+        ));
+        assert!(joined.contains("-device virtio-blk-pci,drive=qolpayload,serial=qolpayload"));
+        assert!(!joined.contains("virtfs"));
+        assert!(!joined.contains("fsdev"));
+        assert!(joined.contains("-nic none"));
+        assert!(!joined.contains("user,model=virtio-net-pci"));
     }
 
     #[test]
@@ -2021,6 +2589,7 @@ mod tests {
             ports: machine::BootPorts {
                 qmp: 4444,
                 serial: 5555,
+                guest_control: 6666,
             },
             firmware: Some(Path::new("/fw/edk2-aarch64-code.fd")),
         })
@@ -2047,6 +2616,7 @@ mod tests {
             ports: machine::BootPorts {
                 qmp: 4444,
                 serial: 5555,
+                guest_control: 6666,
             },
             firmware: None,
         })
@@ -2081,6 +2651,7 @@ mod tests {
             ports: machine::BootPorts {
                 qmp: 4444,
                 serial: 5555,
+                guest_control: 6666,
             },
             firmware: None,
         })

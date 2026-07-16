@@ -259,6 +259,74 @@ pub(crate) fn list_in_roots<'a>(runs_roots: impl IntoIterator<Item = &'a Path>) 
     live_runs
 }
 
+pub(crate) fn reconcile_exact_image_import_vm(
+    run_dir: &Path,
+    expected_run_id: &str,
+    expected_owner_pid: u32,
+    expected_owner_identity: &str,
+) -> Result<()> {
+    ensure_owned_run_directory(run_dir, expected_run_id)?;
+    let report_path = run_dir.join("report.json");
+    let report = qol_dev_env::read_report_checked(
+        &report_path,
+        expected_run_id,
+        &qol_dev_env::ReportKind::ImageImport,
+    )?
+    .context("image-import VM report disappeared during reconciliation")?;
+    if report.owner.pid != Some(expected_owner_pid)
+        || report.owner.process_identity.as_deref() != Some(expected_owner_identity)
+    {
+        bail!("image-import VM owner identity changed during reconciliation");
+    }
+    if qol_process::process_identity_matches(expected_owner_pid, expected_owner_identity) {
+        bail!("image-import VM owner PID {expected_owner_pid} is still alive");
+    }
+    let candidate = running_candidate_from_dir(run_dir.to_path_buf())
+        .context("image-import VM report has no recoverable runtime identity")?;
+    if candidate.supervisor_pid != Some(expected_owner_pid) {
+        bail!("image-import VM supervisor identity does not match its owner journal");
+    }
+    record_stale_with(
+        &candidate,
+        &StaleReason::SupervisorDead(expected_owner_pid),
+        &ExactOwnerRuntime {
+            owner_pid: expected_owner_pid,
+            owner_identity: expected_owner_identity,
+        },
+    )?;
+    Ok(())
+}
+
+struct ExactOwnerRuntime<'a> {
+    owner_pid: u32,
+    owner_identity: &'a str,
+}
+
+impl OrphanRuntime for ExactOwnerRuntime<'_> {
+    fn pid_alive(&self, pid: u32) -> bool {
+        if pid == self.owner_pid {
+            return qol_process::process_identity_matches(pid, self.owner_identity);
+        }
+        SystemOrphanRuntime.pid_alive(pid)
+    }
+
+    fn connect(&self, run: &LiveRun, timeout: Duration) -> Result<Box<dyn OrphanControl>> {
+        SystemOrphanRuntime.connect(run, timeout)
+    }
+
+    fn wait_for_exit(&self, pid: u32, timeout: Duration) -> Result<()> {
+        SystemOrphanRuntime.wait_for_exit(pid, timeout)
+    }
+
+    fn wait_for_tree_exit(&self, process_group: u32, timeout: Duration) -> Result<()> {
+        SystemOrphanRuntime.wait_for_tree_exit(process_group, timeout)
+    }
+
+    fn teardown(&self, run_dir: &Path) -> Result<Vec<PathBuf>> {
+        SystemOrphanRuntime.teardown(run_dir)
+    }
+}
+
 pub(crate) fn reconcile_owned_terminated(
     run_dir: &Path,
     expected_run_id: &str,
@@ -333,11 +401,18 @@ pub(crate) fn reconcile_owned_terminated(
     let already_terminal = existing_status
         .as_deref()
         .is_some_and(owned_report_status_is_terminal);
-    let already_recorded_cleanup = existing_report
-        .as_ref()
-        .and_then(|report| report.get("teardown"))
-        .is_some_and(|teardown| !teardown.is_null());
-    if already_terminal && already_recorded_cleanup && removed.is_empty() {
+    let already_verified_cleanup = existing_report.as_ref().is_some_and(|report| {
+        let status = report
+            .get("status")
+            .and_then(Value::as_str)
+            .map(qol_dev_env::ReportStatus::parse)
+            .unwrap_or_else(|| qol_dev_env::ReportStatus::Unknown(String::new()));
+        matches!(
+            qol_dev_env::report::child_cleanup(report, &status),
+            qol_dev_env::CleanupState::Complete
+        )
+    });
+    if already_terminal && already_verified_cleanup && removed.is_empty() {
         return Ok(OwnedRunCleanup {
             report_status: existing_status.unwrap_or_default(),
             evidence_path: report_path,
@@ -352,7 +427,7 @@ pub(crate) fn reconcile_owned_terminated(
                 .with_context(|| format!("failed to write {}", interrupted_path.display()))?;
         }
     }
-    let observed_at = unix_millis()?;
+    let observed_at = qol_dev_env::unix_millis()?;
     let marker_path = run_dir.join("owner-cleanup.json");
     let marker = json!({
         "status": "complete",
@@ -421,10 +496,7 @@ fn ensure_owned_run_directory(run_dir: &Path, expected_run_id: &str) -> Result<(
 }
 
 fn owned_report_status_is_terminal(status: &str) -> bool {
-    matches!(
-        status,
-        "pass" | "failed" | "skipped" | "abandoned" | "cancelled"
-    )
+    qol_dev_env::ReportStatus::parse(status).is_terminal()
 }
 
 fn candidates_in_roots<'a>(
@@ -679,7 +751,7 @@ fn record_stale_with(
     reason: &StaleReason,
     runtime: &impl OrphanRuntime,
 ) -> Result<PathBuf> {
-    let observed_at = unix_millis()?;
+    let observed_at = qol_dev_env::unix_millis()?;
     let marker_path = candidate.run_dir.join("stale.json");
     let lock_path = candidate.run_dir.join("reconcile.lock");
     let lock = OpenOptions::new()
@@ -859,7 +931,7 @@ fn preserve_running_report(candidate: &RunningCandidate) -> Result<PathBuf> {
 fn write_stale_marker(
     candidate: &RunningCandidate,
     reason: &StaleReason,
-    observed_at: u128,
+    observed_at: u64,
     marker_path: &Path,
     cleanup: &OrphanCleanup,
 ) -> Result<()> {
@@ -881,7 +953,7 @@ fn write_stale_marker(
 fn commit_reconciliation(
     candidate: &RunningCandidate,
     reason: &StaleReason,
-    observed_at: u128,
+    observed_at: u64,
     marker_path: &Path,
     evidence_path: &Path,
     cleanup: &OrphanCleanup,
@@ -954,13 +1026,6 @@ fn write_json(path: &Path, value: &Value) -> Result<()> {
     let content = serde_json::to_string_pretty(value).context("failed to serialize JSON")?;
     qol_fs::atomic_write(path, format!("{content}\n").as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))
-}
-
-fn unix_millis() -> Result<u128> {
-    Ok(SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| anyhow!("system time is before UNIX_EPOCH"))?
-        .as_millis())
 }
 
 fn no_live_run(selector: &str) -> anyhow::Error {
@@ -1622,6 +1687,37 @@ mod tests {
                 "status: {status}"
             );
         }
+    }
+
+    #[test]
+    fn owned_tree_recovery_upgrades_legacy_terminal_cleanup_evidence() {
+        let (proof, dead_pid) = terminated_tree_proof();
+        let root = TempDir::new().unwrap();
+        let mut legacy = report(
+            "debian",
+            Some("debian-owned"),
+            4400,
+            Some(u64::from(dead_pid)),
+            Some(u64::from(dead_pid)),
+        );
+        legacy["kind"] = json!("flow");
+        legacy["status"] = json!("pass");
+        legacy["teardown"] = json!({ "removed": [] });
+        let run_dir = write_report(root.path(), "debian-owned", legacy);
+
+        let cleanup =
+            reconcile_owned_terminated(&run_dir, "debian-owned", "flow supervisor exited", &proof)
+                .unwrap();
+        let recovered: Value =
+            serde_json::from_str(&fs::read_to_string(run_dir.join("report.json")).unwrap())
+                .unwrap();
+
+        assert_eq!(cleanup.report_status, "abandoned");
+        assert_eq!(recovered["status"], "abandoned");
+        assert_eq!(recovered["teardown"]["status"], "complete");
+        assert_eq!(recovered["teardown"]["qemu_exit_verified"], true);
+        assert_eq!(recovered["teardown"]["tree_exit_verified"], true);
+        assert!(run_dir.join("report.interrupted.json").is_file());
     }
 
     #[test]

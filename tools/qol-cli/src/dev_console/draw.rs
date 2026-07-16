@@ -78,7 +78,7 @@ pub(super) fn page_description(view: View) -> Option<&'static str> {
         View::Trace => Some("runtime trace events"),
         View::Doctor => Some("install health checks"),
         View::Plugins => Some("workspace plugins · enter to link/unlink"),
-        View::Emu => Some("clean-os test envs"),
+        View::Emu => Some("headless guest flows · enter opens a manual VM"),
         View::Endpoints => Some("local service endpoints"),
         View::Dashboard | View::EmuDetail => None,
     }
@@ -99,7 +99,7 @@ pub(super) fn breadcrumb(dash: &Dash, accent: Color) -> Line<'static> {
         View::Trace => vec!["trace".to_string()],
         View::Doctor => vec!["doctor".to_string()],
         View::Plugins => vec!["plugins".to_string()],
-        View::Emu => vec!["emu".to_string()],
+        View::Emu => vec!["sandboxes".to_string()],
         View::Endpoints => vec!["endpoints".to_string()],
         View::EmuDetail => {
             let id = dash
@@ -369,7 +369,7 @@ pub(super) fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
         dash_row(dash.cursor == 0, tray_color, "tray", tray_value),
         dash_row(dash.cursor == 1, web_color, "web", web_value),
         dash_row(dash.cursor == 2, plugins_color, "plugins", plugins_value),
-        dash_row(dash.cursor == 3, emu_color, "emu", emu_value),
+        dash_row(dash.cursor == 3, emu_color, "sandboxes", emu_value),
         dash_row(dash.cursor == 4, doctor_color, "doctor", doctor_value),
         dash_row(
             dash.cursor == 5,
@@ -815,7 +815,7 @@ mod tests {
             (View::Endpoints, "qol dev · endpoints"),
             (View::Plugins, "qol dev · plugins"),
             (View::Doctor, "qol dev · doctor"),
-            (View::Emu, "qol dev · emu"),
+            (View::Emu, "qol dev · sandboxes"),
         ];
         for (view, crumb) in cases {
             let mut dash = Dash::new(Vec::new());
@@ -938,7 +938,11 @@ mod tests {
                 "stale context title rendered"
             );
             if matches!(view, View::Emu) {
-                assert!(text.contains("set arch"), "missing emu o/t/a keys");
+                assert!(text.contains("verify image"), "missing verified image key");
+                assert!(
+                    !text.contains("set arch"),
+                    "stale architecture key rendered"
+                );
             }
         }
     }

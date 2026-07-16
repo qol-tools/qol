@@ -13,6 +13,10 @@ pub fn atomic_write_durable(path: &Path, content: &[u8]) -> io::Result<()> {
     atomic_write_inner(path, content, true)
 }
 
+pub fn sync_directory(path: &Path) -> io::Result<()> {
+    platform::sync_parent(path)
+}
+
 fn atomic_write_inner(path: &Path, content: &[u8], durable: bool) -> io::Result<()> {
     let parent = parent_dir(path);
     fs::create_dir_all(parent)?;
@@ -93,6 +97,13 @@ mod tests {
 
         assert_eq!(fs::read(&path).unwrap(), b"durable content");
         assert!(temp_files(path.parent().unwrap(), "state.json").is_empty());
+    }
+
+    #[test]
+    fn directory_sync_is_cross_platform() {
+        let dir = tempfile::tempdir().unwrap();
+
+        sync_directory(dir.path()).unwrap();
     }
 
     #[test]

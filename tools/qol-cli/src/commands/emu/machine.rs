@@ -3,6 +3,7 @@ use std::fs::{File, OpenOptions};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::media;
@@ -14,13 +15,102 @@ const PROCESS_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 pub(crate) struct BootPorts {
     pub(crate) qmp: u16,
     pub(crate) serial: u16,
+    pub(crate) guest_control: u16,
 }
 
 pub(crate) struct BootReservation {
     _lock_file: File,
     qmp_probe: Option<TcpListener>,
     serial_probe: Option<TcpListener>,
+    guest_control_probe: Option<TcpListener>,
     ports: BootPorts,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct LifecycleCleanupProof {
+    pub(crate) qemu_started: bool,
+    pub(crate) qemu_exit_verified: bool,
+    pub(crate) tree_exit_verified: bool,
+    pub(crate) artifacts_removed: bool,
+    pub(crate) error: Option<String>,
+}
+
+impl LifecycleCleanupProof {
+    pub(crate) fn not_started(tree_exit_verified: bool) -> Self {
+        Self {
+            qemu_started: false,
+            qemu_exit_verified: true,
+            tree_exit_verified,
+            artifacts_removed: true,
+            error: (!tree_exit_verified)
+                .then(|| "a pre-VM process tree may still be running".to_string()),
+        }
+    }
+
+    pub(crate) fn verified_vm() -> Self {
+        Self {
+            qemu_started: true,
+            qemu_exit_verified: true,
+            tree_exit_verified: true,
+            artifacts_removed: true,
+            error: None,
+        }
+    }
+
+    pub(crate) fn is_complete(&self) -> bool {
+        self.qemu_exit_verified && self.tree_exit_verified && self.artifacts_removed
+    }
+
+    fn pending() -> Self {
+        Self {
+            qemu_started: false,
+            qemu_exit_verified: true,
+            tree_exit_verified: true,
+            artifacts_removed: false,
+            error: Some("VM lifecycle cleanup has not completed".to_string()),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct LifecycleCleanupTracker {
+    proof: Arc<Mutex<LifecycleCleanupProof>>,
+}
+
+impl LifecycleCleanupTracker {
+    pub(crate) fn new() -> Self {
+        Self {
+            proof: Arc::new(Mutex::new(LifecycleCleanupProof::not_started(true))),
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> LifecycleCleanupProof {
+        self.with_proof(|proof| proof.clone())
+    }
+
+    fn begin(&self) {
+        self.record(LifecycleCleanupProof::pending());
+    }
+
+    fn mark_started(&self) {
+        self.with_proof(|proof| {
+            proof.qemu_started = true;
+            proof.qemu_exit_verified = false;
+            proof.tree_exit_verified = false;
+        });
+    }
+
+    fn record(&self, proof: LifecycleCleanupProof) {
+        self.with_proof(|current| *current = proof);
+    }
+
+    fn with_proof<T>(&self, apply: impl FnOnce(&mut LifecycleCleanupProof) -> T) -> T {
+        let mut proof = match self.proof.lock() {
+            Ok(proof) => proof,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        apply(&mut proof)
+    }
 }
 
 pub(crate) struct VmLifecycle {
@@ -30,10 +120,16 @@ pub(crate) struct VmLifecycle {
     current_process_tree: Option<qol_process::CurrentProcessTreeGuard>,
     exit_verified: bool,
     armed: bool,
+    cleanup_tracker: LifecycleCleanupTracker,
 }
 
 impl VmLifecycle {
     pub(crate) fn new(run_dir: &Path) -> Self {
+        Self::tracked(run_dir, LifecycleCleanupTracker::new())
+    }
+
+    pub(crate) fn tracked(run_dir: &Path, cleanup_tracker: LifecycleCleanupTracker) -> Self {
+        cleanup_tracker.begin();
         Self {
             run_dir: run_dir.to_path_buf(),
             child: None,
@@ -41,10 +137,16 @@ impl VmLifecycle {
             current_process_tree: None,
             exit_verified: false,
             armed: true,
+            cleanup_tracker,
         }
     }
 
-    pub(crate) fn spawn(&mut self, qemu_system: &Path, args: &[String]) -> Result<u32> {
+    pub(crate) fn spawn(
+        &mut self,
+        qemu_system: &Path,
+        args: &[String],
+        isolate_host_session: bool,
+    ) -> Result<u32> {
         if !self.armed {
             bail!("cannot spawn qemu from a completed VM lifecycle");
         }
@@ -55,7 +157,8 @@ impl VmLifecycle {
             .context("failed to guard the qemu supervisor process tree")?;
         let process_tree = qol_process::own_current_process_tree()
             .context("failed to create qemu process-tree ownership")?;
-        let mut child = spawn_qemu(qemu_system, args, &self.run_dir)?;
+        let mut child = spawn_qemu(qemu_system, args, &self.run_dir, isolate_host_session)?;
+        self.cleanup_tracker.mark_started();
         if let Err(assign_error) = process_tree.assign(&child) {
             let cleanup = qol_process::terminate_owned(&mut child, PROCESS_SHUTDOWN_GRACE);
             if let Err(cleanup_error) = cleanup {
@@ -68,6 +171,13 @@ impl VmLifecycle {
             current_process_tree
                 .disarm()
                 .context("failed to disarm qemu supervisor process-tree ownership")?;
+            self.cleanup_tracker.record(LifecycleCleanupProof {
+                qemu_started: true,
+                qemu_exit_verified: true,
+                tree_exit_verified: true,
+                artifacts_removed: false,
+                error: Some("VM lifecycle artifact cleanup has not completed".to_string()),
+            });
             return Err(assign_error).context("failed to own qemu process tree");
         }
         let pid = child.id();
@@ -126,6 +236,13 @@ impl VmLifecycle {
                 .context("failed to disarm qemu supervisor process-tree ownership")?;
         }
         self.armed = false;
+        self.cleanup_tracker.record(LifecycleCleanupProof {
+            qemu_started: self.cleanup_tracker.snapshot().qemu_started,
+            qemu_exit_verified: true,
+            tree_exit_verified: true,
+            artifacts_removed: true,
+            error: None,
+        });
         Ok((committed, removed))
     }
 
@@ -143,6 +260,7 @@ impl VmLifecycle {
     #[cfg(test)]
     fn adopt(&mut self, child: Child) -> u32 {
         let pid = child.id();
+        self.cleanup_tracker.mark_started();
         self.child = Some(child);
         pid
     }
@@ -153,25 +271,57 @@ impl Drop for VmLifecycle {
         if !self.armed {
             return;
         }
-        let mut tree_exit_verified = self.child.is_none() || self.exit_verified;
-        if !tree_exit_verified {
+        let pending = self.cleanup_tracker.snapshot();
+        let qemu_started = pending.qemu_started;
+        let mut qemu_exit_verified =
+            !qemu_started || self.exit_verified || pending.qemu_exit_verified;
+        let mut tree_exit_verified =
+            !qemu_started || self.exit_verified || pending.tree_exit_verified;
+        let mut errors = Vec::new();
+        if qemu_started && !self.exit_verified {
             if let Some(child) = self.child.as_mut() {
-                tree_exit_verified = qol_process::terminate_owned(child, PROCESS_SHUTDOWN_GRACE)
+                match qol_process::terminate_owned(child, PROCESS_SHUTDOWN_GRACE)
                     .and_then(|_| child.wait().map(|_| ()))
-                    .is_ok();
+                {
+                    Ok(()) => qemu_exit_verified = true,
+                    Err(error) => errors.push(format!("failed to terminate qemu: {error}")),
+                }
             }
-            if tree_exit_verified && self.process_tree.is_some() {
-                tree_exit_verified = self.verify_process_tree_exit().is_ok();
+            if qemu_exit_verified && self.process_tree.is_some() {
+                match self.verify_process_tree_exit() {
+                    Ok(()) => tree_exit_verified = true,
+                    Err(error) => {
+                        errors.push(format!("failed to verify qemu process tree: {error:#}"))
+                    }
+                }
             } else if self.current_process_tree.is_some() {
                 tree_exit_verified = false;
+            } else if qemu_exit_verified {
+                tree_exit_verified = true;
             }
         }
-        if tree_exit_verified {
-            let _ = teardown(&self.run_dir);
+        let mut artifacts_removed = false;
+        if qemu_exit_verified && tree_exit_verified {
+            match teardown(&self.run_dir) {
+                Ok(_) => artifacts_removed = true,
+                Err(error) => errors.push(format!("failed to remove VM artifacts: {error:#}")),
+            }
             if let Some(guard) = self.current_process_tree.as_mut() {
-                let _ = guard.disarm();
+                if let Err(error) = guard.disarm() {
+                    tree_exit_verified = false;
+                    errors.push(format!(
+                        "failed to disarm qemu supervisor process-tree ownership: {error:#}"
+                    ));
+                }
             }
         }
+        self.cleanup_tracker.record(LifecycleCleanupProof {
+            qemu_started,
+            qemu_exit_verified,
+            tree_exit_verified,
+            artifacts_removed,
+            error: (!errors.is_empty()).then(|| errors.join("; ")),
+        });
     }
 }
 
@@ -201,14 +351,17 @@ impl BootReservation {
             .with_context(|| format!("failed to acquire boot lock {}", lock_path.display()))?;
         let qmp_probe = bind_port_probe("qmp")?;
         let serial_probe = bind_port_probe("serial")?;
+        let guest_control_probe = bind_port_probe("guest control")?;
         let ports = BootPorts {
             qmp: probe_port(&qmp_probe, "qmp")?,
             serial: probe_port(&serial_probe, "serial")?,
+            guest_control: probe_port(&guest_control_probe, "guest control")?,
         };
         Ok(Self {
             _lock_file: lock_file,
             qmp_probe: Some(qmp_probe),
             serial_probe: Some(serial_probe),
+            guest_control_probe: Some(guest_control_probe),
             ports,
         })
     }
@@ -220,6 +373,7 @@ impl BootReservation {
     pub(crate) fn release_ports(&mut self) {
         self.qmp_probe = None;
         self.serial_probe = None;
+        self.guest_control_probe = None;
     }
 }
 
@@ -240,7 +394,12 @@ fn probe_port(probe: &TcpListener, kind: &str) -> Result<u16> {
         .port())
 }
 
-fn spawn_qemu(qemu_system: &Path, args: &[String], run_dir: &Path) -> Result<Child> {
+fn spawn_qemu(
+    qemu_system: &Path,
+    args: &[String],
+    run_dir: &Path,
+    isolate_host_session: bool,
+) -> Result<Child> {
     let logs_dir = run_dir.join("logs");
     std::fs::create_dir_all(&logs_dir)
         .with_context(|| format!("failed to create {}", logs_dir.display()))?;
@@ -250,11 +409,16 @@ fn spawn_qemu(qemu_system: &Path, args: &[String], run_dir: &Path) -> Result<Chi
     let stderr = stdout
         .try_clone()
         .with_context(|| format!("failed to clone {}", log_path.display()))?;
-    Command::new(qemu_system)
+    let mut command = Command::new(qemu_system);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
+        .stderr(Stdio::from(stderr));
+    if isolate_host_session {
+        crate::commands::dev_env::clear_host_session(&mut command);
+    }
+    command
         .spawn()
         .with_context(|| format!("failed to spawn {}", qemu_system.display()))
 }
@@ -290,14 +454,17 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
-    fn reservation_holds_two_distinct_ports() {
+    fn reservation_holds_three_distinct_ports() {
         let dir = tempfile::tempdir().unwrap();
         let reservation = BootReservation::acquire(dir.path()).unwrap();
         let ports = reservation.ports();
 
         assert_ne!(ports.qmp, ports.serial);
+        assert_ne!(ports.qmp, ports.guest_control);
+        assert_ne!(ports.serial, ports.guest_control);
         assert!(TcpListener::bind(("127.0.0.1", ports.qmp)).is_err());
         assert!(TcpListener::bind(("127.0.0.1", ports.serial)).is_err());
+        assert!(TcpListener::bind(("127.0.0.1", ports.guest_control)).is_err());
     }
 
     #[test]
@@ -309,8 +476,13 @@ mod tests {
 
         let qmp = TcpListener::bind(("127.0.0.1", ports.qmp)).unwrap();
         let serial = TcpListener::bind(("127.0.0.1", ports.serial)).unwrap();
+        let guest_control = TcpListener::bind(("127.0.0.1", ports.guest_control)).unwrap();
         assert_eq!(qmp.local_addr().unwrap().port(), ports.qmp);
         assert_eq!(serial.local_addr().unwrap().port(), ports.serial);
+        assert_eq!(
+            guest_control.local_addr().unwrap().port(),
+            ports.guest_control
+        );
         assert!(boot_lock_path().is_file());
     }
 
@@ -472,10 +644,12 @@ mod tests {
             .env("QOL_EMU_LIFECYCLE_TEST_CHILD", "1")
             .spawn()
             .unwrap();
-        let mut lifecycle = VmLifecycle::new(dir.path());
+        let cleanup_tracker = LifecycleCleanupTracker::new();
+        let mut lifecycle = VmLifecycle::tracked(dir.path(), cleanup_tracker.clone());
         let pid = lifecycle.adopt(child);
         assert_eq!(lifecycle.pid(), Some(pid));
         assert!(qol_process::is_pid_alive(pid));
+        assert!(!cleanup_tracker.snapshot().is_complete());
         let commit_called = std::cell::Cell::new(false);
         let finish = lifecycle.finish::<()>(|_| {
             commit_called.set(true);
@@ -488,6 +662,10 @@ mod tests {
 
         assert!(!qol_process::is_pid_alive(pid));
         assert!(!overlay.exists());
+        assert_eq!(
+            cleanup_tracker.snapshot(),
+            LifecycleCleanupProof::verified_vm()
+        );
     }
 
     #[test]

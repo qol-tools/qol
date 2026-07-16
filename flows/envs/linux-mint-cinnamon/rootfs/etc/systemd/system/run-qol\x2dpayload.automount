@@ -1,0 +1,9 @@
+[Unit]
+Description=QoL read-only development payload automount
+
+[Automount]
+Where=/run/qol-payload
+TimeoutIdleSec=0
+
+[Install]
+WantedBy=multi-user.target

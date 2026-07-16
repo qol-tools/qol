@@ -1,0 +1,1 @@
+SUBSYSTEM=="virtio-ports", ATTR{name}=="org.qol-tools.guest-control", GROUP="qol-guest", MODE="0660"

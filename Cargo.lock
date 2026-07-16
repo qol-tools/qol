@@ -5424,6 +5424,9 @@ dependencies = [
  "qol-config",
  "qol-conventions",
  "qol-dev-build",
+ "qol-dev-env",
+ "qol-dev-guest",
+ "qol-dev-orchestrator",
  "qol-fs",
  "qol-platform",
  "qol-process",
@@ -5431,6 +5434,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "toml_edit 0.25.12+spec-1.1.0",
@@ -5502,6 +5506,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-dev-env"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "qol-config",
+ "qol-fs",
+ "qol-platform",
+ "qol-process",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
+ "toml_edit 0.25.12+spec-1.1.0",
+]
+
+[[package]]
+name = "qol-dev-guest"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "qol-dev-orchestrator"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "qol-dev-env",
+ "qol-process",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "qol-frecency"
 version = "0.2.0"
 dependencies = [
@@ -5534,6 +5577,16 @@ dependencies = [
  "serde",
  "serde_json",
  "x11rb",
+]
+
+[[package]]
+name = "qol-guest-runner"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "qol-dev-guest",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

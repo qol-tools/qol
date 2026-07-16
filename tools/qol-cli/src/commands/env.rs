@@ -1,10 +1,13 @@
 use crate::commands::dev_env;
-use crate::commands::dev_env::registry::{EnvironmentState, ResolvedEnvironment};
 use crate::commands::dev_env::resources::{self as dev_resources, Admission};
 use crate::commands::emu;
 use crate::commands::flow;
 use crate::host_facade;
 use anyhow::{anyhow, bail, Context, Result};
+use qol_dev_env::{ReportStatus, ResolutionState, ResolvedEnvironment};
+use qol_dev_orchestrator::{
+    ImageImportStart, ImageImportWorkerRequest, RunHandle, RunTicket, WaitState,
+};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -12,22 +15,40 @@ use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const TEARDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 const UP_USAGE: &str =
     "qol env up <environment> [--count N] [--memory-mb N] [--cpus N] [--windowed] [--force]";
+const IMAGE_IMPORT_USAGE: &str =
+    "qol env image import <environment> <source> --worktree <absolute-path> [--run-id ID]";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct UpArgs {
     environment_id: String,
+    run_id: Option<String>,
     count: usize,
     memory_mb: Option<u64>,
     cpus: Option<u16>,
     windowed: bool,
     force: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ImageImportArgs {
+    environment_id: String,
+    source: PathBuf,
+    worktree: PathBuf,
+    run_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DoctorAction {
+    Inspect,
+    Repair,
+    Clear(dev_resources::LeaseClearSelection),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,6 +146,27 @@ enum BatchExecution {
     },
 }
 
+trait CancellationSource {
+    fn is_cancelled(&self) -> bool;
+}
+
+impl CancellationSource for qol_process::CancellationToken {
+    fn is_cancelled(&self) -> bool {
+        self.is_cancelled()
+    }
+}
+
+struct EnvironmentCancellation<'a> {
+    signals: &'a qol_process::CancellationToken,
+    inbox: &'a qol_dev_env::CancellationInbox,
+}
+
+impl CancellationSource for EnvironmentCancellation<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.signals.is_cancelled() || self.inbox.is_requested().unwrap_or(true)
+    }
+}
+
 pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
     let Some(command) = args.first().and_then(|arg| arg.to_str()) else {
         print_help();
@@ -139,6 +181,8 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
         "list" => cmd_list(rest),
         "doctor" => cmd_doctor(rest),
         "up" => cmd_up(rest, verbose),
+        "image" => cmd_image(rest, verbose),
+        "cancel" => cmd_cancel(rest),
         "runs" => cmd_runs(rest),
         "down" => cmd_down(rest, verbose),
         "shot" => cmd_shot(rest, verbose),
@@ -148,6 +192,203 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
         }
         other => bail!("unknown env command `{other}`\n\n{}", help_text()),
     }
+}
+
+fn cmd_image(args: &[OsString], verbose: bool) -> Result<()> {
+    let Some(command) = args.first().and_then(|argument| argument.to_str()) else {
+        bail!("usage: {IMAGE_IMPORT_USAGE}");
+    };
+    match command {
+        "import" => cmd_image_import(&args[1..], verbose),
+        "help" | "-h" | "--help" => {
+            println!("{IMAGE_IMPORT_USAGE}");
+            Ok(())
+        }
+        other => bail!("unknown env image command `{other}`\nusage: {IMAGE_IMPORT_USAGE}"),
+    }
+}
+
+fn cmd_image_import(args: &[OsString], verbose: bool) -> Result<()> {
+    let parsed = parse_image_import_args(args)?;
+    let run_id = match parsed.run_id {
+        Some(run_id) => run_id,
+        None => emu::new_run_id("image-import")?,
+    };
+    let start = ImageImportStart {
+        environment_id: parsed.environment_id,
+        source: parsed.source,
+        worktree: parsed.worktree,
+        run_id,
+    };
+    let executable = std::env::current_exe().context("failed to resolve the qol executable")?;
+    let cancellation = qol_process::CancellationToken::install()
+        .context("failed to install image-import cancellation handlers")?;
+    let mut handle = start_typed_image_import(&executable, start, verbose)?;
+    println!("Image import run: {}", handle.ticket().run_id);
+    println!(
+        "Worker log: {}",
+        handle.ticket().worker_log_path()?.display()
+    );
+    let receipt = wait_for_typed_image_import(&mut handle, &cancellation)?;
+    println!("Verified image: {}", receipt.image_path.display());
+    println!("Verification report: {}", receipt.report_path.display());
+    Ok(())
+}
+
+pub(crate) fn run_image_import_worker(args: &[OsString]) -> Result<()> {
+    if !args.is_empty() {
+        bail!("internal image-import worker accepts typed standard input only");
+    }
+    qol_dev_env::require_host_session_cleared()
+        .context("internal image-import worker refused host session access")?;
+    let request = qol_dev_orchestrator::read_image_import_worker_request(std::io::stdin().lock())?;
+    let plan = emu::image_import::plan_image_import(
+        emu::image_import::ImageImportRequest {
+            environment_id: request.start.environment_id.clone(),
+            source: request.start.source.clone(),
+            run_id: Some(request.start.run_id.clone()),
+            worktree: request.start.worktree.clone(),
+        },
+        request.verbose,
+    )?;
+    let expected_ticket = request.start.ticket(&request.image_root)?;
+    if plan.report_path != expected_ticket.report_path {
+        bail!("image-import configuration changed after the worker ticket was issued");
+    }
+    if plan.fingerprint()? != request.plan_fingerprint {
+        bail!("image-import plan changed before the typed worker started; retry the import");
+    }
+    emu::image_import::execute_image_import(plan, request.verbose)?;
+    Ok(())
+}
+
+pub(crate) fn start_typed_image_import(
+    executable: &Path,
+    start: ImageImportStart,
+    verbose: bool,
+) -> Result<RunHandle> {
+    start.validate()?;
+    let plan = emu::image_import::plan_image_import(
+        emu::image_import::ImageImportRequest {
+            environment_id: start.environment_id.clone(),
+            source: start.source.clone(),
+            run_id: Some(start.run_id.clone()),
+            worktree: start.worktree.clone(),
+        },
+        verbose,
+    )?;
+    let canonical_start = ImageImportStart {
+        environment_id: start.environment_id,
+        source: start.source.canonicalize().with_context(|| {
+            format!("failed to resolve image source {}", start.source.display())
+        })?,
+        worktree: start.worktree.canonicalize().with_context(|| {
+            format!(
+                "failed to resolve image-import worktree {}",
+                start.worktree.display()
+            )
+        })?,
+        run_id: start.run_id,
+    };
+    let ticket = canonical_start.ticket(&plan.image_root)?;
+    if ticket.report_path != plan.report_path {
+        bail!("image-import plan produced a mismatched report path");
+    }
+    let plan_fingerprint = plan.fingerprint()?;
+    qol_dev_orchestrator::start_image_import_worker(
+        executable,
+        ImageImportWorkerRequest {
+            start: canonical_start,
+            image_root: plan.image_root,
+            plan_fingerprint,
+            verbose,
+        },
+        ticket,
+    )
+}
+
+fn wait_for_typed_image_import(
+    handle: &mut RunHandle,
+    cancellation: &qol_process::CancellationToken,
+) -> Result<emu::image_import::ImageImportReceipt> {
+    let mut cancellation_requested = false;
+    loop {
+        if cancellation.is_cancelled() && !cancellation_requested {
+            handle.cancel()?;
+            cancellation_requested = true;
+        }
+        match handle.poll()? {
+            WaitState::Starting | WaitState::Running(_) => {}
+            WaitState::Terminal {
+                report,
+                worker_success,
+            } => return image_import_receipt(handle.ticket(), report, worker_success),
+            WaitState::Failed {
+                report,
+                worker_exit,
+            } => {
+                let status = report
+                    .as_ref()
+                    .map(|report| report.status.as_str())
+                    .unwrap_or("missing");
+                bail!(
+                    "image-import worker exited {worker_exit} without terminal cleanup proof; report status: {status}; evidence: {}; worker log: {}",
+                    handle.ticket().report_path.display(),
+                    handle.ticket().worker_log_path()?.display()
+                );
+            }
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn image_import_receipt(
+    ticket: &RunTicket,
+    summary: qol_dev_env::RunSummary,
+    worker_success: bool,
+) -> Result<emu::image_import::ImageImportReceipt> {
+    if summary.status != ReportStatus::Pass {
+        let error = summary
+            .error
+            .as_deref()
+            .unwrap_or("image verification did not pass");
+        bail!(
+            "image import ended `{}`: {error}; report: {}; worker log: {}",
+            summary.status.as_str(),
+            summary.report_path.display(),
+            ticket.worker_log_path()?.display()
+        );
+    }
+    if !worker_success {
+        bail!(
+            "image-import worker exited unsuccessfully after publishing a passing report: {}; worker log: {}",
+            summary.report_path.display(),
+            ticket.worker_log_path()?.display()
+        );
+    }
+    let report = ticket
+        .read()?
+        .context("passing image-import report disappeared")?;
+    let promotion = report
+        .document()
+        .pointer("/workflow/promotion")
+        .context("passing image-import report has no promotion receipt")?;
+    if promotion.get("status").and_then(Value::as_str) != Some("published") {
+        bail!("passing image-import report has no published image receipt");
+    }
+    let image_path = promotion
+        .get("image_path")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .context("passing image-import report has no verified image path")?;
+    if !image_path.is_absolute() {
+        bail!("passing image-import report has a non-absolute image path");
+    }
+    Ok(emu::image_import::ImageImportReceipt {
+        run_id: ticket.run_id.clone(),
+        image_path,
+        report_path: ticket.report_path.clone(),
+    })
 }
 
 fn cmd_list(args: &[OsString]) -> Result<()> {
@@ -173,8 +414,38 @@ fn cmd_list(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
+fn cmd_cancel(args: &[OsString]) -> Result<()> {
+    let run_id = required_selector(args, "qol env cancel <batch-run-id>")?;
+    let path = qol_dev_env::request_cancellation(&run_id)?;
+    println!("Cancellation requested for {run_id}: {}", path.display());
+    Ok(())
+}
+
 fn cmd_doctor(args: &[OsString]) -> Result<()> {
-    require_no_args(args, "qol env doctor")?;
+    let action = parse_doctor_action(args)?;
+    match action {
+        DoctorAction::Inspect => {}
+        DoctorAction::Repair => {
+            reconcile_for_admission()?;
+            flow::reconcile_all()?;
+            let reserved = dev_env::reconcile_resources()?;
+            println!(
+                "Repair complete: {} lane(s), {} MiB, {} CPU(s) remain reserved.",
+                reserved.lanes, reserved.memory_mb, reserved.cpus
+            );
+        }
+        DoctorAction::Clear(selection) => {
+            let outcome = dev_resources::clear_leases(selection)?;
+            if outcome.removed.is_empty() {
+                println!("No matching resource leases were recorded.");
+            } else {
+                println!("Cleared resource leases: {}", outcome.removed.join(", "));
+            }
+            if let Some(path) = outcome.backup_path {
+                println!("Backup: {}", path.display());
+            }
+        }
+    }
     let environments = dev_env::discover()?;
     let config = dev_env::config_path()
         .map(|path| path.display().to_string())
@@ -184,6 +455,28 @@ fn cmd_doctor(args: &[OsString]) -> Result<()> {
         "Available memory: {}",
         display_optional_memory(host_facade::available_memory_mb())
     );
+    let inspection = dev_resources::inspect().with_context(|| {
+        "resource lease inspection failed; use `qol env doctor --lease-clear --all` only after verifying no sandbox processes are live"
+    })?;
+    println!(
+        "Resource leases: {} record(s), {} lane(s), {} MiB, {} CPU(s)",
+        inspection.leases.len(),
+        inspection.reserved.lanes,
+        inspection.reserved.memory_mb,
+        inspection.reserved.cpus
+    );
+    for lease in inspection.leases {
+        println!(
+            "  {}: owner {}, {} lane(s), report {}",
+            lease.lease_id,
+            lease.owner_pid,
+            lease.resources.lanes,
+            lease.report_path.display()
+        );
+    }
+    for diagnostic in inspection.diagnostics {
+        println!("  warning: {diagnostic}");
+    }
     if environments.is_empty() {
         println!("Definitions: none");
         return Ok(());
@@ -212,13 +505,36 @@ fn cmd_doctor(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
+fn parse_doctor_action(args: &[OsString]) -> Result<DoctorAction> {
+    if args.is_empty() {
+        return Ok(DoctorAction::Inspect);
+    }
+    if args.len() == 1
+        && args[0]
+            .to_str()
+            .is_some_and(|value| matches!(value, "--repair" | "--fix"))
+    {
+        return Ok(DoctorAction::Repair);
+    }
+    if args.len() == 2 && args[0].to_str() == Some("--lease-clear") {
+        let target = args[1].to_str().context("lease id must be valid UTF-8")?;
+        let selection = if target == "--all" {
+            dev_resources::LeaseClearSelection::All
+        } else {
+            dev_resources::LeaseClearSelection::One(target.to_string())
+        };
+        return Ok(DoctorAction::Clear(selection));
+    }
+    bail!("usage: qol env doctor [--repair|--fix|--lease-clear <run-id|--all>]")
+}
+
 fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
     let parsed = parse_up_args(args)?;
-    let cancellation = qol_process::CancellationToken::install()
+    let signal_cancellation = qol_process::CancellationToken::install()
         .context("failed to install environment cancellation handlers")?;
     reconcile_for_admission()?;
     flow::reconcile_all()?;
-    dev_resources::reconcile()?;
+    dev_env::reconcile_resources()?;
     let environment = dev_env::find(&parsed.environment_id)?
         .ok_or_else(|| unknown_environment(&parsed.environment_id))?;
     ensure_ready(&environment)?;
@@ -237,30 +553,69 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
     let resources = dev_resources::profile(memory_mb, u64::from(cpus))?;
     let memory_mb = u64::from(resources.memory_mb);
     let cpus = resources.cpus;
-    let batch_id = emu::new_run_id(&format!("{}-batch", environment.definition.id))?;
+    let concurrent_lanes = u64::try_from(parsed.count).context("lane count exceeds u64")?;
+    let batch_id = match parsed.run_id {
+        Some(run_id) => run_id,
+        None => emu::new_run_id(&format!("{}-batch", environment.definition.id))?,
+    };
+    let cancellation_inbox = qol_dev_env::CancellationInbox::for_run(&batch_id)?;
+    let cancellation = EnvironmentCancellation {
+        signals: &signal_cancellation,
+        inbox: &cancellation_inbox,
+    };
+    if cancellation.is_cancelled() {
+        bail!("environment launch cancelled before admission");
+    }
+    let batch_dir = prepare_batch_dir(run_root, &batch_id)?;
+    let case_root = run_root.join("cases");
+    let setup = (|| -> Result<_> {
+        let started_at_unix_ms = qol_dev_env::unix_millis()?;
+        let mut planned_lanes = Vec::with_capacity(parsed.count);
+        for _ in 0..parsed.count {
+            planned_lanes.push(Lane::attempted(
+                emu::new_run_id(&environment.definition.id)?,
+                &case_root,
+            ));
+        }
+        Ok((started_at_unix_ms, planned_lanes))
+    })();
+    let (started_at_unix_ms, planned_lanes) = match setup {
+        Ok(setup) => setup,
+        Err(error) => {
+            let cleanup = remove_unpublished_batch_dir(&batch_dir).err();
+            return Err(combine_unpublished_errors(error, cleanup, None));
+        }
+    };
     let batch_report_path = run_root.join(&batch_id).join("report.json");
-    let (admission, resource_lease) = dev_resources::reserve(
+    let (admission, resource_lease) = match dev_resources::reserve(
         &batch_id,
         &batch_report_path,
         dev_resources::AdmissionRequest {
-            concurrent_lanes: u64::try_from(parsed.count).context("lane count exceeds u64")?,
+            concurrent_lanes,
             profile: resources,
             recommended_size_gb: environment.definition.image.recommended_size_gb,
-            capacity: dev_resources::host_capacity(run_root),
+            capacity: dev_env::host_capacity(run_root),
             force: parsed.force,
         },
-    )?;
-    let batch_dir = prepare_batch_dir(run_root, &batch_id)?;
-    let case_root = run_root.join("cases");
-    let started_at_unix_ms = unix_millis()?;
-    let mut planned_lanes = Vec::with_capacity(parsed.count);
-    for _ in 0..parsed.count {
-        planned_lanes.push(Lane::attempted(
-            emu::new_run_id(&environment.definition.id)?,
-            &case_root,
-        ));
-    }
-    write_batch_files(&Batch {
+    ) {
+        Ok(reservation) => reservation,
+        Err(error) => {
+            let cleanup = remove_unpublished_batch_dir(&batch_dir).err();
+            return Err(combine_unpublished_errors(error, cleanup, None));
+        }
+    };
+    let parent_lease = match resource_lease.child_claim() {
+        Ok(parent_lease) => parent_lease,
+        Err(error) => {
+            return Err(rollback_unpublished_batch(
+                resource_lease,
+                &batch_dir,
+                &batch_id,
+                error,
+            ))
+        }
+    };
+    let initial_report = write_batch_files(&Batch {
         run_id: &batch_id,
         run_dir: &batch_dir,
         environment: &environment,
@@ -275,7 +630,15 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
         error: None,
         started_at_unix_ms,
         finished_at_unix_ms: None,
-    })?;
+    });
+    if let Err(error) = initial_report {
+        return Err(rollback_unpublished_batch(
+            resource_lease,
+            &batch_dir,
+            &batch_id,
+            error.context("failed to publish initial environment ownership"),
+        ));
+    }
     let execution = execute_owned_batch(
         planned_lanes,
         &cancellation,
@@ -283,15 +646,16 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
             if verbose {
                 println!("Starting lane: {}", lane.run_id);
             }
-            let child_args = emu_up_args(
+            let child_args = emu_up_args(EmuUpRequest {
                 image_path,
-                &environment,
-                &lane.run_id,
+                environment: &environment,
+                parent_lease: &parent_lease,
+                run_id: &lane.run_id,
                 memory_mb,
                 cpus,
-                parsed.windowed,
-                &case_root,
-            )?;
+                windowed: parsed.windowed,
+                case_root: &case_root,
+            })?;
             if let Err(error) = spawn_lane(&child_args, parsed.windowed) {
                 lane.phase = LanePhase::Attempting;
                 return Err(error);
@@ -335,7 +699,7 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
             let cleanup_complete = teardown.iter().all(TeardownResult::succeeded);
             let status = rollback_status(cancelled, cleanup_complete);
             let (finished_at_unix_ms, timestamp_error) =
-                match cleanup_complete.then(unix_millis).transpose() {
+                match cleanup_complete.then(qol_dev_env::unix_millis).transpose() {
                     Ok(timestamp) => (timestamp, None),
                     Err(error) => (None, Some(error)),
                 };
@@ -419,7 +783,7 @@ fn combine_optional_errors(
 
 fn execute_owned_batch(
     mut lanes: Vec<Lane>,
-    cancellation: &qol_process::CancellationToken,
+    cancellation: &impl CancellationSource,
     mut launch_lane: impl FnMut(&mut Lane) -> Result<()>,
     mut persist: impl FnMut(&[Lane], &str) -> Result<()>,
     mut rollback: impl FnMut(&[Lane]) -> Vec<TeardownResult>,
@@ -569,7 +933,7 @@ fn cmd_runs(args: &[OsString]) -> Result<()> {
     let runs = emu::live_runs_in_roots(&roots);
     reconcile_batch_reports(&[], false)?;
     flow::reconcile_all()?;
-    dev_resources::reconcile()?;
+    dev_env::reconcile_resources()?;
     if runs.is_empty() {
         println!("No development environments are running.");
         return Ok(());
@@ -595,7 +959,7 @@ fn cmd_down(args: &[OsString], verbose: bool) -> Result<()> {
         Ok(runs) => runs,
         Err(selection_error) => {
             let reconciliation = reconcile_batch_reports(&[], false)
-                .and_then(|()| dev_resources::reconcile().map(|_| ()));
+                .and_then(|()| dev_env::reconcile_resources().map(|_| ()));
             if let Err(reconciliation_error) = reconciliation {
                 bail!("{selection_error:#}\nbatch reconciliation: {reconciliation_error:#}");
             }
@@ -604,7 +968,7 @@ fn cmd_down(args: &[OsString], verbose: bool) -> Result<()> {
     };
     if runs.is_empty() {
         reconcile_batch_reports(&[], false)?;
-        dev_resources::reconcile()?;
+        dev_env::reconcile_resources()?;
         println!("No development environments are running.");
         return Ok(());
     }
@@ -619,7 +983,7 @@ fn cmd_down(args: &[OsString], verbose: bool) -> Result<()> {
         .collect::<Vec<_>>();
     let teardown = teardown_lanes(&lanes, verbose);
     let reconciliation = reconcile_batch_reports(&teardown, true)
-        .and_then(|()| dev_resources::reconcile().map(|_| ()));
+        .and_then(|()| dev_env::reconcile_resources().map(|_| ()));
     let failures = teardown
         .iter()
         .filter(|result| !result.succeeded())
@@ -706,6 +1070,7 @@ fn environment_case_roots() -> Result<Vec<PathBuf>> {
 
 fn parse_up_args(args: &[OsString]) -> Result<UpArgs> {
     let mut environment_id = None;
+    let mut run_id = None;
     let mut count = None;
     let mut memory_mb = None;
     let mut cpus = None;
@@ -735,6 +1100,11 @@ fn parse_up_args(args: &[OsString]) -> Result<UpArgs> {
                     "--cpus",
                 )?;
             }
+            Some("--run-id") => {
+                let value = next_value(&mut iter, "--run-id")?;
+                dev_resources::ParentLeaseClaim::parse(value)?;
+                set_once(&mut run_id, value.to_string(), "--run-id")?;
+            }
             Some("--windowed") => set_flag(&mut windowed, "--windowed")?,
             Some("--force") => set_flag(&mut force, "--force")?,
             Some(value) if value.starts_with('-') => {
@@ -752,11 +1122,77 @@ fn parse_up_args(args: &[OsString]) -> Result<UpArgs> {
     }
     Ok(UpArgs {
         environment_id,
+        run_id,
         count,
         memory_mb,
         cpus,
         windowed,
         force,
+    })
+}
+
+fn parse_image_import_args(args: &[OsString]) -> Result<ImageImportArgs> {
+    let mut environment_id = None;
+    let mut source = None;
+    let mut worktree = None;
+    let mut run_id = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].to_str() {
+            Some("--worktree") => {
+                if worktree.is_some() {
+                    bail!("--worktree was provided more than once");
+                }
+                let value = args
+                    .get(index + 1)
+                    .filter(|value| !value.to_string_lossy().starts_with('-'))
+                    .context("--worktree needs a value")?;
+                let path = PathBuf::from(value);
+                if !path.is_absolute() {
+                    bail!("--worktree requires an absolute path");
+                }
+                worktree = Some(path);
+                index += 2;
+            }
+            Some("--run-id") => {
+                if run_id.is_some() {
+                    bail!("--run-id was provided more than once");
+                }
+                let value = args
+                    .get(index + 1)
+                    .and_then(|value| value.to_str())
+                    .filter(|value| !value.starts_with('-'))
+                    .context("--run-id needs a value")?;
+                qol_dev_env::validate_run_id(value)?;
+                run_id = Some(value.to_string());
+                index += 2;
+            }
+            Some(option) if option.starts_with('-') => {
+                bail!("unknown image-import option `{option}`\nusage: {IMAGE_IMPORT_USAGE}")
+            }
+            Some(value) if environment_id.is_none() => {
+                if value.is_empty() {
+                    bail!("usage: {IMAGE_IMPORT_USAGE}");
+                }
+                environment_id = Some(value.to_string());
+                index += 1;
+            }
+            Some(_) | None if source.is_none() => {
+                let path = PathBuf::from(&args[index]);
+                if !path.is_absolute() {
+                    bail!("image source requires an absolute path");
+                }
+                source = Some(path);
+                index += 1;
+            }
+            Some(_) | None => bail!("usage: {IMAGE_IMPORT_USAGE}"),
+        }
+    }
+    Ok(ImageImportArgs {
+        environment_id: environment_id.ok_or_else(|| anyhow!("usage: {IMAGE_IMPORT_USAGE}"))?,
+        source: source.ok_or_else(|| anyhow!("usage: {IMAGE_IMPORT_USAGE}"))?,
+        worktree: worktree.ok_or_else(|| anyhow!("--worktree is required"))?,
+        run_id,
     })
 }
 
@@ -809,7 +1245,7 @@ fn set_flag(flag: &mut bool, label: &str) -> Result<()> {
 }
 
 fn ensure_ready(environment: &ResolvedEnvironment) -> Result<()> {
-    if environment.state == EnvironmentState::Ready {
+    if environment.state == ResolutionState::Ready {
         return Ok(());
     }
     let detail = environment.messages.join("; ");
@@ -829,29 +1265,137 @@ fn prepare_batch_dir(run_root: &Path, run_id: &str) -> Result<PathBuf> {
         .with_context(|| format!("failed to create {}", run_root.display()))?;
     let run_dir = run_root.join(run_id);
     fs::create_dir(&run_dir).with_context(|| format!("failed to create {}", run_dir.display()))?;
-    fs::create_dir(run_dir.join("artifacts"))
-        .with_context(|| format!("failed to create artifacts for {run_id}"))?;
-    fs::create_dir(run_dir.join("logs"))
-        .with_context(|| format!("failed to create logs for {run_id}"))?;
-    fs::create_dir(run_dir.join("steps"))
-        .with_context(|| format!("failed to create steps for {run_id}"))?;
-    Ok(run_dir)
+    let prepared = (|| -> Result<()> {
+        fs::create_dir(run_dir.join("artifacts"))
+            .with_context(|| format!("failed to create artifacts for {run_id}"))?;
+        fs::create_dir(run_dir.join("logs"))
+            .with_context(|| format!("failed to create logs for {run_id}"))?;
+        fs::create_dir(run_dir.join("steps"))
+            .with_context(|| format!("failed to create steps for {run_id}"))
+    })();
+    match prepared {
+        Ok(()) => Ok(run_dir),
+        Err(error) => {
+            let cleanup = remove_unpublished_batch_dir(&run_dir).err();
+            Err(combine_unpublished_errors(error, cleanup, None))
+        }
+    }
 }
 
-fn emu_up_args(
-    image_path: &Path,
-    environment: &ResolvedEnvironment,
-    run_id: &str,
+fn rollback_unpublished_batch(
+    resource_lease: dev_resources::ResourceLease,
+    run_dir: &Path,
+    batch_id: &str,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let cleanup = remove_unpublished_batch_dir(run_dir).err();
+    if let Some(cleanup) = cleanup {
+        let mut failures = vec![
+            format!("{error:#}"),
+            format!("batch directory cleanup failed: {cleanup:#}"),
+        ];
+        if let Err(error) = write_unpublished_batch_failure(run_dir, batch_id, &failures.join("; "))
+        {
+            failures.push(format!(
+                "failed to persist unresolved cleanup evidence: {error:#}"
+            ));
+        }
+        resource_lease.retain();
+        return anyhow!(failures.join("; "));
+    }
+    let rollback = resource_lease.rollback_unpublished().err();
+    combine_unpublished_errors(error, None, rollback)
+}
+
+fn write_unpublished_batch_failure(run_dir: &Path, batch_id: &str, error: &str) -> Result<()> {
+    let report_path = run_dir.join("report.json");
+    let report = json!({
+        "name": "qol-env-setup-failure",
+        "kind": "environment",
+        "run_id": batch_id,
+        "status": "cleanup-incomplete",
+        "owner": dev_env::run_owner("environment-setup", "released"),
+        "teardown": {
+            "status": "incomplete",
+            "error": error,
+        },
+        "artifacts": {
+            "run_dir": run_dir,
+            "report": report_path,
+        },
+        "error": error,
+        "next": [
+            format!("Inspect retained setup artifacts under {}.", run_dir.display()),
+            format!("After verifying no sandbox process is live, run qol env doctor --lease-clear {batch_id}."),
+        ],
+    });
+    let content = serde_json::to_vec_pretty(&report).context("failed to serialize JSON")?;
+    qol_fs::atomic_write_durable(&report_path, &content)
+        .with_context(|| format!("failed to write {}", report_path.display()))
+}
+
+fn remove_unpublished_batch_dir(run_dir: &Path) -> Result<()> {
+    match fs::remove_dir_all(run_dir) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to remove unpublished environment batch {}",
+                run_dir.display()
+            )
+        }),
+    }
+}
+
+fn combine_unpublished_errors(
+    error: anyhow::Error,
+    cleanup: Option<anyhow::Error>,
+    rollback: Option<anyhow::Error>,
+) -> anyhow::Error {
+    let mut failures = vec![format!("{error:#}")];
+    if let Some(cleanup) = cleanup {
+        failures.push(format!("batch directory cleanup failed: {cleanup:#}"));
+    }
+    if let Some(rollback) = rollback {
+        failures.push(format!(
+            "resource reservation rollback failed: {rollback:#}"
+        ));
+    }
+    anyhow!(failures.join("; "))
+}
+
+struct EmuUpRequest<'a> {
+    image_path: &'a Path,
+    environment: &'a ResolvedEnvironment,
+    parent_lease: &'a dev_resources::ParentLeaseClaim,
+    run_id: &'a str,
     memory_mb: u64,
     cpus: u16,
     windowed: bool,
-    case_root: &Path,
-) -> Result<Vec<OsString>> {
+    case_root: &'a Path,
+}
+
+fn emu_up_args(request: EmuUpRequest<'_>) -> Result<Vec<OsString>> {
+    let EmuUpRequest {
+        image_path,
+        environment,
+        parent_lease,
+        run_id,
+        memory_mb,
+        cpus,
+        windowed,
+        case_root,
+    } = request;
     emu::child_launch_args(emu::ChildLaunch {
         operation: emu::ChildOperation::Up,
         target: image_path,
         environment_id: &environment.definition.id,
         run_id,
+        parent_lease,
+        guest_adapter: None,
+        guest_image_revision: None,
+        payload_manifest: None,
+        payload_image: None,
         run_root: Some(case_root),
         image_kind: Some(environment.definition.image.kind.as_str()),
         display: if windowed {
@@ -859,6 +1403,7 @@ fn emu_up_args(
         } else {
             emu::DisplayMode::None
         },
+        offline: false,
         resources: dev_resources::profile(memory_mb, u64::from(cpus))?,
         acceleration: environment
             .definition
@@ -882,7 +1427,7 @@ fn spawn_lane(args: &[OsString], windowed: bool) -> Result<()> {
         .with_context(|| format!("failed to start {}", executable.display()))
 }
 
-fn wait_until_running(lane: &Lane, cancellation: &qol_process::CancellationToken) -> Result<()> {
+fn wait_until_running(lane: &Lane, cancellation: &impl CancellationSource) -> Result<()> {
     let deadline = Instant::now() + READY_TIMEOUT;
     while Instant::now() < deadline {
         if cancellation.is_cancelled() {
@@ -940,39 +1485,12 @@ fn read_report(path: &Path) -> Result<Option<Value>> {
 }
 
 fn cleanup_verification(report: &Value, status: &str) -> CleanupVerification {
-    if report_status_is_active(status) {
-        return CleanupVerification::Pending;
+    let status = qol_dev_env::ReportStatus::parse(status);
+    match qol_dev_env::report::child_cleanup(report, &status) {
+        qol_dev_env::CleanupState::Pending => CleanupVerification::Pending,
+        qol_dev_env::CleanupState::Complete => CleanupVerification::Complete,
+        qol_dev_env::CleanupState::Incomplete(error) => CleanupVerification::Incomplete(error),
     }
-    if matches!(
-        status,
-        "cleanup-incomplete" | "rollback-incomplete" | "cancellation-cleanup-incomplete"
-    ) {
-        let reason = report
-            .get("teardown")
-            .and_then(|teardown| teardown.get("error"))
-            .and_then(Value::as_str)
-            .unwrap_or("cleanup is incomplete")
-            .to_string();
-        return CleanupVerification::Incomplete(reason);
-    }
-    let Some(teardown) = report.get("teardown").filter(|value| !value.is_null()) else {
-        return CleanupVerification::Incomplete(
-            "terminal report has no teardown evidence".to_string(),
-        );
-    };
-    if status != "abandoned" {
-        return CleanupVerification::Complete;
-    }
-    let complete = teardown.get("status").and_then(Value::as_str) == Some("complete");
-    let exit_verified = teardown.get("qemu_exit_verified").and_then(Value::as_bool) == Some(true);
-    let tree_exit_verified =
-        teardown.get("tree_exit_verified").and_then(Value::as_bool) == Some(true);
-    if complete && exit_verified && tree_exit_verified {
-        return CleanupVerification::Complete;
-    }
-    CleanupVerification::Incomplete(
-        "abandoned run lacks verified process-tree exit or artifact cleanup".to_string(),
-    )
 }
 
 fn teardown_lanes(lanes: &[Lane], verbose: bool) -> Vec<TeardownResult> {
@@ -1082,10 +1600,6 @@ fn lane_control_roots(lane: &Lane) -> Vec<PathBuf> {
         .collect()
 }
 
-fn report_status_is_active(status: &str) -> bool {
-    matches!(status, "preparing" | "starting" | "running" | "stopping")
-}
-
 fn reconcile_batch_reports(
     teardown: &[TeardownResult],
     require_cleanup_complete: bool,
@@ -1187,7 +1701,8 @@ fn reconcile_batch_report_file(
             .flatten();
         lane_states.insert(run_id.to_string(), lifecycle);
     }
-    let reconciled = reconciled_batch_report(&report, &lane_states, teardown, unix_millis()?);
+    let reconciled =
+        reconciled_batch_report(&report, &lane_states, teardown, qol_dev_env::unix_millis()?);
     if reconciled == report {
         if require_cleanup_complete {
             ensure_batch_cleanup_complete(&reconciled)?;
@@ -1377,21 +1892,31 @@ fn batch_owner_interrupted(report: &serde_json::Map<String, Value>) -> bool {
     if state != Some("running") {
         return false;
     }
-    owner
-        .and_then(|owner| owner.get("pid"))
-        .and_then(Value::as_u64)
-        .and_then(|pid| u32::try_from(pid).ok())
-        .is_none_or(|pid| !qol_process::is_pid_alive(pid))
+    owner.is_none_or(|owner| !batch_owner_may_be_active(owner))
 }
 
 fn batch_owner_active(report: &Value) -> bool {
     report
         .get("owner")
         .filter(|owner| owner.get("state").and_then(Value::as_str) == Some("running"))
-        .and_then(|owner| owner.get("pid"))
+        .is_some_and(batch_owner_may_be_active)
+}
+
+fn batch_owner_may_be_active(owner: &Value) -> bool {
+    let Some(pid) = owner
+        .get("pid")
         .and_then(Value::as_u64)
         .and_then(|pid| u32::try_from(pid).ok())
-        .is_some_and(qol_process::is_pid_alive)
+    else {
+        return false;
+    };
+    if !qol_process::is_pid_alive(pid) {
+        return false;
+    }
+    let Some(identity) = owner.get("process_identity").and_then(Value::as_str) else {
+        return true;
+    };
+    qol_process::process_identity_matches(pid, identity)
 }
 
 fn mark_batch_owner_orphaned(report: &mut serde_json::Map<String, Value>, interrupted: bool) {
@@ -1523,10 +2048,10 @@ fn batch_report(batch: &Batch<'_>) -> Value {
         "started_at_unix_ms": batch.started_at_unix_ms,
         "status": batch.status,
         "error": batch.error,
-        "owner": {
-            "pid": std::process::id(),
-            "state": if batch.status == "starting" { "running" } else { "released" },
-        },
+        "owner": dev_env::run_owner(
+            "interactive-environment",
+            if batch.status == "starting" { "running" } else { "released" },
+        ),
         "environment": {
             "id": batch.environment.definition.id,
             "name": batch.environment.definition.name,
@@ -1728,16 +2253,8 @@ fn display_optional_memory(memory_mb: Option<u64>) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn unix_millis() -> Result<u64> {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system time is before UNIX_EPOCH")?
-        .as_millis();
-    u64::try_from(millis).context("system time overflowed u64 milliseconds")
-}
-
 fn help_text() -> &'static str {
-    "qol env\n\n  list\n  doctor\n  up <environment> [--count N] [--memory-mb N] [--cpus N] [--windowed] [--force]\n  runs\n  down <run-id|environment|--all>\n  shot <run-id|environment>\n\nDefinitions live in flows/envs/*.toml. Local image_root, run_root, and [images]\noverrides live in the dev-envs.toml path shown by `qol env doctor`. Environment\ncapabilities select the required acceleration policy."
+    "qol env\n\n  list\n  doctor [--repair|--fix|--lease-clear <run-id|--all>]\n  up <environment> [--count N] [--memory-mb N] [--cpus N] [--windowed] [--force]\n  image import <environment> <source> --worktree <absolute-path> [--run-id ID]\n  cancel <batch-run-id>\n  runs\n  down <run-id|environment|--all>\n  shot <run-id|environment>\n\nDefinitions live in flows/envs/*.toml. Local image_root, run_root, and [images]\noverrides live in the dev-envs.toml path shown by `qol env doctor`. Environment\ncapabilities select the required acceleration policy."
 }
 
 fn print_help() {
@@ -1747,9 +2264,7 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::dev_env::registry::{
-        BootDefinition, EnvironmentDefinition, ImageDefinition, MountDefinition,
-    };
+    use qol_dev_env::{BootDefinition, EnvironmentDefinition, ImageDefinition, MountDefinition};
     use std::collections::BTreeMap;
     use tempfile::tempdir;
 
@@ -1790,8 +2305,9 @@ mod tests {
                 )]),
                 source: PathBuf::from("flows/envs/linux-debian.toml"),
             },
-            state: EnvironmentState::Ready,
+            state: ResolutionState::Ready,
             image_path: Some(PathBuf::from("/images/debian.qcow2")),
+            verified_image: None,
             run_root: Some(run_root.to_path_buf()),
             messages: Vec::new(),
         }
@@ -1804,6 +2320,7 @@ mod tests {
                 vec!["debian"],
                 UpArgs {
                     environment_id: "debian".to_string(),
+                    run_id: None,
                     count: 1,
                     memory_mb: None,
                     cpus: None,
@@ -1822,9 +2339,12 @@ mod tests {
                     "--memory-mb",
                     "768",
                     "--force",
+                    "--run-id",
+                    "debian-batch-test",
                 ],
                 UpArgs {
                     environment_id: "debian".to_string(),
+                    run_id: Some("debian-batch-test".to_string()),
                     count: 10,
                     memory_mb: Some(768),
                     cpus: Some(2),
@@ -1839,6 +2359,150 @@ mod tests {
     }
 
     #[test]
+    fn image_import_parser_requires_exact_absolute_inputs() {
+        let parsed = parse_image_import_args(&os_args(&[
+            "linux/mint-cinnamon",
+            "/images/mint.qcow2",
+            "--run-id",
+            "mint-import-1",
+            "--worktree",
+            "/worktrees/mint",
+        ]))
+        .unwrap();
+        assert_eq!(parsed.environment_id, "linux/mint-cinnamon");
+        assert_eq!(parsed.source, PathBuf::from("/images/mint.qcow2"));
+        assert_eq!(parsed.worktree, PathBuf::from("/worktrees/mint"));
+        assert_eq!(parsed.run_id.as_deref(), Some("mint-import-1"));
+
+        let cases = [
+            (
+                vec!["linux/mint-cinnamon", "/images/mint.qcow2"],
+                "--worktree is required",
+            ),
+            (
+                vec![
+                    "linux/mint-cinnamon",
+                    "relative.qcow2",
+                    "--worktree",
+                    "/worktree",
+                ],
+                "absolute path",
+            ),
+            (
+                vec![
+                    "linux/mint-cinnamon",
+                    "/images/mint.qcow2",
+                    "--worktree",
+                    "relative",
+                ],
+                "absolute path",
+            ),
+            (
+                vec![
+                    "linux/mint-cinnamon",
+                    "/images/mint.qcow2",
+                    "--worktree",
+                    "/worktree",
+                    "--run-id",
+                    "../escape",
+                ],
+                "invalid run id",
+            ),
+            (
+                vec![
+                    "linux/mint-cinnamon",
+                    "/images/mint.qcow2",
+                    "--worktree",
+                    "/worktree",
+                    "--unknown",
+                ],
+                "unknown image-import option",
+            ),
+        ];
+        for (args, expected) in cases {
+            let error = parse_image_import_args(&os_args(&args)).unwrap_err();
+            assert!(
+                error.to_string().contains(expected),
+                "args {args:?}: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn image_import_receipt_comes_from_the_exact_terminal_report() {
+        let temp = tempdir().unwrap();
+        let run_id = "mint-import-1";
+        let image_root = temp.path().join("images");
+        let report_path =
+            qol_dev_env::managed_verification_report_path(&image_root, run_id).unwrap();
+        let image_path = image_root.join("verified/images/digest.qcow2");
+        write_json(
+            &report_path,
+            &json!({
+                "kind": "image-import",
+                "run_id": run_id,
+                "status": "pass",
+                "workflow": {
+                    "promotion": {
+                        "status": "published",
+                        "image_path": image_path,
+                    },
+                },
+                "teardown": {
+                    "status": "complete",
+                    "qemu_exit_verified": true,
+                    "tree_exit_verified": true,
+                    "staging_removed": true,
+                },
+            }),
+        )
+        .unwrap();
+        let ticket = RunTicket::new(
+            run_id.to_string(),
+            qol_dev_env::ReportKind::ImageImport,
+            report_path.clone(),
+        )
+        .unwrap();
+        let summary = ticket.read().unwrap().unwrap().summary();
+
+        let receipt = image_import_receipt(&ticket, summary, true).unwrap();
+
+        assert_eq!(receipt.run_id, run_id);
+        assert_eq!(receipt.image_path, image_path);
+        assert_eq!(receipt.report_path, report_path);
+    }
+
+    #[test]
+    fn doctor_actions_require_explicit_repair_and_clear_modes() {
+        let cases = [
+            (Vec::new(), DoctorAction::Inspect),
+            (vec!["--repair"], DoctorAction::Repair),
+            (vec!["--fix"], DoctorAction::Repair),
+            (
+                vec!["--lease-clear", "run-1"],
+                DoctorAction::Clear(dev_resources::LeaseClearSelection::One("run-1".to_string())),
+            ),
+            (
+                vec!["--lease-clear", "--all"],
+                DoctorAction::Clear(dev_resources::LeaseClearSelection::All),
+            ),
+        ];
+        for (args, expected) in cases {
+            assert_eq!(parse_doctor_action(&os_args(&args)).unwrap(), expected);
+        }
+        for args in [
+            vec!["--repair", "extra"],
+            vec!["--lease-clear"],
+            vec!["--unknown"],
+        ] {
+            assert!(
+                parse_doctor_action(&os_args(&args)).is_err(),
+                "args: {args:?}"
+            );
+        }
+    }
+
+    #[test]
     fn rejects_invalid_up_options() {
         let cases = [
             (vec![], "usage"),
@@ -1849,6 +2513,10 @@ mod tests {
             (vec!["debian", "--cpus", "0"], "positive integer"),
             (vec!["debian", "--wat"], "unknown option"),
             (vec!["debian", "--force", "--force"], "more than once"),
+            (
+                vec!["debian", "--run-id", "../bad"],
+                "invalid resource lease",
+            ),
         ];
         for (args, expected) in cases {
             let error = parse_up_args(&os_args(&args)).unwrap_err();
@@ -1864,15 +2532,17 @@ mod tests {
         let temp = tempdir().unwrap();
         let environment = resolved_environment(temp.path());
         let case_root = temp.path().join("cases");
-        let args = emu_up_args(
-            Path::new("/images/debian.qcow2"),
-            &environment,
-            "linux-debian-run-1",
-            768,
-            2,
-            false,
-            &case_root,
-        )
+        let parent_lease = dev_resources::ParentLeaseClaim::parse("linux-debian-batch-1").unwrap();
+        let args = emu_up_args(EmuUpRequest {
+            image_path: Path::new("/images/debian.qcow2"),
+            environment: &environment,
+            parent_lease: &parent_lease,
+            run_id: "linux-debian-run-1",
+            memory_mb: 768,
+            cpus: 2,
+            windowed: false,
+            case_root: &case_root,
+        })
         .unwrap();
         let actual = args
             .iter()
@@ -1891,6 +2561,8 @@ mod tests {
                 "2",
                 "--run-id",
                 "linux-debian-run-1",
+                "--parent-lease",
+                "linux-debian-batch-1",
                 "--environment-id",
                 "linux-debian",
                 "--run-root",
@@ -1905,16 +2577,18 @@ mod tests {
                 "bios",
             ]
         );
-        let windowed = emu_up_args(
-            Path::new("/images/debian.qcow2"),
-            &environment,
-            "linux-debian-run-2",
-            768,
-            2,
-            true,
-            &case_root,
-        )
+        let windowed = emu_up_args(EmuUpRequest {
+            image_path: Path::new("/images/debian.qcow2"),
+            environment: &environment,
+            parent_lease: &parent_lease,
+            run_id: "linux-debian-run-2",
+            memory_mb: 768,
+            cpus: 2,
+            windowed: true,
+            case_root: &case_root,
+        })
         .unwrap();
+        assert!(windowed.contains(&OsString::from("--windowed")));
         assert!(!windowed.contains(&OsString::from("--headless")));
     }
 
@@ -1969,6 +2643,10 @@ mod tests {
         assert_eq!(report["runs"][0]["run_id"], "lane-1");
         assert_eq!(report["runs"][0]["phase"], "running");
         assert_eq!(report["launch"]["display"], "none");
+        assert_eq!(
+            report["owner"]["process_identity"],
+            qol_process::process_identity(std::process::id()).unwrap()
+        );
         assert!(report.get("finished_at_unix_ms").is_none());
         assert!(run_dir.join("effective-env.json").is_file());
         assert!(run_dir.join("host-preflight.txt").is_file());
@@ -1978,6 +2656,44 @@ mod tests {
         let preflight = fs::read_to_string(run_dir.join("host-preflight.txt")).unwrap();
         assert!(preflight.contains("budget_memory_mb=3072"));
         assert!(preflight.contains("admission=passed"));
+    }
+
+    #[test]
+    fn unpublished_batch_directories_are_owned_exclusively_and_removable() {
+        let temp = tempdir().unwrap();
+        let owned = prepare_batch_dir(temp.path(), "owned").unwrap();
+        assert!(owned.join("artifacts").is_dir());
+        assert!(owned.join("logs").is_dir());
+        assert!(owned.join("steps").is_dir());
+
+        remove_unpublished_batch_dir(&owned).unwrap();
+        assert!(!owned.exists());
+
+        let existing = temp.path().join("existing");
+        fs::create_dir(&existing).unwrap();
+        let marker = existing.join("keep");
+        fs::write(&marker, b"keep").unwrap();
+        assert!(prepare_batch_dir(temp.path(), "existing").is_err());
+        assert_eq!(fs::read(&marker).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn unresolved_unpublished_batch_cleanup_writes_durable_quarantine_evidence() {
+        let temp = tempdir().unwrap();
+        let run_dir = temp.path().join("quarantined");
+
+        write_unpublished_batch_failure(&run_dir, "quarantined", "cleanup failed").unwrap();
+
+        let report = qol_dev_env::read_report(&run_dir.join("report.json"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.run_id, "quarantined");
+        assert_eq!(report.kind, qol_dev_env::ReportKind::Environment);
+        assert_eq!(report.status, qol_dev_env::ReportStatus::CleanupIncomplete);
+        assert!(matches!(
+            report.cleanup,
+            qol_dev_env::CleanupState::Incomplete(_)
+        ));
     }
 
     #[test]
@@ -2184,7 +2900,7 @@ mod tests {
                     "teardown": {"status": "complete", "qemu_exit_verified": false},
                 }),
                 CleanupVerification::Incomplete(
-                    "abandoned run lacks verified process-tree exit or artifact cleanup"
+                    "terminal child lacks verified process-tree exit or artifact cleanup"
                         .to_string(),
                 ),
             ),
@@ -2203,7 +2919,35 @@ mod tests {
             (
                 "pass",
                 json!({"status": "pass", "teardown": {"removed": []}}),
+                CleanupVerification::Incomplete(
+                    "terminal child lacks verified process-tree exit or artifact cleanup"
+                        .to_string(),
+                ),
+            ),
+            (
+                "pass",
+                json!({
+                    "status": "pass",
+                    "teardown": {
+                        "status": "complete",
+                        "qemu_exit_verified": true,
+                        "tree_exit_verified": true,
+                        "removed": []
+                    }
+                }),
                 CleanupVerification::Complete,
+            ),
+            (
+                "future-status",
+                json!({
+                    "status": "future-status",
+                    "teardown": {
+                        "status": "complete",
+                        "qemu_exit_verified": true,
+                        "tree_exit_verified": true
+                    }
+                }),
+                CleanupVerification::Pending,
             ),
         ];
         for (status, report, expected) in cases {
@@ -2305,6 +3049,59 @@ mod tests {
         assert_eq!(reconciled["runs"][0]["status"], "not-started");
         assert_eq!(reconciled["teardown"]["status"], "complete");
         assert_eq!(reconciled["finished_at_unix_ms"], 300);
+    }
+
+    #[test]
+    fn reused_batch_owner_pid_resolves_planned_lane_as_not_started() {
+        let report = json!({
+            "kind": "environment-batch",
+            "run_id": "batch-1",
+            "status": "starting",
+            "error": null,
+            "owner": {
+                "pid": std::process::id(),
+                "process_identity": "stale-process-identity",
+                "state": "running",
+            },
+            "runs": [{
+                "run_id": "lane-1",
+                "phase": "attempting",
+                "report": "/runs/lane-1/report.json",
+            }],
+        });
+        let states = BTreeMap::from([("lane-1".to_string(), None)]);
+
+        assert!(!batch_owner_active(&report));
+        let reconciled = reconciled_batch_report(&report, &states, &BTreeMap::new(), 300);
+
+        assert_eq!(reconciled["status"], "abandoned");
+        assert_eq!(reconciled["owner"]["state"], "released");
+        assert_eq!(reconciled["runs"][0]["status"], "not-started");
+        assert_eq!(reconciled["teardown"]["status"], "complete");
+    }
+
+    #[test]
+    fn matching_and_legacy_batch_owner_evidence_remain_active() {
+        let pid = std::process::id();
+        let identity = qol_process::process_identity(pid).unwrap();
+        let report = json!({
+            "owner": {
+                "pid": pid,
+                "process_identity": identity,
+                "state": "running",
+            },
+        });
+        let legacy_report = json!({
+            "owner": {
+                "pid": pid,
+                "state": "running",
+            },
+        });
+
+        assert!(batch_owner_active(&report));
+        assert!(!batch_owner_interrupted(report.as_object().unwrap()));
+        assert!(batch_owner_active(&legacy_report));
+        assert!(!batch_owner_interrupted(legacy_report.as_object().unwrap()));
     }
 
     #[test]

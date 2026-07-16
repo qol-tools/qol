@@ -1,0 +1,18 @@
+[package]
+name = "qol-guest-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Guest-side desktop-session control runner for disposable qol development environments"
+
+[[bin]]
+name = "qol-guest-runner"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+qol-dev-guest.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3.8"

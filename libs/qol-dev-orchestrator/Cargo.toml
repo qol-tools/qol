@@ -1,0 +1,16 @@
+[package]
+name = "qol-dev-orchestrator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Typed durable development-environment worker orchestration for qol-tools"
+
+[dependencies]
+anyhow = "1.0"
+qol-dev-env.workspace = true
+qol-process.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3.8"
