@@ -13,13 +13,19 @@ use crate::paths;
 pub struct HotkeyManager {
     manager: Option<GlobalHotKeyManager>,
     applied: HashMap<String, AppliedHotkey>,
-    bindings: HashMap<u32, HotkeyAction>,
+    bindings: HashMap<u32, RegisteredHotkey>,
     config_path: PathBuf,
 }
 
 struct AppliedHotkey {
     hotkey: HotKey,
     action: HotkeyAction,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct RegisteredHotkey {
+    pub(super) action: HotkeyAction,
+    pub(super) raw_key: String,
 }
 
 impl HotkeyManager {
@@ -48,7 +54,7 @@ impl HotkeyManager {
         Ok(())
     }
 
-    pub fn get_action(&self, event: &GlobalHotKeyEvent) -> Option<&HotkeyAction> {
+    pub(super) fn get_registration(&self, event: &GlobalHotKeyEvent) -> Option<&RegisteredHotkey> {
         self.bindings.get(&event.id())
     }
 
@@ -108,8 +114,13 @@ impl HotkeyManager {
         if existing.action == planned.action {
             return;
         }
-        self.bindings
-            .insert(existing.hotkey.id(), planned.action.clone());
+        self.bindings.insert(
+            existing.hotkey.id(),
+            RegisteredHotkey {
+                action: planned.action.clone(),
+                raw_key: key.to_string(),
+            },
+        );
         existing.action = planned.action;
         log_registered_hotkey(key, &existing.action);
     }
@@ -140,7 +151,7 @@ fn register_via(
     manager: &GlobalHotKeyManager,
     registration: PlannedRegistration,
     applied: &mut HashMap<String, AppliedHotkey>,
-    bindings: &mut HashMap<u32, HotkeyAction>,
+    bindings: &mut HashMap<u32, RegisteredHotkey>,
 ) -> Option<RegistrationError> {
     let PlannedRegistration {
         binding_key,
@@ -161,7 +172,13 @@ fn register_via(
             error: msg,
         });
     }
-    bindings.insert(hotkey.id(), action.clone());
+    bindings.insert(
+        hotkey.id(),
+        RegisteredHotkey {
+            action: action.clone(),
+            raw_key: binding_key.clone(),
+        },
+    );
     log_registered_hotkey(&binding_key, &action);
     applied.insert(binding_key, AppliedHotkey { hotkey, action });
     None

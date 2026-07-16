@@ -1,4 +1,6 @@
 use super::catalog::load_available_actions;
+use super::manager::RegisteredHotkey;
+use super::physical_state::PhysicalHotkeyState;
 use super::reload;
 use super::{HotkeyAction, HotkeyManager};
 use crate::plugins::PluginManager;
@@ -87,11 +89,14 @@ fn next_backoff(current: Duration) -> Duration {
 fn run_listener_once(plugin_manager: &SharedPluginManager, reload_rx: &Receiver<()>) -> Result<()> {
     let manager =
         HotkeyManager::new().map_err(|e| anyhow!("failed to create hotkey manager: {}", e))?;
+    let physical_state = PhysicalHotkeyState::connect()
+        .map_err(|e| anyhow!("failed to connect physical hotkey state: {}", e))?;
     HotkeyListenerLoop {
         manager,
         plugin_manager: plugin_manager.clone(),
         reload_rx,
         held_actions: HeldActions::default(),
+        physical_state,
     }
     .run();
     Err(anyhow!("hotkey listener loop returned unexpectedly"))
@@ -102,6 +107,7 @@ struct HotkeyListenerLoop<'a> {
     plugin_manager: SharedPluginManager,
     reload_rx: &'a Receiver<()>,
     held_actions: HeldActions,
+    physical_state: PhysicalHotkeyState,
 }
 
 impl<'a> HotkeyListenerLoop<'a> {
@@ -159,19 +165,35 @@ impl<'a> HotkeyListenerLoop<'a> {
     }
 
     fn handle_hotkey_event(&mut self, event: GlobalHotKeyEvent) {
-        let action = self.manager.get_action(&event).cloned();
+        let action = self.manager.get_registration(&event).cloned();
         let Some(dispatch) = self.held_actions.handle_event(event, action.as_ref()) else {
             return;
         };
         self.dispatch(dispatch);
     }
 
-    fn send_heartbeats(&self) {
-        for action in self.held_actions.heartbeat_actions() {
-            self.dispatch(HotkeyDispatch::Continuous {
-                action,
-                phase: ContinuousPhase::Heartbeat,
-            });
+    fn send_heartbeats(&mut self) {
+        let snapshot = match self.physical_state.snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                log::warn!("Physical hotkey state query failed: {error}");
+                self.stop_held_actions();
+                return;
+            }
+        };
+        let dispatches = self
+            .held_actions
+            .heartbeat_dispatches(|registration| snapshot.chord_is_pressed(&registration.raw_key));
+        for dispatch in dispatches {
+            if dispatch.is_stop() {
+                let action = dispatch.action();
+                log::info!(
+                    "Continuous hotkey chord released: {}::{} source=physical-state",
+                    action.plugin_uid.as_str(),
+                    action.action
+                );
+            }
+            self.dispatch(dispatch);
         }
     }
 
@@ -275,11 +297,21 @@ impl HotkeyDispatch {
             Self::OneShot(action) | Self::Continuous { action, .. } => action,
         }
     }
+
+    fn is_stop(&self) -> bool {
+        matches!(
+            self,
+            Self::Continuous {
+                phase: ContinuousPhase::Stop,
+                ..
+            }
+        )
+    }
 }
 
 #[derive(Default)]
 struct HeldActions {
-    actions: HashMap<u32, HotkeyAction>,
+    actions: HashMap<u32, RegisteredHotkey>,
 }
 
 impl HeldActions {
@@ -290,42 +322,58 @@ impl HeldActions {
     fn handle_event(
         &mut self,
         event: GlobalHotKeyEvent,
-        registered_action: Option<&HotkeyAction>,
+        registered_action: Option<&RegisteredHotkey>,
     ) -> Option<HotkeyDispatch> {
         match event.state {
             HotKeyState::Pressed => {
-                let action = registered_action?.clone();
-                if !action.continuous {
-                    return Some(HotkeyDispatch::OneShot(action));
+                let registration = registered_action?.clone();
+                if !registration.action.continuous {
+                    return Some(HotkeyDispatch::OneShot(registration.action));
                 }
                 if self.actions.contains_key(&event.id) {
                     return None;
                 }
-                self.actions.insert(event.id, action.clone());
+                self.actions.insert(event.id, registration.clone());
                 Some(HotkeyDispatch::Continuous {
-                    action,
+                    action: registration.action,
                     phase: ContinuousPhase::Start,
                 })
             }
             HotKeyState::Released => {
-                let action = self.actions.remove(&event.id)?;
+                let registration = self.actions.remove(&event.id)?;
                 Some(HotkeyDispatch::Continuous {
-                    action,
+                    action: registration.action,
                     phase: ContinuousPhase::Stop,
                 })
             }
         }
     }
 
-    fn heartbeat_actions(&self) -> Vec<HotkeyAction> {
-        self.actions.values().cloned().collect()
+    fn heartbeat_dispatches(
+        &mut self,
+        is_pressed: impl Fn(&RegisteredHotkey) -> bool,
+    ) -> Vec<HotkeyDispatch> {
+        let mut dispatches = Vec::with_capacity(self.actions.len());
+        self.actions.retain(|_, action| {
+            let pressed = is_pressed(action);
+            dispatches.push(HotkeyDispatch::Continuous {
+                action: action.action.clone(),
+                phase: if pressed {
+                    ContinuousPhase::Heartbeat
+                } else {
+                    ContinuousPhase::Stop
+                },
+            });
+            pressed
+        });
+        dispatches
     }
 
     fn stop_all(&mut self) -> Vec<HotkeyDispatch> {
         self.actions
             .drain()
-            .map(|(_, action)| HotkeyDispatch::Continuous {
-                action,
+            .map(|(_, registration)| HotkeyDispatch::Continuous {
+                action: registration.action,
                 phase: ContinuousPhase::Stop,
             })
             .collect()
@@ -337,11 +385,14 @@ mod tests {
     use crate::plugins::PluginUid;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    fn action(name: &str, continuous: bool) -> HotkeyAction {
-        HotkeyAction {
-            plugin_uid: PluginUid::new("uid-window-actions"),
-            action: name.to_string(),
-            continuous,
+    fn registration(name: &str, continuous: bool) -> RegisteredHotkey {
+        RegisteredHotkey {
+            action: HotkeyAction {
+                plugin_uid: PluginUid::new("uid-window-actions"),
+                action: name.to_string(),
+                continuous,
+            },
+            raw_key: "Ctrl+Shift+Super+Left".to_string(),
         }
     }
 
@@ -352,11 +403,11 @@ mod tests {
     #[test]
     fn one_shot_actions_dispatch_only_on_press() {
         let mut held = HeldActions::default();
-        let center = action("center", false);
+        let center = registration("center", false);
 
         assert_eq!(
             held.handle_event(event(1, HotKeyState::Pressed), Some(&center)),
-            Some(HotkeyDispatch::OneShot(center))
+            Some(HotkeyDispatch::OneShot(center.action))
         );
         assert_eq!(
             held.handle_event(event(1, HotKeyState::Released), None),
@@ -368,20 +419,26 @@ mod tests {
     #[test]
     fn continuous_actions_dispatch_start_heartbeats_and_stop() {
         let mut held = HeldActions::default();
-        let glide = action("glide-left", true);
+        let glide = registration("glide-left", true);
 
         assert_eq!(
             held.handle_event(event(7, HotKeyState::Pressed), Some(&glide)),
             Some(HotkeyDispatch::Continuous {
-                action: glide.clone(),
+                action: glide.action.clone(),
                 phase: ContinuousPhase::Start,
             })
         );
-        assert_eq!(held.heartbeat_actions(), vec![glide.clone()]);
+        assert_eq!(
+            held.heartbeat_dispatches(|_| true),
+            vec![HotkeyDispatch::Continuous {
+                action: glide.action.clone(),
+                phase: ContinuousPhase::Heartbeat,
+            }]
+        );
         assert_eq!(
             held.handle_event(event(7, HotKeyState::Released), Some(&glide)),
             Some(HotkeyDispatch::Continuous {
-                action: glide,
+                action: glide.action,
                 phase: ContinuousPhase::Stop,
             })
         );
@@ -391,7 +448,7 @@ mod tests {
     #[test]
     fn continuous_actions_ignore_duplicate_press_events() {
         let mut held = HeldActions::default();
-        let glide = action("glide-right", true);
+        let glide = registration("glide-right", true);
 
         assert!(held
             .handle_event(event(9, HotKeyState::Pressed), Some(&glide))
@@ -400,14 +457,36 @@ mod tests {
             held.handle_event(event(9, HotKeyState::Pressed), Some(&glide)),
             None
         );
-        assert_eq!(held.heartbeat_actions(), vec![glide]);
+        assert_eq!(
+            held.heartbeat_dispatches(|_| true),
+            vec![HotkeyDispatch::Continuous {
+                action: glide.action,
+                phase: ContinuousPhase::Heartbeat,
+            }]
+        );
+    }
+
+    #[test]
+    fn physical_chord_break_stops_action_when_release_event_is_missing() {
+        let mut held = HeldActions::default();
+        let glide = registration("glide-left", true);
+        held.handle_event(event(7, HotKeyState::Pressed), Some(&glide));
+
+        assert_eq!(
+            held.heartbeat_dispatches(|_| false),
+            vec![HotkeyDispatch::Continuous {
+                action: glide.action,
+                phase: ContinuousPhase::Stop,
+            }]
+        );
+        assert!(held.is_empty());
     }
 
     #[test]
     fn stop_all_releases_every_held_continuous_action() {
         let mut held = HeldActions::default();
-        let left = action("glide-left", true);
-        let up = action("glide-up", true);
+        let left = registration("glide-left", true);
+        let up = registration("glide-up", true);
         held.handle_event(event(1, HotKeyState::Pressed), Some(&left));
         held.handle_event(event(2, HotKeyState::Pressed), Some(&up));
 
@@ -418,11 +497,11 @@ mod tests {
             stopped,
             vec![
                 HotkeyDispatch::Continuous {
-                    action: left,
+                    action: left.action,
                     phase: ContinuousPhase::Stop,
                 },
                 HotkeyDispatch::Continuous {
-                    action: up,
+                    action: up.action,
                     phase: ContinuousPhase::Stop,
                 },
             ]
