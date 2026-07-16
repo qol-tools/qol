@@ -384,6 +384,8 @@
     --panel-shadow: var(--qol-identity-panel-shadow);
     --heading-size: var(--qol-identity-heading-size);
     --heading-weight: var(--qol-identity-heading-weight);
+    --heading-border: var(--qol-identity-heading-border);
+    --heading-bg: var(--qol-identity-heading-bg);
     --minimap-slab-radius: var(--qol-identity-minimap-slab-radius);
 }
 

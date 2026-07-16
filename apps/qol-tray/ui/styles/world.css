@@ -645,13 +645,13 @@ html.qol-bootstrapping-dive #app {
     position: absolute;
     transform-origin: center;
     padding: 8px 24px;
-    background: var(--tui-sign-bg);
-    border: var(--border-w-3) double var(--tui-line);
+    background: var(--heading-bg);
+    border: var(--heading-border);
     border-radius: var(--radius-md);
     color: var(--accent);
     font-family: var(--font-ui);
-    font-size: var(--fs-xl-plus);
-    font-weight: var(--fw-bold);
+    font-size: var(--heading-size);
+    font-weight: var(--heading-weight);
     letter-spacing: var(--ls-3xl);
     text-transform: var(--case-label);
     pointer-events: none;
@@ -659,6 +659,12 @@ html.qol-bootstrapping-dive #app {
     white-space: nowrap;
     text-shadow: var(--glow-text);
     box-shadow: 0 6px 22px var(--layer-ink-45), 0 0 24px rgba(var(--accent-rgb), 0.12);
+}
+
+:root[data-qol-identity="modern"] .world-region-label {
+    color: var(--text-primary);
+    letter-spacing: normal;
+    box-shadow: none;
 }
 
 @property --hide {

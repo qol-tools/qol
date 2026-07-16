@@ -122,6 +122,8 @@ fn push_identity(out: &mut String, identity: &ThemeIdentity) {
         ("panel-shadow", identity.panel_shadow),
         ("heading-size", identity.heading_size),
         ("heading-weight", identity.heading_weight),
+        ("heading-border", identity.heading_border),
+        ("heading-bg", identity.heading_bg),
     ];
     for (name, value) in surfaces {
         let _ = writeln!(out, "    --qol-identity-{name}: {value};");

@@ -268,6 +268,8 @@ pub struct ThemeIdentity {
     pub panel_shadow: &'static str,
     pub heading_size: &'static str,
     pub heading_weight: &'static str,
+    pub heading_border: &'static str,
+    pub heading_bg: &'static str,
     pub minimap_slab_radius: u8,
 }
 
@@ -306,8 +308,10 @@ pub const RETRO_IDENTITY: ThemeIdentity = ThemeIdentity {
     panel_border: "var(--border-w-1) solid var(--tui-line)",
     panel_radius: "var(--radius-md)",
     panel_shadow: "none",
-    heading_size: "var(--fs-md)",
+    heading_size: "var(--fs-xl-plus)",
     heading_weight: "var(--fw-bold)",
+    heading_border: "var(--border-w-3) double var(--tui-line)",
+    heading_bg: "var(--tui-sign-bg)",
     minimap_slab_radius: 3,
 };
 
@@ -348,6 +352,8 @@ pub const MODERN_IDENTITY: ThemeIdentity = ThemeIdentity {
     panel_shadow: "0 14px 36px rgba(0, 0, 0, 0.5)",
     heading_size: "1.55rem",
     heading_weight: "700",
+    heading_border: "none",
+    heading_bg: "transparent",
     minimap_slab_radius: 8,
 };
 
