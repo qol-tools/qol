@@ -1106,6 +1106,32 @@ fn tray_theme_js_emits_theme_metadata() {
 }
 
 #[test]
+fn retro_identity_matches_legacy_hardcoded_values() {
+    let cases = [
+        ("--qol-identity-case-label", "uppercase"),
+        ("--qol-identity-tracking-label", "var(--ls-md)"),
+        ("--qol-identity-font-ui", "var(--font-mono)"),
+        ("--qol-identity-radius-xs", "3px"),
+        (
+            "--qol-identity-frame-border",
+            "var(--border-w-3) double var(--tui-line)",
+        ),
+        ("--qol-identity-frame-texture", "var(--tui-scanline)"),
+        (
+            "--qol-identity-card-border",
+            "var(--border-w-1) solid var(--tui-line-soft)",
+        ),
+        ("--qol-identity-cover-bg", "var(--tui-screen-bg)"),
+        ("--qol-identity-minimap-slab-radius", "3"),
+    ];
+    let css = css::tray_css();
+    let base = css.split(":root[data-qol-theme").next().unwrap();
+    for (name, value) in cases {
+        assert!(base.contains(&format!("{name}: {value};")), "{name}");
+    }
+}
+
+#[test]
 fn tray_css_emits_identity_tokens_per_theme() {
     let css = css::tray_css();
     let base = css.split(":root[data-qol-theme").next().unwrap();
