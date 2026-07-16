@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { PageShell } from '../../components/PageShell.js';
 import { PageHeader } from '../../components/PageHeader.js';
 import { Surface } from '../../lib/components/Surface.js';
+import { TextInput } from '../../lib/components/TextInput.js';
 import {
     GHOST_OPACITY_MAX,
     GHOST_OPACITY_MIN,
@@ -60,9 +61,9 @@ function OpacityRow({ value, onInput }) {
     return html`
         <${Surface} className="gpui-setting-row" onActivate=${focusInput}>
             <span class="gpui-setting-label">Ghost UI opacity</span>
-            <input
-                ref=${inputRef}
-                class="gpui-setting-range"
+            <${TextInput}
+                inputRef=${inputRef}
+                className="gpui-setting-range"
                 type="range"
                 min=${GHOST_OPACITY_MIN}
                 max=${GHOST_OPACITY_MAX}
@@ -87,10 +88,9 @@ function ColorRow({ value, onInput }) {
         <${Surface} className="gpui-setting-row" onActivate=${focusInput}>
             <span class="gpui-setting-label">Ghost debug color</span>
             <span class="gpui-setting-swatch" style=${`background:${swatch}`} aria-hidden="true"></span>
-            <input
-                ref=${inputRef}
-                class="gpui-setting-color"
-                type="text"
+            <${TextInput}
+                inputRef=${inputRef}
+                className="gpui-setting-color"
                 inputmode="text"
                 placeholder="#rrggbb"
                 value=${value || ''}
