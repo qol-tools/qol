@@ -6,6 +6,8 @@ use super::tracking::{
 use super::ActionExecutionError;
 use crate::plugins::action_transport::DaemonActionDispatch;
 use std::path::Path;
+#[cfg(debug_assertions)]
+use std::time::Instant;
 
 pub(super) fn execute_resolved_action(
     resolved: &ResolvedAction,
@@ -29,6 +31,8 @@ fn execute_via_daemon(
     socket_path: &Path,
     input: &serde_json::Value,
 ) -> Result<(), ActionExecutionError> {
+    #[cfg(debug_assertions)]
+    let started = Instant::now();
     let dispatch = crate::plugins::action_transport::dispatch_daemon_action_with_input(
         socket_path,
         &resolved.action_id,
@@ -42,6 +46,8 @@ fn execute_via_daemon(
         resolved.action_id,
         super::dispatch_outcome(&dispatch)
     );
+    #[cfg(debug_assertions)]
+    trace_window_action_dispatch(resolved, input, started.elapsed(), &dispatch);
     if matches!(dispatch, DaemonActionDispatch::Handled { .. }) {
         log::info!(
             "Plugin action handled via daemon: {}::{}",
@@ -64,6 +70,48 @@ fn execute_via_daemon(
         "{} {}::{}",
         reason, resolved.plugin_id, resolved.action_id
     )))
+}
+
+#[cfg(debug_assertions)]
+fn trace_window_action_dispatch(
+    resolved: &ResolvedAction,
+    input: &serde_json::Value,
+    elapsed: std::time::Duration,
+    dispatch: &DaemonActionDispatch,
+) {
+    let Some(direction) = resolved.action_id.strip_prefix("glide-") else {
+        return;
+    };
+    if resolved.plugin_id.as_str() != "plugin-window-actions" {
+        return;
+    }
+    let phase = input
+        .get("phase")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    if phase == "heartbeat" && matches!(dispatch, DaemonActionDispatch::Handled { .. }) {
+        return;
+    }
+    qol_runtime::probe!(
+        "WINACT_DISPATCH",
+        "session={} seq={} source={} phase={} direction={} transport_us={} outcome={}",
+        input
+            .get("trace_session")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        input
+            .get("trace_seq")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        input
+            .get("trace_source")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown"),
+        phase,
+        direction,
+        elapsed.as_micros(),
+        super::dispatch_outcome(dispatch)
+    );
 }
 
 fn has_action_input(input: &serde_json::Value) -> bool {

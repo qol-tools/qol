@@ -47,6 +47,41 @@ impl PhysicalHotkeySnapshot {
         })
     }
 
+    pub(in crate::hotkeys) fn trace_summary(&self) -> String {
+        let pressed = [
+            (
+                "ctrl",
+                self.any_key_is_pressed(&[evdev::KEY_LEFTCTRL, evdev::KEY_RIGHTCTRL]),
+            ),
+            (
+                "shift",
+                self.any_key_is_pressed(&[evdev::KEY_LEFTSHIFT, evdev::KEY_RIGHTSHIFT]),
+            ),
+            (
+                "super",
+                self.any_key_is_pressed(&[evdev::KEY_LEFTMETA, evdev::KEY_RIGHTMETA]),
+            ),
+            ("left", self.evdev_key_is_pressed(evdev::KEY_LEFT)),
+            ("right", self.evdev_key_is_pressed(evdev::KEY_RIGHT)),
+            ("up", self.evdev_key_is_pressed(evdev::KEY_UP)),
+            ("down", self.evdev_key_is_pressed(evdev::KEY_DOWN)),
+        ]
+        .into_iter()
+        .filter_map(|(name, is_pressed)| is_pressed.then_some(name))
+        .collect::<Vec<_>>();
+        if pressed.is_empty() {
+            "none".into()
+        } else {
+            pressed.join("+")
+        }
+    }
+
+    fn any_key_is_pressed(&self, keycodes: &[u16]) -> bool {
+        keycodes
+            .iter()
+            .any(|keycode| self.evdev_key_is_pressed(*keycode))
+    }
+
     fn evdev_key_is_pressed(&self, keycode: u16) -> bool {
         let Some(x11_keycode) = keycode
             .checked_add(X11_EVDEV_OFFSET)
@@ -106,5 +141,19 @@ mod tests {
             evdev::KEY_RIGHT,
         ];
         assert!(snapshot(&chord).chord_is_pressed(&combo));
+    }
+
+    #[test]
+    fn trace_summary_only_reports_relevant_modifier_and_direction_keys() {
+        let state = snapshot(&[
+            evdev::KEY_LEFTCTRL,
+            evdev::KEY_RIGHTSHIFT,
+            evdev::KEY_LEFTMETA,
+            evdev::KEY_LEFT,
+            evdev::KEY_DOWN,
+            evdev::KEY_SPACE,
+        ]);
+
+        assert_eq!(state.trace_summary(), "ctrl+shift+super+left+down");
     }
 }

@@ -36,4 +36,8 @@ impl PhysicalHotkeySnapshot {
     pub(super) fn chord_is_pressed(&self, _chord: &super::capture::Combo) -> bool {
         true
     }
+
+    pub(super) fn trace_summary(&self) -> String {
+        "unsupported".into()
+    }
 }

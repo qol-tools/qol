@@ -22,13 +22,13 @@ impl GlideController {
         direction: Direction,
         phase: Phase,
         speed: f64,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let script = match phase {
             Phase::Start => start_script(direction, speed, WATCHDOG_MS),
             Phase::Heartbeat => heartbeat_script(speed, WATCHDOG_MS),
             Phase::Stop => stop_script(direction),
         };
-        self.session.eval(&script)?;
+        let observation = self.session.eval(&script)?;
         match phase {
             Phase::Start => {
                 self.active.insert(direction);
@@ -38,7 +38,7 @@ impl GlideController {
                 self.active.remove(&direction);
             }
         }
-        Ok(())
+        Ok(observation)
     }
 
     pub(crate) fn stop_all(&mut self) -> Result<(), String> {
@@ -78,6 +78,8 @@ fn start_script(direction: Direction, speed: f64, watchdog_ms: u64) -> String {
             dx *= 0.70710678118;
             dy *= 0.70710678118;
         }}
+        state.dx = dx;
+        state.dy = dy;
         state.x += dx * state.speed * elapsed;
         state.y += dy * state.speed * elapsed;
         state.win.move_frame(true, Math.round(state.x), Math.round(state.y));
@@ -99,6 +101,8 @@ fn start_script(direction: Direction, speed: f64, watchdog_ms: u64) -> String {
                 sequence: 0,
                 x: rect.x,
                 y: rect.y,
+                dx: 0,
+                dy: 0,
                 speed: {speed},
                 lastTick: now,
                 expiresAt: now + {watchdog_ms},
@@ -127,7 +131,14 @@ fn start_script(direction: Direction, speed: f64, watchdog_ms: u64) -> String {
         state.expiresAt = now + {watchdog_ms};
         applyMotion(state, 1 / 60);
         state.lastTick = now;
-        return 'Glide updated';
+        const active = ['left', 'right', 'up', 'down']
+            .filter(direction => state.directions[direction])
+            .sort((a, b) => state.directions[a] - state.directions[b])
+            .map(direction => direction + ':' + state.directions[direction])
+            .join(',');
+        return 'active=' + (active || 'none')
+            + ' vector=' + state.dx + ',' + state.dy
+            + ' position=' + Math.round(state.x) + ',' + Math.round(state.y);
     }})()
 "#,
         direction = direction.as_str(),
@@ -153,17 +164,37 @@ fn stop_script(direction: Direction) -> String {
         r#"
     const GLib = imports.gi.GLib;
     const key = '__qolWindowActionsGlide';
-    const state = global[key];
-    if (state) {{
+    (() => {{
+        const state = global[key];
+        if (!state) {{
+            return 'active=none vector=0,0 position=unknown';
+        }}
         delete state.directions.{direction};
-        if (Object.keys(state.directions).length === 0) {{
+        const left = state.directions.left || 0;
+        const right = state.directions.right || 0;
+        const up = state.directions.up || 0;
+        const down = state.directions.down || 0;
+        let dx = right === left ? 0 : (right > left ? 1 : -1);
+        let dy = down === up ? 0 : (down > up ? 1 : -1);
+        if (dx !== 0 && dy !== 0) {{
+            dx *= 0.70710678118;
+            dy *= 0.70710678118;
+        }}
+        const active = ['left', 'right', 'up', 'down']
+            .filter(direction => state.directions[direction])
+            .sort((a, b) => state.directions[a] - state.directions[b])
+            .map(direction => direction + ':' + state.directions[direction])
+            .join(',');
+        if (!active) {{
             if (state.sourceId) {{
                 GLib.source_remove(state.sourceId);
             }}
             delete global[key];
         }}
-    }}
-    'Glide stopped';
+        return 'active=' + (active || 'none')
+            + ' vector=' + dx + ',' + dy
+            + ' position=' + Math.round(state.x) + ',' + Math.round(state.y);
+    }})()
 "#,
         direction = direction.as_str(),
     )
@@ -196,6 +227,8 @@ mod tests {
             "delete global[key]",
             "move_frame(true",
             "applyMotion(state, 1 / 60)",
+            "return 'active=' + (active || 'none')",
+            "+ ' vector=' + state.dx + ',' + state.dy",
         ];
         for fragment in required {
             assert!(script.contains(fragment), "missing {fragment}\n{script}");
@@ -210,6 +243,7 @@ mod tests {
 
         let stop = stop_script(Direction::Up);
         assert!(stop.contains("delete state.directions.up"));
+        assert!(stop.contains("+ ' vector=' + dx + ',' + dy"));
 
         let heartbeat = heartbeat_script(1.0, WATCHDOG_MS);
         assert!(heartbeat.contains("state.speed = 100"));

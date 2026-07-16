@@ -98,6 +98,9 @@ fn run_listener_once(plugin_manager: &SharedPluginManager, reload_rx: &Receiver<
         held_actions: HeldActions::default(),
         physical_state,
         last_heartbeat: Instant::now(),
+        trace_session: 0,
+        next_trace_session: 0,
+        next_trace_sequence: 0,
     }
     .run();
     Err(anyhow!("hotkey listener loop returned unexpectedly"))
@@ -110,6 +113,9 @@ struct HotkeyListenerLoop<'a> {
     held_actions: HeldActions,
     physical_state: PhysicalHotkeyState,
     last_heartbeat: Instant,
+    trace_session: u64,
+    next_trace_session: u64,
+    next_trace_sequence: u64,
 }
 
 impl<'a> HotkeyListenerLoop<'a> {
@@ -150,7 +156,7 @@ impl<'a> HotkeyListenerLoop<'a> {
                 recv(physical_state_rx) -> _ => self.poll_physical_state(),
             }
         }
-        self.stop_held_actions();
+        self.stop_held_actions(DispatchSource::ForcedStop);
     }
 
     fn drain_reload_signals(&self) {
@@ -159,7 +165,7 @@ impl<'a> HotkeyListenerLoop<'a> {
 
     fn handle_reload(&mut self) {
         log::info!("Reloading hotkeys...");
-        self.stop_held_actions();
+        self.stop_held_actions(DispatchSource::ForcedStop);
         match self.reload_hotkeys() {
             Ok(()) => log::info!("Hotkeys reloaded successfully"),
             Err(error) => log::error!("Failed to register hotkeys: {}", error),
@@ -171,7 +177,8 @@ impl<'a> HotkeyListenerLoop<'a> {
         let Some(dispatch) = self.held_actions.handle_event(event, action.as_ref()) else {
             return;
         };
-        self.dispatch(dispatch);
+        self.dispatch(dispatch, DispatchSource::GlobalEvent, "event");
+        self.finish_trace_session_if_idle();
     }
 
     fn poll_physical_state(&mut self) {
@@ -179,7 +186,7 @@ impl<'a> HotkeyListenerLoop<'a> {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 log::warn!("Physical hotkey state query failed: {error}");
-                self.stop_held_actions();
+                self.stop_held_actions(DispatchSource::ForcedStop);
                 return;
             }
         };
@@ -196,16 +203,22 @@ impl<'a> HotkeyListenerLoop<'a> {
         } else {
             Vec::new()
         };
+        let key_summary = (!dispatches.is_empty()).then(|| snapshot.trace_summary());
         for dispatch in dispatches {
             self.log_physical_transition(&dispatch);
-            self.dispatch(dispatch);
+            self.dispatch(
+                dispatch,
+                DispatchSource::PhysicalState,
+                key_summary.as_deref().unwrap_or("unknown"),
+            );
         }
+        self.finish_trace_session_if_idle();
         if self.held_actions.is_empty() || self.last_heartbeat.elapsed() < HEARTBEAT_INTERVAL {
             return;
         }
         self.last_heartbeat = Instant::now();
         for dispatch in self.held_actions.heartbeat_dispatches() {
-            self.dispatch(dispatch);
+            self.dispatch(dispatch, DispatchSource::Heartbeat, "unchanged");
         }
     }
 
@@ -221,13 +234,14 @@ impl<'a> HotkeyListenerLoop<'a> {
         );
     }
 
-    fn stop_held_actions(&mut self) {
+    fn stop_held_actions(&mut self, source: DispatchSource) {
         for dispatch in self.held_actions.stop_all() {
-            self.dispatch(dispatch);
+            self.dispatch(dispatch, source, "unavailable");
         }
+        self.finish_trace_session_if_idle();
     }
 
-    fn dispatch(&self, dispatch: HotkeyDispatch) {
+    fn dispatch(&mut self, dispatch: HotkeyDispatch, source: DispatchSource, keys: &str) {
         let action = dispatch.action();
 
         let plugin_id = match self.plugin_manager.lock() {
@@ -263,6 +277,25 @@ impl<'a> HotkeyListenerLoop<'a> {
                 );
             }
             HotkeyDispatch::Continuous { action, phase } => {
+                let (session, sequence) = self.trace_ids(phase);
+                let active = self.held_actions.trace_active_directions();
+                if phase != ContinuousPhase::Heartbeat {
+                    #[cfg(debug_assertions)]
+                    qol_runtime::probe!(
+                        "WINACT_HOTKEY",
+                        "session={} seq={} source={} phase={} direction={} active={} keys={}",
+                        session,
+                        sequence,
+                        source.as_str(),
+                        phase.as_str(),
+                        action
+                            .action
+                            .strip_prefix("glide-")
+                            .unwrap_or(&action.action),
+                        active,
+                        keys
+                    );
+                }
                 if phase == ContinuousPhase::Heartbeat {
                     log::trace!(
                         "Continuous hotkey phase: {}::{} phase={}",
@@ -282,9 +315,51 @@ impl<'a> HotkeyListenerLoop<'a> {
                     &self.plugin_manager,
                     &plugin_id,
                     &action.action,
-                    serde_json::json!({ "phase": phase.as_str() }),
+                    serde_json::json!({
+                        "phase": phase.as_str(),
+                        "trace_session": session,
+                        "trace_seq": sequence,
+                        "trace_source": source.as_str(),
+                    }),
                 );
             }
+        }
+    }
+
+    fn trace_ids(&mut self, phase: ContinuousPhase) -> (u64, u64) {
+        if self.trace_session == 0 {
+            self.next_trace_session = self.next_trace_session.wrapping_add(1).max(1);
+            self.trace_session = self.next_trace_session;
+        }
+        if phase == ContinuousPhase::Heartbeat {
+            return (self.trace_session, 0);
+        }
+        self.next_trace_sequence = self.next_trace_sequence.wrapping_add(1).max(1);
+        (self.trace_session, self.next_trace_sequence)
+    }
+
+    fn finish_trace_session_if_idle(&mut self) {
+        if self.held_actions.is_empty() {
+            self.trace_session = 0;
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DispatchSource {
+    GlobalEvent,
+    PhysicalState,
+    Heartbeat,
+    ForcedStop,
+}
+
+impl DispatchSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::GlobalEvent => "global-event",
+            Self::PhysicalState => "physical-state",
+            Self::Heartbeat => "heartbeat",
+            Self::ForcedStop => "forced-stop",
         }
     }
 }
@@ -331,6 +406,20 @@ struct HeldActions {
 impl HeldActions {
     fn is_empty(&self) -> bool {
         self.actions.is_empty()
+    }
+
+    fn trace_active_directions(&self) -> String {
+        let mut directions = self
+            .actions
+            .values()
+            .filter_map(|registration| registration.action.action.strip_prefix("glide-"))
+            .collect::<Vec<_>>();
+        directions.sort_unstable();
+        if directions.is_empty() {
+            "none".into()
+        } else {
+            directions.join(",")
+        }
     }
 
     fn handle_event(

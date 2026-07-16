@@ -15,8 +15,39 @@ const CONFIG: DaemonConfig = DaemonConfig {
 #[derive(Debug, PartialEq)]
 enum Command {
     Execute(String),
-    Glide { direction: Direction, phase: Phase },
+    Glide {
+        direction: Direction,
+        phase: Phase,
+        trace: TraceContext,
+    },
     Kill,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TraceContext {
+    session: u64,
+    sequence: u64,
+    source: String,
+}
+
+impl TraceContext {
+    fn from_input(input: &serde_json::Value) -> Self {
+        Self {
+            session: input
+                .get("trace_session")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            sequence: input
+                .get("trace_seq")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            source: input
+                .get("trace_source")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown")
+                .to_owned(),
+        }
+    }
 }
 
 struct Runtime {
@@ -46,9 +77,14 @@ impl Runtime {
                 }
                 true
             }
-            Command::Glide { direction, phase } => {
+            Command::Glide {
+                direction,
+                phase,
+                trace,
+            } => {
+                let started = std::time::Instant::now();
                 let result = self.update_glide(direction, phase);
-                trace_glide(direction, phase, &result);
+                trace_glide(direction, phase, &trace, started.elapsed(), &result);
                 if let Err(error) = result {
                     eprintln!("{error}");
                 }
@@ -63,7 +99,7 @@ impl Runtime {
         }
     }
 
-    fn update_glide(&mut self, direction: Direction, phase: Phase) -> Result<(), String> {
+    fn update_glide(&mut self, direction: Direction, phase: Phase) -> Result<String, String> {
         if phase == Phase::Start {
             self.glide_speed = load_config().glide_speed_px_per_second;
             if self.glide.is_none() {
@@ -71,7 +107,7 @@ impl Runtime {
             }
         }
         let Some(glide) = self.glide.as_mut() else {
-            return Ok(());
+            return Ok("active=none vector=0,0 position=unknown".into());
         };
         glide.update(direction, phase, self.glide_speed)
     }
@@ -102,7 +138,11 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
 
     if let Some(direction) = Direction::from_action(&request.action) {
         return match Phase::from_input(&request.input) {
-            Ok(phase) => ReadResult::Command(Command::Glide { direction, phase }),
+            Ok(phase) => ReadResult::Command(Command::Glide {
+                direction,
+                phase,
+                trace: TraceContext::from_input(&request.input),
+            }),
             Err(error) => ReadResult::Error(error),
         };
     }
@@ -128,23 +168,36 @@ fn is_regular_action(action: &str) -> bool {
     )
 }
 
-fn trace_glide(direction: Direction, phase: Phase, outcome: &Result<(), String>) {
+fn trace_glide(
+    direction: Direction,
+    phase: Phase,
+    trace: &TraceContext,
+    elapsed: std::time::Duration,
+    outcome: &Result<String, String>,
+) {
     #[cfg(debug_assertions)]
-    qol_runtime::probe!(
-        "WINACT_GLIDE",
-        "phase={} direction={} outcome={} detail={:?}",
-        phase.as_str(),
-        direction.as_str(),
-        if outcome.is_ok() { "ok" } else { "err" },
-        outcome.as_ref().err().map(String::as_str).unwrap_or("")
-    );
+    if phase != Phase::Heartbeat || outcome.is_err() {
+        qol_runtime::probe!(
+            "WINACT_GLIDE",
+            "session={} seq={} source={} phase={} direction={} elapsed_us={} outcome={} compositor={:?} detail={:?}",
+            trace.session,
+            trace.sequence,
+            trace.source,
+            phase.as_str(),
+            direction.as_str(),
+            elapsed.as_micros(),
+            if outcome.is_ok() { "ok" } else { "err" },
+            outcome.as_ref().map(String::as_str).unwrap_or(""),
+            outcome.as_ref().err().map(String::as_str).unwrap_or("")
+        );
+    }
     #[cfg(not(debug_assertions))]
-    let _ = (direction, phase, outcome);
+    let _ = (direction, phase, trace, elapsed, outcome);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_request, Command};
+    use super::{parse_request, Command, TraceContext};
     use crate::movement::{Direction, Phase};
     use qol_plugin_daemon::daemon::ReadResult;
     use qol_runtime::protocol::DaemonRequest;
@@ -162,12 +215,42 @@ mod tests {
             "glide-left",
             serde_json::json!({ "phase": "start" }),
         ));
+        let expected_trace = TraceContext {
+            source: "unknown".into(),
+            ..TraceContext::default()
+        };
         assert!(matches!(
             result,
             ReadResult::Command(Command::Glide {
                 direction: Direction::Left,
-                phase: Phase::Start
-            })
+                phase: Phase::Start,
+                ref trace,
+            }) if trace == &expected_trace
+        ));
+    }
+
+    #[test]
+    fn carries_trace_context_with_continuous_actions() {
+        let result = parse_request(&request(
+            "glide-right",
+            serde_json::json!({
+                "phase": "stop",
+                "trace_session": 7,
+                "trace_seq": 19,
+                "trace_source": "physical-state",
+            }),
+        ));
+        assert!(matches!(
+            result,
+            ReadResult::Command(Command::Glide {
+                direction: Direction::Right,
+                phase: Phase::Stop,
+                trace: TraceContext {
+                    session: 7,
+                    sequence: 19,
+                    ref source,
+                },
+            }) if source == "physical-state"
         ));
     }
 
