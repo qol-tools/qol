@@ -132,7 +132,7 @@
     border-radius: var(--radius-chip);
     color: var(--cfg-text-bright);
     font-size: 0.75rem;
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
 }
 
 .mod-chip {
@@ -143,7 +143,7 @@
     border-radius: var(--radius-chip);
     color: var(--cfg-text-subtle);
     font-size: 0.75rem;
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     cursor: pointer;
     user-select: none;
     transition: all var(--dur-fast);
@@ -167,13 +167,13 @@
     border: var(--border-w-1) solid var(--cfg-chip-border);
     border-radius: var(--radius-sm);
     color: var(--cfg-text-strong);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: 0.8rem;
 }
 
 .key-label {
     color: var(--cfg-text-strong);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: 0.85rem;
     padding: 0.15rem 0.4rem;
     background: var(--cfg-muted-bg);
@@ -198,7 +198,7 @@
     border-radius: var(--radius-sm);
     color: var(--cfg-success);
     font-size: 0.7rem;
-    font-family: var(--font-mono);
+    font-family: var(--font-ui);
     text-transform: var(--case-label);
 }
 
@@ -286,7 +286,7 @@
     border: var(--border-w-1) solid var(--cfg-input-border);
     border-radius: var(--radius-md);
     color: var(--cfg-text-strong);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: 0.8rem;
 }
 

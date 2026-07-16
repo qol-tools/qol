@@ -146,7 +146,7 @@ html.qol-bootstrapping-dive #app {
     justify-content: center;
     font-size: 9px;
     font-weight: var(--fw-bold);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     line-height: var(--lh-tight);
     color: rgb(var(--ink-rgb));
     background: hsl(var(--wedge-hue, 50) 80% 38% / 0.95);
@@ -284,7 +284,7 @@ html.qol-bootstrapping-dive #app {
     border-radius: var(--radius-sm);
     background: rgba(var(--accent-rgb), 0.1);
     color: var(--text-secondary);
-    font-family: var(--font-mono);
+    font-family: var(--font-ui);
     font-size: calc(var(--fs-caption-1) * 0.92);
     font-weight: var(--fw-medium);
     text-transform: none;
@@ -639,7 +639,7 @@ html.qol-bootstrapping-dive #app {
     border: var(--border-w-3) double var(--tui-line);
     border-radius: var(--radius-md);
     color: var(--accent);
-    font-family: var(--font-mono);
+    font-family: var(--font-ui);
     font-size: var(--fs-xl-plus);
     font-weight: var(--fw-bold);
     letter-spacing: var(--ls-3xl);

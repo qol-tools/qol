@@ -21,7 +21,7 @@ body {
 }
 
 .tui-label {
-    font-family: var(--font-mono);
+    font-family: var(--font-ui);
     text-transform: var(--case-label);
     letter-spacing: var(--tracking-label);
 }
@@ -392,7 +392,7 @@ body {
 .wt-picker-option {
     padding: var(--space-2) var(--space-4);
     font-size: var(--fs-md);
-    font-family: var(--font-mono);
+    font-family: var(--font-ui);
     color: var(--text-secondary);
     cursor: pointer;
     white-space: nowrap;

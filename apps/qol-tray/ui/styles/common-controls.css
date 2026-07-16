@@ -4,7 +4,7 @@
     background: var(--tui-bg-screen);
     border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-md);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: var(--fs-sm);
     color: var(--text-secondary);
     white-space: pre-wrap;
@@ -236,7 +236,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     background: var(--tui-bg-card);
     transition: transform var(--transition), background var(--transition), border-color var(--transition), color var(--transition), box-shadow var(--transition), opacity var(--transition);
     border: var(--border-w-1) solid transparent;
-    font-family: var(--font-mono);
+    font-family: var(--font-ui);
     box-shadow: var(--btn-raise-shadow);
 }
 
@@ -417,7 +417,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
 }
 
 .btn kbd {
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: 0.75em;
     opacity: 0.4;
     padding: 1px 4px;
@@ -657,7 +657,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     content: '>';
     margin-right: var(--space-2);
     color: rgba(var(--accent-rgb), 0.7);
-    font-family: var(--font-mono);
+    font-family: var(--font-ui);
     font-weight: var(--fw-bold);
 }
 
@@ -668,7 +668,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     background: transparent;
     color: var(--text-secondary);
     font-size: var(--fs-base);
-    font-family: var(--font-mono);
+    font-family: var(--font-ui);
     outline: none;
 }
 
@@ -737,7 +737,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     padding: 0 var(--space-3);
     background: rgba(var(--accent-rgb), 0.08);
     border-bottom: var(--border-w-1) solid var(--tui-line-soft);
-    font-family: var(--font-mono);
+    font-family: var(--font-ui);
     font-size: var(--fs-xs);
     text-transform: var(--case-label);
     letter-spacing: 0.12em;
@@ -764,7 +764,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     background: var(--tui-bg-panel);
     border: var(--border-w-1) solid var(--tui-line);
     box-shadow: var(--elevation-crisp-1);
-    font-family: var(--font-mono);
+    font-family: var(--font-ui);
     font-size: var(--fs-xs);
 }
 

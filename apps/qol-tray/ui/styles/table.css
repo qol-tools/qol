@@ -15,7 +15,7 @@
 }
 
 .table-list-header .table-cell {
-    font-family: var(--font-mono);
+    font-family: var(--font-ui);
     text-transform: var(--case-label);
     letter-spacing: var(--tracking-label);
     font-size: var(--fs-xs);

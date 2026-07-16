@@ -222,7 +222,7 @@
 .plugin-row .plugin-path {
     user-select: text;
     cursor: text;
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     color: var(--text-faint);
     font-size: var(--fs-caption-1);
     line-height: var(--lh-tight);
@@ -482,7 +482,7 @@
     color: var(--text-secondary);
     font-size: var(--fs-caption-lg);
     line-height: var(--lh-snug);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     overflow: hidden;
@@ -518,7 +518,7 @@
 
 .plugin-row .plugin-cpu-strip-value {
     color: var(--text-secondary);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: var(--fs-caption);
     line-height: var(--lh-tight);
     min-width: var(--size-cpu-value-min);
@@ -622,7 +622,7 @@
     border-radius: var(--radius-sm);
     background: var(--tui-bg-screen);
     color: var(--text-secondary);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: var(--fs-md-minus);
 }
 

@@ -80,7 +80,7 @@
     line-height: var(--lh-tight);
     color: rgba(var(--accent-rgb), 0.72);
     text-shadow: var(--tui-glow-text);
-    font-family: var(--font-mono);
+    font-family: var(--font-ui);
     user-select: none;
     position: relative;
     z-index: var(--z-2);
@@ -111,7 +111,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-family: var(--font-mono);
+    font-family: var(--font-ui);
     text-transform: var(--case-label);
     letter-spacing: var(--tracking-label);
     font-size: var(--fs-sm);
@@ -163,7 +163,7 @@
 .plugins-grid .plugin-card .version {
     color: var(--text-muted);
     font-size: var(--fs-xs);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     letter-spacing: var(--ls-md);
 }
 
@@ -461,7 +461,7 @@
 .plugin-version {
     flex-shrink: 0;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: var(--fs-xs);
     line-height: var(--lh-snug);
     letter-spacing: var(--ls-md);

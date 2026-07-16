@@ -518,7 +518,7 @@ select.field-select:focus {
     border: var(--border-w-1) solid var(--cfg-input-border);
     border-radius: var(--radius-md);
     color: var(--cfg-text-strong);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: 0.85rem;
 }
 
@@ -684,7 +684,7 @@ select.field-select:focus {
 .slider-val {
     min-width: 3.5em;
     text-align: right;
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: 0.85rem;
     color: var(--cfg-text-bright);
 }

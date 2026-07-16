@@ -171,7 +171,7 @@
 
 .key-input-row input {
     flex: 1;
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     cursor: pointer;
 }
 
@@ -208,7 +208,7 @@ kbd {
     background: var(--state-info-bg-faint);
     border: var(--border-w-1) solid var(--state-info-border-soft);
     border-radius: var(--radius-xs);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: 0.85em;
     color: var(--state-info-text);
 }

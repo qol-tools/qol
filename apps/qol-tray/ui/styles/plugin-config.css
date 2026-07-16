@@ -480,7 +480,7 @@
     position: relative;
     padding: 0.45rem 0.7rem;
     font-size: 0.88rem;
-    font-family: var(--font-mono);
+    font-family: var(--font-ui);
     color: var(--text-secondary);
     border-radius: var(--radius-xs);
     cursor: pointer;
@@ -963,7 +963,7 @@
 
 .gamepad-connection output {
     color: var(--text-secondary);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
 }
 
 .gamepad-adapter {
@@ -1064,7 +1064,7 @@
 
 .gamepad-signal-history-heading strong {
     color: var(--text-secondary);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-weight: var(--fw-medium);
 }
 
@@ -1200,7 +1200,7 @@
 .gamepad-rumble-heading output {
     flex-shrink: 0;
     color: var(--accent);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: var(--fs-xs);
 }
 
@@ -1300,7 +1300,7 @@
 
 .gamepad-vector-value {
     fill: var(--text-primary) !important;
-    font-family: var(--font-mono) !important;
+    font-family: var(--font-data) !important;
     font-size: 10px !important;
     font-weight: var(--fw-semibold) !important;
 }
@@ -1435,7 +1435,7 @@
 
 .gamepad-vector-device-control text {
     fill: var(--text-faint);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: 8px;
     font-weight: var(--fw-medium);
     opacity: 0.9;
@@ -1444,7 +1444,7 @@
 .gamepad-vector-auxiliary-label,
 .gamepad-vector-auxiliary-overflow {
     fill: var(--text-faint) !important;
-    font-family: var(--font-mono) !important;
+    font-family: var(--font-data) !important;
     font-size: 8px !important;
     font-weight: var(--fw-medium) !important;
     letter-spacing: 0.08em;
@@ -1458,7 +1458,7 @@
 
 .gamepad-vector-auxiliary text {
     fill: var(--warning);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: 8px;
 }
 
@@ -1521,7 +1521,7 @@
 .gamepad-active-inputs strong {
     overflow: hidden;
     color: var(--accent);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: var(--fs-xs);
     font-weight: var(--fw-medium);
     text-align: right;
@@ -1575,7 +1575,7 @@
 
 .gamepad-axis output {
     color: var(--text-secondary);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     text-align: right;
 }
 
@@ -1598,7 +1598,7 @@
 }
 
 .gamepad-button-chip output {
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
 }
 
 .gamepad-button-chip[data-active="true"] {

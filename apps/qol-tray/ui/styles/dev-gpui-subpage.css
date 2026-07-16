@@ -60,7 +60,7 @@
     border: var(--border-w-1) solid var(--border-default);
     border-radius: var(--radius-sm);
     color: var(--text-primary);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: var(--fs-sm);
 }
 

@@ -58,7 +58,7 @@
 
 .profile-settings-value {
     color: var(--text-secondary);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: var(--fs-sm);
     word-break: break-all;
     min-width: 0;
@@ -67,7 +67,7 @@
 .profile-settings-link {
     color: rgba(var(--accent-rgb), 0.65);
     text-decoration: none;
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: var(--fs-sm);
     word-break: break-all;
 }
@@ -383,7 +383,7 @@
 .profile-device-code {
     font-size: 1.75rem;
     font-weight: var(--fw-bold);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     letter-spacing: 0.15em;
     cursor: pointer;
     padding: var(--space-2) var(--space-4);
@@ -407,7 +407,7 @@
 }
 
 .profile-device-uri {
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: 0.9rem;
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-md);
@@ -577,7 +577,7 @@
 }
 
 .profile-result-id {
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: var(--fs-sm);
     color: var(--text-primary);
     word-break: break-word;
@@ -666,7 +666,7 @@
 
 .profile-backup-file {
     color: var(--text-secondary);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: var(--fs-sm);
     min-width: 0;
     word-break: break-word;

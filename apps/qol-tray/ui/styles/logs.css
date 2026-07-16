@@ -100,7 +100,7 @@
 
 .log-src {
     color: rgba(var(--accent-rgb), 0.7);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     word-break: break-word;
 }
 
@@ -142,7 +142,7 @@
 .log-loc {
     color: var(--text-faint);
     font-size: var(--fs-xs);
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     word-break: break-word;
     margin-left: calc(-1 * var(--space-2));
 }
@@ -182,7 +182,7 @@
 }
 
 .suppressed-key {
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: var(--fs-xs);
     font-weight: var(--fw-semibold);
     color: var(--text-primary);
@@ -222,7 +222,7 @@
 }
 
 .suppressed-msg {
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: var(--fs-xs);
     color: var(--text-secondary);
     line-height: var(--lh-relaxed);
@@ -290,13 +290,13 @@
 }
 
 .suppressed-detail-value.mono {
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
 }
 
 .suppressed-meta-sep { color: var(--text-faint); }
 
 .suppressed-version {
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
     font-size: var(--fs-caption);
     color: var(--text-faint);
 }

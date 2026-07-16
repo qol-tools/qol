@@ -158,7 +158,7 @@
 }
 
 .list-row-mono {
-    font-family: var(--font-mono);
+    font-family: var(--font-data);
 }
 
 .list-row-label {
