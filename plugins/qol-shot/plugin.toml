@@ -3,7 +3,7 @@ id = "qol-shot"
 uid = "e8208e3e-58b3-4f8c-ad4b-ddbecafa3375"
 name = "QoL Shot"
 description = "Capture screenshots and record screen regions"
-version = "1.24.0"
+version = "1.25.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
