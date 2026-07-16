@@ -49,6 +49,8 @@ pub(super) fn routes() -> Router<AppState> {
             "/theme/accent",
             axum::routing::put(theme_handlers::set_theme_accent),
         )
+        .route("/theme", get(theme_handlers::get_theme))
+        .route("/theme", axum::routing::put(theme_handlers::set_theme))
         .route("/shortcuts", get(shortcut_handlers::list_shortcuts))
         .route("/shortcuts", post(shortcut_handlers::create_shortcut))
         .route(

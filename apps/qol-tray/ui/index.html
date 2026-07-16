@@ -26,6 +26,9 @@
                     document.documentElement.style.setProperty('--accent-hover', chosen.hover);
                 }
             }
+            if (boot && boot.theme && boot.theme.defaultKey) {
+                document.documentElement.setAttribute('data-qol-theme', boot.theme.defaultKey);
+            }
         } catch (e) {}
     </script>
     <link rel="stylesheet" href="styles.css">

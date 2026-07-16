@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use qol_theme::{css, dark_accent_presets};
+use qol_theme::{css, dark_accent_presets, tray_theme_presets};
 
 #[derive(Serialize)]
 struct AccentEntry {
@@ -43,6 +43,35 @@ const PLATFORM_LABEL: &str = "Linux";
 const PLATFORM_LABEL: &str = "Windows";
 
 #[derive(Serialize)]
+struct ThemeEntry {
+    key: &'static str,
+    label: &'static str,
+}
+
+#[derive(Serialize)]
+struct ThemeBoot {
+    themes: Vec<ThemeEntry>,
+    #[serde(rename = "defaultKey")]
+    default_key: String,
+    #[serde(rename = "selectedKey")]
+    selected_key: Option<String>,
+}
+
+fn theme_boot() -> ThemeBoot {
+    ThemeBoot {
+        themes: tray_theme_presets()
+            .iter()
+            .map(|preset| ThemeEntry {
+                key: preset.key,
+                label: preset.label,
+            })
+            .collect(),
+        default_key: crate::features::theme::current_theme_key(),
+        selected_key: crate::features::theme::selected_theme_key().ok().flatten(),
+    }
+}
+
+#[derive(Serialize)]
 struct DeviceBoot {
     name: String,
     platform: &'static str,
@@ -59,6 +88,7 @@ fn device_boot() -> DeviceBoot {
 struct BootState {
     dev: bool,
     accent: AccentBoot,
+    theme: ThemeBoot,
     device: DeviceBoot,
 }
 
@@ -70,6 +100,7 @@ pub(super) fn boot_json(dev: bool) -> String {
             default_key: crate::features::theme::resolved_accent_key(dev),
             selected_key: crate::features::theme::selected_accent_key().ok().flatten(),
         },
+        theme: theme_boot(),
         device: device_boot(),
     };
     serde_json::to_string(&state).unwrap_or_else(|_| "null".to_string())
@@ -180,6 +211,31 @@ mod tests {
             ["macOS", "Linux", "Windows"].contains(&platform),
             "platform label is a known OS, got {platform}"
         );
+    }
+
+    #[test]
+    fn boot_json_carries_theme_selection_and_palette() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        crate::features::theme::save_selected_theme_key("graphite").unwrap();
+
+        let v: serde_json::Value = serde_json::from_str(&boot_json(false)).unwrap();
+        assert_eq!(v["theme"]["defaultKey"], "graphite");
+        assert_eq!(v["theme"]["selectedKey"], "graphite");
+        let themes = v["theme"]["themes"].as_array().unwrap();
+        assert_eq!(themes.len(), qol_theme::tray_theme_presets().len());
+        assert_eq!(themes[0]["key"], "slate");
+        assert_eq!(themes[0]["label"], "Slate");
+    }
+
+    #[test]
+    fn boot_json_marks_auto_theme_with_default_key() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        let v: serde_json::Value = serde_json::from_str(&boot_json(false)).unwrap();
+        assert_eq!(v["theme"]["defaultKey"], qol_theme::DEFAULT_TRAY_THEME_KEY);
+        assert_eq!(v["theme"]["selectedKey"], serde_json::Value::Null);
     }
 
     #[test]
