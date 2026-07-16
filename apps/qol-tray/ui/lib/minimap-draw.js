@@ -17,6 +17,15 @@ function accentChannel() {
     return v.trim() || DEFAULT_ACCENT_RGB;
 }
 
+export function minimapSlabRadius() {
+    if (typeof document === 'undefined' || typeof getComputedStyle === 'undefined') {
+        return RADIUS;
+    }
+    const v = getComputedStyle(document.documentElement).getPropertyValue('--minimap-slab-radius');
+    const parsed = Number.parseInt(v, 10);
+    return Number.isFinite(parsed) ? parsed : RADIUS;
+}
+
 function slotAlpha(coverage, floor) {
     if (!(coverage >= 0)) return floor;
     if (coverage >= 1) return 1;
@@ -37,7 +46,7 @@ function roundRect(ctx, x, y, w, h, r) {
     ctx.closePath();
 }
 
-function drawInactiveSlot(ctx, cw, label, slot, alpha) {
+function drawInactiveSlot(ctx, cw, label, slot, alpha, radius) {
     if (slot.x + slot.w < 0 || slot.x > cw) return;
     const innerX = slot.x + SLOT_INSET;
     const innerW = Math.max(0, slot.w - SLOT_INSET * 2);
@@ -48,7 +57,7 @@ function drawInactiveSlot(ctx, cw, label, slot, alpha) {
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.fillStyle = QOL_TRAY_INTERNAL_COLORS.minimapInactiveFill;
-    roundRect(ctx, innerX, innerY, innerW, innerH, RADIUS);
+    roundRect(ctx, innerX, innerY, innerW, innerH, radius);
     ctx.fill();
     ctx.strokeStyle = QOL_TRAY_INTERNAL_COLORS.minimapInactiveStroke;
     ctx.lineWidth = 0.5;
@@ -64,7 +73,7 @@ function drawInactiveSlot(ctx, cw, label, slot, alpha) {
     ctx.restore();
 }
 
-function drawActiveSlot(ctx, cw, label, slot, alpha) {
+function drawActiveSlot(ctx, cw, label, slot, alpha, radius) {
     const layoutInnerX = slot.x + SLOT_INSET;
     const layoutInnerW = Math.max(0, slot.w - SLOT_INSET * 2);
     const layoutInnerH = Math.max(0, slot.h - SLOT_INSET * 2);
@@ -84,7 +93,7 @@ function drawActiveSlot(ctx, cw, label, slot, alpha) {
     ctx.shadowColor = `rgba(${accentChannel()}, 0.55)`;
     ctx.shadowBlur = 8;
     ctx.fillStyle = QOL_TRAY_INTERNAL_COLORS.minimapActiveFill;
-    roundRect(ctx, drawX, drawY, drawW, drawH, RADIUS);
+    roundRect(ctx, drawX, drawY, drawW, drawH, radius);
     ctx.fill();
     ctx.restore();
 
@@ -92,7 +101,7 @@ function drawActiveSlot(ctx, cw, label, slot, alpha) {
     ctx.globalAlpha = alpha;
     ctx.strokeStyle = QOL_TRAY_INTERNAL_COLORS.minimapActiveStroke;
     ctx.lineWidth = 1.5;
-    roundRect(ctx, drawX, drawY, drawW, drawH, RADIUS);
+    roundRect(ctx, drawX, drawY, drawW, drawH, radius);
     ctx.stroke();
 
     if (drawW >= 18 && label) {
@@ -105,7 +114,7 @@ function drawActiveSlot(ctx, cw, label, slot, alpha) {
     ctx.restore();
 }
 
-export function drawMinimap(ctx, cw, ch, sortedEntries, slots, activeId, labelFor, rect) {
+export function drawMinimap(ctx, cw, ch, sortedEntries, slots, activeId, labelFor, rect, radius = minimapSlabRadius()) {
     let activeIdx = -1;
     for (let i = 0; i < sortedEntries.length; i++) {
         if (sortedEntries[i].id === activeId) { activeIdx = i; break; }
@@ -115,13 +124,13 @@ export function drawMinimap(ctx, cw, ch, sortedEntries, slots, activeId, labelFo
         if (i === activeIdx) continue;
         const label = labelFor ? labelFor(sortedEntries[i]) : null;
         const coverage = computeSlotCoverage(slots[i], rect);
-        drawInactiveSlot(ctx, cw, label, slots[i], slotAlpha(coverage, INACTIVE_OPACITY_FLOOR));
+        drawInactiveSlot(ctx, cw, label, slots[i], slotAlpha(coverage, INACTIVE_OPACITY_FLOOR), radius);
     }
 
     if (activeIdx >= 0) {
         const label = labelFor ? labelFor(sortedEntries[activeIdx]) : null;
         const coverage = computeSlotCoverage(slots[activeIdx], rect);
-        drawActiveSlot(ctx, cw, label, slots[activeIdx], slotAlpha(coverage, ACTIVE_OPACITY_FLOOR));
+        drawActiveSlot(ctx, cw, label, slots[activeIdx], slotAlpha(coverage, ACTIVE_OPACITY_FLOOR), radius);
     }
 }
 
@@ -136,7 +145,7 @@ export function clampRectForDraw(rect, cw, minWidth = VIEWPORT_MIN_WIDTH) {
     return { x, width: targetWidth };
 }
 
-export function drawViewportRect(ctx, cw, ch, rect) {
+export function drawViewportRect(ctx, cw, ch, rect, radius = minimapSlabRadius()) {
     const clamped = clampRectForDraw(rect, cw);
     if (clamped.width <= 0) return;
     const y = rect.y != null ? rect.y : 0;
@@ -144,7 +153,7 @@ export function drawViewportRect(ctx, cw, ch, rect) {
 
     const accent = accentChannel();
     ctx.fillStyle = `rgba(${accent}, 0.18)`;
-    roundRect(ctx, clamped.x, y, clamped.width, h, RADIUS);
+    roundRect(ctx, clamped.x, y, clamped.width, h, radius);
     ctx.fill();
 
     ctx.save();
@@ -152,7 +161,7 @@ export function drawViewportRect(ctx, cw, ch, rect) {
     ctx.shadowBlur = 6;
     ctx.strokeStyle = `rgba(${accent}, 0.95)`;
     ctx.lineWidth = 2;
-    roundRect(ctx, clamped.x, y, clamped.width, h, RADIUS);
+    roundRect(ctx, clamped.x, y, clamped.width, h, radius);
     ctx.stroke();
     ctx.restore();
 }

@@ -165,6 +165,13 @@ html.qol-bootstrapping-dive #app {
     overflow: visible;
 }
 
+:root[data-qol-identity="modern"] .world-minimap {
+    background: var(--panel-bg);
+    border: var(--panel-border);
+    border-radius: var(--panel-radius);
+    box-shadow: var(--panel-shadow);
+}
+
 .world-minimap > canvas {
     border-radius: inherit;
 }
@@ -245,9 +252,9 @@ html.qol-bootstrapping-dive #app {
 }
 
 .world-settings-panel {
-    background: var(--tui-bg-panel);
-    border: var(--border-w-1) solid var(--tui-line);
-    border-radius: var(--radius-md);
+    background: var(--panel-bg);
+    border: var(--panel-border);
+    border-radius: var(--panel-radius);
     padding: 0;
     width: 400px;
     user-select: none;
