@@ -984,3 +984,79 @@ fn themed_gpui_surfaces_do_not_use_inline_color_literals() {
         violations.join("\n")
     );
 }
+
+fn relative_luminance(rgb: u32) -> f64 {
+    let channel = |c: u32| {
+        let c = c as f64 / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let r = channel((rgb >> 16) & 0xff);
+    let g = channel((rgb >> 8) & 0xff);
+    let b = channel(rgb & 0xff);
+    0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+fn contrast_ratio(a: u32, b: u32) -> f64 {
+    let (hi, lo) = {
+        let (la, lb) = (relative_luminance(a), relative_luminance(b));
+        if la > lb {
+            (la, lb)
+        } else {
+            (lb, la)
+        }
+    };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+#[test]
+fn tray_theme_presets_have_unique_keys_and_a_default() {
+    let presets = qol_theme::tray_theme_presets();
+    let mut keys: Vec<_> = presets.iter().map(|p| p.key).collect();
+    keys.sort_unstable();
+    keys.dedup();
+    assert_eq!(keys.len(), presets.len(), "duplicate theme keys");
+    assert!(qol_theme::tray_theme_preset(qol_theme::DEFAULT_TRAY_THEME_KEY).is_some());
+    assert!(qol_theme::tray_theme_preset("nope").is_none());
+}
+
+#[test]
+fn tray_theme_palettes_hold_contrast_floors() {
+    for preset in qol_theme::tray_theme_presets() {
+        let s = preset.system;
+        let surfaces = [
+            ("canvas", s.surface_canvas),
+            ("elevated", s.surface_elevated),
+            ("raised", s.surface_raised),
+            ("hovered", s.surface_hovered),
+        ];
+        for (name, surface) in surfaces {
+            let cases = [
+                ("text_primary", s.text_primary, 6.5),
+                ("text_secondary", s.text_secondary, 4.0),
+                ("text_muted", s.text_muted, 2.4),
+            ];
+            for (text_name, text, floor) in cases {
+                let ratio = contrast_ratio(text, surface);
+                assert!(
+                    ratio >= floor,
+                    "{}: {text_name} on {name} = {ratio:.2}, floor {floor}",
+                    preset.key
+                );
+            }
+        }
+        for pair in surfaces.windows(2) {
+            let ratio = contrast_ratio(pair[0].1, pair[1].1);
+            assert!(
+                ratio >= 1.04,
+                "{}: surfaces {} vs {} too close ({ratio:.3})",
+                preset.key,
+                pair[0].0,
+                pair[1].0
+            );
+        }
+    }
+}

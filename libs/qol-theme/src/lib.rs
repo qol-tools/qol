@@ -209,6 +209,101 @@ impl SystemPalette {
 pub const DARK_SYSTEM: SystemPalette = SystemPalette::from_reference(DARK_REFERENCE);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OverlayPalette {
+    pub surface_rgb: u32,
+    pub deep_rgb: u32,
+    pub ink_rgb: u32,
+    pub scrim_rgb: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrayThemePreset {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub system: SystemPalette,
+    pub overlay: OverlayPalette,
+}
+
+pub const DEFAULT_TRAY_THEME_KEY: &str = "slate";
+
+pub const TRAY_THEME_PRESETS: [TrayThemePreset; 3] = [
+    TrayThemePreset {
+        key: "slate",
+        label: "Slate",
+        system: DARK_SYSTEM,
+        overlay: OverlayPalette {
+            surface_rgb: 0x12161e,
+            deep_rgb: 0x111419,
+            ink_rgb: 0x070a0e,
+            scrim_rgb: 0x040508,
+        },
+    },
+    TrayThemePreset {
+        key: "graphite",
+        label: "Graphite",
+        system: SystemPalette {
+            surface_canvas: 0x121110,
+            surface_elevated: 0x1a1816,
+            surface_raised: 0x201d1a,
+            surface_hovered: 0x282420,
+            text_primary: 0xf2ede4,
+            text_secondary: 0xcfc7b8,
+            text_muted: 0x92876f,
+            text_faint: 0x6b6254,
+            border_subtle: 0x3a352c,
+            accent: DARK_REFERENCE.orange_400,
+            success: DARK_REFERENCE.green_400,
+            danger: DARK_REFERENCE.red_500,
+            info: DARK_REFERENCE.blue_400,
+            warning: DARK_REFERENCE.amber_500,
+        },
+        overlay: OverlayPalette {
+            surface_rgb: 0x1e1b17,
+            deep_rgb: 0x191613,
+            ink_rgb: 0x0c0a07,
+            scrim_rgb: 0x080604,
+        },
+    },
+    TrayThemePreset {
+        key: "void",
+        label: "Void",
+        system: SystemPalette {
+            surface_canvas: 0x000000,
+            surface_elevated: 0x0a0c10,
+            surface_raised: 0x10131a,
+            surface_hovered: 0x181c26,
+            text_primary: 0xeef2fa,
+            text_secondary: 0xb6becf,
+            text_muted: 0x76829c,
+            text_faint: 0x4f5a72,
+            border_subtle: 0x272e3c,
+            accent: DARK_REFERENCE.orange_400,
+            success: DARK_REFERENCE.green_400,
+            danger: DARK_REFERENCE.red_500,
+            info: DARK_REFERENCE.blue_400,
+            warning: DARK_REFERENCE.amber_500,
+        },
+        overlay: OverlayPalette {
+            surface_rgb: 0x0d1017,
+            deep_rgb: 0x090b10,
+            ink_rgb: 0x04060a,
+            scrim_rgb: 0x020304,
+        },
+    },
+];
+
+pub fn tray_theme_presets() -> &'static [TrayThemePreset] {
+    &TRAY_THEME_PRESETS
+}
+
+pub fn tray_theme_preset(key: &str) -> Option<TrayThemePreset> {
+    TRAY_THEME_PRESETS
+        .iter()
+        .copied()
+        .find(|preset| preset.key == key)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TrayRampPalette {
     pub slate_975: u32,
     pub slate_950: u32,
