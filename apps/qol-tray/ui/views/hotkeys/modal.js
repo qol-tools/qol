@@ -1,6 +1,8 @@
 import { html } from '../../lib/html.js';
 import { useMemo } from 'preact/hooks';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
+import { Surface } from '../../lib/components/Surface.js';
+import { TextInput } from '../../lib/components/TextInput.js';
 
 export function PluginSelect({ modal, plugins, onChange }) {
     const options = useMemo(() => plugins.map(p => p.uid), [plugins]);
@@ -15,10 +17,10 @@ export function ActionSelect({ modal, onChange, disabled }) {
     if (disabled) {
         return html`
             <div class="custom-select">
-                <button type="button" class="custom-select-trigger" disabled>
+                <${Surface} as="button" type="button" className="custom-select-trigger" disabled>
                     <span class="custom-select-value">All actions assigned</span>
                     <span class="custom-select-arrow">${'\u25BE'}</span>
-                </button>
+                <//>
             </div>
         `;
     }
@@ -28,9 +30,9 @@ export function ActionSelect({ modal, onChange, disabled }) {
 export function KeyInput({ modal, recording, onStartRecording, disabled }) {
     return html`
         <div class="key-input-row">
-            <input type="text" id="hotkey-key"
+            <${TextInput} id="hotkey-key"
                    value=${modal.key} readonly disabled=${disabled}
-                   class=${recording ? 'recording' : ''}
+                   className=${recording ? 'recording' : ''}
                    placeholder=${recording ? 'Press keys... (Esc to cancel)' : 'Press Enter to record'}
                    onClick=${!disabled ? onStartRecording : undefined} />
         </div>
