@@ -80,9 +80,14 @@ fn start_script(direction: Direction, speed: f64, watchdog_ms: u64) -> String {
         }}
         state.dx = dx;
         state.dy = dy;
-        state.x += dx * state.speed * elapsed;
-        state.y += dy * state.speed * elapsed;
-        state.win.move_frame(true, Math.round(state.x), Math.round(state.y));
+        const nextX = state.x + dx * state.speed * elapsed;
+        const nextY = state.y + dy * state.speed * elapsed;
+        const targetX = Math.round(nextX);
+        const targetY = Math.round(nextY);
+        state.win.move_frame(true, targetX, targetY);
+        const actual = state.win.get_frame_rect();
+        state.x = actual.x === targetX ? nextX : actual.x;
+        state.y = actual.y === targetY ? nextY : actual.y;
     }};
     (() => {{
         let state = global[key];
@@ -257,6 +262,21 @@ mod tests {
             "state.sequence = (state.sequence || 0) + 1",
             "right === left ? 0 : (right > left ? 1 : -1)",
             "down === up ? 0 : (down > up ? 1 : -1)",
+        ];
+        for fragment in required {
+            assert!(script.contains(fragment), "missing {fragment}\n{script}");
+        }
+    }
+
+    #[test]
+    fn glide_resynchronizes_when_cinnamon_constrains_motion() {
+        let script = start_script(Direction::Up, 1200.0, WATCHDOG_MS);
+        let required = [
+            "const targetX = Math.round(nextX)",
+            "const targetY = Math.round(nextY)",
+            "const actual = state.win.get_frame_rect()",
+            "state.x = actual.x === targetX ? nextX : actual.x",
+            "state.y = actual.y === targetY ? nextY : actual.y",
         ];
         for fragment in required {
             assert!(script.contains(fragment), "missing {fragment}\n{script}");
