@@ -649,7 +649,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_keeps_physical_reconciliation_available_while_idle() {
-        assert!(super::super::physical_state::POLL_WHILE_IDLE);
+        const { assert!(super::super::physical_state::POLL_WHILE_IDLE) };
         assert_eq!(super::super::physical_state::POLL_INTERVAL.as_millis(), 8);
     }
 
