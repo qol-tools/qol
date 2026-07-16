@@ -3,6 +3,9 @@ import { useState, useCallback, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { FieldLabel } from './FieldLabel.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
+import { TextInput } from '../../../lib/components/TextInput.js';
+import { Button } from '../../../lib/components/Button.js';
+import { Surface } from '../../../lib/components/Surface.js';
 
 export function StringArrayField({ field }) {
     const ctx = usePluginConfigContext();
@@ -64,8 +67,8 @@ function StringList({ values, showIcon, remove }) {
                     ${showIcon && html`<img class="app-icon" src=${`/api/icon/${encodeURIComponent(v)}`}
                         width="20" height="20" onError=${hideIcon} />`}
                     <span>${v}</span>
-                    <button type="button" class="btn-remove"
-                        onClick=${() => remove(i)}>\u00d7</button>
+                    <${Surface} as="button" type="button" className="btn-remove"
+                        onActivate=${() => remove(i)}>\u00d7<//>
                 </div>
             `)}
         </div>
@@ -75,10 +78,10 @@ function StringList({ values, showIcon, remove }) {
 function AddRow({ inputRef, placeholder, onKeyDown, add }) {
     return html`
         <div class="add-row">
-            <input ref=${inputRef} type="text" class="text-input" data-wedge-root="" data-selection-tint-root=""
+            <${TextInput} inputRef=${inputRef} className="text-input" data-wedge-root="" data-selection-tint-root=""
                 placeholder=${placeholder || 'Add item...'} onKeyDown=${onKeyDown} />
-            <button type="button" class="btn btn-ghost btn-sm btn-add" data-wedge-root=""
-                onClick=${add}>+ Add</button>
+            <${Button} small variant="btn-ghost" className="btn-add" type="button" data-wedge-root=""
+                onActivate=${add}>+ Add<//>
         </div>
     `;
 }

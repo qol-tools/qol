@@ -28,7 +28,6 @@ const GRANDFATHERED = new Set([
     'views/plugin-config/fields/ActionField.js',
     'views/plugin-config/fields/ObjectArrayField.js',
     'views/plugin-config/fields/ObjectMapField.js',
-    'views/plugin-config/fields/StringArrayField.js',
     'views/plugin-config/view.js',
     'views/plugins/grid.js',
     'views/profile/components.js',
