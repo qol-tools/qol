@@ -1578,12 +1578,19 @@ fn reconcile_flow_report_file(path: &Path) -> Result<Option<FlowRunSummary>> {
             report_path: path.to_path_buf(),
         }));
     }
-    validate_flow_lanes(run_dir, &report)?;
     let owner_state = report
         .get("owner")
         .and_then(|owner| owner.get("state"))
         .and_then(Value::as_str)
         .map(str::to_string);
+    let Some(owner_state) = owner_state else {
+        return Ok(Some(FlowRunSummary {
+            run_id,
+            status,
+            report_path: path.to_path_buf(),
+        }));
+    };
+    validate_flow_lanes(run_dir, &report)?;
     let owner_pid = report
         .get("owner")
         .and_then(|owner| owner.get("pid"))
@@ -1594,13 +1601,6 @@ fn reconcile_flow_report_file(path: &Path) -> Result<Option<FlowRunSummary>> {
         .get("owner")
         .and_then(|owner| owner.get("process_identity"))
         .and_then(Value::as_str);
-    let Some(owner_state) = owner_state else {
-        return Ok(Some(FlowRunSummary {
-            run_id,
-            status,
-            report_path: path.to_path_buf(),
-        }));
-    };
     let owner_process_state = recorded_process_state(owner_pid, owner_process_identity, false);
     let owner_claims_live = matches!(owner_state.as_str(), "running" | "cancelling");
     let owner_identity_uncertain =
@@ -5796,6 +5796,29 @@ mod tests {
         assert!(format!("{error:#}").contains("path contract"));
         assert_eq!(fs::read(&fixture.report_path).unwrap(), before);
         assert!(lane_owner_path(&fixture.flow_dir, &fixture.lane_id).is_file());
+    }
+
+    #[test]
+    fn ownerless_legacy_terminal_flow_does_not_block_reconciliation() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = recovery_fixture(&temp, u32::MAX, "running", "planned");
+        let mut report = read_value(&fixture.report_path);
+        report.as_object_mut().unwrap().remove("owner");
+        report["status"] = json!("failed");
+        report["lanes"][0]["report"] = json!(temp.path().join("legacy/report.json"));
+        fs::write(
+            &fixture.report_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+        let before = fs::read(&fixture.report_path).unwrap();
+
+        let summary = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(summary.status, "failed");
+        assert_eq!(fs::read(&fixture.report_path).unwrap(), before);
     }
 
     #[test]

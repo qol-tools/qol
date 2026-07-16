@@ -98,7 +98,7 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
     );
 
     spawn(&mut guest, command(TRAY_BINARY, &[]))?;
-    let plugin_api = format!("{}/api/plugins", local_base_url());
+    let plugin_api = format!("{}/api/installed", local_base_url());
     wait_for_command(
         &mut guest,
         command("/usr/bin/curl", &["--fail", "--silent", &plugin_api]),
@@ -207,36 +207,28 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
         &mut guest,
         capture_trace,
         "SHOW_WIN_STATE",
-        &["phase=after", "title=qol-shot-preview", "map=viewable"],
+        &[
+            "phase=after",
+            "title=qol-shot-preview",
+            "target_active=true",
+            "map=viewable",
+        ],
         CAPTURE_TIMEOUT,
-    )?;
-    let captured = wait_for_command(
-        &mut guest,
-        command(
-            "/usr/bin/find",
-            &[
-                "/home/qol/Pictures",
-                "-maxdepth",
-                "1",
-                "-type",
-                "f",
-                "-name",
-                "screenshot-*.png",
-                "-newer",
-                CAPTURE_MARKER,
-                "-size",
-                "+0c",
-                "-printf",
-                "%p\t%s\\n",
-            ],
-        ),
-        CAPTURE_TIMEOUT,
-        |outcome| !outcome.stdout.trim().is_empty(),
-        "a saved screenshot file",
     )?;
     let preview = artifacts_dir.join("preview.ppm");
     qmp.screendump(&preview)?;
 
+    let preview_id = wait_for_window_id_matching(
+        &mut guest,
+        "^qol-shot-preview",
+        "the visible screenshot preview",
+        CAPTURE_TIMEOUT,
+    )?;
+    require_exec(
+        &mut guest,
+        command("/usr/bin/xdotool", &["windowfocus", "--sync", &preview_id]),
+        GUEST_COMMAND_TIMEOUT,
+    )?;
     let pin_trace = current_trace_cursor(&mut guest)?;
     qmp.send_keys(&["i".to_string()])?;
     let pin_reveal = wait_for_probe_line(
@@ -282,6 +274,31 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
     let after_move = wait_for_window_move(&mut guest, &pin_id, before_move, CAPTURE_TIMEOUT)?;
     let pinned = artifacts_dir.join("pinned.ppm");
     qmp.screendump(&pinned)?;
+
+    let captured = wait_for_command(
+        &mut guest,
+        command(
+            "/usr/bin/find",
+            &[
+                "/home/qol/Pictures",
+                "-maxdepth",
+                "1",
+                "-type",
+                "f",
+                "-name",
+                "screenshot-*.png",
+                "-newer",
+                CAPTURE_MARKER,
+                "-size",
+                "+0c",
+                "-printf",
+                "%p\t%s\\n",
+            ],
+        ),
+        CAPTURE_TIMEOUT,
+        |outcome| !outcome.stdout.trim().is_empty(),
+        "a saved screenshot file",
+    )?;
 
     let probes = require_exec(
         &mut guest,
@@ -469,15 +486,29 @@ fn wait_for_window_id(
     timeout: Duration,
 ) -> Result<String> {
     let pattern = format!("^{title}$");
+    wait_for_window_id_matching(
+        guest,
+        &pattern,
+        &format!("the visible guest window `{title}`"),
+        timeout,
+    )
+}
+
+fn wait_for_window_id_matching(
+    guest: &mut GuestControlClient,
+    pattern: &str,
+    description: &str,
+    timeout: Duration,
+) -> Result<String> {
     let outcome = wait_for_command(
         guest,
         command(
             "/usr/bin/xdotool",
-            &["search", "--onlyvisible", "--name", &pattern],
+            &["search", "--onlyvisible", "--name", pattern],
         ),
         timeout,
         |outcome| parse_window_id(&outcome.stdout).is_some(),
-        &format!("the visible guest window `{title}`"),
+        description,
     )?;
     parse_window_id(&outcome.stdout)
         .map(|id| id.to_string())

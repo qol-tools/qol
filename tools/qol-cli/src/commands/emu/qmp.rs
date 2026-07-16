@@ -6,6 +6,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 const QMP_ABSOLUTE_MAX: u64 = 0x7fff;
+const POINTER_CLICK_HOLD: Duration = Duration::from_millis(50);
 
 #[derive(Debug)]
 pub(crate) enum QmpLine {
@@ -241,7 +242,9 @@ impl<S: Read + Write> QmpClient<S> {
     }
 
     pub(crate) fn click_left(&mut self) -> Result<()> {
-        self.send_input_events(vec![left_button_event(true), left_button_event(false)])
+        self.set_left_button(true)?;
+        std::thread::sleep(POINTER_CLICK_HOLD);
+        self.set_left_button(false)
     }
 
     fn send_input_events(&mut self, events: Vec<Value>) -> Result<()> {
@@ -457,16 +460,22 @@ mod tests {
     }
 
     #[test]
-    fn click_left_sends_a_complete_click_in_one_qmp_request() {
-        let mut client = client(&[r#"{"return":{}}"#]);
+    fn click_left_sends_distinct_press_and_release_events() {
+        let mut client = client(&[r#"{"return":{}}"#, r#"{"return":{}}"#]);
         client.click_left().unwrap();
 
-        let request = &requests(&client)[1];
-        assert_eq!(request["execute"], "input-send-event");
+        let requests = requests(&client);
+        assert_eq!(requests[1]["execute"], "input-send-event");
         assert_eq!(
-            request["arguments"]["events"],
+            requests[1]["arguments"]["events"],
             serde_json::json!([
-                {"type": "btn", "data": {"button": "left", "down": true}},
+                {"type": "btn", "data": {"button": "left", "down": true}}
+            ])
+        );
+        assert_eq!(requests[2]["execute"], "input-send-event");
+        assert_eq!(
+            requests[2]["arguments"]["events"],
+            serde_json::json!([
                 {"type": "btn", "data": {"button": "left", "down": false}}
             ])
         );

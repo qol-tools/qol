@@ -1,0 +1,11 @@
+[Unit]
+Description=Publish the QoL guest run identity
+Before=display-manager.service
+ConditionPathExists=/sys/firmware/qemu_fw_cfg/by_name/opt/qol/run-id/raw
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/install -m 0444 /sys/firmware/qemu_fw_cfg/by_name/opt/qol/run-id/raw /run/qol-guest-run-id
+
+[Install]
+WantedBy=graphical.target

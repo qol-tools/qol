@@ -8,6 +8,7 @@ asset_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 runner_source="${1:-}"
 mount_unit='run-qol\x2dpayload.mount'
 automount_unit='run-qol\x2dpayload.automount'
+run_id_unit='qol-guest-run-id.service'
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "provision.sh must run as root" >&2
@@ -99,9 +100,10 @@ install -m 0644 "$asset_root/rootfs/etc/udev/rules.d/70-qol-guest-control.rules"
 install -d -m 0755 /etc/systemd/system
 install -m 0644 "$asset_root/rootfs/etc/systemd/system/$mount_unit" "/etc/systemd/system/$mount_unit"
 install -m 0644 "$asset_root/rootfs/etc/systemd/system/$automount_unit" "/etc/systemd/system/$automount_unit"
+install -m 0644 "$asset_root/rootfs/etc/systemd/system/$run_id_unit" "/etc/systemd/system/$run_id_unit"
 
 systemctl daemon-reload
-systemctl enable lightdm.service "$automount_unit"
+systemctl enable lightdm.service "$automount_unit" "$run_id_unit"
 systemctl set-default graphical.target
 udevadm control --reload-rules
 modprobe qemu_fw_cfg
@@ -124,9 +126,10 @@ test -x /usr/local/libexec/qol-guest-runner
 test -x /usr/local/libexec/qol-sandbox-payload
 test -r /etc/qol-dev-image.json
 test -d /sys/firmware/qemu_fw_cfg/by_name
-grep -Fq -- '--run-id-path /sys/firmware/qemu_fw_cfg/by_name/opt/qol/run-id/raw' /etc/xdg/autostart/qol-guest-runner.desktop
+grep -Fq -- '--run-id-path /run/qol-guest-run-id' /etc/xdg/autostart/qol-guest-runner.desktop
 grep -Fxq 'Hidden=true' /etc/xdg/autostart/mintwelcome.desktop
 test -z "$(find "$home" -mindepth 1 -print -quit)"
 systemctl is-enabled --quiet lightdm.service
 systemctl is-enabled --quiet "$automount_unit"
+systemctl is-enabled --quiet "$run_id_unit"
 sync
