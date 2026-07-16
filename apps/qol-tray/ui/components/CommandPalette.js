@@ -4,6 +4,7 @@ import { usePaletteContext } from '../palette/context.js';
 import { getContextualCommands, subscribeRegistry, getRegistryVersion } from '../palette/registry.js';
 import init, { fuzzy_match as wasmFuzzyMatch } from '../wasm/qol_wasm.js';
 import { Surface } from '../lib/components/Surface.js';
+import { TextInput } from '../lib/components/TextInput.js';
 import { Peripheral } from './shell/Peripheral.js';
 
 function filterCommands(commands, query, useWasm) {
@@ -117,11 +118,11 @@ export function CommandPalette({ camera, navigation }) {
         if (committedFilter) {
             return html`<${Peripheral} camera=${camera} navigation=${navigation} edge="top"
                 alwaysVisible=${true} className="palette-filter-pill">
-                <button class="palette-pill-body" onClick=${reopenFilter}>
+                <${Surface} as="button" className="palette-pill-body" onActivate=${reopenFilter}>
                     <span class="palette-pill-tag">filter</span>
                     <span class="palette-pill-value">${committedFilter}</span>
-                </button>
-                <button class="palette-pill-clear" title="Clear filter" onClick=${clearFilter}>✕</button>
+                <//>
+                <${Surface} as="button" className="palette-pill-clear" title="Clear filter" onActivate=${clearFilter}>✕<//>
             <//>`;
         }
         return html`<${Peripheral} camera=${camera} navigation=${navigation} edge="top"
@@ -139,7 +140,7 @@ export function CommandPalette({ camera, navigation }) {
                 <span class="palette-hintkeys">${mode === 'action' ? '↑↓ select · ⏎ run' : '⏎ lock filter · esc cancel'}</span>
             </div>
             <div class="search-bar">
-                <input ref=${inputRef} class="search-input" type="text"
+                <${TextInput} inputRef=${inputRef} className="search-input"
                     value=${query} onInput=${handleInput} onKeyDown=${handleKeyDown} onBlur=${handleBlur}
                     placeholder=${mode === 'action' ? 'Type a command...' : 'Filter this view...'} />
             </div>
