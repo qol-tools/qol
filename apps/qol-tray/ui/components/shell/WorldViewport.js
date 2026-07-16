@@ -152,6 +152,7 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, rend
         function onFocusIn(e) {
             const surface = e.target?.closest?.('[data-selected-surface]');
             if (!surface) return;
+            if (!vp.contains(surface)) return;
             if (navigation) {
                 const pageId = surface.closest('[data-view-id]')?.dataset?.viewId;
                 const selector = selectorFor(surface);
