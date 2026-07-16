@@ -217,11 +217,20 @@ pub struct OverlayPalette {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TuiBackgroundPalette {
+    pub desktop: u32,
+    pub screen: u32,
+    pub panel: u32,
+    pub card: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TrayThemePreset {
     pub key: &'static str,
     pub label: &'static str,
     pub system: SystemPalette,
     pub overlay: OverlayPalette,
+    pub tui: TuiBackgroundPalette,
 }
 
 pub const DEFAULT_TRAY_THEME_KEY: &str = "slate";
@@ -252,6 +261,12 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 3] = [
             ink_rgb: 0x070a0e,
             scrim_rgb: 0x040508,
         },
+        tui: TuiBackgroundPalette {
+            desktop: 0x07080b,
+            screen: 0x070809,
+            panel: 0x0c0e12,
+            card: 0x0a0b0d,
+        },
     },
     TrayThemePreset {
         key: "graphite",
@@ -278,6 +293,12 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 3] = [
             ink_rgb: 0x0c0a07,
             scrim_rgb: 0x080604,
         },
+        tui: TuiBackgroundPalette {
+            desktop: 0x0a0908,
+            screen: 0x090807,
+            panel: 0x110f0c,
+            card: 0x0c0b09,
+        },
     },
     TrayThemePreset {
         key: "void",
@@ -303,6 +324,12 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 3] = [
             deep_rgb: 0x090b10,
             ink_rgb: 0x04060a,
             scrim_rgb: 0x020304,
+        },
+        tui: TuiBackgroundPalette {
+            desktop: 0x000000,
+            screen: 0x000000,
+            panel: 0x080a0f,
+            card: 0x04050a,
         },
     },
 ];
@@ -387,10 +414,6 @@ pub const fn css_rgba_milli(rgb: u32, alpha_milli: u16) -> CssRgba {
 pub struct TrayInternalPalette {
     pub border_default_2: u32,
     pub border_strong: u32,
-    pub tui_bg_desktop: u32,
-    pub tui_bg_panel: u32,
-    pub tui_bg_screen: u32,
-    pub tui_bg_card: u32,
     pub atmosphere_wood_bg: u32,
     pub atmosphere_wood_glow_a: CssRgba,
     pub atmosphere_wood_glow_b: CssRgba,
@@ -421,10 +444,6 @@ pub struct TrayInternalPalette {
 pub const DARK_TRAY_INTERNAL: TrayInternalPalette = TrayInternalPalette {
     border_default_2: 0x3e485b,
     border_strong: 0x55627a,
-    tui_bg_desktop: 0x07080b,
-    tui_bg_panel: 0x0c0e12,
-    tui_bg_screen: 0x070809,
-    tui_bg_card: 0x0a0b0d,
     atmosphere_wood_bg: 0x120a05,
     atmosphere_wood_glow_a: css_rgba_milli(0x653d1e, 180),
     atmosphere_wood_glow_b: css_rgba_milli(0x3c220f, 180),

@@ -66,6 +66,10 @@ fn tray_theme_base_css(selector: &str, preset: TrayThemePreset) -> String {
         preset.overlay.ink_rgb,
     );
     push_rgb(&mut out, "qol-system-scrim-rgb", preset.overlay.scrim_rgb);
+    push_hex(&mut out, "qol-tray-tui-bg-desktop", preset.tui.desktop);
+    push_hex(&mut out, "qol-tray-tui-bg-screen", preset.tui.screen);
+    push_hex(&mut out, "qol-tray-tui-bg-panel", preset.tui.panel);
+    push_hex(&mut out, "qol-tray-tui-bg-card", preset.tui.card);
     out.push_str("}\n");
     out
 }
@@ -373,22 +377,6 @@ fn push_tray_ramp_variables(out: &mut String) {
         "qol-tray-border-strong",
         DARK_TRAY_INTERNAL.border_strong,
     );
-    push_hex(
-        out,
-        "qol-tray-tui-bg-desktop",
-        DARK_TRAY_INTERNAL.tui_bg_desktop,
-    );
-    push_hex(
-        out,
-        "qol-tray-tui-bg-panel",
-        DARK_TRAY_INTERNAL.tui_bg_panel,
-    );
-    push_hex(
-        out,
-        "qol-tray-tui-bg-screen",
-        DARK_TRAY_INTERNAL.tui_bg_screen,
-    );
-    push_hex(out, "qol-tray-tui-bg-card", DARK_TRAY_INTERNAL.tui_bg_card);
     push_hex(
         out,
         "qol-atmosphere-wood-bg",
