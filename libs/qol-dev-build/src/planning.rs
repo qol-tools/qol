@@ -121,6 +121,49 @@ mod tests {
     }
 
     #[test]
+    fn workspace_path_dep_change_triggers_rebuild() {
+        let tmp = TempDir::new().unwrap();
+        let workspace = tmp.path();
+        let dep_dir = workspace.join("libs/my-lib");
+        fs::create_dir_all(dep_dir.join("src")).unwrap();
+        fs::write(
+            workspace.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"plugins/plugin-a\", \"libs/my-lib\"]\n\n[workspace.dependencies]\nmy-lib = { path = \"libs/my-lib\" }\n",
+        )
+        .unwrap();
+        fs::write(
+            dep_dir.join("Cargo.toml"),
+            "[package]\nname = \"my-lib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(dep_dir.join("src/lib.rs"), "pub fn foo() {}\n").unwrap();
+
+        let plugin_dir = workspace.join("plugins/plugin-a");
+        fs::create_dir_all(plugin_dir.join("src")).unwrap();
+        fs::write(
+            plugin_dir.join("Cargo.toml"),
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[target.'cfg(any())'.dependencies]\nmy-lib = { workspace = true }\n",
+        )
+        .unwrap();
+        fs::write(plugin_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        write_plugin_toml_for_current_os(&plugin_dir);
+
+        let links = HashMap::from([("plugin-a".to_string(), plugin_dir.clone())]);
+        let fingerprint = fingerprint_plugin(&plugin_dir).unwrap();
+        let known = HashMap::from([("plugin-a".to_string(), fingerprint)]);
+
+        fs::write(dep_dir.join("src/lib.rs"), "pub fn foo() { changed() }\n").unwrap();
+
+        let plans = plan_linked_plugin_builds(&links, &known, None);
+        assert_eq!(plans.len(), 1);
+        assert!(
+            plans[0].needs_rebuild,
+            "workspace path dependency change should trigger rebuild"
+        );
+        assert_eq!(plans[0].reason, "Source changed");
+    }
+
+    #[test]
     fn plan_skips_plugin_without_cargo_manifest() {
         let tmp = TempDir::new().unwrap();
         let plugin_dir = tmp.path().join("plugin-a");
