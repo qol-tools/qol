@@ -64,9 +64,10 @@ html.qol-bootstrapping-dive #app {
     position: relative;
     isolation: isolate;
     border: var(--frame-border);
-    border-radius: var(--radius-md);
+    border-radius: var(--frame-radius);
     background-color: var(--frame-bg);
     background-image: var(--frame-texture);
+    box-shadow: var(--frame-shadow);
 }
 
 .view-container.content-shell::before {

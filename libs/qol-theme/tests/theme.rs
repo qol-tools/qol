@@ -1110,6 +1110,8 @@ fn retro_identity_matches_legacy_hardcoded_values() {
             "var(--border-w-3) double var(--tui-line)",
         ),
         ("--qol-identity-frame-texture", "var(--tui-scanline)"),
+        ("--qol-identity-frame-radius", "var(--radius-md)"),
+        ("--qol-identity-frame-shadow", "none"),
         (
             "--qol-identity-card-border",
             "var(--border-w-1) solid var(--tui-line-soft)",
@@ -1138,6 +1140,11 @@ fn tray_css_emits_identity_tokens_per_theme() {
     assert!(midnight.contains("--qol-identity-font-ui: var(--font-sans);"));
     assert!(midnight.contains("--qol-identity-radius-md: 10px;"));
     assert!(midnight.contains("--qol-identity-crt-band-display: none;"));
+    assert!(midnight.contains("--qol-identity-frame-bg: var(--surface-canvas);"));
+    assert!(midnight.contains("--qol-identity-frame-radius: var(--radius-xl);"));
+    assert!(midnight.contains(
+        "--qol-identity-frame-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(var(--paper-rgb), 0.07);"
+    ));
     assert_eq!(
         css.matches(":root[data-qol-theme=").count(),
         1,

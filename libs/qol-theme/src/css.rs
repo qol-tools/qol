@@ -103,6 +103,8 @@ fn push_identity(out: &mut String, identity: &ThemeIdentity) {
         ("frame-border", identity.frame_border),
         ("frame-texture", identity.frame_texture),
         ("frame-bg", identity.frame_bg),
+        ("frame-radius", identity.frame_radius),
+        ("frame-shadow", identity.frame_shadow),
         ("crt-band-display", identity.crt_band_display),
         ("card-border", identity.card_border),
         ("card-bg", identity.card_bg),

@@ -365,6 +365,8 @@
     --frame-border: var(--qol-identity-frame-border);
     --frame-texture: var(--qol-identity-frame-texture);
     --frame-bg: var(--qol-identity-frame-bg);
+    --frame-radius: var(--qol-identity-frame-radius);
+    --frame-shadow: var(--qol-identity-frame-shadow);
     --crt-band-display: var(--qol-identity-crt-band-display);
     --card-border: var(--qol-identity-card-border);
     --card-bg: var(--qol-identity-card-bg);
