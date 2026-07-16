@@ -7,10 +7,10 @@
     --qol-system-warning-rgb: 255, 193, 7;
     --qol-system-ink-rgb: 0, 0, 0;
     --qol-system-paper-rgb: 255, 255, 255;
-    --qol-system-surface-canvas: #0c0e13;
-    --qol-system-surface-elevated: #14181f;
-    --qol-system-surface-raised: #171c26;
-    --qol-system-surface-hovered: #1f2531;
+    --qol-system-surface-canvas: #0b0d12;
+    --qol-system-surface-elevated: #151a23;
+    --qol-system-surface-raised: #1b212c;
+    --qol-system-surface-hovered: #242c3a;
     --qol-system-text-primary: #edf2fb;
     --qol-system-text-secondary: #b8c0d0;
     --qol-system-text-muted: #67748f;
@@ -97,10 +97,10 @@
     --qol-accent-blue-hover: #68b0ff;
 }
 :root[data-qol-theme="graphite"] {
-    --qol-system-surface-canvas: #121110;
-    --qol-system-surface-elevated: #1a1816;
-    --qol-system-surface-raised: #201d1a;
-    --qol-system-surface-hovered: #282420;
+    --qol-system-surface-canvas: #0f0e0d;
+    --qol-system-surface-elevated: #1a1815;
+    --qol-system-surface-raised: #242019;
+    --qol-system-surface-hovered: #302a21;
     --qol-system-text-primary: #f2ede4;
     --qol-system-text-secondary: #cfc7b8;
     --qol-system-text-muted: #92876f;
@@ -113,9 +113,9 @@
 }
 :root[data-qol-theme="void"] {
     --qol-system-surface-canvas: #000000;
-    --qol-system-surface-elevated: #0a0c10;
-    --qol-system-surface-raised: #10131a;
-    --qol-system-surface-hovered: #181c26;
+    --qol-system-surface-elevated: #0b0d12;
+    --qol-system-surface-raised: #131721;
+    --qol-system-surface-hovered: #1d2330;
     --qol-system-text-primary: #eef2fa;
     --qol-system-text-secondary: #b6becf;
     --qol-system-text-muted: #76829c;

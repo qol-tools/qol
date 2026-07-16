@@ -360,9 +360,16 @@ fn tray_css_layers_tray_tokens_without_polluting_core() {
     assert!(!core.contains("--qol-system-overlay-"));
 
     let tray = css::tray_css();
-    for line in core.lines().filter(|line| line.contains("--qol-system-")) {
+    for line in core
+        .lines()
+        .filter(|line| line.contains("--qol-system-") && !line.contains("-surface-"))
+    {
         assert!(tray.contains(line), "tray css must carry core token {line}");
     }
+    assert!(
+        tray.contains("    --qol-system-surface-canvas: #0b0d12;\n"),
+        "tray css must use the retuned slate surfaces"
+    );
     assert!(tray.contains("    --qol-system-overlay-surface-rgb: 18, 22, 30;\n"));
     assert!(tray.contains("    --qol-reference-slate-750: #2f3644;\n"));
     assert!(tray.contains("    --qol-tray-blue-500: #4a9eff;\n"));
@@ -1087,7 +1094,7 @@ fn tray_theme_palettes_hold_contrast_floors() {
         for pair in surfaces.windows(2) {
             let ratio = contrast_ratio(pair[0].1, pair[1].1);
             assert!(
-                ratio >= 1.04,
+                ratio >= 1.08,
                 "{}: surfaces {} vs {} too close ({ratio:.3})",
                 preset.key,
                 pair[0].0,
