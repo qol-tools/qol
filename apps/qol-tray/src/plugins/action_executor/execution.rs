@@ -189,6 +189,7 @@ fn runtime_command(resolved: &ResolvedAction, command_path: &Path) -> std::proce
             crate::dev_generation::state_socket_path(),
         );
     crate::features::theme::apply_accent_env(&mut command);
+    crate::features::theme::apply_theme_name_env(&mut command);
     if let Some(socket_path) = &resolved.daemon_socket {
         command.env(qol_conventions::ENV_DAEMON_SOCKET, socket_path);
     }

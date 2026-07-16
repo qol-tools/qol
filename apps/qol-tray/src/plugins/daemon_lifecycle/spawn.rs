@@ -82,6 +82,7 @@ fn daemon_command(
     command.env(qol_conventions::ENV_PLUGIN_ID, plugin.id.as_str());
     command.env("QOL_TRAY_PLUGIN_DIR", &plugin.path);
     crate::features::theme::apply_accent_env(&mut command);
+    crate::features::theme::apply_theme_name_env(&mut command);
     apply_log_env(&mut command);
     apply_daemon_env(&mut command, daemon_config);
     apply_process_group(&mut command);
