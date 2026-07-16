@@ -112,8 +112,8 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: var(--ls-md);
+    text-transform: var(--case-label);
+    letter-spacing: var(--tracking-label);
     font-size: var(--fs-sm);
 }
 
@@ -199,7 +199,7 @@
     font-size: var(--fs-xs);
     font-weight: var(--fw-semibold);
     letter-spacing: var(--ls-lg);
-    text-transform: uppercase;
+    text-transform: var(--case-label);
     color: var(--success);
     background: rgba(var(--success-rgb), 0.1);
     border: var(--border-w-1) solid rgba(var(--success-rgb), 0.3);
@@ -340,7 +340,7 @@
     color: var(--accent);
     font-size: var(--fs-lg);
     font-weight: var(--fw-semibold);
-    text-transform: uppercase;
+    text-transform: var(--case-label);
     letter-spacing: var(--ls-2xl);
     z-index: var(--z-control);
     pointer-events: none;
@@ -453,7 +453,7 @@
     font-weight: var(--fw-bold);
     line-height: var(--lh-snug);
     letter-spacing: var(--ls-lg);
-    text-transform: uppercase;
+    text-transform: var(--case-label);
     white-space: nowrap;
     pointer-events: auto;
 }

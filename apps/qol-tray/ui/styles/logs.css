@@ -248,8 +248,8 @@
 
 .suppressed-meta-label {
     color: var(--text-faint);
-    text-transform: uppercase;
-    letter-spacing: var(--ls-md);
+    text-transform: var(--case-label);
+    letter-spacing: var(--tracking-label);
     font-size: var(--fs-caption);
     font-weight: var(--fw-semibold);
 }

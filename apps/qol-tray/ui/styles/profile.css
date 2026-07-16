@@ -273,7 +273,7 @@
     font-size: var(--fs-xs);
     font-weight: var(--fw-semibold);
     letter-spacing: var(--ls-lg);
-    text-transform: uppercase;
+    text-transform: var(--case-label);
 }
 
 .profile-toggle-row {

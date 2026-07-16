@@ -269,7 +269,7 @@ html.qol-bootstrapping-dive #app {
 .wsp-heading {
     font-size: var(--fs-caption-1);
     font-weight: var(--fw-semibold);
-    text-transform: uppercase;
+    text-transform: var(--case-label);
     letter-spacing: var(--ls-2xl);
     color: var(--text-faint);
     margin-bottom: 2px;
@@ -643,7 +643,7 @@ html.qol-bootstrapping-dive #app {
     font-size: var(--fs-xl-plus);
     font-weight: var(--fw-bold);
     letter-spacing: var(--ls-3xl);
-    text-transform: uppercase;
+    text-transform: var(--case-label);
     pointer-events: none;
     user-select: none;
     white-space: nowrap;

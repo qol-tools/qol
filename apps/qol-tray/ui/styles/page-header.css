@@ -40,7 +40,7 @@
     color: var(--text-primary);
     font-size: clamp(1.05rem, 1.5vw, 1.4rem);
     line-height: var(--lh-tight);
-    text-transform: uppercase;
+    text-transform: var(--case-label);
     letter-spacing: var(--ls-3xl);
     margin: 0;
     flex-shrink: 0;

@@ -283,7 +283,7 @@
     color: var(--text-muted);
     font-size: var(--fs-xs);
     font-weight: var(--fw-semibold);
-    text-transform: uppercase;
+    text-transform: var(--case-label);
     letter-spacing: 0.06em;
 }
 
@@ -746,7 +746,7 @@
 .hue-slider-label {
     font-size: 0.75rem;
     color: var(--text-muted);
-    text-transform: uppercase;
+    text-transform: var(--case-label);
     letter-spacing: var(--ls-xl);
     font-weight: var(--fw-medium);
 }
@@ -981,7 +981,7 @@
 }
 
 .gamepad-adapter > span {
-    text-transform: uppercase;
+    text-transform: var(--case-label);
     letter-spacing: 0.08em;
 }
 
@@ -1056,7 +1056,7 @@
 
 .gamepad-signal-history-heading > span:first-child {
     overflow: hidden;
-    text-transform: uppercase;
+    text-transform: var(--case-label);
     text-overflow: ellipsis;
     white-space: nowrap;
     letter-spacing: 0.08em;
@@ -1514,7 +1514,7 @@
     flex-shrink: 0;
     color: var(--text-muted);
     font-size: var(--fs-xs);
-    text-transform: uppercase;
+    text-transform: var(--case-label);
     letter-spacing: 0.08em;
 }
 

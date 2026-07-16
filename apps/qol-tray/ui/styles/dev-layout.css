@@ -47,7 +47,7 @@
     font-size: var(--fs-xs);
     font-weight: var(--fw-semibold);
     letter-spacing: var(--ls-lg);
-    text-transform: uppercase;
+    text-transform: var(--case-label);
     padding-bottom: var(--space-1);
     margin-bottom: var(--space-1);
     border-bottom: var(--border-w-1) solid var(--border-subtle);
@@ -146,8 +146,8 @@
     color: var(--text-faint);
     font-size: var(--fs-sm);
     font-weight: var(--fw-semibold);
-    letter-spacing: var(--ls-md);
-    text-transform: uppercase;
+    letter-spacing: var(--tracking-label);
+    text-transform: var(--case-label);
 }
 
 .catalog-try {
@@ -172,8 +172,8 @@
     color: var(--text-faint);
     font-size: var(--fs-caption-2);
     font-weight: var(--fw-semibold);
-    letter-spacing: var(--ls-md);
-    text-transform: uppercase;
+    letter-spacing: var(--tracking-label);
+    text-transform: var(--case-label);
     margin-top: var(--space-2);
 }
 

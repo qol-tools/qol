@@ -227,7 +227,7 @@
     letter-spacing: var(--ls-lg);
     line-height: var(--lh-md);
     text-align: center;
-    text-transform: uppercase;
+    text-transform: var(--case-label);
     transition: background var(--transition), color var(--transition), text-shadow var(--transition);
 }
 

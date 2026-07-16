@@ -22,8 +22,8 @@ body {
 
 .tui-label {
     font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: var(--ls-md);
+    text-transform: var(--case-label);
+    letter-spacing: var(--tracking-label);
 }
 
 #app {

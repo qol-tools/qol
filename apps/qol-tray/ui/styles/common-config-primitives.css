@@ -199,7 +199,7 @@
     color: var(--cfg-success);
     font-size: 0.7rem;
     font-family: var(--font-mono);
-    text-transform: uppercase;
+    text-transform: var(--case-label);
 }
 
 .rules-list {

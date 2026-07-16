@@ -71,7 +71,7 @@
     font-size: var(--fs-xs);
     font-weight: var(--fw-semibold);
     letter-spacing: var(--ls-lg);
-    text-transform: uppercase;
+    text-transform: var(--case-label);
     color: var(--text-faint);
 }
 
@@ -473,7 +473,7 @@
     color: var(--accent);
     font-size: var(--fs-caption-1-plus);
     line-height: var(--lh-tight);
-    text-transform: uppercase;
+    text-transform: var(--case-label);
     letter-spacing: var(--ls-xl-minus);
     font-weight: var(--fw-bold);
 }
