@@ -13,11 +13,7 @@ pub fn post_to_daemon(path: &str, body: &str) -> std::io::Result<(u16, String)> 
     let _ = stream.set_read_timeout(timeout);
     let _ = stream.set_write_timeout(timeout);
 
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}",
-        port = crate::features::plugin_store::DEFAULT_SERVER_PORT,
-        len = body.len(),
-    );
+    let request = json_post_request(path, body);
     stream.write_all(request.as_bytes())?;
 
     let mut buf = Vec::new();
@@ -34,4 +30,35 @@ pub fn post_to_daemon(path: &str, body: &str) -> std::io::Result<(u16, String)> 
         .map(|(_, body)| body.to_string())
         .unwrap_or_default();
     Ok((status, body))
+}
+
+fn json_post_request(path: &str, body: &str) -> String {
+    let body = if body.is_empty() { "{}" } else { body };
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}",
+        port = crate::features::plugin_store::DEFAULT_SERVER_PORT,
+        len = body.len(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn post_request_always_contains_valid_json() {
+        let cases = [
+            ("", "{}"),
+            (r#"{"route":"sessions"}"#, r#"{"route":"sessions"}"#),
+        ];
+
+        for (body, expected) in cases {
+            let request = json_post_request("/api/test", body);
+            let (_, actual) = request.split_once("\r\n\r\n").unwrap();
+
+            assert_eq!(actual, expected);
+            assert!(serde_json::from_str::<serde_json::Value>(actual).is_ok());
+            assert!(request.contains(&format!("Content-Length: {}\r\n", expected.len())));
+        }
+    }
 }
