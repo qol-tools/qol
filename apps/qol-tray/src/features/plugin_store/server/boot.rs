@@ -220,11 +220,11 @@ mod tests {
     fn boot_json_carries_theme_selection_and_palette() {
         let root = tempfile::TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
-        crate::features::theme::save_selected_theme_key("graphite").unwrap();
+        crate::features::theme::save_selected_theme_key("midnight").unwrap();
 
         let v: serde_json::Value = serde_json::from_str(&boot_json(false)).unwrap();
-        assert_eq!(v["theme"]["defaultKey"], "graphite");
-        assert_eq!(v["theme"]["selectedKey"], "graphite");
+        assert_eq!(v["theme"]["defaultKey"], "midnight");
+        assert_eq!(v["theme"]["selectedKey"], "midnight");
         let themes = v["theme"]["themes"].as_array().unwrap();
         assert_eq!(themes.len(), qol_theme::tray_theme_presets().len());
         assert_eq!(themes[0]["key"], "slate");

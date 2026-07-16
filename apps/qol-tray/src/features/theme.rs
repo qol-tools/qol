@@ -158,9 +158,9 @@ mod tests {
         let _guard = crate::paths::push_test_path_root(root.path());
 
         assert!(save_selected_theme_key("not-a-theme").is_err());
-        save_selected_theme_key("void").unwrap();
-        assert_eq!(selected_theme_key().unwrap().as_deref(), Some("void"));
-        assert_eq!(current_theme_key(), "void");
+        save_selected_theme_key("midnight").unwrap();
+        assert_eq!(selected_theme_key().unwrap().as_deref(), Some("midnight"));
+        assert_eq!(current_theme_key(), "midnight");
     }
 
     #[test]
@@ -169,7 +169,7 @@ mod tests {
         let _guard = crate::paths::push_test_path_root(root.path());
 
         save_selected_accent_key("blue").unwrap();
-        save_selected_theme_key("graphite").unwrap();
+        save_selected_theme_key("midnight").unwrap();
         clear_selected_theme_key().unwrap();
 
         assert_eq!(selected_theme_key().unwrap(), None);

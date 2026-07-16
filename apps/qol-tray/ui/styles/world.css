@@ -414,14 +414,6 @@ html.qol-bootstrapping-dive #app {
     background: linear-gradient(135deg, #0b0d12 0%, #0b0d12 34%, #1b212c 34%, #1b212c 67%, #242c3a 67%);
 }
 
-.wsp-theme-swatch[data-qol-theme-preview="graphite"] {
-    background: linear-gradient(135deg, #0f0e0d 0%, #0f0e0d 34%, #242019 34%, #242019 67%, #302a21 67%);
-}
-
-.wsp-theme-swatch[data-qol-theme-preview="void"] {
-    background: linear-gradient(135deg, #000000 0%, #000000 34%, #131721 34%, #131721 67%, #1d2330 67%);
-}
-
 .wsp-theme-swatch[data-qol-theme-preview="midnight"] {
     background: linear-gradient(135deg, #090b19 0%, #090b19 34%, #1b1e30 34%, #1b1e30 67%, #26283c 67%);
 }

@@ -67,7 +67,7 @@ test('setTheme persists via /api/theme and applies the attribute', async () => {
     const calls = [];
     const harness = installBrowserGlobals(async (url, options) => {
         calls.push({ url, options });
-        return new Response(JSON.stringify({ key: 'void', selectedKey: 'void' }), {
+        return new Response(JSON.stringify({ key: 'midnight', selectedKey: 'midnight' }), {
             status: 200,
             headers: { 'content-type': 'application/json' },
         });
@@ -77,14 +77,14 @@ test('setTheme persists via /api/theme and applies the attribute', async () => {
         const seen = [];
         themeSync.subscribeTheme((key) => seen.push(key));
 
-        const selected = await themeSync.setTheme('void');
+        const selected = await themeSync.setTheme('midnight');
 
-        assert.equal(selected, 'void');
-        assert.equal(themeSync.getTheme(), 'void');
+        assert.equal(selected, 'midnight');
+        assert.equal(themeSync.getTheme(), 'midnight');
         assert.equal(calls.length, 1);
         assert.equal(calls[0].url, '/api/theme');
-        assert.equal(harness.attributes.get('data-qol-theme'), 'void');
-        assert.deepEqual(seen, ['void']);
+        assert.equal(harness.attributes.get('data-qol-theme'), 'midnight');
+        assert.deepEqual(seen, ['midnight']);
     } finally {
         harness.restore();
     }
@@ -119,7 +119,7 @@ test('theme save failures preserve local state and defer feedback to caller', as
         themeSync.subscribeTheme((key) => seen.push(key));
 
         assert.equal(themeSync.getTheme(), null);
-        await assert.rejects(() => themeSync.setTheme('void'), /unknown theme/);
+        await assert.rejects(() => themeSync.setTheme('midnight'), /unknown theme/);
 
         assert.equal(themeSync.getTheme(), null);
         assert.deepEqual(seen, []);

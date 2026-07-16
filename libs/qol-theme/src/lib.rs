@@ -370,7 +370,7 @@ pub struct TrayThemePreset {
 
 pub const DEFAULT_TRAY_THEME_KEY: &str = "slate";
 
-pub const TRAY_THEME_PRESETS: [TrayThemePreset; 4] = [
+pub const TRAY_THEME_PRESETS: [TrayThemePreset; 2] = [
     TrayThemePreset {
         key: "slate",
         label: "Slate",
@@ -403,74 +403,6 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 4] = [
             screen: 0x070809,
             panel: 0x0c0e12,
             card: 0x0a0b0d,
-        },
-    },
-    TrayThemePreset {
-        key: "graphite",
-        label: "Graphite",
-        accent_key: "amber",
-        identity: &RETRO_IDENTITY,
-        system: SystemPalette {
-            surface_canvas: 0x0f0e0d,
-            surface_elevated: 0x1a1815,
-            surface_raised: 0x242019,
-            surface_hovered: 0x302a21,
-            text_primary: 0xf2ede4,
-            text_secondary: 0xcfc7b8,
-            text_muted: 0x92876f,
-            text_faint: 0x6b6254,
-            border_subtle: 0x3a352c,
-            accent: DARK_REFERENCE.orange_400,
-            success: DARK_REFERENCE.green_400,
-            danger: DARK_REFERENCE.red_500,
-            info: DARK_REFERENCE.blue_400,
-            warning: DARK_REFERENCE.amber_500,
-        },
-        overlay: OverlayPalette {
-            surface_rgb: 0x1e1b17,
-            deep_rgb: 0x191613,
-            ink_rgb: 0x0c0a07,
-            scrim_rgb: 0x080604,
-        },
-        tui: TuiBackgroundPalette {
-            desktop: 0x0a0908,
-            screen: 0x090807,
-            panel: 0x110f0c,
-            card: 0x0c0b09,
-        },
-    },
-    TrayThemePreset {
-        key: "void",
-        label: "Void",
-        accent_key: "cyan",
-        identity: &RETRO_IDENTITY,
-        system: SystemPalette {
-            surface_canvas: 0x000000,
-            surface_elevated: 0x0b0d12,
-            surface_raised: 0x131721,
-            surface_hovered: 0x1d2330,
-            text_primary: 0xeef2fa,
-            text_secondary: 0xb6becf,
-            text_muted: 0x76829c,
-            text_faint: 0x4f5a72,
-            border_subtle: 0x272e3c,
-            accent: 0x56d6e0,
-            success: DARK_REFERENCE.green_400,
-            danger: DARK_REFERENCE.red_500,
-            info: DARK_REFERENCE.blue_400,
-            warning: DARK_REFERENCE.amber_500,
-        },
-        overlay: OverlayPalette {
-            surface_rgb: 0x0d1017,
-            deep_rgb: 0x090b10,
-            ink_rgb: 0x04060a,
-            scrim_rgb: 0x020304,
-        },
-        tui: TuiBackgroundPalette {
-            desktop: 0x000000,
-            screen: 0x000000,
-            panel: 0x080a0f,
-            card: 0x04050a,
         },
     },
     TrayThemePreset {

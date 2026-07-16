@@ -1073,15 +1073,14 @@ fn tray_css_emits_theme_override_blocks() {
         !css.contains(":root[data-qol-theme=\"slate\"]"),
         "default theme needs no block"
     );
-    for key in ["graphite", "void"] {
-        let marker = format!(":root[data-qol-theme=\"{key}\"]");
-        assert!(css.contains(&marker), "missing {marker}");
-    }
-    let void_block = css.split(":root[data-qol-theme=\"void\"]").nth(1).unwrap();
-    let void_block = void_block.split('}').next().unwrap();
-    assert!(void_block.contains("--qol-system-surface-canvas: #000000;"));
+    let midnight_block = css
+        .split(":root[data-qol-theme=\"midnight\"]")
+        .nth(1)
+        .unwrap();
+    let midnight_block = midnight_block.split('}').next().unwrap();
+    assert!(midnight_block.contains("--qol-system-surface-canvas: #090b19;"));
     assert!(
-        !void_block.contains("--qol-system-accent-rgb"),
+        !midnight_block.contains("--qol-system-accent-rgb"),
         "themes must not override accent"
     );
 }
@@ -1092,12 +1091,6 @@ fn tray_theme_js_emits_theme_metadata() {
     assert!(js.contains("export const QOL_THEMES = ["));
     assert!(js.contains(
         "{ key: \"slate\", label: \"Slate\", accentKey: \"amber\", identityKey: \"retro\" },"
-    ));
-    assert!(js.contains(
-        "{ key: \"graphite\", label: \"Graphite\", accentKey: \"amber\", identityKey: \"retro\" },"
-    ));
-    assert!(js.contains(
-        "{ key: \"void\", label: \"Void\", accentKey: \"cyan\", identityKey: \"retro\" },"
     ));
     assert!(js.contains(
         "{ key: \"midnight\", label: \"Midnight\", accentKey: \"violet\", identityKey: \"modern\" },"
@@ -1145,14 +1138,10 @@ fn tray_css_emits_identity_tokens_per_theme() {
     assert!(midnight.contains("--qol-identity-font-ui: var(--font-sans);"));
     assert!(midnight.contains("--qol-identity-radius-md: 10px;"));
     assert!(midnight.contains("--qol-identity-crt-band-display: none;"));
-    let graphite = css
-        .split(":root[data-qol-theme=\"graphite\"]")
-        .nth(1)
-        .unwrap();
-    let graphite = graphite.split('}').next().unwrap();
-    assert!(
-        !graphite.contains("--qol-identity-font-ui"),
-        "retro themes emit no identity diff"
+    assert_eq!(
+        css.matches(":root[data-qol-theme=").count(),
+        1,
+        "only the modern theme emits an override block"
     );
 }
 
