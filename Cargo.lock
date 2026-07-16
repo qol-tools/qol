@@ -5781,6 +5781,7 @@ version = "0.2.0"
 dependencies = [
  "dirs 6.0.0",
  "libc",
+ "zbus",
 ]
 
 [[package]]
@@ -8891,7 +8892,9 @@ dependencies = [
  "qol-config",
  "qol-conventions",
  "qol-fs",
+ "qol-platform",
  "qol-plugin-api",
+ "qol-plugin-daemon",
  "qol-runtime",
  "serde",
  "serde_json",
