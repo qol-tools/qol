@@ -18,14 +18,7 @@ const GRANDFATHERED = new Set([
     'components/domain-rows/SuppressedRow.js',
     'components/shell/Minimap.js',
     'components/shell/PeripheralPreview.js',
-    'views/hotkeys/modal.js',
-    'views/plugins/grid.js',
-    'views/profile/components.js',
     'views/profile/view.js',
-    'views/shortcuts/modal.js',
-    'views/task-runner/panels.js',
-    'views/task-runner/test-runner-subpage.js',
-    'views/task-runner-view.js',
 ]);
 
 function jsFiles(dir) {

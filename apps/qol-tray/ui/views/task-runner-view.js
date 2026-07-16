@@ -1,5 +1,6 @@
 import { useEffect, useRef, useMemo } from 'preact/hooks';
 import { html } from '../lib/html.js';
+import { Button } from '../lib/components/Button.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../app/view-keyboard-context.js';
 import { PageHeader } from '../components/PageHeader.js';
@@ -46,7 +47,7 @@ function ApiUsage({ actions, actionIds, copyApiExample }) {
     return html`<div class="api-usage">
         <div class="api-usage-header">
             <span>API Usage</span>
-            ${hasActions && html`<button class="btn btn-ghost btn-sm" onClick=${copyApiExample}>Copy</button>`}
+            ${hasActions && html`<${Button} small variant="btn-ghost" onActivate=${copyApiExample}>Copy<//>`}
         </div>
         <div class="api-usage-content">
             <code>POST ${API_BASE}/execute</code>

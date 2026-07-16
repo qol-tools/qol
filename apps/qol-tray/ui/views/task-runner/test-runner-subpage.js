@@ -2,6 +2,7 @@ import { html } from '../../lib/html.js';
 import { useEffect, useState, useRef, useCallback } from 'preact/hooks';
 import { PageShell } from '../../components/PageShell.js';
 import { Button } from '../../lib/components/Button.js';
+import { TextInput } from '../../lib/components/TextInput.js';
 import { createSharedSlot } from '../../lib/shared-slot.js';
 import { extractParams } from './data.js';
 
@@ -78,10 +79,9 @@ function TestParams({ params, testParams, onParamChange, firstInputRef }) {
             ${params.map((param, i) => html`
                 <div key=${param} class="test-param-row">
                     <label>${param}</label>
-                    <input
-                        ref=${i === 0 ? firstInputRef : null}
-                        type="text"
-                        class="test-param-input"
+                    <${TextInput}
+                        inputRef=${i === 0 ? firstInputRef : null}
+                        className="test-param-input"
                         data-param=${param}
                         value=${testParams?.[param] || ''}
                         onInput=${(e) => onParamChange?.(param, e.target.value)}
