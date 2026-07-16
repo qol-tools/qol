@@ -696,6 +696,27 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     user-select: none;
 }
 
+.palette-hint-kbd {
+    display: inline;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    font-family: inherit;
+    font-size: var(--fs-base);
+    color: var(--text-faint);
+    user-select: none;
+}
+
+:root[data-qol-identity="modern"] .palette-hint-kbd {
+    display: inline-block;
+    padding: 2px 7px;
+    background: rgba(var(--accent-rgb), 0.22);
+    border-radius: var(--radius-md);
+    font-family: var(--font-data);
+    color: var(--text-secondary);
+}
+
 .palette-dropdown {
     position: absolute;
     top: 100%;

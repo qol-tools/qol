@@ -48,10 +48,10 @@
     --qol-identity-cover-texture: var(--tui-scanline);
     --qol-identity-sel-outline: none;
     --qol-identity-sel-outline-offset: 0px;
-    --qol-identity-ghost-btn-bg: transparent;
-    --qol-identity-ghost-btn-radius: var(--radius-sm);
-    --qol-identity-hint-bg: transparent;
-    --qol-identity-hint-border: none;
+    --qol-identity-ghost-btn-bg: var(--layer-ink-45);
+    --qol-identity-ghost-btn-radius: var(--radius-pill);
+    --qol-identity-hint-bg: var(--tui-bg-panel);
+    --qol-identity-hint-border: var(--border-w-1) solid var(--tui-line-soft);
     --qol-identity-hint-shadow: none;
     --qol-identity-panel-bg: var(--tui-bg-panel);
     --qol-identity-panel-border: var(--border-w-1) solid var(--tui-line);

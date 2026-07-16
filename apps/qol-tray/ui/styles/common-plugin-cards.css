@@ -292,9 +292,9 @@
     right: var(--space-2);
     width: var(--size-control-sm-icon);
     height: var(--size-control-sm-icon);
-    border: var(--border-w-1) solid var(--tui-line-soft);
-    border-radius: var(--radius-pill);
-    background: var(--layer-ink-45);
+    border: var(--card-border);
+    border-radius: var(--ghost-btn-radius);
+    background: var(--ghost-btn-bg);
     color: var(--text-secondary);
     cursor: pointer;
     opacity: 0.92;
@@ -316,6 +316,10 @@
     color: var(--accent);
     background: var(--layer-ink-62);
     border-color: var(--tui-line);
+}
+
+:root[data-qol-identity="modern"] .plugin-cog:hover {
+    background: rgba(var(--accent-rgb), 0.22);
 }
 
 .plugin-context-menu {

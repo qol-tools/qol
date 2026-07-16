@@ -575,8 +575,9 @@ html.qol-bootstrapping-dive #app {
 }
 
 .app-container > .palette-hint {
-    background: var(--tui-bg-panel);
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--hint-bg);
+    border: var(--hint-border);
+    box-shadow: var(--hint-shadow);
     border-radius: var(--radius-lg);
     padding: var(--space-1-5) var(--space-3-5);
     width: auto;
@@ -593,7 +594,8 @@ html.qol-bootstrapping-dive #app {
     background: rgba(var(--accent-rgb), 0.08);
 }
 
-.app-container > .palette-hint .palette-hint-text {
+.app-container > .palette-hint .palette-hint-text,
+.app-container > .palette-hint .palette-hint-kbd {
     font-size: var(--fs-xs);
     letter-spacing: var(--ls-sm);
 }
