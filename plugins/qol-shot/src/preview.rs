@@ -745,7 +745,10 @@ impl PreviewView {
             return;
         };
         qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=presented");
+        self.blur_guard_until = Instant::now() + BLUR_GUARD;
         show_ghost_window_topmost(&reveal.title, &reveal.all_titles);
+        FOCUS_REASSERT_GEN.store(seq, Ordering::SeqCst);
+        qol_gpui::popup_window::reassert_focus_until_held(&reveal.title, &FOCUS_REASSERT_GEN, seq);
     }
 
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
