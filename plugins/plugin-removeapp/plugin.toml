@@ -3,7 +3,7 @@ id = "plugin-removeapp"
 uid = "37aae6d0-ae74-4487-946a-32a635a9ef03"
 name = "Remove App"
 description = "Uninstall an app and its leftovers"
-version = "0.15.2"
+version = "0.15.3"
 author = "KMRH47"
 platforms = ["macos"]
 
