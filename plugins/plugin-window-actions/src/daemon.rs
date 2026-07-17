@@ -1,4 +1,5 @@
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::time::Duration;
 
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_runtime::protocol::DaemonRequest;
@@ -12,6 +13,9 @@ const CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
     support_replace_existing: true,
 };
+const GLIDE_MAINTENANCE_POLL: Duration = Duration::from_millis(50);
+#[cfg(debug_assertions)]
+const FOCUS_TRACE_SCHEMA: u8 = 1;
 #[derive(Debug, PartialEq)]
 enum Command {
     Execute(String),
@@ -111,6 +115,23 @@ impl Runtime {
         };
         glide.update(direction, phase, self.glide_speed)
     }
+
+    fn maintain_glide(&mut self) {
+        let Some(glide) = self.glide.as_mut() else {
+            return;
+        };
+        let Some(result) = glide.maintain() else {
+            return;
+        };
+        trace_glide_watchdog(&result);
+        if let Err(error) = result {
+            eprintln!("{error}");
+        }
+    }
+
+    fn glide_is_active(&self) -> bool {
+        self.glide.as_ref().is_some_and(GlideController::is_active)
+    }
 }
 
 pub(crate) fn run() -> Result<(), String> {
@@ -118,15 +139,29 @@ pub(crate) fn run() -> Result<(), String> {
     if !core_daemon::start_request_listener(&CONFIG, tx, parse_request) {
         return Err("Failed to start window-actions daemon listener".into());
     }
+    trace_daemon_lifecycle("start");
 
     let mut runtime = Runtime::new();
-    while let Ok(command) = rx.recv() {
-        if !runtime.handle(command) {
+    while let Ok(command) = receive_command(&rx, runtime.glide_is_active()) {
+        if command.is_some_and(|command| !runtime.handle(command)) {
             break;
         }
+        runtime.maintain_glide();
     }
     core_daemon::cleanup(&CONFIG);
+    trace_daemon_lifecycle("stop");
     Ok(())
+}
+
+fn receive_command(rx: &Receiver<Command>, glide_is_active: bool) -> Result<Option<Command>, ()> {
+    if !glide_is_active {
+        return rx.recv().map(Some).map_err(|_| ());
+    }
+    match rx.recv_timeout(GLIDE_MAINTENANCE_POLL) {
+        Ok(command) => Ok(Some(command)),
+        Err(RecvTimeoutError::Timeout) => Ok(None),
+        Err(RecvTimeoutError::Disconnected) => Err(()),
+    }
 }
 
 fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
@@ -176,7 +211,7 @@ fn trace_glide(
     outcome: &Result<String, String>,
 ) {
     #[cfg(debug_assertions)]
-    if phase != Phase::Heartbeat || outcome.is_err() {
+    if should_trace_glide(phase, outcome) {
         qol_runtime::probe!(
             "WINACT_GLIDE",
             "session={} seq={} source={} phase={} direction={} elapsed_us={} outcome={} compositor={:?} detail={:?}",
@@ -195,9 +230,43 @@ fn trace_glide(
     let _ = (direction, phase, trace, elapsed, outcome);
 }
 
+#[cfg(debug_assertions)]
+fn should_trace_glide(phase: Phase, outcome: &Result<String, String>) -> bool {
+    phase != Phase::Heartbeat
+        || outcome.is_err()
+        || outcome
+            .as_ref()
+            .is_ok_and(|observation| !observation.contains("focus_events=none"))
+}
+
+fn trace_daemon_lifecycle(event: &str) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "WINACT_DAEMON",
+        "event={} pid={} focus_trace_schema={}",
+        event,
+        std::process::id(),
+        FOCUS_TRACE_SCHEMA
+    );
+    #[cfg(not(debug_assertions))]
+    let _ = event;
+}
+
+fn trace_glide_watchdog(outcome: &Result<(), String>) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "WINACT_GLIDE",
+        "phase=watchdog outcome={} native_move=released reason=watchdog detail={:?}",
+        if outcome.is_ok() { "ok" } else { "err" },
+        outcome.as_ref().err().map(String::as_str).unwrap_or("")
+    );
+    #[cfg(not(debug_assertions))]
+    let _ = outcome;
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_request, Command, TraceContext};
+    use super::{parse_request, should_trace_glide, Command, TraceContext};
     use crate::movement::{Direction, Phase};
     use qol_plugin_daemon::daemon::ReadResult;
     use qol_runtime::protocol::DaemonRequest;
@@ -271,6 +340,22 @@ mod tests {
         assert!(matches!(
             parse_request(&request("nope", serde_json::Value::Null)),
             ReadResult::Fallback
+        ));
+    }
+
+    #[test]
+    fn successful_heartbeats_are_traced_only_for_focus_events() {
+        assert!(!should_trace_glide(
+            Phase::Heartbeat,
+            &Ok("active=heartbeat focus_events=none".into())
+        ));
+        assert!(should_trace_glide(
+            Phase::Heartbeat,
+            &Ok("active=heartbeat focus_events=at_ms=32,from=1,to=2".into())
+        ));
+        assert!(should_trace_glide(
+            Phase::Heartbeat,
+            &Err("Cinnamon Eval failed".into())
         ));
     }
 }

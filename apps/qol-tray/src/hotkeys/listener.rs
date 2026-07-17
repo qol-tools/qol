@@ -279,6 +279,20 @@ impl<'a> HotkeyListenerLoop<'a> {
                 );
             }
             HotkeyDispatch::Continuous { action, phase } => {
+                if phase == ContinuousPhase::Start {
+                    match self.manager.release_active_grab() {
+                        Ok(()) => {
+                            #[cfg(debug_assertions)]
+                            qol_runtime::probe!(
+                                "WINACT_HOTKEY",
+                                "phase=grab-handoff outcome=ok owner=window-manager"
+                            );
+                        }
+                        Err(error) => log::error!(
+                            "Continuous hotkey could not hand keyboard ownership to the window manager: {error}"
+                        ),
+                    }
+                }
                 let (session, sequence) = self.trace_ids(phase);
                 #[cfg(debug_assertions)]
                 let active = self.held_actions.trace_active_directions();

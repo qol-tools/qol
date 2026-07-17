@@ -27,12 +27,20 @@ impl GlideController {
         _direction: crate::movement::Direction,
         _phase: crate::movement::Phase,
         _speed: f64,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         Err("continuous window movement is not yet available on macOS".into())
     }
 
     pub(crate) fn stop_all(&mut self) -> Result<(), String> {
         Ok(())
+    }
+
+    pub(crate) fn maintain(&mut self) -> Option<Result<(), String>> {
+        None
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        false
     }
 }
 

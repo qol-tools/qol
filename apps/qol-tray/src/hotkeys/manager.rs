@@ -68,6 +68,14 @@ impl HotkeyManager {
             .map(|(id, registration)| (*id, registration))
     }
 
+    pub(super) fn release_active_grab(&self) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if let Some(manager) = self.manager.as_ref() {
+            manager.release_active_grab()?;
+        }
+        Ok(())
+    }
+
     fn with_config_path(config_path: PathBuf) -> Self {
         Self {
             manager: None,

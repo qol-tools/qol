@@ -52,8 +52,10 @@ objc2-foundation = { version = "0.3", default-features = false }
 objc2-app-kit = { version = "0.3", default-features = false }
 objc2-core-graphics = { version = "0.3", features = ["CGImage", "CGDataProvider"] }
 
-# macOS only: align zed-font-kit core-graphics versions
 [patch.crates-io]
+# QoL needs the owning X11 client to hand active continuous-hotkey grabs to Muffin.
+global-hotkey = { path = "vendor/global-hotkey" }
+# macOS only: align zed-font-kit core-graphics versions
 # gpui forces image's "avif" feature (an encoder nothing can call); the stub
 # drops the rav1e stack until zed#60897 ships in a gpui release
 ravif = { path = "vendor/ravif" }
