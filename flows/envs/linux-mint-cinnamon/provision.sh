@@ -7,7 +7,9 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 asset_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 runner_source="${1:-}"
 mount_unit='run-qol\x2dpayload.mount'
+mount_unit_source='run-qol-payload.mount'
 automount_unit='run-qol\x2dpayload.automount'
+automount_unit_source='run-qol-payload.automount'
 run_id_unit='qol-guest-run-id.service'
 
 if [[ "${EUID}" -ne 0 ]]; then
@@ -98,8 +100,8 @@ done
 install -d -m 0755 /etc/udev/rules.d
 install -m 0644 "$asset_root/rootfs/etc/udev/rules.d/70-qol-guest-control.rules" /etc/udev/rules.d/70-qol-guest-control.rules
 install -d -m 0755 /etc/systemd/system
-install -m 0644 "$asset_root/rootfs/etc/systemd/system/$mount_unit" "/etc/systemd/system/$mount_unit"
-install -m 0644 "$asset_root/rootfs/etc/systemd/system/$automount_unit" "/etc/systemd/system/$automount_unit"
+install -m 0644 "$asset_root/rootfs/etc/systemd/system/$mount_unit_source" "/etc/systemd/system/$mount_unit"
+install -m 0644 "$asset_root/rootfs/etc/systemd/system/$automount_unit_source" "/etc/systemd/system/$automount_unit"
 install -m 0644 "$asset_root/rootfs/etc/systemd/system/$run_id_unit" "/etc/systemd/system/$run_id_unit"
 
 systemctl daemon-reload
