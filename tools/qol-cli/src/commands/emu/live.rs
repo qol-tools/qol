@@ -1254,6 +1254,7 @@ mod tests {
         running_candidate_from_dir(run_dir).unwrap()
     }
 
+    #[cfg(target_os = "linux")]
     fn terminated_tree_proof() -> (qol_process::TerminatedProcessTree, u32) {
         let process_tree = crate::process_guardian::own_process_tree().unwrap();
         let mut command = Command::new("sleep");
@@ -1721,6 +1722,7 @@ mod tests {
         assert!(reconciled.get("finished_at_unix_ms").is_none());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn owned_tree_recovery_finalizes_matching_active_runs() {
         let (proof, dead_pid) = terminated_tree_proof();
@@ -1787,6 +1789,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn owned_tree_recovery_upgrades_legacy_terminal_cleanup_evidence() {
         let (proof, dead_pid) = terminated_tree_proof();
@@ -1818,6 +1821,7 @@ mod tests {
         assert!(run_dir.join("report.interrupted.json").is_file());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn owned_tree_recovery_rejects_report_identity_mismatch() {
         let (proof, dead_pid) = terminated_tree_proof();
@@ -1852,6 +1856,7 @@ mod tests {
         assert!(!run_dir.join("owner-cleanup.json").exists());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn owned_tree_recovery_rejects_wrong_kind_and_missing_run_identity() {
         let (proof, dead_pid) = terminated_tree_proof();
@@ -1898,6 +1903,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn owned_tree_recovery_synthesizes_missing_report() {
         let (proof, _) = terminated_tree_proof();

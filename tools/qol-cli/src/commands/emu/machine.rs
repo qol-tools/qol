@@ -1058,7 +1058,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn qemu_spawn_uses_a_distinct_owned_process_group() {
         let dir = tempfile::tempdir().unwrap();

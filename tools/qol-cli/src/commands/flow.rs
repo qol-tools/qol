@@ -4431,13 +4431,13 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     struct CancelAfterPoll {
         polls: AtomicUsize,
         cancel_at: usize,
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     impl CancellationSource for CancelAfterPoll {
         fn is_cancelled(&self) -> bool {
             self.polls.fetch_add(1, Ordering::SeqCst) + 1 >= self.cancel_at
@@ -4942,7 +4942,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn cancellation_stops_the_owned_payload_build_tree_with_verified_cleanup() {
         let temp = tempfile::tempdir().unwrap();
@@ -4969,7 +4969,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn successful_payload_build_waits_for_owned_tree_cleanup_proof() {
         let temp = tempfile::tempdir().unwrap();
@@ -5191,9 +5191,10 @@ mod tests {
     #[test]
     fn successful_payload_cleanup_removes_image_root_and_payload_directory() {
         let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("qol-shot");
+        let base = temp.path().canonicalize().unwrap();
+        let source = base.join("qol-shot");
         fs::write(&source, b"sandbox binary").unwrap();
-        let payload_dir = temp.path().join("flow/payload");
+        let payload_dir = base.join("flow/payload");
         let prepared = qol_dev_env::payload::stage_payload(
             &payload_dir.join("root"),
             "qol-shot-capture",
@@ -5278,7 +5279,7 @@ mod tests {
         let mut report = read_value(&fixture.report_path);
         report["payload"] = json!({
             "manifest": prepared.manifest_path,
-            "image": image_path,
+            "image": image_path.canonicalize().unwrap(),
             "manifest_sha256": digest,
             "cleanup": { "status": "pending", "complete": false },
         });

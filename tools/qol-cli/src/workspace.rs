@@ -392,7 +392,7 @@ mod tests {
 
         let resolved = dev_repo_root_from(&foreign.join("nested"), Some(&config_dir)).unwrap();
 
-        assert_eq!(resolved, configured);
+        assert_eq!(resolved, configured.canonicalize().unwrap());
     }
 
     #[test]
