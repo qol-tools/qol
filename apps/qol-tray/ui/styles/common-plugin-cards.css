@@ -108,7 +108,7 @@
     bottom: 0;
     left: 0;
     right: 0;
-    background: linear-gradient(to top, var(--ink-overlay-strong), transparent);
+    background: linear-gradient(to top, var(--cover-scrim), transparent);
     padding: var(--space-4);
     color: var(--text-primary);
     font-weight: var(--fw-medium);

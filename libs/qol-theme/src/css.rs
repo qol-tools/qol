@@ -117,6 +117,7 @@ fn push_identity(out: &mut String, identity: &ThemeIdentity) {
         ("card-shadow", identity.card_shadow),
         ("cover-bg", identity.cover_bg),
         ("cover-texture", identity.cover_texture),
+        ("cover-scrim", identity.cover_scrim),
         ("sel-outline", identity.sel_outline),
         ("sel-outline-offset", identity.sel_outline_offset),
         ("ghost-btn-bg", identity.ghost_btn_bg),

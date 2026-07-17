@@ -54,6 +54,7 @@
     --qol-identity-card-shadow: inset 0 1px 0 rgba(var(--accent-rgb), 0.08), 0 6px 18px var(--layer-ink-45);
     --qol-identity-cover-bg: var(--tui-screen-bg);
     --qol-identity-cover-texture: var(--tui-scanline);
+    --qol-identity-cover-scrim: var(--ink-overlay-strong);
     --qol-identity-sel-outline: none;
     --qol-identity-sel-outline-offset: 0px;
     --qol-identity-ghost-btn-bg: var(--layer-ink-45);
@@ -191,6 +192,7 @@
     --qol-identity-card-shadow: 0 14px 36px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
     --qol-identity-cover-bg: transparent;
     --qol-identity-cover-texture: none;
+    --qol-identity-cover-scrim: var(--qol-system-surface-raised);
     --qol-identity-sel-outline: 2px solid rgba(var(--accent-rgb), 0.85);
     --qol-identity-sel-outline-offset: 3px;
     --qol-identity-ghost-btn-bg: rgba(var(--accent-rgb), 0.14);

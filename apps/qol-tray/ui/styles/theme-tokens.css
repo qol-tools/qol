@@ -379,6 +379,7 @@
     --card-shadow: var(--qol-identity-card-shadow);
     --cover-bg: var(--qol-identity-cover-bg);
     --cover-texture: var(--qol-identity-cover-texture);
+    --cover-scrim: var(--qol-identity-cover-scrim);
     --sel-outline: var(--qol-identity-sel-outline);
     --sel-outline-offset: var(--qol-identity-sel-outline-offset);
     --ghost-btn-bg: var(--qol-identity-ghost-btn-bg);
