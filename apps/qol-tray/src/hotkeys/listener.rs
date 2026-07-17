@@ -411,6 +411,7 @@ impl HeldActions {
         self.actions.is_empty()
     }
 
+    #[cfg(debug_assertions)]
     fn trace_active_directions(&self) -> String {
         let mut directions = self
             .actions
