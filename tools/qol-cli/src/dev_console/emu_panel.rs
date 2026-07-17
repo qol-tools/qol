@@ -1532,18 +1532,24 @@ pub(super) fn emu_status(state: &EmuState) -> (Color, Vec<Span<'static>>) {
             .filter(|run| run.needs_attention())
             .count()
         + inventory.issues.len();
-    if active > 0 || attention > 0 {
-        let color = if attention > 0 {
-            Color::Red
-        } else {
-            Color::Yellow
+    if attention > 0 {
+        let summary = match active {
+            0 => format!("{attention} flagged"),
+            _ => format!("{active} active · {attention} flagged"),
         };
         return (
-            color,
+            Color::Yellow,
             vec![
-                format!("{active} active · {attention} need attention")
-                    .fg(color)
-                    .bold(),
+                summary.fg(Color::Yellow).bold(),
+                " · → open".fg(Color::DarkGray),
+            ],
+        );
+    }
+    if active > 0 {
+        return (
+            Color::Yellow,
+            vec![
+                format!("{active} active").fg(Color::Yellow).bold(),
                 " · → open".fg(Color::DarkGray),
             ],
         );
@@ -2607,7 +2613,7 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_cleanup_keeps_the_sandbox_summary_actionable() {
+    fn unresolved_cleanup_uses_a_compact_warning_summary() {
         let mut environment = emu_env("linux/mint", ResolutionState::Ready);
         environment.runs = vec![report_summary("pass", None)];
         let inventory = emu_inventory(vec![environment]);
@@ -2616,12 +2622,22 @@ mod tests {
         let line = attention_run_line(run, concern);
         let (color, spans) = emu_status(&EmuState::Done(inventory));
 
-        assert_eq!(color, Color::Red);
-        assert_eq!(span_text(&spans), "0 active · 1 need attention · → open");
+        assert_eq!(color, Color::Yellow);
+        assert_eq!(span_text(&spans), "1 flagged · → open");
         assert_eq!(
             span_text(&line.spans),
             "    ! run-pass · cleanup unresolved · pass"
         );
+    }
+
+    #[test]
+    fn active_sandbox_summary_omits_empty_attention_count() {
+        let mut environment = emu_env("linux/mint", ResolutionState::Ready);
+        environment.runs = vec![report_summary("running", None)];
+        let (color, spans) = emu_status(&EmuState::Done(emu_inventory(vec![environment])));
+
+        assert_eq!(color, Color::Yellow);
+        assert_eq!(span_text(&spans), "1 active · → open");
     }
 
     #[test]
