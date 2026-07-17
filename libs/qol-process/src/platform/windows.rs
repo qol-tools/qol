@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use crate::{PlatformSpawnFailure, PreparedSpawnCleanup};
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, BOOL, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER,
+    CloseHandle, GetLastError, BOOL, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_MORE_DATA,
     ERROR_NO_MORE_FILES, FILETIME, HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0,
     WAIT_TIMEOUT,
 };
@@ -22,9 +22,10 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
-    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
-    TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+    SetInformationJobObject, TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+    JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, TerminateProcess,
@@ -77,6 +78,7 @@ impl Drop for SnapshotHandle {
 pub(crate) struct ProcessTreeGuard {
     job: JobHandle,
     assigned_process: Mutex<Option<AssignedProcess>>,
+    terminating_processes: Mutex<Vec<ProcessHandle>>,
     prepared: AtomicBool,
 }
 
@@ -229,45 +231,33 @@ impl ProcessTreeGuard {
     }
 
     pub(crate) fn terminate_and_wait(&self, timeout: Duration) -> io::Result<()> {
-        let assigned_process = self
-            .assigned_process
-            .lock()
-            .map_err(|_| io::Error::other("process-tree assignment state is unavailable"))?;
-        let process_id = assigned_process
-            .as_ref()
-            .map(|process| process.id)
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotConnected,
-                    "process tree has no assigned process",
-                )
-            })?;
+        let process_id = self.assigned_process_id()?;
         let deadline = Instant::now().checked_add(timeout).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "process-tree timeout is too large",
             )
         })?;
+        let processes = self.termination_processes()?;
         if unsafe { TerminateJobObject(self.job.0, 1) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        loop {
-            if active_processes(self.job.0)? == 0 {
-                return Ok(());
-            }
-            let now = Instant::now();
-            if now >= deadline {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!("process tree rooted at {process_id} did not exit within {timeout:?}"),
-                ));
-            }
-            std::thread::sleep(WAIT_INTERVAL.min(deadline.duration_since(now)));
-        }
+        wait_for_process_handles(&processes, deadline, timeout).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("process tree rooted at {process_id} did not exit: {error}"),
+            )
+        })?;
+        wait_for_job_empty(self.job.0, deadline, timeout)
     }
 
     pub(crate) fn request_stop(&self) -> io::Result<()> {
         self.assigned_process_id()?;
+        let processes = job_process_handles(self.job.0)?;
+        self.terminating_processes
+            .lock()
+            .map_err(|_| io::Error::other("process-tree termination state is unavailable"))?
+            .extend(processes);
         if unsafe { TerminateJobObject(self.job.0, 1) } == 0 {
             return Err(io::Error::last_os_error());
         }
@@ -295,11 +285,13 @@ impl ProcessTreeGuard {
                 "process-tree timeout is too large",
             )
         })?;
+        let processes = job_process_handles(self.job.0)?;
         let _ = unsafe { TerminateJobObject(self.job.0, 1) };
         if unsafe { WaitForSingleObject(process.handle.0, 0) } == WAIT_TIMEOUT {
             let _ = unsafe { TerminateProcess(process.handle.0, 1) };
         }
         wait_for_process_handle(process, deadline, timeout)?;
+        wait_for_process_handles(&processes, deadline, timeout)?;
         wait_for_job_empty(self.job.0, deadline, timeout)
     }
 
@@ -379,6 +371,17 @@ impl ProcessTreeGuard {
                 )
             })
     }
+
+    fn termination_processes(&self) -> io::Result<Vec<ProcessHandle>> {
+        let current = job_process_handles(self.job.0)?;
+        let mut processes = self
+            .terminating_processes
+            .lock()
+            .map_err(|_| io::Error::other("process-tree termination state is unavailable"))?;
+        let mut captured = std::mem::take(&mut *processes);
+        captured.extend(current);
+        Ok(captured)
+    }
 }
 
 fn wait_for_process_handle(
@@ -406,6 +409,37 @@ fn wait_for_process_handle(
             "unexpected pending-process wait result {other}"
         ))),
     }
+}
+
+fn wait_for_process_handles(
+    processes: &[ProcessHandle],
+    deadline: Instant,
+    timeout: Duration,
+) -> io::Result<()> {
+    for process in processes {
+        let wait = unsafe {
+            WaitForSingleObject(
+                process.0,
+                duration_millis(deadline.saturating_duration_since(Instant::now())),
+            )
+        };
+        match wait {
+            WAIT_OBJECT_0 => {}
+            WAIT_TIMEOUT => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("owned process did not exit within {timeout:?}"),
+                ));
+            }
+            WAIT_FAILED => return Err(io::Error::last_os_error()),
+            other => {
+                return Err(io::Error::other(format!(
+                    "unexpected owned-process wait result {other}"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn wait_for_job_empty(job: HANDLE, deadline: Instant, timeout: Duration) -> io::Result<()> {
@@ -559,6 +593,7 @@ pub(crate) fn own_current_process_tree_with_guardian(
     Ok(ProcessTreeGuard {
         job: create_kill_on_close_job()?,
         assigned_process: Mutex::new(None),
+        terminating_processes: Mutex::new(Vec::new()),
         prepared: AtomicBool::new(false),
     })
 }
@@ -638,6 +673,73 @@ fn active_processes(handle: HANDLE) -> io::Result<u32> {
         return Err(io::Error::last_os_error());
     }
     Ok(accounting.ActiveProcesses)
+}
+
+fn job_process_handles(handle: HANDLE) -> io::Result<Vec<ProcessHandle>> {
+    let mut processes = Vec::new();
+    for pid in job_process_ids(handle)? {
+        match open_process(pid, QUERY_AND_WAIT_ACCESS) {
+            Ok(process) => processes.push(process),
+            Err(error) if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(processes)
+}
+
+fn job_process_ids(handle: HANDLE) -> io::Result<Vec<u32>> {
+    let mut capacity = 8usize;
+    loop {
+        let header = std::mem::offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList);
+        let bytes = header
+            .checked_add(
+                capacity
+                    .checked_mul(std::mem::size_of::<usize>())
+                    .ok_or_else(|| io::Error::other("process ID buffer is too large"))?,
+            )
+            .ok_or_else(|| io::Error::other("process ID buffer is too large"))?;
+        let words = bytes.div_ceil(std::mem::size_of::<usize>());
+        let mut buffer = vec![0usize; words];
+        let buffer_bytes = u32::try_from(words * std::mem::size_of::<usize>())
+            .map_err(|_| io::Error::other("process ID buffer is too large"))?;
+        let queried = unsafe {
+            QueryInformationJobObject(
+                handle,
+                JobObjectBasicProcessIdList,
+                buffer.as_mut_ptr().cast(),
+                buffer_bytes,
+                std::ptr::null_mut(),
+            )
+        };
+        if queried == 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_MORE_DATA as i32) {
+                capacity = capacity
+                    .checked_mul(2)
+                    .ok_or_else(|| io::Error::other("process ID buffer is too large"))?;
+                continue;
+            }
+            return Err(error);
+        }
+        let info = buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>();
+        let count = unsafe { (*info).NumberOfProcessIdsInList as usize };
+        if count > capacity {
+            return Err(io::Error::other(
+                "job returned more process IDs than the query buffer holds",
+            ));
+        }
+        let ids = unsafe {
+            std::slice::from_raw_parts(
+                std::ptr::addr_of!((*info).ProcessIdList).cast::<usize>(),
+                count,
+            )
+        };
+        return ids
+            .iter()
+            .copied()
+            .map(|pid| u32::try_from(pid).map_err(|_| io::Error::other("process ID exceeds u32")))
+            .collect();
+    }
 }
 
 pub(crate) fn install_cancellation_handler() -> io::Result<()> {
