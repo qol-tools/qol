@@ -146,7 +146,7 @@ fn run_tap(
             if !matches!(event_type, CGEventType::KeyDown | CGEventType::KeyUp) {
                 return CallbackResult::Keep;
             }
-            if event_type == CGEventType::KeyDown && is_auto_repeat(event) {
+            if matches!(event_type, CGEventType::KeyDown) && is_auto_repeat(event) {
                 return CallbackResult::Keep;
             }
             let observed = observed_combo(event);
@@ -217,7 +217,7 @@ impl MacBindingMatcher {
         event_type: CGEventType,
         observed: &MacCombo,
     ) -> Option<(Binding, Phase)> {
-        if event_type == CGEventType::KeyUp {
+        if matches!(event_type, CGEventType::KeyUp) {
             return self
                 .active_continuous
                 .remove(&observed.key)
