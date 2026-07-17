@@ -242,6 +242,7 @@ impl<'a> HotkeyListenerLoop<'a> {
         self.finish_trace_session_if_idle();
     }
 
+    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
     fn dispatch(&mut self, dispatch: HotkeyDispatch, source: DispatchSource, keys: &str) {
         let action = dispatch.action();
 
@@ -279,6 +280,7 @@ impl<'a> HotkeyListenerLoop<'a> {
             }
             HotkeyDispatch::Continuous { action, phase } => {
                 let (session, sequence) = self.trace_ids(phase);
+                #[cfg(debug_assertions)]
                 let active = self.held_actions.trace_active_directions();
                 if phase != ContinuousPhase::Heartbeat {
                     #[cfg(debug_assertions)]
