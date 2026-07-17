@@ -103,6 +103,20 @@ pub(super) enum Row {
     Trace,
 }
 
+impl Row {
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Tray => "tray",
+            Self::Web => "web",
+            Self::Plugins => "plugins",
+            Self::Emu => "sandboxes",
+            Self::Doctor => "doctor",
+            Self::Logs => "logs",
+            Self::Trace => "trace",
+        }
+    }
+}
+
 pub(super) const ROWS: [Row; 7] = [
     Row::Tray,
     Row::Web,

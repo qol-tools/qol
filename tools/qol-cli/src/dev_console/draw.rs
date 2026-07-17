@@ -6,7 +6,7 @@ use ratatui::Frame;
 
 use crate::dev_server::{PluginDaemonStatus, WorkspacePlugin};
 
-use super::dash::{Dash, Health, LinksState, RebuildState, View};
+use super::dash::{Dash, Health, LinksState, RebuildState, Row, View};
 use super::doctor::{doctor_status, draw_doctor};
 use super::emu_panel::{draw_emu, draw_emu_detail, emu_detail_shows_warnings, emu_status};
 use super::feature_flags::draw_feature_flags_panel;
@@ -369,21 +369,21 @@ pub(super) fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
     let (doctor_color, doctor_value) = doctor_status(&dash.doctor, now_unix_ms());
 
     let rows = vec![
-        dash_row(dash.cursor == 0, tray_color, "tray", tray_value),
-        dash_row(dash.cursor == 1, web_color, "web", web_value),
-        dash_row(dash.cursor == 2, plugins_color, "plugins", plugins_value),
-        dash_row(dash.cursor == 3, emu_color, "sandboxes", emu_value),
-        dash_row(dash.cursor == 4, doctor_color, "doctor", doctor_value),
+        dash_row(dash.cursor == 0, tray_color, Row::Tray, tray_value),
+        dash_row(dash.cursor == 1, web_color, Row::Web, web_value),
+        dash_row(dash.cursor == 2, plugins_color, Row::Plugins, plugins_value),
+        dash_row(dash.cursor == 3, emu_color, Row::Emu, emu_value),
+        dash_row(dash.cursor == 4, doctor_color, Row::Doctor, doctor_value),
         dash_row(
             dash.cursor == 5,
             Color::DarkGray,
-            "logs",
+            Row::Logs,
             vec![format!("{} buffered", dash.logs.len()).fg(Color::DarkGray)],
         ),
         dash_row(
             dash.cursor == 6,
             Color::DarkGray,
-            "trace",
+            Row::Trace,
             trace_value(dash),
         ),
     ];
@@ -435,23 +435,28 @@ pub(super) fn web_status(web: Health) -> (Color, Vec<Span<'static>>) {
 pub(super) fn dash_row(
     selected: bool,
     color: Color,
-    label: &str,
+    row: Row,
     value: Vec<Span<'static>>,
 ) -> Line<'static> {
+    let label = row.label();
     let caret: Span<'static> = if selected {
         "▸ ".fg(accent()).bold()
     } else {
         "  ".into()
     };
     let label_span = if selected {
-        format!(" {label:<8} ").fg(Color::White).bold()
+        format!(" {label:<DASH_LABEL_WIDTH$} ")
+            .fg(Color::White)
+            .bold()
     } else {
-        format!(" {label:<8} ").fg(Color::DarkGray)
+        format!(" {label:<DASH_LABEL_WIDTH$} ").fg(Color::DarkGray)
     };
     let mut spans: Vec<Span<'static>> = vec![caret, "●".fg(color).bold(), label_span];
     spans.extend(value);
     Line::from(spans)
 }
+
+const DASH_LABEL_WIDTH: usize = "sandboxes".len();
 
 pub(super) fn frame_accent(dash: &Dash) -> Color {
     if dash.quit_prompt_active() || dash.is_reloading() {
@@ -637,6 +642,7 @@ pub(super) fn daemon_status_span(status: Option<&PluginDaemonStatus>) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dev_console::dash::ROWS;
     use crate::dev_console::testkit::*;
     use crate::dev_console::*;
     use std::path::PathBuf;
@@ -682,6 +688,23 @@ mod tests {
             assert_eq!(color, expected_color, "text: {expected_text}");
             assert_eq!(span_text(&spans), expected_text);
         }
+    }
+
+    #[test]
+    fn dashboard_values_share_one_column_for_every_row_label() {
+        let starts = ROWS.map(|row| {
+            let line = dash_row(false, Color::Green, row, vec!["VALUE".fg(Color::Green)]);
+            span_text(&line.spans)
+                .chars()
+                .position(|character| character == 'V')
+                .unwrap()
+        });
+
+        assert!(starts.iter().all(|start| *start == starts[0]));
+        assert_eq!(
+            ROWS.iter().map(|row| row.label().len()).max(),
+            Some(DASH_LABEL_WIDTH)
+        );
     }
 
     #[test]
