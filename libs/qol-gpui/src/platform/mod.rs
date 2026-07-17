@@ -48,6 +48,10 @@ pub fn has_process_focus() -> bool {
     imp::has_process_focus()
 }
 
+pub fn process_focus_truth() -> Option<bool> {
+    should_poll_focus().then(has_process_focus)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ReassertStep {
     Settled,

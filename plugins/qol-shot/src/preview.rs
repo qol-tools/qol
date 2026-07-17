@@ -33,6 +33,7 @@ pub(crate) const PREVIEW_TITLE: &str = "qol-shot-preview";
 pub(crate) const PREVIEW_APP_ID: &str = "qol-tray-shot";
 
 static PREVIEW_SEQ: AtomicU64 = AtomicU64::new(0);
+static FOCUS_REASSERT_GEN: AtomicU64 = AtomicU64::new(0);
 static CURRENT_PALETTE: LazyLock<ShotPreviewPalette> = LazyLock::new(shot_preview_runtime);
 
 pub(crate) fn current_palette() -> &'static ShotPreviewPalette {
@@ -381,6 +382,8 @@ fn reuse_existing(
         opened_at.elapsed().as_millis()
     );
     cx.activate(true);
+    FOCUS_REASSERT_GEN.store(seq, Ordering::SeqCst);
+    qol_gpui::popup_window::reassert_focus_until_held(&title, &FOCUS_REASSERT_GEN, seq);
     true
 }
 
@@ -436,6 +439,8 @@ fn create_and_show(
         opened_at.elapsed().as_millis()
     );
     cx.activate(true);
+    FOCUS_REASSERT_GEN.store(seq, Ordering::SeqCst);
+    qol_gpui::popup_window::reassert_focus_until_held(&title, &FOCUS_REASSERT_GEN, seq);
     true
 }
 
@@ -849,6 +854,7 @@ impl PreviewView {
     }
 
     fn dismiss(&mut self, exit: crate::completion::PreviewExit, window: &mut Window) {
+        FOCUS_REASSERT_GEN.store(u64::MAX, Ordering::SeqCst);
         self.hide_to_ghost(window);
         self.finish_completion(exit);
     }
@@ -906,13 +912,26 @@ impl PreviewView {
             window,
             |this: &Self| this.blur_guard_until,
             |this: &Self| this.is_showing,
-            |this: &Self| qol_gpui::popup_window::window_holds_input_focus(&this.title),
+            |this: &Self| {
+                combine_focus_truth(
+                    qol_gpui::popup_window::window_holds_input_focus(&this.title),
+                    qol_gpui::platform::process_focus_truth(),
+                )
+            },
             cx,
             |this, window, _cx| this.dismiss(crate::completion::PreviewExit::LostFocus, window),
         ));
         if !self.is_showing {
             hide_invisible(&self.title);
         }
+    }
+}
+
+fn combine_focus_truth(window: Option<bool>, process: Option<bool>) -> Option<bool> {
+    match (window, process) {
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        (Some(false), Some(false)) => Some(false),
+        (window, process) => window.and(process),
     }
 }
 
@@ -1053,8 +1072,30 @@ fn circles_total_width(count: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        circles_total_width, thumbnail_size, window_dims, GhostOpenMode, MAX_THUMB_H, MAX_THUMB_W,
+        circles_total_width, combine_focus_truth, thumbnail_size, window_dims, GhostOpenMode,
+        MAX_THUMB_H, MAX_THUMB_W,
     };
+
+    #[test]
+    fn focus_truth_recovers_when_any_owned_window_holds_focus() {
+        let cases = [
+            (Some(true), Some(false), Some(true)),
+            (Some(false), Some(true), Some(true)),
+            (Some(true), None, Some(true)),
+            (None, Some(true), Some(true)),
+            (Some(false), Some(false), Some(false)),
+            (Some(false), None, None),
+            (None, Some(false), None),
+            (None, None, None),
+        ];
+        for (window, process, expected) in cases {
+            assert_eq!(
+                combine_focus_truth(window, process),
+                expected,
+                "window: {window:?} process: {process:?}"
+            );
+        }
+    }
 
     #[test]
     fn ghost_open_mode_keeps_hidden_windows_inert() {

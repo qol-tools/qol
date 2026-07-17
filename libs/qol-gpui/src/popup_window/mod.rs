@@ -95,6 +95,43 @@ pub use platform::{
 const ENV_GHOST_OPACITY: &str = "QOL_TRAY_GHOST_OPACITY";
 const ENV_GHOST_COLOR: &str = "QOL_TRAY_GHOST_COLOR";
 
+const FOCUS_REASSERT_STEPS_MS: &[u64] = &[150, 300, 600];
+
+pub fn reassert_focus_until_held(
+    title: &str,
+    gen: &'static std::sync::atomic::AtomicU64,
+    commit_gen: u64,
+) {
+    if !crate::platform::should_poll_focus() {
+        return;
+    }
+    let poll_title = title.to_string();
+    let assert_title = title.to_string();
+    crate::platform::spawn_reassert_driver(
+        gen,
+        commit_gen,
+        FOCUS_REASSERT_STEPS_MS,
+        move || {
+            if window_holds_input_focus(&poll_title) == Some(true) {
+                qol_runtime::probe!("FOCUS_REASSERT", "title={poll_title} step=held");
+                return crate::platform::ReassertStep::Stop;
+            }
+            if visible_windows_by_title_prefix(&poll_title) == 0 {
+                qol_runtime::probe!("FOCUS_REASSERT", "title={poll_title} step=hidden");
+                return crate::platform::ReassertStep::Stop;
+            }
+            crate::platform::ReassertStep::Reassert
+        },
+        move || {
+            let shown = show_window_by_title(&assert_title);
+            qol_runtime::probe!(
+                "FOCUS_REASSERT",
+                "title={assert_title} step=reassert shown={shown}"
+            );
+        },
+    );
+}
+
 pub fn set_ghost_debug(opacity: Option<f32>, color_hex: Option<&str>) {
     let runtime = load_gpui_runtime_config();
     let opacity = ghost_opacity_env().or(runtime.ghost_opacity).or(opacity);
