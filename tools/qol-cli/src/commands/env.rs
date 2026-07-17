@@ -5,7 +5,7 @@ use crate::commands::emu;
 use crate::commands::flow;
 use crate::host_facade;
 use anyhow::{anyhow, bail, Context, Result};
-use qol_dev_env::{ReportStatus, ResolutionState, ResolvedEnvironment};
+use qol_dev_env::{CleanupState, ReportStatus, ResolutionState, ResolvedEnvironment, RunSummary};
 use qol_dev_orchestrator::{
     ImageImportStart, ImageImportWorkerRequest, RunHandle, RunTicket, WaitState,
 };
@@ -47,6 +47,18 @@ struct ImageImportArgs {
     source: PathBuf,
     worktree: PathBuf,
     run_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct CleanupRepairSummary {
+    repaired: usize,
+    remaining: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct CleanupWarningSummary {
+    total: usize,
+    reasons: BTreeMap<String, usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -208,6 +220,8 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
         "runs" => cmd_runs(rest),
         "down" => cmd_down(rest, verbose),
         "shot" => cmd_shot(rest, verbose),
+        "exec" => cmd_exec(rest, verbose),
+        "drag" => cmd_drag(rest, verbose),
         "help" | "-h" | "--help" => {
             print_help();
             Ok(())
@@ -508,15 +522,23 @@ fn cmd_cancel(args: &[OsString]) -> Result<()> {
 
 fn cmd_doctor(args: &[OsString]) -> Result<()> {
     let action = parse_doctor_action(args)?;
+    let repair_requested = matches!(&action, DoctorAction::Repair);
+    let environments = dev_env::discover()?;
     match action {
         DoctorAction::Inspect => {}
         DoctorAction::Repair => {
+            let mut cleanup = repair_legacy_cleanup_reports(&environments)?;
             reconcile_for_admission()?;
             flow::reconcile_all()?;
             let reserved = dev_env::reconcile_resources()?;
+            cleanup.remaining = cleanup_warning_count(&environments);
             println!(
                 "Repair complete: {} lane(s), {} MiB, {} CPU(s) remain reserved.",
                 reserved.lanes, reserved.memory_mb, reserved.cpus
+            );
+            println!(
+                "Cleanup reports: {} legacy proof record(s) upgraded, {} warning(s) remain.",
+                cleanup.repaired, cleanup.remaining
             );
         }
         DoctorAction::Clear(selection) => {
@@ -531,7 +553,6 @@ fn cmd_doctor(args: &[OsString]) -> Result<()> {
             }
         }
     }
-    let environments = dev_env::discover()?;
     let config = dev_env::config_path()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "unavailable".to_string());
@@ -562,6 +583,16 @@ fn cmd_doctor(args: &[OsString]) -> Result<()> {
     for diagnostic in inspection.diagnostics {
         println!("  warning: {diagnostic}");
     }
+    let cleanup = cleanup_warning_summary(&environments);
+    if !repair_requested && cleanup.total > 0 {
+        println!(
+            "Cleanup reports: {} warning(s); run `qol env doctor --repair`.",
+            cleanup.total
+        );
+    }
+    for (reason, count) in cleanup.reasons {
+        println!("  {count}: {reason}");
+    }
     if environments.is_empty() {
         println!("Definitions: none");
         return Ok(());
@@ -588,6 +619,69 @@ fn cmd_doctor(args: &[OsString]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn repair_legacy_cleanup_reports(
+    environments: &[ResolvedEnvironment],
+) -> Result<CleanupRepairSummary> {
+    let inventory = qol_dev_env::scan_inventory(environments);
+    let mut report_paths = BTreeSet::new();
+    for environment in &inventory.environments {
+        report_paths.extend(environment.runs.iter().map(|run| run.report_path.clone()));
+    }
+    report_paths.extend(inventory.flows.iter().map(|run| run.report_path.clone()));
+    report_paths.extend(
+        inventory
+            .unassigned_runs
+            .iter()
+            .map(|run| run.report_path.clone()),
+    );
+    let mut repaired = 0;
+    for path in report_paths {
+        if matches!(
+            qol_dev_env::repair_legacy_cleanup_report(&path)?,
+            qol_dev_env::LegacyCleanupRepair::Repaired { .. }
+        ) {
+            repaired += 1;
+        }
+    }
+    Ok(CleanupRepairSummary {
+        repaired,
+        remaining: 0,
+    })
+}
+
+fn cleanup_warning_count(environments: &[ResolvedEnvironment]) -> usize {
+    cleanup_warning_summary(environments).total
+}
+
+fn cleanup_warning_summary(environments: &[ResolvedEnvironment]) -> CleanupWarningSummary {
+    let inventory = qol_dev_env::scan_inventory(environments);
+    let mut summary = CleanupWarningSummary::default();
+    for run in inventory
+        .environments
+        .iter()
+        .flat_map(|environment| environment.attention_runs().map(|(run, _)| run))
+        .chain(
+            inventory
+                .unassigned_runs
+                .iter()
+                .filter(|run| run.needs_attention()),
+        )
+    {
+        record_cleanup_warning(&mut summary, run);
+    }
+    summary
+}
+
+fn record_cleanup_warning(summary: &mut CleanupWarningSummary, run: &RunSummary) {
+    let reason = match &run.cleanup {
+        CleanupState::Incomplete(reason) => reason.clone(),
+        CleanupState::Pending => "terminal cleanup proof is pending".to_string(),
+        CleanupState::Complete => return,
+    };
+    summary.total += 1;
+    *summary.reasons.entry(reason).or_default() += 1;
 }
 
 fn parse_doctor_action(args: &[OsString]) -> Result<DoctorAction> {
@@ -1200,6 +1294,44 @@ fn cmd_shot(args: &[OsString], verbose: bool) -> Result<()> {
         bail!("qol env shot requires one run ID or unambiguous environment ID");
     }
     forward_emu("shot", &selector, verbose, &environment_case_roots()?)
+}
+
+fn cmd_exec(args: &[OsString], verbose: bool) -> Result<()> {
+    forward_emu_with_rest(
+        "exec",
+        args,
+        "qol env exec <run-id|environment> <absolute-program> [args...]",
+        verbose,
+    )
+}
+
+fn cmd_drag(args: &[OsString], verbose: bool) -> Result<()> {
+    forward_emu_with_rest(
+        "drag",
+        args,
+        "qol env drag <run-id|environment> <x1,y1> <x2,y2>",
+        verbose,
+    )
+}
+
+fn forward_emu_with_rest(
+    command: &str,
+    args: &[OsString],
+    usage: &str,
+    verbose: bool,
+) -> Result<()> {
+    if args.len() < 2 {
+        bail!("usage: {usage}");
+    }
+    let mut forwarded = vec![OsString::from(command)];
+    for root in environment_case_roots()? {
+        forwarded.extend([
+            OsString::from("--run-root"),
+            root.as_os_str().to_os_string(),
+        ]);
+    }
+    forwarded.extend(args.iter().cloned());
+    emu::run(&forwarded, verbose)
 }
 
 fn environment_case_roots() -> Result<Vec<PathBuf>> {
@@ -2590,7 +2722,7 @@ fn display_optional_memory(memory_mb: Option<u64>) -> String {
 }
 
 fn help_text() -> &'static str {
-    "qol env\n\n  list\n  doctor [--repair|--fix|--lease-clear <run-id|--all>]\n  up <environment> [--count N] [--memory-mb N] [--cpus N] [--windowed] [--dev-worktree PATH] [--force]\n  image import <environment> <source> --worktree <absolute-path> [--run-id ID]\n  cancel <batch-run-id>\n  runs\n  down <run-id|environment|--all>\n  shot <run-id|environment>\n\nDefinitions live in flows/envs/*.toml. Local image_root, run_root, and [images]\noverrides live in the dev-envs.toml path shown by `qol env doctor`. Environment\ncapabilities select the required acceleration policy."
+    "qol env\n\n  list\n  doctor [--repair|--fix|--lease-clear <run-id|--all>]\n  up <environment> [--count N] [--memory-mb N] [--cpus N] [--windowed] [--dev-worktree PATH] [--force]\n  image import <environment> <source> --worktree <absolute-path> [--run-id ID]\n  cancel <batch-run-id>\n  runs\n  down <run-id|environment|--all>\n  shot <run-id|environment>\n  exec <run-id|environment> <absolute-program> [args...]\n  drag <run-id|environment> <x1,y1> <x2,y2>\n\nexec runs a command in the guest as the desktop user over verified guest\ncontrol; drag drives the guest pointer through QMP. Both target prepared\ndesktop lanes started by `qol env up`.\n\nDefinitions live in flows/envs/*.toml. Local image_root, run_root, and [images]\noverrides live in the dev-envs.toml path shown by `qol env doctor`. Environment\ncapabilities select the required acceleration policy."
 }
 
 fn print_help() {
@@ -2877,6 +3009,44 @@ mod tests {
                 "args: {args:?}"
             );
         }
+    }
+
+    #[test]
+    fn doctor_repair_upgrades_legacy_cleanup_reports_from_the_inventory() {
+        let temp = tempdir().unwrap();
+        let run_id = "lane-a";
+        let run_dir = temp.path().join("cases").join(run_id);
+        let report_path = run_dir.join("report.json");
+        write_json(
+            &report_path,
+            &json!({
+                "name": "qol-emu-run",
+                "kind": "flow",
+                "run_id": run_id,
+                "status": "pass",
+                "environment": { "id": "linux-debian" },
+                "finished_at_unix_ms": 1,
+                "runtime": {
+                    "supervisor_pid": 10,
+                    "qemu_pid": 11
+                },
+                "teardown": {
+                    "exit": "exit status: 0",
+                    "removed": [
+                        run_dir.join("overlay.qcow2"),
+                        run_dir.join("usb-stick.raw")
+                    ]
+                }
+            }),
+        )
+        .unwrap();
+        let environments = vec![resolved_environment(temp.path())];
+
+        let result = repair_legacy_cleanup_reports(&environments).unwrap();
+
+        assert_eq!(result.repaired, 1);
+        assert_eq!(cleanup_warning_count(&environments), 0);
+        assert!(run_dir.join("report.legacy-cleanup.json").is_file());
     }
 
     #[test]
