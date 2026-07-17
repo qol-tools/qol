@@ -1110,6 +1110,11 @@ fn retro_identity_matches_legacy_hardcoded_values() {
             "var(--border-w-3) double var(--tui-line)",
         ),
         ("--qol-identity-frame-texture", "var(--tui-scanline)"),
+        ("--qol-identity-line", "var(--tui-line)"),
+        ("--qol-identity-line-soft", "var(--tui-line-soft)"),
+        ("--qol-identity-surface-inset", "var(--tui-bg-screen)"),
+        ("--qol-identity-surface-row", "var(--tui-bg-card)"),
+        ("--qol-identity-prompt-display", "inline"),
         ("--qol-identity-frame-radius", "var(--radius-md)"),
         ("--qol-identity-frame-shadow", "none"),
         (
@@ -1140,6 +1145,11 @@ fn tray_css_emits_identity_tokens_per_theme() {
     assert!(midnight.contains("--qol-identity-font-ui: var(--font-sans);"));
     assert!(midnight.contains("--qol-identity-radius-md: 10px;"));
     assert!(midnight.contains("--qol-identity-crt-band-display: none;"));
+    assert!(midnight.contains("--qol-identity-line: var(--qol-system-border-subtle);"));
+    assert!(midnight.contains("--qol-identity-line-soft: rgba(var(--paper-rgb), 0.07);"));
+    assert!(midnight.contains("--qol-identity-surface-inset: var(--qol-system-surface-raised);"));
+    assert!(midnight.contains("--qol-identity-surface-row: var(--qol-system-surface-raised);"));
+    assert!(midnight.contains("--qol-identity-prompt-display: none;"));
     assert!(midnight.contains("--qol-identity-frame-bg: var(--surface-canvas);"));
     assert!(midnight.contains("--qol-identity-frame-radius: var(--radius-xl);"));
     assert!(midnight.contains(

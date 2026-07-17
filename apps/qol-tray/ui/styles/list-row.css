@@ -1,6 +1,6 @@
 .list-group {
-    background: var(--tui-bg-screen);
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--surface-inset);
+    border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-lg);
     overflow: visible;
 }
@@ -55,8 +55,8 @@
 }
 
 .list-group-cards > .list-row {
-    background: var(--tui-bg-card);
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--surface-row);
+    border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-lg);
     border-left: var(--border-w-3) solid transparent;
     box-shadow: var(--elevation-crisp-1);
@@ -86,8 +86,8 @@
     align-items: stretch;
     flex-shrink: 0;
     width: var(--size-action-col-md);
-    border-left: var(--border-w-1) solid var(--tui-line-soft);
-    background: var(--tui-bg-screen);
+    border-left: var(--border-w-1) solid var(--line-soft);
+    background: var(--surface-inset);
 }
 
 .list-row-action > button,
@@ -186,8 +186,8 @@
     flex-direction: column;
     min-width: 160px;
     padding: var(--space-1) 0;
-    background: var(--tui-bg-panel);
-    border: var(--border-w-1) solid var(--tui-line);
+    background: var(--surface-row);
+    border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-md);
     box-shadow: var(--elevation-crisp-2);
 }

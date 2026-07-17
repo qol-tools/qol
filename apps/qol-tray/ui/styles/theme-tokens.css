@@ -362,6 +362,11 @@
     --case-label: var(--qol-identity-case-label);
     --tracking-label: var(--qol-identity-tracking-label);
     --glow-text: var(--qol-identity-glow-text);
+    --line: var(--qol-identity-line);
+    --line-soft: var(--qol-identity-line-soft);
+    --surface-inset: var(--qol-identity-surface-inset);
+    --surface-row: var(--qol-identity-surface-row);
+    --prompt-display: var(--qol-identity-prompt-display);
     --frame-border: var(--qol-identity-frame-border);
     --frame-texture: var(--qol-identity-frame-texture);
     --frame-bg: var(--qol-identity-frame-bg);

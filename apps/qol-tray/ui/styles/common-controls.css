@@ -1,8 +1,8 @@
 .code-block {
     margin: 0;
     padding: var(--space-4) var(--space-5);
-    background: var(--tui-bg-screen);
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--surface-inset);
+    border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-md);
     font-family: var(--font-data);
     font-size: var(--fs-sm);
@@ -15,7 +15,7 @@
 }
 
 .code-block:hover {
-    border-color: var(--tui-line);
+    border-color: var(--line);
 }
 
 .code-block:focus-visible {
@@ -160,7 +160,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     position: relative;
     height: 28px;
     border-radius: var(--radius-pill);
-    background: var(--tui-bg-screen);
+    background: var(--surface-inset);
     box-shadow:
         inset 0 2px 4px rgba(var(--ink-rgb), 0.3),
         0 0 0 1px rgba(var(--paper-rgb), 0.05);
@@ -233,7 +233,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     cursor: pointer;
     appearance: none;
     -webkit-appearance: none;
-    background: var(--tui-bg-card);
+    background: var(--surface-row);
     transition: transform var(--transition), background var(--transition), border-color var(--transition), color var(--transition), box-shadow var(--transition), opacity var(--transition);
     border: var(--border-w-1) solid transparent;
     font-family: var(--font-ui);
@@ -288,14 +288,14 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
 
 .btn-ghost {
     background: transparent;
-    border-color: var(--tui-line-soft);
+    border-color: var(--line-soft);
     color: var(--text-secondary);
     box-shadow: none;
 }
 
 .btn-ghost:hover:not(:disabled) {
     background: rgba(var(--accent-rgb), 0.08);
-    border-color: var(--tui-line);
+    border-color: var(--line);
     color: var(--text-primary);
 }
 
@@ -357,7 +357,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
 
 .btn-dropdown {
     border-style: dashed;
-    border-color: var(--tui-line);
+    border-color: var(--line);
     color: var(--text-primary);
     text-transform: none;
 }
@@ -402,8 +402,8 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     flex-direction: column;
     gap: var(--space-3);
     padding: var(--space-3);
-    border-top: var(--border-w-1) solid var(--tui-line-soft);
-    background: var(--tui-bg-panel);
+    border-top: var(--border-w-1) solid var(--line-soft);
+    background: var(--surface-inset);
     cursor: default;
     font-weight: normal;
     text-transform: none;
@@ -655,6 +655,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
 
 .search-bar:not(.palette-hint)::before {
     content: '>';
+    display: var(--prompt-display);
     margin-right: var(--space-2);
     color: rgba(var(--accent-rgb), 0.7);
     font-family: var(--font-ui);
@@ -723,8 +724,8 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     left: 0;
     right: 0;
     z-index: var(--z-popover);
-    background: var(--tui-bg-panel);
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--panel-bg);
+    border: var(--border-w-1) solid var(--line-soft);
     border-top: none;
     max-height: 240px;
     overflow-y: auto;
@@ -757,7 +758,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     height: 22px;
     padding: 0 var(--space-3);
     background: rgba(var(--accent-rgb), 0.08);
-    border-bottom: var(--border-w-1) solid var(--tui-line-soft);
+    border-bottom: var(--border-w-1) solid var(--line-soft);
     font-family: var(--font-ui);
     font-size: var(--fs-xs);
     text-transform: var(--case-label);
@@ -782,8 +783,8 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     gap: var(--space-2);
     height: 26px;
     padding: 0 var(--space-1) 0 var(--space-3);
-    background: var(--tui-bg-panel);
-    border: var(--border-w-1) solid var(--tui-line);
+    background: var(--surface-row);
+    border: var(--border-w-1) solid var(--line);
     box-shadow: var(--elevation-crisp-1);
     font-family: var(--font-ui);
     font-size: var(--fs-xs);

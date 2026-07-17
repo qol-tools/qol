@@ -431,8 +431,8 @@
     position: relative;
     max-height: 220px;
     overflow-y: auto;
-    background: var(--tui-bg-panel);
-    border: var(--border-w-1) solid var(--tui-line);
+    background: var(--panel-bg);
+    border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-sm);
     box-shadow: var(--elevation-crisp-2);
     padding: 4px;
@@ -680,8 +680,8 @@
 
 .variant-selector-card {
     padding: 0;
-    background: var(--tui-bg-card);
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--surface-row);
+    border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-md);
     width: fit-content;
     max-width: 100%;
