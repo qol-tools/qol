@@ -8,13 +8,14 @@ use crate::dev_server::{PluginDaemonStatus, WorkspacePlugin};
 
 use super::dash::{Dash, Health, LinksState, RebuildState, View};
 use super::doctor::{doctor_status, draw_doctor};
-use super::emu_panel::{draw_emu, draw_emu_detail, emu_status};
+use super::emu_panel::{draw_emu, draw_emu_detail, emu_detail_shows_warnings, emu_status};
 use super::feature_flags::draw_feature_flags_panel;
 use super::filters::{draw_filter_panel, filter_scope, FilterState};
 use super::key_bindings::{context_action_bindings, global_action_bindings, unique_hints, KeyHint};
 use super::render_util;
 use super::render_util::{
-    accent, format_duration, list_capacity, now_unix_ms, view_content, Sign, SignBox,
+    accent, cursor_window_start, format_duration, list_capacity, now_unix_ms, view_content, Sign,
+    SignBox,
 };
 use super::stream_view::{draw_endpoints, draw_logs, draw_trace, trace_value};
 use super::worktrees_panel::{draw_worktrees_panel, target_label};
@@ -89,7 +90,9 @@ pub(super) fn filterable_view(view: View) -> bool {
 }
 
 pub(super) fn filters_visible(dash: &Dash) -> bool {
-    filterable_view(dash.view) && !dash.active_filters().is_empty()
+    filterable_view(dash.view)
+        && !emu_detail_shows_warnings(dash)
+        && !dash.active_filters().is_empty()
 }
 
 pub(super) fn breadcrumb(dash: &Dash, accent: Color) -> Line<'static> {
@@ -569,18 +572,6 @@ pub(super) fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     view_content(frame, area, lines);
 }
 
-pub(super) fn cursor_window_start(total: usize, height: usize, cursor: usize) -> usize {
-    if height == 0 || total <= height {
-        return 0;
-    }
-    let max_start = total - height;
-    if cursor >= height {
-        (cursor + 1 - height).min(max_start)
-    } else {
-        0
-    }
-}
-
 pub(super) fn plugin_row_line(
     row: &WorkspacePlugin,
     daemon_status: Option<&PluginDaemonStatus>,
@@ -777,24 +768,6 @@ mod tests {
     }
 
     #[test]
-    fn cursor_window_keeps_selection_visible() {
-        let cases = [
-            (10, 4, 0, 0),
-            (10, 4, 2, 0),
-            (10, 4, 4, 1),
-            (10, 4, 9, 6),
-            (3, 5, 2, 0),
-        ];
-        for (total, height, cursor, expected) in cases {
-            assert_eq!(
-                cursor_window_start(total, height, cursor),
-                expected,
-                "total={total} height={height} cursor={cursor}"
-            );
-        }
-    }
-
-    #[test]
     fn plugins_status_appends_reload_failure() {
         let (color, spans) = plugins_status(
             &RebuildState::Failed("boom".to_string()),
@@ -862,6 +835,7 @@ mod tests {
                 dash.emu_detail = Some(EmuDetail {
                     id: "foo".to_string(),
                     info: Vec::new(),
+                    warnings: Vec::new(),
                     replay: None,
                 });
             }

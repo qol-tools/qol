@@ -1,5 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
+use super::emu_panel::emu_detail_shows_warnings;
 use super::{Dash, View};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -262,37 +263,21 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
         ],
         View::Logs => stream_view_bindings(false, true, false),
         View::Trace => stream_view_bindings(true, true, dash.trace_rate.is_realtime()),
+        View::EmuDetail if emu_detail_shows_warnings(dash) => scrolling_view_bindings(),
         View::EmuDetail => stream_view_bindings(false, false, false),
-        View::Doctor => vec![
-            char_binding("d", "refresh checks", Action::Doctor, 'd'),
-            binding(
-                "space",
-                "raw output",
-                Action::ToggleArm,
-                vec![KeyStroke::plain(KeyCode::Char(' '))],
-            ),
-            binding(
-                "↑/↓",
-                "scroll",
-                Action::ScrollUp,
-                vec![KeyStroke::plain(KeyCode::Up)],
-            ),
-            binding(
-                "↑/↓",
-                "scroll",
-                Action::ScrollDown,
-                vec![KeyStroke::plain(KeyCode::Down)],
-            ),
-            binding(
-                "←",
-                "back",
-                Action::Back,
-                vec![
-                    KeyStroke::plain(KeyCode::Left),
-                    KeyStroke::plain(KeyCode::Esc),
-                ],
-            ),
-        ],
+        View::Doctor => {
+            let mut bindings = vec![
+                char_binding("d", "refresh checks", Action::Doctor, 'd'),
+                binding(
+                    "space",
+                    "raw output",
+                    Action::ToggleArm,
+                    vec![KeyStroke::plain(KeyCode::Char(' '))],
+                ),
+            ];
+            bindings.extend(scrolling_view_bindings());
+            bindings
+        }
         View::Plugins => vec![
             binding(
                 "↑/↓",
@@ -322,30 +307,34 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
                 ],
             ),
         ],
-        View::Endpoints => vec![
-            binding(
-                "↑/↓",
-                "scroll",
-                Action::ScrollUp,
-                vec![KeyStroke::plain(KeyCode::Up)],
-            ),
-            binding(
-                "↑/↓",
-                "scroll",
-                Action::ScrollDown,
-                vec![KeyStroke::plain(KeyCode::Down)],
-            ),
-            binding(
-                "←",
-                "back",
-                Action::Back,
-                vec![
-                    KeyStroke::plain(KeyCode::Left),
-                    KeyStroke::plain(KeyCode::Esc),
-                ],
-            ),
-        ],
+        View::Endpoints => scrolling_view_bindings(),
     }
+}
+
+fn scrolling_view_bindings() -> Vec<KeyBinding> {
+    vec![
+        binding(
+            "↑/↓",
+            "scroll",
+            Action::ScrollUp,
+            vec![KeyStroke::plain(KeyCode::Up)],
+        ),
+        binding(
+            "↑/↓",
+            "scroll",
+            Action::ScrollDown,
+            vec![KeyStroke::plain(KeyCode::Down)],
+        ),
+        binding(
+            "←",
+            "back",
+            Action::Back,
+            vec![
+                KeyStroke::plain(KeyCode::Left),
+                KeyStroke::plain(KeyCode::Esc),
+            ],
+        ),
+    ]
 }
 
 pub(super) fn stream_view_bindings(
@@ -492,6 +481,7 @@ pub(super) fn unique_hints(bindings: Vec<KeyBinding>) -> Vec<KeyHint> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dev_console::emu_panel::EmuDetail;
 
     #[test]
     fn action_for_maps_keys() {
@@ -626,6 +616,31 @@ mod tests {
             action_for(&dash, KeyCode::Char(' '), KeyModifiers::NONE),
             Action::Ignore,
             "sandboxes do not advertise an unwired armed action"
+        );
+    }
+
+    #[test]
+    fn cleanup_history_detail_reuses_scroll_only_bindings() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::EmuDetail;
+        dash.emu_detail = Some(EmuDetail {
+            id: "linux/mint".to_string(),
+            info: Vec::new(),
+            warnings: vec![ratatui::text::Line::from("cleanup warning")],
+            replay: None,
+        });
+
+        assert_eq!(
+            action_for(&dash, KeyCode::Up, KeyModifiers::NONE),
+            Action::ScrollUp
+        );
+        assert_eq!(
+            action_for(&dash, KeyCode::Char('/'), KeyModifiers::NONE),
+            Action::Ignore
+        );
+        assert_eq!(
+            action_for(&dash, KeyCode::Char('c'), KeyModifiers::NONE),
+            Action::Ignore
         );
     }
 }

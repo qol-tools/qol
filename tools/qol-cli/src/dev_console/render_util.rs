@@ -170,6 +170,17 @@ pub(super) fn list_capacity(height: u16) -> usize {
     (height as usize + ITEM_GAP as usize) / (1 + ITEM_GAP as usize)
 }
 
+pub(super) fn cursor_window_start(total: usize, height: usize, cursor: usize) -> usize {
+    if height == 0 || total <= height {
+        return 0;
+    }
+    let max_start = total - height;
+    if cursor >= height {
+        return (cursor + 1 - height).min(max_start);
+    }
+    0
+}
+
 pub(super) fn view_content(frame: &mut Frame, area: Rect, lines: Vec<Line>) {
     frame.render_widget(Paragraph::new(space_rows(lines, ITEM_GAP)), area);
 }
@@ -234,6 +245,24 @@ pub(super) fn now_unix_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_window_keeps_selection_visible() {
+        let cases = [
+            (10, 4, 0, 0),
+            (10, 4, 2, 0),
+            (10, 4, 4, 1),
+            (10, 4, 9, 6),
+            (3, 5, 2, 0),
+        ];
+        for (total, height, cursor, expected) in cases {
+            assert_eq!(
+                cursor_window_start(total, height, cursor),
+                expected,
+                "total={total} height={height} cursor={cursor}"
+            );
+        }
+    }
 
     #[test]
     fn relative_age_buckets_seconds_minutes_hours_days() {

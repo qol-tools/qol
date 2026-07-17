@@ -19,8 +19,9 @@ use super::dash::{
 use super::doctor::{apply_doctor_outcome, open_doctor, spawn_doctor_probe, DoctorMode};
 use super::draw::{accent_state_line, draw, filterable_view, plugin_row_count, resolve_base_label};
 use super::emu_panel::{
-    act_emu, drain_emu_runs, emu_detail_ring, emu_env_count, open_emu, open_emu_detail,
-    open_emu_dir, run_selected_flow, stop_emu_runs, verify_selected_image, EmuState,
+    act_emu, drain_emu_runs, emu_detail_ring, emu_detail_scroll_len, emu_env_count, open_emu,
+    open_emu_detail, open_emu_dir, run_selected_flow, stop_emu_runs, verify_selected_image,
+    EmuState,
 };
 use super::filters::{line_matches_filters, FilterState};
 use super::key_bindings::{
@@ -586,7 +587,7 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
     let len = if dash.view == View::Trace {
         dash.trace.len()
     } else if dash.view == View::EmuDetail {
-        emu_detail_ring(dash).map_or(0, LogRing::len)
+        emu_detail_scroll_len(dash)
     } else {
         dash.logs.len()
     };

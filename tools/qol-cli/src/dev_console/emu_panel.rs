@@ -14,13 +14,14 @@ use ratatui::Frame;
 
 use crate::commands::emu::{emu_dir, newest_run_detail, ImageCandidate, RunDetail};
 use qol_dev_env::{
-    CleanupState, EnvironmentSnapshot, Inventory, ReportKind, ResolutionState, RunConcern,
-    RunReport, RunSummary,
+    CleanupState, EnvironmentSnapshot, Inventory, ReportKind, ReportStatus, ResolutionState,
+    RunConcern, RunReport, RunSummary,
 };
 use qol_dev_orchestrator::{FlowStart, ImageImportStart, RunHandle, WaitState};
 
 use super::render_util::{
-    accent, list_window, now_unix_ms, relative_age, spaced_height, view_content,
+    accent, cursor_window_start, list_capacity, list_window, now_unix_ms, relative_age,
+    spaced_height, view_content,
 };
 use super::{
     copy_highlight, draw_run_log, frame_accent, spawn_forwarders, Dash, LogPane, LogRing, View,
@@ -39,6 +40,7 @@ pub(super) enum EmuState {
 pub(super) struct EmuDetail {
     pub(super) id: String,
     pub(super) info: Vec<Line<'static>>,
+    pub(super) warnings: Vec<Line<'static>>,
     pub(super) replay: Option<LogPane>,
 }
 
@@ -1316,6 +1318,11 @@ pub(super) fn open_emu_detail(dash: &mut Dash) {
     if let Some(snapshot) = selected_environment(dash).cloned() {
         let id = snapshot.resolved.definition.id.clone();
         let mut info = emu_info_lines(&snapshot);
+        let mut warnings = snapshot
+            .attention_runs()
+            .map(|(run, concern)| attention_run_line(run, concern))
+            .collect::<Vec<_>>();
+        warnings.reverse();
         if let Some(run) = dash.active_runs.get(&id) {
             if let Some(report_path) = run.report_path() {
                 info.push(info_row(
@@ -1331,7 +1338,7 @@ pub(super) fn open_emu_detail(dash: &mut Dash) {
             }
         }
         let log_path = snapshot.runs.iter().find_map(|run| run.log_path.clone());
-        set_emu_detail(dash, id, info, log_path);
+        set_emu_detail(dash, id, info, warnings, log_path);
         return;
     }
     let Some(candidate) = selected_candidate(dash).cloned() else {
@@ -1340,13 +1347,14 @@ pub(super) fn open_emu_detail(dash: &mut Dash) {
     let detail = newest_run_detail(&candidate.id);
     let info = candidate_info_lines(&candidate, detail.as_ref());
     let log_path = detail.as_ref().map(RunDetail::run_log);
-    set_emu_detail(dash, candidate.id, info, log_path);
+    set_emu_detail(dash, candidate.id, info, Vec::new(), log_path);
 }
 
 fn set_emu_detail(
     dash: &mut Dash,
     id: String,
     info: Vec<Line<'static>>,
+    warnings: Vec<Line<'static>>,
     log_path: Option<std::path::PathBuf>,
 ) {
     let replay = if dash.active_runs.contains_key(&id) {
@@ -1354,7 +1362,12 @@ fn set_emu_detail(
     } else {
         log_path.as_deref().map(LogPane::replay)
     };
-    dash.emu_detail = Some(EmuDetail { id, info, replay });
+    dash.emu_detail = Some(EmuDetail {
+        id,
+        info,
+        warnings,
+        replay,
+    });
     dash.view = View::EmuDetail;
     dash.scroll_offset = 0;
     dash.close_filters();
@@ -1366,6 +1379,22 @@ pub(super) fn emu_detail_ring(dash: &Dash) -> Option<&LogRing> {
         return Some(&run.pane.ring);
     }
     detail.replay.as_ref().map(|pane| &pane.ring)
+}
+
+pub(super) fn emu_detail_shows_warnings(dash: &Dash) -> bool {
+    dash.emu_detail.as_ref().is_some_and(|detail| {
+        !detail.warnings.is_empty() && !dash.active_runs.contains_key(&detail.id)
+    })
+}
+
+pub(super) fn emu_detail_scroll_len(dash: &Dash) -> usize {
+    if emu_detail_shows_warnings(dash) {
+        return dash
+            .emu_detail
+            .as_ref()
+            .map_or(0, |detail| detail.warnings.len());
+    }
+    emu_detail_ring(dash).map_or(0, LogRing::len)
 }
 
 pub(super) fn live_verb(dash: &Dash, id: &str) -> Option<String> {
@@ -1428,6 +1457,16 @@ fn emu_info_lines(snapshot: &EnvironmentSnapshot) -> Vec<Line<'static>> {
         lines.push(info_row("report", &run.report_path.display().to_string()));
     } else {
         lines.push(Line::from("  no runs yet".fg(Color::DarkGray)));
+    }
+    let warning_count = snapshot.attention_runs().count();
+    if warning_count > 0 {
+        let unit = if warning_count == 1 { "run" } else { "runs" };
+        lines.push(Line::from(vec![
+            "  cleanup  ".fg(Color::White),
+            format!("{warning_count} retained {unit} lack cleanup proof")
+                .fg(Color::Yellow)
+                .bold(),
+        ]));
     }
     lines
 }
@@ -1674,86 +1713,137 @@ fn environment_line(
 }
 
 pub(super) fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
-    let lines = match &dash.emu {
-        EmuState::Probing => vec![Line::from("  scanning sandboxes".fg(Color::Yellow))],
-        EmuState::Done(inventory) if inventory.environments.is_empty() => {
-            let config = crate::commands::dev_env::config_path()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "~/.config/qol/dev-envs.toml".to_string());
-            emu_empty_lines(&config)
-        }
-        EmuState::Done(inventory) => {
-            let mut lines = inventory
-                .environments
-                .iter()
-                .enumerate()
-                .flat_map(|(index, snapshot)| {
-                    let selected = index == dash.emu_cursor;
-                    let environment = &snapshot.resolved;
-                    let mut entry = vec![environment_line(
-                        snapshot,
-                        selected,
-                        live_verb(dash, &environment.definition.id),
-                        dash.sandbox_flow_lanes,
-                    )];
-                    if environment.state != ResolutionState::Ready {
-                        for message in &environment.messages {
-                            entry.push(Line::from(vec![
-                                "    ".into(),
-                                message.clone().fg(Color::DarkGray),
-                            ]));
-                        }
-                    }
-                    for (run, concern) in snapshot.attention_runs() {
-                        entry.push(attention_run_line(run, concern));
-                    }
-                    entry
-                })
-                .collect::<Vec<_>>();
-            for run in &inventory.unassigned_runs {
-                lines.push(Line::from(vec![
-                    "  ? ".fg(Color::Yellow).bold(),
-                    run.run_id.clone().fg(Color::White),
-                    format!(" · {} · unassigned", run.status.as_str()).fg(Color::DarkGray),
-                ]));
-            }
-            for issue in &inventory.issues {
-                lines.push(Line::from(vec![
-                    "  ! ".fg(Color::Red).bold(),
-                    issue.message.clone().fg(Color::DarkGray),
-                ]));
-            }
-            lines
-        }
-        EmuState::Failed(error) => vec![Line::from(vec![
-            "  registry error ".fg(Color::Red).bold(),
-            error.clone().fg(Color::DarkGray),
-        ])],
+    let selectable = emu_env_count(dash) + dash.emu_candidates.len();
+    if selectable > 0 && dash.emu_cursor >= selectable {
+        dash.emu_cursor = selectable - 1;
+    }
+    let (mut lines, mut selected_line) = match &dash.emu {
+        EmuState::Probing => (
+            vec![Line::from("  scanning sandboxes".fg(Color::Yellow))],
+            None,
+        ),
+        EmuState::Done(inventory) => sandbox_inventory_lines(dash, inventory),
+        EmuState::Failed(error) => (
+            vec![Line::from(vec![
+                "  registry error ".fg(Color::Red).bold(),
+                error.clone().fg(Color::DarkGray),
+            ])],
+            None,
+        ),
     };
-    let mut lines = lines;
-    let env_count = emu_env_count(dash);
-    for (index, candidate) in dash.emu_candidates.iter().enumerate() {
-        lines.push(candidate_line(
-            candidate,
-            env_count + index == dash.emu_cursor,
-            live_verb(dash, &candidate.id),
-        ));
+    if !matches!(dash.emu, EmuState::Done(_)) {
+        append_candidate_lines(dash, 0, &mut lines, &mut selected_line);
     }
     let total = lines.len();
-    let (start, height) = list_window(dash, area, total);
+    let height = list_capacity(area.height);
+    dash.log_height = height;
+    let start = cursor_window_start(total, height, selected_line.unwrap_or_default());
     let visible: Vec<Line> = lines.into_iter().skip(start).take(height).collect();
     view_content(frame, area, visible);
 }
 
+fn sandbox_inventory_lines(
+    dash: &Dash,
+    inventory: &Inventory,
+) -> (Vec<Line<'static>>, Option<usize>) {
+    let mut lines = Vec::new();
+    let mut selected_line = None;
+    if inventory.environments.is_empty() {
+        let config = crate::commands::dev_env::config_path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "~/.config/qol/dev-envs.toml".to_string());
+        lines.extend(emu_empty_lines(&config));
+    }
+    for (index, snapshot) in inventory.environments.iter().enumerate() {
+        let selected = index == dash.emu_cursor;
+        if selected {
+            selected_line = Some(lines.len());
+        }
+        let environment = &snapshot.resolved;
+        lines.push(environment_line(
+            snapshot,
+            selected,
+            live_verb(dash, &environment.definition.id),
+            dash.sandbox_flow_lanes,
+        ));
+        if environment.state != ResolutionState::Ready {
+            lines.extend(environment.messages.iter().map(|message| {
+                Line::from(vec!["    ".into(), message.clone().fg(Color::DarkGray)])
+            }));
+        }
+        let warning_count = snapshot.attention_runs().count();
+        if warning_count > 0 {
+            lines.push(cleanup_warning_summary_line(warning_count));
+        }
+    }
+    append_candidate_lines(
+        dash,
+        inventory.environments.len(),
+        &mut lines,
+        &mut selected_line,
+    );
+    if !inventory.unassigned_runs.is_empty() {
+        let count = inventory.unassigned_runs.len();
+        let unit = if count == 1 { "report" } else { "reports" };
+        lines.push(Line::from(vec![
+            "  ? ".fg(Color::Yellow).bold(),
+            format!("{count} unassigned {unit}").fg(Color::DarkGray),
+        ]));
+    }
+    if !inventory.issues.is_empty() {
+        let count = inventory.issues.len();
+        let unit = if count == 1 { "error" } else { "errors" };
+        lines.push(Line::from(vec![
+            "  ! ".fg(Color::Red).bold(),
+            format!("{count} inventory {unit}").fg(Color::Red),
+        ]));
+    }
+    (lines, selected_line)
+}
+
+fn append_candidate_lines(
+    dash: &Dash,
+    environment_count: usize,
+    lines: &mut Vec<Line<'static>>,
+    selected_line: &mut Option<usize>,
+) {
+    for (index, candidate) in dash.emu_candidates.iter().enumerate() {
+        let selected = environment_count + index == dash.emu_cursor;
+        if selected {
+            *selected_line = Some(lines.len());
+        }
+        lines.push(candidate_line(
+            candidate,
+            selected,
+            live_verb(dash, &candidate.id),
+        ));
+    }
+}
+
+fn cleanup_warning_summary_line(count: usize) -> Line<'static> {
+    let unit = if count == 1 { "warning" } else { "warnings" };
+    Line::from(vec![
+        "    ! ".fg(Color::Yellow).bold(),
+        format!("{count} cleanup {unit}").fg(Color::Yellow),
+        " · → details".fg(Color::DarkGray),
+    ])
+}
+
 fn attention_run_line(run: &RunSummary, concern: RunConcern) -> Line<'static> {
-    let label = match concern {
-        RunConcern::HistoricalFailure => "historical failure",
-        RunConcern::UnresolvedCleanup => "cleanup unresolved",
+    let (label, concern_color) = match concern {
+        RunConcern::HistoricalFailure => ("historical failure", Color::Red),
+        RunConcern::UnresolvedCleanup => ("cleanup unresolved", Color::Yellow),
     };
     Line::from(vec![
-        "    ! ".fg(Color::Red).bold(),
+        "  ! ".fg(concern_color).bold(),
         run.run_id.clone().fg(Color::White),
-        format!(" · {label} · {}", run.status.as_str()).fg(Color::Red),
+        format!(" · {label}").fg(concern_color),
+        " · ".fg(Color::DarkGray),
+        run.status
+            .as_str()
+            .to_string()
+            .fg(run_status_color(&run.status))
+            .bold(),
     ])
 }
 
@@ -1784,6 +1874,28 @@ pub(super) fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         height: area.height - used,
         ..area
     };
+    if emu_detail_shows_warnings(dash) {
+        let warning_count = dash
+            .emu_detail
+            .as_ref()
+            .map_or(0, |detail| detail.warnings.len());
+        let (start, height) = list_window(dash, log_area, warning_count);
+        let visible = dash
+            .emu_detail
+            .as_ref()
+            .map(|detail| {
+                detail
+                    .warnings
+                    .iter()
+                    .skip(start)
+                    .take(height)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        view_content(frame, log_area, visible);
+        return;
+    }
     let highlight = copy_highlight(dash);
     if let Some(run) = dash.active_runs.get(&id) {
         draw_run_log(
@@ -1827,12 +1939,7 @@ fn last_run_spans(last_run: Option<&RunSummary>) -> Vec<Span<'static>> {
     let Some(run) = last_run else {
         return Vec::new();
     };
-    let color = match run.status.as_str() {
-        "pass" => accent(),
-        "failed" => Color::Red,
-        "running" => Color::Yellow,
-        _ => Color::DarkGray,
-    };
+    let color = run_status_color(&run.status);
     let observed_at = run
         .finished_at_unix_ms
         .or(run.started_at_unix_ms)
@@ -1855,6 +1962,25 @@ fn last_run_spans(last_run: Option<&RunSummary>) -> Vec<Span<'static>> {
         spans.push(format!(" @{worktree}").fg(Color::DarkGray));
     }
     spans
+}
+
+fn run_status_color(status: &ReportStatus) -> Color {
+    match status {
+        ReportStatus::Pass => accent(),
+        ReportStatus::Failed
+        | ReportStatus::CleanupIncomplete
+        | ReportStatus::RollbackIncomplete
+        | ReportStatus::CancellationCleanupIncomplete => Color::Red,
+        ReportStatus::Preparing
+        | ReportStatus::Starting
+        | ReportStatus::Running
+        | ReportStatus::Stopping
+        | ReportStatus::Recovering
+        | ReportStatus::Cancelling
+        | ReportStatus::Cancelled
+        | ReportStatus::Abandoned => Color::Yellow,
+        ReportStatus::Skipped | ReportStatus::Stopped | ReportStatus::Unknown(_) => Color::DarkGray,
+    }
 }
 
 #[cfg(test)]
@@ -2626,8 +2752,49 @@ mod tests {
         assert_eq!(span_text(&spans), "1 flagged · → open");
         assert_eq!(
             span_text(&line.spans),
-            "    ! run-pass · cleanup unresolved · pass"
+            "  ! run-pass · cleanup unresolved · pass"
         );
+        assert_eq!(line.spans[0].style.fg, Some(Color::Yellow));
+        assert_eq!(line.spans[2].style.fg, Some(Color::Yellow));
+        assert_eq!(line.spans[4].style.fg, Some(accent()));
+    }
+
+    #[test]
+    fn sandbox_list_collapses_cleanup_history_and_keeps_selection_visible() {
+        let mut first = emu_env("linux/first", ResolutionState::Ready);
+        first.runs = (0..30).map(|_| report_summary("pass", None)).collect();
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Emu;
+        dash.emu = EmuState::Done(emu_inventory(vec![
+            first,
+            emu_env("linux/second", ResolutionState::Ready),
+        ]));
+
+        let rows = render_rows(&mut dash);
+
+        assert!(
+            rows.iter().any(|row| row.contains("▸ ● linux/first")),
+            "the initial sandbox selection must remain visible"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("30 cleanup warnings · → details")),
+            "cleanup history must collapse into one summary row"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("run-pass")),
+            "historical report ids belong in the detail view"
+        );
+        open_emu_detail(&mut dash);
+        let detail = dash.emu_detail.as_ref().unwrap();
+        let warnings = &detail.warnings;
+        assert_eq!(warnings.len(), 30);
+        assert!(warnings
+            .iter()
+            .any(|line| span_text(&line.spans).contains("run-pass")));
+        assert!(detail.info.iter().any(|line| {
+            span_text(&line.spans).contains("30 retained runs lack cleanup proof")
+        }));
     }
 
     #[test]
