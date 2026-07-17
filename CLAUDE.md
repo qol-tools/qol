@@ -8,6 +8,10 @@ Default all work (tests, refactors, fixes, features, configs, docs) direct to `m
 
 Found a practice better than the current standard? Encode it as a skill or rule **before** applying it, so the next session sees it. Place it with `qol-workflow:standards-evolution`.
 
+## Runtime behavior verifies in a guest VM
+
+Reproducing or verifying qol runtime desktop behavior (plugin windows, hotkeys, previews, tray actions) happens in a disposable guest — `qol env up <environment> --dev-worktree <worktree>` — never on the host session, unless the user explicitly asks for host verification. This applies to bug repros before fixing and to fix verification after. Mechanics and the agent loop: `qol-project:qol-dev-environments`.
+
 ## Code Style
 
 - **No comments** - keep the codebase comment-free
