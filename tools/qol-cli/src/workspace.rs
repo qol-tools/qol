@@ -1,5 +1,6 @@
 use crate::host_facade;
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -21,6 +22,8 @@ pub(crate) const DOCTOR_BUILD_ARGS: [&str; 7] = [
     "qol-tray-doctor",
 ];
 
+const DEFAULT_WORKSPACE_FILE: &str = "dev/default-workspace.txt";
+
 pub(crate) fn doctor_binary_path(root: &Path) -> PathBuf {
     root.join("target")
         .join("debug")
@@ -35,6 +38,80 @@ pub(crate) fn cargo_build_command(root: &Path, args: &[&str]) -> Command {
 
 pub(crate) fn repo_root() -> Result<PathBuf> {
     qol_workspace::workspace_root_from_cwd()
+}
+
+pub(crate) fn dev_repo_root() -> Result<PathBuf> {
+    let cwd = std::env::current_dir().context("failed to read current directory")?;
+    dev_repo_root_from(&cwd, qol_config::config_dir().as_deref())
+}
+
+pub(crate) fn record_default_workspace(root: &Path) -> Result<()> {
+    let config_dir = qol_config::config_dir().context("no user config directory is available")?;
+    record_default_workspace_in(root, &config_dir)
+}
+
+fn dev_repo_root_from(cwd: &Path, config_dir: Option<&Path>) -> Result<PathBuf> {
+    if let Ok(root) = qol_workspace::workspace_root_from(cwd) {
+        if is_qol_cli_workspace(&root) {
+            return Ok(root);
+        }
+    }
+    let config_dir = config_dir.context(
+        "qol dev has no default workspace; run `qol setup` from the qol workspace first",
+    )?;
+    read_default_workspace(config_dir)
+}
+
+fn record_default_workspace_in(root: &Path, config_dir: &Path) -> Result<()> {
+    let root = exact_qol_cli_workspace(root)?;
+    let value = root
+        .to_str()
+        .context("qol workspace path is not valid UTF-8")?;
+    let content = format!("{value}\n");
+    let path = default_workspace_path(config_dir);
+    if fs::read_to_string(&path).ok().as_deref() == Some(&content) {
+        return Ok(());
+    }
+    qol_fs::atomic_write_durable(&path, content.as_bytes())
+        .with_context(|| format!("failed to record default workspace at {}", path.display()))
+}
+
+fn read_default_workspace(config_dir: &Path) -> Result<PathBuf> {
+    let path = default_workspace_path(config_dir);
+    let content = fs::read_to_string(&path).with_context(|| {
+        format!(
+            "qol dev has no default workspace; run `qol setup` from the qol workspace first ({})",
+            path.display()
+        )
+    })?;
+    let configured = content.trim_end_matches(['\r', '\n']);
+    if configured.is_empty() {
+        bail!("qol dev default workspace is empty; run `qol setup` from the qol workspace again");
+    }
+    exact_qol_cli_workspace(Path::new(configured)).with_context(|| {
+        format!(
+            "qol dev default workspace `{configured}` is unavailable; run `qol setup` from the qol workspace again"
+        )
+    })
+}
+
+fn exact_qol_cli_workspace(path: &Path) -> Result<PathBuf> {
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("failed to resolve {}", path.display()))?;
+    let root = qol_workspace::workspace_root_from(&canonical)?;
+    if root != canonical || !is_qol_cli_workspace(&root) {
+        bail!("{} is not a qol CLI workspace root", path.display());
+    }
+    Ok(root)
+}
+
+fn is_qol_cli_workspace(root: &Path) -> bool {
+    root.join("tools/qol-cli/Cargo.toml").is_file()
+}
+
+fn default_workspace_path(config_dir: &Path) -> PathBuf {
+    config_dir.join(DEFAULT_WORKSPACE_FILE)
 }
 
 pub(crate) fn resolve_crate_target(root: &Path, name: &str) -> Result<PathBuf> {
@@ -78,6 +155,16 @@ mod tests {
         fs::write(
             dir.join("Cargo.toml"),
             "[workspace]\nmembers = [\"apps/*\", \"plugins/*\"]\n",
+        )
+        .unwrap();
+    }
+
+    fn write_qol_cli_workspace(dir: &Path) {
+        fs::create_dir_all(dir.join("tools/qol-cli")).unwrap();
+        write_workspace(dir);
+        fs::write(
+            dir.join("tools/qol-cli/Cargo.toml"),
+            "[package]\nname = \"qol\"\nversion = \"0.0.0\"\n",
         )
         .unwrap();
     }
@@ -275,6 +362,57 @@ mod tests {
         fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
         let err = cargo_package_name(&dir).unwrap_err().to_string();
         assert!(err.contains("[package].name"), "got: {err}");
+    }
+
+    #[test]
+    fn dev_workspace_prefers_the_current_qol_checkout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let current = tmp.path().join("current");
+        let configured = tmp.path().join("configured");
+        let config_dir = tmp.path().join("config");
+        write_qol_cli_workspace(&current);
+        write_qol_cli_workspace(&configured);
+        record_default_workspace_in(&configured, &config_dir).unwrap();
+
+        let resolved = dev_repo_root_from(&current.join("tools"), Some(&config_dir)).unwrap();
+
+        assert_eq!(resolved, current);
+    }
+
+    #[test]
+    fn dev_workspace_uses_the_default_outside_qol() {
+        let tmp = tempfile::tempdir().unwrap();
+        let configured = tmp.path().join("configured");
+        let foreign = tmp.path().join("foreign");
+        let config_dir = tmp.path().join("config");
+        write_qol_cli_workspace(&configured);
+        fs::create_dir_all(foreign.join("nested")).unwrap();
+        write_workspace(&foreign);
+        record_default_workspace_in(&configured, &config_dir).unwrap();
+
+        let resolved = dev_repo_root_from(&foreign.join("nested"), Some(&config_dir)).unwrap();
+
+        assert_eq!(resolved, configured);
+    }
+
+    #[test]
+    fn dev_workspace_errors_explain_how_to_repair_the_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        let config_dir = tmp.path().join("config");
+        fs::create_dir_all(&outside).unwrap();
+
+        let missing = dev_repo_root_from(&outside, Some(&config_dir))
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("run `qol setup`"), "got: {missing}");
+
+        fs::create_dir_all(default_workspace_path(&config_dir).parent().unwrap()).unwrap();
+        fs::write(default_workspace_path(&config_dir), "/gone/qol\n").unwrap();
+        let stale = dev_repo_root_from(&outside, Some(&config_dir))
+            .unwrap_err()
+            .to_string();
+        assert!(stale.contains("run `qol setup`"), "got: {stale}");
     }
 
     #[test]

@@ -9,7 +9,8 @@ use crate::dev_shutdown::ShutdownMethod;
 use crate::host_facade;
 use crate::progress::{print_title, run_status, step_label, StepKind};
 use crate::workspace::{
-    cargo_build_command, display_name, repo_root, scan_buildable_plugins, BuildablePlugin,
+    cargo_build_command, dev_repo_root, display_name, repo_root, scan_buildable_plugins,
+    BuildablePlugin,
 };
 use anyhow::{bail, Context, Result};
 use qol_dev_build::adapters::CoreEventSink;
@@ -40,7 +41,9 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         return run_artifact(args, verbose, PathBuf::from(root));
     }
     let directive = tray_directive(optional_single_arg(args, "qol dev [worktree|--base]")?);
-    let root = repo_root()?;
+    let root = dev_repo_root()?;
+    std::env::set_current_dir(&root)
+        .with_context(|| format!("failed to enter qol workspace {}", root.display()))?;
     if let Some(tray_pid) = crate::self_exec::resume_tray_pid() {
         return run_attached(tray_pid, verbose, current_active_worktree_marker());
     }

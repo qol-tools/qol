@@ -1,5 +1,5 @@
 use crate::progress::{print_hint, print_title, run_step, step_label, StepKind};
-use crate::workspace::{exe_name, repo_root};
+use crate::workspace::{exe_name, record_default_workspace, repo_root};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value as JsonValue;
 use std::env;
@@ -17,7 +17,10 @@ pub(crate) fn cmd_setup(args: &[OsString], verbose: bool) -> Result<()> {
         bail!("usage: qol setup");
     }
     let root = repo_root()?;
-    run_setup(&root, verbose)
+    run_setup(&root, verbose)?;
+    record_default_workspace(&root)?;
+    step_label("root", StepKind::Success, &root.display().to_string());
+    Ok(())
 }
 
 pub(crate) fn run_setup(root: &Path, verbose: bool) -> Result<()> {
