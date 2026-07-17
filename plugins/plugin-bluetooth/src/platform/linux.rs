@@ -34,6 +34,8 @@ type DeviceStreams = SelectAll<LocalBoxStream<'static, (Address, bool)>>;
 type DiscoveryStream = LocalBoxStream<'static, AdapterEvent>;
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
 const PROFILE_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+const DEVICE_CONNECT_ATTEMPTS: u32 = 3;
+const DEVICE_CONNECT_RETRY_DELAY: Duration = Duration::from_millis(1500);
 const BREDR_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(15);
 const AUDIO_SINK_PROFILE: u16 = 0x110b;
 
@@ -504,11 +506,46 @@ async fn discover_bredr_device_with_filter(adapter: &Adapter, address: Address) 
 }
 
 async fn connect_all_profiles(device: &Device, address: Address) -> Result<()> {
-    match device.connect().await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind == ErrorKind::AlreadyConnected => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("BlueZ failed to connect {address}")),
+    let mut attempt = 1;
+    loop {
+        let result = device.connect().await;
+        let outcome = match &result {
+            Ok(()) => "connected",
+            Err(error) if error.kind == ErrorKind::AlreadyConnected => "already_connected",
+            Err(error) if transient_connect_error(&error.kind, &error.message) => "transient",
+            Err(_) => "failed",
+        };
+        qol_runtime::probe!(
+            "BLUETOOTH_CONNECT",
+            "device={} attempt={attempt} outcome={outcome}",
+            redacted(address),
+        );
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind == ErrorKind::AlreadyConnected => return Ok(()),
+            Err(error)
+                if attempt < DEVICE_CONNECT_ATTEMPTS
+                    && transient_connect_error(&error.kind, &error.message) =>
+            {
+                attempt += 1;
+                tokio::time::sleep(DEVICE_CONNECT_RETRY_DELAY).await;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("BlueZ failed to connect {address}"))
+            }
+        }
     }
+}
+
+fn transient_connect_error(kind: &ErrorKind, message: &str) -> bool {
+    const TRANSIENT_LINK_ERRORS: [&str; 5] = [
+        "br-connection-unknown",
+        "br-connection-busy",
+        "br-connection-canceled",
+        "br-connection-aborted-by-remote",
+        "br-connection-timeout",
+    ];
+    *kind == ErrorKind::InProgress || TRANSIENT_LINK_ERRORS.contains(&message)
 }
 
 async fn connect_audio_profile(
@@ -1450,7 +1487,34 @@ fn redacted(address: Address) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{pactl_has_card, tolerated_profile_connect, ErrorKind};
+    use super::{pactl_has_card, tolerated_profile_connect, transient_connect_error, ErrorKind};
+
+    #[test]
+    fn transient_link_errors_are_retried() {
+        let cases = [
+            (ErrorKind::Failed, "br-connection-unknown", true),
+            (ErrorKind::Failed, "br-connection-busy", true),
+            (ErrorKind::Failed, "br-connection-canceled", true),
+            (ErrorKind::Failed, "br-connection-aborted-by-remote", true),
+            (ErrorKind::Failed, "br-connection-timeout", true),
+            (ErrorKind::InProgress, "br-connection-busy", true),
+            (ErrorKind::Failed, "br-connection-page-timeout", false),
+            (
+                ErrorKind::Failed,
+                "br-connection-adapter-not-powered",
+                false,
+            ),
+            (ErrorKind::Failed, "", false),
+            (ErrorKind::NotReady, "resource not ready", false),
+        ];
+        for (kind, message, expected) in cases {
+            assert_eq!(
+                transient_connect_error(&kind, message),
+                expected,
+                "kind: {kind:?} message: {message}"
+            );
+        }
+    }
 
     #[test]
     fn transient_profile_connect_outcomes_are_tolerated() {
