@@ -146,30 +146,28 @@ where
     out
 }
 
-fn walk_for_any_repo<F>(
-    dir: &Path,
-    resolve_branch: F,
-    out: &mut Vec<WorktreeInfo>,
-    depth_remaining: u8,
-) where
+fn walk_for_any_repo<F>(dir: &Path, resolve_branch: F, out: &mut Vec<WorktreeInfo>, max_depth: u8)
+where
     F: Fn(&Path) -> Option<String> + Copy,
 {
-    if dir.join("Cargo.toml").is_file() && dir.join(".git").exists() {
-        if let Some(branch) = resolve_branch(dir) {
-            if !out.iter().any(|w| w.branch == branch) {
-                out.push(WorktreeInfo {
-                    branch,
-                    path: dir.to_path_buf(),
-                });
+    let mut frontier = vec![dir.to_path_buf()];
+    for depth in 0..=max_depth {
+        let mut next = Vec::new();
+        for dir in frontier {
+            if dir.join("Cargo.toml").is_file() && dir.join(".git").exists() {
+                if let Some(branch) = resolve_branch(&dir) {
+                    if !out.iter().any(|w| w.branch == branch) {
+                        out.push(WorktreeInfo { branch, path: dir });
+                    }
+                }
+            } else if depth < max_depth {
+                next.extend(read_child_dirs(&dir));
             }
         }
-        return;
-    }
-    if depth_remaining == 0 {
-        return;
-    }
-    for child in read_child_dirs(dir) {
-        walk_for_any_repo(&child, resolve_branch, out, depth_remaining - 1);
+        if next.is_empty() {
+            return;
+        }
+        frontier = next;
     }
 }
 
@@ -181,7 +179,7 @@ fn find_dir_in_ancestors(start: &Path, dir_name: &str) -> Option<PathBuf> {
 }
 
 fn read_child_dirs(dir: &Path) -> Vec<PathBuf> {
-    std::fs::read_dir(dir)
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|entries| {
             entries
                 .flatten()
@@ -189,7 +187,9 @@ fn read_child_dirs(dir: &Path) -> Vec<PathBuf> {
                 .filter(|p| p.is_dir())
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    dirs.sort();
+    dirs
 }
 
 fn resolve_missing_tray_root(root: &Path, fallback: &Path) -> PathBuf {
@@ -613,7 +613,7 @@ path = \"src/main.rs\"
         let manifest_dir = create_manifest_dir(tmp.path(), "qol-tray");
         let feat = tmp.path().join("worktrees").join("feat");
         let outer = create_git_worktree(&feat.join("qol-tray"));
-        create_git_worktree(&feat.join("x").join("qol-tray"));
+        create_git_worktree(&feat.join("a").join("qol-tray"));
         let result = scan_with_branch_resolver(&manifest_dir, fake_branch_resolver);
 
         assert_eq!(result.len(), 1, "result: {:?}", result);
