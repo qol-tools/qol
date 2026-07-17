@@ -26,7 +26,7 @@
 
 .plugin-grid-media .plugin-card.no-ui,
 .plugin-grid .plugin-card.no-ui {
-    border-color: var(--tui-line-soft);
+    border-color: var(--line-soft);
 }
 
 .plugin-grid-media .plugin-card.no-ui img,
@@ -166,7 +166,7 @@
 
 .plugin-grid-store .plugin-card:hover:not([data-selected="true"]),
 .plugins-grid .plugin-card:hover:not([data-selected="true"]) {
-    border-color: var(--tui-line);
+    border-color: var(--line);
     box-shadow: var(--elevation-crisp-2);
     transform: translateY(-1px);
 }
@@ -271,7 +271,7 @@
 
 .plugin-grid-media .plugin-card.ghost,
 .plugin-grid .plugin-card.ghost {
-    background: var(--tui-bg-card);
+    background: var(--surface-row);
     opacity: 0.6;
     pointer-events: none;
     display: flex;
@@ -315,7 +315,7 @@
 .plugin-cog:hover {
     color: var(--accent);
     background: var(--layer-ink-62);
-    border-color: var(--tui-line);
+    border-color: var(--line);
 }
 
 :root[data-qol-identity="modern"] .plugin-cog:hover {
@@ -326,8 +326,8 @@
     position: absolute;
     top: calc(var(--size-control-md) + var(--space-1));
     right: var(--space-2);
-    background: var(--tui-bg-panel);
-    border: var(--border-w-1) solid var(--tui-line);
+    background: var(--panel-bg);
+    border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-md);
     overflow: hidden;
     opacity: 0;
@@ -530,8 +530,8 @@
 
 .plugin-grid-media .plugin-card.skeleton,
 .plugin-grid .plugin-card.skeleton {
-    background: var(--tui-bg-card);
-    border-color: var(--tui-line-soft);
+    background: var(--surface-row);
+    border-color: var(--line-soft);
     overflow: hidden;
     position: relative;
     pointer-events: none;

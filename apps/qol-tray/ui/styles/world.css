@@ -272,7 +272,7 @@ html.qol-bootstrapping-dive #app {
 }
 
 .wsp-section + .wsp-section {
-    border-top: var(--border-w-1) solid var(--tui-line-soft);
+    border-top: var(--border-w-1) solid var(--line-soft);
 }
 
 .wsp-heading {
@@ -420,8 +420,8 @@ html.qol-bootstrapping-dive #app {
 }
 
 .world-settings-panel select {
-    background: var(--tui-bg-screen);
-    border: var(--border-w-1) solid var(--tui-line);
+    background: var(--surface-inset);
+    border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-sm);
     color: var(--text-secondary);
     font-size: var(--fs-md);
@@ -453,8 +453,8 @@ html.qol-bootstrapping-dive #app {
     font-family: inherit;
     padding: var(--space-1-5) var(--space-4);
     border-radius: var(--radius-sm);
-    border: var(--border-w-1) solid var(--tui-line-soft);
-    background: var(--tui-bg-card);
+    border: var(--border-w-1) solid var(--line-soft);
+    background: var(--surface-row);
     color: var(--text-muted);
     cursor: pointer;
     transition: color var(--dur-sm), border-color var(--dur-sm), background var(--dur-sm);
@@ -463,7 +463,7 @@ html.qol-bootstrapping-dive #app {
 .wsp-version-btn:hover {
     color: var(--text-primary);
     background: rgba(var(--accent-rgb), 0.08);
-    border-color: var(--tui-line);
+    border-color: var(--line);
 }
 
 .wsp-version-btn.has-update {
@@ -528,8 +528,8 @@ html.qol-bootstrapping-dive #app {
     translate: -50% 0;
     width: min(560px, 82vw);
     pointer-events: auto;
-    background: var(--tui-bg-panel);
-    border: var(--border-w-1) solid var(--tui-line);
+    background: var(--panel-bg);
+    border: var(--border-w-1) solid var(--line);
     box-shadow: var(--elevation-crisp-2);
     overflow: hidden;
 }
@@ -555,7 +555,7 @@ html.qol-bootstrapping-dive #app {
 .palette-layer .command-palette .palette-dropdown {
     position: static;
     border: none;
-    border-top: var(--border-w-1) solid var(--tui-line-soft);
+    border-top: var(--border-w-1) solid var(--line-soft);
     background: transparent;
     max-height: 320px;
     padding: var(--space-1) 0;

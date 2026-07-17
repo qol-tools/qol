@@ -4,14 +4,14 @@
     --table-header-pad: var(--pad-header-row);
     --table-row-pad: var(--pad-list-row);
     --table-row-min-h: var(--size-row-sm);
-    background: var(--tui-bg-screen);
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--surface-inset);
+    border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-lg);
     overflow: visible;
 }
 
 .table-list-header {
-    border-bottom: var(--border-w-1) solid var(--tui-line-soft);
+    border-bottom: var(--border-w-1) solid var(--line-soft);
 }
 
 .table-list-header .table-cell {

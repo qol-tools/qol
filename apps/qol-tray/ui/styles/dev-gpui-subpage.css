@@ -18,7 +18,7 @@
     align-items: center;
     gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
-    background: var(--tui-bg-card);
+    background: var(--surface-row);
     border: var(--border-w-1) solid transparent;
     border-radius: var(--radius-md);
 }

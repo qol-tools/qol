@@ -250,6 +250,7 @@ pub struct ThemeIdentity {
     pub line_soft: &'static str,
     pub surface_inset: &'static str,
     pub surface_row: &'static str,
+    pub desktop_bg: &'static str,
     pub prompt_display: &'static str,
     pub frame_border: &'static str,
     pub frame_texture: &'static str,
@@ -299,6 +300,7 @@ pub const RETRO_IDENTITY: ThemeIdentity = ThemeIdentity {
     line_soft: "var(--tui-line-soft)",
     surface_inset: "var(--tui-bg-screen)",
     surface_row: "var(--tui-bg-card)",
+    desktop_bg: "var(--tui-desktop-bg)",
     prompt_display: "inline",
     frame_border: "var(--border-w-3) double var(--tui-line)",
     frame_texture: "var(--tui-scanline)",
@@ -348,6 +350,7 @@ pub const MODERN_IDENTITY: ThemeIdentity = ThemeIdentity {
     line_soft: "rgba(var(--paper-rgb), 0.07)",
     surface_inset: "var(--qol-system-surface-raised)",
     surface_row: "var(--qol-system-surface-raised)",
+    desktop_bg: "var(--surface-canvas)",
     prompt_display: "none",
     frame_border: "none",
     frame_texture:

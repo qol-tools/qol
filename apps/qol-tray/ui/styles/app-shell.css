@@ -11,7 +11,7 @@
 
 body {
     font-family: var(--font-sans);
-    background: var(--tui-desktop-bg);
+    background: var(--desktop-bg);
     background-attachment: fixed;
     color: var(--text-secondary);
     color-scheme: dark;
@@ -299,8 +299,8 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--tui-bg-card);
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--surface-row);
+    border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-lg);
 }
 
@@ -343,7 +343,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    border-left: var(--border-w-1) solid var(--tui-line-soft);
+    border-left: var(--border-w-1) solid var(--line-soft);
     cursor: pointer;
     font-size: var(--fs-xl);
     color: var(--text-muted);
@@ -355,8 +355,8 @@ body {
 }
 
 .wt-picker {
-    background: var(--tui-bg-panel);
-    border: var(--border-w-1) solid var(--tui-line);
+    background: var(--panel-bg);
+    border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-lg);
     box-shadow: var(--elevation-crisp-2);
     z-index: var(--z-popover);
@@ -368,7 +368,7 @@ body {
     padding: var(--space-3) var(--space-4);
     background: transparent;
     border: none;
-    border-bottom: var(--border-w-1) solid var(--tui-line-soft);
+    border-bottom: var(--border-w-1) solid var(--line-soft);
     color: var(--text-secondary);
     font-size: var(--fs-md);
     font-family: inherit;
@@ -514,9 +514,9 @@ body {
     align-items: flex-start;
     gap: var(--space-2);
     padding: var(--space-3) var(--space-5);
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-md);
-    background: var(--tui-bg-card);
+    background: var(--surface-row);
     color: var(--text-secondary);
     font-size: var(--fs-md-minus);
     pointer-events: auto;
@@ -593,8 +593,8 @@ body {
 }
 
 .toast-info {
-    border-color: var(--tui-line-soft);
-    background: var(--tui-bg-card);
+    border-color: var(--line-soft);
+    background: var(--surface-row);
     color: var(--text-secondary);
 }
 

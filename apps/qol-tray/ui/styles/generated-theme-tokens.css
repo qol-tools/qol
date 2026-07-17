@@ -41,6 +41,7 @@
     --qol-identity-line-soft: var(--tui-line-soft);
     --qol-identity-surface-inset: var(--tui-bg-screen);
     --qol-identity-surface-row: var(--tui-bg-card);
+    --qol-identity-desktop-bg: var(--tui-desktop-bg);
     --qol-identity-prompt-display: inline;
     --qol-identity-frame-border: var(--border-w-3) double var(--tui-line);
     --qol-identity-frame-texture: var(--tui-scanline);
@@ -177,6 +178,7 @@
     --qol-identity-line-soft: rgba(var(--paper-rgb), 0.07);
     --qol-identity-surface-inset: var(--qol-system-surface-raised);
     --qol-identity-surface-row: var(--qol-system-surface-raised);
+    --qol-identity-desktop-bg: var(--surface-canvas);
     --qol-identity-prompt-display: none;
     --qol-identity-frame-border: none;
     --qol-identity-frame-texture: linear-gradient(180deg, rgba(var(--paper-rgb), 0.035), rgba(var(--paper-rgb), 0.015));

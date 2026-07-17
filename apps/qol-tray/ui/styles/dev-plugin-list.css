@@ -5,8 +5,8 @@
 
 .plugin-list,
 .discovered-list {
-    background: var(--tui-bg-screen);
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--surface-inset);
+    border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-lg);
     overflow: visible;
 }
@@ -21,7 +21,7 @@
     gap: 0;
     padding: 0;
     min-height: var(--size-row-md);
-    border-bottom: var(--border-w-1) solid var(--tui-line-soft);
+    border-bottom: var(--border-w-1) solid var(--line-soft);
     transition: background var(--transition), border-left-color var(--transition);
     border-left: var(--border-w-3) solid transparent;
     box-sizing: border-box;
@@ -133,8 +133,8 @@
     align-self: stretch;
     display: flex;
     position: relative;
-    border-left: var(--border-w-1) solid var(--tui-line-soft);
-    background: var(--tui-bg-screen);
+    border-left: var(--border-w-1) solid var(--line-soft);
+    background: var(--surface-inset);
     overflow: visible;
 }
 
@@ -286,8 +286,8 @@
     top: calc(var(--size-control-sm) - var(--space-1));
     right: var(--space-1);
     min-width: var(--size-context-menu-min);
-    background: var(--tui-bg-panel);
-    border: var(--border-w-1) solid var(--tui-line);
+    background: var(--panel-bg);
+    border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-md);
     overflow: hidden;
     opacity: 0;
@@ -529,7 +529,7 @@
     min-width: var(--size-action-col-sm);
     height: var(--size-icon-menu-dot-h);
     padding: var(--pad-sparkline);
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-md);
     background: var(--layer-ink-22);
 }
@@ -610,17 +610,17 @@
     align-items: center;
     margin-top: var(--space-3);
     padding: var(--space-3) var(--space-4);
-    background: var(--tui-bg-card);
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--surface-row);
+    border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-md);
 }
 
 .link-input-row input {
     flex: 1;
     padding: var(--space-2) var(--space-3);
-    border: var(--border-w-1) solid var(--tui-line);
+    border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-sm);
-    background: var(--tui-bg-screen);
+    background: var(--surface-inset);
     color: var(--text-secondary);
     font-family: var(--font-data);
     font-size: var(--fs-md-minus);

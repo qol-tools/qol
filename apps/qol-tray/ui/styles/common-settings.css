@@ -15,10 +15,10 @@
 }
 
 .content-frame {
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-lg);
     padding: var(--space-5);
-    background: var(--tui-bg-screen);
+    background: var(--surface-inset);
     box-shadow: var(--card-top-highlight);
 }
 
@@ -149,9 +149,9 @@
 .form-group select {
     width: 100%;
     padding: var(--space-3) var(--space-4);
-    border: var(--border-w-1) solid var(--tui-line);
+    border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-md);
-    background: var(--tui-bg-screen);
+    background: var(--surface-inset);
     color: var(--text-secondary);
     font-size: var(--fs-base);
 }

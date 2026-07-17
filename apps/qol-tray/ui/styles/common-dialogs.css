@@ -14,8 +14,8 @@
 
 .confirm-modal-content,
 .edit-modal-content {
-    background: var(--tui-bg-panel);
-    border: var(--border-w-1) solid var(--tui-line);
+    background: var(--panel-bg);
+    border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-md);
     padding: var(--space-7);
     box-shadow: var(--elevation-crisp-2);

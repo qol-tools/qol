@@ -121,8 +121,8 @@
     --bg-hover: rgba(var(--accent-rgb), 0.08);
     --bg-selected: rgba(var(--accent-rgb), 0.14);
 
-    --border-subtle: var(--tui-line-soft);
-    --border-default: var(--tui-line);
+    --border-subtle: var(--line-soft);
+    --border-default: var(--line);
     --border-hover: rgba(var(--accent-rgb), 0.7);
 
     --text-primary: var(--text-strong);
@@ -366,6 +366,7 @@
     --line-soft: var(--qol-identity-line-soft);
     --surface-inset: var(--qol-identity-surface-inset);
     --surface-row: var(--qol-identity-surface-row);
+    --desktop-bg: var(--qol-identity-desktop-bg);
     --prompt-display: var(--qol-identity-prompt-display);
     --frame-border: var(--qol-identity-frame-border);
     --frame-texture: var(--qol-identity-frame-texture);

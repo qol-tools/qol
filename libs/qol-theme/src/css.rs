@@ -104,6 +104,7 @@ fn push_identity(out: &mut String, identity: &ThemeIdentity) {
         ("line-soft", identity.line_soft),
         ("surface-inset", identity.surface_inset),
         ("surface-row", identity.surface_row),
+        ("desktop-bg", identity.desktop_bg),
         ("prompt-display", identity.prompt_display),
         ("frame-border", identity.frame_border),
         ("frame-texture", identity.frame_texture),

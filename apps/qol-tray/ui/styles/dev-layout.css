@@ -190,9 +190,9 @@
 
 .catalog-input {
     padding: var(--space-2) var(--space-3);
-    border: var(--border-w-1) solid var(--tui-line);
+    border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-md);
-    background: var(--tui-bg-screen);
+    background: var(--surface-inset);
     color: var(--text-secondary);
     font-family: var(--font-ui);
     font-size: var(--fs-sm);
@@ -217,8 +217,8 @@
     top: calc(100% + 4px);
     left: 0;
     min-width: 100%;
-    background: var(--tui-bg-panel);
-    border: var(--border-w-1) solid var(--tui-line);
+    background: var(--panel-bg);
+    border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-md);
     padding: 4px 0;
     box-shadow: var(--elevation-crisp-2);
@@ -258,7 +258,7 @@
     align-items: flex-start;
     gap: var(--space-2);
     padding: var(--space-2);
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-md);
 }
 
@@ -275,10 +275,10 @@
 }
 
 .dev-content-frame {
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-lg);
     padding: var(--space-4) var(--space-5) var(--space-1);
-    background: var(--tui-bg-screen);
+    background: var(--surface-inset);
     box-shadow: var(--card-top-highlight);
 }
 
@@ -287,8 +287,8 @@
     align-items: center;
     gap: var(--space-6);
     padding: var(--space-6);
-    background: var(--tui-bg-card);
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--surface-row);
+    border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-lg);
     cursor: pointer;
     transition: background var(--transition), border-color var(--transition), transform var(--transition);
@@ -305,7 +305,7 @@
     border-color: var(--state-info-border);
     background:
         linear-gradient(115deg, var(--accent-glow-soft) 0%, var(--state-info-bg-faint) 38%, transparent 70%),
-        var(--tui-bg-card);
+        var(--surface-row);
 }
 
 .dev-card .refresh-btn {

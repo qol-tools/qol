@@ -47,9 +47,9 @@
     flex-direction: column;
     gap: var(--space-1);
     padding: var(--space-1-5);
-    border: var(--border-w-1) solid var(--tui-line);
+    border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-md);
-    background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.06), transparent 45%), var(--tui-bg-panel);
+    background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.06), transparent 45%), var(--panel-bg);
     box-shadow: var(--elevation-crisp-2);
     outline: none;
 }

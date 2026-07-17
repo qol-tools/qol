@@ -93,8 +93,8 @@
     height: 100%;
     position: relative;
     overflow: hidden;
-    background: var(--tui-bg-card);
-    border: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--surface-row);
+    border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-lg);
     box-shadow: var(--elevation-crisp-1);
 }
