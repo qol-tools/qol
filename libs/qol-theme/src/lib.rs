@@ -355,7 +355,7 @@ pub const MODERN_IDENTITY: ThemeIdentity = ThemeIdentity {
     frame_border: "none",
     frame_texture:
         "linear-gradient(180deg, rgba(var(--paper-rgb), 0.035), rgba(var(--paper-rgb), 0.015))",
-    frame_bg: "var(--surface-canvas)",
+    frame_bg: "var(--surface-elevated)",
     frame_radius: "var(--radius-xl)",
     frame_shadow: "0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(var(--paper-rgb), 0.07)",
     crt_band_display: "none",

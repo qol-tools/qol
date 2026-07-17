@@ -182,7 +182,7 @@
     --qol-identity-prompt-display: none;
     --qol-identity-frame-border: none;
     --qol-identity-frame-texture: linear-gradient(180deg, rgba(var(--paper-rgb), 0.035), rgba(var(--paper-rgb), 0.015));
-    --qol-identity-frame-bg: var(--surface-canvas);
+    --qol-identity-frame-bg: var(--surface-elevated);
     --qol-identity-frame-radius: var(--radius-xl);
     --qol-identity-frame-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(var(--paper-rgb), 0.07);
     --qol-identity-crt-band-display: none;

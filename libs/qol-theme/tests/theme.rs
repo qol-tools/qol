@@ -1152,7 +1152,7 @@ fn tray_css_emits_identity_tokens_per_theme() {
     assert!(midnight.contains("--qol-identity-surface-row: var(--qol-system-surface-raised);"));
     assert!(midnight.contains("--qol-identity-desktop-bg: var(--surface-canvas);"));
     assert!(midnight.contains("--qol-identity-prompt-display: none;"));
-    assert!(midnight.contains("--qol-identity-frame-bg: var(--surface-canvas);"));
+    assert!(midnight.contains("--qol-identity-frame-bg: var(--surface-elevated);"));
     assert!(midnight.contains("--qol-identity-frame-radius: var(--radius-xl);"));
     assert!(midnight.contains(
         "--qol-identity-frame-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(var(--paper-rgb), 0.07);"
