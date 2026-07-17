@@ -1583,12 +1583,28 @@ fn reconcile_flow_report_file(path: &Path) -> Result<Option<FlowRunSummary>> {
         .and_then(|owner| owner.get("state"))
         .and_then(Value::as_str)
         .map(str::to_string);
-    let Some(owner_state) = owner_state else {
+    if owner_state.is_none()
+        && repair_ownerless_legacy_flow(path, run_dir, &content, &mut report, &status)?
+    {
         return Ok(Some(FlowRunSummary {
             run_id,
             status,
             report_path: path.to_path_buf(),
         }));
+    }
+    let owner_state = match owner_state {
+        Some(owner_state) => owner_state,
+        None if ownerless_terminal_flow_is_repairable(run_dir, &report, &status) => {
+            report["owner"] = json!({ "state": "released" });
+            "released".to_string()
+        }
+        None => {
+            return Ok(Some(FlowRunSummary {
+                run_id,
+                status,
+                report_path: path.to_path_buf(),
+            }));
+        }
     };
     validate_flow_lanes(run_dir, &report)?;
     let owner_pid = report
@@ -1682,6 +1698,171 @@ fn reconcile_flow_report_file(path: &Path) -> Result<Option<FlowRunSummary>> {
         status: recovered_status.to_string(),
         report_path: path.to_path_buf(),
     }))
+}
+
+fn repair_ownerless_legacy_flow(
+    path: &Path,
+    run_dir: &Path,
+    content: &str,
+    report: &mut Value,
+    status: &str,
+) -> Result<bool> {
+    if !flow_status_is_terminal(status) {
+        return Ok(false);
+    }
+    let Some(run_root) = run_dir.parent().and_then(Path::parent) else {
+        return Ok(false);
+    };
+    let current_root = run_root.join("cases");
+    let legacy_root = run_root.parent().unwrap_or(run_root).join("qol-emu");
+    let Some(lanes) = report.get("lanes").and_then(Value::as_array) else {
+        return Ok(false);
+    };
+    let requested = report
+        .get("workflow")
+        .and_then(|workflow| workflow.get("repeat"))
+        .and_then(Value::as_u64);
+    if requested != u64::try_from(lanes.len()).ok() {
+        return Ok(false);
+    }
+    let mut seen = BTreeSet::new();
+    let mut repairs = Vec::with_capacity(lanes.len());
+    for lane in lanes {
+        let Some(run_id) = lane.get("run_id").and_then(Value::as_str) else {
+            return Ok(false);
+        };
+        if !safe_run_id(run_id) || !seen.insert(run_id.to_string()) {
+            return Ok(false);
+        }
+        let recorded_report = lane
+            .get("report")
+            .and_then(Value::as_str)
+            .map(PathBuf::from);
+        let current_report = current_root.join(run_id).join("report.json");
+        let legacy_report = legacy_root.join(run_id).join("report.json");
+        let Some(recorded_report) =
+            recorded_report.filter(|path| path == &current_report || path == &legacy_report)
+        else {
+            return Ok(false);
+        };
+        let expected_log = run_dir.join("logs").join(format!("{run_id}.log"));
+        let recorded_log = lane.get("log").and_then(Value::as_str).map(PathBuf::from);
+        if recorded_log.as_ref() != Some(&expected_log) {
+            return Ok(false);
+        }
+        let child = qol_dev_env::read_report_checked(
+            &recorded_report,
+            run_id,
+            &qol_dev_env::ReportKind::Flow,
+        )?;
+        if let Some(child) = child {
+            if !child.cleanup.is_complete() {
+                return Ok(false);
+            }
+            repairs.push(LegacyFlowLaneRepair::Child {
+                report_path: recorded_report,
+                document: child.document().clone(),
+            });
+            continue;
+        }
+        let not_started = status == "cancelled"
+            && recorded_report == current_report
+            && lane.get("process_status").and_then(Value::as_str) == Some("not started")
+            && lane.get("report_status").is_none_or(Value::is_null)
+            && lane.get("completed").and_then(Value::as_bool) == Some(false)
+            && lane.get("passed").and_then(Value::as_bool) == Some(false)
+            && fs::symlink_metadata(lane_owner_path(run_dir, run_id)).is_err();
+        if !not_started {
+            return Ok(false);
+        }
+        repairs.push(LegacyFlowLaneRepair::NotStarted);
+    }
+    let lanes = report
+        .get_mut("lanes")
+        .and_then(Value::as_array_mut)
+        .context("flow report has no mutable lane plan")?;
+    for (lane, repair) in lanes.iter_mut().zip(repairs) {
+        match repair {
+            LegacyFlowLaneRepair::Child {
+                report_path,
+                document,
+            } => {
+                let report_status = document
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let verdict = document
+                    .get("workflow")
+                    .and_then(|workflow| workflow.get("verdict"))
+                    .and_then(Value::as_str);
+                let passed = report_status == "pass" && verdict == Some("pass");
+                mark_lane_resolved(
+                    lane,
+                    &report_path,
+                    &document,
+                    report_status,
+                    verdict,
+                    passed,
+                )?;
+            }
+            LegacyFlowLaneRepair::NotStarted => mark_lane_unspawned(
+                lane,
+                "not-started",
+                "not started",
+                "flow was cancelled before this lane launched",
+            )?,
+        }
+    }
+    let observed_at = qol_dev_env::unix_millis()?;
+    let interrupted_path = run_dir.join("report.interrupted.json");
+    if fs::symlink_metadata(&interrupted_path).is_err() {
+        atomic_write(&interrupted_path, content.as_bytes())?;
+    }
+    report["owner"] = json!({ "state": "released" });
+    report["reconciliation"] = json!({
+        "status": "complete",
+        "source": "qol-flow-legacy-lane-root-v1",
+        "observed_at_unix_ms": observed_at,
+        "interrupted_report": interrupted_path,
+    });
+    let repaired = serde_json::to_vec_pretty(report).context("failed to serialize flow report")?;
+    if !qol_dev_env::parse_report(path, &repaired)?
+        .cleanup
+        .is_complete()
+    {
+        return Ok(false);
+    }
+    atomic_write(path, &[repaired.as_slice(), b"\n"].concat())?;
+    Ok(true)
+}
+
+enum LegacyFlowLaneRepair {
+    Child {
+        report_path: PathBuf,
+        document: Value,
+    },
+    NotStarted,
+}
+
+fn ownerless_terminal_flow_is_repairable(run_dir: &Path, report: &Value, status: &str) -> bool {
+    if !flow_status_is_terminal(status) || validate_flow_lanes(run_dir, report).is_err() {
+        return false;
+    }
+    let Some(lanes) = report.get("lanes").and_then(Value::as_array) else {
+        return false;
+    };
+    lanes.iter().all(|lane| {
+        let Some(run_id) = lane.get("run_id").and_then(Value::as_str) else {
+            return false;
+        };
+        let Ok((report_path, _)) = canonical_lane_paths(run_dir, run_id) else {
+            return false;
+        };
+        qol_dev_env::read_report_checked(&report_path, run_id, &qol_dev_env::ReportKind::Flow)
+            .ok()
+            .flatten()
+            .is_some_and(|report| report.cleanup.is_complete())
+    })
 }
 
 fn reconcile_preparation_evidence(run_dir: &Path, report: &mut Value) {
@@ -5820,6 +6001,174 @@ mod tests {
 
         assert_eq!(summary.status, "failed");
         assert_eq!(fs::read(&fixture.report_path).unwrap(), before);
+    }
+
+    #[test]
+    fn ownerless_terminal_flow_reconciles_from_typed_child_cleanup_proof() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = recovery_fixture(&temp, u32::MAX, "running", "spawned");
+        fs::write(
+            fixture.lane_dir.join("report.json"),
+            serde_json::to_vec_pretty(&json!({
+                "kind": "flow",
+                "run_id": fixture.lane_id,
+                "status": "pass",
+                "workflow": { "verdict": "pass" },
+                "teardown": {
+                    "status": "complete",
+                    "qemu_exit_verified": true,
+                    "tree_exit_verified": true,
+                    "removed": []
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut report = read_value(&fixture.report_path);
+        report.as_object_mut().unwrap().remove("owner");
+        report["status"] = json!("pass");
+        fs::write(
+            &fixture.report_path,
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+
+        let summary = reconcile_flow_report_file(&fixture.report_path)
+            .unwrap()
+            .unwrap();
+        let repaired = read_value(&fixture.report_path);
+
+        assert_eq!(summary.status, "pass");
+        assert_eq!(repaired["lanes"][0]["cleanup"]["complete"], true);
+        assert_eq!(repaired["reconciliation"]["status"], "complete");
+        assert!(fixture.flow_dir.join("report.interrupted.json").is_file());
+    }
+
+    #[test]
+    fn ownerless_legacy_root_flow_reconciles_from_its_recorded_children() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_root = temp.path().join("target/qol-env");
+        let flow_id = "legacy-flow";
+        let lane_id = "legacy-lane";
+        let flow_dir = run_root.join("flows").join(flow_id);
+        let lane_dir = temp.path().join("target/qol-emu").join(lane_id);
+        let report_path = flow_dir.join("report.json");
+        let child_report_path = lane_dir.join("report.json");
+        let log_path = flow_dir.join("logs").join(format!("{lane_id}.log"));
+        fs::create_dir_all(flow_dir.join("logs")).unwrap();
+        fs::create_dir_all(&lane_dir).unwrap();
+        fs::write(
+            &child_report_path,
+            serde_json::to_vec_pretty(&json!({
+                "kind": "flow",
+                "run_id": lane_id,
+                "status": "pass",
+                "workflow": { "verdict": "pass" },
+                "teardown": {
+                    "status": "complete",
+                    "qemu_exit_verified": true,
+                    "tree_exit_verified": true,
+                    "removed": []
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            &report_path,
+            serde_json::to_vec_pretty(&json!({
+                "kind": "flow-fanout",
+                "run_id": flow_id,
+                "status": "pass",
+                "workflow": { "id": "leaves-no-trace", "repeat": 1 },
+                "lanes": [{
+                    "run_id": lane_id,
+                    "cleanup": { "complete": false },
+                    "report": child_report_path,
+                    "log": log_path
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let summary = reconcile_flow_report_file(&report_path).unwrap().unwrap();
+        let repaired = read_value(&report_path);
+
+        assert_eq!(summary.status, "pass");
+        assert_eq!(repaired["lanes"][0]["cleanup"]["complete"], true);
+        assert_eq!(
+            repaired["reconciliation"]["source"],
+            "qol-flow-legacy-lane-root-v1"
+        );
+        assert!(flow_dir.join("report.interrupted.json").is_file());
+    }
+
+    #[test]
+    fn ownerless_cancelled_flow_reconciles_children_and_not_started_lanes() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_root = temp.path().join("target/qol-env");
+        let flow_id = "cancelled-flow";
+        let flow_dir = run_root.join("flows").join(flow_id);
+        let report_path = flow_dir.join("report.json");
+        fs::create_dir_all(flow_dir.join("logs")).unwrap();
+        let lanes = ["completed-lane", "not-started-lane"];
+        let child_dir = run_root.join("cases").join(lanes[0]);
+        fs::create_dir_all(&child_dir).unwrap();
+        fs::write(
+            child_dir.join("report.json"),
+            serde_json::to_vec_pretty(&json!({
+                "kind": "flow",
+                "run_id": lanes[0],
+                "status": "abandoned",
+                "teardown": {
+                    "status": "complete",
+                    "qemu_exit_verified": true,
+                    "tree_exit_verified": true,
+                    "removed": []
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let lane = |run_id: &str, process_status: &str| {
+            json!({
+                "run_id": run_id,
+                "completed": false,
+                "passed": false,
+                "process_status": process_status,
+                "report_status": null,
+                "cleanup": { "complete": false },
+                "report": run_root.join("cases").join(run_id).join("report.json"),
+                "log": flow_dir.join("logs").join(format!("{run_id}.log"))
+            })
+        };
+        fs::write(
+            &report_path,
+            serde_json::to_vec_pretty(&json!({
+                "kind": "flow-fanout",
+                "run_id": flow_id,
+                "status": "cancelled",
+                "workflow": { "id": "leaves-no-trace", "repeat": 2 },
+                "lanes": [lane(lanes[0], "terminated"), lane(lanes[1], "not started")]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let summary = reconcile_flow_report_file(&report_path).unwrap().unwrap();
+        let repaired = read_value(&report_path);
+
+        assert_eq!(summary.status, "cancelled");
+        assert_eq!(repaired["lanes"][0]["cleanup"]["complete"], true);
+        assert_eq!(repaired["lanes"][1]["phase"], "not-started");
+        assert_eq!(repaired["lanes"][1]["cleanup"]["complete"], true);
+        assert!(
+            qol_dev_env::parse_report(&report_path, &fs::read(&report_path).unwrap())
+                .unwrap()
+                .cleanup
+                .is_complete()
+        );
     }
 
     #[test]

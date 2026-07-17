@@ -1,10 +1,12 @@
 use std::collections::BTreeSet;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
+
+const LEGACY_CLEANUP_BACKUP: &str = "report.legacy-cleanup.json";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReportKind {
@@ -205,6 +207,27 @@ pub struct RunSummary {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LegacyCleanupRepair {
+    NotApplicable,
+    Repaired { backup_path: PathBuf },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LegacyCleanupFormat {
+    Lifecycle,
+    OrphanReconciliation,
+}
+
+impl LegacyCleanupFormat {
+    fn source(self) -> &'static str {
+        match self {
+            Self::Lifecycle => "qol-emu-legacy-lifecycle-v1",
+            Self::OrphanReconciliation => "qol-emu-legacy-orphan-reconciliation-v1",
+        }
+    }
+}
+
 impl RunReport {
     pub fn summary(&self) -> RunSummary {
         RunSummary {
@@ -269,6 +292,197 @@ pub fn read_report(path: &Path) -> Result<Option<RunReport>> {
         }
     };
     parse_report(path, &content).map(Some)
+}
+
+pub fn repair_legacy_cleanup_report(path: &Path) -> Result<LegacyCleanupRepair> {
+    let initial = match fs::read(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Ok(LegacyCleanupRepair::NotApplicable)
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()))
+        }
+    };
+    let initial_document: Value = serde_json::from_slice(&initial)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    if legacy_cleanup_format(path, &initial_document)?.is_none() {
+        return Ok(LegacyCleanupRepair::NotApplicable);
+    }
+    let run_dir = path
+        .parent()
+        .with_context(|| format!("report has no run directory: {}", path.display()))?;
+    let lock_path = run_dir.join("cleanup-repair.lock");
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open {}", lock_path.display()))?;
+    lock.lock()
+        .with_context(|| format!("failed to lock {}", lock_path.display()))?;
+    let content = match fs::read(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Ok(LegacyCleanupRepair::NotApplicable)
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()))
+        }
+    };
+    let mut document: Value = serde_json::from_slice(&content)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    let Some(format) = legacy_cleanup_format(path, &document)? else {
+        return Ok(LegacyCleanupRepair::NotApplicable);
+    };
+    let backup_path = run_dir.join(LEGACY_CLEANUP_BACKUP);
+    if !backup_path.exists() {
+        qol_fs::atomic_write(&backup_path, &content)
+            .with_context(|| format!("failed to write {}", backup_path.display()))?;
+    }
+    let upgraded_at_unix_ms = crate::unix_millis()?;
+    let teardown = document
+        .get_mut("teardown")
+        .and_then(Value::as_object_mut)
+        .context("legacy teardown must be an object")?;
+    teardown.insert("status".to_string(), Value::String("complete".to_string()));
+    teardown.insert("qemu_exit_verified".to_string(), Value::Bool(true));
+    teardown.insert("tree_exit_verified".to_string(), Value::Bool(true));
+    document["cleanup_proof_upgrade"] = serde_json::json!({
+        "source": format.source(),
+        "upgraded_at_unix_ms": upgraded_at_unix_ms,
+        "evidence_report": backup_path,
+    });
+    let upgraded = serde_json::to_vec_pretty(&document).context("failed to serialize report")?;
+    let parsed = parse_report(path, &upgraded)?;
+    if parsed.cleanup != CleanupState::Complete {
+        bail!("legacy cleanup upgrade did not produce typed cleanup proof");
+    }
+    qol_fs::atomic_write(path, &[upgraded.as_slice(), b"\n"].concat())
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(LegacyCleanupRepair::Repaired { backup_path })
+}
+
+fn legacy_cleanup_format(path: &Path, document: &Value) -> Result<Option<LegacyCleanupFormat>> {
+    if path.file_name().and_then(|name| name.to_str()) != Some("report.json") {
+        return Ok(None);
+    }
+    let run_dir = path
+        .parent()
+        .with_context(|| format!("report has no run directory: {}", path.display()))?;
+    let directory_id = run_dir.file_name().and_then(|name| name.to_str());
+    let run_id = document.get("run_id").and_then(Value::as_str);
+    if run_id.is_none() || run_id != directory_id {
+        return Ok(None);
+    }
+    let kind = document.get("kind").and_then(Value::as_str);
+    if !matches!(kind, Some("environment" | "flow")) {
+        return Ok(None);
+    }
+    let status = document
+        .get("status")
+        .and_then(Value::as_str)
+        .map(ReportStatus::parse);
+    if !status.is_some_and(|status| status.is_terminal()) {
+        return Ok(None);
+    }
+    if document
+        .get("name")
+        .and_then(Value::as_str)
+        .is_none_or(|name| !name.starts_with("qol-emu-"))
+    {
+        return Ok(None);
+    }
+    if document
+        .get("finished_at_unix_ms")
+        .and_then(Value::as_u64)
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let Some(teardown) = document.get("teardown").and_then(Value::as_object) else {
+        return Ok(None);
+    };
+    let Some(removed) = teardown.get("removed").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+    for value in removed {
+        let Some(removed_path) = value.as_str().map(Path::new) else {
+            return Ok(None);
+        };
+        let Some(name) = removed_path.file_name().and_then(|name| name.to_str()) else {
+            return Ok(None);
+        };
+        let generated = name == "overlay.qcow2"
+            || name == "usb-stick.raw"
+            || (name.starts_with("overlay-snap-") && name.ends_with(".qcow2"));
+        if !generated || removed_path != run_dir.join(name) || removed_path.exists() {
+            return Ok(None);
+        }
+    }
+    let lifecycle = !teardown.contains_key("status")
+        && teardown
+            .keys()
+            .all(|key| matches!(key.as_str(), "exit" | "removed"))
+        && teardown
+            .get("exit")
+            .and_then(Value::as_str)
+            .is_some_and(|exit| exit.starts_with("exit status:"));
+    if lifecycle {
+        return Ok(Some(LegacyCleanupFormat::Lifecycle));
+    }
+    if legacy_orphan_reconciliation_is_complete(run_dir, document, teardown) {
+        return Ok(Some(LegacyCleanupFormat::OrphanReconciliation));
+    }
+    Ok(None)
+}
+
+fn legacy_orphan_reconciliation_is_complete(
+    run_dir: &Path,
+    document: &Value,
+    teardown: &serde_json::Map<String, Value>,
+) -> bool {
+    let expected_keys = [
+        "machine_name",
+        "phase",
+        "qemu_exit_verified",
+        "qemu_was_alive",
+        "removed",
+        "status",
+    ];
+    if teardown.len() != expected_keys.len()
+        || !expected_keys.iter().all(|key| teardown.contains_key(*key))
+        || teardown.get("status").and_then(Value::as_str) != Some("complete")
+        || teardown.get("phase").and_then(Value::as_str) != Some("complete")
+        || teardown.get("qemu_exit_verified").and_then(Value::as_bool) != Some(true)
+        || teardown.contains_key("tree_exit_verified")
+    {
+        return false;
+    }
+    let Some(reconciliation) = document.get("reconciliation") else {
+        return false;
+    };
+    if reconciliation.get("cleanup") != document.get("teardown")
+        || reconciliation
+            .get("previous_status")
+            .and_then(Value::as_str)
+            .is_none_or(|status| !ReportStatus::parse(status).is_active())
+    {
+        return false;
+    }
+    [
+        ("evidence_report", "report.running.json"),
+        ("stale_marker", "stale.json"),
+    ]
+    .into_iter()
+    .all(|(field, name)| {
+        reconciliation
+            .get(field)
+            .and_then(Value::as_str)
+            .map(Path::new)
+            .is_some_and(|path| path == run_dir.join(name) && path.is_file())
+    })
 }
 
 pub fn parse_report(path: &Path, content: &[u8]) -> Result<RunReport> {
@@ -945,6 +1159,141 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn doctor_repairs_the_known_legacy_lifecycle_contract_and_preserves_evidence() {
+        let root = tempdir().unwrap();
+        let run_dir = root.path().join("cases/lane-a");
+        fs::create_dir_all(&run_dir).unwrap();
+        let report_path = run_dir.join("report.json");
+        let legacy = json!({
+            "name": "qol-emu-run",
+            "kind": "flow",
+            "run_id": "lane-a",
+            "status": "pass",
+            "finished_at_unix_ms": 1,
+            "runtime": {
+                "supervisor_pid": 10,
+                "qemu_pid": 11
+            },
+            "teardown": {
+                "exit": "exit status: 0",
+                "removed": [
+                    run_dir.join("overlay.qcow2"),
+                    run_dir.join("usb-stick.raw")
+                ]
+            }
+        });
+        let original = format!("{}\n", serde_json::to_string_pretty(&legacy).unwrap());
+        fs::write(&report_path, &original).unwrap();
+
+        let result = repair_legacy_cleanup_report(&report_path).unwrap();
+        let LegacyCleanupRepair::Repaired { backup_path } = result else {
+            panic!("legacy report was not repaired");
+        };
+        assert_eq!(fs::read_to_string(backup_path).unwrap(), original);
+        let repaired = read_report(&report_path).unwrap().unwrap();
+        assert_eq!(repaired.cleanup, CleanupState::Complete);
+        assert_eq!(
+            repaired.document()["cleanup_proof_upgrade"]["source"],
+            "qol-emu-legacy-lifecycle-v1"
+        );
+        assert_eq!(
+            repair_legacy_cleanup_report(&report_path).unwrap(),
+            LegacyCleanupRepair::NotApplicable
+        );
+    }
+
+    #[test]
+    fn doctor_repairs_legacy_orphan_reconciliation_with_durable_evidence() {
+        let root = tempdir().unwrap();
+        let run_dir = root.path().join("cases/lane-a");
+        fs::create_dir_all(&run_dir).unwrap();
+        let report_path = run_dir.join("report.json");
+        let evidence_path = run_dir.join("report.running.json");
+        let stale_path = run_dir.join("stale.json");
+        fs::write(&evidence_path, b"{}\n").unwrap();
+        fs::write(&stale_path, b"{}\n").unwrap();
+        let teardown = json!({
+            "status": "complete",
+            "phase": "complete",
+            "qemu_exit_verified": true,
+            "qemu_was_alive": false,
+            "machine_name": null,
+            "removed": []
+        });
+        let legacy = json!({
+            "name": "qol-emu-run",
+            "kind": "flow",
+            "run_id": "lane-a",
+            "status": "abandoned",
+            "finished_at_unix_ms": 1,
+            "teardown": teardown,
+            "reconciliation": {
+                "cleanup": teardown,
+                "previous_status": "running",
+                "evidence_report": evidence_path,
+                "stale_marker": stale_path
+            }
+        });
+        fs::write(
+            &report_path,
+            format!("{}\n", serde_json::to_string_pretty(&legacy).unwrap()),
+        )
+        .unwrap();
+
+        let result = repair_legacy_cleanup_report(&report_path).unwrap();
+
+        assert!(matches!(result, LegacyCleanupRepair::Repaired { .. }));
+        let repaired = read_report(&report_path).unwrap().unwrap();
+        assert_eq!(repaired.cleanup, CleanupState::Complete);
+        assert_eq!(
+            repaired.document()["cleanup_proof_upgrade"]["source"],
+            "qol-emu-legacy-orphan-reconciliation-v1"
+        );
+    }
+
+    #[test]
+    fn doctor_refuses_legacy_cleanup_without_the_old_lifecycle_invariants() {
+        let root = tempdir().unwrap();
+        let run_dir = root.path().join("cases/lane-a");
+        fs::create_dir_all(&run_dir).unwrap();
+        let report_path = run_dir.join("report.json");
+        let cases = [
+            json!({
+                "name": "qol-emu-run",
+                "kind": "flow",
+                "run_id": "lane-a",
+                "status": "pass",
+                "finished_at_unix_ms": 1,
+                "teardown": { "removed": [] }
+            }),
+            json!({
+                "name": "qol-emu-run",
+                "kind": "flow",
+                "run_id": "lane-a",
+                "status": "pass",
+                "finished_at_unix_ms": 1,
+                "teardown": {
+                    "exit": "exit status: 0",
+                    "removed": [root.path().join("outside.qcow2")]
+                }
+            }),
+        ];
+        for document in cases {
+            fs::write(
+                &report_path,
+                format!("{}\n", serde_json::to_string_pretty(&document).unwrap()),
+            )
+            .unwrap();
+            assert_eq!(
+                repair_legacy_cleanup_report(&report_path).unwrap(),
+                LegacyCleanupRepair::NotApplicable
+            );
+        }
+        assert!(!run_dir.join(LEGACY_CLEANUP_BACKUP).exists());
+        assert!(!run_dir.join("cleanup-repair.lock").exists());
     }
 
     #[test]

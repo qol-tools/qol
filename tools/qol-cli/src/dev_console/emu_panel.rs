@@ -1467,6 +1467,7 @@ fn emu_info_lines(snapshot: &EnvironmentSnapshot) -> Vec<Line<'static>> {
                 .fg(Color::Yellow)
                 .bold(),
         ]));
+        lines.push(info_row("repair", "qol env doctor --repair"));
     }
     lines
 }
@@ -2795,6 +2796,10 @@ mod tests {
         assert!(detail.info.iter().any(|line| {
             span_text(&line.spans).contains("30 retained runs lack cleanup proof")
         }));
+        assert!(detail
+            .info
+            .iter()
+            .any(|line| { span_text(&line.spans).contains("qol env doctor --repair") }));
     }
 
     #[test]

@@ -590,6 +590,9 @@ fn cmd_doctor(args: &[OsString]) -> Result<()> {
             cleanup.total
         );
     }
+    if !repair_requested && cleanup.total == 0 {
+        println!("Cleanup reports: all verified.");
+    }
     for (reason, count) in cleanup.reasons {
         println!("  {count}: {reason}");
     }
@@ -636,6 +639,48 @@ fn repair_legacy_cleanup_reports(
             .iter()
             .map(|run| run.report_path.clone()),
     );
+    let session_paths = report_paths.iter().cloned().collect::<Vec<_>>();
+    let allowed_collections = environments
+        .iter()
+        .filter_map(|environment| environment.run_root.as_deref())
+        .flat_map(|run_root| {
+            [
+                run_root.join("cases"),
+                run_root.parent().unwrap_or(run_root).join("qol-emu"),
+            ]
+        })
+        .collect::<BTreeSet<_>>();
+    for session_path in session_paths {
+        let Some(session) = qol_dev_env::read_report(&session_path)? else {
+            continue;
+        };
+        let field = match session.kind {
+            qol_dev_env::ReportKind::EnvironmentBatch => Some("runs"),
+            qol_dev_env::ReportKind::FlowFanout => Some("lanes"),
+            _ => None,
+        };
+        let Some(children) = field
+            .and_then(|field| session.document().get(field))
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for child in children {
+            let Some(path) = child
+                .get("report")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+            else {
+                continue;
+            };
+            let collection = path.parent().and_then(Path::parent);
+            if path.file_name().and_then(|name| name.to_str()) == Some("report.json")
+                && collection.is_some_and(|root| allowed_collections.contains(root))
+            {
+                report_paths.insert(path);
+            }
+        }
+    }
     let mut repaired = 0;
     for path in report_paths {
         if matches!(
@@ -2095,10 +2140,9 @@ fn reconcile_batch_report_file(
         let Some(run_id) = run.get("run_id").and_then(Value::as_str) else {
             continue;
         };
-        let lifecycle = match recorded_lane(run_root, run).and_then(|lane| {
-            read_report_lifecycle(&lane)
-                .with_context(|| format!("invalid environment lane `{run_id}` report"))
-        }) {
+        let lifecycle = match recorded_lane_lifecycle(run_root, run)
+            .with_context(|| format!("invalid environment lane `{run_id}` report"))
+        {
             Ok(lifecycle) => lifecycle,
             Err(error) => Some(ReportLifecycle {
                 status: "invalid-report".to_string(),
@@ -2127,7 +2171,7 @@ fn reconcile_batch_report_file(
     Ok(())
 }
 
-fn recorded_lane(run_root: &Path, run: &Value) -> Result<Lane> {
+fn recorded_lane_lifecycle(run_root: &Path, run: &Value) -> Result<Option<ReportLifecycle>> {
     let run_id = run
         .get("run_id")
         .and_then(Value::as_str)
@@ -2135,8 +2179,6 @@ fn recorded_lane(run_root: &Path, run: &Value) -> Result<Lane> {
     if !safe_run_id(run_id) {
         bail!("environment lane has unsafe run ID `{run_id}`");
     }
-    let run_dir = run_root.join("cases").join(run_id);
-    let report_path = run_dir.join("report.json");
     let recorded_run_dir = run
         .get("run_dir")
         .and_then(Value::as_str)
@@ -2147,17 +2189,42 @@ fn recorded_lane(run_root: &Path, run: &Value) -> Result<Lane> {
         .and_then(Value::as_str)
         .map(PathBuf::from)
         .context("environment lane has no recorded report path")?;
-    if recorded_run_dir != run_dir || recorded_report != report_path {
+    let run_dir = run_root.join("cases").join(run_id);
+    let report_path = run_dir.join("report.json");
+    if recorded_run_dir == run_dir && recorded_report == report_path {
+        let lane = Lane {
+            run_id: run_id.to_string(),
+            case_root: run_root.join("cases"),
+            run_dir,
+            report_path,
+            phase: LanePhase::Running,
+            dev_session: None,
+        };
+        return read_report_lifecycle(&lane);
+    }
+    let legacy_root = run_root.parent().unwrap_or(run_root).join("qol-emu");
+    let legacy_run_dir = legacy_root.join(run_id);
+    let legacy_report = legacy_run_dir.join("report.json");
+    if recorded_run_dir != legacy_run_dir || recorded_report != legacy_report {
         bail!("environment lane `{run_id}` recorded path escapes its canonical location");
     }
-    Ok(Lane {
-        run_id: run_id.to_string(),
-        case_root: run_root.join("cases"),
-        run_dir,
-        report_path,
-        phase: LanePhase::Running,
-        dev_session: None,
-    })
+    let Some(report) = qol_dev_env::read_report_checked(
+        &legacy_report,
+        run_id,
+        &qol_dev_env::ReportKind::Environment,
+    )?
+    else {
+        return Ok(None);
+    };
+    let cleanup = match report.cleanup {
+        qol_dev_env::CleanupState::Pending => CleanupVerification::Pending,
+        qol_dev_env::CleanupState::Complete => CleanupVerification::Complete,
+        qol_dev_env::CleanupState::Incomplete(error) => CleanupVerification::Incomplete(error),
+    };
+    Ok(Some(ReportLifecycle {
+        status: report.status.as_str().to_string(),
+        cleanup,
+    }))
 }
 
 fn reconciled_batch_report(
@@ -2196,7 +2263,7 @@ fn reconciled_batch_report(
             };
             let lifecycle = lane_states.get(&run_id).cloned().flatten();
             let phase = run.get("phase").and_then(Value::as_str);
-            let planned_not_started = owner_interrupted
+            let planned_not_started = owner_inactive
                 && lifecycle.is_none()
                 && phase == Some(LanePhase::Attempting.as_str());
             let uncertain_launch = owner_inactive && lifecycle.is_none() && !planned_not_started;
@@ -2249,7 +2316,9 @@ fn reconciled_batch_report(
             } else {
                 outcome.map(|result| result.status).unwrap_or("pending")
             };
-            let verification = if cleanup_incomplete {
+            let verification = if planned_not_started {
+                "not-started"
+            } else if cleanup_incomplete {
                 "cleanup-incomplete"
             } else if cleanup_complete {
                 "verified-cleanup"
@@ -2258,11 +2327,16 @@ fn reconciled_batch_report(
                     .map(|result| result.verification)
                     .unwrap_or("active-or-unknown")
             };
+            let teardown_report_status = if planned_not_started {
+                None
+            } else {
+                state.clone()
+            };
             teardown_lanes.push(json!({
                 "run_id": run_id,
                 "status": teardown_lane_status,
                 "verification": verification,
-                "report_status": state,
+                "report_status": teardown_report_status,
                 "stop_error": outcome.and_then(|result| result.stop_error.as_deref()),
             }));
         }
@@ -2302,7 +2376,10 @@ fn reconciled_batch_report(
         return reconciled;
     }
     let failed = object.get("error").is_some_and(|error| !error.is_null());
-    let cancelled = object.get("status").and_then(Value::as_str) == Some("cancelled");
+    let cancelled = matches!(
+        object.get("status").and_then(Value::as_str),
+        Some("cancelled" | "cancellation-cleanup-incomplete")
+    );
     let status = if cancelled || child_cancelled {
         "cancelled"
     } else if failed || child_failed {
@@ -3942,6 +4019,37 @@ mod tests {
     }
 
     #[test]
+    fn released_batch_owner_resolves_an_attempting_lane_as_not_started() {
+        let report = json!({
+            "kind": "environment-batch",
+            "run_id": "batch-1",
+            "status": "cancellation-cleanup-incomplete",
+            "owner": { "state": "released" },
+            "runs": [{
+                "run_id": "lane-1",
+                "phase": "attempting",
+                "run_dir": "/runs/cases/lane-1",
+                "report": "/runs/cases/lane-1/report.json",
+            }],
+        });
+        let states = BTreeMap::from([("lane-1".to_string(), None)]);
+
+        let reconciled = reconciled_batch_report(&report, &states, &BTreeMap::new(), 303);
+
+        assert_eq!(reconciled["status"], "cancelled");
+        assert_eq!(reconciled["runs"][0]["status"], "not-started");
+        assert_eq!(reconciled["teardown"]["status"], "complete");
+        assert_eq!(
+            reconciled["teardown"]["lanes"][0]["verification"],
+            "not-started"
+        );
+        assert_eq!(
+            reconciled["teardown"]["lanes"][0]["report_status"],
+            Value::Null
+        );
+    }
+
+    #[test]
     fn cleanup_incomplete_child_can_never_produce_successful_batch_teardown() {
         let report = json!({
             "kind": "environment-batch",
@@ -4071,5 +4179,39 @@ mod tests {
             .unwrap()
             .contains("cleanup-incomplete"));
         assert!(outside_report.is_file());
+    }
+
+    #[test]
+    fn legacy_lane_root_is_accepted_only_with_typed_child_cleanup_proof() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_root = temp.path().join("target/qol-env");
+        let run_id = "lane-1";
+        let run_dir = temp.path().join("target/qol-emu").join(run_id);
+        let report_path = run_dir.join("report.json");
+        write_json(
+            &report_path,
+            &json!({
+                "kind": "environment",
+                "run_id": run_id,
+                "status": "pass",
+                "teardown": {
+                    "status": "complete",
+                    "qemu_exit_verified": true,
+                    "tree_exit_verified": true,
+                    "removed": []
+                }
+            }),
+        )
+        .unwrap();
+        let run = json!({
+            "run_id": run_id,
+            "run_dir": run_dir,
+            "report": report_path
+        });
+
+        let lifecycle = recorded_lane_lifecycle(&run_root, &run).unwrap().unwrap();
+
+        assert_eq!(lifecycle.status, "pass");
+        assert_eq!(lifecycle.cleanup, CleanupVerification::Complete);
     }
 }

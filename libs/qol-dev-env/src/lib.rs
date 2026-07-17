@@ -17,8 +17,8 @@ pub use registry::{
     VERIFIED_IMAGE_PROVENANCE,
 };
 pub use report::{
-    parse_report, read_report, read_report_checked, CleanupState, ReportKind, ReportStatus,
-    RunConcern, RunReport, RunSummary,
+    parse_report, read_report, read_report_checked, repair_legacy_cleanup_report, CleanupState,
+    LegacyCleanupRepair, ReportKind, ReportStatus, RunConcern, RunReport, RunSummary,
 };
 pub use resources::validate_run_id;
 pub use session::{clear_host_session, require_host_session_cleared};
