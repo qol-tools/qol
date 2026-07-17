@@ -138,6 +138,7 @@ enum CleanupVerification {
 struct ReportLifecycle {
     status: String,
     cleanup: CleanupVerification,
+    finished_at_unix_ms: Option<u64>,
 }
 
 struct Batch<'a> {
@@ -1804,12 +1805,17 @@ fn read_report_lifecycle(lane: &Lane) -> Result<Option<ReportLifecycle>> {
         return Ok(None);
     };
     let status = report.status.as_str().to_string();
+    let finished_at_unix_ms = report.finished_at_unix_ms;
     let cleanup = match report.cleanup {
         qol_dev_env::CleanupState::Pending => CleanupVerification::Pending,
         qol_dev_env::CleanupState::Complete => CleanupVerification::Complete,
         qol_dev_env::CleanupState::Incomplete(error) => CleanupVerification::Incomplete(error),
     };
-    Ok(Some(ReportLifecycle { status, cleanup }))
+    Ok(Some(ReportLifecycle {
+        status,
+        cleanup,
+        finished_at_unix_ms,
+    }))
 }
 
 fn validate_lane_paths(lane: &Lane) -> Result<()> {
@@ -2147,9 +2153,35 @@ fn reconcile_batch_report_file(
             Err(error) => Some(ReportLifecycle {
                 status: "invalid-report".to_string(),
                 cleanup: CleanupVerification::Incomplete(format!("{error:#}")),
+                finished_at_unix_ms: None,
             }),
         };
         lane_states.insert(run_id.to_string(), lifecycle);
+    }
+    let settled = qol_dev_env::parse_report(path, content.as_bytes()).is_ok_and(|report| {
+        report.kind == qol_dev_env::ReportKind::EnvironmentBatch
+            && report.status.is_terminal()
+            && report.cleanup.is_complete()
+    });
+    if settled {
+        let latest_lane_finished_at_unix_ms = lane_states
+            .values()
+            .flatten()
+            .filter_map(|lifecycle| lifecycle.finished_at_unix_ms)
+            .max();
+        if let Some(finished_at_unix_ms) = latest_lane_finished_at_unix_ms {
+            if report.get("finished_at_unix_ms").and_then(Value::as_u64)
+                != Some(finished_at_unix_ms)
+            {
+                let mut normalized = report.clone();
+                normalized["finished_at_unix_ms"] = Value::from(finished_at_unix_ms);
+                write_json(path, &normalized)?;
+            }
+        }
+        if require_cleanup_complete {
+            ensure_batch_cleanup_complete(&report)?;
+        }
+        return Ok(());
     }
     let reconciled =
         reconciled_batch_report(&report, &lane_states, teardown, qol_dev_env::unix_millis()?);
@@ -2224,6 +2256,7 @@ fn recorded_lane_lifecycle(run_root: &Path, run: &Value) -> Result<Option<Report
     Ok(Some(ReportLifecycle {
         status: report.status.as_str().to_string(),
         cleanup,
+        finished_at_unix_ms: report.finished_at_unix_ms,
     }))
 }
 
@@ -2250,6 +2283,7 @@ fn reconciled_batch_report(
     let mut child_failed = false;
     let mut child_abandoned = false;
     let mut child_cancelled = false;
+    let mut latest_lane_finished_at_unix_ms = None;
     let mut teardown_lanes = Vec::new();
     if let Some(runs) = object.get_mut("runs").and_then(Value::as_array_mut) {
         for run in runs {
@@ -2262,6 +2296,11 @@ fn reconciled_batch_report(
                 continue;
             };
             let lifecycle = lane_states.get(&run_id).cloned().flatten();
+            latest_lane_finished_at_unix_ms = latest_lane_finished_at_unix_ms.max(
+                lifecycle
+                    .as_ref()
+                    .and_then(|lifecycle| lifecycle.finished_at_unix_ms),
+            );
             let phase = run.get("phase").and_then(Value::as_str);
             let planned_not_started = owner_inactive
                 && lifecycle.is_none()
@@ -2392,7 +2431,7 @@ fn reconciled_batch_report(
     object.insert("status".to_string(), Value::String(status.to_string()));
     object.insert(
         "finished_at_unix_ms".to_string(),
-        Value::from(finished_at_unix_ms),
+        Value::from(latest_lane_finished_at_unix_ms.unwrap_or(finished_at_unix_ms)),
     );
     if owner_interrupted {
         if let Some(owner) = object.get_mut("owner").and_then(Value::as_object_mut) {
@@ -2833,9 +2872,18 @@ mod tests {
     }
 
     fn report_lifecycle(status: &str, cleanup: CleanupVerification) -> Option<ReportLifecycle> {
+        report_lifecycle_at(status, cleanup, None)
+    }
+
+    fn report_lifecycle_at(
+        status: &str,
+        cleanup: CleanupVerification,
+        finished_at_unix_ms: Option<u64>,
+    ) -> Option<ReportLifecycle> {
         Some(ReportLifecycle {
             status: status.to_string(),
             cleanup,
+            finished_at_unix_ms,
         })
     }
 
@@ -3885,6 +3933,62 @@ mod tests {
         assert_eq!(abandoned["status"], "abandoned");
         assert_eq!(abandoned["finished_at_unix_ms"], 102);
         assert_eq!(abandoned["steps"][1]["status"], "failed");
+    }
+
+    #[test]
+    fn reconciliation_uses_terminal_lane_time_instead_of_repair_time() {
+        let report = json!({
+            "kind": "environment-batch",
+            "status": "rollback-incomplete",
+            "finished_at_unix_ms": 9_999,
+            "runs": [{ "run_id": "lane-1", "report": "/runs/lane-1/report.json" }],
+        });
+        let terminal = BTreeMap::from([(
+            "lane-1".to_string(),
+            report_lifecycle_at("abandoned", CleanupVerification::Complete, Some(123)),
+        )]);
+
+        let reconciled = reconciled_batch_report(&report, &terminal, &BTreeMap::new(), 10_000);
+
+        assert_eq!(reconciled["status"], "abandoned");
+        assert_eq!(reconciled["finished_at_unix_ms"], 123);
+        assert_eq!(reconciled["teardown"]["status"], "complete");
+    }
+
+    #[test]
+    fn settled_batch_cannot_be_downgraded_by_missing_child_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let batch_dir = temp.path().join("batch-1");
+        fs::create_dir_all(&batch_dir).unwrap();
+        let batch_report = batch_dir.join("report.json");
+        let report = json!({
+            "kind": "environment-batch",
+            "run_id": "batch-1",
+            "status": "abandoned",
+            "finished_at_unix_ms": 123,
+            "launch": { "count": 1 },
+            "runs": [{
+                "run_id": "lane-1",
+                "phase": "running",
+                "run_dir": temp.path().join("cases/lane-1"),
+                "report": temp.path().join("cases/lane-1/report.json"),
+            }],
+            "teardown": {
+                "status": "complete",
+                "lanes": [{
+                    "run_id": "lane-1",
+                    "status": "pass",
+                    "verification": "verified-cleanup",
+                    "report_status": "abandoned",
+                }],
+            },
+        });
+        write_json(&batch_report, &report).unwrap();
+
+        reconcile_batch_report_file(&batch_report, &BTreeMap::new(), false).unwrap();
+
+        let persisted: Value = serde_json::from_slice(&fs::read(batch_report).unwrap()).unwrap();
+        assert_eq!(persisted, report);
     }
 
     #[test]

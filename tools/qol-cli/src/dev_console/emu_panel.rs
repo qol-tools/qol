@@ -1785,11 +1785,23 @@ fn sandbox_inventory_lines(
     );
     if !inventory.unassigned_runs.is_empty() {
         let count = inventory.unassigned_runs.len();
-        let unit = if count == 1 { "report" } else { "reports" };
-        lines.push(Line::from(vec![
-            "  ? ".fg(Color::Yellow).bold(),
-            format!("{count} unassigned {unit}").fg(Color::DarkGray),
-        ]));
+        let warnings = inventory
+            .unassigned_runs
+            .iter()
+            .filter(|run| run.needs_attention())
+            .count();
+        if warnings == 0 {
+            lines.push(Line::from(vec![
+                "  ○ ".fg(Color::DarkGray),
+                format!("{count} unassigned history").fg(Color::DarkGray),
+            ]));
+        } else {
+            let unit = if warnings == 1 { "warning" } else { "warnings" };
+            lines.push(Line::from(vec![
+                "  ! ".fg(Color::Yellow).bold(),
+                format!("{warnings} unassigned {unit}").fg(Color::Yellow),
+            ]));
+        }
     }
     if !inventory.issues.is_empty() {
         let count = inventory.issues.len();
@@ -1947,7 +1959,7 @@ fn last_run_spans(last_run: Option<&RunSummary>) -> Vec<Span<'static>> {
         .unwrap_or_default();
     let mut spans = vec![
         " · ".fg(Color::DarkGray),
-        run.status.as_str().to_string().fg(color),
+        run_status_label(&run.status).to_string().fg(color),
         format!(" {}", relative_age(now_unix_ms(), observed_at)).fg(Color::DarkGray),
     ];
     if let Some(task) = run.owner.task.as_deref() {
@@ -1965,6 +1977,13 @@ fn last_run_spans(last_run: Option<&RunSummary>) -> Vec<Span<'static>> {
     spans
 }
 
+fn run_status_label(status: &ReportStatus) -> &str {
+    match status {
+        ReportStatus::Abandoned => "interrupted",
+        status => status.as_str(),
+    }
+}
+
 fn run_status_color(status: &ReportStatus) -> Color {
     match status {
         ReportStatus::Pass => accent(),
@@ -1978,9 +1997,11 @@ fn run_status_color(status: &ReportStatus) -> Color {
         | ReportStatus::Stopping
         | ReportStatus::Recovering
         | ReportStatus::Cancelling
-        | ReportStatus::Cancelled
-        | ReportStatus::Abandoned => Color::Yellow,
-        ReportStatus::Skipped | ReportStatus::Stopped | ReportStatus::Unknown(_) => Color::DarkGray,
+        | ReportStatus::Cancelled => Color::Yellow,
+        ReportStatus::Skipped
+        | ReportStatus::Stopped
+        | ReportStatus::Abandoned
+        | ReportStatus::Unknown(_) => Color::DarkGray,
     }
 }
 
@@ -2184,6 +2205,47 @@ mod tests {
         .summary();
 
         assert!(span_text(&last_run_spans(Some(&run))).contains("· qol-shot-capture @shot-speed"));
+    }
+
+    #[test]
+    fn clean_abandoned_run_is_presented_as_interrupted_history() {
+        let run = report_summary(
+            "abandoned",
+            Some(json!({
+                "status": "complete",
+                "qemu_exit_verified": true,
+                "tree_exit_verified": true,
+                "removed": [],
+            })),
+        );
+
+        assert!(span_text(&last_run_spans(Some(&run))).contains("· interrupted"));
+        assert_eq!(run_status_color(&run.status), Color::DarkGray);
+    }
+
+    #[test]
+    fn clean_unassigned_reports_are_neutral_history() {
+        let mut inventory = emu_inventory(vec![emu_env("linux/mint", ResolutionState::Ready)]);
+        inventory.unassigned_runs.push(report_summary(
+            "stopped",
+            Some(json!({
+                "status": "complete",
+                "qemu_exit_verified": true,
+                "tree_exit_verified": true,
+                "removed": [],
+            })),
+        ));
+        let dash = Dash::new(Vec::new());
+
+        let (lines, _) = sandbox_inventory_lines(&dash, &inventory);
+        let rendered = lines
+            .iter()
+            .map(|line| span_text(&line.spans))
+            .collect::<Vec<_>>();
+
+        assert!(rendered
+            .iter()
+            .any(|line| line == "  ○ 1 unassigned history"));
     }
 
     #[test]
