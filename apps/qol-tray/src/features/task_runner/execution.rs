@@ -200,6 +200,7 @@ mod tests {
             assert!(result.success);
         }
 
+        #[cfg(target_os = "linux")]
         #[tokio::test]
         async fn execute_times_out_when_command_outlasts_timeout() {
             let root = tempfile::tempdir().unwrap();
