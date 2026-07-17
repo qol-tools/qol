@@ -3,7 +3,7 @@ id = "plugin-keyremap"
 uid = "e1bc6f9b-95e0-46c5-951b-6cc5de5c6d87"
 name = "Key Remap"
 description = "Remap keyboard and mouse shortcuts (Ctrl->Cmd, etc.)"
-version = "1.15.0"
+version = "1.15.1"
 author = "KMRH47"
 platforms = ["macos"]
 
