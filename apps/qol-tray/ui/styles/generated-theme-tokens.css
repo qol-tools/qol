@@ -187,7 +187,7 @@
     --qol-identity-frame-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(var(--paper-rgb), 0.07);
     --qol-identity-crt-band-display: none;
     --qol-identity-card-border: none;
-    --qol-identity-card-bg: var(--qol-system-surface-elevated);
+    --qol-identity-card-bg: var(--qol-system-surface-raised);
     --qol-identity-card-shadow: 0 14px 36px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
     --qol-identity-cover-bg: transparent;
     --qol-identity-cover-texture: none;
@@ -195,10 +195,10 @@
     --qol-identity-sel-outline-offset: 3px;
     --qol-identity-ghost-btn-bg: rgba(var(--accent-rgb), 0.14);
     --qol-identity-ghost-btn-radius: 10px;
-    --qol-identity-hint-bg: rgba(var(--qol-system-overlay-surface-rgb), 0.92);
+    --qol-identity-hint-bg: var(--qol-system-surface-raised);
     --qol-identity-hint-border: 1px solid rgba(var(--accent-rgb), 0.25);
     --qol-identity-hint-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
-    --qol-identity-panel-bg: rgba(var(--qol-system-overlay-surface-rgb), 0.95);
+    --qol-identity-panel-bg: var(--qol-system-surface-raised);
     --qol-identity-panel-border: none;
     --qol-identity-panel-radius: 16px;
     --qol-identity-panel-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
