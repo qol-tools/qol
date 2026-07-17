@@ -520,8 +520,7 @@ async fn connect_audio_profile(
     let result = device.connect_profile(&profile).await;
     let outcome = match &result {
         Ok(()) => "connected",
-        Err(error) if error.kind == ErrorKind::AlreadyConnected => "already_connected",
-        Err(_) => "failed",
+        Err(error) => tolerated_profile_connect(&error.kind).unwrap_or("failed"),
     };
     qol_runtime::probe!(
         "BLUETOOTH_PROFILE_REPAIR",
@@ -531,9 +530,17 @@ async fn connect_audio_profile(
     );
     match result {
         Ok(()) => Ok(()),
-        Err(error) if error.kind == ErrorKind::AlreadyConnected => Ok(()),
+        Err(error) if tolerated_profile_connect(&error.kind).is_some() => Ok(()),
         Err(error) => Err(error)
             .with_context(|| format!("BlueZ failed to connect the A2DP profile for {address}")),
+    }
+}
+
+fn tolerated_profile_connect(kind: &ErrorKind) -> Option<&'static str> {
+    match kind {
+        ErrorKind::AlreadyConnected => Some("already_connected"),
+        ErrorKind::InProgress => Some("in_progress"),
+        _ => None,
     }
 }
 
@@ -1443,7 +1450,21 @@ fn redacted(address: Address) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::pactl_has_card;
+    use super::{pactl_has_card, tolerated_profile_connect, ErrorKind};
+
+    #[test]
+    fn transient_profile_connect_outcomes_are_tolerated() {
+        let cases = [
+            (ErrorKind::AlreadyConnected, Some("already_connected")),
+            (ErrorKind::InProgress, Some("in_progress")),
+            (ErrorKind::Failed, None),
+            (ErrorKind::ConnectionAttemptFailed, None),
+            (ErrorKind::NotReady, None),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(tolerated_profile_connect(&kind), expected, "kind: {kind:?}");
+        }
+    }
 
     #[test]
     fn finds_an_exact_pipewire_bluetooth_card() {
