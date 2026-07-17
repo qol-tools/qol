@@ -196,18 +196,38 @@ fn rearm_on_new_show(
 
 const DISMISS_DEBOUNCE_MS: u64 = 120;
 
-fn should_dismiss_after_debounce(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DebounceVerdict {
+    Wait,
+    Recover,
+    Dismiss,
+}
+
+fn debounce_verdict(
+    guarded: bool,
     showing: bool,
     gpui_active: bool,
     platform_focus: Option<bool>,
-) -> bool {
-    showing && !platform_focus.unwrap_or(gpui_active)
+) -> DebounceVerdict {
+    if !showing {
+        return DebounceVerdict::Recover;
+    }
+    if guarded {
+        return DebounceVerdict::Wait;
+    }
+    if platform_focus.unwrap_or(gpui_active) {
+        DebounceVerdict::Recover
+    } else {
+        DebounceVerdict::Dismiss
+    }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn schedule_debounced_dismiss<V: 'static>(
     label: &'static str,
     event: &'static str,
     window_handle: gpui::AnyWindowHandle,
+    get_blur_guard: std::rc::Rc<impl Fn(&V) -> std::time::Instant + 'static>,
     is_showing: std::rc::Rc<impl Fn(&V) -> bool + 'static>,
     platform_focus: std::rc::Rc<impl Fn(&V) -> Option<bool> + 'static>,
     on_dismiss: std::rc::Rc<
@@ -218,44 +238,71 @@ fn schedule_debounced_dismiss<V: 'static>(
     cx.spawn(
         move |view_handle: gpui::WeakEntity<V>, cx: &mut gpui::AsyncApp| {
             let mut cx = cx.clone();
+            let get_blur_guard = get_blur_guard.clone();
             let is_showing = is_showing.clone();
             let platform_focus = platform_focus.clone();
             let on_dismiss = on_dismiss.clone();
             async move {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(DISMISS_DEBOUNCE_MS))
-                    .await;
-                let _ = cx.update_window(window_handle, move |_, window, cx| {
-                    let Some(handle) = view_handle.upgrade() else {
-                        return;
-                    };
-                    let showing = is_showing(handle.read(cx));
-                    let gpui_active = window.is_window_active();
-                    let focus_truth = platform_focus(handle.read(cx));
-                    if !should_dismiss_after_debounce(showing, gpui_active, focus_truth) {
-                        let active = format!("{gpui_active} platform={focus_truth:?}");
-                        trace_dismiss_decision(
-                            label,
-                            event,
-                            showing,
-                            &active,
-                            std::time::Instant::now(),
-                            "debounce_recovered",
-                        );
-                        return;
-                    }
-                    trace_dismiss_decision(
-                        label,
-                        event,
-                        showing,
-                        "false",
-                        std::time::Instant::now(),
-                        "dismiss",
-                    );
-                    handle.update(cx, |view, cx| {
-                        (*on_dismiss.borrow_mut())(view, window, cx);
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(DISMISS_DEBOUNCE_MS))
+                        .await;
+                    let view_handle = view_handle.clone();
+                    let get_blur_guard = get_blur_guard.clone();
+                    let is_showing = is_showing.clone();
+                    let platform_focus = platform_focus.clone();
+                    let on_dismiss = on_dismiss.clone();
+                    let outcome = cx.update_window(window_handle, move |_, window, cx| {
+                        let Some(handle) = view_handle.upgrade() else {
+                            return DebounceVerdict::Recover;
+                        };
+                        let showing = is_showing(handle.read(cx));
+                        let guarded = std::time::Instant::now() < get_blur_guard(handle.read(cx));
+                        let gpui_active = window.is_window_active();
+                        let focus_truth = platform_focus(handle.read(cx));
+                        let verdict = debounce_verdict(guarded, showing, gpui_active, focus_truth);
+                        match verdict {
+                            DebounceVerdict::Wait => {
+                                trace_dismiss_decision(
+                                    label,
+                                    event,
+                                    showing,
+                                    "na",
+                                    std::time::Instant::now(),
+                                    "debounce_guarded",
+                                );
+                            }
+                            DebounceVerdict::Recover => {
+                                let active = format!("{gpui_active} platform={focus_truth:?}");
+                                trace_dismiss_decision(
+                                    label,
+                                    event,
+                                    showing,
+                                    &active,
+                                    std::time::Instant::now(),
+                                    "debounce_recovered",
+                                );
+                            }
+                            DebounceVerdict::Dismiss => {
+                                trace_dismiss_decision(
+                                    label,
+                                    event,
+                                    showing,
+                                    "false",
+                                    std::time::Instant::now(),
+                                    "dismiss",
+                                );
+                                handle.update(cx, |view, cx| {
+                                    (*on_dismiss.borrow_mut())(view, window, cx);
+                                });
+                            }
+                        }
+                        verdict
                     });
-                });
+                    if !matches!(outcome, Ok(DebounceVerdict::Wait)) {
+                        break;
+                    }
+                }
             }
         },
     )
@@ -337,6 +384,7 @@ pub fn track_dismiss_confirmed<V: gpui::Focusable + 'static>(
             label,
             "blur",
             window_handle,
+            get_blur_guard_1.clone(),
             is_showing_1.clone(),
             platform_focus_1.clone(),
             on_dismiss_1.clone(),
@@ -388,6 +436,7 @@ pub fn track_dismiss_confirmed<V: gpui::Focusable + 'static>(
             label,
             "activation",
             window_handle,
+            get_blur_guard_2.clone(),
             is_showing_2.clone(),
             platform_focus_2.clone(),
             on_dismiss_2.clone(),
@@ -466,57 +515,87 @@ pub fn track_dismiss_confirmed<V: gpui::Focusable + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use super::should_dismiss_after_debounce;
+    use super::{debounce_verdict, DebounceVerdict};
 
     #[test]
     fn debounce_recheck_dismisses_only_when_truly_inactive() {
         let cases = [
             (
                 "showing, gpui inactive, no platform truth: dismiss",
+                false,
                 true,
                 false,
                 None,
-                true,
+                DebounceVerdict::Dismiss,
             ),
             (
                 "showing, gpui active, no platform truth: recovered",
+                false,
                 true,
                 true,
                 None,
-                false,
+                DebounceVerdict::Recover,
             ),
             (
                 "showing, gpui inactive, platform holds focus: recovered",
+                false,
                 true,
                 false,
                 Some(true),
-                false,
+                DebounceVerdict::Recover,
             ),
             (
                 "showing, gpui active, platform lost focus: dismiss",
+                false,
                 true,
                 true,
                 Some(false),
-                true,
+                DebounceVerdict::Dismiss,
             ),
             (
                 "no longer showing, still inactive: nothing to dismiss",
                 false,
                 false,
-                Some(false),
                 false,
+                Some(false),
+                DebounceVerdict::Recover,
             ),
             (
                 "no longer showing, focus held: nothing to dismiss",
                 false,
+                false,
                 true,
                 Some(true),
+                DebounceVerdict::Recover,
+            ),
+            (
+                "guarded, showing, focus not yet granted: keep waiting",
+                true,
+                true,
                 false,
+                Some(false),
+                DebounceVerdict::Wait,
+            ),
+            (
+                "guarded, showing, no platform truth, gpui inactive: keep waiting",
+                true,
+                true,
+                false,
+                None,
+                DebounceVerdict::Wait,
+            ),
+            (
+                "guarded but no longer showing: nothing to dismiss",
+                true,
+                false,
+                false,
+                Some(false),
+                DebounceVerdict::Recover,
             ),
         ];
-        for (case, showing, gpui_active, platform_focus, expected) in cases {
+        for (case, guarded, showing, gpui_active, platform_focus, expected) in cases {
             assert_eq!(
-                should_dismiss_after_debounce(showing, gpui_active, platform_focus),
+                debounce_verdict(guarded, showing, gpui_active, platform_focus),
                 expected,
                 "case: {case}"
             );
