@@ -36,13 +36,20 @@ pub fn open(
     let resolved = qol_config::normalized::resolve_config(&spec, &values)
         .map_err(|errors| anyhow::anyhow!("contract resolve failed: {errors:?}"))?;
     let rows = rows_from_resolved(&resolved, provider);
+    let monitor = tracker
+        .snapshot_monitor()
+        .ok_or_else(|| anyhow::anyhow!("no monitor state available for the settings panel"))?;
+    let available =
+        monitor.bounds().size.height.to_f64() as f32 - 2.0 * crate::surface::CORNER_MARGIN;
+    let height = panel_height(&rows).min(available);
+    let body_max = height - PANEL_CHROME_HEIGHT;
     let title = format!("{}-settings-{}", panel.plugin_id, std::process::id());
     Surface::new(SurfaceKind::Panel)
         .title(title)
         .anchor(Anchor::MonitorCenter)
-        .size(size(px(PANEL_WIDTH), px(panel_height(&rows))))
+        .size(size(px(PANEL_WIDTH), px(height)))
         .show_focused(tracker, cx, move |dismisser, _window, cx| {
-            SettingsPanelView::new(panel, rows, values, path, dismisser, cx)
+            SettingsPanelView::new(panel, rows, values, path, body_max, dismisser, cx)
         })
         .map(|_| ())
 }

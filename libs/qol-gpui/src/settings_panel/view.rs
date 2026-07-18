@@ -15,6 +15,8 @@ pub(super) struct SettingsPanelView {
     values: serde_json::Value,
     path: PathBuf,
     selected: usize,
+    scroll_offset: usize,
+    body_max: f32,
     edit: Option<String>,
     dropdown: Option<Dropdown>,
     dismisser: SurfaceDismisser,
@@ -28,6 +30,7 @@ impl SettingsPanelView {
         rows: Vec<Row>,
         values: serde_json::Value,
         path: PathBuf,
+        body_max: f32,
         dismisser: SurfaceDismisser,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -37,6 +40,8 @@ impl SettingsPanelView {
             values,
             path,
             selected: 0,
+            scroll_offset: 0,
+            body_max,
             edit: None,
             dropdown: None,
             dismisser,
@@ -62,9 +67,13 @@ impl SettingsPanelView {
             return;
         };
         match intent {
-            Intent::Up => self.selected = self.selected.saturating_sub(1),
+            Intent::Up => {
+                self.selected = self.selected.saturating_sub(1);
+                self.sync_scroll();
+            }
             Intent::Down => {
-                self.selected = (self.selected + 1).min(self.rows.len().saturating_sub(1))
+                self.selected = (self.selected + 1).min(self.rows.len().saturating_sub(1));
+                self.sync_scroll();
             }
             Intent::Toggle => self.toggle(),
             Intent::Left => self.adjust(-1.0),
@@ -260,6 +269,11 @@ impl SettingsPanelView {
         save_values(self.panel.plugin_id, &self.path, &self.values);
     }
 
+    fn sync_scroll(&mut self) {
+        self.scroll_offset =
+            scroll_offset_for(&self.rows, self.selected, self.scroll_offset, self.body_max);
+    }
+
     fn display_value(&self, index: usize) -> String {
         if index == self.selected {
             if let Some(edit) = &self.edit {
@@ -389,9 +403,10 @@ impl Focusable for SettingsPanelView {
 
 impl Render for SettingsPanelView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let items: Vec<AnyElement> = (0..self.rows.len())
-            .map(|index| self.render_row(index).into_any_element())
-            .collect();
+        let items: Vec<AnyElement> =
+            visible_row_range(&self.rows, self.scroll_offset, self.body_max)
+                .map(|index| self.render_row(index).into_any_element())
+                .collect();
         div()
             .track_focus(&self.focus_handle)
             .on_key_down(
@@ -478,9 +493,91 @@ fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option<Intent> {
     }
 }
 
+fn row_height(row: &Row) -> f32 {
+    let header = if row.section_label.is_some() {
+        super::PANEL_SECTION_HEADER_HEIGHT
+    } else {
+        0.0
+    };
+    super::PANEL_ROW_HEIGHT + header
+}
+
+fn visible_row_range(rows: &[Row], offset: usize, body_max: f32) -> std::ops::Range<usize> {
+    let mut used = 0.0;
+    let mut end = offset;
+    for row in rows.iter().skip(offset) {
+        used += row_height(row);
+        if used > body_max && end > offset {
+            break;
+        }
+        end += 1;
+    }
+    offset..end.min(rows.len())
+}
+
+fn scroll_offset_for(rows: &[Row], selected: usize, offset: usize, body_max: f32) -> usize {
+    if selected < offset {
+        return selected;
+    }
+    let mut offset = offset;
+    while !visible_row_range(rows, offset, body_max).contains(&selected) {
+        offset += 1;
+    }
+    offset
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{intent, is_number_seed, parsed_number, Intent};
+    use super::{
+        intent, is_number_seed, parsed_number, scroll_offset_for, visible_row_range, Intent, Row,
+        RowControl,
+    };
+
+    fn rows(headers: &[bool]) -> Vec<Row> {
+        headers
+            .iter()
+            .map(|header| Row {
+                section_label: header.then(|| "Section".to_string()),
+                label: "Label".into(),
+                config_key: "key".into(),
+                control: RowControl::Toggle(false),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn visible_range_windows_rows_by_height_budget() {
+        let rows = rows(&[true, false, false, false]);
+        let two_plain_rows = 2.0 * super::super::PANEL_ROW_HEIGHT;
+        let cases = [
+            (0, two_plain_rows, 0..1),
+            (1, two_plain_rows, 1..3),
+            (3, two_plain_rows, 3..4),
+            (0, 1000.0, 0..4),
+            (0, 1.0, 0..1),
+        ];
+        for (offset, budget, expected) in cases {
+            assert_eq!(
+                visible_row_range(&rows, offset, budget),
+                expected,
+                "offset {offset} budget {budget}"
+            );
+        }
+    }
+
+    #[test]
+    fn scroll_offset_keeps_selection_visible_in_both_directions() {
+        let rows = rows(&[false, false, false, false]);
+        let two_rows = 2.0 * super::super::PANEL_ROW_HEIGHT;
+        let cases = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 1, 2), (0, 2, 0)];
+        for (selected, offset, expected) in cases {
+            assert_eq!(
+                scroll_offset_for(&rows, selected, offset, two_rows),
+                expected,
+                "selected {selected} offset {offset}"
+            );
+        }
+    }
 
     #[test]
     fn is_number_seed_accepts_numeric_starters_only() {
