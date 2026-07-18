@@ -5,6 +5,7 @@ mod cargo_target;
 mod cargo_target_cache;
 #[cfg(feature = "dev")]
 mod cargo_target_total;
+mod config_parse_failures;
 #[cfg(feature = "dev")]
 mod dev_link_paths;
 #[cfg(feature = "dev")]
@@ -48,6 +49,7 @@ pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
         Box::new(hotkey_shadows::HotkeyShadowsCheck),
         Box::new(plugin_uid_table::PluginUidTableCheck),
         Box::new(orphan_plugin_configs::OrphanPluginConfigsCheck),
+        Box::new(config_parse_failures::ConfigParseFailuresCheck),
         Box::new(plugin_port_collisions::PluginPortCollisionsCheck),
     ];
     #[cfg(feature = "dev")]
