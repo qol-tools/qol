@@ -165,6 +165,9 @@ impl Surface {
         if let Some(timeout) = self.timeout {
             schedule_dismiss(dismisser.clone(), timeout, cx);
         }
+        if matches!(self.kind, SurfaceKind::Panel) {
+            reassert_position(self.title, bounds.origin, cx);
+        }
         Ok(dismisser)
     }
 
@@ -192,6 +195,25 @@ impl Surface {
             SurfaceKind::Panel => true,
         }
     }
+}
+
+fn reassert_position(title: String, origin: Point<Pixels>, cx: &mut App) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        for _ in 0..10 {
+            cx.background_executor()
+                .timer(Duration::from_millis(50))
+                .await;
+            let moved = crate::popup_window::reposition_window_by_title(
+                &title,
+                origin.x.to_f64(),
+                origin.y.to_f64(),
+            );
+            if moved {
+                return;
+            }
+        }
+    })
+    .detach();
 }
 
 fn schedule_dismiss(dismisser: SurfaceDismisser, timeout: Duration, cx: &mut App) {
