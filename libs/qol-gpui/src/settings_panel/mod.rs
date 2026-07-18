@@ -7,7 +7,7 @@ use gpui::*;
 
 use crate::monitor::MonitorTracker;
 use crate::surface::{Anchor, Surface, SurfaceKind};
-use rows::{rows_from_resolved, Row};
+use rows::{rows_from_resolved, Row, RowControl};
 use view::SettingsPanelView;
 
 const PANEL_WIDTH: f32 = 520.0;
@@ -69,7 +69,37 @@ fn panel_height(rows: &[Row]) -> f32 {
         .iter()
         .filter(|row| row.section_label.is_some())
         .count() as f32;
-    PANEL_CHROME_HEIGHT
+    let content_height = PANEL_CHROME_HEIGHT
         + rows.len() as f32 * PANEL_ROW_HEIGHT
-        + headers * PANEL_SECTION_HEADER_HEIGHT
+        + headers * PANEL_SECTION_HEADER_HEIGHT;
+    if rows
+        .iter()
+        .any(|row| matches!(&row.control, RowControl::Color(_)))
+    {
+        return content_height.max(color_wheel::MIN_HOST_HEIGHT);
+    }
+    content_height
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{panel_height, Row, RowControl, PANEL_CHROME_HEIGHT, PANEL_ROW_HEIGHT};
+
+    fn row(control: RowControl) -> Row {
+        Row {
+            section_label: None,
+            label: "Label".into(),
+            config_key: "key".into(),
+            control,
+        }
+    }
+
+    #[test]
+    fn color_controls_reserve_enough_height_for_the_wheel() {
+        let plain = vec![row(RowControl::Toggle(false))];
+        let color = vec![row(RowControl::Color("#ffffff".into()))];
+
+        assert_eq!(panel_height(&plain), PANEL_CHROME_HEIGHT + PANEL_ROW_HEIGHT);
+        assert_eq!(panel_height(&color), super::color_wheel::MIN_HOST_HEIGHT);
+    }
 }

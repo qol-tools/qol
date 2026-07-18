@@ -5,10 +5,15 @@ use std::sync::Arc;
 use gpui::*;
 
 pub(super) const DISC_SIZE: f32 = 200.0;
+pub(super) const MIN_HOST_HEIGHT: f32 =
+    DISC_SIZE + 2.0 * (WHEEL_PADDING + WHEEL_BORDER + WINDOW_MARGIN);
 const DISC_RADIUS: f64 = DISC_SIZE as f64 / 2.0 - 1.0;
 const THUMB_SIZE: f32 = 16.0;
 const NUDGE_STEP: f64 = 6.0;
 const NUDGE_STEP_FAST: f64 = 18.0;
+const WHEEL_PADDING: f32 = 8.0;
+const WHEEL_BORDER: f32 = 1.0;
+const WINDOW_MARGIN: f32 = 8.0;
 
 pub(super) struct WheelStyle {
     pub(super) bg: u32,
@@ -115,46 +120,48 @@ impl ColorWheel {
         let (tx, ty) = self.thumb_position();
         let disc_bounds = Rc::clone(&self.disc_bounds);
         deferred(
-            anchored().snap_to_window_with_margin(px(8.0)).child(
-                div()
-                    .id("settings-color-wheel")
-                    .p_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(style.border))
-                    .bg(rgb(style.bg))
-                    .on_click(|_, _, cx| cx.stop_propagation())
-                    .child(
-                        div()
-                            .id("settings-color-wheel-disc")
-                            .relative()
-                            .w(px(DISC_SIZE))
-                            .h(px(DISC_SIZE))
-                            .cursor(CursorStyle::Crosshair)
-                            .on_mouse_down(MouseButton::Left, on_mouse_down)
-                            .child(img(self.image.clone()).w(px(DISC_SIZE)).h(px(DISC_SIZE)))
-                            .child(
-                                canvas(
-                                    move |bounds, _, _| disc_bounds.set(Some(bounds)),
-                                    |_, _, _, _| {},
-                                )
-                                .absolute()
-                                .inset_0(),
-                            )
-                            .child(
-                                div()
+            anchored()
+                .snap_to_window_with_margin(px(WINDOW_MARGIN))
+                .child(
+                    div()
+                        .id("settings-color-wheel")
+                        .p(px(WHEEL_PADDING))
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(style.border))
+                        .bg(rgb(style.bg))
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
+                            div()
+                                .id("settings-color-wheel-disc")
+                                .relative()
+                                .w(px(DISC_SIZE))
+                                .h(px(DISC_SIZE))
+                                .cursor(CursorStyle::Crosshair)
+                                .on_mouse_down(MouseButton::Left, on_mouse_down)
+                                .child(img(self.image.clone()).w(px(DISC_SIZE)).h(px(DISC_SIZE)))
+                                .child(
+                                    canvas(
+                                        move |bounds, _, _| disc_bounds.set(Some(bounds)),
+                                        |_, _, _, _| {},
+                                    )
                                     .absolute()
-                                    .left(px(tx - THUMB_SIZE / 2.0))
-                                    .top(px(ty - THUMB_SIZE / 2.0))
-                                    .w(px(THUMB_SIZE))
-                                    .h(px(THUMB_SIZE))
-                                    .rounded_full()
-                                    .border_2()
-                                    .border_color(rgb(style.thumb_border))
-                                    .bg(rgb(self.thumb_color())),
-                            ),
-                    ),
-            ),
+                                    .inset_0(),
+                                )
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left(px(tx - THUMB_SIZE / 2.0))
+                                        .top(px(ty - THUMB_SIZE / 2.0))
+                                        .w(px(THUMB_SIZE))
+                                        .h(px(THUMB_SIZE))
+                                        .rounded_full()
+                                        .border_2()
+                                        .border_color(rgb(style.thumb_border))
+                                        .bg(rgb(self.thumb_color())),
+                                ),
+                        ),
+                ),
         )
     }
 }
