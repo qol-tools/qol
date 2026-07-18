@@ -160,7 +160,14 @@ pub fn load_plugin_config_or<T: DeserializeOwned>(
             Ok(contents) => contents,
             Err(_) => continue,
         };
-        match serde_json::from_str::<T>(&contents) {
+        let value = match serde_json::from_str::<serde_json::Value>(&contents) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("[config] failed to parse {}: {}", path.display(), error);
+                continue;
+            }
+        };
+        match serde_json::from_value::<T>(canonicalize_whole_floats(value)) {
             Ok(config) => {
                 eprintln!("[config] loaded from {}", path.display());
                 return config;
@@ -171,6 +178,36 @@ pub fn load_plugin_config_or<T: DeserializeOwned>(
         }
     }
     default()
+}
+
+fn canonicalize_whole_floats(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Number(number) => serde_json::Value::Number(canonical_number(number)),
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(canonicalize_whole_floats).collect())
+        }
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.into_iter()
+                .map(|(key, item)| (key, canonicalize_whole_floats(item)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+fn canonical_number(number: serde_json::Number) -> serde_json::Number {
+    if !number.is_f64() {
+        return number;
+    }
+    let Some(value) = number.as_f64() else {
+        return number;
+    };
+    let whole = value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64;
+    if whole {
+        serde_json::Number::from(value as i64)
+    } else {
+        number
+    }
 }
 
 pub fn load_plugin_config_with_contract<T: DeserializeOwned>(names: &[&str], contract: &str) -> T {
@@ -194,7 +231,8 @@ fn load_plugin_config_with_defaults<T: DeserializeOwned>(
                 continue;
             }
         };
-        let merged = defaults::merge_json_defaults(defaults.clone(), overrides);
+        let merged =
+            canonicalize_whole_floats(defaults::merge_json_defaults(defaults.clone(), overrides));
         match serde_json::from_value::<T>(merged) {
             Ok(config) => {
                 eprintln!("[config] loaded from {}", path.display());
@@ -237,6 +275,42 @@ pub fn valid_install_id(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn whole_floats_canonicalize_to_integers_for_typed_configs() {
+        #[derive(serde::Deserialize, Debug, PartialEq)]
+        struct Typed {
+            max_columns: usize,
+            scale: f64,
+            offset: i32,
+        }
+        let raw = serde_json::json!({
+            "max_columns": 6.0,
+            "scale": 1.5,
+            "offset": -4.0,
+            "extra": { "framerate": 60.0, "huge": 1.0e300 }
+        });
+
+        let canonical = canonicalize_whole_floats(raw);
+
+        assert_eq!(
+            canonical,
+            serde_json::json!({
+                "max_columns": 6,
+                "scale": 1.5,
+                "offset": -4,
+                "extra": { "framerate": 60, "huge": 1.0e300 }
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Typed>(canonical.clone()).unwrap(),
+            Typed {
+                max_columns: 6,
+                scale: 1.5,
+                offset: -4,
+            }
+        );
+    }
 
     #[test]
     fn namespaced_resolver_joins_base_with_namespace() {
