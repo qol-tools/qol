@@ -20,10 +20,12 @@ pub enum Corner {
 #[derive(Clone, Copy, Debug)]
 pub enum Anchor {
     CornerStack(Corner),
+    MonitorCenter,
 }
 
 pub enum SurfaceKind {
     Toast,
+    Panel,
 }
 
 pub struct Surface {
@@ -103,19 +105,43 @@ impl Surface {
         cx: &mut App,
         build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
     ) -> Result<SurfaceDismisser> {
+        self.open(tracker, cx, |dismisser, window, cx| {
+            build(dismisser, window, cx)
+        })
+    }
+
+    pub fn show_focused<V: Render + Focusable + 'static>(
+        self,
+        tracker: &MonitorTracker,
+        cx: &mut App,
+        build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
+    ) -> Result<SurfaceDismisser> {
+        self.open(tracker, cx, |dismisser, window, cx| {
+            let view = build(dismisser, window, cx);
+            window.focus(&view.focus_handle(cx));
+            window.activate_window();
+            view
+        })
+    }
+
+    fn open<V: Render + 'static>(
+        self,
+        tracker: &MonitorTracker,
+        cx: &mut App,
+        build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
+    ) -> Result<SurfaceDismisser> {
         let monitor = tracker
             .snapshot_cursor()
             .map(|(monitor, _)| monitor)
             .ok_or_else(|| anyhow!("no monitor state available for surface placement"))?;
-        let Anchor::CornerStack(corner) = self.anchor;
-        let bounds = corner_anchored_bounds(monitor.bounds(), corner, self.size, CORNER_MARGIN);
+        let bounds = self.resolved_bounds(&monitor);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id: crate::window::display_id_for_monitor(Some(&monitor), cx),
             titlebar: None,
             window_decorations: Some(WindowDecorations::Client),
             kind: self.window_kind(),
-            focus: false,
+            focus: self.takes_focus(),
             is_movable: true,
             window_background: WindowBackgroundAppearance::Transparent,
             app_id: Some(self.title.clone()),
@@ -141,9 +167,26 @@ impl Surface {
         Ok(dismisser)
     }
 
+    fn resolved_bounds(&self, monitor: &crate::monitor::ActiveMonitor) -> Bounds<Pixels> {
+        match self.anchor {
+            Anchor::CornerStack(corner) => {
+                corner_anchored_bounds(monitor.bounds(), corner, self.size, CORNER_MARGIN)
+            }
+            Anchor::MonitorCenter => monitor.centered_bounds(self.size),
+        }
+    }
+
     fn window_kind(&self) -> WindowKind {
         match self.kind {
             SurfaceKind::Toast => WindowKind::PopUp,
+            SurfaceKind::Panel => WindowKind::Normal,
+        }
+    }
+
+    fn takes_focus(&self) -> bool {
+        match self.kind {
+            SurfaceKind::Toast => false,
+            SurfaceKind::Panel => true,
         }
     }
 }
