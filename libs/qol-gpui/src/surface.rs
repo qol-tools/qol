@@ -220,6 +220,7 @@ impl<V: Render + 'static> Render for SurfaceRoot<V> {
 }
 
 static SURFACE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static PANEL_FOCUS_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 fn unique_surface_title(base: &str) -> String {
     format!(
@@ -254,6 +255,12 @@ fn settle_then_reveal<V: Render + 'static>(
                 cx.notify();
             });
         });
+        let focus_commit = PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+        crate::popup_window::reassert_focus_until_held(
+            &title,
+            &PANEL_FOCUS_GENERATION,
+            focus_commit,
+        );
         for _ in 0..3 {
             cx.background_executor()
                 .timer(Duration::from_millis(50))
