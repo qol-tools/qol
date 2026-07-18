@@ -308,10 +308,6 @@ fn log_applied(action: &FixAction) {
             log::info!("doctor: pruned cargo incremental cache {}", path.display());
         }
         #[cfg(feature = "dev")]
-        FixAction::CargoClean { workspace } => {
-            log::info!("doctor: ran cargo clean in {}", workspace.display());
-        }
-        #[cfg(feature = "dev")]
         FixAction::HealDevLinkedPlugins { rebuild_ids } => {
             log::info!(
                 "doctor: healed dev-linked plugin(s) (rebuilt: {}; restarted stale daemons)",

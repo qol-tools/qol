@@ -1,7 +1,6 @@
-use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use super::cargo_target::{dir_size, format_bytes, workspace_root};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const ID: &str = "cargo_target_total";
 const WARN_BYTES: u64 = 10 * 1024 * 1024 * 1024;
@@ -20,7 +19,7 @@ impl DoctorCheck for CargoTargetTotalCheck {
             return CheckReport::ok("workspace root not found; skipping cargo target directory");
         };
         let path = root.join("target");
-        report_for(target_size(&path), root)
+        report_for(target_size(&path))
     }
 }
 
@@ -39,7 +38,7 @@ fn target_size(path: &Path) -> TargetSize {
     }
 }
 
-fn report_for(size: TargetSize, workspace: PathBuf) -> CheckReport {
+fn report_for(size: TargetSize) -> CheckReport {
     match size {
         TargetSize::Missing => CheckReport::ok("cargo target directory has not been created yet"),
         TargetSize::Bytes(bytes) if bytes <= WARN_BYTES => {
@@ -47,12 +46,12 @@ fn report_for(size: TargetSize, workspace: PathBuf) -> CheckReport {
         }
         TargetSize::Bytes(bytes) => CheckReport::warn(
             format!(
-                "cargo target directory is {} over the {} limit; cargo clean reclaims it",
+                "cargo target directory is {} over the {} limit; stop the dev session (tray, plugins, qol dev all run from target/) and run cargo clean manually",
                 format_bytes(bytes),
                 format_bytes(WARN_BYTES)
             ),
             ID,
-            vec![FixAction::CargoClean { workspace }],
+            Vec::new(),
         ),
         TargetSize::Unreadable(reason) => CheckReport::ok(format!(
             "cargo target directory unreadable, skipping: {reason}"
@@ -66,24 +65,27 @@ mod tests {
 
     #[test]
     fn missing_target_is_ok_without_fix() {
-        let report = report_for(TargetSize::Missing, PathBuf::from("/ws"));
+        let report = report_for(TargetSize::Missing);
         assert!(report.issues.is_empty());
         assert!(report.fixes.is_empty());
     }
 
     #[test]
     fn target_below_limit_is_ok_without_fix() {
-        let report = report_for(TargetSize::Bytes(WARN_BYTES), PathBuf::from("/ws"));
+        let report = report_for(TargetSize::Bytes(WARN_BYTES));
         assert!(report.issues.is_empty());
         assert!(report.fixes.is_empty());
         assert!(report.summary.contains("10.0 GiB"));
     }
 
     #[test]
-    fn target_above_limit_warns_with_cargo_clean_fix() {
-        let workspace = PathBuf::from("/ws");
-        let report = report_for(TargetSize::Bytes(WARN_BYTES + 1), workspace.clone());
+    fn target_above_limit_warns_with_manual_advice_only() {
+        let report = report_for(TargetSize::Bytes(WARN_BYTES + 1));
         assert_eq!(report.issues.len(), 1);
-        assert_eq!(report.fixes, vec![FixAction::CargoClean { workspace }]);
+        assert!(
+            report.fixes.is_empty(),
+            "cargo clean must never run automatically: the live dev session executes from target/"
+        );
+        assert!(report.summary.contains("stop the dev session"));
     }
 }
