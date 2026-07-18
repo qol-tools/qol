@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use gpui::*;
 use qol_config::contract::{FieldDefault, FieldKind};
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection};
+use qol_gpui::dropdown::{Dropdown, DropdownStyle};
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::surface::{Anchor, Surface, SurfaceDismisser, SurfaceKind};
 use qol_gpui::theme::{shot_preview_runtime, ShotPreviewPalette};
@@ -75,6 +76,7 @@ struct SettingsPanelView {
     path: PathBuf,
     selected: usize,
     edit: Option<String>,
+    dropdown: Option<Dropdown>,
     dismisser: SurfaceDismisser,
     palette: ShotPreviewPalette,
     focus_handle: FocusHandle,
@@ -94,6 +96,7 @@ impl SettingsPanelView {
             path,
             selected: 0,
             edit: None,
+            dropdown: None,
             dismisser,
             palette: shot_preview_runtime(),
             focus_handle: cx.focus_handle(),
@@ -103,6 +106,10 @@ impl SettingsPanelView {
     fn on_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let key_char = event.keystroke.key_char.as_deref();
+        if self.dropdown.is_some() {
+            self.on_dropdown_key(key, cx);
+            return;
+        }
         if self.edit.is_some() && matches!(key, "up" | "down") {
             self.commit_edit();
         }
@@ -139,6 +146,35 @@ impl SettingsPanelView {
             }
         }
         cx.notify();
+    }
+
+    fn on_dropdown_key(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(dropdown) = self.dropdown.as_mut() else {
+            return;
+        };
+        match key {
+            "up" => dropdown.move_up(),
+            "down" => dropdown.move_down(),
+            "enter" | "return" | "space" => self.commit_dropdown(),
+            "escape" => self.dropdown = None,
+            _ => return,
+        }
+        cx.notify();
+    }
+
+    fn commit_dropdown(&mut self) {
+        let Some(dropdown) = self.dropdown.take() else {
+            return;
+        };
+        let Some(row) = self.rows.get_mut(self.selected) else {
+            return;
+        };
+        if let RowControl::Select { options, index, .. } = &mut row.control {
+            if dropdown.selected() < options.len() {
+                *index = dropdown.selected();
+                self.persist();
+            }
+        }
     }
 
     fn toggle(&mut self) {
@@ -189,7 +225,9 @@ impl SettingsPanelView {
         };
         match &row.control {
             RowControl::Toggle(_) => self.toggle(),
-            RowControl::Select { .. } => self.adjust(1.0),
+            RowControl::Select { options, index, .. } => {
+                self.dropdown = Some(Dropdown::open(options.len(), *index));
+            }
             RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
                 self.begin_edit()
             }
@@ -295,6 +333,16 @@ impl SettingsPanelView {
         }
     }
 
+    fn dropdown_style(&self) -> DropdownStyle {
+        DropdownStyle {
+            bg: self.palette.action_bg,
+            bg_selected: self.palette.action_bg_selected,
+            border: self.palette.action_border_selected,
+            text: self.palette.label_text,
+            text_selected: self.palette.action_glyph,
+        }
+    }
+
     fn render_row(&self, index: usize) -> Div {
         let row = &self.rows[index];
         let mut container = div().flex().flex_col().gap_1();
@@ -330,6 +378,11 @@ impl SettingsPanelView {
                 .bg(rgb(self.palette.action_bg_selected))
                 .border_1()
                 .border_color(rgb(self.palette.action_border_selected));
+            if let (Some(dropdown), RowControl::Select { labels, .. }) =
+                (&self.dropdown, &row.control)
+            {
+                line = line.child(dropdown.render(labels, self.dropdown_style()));
+            }
         }
         container.child(line)
     }
