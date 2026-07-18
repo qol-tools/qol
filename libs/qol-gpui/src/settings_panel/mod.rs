@@ -1,0 +1,58 @@
+mod persistence;
+mod rows;
+mod view;
+
+use gpui::*;
+
+use crate::monitor::MonitorTracker;
+use crate::surface::{Anchor, Surface, SurfaceKind};
+use rows::{rows_from_resolved, Row};
+use view::SettingsPanelView;
+
+const PANEL_WIDTH: f32 = 520.0;
+const PANEL_ROW_HEIGHT: f32 = 36.0;
+const PANEL_SECTION_HEADER_HEIGHT: f32 = 26.0;
+const PANEL_CHROME_HEIGHT: f32 = 72.0;
+
+#[derive(Clone, Copy)]
+pub struct SettingsPanel {
+    pub plugin_id: &'static str,
+    pub contract: &'static str,
+    pub heading: &'static str,
+}
+
+pub type QueryOptions = dyn Fn(&str) -> Vec<(String, String)>;
+
+pub fn open(
+    panel: SettingsPanel,
+    tracker: &MonitorTracker,
+    provider: &QueryOptions,
+    cx: &mut App,
+) -> anyhow::Result<()> {
+    let spec = qol_config::contract::parse_spec_str(panel.contract)
+        .map_err(|error| anyhow::anyhow!("contract parse failed: {error:?}"))?;
+    let path = persistence::config_path(panel.plugin_id)?;
+    let values = persistence::load_values(panel.plugin_id, &path);
+    let resolved = qol_config::normalized::resolve_config(&spec, &values)
+        .map_err(|errors| anyhow::anyhow!("contract resolve failed: {errors:?}"))?;
+    let rows = rows_from_resolved(&resolved, provider);
+    let title = format!("{}-settings-{}", panel.plugin_id, std::process::id());
+    Surface::new(SurfaceKind::Panel)
+        .title(title)
+        .anchor(Anchor::MonitorCenter)
+        .size(size(px(PANEL_WIDTH), px(panel_height(&rows))))
+        .show_focused(tracker, cx, move |dismisser, _window, cx| {
+            SettingsPanelView::new(panel, rows, values, path, dismisser, cx)
+        })
+        .map(|_| ())
+}
+
+fn panel_height(rows: &[Row]) -> f32 {
+    let headers = rows
+        .iter()
+        .filter(|row| row.section_label.is_some())
+        .count() as f32;
+    PANEL_CHROME_HEIGHT
+        + rows.len() as f32 * PANEL_ROW_HEIGHT
+        + headers * PANEL_SECTION_HEADER_HEIGHT
+}
