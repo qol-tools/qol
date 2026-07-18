@@ -97,15 +97,27 @@ step = 25
 field = "enabled"
 equals = true
 
-[field.restore_steps]
+[field.grow_ms]
 type = "number"
-label = "Restore Steps"
+label = "Grow Duration (ms)"
 section = "shake_to_grow"
-default = 18
-min = 1
-step = 1
+default = 110
+min = 20
+step = 10
 
-[field.restore_steps.show_when]
+[field.grow_ms.show_when]
+field = "enabled"
+equals = true
+
+[field.shrink_ms]
+type = "number"
+label = "Shrink Duration (ms)"
+section = "shake_to_grow"
+default = 300
+min = 20
+step = 10
+
+[field.shrink_ms.show_when]
 field = "enabled"
 equals = true
 

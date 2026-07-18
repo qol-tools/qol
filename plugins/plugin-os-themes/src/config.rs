@@ -13,7 +13,8 @@ pub struct Config {
     pub shake_window_ms: u64,
     pub scale_factor: u32,
     pub calm_duration_ms: u64,
-    pub restore_steps: u32,
+    pub grow_ms: u32,
+    pub shrink_ms: u32,
 }
 
 pub fn load() -> Config {
@@ -49,7 +50,7 @@ fn persist(config: &Config) {
 
 fn log_config(config: &Config) {
     eprintln!(
-        "[shake-to-grow] config: enabled={} strictness={} regrow={} min_extent={}px regrow_extent={}px window_ms={} scale={} calm_ms={} steps={}",
+        "[shake-to-grow] config: enabled={} strictness={} regrow={} min_extent={}px regrow_extent={}px window_ms={} scale={} calm_ms={} grow_ms={} shrink_ms={}",
         config.enabled,
         config.shake_strictness,
         config.regrow_strictness,
@@ -58,7 +59,8 @@ fn log_config(config: &Config) {
         config.shake_window_ms,
         config.scale_factor,
         config.calm_duration_ms,
-        config.restore_steps,
+        config.grow_ms,
+        config.shrink_ms,
     );
 }
 
@@ -81,6 +83,7 @@ mod tests {
         assert_eq!(defaults.shake_min_extent_px, 150);
         assert_eq!(defaults.regrow_min_extent_px, 60);
         assert_eq!(defaults.shake_window_ms, 1000);
-        assert_eq!(defaults.restore_steps, 18);
+        assert_eq!(defaults.grow_ms, 110);
+        assert_eq!(defaults.shrink_ms, 300);
     }
 }
