@@ -1,5 +1,314 @@
+use std::path::{Path, PathBuf};
+
+use gpui::*;
 use qol_config::contract::{FieldDefault, FieldKind};
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection};
+use qol_gpui::monitor::MonitorTracker;
+use qol_gpui::surface::{Anchor, Surface, SurfaceDismisser, SurfaceKind};
+use qol_gpui::theme::{shot_preview_runtime, ShotPreviewPalette};
+
+const PANEL_WIDTH: f32 = 520.0;
+const PANEL_HEIGHT: f32 = 560.0;
+
+pub(crate) fn open(tracker: &MonitorTracker, cx: &mut App) -> anyhow::Result<()> {
+    let spec = qol_config::contract::parse_spec_str(crate::config::contract())
+        .map_err(|error| anyhow::anyhow!("contract parse failed: {error:?}"))?;
+    let path = config_path()?;
+    let values = load_values(&path);
+    let resolved = qol_config::normalized::resolve_config(&spec, &values)
+        .map_err(|errors| anyhow::anyhow!("contract resolve failed: {errors:?}"))?;
+    let rows = rows_from_resolved(&resolved);
+    let title = format!("qol-shot-settings-{}", std::process::id());
+    Surface::new(SurfaceKind::Panel)
+        .title(title)
+        .anchor(Anchor::MonitorCenter)
+        .size(size(px(PANEL_WIDTH), px(PANEL_HEIGHT)))
+        .show_focused(tracker, cx, move |dismisser, _window, cx| {
+            SettingsPanelView::new(rows, values, path, dismisser, cx)
+        })
+        .map(|_| ())
+}
+
+fn config_path() -> anyhow::Result<PathBuf> {
+    qol_config::plugin_config_paths_from_env(crate::PLUGIN_ID)
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no plugin config path available"))
+}
+
+fn load_values(path: &Path) -> serde_json::Value {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+fn save_values(path: &Path, values: &serde_json::Value) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match serde_json::to_string_pretty(values) {
+        Ok(raw) => {
+            if let Err(error) = std::fs::write(path, raw) {
+                eprintln!("[qol-shot] settings save failed: {error:#}");
+            }
+        }
+        Err(error) => eprintln!("[qol-shot] settings serialize failed: {error:#}"),
+    }
+}
+
+struct SettingsPanelView {
+    rows: Vec<Row>,
+    values: serde_json::Value,
+    path: PathBuf,
+    selected: usize,
+    edit: Option<String>,
+    dismisser: SurfaceDismisser,
+    palette: ShotPreviewPalette,
+    focus_handle: FocusHandle,
+}
+
+impl SettingsPanelView {
+    fn new(
+        rows: Vec<Row>,
+        values: serde_json::Value,
+        path: PathBuf,
+        dismisser: SurfaceDismisser,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self {
+            rows,
+            values,
+            path,
+            selected: 0,
+            edit: None,
+            dismisser,
+            palette: shot_preview_runtime(),
+            focus_handle: cx.focus_handle(),
+        }
+    }
+
+    fn on_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let key = event.keystroke.key.as_str();
+        let key_char = event.keystroke.key_char.as_deref();
+        let Some(intent) = intent(key, key_char, self.edit.is_some()) else {
+            return;
+        };
+        match intent {
+            Intent::Up => self.selected = self.selected.saturating_sub(1),
+            Intent::Down => {
+                self.selected = (self.selected + 1).min(self.rows.len().saturating_sub(1))
+            }
+            Intent::Toggle => self.toggle(),
+            Intent::Left => self.adjust(-1.0),
+            Intent::Right => self.adjust(1.0),
+            Intent::BeginEdit => self.begin_edit(),
+            Intent::CommitEdit => self.commit_edit(),
+            Intent::Backspace => {
+                if let Some(edit) = self.edit.as_mut() {
+                    edit.pop();
+                }
+            }
+            Intent::Insert(ch) => {
+                if let Some(edit) = self.edit.as_mut() {
+                    edit.push_str(&ch);
+                }
+            }
+            Intent::CancelEdit => self.edit = None,
+            Intent::Close => {
+                self.dismisser.dismiss(cx);
+                return;
+            }
+        }
+        cx.notify();
+    }
+
+    fn toggle(&mut self) {
+        let Some(row) = self.rows.get_mut(self.selected) else {
+            return;
+        };
+        if let RowControl::Toggle(value) = &mut row.control {
+            *value = !*value;
+            self.persist();
+        }
+    }
+
+    fn adjust(&mut self, direction: f64) {
+        let Some(row) = self.rows.get_mut(self.selected) else {
+            return;
+        };
+        match &mut row.control {
+            RowControl::Select { options, index, .. } => {
+                let len = options.len();
+                if len == 0 {
+                    return;
+                }
+                *index = (*index + if direction > 0.0 { 1 } else { len - 1 }) % len;
+            }
+            RowControl::Number {
+                value,
+                min,
+                max,
+                step,
+            } => {
+                let mut next = *value + direction * *step;
+                if let Some(min) = min {
+                    next = next.max(*min);
+                }
+                if let Some(max) = max {
+                    next = next.min(*max);
+                }
+                *value = next;
+            }
+            RowControl::Toggle(_) | RowControl::Text(_) | RowControl::TextList(_) => return,
+        }
+        self.persist();
+    }
+
+    fn begin_edit(&mut self) {
+        let Some(row) = self.rows.get(self.selected) else {
+            return;
+        };
+        self.edit = match &row.control {
+            RowControl::Text(value) => Some(value.clone()),
+            RowControl::TextList(values) => Some(values.join(", ")),
+            RowControl::Toggle(_) | RowControl::Select { .. } | RowControl::Number { .. } => None,
+        };
+    }
+
+    fn commit_edit(&mut self) {
+        let Some(edit) = self.edit.take() else {
+            return;
+        };
+        let Some(row) = self.rows.get_mut(self.selected) else {
+            return;
+        };
+        match &mut row.control {
+            RowControl::Text(value) => *value = edit,
+            RowControl::TextList(values) => {
+                *values = edit
+                    .split(',')
+                    .map(|part| part.trim().to_string())
+                    .filter(|part| !part.is_empty())
+                    .collect();
+            }
+            RowControl::Toggle(_) | RowControl::Select { .. } | RowControl::Number { .. } => return,
+        }
+        self.persist();
+    }
+
+    fn persist(&mut self) {
+        let Some(row) = self.rows.get(self.selected) else {
+            return;
+        };
+        set_config_value(
+            &mut self.values,
+            &row.config_key,
+            row_value_json(&row.control),
+        );
+        save_values(&self.path, &self.values);
+    }
+
+    fn display_value(&self, index: usize) -> String {
+        if index == self.selected {
+            if let Some(edit) = &self.edit {
+                return format!("{edit}_");
+            }
+        }
+        match &self.rows[index].control {
+            RowControl::Toggle(true) => "[on]".into(),
+            RowControl::Toggle(false) => "[off]".into(),
+            RowControl::Select { labels, index, .. } => {
+                labels.get(*index).cloned().unwrap_or_default()
+            }
+            RowControl::Number { value, .. } => format_number(*value),
+            RowControl::Text(value) => value.clone(),
+            RowControl::TextList(values) => values.join(", "),
+        }
+    }
+
+    fn render_row(&self, index: usize) -> Div {
+        let row = &self.rows[index];
+        let mut container = div().flex().flex_col().gap_1();
+        if let Some(section) = &row.section_label {
+            container = container.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(self.palette.action_glyph))
+                    .child(section.clone()),
+            );
+        }
+        let mut line = div()
+            .flex()
+            .flex_row()
+            .justify_between()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(self.palette.label_text))
+                    .child(row.label.clone()),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(self.palette.label_text))
+                    .child(self.display_value(index)),
+            );
+        if index == self.selected {
+            line = line
+                .bg(rgb(self.palette.action_bg_selected))
+                .border_1()
+                .border_color(rgb(self.palette.action_border_selected));
+        }
+        container.child(line)
+    }
+}
+
+impl Focusable for SettingsPanelView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for SettingsPanelView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let items: Vec<AnyElement> = (0..self.rows.len())
+            .map(|index| self.render_row(index).into_any_element())
+            .collect();
+        div()
+            .track_focus(&self.focus_handle)
+            .on_key_down(
+                cx.listener(|this, event: &KeyDownEvent, _window, cx| this.on_key(event, cx)),
+            )
+            .size_full()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_4()
+            .rounded_xl()
+            .border_1()
+            .border_color(rgb(self.palette.thumb_border))
+            .bg(rgb(self.palette.window_bg))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(self.palette.label_text))
+                    .child("QoL Shot Settings"),
+            )
+            .children(items)
+    }
+}
+
+fn format_number(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        format!("{value}")
+    }
+}
 
 #[derive(Debug)]
 pub(crate) enum RowControl {
@@ -187,7 +496,7 @@ pub(crate) fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{intent, rows_from_resolved, set_config_value, Intent, ResolvedConfig, RowControl};
 
     const SPEC: &str = r#"
 schema_version = 1

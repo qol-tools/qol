@@ -202,6 +202,10 @@ fn contract_defaults() -> Config {
     qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).expect("contract defaults must parse")
 }
 
+pub(crate) fn contract() -> &'static str {
+    CONFIG_CONTRACT
+}
+
 pub fn load() -> Config {
     qol_config::load_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT)
 }
