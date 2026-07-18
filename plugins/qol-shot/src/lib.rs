@@ -26,6 +26,8 @@ mod saved_toast;
 pub mod screenshot;
 mod settings;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod settings_panel;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod shortcuts;
 mod space;
 
