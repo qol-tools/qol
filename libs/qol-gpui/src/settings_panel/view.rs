@@ -142,6 +142,65 @@ impl SettingsPanelView {
         self.persist();
     }
 
+    fn on_wheel_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ActiveControl::Wheel(wheel)) = self.active_control.as_mut() else {
+            return;
+        };
+        if !wheel.begin_drag(event.position) {
+            return;
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn on_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !event.dragging() {
+            return;
+        }
+        let Some(ActiveControl::Wheel(wheel)) = self.active_control.as_mut() else {
+            return;
+        };
+        if wheel.drag_to(event.position) {
+            cx.notify();
+        }
+    }
+
+    fn on_mouse_up(&mut self, event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ActiveControl::Wheel(wheel)) = self.active_control.as_mut() else {
+            return;
+        };
+        if !wheel.finish_drag(event.position) {
+            return;
+        }
+        self.commit_wheel();
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn open_color_wheel(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(row) = self.rows.get(index) else {
+            return;
+        };
+        let RowControl::Color(value) = &row.control else {
+            return;
+        };
+        let value = value.clone();
+        self.selected = index;
+        self.sync_scroll();
+        self.active_control = Some(ActiveControl::Wheel(ColorWheel::open(&value)));
+        cx.notify();
+    }
+
     fn on_dropdown_key(&mut self, key: &str, cx: &mut Context<Self>) {
         let Some(ActiveControl::Dropdown(dropdown)) = self.active_control.as_mut() else {
             return;
@@ -428,7 +487,7 @@ impl SettingsPanelView {
         parsed_color(text)
     }
 
-    fn render_row(&self, index: usize) -> Div {
+    fn render_row(&self, index: usize, cx: &mut Context<Self>) -> Div {
         let row = &self.rows[index];
         let mut container = div().flex().flex_col().gap_1();
         if let Some(section) = &row.section_label {
@@ -440,6 +499,7 @@ impl SettingsPanelView {
             );
         }
         let mut line = div()
+            .id(("settings-row", index))
             .flex()
             .flex_row()
             .justify_between()
@@ -453,6 +513,15 @@ impl SettingsPanelView {
                     .child(row.label.clone()),
             )
             .child(self.render_value_cell(index));
+        if matches!(row.control, RowControl::Color(_)) {
+            line = line.cursor(CursorStyle::PointingHand).on_click(cx.listener(
+                move |this, event: &ClickEvent, _window, cx| {
+                    if event.standard_click() {
+                        this.open_color_wheel(index, cx);
+                    }
+                },
+            ));
+        }
         if index == self.selected {
             line = line
                 .bg(rgb(self.palette.row_bg_selected))
@@ -483,11 +552,14 @@ impl SettingsPanelView {
                 }
             }
             if let Some(ActiveControl::Wheel(wheel)) = &self.active_control {
-                line = line.child(wheel.render(WheelStyle {
-                    bg: self.palette.dropdown_bg,
-                    border: self.palette.row_border_selected,
-                    thumb_border: self.palette.section_text,
-                }));
+                line = line.child(wheel.render(
+                    WheelStyle {
+                        bg: self.palette.dropdown_bg,
+                        border: self.palette.row_border_selected,
+                        thumb_border: self.palette.section_text,
+                    },
+                    cx.listener(Self::on_wheel_mouse_down),
+                ));
             }
         }
         container.child(line)
@@ -504,13 +576,17 @@ impl Render for SettingsPanelView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let items: Vec<AnyElement> =
             visible_row_range(&self.rows, self.scroll_offset, self.body_max)
-                .map(|index| self.render_row(index).into_any_element())
+                .map(|index| self.render_row(index, cx).into_any_element())
                 .collect();
         div()
+            .id("settings-panel")
             .track_focus(&self.focus_handle)
             .on_key_down(
                 cx.listener(|this, event: &KeyDownEvent, _window, cx| this.on_key(event, cx)),
             )
+            .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .size_full()
             .flex()
             .flex_col()

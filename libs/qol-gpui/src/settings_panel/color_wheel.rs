@@ -1,3 +1,5 @@
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::*;
@@ -18,6 +20,8 @@ pub(super) struct ColorWheel {
     hue: f64,
     sat: f64,
     image: Arc<RenderImage>,
+    disc_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    dragging: bool,
 }
 
 impl ColorWheel {
@@ -27,6 +31,8 @@ impl ColorWheel {
             hue,
             sat,
             image: disc_image(),
+            disc_bounds: Rc::new(Cell::new(None)),
+            dragging: false,
         }
     }
 
@@ -39,6 +45,51 @@ impl ColorWheel {
 
     pub(super) fn hex(&self) -> String {
         format!("#{}", hue_sat_to_hex(self.hue, self.sat))
+    }
+
+    pub(super) fn begin_drag(&mut self, position: Point<Pixels>) -> bool {
+        let Some((x, y)) = self.local_pointer(position) else {
+            return false;
+        };
+        if !pointer_hits_disc(x, y) {
+            return false;
+        }
+        self.dragging = true;
+        self.set_from_pointer(x, y);
+        true
+    }
+
+    pub(super) fn drag_to(&mut self, position: Point<Pixels>) -> bool {
+        if !self.dragging {
+            return false;
+        }
+        let Some((x, y)) = self.local_pointer(position) else {
+            return false;
+        };
+        self.set_from_pointer(x, y);
+        true
+    }
+
+    pub(super) fn finish_drag(&mut self, position: Point<Pixels>) -> bool {
+        if !self.drag_to(position) {
+            return false;
+        }
+        self.dragging = false;
+        true
+    }
+
+    fn local_pointer(&self, position: Point<Pixels>) -> Option<(f64, f64)> {
+        let bounds = self.disc_bounds.get()?;
+        Some((
+            (position.x - bounds.origin.x).to_f64(),
+            (position.y - bounds.origin.y).to_f64(),
+        ))
+    }
+
+    fn set_from_pointer(&mut self, x: f64, y: f64) {
+        let (hue, sat) = hue_sat_from_pointer(x, y);
+        self.hue = hue;
+        self.sat = sat;
     }
 
     fn thumb_color(&self) -> u32 {
@@ -56,22 +107,40 @@ impl ColorWheel {
         )
     }
 
-    pub(super) fn render(&self, style: WheelStyle) -> impl IntoElement {
+    pub(super) fn render(
+        &self,
+        style: WheelStyle,
+        on_mouse_down: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
         let (tx, ty) = self.thumb_position();
+        let disc_bounds = Rc::clone(&self.disc_bounds);
         deferred(
             anchored().snap_to_window_with_margin(px(8.0)).child(
                 div()
+                    .id("settings-color-wheel")
                     .p_2()
                     .rounded_md()
                     .border_1()
                     .border_color(rgb(style.border))
                     .bg(rgb(style.bg))
+                    .on_click(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
+                            .id("settings-color-wheel-disc")
                             .relative()
                             .w(px(DISC_SIZE))
                             .h(px(DISC_SIZE))
+                            .cursor(CursorStyle::Crosshair)
+                            .on_mouse_down(MouseButton::Left, on_mouse_down)
                             .child(img(self.image.clone()).w(px(DISC_SIZE)).h(px(DISC_SIZE)))
+                            .child(
+                                canvas(
+                                    move |bounds, _, _| disc_bounds.set(Some(bounds)),
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .inset_0(),
+                            )
                             .child(
                                 div()
                                     .absolute()
@@ -95,9 +164,25 @@ fn nudged(hue: f64, sat: f64, dx: f64, dy: f64) -> (f64, f64) {
     let dist = sat * DISC_RADIUS;
     let x = dist * angle.cos() + dx;
     let y = dist * angle.sin() + dy;
-    let new_dist = (x * x + y * y).sqrt().min(DISC_RADIUS);
-    let new_hue = (y.atan2(x).to_degrees() + 360.0) % 360.0;
-    (new_hue, new_dist / DISC_RADIUS)
+    hue_sat_from_cartesian(x, y)
+}
+
+fn pointer_hits_disc(x: f64, y: f64) -> bool {
+    let center = DISC_SIZE as f64 / 2.0;
+    let dx = x - center;
+    let dy = y - center;
+    (dx * dx + dy * dy).sqrt() <= center
+}
+
+fn hue_sat_from_pointer(x: f64, y: f64) -> (f64, f64) {
+    let center = DISC_SIZE as f64 / 2.0;
+    hue_sat_from_cartesian(x - center, y - center)
+}
+
+fn hue_sat_from_cartesian(x: f64, y: f64) -> (f64, f64) {
+    let dist = (x * x + y * y).sqrt().min(DISC_RADIUS);
+    let hue = (y.atan2(x).to_degrees() + 360.0) % 360.0;
+    (hue, dist / DISC_RADIUS)
 }
 
 fn hue_components(h: f64) -> [f64; 3] {
@@ -190,8 +275,8 @@ mod tests {
     use proptest::prelude::*;
 
     use super::{
-        disc_bgra, hex_to_hue_sat, hue_sat_to_hex, nudged, ColorWheel, DISC_RADIUS, DISC_SIZE,
-        NUDGE_STEP, NUDGE_STEP_FAST,
+        disc_bgra, hex_to_hue_sat, hue_sat_from_pointer, hue_sat_to_hex, nudged, pointer_hits_disc,
+        ColorWheel, DISC_RADIUS, DISC_SIZE, NUDGE_STEP, NUDGE_STEP_FAST,
     };
 
     #[test]
@@ -259,6 +344,37 @@ mod tests {
         fast.nudge(1.0, 0.0, true);
         assert!((normal.sat - NUDGE_STEP / DISC_RADIUS).abs() < 1e-9);
         assert!((fast.sat - NUDGE_STEP_FAST / DISC_RADIUS).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pointer_position_maps_center_cardinals_and_outside_to_the_disc() {
+        let cases = [
+            ((100.0, 100.0), (0.0, 0.0)),
+            ((199.0, 100.0), (0.0, 1.0)),
+            ((100.0, 199.0), (90.0, 1.0)),
+            ((1.0, 100.0), (180.0, 1.0)),
+            ((100.0, 1.0), (270.0, 1.0)),
+            ((500.0, 100.0), (0.0, 1.0)),
+        ];
+        for ((x, y), (expected_hue, expected_sat)) in cases {
+            let (hue, sat) = hue_sat_from_pointer(x, y);
+            assert!((hue - expected_hue).abs() < 1e-9, "point {x},{y}");
+            assert!((sat - expected_sat).abs() < 1e-9, "point {x},{y}");
+        }
+    }
+
+    #[test]
+    fn pointer_hit_test_accepts_the_disc_and_rejects_transparent_corners() {
+        let cases = [
+            ((100.0, 100.0), true),
+            ((200.0, 100.0), true),
+            ((0.0, 100.0), true),
+            ((0.0, 0.0), false),
+            ((200.0, 200.0), false),
+        ];
+        for ((x, y), expected) in cases {
+            assert_eq!(pointer_hits_disc(x, y), expected, "point {x},{y}");
+        }
     }
 
     #[test]
