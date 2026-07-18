@@ -130,10 +130,11 @@ impl Surface {
         cx: &mut App,
         build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
     ) -> Result<SurfaceDismisser> {
-        let monitor = tracker
-            .snapshot_cursor()
-            .map(|(monitor, _)| monitor)
-            .ok_or_else(|| anyhow!("no monitor state available for surface placement"))?;
+        let monitor = match self.kind {
+            SurfaceKind::Toast => tracker.snapshot_cursor().map(|(monitor, _)| monitor),
+            SurfaceKind::Panel => tracker.snapshot_monitor_focus_first(),
+        }
+        .ok_or_else(|| anyhow!("no monitor state available for surface placement"))?;
         let bounds = self.resolved_bounds(&monitor);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
