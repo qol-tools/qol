@@ -103,7 +103,13 @@ impl SettingsPanelView {
     fn on_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let key_char = event.keystroke.key_char.as_deref();
+        if self.edit.is_some() && matches!(key, "up" | "down") {
+            self.commit_edit();
+        }
         let Some(intent) = intent(key, key_char, self.edit.is_some()) else {
+            if self.begin_number_entry(key_char) {
+                cx.notify();
+            }
             return;
         };
         match intent {
@@ -188,6 +194,20 @@ impl SettingsPanelView {
                 self.begin_edit()
             }
         }
+    }
+
+    fn begin_number_entry(&mut self, key_char: Option<&str>) -> bool {
+        let Some(seed) = key_char.filter(|ch| is_number_seed(ch)) else {
+            return false;
+        };
+        let Some(row) = self.rows.get(self.selected) else {
+            return false;
+        };
+        if !matches!(row.control, RowControl::Number { .. }) {
+            return false;
+        }
+        self.edit = Some(seed.to_string());
+        true
     }
 
     fn begin_edit(&mut self) {
@@ -348,6 +368,13 @@ impl Render for SettingsPanelView {
             )
             .children(items)
     }
+}
+
+pub(crate) fn is_number_seed(ch: &str) -> bool {
+    !ch.is_empty()
+        && ch
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '-' || c == '.')
 }
 
 pub(crate) fn parsed_number(edit: &str, min: Option<f64>, max: Option<f64>) -> Option<f64> {
@@ -556,8 +583,8 @@ pub(crate) fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option
 #[cfg(test)]
 mod tests {
     use super::{
-        intent, parsed_number, rows_from_resolved, set_config_value, Intent, ResolvedConfig,
-        RowControl,
+        intent, is_number_seed, parsed_number, rows_from_resolved, set_config_value, Intent,
+        ResolvedConfig, RowControl,
     };
 
     const SPEC: &str = r#"
@@ -658,6 +685,21 @@ default = ["mic"]
                 "audio": { "inputs": ["mic", "system"] }
             })
         );
+    }
+
+    #[test]
+    fn is_number_seed_accepts_numeric_starters_only() {
+        let cases = [
+            ("5", true),
+            ("-", true),
+            (".", true),
+            ("a", false),
+            (" ", false),
+            ("", false),
+        ];
+        for (ch, expected) in cases {
+            assert_eq!(is_number_seed(ch), expected, "char: {ch:?}");
+        }
     }
 
     #[test]
