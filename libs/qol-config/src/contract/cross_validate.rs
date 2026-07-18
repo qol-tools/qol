@@ -109,7 +109,11 @@ fn validate_runable_ref(
                 format!("references undeclared action: {ref_name}"),
             ));
         }
-        FieldKind::List | FieldKind::Status | FieldKind::QrCode | FieldKind::Gamepad
+        FieldKind::List
+        | FieldKind::Status
+        | FieldKind::QrCode
+        | FieldKind::Gamepad
+        | FieldKind::Select
             if !rt.queries.contains_key(ref_name) =>
         {
             errors.push(ValidationError::new(
@@ -192,9 +196,11 @@ fn validate_row_action_ref(
 fn runable_reference_for(field: &FieldSpec) -> Option<&str> {
     match field.kind {
         FieldKind::Action => field.action.as_deref(),
-        FieldKind::List | FieldKind::Status | FieldKind::QrCode | FieldKind::Gamepad => {
-            field.query.as_deref()
-        }
+        FieldKind::List
+        | FieldKind::Status
+        | FieldKind::QrCode
+        | FieldKind::Gamepad
+        | FieldKind::Select => field.query.as_deref(),
         _ => None,
     }
 }
@@ -204,6 +210,51 @@ mod tests {
     use super::*;
     use crate::contract::runtime::parse_runtime_spec_str;
     use crate::contract::v1::parse_spec_str;
+
+    #[test]
+    fn select_query_must_be_declared_in_runtime() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.device]
+type = "select"
+config_key = "audio.device"
+default = "default"
+query = "audio_sources"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.other]
+description = "something else"
+poll_interval_ms = 1000
+"#,
+        )
+        .expect("parse runtime");
+
+        let errors = validate_contracts(&config, Some(&runtime)).expect_err("must fail");
+        assert!(
+            errors.iter().any(|error| error.path == "field.device.query"
+                && error.message.contains("audio_sources")),
+            "{errors:?}"
+        );
+
+        let declared = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.audio_sources]
+description = "PulseAudio capture sources"
+poll_interval_ms = 5000
+"#,
+        )
+        .expect("parse runtime");
+        assert!(validate_contracts(&config, Some(&declared)).is_ok());
+    }
 
     #[test]
     fn accepts_consistent_contracts() {

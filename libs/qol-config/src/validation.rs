@@ -274,10 +274,12 @@ fn validate_object_map_fields(id: &str, field: &FieldSpec, errors: &mut Vec<Vali
 
 fn validate_select_options(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
     if field.options.is_empty() {
-        errors.push(ValidationError::new(
-            format!("field.{id}.options"),
-            "select field requires options",
-        ));
+        if field.kind == FieldKind::Select && field.query.is_none() {
+            errors.push(ValidationError::new(
+                format!("field.{id}.options"),
+                "select field requires options or a query",
+            ));
+        }
         return;
     }
     for (index, option) in field.options.iter().enumerate() {
@@ -293,7 +295,9 @@ fn validate_select_options(id: &str, field: &FieldSpec, errors: &mut Vec<Validat
 
 fn validate_option_labels(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
     for (option, label) in &field.option_labels {
-        if field.options.iter().any(|candidate| candidate == option) {
+        let known =
+            field.query.is_some() || field.options.iter().any(|candidate| candidate == option);
+        if known {
             if !label.trim().is_empty() {
                 continue;
             }
@@ -415,7 +419,7 @@ fn validate_select_value(
     if field.kind != FieldKind::Select {
         return;
     }
-    if field.options.is_empty() {
+    if field.options.is_empty() || field.query.is_some() {
         return;
     }
     let selected = match value {
@@ -676,6 +680,38 @@ default = 2
                 .iter()
                 .all(|error| !error.message.contains("collides with")),
             "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn select_with_query_allows_dynamic_options() {
+        let errors = validate_contract(
+            r#"
+schema_version = 1
+
+[field.device]
+type = "select"
+config_key = "audio.device"
+default = "default"
+query = "audio_sources"
+"#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let static_without_options = validate_contract(
+            r#"
+schema_version = 1
+
+[field.device]
+type = "select"
+config_key = "audio.device"
+default = "default"
+"#,
+        );
+        assert_has_error(
+            &static_without_options,
+            "field.device.options",
+            "select field requires options or a query",
         );
     }
 
