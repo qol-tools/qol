@@ -8,7 +8,19 @@ use qol_gpui::surface::{Anchor, Surface, SurfaceDismisser, SurfaceKind};
 use qol_gpui::theme::{shot_preview_runtime, ShotPreviewPalette};
 
 const PANEL_WIDTH: f32 = 520.0;
-const PANEL_HEIGHT: f32 = 560.0;
+const PANEL_ROW_HEIGHT: f32 = 36.0;
+const PANEL_SECTION_HEADER_HEIGHT: f32 = 26.0;
+const PANEL_CHROME_HEIGHT: f32 = 72.0;
+
+fn panel_height(rows: &[Row]) -> f32 {
+    let headers = rows
+        .iter()
+        .filter(|row| row.section_label.is_some())
+        .count() as f32;
+    PANEL_CHROME_HEIGHT
+        + rows.len() as f32 * PANEL_ROW_HEIGHT
+        + headers * PANEL_SECTION_HEADER_HEIGHT
+}
 
 pub(crate) fn open(tracker: &MonitorTracker, cx: &mut App) -> anyhow::Result<()> {
     let spec = qol_config::contract::parse_spec_str(crate::config::contract())
@@ -22,7 +34,7 @@ pub(crate) fn open(tracker: &MonitorTracker, cx: &mut App) -> anyhow::Result<()>
     Surface::new(SurfaceKind::Panel)
         .title(title)
         .anchor(Anchor::MonitorCenter)
-        .size(size(px(PANEL_WIDTH), px(PANEL_HEIGHT)))
+        .size(size(px(PANEL_WIDTH), px(panel_height(&rows))))
         .show_focused(tracker, cx, move |dismisser, _window, cx| {
             SettingsPanelView::new(rows, values, path, dismisser, cx)
         })

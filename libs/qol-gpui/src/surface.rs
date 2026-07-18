@@ -172,7 +172,9 @@ impl Surface {
             Anchor::CornerStack(corner) => {
                 corner_anchored_bounds(monitor.bounds(), corner, self.size, CORNER_MARGIN)
             }
-            Anchor::MonitorCenter => monitor.centered_bounds(self.size),
+            Anchor::MonitorCenter => {
+                monitor.centered_bounds(clamped_to_monitor(self.size, monitor.bounds()))
+            }
         }
     }
 
@@ -201,6 +203,24 @@ fn schedule_dismiss(dismisser: SurfaceDismisser, timeout: Duration, cx: &mut App
         let _ = cx.update(|cx| dismisser.dismiss(cx));
     })
     .detach();
+}
+
+fn clamped_to_monitor(win: Size<Pixels>, monitor: Bounds<Pixels>) -> Size<Pixels> {
+    let margin = px(2.0 * CORNER_MARGIN);
+    let max_width = monitor.size.width - margin;
+    let max_height = monitor.size.height - margin;
+    size(
+        if win.width > max_width {
+            max_width
+        } else {
+            win.width
+        },
+        if win.height > max_height {
+            max_height
+        } else {
+            win.height
+        },
+    )
 }
 
 fn corner_anchored_bounds(
