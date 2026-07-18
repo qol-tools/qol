@@ -669,11 +669,7 @@ fn select_options(
     current: &str,
     provider: &QueryOptions,
 ) -> (Vec<String>, Vec<String>) {
-    let dynamic = field
-        .query
-        .as_deref()
-        .map(|query| provider(query))
-        .unwrap_or_default();
+    let dynamic = field.query.as_deref().map(provider).unwrap_or_default();
     let mut options = field.options.clone();
     if field.query.is_some() {
         for option in field.option_labels.keys() {
