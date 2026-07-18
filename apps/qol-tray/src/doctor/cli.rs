@@ -8,6 +8,7 @@ use serde::Serialize;
 use std::io::Write;
 
 pub(super) fn run_cli_from_env() -> Result<i32> {
+    super::progress::enable_from_env();
     match command()? {
         DoctorCommand::Check {
             selection,

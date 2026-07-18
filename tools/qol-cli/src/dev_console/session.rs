@@ -242,7 +242,7 @@ pub(super) fn tui_session(
             .doctor
             .manual
             .as_ref()
-            .and_then(|(_, rx)| rx.try_recv().ok());
+            .and_then(|manual| manual.rx.try_recv().ok());
         if let Some(outcome) = manual_outcome {
             dash.doctor.manual = None;
             apply_doctor_outcome(dash, outcome);

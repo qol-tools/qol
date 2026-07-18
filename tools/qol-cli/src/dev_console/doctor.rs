@@ -1,5 +1,7 @@
-use std::process::Command;
+use std::io::{BufRead, BufReader, Read};
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{channel, Receiver};
+use std::sync::{Arc, Mutex};
 
 use qol_conventions::doctor_wire::{
     FixReport as DoctorFixReport, Outcome, OutcomeStatus, Report as DoctorReport,
@@ -25,8 +27,24 @@ pub(super) fn spawn_doctor_probe() -> Poller<Result<DoctorRun, String>> {
 pub(super) struct DoctorPanel {
     pub(super) last: Option<DoctorRun>,
     pub(super) last_at_ms: Option<u64>,
-    pub(super) manual: Option<(DoctorMode, Receiver<Result<DoctorRun, String>>)>,
+    pub(super) manual: Option<ManualDoctor>,
     pub(super) error: Option<String>,
+}
+
+pub(super) struct ManualDoctor {
+    pub(super) mode: DoctorMode,
+    pub(super) rx: Receiver<Result<DoctorRun, String>>,
+    progress: Arc<Mutex<String>>,
+    started_at_ms: u64,
+}
+
+impl ManualDoctor {
+    fn progress_step(&self) -> String {
+        self.progress
+            .lock()
+            .map(|step| step.clone())
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -54,8 +72,16 @@ pub(super) fn open_doctor(dash: &mut Dash) {
 }
 
 pub(super) fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Span<'static>>) {
-    if let Some((mode, _)) = &panel.manual {
-        return (Color::Yellow, vec![mode.gerund().fg(Color::Yellow)]);
+    if let Some(manual) = &panel.manual {
+        let mut value = vec![manual.mode.gerund().fg(Color::Yellow)];
+        let step = manual.progress_step();
+        if !step.is_empty() {
+            value.push(format!(" · {step}").fg(Color::DarkGray));
+        }
+        value.push(
+            format!(" · {}", elapsed_label(now_ms, manual.started_at_ms)).fg(Color::DarkGray),
+        );
+        return (Color::Yellow, value);
     }
     let Some(run) = &panel.last else {
         let detail = panel
@@ -107,8 +133,15 @@ pub(super) fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let lines = doctor_view_lines(&dash.doctor);
     if lines.is_empty() {
         let message = match &dash.doctor.manual {
-            Some((mode, _)) => mode.progress_message(),
-            None => "  no checks reported · press d to run",
+            Some(manual) => {
+                let step = manual.progress_step();
+                if step.is_empty() {
+                    manual.mode.progress_message().to_string()
+                } else {
+                    format!("{} · {step}", manual.mode.progress_message())
+                }
+            }
+            None => "  no checks reported · press d to run".to_string(),
         };
         view_content(frame, area, vec![Line::from(message)]);
         return;
@@ -202,6 +235,14 @@ fn friendly_doctor_line(raw: &str) -> Line<'static> {
     ])
 }
 
+fn elapsed_label(now_ms: u64, started_ms: u64) -> String {
+    let seconds = now_ms.saturating_sub(started_ms) / 1000;
+    if seconds < 60 {
+        return format!("{seconds}s");
+    }
+    format!("{}m{:02}s", seconds / 60, seconds % 60)
+}
+
 fn humanize_check_id(id: &str) -> String {
     let spaced = id.replace('_', " ");
     let mut chars = spaced.chars();
@@ -258,24 +299,77 @@ impl DoctorMode {
     }
 }
 
-pub(super) fn spawn_doctor(mode: DoctorMode) -> Receiver<Result<DoctorRun, String>> {
+pub(super) fn spawn_doctor(mode: DoctorMode) -> ManualDoctor {
     let (tx, rx) = channel();
+    let progress = Arc::new(Mutex::new(String::new()));
+    let worker_progress = Arc::clone(&progress);
     std::thread::spawn(move || {
-        let _ = tx.send(run_doctor(mode));
+        let _ = tx.send(run_doctor(mode, &worker_progress));
     });
-    rx
+    ManualDoctor {
+        mode,
+        rx,
+        progress,
+        started_at_ms: now_unix_ms(),
+    }
 }
 
-fn run_doctor(mode: DoctorMode) -> Result<DoctorRun, String> {
+fn run_doctor(mode: DoctorMode, progress: &Arc<Mutex<String>>) -> Result<DoctorRun, String> {
     let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
+    set_progress(progress, "building doctor binary");
     build_doctor(&root)?;
-    run_doctor_binary(
+    run_doctor_streaming(
         &crate::workspace::doctor_binary_path(&root),
         &root,
         mode,
-        DoctorScope::Full,
         mode.full_command_args(),
+        progress,
     )
+}
+
+fn set_progress(progress: &Arc<Mutex<String>>, step: &str) {
+    if let Ok(mut current) = progress.lock() {
+        *current = step.to_string();
+    }
+}
+
+fn run_doctor_streaming(
+    binary: &std::path::Path,
+    root: &std::path::Path,
+    mode: DoctorMode,
+    args: &[&str],
+    progress: &Arc<Mutex<String>>,
+) -> Result<DoctorRun, String> {
+    let mut child = Command::new(binary)
+        .current_dir(root)
+        .args(args)
+        .env(qol_conventions::doctor_cli::PROGRESS_ENV_VAR, "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let stderr = child.stderr.take().ok_or("doctor stderr unavailable")?;
+    let reader_progress = Arc::clone(progress);
+    let stderr_reader = std::thread::spawn(move || {
+        let mut other_lines = String::new();
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            match line.strip_prefix(qol_conventions::doctor_cli::PROGRESS_LINE_PREFIX) {
+                Some(step) => set_progress(&reader_progress, step),
+                None => {
+                    other_lines.push_str(&line);
+                    other_lines.push('\n');
+                }
+            }
+        }
+        other_lines
+    });
+    let mut stdout = Vec::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        let _ = pipe.read_to_end(&mut stdout);
+    }
+    let _ = child.wait().map_err(|error| error.to_string())?;
+    let stderr_rest = stderr_reader.join().unwrap_or_default();
+    parse_doctor_run(&stdout, &stderr_rest, mode, DoctorScope::Full)
 }
 
 fn run_doctor_prebuilt() -> Result<DoctorRun, String> {
@@ -305,8 +399,21 @@ fn run_doctor_binary(
         .args(args)
         .output()
         .map_err(|error| error.to_string())?;
-    let (report, lines) = parse_doctor_output(&output.stdout, mode).map_err(|error| {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    parse_doctor_run(
+        &output.stdout,
+        &String::from_utf8_lossy(&output.stderr),
+        mode,
+        scope,
+    )
+}
+
+fn parse_doctor_run(
+    stdout: &[u8],
+    stderr: &str,
+    mode: DoctorMode,
+    scope: DoctorScope,
+) -> Result<DoctorRun, String> {
+    let (report, lines) = parse_doctor_output(stdout, mode).map_err(|error| {
         let detail = stderr.trim();
         if detail.is_empty() {
             format!("could not read doctor report: {error}")
@@ -526,6 +633,41 @@ mod tests {
             let (color, spans) = doctor_status(&panel, now);
             assert_eq!(color, expected_color, "text: {expected_text}");
             assert_eq!(span_text(&spans), expected_text);
+        }
+    }
+
+    #[test]
+    fn doctor_status_shows_manual_step_and_elapsed() {
+        let (_tx, rx) = channel();
+        let panel = DoctorPanel {
+            last: None,
+            last_at_ms: None,
+            manual: Some(ManualDoctor {
+                mode: DoctorMode::Fix,
+                rx,
+                progress: Arc::new(Mutex::new("check rust_clippy".to_string())),
+                started_at_ms: 1_000_000_000 - 83_000,
+            }),
+            error: None,
+        };
+        let (color, spans) = doctor_status(&panel, 1_000_000_000);
+        assert_eq!(color, Color::Yellow);
+        assert_eq!(span_text(&spans), "fixing · check rust_clippy · 1m23s");
+    }
+
+    #[test]
+    fn elapsed_label_formats_seconds_and_minutes() {
+        let cases = [
+            (5_000, "5s"),
+            (59_999, "59s"),
+            (60_000, "1m00s"),
+            (683_000, "11m23s"),
+        ];
+        for (delta_ms, expected) in cases {
+            assert_eq!(
+                elapsed_label(1_000_000_000, 1_000_000_000 - delta_ms),
+                expected
+            );
         }
     }
 

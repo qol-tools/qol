@@ -93,6 +93,8 @@ pub mod doctor_cli {
     pub const ARG_JSON: &str = "--json";
     pub const ARG_QUICK: &str = "--quick";
     pub const ARG_ID: &str = "--id";
+    pub const PROGRESS_ENV_VAR: &str = "QOL_DOCTOR_PROGRESS";
+    pub const PROGRESS_LINE_PREFIX: &str = "::doctor-progress ";
 }
 
 pub mod doctor_wire {

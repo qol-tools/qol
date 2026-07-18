@@ -434,7 +434,7 @@ impl Dash {
     }
 
     pub(super) fn start_doctor(&mut self, mode: DoctorMode) {
-        self.doctor.manual = Some((mode, spawn_doctor(mode)));
+        self.doctor.manual = Some(spawn_doctor(mode));
     }
 
     pub(super) fn active_filters(&self) -> &[LogFilter] {
