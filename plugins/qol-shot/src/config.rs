@@ -29,6 +29,14 @@ pub enum CopyCommand {
     CopyPath,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SavedFeedback {
+    #[default]
+    Notification,
+    Toast,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CaptureConfig {
     #[serde(default = "default_true")]
@@ -51,6 +59,8 @@ pub struct CaptureConfig {
     pub pin_border: bool,
     #[serde(default)]
     pub open_folder_after_save: bool,
+    #[serde(default)]
+    pub saved_feedback: SavedFeedback,
 }
 
 impl Default for CaptureConfig {
@@ -59,6 +69,7 @@ impl Default for CaptureConfig {
             include_window_frame: true,
             pin_border: true,
             open_folder_after_save: false,
+            saved_feedback: SavedFeedback::default(),
         }
     }
 }
@@ -213,6 +224,7 @@ mod tests {
         assert_eq!(defaults.video.framerate, default_framerate());
         assert_eq!(defaults.video.format, default_format());
         assert!(!defaults.capture.open_folder_after_save);
+        assert_eq!(defaults.capture.saved_feedback, SavedFeedback::Notification);
         assert_eq!(defaults.shortcuts.copy_command, CopyCommand::CopyImage);
     }
 }
