@@ -1,0 +1,9 @@
+schema_version = 1
+
+[query.audio_sources]
+description = "PulseAudio capture sources available for the microphone input"
+poll_interval_ms = 5000
+
+[query.audio_sinks]
+description = "PulseAudio output sinks whose monitors capture system audio"
+poll_interval_ms = 5000

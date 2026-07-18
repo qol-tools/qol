@@ -158,3 +158,11 @@ pub fn required_binaries_check() -> DoctorCheckResult {
         "Windows capture is not implemented, so recorder binaries were not checked.",
     )
 }
+
+pub fn list_audio_sources() -> Vec<crate::platform::AudioDevice> {
+    Vec::new()
+}
+
+pub fn list_audio_sinks() -> Vec<crate::platform::AudioDevice> {
+    Vec::new()
+}

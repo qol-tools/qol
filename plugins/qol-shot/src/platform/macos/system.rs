@@ -222,3 +222,11 @@ pub(super) fn resolve_command(command: &str) -> Option<PathBuf> {
         .map(|dir| dir.join(command))
         .find(|path| path.is_file())
 }
+
+pub fn list_audio_sources() -> Vec<crate::platform::AudioDevice> {
+    Vec::new()
+}
+
+pub fn list_audio_sinks() -> Vec<crate::platform::AudioDevice> {
+    Vec::new()
+}

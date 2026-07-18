@@ -30,20 +30,28 @@ mic = "Microphone"
 system = "System Audio"
 
 [field.audio_mic_device]
-type = "string"
+type = "select"
 config_key = "audio.mic_device"
 label = "Mic Device"
-description = "Linux-only PulseAudio device name."
+description = "Linux-only PulseAudio capture source."
 section = "audio"
 default = "default"
+query = "audio_sources"
+
+[field.audio_mic_device.option_labels]
+default = "System Default"
 
 [field.audio_system_device]
-type = "string"
+type = "select"
 config_key = "audio.system_device"
 label = "System Device"
-description = "Linux-only PulseAudio monitor device name."
+description = "Linux-only PulseAudio output whose monitor is recorded."
 section = "audio"
 default = "default"
+query = "audio_sinks"
+
+[field.audio_system_device.option_labels]
+default = "System Default"
 
 [section.video]
 label = "Video"
@@ -52,6 +60,7 @@ actions = ["record"]
 
 [field.video_crf]
 type = "number"
+variant = "slider"
 config_key = "video.crf"
 label = "CRF"
 description = "Used by Linux capture and macOS ffmpeg conversion. Native MOV and avconvert ignore this."

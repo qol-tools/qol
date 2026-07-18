@@ -26,8 +26,8 @@ pub use preview::{capture_frozen_frame, configure_preview_window, grab_preview_r
 pub use status::{hide_capture_status, show_capture_status};
 use system::resolve_command;
 pub use system::{
-    open_url, platform_supported_check, required_binaries_check, show_notification,
-    show_saved_notification,
+    list_audio_sinks, list_audio_sources, open_url, platform_supported_check,
+    required_binaries_check, show_notification, show_saved_notification,
 };
 pub use window::{
     configure_pin_window, pin_focus, pin_release_focus, pin_resize_session, prepare_pin_window,

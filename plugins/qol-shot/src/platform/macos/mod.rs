@@ -19,9 +19,9 @@ pub use selector::{select_region, select_region_in_app};
 pub use status::{hide_capture_status, show_capture_status};
 pub use system::{
     capture_frozen_frame, configure_pin_window, configure_preview_window, grab_preview_rgba,
-    open_url, pin_focus, pin_release_focus, pin_resize_session, platform_supported_check,
-    process_alive, required_binaries_check, show_notification, show_saved_notification,
-    PinResizeSession,
+    list_audio_sinks, list_audio_sources, open_url, pin_focus, pin_release_focus,
+    pin_resize_session, platform_supported_check, process_alive, required_binaries_check,
+    show_notification, show_saved_notification, PinResizeSession,
 };
 
 #[cfg(test)]

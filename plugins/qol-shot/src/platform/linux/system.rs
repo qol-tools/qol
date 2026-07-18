@@ -1,3 +1,4 @@
+use crate::platform::AudioDevice;
 use anyhow::{Context, Result};
 use qol_headless::DoctorCheckResult;
 use std::env;
@@ -139,10 +140,69 @@ fn is_executable_file(path: &Path) -> bool {
     metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
 }
 
+pub fn list_audio_sources() -> Vec<AudioDevice> {
+    pactl_devices("sources")
+        .into_iter()
+        .filter(|device| !device.value.ends_with(".monitor"))
+        .collect()
+}
+
+pub fn list_audio_sinks() -> Vec<AudioDevice> {
+    pactl_devices("sinks")
+}
+
+fn pactl_devices(kind: &str) -> Vec<AudioDevice> {
+    let output = Command::new("pactl")
+        .args(["--format=json", "list", kind])
+        .stdin(Stdio::null())
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    parse_pactl_devices(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_pactl_devices(raw: &str) -> Vec<AudioDevice> {
+    let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(raw) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let value = entry.get("name")?.as_str()?.to_string();
+            let label = entry
+                .get("description")
+                .and_then(|description| description.as_str())
+                .unwrap_or(value.as_str())
+                .to_string();
+            Some(AudioDevice { value, label })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+
+    #[test]
+    fn pactl_device_parsing_maps_names_and_descriptions() {
+        let raw = r#"[
+            {"index": 1, "name": "alsa_input.foo", "description": "Built-in Microphone"},
+            {"index": 2, "name": "alsa_output.bar.monitor"},
+            {"index": 3, "description": "nameless is skipped"}
+        ]"#;
+        let devices = parse_pactl_devices(raw);
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].value, "alsa_input.foo");
+        assert_eq!(devices[0].label, "Built-in Microphone");
+        assert_eq!(devices[1].value, "alsa_output.bar.monitor");
+        assert_eq!(devices[1].label, "alsa_output.bar.monitor");
+        assert!(parse_pactl_devices("not json").is_empty());
+    }
 
     #[test]
     fn saved_notification_exposes_default_and_button_actions() {

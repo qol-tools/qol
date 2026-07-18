@@ -58,6 +58,15 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
         "kill" => ReadResult::Command(Command::Kill),
         "screenshot" => ReadResult::Command(Command::Screenshot),
         "preview" => ReadResult::Command(Command::Preview),
+        "audio_sources" => audio_device_payload(crate::platform::list_audio_sources()),
+        "audio_sinks" => audio_device_payload(crate::platform::list_audio_sinks()),
         other => ReadResult::Command(Command::Cli(other.to_string())),
+    }
+}
+
+fn audio_device_payload(devices: Vec<crate::platform::AudioDevice>) -> ReadResult<Command> {
+    match serde_json::to_value(devices) {
+        Ok(payload) => ReadResult::HandledWithData(payload),
+        Err(_) => ReadResult::HandledWithData(serde_json::json!([])),
     }
 }

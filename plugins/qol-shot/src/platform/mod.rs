@@ -20,6 +20,12 @@ pub use windows::*;
 pub const CAPTURE_LOG: &str = "/tmp/record-region.log";
 
 #[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AudioDevice {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CaptureProcess {
     pub pid: u32,
 }
