@@ -9,6 +9,7 @@ pub(crate) enum RevealSource {
     #[cfg(target_os = "linux")]
     Notification,
     PreviewAction,
+    Toast,
 }
 
 impl RevealSource {
@@ -18,6 +19,7 @@ impl RevealSource {
             #[cfg(target_os = "linux")]
             Self::Notification => "notification",
             Self::PreviewAction => "preview-action",
+            Self::Toast => "toast",
         }
     }
 }
@@ -83,6 +85,22 @@ impl PreviewExit {
 }
 
 #[derive(Clone)]
+pub(crate) struct SavedAnnouncement {
+    pub(crate) title: &'static str,
+    pub(crate) message: String,
+    pub(crate) target: RevealTarget,
+    pub(crate) open_automatically: bool,
+}
+
+impl SavedAnnouncement {
+    pub(crate) fn reveal_automatically(&self) {
+        if let Err(error) = self.target.open(RevealSource::Automatic) {
+            eprintln!("[qol-shot] automatic folder reveal failed: {error:#}");
+        }
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct PreviewCompletion {
     target: RevealTarget,
     open_folder_after_save: bool,
@@ -136,19 +154,28 @@ impl PreviewCompletion {
         }
     }
 
+    pub(crate) fn announce(&self) -> Option<SavedAnnouncement> {
+        let open_automatically = self.lifecycle.announce()?;
+        Some(SavedAnnouncement {
+            title: "Screenshot saved",
+            message: file_label(self.target.path()),
+            target: self.target.clone(),
+            open_automatically,
+        })
+    }
+
     pub(crate) fn announce_saved(&self) {
-        let Some(open_automatically) = self.lifecycle.announce() else {
+        let Some(announcement) = self.announce() else {
             return;
         };
-        let message = file_label(self.target.path());
         crate::platform::show_saved_notification(
-            "Screenshot saved",
-            &message,
+            announcement.title,
+            &announcement.message,
             8_000,
-            self.target.clone(),
+            announcement.target.clone(),
         );
-        if open_automatically {
-            self.open_automatically();
+        if announcement.open_automatically {
+            announcement.reveal_automatically();
         }
     }
 
