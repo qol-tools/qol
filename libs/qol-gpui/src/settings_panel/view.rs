@@ -138,7 +138,8 @@ impl SettingsPanelView {
             RowControl::Toggle(_)
             | RowControl::Number { .. }
             | RowControl::Text(_)
-            | RowControl::TextList(_) => self.dropdown = None,
+            | RowControl::TextList(_)
+            | RowControl::Color(_) => self.dropdown = None,
         }
     }
 
@@ -182,7 +183,8 @@ impl SettingsPanelView {
             RowControl::Toggle(_)
             | RowControl::MultiSelect { .. }
             | RowControl::Text(_)
-            | RowControl::TextList(_) => return,
+            | RowControl::TextList(_)
+            | RowControl::Color(_) => return,
         }
         self.persist();
     }
@@ -199,9 +201,10 @@ impl SettingsPanelView {
             RowControl::MultiSelect { options, .. } => {
                 self.dropdown = Some(Dropdown::open(options.len(), 0));
             }
-            RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
-                self.begin_edit()
-            }
+            RowControl::Number { .. }
+            | RowControl::Text(_)
+            | RowControl::TextList(_)
+            | RowControl::Color(_) => self.begin_edit(),
         }
     }
 
@@ -226,6 +229,7 @@ impl SettingsPanelView {
         self.edit = match &row.control {
             RowControl::Text(value) => Some(value.clone()),
             RowControl::TextList(values) => Some(values.join(", ")),
+            RowControl::Color(value) => Some(value.clone()),
             RowControl::Number { value, .. } => Some(format_number(*value)),
             RowControl::Toggle(_) | RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
                 None
@@ -242,6 +246,13 @@ impl SettingsPanelView {
         };
         match &mut row.control {
             RowControl::Text(value) => *value = edit,
+            RowControl::Color(value) => {
+                let trimmed = edit.trim();
+                if parsed_color(trimmed).is_none() {
+                    return;
+                }
+                *value = trimmed.to_string();
+            }
             RowControl::TextList(values) => {
                 *values = edit
                     .split(',')
@@ -304,6 +315,7 @@ impl SettingsPanelView {
             RowControl::Number { value, .. } => format_number(*value),
             RowControl::Text(value) => value.clone(),
             RowControl::TextList(values) => values.join(", "),
+            RowControl::Color(value) => value.clone(),
         }
     }
 
@@ -318,7 +330,8 @@ impl SettingsPanelView {
             | RowControl::MultiSelect { .. }
             | RowControl::Number { .. }
             | RowControl::Text(_)
-            | RowControl::TextList(_) => self.palette.label_text,
+            | RowControl::TextList(_)
+            | RowControl::Color(_) => self.palette.label_text,
         }
     }
 
@@ -330,6 +343,39 @@ impl SettingsPanelView {
             text: self.palette.label_text,
             text_selected: self.palette.section_text,
         }
+    }
+
+    fn render_value_cell(&self, index: usize) -> Div {
+        let mut cell = div().flex().flex_row().items_center().gap_2();
+        if let Some(color) = self.swatch_color(index) {
+            cell = cell.child(
+                div()
+                    .w_3()
+                    .h_3()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(rgb(self.palette.panel_border))
+                    .bg(rgb(color)),
+            );
+        }
+        cell.child(
+            div()
+                .text_sm()
+                .text_color(rgb(self.value_color(index)))
+                .child(self.display_value(index)),
+        )
+    }
+
+    fn swatch_color(&self, index: usize) -> Option<u32> {
+        let RowControl::Color(value) = &self.rows[index].control else {
+            return None;
+        };
+        let text = if index == self.selected {
+            self.edit.as_deref().unwrap_or(value)
+        } else {
+            value
+        };
+        parsed_color(text)
     }
 
     fn render_row(&self, index: usize) -> Div {
@@ -356,12 +402,7 @@ impl SettingsPanelView {
                     .text_color(rgb(self.palette.label_text))
                     .child(row.label.clone()),
             )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(rgb(self.value_color(index)))
-                    .child(self.display_value(index)),
-            );
+            .child(self.render_value_cell(index));
         if index == self.selected {
             line = line
                 .bg(rgb(self.palette.row_bg_selected))
@@ -387,7 +428,8 @@ impl SettingsPanelView {
                     RowControl::Toggle(_)
                     | RowControl::Number { .. }
                     | RowControl::Text(_)
-                    | RowControl::TextList(_) => {}
+                    | RowControl::TextList(_)
+                    | RowControl::Color(_) => {}
                 }
             }
         }
@@ -447,6 +489,15 @@ fn parsed_number(edit: &str, min: Option<f64>, max: Option<f64>) -> Option<f64> 
         value = value.min(max);
     }
     Some(value)
+}
+
+fn parsed_color(text: &str) -> Option<u32> {
+    let hex = text.trim();
+    let hex = hex.strip_prefix('#').unwrap_or(hex);
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(hex, 16).ok()
 }
 
 fn format_number(value: f64) -> String {
@@ -529,8 +580,8 @@ fn scroll_offset_for(rows: &[Row], selected: usize, offset: usize, body_max: f32
 #[cfg(test)]
 mod tests {
     use super::{
-        intent, is_number_seed, parsed_number, scroll_offset_for, visible_row_range, Intent, Row,
-        RowControl,
+        intent, is_number_seed, parsed_color, parsed_number, scroll_offset_for, visible_row_range,
+        Intent, Row, RowControl,
     };
 
     fn rows(headers: &[bool]) -> Vec<Row> {
@@ -607,6 +658,23 @@ mod tests {
         ];
         for (edit, min, max, expected) in cases {
             assert_eq!(parsed_number(edit, min, max), expected, "edit: {edit:?}");
+        }
+    }
+
+    #[test]
+    fn parsed_color_accepts_six_digit_hex_with_optional_hash() {
+        let cases = [
+            ("#202322", Some(0x202322)),
+            ("202322", Some(0x202322)),
+            (" #ffffff ", Some(0xffffff)),
+            ("AABBCC", Some(0xaabbcc)),
+            ("#fff", None),
+            ("#2023221", None),
+            ("20232g", None),
+            ("", None),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(parsed_color(text), expected, "text: {text:?}");
         }
     }
 

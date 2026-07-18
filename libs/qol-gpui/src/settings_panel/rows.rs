@@ -24,6 +24,7 @@ pub(super) enum RowControl {
     },
     Text(String),
     TextList(Vec<String>),
+    Color(String),
 }
 
 pub(super) struct Row {
@@ -122,9 +123,12 @@ fn control_for(field: &ResolvedField, provider: &QueryOptions) -> Option<RowCont
             }
             _ => None,
         },
+        FieldKind::Color => match &field.value {
+            FieldDefault::String(value) => Some(RowControl::Color(value.clone())),
+            _ => None,
+        },
         FieldKind::ObjectArray
         | FieldKind::ObjectMap
-        | FieldKind::Color
         | FieldKind::Action
         | FieldKind::List
         | FieldKind::Status
@@ -218,6 +222,7 @@ fn row_value_json(control: &RowControl) -> serde_json::Value {
         RowControl::Number { value, .. } => number_json(*value),
         RowControl::Text(value) => serde_json::json!(value),
         RowControl::TextList(values) => serde_json::json!(values),
+        RowControl::Color(value) => serde_json::json!(value),
     }
 }
 
@@ -311,6 +316,13 @@ config_key = "capture.tags"
 label = "Tags"
 section = "capture"
 default = ["foo"]
+
+[field.card_color]
+type = "color"
+config_key = "display.card_color"
+label = "Card Color"
+section = "capture"
+default = "202322"
 "#;
 
     fn resolved(overrides: serde_json::Value) -> ResolvedConfig {
@@ -326,7 +338,7 @@ default = ["foo"]
             })),
             &|_| Vec::new(),
         );
-        assert_eq!(rows.len(), 6);
+        assert_eq!(rows.len(), 7);
         assert_eq!(rows[0].section_label.as_deref(), Some("Capture"));
         assert!(rows[1..].iter().all(|r| r.section_label.is_none()));
         assert!(matches!(rows[0].control, RowControl::Toggle(false)));
@@ -358,6 +370,7 @@ default = ["foo"]
         assert!(
             matches!(&rows[5].control, RowControl::TextList(v) if v == &vec!["foo".to_string()])
         );
+        assert!(matches!(&rows[6].control, RowControl::Color(v) if v == "202322"));
     }
 
     #[test]
@@ -468,6 +481,12 @@ default = "System Default"
             };
             assert_eq!(row_value_json(&control), expected, "value: {value}");
         }
+    }
+
+    #[test]
+    fn color_value_json_keeps_the_stored_string() {
+        let control = RowControl::Color("#202322".into());
+        assert_eq!(row_value_json(&control), serde_json::json!("#202322"));
     }
 
     #[test]
