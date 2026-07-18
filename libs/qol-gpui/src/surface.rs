@@ -34,8 +34,10 @@ pub struct Surface {
     size: Size<Pixels>,
 }
 
+type CloseWindow = Box<dyn Fn(&mut App)>;
+
 struct DismissState {
-    close: RefCell<Option<Box<dyn Fn(&mut App)>>>,
+    close: RefCell<Option<CloseWindow>>,
     generation: Cell<u64>,
 }
 
