@@ -47,26 +47,52 @@ pub fn collect_command_entries() -> Vec<LauncherEntry> {
         .collect()
 }
 
+pub fn collect_plugin_settings_entries<'a>(
+    plugins: impl IntoIterator<Item = &'a Plugin>,
+) -> Vec<LauncherEntry> {
+    plugins
+        .into_iter()
+        .filter_map(|plugin| {
+            let action = plugin
+                .manifest
+                .executable_actions()
+                .into_iter()
+                .find(|action| action.kind == crate::plugins::ActionType::Settings)?;
+            let id = plugin.id.as_str();
+            let name = plugin.manifest.plugin.name.as_str();
+            Some(LauncherEntry {
+                file_stem: format!("plugin-settings-{}", id),
+                display_name: format!("{} Settings", name),
+                description: format!("QoL plugin settings: {}", name),
+                bundle_id: format!("com.qol-tools.plugin-settings.{}", id),
+                exec_args: vec!["exec".into(), id.to_string(), action.id],
+                shortcut_action: None,
+            })
+        })
+        .collect()
+}
+
 pub fn sync_entries(entries: &[LauncherEntry], binary_path: &Path) {
     if let Err(e) = platform::sync(entries, binary_path) {
         log::error!("Failed to sync launcher apps: {}", e);
     }
 }
 
-pub fn trigger_full_sync_with_plugins<'a>(plugins: impl IntoIterator<Item = &'a Plugin>) {
-    reconcile_plugin_shortcuts(plugins);
-    sync_launcher_entries();
-}
-
 pub fn trigger_full_sync_with_manager(plugin_manager: &Arc<Mutex<PluginManager>>) {
-    match plugin_manager.lock() {
-        Ok(manager) => reconcile_plugin_shortcuts(manager.plugins()),
-        Err(error) => log::error!(
-            "plugin manager lock poisoned during launcher sync: {}",
-            error
-        ),
-    }
-    sync_launcher_entries();
+    let plugin_settings_entries = match plugin_manager.lock() {
+        Ok(manager) => {
+            reconcile_plugin_shortcuts(manager.plugins());
+            collect_plugin_settings_entries(manager.plugins())
+        }
+        Err(error) => {
+            log::error!(
+                "plugin manager lock poisoned during launcher sync: {}",
+                error
+            );
+            Vec::new()
+        }
+    };
+    sync_launcher_entries(plugin_settings_entries);
 }
 
 fn reconcile_plugin_shortcuts<'a>(plugins: impl IntoIterator<Item = &'a Plugin>) {
@@ -78,7 +104,7 @@ fn reconcile_plugin_shortcuts<'a>(plugins: impl IntoIterator<Item = &'a Plugin>)
     }
 }
 
-fn sync_launcher_entries() {
+fn sync_launcher_entries(plugin_settings_entries: Vec<LauncherEntry>) {
     let shortcut_config = match crate::shortcuts::store::load() {
         Ok(c) => c,
         Err(e) => {
@@ -88,6 +114,7 @@ fn sync_launcher_entries() {
     };
     let mut entries = collect_shortcut_entries(&shortcut_config.shortcuts);
     entries.extend(collect_command_entries());
+    entries.extend(plugin_settings_entries);
     let gen = SYNC_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     std::thread::spawn(move || {
         let _guard = SYNC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -120,7 +147,35 @@ fn publish_synced() {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::{PluginId, PluginManifest};
     use crate::shortcuts::model::{AppRef, Shortcut, ShortcutAction};
+
+    fn manifest(toml: &str) -> PluginManifest {
+        toml::from_str(toml).unwrap()
+    }
+
+    #[test]
+    fn collect_plugin_settings_entries_exports_settings_actions_only() {
+        let with_settings = manifest(
+            "[plugin]\nid = \"foo\"\nname = \"Foo\"\ndescription = \"\"\nversion = \"1.0.0\"\n[menu]\nlabel = \"\"\nitems = []\n[action.settings]\nlabel = \"Settings...\"\nkind = \"settings\"\nargs = [\"settings\"]\n",
+        );
+        let without_settings = manifest(
+            "[plugin]\nid = \"bar\"\nname = \"Bar\"\ndescription = \"\"\nversion = \"1.0.0\"\n[menu]\nlabel = \"\"\nitems = []\n",
+        );
+        let plugins = [
+            Plugin::new(PluginId::new("foo"), with_settings, "/a/b/foo".into()),
+            Plugin::new(PluginId::new("bar"), without_settings, "/a/b/bar".into()),
+        ];
+
+        let entries = collect_plugin_settings_entries(plugins.iter());
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].file_stem, "plugin-settings-foo");
+        assert_eq!(entries[0].display_name, "Foo Settings");
+        assert_eq!(entries[0].bundle_id, "com.qol-tools.plugin-settings.foo");
+        assert_eq!(entries[0].exec_args, ["exec", "foo", "settings"]);
+        assert!(entries[0].shortcut_action.is_none());
+    }
 
     fn url_shortcut(id: &str, enabled: bool, export_to_launcher: bool, url: &str) -> Shortcut {
         Shortcut {
