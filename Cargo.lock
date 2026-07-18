@@ -5718,6 +5718,7 @@ dependencies = [
 name = "qol-gpui"
 version = "1.0.0"
 dependencies = [
+ "anyhow",
  "gpui",
  "objc2",
  "objc2-app-kit",
