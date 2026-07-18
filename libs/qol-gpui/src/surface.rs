@@ -132,7 +132,7 @@ impl Surface {
     ) -> Result<SurfaceDismisser> {
         let monitor = match self.kind {
             SurfaceKind::Toast => tracker.snapshot_cursor().map(|(monitor, _)| monitor),
-            SurfaceKind::Panel => tracker.snapshot_monitor_focus_first(),
+            SurfaceKind::Panel => tracker.snapshot_monitor(),
         }
         .ok_or_else(|| anyhow!("no monitor state available for surface placement"))?;
         let bounds = self.resolved_bounds(&monitor);
