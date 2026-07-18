@@ -63,7 +63,7 @@ impl SurfaceDismisser {
             .generation
             .set(self.state.generation.get().wrapping_add(1));
         if let Some(close) = self.state.close.borrow_mut().take() {
-            close(cx);
+            cx.defer(move |cx| close(cx));
         }
     }
 }
