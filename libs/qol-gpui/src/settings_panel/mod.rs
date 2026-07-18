@@ -23,6 +23,15 @@ pub struct SettingsPanel {
 
 pub type QueryOptions = dyn Fn(&str) -> Vec<(String, String)>;
 
+pub fn open_from_async(
+    panel: SettingsPanel,
+    tracker: MonitorTracker,
+    provider: impl Fn(&str) -> Vec<(String, String)> + 'static,
+    cx: &AsyncApp,
+) -> anyhow::Result<()> {
+    cx.update(move |cx| open(panel, &tracker, &provider, cx))?
+}
+
 pub fn open(
     panel: SettingsPanel,
     tracker: &MonitorTracker,

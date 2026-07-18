@@ -134,7 +134,7 @@ fn spawn_daemon_loop(cx: &mut App, rx: mpsc::Receiver<daemon::Command>, state: P
                     LoopFlow::Continue
                 }
                 daemon::Command::Settings => {
-                    dispatch_settings(&cx, &state).await;
+                    dispatch_settings(&cx, &state);
                     LoopFlow::Continue
                 }
                 daemon::Command::Kill => LoopFlow::Stop,
@@ -143,30 +143,20 @@ fn spawn_daemon_loop(cx: &mut App, rx: mpsc::Receiver<daemon::Command>, state: P
     });
 }
 
-async fn dispatch_settings(cx: &AsyncApp, state: &PickerState) {
-    let tracker = state.tracker.clone();
-    let opened = cx.update(move |cx| {
-        qol_gpui::settings_panel::open(
-            qol_gpui::settings_panel::SettingsPanel {
-                plugin_id: crate::config::PLUGIN_ID,
-                contract: crate::config::contract(),
-                heading: "Alt Tab Settings",
-            },
-            &tracker,
-            &|_| Vec::new(),
-            cx,
-        )
-    });
-    match opened {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => {
-            eprintln!("[alt-tab/daemon] settings panel failed, opening browser: {error:#}");
-            crate::open_settings_page();
-        }
-        Err(error) => {
-            eprintln!("[alt-tab/daemon] settings panel failed, opening browser: {error}");
-            crate::open_settings_page();
-        }
+fn dispatch_settings(cx: &AsyncApp, state: &PickerState) {
+    let opened = qol_gpui::settings_panel::open_from_async(
+        qol_gpui::settings_panel::SettingsPanel {
+            plugin_id: crate::config::PLUGIN_ID,
+            contract: crate::config::contract(),
+            heading: "Alt Tab Settings",
+        },
+        state.tracker.clone(),
+        |_| Vec::new(),
+        cx,
+    );
+    if let Err(error) = opened {
+        eprintln!("[alt-tab/daemon] settings panel failed, opening browser: {error:#}");
+        crate::open_settings_page();
     }
 }
 

@@ -114,7 +114,7 @@ fn spawn_command_poll(
                     LoopFlow::Continue
                 }
                 daemon::Command::Settings => {
-                    dispatch_settings(&cx, focus_cache).await;
+                    dispatch_settings(&cx, focus_cache);
                     LoopFlow::Continue
                 }
                 daemon::Command::Kill => LoopFlow::Stop,
@@ -123,29 +123,20 @@ fn spawn_command_poll(
     });
 }
 
-async fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {
-    let opened = cx.update(move |cx| {
-        qol_gpui::settings_panel::open(
-            qol_gpui::settings_panel::SettingsPanel {
-                plugin_id: crate::config::plugin_id(),
-                contract: crate::config::contract(),
-                heading: "Launcher Settings",
-            },
-            &focus_cache,
-            &|_| Vec::new(),
-            cx,
-        )
-    });
-    match opened {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => {
-            eprintln!("[launcher] settings panel failed, opening browser: {error:#}");
-            open_settings_page();
-        }
-        Err(error) => {
-            eprintln!("[launcher] settings panel failed, opening browser: {error}");
-            open_settings_page();
-        }
+fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {
+    let opened = qol_gpui::settings_panel::open_from_async(
+        qol_gpui::settings_panel::SettingsPanel {
+            plugin_id: crate::config::plugin_id(),
+            contract: crate::config::contract(),
+            heading: "Launcher Settings",
+        },
+        focus_cache,
+        |_| Vec::new(),
+        cx,
+    );
+    if let Err(error) = opened {
+        eprintln!("[launcher] settings panel failed, opening browser: {error:#}");
+        open_settings_page();
     }
 }
 
