@@ -184,8 +184,9 @@ impl SettingsPanelView {
         match &row.control {
             RowControl::Toggle(_) => self.toggle(),
             RowControl::Select { .. } => self.adjust(1.0),
-            RowControl::Number { .. } => {}
-            RowControl::Text(_) | RowControl::TextList(_) => self.begin_edit(),
+            RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
+                self.begin_edit()
+            }
         }
     }
 
@@ -196,7 +197,8 @@ impl SettingsPanelView {
         self.edit = match &row.control {
             RowControl::Text(value) => Some(value.clone()),
             RowControl::TextList(values) => Some(values.join(", ")),
-            RowControl::Toggle(_) | RowControl::Select { .. } | RowControl::Number { .. } => None,
+            RowControl::Number { value, .. } => Some(format_number(*value)),
+            RowControl::Toggle(_) | RowControl::Select { .. } => None,
         };
     }
 
@@ -216,7 +218,15 @@ impl SettingsPanelView {
                     .filter(|part| !part.is_empty())
                     .collect();
             }
-            RowControl::Toggle(_) | RowControl::Select { .. } | RowControl::Number { .. } => return,
+            RowControl::Number {
+                value, min, max, ..
+            } => {
+                let Some(parsed) = parsed_number(&edit, *min, *max) else {
+                    return;
+                };
+                *value = parsed;
+            }
+            RowControl::Toggle(_) | RowControl::Select { .. } => return,
         }
         self.persist();
     }
@@ -338,6 +348,17 @@ impl Render for SettingsPanelView {
             )
             .children(items)
     }
+}
+
+pub(crate) fn parsed_number(edit: &str, min: Option<f64>, max: Option<f64>) -> Option<f64> {
+    let mut value = edit.trim().parse::<f64>().ok().filter(|v| v.is_finite())?;
+    if let Some(min) = min {
+        value = value.max(min);
+    }
+    if let Some(max) = max {
+        value = value.min(max);
+    }
+    Some(value)
 }
 
 fn format_number(value: f64) -> String {
@@ -534,7 +555,10 @@ pub(crate) fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option
 
 #[cfg(test)]
 mod tests {
-    use super::{intent, rows_from_resolved, set_config_value, Intent, ResolvedConfig, RowControl};
+    use super::{
+        intent, parsed_number, rows_from_resolved, set_config_value, Intent, ResolvedConfig,
+        RowControl,
+    };
 
     const SPEC: &str = r#"
 schema_version = 1
@@ -634,6 +658,22 @@ default = ["mic"]
                 "audio": { "inputs": ["mic", "system"] }
             })
         );
+    }
+
+    #[test]
+    fn parsed_number_parses_clamps_and_rejects() {
+        let cases = [
+            ("18", None, None, Some(18.0)),
+            (" 23.5 ", None, None, Some(23.5)),
+            ("-4", Some(0.0), Some(51.0), Some(0.0)),
+            ("99", Some(0.0), Some(51.0), Some(51.0)),
+            ("abc", None, None, None),
+            ("", None, None, None),
+            ("inf", None, None, None),
+        ];
+        for (edit, min, max, expected) in cases {
+            assert_eq!(parsed_number(edit, min, max), expected, "edit: {edit:?}");
+        }
     }
 
     #[test]
