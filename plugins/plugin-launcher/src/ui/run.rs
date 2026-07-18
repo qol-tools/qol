@@ -25,6 +25,11 @@ pub fn run() {
         return;
     }
 
+    if std::env::args().any(|a| a == "--settings") {
+        open_settings_page();
+        return;
+    }
+
     if show_immediately && daemon::send_show() {
         return;
     }
@@ -108,10 +113,47 @@ fn spawn_command_poll(
                     let _ = cx.update(move |cx| reload_ghost_debug(&active, cx));
                     LoopFlow::Continue
                 }
+                daemon::Command::Settings => {
+                    dispatch_settings(&cx, focus_cache).await;
+                    LoopFlow::Continue
+                }
                 daemon::Command::Kill => LoopFlow::Stop,
             }
         }
     });
+}
+
+async fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {
+    let opened = cx.update(move |cx| {
+        qol_gpui::settings_panel::open(
+            qol_gpui::settings_panel::SettingsPanel {
+                plugin_id: crate::config::plugin_id(),
+                contract: crate::config::contract(),
+                heading: "Launcher Settings",
+            },
+            &focus_cache,
+            &|_| Vec::new(),
+            cx,
+        )
+    });
+    match opened {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            eprintln!("[launcher] settings panel failed, opening browser: {error:#}");
+            open_settings_page();
+        }
+        Err(error) => {
+            eprintln!("[launcher] settings panel failed, opening browser: {error}");
+            open_settings_page();
+        }
+    }
+}
+
+fn open_settings_page() {
+    let settings_url = qol_conventions::settings_url(crate::config::plugin_id());
+    if let Err(error) = qol_apps::desktop_integration::open_with_default_app(&settings_url) {
+        eprintln!("[launcher] failed to open settings page: {error}");
+    }
 }
 
 fn reload_ghost_debug(active: &Rc<RefCell<ActiveLaunchers>>, cx: &mut App) {

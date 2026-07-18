@@ -14,6 +14,14 @@ pub struct LauncherConfig {
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
+pub(crate) fn contract() -> &'static str {
+    CONFIG_CONTRACT
+}
+
+pub(crate) fn plugin_id() -> &'static str {
+    PLUGIN_ID
+}
+
 pub fn load_launcher_config() -> LauncherConfig {
     qol_config::load_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
 }

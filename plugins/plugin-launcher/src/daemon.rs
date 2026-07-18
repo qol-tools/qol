@@ -10,6 +10,7 @@ const CONFIG: DaemonConfig = DaemonConfig {
 pub enum Command {
     Show,
     Reload,
+    Settings,
     Kill,
 }
 
@@ -38,6 +39,7 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
         "ping" => ReadResult::Handled,
         "show" | "open" => ReadResult::Command(Command::Show),
         "reload" => ReadResult::Command(Command::Reload),
+        "settings" => ReadResult::Command(Command::Settings),
         "kill" => ReadResult::Command(Command::Kill),
         _ => ReadResult::Fallback,
     }
