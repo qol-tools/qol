@@ -151,9 +151,14 @@ impl Surface {
         let dismisser = SurfaceDismisser::new();
         let build_dismisser = dismisser.clone();
         let title = self.title.clone();
+        let reveal_after_move = matches!(self.kind, SurfaceKind::Panel);
         let handle = cx.open_window(options, move |window, cx| {
             window.set_window_title(&title);
-            cx.new(|cx| build(build_dismisser, window, cx))
+            let inner = cx.new(|cx| build(build_dismisser, window, cx));
+            cx.new(|_| SurfaceRoot {
+                inner,
+                revealed: !reveal_after_move,
+            })
         })?;
         dismisser
             .state
@@ -165,8 +170,8 @@ impl Surface {
         if let Some(timeout) = self.timeout {
             schedule_dismiss(dismisser.clone(), timeout, cx);
         }
-        if matches!(self.kind, SurfaceKind::Panel) {
-            reassert_position(self.title, bounds.origin, cx);
+        if reveal_after_move {
+            settle_then_reveal(handle, self.title, bounds.origin, cx);
         }
         Ok(dismisser)
     }
@@ -197,11 +202,31 @@ impl Surface {
     }
 }
 
-fn reassert_position(title: String, origin: Point<Pixels>, cx: &mut App) {
+struct SurfaceRoot<V> {
+    inner: Entity<V>,
+    revealed: bool,
+}
+
+impl<V: Render + 'static> Render for SurfaceRoot<V> {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let mut root = div().size_full();
+        if self.revealed {
+            root = root.child(self.inner.clone());
+        }
+        root
+    }
+}
+
+fn settle_then_reveal<V: Render + 'static>(
+    handle: WindowHandle<SurfaceRoot<V>>,
+    title: String,
+    origin: Point<Pixels>,
+    cx: &mut App,
+) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         for _ in 0..10 {
             cx.background_executor()
-                .timer(Duration::from_millis(50))
+                .timer(Duration::from_millis(15))
                 .await;
             let moved = crate::popup_window::reposition_window_by_title(
                 &title,
@@ -209,9 +234,15 @@ fn reassert_position(title: String, origin: Point<Pixels>, cx: &mut App) {
                 origin.y.to_f64(),
             );
             if moved {
-                return;
+                break;
             }
         }
+        let _ = cx.update(|cx| {
+            let _ = handle.update(cx, |root, _, cx| {
+                root.revealed = true;
+                cx.notify();
+            });
+        });
     })
     .detach();
 }
