@@ -281,7 +281,7 @@ fn cursor_adjacent_axis(origin: f32, available: f32, cursor: f32, window: f32) -
     (cursor - CURSOR_WINDOW_GAP - window).clamp(minimum, maximum)
 }
 
-fn display_id_for_monitor(monitor: Option<&ActiveMonitor>, cx: &App) -> Option<DisplayId> {
+pub fn display_id_for_monitor(monitor: Option<&ActiveMonitor>, cx: &App) -> Option<DisplayId> {
     let monitor = monitor?;
     let target_bounds = monitor.bounds();
     cx.displays()

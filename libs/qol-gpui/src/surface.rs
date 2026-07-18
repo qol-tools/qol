@@ -1,4 +1,11 @@
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::time::Duration;
+
+use anyhow::{anyhow, Result};
 use gpui::*;
+
+use crate::monitor::MonitorTracker;
 
 pub const CORNER_MARGIN: f32 = 24.0;
 
@@ -13,6 +20,142 @@ pub enum Corner {
 #[derive(Clone, Copy, Debug)]
 pub enum Anchor {
     CornerStack(Corner),
+}
+
+pub enum SurfaceKind {
+    Toast,
+}
+
+pub struct Surface {
+    kind: SurfaceKind,
+    title: String,
+    anchor: Anchor,
+    timeout: Option<Duration>,
+    size: Size<Pixels>,
+}
+
+struct DismissState {
+    close: RefCell<Option<Box<dyn Fn(&mut App)>>>,
+    generation: Cell<u64>,
+}
+
+#[derive(Clone)]
+pub struct SurfaceDismisser {
+    state: Rc<DismissState>,
+}
+
+impl SurfaceDismisser {
+    fn new() -> Self {
+        Self {
+            state: Rc::new(DismissState {
+                close: RefCell::new(None),
+                generation: Cell::new(0),
+            }),
+        }
+    }
+
+    pub fn dismiss(&self, cx: &mut App) {
+        self.state
+            .generation
+            .set(self.state.generation.get().wrapping_add(1));
+        if let Some(close) = self.state.close.borrow_mut().take() {
+            close(cx);
+        }
+    }
+}
+
+impl Surface {
+    pub fn new(kind: SurfaceKind) -> Self {
+        Self {
+            kind,
+            title: "qol-surface".into(),
+            anchor: Anchor::CornerStack(Corner::BottomRight),
+            timeout: None,
+            size: size(px(320.0), px(72.0)),
+        }
+    }
+
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
+    }
+
+    pub fn anchor(mut self, anchor: Anchor) -> Self {
+        self.anchor = anchor;
+        self
+    }
+
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    pub fn size(mut self, size: Size<Pixels>) -> Self {
+        self.size = size;
+        self
+    }
+
+    pub fn show<V: Render + 'static>(
+        self,
+        tracker: &MonitorTracker,
+        cx: &mut App,
+        build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
+    ) -> Result<SurfaceDismisser> {
+        let monitor = tracker
+            .snapshot_cursor()
+            .map(|(monitor, _)| monitor)
+            .ok_or_else(|| anyhow!("no monitor state available for surface placement"))?;
+        let Anchor::CornerStack(corner) = self.anchor;
+        let bounds = corner_anchored_bounds(monitor.bounds(), corner, self.size, CORNER_MARGIN);
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id: crate::window::display_id_for_monitor(Some(&monitor), cx),
+            titlebar: None,
+            window_decorations: Some(WindowDecorations::Client),
+            kind: self.window_kind(),
+            focus: false,
+            is_movable: true,
+            window_background: WindowBackgroundAppearance::Transparent,
+            app_id: Some(self.title.clone()),
+            ..Default::default()
+        };
+        let dismisser = SurfaceDismisser::new();
+        let build_dismisser = dismisser.clone();
+        let title = self.title.clone();
+        let handle = cx.open_window(options, move |window, cx| {
+            window.set_window_title(&title);
+            cx.new(|cx| build(build_dismisser, window, cx))
+        })?;
+        dismisser
+            .state
+            .close
+            .borrow_mut()
+            .replace(Box::new(move |cx: &mut App| {
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            }));
+        if let Some(timeout) = self.timeout {
+            schedule_dismiss(dismisser.clone(), timeout, cx);
+        }
+        Ok(dismisser)
+    }
+
+    fn window_kind(&self) -> WindowKind {
+        match self.kind {
+            SurfaceKind::Toast => WindowKind::PopUp,
+        }
+    }
+}
+
+fn schedule_dismiss(dismisser: SurfaceDismisser, timeout: Duration, cx: &mut App) {
+    let scheduled = dismisser.state.generation.get();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        cx.background_executor().timer(timeout).await;
+        if dismisser.state.generation.get() != scheduled {
+            return;
+        }
+        let _ = cx.update(|cx| dismisser.dismiss(cx));
+    })
+    .detach();
 }
 
 fn corner_anchored_bounds(

@@ -6,6 +6,7 @@ license.workspace = true
 description = "GPUI windowing helpers for resident qol-tray plugins: ghost popups, monitor tracking, runtime event bridge"
 
 [dependencies]
+anyhow = "1"
 gpui.workspace = true
 qol-config.workspace = true
 qol-runtime.workspace = true
