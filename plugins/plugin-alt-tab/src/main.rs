@@ -23,11 +23,15 @@ fn maybe_open_settings(args: &[String]) -> bool {
     if !args.iter().any(|arg| arg == "--settings") {
         return false;
     }
+    open_settings_page();
+    true
+}
+
+pub(crate) fn open_settings_page() {
     let settings_url = qol_conventions::settings_url(PLUGIN_ID);
     if let Err(error) = qol_apps::desktop_integration::open_with_default_app(&settings_url) {
         eprintln!("Failed to open settings page: {}", error);
     }
-    true
 }
 
 fn main() {

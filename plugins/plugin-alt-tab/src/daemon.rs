@@ -11,6 +11,7 @@ pub enum Command {
     Show,
     ShowReverse,
     Reload,
+    Settings,
     Kill,
 }
 
@@ -44,6 +45,7 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
         "show" | "open" => ReadResult::Command(Command::Show),
         "show-reverse" | "open-reverse" => ReadResult::Command(Command::ShowReverse),
         "reload" => ReadResult::Command(Command::Reload),
+        "settings" => ReadResult::Command(Command::Settings),
         "kill" => ReadResult::Command(Command::Kill),
         _ => ReadResult::Fallback,
     }

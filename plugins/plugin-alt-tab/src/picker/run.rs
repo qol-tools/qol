@@ -133,10 +133,41 @@ fn spawn_daemon_loop(cx: &mut App, rx: mpsc::Receiver<daemon::Command>, state: P
                     dispatch_reload(&cx, &state).await;
                     LoopFlow::Continue
                 }
+                daemon::Command::Settings => {
+                    dispatch_settings(&cx, &state).await;
+                    LoopFlow::Continue
+                }
                 daemon::Command::Kill => LoopFlow::Stop,
             }
         }
     });
+}
+
+async fn dispatch_settings(cx: &AsyncApp, state: &PickerState) {
+    let tracker = state.tracker.clone();
+    let opened = cx.update(move |cx| {
+        qol_gpui::settings_panel::open(
+            qol_gpui::settings_panel::SettingsPanel {
+                plugin_id: crate::config::PLUGIN_ID,
+                contract: crate::config::contract(),
+                heading: "Alt Tab Settings",
+            },
+            &tracker,
+            &|_| Vec::new(),
+            cx,
+        )
+    });
+    match opened {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            eprintln!("[alt-tab/daemon] settings panel failed, opening browser: {error:#}");
+            crate::open_settings_page();
+        }
+        Err(error) => {
+            eprintln!("[alt-tab/daemon] settings panel failed, opening browser: {error}");
+            crate::open_settings_page();
+        }
+    }
 }
 
 async fn dispatch_reload(cx: &AsyncApp, state: &PickerState) {
