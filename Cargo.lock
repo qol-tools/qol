@@ -5724,6 +5724,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "qol-config",
+ "qol-conventions",
  "qol-runtime",
  "qol-theme",
  "raw-window-handle",
