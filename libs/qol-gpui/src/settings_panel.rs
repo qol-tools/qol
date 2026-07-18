@@ -777,9 +777,18 @@ fn row_value_json(control: &RowControl) -> serde_json::Value {
                 .collect();
             serde_json::json!(values)
         }
-        RowControl::Number { value, .. } => serde_json::json!(value),
+        RowControl::Number { value, .. } => number_json(*value),
         RowControl::Text(value) => serde_json::json!(value),
         RowControl::TextList(values) => serde_json::json!(values),
+    }
+}
+
+fn number_json(value: f64) -> serde_json::Value {
+    let whole = value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64;
+    if whole {
+        serde_json::json!(value as i64)
+    } else {
+        serde_json::json!(value)
     }
 }
 
@@ -1019,6 +1028,25 @@ default = "System Default"
                 }
                 other => panic!("expected select, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn number_value_json_emits_integers_for_whole_values() {
+        let cases = [
+            (6.0, serde_json::json!(6)),
+            (0.0, serde_json::json!(0)),
+            (-4.0, serde_json::json!(-4)),
+            (1.5, serde_json::json!(1.5)),
+        ];
+        for (value, expected) in cases {
+            let control = RowControl::Number {
+                value,
+                min: None,
+                max: None,
+                step: 1.0,
+            };
+            assert_eq!(row_value_json(&control), expected, "value: {value}");
         }
     }
 
