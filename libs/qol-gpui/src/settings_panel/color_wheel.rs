@@ -5,8 +5,7 @@ use std::sync::Arc;
 use gpui::*;
 
 pub(super) const DISC_SIZE: f32 = 200.0;
-pub(super) const MIN_HOST_HEIGHT: f32 =
-    DISC_SIZE + 2.0 * (WHEEL_PADDING + WHEEL_BORDER + WINDOW_MARGIN);
+pub(super) const POPUP_SIZE: f32 = DISC_SIZE + 2.0 * (WHEEL_PADDING + WHEEL_BORDER);
 const DISC_RADIUS: f64 = DISC_SIZE as f64 / 2.0 - 1.0;
 const THUMB_SIZE: f32 = 16.0;
 const NUDGE_STEP: f64 = 6.0;
@@ -15,10 +14,41 @@ const WHEEL_PADDING: f32 = 8.0;
 const WHEEL_BORDER: f32 = 1.0;
 const WINDOW_MARGIN: f32 = 8.0;
 
+#[derive(Clone, Copy)]
 pub(super) struct WheelStyle {
     pub(super) bg: u32,
     pub(super) border: u32,
     pub(super) thumb_border: u32,
+}
+
+type WheelCallback = Box<dyn FnMut(String, &mut App)>;
+
+pub(super) struct WheelCallbacks {
+    preview: WheelCallback,
+    commit: WheelCallback,
+}
+
+impl WheelCallbacks {
+    pub(super) fn new(
+        preview: impl FnMut(String, &mut App) + 'static,
+        commit: impl FnMut(String, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            preview: Box::new(preview),
+            commit: Box::new(commit),
+        }
+    }
+}
+
+pub(super) struct ColorWheelPopup {
+    wheel: ColorWheel,
+    style: WheelStyle,
+    on_preview: WheelCallback,
+    on_commit: WheelCallback,
+    parent_window: AnyWindowHandle,
+    parent_focus: FocusHandle,
+    focus_handle: FocusHandle,
+    finished: bool,
 }
 
 pub(super) struct ColorWheel {
@@ -27,6 +57,170 @@ pub(super) struct ColorWheel {
     image: Arc<RenderImage>,
     disc_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     dragging: bool,
+}
+
+impl ColorWheelPopup {
+    pub(super) fn open(
+        wheel: ColorWheel,
+        style: WheelStyle,
+        anchor: Bounds<Pixels>,
+        parent_window: &mut Window,
+        parent_focus: FocusHandle,
+        callbacks: WheelCallbacks,
+        cx: &mut App,
+    ) -> Option<WindowHandle<Self>> {
+        let parent_bounds = parent_window.window_bounds().get_bounds();
+        let display = parent_window.display(cx);
+        let display_bounds = display
+            .as_ref()
+            .map(|display| display.bounds())
+            .unwrap_or(parent_bounds);
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(popup_bounds(
+                anchor,
+                parent_bounds,
+                display_bounds,
+            ))),
+            titlebar: None,
+            focus: true,
+            kind: WindowKind::Floating,
+            is_movable: false,
+            display_id: display.map(|display| display.id()),
+            window_background: WindowBackgroundAppearance::Transparent,
+            window_decorations: Some(WindowDecorations::Client),
+            app_id: Some("qol-settings-color-wheel".into()),
+            ..Default::default()
+        };
+        let parent_handle = parent_window.window_handle();
+        cx.open_window(options, move |window, cx| {
+            let view = cx.new(|cx| Self {
+                wheel,
+                style,
+                on_preview: callbacks.preview,
+                on_commit: callbacks.commit,
+                parent_window: parent_handle,
+                parent_focus,
+                focus_handle: cx.focus_handle(),
+                finished: false,
+            });
+            view.update(cx, |view, cx| view.observe_blur(window, cx));
+            window.focus(&view.focus_handle(cx));
+            window.activate_window();
+            view
+        })
+        .ok()
+    }
+
+    fn observe_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.on_blur(&self.focus_handle, window, Self::on_blur)
+            .detach();
+    }
+
+    fn on_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.finish(window, cx);
+    }
+
+    pub(super) fn handle_key(
+        &mut self,
+        key: &str,
+        fast: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(intent) = wheel_intent(key) else {
+            return;
+        };
+        match intent {
+            WheelIntent::Nudge(dx, dy) => {
+                self.wheel.nudge(f64::from(dx), f64::from(dy), fast);
+                (self.on_preview)(self.wheel.hex(), cx);
+                cx.notify();
+            }
+            WheelIntent::Commit => self.finish(window, cx),
+        }
+    }
+
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.wheel.begin_drag(event.position) {
+            return;
+        }
+        (self.on_preview)(self.wheel.hex(), cx);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn on_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !event.dragging() || !self.wheel.drag_to(event.position) {
+            return;
+        }
+        (self.on_preview)(self.wheel.hex(), cx);
+        cx.notify();
+    }
+
+    fn on_mouse_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.wheel.finish_drag(event.position) {
+            return;
+        }
+        cx.stop_propagation();
+        self.finish(window, cx);
+    }
+
+    fn finish(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        (self.on_commit)(self.wheel.hex(), cx);
+        window.remove_window();
+        let parent_window = self.parent_window;
+        let parent_focus = self.parent_focus.clone();
+        cx.defer(move |cx| {
+            let _ = parent_window.update(cx, |_, window, _| {
+                window.focus(&parent_focus);
+                window.activate_window();
+            });
+        });
+    }
+}
+
+impl Focusable for ColorWheelPopup {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for ColorWheelPopup {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("settings-color-wheel-popup")
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.handle_key(
+                    event.keystroke.key.as_str(),
+                    event.keystroke.modifiers.shift,
+                    window,
+                    cx,
+                );
+            }))
+            .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .size_full()
+            .child(
+                self.wheel
+                    .render(self.style, cx.listener(Self::on_mouse_down)),
+            )
+    }
 }
 
 impl ColorWheel {
@@ -119,51 +313,92 @@ impl ColorWheel {
     ) -> impl IntoElement {
         let (tx, ty) = self.thumb_position();
         let disc_bounds = Rc::clone(&self.disc_bounds);
-        deferred(
-            anchored()
-                .snap_to_window_with_margin(px(WINDOW_MARGIN))
-                .child(
-                    div()
-                        .id("settings-color-wheel")
-                        .p(px(WHEEL_PADDING))
-                        .rounded_md()
-                        .border_1()
-                        .border_color(rgb(style.border))
-                        .bg(rgb(style.bg))
-                        .on_click(|_, _, cx| cx.stop_propagation())
-                        .child(
-                            div()
-                                .id("settings-color-wheel-disc")
-                                .relative()
-                                .w(px(DISC_SIZE))
-                                .h(px(DISC_SIZE))
-                                .cursor(CursorStyle::Crosshair)
-                                .on_mouse_down(MouseButton::Left, on_mouse_down)
-                                .child(img(self.image.clone()).w(px(DISC_SIZE)).h(px(DISC_SIZE)))
-                                .child(
-                                    canvas(
-                                        move |bounds, _, _| disc_bounds.set(Some(bounds)),
-                                        |_, _, _, _| {},
-                                    )
-                                    .absolute()
-                                    .inset_0(),
-                                )
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .left(px(tx - THUMB_SIZE / 2.0))
-                                        .top(px(ty - THUMB_SIZE / 2.0))
-                                        .w(px(THUMB_SIZE))
-                                        .h(px(THUMB_SIZE))
-                                        .rounded_full()
-                                        .border_2()
-                                        .border_color(rgb(style.thumb_border))
-                                        .bg(rgb(self.thumb_color())),
-                                ),
-                        ),
-                ),
-        )
+        div()
+            .id("settings-color-wheel")
+            .p(px(WHEEL_PADDING))
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(style.border))
+            .bg(rgb(style.bg))
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .id("settings-color-wheel-disc")
+                    .relative()
+                    .w(px(DISC_SIZE))
+                    .h(px(DISC_SIZE))
+                    .cursor(CursorStyle::Crosshair)
+                    .on_mouse_down(MouseButton::Left, on_mouse_down)
+                    .child(img(self.image.clone()).w(px(DISC_SIZE)).h(px(DISC_SIZE)))
+                    .child(
+                        canvas(
+                            move |bounds, _, _| disc_bounds.set(Some(bounds)),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(tx - THUMB_SIZE / 2.0))
+                            .top(px(ty - THUMB_SIZE / 2.0))
+                            .w(px(THUMB_SIZE))
+                            .h(px(THUMB_SIZE))
+                            .rounded_full()
+                            .border_2()
+                            .border_color(rgb(style.thumb_border))
+                            .bg(rgb(self.thumb_color())),
+                    ),
+            )
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WheelIntent {
+    Nudge(i8, i8),
+    Commit,
+}
+
+fn wheel_intent(key: &str) -> Option<WheelIntent> {
+    match key {
+        "left" => Some(WheelIntent::Nudge(-1, 0)),
+        "right" => Some(WheelIntent::Nudge(1, 0)),
+        "up" => Some(WheelIntent::Nudge(0, -1)),
+        "down" => Some(WheelIntent::Nudge(0, 1)),
+        "enter" | "return" | "escape" => Some(WheelIntent::Commit),
+        _ => None,
+    }
+}
+
+fn popup_bounds(
+    anchor: Bounds<Pixels>,
+    parent: Bounds<Pixels>,
+    display: Bounds<Pixels>,
+) -> Bounds<Pixels> {
+    let width = POPUP_SIZE;
+    let height = POPUP_SIZE;
+    let anchor_left = (parent.origin.x + anchor.origin.x).to_f64() as f32;
+    let anchor_top = (parent.origin.y + anchor.origin.y).to_f64() as f32;
+    let anchor_bottom = anchor_top + anchor.size.height.to_f64() as f32;
+    let display_left = display.origin.x.to_f64() as f32 + WINDOW_MARGIN;
+    let display_top = display.origin.y.to_f64() as f32 + WINDOW_MARGIN;
+    let display_right = (display.origin.x + display.size.width).to_f64() as f32 - WINDOW_MARGIN;
+    let display_bottom = (display.origin.y + display.size.height).to_f64() as f32 - WINDOW_MARGIN;
+    let max_x = (display_right - width).max(display_left);
+    let max_y = (display_bottom - height).max(display_top);
+    let preferred_y = if anchor_bottom + height <= display_bottom {
+        anchor_bottom
+    } else {
+        anchor_top - height
+    };
+    Bounds::new(
+        point(
+            px(anchor_left.clamp(display_left, max_x)),
+            px(preferred_y.clamp(display_top, max_y)),
+        ),
+        size(px(width), px(height)),
+    )
 }
 
 fn nudged(hue: f64, sat: f64, dx: f64, dy: f64) -> (f64, f64) {
@@ -279,12 +514,18 @@ fn disc_image() -> Arc<RenderImage> {
 
 #[cfg(test)]
 mod tests {
+    use gpui::{point, px, size, Bounds, Pixels};
     use proptest::prelude::*;
 
     use super::{
         disc_bgra, hex_to_hue_sat, hue_sat_from_pointer, hue_sat_to_hex, nudged, pointer_hits_disc,
-        ColorWheel, DISC_RADIUS, DISC_SIZE, NUDGE_STEP, NUDGE_STEP_FAST,
+        popup_bounds, wheel_intent, ColorWheel, WheelIntent, DISC_RADIUS, DISC_SIZE, NUDGE_STEP,
+        NUDGE_STEP_FAST, POPUP_SIZE,
     };
+
+    fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {
+        Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
+    }
 
     #[test]
     fn hue_sat_hex_round_trips_primary_colors() {
@@ -351,6 +592,43 @@ mod tests {
         fast.nudge(1.0, 0.0, true);
         assert!((normal.sat - NUDGE_STEP / DISC_RADIUS).abs() < 1e-9);
         assert!((fast.sat - NUDGE_STEP_FAST / DISC_RADIUS).abs() < 1e-9);
+    }
+
+    #[test]
+    fn wheel_intent_maps_cartesian_movement_and_commit_keys() {
+        let cases = [
+            ("left", Some(WheelIntent::Nudge(-1, 0))),
+            ("right", Some(WheelIntent::Nudge(1, 0))),
+            ("up", Some(WheelIntent::Nudge(0, -1))),
+            ("down", Some(WheelIntent::Nudge(0, 1))),
+            ("enter", Some(WheelIntent::Commit)),
+            ("return", Some(WheelIntent::Commit)),
+            ("escape", Some(WheelIntent::Commit)),
+            ("space", None),
+        ];
+        for (key, expected) in cases {
+            assert_eq!(wheel_intent(key), expected, "key {key}");
+        }
+    }
+
+    #[test]
+    fn popup_placement_anchors_flips_and_clamps_to_the_display() {
+        let anchor = bounds(16.0, 80.0, 488.0, 36.0);
+        let display = bounds(0.0, 0.0, 1000.0, 1080.0);
+        let cases = [
+            (bounds(200.0, 200.0, 520.0, 170.0), (216.0, 316.0)),
+            (bounds(200.0, 800.0, 520.0, 170.0), (216.0, 662.0)),
+            (bounds(900.0, 100.0, 520.0, 170.0), (774.0, 216.0)),
+        ];
+        for (parent, expected) in cases {
+            let placed = popup_bounds(anchor, parent, display);
+            assert_eq!(
+                (placed.origin.x.to_f64(), placed.origin.y.to_f64()),
+                (expected.0, expected.1),
+                "parent {parent:?}"
+            );
+            assert_eq!(placed.size, size(px(POPUP_SIZE), px(POPUP_SIZE)));
+        }
     }
 
     #[test]
