@@ -114,7 +114,7 @@ impl SettingsPanelView {
             Intent::Toggle => self.toggle(),
             Intent::Left => self.adjust(-1.0),
             Intent::Right => self.adjust(1.0),
-            Intent::BeginEdit => self.begin_edit(),
+            Intent::Activate => self.activate(),
             Intent::CommitEdit => self.commit_edit(),
             Intent::Backspace => {
                 if let Some(edit) = self.edit.as_mut() {
@@ -175,6 +175,18 @@ impl SettingsPanelView {
             RowControl::Toggle(_) | RowControl::Text(_) | RowControl::TextList(_) => return,
         }
         self.persist();
+    }
+
+    fn activate(&mut self) {
+        let Some(row) = self.rows.get(self.selected) else {
+            return;
+        };
+        match &row.control {
+            RowControl::Toggle(_) => self.toggle(),
+            RowControl::Select { .. } => self.adjust(1.0),
+            RowControl::Number { .. } => {}
+            RowControl::Text(_) | RowControl::TextList(_) => self.begin_edit(),
+        }
     }
 
     fn begin_edit(&mut self) {
@@ -477,7 +489,7 @@ pub(crate) enum Intent {
     Toggle,
     Left,
     Right,
-    BeginEdit,
+    Activate,
     CommitEdit,
     Backspace,
     Insert(String),
@@ -488,7 +500,7 @@ pub(crate) enum Intent {
 pub(crate) fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option<Intent> {
     if editing {
         return match key {
-            "enter" => Some(Intent::CommitEdit),
+            "enter" | "return" => Some(Intent::CommitEdit),
             "escape" => Some(Intent::CancelEdit),
             "backspace" => Some(Intent::Backspace),
             _ => key_char.map(|ch| Intent::Insert(ch.to_string())),
@@ -500,7 +512,7 @@ pub(crate) fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option
         "space" => Some(Intent::Toggle),
         "left" => Some(Intent::Left),
         "right" => Some(Intent::Right),
-        "enter" => Some(Intent::BeginEdit),
+        "enter" | "return" => Some(Intent::Activate),
         "escape" => Some(Intent::Close),
         _ => None,
     }
@@ -618,9 +630,11 @@ default = ["mic"]
             ("space", None, false, Some(Intent::Toggle)),
             ("left", None, false, Some(Intent::Left)),
             ("right", None, false, Some(Intent::Right)),
-            ("enter", None, false, Some(Intent::BeginEdit)),
+            ("enter", None, false, Some(Intent::Activate)),
+            ("return", None, false, Some(Intent::Activate)),
             ("escape", None, false, Some(Intent::Close)),
             ("enter", None, true, Some(Intent::CommitEdit)),
+            ("return", None, true, Some(Intent::CommitEdit)),
             ("escape", None, true, Some(Intent::CancelEdit)),
             ("backspace", None, true, Some(Intent::Backspace)),
             ("a", Some("a"), true, Some(Intent::Insert("a".into()))),
