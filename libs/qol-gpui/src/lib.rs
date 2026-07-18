@@ -10,6 +10,7 @@ pub mod popup_window;
 pub mod probe;
 pub mod runtime_config;
 pub mod scroll_list;
+pub mod settings_panel;
 pub mod surface;
 pub mod window;
 

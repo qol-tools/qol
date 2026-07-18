@@ -613,6 +613,7 @@ pub struct ComponentPalettes {
     pub remove_app: RemoveAppPalette,
     pub shot_selector: ShotSelectorPalette,
     pub shot_preview: ShotPreviewPalette,
+    pub settings_panel: SettingsPanelPalette,
     pub alt_tab_preview_plane: AltTabPreviewPlanePalette,
 }
 
@@ -624,6 +625,7 @@ impl ComponentPalettes {
             remove_app: RemoveAppPalette::from_theme(reference, system),
             shot_selector: ShotSelectorPalette::from_theme(reference, system),
             shot_preview: ShotPreviewPalette::from_system(system),
+            settings_panel: SettingsPanelPalette::from_system(system),
             alt_tab_preview_plane: AltTabPreviewPlanePalette::from_theme(reference, system),
         }
     }
@@ -800,6 +802,35 @@ impl ShotPreviewPalette {
             action_bg_selected: mix_rgb(system.surface_raised, system.accent, 0.28),
             action_border: system.border_subtle,
             action_border_selected: system.accent,
+            state_on: system.success,
+            state_off: system.danger,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SettingsPanelPalette {
+    pub window_bg: u32,
+    pub panel_border: u32,
+    pub label_text: u32,
+    pub section_text: u32,
+    pub row_bg_selected: u32,
+    pub row_border_selected: u32,
+    pub dropdown_bg: u32,
+    pub state_on: u32,
+    pub state_off: u32,
+}
+
+impl SettingsPanelPalette {
+    pub fn from_system(system: SystemPalette) -> Self {
+        Self {
+            window_bg: system.surface_elevated,
+            panel_border: system.border_subtle,
+            label_text: system.text_secondary,
+            section_text: system.text_primary,
+            row_bg_selected: mix_rgb(system.surface_raised, system.accent, 0.28),
+            row_border_selected: system.accent,
+            dropdown_bg: system.surface_raised,
             state_on: system.success,
             state_off: system.danger,
         }
@@ -1008,6 +1039,10 @@ pub fn shot_preview_dark() -> ShotPreviewPalette {
 
 pub fn shot_preview_runtime() -> ShotPreviewPalette {
     runtime_dark_theme().components.shot_preview
+}
+
+pub fn settings_panel_runtime() -> SettingsPanelPalette {
+    runtime_dark_theme().components.settings_panel
 }
 
 pub fn alt_tab_preview_plane_dark() -> AltTabPreviewPlanePalette {
