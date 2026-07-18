@@ -500,6 +500,24 @@ async fn run_cli(cx: &AsyncApp, state: &State, action: String) {
         return;
     }
 
+    if action == "settings" {
+        let tracker = state.tracker.clone();
+        let opened = cx.update(move |cx| crate::settings_panel::open(&tracker, cx));
+        match opened {
+            Ok(Ok(())) => {
+                qol_runtime::probe!("SHOT_SETTINGS_PANEL", "result=shown");
+                return;
+            }
+            Ok(Err(error)) => {
+                qol_runtime::probe!("SHOT_SETTINGS_PANEL", "result=fallback error={error:#}");
+                eprintln!("[qol-shot] settings panel failed, opening browser: {error:#}");
+            }
+            Err(error) => {
+                qol_runtime::probe!("SHOT_SETTINGS_PANEL", "result=fallback error={error}");
+            }
+        }
+    }
+
     let _ = cx
         .background_spawn(async move {
             crate::cli::exit_code(std::iter::once(action));
