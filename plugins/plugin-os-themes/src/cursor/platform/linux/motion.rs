@@ -13,7 +13,8 @@ pub struct ShakeDetector {
     calm_duration: Duration,
     scale_factor: f32,
     grow_rate: f32,
-    shrink_rate: f32,
+    shrink_duration: Duration,
+    shrink_from: Option<(f32, Instant)>,
     current_scale: f32,
     growing: bool,
     last_shake: Option<Instant>,
@@ -145,7 +146,8 @@ impl ShakeDetector {
             calm_duration: Duration::from_millis(config.calm_duration_ms),
             scale_factor,
             grow_rate: rate_per_second(scale_factor, config.grow_ms),
-            shrink_rate: rate_per_second(scale_factor, config.shrink_ms),
+            shrink_duration: Duration::from_millis(u64::from(config.shrink_ms.max(1))),
+            shrink_from: None,
             current_scale: 1.0,
             growing: false,
             last_shake: None,
@@ -195,7 +197,7 @@ impl ShakeDetector {
 
         let previous_scale = self.current_scale;
         let target_scale = if self.growing { self.scale_factor } else { 1.0 };
-        let next_scale = self.next_scale(target_scale, dt);
+        let next_scale = self.next_scale(target_scale, now, dt);
         self.current_scale = next_scale;
 
         ScaleUpdate {
@@ -217,14 +219,20 @@ impl ShakeDetector {
         }
     }
 
-    fn next_scale(&self, target: f32, dt: Duration) -> f32 {
-        let dt_secs = dt.as_secs_f32();
+    fn next_scale(&mut self, target: f32, now: Instant, dt: Duration) -> f32 {
         if target > self.current_scale {
-            return (self.current_scale + self.grow_rate * dt_secs).min(target);
+            self.shrink_from = None;
+            return (self.current_scale + self.grow_rate * dt.as_secs_f32()).min(target);
         }
         if target < self.current_scale {
-            return (self.current_scale - self.shrink_rate * dt_secs).max(target);
+            let (from, started) = *self.shrink_from.get_or_insert((self.current_scale, now));
+            let progress = (now.saturating_duration_since(started).as_secs_f32()
+                / self.shrink_duration.as_secs_f32())
+            .min(1.0);
+            let eased = 1.0 - (1.0 - progress) * (1.0 - progress);
+            return from + (target - from) * eased;
         }
+        self.shrink_from = None;
         self.current_scale
     }
 }
@@ -273,9 +281,9 @@ mod tests {
             regrow_min_extent_px: 60,
             shake_window_ms: 1000,
             scale_factor: 4,
-            calm_duration_ms: 650,
-            grow_ms: 110,
-            shrink_ms: 300,
+            calm_duration_ms: 250,
+            grow_ms: 90,
+            shrink_ms: 180,
         }
     }
 
@@ -375,20 +383,21 @@ mod tests {
 
         let mut grower = ShakeDetector::new(&config());
         grower.growing = true;
-        let mid = tick(&mut grower, t0, 0, 80);
-        assert!(mid < 4.0, "grow must not finish before 110ms, got {mid}");
-        let full = tick(&mut grower, t0, 96, 160);
-        assert_eq!(full, 4.0, "grow must complete within 110ms, got {full}");
+        let mid = tick(&mut grower, t0, 0, 64);
+        assert!(mid < 4.0, "grow must not finish before 90ms, got {mid}");
+        let full = tick(&mut grower, t0, 80, 144);
+        assert_eq!(full, 4.0, "grow must complete within 90ms, got {full}");
 
         let mut shrinker = ShakeDetector::new(&config());
         shrinker.growing = true;
         tick(&mut shrinker, t0, 0, 200);
         shrinker.growing = false;
         shrinker.last_shake = None;
-        let mid = tick(&mut shrinker, t0, 216, 440);
-        assert!(mid > 1.0, "shrink must not finish before 300ms, got {mid}");
-        let done = tick(&mut shrinker, t0, 456, 700);
-        assert_eq!(done, 1.0, "shrink must complete within 300ms, got {done}");
+        let mid = tick(&mut shrinker, t0, 216, 296);
+        assert!(mid > 1.0, "shrink must not finish before 180ms, got {mid}");
+        assert!(mid < 2.5, "shrink must front-load via ease-out, got {mid}");
+        let done = tick(&mut shrinker, t0, 312, 500);
+        assert_eq!(done, 1.0, "shrink must complete within 180ms, got {done}");
     }
 
     #[test]
@@ -436,7 +445,7 @@ mod tests {
         }
         assert!(shrinking, "shrink phase must begin after calm");
         let offset = t.as_millis() as u64;
-        let burst: Vec<(u64, i32, i32)> = wiggle(80, 64, 300)
+        let burst: Vec<(u64, i32, i32)> = wiggle(80, 32, 300)
             .iter()
             .map(|(ms, dx, dy)| (ms + offset, *dx, *dy))
             .collect();
@@ -454,7 +463,7 @@ mod tests {
         );
 
         let mut rested = ShakeDetector::new(&config());
-        let grew = feed(&mut rested, Instant::now(), &wiggle(80, 64, 300));
+        let grew = feed(&mut rested, Instant::now(), &wiggle(80, 32, 300));
         assert_eq!(grew, None, "same burst from rest must not trigger");
     }
 

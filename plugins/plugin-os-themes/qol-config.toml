@@ -89,7 +89,7 @@ equals = true
 type = "number"
 label = "Calm Duration"
 section = "shake_to_grow"
-default = 650
+default = 250
 min = 50
 step = 25
 
@@ -101,7 +101,7 @@ equals = true
 type = "number"
 label = "Grow Duration (ms)"
 section = "shake_to_grow"
-default = 110
+default = 90
 min = 20
 step = 10
 
@@ -113,7 +113,7 @@ equals = true
 type = "number"
 label = "Shrink Duration (ms)"
 section = "shake_to_grow"
-default = 300
+default = 180
 min = 20
 step = 10
 
