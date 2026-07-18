@@ -46,6 +46,7 @@ pub fn validate_field_value(
     let mut errors = Vec::new();
     validate_field_value_type(path, field, value, &mut errors);
     validate_select_value(path, field, value, &mut errors);
+    validate_string_array_value(path, field, value, &mut errors);
     validate_number_value(path, field, value, &mut errors);
     errors
 }
@@ -213,13 +214,18 @@ fn validate_field_options(id: &str, field: &FieldSpec, errors: &mut Vec<Validati
         validate_option_labels(id, field, errors);
         return;
     }
+    if field.kind == FieldKind::StringArray && !field.options.is_empty() {
+        validate_select_options(id, field, errors);
+        validate_option_labels(id, field, errors);
+        return;
+    }
     if field.options.is_empty() && field.option_labels.is_empty() {
         return;
     }
     if !field.option_labels.is_empty() {
         errors.push(ValidationError::new(
             format!("field.{id}.option_labels"),
-            "option_labels only supported for select fields",
+            "option_labels only supported for select and string_array fields",
         ));
     }
     if field.options.is_empty() {
@@ -227,7 +233,7 @@ fn validate_field_options(id: &str, field: &FieldSpec, errors: &mut Vec<Validati
     }
     errors.push(ValidationError::new(
         format!("field.{id}.options"),
-        "options only supported for select fields",
+        "options only supported for select and string_array fields",
     ));
 }
 
@@ -423,6 +429,33 @@ fn validate_select_value(
         path,
         "value must match one of the select options",
     ));
+}
+
+fn validate_string_array_value(
+    path: &str,
+    field: &FieldSpec,
+    value: &FieldDefault,
+    errors: &mut Vec<ValidationError>,
+) {
+    if field.kind != FieldKind::StringArray {
+        return;
+    }
+    if field.options.is_empty() {
+        return;
+    }
+    let values = match value {
+        FieldDefault::StringArray(values) => values,
+        _ => return,
+    };
+    for (index, entry) in values.iter().enumerate() {
+        if field.options.iter().any(|option| option == entry) {
+            continue;
+        }
+        errors.push(ValidationError::new(
+            format!("{path}[{index}]"),
+            "value must match one of the field options",
+        ));
+    }
 }
 
 fn validate_number_value(
@@ -643,6 +676,59 @@ default = 2
                 .iter()
                 .all(|error| !error.message.contains("collides with")),
             "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn string_array_options_constrain_defaults_and_labels() {
+        let valid = validate_contract(
+            r#"
+schema_version = 1
+
+[field.inputs]
+type = "string_array"
+config_key = "audio.inputs"
+default = ["mic"]
+options = ["mic", "system"]
+
+[field.inputs.option_labels]
+mic = "Microphone"
+system = "System Audio"
+"#,
+        );
+        assert!(valid.is_empty(), "{valid:?}");
+
+        let unknown_default = validate_contract(
+            r#"
+schema_version = 1
+
+[field.inputs]
+type = "string_array"
+config_key = "audio.inputs"
+default = ["mic", "webcam"]
+options = ["mic", "system"]
+"#,
+        );
+        assert_has_error(
+            &unknown_default,
+            "field.inputs.default[1]",
+            "value must match one of the field options",
+        );
+
+        let options_elsewhere = validate_contract(
+            r#"
+schema_version = 1
+
+[field.name]
+type = "string"
+default = "foo"
+options = ["foo", "bar"]
+"#,
+        );
+        assert_has_error(
+            &options_elsewhere,
+            "field.name.options",
+            "options only supported for select and string_array fields",
         );
     }
 
