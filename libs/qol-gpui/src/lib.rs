@@ -1,5 +1,6 @@
 pub mod command_loop;
 #[cfg(unix)]
+pub mod dropdown;
 pub mod event_router;
 pub mod ghost;
 pub mod keepalive;
