@@ -83,7 +83,7 @@ mod tests {
         assert_eq!(defaults.shake_min_extent_px, 150);
         assert_eq!(defaults.regrow_min_extent_px, 60);
         assert_eq!(defaults.shake_window_ms, 1000);
-        assert_eq!(defaults.grow_ms, 90);
-        assert_eq!(defaults.shrink_ms, 180);
+        assert_eq!(defaults.grow_ms, 250);
+        assert_eq!(defaults.shrink_ms, 225);
     }
 }

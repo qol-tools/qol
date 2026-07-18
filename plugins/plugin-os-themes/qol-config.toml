@@ -101,7 +101,7 @@ equals = true
 type = "number"
 label = "Grow Duration (ms)"
 section = "shake_to_grow"
-default = 90
+default = 250
 min = 20
 step = 10
 
@@ -113,9 +113,9 @@ equals = true
 type = "number"
 label = "Shrink Duration (ms)"
 section = "shake_to_grow"
-default = 180
+default = 225
 min = 20
-step = 10
+step = 5
 
 [field.shrink_ms.show_when]
 field = "enabled"

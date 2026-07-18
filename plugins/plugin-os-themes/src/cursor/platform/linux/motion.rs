@@ -12,13 +12,19 @@ pub struct ShakeDetector {
     regrow_min_extent: f64,
     calm_duration: Duration,
     scale_factor: f32,
-    grow_rate: f32,
+    grow_duration: Duration,
     shrink_duration: Duration,
-    shrink_from: Option<(f32, Instant)>,
+    animation: Option<ScaleAnimation>,
     current_scale: f32,
     growing: bool,
     last_shake: Option<Instant>,
-    last_tick: Option<Instant>,
+}
+
+#[derive(Clone, Copy)]
+struct ScaleAnimation {
+    from: f32,
+    started: Instant,
+    target: f32,
 }
 
 pub struct ScaleUpdate {
@@ -145,26 +151,18 @@ impl ShakeDetector {
             regrow_min_extent: f64::from(config.regrow_min_extent_px),
             calm_duration: Duration::from_millis(config.calm_duration_ms),
             scale_factor,
-            grow_rate: rate_per_second(scale_factor, config.grow_ms),
+            grow_duration: Duration::from_millis(u64::from(config.grow_ms.max(1))),
             shrink_duration: Duration::from_millis(u64::from(config.shrink_ms.max(1))),
-            shrink_from: None,
+            animation: None,
             current_scale: 1.0,
             growing: false,
             last_shake: None,
-            last_tick: None,
         }
     }
 
     pub fn record(&mut self, sample: MotionSample) -> ScaleUpdate {
-        let dt = self
-            .last_tick
-            .map_or(Duration::ZERO, |last| {
-                sample.at.saturating_duration_since(last)
-            })
-            .min(Duration::from_millis(50));
-        self.last_tick = Some(sample.at);
         let shake = self.detect(sample);
-        self.update(sample.at, shake, dt)
+        self.update(sample.at, shake)
     }
 
     fn detect(&mut self, sample: MotionSample) -> Option<f64> {
@@ -187,7 +185,7 @@ impl ShakeDetector {
         self.current_scale > 1.0 + f32::EPSILON
     }
 
-    fn update(&mut self, now: Instant, shake: Option<f64>, dt: Duration) -> ScaleUpdate {
+    fn update(&mut self, now: Instant, shake: Option<f64>) -> ScaleUpdate {
         if shake.is_some() {
             self.growing = true;
             self.last_shake = Some(now);
@@ -197,7 +195,7 @@ impl ShakeDetector {
 
         let previous_scale = self.current_scale;
         let target_scale = if self.growing { self.scale_factor } else { 1.0 };
-        let next_scale = self.next_scale(target_scale, now, dt);
+        let next_scale = self.next_scale(target_scale, now);
         self.current_scale = next_scale;
 
         ScaleUpdate {
@@ -219,26 +217,36 @@ impl ShakeDetector {
         }
     }
 
-    fn next_scale(&mut self, target: f32, now: Instant, dt: Duration) -> f32 {
-        if target > self.current_scale {
-            self.shrink_from = None;
-            return (self.current_scale + self.grow_rate * dt.as_secs_f32()).min(target);
+    fn next_scale(&mut self, target: f32, now: Instant) -> f32 {
+        if (self.current_scale - target).abs() <= f32::EPSILON {
+            self.animation = None;
+            return target;
         }
-        if target < self.current_scale {
-            let (from, started) = *self.shrink_from.get_or_insert((self.current_scale, now));
-            let progress = (now.saturating_duration_since(started).as_secs_f32()
-                / self.shrink_duration.as_secs_f32())
-            .min(1.0);
-            let eased = 1.0 - (1.0 - progress) * (1.0 - progress);
-            return from + (target - from) * eased;
-        }
-        self.shrink_from = None;
-        self.current_scale
+        let animation = match self.animation {
+            Some(animation) if animation.target == target => animation,
+            Some(_) | None => {
+                let animation = ScaleAnimation {
+                    from: self.current_scale,
+                    started: now,
+                    target,
+                };
+                self.animation = Some(animation);
+                animation
+            }
+        };
+        let duration = if target > animation.from {
+            self.grow_duration
+        } else {
+            self.shrink_duration
+        };
+        let progress = (now
+            .saturating_duration_since(animation.started)
+            .as_secs_f32()
+            / duration.as_secs_f32())
+        .min(1.0);
+        let eased = 1.0 - (1.0 - progress) * (1.0 - progress);
+        animation.from + (target - animation.from) * eased
     }
-}
-
-fn rate_per_second(scale_factor: f32, duration_ms: u32) -> f32 {
-    (scale_factor - 1.0) * 1000.0 / duration_ms.max(1) as f32
 }
 
 impl MotionSample {
@@ -282,8 +290,8 @@ mod tests {
             shake_window_ms: 1000,
             scale_factor: 4,
             calm_duration_ms: 250,
-            grow_ms: 90,
-            shrink_ms: 180,
+            grow_ms: 250,
+            shrink_ms: 225,
         }
     }
 
@@ -383,21 +391,22 @@ mod tests {
 
         let mut grower = ShakeDetector::new(&config());
         grower.growing = true;
-        let mid = tick(&mut grower, t0, 0, 64);
-        assert!(mid < 4.0, "grow must not finish before 90ms, got {mid}");
-        let full = tick(&mut grower, t0, 80, 144);
-        assert_eq!(full, 4.0, "grow must complete within 90ms, got {full}");
+        let mid = tick(&mut grower, t0, 0, 176);
+        assert!(mid < 4.0, "grow must not finish before 250ms, got {mid}");
+        assert!(mid > 3.1, "grow must front-load via ease-out, got {mid}");
+        let full = tick(&mut grower, t0, 192, 280);
+        assert_eq!(full, 4.0, "grow must complete within 250ms, got {full}");
 
         let mut shrinker = ShakeDetector::new(&config());
         shrinker.growing = true;
-        tick(&mut shrinker, t0, 0, 200);
+        tick(&mut shrinker, t0, 0, 280);
         shrinker.growing = false;
         shrinker.last_shake = None;
-        let mid = tick(&mut shrinker, t0, 216, 296);
-        assert!(mid > 1.0, "shrink must not finish before 180ms, got {mid}");
+        let mid = tick(&mut shrinker, t0, 296, 400);
+        assert!(mid > 1.0, "shrink must not finish before 225ms, got {mid}");
         assert!(mid < 2.5, "shrink must front-load via ease-out, got {mid}");
-        let done = tick(&mut shrinker, t0, 312, 500);
-        assert_eq!(done, 1.0, "shrink must complete within 180ms, got {done}");
+        let done = tick(&mut shrinker, t0, 416, 640);
+        assert_eq!(done, 1.0, "shrink must complete within 225ms, got {done}");
     }
 
     #[test]
