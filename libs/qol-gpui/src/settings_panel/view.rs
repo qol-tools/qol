@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use gpui::*;
 
+use super::color_wheel::{ColorWheel, WheelStyle};
 use super::persistence::save_values;
 use super::rows::{merged_config, Row, RowControl};
 use super::SettingsPanel;
@@ -17,11 +18,16 @@ pub(super) struct SettingsPanelView {
     selected: usize,
     scroll_offset: usize,
     body_max: f32,
-    edit: Option<String>,
-    dropdown: Option<Dropdown>,
+    active_control: Option<ActiveControl>,
     dismisser: SurfaceDismisser,
     palette: SettingsPanelPalette,
     focus_handle: FocusHandle,
+}
+
+enum ActiveControl {
+    Edit(String),
+    Dropdown(Dropdown),
+    Wheel(ColorWheel),
 }
 
 impl SettingsPanelView {
@@ -42,8 +48,7 @@ impl SettingsPanelView {
             selected: 0,
             scroll_offset: 0,
             body_max,
-            edit: None,
-            dropdown: None,
+            active_control: None,
             dismisser,
             palette: settings_panel_runtime(),
             focus_handle: cx.focus_handle(),
@@ -53,14 +58,19 @@ impl SettingsPanelView {
     fn on_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let key_char = event.keystroke.key_char.as_deref();
-        if self.dropdown.is_some() {
+        if matches!(self.active_control, Some(ActiveControl::Wheel(_))) {
+            self.on_wheel_key(key, event.keystroke.modifiers.shift, cx);
+            return;
+        }
+        if matches!(self.active_control, Some(ActiveControl::Dropdown(_))) {
             self.on_dropdown_key(key, cx);
             return;
         }
-        if self.edit.is_some() && matches!(key, "up" | "down") {
+        let editing = matches!(self.active_control, Some(ActiveControl::Edit(_)));
+        if editing && matches!(key, "up" | "down") {
             self.commit_edit();
         }
-        let Some(intent) = intent(key, key_char, self.edit.is_some()) else {
+        let Some(intent) = intent(key, key_char, editing) else {
             if self.begin_number_entry(key_char) {
                 cx.notify();
             }
@@ -81,16 +91,16 @@ impl SettingsPanelView {
             Intent::Activate => self.activate(),
             Intent::CommitEdit => self.commit_edit(),
             Intent::Backspace => {
-                if let Some(edit) = self.edit.as_mut() {
+                if let Some(ActiveControl::Edit(edit)) = self.active_control.as_mut() {
                     edit.pop();
                 }
             }
             Intent::Insert(ch) => {
-                if let Some(edit) = self.edit.as_mut() {
+                if let Some(ActiveControl::Edit(edit)) = self.active_control.as_mut() {
                     edit.push_str(&ch);
                 }
             }
-            Intent::CancelEdit => self.edit = None,
+            Intent::CancelEdit => self.active_control = None,
             Intent::Close => {
                 self.dismisser.dismiss(cx);
                 return;
@@ -99,22 +109,55 @@ impl SettingsPanelView {
         cx.notify();
     }
 
+    fn on_wheel_key(&mut self, key: &str, fast: bool, cx: &mut Context<Self>) {
+        let Some(intent) = wheel_intent(key) else {
+            return;
+        };
+        let (dx, dy) = match intent {
+            WheelIntent::Nudge(dx, dy) => (dx, dy),
+            WheelIntent::Commit => {
+                self.commit_wheel();
+                cx.notify();
+                return;
+            }
+        };
+        let Some(ActiveControl::Wheel(wheel)) = self.active_control.as_mut() else {
+            return;
+        };
+        wheel.nudge(f64::from(dx), f64::from(dy), fast);
+        cx.notify();
+    }
+
+    fn commit_wheel(&mut self) {
+        let Some(ActiveControl::Wheel(wheel)) = self.active_control.take() else {
+            return;
+        };
+        let Some(row) = self.rows.get_mut(self.selected) else {
+            return;
+        };
+        let RowControl::Color(value) = &mut row.control else {
+            return;
+        };
+        *value = wheel.hex();
+        self.persist();
+    }
+
     fn on_dropdown_key(&mut self, key: &str, cx: &mut Context<Self>) {
-        let Some(dropdown) = self.dropdown.as_mut() else {
+        let Some(ActiveControl::Dropdown(dropdown)) = self.active_control.as_mut() else {
             return;
         };
         match key {
             "up" => dropdown.move_up(),
             "down" => dropdown.move_down(),
             "enter" | "return" | "space" => self.pick_dropdown(),
-            "escape" => self.dropdown = None,
+            "escape" => self.active_control = None,
             _ => return,
         }
         cx.notify();
     }
 
     fn pick_dropdown(&mut self) {
-        let Some(dropdown) = self.dropdown.as_ref() else {
+        let Some(ActiveControl::Dropdown(dropdown)) = self.active_control.as_ref() else {
             return;
         };
         let pick = dropdown.selected();
@@ -127,7 +170,7 @@ impl SettingsPanelView {
                     *index = pick;
                     self.persist();
                 }
-                self.dropdown = None;
+                self.active_control = None;
             }
             RowControl::MultiSelect { selected, .. } => {
                 if let Some(flag) = selected.get_mut(pick) {
@@ -139,7 +182,7 @@ impl SettingsPanelView {
             | RowControl::Number { .. }
             | RowControl::Text(_)
             | RowControl::TextList(_)
-            | RowControl::Color(_) => self.dropdown = None,
+            | RowControl::Color(_) => self.active_control = None,
         }
     }
 
@@ -196,15 +239,21 @@ impl SettingsPanelView {
         match &row.control {
             RowControl::Toggle(_) => self.toggle(),
             RowControl::Select { options, index, .. } => {
-                self.dropdown = Some(Dropdown::open(options.len(), *index));
+                self.active_control = Some(ActiveControl::Dropdown(Dropdown::open(
+                    options.len(),
+                    *index,
+                )));
             }
             RowControl::MultiSelect { options, .. } => {
-                self.dropdown = Some(Dropdown::open(options.len(), 0));
+                self.active_control =
+                    Some(ActiveControl::Dropdown(Dropdown::open(options.len(), 0)));
             }
-            RowControl::Number { .. }
-            | RowControl::Text(_)
-            | RowControl::TextList(_)
-            | RowControl::Color(_) => self.begin_edit(),
+            RowControl::Color(value) => {
+                self.active_control = Some(ActiveControl::Wheel(ColorWheel::open(value)));
+            }
+            RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
+                self.begin_edit()
+            }
         }
     }
 
@@ -218,7 +267,7 @@ impl SettingsPanelView {
         if !matches!(row.control, RowControl::Number { .. }) {
             return false;
         }
-        self.edit = Some(seed.to_string());
+        self.active_control = Some(ActiveControl::Edit(seed.to_string()));
         true
     }
 
@@ -226,19 +275,20 @@ impl SettingsPanelView {
         let Some(row) = self.rows.get(self.selected) else {
             return;
         };
-        self.edit = match &row.control {
-            RowControl::Text(value) => Some(value.clone()),
-            RowControl::TextList(values) => Some(values.join(", ")),
-            RowControl::Color(value) => Some(value.clone()),
-            RowControl::Number { value, .. } => Some(format_number(*value)),
-            RowControl::Toggle(_) | RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
-                None
-            }
+        let edit = match &row.control {
+            RowControl::Text(value) => value.clone(),
+            RowControl::TextList(values) => values.join(", "),
+            RowControl::Number { value, .. } => format_number(*value),
+            RowControl::Toggle(_)
+            | RowControl::Select { .. }
+            | RowControl::MultiSelect { .. }
+            | RowControl::Color(_) => return,
         };
+        self.active_control = Some(ActiveControl::Edit(edit));
     }
 
     fn commit_edit(&mut self) {
-        let Some(edit) = self.edit.take() else {
+        let Some(ActiveControl::Edit(edit)) = self.active_control.take() else {
             return;
         };
         let Some(row) = self.rows.get_mut(self.selected) else {
@@ -246,13 +296,6 @@ impl SettingsPanelView {
         };
         match &mut row.control {
             RowControl::Text(value) => *value = edit,
-            RowControl::Color(value) => {
-                let trimmed = edit.trim();
-                if parsed_color(trimmed).is_none() {
-                    return;
-                }
-                *value = trimmed.to_string();
-            }
             RowControl::TextList(values) => {
                 *values = edit
                     .split(',')
@@ -268,9 +311,10 @@ impl SettingsPanelView {
                 };
                 *value = parsed;
             }
-            RowControl::Toggle(_) | RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
-                return
-            }
+            RowControl::Toggle(_)
+            | RowControl::Select { .. }
+            | RowControl::MultiSelect { .. }
+            | RowControl::Color(_) => return,
         }
         self.persist();
     }
@@ -287,8 +331,10 @@ impl SettingsPanelView {
 
     fn display_value(&self, index: usize) -> String {
         if index == self.selected {
-            if let Some(edit) = &self.edit {
-                return format!("{edit}_");
+            match &self.active_control {
+                Some(ActiveControl::Edit(edit)) => return format!("{edit}_"),
+                Some(ActiveControl::Wheel(wheel)) => return wheel.hex(),
+                Some(ActiveControl::Dropdown(_)) | None => {}
             }
         }
         match &self.rows[index].control {
@@ -320,7 +366,7 @@ impl SettingsPanelView {
     }
 
     fn value_color(&self, index: usize) -> u32 {
-        if index == self.selected && self.edit.is_some() {
+        if index == self.selected && matches!(self.active_control, Some(ActiveControl::Edit(_))) {
             return self.palette.label_text;
         }
         match self.rows[index].control {
@@ -371,7 +417,11 @@ impl SettingsPanelView {
             return None;
         };
         let text = if index == self.selected {
-            self.edit.as_deref().unwrap_or(value)
+            match &self.active_control {
+                Some(ActiveControl::Edit(edit)) => edit,
+                Some(ActiveControl::Wheel(wheel)) => return parsed_color(&wheel.hex()),
+                Some(ActiveControl::Dropdown(_)) | None => value,
+            }
         } else {
             value
         };
@@ -408,7 +458,7 @@ impl SettingsPanelView {
                 .bg(rgb(self.palette.row_bg_selected))
                 .border_1()
                 .border_color(rgb(self.palette.row_border_selected));
-            if let Some(dropdown) = &self.dropdown {
+            if let Some(ActiveControl::Dropdown(dropdown)) = &self.active_control {
                 match &row.control {
                     RowControl::Select { labels, .. } => {
                         line = line.child(dropdown.render(labels, self.dropdown_style()));
@@ -431,6 +481,13 @@ impl SettingsPanelView {
                     | RowControl::TextList(_)
                     | RowControl::Color(_) => {}
                 }
+            }
+            if let Some(ActiveControl::Wheel(wheel)) = &self.active_control {
+                line = line.child(wheel.render(WheelStyle {
+                    bg: self.palette.dropdown_bg,
+                    border: self.palette.row_border_selected,
+                    thumb_border: self.palette.section_text,
+                }));
             }
         }
         container.child(line)
@@ -523,6 +580,23 @@ enum Intent {
     CancelEdit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WheelIntent {
+    Nudge(i8, i8),
+    Commit,
+}
+
+fn wheel_intent(key: &str) -> Option<WheelIntent> {
+    match key {
+        "left" => Some(WheelIntent::Nudge(-1, 0)),
+        "right" => Some(WheelIntent::Nudge(1, 0)),
+        "up" => Some(WheelIntent::Nudge(0, -1)),
+        "down" => Some(WheelIntent::Nudge(0, 1)),
+        "enter" | "return" | "escape" => Some(WheelIntent::Commit),
+        _ => None,
+    }
+}
+
 fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option<Intent> {
     if editing {
         return match key {
@@ -581,7 +655,7 @@ fn scroll_offset_for(rows: &[Row], selected: usize, offset: usize, body_max: f32
 mod tests {
     use super::{
         intent, is_number_seed, parsed_color, parsed_number, scroll_offset_for, visible_row_range,
-        Intent, Row, RowControl,
+        wheel_intent, Intent, Row, RowControl, WheelIntent,
     };
 
     fn rows(headers: &[bool]) -> Vec<Row> {
@@ -702,6 +776,23 @@ mod tests {
                 expected,
                 "key {key} editing {editing}"
             );
+        }
+    }
+
+    #[test]
+    fn wheel_intent_maps_cartesian_movement_and_commit_keys() {
+        let cases = [
+            ("left", Some(WheelIntent::Nudge(-1, 0))),
+            ("right", Some(WheelIntent::Nudge(1, 0))),
+            ("up", Some(WheelIntent::Nudge(0, -1))),
+            ("down", Some(WheelIntent::Nudge(0, 1))),
+            ("enter", Some(WheelIntent::Commit)),
+            ("return", Some(WheelIntent::Commit)),
+            ("escape", Some(WheelIntent::Commit)),
+            ("space", None),
+        ];
+        for (key, expected) in cases {
+            assert_eq!(wheel_intent(key), expected, "key {key}");
         }
     }
 }

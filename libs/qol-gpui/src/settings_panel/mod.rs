@@ -1,3 +1,4 @@
+mod color_wheel;
 mod persistence;
 mod rows;
 mod view;
