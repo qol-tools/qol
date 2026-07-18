@@ -18,6 +18,8 @@ import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
 import { useSurface } from '../../lib/components/Surface.js';
 import { FieldLabel } from './fields/FieldLabel.js';
 import { isSliderNumberField } from './field-rules.js';
+import { selectOptions } from './fields/select-options.js';
+import { useQueryPoll } from '../../lib/hooks/useQueryPoll.js';
 
 export const FIELD_MAP = {
     boolean: BooleanField,
@@ -99,9 +101,15 @@ function StringField({ field }) {
     `;
 }
 
+const SELECT_QUERY_POLL_MS = 5000;
+
 function SelectField({ field }) {
     const ctx = usePluginConfigContext();
     const value = ctx.getFieldValue(field);
+    const queryDef = field.query ? ctx.runtime?.query?.[field.query] : null;
+    const interval = field.query ? (queryDef?.poll_interval_ms ?? SELECT_QUERY_POLL_MS) : 0;
+    const query = useQueryPoll(ctx.pluginId, field.query || '', interval);
+    const { options, labels } = selectOptions(field, value, query.data);
     const onChange = useCallback((option) => {
         ctx.setFieldValue(field, option);
         ctx.bumpRender();
@@ -116,8 +124,8 @@ function SelectField({ field }) {
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
             <${FieldLabel} text=${field.label} description=${field.description || ''} />
-            <${CustomSelect} value=${value} options=${field.options}
-                labels=${field.option_labels} onChange=${onChange} />
+            <${CustomSelect} value=${value} options=${options}
+                labels=${labels} onChange=${onChange} />
         </div>
     `;
 }
