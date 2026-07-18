@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -136,6 +137,7 @@ impl Surface {
         }
         .ok_or_else(|| anyhow!("no monitor state available for surface placement"))?;
         let bounds = self.resolved_bounds(&monitor);
+        let title = unique_surface_title(&self.title);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id: crate::window::display_id_for_monitor(Some(&monitor), cx),
@@ -145,15 +147,15 @@ impl Surface {
             focus: self.takes_focus(),
             is_movable: true,
             window_background: WindowBackgroundAppearance::Transparent,
-            app_id: Some(self.title.clone()),
+            app_id: Some(title.clone()),
             ..Default::default()
         };
         let dismisser = SurfaceDismisser::new();
         let build_dismisser = dismisser.clone();
-        let title = self.title.clone();
+        let window_title = title.clone();
         let reveal_after_move = matches!(self.kind, SurfaceKind::Panel);
         let handle = cx.open_window(options, move |window, cx| {
-            window.set_window_title(&title);
+            window.set_window_title(&window_title);
             let inner = cx.new(|cx| build(build_dismisser, window, cx));
             cx.new(|_| SurfaceRoot {
                 inner,
@@ -171,7 +173,7 @@ impl Surface {
             schedule_dismiss(dismisser.clone(), timeout, cx);
         }
         if reveal_after_move {
-            settle_then_reveal(handle, self.title, bounds.origin, cx);
+            settle_then_reveal(handle, title, bounds.origin, cx);
         }
         Ok(dismisser)
     }
@@ -217,6 +219,15 @@ impl<V: Render + 'static> Render for SurfaceRoot<V> {
     }
 }
 
+static SURFACE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn unique_surface_title(base: &str) -> String {
+    format!(
+        "{base}-{}",
+        SURFACE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 fn settle_then_reveal<V: Render + 'static>(
     handle: WindowHandle<SurfaceRoot<V>>,
     title: String,
@@ -224,7 +235,7 @@ fn settle_then_reveal<V: Render + 'static>(
     cx: &mut App,
 ) {
     cx.spawn(async move |cx: &mut AsyncApp| {
-        for _ in 0..10 {
+        for _ in 0..40 {
             cx.background_executor()
                 .timer(Duration::from_millis(15))
                 .await;
@@ -243,6 +254,16 @@ fn settle_then_reveal<V: Render + 'static>(
                 cx.notify();
             });
         });
+        for _ in 0..3 {
+            cx.background_executor()
+                .timer(Duration::from_millis(50))
+                .await;
+            crate::popup_window::reposition_window_by_title(
+                &title,
+                origin.x.to_f64(),
+                origin.y.to_f64(),
+            );
+        }
     })
     .detach();
 }

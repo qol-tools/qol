@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use gpui::*;
 use qol_config::contract::{FieldDefault, FieldKind};
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection};
+use qol_conventions::DEFAULT_PORT;
 use qol_gpui::dropdown::{Dropdown, DropdownStyle};
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::surface::{Anchor, Surface, SurfaceDismisser, SurfaceKind};
@@ -53,7 +55,16 @@ fn config_path() -> anyhow::Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("no plugin config path available"))
 }
 
+fn tray_config_route() -> String {
+    format!("/api/plugins/{}/config", crate::PLUGIN_ID)
+}
+
 fn load_values(path: &Path) -> serde_json::Value {
+    if let Ok((200, body)) = tray_http("GET", &tray_config_route(), None) {
+        if let Ok(values) = serde_json::from_str(&body) {
+            return values;
+        }
+    }
     std::fs::read_to_string(path)
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -61,17 +72,61 @@ fn load_values(path: &Path) -> serde_json::Value {
 }
 
 fn save_values(path: &Path, values: &serde_json::Value) {
+    let body = match serde_json::to_string(values) {
+        Ok(body) => body,
+        Err(error) => {
+            eprintln!("[qol-shot] settings serialize failed: {error:#}");
+            return;
+        }
+    };
+    match tray_http("PUT", &tray_config_route(), Some(&body)) {
+        Ok((200, _)) => return,
+        Ok((status, payload)) => {
+            eprintln!(
+                "[qol-shot] settings save rejected by tray ({status}): {}",
+                payload.trim()
+            );
+            return;
+        }
+        Err(error) => eprintln!("[qol-shot] tray unreachable, saving locally: {error:#}"),
+    }
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    match serde_json::to_string_pretty(values) {
-        Ok(raw) => {
-            if let Err(error) = std::fs::write(path, raw) {
-                eprintln!("[qol-shot] settings save failed: {error:#}");
-            }
-        }
-        Err(error) => eprintln!("[qol-shot] settings serialize failed: {error:#}"),
+    if let Err(error) = std::fs::write(path, body) {
+        eprintln!("[qol-shot] settings save failed: {error:#}");
     }
+}
+
+fn tray_http(method: &str, route: &str, body: Option<&str>) -> anyhow::Result<(u16, String)> {
+    use std::io::{Read, Write};
+    let stream = std::net::TcpStream::connect((qol_conventions::LOCAL_HOST, DEFAULT_PORT))?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    let mut stream = stream;
+    let body = body.unwrap_or("");
+    let request = format!(
+        "{method} {route} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        qol_conventions::LOCAL_HOST,
+        body.len()
+    );
+    stream.write_all(request.as_bytes())?;
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw)?;
+    Ok(parse_http_response(&raw))
+}
+
+pub(crate) fn parse_http_response(raw: &str) -> (u16, String) {
+    let status = raw
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .unwrap_or(0);
+    let body = raw
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body.to_string())
+        .unwrap_or_default();
+    (status, body)
 }
 
 struct SettingsPanelView {
@@ -318,14 +373,11 @@ impl SettingsPanelView {
     }
 
     fn persist(&mut self) {
-        let Some(row) = self.rows.get(self.selected) else {
-            return;
-        };
-        set_config_value(
-            &mut self.values,
-            &row.config_key,
-            row_value_json(&row.control),
-        );
+        let mut config = serde_json::json!({});
+        for row in &self.rows {
+            set_config_value(&mut config, &row.config_key, row_value_json(&row.control));
+        }
+        self.values = config;
         save_values(&self.path, &self.values);
     }
 
@@ -787,9 +839,29 @@ pub(crate) fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option
 #[cfg(test)]
 mod tests {
     use super::{
-        intent, is_number_seed, parsed_number, row_value_json, rows_from_resolved,
-        set_config_value, Intent, ResolvedConfig, RowControl,
+        intent, is_number_seed, parse_http_response, parsed_number, row_value_json,
+        rows_from_resolved, set_config_value, Intent, ResolvedConfig, RowControl,
     };
+
+    #[test]
+    fn http_response_parsing_extracts_status_and_body() {
+        let cases = [
+            ("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}", 200, "{}"),
+            (
+                "HTTP/1.1 422 Unprocessable\r\n\r\nbad value",
+                422,
+                "bad value",
+            ),
+            ("garbage", 0, ""),
+        ];
+        for (raw, status, body) in cases {
+            assert_eq!(
+                parse_http_response(raw),
+                (status, body.to_string()),
+                "raw: {raw}"
+            );
+        }
+    }
 
     const SPEC: &str = r#"
 schema_version = 1
