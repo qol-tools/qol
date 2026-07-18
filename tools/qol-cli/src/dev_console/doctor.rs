@@ -13,7 +13,7 @@ use ratatui::Frame;
 
 use crate::poller::Poller;
 
-use super::render_util::{accent, list_window, now_unix_ms, relative_age, view_content};
+use super::render_util::{accent, list_window_head, now_unix_ms, relative_age, view_content};
 use super::{Dash, View, DOCTOR_BASE_INTERVAL, DOCTOR_CAP_INTERVAL};
 
 pub(super) fn spawn_doctor_probe() -> Poller<Result<DoctorRun, String>> {
@@ -147,7 +147,7 @@ pub(super) fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         return;
     }
     let total = lines.len();
-    let (start, height) = list_window(dash, area, total);
+    let (start, height) = list_window_head(dash, area, total);
     let render = if dash.armed {
         styled_doctor_line
     } else {
@@ -160,6 +160,10 @@ pub(super) fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         .map(|line| render(line))
         .collect();
     view_content(frame, area, visible);
+}
+
+pub(super) fn doctor_scroll_len(panel: &DoctorPanel) -> usize {
+    doctor_view_lines(panel).len()
 }
 
 fn doctor_view_lines(panel: &DoctorPanel) -> Vec<String> {
@@ -467,7 +471,18 @@ fn parse_doctor_output(
 }
 
 fn report_lines(report: &DoctorReport) -> Vec<String> {
-    report.outcomes.iter().map(outcome_line).collect()
+    let mut outcomes: Vec<&Outcome> = report.outcomes.iter().collect();
+    outcomes.sort_by_key(|outcome| status_rank(outcome.status));
+    outcomes.into_iter().map(outcome_line).collect()
+}
+
+fn status_rank(status: OutcomeStatus) -> u8 {
+    match status {
+        OutcomeStatus::Crash => 0,
+        OutcomeStatus::Error => 1,
+        OutcomeStatus::Warn => 2,
+        OutcomeStatus::Ok => 3,
+    }
 }
 
 fn outcome_line(outcome: &Outcome) -> String {
@@ -634,6 +649,21 @@ mod tests {
             assert_eq!(color, expected_color, "text: {expected_text}");
             assert_eq!(span_text(&spans), expected_text);
         }
+    }
+
+    #[test]
+    fn report_lines_sort_divergences_first() {
+        let report = DoctorReport::new(vec![
+            outcome("a", OutcomeStatus::Ok, "x", false),
+            outcome("b", OutcomeStatus::Warn, "y", false),
+            outcome("c", OutcomeStatus::Crash, "z", false),
+            outcome("d", OutcomeStatus::Error, "w", false),
+        ]);
+        assert_eq!(
+            report_lines(&report),
+            vec!["[CRASH] c: z", "[ERR] d: w", "[WARN] b: y", "[OK] a: x"],
+            "divergences must never hide below the ok lines"
+        );
     }
 
     #[test]

@@ -195,6 +195,13 @@ pub(super) fn list_window(dash: &mut Dash, area: Rect, total: usize) -> (usize, 
     )
 }
 
+pub(super) fn list_window_head(dash: &mut Dash, area: Rect, total: usize) -> (usize, usize) {
+    let height = list_capacity(area.height);
+    dash.log_height = height;
+    dash.scroll_offset = super::clamp_offset(total, height, dash.scroll_offset);
+    (dash.scroll_offset, height)
+}
+
 pub(super) fn list_status(total: usize, scroll_offset: usize) -> String {
     let mode = if scroll_offset == 0 {
         "follow"

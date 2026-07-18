@@ -16,7 +16,9 @@ use super::console_state::{load_console_state, save_console_state};
 use super::dash::{
     flush_pokes, Dash, Health, HealthSnapshot, LinksState, Probes, ReloadOutcome, Row, View, ROWS,
 };
-use super::doctor::{apply_doctor_outcome, open_doctor, spawn_doctor_probe, DoctorMode};
+use super::doctor::{
+    apply_doctor_outcome, doctor_scroll_len, open_doctor, spawn_doctor_probe, DoctorMode,
+};
 use super::draw::{accent_state_line, draw, filterable_view, plugin_row_count, resolve_base_label};
 use super::emu_panel::{
     act_emu, drain_emu_runs, emu_detail_ring, emu_detail_scroll_len, emu_env_count, open_emu,
@@ -521,7 +523,8 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             View::Dashboard => dash.cursor = dash.cursor.saturating_sub(1),
             View::Emu => dash.emu_cursor = dash.emu_cursor.saturating_sub(1),
             View::Plugins => dash.plugin_cursor = dash.plugin_cursor.saturating_sub(1),
-            View::Logs | View::Doctor | View::Trace | View::Endpoints | View::EmuDetail => {
+            View::Doctor => dash.scroll_offset = dash.scroll_offset.saturating_sub(1),
+            View::Logs | View::Trace | View::Endpoints | View::EmuDetail => {
                 dash.scroll_offset = dash.scroll_offset.saturating_add(1)
             }
         },
@@ -535,7 +538,8 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
                 let total = plugin_row_count(dash);
                 dash.plugin_cursor = (dash.plugin_cursor + 1).min(total.saturating_sub(1));
             }
-            View::Logs | View::Doctor | View::Trace | View::Endpoints | View::EmuDetail => {
+            View::Doctor => dash.scroll_offset = dash.scroll_offset.saturating_add(1),
+            View::Logs | View::Trace | View::Endpoints | View::EmuDetail => {
                 dash.scroll_offset = dash.scroll_offset.saturating_sub(1)
             }
         },
@@ -588,6 +592,8 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
         dash.trace.len()
     } else if dash.view == View::EmuDetail {
         emu_detail_scroll_len(dash)
+    } else if dash.view == View::Doctor {
+        doctor_scroll_len(&dash.doctor)
     } else {
         dash.logs.len()
     };
@@ -740,6 +746,19 @@ mod tests {
         assert_eq!(dash.cursor, ROWS.len() - 1, "clamps at bottom");
         apply_action(&mut dash, Action::ScrollUp, false);
         assert_eq!(dash.cursor, ROWS.len() - 2);
+    }
+
+    #[test]
+    fn doctor_scrolls_from_the_top_downward() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Doctor;
+        dash.doctor.error = Some("probe failed".to_string());
+        apply_action(&mut dash, Action::ScrollUp, false);
+        assert_eq!(dash.scroll_offset, 0, "clamps at the top");
+        apply_action(&mut dash, Action::ScrollDown, false);
+        assert_eq!(dash.scroll_offset, 1, "down reveals later report lines");
+        apply_action(&mut dash, Action::ScrollUp, false);
+        assert_eq!(dash.scroll_offset, 0, "up returns toward the head");
     }
 
     #[test]
