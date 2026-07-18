@@ -155,29 +155,55 @@ pub fn load_plugin_config_or<T: DeserializeOwned>(
     names: &[&str],
     default: impl FnOnce() -> T,
 ) -> T {
-    for path in plugin_config_paths(names) {
-        let contents = match fs::read_to_string(&path) {
-            Ok(contents) => contents,
-            Err(_) => continue,
-        };
-        let value = match serde_json::from_str::<serde_json::Value>(&contents) {
-            Ok(value) => value,
-            Err(error) => {
-                eprintln!("[config] failed to parse {}: {}", path.display(), error);
-                continue;
-            }
+    load_typed_from_paths(&plugin_config_paths(names), default)
+}
+
+fn load_typed_from_paths<T: DeserializeOwned>(paths: &[PathBuf], default: impl FnOnce() -> T) -> T {
+    for path in paths {
+        let Some(value) = read_config_value(path) else {
+            continue;
         };
         match serde_json::from_value::<T>(canonicalize_whole_floats(value)) {
             Ok(config) => {
                 eprintln!("[config] loaded from {}", path.display());
+                clear_parse_failure(path);
                 return config;
             }
-            Err(e) => {
-                eprintln!("[config] failed to parse {}: {}", path.display(), e);
-            }
+            Err(error) => record_parse_failure(path, &error),
         }
     }
     default()
+}
+
+fn read_config_value(path: &Path) -> Option<serde_json::Value> {
+    let contents = fs::read_to_string(path).ok()?;
+    match serde_json::from_str::<serde_json::Value>(&contents) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            record_parse_failure(path, &error);
+            None
+        }
+    }
+}
+
+pub const PARSE_ERROR_MARKER_SUFFIX: &str = ".parse-error";
+
+pub fn parse_error_marker_path(config_path: &Path) -> PathBuf {
+    let mut name = config_path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_default();
+    name.push(PARSE_ERROR_MARKER_SUFFIX);
+    config_path.with_file_name(name)
+}
+
+fn record_parse_failure(path: &Path, error: &dyn std::fmt::Display) {
+    eprintln!("[config] failed to parse {}: {}", path.display(), error);
+    let _ = fs::write(parse_error_marker_path(path), error.to_string());
+}
+
+fn clear_parse_failure(path: &Path) {
+    let _ = fs::remove_file(parse_error_marker_path(path));
 }
 
 fn canonicalize_whole_floats(value: serde_json::Value) -> serde_json::Value {
@@ -219,28 +245,26 @@ fn load_plugin_config_with_defaults<T: DeserializeOwned>(
     names: &[&str],
     defaults: serde_json::Value,
 ) -> T {
-    for path in plugin_config_paths(names) {
-        let contents = match fs::read_to_string(&path) {
-            Ok(contents) => contents,
-            Err(_) => continue,
-        };
-        let overrides = match serde_json::from_str::<serde_json::Value>(&contents) {
-            Ok(value) => value,
-            Err(error) => {
-                eprintln!("[config] failed to parse {}: {}", path.display(), error);
-                continue;
-            }
+    load_merged_from_paths(&plugin_config_paths(names), defaults)
+}
+
+fn load_merged_from_paths<T: DeserializeOwned>(
+    paths: &[PathBuf],
+    defaults: serde_json::Value,
+) -> T {
+    for path in paths {
+        let Some(overrides) = read_config_value(path) else {
+            continue;
         };
         let merged =
             canonicalize_whole_floats(defaults::merge_json_defaults(defaults.clone(), overrides));
         match serde_json::from_value::<T>(merged) {
             Ok(config) => {
                 eprintln!("[config] loaded from {}", path.display());
+                clear_parse_failure(path);
                 return config;
             }
-            Err(error) => {
-                eprintln!("[config] failed to parse {}: {}", path.display(), error);
-            }
+            Err(error) => record_parse_failure(path, &error),
         }
     }
     serde_json::from_value(defaults).expect("config contract defaults must deserialize")
@@ -310,6 +334,44 @@ mod tests {
                 offset: -4,
             }
         );
+    }
+
+    #[test]
+    fn parse_failures_write_markers_and_successful_loads_clear_them() {
+        #[derive(serde::Deserialize)]
+        struct Typed {
+            count: usize,
+        }
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("config.json");
+        let paths = vec![path.clone()];
+        let marker = parse_error_marker_path(&path);
+        assert_eq!(marker, tmp.path().join("config.json.parse-error"));
+
+        let failure_cases = [
+            ("not json at all", "invalid JSON"),
+            ("{\"count\": \"nope\"}", "typed parse failure"),
+        ];
+        for (contents, label) in failure_cases {
+            fs::write(&path, contents).unwrap();
+            let fallen: Typed = load_typed_from_paths(&paths, || Typed { count: 7 });
+            assert_eq!(fallen.count, 7, "{label} falls back to default");
+            assert!(marker.is_file(), "{label} writes a marker");
+            assert!(
+                !fs::read_to_string(&marker).unwrap().is_empty(),
+                "{label} records the error text"
+            );
+        }
+
+        fs::write(&path, "{\"count\": 3}").unwrap();
+        let loaded: Typed = load_typed_from_paths(&paths, || Typed { count: 7 });
+        assert_eq!(loaded.count, 3);
+        assert!(!marker.exists(), "successful load clears the marker");
+
+        fs::write(&path, "{\"count\": false}").unwrap();
+        let merged: Typed = load_merged_from_paths(&paths, serde_json::json!({ "count": 1 }));
+        assert_eq!(merged.count, 1, "merged load falls back to defaults");
+        assert!(marker.is_file(), "merged load writes a marker too");
     }
 
     #[test]
