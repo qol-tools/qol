@@ -387,11 +387,7 @@ impl SettingsPanelView {
     }
 
     fn persist(&mut self) {
-        let mut config = serde_json::json!({});
-        for row in &self.rows {
-            set_config_value(&mut config, &row.config_key, row_value_json(&row.control));
-        }
-        self.values = config;
+        self.values = merged_config(&self.values, &self.rows);
         save_values(self.panel.plugin_id, &self.path, &self.values);
     }
 
@@ -783,6 +779,18 @@ fn row_value_json(control: &RowControl) -> serde_json::Value {
     }
 }
 
+fn merged_config(base: &serde_json::Value, rows: &[Row]) -> serde_json::Value {
+    let mut config = if base.is_object() {
+        base.clone()
+    } else {
+        serde_json::json!({})
+    };
+    for row in rows {
+        set_config_value(&mut config, &row.config_key, row_value_json(&row.control));
+    }
+    config
+}
+
 fn number_json(value: f64) -> serde_json::Value {
     let whole = value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64;
     if whole {
@@ -1029,6 +1037,44 @@ default = "System Default"
                 other => panic!("expected select, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn merged_config_preserves_fields_without_rows() {
+        let base = serde_json::json!({
+            "action_mode": "hold_to_switch",
+            "display": { "card_background_color": "aabbcc", "max_columns": 6 }
+        });
+        let rows = vec![
+            super::Row {
+                section_label: None,
+                label: "Action Mode".into(),
+                config_key: "action_mode".into(),
+                control: RowControl::Select {
+                    options: vec!["hold_to_switch".into(), "sticky".into()],
+                    labels: vec!["Hold".into(), "Sticky".into()],
+                    index: 1,
+                },
+            },
+            super::Row {
+                section_label: None,
+                label: "Max Columns".into(),
+                config_key: "display.max_columns".into(),
+                control: RowControl::Number {
+                    value: 4.0,
+                    min: None,
+                    max: None,
+                    step: 1.0,
+                },
+            },
+        ];
+        assert_eq!(
+            super::merged_config(&base, &rows),
+            serde_json::json!({
+                "action_mode": "sticky",
+                "display": { "card_background_color": "aabbcc", "max_columns": 4 }
+            })
+        );
     }
 
     #[test]
