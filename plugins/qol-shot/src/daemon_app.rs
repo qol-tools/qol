@@ -235,8 +235,9 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
     let completion = capture.completion.clone();
     let presented = present(cx, state, capture);
     let status = state.capture_status.clone();
+    let tracker = state.tracker.clone();
     cx.spawn(async move |cx: &mut AsyncApp| {
-        complete_screenshot(path, file_ready, completion, presented, status, cx).await;
+        complete_screenshot(path, file_ready, completion, presented, status, tracker, cx).await;
     })
     .detach();
 }
@@ -247,6 +248,7 @@ async fn complete_screenshot(
     completion: Option<crate::completion::PreviewCompletion>,
     presented: bool,
     status: crate::capture_status::CaptureStatusUi,
+    tracker: MonitorTracker,
     cx: &mut AsyncApp,
 ) {
     let result = cx.background_spawn(async move { file_ready.wait() }).await;
@@ -256,7 +258,7 @@ async fn complete_screenshot(
         return;
     }
     if let Some(completion) = completion {
-        completion.announce_saved();
+        announce_saved_feedback(&completion, &tracker, cx);
         if !presented {
             completion.finish(crate::completion::PreviewExit::Unavailable);
         }
@@ -272,6 +274,41 @@ async fn complete_screenshot(
             Duration::from_millis(2_800),
         ),
     );
+}
+
+fn announce_saved_feedback(
+    completion: &crate::completion::PreviewCompletion,
+    tracker: &MonitorTracker,
+    cx: &mut AsyncApp,
+) {
+    if crate::config::load().capture.saved_feedback == crate::config::SavedFeedback::Notification {
+        completion.announce_saved();
+        return;
+    }
+    let Some(announcement) = completion.announce() else {
+        return;
+    };
+    let toast_announcement = announcement.clone();
+    let toast_tracker = tracker.clone();
+    let shown = cx
+        .update(move |cx| crate::saved_toast::show(toast_announcement, &toast_tracker, cx))
+        .unwrap_or_else(|error| Err(anyhow::anyhow!("app unavailable: {error}")));
+    match shown {
+        Ok(()) => qol_runtime::probe!("SHOT_SAVED_TOAST", "result=shown"),
+        Err(error) => {
+            qol_runtime::probe!("SHOT_SAVED_TOAST", "result=fallback error={error:#}");
+            eprintln!("[qol-shot] saved toast failed, falling back to notification: {error:#}");
+            crate::platform::show_saved_notification(
+                announcement.title,
+                &announcement.message,
+                8_000,
+                announcement.target.clone(),
+            );
+        }
+    }
+    if announcement.open_automatically {
+        announcement.reveal_automatically();
+    }
 }
 
 fn show_screenshot_failure(

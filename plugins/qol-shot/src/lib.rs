@@ -21,6 +21,8 @@ mod preview;
 pub mod recording;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod region_selector;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod saved_toast;
 pub mod screenshot;
 mod settings;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
