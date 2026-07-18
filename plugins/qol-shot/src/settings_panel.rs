@@ -251,6 +251,20 @@ impl SettingsPanelView {
         }
     }
 
+    fn value_color(&self, index: usize) -> u32 {
+        if index == self.selected && self.edit.is_some() {
+            return self.palette.label_text;
+        }
+        match self.rows[index].control {
+            RowControl::Toggle(true) => self.palette.state_on,
+            RowControl::Toggle(false) => self.palette.state_off,
+            RowControl::Select { .. }
+            | RowControl::Number { .. }
+            | RowControl::Text(_)
+            | RowControl::TextList(_) => self.palette.label_text,
+        }
+    }
+
     fn render_row(&self, index: usize) -> Div {
         let row = &self.rows[index];
         let mut container = div().flex().flex_col().gap_1();
@@ -278,7 +292,7 @@ impl SettingsPanelView {
             .child(
                 div()
                     .text_sm()
-                    .text_color(rgb(self.palette.label_text))
+                    .text_color(rgb(self.value_color(index)))
                     .child(self.display_value(index)),
             );
         if index == self.selected {

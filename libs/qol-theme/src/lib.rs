@@ -785,6 +785,8 @@ pub struct ShotPreviewPalette {
     pub action_bg_selected: u32,
     pub action_border: u32,
     pub action_border_selected: u32,
+    pub state_on: u32,
+    pub state_off: u32,
 }
 
 impl ShotPreviewPalette {
@@ -798,6 +800,8 @@ impl ShotPreviewPalette {
             action_bg_selected: mix_rgb(system.surface_raised, system.accent, 0.28),
             action_border: system.border_subtle,
             action_border_selected: system.accent,
+            state_on: system.success,
+            state_off: system.danger,
         }
     }
 }
