@@ -19,10 +19,15 @@ default = true
 type = "string_array"
 config_key = "audio.inputs"
 label = "Audio Inputs"
-description = "Linux-only PulseAudio inputs. Use values like mic and system."
+description = "Linux-only PulseAudio inputs."
 section = "audio"
 placeholder = "mic"
 default = ["mic"]
+options = ["mic", "system"]
+
+[field.audio_inputs.option_labels]
+mic = "Microphone"
+system = "System Audio"
 
 [field.audio_mic_device]
 type = "string"

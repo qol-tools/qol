@@ -155,25 +155,39 @@ impl SettingsPanelView {
         match key {
             "up" => dropdown.move_up(),
             "down" => dropdown.move_down(),
-            "enter" | "return" | "space" => self.commit_dropdown(),
+            "enter" | "return" | "space" => self.pick_dropdown(),
             "escape" => self.dropdown = None,
             _ => return,
         }
         cx.notify();
     }
 
-    fn commit_dropdown(&mut self) {
-        let Some(dropdown) = self.dropdown.take() else {
+    fn pick_dropdown(&mut self) {
+        let Some(dropdown) = self.dropdown.as_ref() else {
             return;
         };
+        let pick = dropdown.selected();
         let Some(row) = self.rows.get_mut(self.selected) else {
             return;
         };
-        if let RowControl::Select { options, index, .. } = &mut row.control {
-            if dropdown.selected() < options.len() {
-                *index = dropdown.selected();
-                self.persist();
+        match &mut row.control {
+            RowControl::Select { options, index, .. } => {
+                if pick < options.len() {
+                    *index = pick;
+                    self.persist();
+                }
+                self.dropdown = None;
             }
+            RowControl::MultiSelect { selected, .. } => {
+                if let Some(flag) = selected.get_mut(pick) {
+                    *flag = !*flag;
+                    self.persist();
+                }
+            }
+            RowControl::Toggle(_)
+            | RowControl::Number { .. }
+            | RowControl::Text(_)
+            | RowControl::TextList(_) => self.dropdown = None,
         }
     }
 
@@ -214,7 +228,10 @@ impl SettingsPanelView {
                 }
                 *value = next;
             }
-            RowControl::Toggle(_) | RowControl::Text(_) | RowControl::TextList(_) => return,
+            RowControl::Toggle(_)
+            | RowControl::MultiSelect { .. }
+            | RowControl::Text(_)
+            | RowControl::TextList(_) => return,
         }
         self.persist();
     }
@@ -227,6 +244,9 @@ impl SettingsPanelView {
             RowControl::Toggle(_) => self.toggle(),
             RowControl::Select { options, index, .. } => {
                 self.dropdown = Some(Dropdown::open(options.len(), *index));
+            }
+            RowControl::MultiSelect { options, .. } => {
+                self.dropdown = Some(Dropdown::open(options.len(), 0));
             }
             RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
                 self.begin_edit()
@@ -256,7 +276,9 @@ impl SettingsPanelView {
             RowControl::Text(value) => Some(value.clone()),
             RowControl::TextList(values) => Some(values.join(", ")),
             RowControl::Number { value, .. } => Some(format_number(*value)),
-            RowControl::Toggle(_) | RowControl::Select { .. } => None,
+            RowControl::Toggle(_) | RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
+                None
+            }
         };
     }
 
@@ -284,7 +306,9 @@ impl SettingsPanelView {
                 };
                 *value = parsed;
             }
-            RowControl::Toggle(_) | RowControl::Select { .. } => return,
+            RowControl::Toggle(_) | RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
+                return
+            }
         }
         self.persist();
     }
@@ -313,6 +337,21 @@ impl SettingsPanelView {
             RowControl::Select { labels, index, .. } => {
                 labels.get(*index).cloned().unwrap_or_default()
             }
+            RowControl::MultiSelect {
+                labels, selected, ..
+            } => {
+                let chosen: Vec<&str> = labels
+                    .iter()
+                    .zip(selected)
+                    .filter(|(_, on)| **on)
+                    .map(|(label, _)| label.as_str())
+                    .collect();
+                if chosen.is_empty() {
+                    "none".into()
+                } else {
+                    chosen.join(", ")
+                }
+            }
             RowControl::Number { value, .. } => format_number(*value),
             RowControl::Text(value) => value.clone(),
             RowControl::TextList(values) => values.join(", "),
@@ -327,6 +366,7 @@ impl SettingsPanelView {
             RowControl::Toggle(true) => self.palette.state_on,
             RowControl::Toggle(false) => self.palette.state_off,
             RowControl::Select { .. }
+            | RowControl::MultiSelect { .. }
             | RowControl::Number { .. }
             | RowControl::Text(_)
             | RowControl::TextList(_) => self.palette.label_text,
@@ -378,10 +418,28 @@ impl SettingsPanelView {
                 .bg(rgb(self.palette.action_bg_selected))
                 .border_1()
                 .border_color(rgb(self.palette.action_border_selected));
-            if let (Some(dropdown), RowControl::Select { labels, .. }) =
-                (&self.dropdown, &row.control)
-            {
-                line = line.child(dropdown.render(labels, self.dropdown_style()));
+            if let Some(dropdown) = &self.dropdown {
+                match &row.control {
+                    RowControl::Select { labels, .. } => {
+                        line = line.child(dropdown.render(labels, self.dropdown_style()));
+                    }
+                    RowControl::MultiSelect {
+                        labels, selected, ..
+                    } => {
+                        let marked: Vec<String> = labels
+                            .iter()
+                            .zip(selected)
+                            .map(|(label, on)| {
+                                format!("{} {label}", if *on { "[x]" } else { "[ ]" })
+                            })
+                            .collect();
+                        line = line.child(dropdown.render(&marked, self.dropdown_style()));
+                    }
+                    RowControl::Toggle(_)
+                    | RowControl::Number { .. }
+                    | RowControl::Text(_)
+                    | RowControl::TextList(_) => {}
+                }
             }
         }
         container.child(line)
@@ -457,6 +515,11 @@ pub(crate) enum RowControl {
         labels: Vec<String>,
         index: usize,
     },
+    MultiSelect {
+        options: Vec<String>,
+        labels: Vec<String>,
+        selected: Vec<bool>,
+    },
     Number {
         value: f64,
         min: Option<f64>,
@@ -520,20 +583,9 @@ fn control_for(field: &ResolvedField) -> Option<RowControl> {
                 _ => return None,
             };
             let index = field.options.iter().position(|o| *o == current)?;
-            let labels = field
-                .options
-                .iter()
-                .map(|o| {
-                    field
-                        .option_labels
-                        .get(o)
-                        .cloned()
-                        .unwrap_or_else(|| o.clone())
-                })
-                .collect();
             Some(RowControl::Select {
                 options: field.options.clone(),
-                labels,
+                labels: option_labels_for(field),
                 index,
             })
         }
@@ -551,7 +603,21 @@ fn control_for(field: &ResolvedField) -> Option<RowControl> {
             _ => None,
         },
         FieldKind::StringArray => match &field.value {
-            FieldDefault::StringArray(values) => Some(RowControl::TextList(values.clone())),
+            FieldDefault::StringArray(values) => {
+                if field.options.is_empty() {
+                    Some(RowControl::TextList(values.clone()))
+                } else {
+                    Some(RowControl::MultiSelect {
+                        selected: field
+                            .options
+                            .iter()
+                            .map(|option| values.contains(option))
+                            .collect(),
+                        options: field.options.clone(),
+                        labels: option_labels_for(field),
+                    })
+                }
+            }
             _ => None,
         },
         FieldKind::ObjectArray
@@ -565,10 +631,35 @@ fn control_for(field: &ResolvedField) -> Option<RowControl> {
     }
 }
 
+fn option_labels_for(field: &ResolvedField) -> Vec<String> {
+    field
+        .options
+        .iter()
+        .map(|option| {
+            field
+                .option_labels
+                .get(option)
+                .cloned()
+                .unwrap_or_else(|| option.clone())
+        })
+        .collect()
+}
+
 pub(crate) fn row_value_json(control: &RowControl) -> serde_json::Value {
     match control {
         RowControl::Toggle(value) => serde_json::json!(value),
         RowControl::Select { options, index, .. } => serde_json::json!(options[*index]),
+        RowControl::MultiSelect {
+            options, selected, ..
+        } => {
+            let values: Vec<&String> = options
+                .iter()
+                .zip(selected)
+                .filter(|(_, on)| **on)
+                .map(|(option, _)| option)
+                .collect();
+            serde_json::json!(values)
+        }
         RowControl::Number { value, .. } => serde_json::json!(value),
         RowControl::Text(value) => serde_json::json!(value),
         RowControl::TextList(values) => serde_json::json!(values),
@@ -636,8 +727,8 @@ pub(crate) fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option
 #[cfg(test)]
 mod tests {
     use super::{
-        intent, is_number_seed, parsed_number, rows_from_resolved, set_config_value, Intent,
-        ResolvedConfig, RowControl,
+        intent, is_number_seed, parsed_number, row_value_json, rows_from_resolved,
+        set_config_value, Intent, ResolvedConfig, RowControl,
     };
 
     const SPEC: &str = r#"
@@ -684,6 +775,18 @@ config_key = "audio.inputs"
 label = "Audio Inputs"
 section = "capture"
 default = ["mic"]
+options = ["mic", "system"]
+
+[field.inputs.option_labels]
+mic = "Microphone"
+system = "System Audio"
+
+[field.tags]
+type = "string_array"
+config_key = "capture.tags"
+label = "Tags"
+section = "capture"
+default = ["foo"]
 "#;
 
     fn resolved(overrides: serde_json::Value) -> ResolvedConfig {
@@ -696,7 +799,7 @@ default = ["mic"]
         let rows = rows_from_resolved(&resolved(serde_json::json!({
             "capture": { "pin_border": false, "saved_feedback": "toast" }
         })));
-        assert_eq!(rows.len(), 5);
+        assert_eq!(rows.len(), 6);
         assert_eq!(rows[0].section_label.as_deref(), Some("Capture"));
         assert!(rows[1..].iter().all(|r| r.section_label.is_none()));
         assert!(matches!(rows[0].control, RowControl::Toggle(false)));
@@ -713,9 +816,31 @@ default = ["mic"]
             other => panic!("expected number, got {other:?}"),
         }
         assert!(matches!(&rows[3].control, RowControl::Text(v) if v == "default"));
+        match &rows[4].control {
+            RowControl::MultiSelect {
+                options,
+                labels,
+                selected,
+            } => {
+                assert_eq!(options, &["mic", "system"]);
+                assert_eq!(labels, &["Microphone", "System Audio"]);
+                assert_eq!(selected, &[true, false]);
+            }
+            other => panic!("expected multi select, got {other:?}"),
+        }
         assert!(
-            matches!(&rows[4].control, RowControl::TextList(v) if v == &vec!["mic".to_string()])
+            matches!(&rows[5].control, RowControl::TextList(v) if v == &vec!["foo".to_string()])
         );
+    }
+
+    #[test]
+    fn multi_select_value_json_preserves_option_order() {
+        let control = RowControl::MultiSelect {
+            options: vec!["mic".into(), "system".into()],
+            labels: vec!["Microphone".into(), "System Audio".into()],
+            selected: vec![false, true],
+        };
+        assert_eq!(row_value_json(&control), serde_json::json!(["system"]));
     }
 
     #[test]
