@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::process::Command;
 use std::sync::{mpsc, LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
@@ -207,6 +208,24 @@ pub fn open_settings() -> Result<()> {
     let settings_url = qol_conventions::settings_url(crate::PLUGIN_ID);
     qol_apps::desktop_integration::open_with_default_app(&settings_url)
         .context("failed to open Bluetooth settings URL")
+}
+
+pub fn run_settings_panel() -> Result<()> {
+    qol_gpui::settings_panel::run_standalone(
+        qol_gpui::settings_panel::SettingsPanel {
+            plugin_id: crate::PLUGIN_ID,
+            contract: crate::config::contract(),
+            heading: "Bluetooth Settings",
+        },
+        |_| Vec::new(),
+    )
+}
+
+fn spawn_settings_panel() -> Result<()> {
+    let executable = std::env::current_exe().context("failed to locate Bluetooth executable")?;
+    let mut command = Command::new(executable);
+    command.arg(crate::SETTINGS_SURFACE_ARG);
+    qol_process::spawn_detached(&mut command).context("failed to launch native Bluetooth settings")
 }
 
 pub fn run_daemon(config: ReconnectConfig) -> Result<()> {
@@ -871,8 +890,11 @@ async fn daemon_loop(
                     return Ok(());
                 }
                 if matches!(command, DaemonCommand::Settings) {
-                    if let Err(error) = open_settings() {
-                        eprintln!("failed to open Bluetooth settings: {error:#}");
+                    if let Err(error) = spawn_settings_panel() {
+                        eprintln!("failed to launch native Bluetooth settings: {error:#}");
+                        if let Err(error) = open_settings() {
+                            eprintln!("failed to open Bluetooth settings fallback: {error:#}");
+                        }
                     }
                     continue;
                 }

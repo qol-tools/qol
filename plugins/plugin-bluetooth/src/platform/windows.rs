@@ -58,6 +58,10 @@ pub fn open_settings() -> Result<()> {
     bail!("plugin-bluetooth is not implemented on Windows")
 }
 
+pub fn run_settings_panel() -> Result<()> {
+    bail!("plugin-bluetooth native settings are not implemented on Windows")
+}
+
 pub fn run_daemon(_config: ReconnectConfig) -> Result<()> {
     bail!("plugin-bluetooth is not implemented on Windows")
 }

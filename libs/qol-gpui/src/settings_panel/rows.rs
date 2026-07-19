@@ -374,6 +374,64 @@ default = "202322"
     }
 
     #[test]
+    fn unsupported_action_and_list_fields_do_not_hide_later_supported_sections() {
+        const MIXED_SPEC: &str = r#"
+schema_version = 1
+
+[section.devices]
+label = "Devices"
+
+[field.search]
+type = "action"
+label = "Start search"
+section = "devices"
+action = "start_search"
+
+[field.devices]
+type = "list"
+label = "Bluetooth devices"
+section = "devices"
+query = "devices"
+row_label = "{name}"
+
+[section.reconnection]
+label = "Reconnection"
+
+[field.auto_reconnect]
+type = "boolean"
+config_key = "auto_reconnect"
+label = "Reconnect automatically"
+section = "reconnection"
+default = true
+
+[field.retry_initial_seconds]
+type = "number"
+config_key = "retry_initial_seconds"
+label = "Initial retry delay"
+section = "reconnection"
+default = 1
+min = 1
+max = 60
+step = 1
+"#;
+        let spec = qol_config::contract::parse_spec_str(MIXED_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved, &|_| Vec::new());
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].section_label.as_deref(), Some("Reconnection"));
+        assert_eq!(rows[0].config_key, "auto_reconnect");
+        assert!(matches!(rows[0].control, RowControl::Toggle(true)));
+        assert_eq!(rows[1].section_label, None);
+        assert_eq!(rows[1].config_key, "retry_initial_seconds");
+        assert!(matches!(
+            rows[1].control,
+            RowControl::Number { value: 1.0, .. }
+        ));
+    }
+
+    #[test]
     fn query_select_merges_labeled_dynamic_and_current_options() {
         const QUERY_SPEC: &str = r#"
 schema_version = 1

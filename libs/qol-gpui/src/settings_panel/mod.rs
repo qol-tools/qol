@@ -3,6 +3,9 @@ mod persistence;
 mod rows;
 mod view;
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use gpui::*;
 
 use crate::monitor::MonitorTracker;
@@ -23,6 +26,30 @@ pub struct SettingsPanel {
 }
 
 pub type QueryOptions = dyn Fn(&str) -> Vec<(String, String)>;
+
+pub fn run_standalone(
+    panel: SettingsPanel,
+    provider: impl Fn(&str) -> Vec<(String, String)> + 'static,
+) -> anyhow::Result<()> {
+    let failure = Rc::new(RefCell::new(None));
+    let reported_failure = failure.clone();
+    Application::new().run(move |cx: &mut App| {
+        crate::platform::set_accessory_policy();
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
+        let tracker = MonitorTracker::start(cx);
+        if let Err(error) = open(panel, &tracker, &provider, cx) {
+            reported_failure.borrow_mut().replace(error);
+            cx.quit();
+        }
+    });
+    let failure = failure.borrow_mut().take();
+    failure.map_or(Ok(()), Err)
+}
 
 pub fn open_from_async(
     panel: SettingsPanel,

@@ -226,13 +226,13 @@ fn reconnect_trusted_command() -> Command {
 
 fn settings_command() -> Command {
     Command::new("settings")
-        .about("Open the plugin settings page.")
+        .about("Open the plugin settings.")
         .usage(format!("{BINARY_NAME} settings"))
         .output("No stdout on success.")
-        .exit_behavior("Exits non-zero if the settings URL cannot be opened.")
+        .exit_behavior("Exits non-zero if native and browser settings cannot be opened.")
         .run_plain_text(|context| {
             reject_args(context.args())?;
-            platform::open_settings()?;
+            crate::show_settings()?;
             Ok(PlainTextOutput::empty())
         })
 }

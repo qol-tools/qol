@@ -2,6 +2,11 @@ use serde::{Deserialize, Serialize};
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 
+#[cfg(target_os = "linux")]
+pub(crate) fn contract() -> &'static str {
+    CONFIG_CONTRACT
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct ReconnectConfig {
     pub managed_devices: Vec<String>,
