@@ -11,6 +11,7 @@ pub(super) struct ResolvedAction {
     pub(super) args: Vec<String>,
     pub(super) runtime_fallback_allowed: bool,
     pub(super) dedupe_runtime_spawn: bool,
+    pub(super) hosted_settings: bool,
 }
 
 pub(super) fn resolve_action(
@@ -20,11 +21,18 @@ pub(super) fn resolve_action(
     validate_action_id(action_id)?;
     validate_catalog_action_membership(plugin, action_id)?;
     let daemon_socket = daemon_socket(plugin);
+    let hosted_settings = is_hosted_settings_action(plugin, action_id);
     let (command_path, args) = resolve_runtime_target(plugin, action_id, daemon_socket.is_some())?;
     let runtime_fallback_allowed =
         allow_runtime_fallback(plugin, daemon_socket.as_ref(), command_path.as_ref());
     let dedupe_runtime_spawn = should_dedupe_runtime_spawn(action_id, daemon_socket.as_ref());
-    ensure_execution_target(plugin, action_id, &daemon_socket, &command_path)?;
+    ensure_execution_target(
+        plugin,
+        action_id,
+        &daemon_socket,
+        &command_path,
+        hosted_settings,
+    )?;
     Ok(ResolvedAction {
         plugin_id: plugin.id.clone(),
         action_id: action_id.to_string(),
@@ -34,6 +42,7 @@ pub(super) fn resolve_action(
         args,
         runtime_fallback_allowed,
         dedupe_runtime_spawn,
+        hosted_settings,
     })
 }
 
@@ -85,8 +94,9 @@ fn ensure_execution_target(
     action_id: &str,
     daemon_socket: &Option<PathBuf>,
     command_path: &Option<PathBuf>,
+    hosted_settings: bool,
 ) -> Result<(), ActionExecutionError> {
-    if daemon_socket.is_some() || command_path.is_some() {
+    if daemon_socket.is_some() || command_path.is_some() || hosted_settings {
         return Ok(());
     }
 
@@ -94,6 +104,14 @@ fn ensure_execution_target(
         plugin_id: plugin.id.clone(),
         action_id: action_id.to_string(),
     })
+}
+
+fn is_hosted_settings_action(plugin: &Plugin, action_id: &str) -> bool {
+    plugin.manifest.capabilities.gpui
+        && plugin.path.join("qol-config.toml").is_file()
+        && plugin.manifest.executable_actions().iter().any(|action| {
+            action.id == action_id && action.kind == crate::plugins::ActionType::Settings
+        })
 }
 
 fn allow_runtime_fallback(

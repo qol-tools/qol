@@ -717,7 +717,7 @@ impl SettingsPanelView {
 
     fn persist(&mut self) {
         self.values = merged_config(&self.values, &self.rows);
-        save_values(self.panel.plugin_id, &self.path, &self.values);
+        save_values(&self.panel.plugin_id, &self.path, &self.values);
     }
 
     fn sync_scroll(&mut self) {
@@ -1275,7 +1275,7 @@ impl Render for SettingsPanelView {
                 div()
                     .text_sm()
                     .text_color(rgb(self.palette.label_text))
-                    .child(self.panel.heading),
+                    .child(self.panel.heading.clone()),
             )
             .children(items)
     }

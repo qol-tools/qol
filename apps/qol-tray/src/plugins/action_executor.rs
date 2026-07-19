@@ -142,6 +142,33 @@ pub fn try_execute_action_with_input(
     input: serde_json::Value,
 ) -> Result<(), ActionExecutionError> {
     let resolved = resolve_plugin_action(plugin_manager, plugin_id, action_id)?;
+    if resolved.hosted_settings {
+        match crate::settings_surface::request(plugin_id) {
+            Ok(true) => {
+                qol_runtime::probe!(
+                    "SURFACE_ACTIVATION",
+                    "plugin={plugin_id} phase=route outcome=hosted"
+                );
+                return Ok(());
+            }
+            Ok(false) => qol_runtime::probe!(
+                "SURFACE_ACTIVATION",
+                "plugin={plugin_id} phase=route outcome=platform_fallback"
+            ),
+            Err(error) => {
+                log::warn!(
+                    "Native settings host failed for {}::{}: {:#}; using plugin fallback",
+                    plugin_id,
+                    action_id,
+                    error
+                );
+                qol_runtime::probe!(
+                    "SURFACE_ACTIVATION",
+                    "plugin={plugin_id} phase=route outcome=spawn_failed error={error}"
+                );
+            }
+        }
+    }
     ensure_daemon_ready_for_action(plugin_manager, &resolved)?;
     execution::execute_resolved_action(&resolved, &input)
 }

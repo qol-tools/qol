@@ -126,9 +126,9 @@ fn spawn_command_poll(
 fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {
     let opened = qol_gpui::settings_panel::open_from_async(
         qol_gpui::settings_panel::SettingsPanel {
-            plugin_id: crate::config::plugin_id(),
-            contract: crate::config::contract(),
-            heading: "Launcher Settings",
+            plugin_id: crate::config::plugin_id().into(),
+            contract: crate::config::contract().into(),
+            heading: "Launcher Settings".into(),
         },
         focus_cache,
         qol_gpui::settings_panel::SettingsRuntime::empty(),

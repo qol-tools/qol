@@ -26,6 +26,9 @@ fn main() -> Result<()> {
             .context("task command process-tree guardian failed")?;
         return Ok(());
     }
+    if let Some(result) = qol_tray::settings_surface::run_from_current_args() {
+        return result;
+    }
     qol_tray::console_guard::guard_console_pipes();
 
     if let Some(code) = try_handle_cli_flag() {

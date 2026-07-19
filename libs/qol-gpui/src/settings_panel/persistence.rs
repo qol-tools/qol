@@ -4,7 +4,7 @@ use std::time::Duration;
 use qol_conventions::DEFAULT_PORT;
 
 pub(super) fn config_path(plugin_id: &str) -> anyhow::Result<PathBuf> {
-    qol_config::plugin_config_paths_from_env(plugin_id)
+    qol_config::plugin_config_paths(&[plugin_id])
         .into_iter()
         .next()
         .ok_or_else(|| anyhow::anyhow!("no plugin config path available"))
@@ -12,6 +12,33 @@ pub(super) fn config_path(plugin_id: &str) -> anyhow::Result<PathBuf> {
 
 fn tray_config_route(plugin_id: &str) -> String {
     format!("/api/plugins/{plugin_id}/config")
+}
+
+pub(super) fn query(plugin_id: &str, query: &str) -> Result<serde_json::Value, String> {
+    let route = format!("/api/plugins/{plugin_id}/queries/{query}");
+    let (status, body) = tray_http("GET", &route, None).map_err(|error| error.to_string())?;
+    if status != 200 {
+        return Err(format!("query `{query}` failed with HTTP {status}: {body}"));
+    }
+    serde_json::from_str(&body)
+        .map_err(|error| format!("query `{query}` returned invalid JSON: {error}"))
+}
+
+pub(super) fn run_action(
+    plugin_id: &str,
+    action: &str,
+    input: &serde_json::Value,
+) -> Result<(), String> {
+    let route = format!("/api/plugins/{plugin_id}/actions/{action}");
+    let body = serde_json::to_string(input).map_err(|error| error.to_string())?;
+    let (status, response) =
+        tray_http("POST", &route, Some(&body)).map_err(|error| error.to_string())?;
+    if (200..300).contains(&status) {
+        return Ok(());
+    }
+    Err(format!(
+        "action `{action}` failed with HTTP {status}: {response}"
+    ))
 }
 
 pub(super) fn load_values(plugin_id: &str, path: &Path) -> serde_json::Value {

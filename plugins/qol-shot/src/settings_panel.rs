@@ -5,9 +5,9 @@ use qol_gpui::settings_panel::{SettingsPanel, SettingsRuntime};
 pub(crate) fn open_from_async(tracker: MonitorTracker, cx: &AsyncApp) -> anyhow::Result<()> {
     qol_gpui::settings_panel::open_from_async(
         SettingsPanel {
-            plugin_id: crate::PLUGIN_ID,
-            contract: crate::config::contract(),
-            heading: "QoL Shot Settings",
+            plugin_id: crate::PLUGIN_ID.into(),
+            contract: crate::config::contract().into(),
+            heading: "QoL Shot Settings".into(),
         },
         tracker,
         SettingsRuntime::new(query_options),

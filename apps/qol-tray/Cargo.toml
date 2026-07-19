@@ -112,6 +112,8 @@ qol-theme.workspace = true
 gtk = "0.18"
 x11rb = { workspace = true, features = ["allow-unsafe-code"] }
 evdev = { version = "0.13", optional = true }
+qol-gpui.workspace = true
+gpui.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }
@@ -120,10 +122,13 @@ objc2-app-kit = { workspace = true, features = ["NSApplication", "NSResponder"] 
 mach2 = "0.6"
 core-foundation = "0.10"
 core-graphics = "0.25"
+qol-gpui.workspace = true
+gpui.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 signal-hook = "0.3"
+qol-plugin-daemon.workspace = true
 
 [dev-dependencies]
 proptest = "1.6"

@@ -12,6 +12,7 @@ pub const STATE_SOCKET_PATH: &str = "/tmp/qol-tray-state.sock";
 pub const TRACE_LOG_PATH: &str = "/tmp/qol-altmon.log";
 pub const RUNTIME_DIR_PATH: &str = "/tmp/qol-tray";
 pub const RUNTIME_PIDS_DIR_PATH: &str = "/tmp/qol-tray/pids";
+pub const SETTINGS_SURFACE_SOCKET_NAME: &str = "qol-tray/settings-surface.sock";
 
 pub const ENV_STATE_SOCKET: &str = "QOL_TRAY_STATE_SOCKET";
 pub const ENV_INSTALL_ID: &str = "QOL_TRAY_INSTALL_ID";

@@ -270,6 +270,7 @@ mod tests {
             args: vec!["open".to_string()],
             runtime_fallback_allowed: true,
             dedupe_runtime_spawn: false,
+            hosted_settings: false,
         }
     }
 

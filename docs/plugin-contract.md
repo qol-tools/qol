@@ -345,9 +345,12 @@ The same transport carries config **queries**.
 - The **native tray menu does NOT list plugin actions** - it shows "Open Dashboard",
   the Mode (dev/prod) toggle, an Update item when one is available, and Quit. Plugin
   actions live in the web dashboard.
-- `ActionType::Run` and `ActionType::Settings` are executable and dispatch the
-  same way today. `ActionType::ToggleConfig` is not executable/hotkey-bindable;
-  checkbox `checked` is the manifest-declared initial value, not live config.
+- `ActionType::Run` and `ActionType::Settings` are executable. On Linux and macOS,
+  a settings action with `capabilities.gpui = true` and `qol-config.toml` is routed
+  to the host-owned native settings surface; other actions use the plugin's normal
+  daemon/runtime target. `ActionType::ToggleConfig` is not executable or
+  hotkey-bindable; checkbox `checked` is the manifest-declared initial value, not
+  live config.
 - Launcher export (`export_to_launcher`) is a third concept, orthogonal to hotkeys
   and to shortcuts: it writes a macOS `.app` / Linux `.desktop` that runs
   `qol-tray exec shortcut <id>` (Windows no-op, honoring "leave host as found").
@@ -460,10 +463,16 @@ gpui plugins consume this via `qol_gpui::MonitorTracker` (placement) and
 
 ## 7. The `gpui` capability
 
-`capabilities.gpui = true` is a thin flag; the host's only behavioral difference is
-broadcasting ghost-debug runtime-config reloads to gpui plugins
-(`features/plugin_store/server/dev_state_handlers.rs`). The real contract is the
-`libs/qol-gpui` crate that such plugins depend on:
+`capabilities.gpui = true` opts a plugin into GPUI lifecycle behavior. The host
+broadcasts ghost-debug runtime-config reloads to these plugins and restarts their
+running daemons after an accent change. When the requested action is a settings
+action and the plugin has `qol-config.toml`, Linux and macOS route it to one
+host-owned settings process. Reopening the same plugin focuses the retained window;
+opening another plugin replaces the view in that window; closing it leaves the host
+ready to create one fresh window on the next request. Custom pickers, overlays, and
+toasts remain plugin-owned.
+
+The rendering contract is the `libs/qol-gpui` crate that such plugins depend on:
 
 - `keepalive::open_keepalive` - a hidden 1x1 window so the app process stays alive
   with no visible windows.

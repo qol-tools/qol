@@ -256,9 +256,9 @@ pub fn run_settings_panel() -> Result<()> {
         .poll_every(Duration::from_millis(500));
     qol_gpui::settings_panel::run_standalone(
         qol_gpui::settings_panel::SettingsPanel {
-            plugin_id: crate::PLUGIN_ID,
-            contract: crate::config::contract(),
-            heading: "Bluetooth Settings",
+            plugin_id: crate::PLUGIN_ID.into(),
+            contract: crate::config::contract().into(),
+            heading: "Bluetooth Settings".into(),
         },
         runtime,
     )

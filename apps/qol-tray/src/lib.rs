@@ -29,6 +29,7 @@ pub mod profile;
 pub mod reconcile;
 #[cfg(unix)]
 pub mod runtime;
+pub mod settings_surface;
 pub mod shortcuts;
 #[cfg(unix)]
 pub(crate) mod signal;

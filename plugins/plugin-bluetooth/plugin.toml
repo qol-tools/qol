@@ -61,6 +61,9 @@ command = "plugin-bluetooth"
 socket = "/tmp/plugin-bluetooth.sock"
 port = 42740
 
+[capabilities]
+gpui = true
+
 [menu]
 label = "Bluetooth"
 items = []

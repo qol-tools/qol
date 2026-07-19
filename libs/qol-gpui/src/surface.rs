@@ -37,6 +37,11 @@ pub struct Surface {
     size: Size<Pixels>,
 }
 
+pub(crate) struct OpenedSurface<V> {
+    pub(crate) handle: WindowHandle<SurfaceRoot<V>>,
+    pub(crate) dismisser: SurfaceDismisser,
+}
+
 type CloseWindow = Box<dyn Fn(&mut App)>;
 
 struct DismissState {
@@ -109,6 +114,7 @@ impl Surface {
         self.open(tracker, cx, |dismisser, window, cx| {
             build(dismisser, window, cx)
         })
+        .map(|opened| opened.dismisser)
     }
 
     pub fn show_focused<V: Render + Focusable + 'static>(
@@ -117,6 +123,16 @@ impl Surface {
         cx: &mut App,
         build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
     ) -> Result<SurfaceDismisser> {
+        self.show_focused_tracked(tracker, cx, build)
+            .map(|opened| opened.dismisser)
+    }
+
+    pub(crate) fn show_focused_tracked<V: Render + Focusable + 'static>(
+        self,
+        tracker: &MonitorTracker,
+        cx: &mut App,
+        build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
+    ) -> Result<OpenedSurface<V>> {
         self.open(tracker, cx, |dismisser, window, cx| {
             let view = build(dismisser, window, cx);
             window.focus(&view.focus_handle(cx));
@@ -129,7 +145,7 @@ impl Surface {
         tracker: &MonitorTracker,
         cx: &mut App,
         build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
-    ) -> Result<SurfaceDismisser> {
+    ) -> Result<OpenedSurface<V>> {
         let monitor = match self.kind {
             SurfaceKind::Toast => tracker.snapshot_cursor().map(|(monitor, _)| monitor),
             SurfaceKind::Panel => tracker.snapshot_monitor(),
@@ -181,7 +197,7 @@ impl Surface {
             );
             settle_then_reveal(handle, title, bounds.origin, cx);
         }
-        Ok(dismisser)
+        Ok(OpenedSurface { handle, dismisser })
     }
 
     fn resolved_bounds(&self, monitor: &crate::monitor::ActiveMonitor) -> Bounds<Pixels> {
@@ -210,8 +226,8 @@ impl Surface {
     }
 }
 
-struct SurfaceRoot<V> {
-    inner: Entity<V>,
+pub(crate) struct SurfaceRoot<V> {
+    pub(crate) inner: Entity<V>,
 }
 
 impl<V: Render + 'static> Render for SurfaceRoot<V> {

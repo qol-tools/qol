@@ -214,6 +214,54 @@ fn resolve_action_uses_catalog_args_without_runtime_action_map() {
 }
 
 #[test]
+fn resolve_action_hosts_only_contract_driven_gpui_settings() {
+    let cases = [
+        (true, ActionType::Settings, true, true),
+        (false, ActionType::Settings, true, false),
+        (true, ActionType::Run, true, false),
+        (true, ActionType::Settings, false, false),
+    ];
+    for (gpui, kind, has_contract, expected) in cases {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("launcher"), "").unwrap();
+        if has_contract {
+            fs::write(dir.path().join("qol-config.toml"), "schema_version = 1").unwrap();
+        }
+        let mut plugin = make_catalog_plugin(
+            &dir,
+            "settings",
+            vec!["settings".to_string()],
+            Some(RuntimeConfig {
+                command: "launcher".to_string(),
+                actions: None,
+            }),
+        );
+        plugin.manifest.capabilities.gpui = gpui;
+        plugin.manifest.actions.get_mut("settings").unwrap().kind = kind;
+
+        let resolved = resolve_action(&plugin, "settings").unwrap();
+        assert_eq!(
+            resolved.hosted_settings, expected,
+            "gpui={gpui} kind={kind:?} has_contract={has_contract}"
+        );
+    }
+}
+
+#[test]
+fn hosted_settings_contract_is_a_complete_execution_target() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("qol-config.toml"), "schema_version = 1").unwrap();
+    let mut plugin = make_catalog_plugin(&dir, "settings", vec![], None);
+    plugin.manifest.capabilities.gpui = true;
+    plugin.manifest.actions.get_mut("settings").unwrap().kind = ActionType::Settings;
+
+    let resolved = resolve_action(&plugin, "settings").unwrap();
+    assert!(resolved.hosted_settings);
+    assert!(resolved.command_path.is_none());
+    assert!(resolved.daemon_socket.is_none());
+}
+
+#[test]
 fn resolve_action_rejects_non_catalog_runtime_action_when_catalog_exists() {
     let dir = TempDir::new().unwrap();
     fs::write(dir.path().join("launcher"), "").unwrap();

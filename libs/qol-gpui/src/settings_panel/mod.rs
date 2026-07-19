@@ -11,7 +11,7 @@ use std::time::Duration;
 use gpui::*;
 
 use crate::monitor::MonitorTracker;
-use crate::surface::{Anchor, Surface, SurfaceKind};
+use crate::surface::{Anchor, Surface, SurfaceDismisser, SurfaceKind, SurfaceRoot};
 use rows::{rows_from_resolved, Row};
 use view::{SettingsPanelState, SettingsPanelView};
 
@@ -27,11 +27,11 @@ const PANEL_LIST_HEIGHT: f32 = PANEL_LIST_PADDING_Y
 const PANEL_SECTION_HEADER_HEIGHT: f32 = 26.0;
 const PANEL_CHROME_HEIGHT: f32 = 72.0;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct SettingsPanel {
-    pub plugin_id: &'static str,
-    pub contract: &'static str,
-    pub heading: &'static str,
+    pub plugin_id: String,
+    pub contract: String,
+    pub heading: String,
 }
 
 type QueryHandler = dyn Fn(&str) -> Result<serde_json::Value, String> + Send + Sync;
@@ -42,6 +42,119 @@ pub struct SettingsRuntime {
     query: Arc<QueryHandler>,
     action: Arc<ActionHandler>,
     poll_interval: Duration,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsActivation {
+    Focused,
+    Opened,
+    Replaced,
+}
+
+#[derive(Default)]
+pub struct SettingsWindowHost {
+    active: Option<ActivePanel>,
+}
+
+struct ActivePanel {
+    plugin_id: String,
+    handle: WindowHandle<SurfaceRoot<SettingsPanelView>>,
+    dismisser: SurfaceDismisser,
+}
+
+struct PreparedPanel {
+    panel: SettingsPanel,
+    state: SettingsPanelState,
+    size: Size<Pixels>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActivationDecision {
+    Focus,
+    Open,
+    Replace,
+}
+
+impl SettingsWindowHost {
+    pub fn activate(
+        &mut self,
+        panel: SettingsPanel,
+        tracker: &MonitorTracker,
+        runtime: SettingsRuntime,
+        cx: &mut App,
+    ) -> anyhow::Result<SettingsActivation> {
+        let decision = activation_decision(
+            self.active.as_ref().map(|active| active.plugin_id.as_str()),
+            &panel.plugin_id,
+        );
+        if decision == ActivationDecision::Focus && self.present(cx) {
+            return Ok(SettingsActivation::Focused);
+        }
+
+        let prepared = prepare_panel(panel, tracker, runtime)?;
+        if decision == ActivationDecision::Replace && self.active_is_open(cx) {
+            self.replace(prepared, cx)?;
+            return Ok(SettingsActivation::Replaced);
+        }
+
+        self.active = Some(open_prepared(prepared, tracker, cx)?);
+        Ok(SettingsActivation::Opened)
+    }
+
+    fn present(&mut self, cx: &mut App) -> bool {
+        if !self.active_is_open(cx) {
+            return false;
+        }
+        let Some(active) = self.active.as_ref() else {
+            return false;
+        };
+        let updated = active
+            .handle
+            .update(cx, |root, window, cx| {
+                let focus = root.inner.read(cx).focus_handle(cx);
+                window.activate_window();
+                window.focus(&focus);
+            })
+            .is_ok();
+        if updated {
+            cx.activate(true);
+        }
+        updated
+    }
+
+    fn active_is_open(&mut self, cx: &mut App) -> bool {
+        let Some(active) = self.active.as_ref() else {
+            return false;
+        };
+        if active.handle.update(cx, |_, _, _| ()).is_ok() {
+            return true;
+        }
+        self.active = None;
+        false
+    }
+
+    fn replace(&mut self, prepared: PreparedPanel, cx: &mut App) -> anyhow::Result<()> {
+        let Some(active) = self.active.as_mut() else {
+            return Err(anyhow::anyhow!(
+                "settings window disappeared before replacement"
+            ));
+        };
+        let plugin_id = prepared.panel.plugin_id.clone();
+        let dismisser = active.dismisser.clone();
+        active.handle.update(cx, move |root, window, cx| {
+            window.resize(prepared.size);
+            let inner =
+                cx.new(|cx| SettingsPanelView::new(prepared.panel, prepared.state, dismisser, cx));
+            let focus = inner.read(cx).focus_handle(cx);
+            root.inner = inner;
+            window.activate_window();
+            window.focus(&focus);
+            cx.notify();
+        })?;
+        active.plugin_id = plugin_id;
+        cx.activate(true);
+        Ok(())
+    }
 }
 
 impl SettingsRuntime {
@@ -57,6 +170,14 @@ impl SettingsRuntime {
 
     pub fn empty() -> Self {
         Self::new(|_| Ok(serde_json::Value::Null))
+    }
+
+    pub fn tray(plugin_id: impl Into<String>) -> Self {
+        let plugin_id = plugin_id.into();
+        let query_plugin_id = plugin_id.clone();
+        Self::new(move |query| persistence::query(&query_plugin_id, query)).with_input_action(
+            move |action, input| persistence::run_action(&plugin_id, action, &input),
+        )
     }
 
     pub fn with_action(
@@ -125,10 +246,19 @@ pub fn open(
     runtime: SettingsRuntime,
     cx: &mut App,
 ) -> anyhow::Result<()> {
-    let spec = qol_config::contract::parse_spec_str(panel.contract)
+    let prepared = prepare_panel(panel, tracker, runtime)?;
+    open_prepared(prepared, tracker, cx).map(|_| ())
+}
+
+fn prepare_panel(
+    panel: SettingsPanel,
+    tracker: &MonitorTracker,
+    runtime: SettingsRuntime,
+) -> anyhow::Result<PreparedPanel> {
+    let spec = qol_config::contract::parse_spec_str(&panel.contract)
         .map_err(|error| anyhow::anyhow!("contract parse failed: {error:?}"))?;
-    let path = persistence::config_path(panel.plugin_id)?;
-    let values = persistence::load_values(panel.plugin_id, &path);
+    let path = persistence::config_path(&panel.plugin_id)?;
+    let values = persistence::load_values(&panel.plugin_id, &path);
     let resolved = qol_config::normalized::resolve_config(&spec, &values)
         .map_err(|errors| anyhow::anyhow!("contract resolve failed: {errors:?}"))?;
     let rows = rows_from_resolved(&resolved, &runtime);
@@ -139,26 +269,46 @@ pub fn open(
         monitor.bounds().size.height.to_f64() as f32 - 2.0 * crate::surface::CORNER_MARGIN;
     let height = panel_height(&rows).min(available);
     let body_max = height - PANEL_CHROME_HEIGHT;
-    let title = format!("{}-settings-{}", panel.plugin_id, std::process::id());
-    Surface::new(SurfaceKind::Panel)
+    Ok(PreparedPanel {
+        panel,
+        state: SettingsPanelState {
+            rows,
+            values,
+            path,
+            body_max,
+            runtime,
+        },
+        size: size(px(PANEL_WIDTH), px(height)),
+    })
+}
+
+fn open_prepared(
+    prepared: PreparedPanel,
+    tracker: &MonitorTracker,
+    cx: &mut App,
+) -> anyhow::Result<ActivePanel> {
+    let plugin_id = prepared.panel.plugin_id.clone();
+    let title = format!("{}-settings-{}", plugin_id, std::process::id());
+    let opened = Surface::new(SurfaceKind::Panel)
         .title(title)
         .anchor(Anchor::MonitorCenter)
-        .size(size(px(PANEL_WIDTH), px(height)))
-        .show_focused(tracker, cx, move |dismisser, _window, cx| {
-            SettingsPanelView::new(
-                panel,
-                SettingsPanelState {
-                    rows,
-                    values,
-                    path,
-                    body_max,
-                    runtime,
-                },
-                dismisser,
-                cx,
-            )
-        })
-        .map(|_| ())
+        .size(prepared.size)
+        .show_focused_tracked(tracker, cx, move |dismisser, _window, cx| {
+            SettingsPanelView::new(prepared.panel, prepared.state, dismisser, cx)
+        })?;
+    Ok(ActivePanel {
+        plugin_id,
+        handle: opened.handle,
+        dismisser: opened.dismisser,
+    })
+}
+
+fn activation_decision(active: Option<&str>, requested: &str) -> ActivationDecision {
+    match active {
+        None => ActivationDecision::Open,
+        Some(active) if active == requested => ActivationDecision::Focus,
+        Some(_) => ActivationDecision::Replace,
+    }
 }
 
 fn panel_height(rows: &[Row]) -> f32 {
@@ -167,7 +317,10 @@ fn panel_height(rows: &[Row]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{panel_height, Row, PANEL_CHROME_HEIGHT, PANEL_ROW_HEIGHT};
+    use super::{
+        activation_decision, panel_height, ActivationDecision, Row, PANEL_CHROME_HEIGHT,
+        PANEL_ROW_HEIGHT,
+    };
     use crate::settings_panel::rows::RowControl;
 
     fn row(control: RowControl) -> Row {
@@ -187,5 +340,21 @@ mod tests {
 
         assert_eq!(panel_height(&toggle), expected);
         assert_eq!(panel_height(&color), expected);
+    }
+
+    #[test]
+    fn activation_reuses_the_single_panel_window() {
+        let cases = [
+            (None, "plugin-a", ActivationDecision::Open),
+            (Some("plugin-a"), "plugin-a", ActivationDecision::Focus),
+            (Some("plugin-a"), "plugin-b", ActivationDecision::Replace),
+        ];
+        for (active, requested, expected) in cases {
+            assert_eq!(
+                activation_decision(active, requested),
+                expected,
+                "active={active:?} requested={requested}"
+            );
+        }
     }
 }

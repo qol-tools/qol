@@ -91,6 +91,7 @@ pub(super) fn reload_plugin(manager: &mut PluginManager, plugin_id: &str) -> Res
 
 pub(super) fn shutdown(manager: &mut PluginManager) {
     log::info!("Shutting down plugins...");
+    crate::settings_surface::stop();
     stop_all_plugins(manager);
 }
 
