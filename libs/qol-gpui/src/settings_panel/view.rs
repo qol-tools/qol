@@ -554,8 +554,7 @@ impl SettingsPanelView {
             }
         }
         match &self.rows[index].control {
-            RowControl::Toggle(true) => "[on]".into(),
-            RowControl::Toggle(false) => "[off]".into(),
+            RowControl::Toggle(value) => binary_state_label(*value).into(),
             RowControl::Select { labels, index, .. } => {
                 labels.get(*index).cloned().unwrap_or_default()
             }
@@ -588,10 +587,8 @@ impl SettingsPanelView {
                     "working...".into()
                 } else if error.is_some() {
                     "failed".into()
-                } else if *active {
-                    "active".into()
                 } else {
-                    "run".into()
+                    binary_state_label(*active).into()
                 }
             }
             RowControl::List { items, error, .. } => {
@@ -609,8 +606,7 @@ impl SettingsPanelView {
             return self.palette.label_text;
         }
         match self.rows[index].control {
-            RowControl::Toggle(true) => self.palette.state_on,
-            RowControl::Toggle(false) => self.palette.state_off,
+            RowControl::Toggle(value) => binary_state_color(self.palette, value),
             RowControl::Select { .. }
             | RowControl::MultiSelect { .. }
             | RowControl::Number { .. }
@@ -620,8 +616,8 @@ impl SettingsPanelView {
             RowControl::Action { error: Some(_), .. } | RowControl::List { error: Some(_), .. } => {
                 self.palette.state_off
             }
-            RowControl::Action { active: true, .. } => self.palette.state_on,
-            RowControl::Action { .. } | RowControl::List { .. } => self.palette.label_text,
+            RowControl::Action { active, .. } => binary_state_color(self.palette, active),
+            RowControl::List { .. } => self.palette.label_text,
         }
     }
 
@@ -942,6 +938,22 @@ fn format_number(value: f64) -> String {
     }
 }
 
+fn binary_state_label(active: bool) -> &'static str {
+    if active {
+        "[on]"
+    } else {
+        "[off]"
+    }
+}
+
+fn binary_state_color(palette: SettingsPanelPalette, active: bool) -> u32 {
+    if active {
+        palette.state_on
+    } else {
+        palette.state_off
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Intent {
     Up,
@@ -1019,8 +1031,8 @@ fn scroll_offset_for(rows: &[Row], selected: usize, offset: usize, body_max: f32
 #[cfg(test)]
 mod tests {
     use super::{
-        intent, is_number_seed, parsed_color, parsed_number, scroll_offset_for, visible_row_range,
-        Intent, Row, RowControl,
+        binary_state_label, intent, is_number_seed, parsed_color, parsed_number, scroll_offset_for,
+        visible_row_range, Intent, Row, RowControl,
     };
 
     fn rows(headers: &[bool]) -> Vec<Row> {
@@ -1082,6 +1094,12 @@ mod tests {
         for (ch, expected) in cases {
             assert_eq!(is_number_seed(ch), expected, "char: {ch:?}");
         }
+    }
+
+    #[test]
+    fn binary_runtime_and_config_states_share_on_off_labels() {
+        assert_eq!(binary_state_label(true), "[on]");
+        assert_eq!(binary_state_label(false), "[off]");
     }
 
     #[test]
