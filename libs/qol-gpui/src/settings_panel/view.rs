@@ -3,15 +3,16 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui::*;
+use qol_config::contract::ResolvedRowAction;
 
 use super::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use super::persistence::save_values;
 use super::rows::{
-    apply_runtime_query, begin_list_item_action, merged_config, primary_list_item_action,
-    runtime_query_names, Row, RowControl,
+    apply_runtime_query, begin_list_item_action, list_item_actions, merged_config,
+    primary_list_item_action, runtime_query_names, Row, RowControl,
 };
 use super::{SettingsPanel, SettingsRuntime};
-use crate::dropdown::{Dropdown, DropdownStyle};
+use crate::dropdown::{Dropdown, DropdownEvent, DropdownStyle};
 use crate::spinner::Spinner;
 use crate::status_indicator::StatusIndicator;
 use crate::surface::SurfaceDismisser;
@@ -47,7 +48,15 @@ enum ActiveControl {
     Edit(String),
     Dropdown(Dropdown),
     List,
+    ListActions(ListActionMenu),
     Wheel(WheelControl),
+}
+
+struct ListActionMenu {
+    row: usize,
+    item_id: String,
+    dropdown: Dropdown,
+    actions: Vec<ResolvedRowAction>,
 }
 
 struct WheelControl {
@@ -141,6 +150,10 @@ impl SettingsPanelView {
             let _ = popup.update(cx, |popup, popup_window, popup_cx| {
                 popup.handle_key(key, event.keystroke.modifiers.shift, popup_window, popup_cx);
             });
+            return;
+        }
+        if matches!(self.active_control, Some(ActiveControl::ListActions(_))) {
+            self.on_list_actions_key(key, cx);
             return;
         }
         if matches!(self.active_control, Some(ActiveControl::Dropdown(_))) {
@@ -292,12 +305,13 @@ impl SettingsPanelView {
         let Some(ActiveControl::Dropdown(dropdown)) = self.active_control.as_mut() else {
             return;
         };
-        match key {
-            "up" => dropdown.move_up(),
-            "down" => dropdown.move_down(),
-            "enter" | "return" | "space" => self.pick_dropdown(),
-            "escape" => self.active_control = None,
-            _ => return,
+        let Some(event) = dropdown.handle_key(key) else {
+            return;
+        };
+        match event {
+            DropdownEvent::Moved => {}
+            DropdownEvent::Pick(_) => self.pick_dropdown(),
+            DropdownEvent::Close => self.active_control = None,
         }
         cx.notify();
     }
@@ -308,6 +322,11 @@ impl SettingsPanelView {
         };
         if intent == ListIntent::Activate {
             self.dispatch_list_action(cx);
+            return;
+        }
+        if intent == ListIntent::Actions {
+            self.open_list_actions();
+            cx.notify();
             return;
         }
         let Some(row) = self.rows.get_mut(self.selected) else {
@@ -322,9 +341,24 @@ impl SettingsPanelView {
             ListIntent::Up => list.move_up(),
             ListIntent::Down => list.move_down(items.len()),
             ListIntent::Close => self.active_control = None,
-            ListIntent::Activate => return,
+            ListIntent::Activate | ListIntent::Actions => return,
         }
         list.sync(items.len());
+        cx.notify();
+    }
+
+    fn on_list_actions_key(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(ActiveControl::ListActions(menu)) = self.active_control.as_mut() else {
+            return;
+        };
+        let Some(event) = menu.dropdown.handle_key(key) else {
+            return;
+        };
+        match event {
+            DropdownEvent::Moved => {}
+            DropdownEvent::Pick(selected) => self.dispatch_list_menu_action(selected, cx),
+            DropdownEvent::Close => self.active_control = Some(ActiveControl::List),
+        }
         cx.notify();
     }
 
@@ -490,15 +524,95 @@ impl SettingsPanelView {
             items,
             list,
             ..
-        }) = self.rows.get_mut(row_index).map(|row| &mut row.control)
+        }) = self.rows.get(row_index).map(|row| &row.control)
         else {
             return;
         };
-        let item_index = list.selected;
-        let Some(item) = items.get_mut(item_index) else {
+        let Some(item) = items.get(list.selected) else {
             return;
         };
-        let Some(action) = begin_list_item_action(actions, item) else {
+        let Some(action) = primary_list_item_action(actions, item) else {
+            return;
+        };
+        let item_id = item.id.clone();
+        self.dispatch_resolved_list_action(row_index, &item_id, action, cx);
+    }
+
+    fn select_list_item(&mut self, row_index: usize, item_index: usize) {
+        let Some(RowControl::List { items, list, .. }) =
+            self.rows.get_mut(row_index).map(|row| &mut row.control)
+        else {
+            return;
+        };
+        if item_index >= items.len() {
+            return;
+        }
+        self.selected = row_index;
+        list.selected = item_index;
+        list.sync(items.len());
+        self.active_control = Some(ActiveControl::List);
+        self.sync_scroll();
+    }
+
+    fn open_list_actions(&mut self) {
+        let row_index = self.selected;
+        let Some(RowControl::List {
+            actions,
+            items,
+            list,
+            ..
+        }) = self.rows.get(row_index).map(|row| &row.control)
+        else {
+            return;
+        };
+        let Some(item) = items.get(list.selected).filter(|item| !item.pending) else {
+            return;
+        };
+        let resolved = list_item_actions(actions, item);
+        if resolved.len() < 2 {
+            return;
+        }
+        self.active_control = Some(ActiveControl::ListActions(ListActionMenu {
+            row: row_index,
+            item_id: item.id.clone(),
+            dropdown: Dropdown::open(resolved.len(), 0),
+            actions: resolved,
+        }));
+    }
+
+    fn dispatch_list_menu_action(&mut self, selected: usize, cx: &mut Context<Self>) {
+        let Some(ActiveControl::ListActions(menu)) = self.active_control.take() else {
+            return;
+        };
+        let row_index = menu.row;
+        let item_id = menu.item_id;
+        let Some(action) = menu.actions.into_iter().nth(selected) else {
+            self.active_control = Some(ActiveControl::List);
+            return;
+        };
+        self.active_control = Some(ActiveControl::List);
+        self.dispatch_resolved_list_action(row_index, &item_id, action, cx);
+    }
+
+    fn dispatch_resolved_list_action(
+        &mut self,
+        row_index: usize,
+        item_id: &str,
+        action: ResolvedRowAction,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(RowControl::List { actions, items, .. }) =
+            self.rows.get_mut(row_index).map(|row| &mut row.control)
+        else {
+            return;
+        };
+        let Some(item) = items.iter_mut().find(|item| item.id == item_id) else {
+            return;
+        };
+        if !list_item_actions(actions, item).contains(&action) {
+            return;
+        }
+        let Some(action) = begin_list_item_action(item, action) else {
             return;
         };
         let item_id = item.id.clone();
@@ -616,7 +730,10 @@ impl SettingsPanelView {
             match &self.active_control {
                 Some(ActiveControl::Edit(edit)) => return format!("{edit}_"),
                 Some(ActiveControl::Wheel(wheel)) => return wheel.value.clone(),
-                Some(ActiveControl::Dropdown(_)) | Some(ActiveControl::List) | None => {}
+                Some(ActiveControl::Dropdown(_))
+                | Some(ActiveControl::List)
+                | Some(ActiveControl::ListActions(_))
+                | None => {}
             }
         }
         match &self.rows[index].control {
@@ -755,7 +872,10 @@ impl SettingsPanelView {
             match &self.active_control {
                 Some(ActiveControl::Edit(edit)) => edit,
                 Some(ActiveControl::Wheel(wheel)) => return parsed_color(&wheel.value),
-                Some(ActiveControl::Dropdown(_)) | Some(ActiveControl::List) | None => value,
+                Some(ActiveControl::Dropdown(_))
+                | Some(ActiveControl::List)
+                | Some(ActiveControl::ListActions(_))
+                | None => value,
             }
         } else {
             value
@@ -775,7 +895,7 @@ impl SettingsPanelView {
             );
         }
         if matches!(row.control, RowControl::List { .. }) {
-            return container.child(self.render_list(index));
+            return container.child(self.render_list(index, cx));
         }
         let label = match &row.control {
             RowControl::Action {
@@ -870,7 +990,7 @@ impl SettingsPanelView {
         container
     }
 
-    fn render_list(&self, index: usize) -> Div {
+    fn render_list(&self, index: usize, cx: &mut Context<Self>) -> Div {
         let row = &self.rows[index];
         let RowControl::List {
             active_label,
@@ -884,8 +1004,11 @@ impl SettingsPanelView {
         else {
             return div();
         };
-        let list_active =
-            index == self.selected && matches!(self.active_control, Some(ActiveControl::List));
+        let list_active = index == self.selected
+            && matches!(
+                self.active_control,
+                Some(ActiveControl::List) | Some(ActiveControl::ListActions(_))
+            );
         let mut header_status = div().flex().items_center().gap_2();
         if *runtime_active {
             header_status = header_status.child(
@@ -951,12 +1074,18 @@ impl SettingsPanelView {
             );
         }
         for item_index in list.visible_range(items.len()) {
-            container = container.child(self.render_list_item(index, item_index, list_active));
+            container = container.child(self.render_list_item(index, item_index, list_active, cx));
         }
         container
     }
 
-    fn render_list_item(&self, index: usize, item_index: usize, list_active: bool) -> Div {
+    fn render_list_item(
+        &self,
+        index: usize,
+        item_index: usize,
+        list_active: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let RowControl::List {
             actions,
             items,
@@ -964,7 +1093,10 @@ impl SettingsPanelView {
             ..
         } = &self.rows[index].control
         else {
-            return div();
+            return div().id((
+                "settings-list-item-empty",
+                ((index as u64) << 32) | item_index as u64,
+            ));
         };
         let item = &items[item_index];
         let selected = list_active && item_index == list.selected;
@@ -986,8 +1118,12 @@ impl SettingsPanelView {
                     }))
                     .child(item.label.clone()),
             )
-            .child(self.render_list_action(index, item_index, selected, item.pending, action));
+            .child(self.render_list_action(index, item_index, selected, item, action, cx));
         let mut item_row = div()
+            .id((
+                "settings-list-item",
+                ((index as u64) << 32) | item_index as u64,
+            ))
             .flex()
             .flex_col()
             .flex_none()
@@ -996,7 +1132,15 @@ impl SettingsPanelView {
             .px_2()
             .py_1()
             .rounded_sm()
+            .cursor(CursorStyle::PointingHand)
             .child(title);
+        item_row = item_row.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+            if !event.standard_click() {
+                return;
+            }
+            this.select_list_item(index, item_index);
+            cx.notify();
+        }));
         if selected {
             item_row = item_row.bg(rgb(self.palette.dropdown_bg));
         }
@@ -1020,11 +1164,12 @@ impl SettingsPanelView {
         index: usize,
         item_index: usize,
         selected: bool,
-        pending: bool,
+        item: &super::rows::ListItem,
         action: Option<qol_config::contract::ResolvedRowAction>,
+        cx: &mut Context<Self>,
     ) -> Div {
         let mut cell = div().flex().flex_none().flex_row().items_center().gap_2();
-        if pending {
+        if item.pending {
             cell = cell.child(Spinner::new(
                 (
                     "settings-list-action-spinner",
@@ -1036,16 +1181,67 @@ impl SettingsPanelView {
         let Some(action) = action else {
             return cell;
         };
-        cell.child(
-            div()
-                .text_xs()
-                .text_color(rgb(if selected {
-                    self.palette.state_on
-                } else {
-                    self.palette.label_text
-                }))
-                .child(format!("[{}]", action.label)),
-        )
+        let action_count = match &self.rows[index].control {
+            RowControl::List { actions, .. } => list_item_actions(actions, item).len(),
+            _ => 0,
+        };
+        let label = list_action_affordance(&action.label, action_count);
+        let mut affordance = div()
+            .id((
+                "settings-list-action",
+                ((index as u64) << 32) | item_index as u64,
+            ))
+            .text_xs()
+            .text_color(rgb(if selected {
+                self.palette.state_on
+            } else {
+                self.palette.label_text
+            }))
+            .child(label);
+        if !item.pending {
+            affordance = affordance
+                .cursor(CursorStyle::PointingHand)
+                .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                    if !event.standard_click() {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    this.select_list_item(index, item_index);
+                    if action_count > 1 {
+                        this.open_list_actions();
+                        cx.notify();
+                        return;
+                    }
+                    this.dispatch_list_action(cx);
+                    cx.notify();
+                }));
+        }
+        if let Some(ActiveControl::ListActions(menu)) = &self.active_control {
+            if menu.row == index && menu.item_id == item.id {
+                let labels = menu
+                    .actions
+                    .iter()
+                    .map(|action| action.label.clone())
+                    .collect::<Vec<_>>();
+                let view = cx.weak_entity();
+                affordance = affordance.child(menu.dropdown.render_clickable(
+                    format!("settings-list-actions-{index}-{item_index}"),
+                    &labels,
+                    self.dropdown_style(),
+                    move |selected, event, _, cx| {
+                        if !event.standard_click() {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        let _ = view.update(cx, |this, cx| {
+                            this.dispatch_list_menu_action(selected, cx);
+                            cx.notify();
+                        });
+                    },
+                ));
+            }
+        }
+        cell.child(affordance)
     }
 }
 
@@ -1136,6 +1332,13 @@ fn binary_state_color(palette: SettingsPanelPalette, active: bool) -> u32 {
     }
 }
 
+fn list_action_affordance(primary: &str, action_count: usize) -> String {
+    if action_count > 1 {
+        return format!("[{primary} +{}]", action_count - 1);
+    }
+    format!("[{primary}]")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Intent {
     Up,
@@ -1156,6 +1359,7 @@ enum ListIntent {
     Up,
     Down,
     Activate,
+    Actions,
     Close,
 }
 
@@ -1164,6 +1368,7 @@ fn list_intent(key: &str) -> Option<ListIntent> {
         "up" => Some(ListIntent::Up),
         "down" => Some(ListIntent::Down),
         "enter" | "return" => Some(ListIntent::Activate),
+        "space" | "right" => Some(ListIntent::Actions),
         "escape" | "left" => Some(ListIntent::Close),
         _ => None,
     }
@@ -1231,8 +1436,9 @@ fn scroll_offset_for(rows: &[Row], selected: usize, offset: usize, body_max: f32
 #[cfg(test)]
 mod tests {
     use super::{
-        binary_state_label, intent, is_number_seed, list_intent, parsed_color, parsed_number,
-        scroll_offset_for, visible_row_range, Intent, ListIntent, Row, RowControl,
+        binary_state_label, intent, is_number_seed, list_action_affordance, list_intent,
+        parsed_color, parsed_number, scroll_offset_for, visible_row_range, Intent, ListIntent, Row,
+        RowControl,
     };
     use crate::scroll_list::ScrollList;
 
@@ -1338,9 +1544,11 @@ mod tests {
             ("down", Some(ListIntent::Down)),
             ("enter", Some(ListIntent::Activate)),
             ("return", Some(ListIntent::Activate)),
+            ("space", Some(ListIntent::Actions)),
+            ("right", Some(ListIntent::Actions)),
             ("escape", Some(ListIntent::Close)),
             ("left", Some(ListIntent::Close)),
-            ("space", None),
+            ("tab", None),
         ];
         for (key, expected) in cases {
             assert_eq!(list_intent(key), expected, "key: {key}");
@@ -1351,6 +1559,18 @@ mod tests {
     fn binary_runtime_and_config_states_share_on_off_labels() {
         assert_eq!(binary_state_label(true), "[on]");
         assert_eq!(binary_state_label(false), "[off]");
+    }
+
+    #[test]
+    fn list_action_affordance_exposes_additional_action_count() {
+        let cases = [
+            ("Connect", 1, "[Connect]"),
+            ("Disconnect", 2, "[Disconnect +1]"),
+            ("Pair", 6, "[Pair +5]"),
+        ];
+        for (primary, count, expected) in cases {
+            assert_eq!(list_action_affordance(primary, count), expected);
+        }
     }
 
     #[test]

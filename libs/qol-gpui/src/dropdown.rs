@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use gpui::*;
 
 use crate::scroll_list::ScrollList;
@@ -17,6 +19,13 @@ pub struct DropdownStyle {
 pub struct Dropdown {
     list: ScrollList,
     count: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropdownEvent {
+    Moved,
+    Pick(usize),
+    Close,
 }
 
 impl Dropdown {
@@ -41,8 +50,43 @@ impl Dropdown {
         self.list.selected
     }
 
+    pub fn handle_key(&mut self, key: &str) -> Option<DropdownEvent> {
+        match key {
+            "up" => {
+                self.move_up();
+                Some(DropdownEvent::Moved)
+            }
+            "down" => {
+                self.move_down();
+                Some(DropdownEvent::Moved)
+            }
+            "enter" | "return" | "space" => Some(DropdownEvent::Pick(self.selected())),
+            "escape" | "left" => Some(DropdownEvent::Close),
+            _ => None,
+        }
+    }
+
     pub fn render(&self, labels: &[String], style: DropdownStyle) -> impl IntoElement {
-        let rows: Vec<Div> = labels
+        self.render_with_click(labels, style, None)
+    }
+
+    pub fn render_clickable(
+        &self,
+        id: impl Into<SharedString>,
+        labels: &[String],
+        style: DropdownStyle,
+        on_click: impl Fn(usize, &ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        self.render_with_click(labels, style, Some((id.into(), Rc::new(on_click))))
+    }
+
+    fn render_with_click(
+        &self,
+        labels: &[String],
+        style: DropdownStyle,
+        on_click: Option<(SharedString, Rc<DropdownClick>)>,
+    ) -> impl IntoElement {
+        let rows: Vec<AnyElement> = labels
             .iter()
             .enumerate()
             .skip(self.list.scroll_offset)
@@ -62,7 +106,15 @@ impl Dropdown {
                 if selected {
                     row = row.bg(rgb(style.bg_selected));
                 }
-                row
+                let Some((id, on_click)) = on_click.clone() else {
+                    return row.into_any_element();
+                };
+                row.id((id, index))
+                    .cursor(CursorStyle::PointingHand)
+                    .on_click(move |event, window, cx| {
+                        on_click(index, event, window, cx);
+                    })
+                    .into_any_element()
             })
             .collect();
         deferred(
@@ -81,9 +133,11 @@ impl Dropdown {
     }
 }
 
+type DropdownClick = dyn Fn(usize, &ClickEvent, &mut Window, &mut App);
+
 #[cfg(test)]
 mod tests {
-    use super::Dropdown;
+    use super::{Dropdown, DropdownEvent};
 
     #[test]
     fn open_seeds_selection_and_scrolls_it_into_view() {
@@ -113,5 +167,24 @@ mod tests {
         }
         assert_eq!(dropdown.selected(), 9, "down clamps to last");
         assert_eq!(dropdown.list.scroll_offset, 2, "window follows selection");
+    }
+
+    #[test]
+    fn key_handling_owns_navigation_pick_and_close() {
+        let mut dropdown = Dropdown::open(3, 1);
+        let cases = [
+            ("down", Some(DropdownEvent::Moved), 2),
+            ("up", Some(DropdownEvent::Moved), 1),
+            ("enter", Some(DropdownEvent::Pick(1)), 1),
+            ("return", Some(DropdownEvent::Pick(1)), 1),
+            ("space", Some(DropdownEvent::Pick(1)), 1),
+            ("escape", Some(DropdownEvent::Close), 1),
+            ("left", Some(DropdownEvent::Close), 1),
+            ("tab", None, 1),
+        ];
+        for (key, expected, selected) in cases {
+            assert_eq!(dropdown.handle_key(key), expected, "key: {key}");
+            assert_eq!(dropdown.selected(), selected, "key: {key}");
+        }
     }
 }

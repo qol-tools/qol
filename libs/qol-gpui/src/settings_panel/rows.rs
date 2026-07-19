@@ -414,19 +414,20 @@ pub(super) fn primary_list_item_action(
     actions: &ListActions,
     item: &ListItem,
 ) -> Option<ResolvedRowAction> {
+    list_item_actions(actions, item).into_iter().next()
+}
+
+pub(super) fn list_item_actions(actions: &ListActions, item: &ListItem) -> Vec<ResolvedRowAction> {
     resolve_row_actions(actions.primary.as_ref(), &actions.additional, &item.data)
-        .into_iter()
-        .next()
 }
 
 pub(super) fn begin_list_item_action(
-    actions: &ListActions,
     item: &mut ListItem,
+    action: ResolvedRowAction,
 ) -> Option<ResolvedRowAction> {
     if item.pending {
         return None;
     }
-    let action = primary_list_item_action(actions, item)?;
     item.pending = true;
     item.error = None;
     Some(action)
@@ -496,9 +497,9 @@ fn set_config_value(root: &mut serde_json::Value, dotted_key: &str, value: serde
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_runtime_query, begin_list_item_action, merged_config, primary_list_item_action,
-        row_value_json, rows_from_resolved, runtime_query_names, set_config_value, ResolvedConfig,
-        Row, RowControl,
+        apply_runtime_query, begin_list_item_action, list_item_actions, merged_config,
+        primary_list_item_action, row_value_json, rows_from_resolved, runtime_query_names,
+        set_config_value, ResolvedConfig, Row, RowControl,
     };
     use crate::settings_panel::SettingsRuntime;
 
@@ -885,6 +886,12 @@ action = "disconnect_device"
 label = "Disconnect"
 when = "can_disconnect"
 input = { address = "{address}" }
+
+[[field.devices.row_actions]]
+action = "remove_device"
+label = "Remove"
+when = "can_remove"
+input = { address = "{address}" }
 "#;
         let spec = qol_config::contract::parse_spec_str(RUNTIME_SPEC).unwrap();
         let resolved =
@@ -907,14 +914,16 @@ input = { address = "{address}" }
                         "name": "Keyboard",
                         "detail": "Paired · Connected",
                         "can_connect": false,
-                        "can_disconnect": true
+                        "can_disconnect": true,
+                        "can_remove": true
                     },
                     {
                         "address": "AA:01",
                         "name": "Headphones",
                         "detail": "Discovered",
                         "can_connect": true,
-                        "can_disconnect": false
+                        "can_disconnect": false,
+                        "can_remove": false
                     }
                 ]
             })),
@@ -941,6 +950,13 @@ input = { address = "{address}" }
                 assert_eq!(connected.action, "disconnect_device");
                 assert_eq!(connected.label, "Disconnect");
                 assert_eq!(connected.input, serde_json::json!({ "address": "AA:00" }));
+                assert_eq!(
+                    list_item_actions(actions, &items[0])
+                        .into_iter()
+                        .map(|action| action.action)
+                        .collect::<Vec<_>>(),
+                    ["disconnect_device", "remove_device"]
+                );
                 let disconnected = primary_list_item_action(actions, &items[1])
                     .expect("disconnected device action");
                 assert_eq!(disconnected.action, "connect_device");
@@ -952,12 +968,12 @@ input = { address = "{address}" }
                 let mut item = items[1].clone();
                 item.error = Some("previous failure".into());
                 assert_eq!(
-                    begin_list_item_action(actions, &mut item),
-                    Some(disconnected)
+                    begin_list_item_action(&mut item, disconnected.clone()),
+                    Some(disconnected.clone())
                 );
                 assert!(item.pending);
                 assert_eq!(item.error, None);
-                assert_eq!(begin_list_item_action(actions, &mut item), None);
+                assert_eq!(begin_list_item_action(&mut item, disconnected), None);
             }
             other => panic!("expected list, got {other:?}"),
         }
