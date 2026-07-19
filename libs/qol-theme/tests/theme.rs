@@ -172,6 +172,17 @@ fn shot_preview_palette_derives_from_system_roles() {
 }
 
 #[test]
+fn settings_panel_palette_derives_status_tones_from_system_roles() {
+    let palette = dark_theme().components.settings_panel;
+    assert_eq!(palette.status_accent, DARK_SYSTEM.accent);
+    assert_eq!(palette.status_success, DARK_SYSTEM.success);
+    assert_eq!(palette.status_danger, DARK_SYSTEM.danger);
+    assert_eq!(palette.status_warning, DARK_SYSTEM.warning);
+    assert_eq!(palette.status_muted, DARK_SYSTEM.text_muted);
+    assert_eq!(palette.transparent_rgba, 0x00000000);
+}
+
+#[test]
 fn alt_tab_preview_plane_palette_derives_from_system_roles() {
     let palette = alt_tab_preview_plane_dark();
     assert_eq!(

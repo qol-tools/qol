@@ -14,7 +14,7 @@ use super::rows::{
 use super::{SettingsPanel, SettingsRuntime};
 use crate::dropdown::{Dropdown, DropdownEvent, DropdownStyle};
 use crate::spinner::Spinner;
-use crate::status_indicator::StatusIndicator;
+use crate::status_indicator::{StatusIndicator, StatusTone};
 use crate::surface::SurfaceDismisser;
 use crate::theme::{settings_panel_runtime, SettingsPanelPalette};
 
@@ -1101,24 +1101,11 @@ impl SettingsPanelView {
         let item = &items[item_index];
         let selected = list_active && item_index == list.selected;
         let action = primary_list_item_action(actions, item);
-        let title = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .text_sm()
-                    .text_color(rgb(if selected {
-                        self.palette.section_text
-                    } else {
-                        self.palette.label_text
-                    }))
-                    .child(item.label.clone()),
-            )
-            .child(self.render_list_action(index, item_index, selected, item, action, cx));
+        let title = self.render_list_item_title(index, item_index, selected, item, action, cx);
+        let accent = item
+            .accent
+            .map(|tone| rgb(status_tone_color(self.palette, tone)))
+            .unwrap_or_else(|| rgba(self.palette.transparent_rgba));
         let mut item_row = div()
             .id((
                 "settings-list-item",
@@ -1129,6 +1116,8 @@ impl SettingsPanelView {
             .flex_none()
             .h(px(super::PANEL_LIST_ITEM_HEIGHT))
             .overflow_hidden()
+            .border_l_2()
+            .border_color(accent)
             .px_2()
             .py_1()
             .rounded_sm()
@@ -1157,6 +1146,55 @@ impl SettingsPanelView {
                 }))
                 .child(detail.clone()),
         )
+    }
+
+    fn render_list_item_title(
+        &self,
+        index: usize,
+        item_index: usize,
+        selected: bool,
+        item: &super::rows::ListItem,
+        action: Option<qol_config::contract::ResolvedRowAction>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let badge = item.badge.as_ref().map(|label| {
+            StatusIndicator::new(
+                (
+                    "settings-list-item-status",
+                    ((index as u64) << 32) | item_index as u64,
+                ),
+                label.clone(),
+                rgb(status_tone_color(self.palette, item.effective_badge_tone())),
+            )
+        });
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .overflow_hidden()
+                    .text_sm()
+                    .text_color(rgb(if selected {
+                        self.palette.section_text
+                    } else {
+                        self.palette.label_text
+                    }))
+                    .child(item.label.clone()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .children(badge)
+                    .child(self.render_list_action(index, item_index, selected, item, action, cx)),
+            )
     }
 
     fn render_list_action(
@@ -1329,6 +1367,16 @@ fn binary_state_color(palette: SettingsPanelPalette, active: bool) -> u32 {
         palette.state_on
     } else {
         palette.state_off
+    }
+}
+
+fn status_tone_color(palette: SettingsPanelPalette, tone: StatusTone) -> u32 {
+    match tone {
+        StatusTone::Accent => palette.status_accent,
+        StatusTone::Success => palette.status_success,
+        StatusTone::Danger => palette.status_danger,
+        StatusTone::Warning => palette.status_warning,
+        StatusTone::Muted => palette.status_muted,
     }
 }
 

@@ -9,6 +9,28 @@ use gpui::{
 
 const PULSE_DURATION: Duration = Duration::from_millis(1200);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StatusTone {
+    Accent,
+    Success,
+    Danger,
+    Warning,
+    Muted,
+}
+
+impl StatusTone {
+    pub(crate) fn from_contract(value: &str) -> Option<Self> {
+        match value {
+            "accent" => Some(Self::Accent),
+            "success" => Some(Self::Success),
+            "danger" => Some(Self::Danger),
+            "warning" => Some(Self::Warning),
+            "muted" => Some(Self::Muted),
+            _ => None,
+        }
+    }
+}
+
 #[derive(IntoElement)]
 pub struct StatusIndicator {
     id: ElementId,
@@ -73,7 +95,22 @@ fn pulse_opacity(progress: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::pulse_opacity;
+    use super::{pulse_opacity, StatusTone};
+
+    #[test]
+    fn contract_status_tones_parse_known_values_and_reject_unknown() {
+        let cases = [
+            ("accent", Some(StatusTone::Accent)),
+            ("success", Some(StatusTone::Success)),
+            ("danger", Some(StatusTone::Danger)),
+            ("warning", Some(StatusTone::Warning)),
+            ("muted", Some(StatusTone::Muted)),
+            ("unknown", None),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(StatusTone::from_contract(value), expected, "value: {value}");
+        }
+    }
 
     #[test]
     fn pulse_opacity_fades_between_visible_bounds() {

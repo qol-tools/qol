@@ -819,6 +819,12 @@ pub struct SettingsPanelPalette {
     pub dropdown_bg: u32,
     pub state_on: u32,
     pub state_off: u32,
+    pub status_accent: u32,
+    pub status_success: u32,
+    pub status_danger: u32,
+    pub status_warning: u32,
+    pub status_muted: u32,
+    pub transparent_rgba: u32,
 }
 
 impl SettingsPanelPalette {
@@ -833,6 +839,12 @@ impl SettingsPanelPalette {
             dropdown_bg: system.surface_raised,
             state_on: system.success,
             state_off: system.danger,
+            status_accent: system.accent,
+            status_success: system.success,
+            status_danger: system.danger,
+            status_warning: system.warning,
+            status_muted: system.text_muted,
+            transparent_rgba: 0x00000000,
         }
     }
 }

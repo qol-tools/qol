@@ -5,6 +5,7 @@ use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection};
 
 use super::SettingsRuntime;
 use crate::scroll_list::ScrollList;
+use crate::status_indicator::StatusTone;
 
 pub(super) const LIST_MAX_VISIBLE: usize = 5;
 
@@ -13,9 +14,18 @@ pub(super) struct ListItem {
     pub(super) id: String,
     pub(super) label: String,
     pub(super) subtitle: Option<String>,
+    pub(super) accent: Option<StatusTone>,
+    pub(super) badge: Option<String>,
+    pub(super) badge_tone: Option<StatusTone>,
     pub(super) data: serde_json::Value,
     pub(super) pending: bool,
     pub(super) error: Option<String>,
+}
+
+impl ListItem {
+    pub(super) fn effective_badge_tone(&self) -> StatusTone {
+        self.badge_tone.or(self.accent).unwrap_or(StatusTone::Muted)
+    }
 }
 
 #[derive(Debug)]
@@ -400,6 +410,13 @@ fn list_items(value: &serde_json::Value, label: &str, subtitle: Option<&str>) ->
             subtitle: subtitle
                 .map(|template| render_template(template, row))
                 .filter(|text| !text.is_empty()),
+            accent: list_item_tone(row, "accent"),
+            badge: row
+                .get("badge")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+            badge_tone: list_item_tone(row, "badge_tone"),
             data: row.clone(),
             pending: row
                 .get("action_pending")
@@ -408,6 +425,12 @@ fn list_items(value: &serde_json::Value, label: &str, subtitle: Option<&str>) ->
             error: None,
         })
         .collect()
+}
+
+fn list_item_tone(row: &serde_json::Value, key: &str) -> Option<StatusTone> {
+    row.get(key)
+        .and_then(serde_json::Value::as_str)
+        .and_then(StatusTone::from_contract)
 }
 
 pub(super) fn primary_list_item_action(
@@ -497,11 +520,12 @@ fn set_config_value(root: &mut serde_json::Value, dotted_key: &str, value: serde
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_runtime_query, begin_list_item_action, list_item_actions, merged_config,
+        apply_runtime_query, begin_list_item_action, list_item_actions, list_items, merged_config,
         primary_list_item_action, row_value_json, rows_from_resolved, runtime_query_names,
         set_config_value, ResolvedConfig, Row, RowControl,
     };
     use crate::settings_panel::SettingsRuntime;
+    use crate::status_indicator::StatusTone;
 
     const SPEC: &str = r#"
 schema_version = 1
@@ -848,6 +872,49 @@ query = "managed_device_options"
             row_value_json(&control),
             Some(serde_json::json!(["system"]))
         );
+    }
+
+    #[test]
+    fn list_items_preserve_supported_status_metadata() {
+        let items = list_items(
+            &serde_json::json!({
+                "items": [
+                    { "name": "a", "accent": "success", "badge": "Connected", "badge_tone": "success" },
+                    { "name": "b", "accent": "accent", "badge": "Paired" },
+                    { "name": "c", "accent": "unknown", "badge": "", "badge_tone": 42 }
+                ]
+            }),
+            "{name}",
+            None,
+        );
+        let cases = [
+            (
+                Some(StatusTone::Success),
+                Some("Connected"),
+                Some(StatusTone::Success),
+                StatusTone::Success,
+            ),
+            (
+                Some(StatusTone::Accent),
+                Some("Paired"),
+                None,
+                StatusTone::Accent,
+            ),
+            (None, None, None, StatusTone::Muted),
+        ];
+        for (item, (accent, badge, badge_tone, effective_tone)) in items.iter().zip(cases) {
+            assert_eq!(
+                (
+                    item.accent,
+                    item.badge.as_deref(),
+                    item.badge_tone,
+                    item.effective_badge_tone(),
+                ),
+                (accent, badge, badge_tone, effective_tone),
+                "item: {}",
+                item.label
+            );
+        }
     }
 
     #[test]
