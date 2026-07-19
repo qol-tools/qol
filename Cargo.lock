@@ -5721,9 +5721,11 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "gpui",
+ "image",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "proptest",
  "qol-config",
  "qol-conventions",
  "qol-runtime",
@@ -5731,6 +5733,7 @@ dependencies = [
  "raw-window-handle",
  "serde",
  "serde_json",
+ "smallvec",
  "x11rb",
 ]
 
