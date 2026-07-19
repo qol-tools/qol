@@ -209,7 +209,7 @@ pub fn devices_payload(
             let signal = device
                 .rssi
                 .map(|rssi| format!("{rssi} dBm"))
-                .unwrap_or_else(|| "Signal unavailable".into());
+                .unwrap_or_else(|| "Signal unknown".into());
             let status = device_action
                 .map(|action| action.status.as_str())
                 .unwrap_or(device_status);
@@ -388,14 +388,14 @@ mod tests {
                         "can_trust": false,
                         "can_untrust": true,
                         "connected": false,
-                        "detail": "Signal unavailable · AA:BB:CC:DD:EE:02",
+                        "detail": "Signal unknown · AA:BB:CC:DD:EE:02",
                         "managed": false,
                         "name": "Luna 2",
                         "paired": true,
                         "ready": false,
                         "rssi": null,
                         "services_resolved": false,
-                        "signal": "Signal unavailable",
+                        "signal": "Signal unknown",
                         "status": "Paired",
                         "trusted": true,
                         "uuids": [],

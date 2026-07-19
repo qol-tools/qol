@@ -1,4 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::error::Error;
+use std::fmt::{Display, Formatter};
+use std::future::Future;
 use std::process::Command;
 use std::sync::{mpsc, LazyLock, RwLock};
 use std::time::{Duration, Instant};
@@ -38,6 +41,7 @@ const SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
 const PROFILE_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const DEVICE_CONNECT_ATTEMPTS: u32 = 3;
 const DEVICE_CONNECT_RETRY_DELAY: Duration = Duration::from_millis(1500);
+const EXPLICIT_DEVICE_ACTION_TIMEOUT: Duration = Duration::from_secs(45);
 const BREDR_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(15);
 const AUDIO_SINK_PROFILE: u16 = 0x110b;
 
@@ -61,11 +65,46 @@ impl ConnectionMode {
     }
 }
 
+impl ExplicitDeviceAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Pair => "Pair",
+            Self::Connect => "Connect",
+        }
+    }
+
+    fn trace_name(self) -> &'static str {
+        match self {
+            Self::Pair => "pair",
+            Self::Connect => "connect",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum ExplicitDeviceAction {
     Pair,
     Connect,
 }
+
+#[derive(Debug)]
+struct DeviceActionTimeout {
+    label: &'static str,
+    deadline: Duration,
+}
+
+impl Display for DeviceActionTimeout {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Bluetooth {} timed out after {} seconds; the device may be unavailable",
+            self.label,
+            self.deadline.as_secs()
+        )
+    }
+}
+
+impl Error for DeviceActionTimeout {}
 
 #[derive(Clone, Copy)]
 enum DaemonCommand {
@@ -1116,14 +1155,26 @@ fn spawn_explicit_device_action(
     cached: Option<DeviceInfo>,
 ) {
     std::mem::drop(tokio::spawn(async move {
-        let result = run_explicit_device_action(action, address, power_on_adapter, cached).await;
-        let (action_name, failure_label) = match action {
-            ExplicitDeviceAction::Pair => ("pair", "Pair"),
-            ExplicitDeviceAction::Connect => ("connect", "Connect"),
-        };
-        finish_device_action(address, failure_label, &result);
-        trace_device_action(action_name, address, result);
+        let result = complete_device_action_within(
+            action.label(),
+            EXPLICIT_DEVICE_ACTION_TIMEOUT,
+            run_explicit_device_action(action, address, power_on_adapter, cached),
+        )
+        .await;
+        finish_device_action(address, action.label(), &result);
+        trace_device_action(action.trace_name(), address, result);
     }));
+}
+
+async fn complete_device_action_within<T>(
+    label: &'static str,
+    deadline: Duration,
+    operation: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    match tokio::time::timeout(deadline, operation).await {
+        Ok(result) => result,
+        Err(_) => Err(DeviceActionTimeout { label, deadline }.into()),
+    }
 }
 
 async fn run_explicit_device_action(
@@ -1194,9 +1245,14 @@ fn trace_device_action(action: &str, address: Address, result: Result<DeviceInfo
         ),
         Err(error) => {
             eprintln!("Bluetooth {action} failed: {error:#}");
+            let outcome = if error.downcast_ref::<DeviceActionTimeout>().is_some() {
+                "timed_out"
+            } else {
+                "failed"
+            };
             qol_runtime::probe!(
                 "BLUETOOTH_DEVICE_ACTION",
-                "action={action} device={} outcome=failed",
+                "action={action} device={} outcome={outcome}",
                 redacted(address),
             );
         }
@@ -1549,7 +1605,39 @@ fn redacted(address: Address) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{pactl_has_card, tolerated_profile_connect, transient_connect_error, ErrorKind};
+    use super::{
+        begin_device_action, complete_device_action_within, finish_device_action, pactl_has_card,
+        parse_address, runtime, set_device_action_state, tolerated_profile_connect,
+        transient_connect_error, DeviceActionTimeout, Duration, ErrorKind, Result,
+        DEVICE_ACTION_STATE,
+    };
+
+    #[test]
+    fn explicit_device_action_deadline_clears_the_pending_state_with_an_error() {
+        let address = parse_address("AA:BB:CC:DD:EE:FF").unwrap();
+        begin_device_action(address, "Connecting...").unwrap();
+        let result = runtime().unwrap().block_on(complete_device_action_within(
+            "Connect",
+            Duration::ZERO,
+            futures::future::pending::<Result<()>>(),
+        ));
+        finish_device_action(address, "Connect", &result);
+        let state = DEVICE_ACTION_STATE.read().unwrap().clone().unwrap();
+        let error = result.unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Bluetooth Connect timed out after 0 seconds; the device may be unavailable"
+        );
+        assert!(error.downcast_ref::<DeviceActionTimeout>().is_some());
+        assert_eq!(state.address, address.to_string());
+        assert_eq!(
+            state.status,
+            "Connect failed: Bluetooth Connect timed out after 0 seconds; the device may be unavailable"
+        );
+        assert!(!state.pending);
+        set_device_action_state(None);
+    }
 
     #[test]
     fn transient_link_errors_are_retried() {
