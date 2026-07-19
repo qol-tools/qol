@@ -75,6 +75,7 @@ description = "Paired Bluetooth MAC addresses to reconnect automatically."
 section = "reconnection"
 placeholder = "AA:BB:CC:DD:EE:FF"
 default = []
+query = "managed_device_options"
 
 [field.auto_reconnect]
 type = "boolean"

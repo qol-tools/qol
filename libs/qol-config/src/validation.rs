@@ -214,7 +214,8 @@ fn validate_field_options(id: &str, field: &FieldSpec, errors: &mut Vec<Validati
         validate_option_labels(id, field, errors);
         return;
     }
-    if field.kind == FieldKind::StringArray && !field.options.is_empty() {
+    if field.kind == FieldKind::StringArray && (!field.options.is_empty() || field.query.is_some())
+    {
         validate_select_options(id, field, errors);
         validate_option_labels(id, field, errors);
         return;
@@ -444,7 +445,7 @@ fn validate_string_array_value(
     if field.kind != FieldKind::StringArray {
         return;
     }
-    if field.options.is_empty() {
+    if field.options.is_empty() || field.query.is_some() {
         return;
     }
     let values = match value {
@@ -750,6 +751,22 @@ options = ["mic", "system"]
             "field.inputs.default[1]",
             "value must match one of the field options",
         );
+
+        let dynamic = validate_contract(
+            r#"
+schema_version = 1
+
+[field.inputs]
+type = "string_array"
+config_key = "audio.inputs"
+default = ["gone-device"]
+query = "audio_sources"
+
+[field.inputs.option_labels]
+default = "System Default"
+"#,
+        );
+        assert!(dynamic.is_empty(), "{dynamic:?}");
 
         let options_elsewhere = validate_contract(
             r#"

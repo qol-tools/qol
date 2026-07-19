@@ -30,6 +30,12 @@ pub struct DeviceInfo {
     pub rssi: Option<i16>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DeviceOption {
+    pub value: String,
+    pub label: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceActionState {
     pub address: String,
@@ -267,6 +273,26 @@ pub fn devices_payload(
     })
 }
 
+pub fn managed_device_options(devices: &[DeviceInfo]) -> Vec<DeviceOption> {
+    let mut paired = devices
+        .iter()
+        .filter(|device| device.paired)
+        .collect::<Vec<_>>();
+    paired.sort_by(|left, right| {
+        left.alias
+            .to_lowercase()
+            .cmp(&right.alias.to_lowercase())
+            .then_with(|| left.address.cmp(&right.address))
+    });
+    paired
+        .into_iter()
+        .map(|device| DeviceOption {
+            value: device.address.clone(),
+            label: format!("{} · {}", device.alias, device.address),
+        })
+        .collect()
+}
+
 pub fn search_status_payload(discovery: &DiscoveryState) -> serde_json::Value {
     serde_json::json!({
         "discovered_count": discovery.discovered_count(),
@@ -405,6 +431,29 @@ mod tests {
                 "ready_count": 1,
                 "searching": true,
             })
+        );
+    }
+
+    #[test]
+    fn managed_device_options_include_only_paired_devices() {
+        let devices = [
+            device("03", "Nearby Speaker", false, false, false, Some(-42)),
+            device("02", "Luna 2", true, true, false, None),
+            device("01", "Alpha", true, true, true, Some(-30)),
+        ];
+
+        assert_eq!(
+            managed_device_options(&devices),
+            vec![
+                DeviceOption {
+                    value: "AA:BB:CC:DD:EE:01".into(),
+                    label: "Alpha · AA:BB:CC:DD:EE:01".into(),
+                },
+                DeviceOption {
+                    value: "AA:BB:CC:DD:EE:02".into(),
+                    label: "Luna 2 · AA:BB:CC:DD:EE:02".into(),
+                },
+            ]
         );
     }
 

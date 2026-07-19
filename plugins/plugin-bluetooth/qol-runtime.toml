@@ -37,3 +37,7 @@ poll_interval_ms = 500
 [query.devices]
 description = "Unified paired and discovered Bluetooth device inventory"
 poll_interval_ms = 1000
+
+[query.managed_device_options]
+description = "Paired Bluetooth devices available for automatic reconnection"
+poll_interval_ms = 5000

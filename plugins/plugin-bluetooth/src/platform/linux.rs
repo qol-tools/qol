@@ -15,9 +15,10 @@ use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, S
 use qol_runtime::protocol::DaemonRequest;
 
 use crate::bluetooth::{
-    connection_ready, devices_payload, has_audio_class, is_audio_device, normalize_address,
-    search_status_payload, supports_audio_sink, AdapterHealth, DeviceActionState, DeviceInfo,
-    DiscoveryState, ReconnectFailure, ReconnectReport, ReconnectSelection,
+    connection_ready, devices_payload, has_audio_class, is_audio_device, managed_device_options,
+    normalize_address, search_status_payload, supports_audio_sink, AdapterHealth,
+    DeviceActionState, DeviceInfo, DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport,
+    ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
 use crate::retry::{RetryPolicy, RetryState};
@@ -217,8 +218,22 @@ pub fn run_settings_panel() -> Result<()> {
             contract: crate::config::contract(),
             heading: "Bluetooth Settings",
         },
-        |_| Vec::new(),
+        |query| match query {
+            "managed_device_options" => current_managed_device_options()
+                .map(|options| {
+                    options
+                        .into_iter()
+                        .map(|option| (option.value, option.label))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        },
     )
+}
+
+fn current_managed_device_options() -> Result<Vec<DeviceOption>> {
+    Ok(managed_device_options(&list_devices()?))
 }
 
 fn spawn_settings_panel() -> Result<()> {
@@ -808,6 +823,14 @@ fn parse_daemon_request(request: &DaemonRequest) -> ReadResult<DaemonCommand> {
             Ok(payload) => ReadResult::HandledWithData(payload),
             Err(error) => ReadResult::Error(format!("{error:#}")),
         },
+        "managed_device_options" => {
+            match current_managed_device_options().and_then(|options| {
+                serde_json::to_value(options).context("failed to encode Bluetooth device options")
+            }) {
+                Ok(payload) => ReadResult::HandledWithData(payload),
+                Err(error) => ReadResult::Error(format!("{error:#}")),
+            }
+        }
         "search_status" => match search_status_snapshot() {
             Ok(payload) => ReadResult::HandledWithData(payload),
             Err(error) => ReadResult::Error(format!("{error:#}")),

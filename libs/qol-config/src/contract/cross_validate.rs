@@ -114,6 +114,7 @@ fn validate_runable_ref(
         | FieldKind::QrCode
         | FieldKind::Gamepad
         | FieldKind::Select
+        | FieldKind::StringArray
             if !rt.queries.contains_key(ref_name) =>
         {
             errors.push(ValidationError::new(
@@ -200,7 +201,8 @@ fn runable_reference_for(field: &FieldSpec) -> Option<&str> {
         | FieldKind::Status
         | FieldKind::QrCode
         | FieldKind::Gamepad
-        | FieldKind::Select => field.query.as_deref(),
+        | FieldKind::Select
+        | FieldKind::StringArray => field.query.as_deref(),
         _ => None,
     }
 }
@@ -212,7 +214,7 @@ mod tests {
     use crate::contract::v1::parse_spec_str;
 
     #[test]
-    fn select_query_must_be_declared_in_runtime() {
+    fn dynamic_option_queries_must_be_declared_in_runtime() {
         let config = parse_spec_str(
             r#"
 schema_version = 1
@@ -222,6 +224,12 @@ type = "select"
 config_key = "audio.device"
 default = "default"
 query = "audio_sources"
+
+[field.devices]
+type = "string_array"
+config_key = "managed_devices"
+default = []
+query = "device_options"
 "#,
         )
         .expect("parse config");
@@ -242,6 +250,13 @@ poll_interval_ms = 1000
                 && error.message.contains("audio_sources")),
             "{errors:?}"
         );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.devices.query"
+                    && error.message.contains("device_options")),
+            "{errors:?}"
+        );
 
         let declared = parse_runtime_spec_str(
             r#"
@@ -249,6 +264,10 @@ schema_version = 1
 
 [query.audio_sources]
 description = "PulseAudio capture sources"
+poll_interval_ms = 5000
+
+[query.device_options]
+description = "Bluetooth devices"
 poll_interval_ms = 5000
 "#,
         )

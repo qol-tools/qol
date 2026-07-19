@@ -84,7 +84,7 @@ fn control_for(field: &ResolvedField, provider: &QueryOptions) -> Option<RowCont
                 FieldDefault::String(value) => value.clone(),
                 _ => return None,
             };
-            let (options, labels) = select_options(field, &current, provider);
+            let (options, labels) = field_options(field, std::slice::from_ref(&current), provider);
             let index = options.iter().position(|o| *o == current)?;
             Some(RowControl::Select {
                 options,
@@ -107,17 +107,17 @@ fn control_for(field: &ResolvedField, provider: &QueryOptions) -> Option<RowCont
         },
         FieldKind::StringArray => match &field.value {
             FieldDefault::StringArray(values) => {
-                if field.options.is_empty() {
+                if field.options.is_empty() && field.query.is_none() {
                     Some(RowControl::TextList(values.clone()))
                 } else {
+                    let (options, labels) = field_options(field, values, provider);
                     Some(RowControl::MultiSelect {
-                        selected: field
-                            .options
+                        selected: options
                             .iter()
                             .map(|option| values.contains(option))
                             .collect(),
-                        options: field.options.clone(),
-                        labels: option_labels_for(field),
+                        options,
+                        labels,
                     })
                 }
             }
@@ -137,23 +137,9 @@ fn control_for(field: &ResolvedField, provider: &QueryOptions) -> Option<RowCont
     }
 }
 
-fn option_labels_for(field: &ResolvedField) -> Vec<String> {
-    field
-        .options
-        .iter()
-        .map(|option| {
-            field
-                .option_labels
-                .get(option)
-                .cloned()
-                .unwrap_or_else(|| option.clone())
-        })
-        .collect()
-}
-
-fn select_options(
+fn field_options(
     field: &ResolvedField,
-    current: &str,
+    current: &[String],
     provider: &QueryOptions,
 ) -> (Vec<String>, Vec<String>) {
     let dynamic = field.query.as_deref().map(provider).unwrap_or_default();
@@ -170,8 +156,10 @@ fn select_options(
             options.push(value.clone());
         }
     }
-    if !options.iter().any(|option| option == current) {
-        options.insert(0, current.to_string());
+    for value in current.iter().rev() {
+        if !options.iter().any(|option| option == value) {
+            options.insert(0, value.clone());
+        }
     }
     let labels = options
         .iter()
@@ -481,6 +469,46 @@ default = "System Default"
                 }
                 other => panic!("expected select, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn query_multi_select_merges_dynamic_and_stale_selected_options() {
+        const QUERY_SPEC: &str = r#"
+schema_version = 1
+
+[field.devices]
+type = "string_array"
+config_key = "managed_devices"
+label = "Managed devices"
+default = []
+query = "managed_device_options"
+"#;
+        let spec = qol_config::contract::parse_spec_str(QUERY_SPEC).unwrap();
+        let resolved = qol_config::normalized::resolve_config(
+            &spec,
+            &serde_json::json!({ "managed_devices": ["AA:00", "AA:02"] }),
+        )
+        .unwrap();
+        let rows = rows_from_resolved(&resolved, &|query| {
+            assert_eq!(query, "managed_device_options");
+            vec![
+                ("AA:01".into(), "Headphones · AA:01".into()),
+                ("AA:02".into(), "Keyboard · AA:02".into()),
+            ]
+        });
+
+        match &rows[0].control {
+            RowControl::MultiSelect {
+                options,
+                labels,
+                selected,
+            } => {
+                assert_eq!(options, &["AA:00", "AA:01", "AA:02"]);
+                assert_eq!(labels, &["AA:00", "Headphones · AA:01", "Keyboard · AA:02"]);
+                assert_eq!(selected, &[true, false, true]);
+            }
+            other => panic!("expected multi select, got {other:?}"),
         }
     }
 
