@@ -12,7 +12,7 @@ use futures::future::pending;
 use futures::stream::{LocalBoxStream, SelectAll};
 use futures::{Stream, StreamExt};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
-use qol_runtime::protocol::DaemonRequest;
+use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 use crate::bluetooth::{
     connection_ready, devices_payload, has_audio_class, is_audio_device, managed_device_options,
@@ -212,24 +212,46 @@ pub fn open_settings() -> Result<()> {
 }
 
 pub fn run_settings_panel() -> Result<()> {
+    let runtime = qol_gpui::settings_panel::SettingsRuntime::new(settings_query)
+        .with_action(settings_action)
+        .poll_every(Duration::from_millis(500));
     qol_gpui::settings_panel::run_standalone(
         qol_gpui::settings_panel::SettingsPanel {
             plugin_id: crate::PLUGIN_ID,
             contract: crate::config::contract(),
             heading: "Bluetooth Settings",
         },
-        |query| match query {
-            "managed_device_options" => current_managed_device_options()
-                .map(|options| {
-                    options
-                        .into_iter()
-                        .map(|option| (option.value, option.label))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            _ => Vec::new(),
-        },
+        runtime,
     )
+}
+
+fn settings_query(query: &str) -> std::result::Result<serde_json::Value, String> {
+    match core_daemon::send_request(
+        &DAEMON_CONFIG,
+        query,
+        serde_json::Value::Null,
+        Duration::from_secs(2),
+    ) {
+        Ok(DaemonResponse::Handled { data: Some(data) }) => Ok(data),
+        Ok(DaemonResponse::Handled { data: None }) => Ok(serde_json::Value::Null),
+        Ok(DaemonResponse::Error { message }) => Err(message),
+        Ok(DaemonResponse::Fallback) => Err("Bluetooth daemon declined the query".into()),
+        Err(error) => Err(format!("Bluetooth daemon query failed: {error}")),
+    }
+}
+
+fn settings_action(action: &str) -> std::result::Result<(), String> {
+    match core_daemon::send_request(
+        &DAEMON_CONFIG,
+        action,
+        serde_json::Value::Null,
+        Duration::from_secs(2),
+    ) {
+        Ok(DaemonResponse::Handled { .. }) => Ok(()),
+        Ok(DaemonResponse::Error { message }) => Err(message),
+        Ok(DaemonResponse::Fallback) => Err("Bluetooth daemon declined the action".into()),
+        Err(error) => Err(format!("Bluetooth daemon action failed: {error}")),
+    }
 }
 
 fn current_managed_device_options() -> Result<Vec<DeviceOption>> {

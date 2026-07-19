@@ -6,14 +6,16 @@ use gpui::*;
 
 use super::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use super::persistence::save_values;
-use super::rows::{merged_config, Row, RowControl};
-use super::SettingsPanel;
+use super::rows::{apply_runtime_query, merged_config, runtime_query_names, Row, RowControl};
+use super::{SettingsPanel, SettingsRuntime};
 use crate::dropdown::{Dropdown, DropdownStyle};
 use crate::surface::SurfaceDismisser;
 use crate::theme::{settings_panel_runtime, SettingsPanelPalette};
 
 pub(super) struct SettingsPanelView {
     panel: SettingsPanel,
+    runtime: SettingsRuntime,
+    runtime_queries: Vec<String>,
     rows: Vec<Row>,
     values: serde_json::Value,
     path: PathBuf,
@@ -28,9 +30,18 @@ pub(super) struct SettingsPanelView {
     focus_handle: FocusHandle,
 }
 
+pub(super) struct SettingsPanelState {
+    pub(super) rows: Vec<Row>,
+    pub(super) values: serde_json::Value,
+    pub(super) path: PathBuf,
+    pub(super) body_max: f32,
+    pub(super) runtime: SettingsRuntime,
+}
+
 enum ActiveControl {
     Edit(String),
     Dropdown(Dropdown),
+    List,
     Wheel(WheelControl),
 }
 
@@ -44,31 +55,77 @@ struct WheelControl {
 impl SettingsPanelView {
     pub(super) fn new(
         panel: SettingsPanel,
-        rows: Vec<Row>,
-        values: serde_json::Value,
-        path: PathBuf,
-        body_max: f32,
+        state: SettingsPanelState,
         dismisser: SurfaceDismisser,
         cx: &mut Context<Self>,
     ) -> Self {
-        let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
+        let row_bounds = (0..state.rows.len())
+            .map(|_| Rc::new(Cell::new(None)))
+            .collect();
+        let runtime_queries = runtime_query_names(&state.rows);
         cx.on_release(|view, cx| view.close_wheel_popup(cx))
             .detach();
-        Self {
+        let view = Self {
             panel,
-            rows,
-            values,
-            path,
+            runtime: state.runtime,
+            runtime_queries,
+            rows: state.rows,
+            values: state.values,
+            path: state.path,
             selected: 0,
             scroll_offset: 0,
-            body_max,
+            body_max: state.body_max,
             active_control: None,
             row_bounds,
             wheel_generation: 0,
             dismisser,
             palette: settings_panel_runtime(),
             focus_handle: cx.focus_handle(),
+        };
+        view.spawn_runtime_poll(cx);
+        view
+    }
+
+    fn spawn_runtime_poll(&self, cx: &mut Context<Self>) {
+        if self.runtime_queries.is_empty() {
+            return;
         }
+        let runtime = self.runtime.clone();
+        let queries = self.runtime_queries.clone();
+        let interval = runtime.poll_interval;
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                loop {
+                    let query_runtime = runtime.clone();
+                    let query_names = queries.clone();
+                    let results = async_cx
+                        .background_spawn(async move {
+                            query_names
+                                .into_iter()
+                                .map(|query| {
+                                    let result = query_runtime.query(&query);
+                                    (query, result)
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .await;
+                    if this
+                        .update(&mut async_cx, |this, cx| {
+                            for (query, result) in results {
+                                apply_runtime_query(&mut this.rows, &query, result);
+                            }
+                            cx.notify();
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                    async_cx.background_executor().timer(interval).await;
+                }
+            }
+        })
+        .detach();
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -83,6 +140,10 @@ impl SettingsPanelView {
         }
         if matches!(self.active_control, Some(ActiveControl::Dropdown(_))) {
             self.on_dropdown_key(key, cx);
+            return;
+        }
+        if matches!(self.active_control, Some(ActiveControl::List)) {
+            self.on_list_key(key, cx);
             return;
         }
         let editing = matches!(self.active_control, Some(ActiveControl::Edit(_)));
@@ -236,6 +297,25 @@ impl SettingsPanelView {
         cx.notify();
     }
 
+    fn on_list_key(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(row) = self.rows.get_mut(self.selected) else {
+            self.active_control = None;
+            return;
+        };
+        let RowControl::List { items, list, .. } = &mut row.control else {
+            self.active_control = None;
+            return;
+        };
+        match key {
+            "up" => list.move_up(),
+            "down" => list.move_down(items.len()),
+            "escape" | "left" | "enter" | "return" => self.active_control = None,
+            _ => return,
+        }
+        list.sync(items.len());
+        cx.notify();
+    }
+
     fn pick_dropdown(&mut self) {
         let Some(ActiveControl::Dropdown(dropdown)) = self.active_control.as_ref() else {
             return;
@@ -262,7 +342,9 @@ impl SettingsPanelView {
             | RowControl::Number { .. }
             | RowControl::Text(_)
             | RowControl::TextList(_)
-            | RowControl::Color(_) => self.active_control = None,
+            | RowControl::Color(_)
+            | RowControl::Action { .. }
+            | RowControl::List { .. } => self.active_control = None,
         }
     }
 
@@ -307,7 +389,9 @@ impl SettingsPanelView {
             | RowControl::MultiSelect { .. }
             | RowControl::Text(_)
             | RowControl::TextList(_)
-            | RowControl::Color(_) => return,
+            | RowControl::Color(_)
+            | RowControl::Action { .. }
+            | RowControl::List { .. } => return,
         }
         self.persist();
     }
@@ -329,10 +413,60 @@ impl SettingsPanelView {
                     Some(ActiveControl::Dropdown(Dropdown::open(options.len(), 0)));
             }
             RowControl::Color(_) => self.open_color_wheel(self.selected, window, cx),
+            RowControl::Action { .. } => self.dispatch_action(cx),
+            RowControl::List { items, .. } if !items.is_empty() => {
+                self.active_control = Some(ActiveControl::List)
+            }
+            RowControl::List { .. } => {}
             RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
                 self.begin_edit()
             }
         }
+    }
+
+    fn dispatch_action(&mut self, cx: &mut Context<Self>) {
+        let Some(RowControl::Action {
+            action,
+            active_action,
+            active,
+            pending,
+            error,
+            ..
+        }) = self.rows.get_mut(self.selected).map(|row| &mut row.control)
+        else {
+            return;
+        };
+        if *pending {
+            return;
+        }
+        let action = if *active {
+            active_action.as_ref().unwrap_or(action)
+        } else {
+            action
+        }
+        .clone();
+        *pending = true;
+        *error = None;
+        let row_index = self.selected;
+        let runtime = self.runtime.clone();
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                let result = async_cx
+                    .background_spawn(async move { runtime.run_action(&action) })
+                    .await;
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    if let Some(RowControl::Action { pending, error, .. }) =
+                        this.rows.get_mut(row_index).map(|row| &mut row.control)
+                    {
+                        *pending = false;
+                        *error = result.err();
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     fn begin_number_entry(&mut self, key_char: Option<&str>) -> bool {
@@ -360,7 +494,9 @@ impl SettingsPanelView {
             RowControl::Toggle(_)
             | RowControl::Select { .. }
             | RowControl::MultiSelect { .. }
-            | RowControl::Color(_) => return,
+            | RowControl::Color(_)
+            | RowControl::Action { .. }
+            | RowControl::List { .. } => return,
         };
         self.active_control = Some(ActiveControl::Edit(edit));
     }
@@ -392,7 +528,9 @@ impl SettingsPanelView {
             RowControl::Toggle(_)
             | RowControl::Select { .. }
             | RowControl::MultiSelect { .. }
-            | RowControl::Color(_) => return,
+            | RowControl::Color(_)
+            | RowControl::Action { .. }
+            | RowControl::List { .. } => return,
         }
         self.persist();
     }
@@ -412,7 +550,7 @@ impl SettingsPanelView {
             match &self.active_control {
                 Some(ActiveControl::Edit(edit)) => return format!("{edit}_"),
                 Some(ActiveControl::Wheel(wheel)) => return wheel.value.clone(),
-                Some(ActiveControl::Dropdown(_)) | None => {}
+                Some(ActiveControl::Dropdown(_)) | Some(ActiveControl::List) | None => {}
             }
         }
         match &self.rows[index].control {
@@ -440,6 +578,29 @@ impl SettingsPanelView {
             RowControl::Text(value) => value.clone(),
             RowControl::TextList(values) => values.join(", "),
             RowControl::Color(value) => value.clone(),
+            RowControl::Action {
+                active,
+                pending,
+                error,
+                ..
+            } => {
+                if *pending {
+                    "working...".into()
+                } else if error.is_some() {
+                    "failed".into()
+                } else if *active {
+                    "active".into()
+                } else {
+                    "run".into()
+                }
+            }
+            RowControl::List { items, error, .. } => {
+                if error.is_some() {
+                    "unavailable".into()
+                } else {
+                    format!("{} found", items.len())
+                }
+            }
         }
     }
 
@@ -456,6 +617,11 @@ impl SettingsPanelView {
             | RowControl::Text(_)
             | RowControl::TextList(_)
             | RowControl::Color(_) => self.palette.label_text,
+            RowControl::Action { error: Some(_), .. } | RowControl::List { error: Some(_), .. } => {
+                self.palette.state_off
+            }
+            RowControl::Action { active: true, .. } => self.palette.state_on,
+            RowControl::Action { .. } | RowControl::List { .. } => self.palette.label_text,
         }
     }
 
@@ -506,7 +672,7 @@ impl SettingsPanelView {
             match &self.active_control {
                 Some(ActiveControl::Edit(edit)) => edit,
                 Some(ActiveControl::Wheel(wheel)) => return parsed_color(&wheel.value),
-                Some(ActiveControl::Dropdown(_)) | None => value,
+                Some(ActiveControl::Dropdown(_)) | Some(ActiveControl::List) | None => value,
             }
         } else {
             value
@@ -525,6 +691,17 @@ impl SettingsPanelView {
                     .child(section.clone()),
             );
         }
+        if matches!(row.control, RowControl::List { .. }) {
+            return container.child(self.render_list(index));
+        }
+        let label = match &row.control {
+            RowControl::Action {
+                active: true,
+                active_label: Some(label),
+                ..
+            } => label.clone(),
+            _ => row.label.clone(),
+        };
         let mut line = div()
             .id(("settings-row", index))
             .flex()
@@ -537,7 +714,7 @@ impl SettingsPanelView {
                 div()
                     .text_sm()
                     .text_color(rgb(self.palette.label_text))
-                    .child(row.label.clone()),
+                    .child(label),
             )
             .child(self.render_value_cell(index));
         let row_bounds = Rc::clone(&self.row_bounds[index]);
@@ -549,11 +726,15 @@ impl SettingsPanelView {
             .absolute()
             .inset_0(),
         );
-        if matches!(row.control, RowControl::Color(_)) {
+        if matches!(
+            row.control,
+            RowControl::Color(_) | RowControl::Action { .. }
+        ) {
             line = line.cursor(CursorStyle::PointingHand).on_click(cx.listener(
                 move |this, event: &ClickEvent, window, cx| {
                     if event.standard_click() {
-                        this.open_color_wheel(index, window, cx);
+                        this.selected = index;
+                        this.activate(window, cx);
                     }
                 },
             ));
@@ -584,11 +765,110 @@ impl SettingsPanelView {
                     | RowControl::Number { .. }
                     | RowControl::Text(_)
                     | RowControl::TextList(_)
-                    | RowControl::Color(_) => {}
+                    | RowControl::Color(_)
+                    | RowControl::Action { .. }
+                    | RowControl::List { .. } => {}
                 }
             }
         }
-        container.child(line)
+        container = container.child(line);
+        if let RowControl::Action {
+            error: Some(error), ..
+        } = &row.control
+        {
+            container = container.child(
+                div()
+                    .px_2()
+                    .text_xs()
+                    .text_color(rgb(self.palette.state_off))
+                    .child(error.clone()),
+            );
+        }
+        container
+    }
+
+    fn render_list(&self, index: usize) -> Div {
+        let row = &self.rows[index];
+        let RowControl::List {
+            empty_message,
+            items,
+            list,
+            error,
+            ..
+        } = &row.control
+        else {
+            return div();
+        };
+        let active =
+            index == self.selected && matches!(self.active_control, Some(ActiveControl::List));
+        let mut container = div().flex().flex_col().gap_1().px_2().py_1().rounded_md();
+        if index == self.selected {
+            container = container
+                .bg(rgb(self.palette.row_bg_selected))
+                .border_1()
+                .border_color(rgb(self.palette.row_border_selected));
+        }
+        container = container.child(
+            div()
+                .flex()
+                .flex_row()
+                .justify_between()
+                .text_sm()
+                .child(
+                    div()
+                        .text_color(rgb(self.palette.label_text))
+                        .child(row.label.clone()),
+                )
+                .child(
+                    div()
+                        .text_color(rgb(self.value_color(index)))
+                        .child(self.display_value(index)),
+                ),
+        );
+        if let Some(error) = error {
+            return container.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(self.palette.state_off))
+                    .child(error.clone()),
+            );
+        }
+        if items.is_empty() {
+            return container.child(
+                div()
+                    .py_2()
+                    .text_sm()
+                    .text_color(rgb(self.palette.label_text))
+                    .child(empty_message.clone()),
+            );
+        }
+        for item_index in list.visible_range(items.len()) {
+            let item = &items[item_index];
+            let mut item_row = div().flex().flex_col().px_2().py_1().rounded_sm();
+            if active && item_index == list.selected {
+                item_row = item_row.bg(rgb(self.palette.dropdown_bg));
+            }
+            item_row = item_row.child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(if active && item_index == list.selected {
+                        self.palette.section_text
+                    } else {
+                        self.palette.label_text
+                    }))
+                    .child(item.label.clone()),
+            );
+            if let Some(subtitle) = &item.subtitle {
+                item_row = item_row.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(self.palette.label_text))
+                        .child(subtitle.clone()),
+                );
+            }
+            container = container.child(item_row);
+        }
+        container
     }
 }
 
@@ -698,13 +978,18 @@ fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option<Intent> {
     }
 }
 
-fn row_height(row: &Row) -> f32 {
+pub(super) fn row_height(row: &Row) -> f32 {
     let header = if row.section_label.is_some() {
         super::PANEL_SECTION_HEADER_HEIGHT
     } else {
         0.0
     };
-    super::PANEL_ROW_HEIGHT + header
+    let body = if matches!(row.control, RowControl::List { .. }) {
+        super::PANEL_LIST_HEIGHT
+    } else {
+        super::PANEL_ROW_HEIGHT
+    };
+    body + header
 }
 
 fn visible_row_range(rows: &[Row], offset: usize, body_max: f32) -> std::ops::Range<usize> {

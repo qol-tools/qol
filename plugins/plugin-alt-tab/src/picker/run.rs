@@ -151,7 +151,7 @@ fn dispatch_settings(cx: &AsyncApp, state: &PickerState) {
             heading: "Alt Tab Settings",
         },
         state.tracker.clone(),
-        |_| Vec::new(),
+        qol_gpui::settings_panel::SettingsRuntime::empty(),
         cx,
     );
     if let Err(error) = opened {

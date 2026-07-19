@@ -60,12 +60,56 @@ fn fallback_socket_path(name: &str, use_tmpdir_env: bool) -> PathBuf {
 }
 
 pub fn send_action(config: &DaemonConfig, action: &str, expect_reply: bool) -> bool {
+    if !expect_reply {
+        return send_request_without_reply(config, action, serde_json::Value::Null);
+    }
+    matches!(
+        send_request(
+            config,
+            action,
+            serde_json::Value::Null,
+            std::time::Duration::from_millis(ACK_TIMEOUT_MS),
+        ),
+        Ok(DaemonResponse::Handled { .. })
+    )
+}
+
+pub fn send_request(
+    config: &DaemonConfig,
+    action: &str,
+    input: serde_json::Value,
+    timeout: std::time::Duration,
+) -> io::Result<DaemonResponse> {
     let Some(path) = socket_path(config) else {
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[daemon] {} unset and no fallback socket - cannot send action",
-            qol_conventions::ENV_DAEMON_SOCKET
-        );
+        return Err(io::Error::new(
+            ErrorKind::NotFound,
+            format!("{} is unset", qol_conventions::ENV_DAEMON_SOCKET),
+        ));
+    };
+    let mut stream = UnixStream::connect(path)?;
+    stream.set_write_timeout(Some(timeout))?;
+    stream.set_read_timeout(Some(timeout))?;
+    write_request(&mut stream, action, input)?;
+    stream.shutdown(Shutdown::Write)?;
+
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    if reader.read_line(&mut line)? == 0 {
+        return Err(io::Error::new(
+            ErrorKind::UnexpectedEof,
+            "daemon closed without a response",
+        ));
+    }
+    serde_json::from_str::<DaemonResponse>(line.trim())
+        .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))
+}
+
+fn send_request_without_reply(
+    config: &DaemonConfig,
+    action: &str,
+    input: serde_json::Value,
+) -> bool {
+    let Some(path) = socket_path(config) else {
         return false;
     };
     let Ok(mut stream) = UnixStream::connect(path) else {
@@ -73,35 +117,22 @@ pub fn send_action(config: &DaemonConfig, action: &str, expect_reply: bool) -> b
     };
     let timeout = std::time::Duration::from_millis(ACK_TIMEOUT_MS);
     let _ = stream.set_write_timeout(Some(timeout));
+    write_request(&mut stream, action, input).is_ok()
+}
 
+fn write_request(
+    stream: &mut UnixStream,
+    action: &str,
+    input: serde_json::Value,
+) -> io::Result<()> {
     let request = DaemonRequest {
         action: action.to_string(),
-        input: serde_json::Value::Null,
+        input,
     };
-    let Ok(mut payload) = serde_json::to_string(&request) else {
-        return false;
-    };
+    let mut payload = serde_json::to_string(&request)
+        .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
     payload.push('\n');
-
-    if stream.write_all(payload.as_bytes()).is_err() {
-        return false;
-    }
-    if !expect_reply {
-        return true;
-    }
-
-    let _ = stream.shutdown(Shutdown::Write);
-    let _ = stream.set_read_timeout(Some(timeout));
-
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    match reader.read_line(&mut line) {
-        Ok(0) | Err(_) => false,
-        Ok(_) => matches!(
-            serde_json::from_str::<DaemonResponse>(line.trim()),
-            Ok(DaemonResponse::Handled { .. })
-        ),
-    }
+    stream.write_all(payload.as_bytes())
 }
 
 pub fn send_kill(config: &DaemonConfig) -> bool {
@@ -554,6 +585,41 @@ mod tests {
         match response {
             DaemonResponse::Handled { data } => assert_eq!(data, Some(payload)),
             _ => panic!("expected handled response"),
+        }
+    }
+
+    #[test]
+    fn send_request_returns_daemon_payload() {
+        let _lock = daemon_listener_fd_env_lock();
+        let socket_name = temp_socket_name("request-payload");
+        let path = PathBuf::from("/tmp").join(socket_name);
+        let _ = fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let result = read_request_and_parse(&mut stream, |request| {
+                assert_eq!(request.action, "devices");
+                assert_eq!(request.input, serde_json::json!({ "paired": true }));
+                ReadResult::<()>::HandledWithData(serde_json::json!({ "count": 3 }))
+            });
+            handle_read_result(&mut stream, result, |_| unreachable!());
+        });
+
+        let response = send_request(
+            &fallback_config(socket_name),
+            "devices",
+            serde_json::json!({ "paired": true }),
+            std::time::Duration::from_secs(1),
+        )
+        .unwrap();
+        server.join().unwrap();
+        remove_socket_file(path);
+
+        match response {
+            DaemonResponse::Handled { data } => {
+                assert_eq!(data, Some(serde_json::json!({ "count": 3 })));
+            }
+            other => panic!("expected handled response, got {other:?}"),
         }
     }
 

@@ -131,7 +131,7 @@ fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {
             heading: "Launcher Settings",
         },
         focus_cache,
-        |_| Vec::new(),
+        qol_gpui::settings_panel::SettingsRuntime::empty(),
         cx,
     );
     if let Err(error) = opened {
