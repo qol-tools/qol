@@ -819,7 +819,16 @@ impl SettingsPanelView {
         };
         let active =
             index == self.selected && matches!(self.active_control, Some(ActiveControl::List));
-        let mut container = div().flex().flex_col().gap_1().px_2().py_1().rounded_md();
+        let mut container = div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .gap_1()
+            .h(px(super::PANEL_LIST_HEIGHT))
+            .overflow_hidden()
+            .px_2()
+            .py_1()
+            .rounded_md();
         if index == self.selected {
             container = container
                 .bg(rgb(self.palette.row_bg_selected))
@@ -829,7 +838,9 @@ impl SettingsPanelView {
         container = container.child(
             div()
                 .flex()
+                .flex_none()
                 .flex_row()
+                .h(px(super::PANEL_LIST_HEADER_HEIGHT))
                 .justify_between()
                 .text_sm()
                 .child(
@@ -862,7 +873,15 @@ impl SettingsPanelView {
         }
         for item_index in list.visible_range(items.len()) {
             let item = &items[item_index];
-            let mut item_row = div().flex().flex_col().px_2().py_1().rounded_sm();
+            let mut item_row = div()
+                .flex()
+                .flex_col()
+                .flex_none()
+                .h(px(super::PANEL_LIST_ITEM_HEIGHT))
+                .overflow_hidden()
+                .px_2()
+                .py_1()
+                .rounded_sm();
             if active && item_index == list.selected {
                 item_row = item_row.bg(rgb(self.palette.dropdown_bg));
             }
@@ -907,6 +926,7 @@ impl Render for SettingsPanelView {
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
             .size_full()
+            .overflow_hidden()
             .flex()
             .flex_col()
             .gap_1()
@@ -1056,6 +1076,7 @@ mod tests {
         binary_state_label, intent, is_number_seed, parsed_color, parsed_number, scroll_offset_for,
         visible_row_range, Intent, Row, RowControl,
     };
+    use crate::scroll_list::ScrollList;
 
     fn rows(headers: &[bool]) -> Vec<Row> {
         headers
@@ -1067,6 +1088,23 @@ mod tests {
                 control: RowControl::Toggle(false),
             })
             .collect()
+    }
+
+    fn list_row() -> Row {
+        Row {
+            section_label: None,
+            label: "Items".into(),
+            config_key: "items".into(),
+            control: RowControl::List {
+                query: "items".into(),
+                row_label: "{name}".into(),
+                row_subtitle: Some("{detail}".into()),
+                empty_message: "No items".into(),
+                items: Vec::new(),
+                list: ScrollList::new(super::super::rows::LIST_MAX_VISIBLE),
+                error: None,
+            },
+        }
     }
 
     #[test]
@@ -1087,6 +1125,15 @@ mod tests {
                 "offset {offset} budget {budget}"
             );
         }
+    }
+
+    #[test]
+    fn visible_range_reserves_the_full_runtime_list_height() {
+        let mut panel_rows = rows(&[true]);
+        panel_rows.push(list_row());
+        panel_rows.extend(rows(&[true, false, false, false]));
+
+        assert_eq!(visible_row_range(&panel_rows, 0, 480.0), 0..4);
     }
 
     #[test]
