@@ -6,7 +6,7 @@ import { useQueryPoll } from '../../../lib/hooks/useQueryPoll.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
 import { isActionRuntimeGated } from '../field-rules.js';
 import { queryFlag } from './query-data.js';
-import { actionLabel, selectedActionName } from './action-state.js';
+import { actionLabel, actionShowsActivity, selectedActionName } from './action-state.js';
 import { Button } from '../../../lib/components/Button.js';
 
 const PAIR_DURATION_S = 60;
@@ -73,10 +73,13 @@ export function ActionField({ field }) {
         run();
     }, [run]);
 
-    const variant = field.variant || 'primary';
+    const stateToggle = field.variant === 'toggle';
     const gated = isActionRuntimeGated(field, ctx.isRuntimeDisabled);
     const busy = primaryAction.pending || activeAction.pending || stopPair.pending || syncing;
     const active = runtimeActive || (isPairAction && pairing);
+    const variant = stateToggle
+        ? (runtimeActive ? 'success' : 'ghost')
+        : (active ? 'ghost' : field.variant || 'primary');
     const gatedMessage = gated ? 'Unavailable until the plugin connection is healthy.' : null;
     const label = actionLabel(field, busy, runtimeActive, pairing);
     const error = primaryAction.error || activeAction.error || stopPair.error || activeState.error;
@@ -87,8 +90,9 @@ export function ActionField({ field }) {
             onFocus=${onSelect}
             onKeyDown=${gated ? undefined : onKeyDown}>
             <div class="field-action-row">
-                ${active && html`<span class="refresh-btn spinning"></span>`}
-                <${Button} type="button" variant=${`btn-${active ? 'ghost' : variant}`}
+                ${actionShowsActivity(field, active) && html`<span class="refresh-btn spinning"></span>`}
+                <${Button} type="button" variant=${`btn-${variant}`}
+                        aria-pressed=${stateToggle ? runtimeActive : undefined}
                         disabled=${busy || gated}
                         onActivate=${gated ? undefined : run}>
                     ${label}

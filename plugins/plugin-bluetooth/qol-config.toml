@@ -6,6 +6,18 @@ description = "Choose devices that qol should keep connected through BlueZ."
 label = "Devices"
 description = "Search for nearby devices and inspect the devices currently paired with BlueZ."
 
+[field.adapter_power]
+type = "action"
+label = "Bluetooth"
+active_label = "Bluetooth"
+description = "Power the default Bluetooth adapter on or off."
+section = "devices"
+action = "enable_adapter"
+active_action = "disable_adapter"
+active_query = "adapter_status"
+active_value_from = "powered"
+variant = "toggle"
+
 [field.search]
 type = "action"
 label = "Start search"
@@ -89,8 +101,8 @@ default = true
 
 [field.power_on_adapter]
 type = "boolean"
-label = "Power on the adapter"
-description = "Allow the plugin to power on the default adapter before reconnecting."
+label = "Allow automatic power-on"
+description = "Allow startup, searches, and explicit connection actions to power on the default adapter when needed."
 section = "reconnection"
 default = true
 

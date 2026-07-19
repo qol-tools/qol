@@ -29,6 +29,10 @@ mod tests {
 
     #[test]
     fn validate_plugin_contract() {
-        PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
+        let manifest =
+            PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
+        let actions = manifest.executable_action_ids();
+        assert!(actions.contains("enable_adapter"));
+        assert!(actions.contains("disable_adapter"));
     }
 }

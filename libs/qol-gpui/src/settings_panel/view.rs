@@ -850,18 +850,7 @@ impl SettingsPanelView {
     }
 
     fn action_is_busy(&self, index: usize) -> bool {
-        matches!(
-            self.rows[index].control,
-            RowControl::Action {
-                active: true,
-                error: None,
-                ..
-            } | RowControl::Action {
-                pending: true,
-                error: None,
-                ..
-            }
-        )
+        action_shows_spinner(&self.rows[index].control)
     }
 
     fn swatch_color(&self, index: usize) -> Option<u32> {
@@ -1422,6 +1411,23 @@ fn list_intent(key: &str) -> Option<ListIntent> {
     }
 }
 
+fn action_shows_spinner(control: &RowControl) -> bool {
+    match control {
+        RowControl::Action {
+            pending: true,
+            error: None,
+            ..
+        } => true,
+        RowControl::Action {
+            active: true,
+            error: None,
+            variant,
+            ..
+        } => variant.as_deref() != Some("toggle"),
+        _ => false,
+    }
+}
+
 fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option<Intent> {
     if editing {
         return match key {
@@ -1484,9 +1490,9 @@ fn scroll_offset_for(rows: &[Row], selected: usize, offset: usize, body_max: f32
 #[cfg(test)]
 mod tests {
     use super::{
-        binary_state_label, intent, is_number_seed, list_action_affordance, list_intent,
-        parsed_color, parsed_number, scroll_offset_for, visible_row_range, Intent, ListIntent, Row,
-        RowControl,
+        action_shows_spinner, binary_state_label, intent, is_number_seed, list_action_affordance,
+        list_intent, parsed_color, parsed_number, scroll_offset_for, visible_row_range, Intent,
+        ListIntent, Row, RowControl,
     };
     use crate::scroll_list::ScrollList;
 
@@ -1607,6 +1613,28 @@ mod tests {
     fn binary_runtime_and_config_states_share_on_off_labels() {
         assert_eq!(binary_state_label(true), "[on]");
         assert_eq!(binary_state_label(false), "[off]");
+    }
+
+    #[test]
+    fn toggle_actions_show_state_without_a_permanent_spinner() {
+        let mut control = RowControl::Action {
+            action: "enable_adapter".into(),
+            active_action: Some("disable_adapter".into()),
+            active_label: Some("Bluetooth".into()),
+            active_query: Some("adapter_status".into()),
+            active_value_from: Some("powered".into()),
+            variant: Some("toggle".into()),
+            active: true,
+            pending: false,
+            error: None,
+        };
+        assert!(!action_shows_spinner(&control));
+
+        let RowControl::Action { pending, .. } = &mut control else {
+            unreachable!();
+        };
+        *pending = true;
+        assert!(action_shows_spinner(&control));
     }
 
     #[test]

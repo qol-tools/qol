@@ -1,5 +1,11 @@
 schema_version = 1
 
+[action.enable_adapter]
+description = "Power on the default Bluetooth adapter"
+
+[action.disable_adapter]
+description = "Power off the default Bluetooth adapter"
+
 [action.start_search]
 description = "Start Bluetooth discovery for up to 60 seconds"
 
@@ -32,6 +38,10 @@ input = { address = "string" }
 
 [query.search_status]
 description = "Whether Bluetooth discovery is currently active"
+poll_interval_ms = 500
+
+[query.adapter_status]
+description = "Current power state of the default Bluetooth adapter"
 poll_interval_ms = 500
 
 [query.devices]

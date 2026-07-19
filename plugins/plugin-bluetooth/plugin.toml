@@ -18,6 +18,14 @@ args = ["reconnect"]
 label = "Reconnect Paired and Trusted Devices"
 args = ["reconnect_trusted"]
 
+[action.enable_adapter]
+label = "Enable Bluetooth Adapter"
+args = ["enable_adapter"]
+
+[action.disable_adapter]
+label = "Disable Bluetooth Adapter"
+args = ["disable_adapter"]
+
 [action.start_search]
 label = "Start Bluetooth Search"
 args = ["search"]

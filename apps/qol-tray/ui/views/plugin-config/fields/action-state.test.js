@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { actionLabel, selectedActionName } from './action-state.js';
+import { actionLabel, actionShowsActivity, selectedActionName } from './action-state.js';
 
 test('runtime-active actions switch between explicit start and stop contracts', () => {
     const field = {
@@ -20,4 +20,10 @@ test('ordinary and pairing actions preserve their existing labels', () => {
     assert.equal(actionLabel({ action: 'reload', label: 'Reload' }, false, false, false), 'Reload');
     assert.equal(actionLabel({ action: 'pair', label: 'Pair' }, false, false, true), 'Stop Pairing');
     assert.equal(selectedActionName({ action: 'reload' }, true), 'reload');
+});
+
+test('persistent toggle actions do not present their active state as ongoing work', () => {
+    assert.equal(actionShowsActivity({ variant: 'toggle' }, true), false);
+    assert.equal(actionShowsActivity({ variant: 'primary' }, true), true);
+    assert.equal(actionShowsActivity({ variant: 'toggle' }, false), false);
 });

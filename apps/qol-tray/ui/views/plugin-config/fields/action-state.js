@@ -3,6 +3,10 @@ export function selectedActionName(field, runtimeActive) {
     return field.action;
 }
 
+export function actionShowsActivity(field, runtimeActive) {
+    return runtimeActive && field.variant !== 'toggle';
+}
+
 export function actionLabel(field, busy, runtimeActive, pairing) {
     if (busy) return 'Working...';
     if (field.active_action && runtimeActive) return field.active_label || 'Stop';
