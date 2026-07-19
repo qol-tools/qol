@@ -19,6 +19,25 @@
     font-weight: var(--fw-semibold);
 }
 
+.searchable-action-list-header-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.searchable-action-list-status {
+    gap: var(--space-1);
+}
+
+.searchable-action-list-status-dot {
+    display: inline-block;
+    font-size: 0.65em;
+}
+
+.searchable-action-list-status[data-pulse="true"] .searchable-action-list-status-dot {
+    animation: searchable-action-list-status-pulse calc(var(--dur-spin) * 1.5) ease-in-out infinite;
+}
+
 .searchable-action-list-count {
     min-width: var(--size-control-xs);
     padding: var(--space-1) var(--space-2);
@@ -247,6 +266,23 @@
     background: rgba(var(--accent-rgb), 0.025);
     color: var(--text-faint);
     text-align: center;
+}
+
+@keyframes searchable-action-list-status-pulse {
+    0%, 100% {
+        opacity: 0.35;
+    }
+
+    50% {
+        opacity: 1;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .searchable-action-list-status[data-pulse="true"] .searchable-action-list-status-dot {
+        animation: none;
+        opacity: 1;
+    }
 }
 
 .searchable-action-list[data-layout="cards"] .searchable-action-list-results {

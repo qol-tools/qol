@@ -13,6 +13,10 @@ const componentCss = readFileSync(
     resolve(fileURLToPath(new URL('.', import.meta.url)), '../styles/searchable-action-list.css'),
     'utf8',
 );
+const indicatorsSource = readFileSync(
+    resolve(fileURLToPath(new URL('.', import.meta.url)), 'components/StatusIndicators.js'),
+    'utf8',
+);
 
 const items = [
     {
@@ -68,4 +72,12 @@ test('searchable action list exposes generic presentation layouts', () => {
 
 test('searchable action list content fills the component width', () => {
     assert.match(componentCss, /\.searchable-action-list-content\s*\{[^}]*width:\s*100%;/s);
+});
+
+test('searchable action list reuses the shared badge for runtime status', () => {
+    assert.match(componentSource, /statusLabel = null/);
+    assert.match(componentSource, /<\$\{Badge\} className=\$\{`searchable-action-list-status/);
+    assert.match(indicatorsSource, /children, \.\.\.rest/);
+    assert.match(indicatorsSource, /\.\.\.\$\{rest\}/);
+    assert.match(componentCss, /searchable-action-list-status-pulse/);
 });

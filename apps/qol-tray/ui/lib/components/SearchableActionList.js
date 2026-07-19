@@ -17,6 +17,9 @@ import { Badge } from './StatusIndicators.js';
 
 export function SearchableActionList({
     label,
+    statusLabel = null,
+    statusTone = 'success',
+    statusPulse = false,
     description,
     items = [],
     emptyMessage = 'No results.',
@@ -67,9 +70,18 @@ export function SearchableActionList({
             ${label && html`
                 <div class="searchable-action-list-header">
                     <div class="searchable-action-list-label">${label}</div>
-                    <span class="searchable-action-list-count" aria-label=${`${visibleItems.length} results`}>
-                        ${resultCount}
-                    </span>
+                    <div class="searchable-action-list-header-meta">
+                        ${statusLabel && html`
+                            <${Badge} className=${`searchable-action-list-status searchable-action-list-badge tone-${statusTone}`}
+                                    data-pulse=${statusPulse ? 'true' : undefined}>
+                                <span class="searchable-action-list-status-dot" aria-hidden="true">${'●'}</span>
+                                ${statusLabel}
+                            <//>
+                        `}
+                        <span class="searchable-action-list-count" aria-label=${`${visibleItems.length} results`}>
+                            ${resultCount}
+                        </span>
+                    </div>
                 </div>
             `}
             ${description && html`<div class="searchable-action-list-description">${description}</div>`}

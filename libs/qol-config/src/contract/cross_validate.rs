@@ -11,7 +11,7 @@ pub fn validate_contracts(
     let mut errors = Vec::new();
     for (id, field) in &config.fields {
         validate_runable_ref(id, field, runtime, &mut errors);
-        validate_active_action_refs(id, field, runtime, &mut errors);
+        validate_runtime_active_refs(id, field, runtime, &mut errors);
         validate_stream_ref(id, field, runtime, &mut errors);
         validate_row_action_ref(id, field, runtime, &mut errors);
     }
@@ -22,7 +22,7 @@ pub fn validate_contracts(
     }
 }
 
-fn validate_active_action_refs(
+fn validate_runtime_active_refs(
     id: &str,
     field: &FieldSpec,
     runtime: Option<&RuntimeSpec>,
@@ -31,16 +31,26 @@ fn validate_active_action_refs(
     if field.active_action.is_none()
         && field.active_query.is_none()
         && field.active_value_from.is_none()
+        && field.active_label.is_none()
     {
         return;
     }
-    if field.kind != FieldKind::Action {
-        errors.push(ValidationError::new(
+    match field.kind {
+        FieldKind::Action => validate_action_active_refs(id, field, runtime, errors),
+        FieldKind::List => validate_list_active_refs(id, field, runtime, errors),
+        _ => errors.push(ValidationError::new(
             format!("field.{id}"),
-            "runtime active state is only valid for action fields",
-        ));
-        return;
+            "runtime active state is only valid for action and list fields",
+        )),
     }
+}
+
+fn validate_action_active_refs(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
     let Some(action) = field.active_action.as_deref() else {
         errors.push(ValidationError::new(
             format!("field.{id}.active_action"),
@@ -48,17 +58,50 @@ fn validate_active_action_refs(
         ));
         return;
     };
+    validate_active_query_refs(id, field, runtime, errors);
+    let Some(runtime) = runtime else {
+        return;
+    };
+    if !runtime.actions.contains_key(action) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.active_action"),
+            format!("references undeclared action: {action}"),
+        ));
+    }
+}
+
+fn validate_list_active_refs(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if field.active_action.is_some() {
+        errors.push(ValidationError::new(
+            format!("field.{id}.active_action"),
+            "is only valid for action fields",
+        ));
+    }
+    validate_active_query_refs(id, field, runtime, errors);
+}
+
+fn validate_active_query_refs(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
     let Some(query) = field.active_query.as_deref() else {
         errors.push(ValidationError::new(
             format!("field.{id}.active_query"),
-            "is required when active_action is configured",
+            "is required when runtime active state is configured",
         ));
         return;
     };
     if field.active_value_from.as_deref().is_none_or(str::is_empty) {
         errors.push(ValidationError::new(
             format!("field.{id}.active_value_from"),
-            "is required when active_action is configured",
+            "is required when runtime active state is configured",
         ));
         return;
     }
@@ -69,12 +112,6 @@ fn validate_active_action_refs(
         ));
         return;
     };
-    if !runtime.actions.contains_key(action) {
-        errors.push(ValidationError::new(
-            format!("field.{id}.active_action"),
-            format!("references undeclared action: {action}"),
-        ));
-    }
     if !runtime.queries.contains_key(query) {
         errors.push(ValidationError::new(
             format!("field.{id}.active_query"),
@@ -352,6 +389,54 @@ description = "Start searching"
         assert!(errors
             .iter()
             .any(|error| error.path == "field.search.active_query"));
+    }
+
+    #[test]
+    fn validates_list_runtime_active_state_references() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.devices]
+type = "list"
+query = "devices"
+active_query = "search_status"
+active_value_from = "searching"
+active_label = "LIVE"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.devices]
+description = "Devices"
+poll_interval_ms = 1000
+
+[query.search_status]
+description = "Search status"
+poll_interval_ms = 500
+"#,
+        )
+        .expect("parse runtime");
+
+        assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+
+        let missing_activity = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.devices]
+description = "Devices"
+poll_interval_ms = 1000
+"#,
+        )
+        .expect("parse runtime");
+        let errors = validate_contracts(&config, Some(&missing_activity)).unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|error| error.path == "field.devices.active_query"));
     }
 
     #[test]

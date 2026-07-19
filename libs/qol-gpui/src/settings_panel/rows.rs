@@ -47,6 +47,10 @@ pub(super) enum RowControl {
     },
     List {
         query: String,
+        active_query: Option<String>,
+        active_value_from: Option<String>,
+        active_label: Option<String>,
+        active: bool,
         row_label: String,
         row_subtitle: Option<String>,
         empty_message: String,
@@ -168,6 +172,10 @@ fn control_for(field: &ResolvedField, runtime: &SettingsRuntime) -> Option<RowCo
         }),
         FieldKind::List => field.query.clone().map(|query| RowControl::List {
             query,
+            active_query: field.active_query.clone(),
+            active_value_from: field.active_value_from.clone(),
+            active_label: field.active_label.clone(),
+            active: false,
             row_label: field.row_label.clone().unwrap_or_else(|| "{name}".into()),
             row_subtitle: field.row_subtitle.clone(),
             empty_message: field
@@ -278,9 +286,16 @@ pub(super) fn runtime_query_names(rows: &[Row]) -> Vec<String> {
             RowControl::Action {
                 active_query: Some(query),
                 ..
-            }
-            | RowControl::List { query, .. } => {
+            } => {
                 names.insert(query.clone());
+            }
+            RowControl::List {
+                query,
+                active_query,
+                ..
+            } => {
+                names.insert(query.clone());
+                names.extend(active_query.iter().cloned());
             }
             _ => {}
         }
@@ -310,20 +325,32 @@ pub(super) fn apply_runtime_query(
             },
             RowControl::List {
                 query: row_query,
+                active_query,
+                active_value_from,
+                active,
                 row_label,
                 row_subtitle,
                 items,
                 list,
                 error,
                 ..
-            } if row_query == query => match &result {
-                Ok(value) => {
-                    *items = list_items(value, row_label, row_subtitle.as_deref());
-                    list.sync(items.len());
-                    *error = None;
+            } => {
+                if row_query == query {
+                    match &result {
+                        Ok(value) => {
+                            *items = list_items(value, row_label, row_subtitle.as_deref());
+                            list.sync(items.len());
+                            *error = None;
+                        }
+                        Err(message) => *error = Some(message.clone()),
+                    }
                 }
-                Err(message) => *error = Some(message.clone()),
-            },
+                if active_query.as_deref() == Some(query) {
+                    *active = result
+                        .as_ref()
+                        .is_ok_and(|value| query_flag(value, active_value_from.as_deref()));
+                }
+            }
             _ => {}
         }
     }
@@ -419,8 +446,8 @@ fn set_config_value(root: &mut serde_json::Value, dotted_key: &str, value: serde
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_runtime_query, merged_config, row_value_json, rows_from_resolved, set_config_value,
-        ResolvedConfig, Row, RowControl,
+        apply_runtime_query, merged_config, row_value_json, rows_from_resolved,
+        runtime_query_names, set_config_value, ResolvedConfig, Row, RowControl,
     };
     use crate::settings_panel::SettingsRuntime;
 
@@ -789,6 +816,9 @@ active_value_from = "searching"
 type = "list"
 label = "Bluetooth devices"
 query = "devices"
+active_query = "search_status"
+active_value_from = "searching"
+active_label = "LIVE"
 row_label = "{name}"
 row_subtitle = "{detail}"
 empty_message = "No devices."
@@ -797,6 +827,7 @@ empty_message = "No devices."
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
         let mut rows = rows_from_resolved(&resolved, &SettingsRuntime::empty());
+        assert_eq!(runtime_query_names(&rows), ["devices", "search_status"]);
 
         apply_runtime_query(
             &mut rows,
@@ -819,8 +850,9 @@ empty_message = "No devices."
             RowControl::Action { active: true, .. }
         ));
         match &rows[1].control {
-            RowControl::List { items, .. } => {
+            RowControl::List { items, active, .. } => {
                 assert_eq!(items.len(), 2);
+                assert!(*active);
                 assert_eq!(items[0].label, "Keyboard");
                 assert_eq!(items[0].subtitle.as_deref(), Some("Paired · Connected"));
                 assert_eq!(items[1].label, "Headphones");

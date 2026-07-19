@@ -463,6 +463,9 @@ function SearchableActionListShowcase() {
                 <${Interactive}>
                     <${SearchableActionList}
                         label="Bluetooth devices"
+                        statusLabel="LIVE"
+                        statusTone="success"
+                        statusPulse=${true}
                         description="Search, navigate, and run the action exposed by each result."
                         items=${items}
                         layout=${layout}

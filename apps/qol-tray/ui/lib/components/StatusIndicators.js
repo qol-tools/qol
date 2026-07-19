@@ -1,8 +1,8 @@
 import { html } from '../html.js';
 
-export function Badge({ className, style, children }) {
+export function Badge({ className, style, children, ...rest }) {
     const cls = ['badge', className].filter(Boolean).join(' ');
-    return html`<span class=${cls} style=${style}>${children}</span>`;
+    return html`<span class=${cls} style=${style} ...${rest}>${children}</span>`;
 }
 
 export function HealthDot({ health }) {

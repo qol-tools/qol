@@ -10,6 +10,7 @@ use super::rows::{apply_runtime_query, merged_config, runtime_query_names, Row, 
 use super::{SettingsPanel, SettingsRuntime};
 use crate::dropdown::{Dropdown, DropdownStyle};
 use crate::spinner::Spinner;
+use crate::status_indicator::StatusIndicator;
 use crate::surface::SurfaceDismisser;
 use crate::theme::{settings_panel_runtime, SettingsPanelPalette};
 
@@ -808,6 +809,8 @@ impl SettingsPanelView {
     fn render_list(&self, index: usize) -> Div {
         let row = &self.rows[index];
         let RowControl::List {
+            active_label,
+            active: runtime_active,
             empty_message,
             items,
             list,
@@ -817,8 +820,24 @@ impl SettingsPanelView {
         else {
             return div();
         };
-        let active =
+        let list_active =
             index == self.selected && matches!(self.active_control, Some(ActiveControl::List));
+        let mut header_status = div().flex().items_center().gap_2();
+        if *runtime_active {
+            header_status = header_status.child(
+                StatusIndicator::new(
+                    ("settings-list-activity", index),
+                    active_label.as_deref().unwrap_or("Live").to_string(),
+                    rgb(self.palette.state_on),
+                )
+                .pulse(),
+            );
+        }
+        header_status = header_status.child(
+            div()
+                .text_color(rgb(self.value_color(index)))
+                .child(self.display_value(index)),
+        );
         let mut container = div()
             .flex()
             .flex_col()
@@ -848,11 +867,7 @@ impl SettingsPanelView {
                         .text_color(rgb(self.palette.label_text))
                         .child(row.label.clone()),
                 )
-                .child(
-                    div()
-                        .text_color(rgb(self.value_color(index)))
-                        .child(self.display_value(index)),
-                ),
+                .child(header_status),
         );
         if let Some(error) = error {
             return container.child(
@@ -882,13 +897,13 @@ impl SettingsPanelView {
                 .px_2()
                 .py_1()
                 .rounded_sm();
-            if active && item_index == list.selected {
+            if list_active && item_index == list.selected {
                 item_row = item_row.bg(rgb(self.palette.dropdown_bg));
             }
             item_row = item_row.child(
                 div()
                     .text_sm()
-                    .text_color(rgb(if active && item_index == list.selected {
+                    .text_color(rgb(if list_active && item_index == list.selected {
                         self.palette.section_text
                     } else {
                         self.palette.label_text
@@ -1097,6 +1112,10 @@ mod tests {
             config_key: "items".into(),
             control: RowControl::List {
                 query: "items".into(),
+                active_query: None,
+                active_value_from: None,
+                active_label: None,
+                active: false,
                 row_label: "{name}".into(),
                 row_subtitle: Some("{detail}".into()),
                 empty_message: "No items".into(),

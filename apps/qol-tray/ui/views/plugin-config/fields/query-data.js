@@ -13,3 +13,8 @@ export function queryFlag(value, path) {
     const flag = extractPath(value, path);
     return flag === true || flag === 1 || flag === 'true';
 }
+
+export function runtimeActivityLabel(field, value) {
+    if (!queryFlag(value, field?.active_value_from)) return null;
+    return field.active_label || 'Live';
+}

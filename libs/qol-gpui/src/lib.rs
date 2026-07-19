@@ -12,10 +12,12 @@ pub mod runtime_config;
 pub mod scroll_list;
 pub mod settings_panel;
 pub mod spinner;
+pub mod status_indicator;
 pub mod surface;
 pub mod window;
 
 pub use spinner::Spinner;
+pub use status_indicator::StatusIndicator;
 
 pub mod theme {
     pub use qol_theme::*;

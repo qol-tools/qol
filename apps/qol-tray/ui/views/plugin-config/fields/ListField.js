@@ -7,6 +7,7 @@ import { SearchableActionList } from '../../../lib/components/SearchableActionLi
 import { fieldLayoutAttrs } from '../field-map.js';
 import { rowActionInput } from './row-action.js';
 import { listItem, rowsFrom } from './list-rows.js';
+import { runtimeActivityLabel } from './query-data.js';
 
 const DEFAULT_POLL_MS = 2000;
 
@@ -15,6 +16,9 @@ export function ListField({ field }) {
     const queryDef = ctx.runtime?.query?.[field.query];
     const interval = queryDef?.poll_interval_ms || DEFAULT_POLL_MS;
     const query = useQueryPoll(ctx.pluginId, field.query, interval);
+    const activeQueryDef = ctx.runtime?.query?.[field.active_query];
+    const activeInterval = activeQueryDef?.poll_interval_ms || DEFAULT_POLL_MS;
+    const activeState = useQueryPoll(ctx.pluginId, field.active_query, activeInterval);
     const rowDispatch = useDispatchAction(ctx.pluginId, null);
     const [pending, setPending] = useState(null);
     const rows = rowsFrom(query.data);
@@ -23,6 +27,7 @@ export function ListField({ field }) {
     const pendingId = pending?.itemId || backendPending?.id;
     const pendingActionId = pending?.actionId || backendPending?.primaryAction?.id;
     const selected = ctx.selectedFieldId === field.id;
+    const activityLabel = runtimeActivityLabel(field, activeState.data);
 
     const onSelect = useCallback(() => {
         ctx.setSelectedFieldId(field.id);
@@ -49,6 +54,9 @@ export function ListField({ field }) {
             selected=${selected ? true : undefined}
             onSelect=${onSelect}
             label=${field.label}
+            statusLabel=${activityLabel}
+            statusTone="success"
+            statusPulse=${Boolean(activityLabel)}
             description=${field.description}
             items=${items}
             emptyMessage=${field.empty_message || 'No items.'}
@@ -56,7 +64,7 @@ export function ListField({ field }) {
             pendingId=${pendingId}
             pendingActionId=${pendingActionId}
             loading=${query.loading}
-            error=${query.error || rowDispatch.error}
+            error=${query.error || activeState.error || rowDispatch.error}
             searchable=${field.search === true}
             onActivate=${activate}
             onAction=${activate} />

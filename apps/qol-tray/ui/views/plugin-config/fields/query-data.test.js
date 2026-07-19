@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractPath, queryFlag } from './query-data.js';
+import { extractPath, queryFlag, runtimeActivityLabel } from './query-data.js';
 
 test('extractPath resolves nested query values safely', () => {
     const value = { search: { active: true }, zero: 0 };
@@ -28,5 +28,17 @@ test('queryFlag accepts only explicit wire truth values', () => {
     ];
     for (const [value, expected] of cases) {
         assert.equal(queryFlag({ value }, 'value'), expected, `value: ${value}`);
+    }
+});
+
+test('runtimeActivityLabel exposes labels only while active', () => {
+    const cases = [
+        [{ active_value_from: 'searching', active_label: 'LIVE' }, { searching: true }, 'LIVE'],
+        [{ active_value_from: 'searching' }, { searching: 'true' }, 'Live'],
+        [{ active_value_from: 'searching', active_label: 'LIVE' }, { searching: false }, null],
+        [{}, { searching: true }, null],
+    ];
+    for (const [field, value, expected] of cases) {
+        assert.equal(runtimeActivityLabel(field, value), expected);
     }
 });
