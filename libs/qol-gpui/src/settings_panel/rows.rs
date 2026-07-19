@@ -1,4 +1,6 @@
-use qol_config::contract::{FieldDefault, FieldKind};
+use qol_config::contract::{
+    resolve_row_actions, FieldDefault, FieldKind, ResolvedRowAction, RowActionSpec,
+};
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection};
 
 use super::SettingsRuntime;
@@ -8,9 +10,18 @@ pub(super) const LIST_MAX_VISIBLE: usize = 5;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ListItem {
+    pub(super) id: String,
     pub(super) label: String,
     pub(super) subtitle: Option<String>,
     pub(super) data: serde_json::Value,
+    pub(super) pending: bool,
+    pub(super) error: Option<String>,
+}
+
+#[derive(Debug)]
+pub(super) struct ListActions {
+    pub(super) primary: Option<RowActionSpec>,
+    pub(super) additional: Vec<RowActionSpec>,
 }
 
 #[derive(Debug)]
@@ -53,6 +64,7 @@ pub(super) enum RowControl {
         active: bool,
         row_label: String,
         row_subtitle: Option<String>,
+        actions: Box<ListActions>,
         empty_message: String,
         items: Vec<ListItem>,
         list: ScrollList,
@@ -178,6 +190,10 @@ fn control_for(field: &ResolvedField, runtime: &SettingsRuntime) -> Option<RowCo
             active: false,
             row_label: field.row_label.clone().unwrap_or_else(|| "{name}".into()),
             row_subtitle: field.row_subtitle.clone(),
+            actions: Box::new(ListActions {
+                primary: field.row_action.clone(),
+                additional: field.row_actions.clone(),
+            }),
             empty_message: field
                 .empty_message
                 .clone()
@@ -372,14 +388,48 @@ fn list_items(value: &serde_json::Value, label: &str, subtitle: Option<&str>) ->
         .map(Vec::as_slice)
         .unwrap_or_default();
     rows.iter()
-        .map(|row| ListItem {
+        .enumerate()
+        .map(|(index, row)| ListItem {
+            id: row
+                .get("id")
+                .or_else(|| row.get("address"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| index.to_string()),
             label: render_template(label, row),
             subtitle: subtitle
                 .map(|template| render_template(template, row))
                 .filter(|text| !text.is_empty()),
             data: row.clone(),
+            pending: row
+                .get("action_pending")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            error: None,
         })
         .collect()
+}
+
+pub(super) fn primary_list_item_action(
+    actions: &ListActions,
+    item: &ListItem,
+) -> Option<ResolvedRowAction> {
+    resolve_row_actions(actions.primary.as_ref(), &actions.additional, &item.data)
+        .into_iter()
+        .next()
+}
+
+pub(super) fn begin_list_item_action(
+    actions: &ListActions,
+    item: &mut ListItem,
+) -> Option<ResolvedRowAction> {
+    if item.pending {
+        return None;
+    }
+    let action = primary_list_item_action(actions, item)?;
+    item.pending = true;
+    item.error = None;
+    Some(action)
 }
 
 fn render_template(template: &str, row: &serde_json::Value) -> String {
@@ -446,8 +496,9 @@ fn set_config_value(root: &mut serde_json::Value, dotted_key: &str, value: serde
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_runtime_query, merged_config, row_value_json, rows_from_resolved,
-        runtime_query_names, set_config_value, ResolvedConfig, Row, RowControl,
+        apply_runtime_query, begin_list_item_action, merged_config, primary_list_item_action,
+        row_value_json, rows_from_resolved, runtime_query_names, set_config_value, ResolvedConfig,
+        Row, RowControl,
     };
     use crate::settings_panel::SettingsRuntime;
 
@@ -822,6 +873,18 @@ active_label = "LIVE"
 row_label = "{name}"
 row_subtitle = "{detail}"
 empty_message = "No devices."
+
+[[field.devices.row_actions]]
+action = "connect_device"
+label = "Connect"
+when = "can_connect"
+input = { address = "{address}" }
+
+[[field.devices.row_actions]]
+action = "disconnect_device"
+label = "Disconnect"
+when = "can_disconnect"
+input = { address = "{address}" }
 "#;
         let spec = qol_config::contract::parse_spec_str(RUNTIME_SPEC).unwrap();
         let resolved =
@@ -839,8 +902,20 @@ empty_message = "No devices."
             "devices",
             Ok(serde_json::json!({
                 "items": [
-                    { "name": "Keyboard", "detail": "Paired · Connected" },
-                    { "name": "Headphones", "detail": "Discovered" }
+                    {
+                        "address": "AA:00",
+                        "name": "Keyboard",
+                        "detail": "Paired · Connected",
+                        "can_connect": false,
+                        "can_disconnect": true
+                    },
+                    {
+                        "address": "AA:01",
+                        "name": "Headphones",
+                        "detail": "Discovered",
+                        "can_connect": true,
+                        "can_disconnect": false
+                    }
                 ]
             })),
         );
@@ -850,12 +925,39 @@ empty_message = "No devices."
             RowControl::Action { active: true, .. }
         ));
         match &rows[1].control {
-            RowControl::List { items, active, .. } => {
+            RowControl::List {
+                actions,
+                items,
+                active,
+                ..
+            } => {
                 assert_eq!(items.len(), 2);
                 assert!(*active);
                 assert_eq!(items[0].label, "Keyboard");
                 assert_eq!(items[0].subtitle.as_deref(), Some("Paired · Connected"));
                 assert_eq!(items[1].label, "Headphones");
+                let connected =
+                    primary_list_item_action(actions, &items[0]).expect("connected device action");
+                assert_eq!(connected.action, "disconnect_device");
+                assert_eq!(connected.label, "Disconnect");
+                assert_eq!(connected.input, serde_json::json!({ "address": "AA:00" }));
+                let disconnected = primary_list_item_action(actions, &items[1])
+                    .expect("disconnected device action");
+                assert_eq!(disconnected.action, "connect_device");
+                assert_eq!(disconnected.label, "Connect");
+                assert_eq!(
+                    disconnected.input,
+                    serde_json::json!({ "address": "AA:01" })
+                );
+                let mut item = items[1].clone();
+                item.error = Some("previous failure".into());
+                assert_eq!(
+                    begin_list_item_action(actions, &mut item),
+                    Some(disconnected)
+                );
+                assert!(item.pending);
+                assert_eq!(item.error, None);
+                assert_eq!(begin_list_item_action(actions, &mut item), None);
             }
             other => panic!("expected list, got {other:?}"),
         }

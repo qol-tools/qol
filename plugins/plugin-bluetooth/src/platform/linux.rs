@@ -213,7 +213,7 @@ pub fn open_settings() -> Result<()> {
 
 pub fn run_settings_panel() -> Result<()> {
     let runtime = qol_gpui::settings_panel::SettingsRuntime::new(settings_query)
-        .with_action(settings_action)
+        .with_input_action(settings_action)
         .poll_every(Duration::from_millis(500));
     qol_gpui::settings_panel::run_standalone(
         qol_gpui::settings_panel::SettingsPanel {
@@ -240,13 +240,8 @@ fn settings_query(query: &str) -> std::result::Result<serde_json::Value, String>
     }
 }
 
-fn settings_action(action: &str) -> std::result::Result<(), String> {
-    match core_daemon::send_request(
-        &DAEMON_CONFIG,
-        action,
-        serde_json::Value::Null,
-        Duration::from_secs(2),
-    ) {
+fn settings_action(action: &str, input: serde_json::Value) -> std::result::Result<(), String> {
+    match core_daemon::send_request(&DAEMON_CONFIG, action, input, Duration::from_secs(2)) {
         Ok(DaemonResponse::Handled { .. }) => Ok(()),
         Ok(DaemonResponse::Error { message }) => Err(message),
         Ok(DaemonResponse::Fallback) => Err("Bluetooth daemon declined the action".into()),

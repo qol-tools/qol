@@ -35,7 +35,7 @@ pub struct SettingsPanel {
 }
 
 type QueryHandler = dyn Fn(&str) -> Result<serde_json::Value, String> + Send + Sync;
-type ActionHandler = dyn Fn(&str) -> Result<(), String> + Send + Sync;
+type ActionHandler = dyn Fn(&str, serde_json::Value) -> Result<(), String> + Send + Sync;
 
 #[derive(Clone)]
 pub struct SettingsRuntime {
@@ -50,7 +50,7 @@ impl SettingsRuntime {
     ) -> Self {
         Self {
             query: Arc::new(query),
-            action: Arc::new(|action| Err(format!("action `{action}` is unavailable"))),
+            action: Arc::new(|action, _| Err(format!("action `{action}` is unavailable"))),
             poll_interval: Duration::from_secs(2),
         }
     }
@@ -62,6 +62,14 @@ impl SettingsRuntime {
     pub fn with_action(
         mut self,
         action: impl Fn(&str) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        self.action = Arc::new(move |name, _| action(name));
+        self
+    }
+
+    pub fn with_input_action(
+        mut self,
+        action: impl Fn(&str, serde_json::Value) -> Result<(), String> + Send + Sync + 'static,
     ) -> Self {
         self.action = Arc::new(action);
         self
@@ -76,8 +84,8 @@ impl SettingsRuntime {
         (self.query)(name)
     }
 
-    fn run_action(&self, name: &str) -> Result<(), String> {
-        (self.action)(name)
+    fn run_action(&self, name: &str, input: serde_json::Value) -> Result<(), String> {
+        (self.action)(name, input)
     }
 }
 

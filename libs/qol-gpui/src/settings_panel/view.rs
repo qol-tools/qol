@@ -6,7 +6,10 @@ use gpui::*;
 
 use super::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use super::persistence::save_values;
-use super::rows::{apply_runtime_query, merged_config, runtime_query_names, Row, RowControl};
+use super::rows::{
+    apply_runtime_query, begin_list_item_action, merged_config, primary_list_item_action,
+    runtime_query_names, Row, RowControl,
+};
 use super::{SettingsPanel, SettingsRuntime};
 use crate::dropdown::{Dropdown, DropdownStyle};
 use crate::spinner::Spinner;
@@ -300,6 +303,13 @@ impl SettingsPanelView {
     }
 
     fn on_list_key(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(intent) = list_intent(key) else {
+            return;
+        };
+        if intent == ListIntent::Activate {
+            self.dispatch_list_action(cx);
+            return;
+        }
         let Some(row) = self.rows.get_mut(self.selected) else {
             self.active_control = None;
             return;
@@ -308,11 +318,11 @@ impl SettingsPanelView {
             self.active_control = None;
             return;
         };
-        match key {
-            "up" => list.move_up(),
-            "down" => list.move_down(items.len()),
-            "escape" | "left" | "enter" | "return" => self.active_control = None,
-            _ => return,
+        match intent {
+            ListIntent::Up => list.move_up(),
+            ListIntent::Down => list.move_down(items.len()),
+            ListIntent::Close => self.active_control = None,
+            ListIntent::Activate => return,
         }
         list.sync(items.len());
         cx.notify();
@@ -455,7 +465,9 @@ impl SettingsPanelView {
             let mut async_cx = cx.clone();
             async move {
                 let result = async_cx
-                    .background_spawn(async move { runtime.run_action(&action) })
+                    .background_spawn(async move {
+                        runtime.run_action(&action, serde_json::Value::Null)
+                    })
                     .await;
                 let _ = this.update(&mut async_cx, |this, cx| {
                     if let Some(RowControl::Action { pending, error, .. }) =
@@ -469,6 +481,58 @@ impl SettingsPanelView {
             }
         })
         .detach();
+    }
+
+    fn dispatch_list_action(&mut self, cx: &mut Context<Self>) {
+        let row_index = self.selected;
+        let Some(RowControl::List {
+            actions,
+            items,
+            list,
+            ..
+        }) = self.rows.get_mut(row_index).map(|row| &mut row.control)
+        else {
+            return;
+        };
+        let item_index = list.selected;
+        let Some(item) = items.get_mut(item_index) else {
+            return;
+        };
+        let Some(action) = begin_list_item_action(actions, item) else {
+            return;
+        };
+        let item_id = item.id.clone();
+        let runtime = self.runtime.clone();
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                let result = async_cx
+                    .background_spawn(
+                        async move { runtime.run_action(&action.action, action.input) },
+                    )
+                    .await;
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    if let Err(error) = result {
+                        this.set_list_action_error(row_index, &item_id, error);
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn set_list_action_error(&mut self, row_index: usize, item_id: &str, error: String) {
+        let Some(RowControl::List { items, .. }) =
+            self.rows.get_mut(row_index).map(|row| &mut row.control)
+        else {
+            return;
+        };
+        let Some(item) = items.iter_mut().find(|item| item.id == item_id) else {
+            return;
+        };
+        item.pending = false;
+        item.error = Some(error);
     }
 
     fn begin_number_entry(&mut self, key_char: Option<&str>) -> bool {
@@ -887,40 +951,101 @@ impl SettingsPanelView {
             );
         }
         for item_index in list.visible_range(items.len()) {
-            let item = &items[item_index];
-            let mut item_row = div()
-                .flex()
-                .flex_col()
-                .flex_none()
-                .h(px(super::PANEL_LIST_ITEM_HEIGHT))
-                .overflow_hidden()
-                .px_2()
-                .py_1()
-                .rounded_sm();
-            if list_active && item_index == list.selected {
-                item_row = item_row.bg(rgb(self.palette.dropdown_bg));
-            }
-            item_row = item_row.child(
+            container = container.child(self.render_list_item(index, item_index, list_active));
+        }
+        container
+    }
+
+    fn render_list_item(&self, index: usize, item_index: usize, list_active: bool) -> Div {
+        let RowControl::List {
+            actions,
+            items,
+            list,
+            ..
+        } = &self.rows[index].control
+        else {
+            return div();
+        };
+        let item = &items[item_index];
+        let selected = list_active && item_index == list.selected;
+        let action = primary_list_item_action(actions, item);
+        let title = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .child(
                 div()
+                    .flex_1()
+                    .overflow_hidden()
                     .text_sm()
-                    .text_color(rgb(if list_active && item_index == list.selected {
+                    .text_color(rgb(if selected {
                         self.palette.section_text
                     } else {
                         self.palette.label_text
                     }))
                     .child(item.label.clone()),
-            );
-            if let Some(subtitle) = &item.subtitle {
-                item_row = item_row.child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(self.palette.label_text))
-                        .child(subtitle.clone()),
-                );
-            }
-            container = container.child(item_row);
+            )
+            .child(self.render_list_action(index, item_index, selected, item.pending, action));
+        let mut item_row = div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .h(px(super::PANEL_LIST_ITEM_HEIGHT))
+            .overflow_hidden()
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .child(title);
+        if selected {
+            item_row = item_row.bg(rgb(self.palette.dropdown_bg));
         }
-        container
+        let Some(detail) = item.error.as_ref().or(item.subtitle.as_ref()) else {
+            return item_row;
+        };
+        item_row.child(
+            div()
+                .text_xs()
+                .text_color(rgb(if item.error.is_some() {
+                    self.palette.state_off
+                } else {
+                    self.palette.label_text
+                }))
+                .child(detail.clone()),
+        )
+    }
+
+    fn render_list_action(
+        &self,
+        index: usize,
+        item_index: usize,
+        selected: bool,
+        pending: bool,
+        action: Option<qol_config::contract::ResolvedRowAction>,
+    ) -> Div {
+        let mut cell = div().flex().flex_none().flex_row().items_center().gap_2();
+        if pending {
+            cell = cell.child(Spinner::new(
+                (
+                    "settings-list-action-spinner",
+                    ((index as u64) << 32) | item_index as u64,
+                ),
+                rgb(self.palette.state_on),
+            ));
+        }
+        let Some(action) = action else {
+            return cell;
+        };
+        cell.child(
+            div()
+                .text_xs()
+                .text_color(rgb(if selected {
+                    self.palette.state_on
+                } else {
+                    self.palette.label_text
+                }))
+                .child(format!("[{}]", action.label)),
+        )
     }
 }
 
@@ -1026,6 +1151,24 @@ enum Intent {
     CancelEdit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListIntent {
+    Up,
+    Down,
+    Activate,
+    Close,
+}
+
+fn list_intent(key: &str) -> Option<ListIntent> {
+    match key {
+        "up" => Some(ListIntent::Up),
+        "down" => Some(ListIntent::Down),
+        "enter" | "return" => Some(ListIntent::Activate),
+        "escape" | "left" => Some(ListIntent::Close),
+        _ => None,
+    }
+}
+
 fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option<Intent> {
     if editing {
         return match key {
@@ -1088,8 +1231,8 @@ fn scroll_offset_for(rows: &[Row], selected: usize, offset: usize, body_max: f32
 #[cfg(test)]
 mod tests {
     use super::{
-        binary_state_label, intent, is_number_seed, parsed_color, parsed_number, scroll_offset_for,
-        visible_row_range, Intent, Row, RowControl,
+        binary_state_label, intent, is_number_seed, list_intent, parsed_color, parsed_number,
+        scroll_offset_for, visible_row_range, Intent, ListIntent, Row, RowControl,
     };
     use crate::scroll_list::ScrollList;
 
@@ -1118,6 +1261,10 @@ mod tests {
                 active: false,
                 row_label: "{name}".into(),
                 row_subtitle: Some("{detail}".into()),
+                actions: Box::new(super::super::rows::ListActions {
+                    primary: None,
+                    additional: Vec::new(),
+                }),
                 empty_message: "No items".into(),
                 items: Vec::new(),
                 list: ScrollList::new(super::super::rows::LIST_MAX_VISIBLE),
@@ -1181,6 +1328,22 @@ mod tests {
         ];
         for (ch, expected) in cases {
             assert_eq!(is_number_seed(ch), expected, "char: {ch:?}");
+        }
+    }
+
+    #[test]
+    fn list_intent_activates_enter_instead_of_closing_navigation() {
+        let cases = [
+            ("up", Some(ListIntent::Up)),
+            ("down", Some(ListIntent::Down)),
+            ("enter", Some(ListIntent::Activate)),
+            ("return", Some(ListIntent::Activate)),
+            ("escape", Some(ListIntent::Close)),
+            ("left", Some(ListIntent::Close)),
+            ("space", None),
+        ];
+        for (key, expected) in cases {
+            assert_eq!(list_intent(key), expected, "key: {key}");
         }
     }
 
