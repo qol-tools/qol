@@ -13,6 +13,10 @@ pub fn hide_invisible(title: &str) -> bool {
     hide_window_by_title(title)
 }
 
+pub fn park_window_by_title(_title: &str) -> bool {
+    false
+}
+
 pub fn configure_keepalive_window(_title: &str) -> bool {
     false
 }

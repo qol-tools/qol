@@ -31,6 +31,7 @@ pub(super) struct SettingsPanelView {
     active_control: Option<ActiveControl>,
     row_bounds: Vec<Rc<Cell<Option<Bounds<Pixels>>>>>,
     wheel_generation: u64,
+    runtime_poll_generation: u64,
     dismisser: SurfaceDismisser,
     palette: SettingsPanelPalette,
     focus_handle: FocusHandle,
@@ -79,7 +80,7 @@ impl SettingsPanelView {
         let runtime_queries = runtime_query_names(&state.rows);
         cx.on_release(|view, cx| view.close_wheel_popup(cx))
             .detach();
-        let view = Self {
+        let mut view = Self {
             panel,
             runtime: state.runtime,
             runtime_queries,
@@ -92,18 +93,21 @@ impl SettingsPanelView {
             active_control: None,
             row_bounds,
             wheel_generation: 0,
+            runtime_poll_generation: 0,
             dismisser,
             palette: settings_panel_runtime(),
             focus_handle: cx.focus_handle(),
         };
-        view.spawn_runtime_poll(cx);
+        view.resume_runtime_poll(cx);
         view
     }
 
-    fn spawn_runtime_poll(&self, cx: &mut Context<Self>) {
+    pub(super) fn resume_runtime_poll(&mut self, cx: &mut Context<Self>) {
         if self.runtime_queries.is_empty() {
             return;
         }
+        self.runtime_poll_generation = self.runtime_poll_generation.wrapping_add(1);
+        let generation = self.runtime_poll_generation;
         let runtime = self.runtime.clone();
         let queries = self.runtime_queries.clone();
         let interval = runtime.poll_interval;
@@ -111,6 +115,14 @@ impl SettingsPanelView {
             let mut async_cx = cx.clone();
             async move {
                 loop {
+                    let active = this
+                        .update(&mut async_cx, |this, _| {
+                            this.runtime_poll_generation == generation
+                        })
+                        .unwrap_or(false);
+                    if !active {
+                        break;
+                    }
                     let query_runtime = runtime.clone();
                     let query_names = queries.clone();
                     let results = async_cx
@@ -124,15 +136,19 @@ impl SettingsPanelView {
                                 .collect::<Vec<_>>()
                         })
                         .await;
-                    if this
+                    let applied = this
                         .update(&mut async_cx, |this, cx| {
+                            if this.runtime_poll_generation != generation {
+                                return false;
+                            }
                             for (query, result) in results {
                                 apply_runtime_query(&mut this.rows, &query, result);
                             }
                             cx.notify();
+                            true
                         })
-                        .is_err()
-                    {
+                        .unwrap_or(false);
+                    if !applied {
                         break;
                     }
                     async_cx.background_executor().timer(interval).await;
@@ -140,6 +156,10 @@ impl SettingsPanelView {
             }
         })
         .detach();
+    }
+
+    fn pause_runtime_poll(&mut self) {
+        self.runtime_poll_generation = self.runtime_poll_generation.wrapping_add(1);
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -200,6 +220,7 @@ impl SettingsPanelView {
             }
             Intent::CancelEdit => self.active_control = None,
             Intent::Close => {
+                self.pause_runtime_poll();
                 self.dismisser.dismiss(cx);
                 return;
             }

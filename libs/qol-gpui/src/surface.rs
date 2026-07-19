@@ -9,6 +9,8 @@ use gpui::*;
 use crate::monitor::MonitorTracker;
 
 pub const CORNER_MARGIN: f32 = 24.0;
+const REUSED_REVEAL_SAMPLE_INTERVAL: Duration = Duration::from_millis(5);
+const REUSED_REVEAL_MAX_ATTEMPTS: usize = 100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Corner {
@@ -35,11 +37,16 @@ pub struct Surface {
     anchor: Anchor,
     timeout: Option<Duration>,
     size: Size<Pixels>,
+    retain_on_dismiss: bool,
 }
 
 pub(crate) struct OpenedSurface<V> {
     pub(crate) handle: WindowHandle<SurfaceRoot<V>>,
     pub(crate) dismisser: SurfaceDismisser,
+    title: String,
+    anchor: Anchor,
+    size: Size<Pixels>,
+    visible: Rc<Cell<bool>>,
 }
 
 type CloseWindow = Box<dyn Fn(&mut App)>;
@@ -47,6 +54,7 @@ type CloseWindow = Box<dyn Fn(&mut App)>;
 struct DismissState {
     close: RefCell<Option<CloseWindow>>,
     generation: Cell<u64>,
+    reusable: bool,
 }
 
 #[derive(Clone)]
@@ -55,11 +63,12 @@ pub struct SurfaceDismisser {
 }
 
 impl SurfaceDismisser {
-    fn new() -> Self {
+    fn new(reusable: bool) -> Self {
         Self {
             state: Rc::new(DismissState {
                 close: RefCell::new(None),
                 generation: Cell::new(0),
+                reusable,
             }),
         }
     }
@@ -68,6 +77,15 @@ impl SurfaceDismisser {
         self.state
             .generation
             .set(self.state.generation.get().wrapping_add(1));
+        if self.state.reusable {
+            let state = self.state.clone();
+            cx.defer(move |cx| {
+                if let Some(close) = state.close.borrow().as_ref() {
+                    close(cx);
+                }
+            });
+            return;
+        }
         if let Some(close) = self.state.close.borrow_mut().take() {
             cx.defer(move |cx| close(cx));
         }
@@ -82,6 +100,7 @@ impl Surface {
             anchor: Anchor::CornerStack(Corner::BottomRight),
             timeout: None,
             size: size(px(320.0), px(72.0)),
+            retain_on_dismiss: false,
         }
     }
 
@@ -102,6 +121,11 @@ impl Surface {
 
     pub fn size(mut self, size: Size<Pixels>) -> Self {
         self.size = size;
+        self
+    }
+
+    pub(crate) fn retain_on_dismiss(mut self) -> Self {
+        self.retain_on_dismiss = true;
         self
     }
 
@@ -155,6 +179,7 @@ impl Surface {
         let title = unique_surface_title(&self.title);
         let reveal_after_move = matches!(self.kind, SurfaceKind::Panel);
         let native_reveal_gate = reveal_after_move && supports_native_reveal_gate();
+        let retain_on_dismiss = self.retain_on_dismiss && native_reveal_gate;
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id: crate::window::display_id_for_monitor(Some(&monitor), cx),
@@ -168,19 +193,29 @@ impl Surface {
             app_id: Some(title.clone()),
             ..Default::default()
         };
-        let dismisser = SurfaceDismisser::new();
+        let dismisser = SurfaceDismisser::new(retain_on_dismiss);
         let build_dismisser = dismisser.clone();
         let window_title = title.clone();
+        let visible = Rc::new(Cell::new(!native_reveal_gate));
         let handle = cx.open_window(options, move |window, cx| {
             window.set_window_title(&window_title);
             let inner = cx.new(|cx| build(build_dismisser, window, cx));
             cx.new(|_| SurfaceRoot { inner })
         })?;
+        let dismiss_title = title.clone();
+        let dismiss_visible = visible.clone();
         dismisser
             .state
             .close
             .borrow_mut()
             .replace(Box::new(move |cx: &mut App| {
+                dismiss_visible.set(false);
+                if retain_on_dismiss {
+                    let _reason = crate::popup_window::reason_scope("surface-dismiss");
+                    if crate::popup_window::park_window_by_title(&dismiss_title) {
+                        return;
+                    }
+                }
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
             }));
         if let Some(timeout) = self.timeout {
@@ -195,20 +230,28 @@ impl Surface {
                 bounds.origin.x.to_f64(),
                 bounds.origin.y.to_f64()
             );
-            settle_then_reveal(handle, title, bounds.origin, cx);
+            settle_then_reveal(
+                handle,
+                title.clone(),
+                bounds.origin,
+                visible.clone(),
+                dismisser.state.generation.get(),
+                dismisser.state.clone(),
+                cx,
+            );
         }
-        Ok(OpenedSurface { handle, dismisser })
+        Ok(OpenedSurface {
+            handle,
+            dismisser,
+            title,
+            anchor: self.anchor,
+            size: self.size,
+            visible,
+        })
     }
 
     fn resolved_bounds(&self, monitor: &crate::monitor::ActiveMonitor) -> Bounds<Pixels> {
-        match self.anchor {
-            Anchor::CornerStack(corner) => {
-                corner_anchored_bounds(monitor.bounds(), corner, self.size, CORNER_MARGIN)
-            }
-            Anchor::MonitorCenter => {
-                monitor.centered_bounds(clamped_to_monitor(self.size, monitor.bounds()))
-            }
-        }
+        resolved_bounds(self.anchor, self.size, monitor)
     }
 
     fn window_kind(&self) -> WindowKind {
@@ -254,6 +297,9 @@ fn settle_then_reveal<V: Render + 'static>(
     handle: WindowHandle<SurfaceRoot<V>>,
     title: String,
     origin: Point<Pixels>,
+    visible: Rc<Cell<bool>>,
+    dismiss_generation: u64,
+    dismiss_state: Rc<DismissState>,
     cx: &mut App,
 ) {
     cx.spawn(async move |cx: &mut AsyncApp| {
@@ -277,10 +323,14 @@ fn settle_then_reveal<V: Render + 'static>(
         if !matches!(window_exists, Ok(true)) {
             return;
         }
+        if dismiss_state.generation.get() != dismiss_generation {
+            return;
+        }
         let shown = {
             let _reason = crate::popup_window::reason_scope("surface-reveal");
             crate::popup_window::show_window_by_title(&title)
         };
+        visible.set(shown);
         qol_runtime::probe!(
             "SURFACE_REVEAL",
             "title={title} phase=revealed moved={moved} attempts={attempts} shown={shown}"
@@ -303,6 +353,117 @@ fn settle_then_reveal<V: Render + 'static>(
         }
     })
     .detach();
+}
+
+impl<V: Render + Focusable + 'static> OpenedSurface<V> {
+    pub(crate) fn is_visible(&self) -> bool {
+        self.visible.get()
+    }
+
+    pub(crate) fn present(&mut self, tracker: &MonitorTracker, cx: &mut App) -> bool {
+        if self.handle.update(cx, |_, _, _| ()).is_err() {
+            return false;
+        }
+        if !self.visible.get() {
+            let Some(monitor) = tracker.snapshot_monitor() else {
+                return false;
+            };
+            let bounds = resolved_bounds(self.anchor, self.size, &monitor);
+            let moved_before = crate::popup_window::reposition_window_by_title(
+                &self.title,
+                bounds.origin.x.to_f64(),
+                bounds.origin.y.to_f64(),
+            );
+            let shown = {
+                let _reason = crate::popup_window::reason_scope("surface-reuse");
+                crate::popup_window::show_window_by_title(&self.title)
+            };
+            let moved_after = shown
+                && crate::popup_window::reposition_window_by_title(
+                    &self.title,
+                    bounds.origin.x.to_f64(),
+                    bounds.origin.y.to_f64(),
+                );
+            let moved = moved_before || moved_after;
+            self.visible.set(shown);
+            if !shown {
+                return false;
+            }
+            trace_reused_reveal(self.title.clone(), moved, cx);
+        }
+        self.handle
+            .update(cx, |root, window, cx| {
+                let focus = root.inner.read(cx).focus_handle(cx);
+                window.activate_window();
+                window.focus(&focus);
+            })
+            .is_ok()
+    }
+
+    pub(crate) fn resize(&mut self, size: Size<Pixels>) {
+        self.size = size;
+    }
+}
+
+fn trace_reused_reveal(title: String, moved: bool, cx: &mut App) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let mut revealed = false;
+        for attempt in 0..=REUSED_REVEAL_MAX_ATTEMPTS {
+            let visible = cx
+                .update(|_| crate::popup_window::visible_windows_by_title_prefix(&title))
+                .unwrap_or_default()
+                > 0;
+            if visible && !revealed {
+                qol_runtime::probe!(
+                    "SURFACE_REVEAL",
+                    "title={title} phase=revealed moved={moved} attempts={attempt} shown=true reused=true"
+                );
+                revealed = true;
+            }
+            let focused = visible
+                && cx
+                    .update(|_| crate::popup_window::window_holds_input_focus(&title))
+                    .ok()
+                    .flatten()
+                    .unwrap_or(false);
+            if focused {
+                qol_runtime::probe!(
+                    "SURFACE_REVEAL",
+                    "title={title} phase=ready focus=true attempts={attempt} reused=true"
+                );
+                return;
+            }
+            cx.background_executor()
+                .timer(REUSED_REVEAL_SAMPLE_INTERVAL)
+                .await;
+        }
+        if !revealed {
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={title} phase=revealed moved={moved} attempts={REUSED_REVEAL_MAX_ATTEMPTS} shown=false reused=true"
+            );
+        }
+        qol_runtime::probe!(
+            "SURFACE_REVEAL",
+            "title={title} phase=ready focus=false attempts={REUSED_REVEAL_MAX_ATTEMPTS} reused=true"
+        );
+    })
+    .detach();
+}
+
+fn resolved_bounds(
+    anchor: Anchor,
+    size: Size<Pixels>,
+    monitor: &crate::monitor::ActiveMonitor,
+) -> Bounds<Pixels> {
+    match anchor {
+        Anchor::CornerStack(corner) => {
+            corner_anchored_bounds(monitor.bounds(), corner, size, CORNER_MARGIN)
+        }
+        Anchor::MonitorCenter => {
+            monitor.centered_bounds(clamped_to_monitor(size, monitor.bounds()))
+        }
+    }
 }
 
 fn schedule_dismiss(dismisser: SurfaceDismisser, timeout: Duration, cx: &mut App) {

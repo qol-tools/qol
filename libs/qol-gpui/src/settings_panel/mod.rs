@@ -11,7 +11,7 @@ use std::time::Duration;
 use gpui::*;
 
 use crate::monitor::MonitorTracker;
-use crate::surface::{Anchor, Surface, SurfaceDismisser, SurfaceKind, SurfaceRoot};
+use crate::surface::{Anchor, OpenedSurface, Surface, SurfaceKind};
 use rows::{rows_from_resolved, Row};
 use view::{SettingsPanelState, SettingsPanelView};
 
@@ -58,8 +58,7 @@ pub struct SettingsWindowHost {
 
 struct ActivePanel {
     plugin_id: String,
-    handle: WindowHandle<SurfaceRoot<SettingsPanelView>>,
-    dismisser: SurfaceDismisser,
+    surface: OpenedSurface<SettingsPanelView>,
 }
 
 struct PreparedPanel {
@@ -87,7 +86,7 @@ impl SettingsWindowHost {
             self.active.as_ref().map(|active| active.plugin_id.as_str()),
             &panel.plugin_id,
         );
-        if decision == ActivationDecision::Focus && self.present(cx) {
+        if decision == ActivationDecision::Focus && self.present(tracker, cx) {
             return Ok(SettingsActivation::Focused);
         }
 
@@ -100,7 +99,7 @@ impl SettingsWindowHost {
             prepare_started.elapsed().as_millis()
         );
         if decision == ActivationDecision::Replace && self.active_is_open(cx) {
-            self.replace(prepared, cx)?;
+            self.replace(prepared, tracker, cx)?;
             return Ok(SettingsActivation::Replaced);
         }
 
@@ -108,21 +107,21 @@ impl SettingsWindowHost {
         Ok(SettingsActivation::Opened)
     }
 
-    fn present(&mut self, cx: &mut App) -> bool {
+    fn present(&mut self, tracker: &MonitorTracker, cx: &mut App) -> bool {
         if !self.active_is_open(cx) {
             return false;
         }
-        let Some(active) = self.active.as_ref() else {
+        let Some(active) = self.active.as_mut() else {
             return false;
         };
-        let updated = active
-            .handle
-            .update(cx, |root, window, cx| {
-                let focus = root.inner.read(cx).focus_handle(cx);
-                window.activate_window();
-                window.focus(&focus);
-            })
-            .is_ok();
+        let resume_runtime_poll = !active.surface.is_visible();
+        let updated = active.surface.present(tracker, cx);
+        if updated && resume_runtime_poll {
+            let _ = active.surface.handle.update(cx, |root, _, cx| {
+                root.inner
+                    .update(cx, |view, cx| view.resume_runtime_poll(cx));
+            });
+        }
         if updated {
             cx.activate(true);
         }
@@ -133,22 +132,27 @@ impl SettingsWindowHost {
         let Some(active) = self.active.as_ref() else {
             return false;
         };
-        if active.handle.update(cx, |_, _, _| ()).is_ok() {
+        if active.surface.handle.update(cx, |_, _, _| ()).is_ok() {
             return true;
         }
         self.active = None;
         false
     }
 
-    fn replace(&mut self, prepared: PreparedPanel, cx: &mut App) -> anyhow::Result<()> {
+    fn replace(
+        &mut self,
+        prepared: PreparedPanel,
+        tracker: &MonitorTracker,
+        cx: &mut App,
+    ) -> anyhow::Result<()> {
         let Some(active) = self.active.as_mut() else {
             return Err(anyhow::anyhow!(
                 "settings window disappeared before replacement"
             ));
         };
         let plugin_id = prepared.panel.plugin_id.clone();
-        let dismisser = active.dismisser.clone();
-        active.handle.update(cx, move |root, window, cx| {
+        let dismisser = active.surface.dismisser.clone();
+        active.surface.handle.update(cx, move |root, window, cx| {
             window.resize(prepared.size);
             let inner =
                 cx.new(|cx| SettingsPanelView::new(prepared.panel, prepared.state, dismisser, cx));
@@ -158,7 +162,11 @@ impl SettingsWindowHost {
             window.focus(&focus);
             cx.notify();
         })?;
+        active.surface.resize(prepared.size);
         active.plugin_id = plugin_id;
+        if !active.surface.present(tracker, cx) {
+            return Err(anyhow::anyhow!("settings window could not be presented"));
+        }
         cx.activate(true);
         Ok(())
     }
@@ -300,13 +308,13 @@ fn open_prepared(
         .title(title)
         .anchor(Anchor::MonitorCenter)
         .size(prepared.size)
+        .retain_on_dismiss()
         .show_focused_tracked(tracker, cx, move |dismisser, _window, cx| {
             SettingsPanelView::new(prepared.panel, prepared.state, dismisser, cx)
         })?;
     Ok(ActivePanel {
         plugin_id,
-        handle: opened.handle,
-        dismisser: opened.dismisser,
+        surface: opened,
     })
 }
 

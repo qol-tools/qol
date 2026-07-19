@@ -213,6 +213,28 @@ pub fn hide_invisible(title: &str) -> bool {
     hide_window_with_opacity(title, 0.0)
 }
 
+pub fn park_window_by_title(title: &str) -> bool {
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
+    else {
+        return false;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        return false;
+    };
+    let parked = conn
+        .unmap_window(wid)
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some();
+    let flushed = conn.flush().is_ok();
+    store_card(title, wid, None);
+    qol_runtime::probe!(
+        "PARK_WIN",
+        "title={title} wid={wid} unmap={parked} flush={flushed}"
+    );
+    parked && flushed
+}
+
 pub fn configure_keepalive_window(title: &str) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
