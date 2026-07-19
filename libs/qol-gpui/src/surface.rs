@@ -120,7 +120,6 @@ impl Surface {
         self.open(tracker, cx, |dismisser, window, cx| {
             let view = build(dismisser, window, cx);
             window.focus(&view.focus_handle(cx));
-            window.activate_window();
             view
         })
     }
@@ -138,6 +137,8 @@ impl Surface {
         .ok_or_else(|| anyhow!("no monitor state available for surface placement"))?;
         let bounds = self.resolved_bounds(&monitor);
         let title = unique_surface_title(&self.title);
+        let reveal_after_move = matches!(self.kind, SurfaceKind::Panel);
+        let native_reveal_gate = reveal_after_move && supports_native_reveal_gate();
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id: crate::window::display_id_for_monitor(Some(&monitor), cx),
@@ -145,6 +146,7 @@ impl Surface {
             window_decorations: Some(WindowDecorations::Client),
             kind: self.window_kind(),
             focus: self.takes_focus(),
+            show: !native_reveal_gate,
             is_movable: true,
             window_background: WindowBackgroundAppearance::Transparent,
             app_id: Some(title.clone()),
@@ -153,14 +155,10 @@ impl Surface {
         let dismisser = SurfaceDismisser::new();
         let build_dismisser = dismisser.clone();
         let window_title = title.clone();
-        let reveal_after_move = matches!(self.kind, SurfaceKind::Panel);
         let handle = cx.open_window(options, move |window, cx| {
             window.set_window_title(&window_title);
             let inner = cx.new(|cx| build(build_dismisser, window, cx));
-            cx.new(|_| SurfaceRoot {
-                inner,
-                revealed: !reveal_after_move,
-            })
+            cx.new(|_| SurfaceRoot { inner })
         })?;
         dismisser
             .state
@@ -172,7 +170,15 @@ impl Surface {
         if let Some(timeout) = self.timeout {
             schedule_dismiss(dismisser.clone(), timeout, cx);
         }
-        if reveal_after_move {
+        if native_reveal_gate {
+            let _reason = crate::popup_window::reason_scope("surface-open");
+            let hidden = crate::popup_window::hide_invisible(&title);
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={title} phase=opened hidden={hidden} x={} y={}",
+                bounds.origin.x.to_f64(),
+                bounds.origin.y.to_f64()
+            );
             settle_then_reveal(handle, title, bounds.origin, cx);
         }
         Ok(dismisser)
@@ -206,16 +212,11 @@ impl Surface {
 
 struct SurfaceRoot<V> {
     inner: Entity<V>,
-    revealed: bool,
 }
 
 impl<V: Render + 'static> Render for SurfaceRoot<V> {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let mut root = div().size_full();
-        if self.revealed {
-            root = root.child(self.inner.clone());
-        }
-        root
+        div().size_full().child(self.inner.clone())
     }
 }
 
@@ -229,6 +230,10 @@ fn unique_surface_title(base: &str) -> String {
     )
 }
 
+const fn supports_native_reveal_gate() -> bool {
+    cfg!(any(target_os = "linux", target_os = "macos"))
+}
+
 fn settle_then_reveal<V: Render + 'static>(
     handle: WindowHandle<SurfaceRoot<V>>,
     title: String,
@@ -236,11 +241,14 @@ fn settle_then_reveal<V: Render + 'static>(
     cx: &mut App,
 ) {
     cx.spawn(async move |cx: &mut AsyncApp| {
-        for _ in 0..40 {
+        let mut attempts = 0;
+        let mut moved = false;
+        for attempt in 1..=40 {
             cx.background_executor()
                 .timer(Duration::from_millis(15))
                 .await;
-            let moved = crate::popup_window::reposition_window_by_title(
+            attempts = attempt;
+            moved = crate::popup_window::reposition_window_by_title(
                 &title,
                 origin.x.to_f64(),
                 origin.y.to_f64(),
@@ -249,12 +257,18 @@ fn settle_then_reveal<V: Render + 'static>(
                 break;
             }
         }
-        let _ = cx.update(|cx| {
-            let _ = handle.update(cx, |root, _, cx| {
-                root.revealed = true;
-                cx.notify();
-            });
-        });
+        let window_exists = cx.update(|cx| handle.update(cx, |_, _, _| ()).is_ok());
+        if !matches!(window_exists, Ok(true)) {
+            return;
+        }
+        let shown = {
+            let _reason = crate::popup_window::reason_scope("surface-reveal");
+            crate::popup_window::show_window_by_title(&title)
+        };
+        qol_runtime::probe!(
+            "SURFACE_REVEAL",
+            "title={title} phase=revealed moved={moved} attempts={attempts} shown={shown}"
+        );
         let focus_commit = PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         crate::popup_window::reassert_focus_until_held(
             &title,
