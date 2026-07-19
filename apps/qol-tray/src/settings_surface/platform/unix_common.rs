@@ -141,6 +141,10 @@ fn spawn_command_loop(
         async move {
             match command {
                 Command::Open(plugin_id) => {
+                    qol_runtime::probe!(
+                        "SURFACE_ACTIVATION",
+                        "plugin={plugin_id} phase=command outcome=received"
+                    );
                     let update = cx.update(move |cx| activate(&host, &tracker, plugin_id, cx));
                     if let Err(error) = update {
                         qol_runtime::probe!(

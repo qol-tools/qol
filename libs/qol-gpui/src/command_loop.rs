@@ -12,9 +12,9 @@
 
 use std::future::Future;
 use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex};
 
-use gpui::{App, AppContext, AsyncApp};
+use futures::{channel::mpsc, StreamExt};
+use gpui::{App, AsyncApp};
 
 /// Whether the command loop keeps waiting or stops (and quits the app).
 pub enum LoopFlow {
@@ -28,17 +28,18 @@ where
     H: FnMut(AsyncApp, Cmd) -> F + 'static,
     F: Future<Output = LoopFlow> + 'static,
 {
-    let rx = Arc::new(Mutex::new(rx));
+    let (tx, mut async_rx) = mpsc::unbounded();
+    let _ = std::thread::Builder::new()
+        .name("qol-gpui-command-loop".into())
+        .spawn(move || {
+            while let Ok(command) = rx.recv() {
+                if tx.unbounded_send(command).is_err() {
+                    return;
+                }
+            }
+        });
     cx.spawn(async move |cx: &mut AsyncApp| {
-        loop {
-            let next = {
-                let rx = rx.clone();
-                cx.background_spawn(async move { rx.lock().ok()?.recv().ok() })
-                    .await
-            };
-            let Some(cmd) = next else {
-                break;
-            };
+        while let Some(cmd) = async_rx.next().await {
             if matches!(handler(cx.clone(), cmd).await, LoopFlow::Stop) {
                 break;
             }

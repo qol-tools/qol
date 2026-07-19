@@ -91,7 +91,14 @@ impl SettingsWindowHost {
             return Ok(SettingsActivation::Focused);
         }
 
+        let plugin_id = panel.plugin_id.clone();
+        let prepare_started = std::time::Instant::now();
         let prepared = prepare_panel(panel, tracker, runtime)?;
+        qol_runtime::probe!(
+            "SURFACE_ACTIVATION",
+            "plugin={plugin_id} phase=prepared outcome=ready elapsed_ms={}",
+            prepare_started.elapsed().as_millis()
+        );
         if decision == ActivationDecision::Replace && self.active_is_open(cx) {
             self.replace(prepared, cx)?;
             return Ok(SettingsActivation::Replaced);
@@ -261,7 +268,7 @@ fn prepare_panel(
     let values = persistence::load_values(&panel.plugin_id, &path);
     let resolved = qol_config::normalized::resolve_config(&spec, &values)
         .map_err(|errors| anyhow::anyhow!("contract resolve failed: {errors:?}"))?;
-    let rows = rows_from_resolved(&resolved, &runtime);
+    let rows = rows_from_resolved(&resolved);
     let monitor = tracker
         .snapshot_monitor()
         .ok_or_else(|| anyhow::anyhow!("no monitor state available for the settings panel"))?;

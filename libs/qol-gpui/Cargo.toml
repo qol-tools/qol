@@ -7,6 +7,7 @@ description = "GPUI windowing helpers for resident qol-tray plugins: ghost popup
 
 [dependencies]
 anyhow = "1"
+futures = "0.3"
 gpui.workspace = true
 image = { version = "0.25", default-features = false }
 smallvec = "1.13"

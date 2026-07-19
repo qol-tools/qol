@@ -3,7 +3,6 @@ use qol_config::contract::{
 };
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection};
 
-use super::SettingsRuntime;
 use crate::scroll_list::ScrollList;
 use crate::status_indicator::StatusTone;
 
@@ -35,17 +34,25 @@ pub(super) struct ListActions {
 }
 
 #[derive(Debug)]
+pub(super) struct OptionQuery {
+    name: String,
+    seeded: Vec<(String, String)>,
+}
+
+#[derive(Debug)]
 pub(super) enum RowControl {
     Toggle(bool),
     Select {
         options: Vec<String>,
         labels: Vec<String>,
         index: usize,
+        dynamic: Option<OptionQuery>,
     },
     MultiSelect {
         options: Vec<String>,
         labels: Vec<String>,
         selected: Vec<bool>,
+        dynamic: Option<OptionQuery>,
     },
     Number {
         value: f64,
@@ -90,35 +97,30 @@ pub(super) struct Row {
     pub(super) control: RowControl,
 }
 
-pub(super) fn rows_from_resolved(config: &ResolvedConfig, runtime: &SettingsRuntime) -> Vec<Row> {
+pub(super) fn rows_from_resolved(config: &ResolvedConfig) -> Vec<Row> {
     let mut rows = Vec::new();
     for field in &config.fields {
-        push_row(&mut rows, None, field, runtime);
+        push_row(&mut rows, None, field);
     }
     for section in &config.sections {
-        push_section_rows(&mut rows, section, runtime);
+        push_section_rows(&mut rows, section);
     }
     rows
 }
 
-fn push_section_rows(rows: &mut Vec<Row>, section: &ResolvedSection, runtime: &SettingsRuntime) {
+fn push_section_rows(rows: &mut Vec<Row>, section: &ResolvedSection) {
     let mut label = Some(section.label.clone());
     for field in &section.fields {
         let before = rows.len();
-        push_row(rows, label.clone(), field, runtime);
+        push_row(rows, label.clone(), field);
         if rows.len() > before {
             label = None;
         }
     }
 }
 
-fn push_row(
-    rows: &mut Vec<Row>,
-    section_label: Option<String>,
-    field: &ResolvedField,
-    runtime: &SettingsRuntime,
-) {
-    let Some(control) = control_for(field, runtime) else {
+fn push_row(rows: &mut Vec<Row>, section_label: Option<String>, field: &ResolvedField) {
+    let Some(control) = control_for(field) else {
         return;
     };
     rows.push(Row {
@@ -129,7 +131,7 @@ fn push_row(
     });
 }
 
-fn control_for(field: &ResolvedField, runtime: &SettingsRuntime) -> Option<RowControl> {
+fn control_for(field: &ResolvedField) -> Option<RowControl> {
     match field.kind {
         FieldKind::Boolean => match field.value {
             FieldDefault::Boolean(value) => Some(RowControl::Toggle(value)),
@@ -140,12 +142,13 @@ fn control_for(field: &ResolvedField, runtime: &SettingsRuntime) -> Option<RowCo
                 FieldDefault::String(value) => value.clone(),
                 _ => return None,
             };
-            let (options, labels) = field_options(field, std::slice::from_ref(&current), runtime);
+            let (options, labels, dynamic) = field_options(field, std::slice::from_ref(&current));
             let index = options.iter().position(|o| *o == current)?;
             Some(RowControl::Select {
                 options,
                 labels,
                 index,
+                dynamic,
             })
         }
         FieldKind::Number => match field.value {
@@ -166,7 +169,7 @@ fn control_for(field: &ResolvedField, runtime: &SettingsRuntime) -> Option<RowCo
                 if field.options.is_empty() && field.query.is_none() {
                     Some(RowControl::TextList(values.clone()))
                 } else {
-                    let (options, labels) = field_options(field, values, runtime);
+                    let (options, labels, dynamic) = field_options(field, values);
                     Some(RowControl::MultiSelect {
                         selected: options
                             .iter()
@@ -174,6 +177,7 @@ fn control_for(field: &ResolvedField, runtime: &SettingsRuntime) -> Option<RowCo
                             .collect(),
                         options,
                         labels,
+                        dynamic,
                     })
                 }
             }
@@ -225,48 +229,56 @@ fn control_for(field: &ResolvedField, runtime: &SettingsRuntime) -> Option<RowCo
 fn field_options(
     field: &ResolvedField,
     current: &[String],
-    runtime: &SettingsRuntime,
-) -> (Vec<String>, Vec<String>) {
-    let dynamic = field
-        .query
-        .as_deref()
-        .and_then(|query| runtime.query(query).ok())
-        .map(options_from_value)
-        .unwrap_or_default();
-    let mut options = field.options.clone();
-    if field.query.is_some() {
-        for option in field.option_labels.keys() {
-            if !options.iter().any(|candidate| candidate == option) {
-                options.push(option.clone());
-            }
-        }
-    }
-    for (value, _) in &dynamic {
-        if !options.iter().any(|option| option == value) {
-            options.push(value.clone());
-        }
-    }
-    for value in current.iter().rev() {
-        if !options.iter().any(|option| option == value) {
-            options.insert(0, value.clone());
-        }
-    }
-    let labels = options
+) -> (Vec<String>, Vec<String>, Option<OptionQuery>) {
+    let seeded = seeded_options(field);
+    let (options, labels) = merge_options(&seeded, &[], current);
+    let dynamic = field.query.as_ref().map(|name| OptionQuery {
+        name: name.clone(),
+        seeded,
+    });
+    (options, labels, dynamic)
+}
+
+fn seeded_options(field: &ResolvedField) -> Vec<(String, String)> {
+    let mut seeded = field
+        .options
         .iter()
         .map(|option| {
-            field
+            let label = field
                 .option_labels
                 .get(option)
                 .cloned()
-                .or_else(|| {
-                    dynamic
-                        .iter()
-                        .find(|(value, _)| value == option)
-                        .map(|(_, label)| label.clone())
-                })
-                .unwrap_or_else(|| option.clone())
+                .unwrap_or_else(|| option.clone());
+            (option.clone(), label)
         })
-        .collect();
+        .collect::<Vec<_>>();
+    if field.query.is_some() {
+        for (option, label) in &field.option_labels {
+            if !seeded.iter().any(|(candidate, _)| candidate == option) {
+                seeded.push((option.clone(), label.clone()));
+            }
+        }
+    }
+    seeded
+}
+
+fn merge_options(
+    seeded: &[(String, String)],
+    dynamic: &[(String, String)],
+    current: &[String],
+) -> (Vec<String>, Vec<String>) {
+    let mut merged = seeded.to_vec();
+    for (value, label) in dynamic {
+        if !merged.iter().any(|(option, _)| option == value) {
+            merged.push((value.clone(), label.clone()));
+        }
+    }
+    for value in current.iter().rev() {
+        if !merged.iter().any(|(option, _)| option == value) {
+            merged.insert(0, (value.clone(), value.clone()));
+        }
+    }
+    let (options, labels) = merged.into_iter().unzip();
     (options, labels)
 }
 
@@ -311,6 +323,16 @@ pub(super) fn runtime_query_names(rows: &[Row]) -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
     for row in rows {
         match &row.control {
+            RowControl::Select {
+                dynamic: Some(dynamic),
+                ..
+            }
+            | RowControl::MultiSelect {
+                dynamic: Some(dynamic),
+                ..
+            } => {
+                names.insert(dynamic.name.clone());
+            }
             RowControl::Action {
                 active_query: Some(query),
                 ..
@@ -338,6 +360,49 @@ pub(super) fn apply_runtime_query(
 ) {
     for row in rows {
         match &mut row.control {
+            RowControl::Select {
+                options,
+                labels,
+                index,
+                dynamic: Some(dynamic),
+            } if dynamic.name == query => {
+                if let Ok(value) = &result {
+                    let current = options.get(*index).cloned().unwrap_or_default();
+                    let fetched = options_from_value(value);
+                    let (next_options, next_labels) =
+                        merge_options(&dynamic.seeded, &fetched, std::slice::from_ref(&current));
+                    *index = next_options
+                        .iter()
+                        .position(|option| option == &current)
+                        .unwrap_or(0);
+                    *options = next_options;
+                    *labels = next_labels;
+                }
+            }
+            RowControl::MultiSelect {
+                options,
+                labels,
+                selected,
+                dynamic: Some(dynamic),
+            } if dynamic.name == query => {
+                if let Ok(value) = &result {
+                    let current = options
+                        .iter()
+                        .zip(selected.iter())
+                        .filter(|(_, selected)| **selected)
+                        .map(|(option, _)| option.clone())
+                        .collect::<Vec<_>>();
+                    let fetched = options_from_value(value);
+                    let (next_options, next_labels) =
+                        merge_options(&dynamic.seeded, &fetched, &current);
+                    *selected = next_options
+                        .iter()
+                        .map(|option| current.contains(option))
+                        .collect();
+                    *options = next_options;
+                    *labels = next_labels;
+                }
+            }
             RowControl::Action {
                 active_query: Some(active_query),
                 active_value_from,
@@ -472,7 +537,7 @@ fn render_template(template: &str, row: &serde_json::Value) -> String {
     rendered
 }
 
-fn options_from_value(value: serde_json::Value) -> Vec<(String, String)> {
+fn options_from_value(value: &serde_json::Value) -> Vec<(String, String)> {
     value
         .as_array()
         .into_iter()
@@ -526,7 +591,6 @@ mod tests {
         primary_list_item_action, row_value_json, rows_from_resolved, runtime_query_names,
         set_config_value, ResolvedConfig, Row, RowControl,
     };
-    use crate::settings_panel::SettingsRuntime;
     use crate::status_indicator::StatusTone;
 
     const SPEC: &str = r#"
@@ -601,12 +665,9 @@ default = "202322"
 
     #[test]
     fn rows_map_every_supported_kind_with_override_values() {
-        let rows = rows_from_resolved(
-            &resolved(serde_json::json!({
-                "capture": { "pin_border": false, "saved_feedback": "toast" }
-            })),
-            &SettingsRuntime::empty(),
-        );
+        let rows = rows_from_resolved(&resolved(serde_json::json!({
+            "capture": { "pin_border": false, "saved_feedback": "toast" }
+        })));
         assert_eq!(rows.len(), 7);
         assert_eq!(rows[0].section_label.as_deref(), Some("Capture"));
         assert!(rows[1..].iter().all(|r| r.section_label.is_none()));
@@ -629,6 +690,7 @@ default = "202322"
                 options,
                 labels,
                 selected,
+                ..
             } => {
                 assert_eq!(options, &["mic", "system"]);
                 assert_eq!(labels, &["Microphone", "System Audio"]);
@@ -686,7 +748,7 @@ step = 1
         let spec = qol_config::contract::parse_spec_str(MIXED_SPEC).unwrap();
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
-        let rows = rows_from_resolved(&resolved, &SettingsRuntime::empty());
+        let rows = rows_from_resolved(&resolved);
 
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[0].section_label.as_deref(), Some("Devices"));
@@ -720,13 +782,6 @@ query = "audio_sources"
 default = "System Default"
 "#;
         let spec = qol_config::contract::parse_spec_str(QUERY_SPEC).unwrap();
-        let runtime = SettingsRuntime::new(|query: &str| {
-            assert_eq!(query, "audio_sources");
-            Ok(serde_json::json!([
-                { "value": "alsa_input.foo", "label": "Built-in Mic" }
-            ]))
-        });
-
         let cases = [
             (
                 serde_json::json!({}),
@@ -743,12 +798,21 @@ default = "System Default"
         ];
         for (overrides, expected_options, expected_labels, expected_index) in cases {
             let resolved = qol_config::normalized::resolve_config(&spec, &overrides).unwrap();
-            let rows = rows_from_resolved(&resolved, &runtime);
+            let mut rows = rows_from_resolved(&resolved);
+            assert_eq!(runtime_query_names(&rows), ["audio_sources"]);
+            apply_runtime_query(
+                &mut rows,
+                "audio_sources",
+                Ok(serde_json::json!([
+                    { "value": "alsa_input.foo", "label": "Built-in Mic" }
+                ])),
+            );
             match &rows[0].control {
                 RowControl::Select {
                     options,
                     labels,
                     index,
+                    ..
                 } => {
                     assert_eq!(options, &expected_options, "overrides: {overrides}");
                     assert_eq!(labels, &expected_labels, "overrides: {overrides}");
@@ -757,6 +821,31 @@ default = "System Default"
                 other => panic!("expected select, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn query_options_are_deferred_from_initial_row_creation() {
+        const QUERY_SPEC: &str = r#"
+schema_version = 1
+
+[field.mic]
+type = "select"
+config_key = "audio.mic_device"
+label = "Mic Device"
+default = "default"
+query = "audio_sources"
+"#;
+        let spec = qol_config::contract::parse_spec_str(QUERY_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+
+        let rows = rows_from_resolved(&resolved);
+
+        match &rows[0].control {
+            RowControl::Select { options, .. } => assert_eq!(options, &["default"]),
+            other => panic!("expected select, got {other:?}"),
+        }
+        assert_eq!(runtime_query_names(&rows), ["audio_sources"]);
     }
 
     #[test]
@@ -777,20 +866,23 @@ query = "managed_device_options"
             &serde_json::json!({ "managed_devices": ["AA:00", "AA:02"] }),
         )
         .unwrap();
-        let runtime = SettingsRuntime::new(|query| {
-            assert_eq!(query, "managed_device_options");
+        let mut rows = rows_from_resolved(&resolved);
+        assert_eq!(runtime_query_names(&rows), ["managed_device_options"]);
+        apply_runtime_query(
+            &mut rows,
+            "managed_device_options",
             Ok(serde_json::json!([
                 { "value": "AA:01", "label": "Headphones · AA:01" },
                 { "value": "AA:02", "label": "Keyboard · AA:02" }
-            ]))
-        });
-        let rows = rows_from_resolved(&resolved, &runtime);
+            ])),
+        );
 
         match &rows[0].control {
             RowControl::MultiSelect {
                 options,
                 labels,
                 selected,
+                ..
             } => {
                 assert_eq!(options, &["AA:00", "AA:01", "AA:02"]);
                 assert_eq!(labels, &["AA:00", "Headphones · AA:01", "Keyboard · AA:02"]);
@@ -815,6 +907,7 @@ query = "managed_device_options"
                     options: vec!["hold_to_switch".into(), "sticky".into()],
                     labels: vec!["Hold".into(), "Sticky".into()],
                     index: 1,
+                    dynamic: None,
                 },
             },
             Row {
@@ -869,6 +962,7 @@ query = "managed_device_options"
             options: vec!["mic".into(), "system".into()],
             labels: vec!["Microphone".into(), "System Audio".into()],
             selected: vec![false, true],
+            dynamic: None,
         };
         assert_eq!(
             row_value_json(&control),
@@ -965,7 +1059,7 @@ input = { address = "{address}" }
         let spec = qol_config::contract::parse_spec_str(RUNTIME_SPEC).unwrap();
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
-        let mut rows = rows_from_resolved(&resolved, &SettingsRuntime::empty());
+        let mut rows = rows_from_resolved(&resolved);
         assert_eq!(runtime_query_names(&rows), ["devices", "search_status"]);
 
         apply_runtime_query(
