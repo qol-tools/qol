@@ -9,6 +9,7 @@ use super::persistence::save_values;
 use super::rows::{apply_runtime_query, merged_config, runtime_query_names, Row, RowControl};
 use super::{SettingsPanel, SettingsRuntime};
 use crate::dropdown::{Dropdown, DropdownStyle};
+use crate::spinner::Spinner;
 use crate::surface::SurfaceDismisser;
 use crate::theme::{settings_panel_runtime, SettingsPanelPalette};
 
@@ -641,6 +642,12 @@ impl SettingsPanelView {
 
     fn render_value_cell(&self, index: usize) -> Div {
         let mut cell = div().flex().flex_row().items_center().gap_2();
+        if self.action_is_busy(index) {
+            cell = cell.child(Spinner::new(
+                ("settings-action-spinner", index),
+                rgb(self.palette.state_on),
+            ));
+        }
         if let Some(color) = self.swatch_color(index) {
             cell = cell.child(
                 div()
@@ -657,6 +664,21 @@ impl SettingsPanelView {
                 .text_sm()
                 .text_color(rgb(self.value_color(index)))
                 .child(self.display_value(index)),
+        )
+    }
+
+    fn action_is_busy(&self, index: usize) -> bool {
+        matches!(
+            self.rows[index].control,
+            RowControl::Action {
+                active: true,
+                error: None,
+                ..
+            } | RowControl::Action {
+                pending: true,
+                error: None,
+                ..
+            }
         )
     }
 

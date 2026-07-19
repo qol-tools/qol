@@ -11,8 +11,11 @@ pub mod probe;
 pub mod runtime_config;
 pub mod scroll_list;
 pub mod settings_panel;
+pub mod spinner;
 pub mod surface;
 pub mod window;
+
+pub use spinner::Spinner;
 
 pub mod theme {
     pub use qol_theme::*;
