@@ -266,6 +266,7 @@ mod cache {
         };
         view.started_at = content.started_at;
         view.active = true;
+        view.action_pending = false;
         view.first_paint = true;
         view.reveal_generation = view.reveal_generation.wrapping_add(1);
         view.scheduled_reveal_generation = None;
@@ -314,6 +315,7 @@ pub struct PinnedView {
     resize_loop_epoch: u64,
     started_at: Instant,
     active: bool,
+    action_pending: bool,
     first_paint: bool,
     reveal_generation: u64,
     scheduled_reveal_generation: Option<u64>,
@@ -352,6 +354,7 @@ impl PinnedView {
             resize_loop_epoch: 0,
             started_at: content.started_at,
             active: spec.active,
+            action_pending: false,
             first_paint: true,
             reveal_generation,
             scheduled_reveal_generation: None,
@@ -667,19 +670,52 @@ impl PinnedView {
     }
 
     fn perform(&mut self, action: ShotAction, window: &mut Window, cx: &mut Context<Self>) {
-        match self
-            .file_ready
-            .wait()
-            .and_then(|()| action.perform(&self.path))
-        {
-            Ok(()) => platform::show_notification(
-                action.done_message(),
-                &self.path.display().to_string(),
-                1400,
-            ),
-            Err(error) => eprintln!("[qol-shot] pinned action failed: {error:#}"),
+        if self.action_pending {
+            return;
         }
-        self.close(window, cx);
+        let Some(handle) = window.window_handle().downcast::<PinnedView>() else {
+            return;
+        };
+        self.action_pending = true;
+        let file_ready = self.file_ready.clone();
+        let path = self.path.clone();
+        let reveal_generation = self.reveal_generation;
+        qol_runtime::probe!(
+            "SHOT_FILE_ACTION",
+            "surface=pinned action={} phase=waiting",
+            action.label()
+        );
+        cx.spawn(async move |_view, cx| {
+            let ready = cx.background_spawn(async move { file_ready.wait() }).await;
+            let _ = handle.update(cx, move |view, window, cx| {
+                if !view.active || view.reveal_generation != reveal_generation {
+                    qol_runtime::probe!(
+                        "SHOT_FILE_ACTION",
+                        "surface=pinned action={} phase=complete outcome=stale",
+                        action.label()
+                    );
+                    return;
+                }
+                view.action_pending = false;
+                let result = ready.and_then(|()| action.perform(&path));
+                qol_runtime::probe!(
+                    "SHOT_FILE_ACTION",
+                    "surface=pinned action={} phase=complete outcome={}",
+                    action.label(),
+                    if result.is_ok() { "ok" } else { "failed" }
+                );
+                match result {
+                    Ok(()) => platform::show_notification(
+                        action.done_message(),
+                        &path.display().to_string(),
+                        1400,
+                    ),
+                    Err(error) => eprintln!("[qol-shot] pinned action failed: {error:#}"),
+                }
+                view.close(window, cx);
+            });
+        })
+        .detach();
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {

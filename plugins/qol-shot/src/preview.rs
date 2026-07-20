@@ -607,6 +607,7 @@ pub struct PreviewView {
     dismiss_sub: Option<DismissSub>,
     copy_command: ShotAction,
     saved_completion: Option<crate::completion::PreviewCompletion>,
+    action_pending: bool,
     scheduled_reveal_seq: Option<u64>,
     pending_reveal: Option<PreviewReveal>,
     focus_handle: FocusHandle,
@@ -687,6 +688,7 @@ impl PreviewView {
             dismiss_sub: None,
             copy_command: resolve_copy_command(crate::config::load().shortcuts.copy_command),
             saved_completion: content.saved_completion,
+            action_pending: false,
             scheduled_reveal_seq: None,
             pending_reveal: presentation.reveal,
             focus_handle: cx.focus_handle(),
@@ -712,6 +714,7 @@ impl PreviewView {
         self.blur_guard_until = Instant::now() + BLUR_GUARD;
         self.copy_command = resolve_copy_command(crate::config::load().shortcuts.copy_command);
         self.saved_completion = content.saved_completion;
+        self.action_pending = false;
         self.scheduled_reveal_seq = None;
         self.pending_reveal = Some(reveal);
         if let Ok(mut slot) = self.completion.lock() {
@@ -805,37 +808,75 @@ impl PreviewView {
     }
 
     fn choose(&mut self, action: ShotAction, window: &mut Window, cx: &mut Context<Self>) {
-        let mut slot = self
-            .completion
-            .lock()
-            .expect("preview completion mutex poisoned");
-        if slot.is_some() {
+        if self.action_pending {
             return;
         }
-
-        let result = self.file_ready.wait().and_then(|()| match action {
-            ShotAction::OpenFolder => self.open_from_preview(),
-            _ => action.perform(&self.path),
-        });
-        if let Err(error) = &result {
-            eprintln!("[qol-shot] preview action failed: {error:#}");
+        if self
+            .completion
+            .lock()
+            .expect("preview completion mutex poisoned")
+            .is_some()
+        {
+            return;
         }
-        *slot = Some(result);
-        drop(slot);
-
+        let Some(handle) = window.window_handle().downcast::<PreviewView>() else {
+            return;
+        };
+        self.action_pending = true;
+        let file_ready = self.file_ready.clone();
+        let path = self.path.clone();
+        let saved_completion = self.saved_completion.clone();
+        let completion = self.completion.clone();
+        let seq = self.seq;
         let exit = if action == ShotAction::OpenFolder {
             crate::completion::PreviewExit::OpenFolder
         } else {
             crate::completion::PreviewExit::Intentional
         };
-        self.close(exit, window, cx);
-    }
-
-    fn open_from_preview(&self) -> Result<()> {
-        let Some(completion) = self.saved_completion.as_ref() else {
-            return crate::completion::reveal(&self.path);
-        };
-        completion.open(crate::completion::RevealSource::PreviewAction)
+        qol_runtime::probe!(
+            "SHOT_FILE_ACTION",
+            "surface=preview action={} phase=waiting",
+            action.label()
+        );
+        cx.spawn(async move |_view, cx| {
+            let ready = cx.background_spawn(async move { file_ready.wait() }).await;
+            let _ = handle.update(cx, move |view, window, cx| {
+                if view.seq != seq {
+                    qol_runtime::probe!(
+                        "SHOT_FILE_ACTION",
+                        "surface=preview action={} phase=complete outcome=stale",
+                        action.label()
+                    );
+                    return;
+                }
+                let result = ready.and_then(|()| match action {
+                    ShotAction::OpenFolder => match saved_completion {
+                        Some(completion) => {
+                            completion.open(crate::completion::RevealSource::PreviewAction)
+                        }
+                        None => crate::completion::reveal(&path),
+                    },
+                    _ => action.perform(&path),
+                });
+                qol_runtime::probe!(
+                    "SHOT_FILE_ACTION",
+                    "surface=preview action={} phase=complete outcome={}",
+                    action.label(),
+                    if result.is_ok() { "ok" } else { "failed" }
+                );
+                if let Err(error) = &result {
+                    eprintln!("[qol-shot] preview action failed: {error:#}");
+                }
+                if let Ok(mut slot) = completion.lock() {
+                    if slot.is_none() {
+                        *slot = Some(result);
+                    }
+                }
+                view.action_pending = false;
+                view.close(exit, window, cx);
+            });
+        })
+        .detach();
     }
 
     fn close(

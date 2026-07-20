@@ -76,7 +76,7 @@ pub(super) fn install(
         );
     }
 
-    spawn_reload_thread(matcher, reload_rx, rebuild);
+    spawn_reload_thread(matcher, reload_rx, rebuild, on_fire);
 
     Ok(())
 }
@@ -85,14 +85,15 @@ fn spawn_reload_thread(
     matcher: Arc<Mutex<BindingMatcher>>,
     reload_rx: Receiver<()>,
     rebuild: RebuildBindings,
+    on_fire: Arc<dyn Fn(&CaptureEvent) + Send + Sync>,
 ) {
     std::thread::Builder::new()
         .name("hotkey-capture-linux-reload".into())
         .spawn(move || {
             while reload_rx.recv().is_ok() {
                 while reload_rx.try_recv().is_ok() {}
-                let next = match rebuild() {
-                    Ok(bindings) => BindingMatcher::new(bindings),
+                let bindings = match rebuild() {
+                    Ok(bindings) => bindings,
                     Err(error) => {
                         log::error!(
                             "linux evdev hotkey reload skipped; keeping current bindings: {error:#}"
@@ -100,18 +101,22 @@ fn spawn_reload_thread(
                         continue;
                     }
                 };
-                match matcher.lock() {
+                let stopped = match matcher.lock() {
                     Ok(mut guard) => {
-                        *guard = next;
+                        let stopped = guard.reload(bindings);
                         log::info!("linux evdev hotkey capture: bindings reloaded");
+                        stopped
                     }
                     Err(poisoned) => {
                         log::error!(
                             "linux evdev matcher lock poisoned during reload; recovering: {poisoned}"
                         );
                         let mut guard = poisoned.into_inner();
-                        *guard = next;
+                        guard.reload(bindings)
                     }
+                };
+                for event in stopped {
+                    on_fire(&event);
                 }
             }
         })

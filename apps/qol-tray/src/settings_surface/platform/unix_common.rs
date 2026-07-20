@@ -4,7 +4,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use gpui::{App, Application};
+use gpui::{App, AppContext, Application};
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::settings_panel::{
@@ -122,7 +122,12 @@ fn run_host(plugin_id: String) -> anyhow::Result<()> {
         qol_gpui::keepalive::open_keepalive(cx, Some("qol-settings-surface"));
         let tracker = MonitorTracker::start(cx);
         let host = Rc::new(RefCell::new(SettingsWindowHost::default()));
-        activate(&host, &tracker, plugin_id, cx);
+        let activation_host = host.clone();
+        let activation_tracker = tracker.clone();
+        cx.spawn(async move |cx| {
+            activate(activation_host, activation_tracker, plugin_id, cx).await;
+        })
+        .detach();
         spawn_command_loop(command_rx, host, tracker, cx);
     });
     core_daemon::cleanup(&CONFIG);
@@ -145,13 +150,7 @@ fn spawn_command_loop(
                         "SURFACE_ACTIVATION",
                         "plugin={plugin_id} phase=command outcome=received"
                     );
-                    let update = cx.update(move |cx| activate(&host, &tracker, plugin_id, cx));
-                    if let Err(error) = update {
-                        qol_runtime::probe!(
-                            "SURFACE_ACTIVATION",
-                            "plugin=unknown phase=activate outcome=app_update_failed error={error}"
-                        );
-                    }
+                    activate(host, tracker, plugin_id, &cx).await;
                     LoopFlow::Continue
                 }
                 Command::Kill => LoopFlow::Stop,
@@ -160,14 +159,59 @@ fn spawn_command_loop(
     });
 }
 
-fn activate(
-    host: &Rc<RefCell<SettingsWindowHost>>,
-    tracker: &MonitorTracker,
+async fn activate(
+    host: Rc<RefCell<SettingsWindowHost>>,
+    tracker: MonitorTracker,
     plugin_id: String,
-    cx: &mut App,
+    cx: &gpui::AsyncApp,
 ) {
-    let activation = load_panel(&plugin_id)
-        .and_then(|(panel, runtime)| host.borrow_mut().activate(panel, tracker, runtime, cx));
+    let focused_host = host.clone();
+    let focused_tracker = tracker.clone();
+    let focused_plugin_id = plugin_id.clone();
+    match cx.update(move |cx| {
+        focused_host
+            .borrow_mut()
+            .present_active(&focused_plugin_id, &focused_tracker, cx)
+    }) {
+        Ok(true) => {
+            qol_runtime::probe!(
+                "SURFACE_ACTIVATION",
+                "plugin={plugin_id} phase=activate outcome=focused visible_windows=1"
+            );
+            return;
+        }
+        Ok(false) => {}
+        Err(error) => {
+            qol_runtime::probe!(
+                "SURFACE_ACTIVATION",
+                "plugin={plugin_id} phase=activate outcome=app_update_failed error={error}"
+            );
+            open_browser_fallback(&plugin_id, "activation_failed");
+            return;
+        }
+    }
+
+    let load_plugin_id = plugin_id.clone();
+    let loaded = cx
+        .background_spawn(async move { load_panel(&load_plugin_id) })
+        .await;
+    let activation = match loaded {
+        Ok((panel, runtime)) => {
+            match qol_gpui::settings_panel::prepare_from_async(panel, runtime, cx).await {
+                Ok(prepared) => {
+                    let activation_host = host.clone();
+                    cx.update(move |cx| {
+                        activation_host
+                            .borrow_mut()
+                            .activate_prepared(prepared, &tracker, cx)
+                    })
+                    .and_then(|result| result)
+                }
+                Err(error) => Err(error),
+            }
+        }
+        Err(error) => Err(error),
+    };
     match activation {
         Ok(activation) => qol_runtime::probe!(
             "SURFACE_ACTIVATION",

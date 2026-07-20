@@ -501,7 +501,7 @@ async fn run_cli(cx: &AsyncApp, state: &State, action: String) {
     }
 
     if action == "settings" {
-        match crate::settings_panel::open_from_async(state.tracker.clone(), cx) {
+        match crate::settings_panel::open_from_async(state.tracker.clone(), cx).await {
             Ok(()) => {
                 qol_runtime::probe!("SHOT_SETTINGS_PANEL", "result=shown");
                 return;

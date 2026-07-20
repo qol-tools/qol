@@ -61,6 +61,14 @@ struct ActivePanel {
     surface: OpenedSurface<SettingsPanelView>,
 }
 
+pub struct PreparedSettingsPanel {
+    panel: SettingsPanel,
+    rows: Vec<Row>,
+    values: serde_json::Value,
+    path: std::path::PathBuf,
+    runtime: SettingsRuntime,
+}
+
 struct PreparedPanel {
     panel: SettingsPanel,
     state: SettingsPanelState,
@@ -75,29 +83,34 @@ enum ActivationDecision {
 }
 
 impl SettingsWindowHost {
-    pub fn activate(
+    pub fn present_active(
         &mut self,
-        panel: SettingsPanel,
+        plugin_id: &str,
         tracker: &MonitorTracker,
-        runtime: SettingsRuntime,
+        cx: &mut App,
+    ) -> bool {
+        if self.active.as_ref().map(|active| active.plugin_id.as_str()) != Some(plugin_id) {
+            return false;
+        }
+        self.present(tracker, cx)
+    }
+
+    pub fn activate_prepared(
+        &mut self,
+        prepared: PreparedSettingsPanel,
+        tracker: &MonitorTracker,
         cx: &mut App,
     ) -> anyhow::Result<SettingsActivation> {
+        let plugin_id = prepared.panel.plugin_id.clone();
         let decision = activation_decision(
             self.active.as_ref().map(|active| active.plugin_id.as_str()),
-            &panel.plugin_id,
+            &plugin_id,
         );
         if decision == ActivationDecision::Focus && self.present(tracker, cx) {
             return Ok(SettingsActivation::Focused);
         }
 
-        let plugin_id = panel.plugin_id.clone();
-        let prepare_started = std::time::Instant::now();
-        let prepared = prepare_panel(panel, tracker, runtime)?;
-        qol_runtime::probe!(
-            "SURFACE_ACTIVATION",
-            "plugin={plugin_id} phase=prepared outcome=ready elapsed_ms={}",
-            prepare_started.elapsed().as_millis()
-        );
+        let prepared = size_prepared_panel(prepared, tracker)?;
         if decision == ActivationDecision::Replace && self.active_is_open(cx) {
             self.replace(prepared, tracker, cx)?;
             return Ok(SettingsActivation::Replaced);
@@ -240,39 +253,54 @@ pub fn run_standalone(panel: SettingsPanel, runtime: SettingsRuntime) -> anyhow:
         })
         .detach();
         let tracker = MonitorTracker::start(cx);
-        if let Err(error) = open(panel, &tracker, runtime.clone(), cx) {
-            reported_failure.borrow_mut().replace(error);
-            cx.quit();
-        }
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            if let Err(error) = open_from_async(panel, tracker, runtime, cx).await {
+                reported_failure.borrow_mut().replace(error);
+                let _ = cx.update(|cx| cx.quit());
+            }
+        })
+        .detach();
     });
     let failure = failure.borrow_mut().take();
     failure.map_or(Ok(()), Err)
 }
 
-pub fn open_from_async(
+pub async fn prepare_from_async(
+    panel: SettingsPanel,
+    runtime: SettingsRuntime,
+    cx: &AsyncApp,
+) -> anyhow::Result<PreparedSettingsPanel> {
+    let plugin_id = panel.plugin_id.clone();
+    let started = std::time::Instant::now();
+    let prepared = cx
+        .background_spawn(async move { prepare_panel(panel, runtime) })
+        .await;
+    qol_runtime::probe!(
+        "SURFACE_ACTIVATION",
+        "plugin={plugin_id} phase=prepared outcome={} elapsed_ms={}",
+        if prepared.is_ok() { "ready" } else { "failed" },
+        started.elapsed().as_millis()
+    );
+    prepared
+}
+
+pub async fn open_from_async(
     panel: SettingsPanel,
     tracker: MonitorTracker,
     runtime: SettingsRuntime,
     cx: &AsyncApp,
 ) -> anyhow::Result<()> {
-    cx.update(move |cx| open(panel, &tracker, runtime, cx))?
-}
-
-pub fn open(
-    panel: SettingsPanel,
-    tracker: &MonitorTracker,
-    runtime: SettingsRuntime,
-    cx: &mut App,
-) -> anyhow::Result<()> {
-    let prepared = prepare_panel(panel, tracker, runtime)?;
-    open_prepared(prepared, tracker, cx).map(|_| ())
+    let prepared = prepare_from_async(panel, runtime, cx).await?;
+    cx.update(move |cx| {
+        let prepared = size_prepared_panel(prepared, &tracker)?;
+        open_prepared(prepared, &tracker, cx).map(|_| ())
+    })?
 }
 
 fn prepare_panel(
     panel: SettingsPanel,
-    tracker: &MonitorTracker,
     runtime: SettingsRuntime,
-) -> anyhow::Result<PreparedPanel> {
+) -> anyhow::Result<PreparedSettingsPanel> {
     let spec = qol_config::contract::parse_spec_str(&panel.contract)
         .map_err(|error| anyhow::anyhow!("contract parse failed: {error:?}"))?;
     let path = persistence::config_path(&panel.plugin_id)?;
@@ -280,21 +308,34 @@ fn prepare_panel(
     let resolved = qol_config::normalized::resolve_config(&spec, &values)
         .map_err(|errors| anyhow::anyhow!("contract resolve failed: {errors:?}"))?;
     let rows = rows_from_resolved(&resolved);
+    Ok(PreparedSettingsPanel {
+        panel,
+        rows,
+        values,
+        path,
+        runtime,
+    })
+}
+
+fn size_prepared_panel(
+    prepared: PreparedSettingsPanel,
+    tracker: &MonitorTracker,
+) -> anyhow::Result<PreparedPanel> {
     let monitor = tracker
         .snapshot_monitor()
         .ok_or_else(|| anyhow::anyhow!("no monitor state available for the settings panel"))?;
     let available =
         monitor.bounds().size.height.to_f64() as f32 - 2.0 * crate::surface::CORNER_MARGIN;
-    let height = panel_height(&rows).min(available);
+    let height = panel_height(&prepared.rows).min(available);
     let body_max = height - PANEL_CHROME_HEIGHT;
     Ok(PreparedPanel {
-        panel,
+        panel: prepared.panel,
         state: SettingsPanelState {
-            rows,
-            values,
-            path,
+            rows: prepared.rows,
+            values: prepared.values,
+            path: prepared.path,
             body_max,
-            runtime,
+            runtime: prepared.runtime,
         },
         size: size(px(PANEL_WIDTH), px(height)),
     })

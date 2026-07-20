@@ -59,6 +59,20 @@ impl BindingMatcher {
         }
     }
 
+    pub(super) fn reload(&mut self, bindings: Vec<Binding>) -> Vec<CaptureEvent> {
+        self.bindings = bindings
+            .into_iter()
+            .filter_map(|binding| binding.combo.clone().map(|combo| (combo, binding)))
+            .collect();
+        self.active_continuous
+            .drain()
+            .map(|(_, (_, binding, _))| CaptureEvent {
+                binding,
+                phase: Phase::Stop,
+            })
+            .collect()
+    }
+
     fn modifier_decision(&mut self) -> CaptureDecision {
         let modifiers = self.state.pressed_modifiers();
         let ended: Vec<u16> = self
@@ -263,6 +277,25 @@ mod matcher_tests {
         assert_eq!(
             matcher.state.pressed_modifiers(),
             BTreeSet::<Modifier>::new()
+        );
+    }
+
+    #[test]
+    fn reload_stops_active_binding_and_keeps_release_suppressed() {
+        let mut matcher = BindingMatcher::new(vec![binding("Super+Space", true)]);
+        matcher.observe(keycodes::KEY_LEFTMETA, 1);
+        matcher.observe(keycodes::KEY_SPACE, 1);
+
+        let stopped = matcher.reload(Vec::new());
+        let release = matcher.observe(keycodes::KEY_SPACE, 0);
+
+        assert_eq!(stopped.len(), 1);
+        assert_eq!(stopped[0].phase, Phase::Stop);
+        assert!(!release.forward);
+        assert!(release.events.is_empty());
+        assert_eq!(
+            matcher.state.pressed_modifiers(),
+            BTreeSet::from([Modifier::Super])
         );
     }
 }

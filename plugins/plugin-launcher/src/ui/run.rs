@@ -114,7 +114,7 @@ fn spawn_command_poll(
                     LoopFlow::Continue
                 }
                 daemon::Command::Settings => {
-                    dispatch_settings(&cx, focus_cache);
+                    dispatch_settings(&cx, focus_cache).await;
                     LoopFlow::Continue
                 }
                 daemon::Command::Kill => LoopFlow::Stop,
@@ -123,7 +123,7 @@ fn spawn_command_poll(
     });
 }
 
-fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {
+async fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {
     let opened = qol_gpui::settings_panel::open_from_async(
         qol_gpui::settings_panel::SettingsPanel {
             plugin_id: crate::config::plugin_id().into(),
@@ -133,7 +133,8 @@ fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {
         focus_cache,
         qol_gpui::settings_panel::SettingsRuntime::empty(),
         cx,
-    );
+    )
+    .await;
     if let Err(error) = opened {
         eprintln!("[launcher] settings panel failed, opening browser: {error:#}");
         open_settings_page();

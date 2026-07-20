@@ -2,6 +2,7 @@ import { html } from '../../lib/html.js';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
 import { Badge } from '../../lib/components/StatusIndicators.js';
 import { Button } from '../../lib/components/Button.js';
+import { TextInput } from '../../lib/components/TextInput.js';
 import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
 import { Surface } from '../../lib/components/Surface.js';
 import { BackupRow } from '../../components/domain-rows/BackupRow.js';

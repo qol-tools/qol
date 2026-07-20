@@ -134,7 +134,7 @@ fn spawn_daemon_loop(cx: &mut App, rx: mpsc::Receiver<daemon::Command>, state: P
                     LoopFlow::Continue
                 }
                 daemon::Command::Settings => {
-                    dispatch_settings(&cx, &state);
+                    dispatch_settings(&cx, &state).await;
                     LoopFlow::Continue
                 }
                 daemon::Command::Kill => LoopFlow::Stop,
@@ -143,7 +143,7 @@ fn spawn_daemon_loop(cx: &mut App, rx: mpsc::Receiver<daemon::Command>, state: P
     });
 }
 
-fn dispatch_settings(cx: &AsyncApp, state: &PickerState) {
+async fn dispatch_settings(cx: &AsyncApp, state: &PickerState) {
     let opened = qol_gpui::settings_panel::open_from_async(
         qol_gpui::settings_panel::SettingsPanel {
             plugin_id: crate::config::PLUGIN_ID.into(),
@@ -153,7 +153,8 @@ fn dispatch_settings(cx: &AsyncApp, state: &PickerState) {
         state.tracker.clone(),
         qol_gpui::settings_panel::SettingsRuntime::empty(),
         cx,
-    );
+    )
+    .await;
     if let Err(error) = opened {
         eprintln!("[alt-tab/daemon] settings panel failed, opening browser: {error:#}");
         crate::open_settings_page();

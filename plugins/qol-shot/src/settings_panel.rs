@@ -2,7 +2,7 @@ use gpui::AsyncApp;
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::settings_panel::{SettingsPanel, SettingsRuntime};
 
-pub(crate) fn open_from_async(tracker: MonitorTracker, cx: &AsyncApp) -> anyhow::Result<()> {
+pub(crate) async fn open_from_async(tracker: MonitorTracker, cx: &AsyncApp) -> anyhow::Result<()> {
     qol_gpui::settings_panel::open_from_async(
         SettingsPanel {
             plugin_id: crate::PLUGIN_ID.into(),
@@ -13,6 +13,7 @@ pub(crate) fn open_from_async(tracker: MonitorTracker, cx: &AsyncApp) -> anyhow:
         SettingsRuntime::new(query_options),
         cx,
     )
+    .await
 }
 
 fn query_options(query: &str) -> Result<serde_json::Value, String> {

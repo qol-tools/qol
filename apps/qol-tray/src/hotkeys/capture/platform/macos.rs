@@ -46,7 +46,7 @@ pub(crate) fn install(
             }
         })?;
 
-    spawn_reload_thread(matcher.clone(), reload_rx, rebuild);
+    spawn_reload_thread(matcher.clone(), reload_rx, rebuild, fire_tx.clone());
 
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
     let tap_matcher = matcher.clone();
@@ -70,14 +70,15 @@ fn spawn_reload_thread(
     matcher: Arc<RwLock<MacBindingMatcher>>,
     reload_rx: Receiver<()>,
     rebuild: RebuildBindings,
+    fire_tx: Sender<CaptureEvent>,
 ) {
     let _ = std::thread::Builder::new()
         .name("hotkey-capture-macos-reload".into())
         .spawn(move || {
             while reload_rx.recv().is_ok() {
                 drain_pending(&reload_rx);
-                let next = match rebuild() {
-                    Ok(bindings) => MacBindingMatcher::new(bindings),
+                let bindings = match rebuild() {
+                    Ok(bindings) => bindings,
                     Err(error) => {
                         log::error!(
                             "macOS hotkey reload skipped; keeping current bindings: {error:#}"
@@ -85,18 +86,22 @@ fn spawn_reload_thread(
                         continue;
                     }
                 };
-                match matcher.write() {
+                let stopped = match matcher.write() {
                     Ok(mut guard) => {
-                        *guard = next;
+                        let stopped = guard.reload(bindings);
                         log::info!("macOS hotkey capture: bindings reloaded");
+                        stopped
                     }
                     Err(poisoned) => {
                         log::error!(
                             "macOS hotkey matcher lock poisoned during reload; recovering: {poisoned}"
                         );
                         let mut guard = poisoned.into_inner();
-                        *guard = next;
+                        guard.reload(bindings)
                     }
+                };
+                for event in stopped {
+                    let _ = fire_tx.send(event);
                 }
             }
         });
@@ -212,6 +217,20 @@ impl MacBindingMatcher {
             .find_map(|(combo, binding)| (combo == observed).then_some(binding))
     }
 
+    fn reload(&mut self, bindings: Vec<Binding>) -> Vec<CaptureEvent> {
+        self.bindings = bindings
+            .into_iter()
+            .filter_map(|binding| parse_mac_combo(&binding).map(|combo| (combo, binding)))
+            .collect();
+        self.active_continuous
+            .drain()
+            .map(|(_, binding)| CaptureEvent {
+                binding,
+                phase: Phase::Stop,
+            })
+            .collect()
+    }
+
     fn match_event(
         &mut self,
         event_type: CGEventType,
@@ -323,6 +342,13 @@ mod tests {
         }
     }
 
+    fn continuous_binding_for(key: &str, plugin: &str, action: &str) -> Binding {
+        Binding {
+            continuous: true,
+            ..binding_for(key, plugin, action)
+        }
+    }
+
     fn combo_for(key: &str) -> MacCombo {
         parse_mac_combo(&binding(key)).expect("combo")
     }
@@ -421,7 +447,8 @@ mod tests {
             anyhow::bail!("simulated corrupt config")
         });
 
-        spawn_reload_thread(matcher.clone(), rx, rebuild);
+        let (fire_tx, _fire_rx) = mpsc::channel();
+        spawn_reload_thread(matcher.clone(), rx, rebuild, fire_tx);
         tx.send(()).unwrap();
 
         for _ in 0..200 {
@@ -484,6 +511,22 @@ mod tests {
             matcher.read().unwrap().match_combo(&disabled).is_none(),
             "disabled (filtered-out) binding must no longer match after swap"
         );
+    }
+
+    #[test]
+    fn reload_stops_active_continuous_binding() {
+        let mut matcher =
+            MacBindingMatcher::new(vec![continuous_binding_for("Super+R", "first", "open")]);
+        let observed = combo_for("Super+R");
+        let started = matcher.match_event(CGEventType::KeyDown, &observed);
+
+        let stopped = matcher.reload(Vec::new());
+
+        assert_eq!(started.map(|(_, phase)| phase), Some(Phase::Start));
+        assert_eq!(stopped.len(), 1);
+        assert_eq!(stopped[0].phase, Phase::Stop);
+        assert_eq!(stopped[0].binding.plugin_uid.as_str(), "first");
+        assert_eq!(stopped[0].binding.action, "open");
     }
 
     #[test]
