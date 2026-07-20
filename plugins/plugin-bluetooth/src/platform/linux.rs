@@ -123,6 +123,60 @@ enum DaemonCommand {
     Settings,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DaemonAction {
+    Ping,
+    Kill,
+    EnableAdapter,
+    DisableAdapter,
+    PairDevice,
+    TrustDevice,
+    UntrustDevice,
+    ConnectDevice,
+    DisconnectDevice,
+    RemoveDevice,
+    StartSearch,
+    StopSearch,
+    Devices,
+    ManagedDeviceOptions,
+    SearchStatus,
+    AdapterStatus,
+    Reconnect,
+    ReconnectTrusted,
+    Reload,
+    Settings,
+}
+
+impl TryFrom<&str> for DaemonAction {
+    type Error = String;
+
+    fn try_from(action: &str) -> std::result::Result<Self, Self::Error> {
+        match action {
+            "ping" => Ok(Self::Ping),
+            "kill" => Ok(Self::Kill),
+            "enable_adapter" => Ok(Self::EnableAdapter),
+            "disable_adapter" => Ok(Self::DisableAdapter),
+            "pair_device" => Ok(Self::PairDevice),
+            "trust_device" => Ok(Self::TrustDevice),
+            "untrust_device" => Ok(Self::UntrustDevice),
+            "connect_device" => Ok(Self::ConnectDevice),
+            "disconnect_device" => Ok(Self::DisconnectDevice),
+            "remove_device" => Ok(Self::RemoveDevice),
+            "start_search" => Ok(Self::StartSearch),
+            "stop_search" => Ok(Self::StopSearch),
+            "devices" => Ok(Self::Devices),
+            "managed_device_options" => Ok(Self::ManagedDeviceOptions),
+            "search_status" => Ok(Self::SearchStatus),
+            "adapter_status" => Ok(Self::AdapterStatus),
+            "reconnect" => Ok(Self::Reconnect),
+            "reconnect_trusted" => Ok(Self::ReconnectTrusted),
+            "reload" => Ok(Self::Reload),
+            "settings" => Ok(Self::Settings),
+            unknown => Err(format!("unknown Bluetooth action: {unknown}")),
+        }
+    }
+}
+
 pub fn list_devices() -> Result<Vec<DeviceInfo>> {
     runtime()?.block_on(async {
         let adapter = default_adapter().await?;
@@ -859,40 +913,57 @@ fn parse_address(value: &str) -> Result<Address> {
 }
 
 fn parse_daemon_request(request: &DaemonRequest) -> ReadResult<DaemonCommand> {
-    match request.action.as_str() {
-        "ping" => ReadResult::Handled,
-        "kill" => ReadResult::Command(DaemonCommand::Kill),
-        "enable_adapter" => ReadResult::Command(DaemonCommand::SetAdapterPower(true)),
-        "disable_adapter" => ReadResult::Command(DaemonCommand::SetAdapterPower(false)),
-        "pair_device" => device_daemon_command(request, DaemonCommand::Pair, "Pairing..."),
-        "trust_device" => device_daemon_command(
+    let action = match DaemonAction::try_from(request.action.as_str()) {
+        Ok(action) => action,
+        Err(error) => return ReadResult::Error(error),
+    };
+    dispatch_daemon_action(action, request)
+}
+
+fn dispatch_daemon_action(
+    action: DaemonAction,
+    request: &DaemonRequest,
+) -> ReadResult<DaemonCommand> {
+    match action {
+        DaemonAction::Ping => ReadResult::Handled,
+        DaemonAction::Kill => ReadResult::Command(DaemonCommand::Kill),
+        DaemonAction::EnableAdapter => ReadResult::Command(DaemonCommand::SetAdapterPower(true)),
+        DaemonAction::DisableAdapter => ReadResult::Command(DaemonCommand::SetAdapterPower(false)),
+        DaemonAction::PairDevice => {
+            device_daemon_command(request, DaemonCommand::Pair, "Pairing...")
+        }
+        DaemonAction::TrustDevice => device_daemon_command(
             request,
             |address| DaemonCommand::Trust(address, true),
             "Trusting...",
         ),
-        "untrust_device" => device_daemon_command(
+        DaemonAction::UntrustDevice => device_daemon_command(
             request,
             |address| DaemonCommand::Trust(address, false),
             "Removing trust...",
         ),
-        "connect_device" => device_daemon_command(request, DaemonCommand::Connect, "Connecting..."),
-        "disconnect_device" => {
+        DaemonAction::ConnectDevice => {
+            device_daemon_command(request, DaemonCommand::Connect, "Connecting...")
+        }
+        DaemonAction::DisconnectDevice => {
             device_daemon_command(request, DaemonCommand::Disconnect, "Disconnecting...")
         }
-        "remove_device" => device_daemon_command(request, DaemonCommand::Remove, "Removing..."),
-        "start_search" => match mark_search_starting() {
+        DaemonAction::RemoveDevice => {
+            device_daemon_command(request, DaemonCommand::Remove, "Removing...")
+        }
+        DaemonAction::StartSearch => match mark_search_starting() {
             Ok(()) => ReadResult::Command(DaemonCommand::StartSearch),
             Err(error) => ReadResult::Error(error.to_string()),
         },
-        "stop_search" => match mark_search_stopped() {
+        DaemonAction::StopSearch => match mark_search_stopped() {
             Ok(()) => ReadResult::Command(DaemonCommand::StopSearch),
             Err(error) => ReadResult::Error(error.to_string()),
         },
-        "devices" => match devices_snapshot() {
+        DaemonAction::Devices => match devices_snapshot() {
             Ok(payload) => ReadResult::HandledWithData(payload),
             Err(error) => ReadResult::Error(format!("{error:#}")),
         },
-        "managed_device_options" => {
+        DaemonAction::ManagedDeviceOptions => {
             match current_managed_device_options().and_then(|options| {
                 serde_json::to_value(options).context("failed to encode Bluetooth device options")
             }) {
@@ -900,19 +971,18 @@ fn parse_daemon_request(request: &DaemonRequest) -> ReadResult<DaemonCommand> {
                 Err(error) => ReadResult::Error(format!("{error:#}")),
             }
         }
-        "search_status" => match search_status_snapshot() {
+        DaemonAction::SearchStatus => match search_status_snapshot() {
             Ok(payload) => ReadResult::HandledWithData(payload),
             Err(error) => ReadResult::Error(format!("{error:#}")),
         },
-        "adapter_status" => match adapter_status_snapshot() {
+        DaemonAction::AdapterStatus => match adapter_status_snapshot() {
             Ok(payload) => ReadResult::HandledWithData(payload),
             Err(error) => ReadResult::Error(format!("{error:#}")),
         },
-        "reconnect" => ReadResult::Command(DaemonCommand::ReconnectManaged),
-        "reconnect_trusted" => ReadResult::Command(DaemonCommand::ReconnectTrusted),
-        "reload" => ReadResult::Command(DaemonCommand::Reload),
-        "settings" => ReadResult::Command(DaemonCommand::Settings),
-        action => ReadResult::Error(format!("unknown Bluetooth action: {action}")),
+        DaemonAction::Reconnect => ReadResult::Command(DaemonCommand::ReconnectManaged),
+        DaemonAction::ReconnectTrusted => ReadResult::Command(DaemonCommand::ReconnectTrusted),
+        DaemonAction::Reload => ReadResult::Command(DaemonCommand::Reload),
+        DaemonAction::Settings => ReadResult::Command(DaemonCommand::Settings),
     }
 }
 
@@ -1723,8 +1793,9 @@ mod tests {
     use super::{
         begin_device_action, complete_device_action_within, finish_device_action, pactl_has_card,
         parse_address, parse_daemon_request, runtime, set_device_action_state,
-        tolerated_profile_connect, transient_connect_error, DaemonCommand, DeviceActionTimeout,
-        Duration, ErrorKind, Instant, ReadResult, Result, RetryState, DEVICE_ACTION_STATE,
+        tolerated_profile_connect, transient_connect_error, DaemonAction, DaemonCommand,
+        DeviceActionTimeout, Duration, ErrorKind, Instant, ReadResult, Result, RetryState,
+        DEVICE_ACTION_STATE,
     };
     use qol_runtime::protocol::DaemonRequest;
     use std::collections::HashMap;
@@ -1745,6 +1816,43 @@ mod tests {
                 ReadResult::Command(DaemonCommand::SetAdapterPower(powered)) if powered == expected
             ));
         }
+    }
+
+    #[test]
+    fn daemon_actions_parse_at_the_protocol_boundary() {
+        let cases = [
+            ("ping", DaemonAction::Ping),
+            ("kill", DaemonAction::Kill),
+            ("enable_adapter", DaemonAction::EnableAdapter),
+            ("disable_adapter", DaemonAction::DisableAdapter),
+            ("pair_device", DaemonAction::PairDevice),
+            ("trust_device", DaemonAction::TrustDevice),
+            ("untrust_device", DaemonAction::UntrustDevice),
+            ("connect_device", DaemonAction::ConnectDevice),
+            ("disconnect_device", DaemonAction::DisconnectDevice),
+            ("remove_device", DaemonAction::RemoveDevice),
+            ("start_search", DaemonAction::StartSearch),
+            ("stop_search", DaemonAction::StopSearch),
+            ("devices", DaemonAction::Devices),
+            ("managed_device_options", DaemonAction::ManagedDeviceOptions),
+            ("search_status", DaemonAction::SearchStatus),
+            ("adapter_status", DaemonAction::AdapterStatus),
+            ("reconnect", DaemonAction::Reconnect),
+            ("reconnect_trusted", DaemonAction::ReconnectTrusted),
+            ("reload", DaemonAction::Reload),
+            ("settings", DaemonAction::Settings),
+        ];
+        for (action, expected) in cases {
+            assert_eq!(
+                DaemonAction::try_from(action),
+                Ok(expected),
+                "action={action}"
+            );
+        }
+        assert_eq!(
+            DaemonAction::try_from("unknown"),
+            Err("unknown Bluetooth action: unknown".into())
+        );
     }
 
     #[test]
