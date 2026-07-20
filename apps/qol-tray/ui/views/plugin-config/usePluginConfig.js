@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
-import { buildFieldPathIndex, getFieldValue, setFieldValue, getFieldValueById } from '../../lib/qol-config.js';
+import { buildFieldPathIndex, getFieldValue, setFieldValue, getFieldValueById, fetchPluginConfig, savePluginConfig } from '../../lib/qol-config.js';
 import { configFromForm, getDisplaySections, ownedConfigKeys } from '../../auto-config/form-model.js';
 
 const SAVE_DEBOUNCE_MS = 400;
@@ -118,9 +118,7 @@ async function tryParseJson(response) {
 
 async function fetchExistingConfig(pluginId) {
     try {
-        const res = await fetch(`/api/plugins/${pluginId}/config`);
-        if (!res.ok) return {};
-        const data = await tryParseJson(res);
+        const data = await fetchPluginConfig(pluginId);
         return data && typeof data === 'object' ? data : {};
     } catch { return {}; }
 }
@@ -159,11 +157,7 @@ function errorMessage(err) {
 async function persistConfig(pluginId, config, form, extraKeys) {
     try {
         const payload = form ? filterOwnedKeys(config, form, extraKeys) : config;
-        const response = await fetch(`/api/plugins/${pluginId}/config`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload, null, 2),
-        });
+        const response = await savePluginConfig(pluginId, payload);
         if (!response.ok) throw new Error(await response.text());
     } catch (err) {
         console.error('Save failed', err);

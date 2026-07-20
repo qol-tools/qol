@@ -1,10 +1,10 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use qol_dev_env::{CleanupState, RunSummary};
 
 #[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
@@ -114,6 +114,134 @@ impl RunHandle {
 
     pub fn detach(self) -> RunTicket {
         self.ticket.clone()
+    }
+
+    /// Drives the handle to completion, requesting graceful cancellation on
+    /// the first signal and escalating to a forced worker-tree termination on
+    /// the second (per `cancellation`). `on_running`/`on_cancel_requested`/
+    /// `on_escalate_start` are caller-supplied progress hooks; `reconcile`
+    /// runs the caller's domain-specific report/resource reconciliation after
+    /// a forced termination; `finish` builds the caller's success value from
+    /// a terminal report. `kind` and `worker_log` only affect diagnostic text.
+    #[allow(clippy::too_many_arguments)]
+    pub fn wait_with_cancellation<T>(
+        &mut self,
+        cancellation: &qol_process::CancellationToken,
+        kind: &str,
+        termination_grace: Duration,
+        worker_log: Option<&Path>,
+        mut on_running: impl FnMut(&RunSummary),
+        mut on_cancel_requested: impl FnMut(),
+        on_escalate_start: impl FnOnce(),
+        reconcile: impl FnOnce() -> Result<()>,
+        finish: impl Fn(&RunHandle, RunSummary, bool) -> Result<T>,
+    ) -> Result<T> {
+        let mut cancellation_requested = false;
+        loop {
+            let mut cancellation_error = None;
+            if cancellation.is_cancelled() && !cancellation_requested {
+                cancellation_requested = true;
+                match self.cancel() {
+                    Ok(_) => on_cancel_requested(),
+                    Err(error) => cancellation_error = Some(format!("{error:#}")),
+                }
+            }
+            if cancellation.escalation_requested() {
+                on_escalate_start();
+                return self.escalate_with_reconcile(
+                    cancellation_error.as_deref(),
+                    kind,
+                    termination_grace,
+                    worker_log,
+                    reconcile,
+                    finish,
+                );
+            }
+            if let Some(error) = cancellation_error {
+                bail!("failed to request graceful {kind} cancellation: {error}");
+            }
+            match self.poll()? {
+                WaitState::Starting => {}
+                WaitState::Running(report) => on_running(&report),
+                WaitState::Terminal {
+                    report,
+                    worker_success,
+                } => return finish(self, report, worker_success),
+                WaitState::Failed {
+                    report,
+                    worker_exit,
+                } => {
+                    let status = report
+                        .as_ref()
+                        .map(|report| report.status.as_str())
+                        .unwrap_or("missing");
+                    let log = worker_log
+                        .map(|path| format!("; worker log: {}", path.display()))
+                        .unwrap_or_default();
+                    bail!(
+                        "{kind} worker exited {worker_exit} without terminal cleanup proof; report status: {status}; evidence: {}{log}",
+                        self.ticket().report_path.display()
+                    );
+                }
+            }
+            thread::sleep(WAIT_INTERVAL);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn escalate_with_reconcile<T>(
+        &mut self,
+        cancellation_error: Option<&str>,
+        kind: &str,
+        termination_grace: Duration,
+        worker_log: Option<&Path>,
+        reconcile: impl FnOnce() -> Result<()>,
+        finish: impl Fn(&RunHandle, RunSummary, bool) -> Result<T>,
+    ) -> Result<T> {
+        let terminated = self.terminate_worker(termination_grace).with_context(|| {
+            format!("failed to terminate the verified {kind} worker process tree")
+        })?;
+        if terminated.is_some() {
+            reconcile()?;
+        }
+        match self.poll()? {
+            WaitState::Terminal {
+                report,
+                worker_success,
+            } => {
+                let result = finish(self, report, worker_success)
+                    .with_context(|| format!("{kind} stopped after second-signal escalation"));
+                match cancellation_error {
+                    Some(error) => result.context(format!(
+                        "graceful cancellation could not be persisted before escalation: {error}"
+                    )),
+                    None => result,
+                }
+            }
+            WaitState::Failed {
+                report,
+                worker_exit,
+            } => {
+                let status = report
+                    .as_ref()
+                    .map(|report| report.status.as_str())
+                    .unwrap_or("missing");
+                let graceful = cancellation_error
+                    .map(|error| format!("; graceful cancellation error: {error}"))
+                    .unwrap_or_default();
+                let log = worker_log
+                    .map(|path| format!("; worker log: {}", path.display()))
+                    .unwrap_or_default();
+                bail!(
+                    "second signal terminated the verified {kind} worker tree; worker exit: {worker_exit}; report status: {status}; evidence: {}{log}{graceful}",
+                    self.ticket().report_path.display(),
+                )
+            }
+            WaitState::Starting | WaitState::Running(_) => bail!(
+                "verified {kind} worker tree terminated, but its worker still appears active; evidence: {}",
+                self.ticket().report_path.display()
+            ),
+        }
     }
 
     pub fn terminate_worker(

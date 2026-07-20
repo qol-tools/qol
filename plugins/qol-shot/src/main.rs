@@ -43,12 +43,8 @@ fn should_run_daemon_with_env(args_empty: bool, daemon_spawn: bool) -> bool {
 mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use super::should_run_daemon_with_env;
-    use qol_plugin_api::manifest::PluginManifest;
 
-    #[test]
-    fn validate_plugin_contract() {
-        PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
-    }
+    qol_plugin_api::assert_plugin_toml_valid!();
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]

@@ -19,6 +19,7 @@ qol-plugin-daemon.workspace = true
 qol-process.workspace = true
 qol-runtime.workspace = true
 qol-config.workspace = true
+qol-fs.workspace = true
 
 [build-dependencies]
 qol-conventions.workspace = true

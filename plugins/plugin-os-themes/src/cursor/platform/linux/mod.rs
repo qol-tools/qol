@@ -24,8 +24,7 @@ impl CursorPlatform for Platform {
     }
 
     fn open_settings(&self) -> Result<()> {
-        let url = qol_conventions::settings_url(PLUGIN_ID);
-        qol_apps::desktop_integration::open_with_default_app(&url)
+        qol_apps::desktop_integration::open_plugin_settings(PLUGIN_ID)
             .context("failed to open settings URL")
     }
 }

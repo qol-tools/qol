@@ -10,12 +10,9 @@ pub fn load(path: &Path) -> Vec<SessionState> {
 }
 
 pub fn save(path: &Path, sessions: &[SessionState]) {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     match serde_json::to_string_pretty(sessions) {
         Ok(json) => {
-            if let Err(e) = std::fs::write(path, json) {
+            if let Err(e) = qol_fs::atomic_write(path, json.as_bytes()) {
                 eprintln!("[cli-sessions] persist write failed: {e}");
             }
         }

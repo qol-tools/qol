@@ -17,6 +17,20 @@ pub use validation::{
     validate_safe_identifier, SafeIdentifierError,
 };
 
+/// Expands to a `validate_plugin_contract` test asserting the crate's
+/// `plugin.toml` parses and validates. Invoke inside a `#[cfg(test)] mod
+/// tests { ... }` block; sibling tests are unaffected.
+#[macro_export]
+macro_rules! assert_plugin_toml_valid {
+    () => {
+        #[test]
+        fn validate_plugin_contract() {
+            $crate::manifest::PluginManifest::load_and_validate("plugin.toml")
+                .expect("plugin.toml invalid");
+        }
+    };
+}
+
 pub const CURRENT_MANIFEST_VERSION: u32 = 3;
 
 pub fn default_manifest_version() -> u32 {

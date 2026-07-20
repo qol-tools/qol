@@ -54,12 +54,12 @@ pub(super) fn show(path: &'static str, title: &str, placement: &WindowPlacement)
         qol_runtime::probe!(
             "LAUNCHER_SHOW",
             "path={path} title={} pos=({},{}) size={}x{} target={}",
-            token(title),
+            qol_runtime::probe::token(title),
             px_i32(bounds.origin.x),
             px_i32(bounds.origin.y),
             px_i32(bounds.size.width),
             px_i32(bounds.size.height),
-            token(&format!("{:?}", placement.target)),
+            qol_runtime::probe::token(&format!("{:?}", placement.target)),
         );
     }
 
@@ -86,12 +86,12 @@ pub(super) fn input(
         qol_runtime::probe!(
             "LAUNCHER_INPUT",
             "key={} held={} key_char={} effect={} title={} q=\"{}\" q_len={} cursor={} selection={} selected={}->{} results_before={} mode={} fuzz={}",
-            token(key),
+            qol_runtime::probe::token(key),
             is_held,
-            token(key_char.unwrap_or("none")),
+            qol_runtime::probe::token(key_char.unwrap_or("none")),
             effect_label(effect),
-            token(&view.window_title),
-            quoted(&view.state.query),
+            qol_runtime::probe::token(&view.window_title),
+            qol_runtime::probe::quoted(&view.state.query, 120),
             view.state.query_len(),
             view.state.cursor,
             selection_label(view),
@@ -126,12 +126,12 @@ pub(super) fn dismiss(view: &LauncherView, from: &'static str) {
         qol_runtime::probe!(
             "LAUNCHER_DISMISS",
             "from={from} title={} q=\"{}\" q_len={} results={} selected={} selected_name=\"{}\"",
-            token(&view.window_title),
-            quoted(&view.state.query),
+            qol_runtime::probe::token(&view.window_title),
+            qol_runtime::probe::quoted(&view.state.query, 120),
             view.state.query_len(),
             view.store.result_count(),
             view.state.selected,
-            quoted(selected_name),
+            qol_runtime::probe::quoted(selected_name, 120),
         );
     }
 
@@ -144,7 +144,7 @@ pub(super) fn click_away(window_title: &str, state: &str) {
     qol_runtime::probe!(
         "LAUNCHER_CLICKAWAY",
         "title={} state={state}",
-        token(window_title),
+        qol_runtime::probe::token(window_title),
     );
 
     #[cfg(not(debug_assertions))]
@@ -158,8 +158,8 @@ pub(super) fn render(view: &mut LauncherView, window: &Window, sample: RenderSam
         qol_runtime::probe!(
             "LAUNCHER_RESIZE",
             "title={} q=\"{}\" rows={} results={} from_h={:.1} to_h={:.1} win=({},{},{}x{})",
-            token(&view.window_title),
-            quoted(&view.state.query),
+            qol_runtime::probe::token(&view.window_title),
+            qol_runtime::probe::quoted(&view.state.query, 120),
             sample.visible_rows,
             sample.result_count,
             from_h,
@@ -191,7 +191,7 @@ pub(super) fn render(view: &mut LauncherView, window: &Window, sample: RenderSam
         window_h: px_i32(bounds.size.height),
         target_h: (super::layout::HEADER_HEIGHT + sample.results_height).round() as i32,
         visual_h: sample.target_height.round() as i32,
-        selected_name: compact(&sample.selected_name, 80),
+        selected_name: qol_runtime::probe::compact(&sample.selected_name, 80),
     };
 
     if view.last_render_trace.as_ref() == Some(&signature) {
@@ -202,9 +202,9 @@ pub(super) fn render(view: &mut LauncherView, window: &Window, sample: RenderSam
     qol_runtime::probe!(
             "LAUNCHER_RENDER",
             "title={} showing={} q=\"{}\" q_len={} cursor={} mode={} fuzz={} results={} visible={} selected={} scroll={} hidden={}/{} win=({},{},{}x{}) target_h={} visual_h={} selected_name=\"{}\" total_us={} filter_us={} rows_us={} gap_us={}",
-            token(&signature.title),
+            qol_runtime::probe::token(&signature.title),
             signature.showing,
-            quoted(&signature.query),
+            qol_runtime::probe::quoted(&signature.query, 120),
             signature.query_len,
             signature.cursor,
             signature.mode,
@@ -221,7 +221,7 @@ pub(super) fn render(view: &mut LauncherView, window: &Window, sample: RenderSam
             signature.window_h,
             signature.target_h,
             signature.visual_h,
-            quoted(&signature.selected_name),
+            qol_runtime::probe::quoted(&signature.selected_name, 120),
             sample.total_us,
             sample.filter_us,
             sample.rows_us,
@@ -248,41 +248,6 @@ fn selection_label(view: &LauncherView) -> String {
         return "none".to_string();
     };
     format!("{start}-{end}")
-}
-
-#[cfg(debug_assertions)]
-fn token(value: &str) -> String {
-    compact(value, 96)
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '@' | ',') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-#[cfg(debug_assertions)]
-fn quoted(value: &str) -> String {
-    compact(value, 120)
-        .chars()
-        .map(|c| {
-            if c.is_ascii_graphic() && c != '"' && c != '\\' {
-                c
-            } else if c == ' ' {
-                ' '
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-#[cfg(debug_assertions)]
-fn compact(value: &str, max_chars: usize) -> String {
-    value.chars().take(max_chars).collect()
 }
 
 #[cfg(debug_assertions)]

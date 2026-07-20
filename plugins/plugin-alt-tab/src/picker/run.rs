@@ -172,12 +172,7 @@ async fn dispatch_reload(cx: &AsyncApp, state: &PickerState) {
         if crate::app::PICKER_VISIBLE.load(Ordering::Relaxed) {
             return;
         }
-        let keys: Vec<_> = current
-            .borrow()
-            .iter()
-            .into_iter()
-            .map(|(key, _)| key)
-            .collect();
+        let keys = current.borrow().keys();
         qol_gpui::ghost::reconcile_active(&keys, super::platform::picker_window_title);
     });
 }

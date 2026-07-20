@@ -30,17 +30,7 @@ pub(crate) fn pre_create_ghost(
     cx: &mut App,
 ) {
     crate::config::apply_ghost_debug();
-    let monitors = tracker.all_monitors();
-    let monitors = if monitors.is_empty() {
-        if let Some(m) = tracker.snapshot_monitor() {
-            vec![m]
-        } else {
-            vec![]
-        }
-    } else {
-        monitors
-    };
-    for monitor in monitors {
+    for monitor in tracker.all_monitors_or_snapshot() {
         let placement = centered_window_placement(Some(&monitor), header_size(), cx);
         let target = placement.target;
         let title = qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, target);
@@ -57,12 +47,7 @@ pub(crate) fn pre_create_ghost(
         popup_window::configure_popup_window(&title);
         qol_gpui::ghost::hide_invisible(&title);
     }
-    let keys: Vec<_> = active
-        .borrow()
-        .iter()
-        .into_iter()
-        .map(|(key, _)| key)
-        .collect();
+    let keys = active.borrow().keys();
     qol_gpui::ghost::reconcile_active(&keys, |key| {
         qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, key)
     });
@@ -149,39 +134,10 @@ pub(crate) fn activate_or_open_launcher(
     create_and_show_ghost(entries, active, monitor_snapshot.as_ref(), cx);
 }
 
-fn non_target_keys(keys: &[MonitorKey], target: MonitorKey) -> Vec<MonitorKey> {
-    keys.iter().copied().filter(|&key| key != target).collect()
-}
-
 fn mark_non_target_hidden(active: &Rc<RefCell<ActiveLaunchers>>, target: MonitorKey, cx: &mut App) {
-    let keys: Vec<MonitorKey> = active
-        .borrow()
-        .iter()
-        .into_iter()
-        .map(|(key, _)| key)
-        .collect();
-    let mut stale = Vec::new();
-
-    for key in non_target_keys(&keys, target) {
-        let Some(handle) = active.borrow().existing(key) else {
-            continue;
-        };
-        if handle
-            .update(cx, |view, _window, _cx| view.set_showing(false))
-            .is_err()
-        {
-            stale.push(key);
-        }
-    }
-
-    if stale.is_empty() {
-        return;
-    }
-
-    let mut active = active.borrow_mut();
-    for key in stale {
-        active.remove(key);
-    }
+    qol_gpui::window::hide_non_target(active, target, cx, |view, _window, _cx| {
+        view.set_showing(false)
+    });
 }
 
 fn show_ghost(
@@ -321,61 +277,5 @@ fn ghost_window_options(placement: &WindowPlacement, focus: bool) -> WindowOptio
         window_background: WindowBackgroundAppearance::Transparent,
         app_id: Some(LAUNCHER_APP_ID.to_string()),
         ..Default::default()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{non_target_keys, MonitorKey};
-    use proptest::prelude::*;
-
-    fn key(x: i32) -> MonitorKey {
-        MonitorKey {
-            x,
-            y: 0,
-            width: 100,
-            height: 100,
-        }
-    }
-
-    #[test]
-    fn hides_every_ghost_except_the_target() {
-        let keys = [key(0), key(1), key(2)];
-        assert_eq!(non_target_keys(&keys, key(1)), vec![key(0), key(2)]);
-    }
-
-    #[test]
-    fn a_lone_target_hides_nothing() {
-        assert!(non_target_keys(&[key(5)], key(5)).is_empty());
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(200))]
-
-        #[test]
-        fn open_leaves_exactly_the_target_showing(
-            xs in prop::collection::hash_set(any::<i32>(), 1..8),
-            pick in any::<prop::sample::Index>(),
-        ) {
-            let keys: Vec<MonitorKey> = xs.into_iter().map(key).collect();
-            let target = keys[pick.index(keys.len())];
-
-            let hidden = non_target_keys(&keys, target);
-
-            prop_assert!(!hidden.contains(&target));
-            let showing: Vec<MonitorKey> =
-                keys.iter().copied().filter(|k| !hidden.contains(k)).collect();
-            prop_assert_eq!(showing, vec![target]);
-        }
-
-        #[test]
-        fn opening_a_fresh_monitor_hides_all_existing(
-            xs in prop::collection::hash_set(any::<i32>(), 0..8),
-            target_x in any::<i32>(),
-        ) {
-            prop_assume!(!xs.contains(&target_x));
-            let keys: Vec<MonitorKey> = xs.into_iter().map(key).collect();
-            prop_assert_eq!(non_target_keys(&keys, key(target_x)).len(), keys.len());
-        }
     }
 }

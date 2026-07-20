@@ -310,8 +310,7 @@ fn discovery_state() -> Result<DiscoveryState> {
 }
 
 pub fn open_settings() -> Result<()> {
-    let settings_url = qol_conventions::settings_url(crate::PLUGIN_ID);
-    qol_apps::desktop_integration::open_with_default_app(&settings_url)
+    qol_apps::desktop_integration::open_plugin_settings(crate::PLUGIN_ID)
         .context("failed to open Bluetooth settings URL")
 }
 

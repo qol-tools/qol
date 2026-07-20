@@ -142,8 +142,9 @@ async fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {
 }
 
 fn open_settings_page() {
-    let settings_url = qol_conventions::settings_url(crate::config::plugin_id());
-    if let Err(error) = qol_apps::desktop_integration::open_with_default_app(&settings_url) {
+    if let Err(error) =
+        qol_apps::desktop_integration::open_plugin_settings(crate::config::plugin_id())
+    {
         eprintln!("[launcher] failed to open settings page: {error}");
     }
 }
@@ -153,12 +154,7 @@ fn reload_ghost_debug(active: &Rc<RefCell<ActiveLaunchers>>, cx: &mut App) {
     if any_showing(active, cx) {
         return;
     }
-    let keys: Vec<_> = active
-        .borrow()
-        .iter()
-        .into_iter()
-        .map(|(key, _)| key)
-        .collect();
+    let keys = active.borrow().keys();
     qol_gpui::ghost::reconcile_active(&keys, |key| {
         qol_gpui::ghost::ghost_window_title(super::LAUNCHER_WINDOW_TITLE, key)
     });

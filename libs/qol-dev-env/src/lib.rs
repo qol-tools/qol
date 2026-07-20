@@ -5,6 +5,7 @@ pub mod payload;
 pub mod registry;
 pub mod report;
 pub mod resources;
+pub mod run_dir;
 mod session;
 mod time;
 
@@ -21,5 +22,8 @@ pub use report::{
     LegacyCleanupRepair, ReportKind, ReportStatus, RunConcern, RunReport, RunSummary,
 };
 pub use resources::validate_run_id;
+pub use run_dir::{
+    is_safe_run_id_component, lock_run_directory, remove_unpublished_run_dir, write_json_report,
+};
 pub use session::{clear_host_session, require_host_session_cleared};
 pub use time::unix_millis;

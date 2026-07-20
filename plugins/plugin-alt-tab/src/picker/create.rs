@@ -258,12 +258,7 @@ pub(crate) fn pre_create_ghost(
         super::platform::sync_picker_window_layout(&title, window, bounds.origin, bounds.size)
     });
     super::platform::disable_window_shadow(&title);
-    let keys: Vec<_> = current
-        .borrow()
-        .iter()
-        .into_iter()
-        .map(|(key, _)| key)
-        .collect();
+    let keys = current.borrow().keys();
     qol_gpui::ghost::reconcile_active(&keys, super::platform::picker_window_title);
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
     qol_runtime::probe!("PICKER_READY", "title={title}");

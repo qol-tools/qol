@@ -4,14 +4,12 @@ use crate::progress::{print_hint, print_title, step_label, StepKind};
 use crate::workspace::repo_root;
 use anyhow::{anyhow, bail, Context, Result};
 use qol_dev_env::{ResolutionState, ResolvedEnvironment};
-use qol_dev_orchestrator::{
-    FlowStart, FlowWorkerRequest, RunHandle, RunTicket, WaitState, MAX_FLOW_REPEATS,
-};
+use qol_dev_orchestrator::{FlowStart, FlowWorkerRequest, RunHandle, RunTicket, MAX_FLOW_REPEATS};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
@@ -729,104 +727,38 @@ fn wait_for_typed_flow(
     handle: &mut RunHandle,
     cancellation: &qol_process::CancellationToken,
 ) -> Result<()> {
-    let mut cancellation_requested = false;
+    let report_path = handle.ticket().report_path.clone();
     let mut previous_status = None;
-    loop {
-        let mut cancellation_error = None;
-        if cancellation.is_cancelled() && !cancellation_requested {
-            cancellation_requested = true;
-            match handle.cancel() {
-                Ok(_) => step_label("cancel", StepKind::Info, "requested"),
-                Err(error) => cancellation_error = Some(format!("{error:#}")),
+    handle.wait_with_cancellation(
+        cancellation,
+        "flow",
+        SUPERVISOR_SHUTDOWN_GRACE,
+        None,
+        |report| {
+            let status = report.status.as_str().to_string();
+            if previous_status.as_ref() != Some(&status) {
+                step_label("status", StepKind::Info, &status);
+                previous_status = Some(status);
             }
-        }
-        if cancellation.escalation_requested() {
-            return escalate_typed_flow(handle, cancellation_error.as_deref());
-        }
-        if let Some(error) = cancellation_error {
-            bail!("failed to request graceful flow cancellation: {error}");
-        }
-        match handle.poll()? {
-            WaitState::Starting => {}
-            WaitState::Running(report) => {
-                let status = report.status.as_str().to_string();
-                if previous_status.as_ref() != Some(&status) {
-                    step_label("status", StepKind::Info, &status);
-                    previous_status = Some(status);
-                }
-            }
-            WaitState::Terminal {
-                report,
-                worker_success,
-            } => return finish_typed_flow(report, worker_success),
-            WaitState::Failed {
-                report,
-                worker_exit,
-            } => {
-                let status = report
-                    .as_ref()
-                    .map(|report| report.status.as_str())
-                    .unwrap_or("missing");
-                bail!(
-                    "flow worker exited {worker_exit} without terminal cleanup proof; report status: {status}; evidence: {}",
-                    handle.ticket().report_path.display()
-                );
-            }
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn escalate_typed_flow(handle: &mut RunHandle, cancellation_error: Option<&str>) -> Result<()> {
-    step_label(
-        "cancel",
-        StepKind::Info,
-        "second signal · terminating owned worker tree",
-    );
-    let terminated = handle
-        .terminate_worker(SUPERVISOR_SHUTDOWN_GRACE)
-        .context("failed to terminate the verified flow worker process tree")?;
-    if terminated.is_some() {
-        reconcile_flow_report_file(&handle.ticket().report_path)
-            .context("flow worker tree stopped, but its report could not be reconciled")?;
-        dev_env::reconcile_resources()
-            .context("flow worker tree stopped, but its resource lease could not be reconciled")?;
-    }
-    match handle.poll()? {
-        WaitState::Terminal {
-            report,
-            worker_success,
-        } => {
-            let result = finish_typed_flow(report, worker_success)
-                .context("flow stopped after second-signal escalation");
-            match cancellation_error {
-                Some(error) => result.context(format!(
-                    "graceful cancellation could not be persisted before escalation: {error}"
-                )),
-                None => result,
-            }
-        }
-        WaitState::Failed {
-            report,
-            worker_exit,
-        } => {
-            let status = report
-                .as_ref()
-                .map(|report| report.status.as_str())
-                .unwrap_or("missing");
-            let graceful = cancellation_error
-                .map(|error| format!("; graceful cancellation error: {error}"))
-                .unwrap_or_default();
-            bail!(
-                "second signal terminated the verified flow worker tree; worker exit: {worker_exit}; report status: {status}; evidence: {}{graceful}",
-                handle.ticket().report_path.display(),
+        },
+        || step_label("cancel", StepKind::Info, "requested"),
+        || {
+            step_label(
+                "cancel",
+                StepKind::Info,
+                "second signal · terminating owned worker tree",
             )
-        }
-        WaitState::Starting | WaitState::Running(_) => bail!(
-            "verified flow worker tree terminated, but its worker still appears active; evidence: {}",
-            handle.ticket().report_path.display()
-        ),
-    }
+        },
+        || {
+            reconcile_flow_report_file(&report_path)
+                .context("flow worker tree stopped, but its report could not be reconciled")?;
+            dev_env::reconcile_resources().context(
+                "flow worker tree stopped, but its resource lease could not be reconciled",
+            )?;
+            Ok(())
+        },
+        |_handle, report, worker_success| finish_typed_flow(report, worker_success),
+    )
 }
 
 fn finish_typed_flow(report: qol_dev_env::RunSummary, worker_success: bool) -> Result<()> {
@@ -2058,19 +1990,7 @@ fn reconcile_recovered_payload(run_dir: &Path, report: &mut Value) -> Result<()>
 }
 
 fn lock_flow_run(run_dir: &Path) -> Result<File> {
-    fs::create_dir_all(run_dir)
-        .with_context(|| format!("failed to create {}", run_dir.display()))?;
-    let path = run_dir.join("reconcile.lock");
-    let lock = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(&path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
-    lock.lock()
-        .with_context(|| format!("failed to lock {}", path.display()))?;
-    Ok(lock)
+    qol_dev_env::lock_run_directory(run_dir, "reconcile.lock")
 }
 
 fn validate_flow_run_directory(run_dir: &Path, run_id: &str) -> Result<()> {
@@ -2142,11 +2062,7 @@ fn validate_flow_lanes(run_dir: &Path, report: &Value) -> Result<()> {
 }
 
 fn safe_run_id(run_id: &str) -> bool {
-    !run_id.is_empty()
-        && run_id != "."
-        && run_id != ".."
-        && !run_id.contains('/')
-        && !run_id.contains('\\')
+    qol_dev_env::is_safe_run_id_component(run_id)
 }
 
 fn canonical_lane_paths(run_dir: &Path, run_id: &str) -> Result<(PathBuf, PathBuf)> {
@@ -3398,12 +3314,7 @@ fn write_unpublished_flow_failure(
 }
 
 fn remove_unpublished_run_dir(run_dir: &Path) -> Result<()> {
-    match fs::remove_dir_all(run_dir) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error)
-            .with_context(|| format!("failed to remove unpublished flow {}", run_dir.display())),
-    }
+    qol_dev_env::remove_unpublished_run_dir(run_dir, "flow")
 }
 
 fn combine_setup_errors(error: anyhow::Error, cleanup: Option<anyhow::Error>) -> anyhow::Error {
@@ -4343,8 +4254,7 @@ fn optional_number(value: Option<u64>) -> String {
 }
 
 fn atomic_json(path: &Path, value: &Value) -> Result<()> {
-    let content = serde_json::to_string_pretty(value).context("failed to serialize JSON")?;
-    atomic_write(path, format!("{content}\n").as_bytes())
+    qol_dev_env::write_json_report(path, value)
 }
 
 fn atomic_json_durable(path: &Path, value: &Value) -> Result<()> {

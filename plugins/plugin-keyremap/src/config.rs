@@ -97,14 +97,11 @@ pub fn load_config() -> RemapConfig {
     } else {
         let defaults = builtin_defaults();
         if let Some(path) = paths.first() {
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
             match serde_json::to_string_pretty(&defaults) {
-                Ok(json) => {
-                    let _ = std::fs::write(path, json);
-                    eprintln!("[keyremap] wrote default config to {}", path.display());
-                }
+                Ok(json) => match qol_fs::atomic_write(path, json.as_bytes()) {
+                    Ok(()) => eprintln!("[keyremap] wrote default config to {}", path.display()),
+                    Err(e) => eprintln!("[keyremap] failed to write default config: {e}"),
+                },
                 Err(e) => eprintln!("[keyremap] failed to write default config: {e}"),
             }
         }

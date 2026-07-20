@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use gpui::*;
 
@@ -134,6 +136,10 @@ impl<T: 'static> ActiveWindows<T> {
         self.windows.iter().map(|(k, v)| (*k, *v)).collect()
     }
 
+    pub fn keys(&self) -> Vec<MonitorKey> {
+        self.windows.keys().copied().collect()
+    }
+
     pub fn titles_with(&self, title_of: impl Fn(MonitorKey) -> String) -> Vec<String> {
         self.windows.keys().map(|key| title_of(*key)).collect()
     }
@@ -169,6 +175,43 @@ impl<T: 'static> ActiveWindows<T> {
             }
         }
     }
+}
+
+/// Hides every window other than `target` by running `on_hide` against each
+/// one, removing any window whose handle no longer resolves (stale). Matches
+/// the borrow-scoping of `ActiveWindows::destroy_non_target`: each handle is
+/// looked up and released before `update` runs, so a reentrant borrow of
+/// `active` during `on_hide` (e.g. from an event handler) cannot panic.
+pub fn hide_non_target<T: Render + 'static>(
+    active: &Rc<RefCell<ActiveWindows<T>>>,
+    target: MonitorKey,
+    cx: &mut App,
+    mut on_hide: impl FnMut(&mut T, &mut Window, &mut Context<T>),
+) {
+    let keys = active.borrow().keys();
+    let mut stale = Vec::new();
+    for key in non_target_keys(&keys, target) {
+        let Some(handle) = active.borrow().existing(key) else {
+            continue;
+        };
+        if handle
+            .update(cx, |view, window, cx| on_hide(view, window, cx))
+            .is_err()
+        {
+            stale.push(key);
+        }
+    }
+    if stale.is_empty() {
+        return;
+    }
+    let mut active = active.borrow_mut();
+    for key in stale {
+        active.remove(key);
+    }
+}
+
+fn non_target_keys(keys: &[MonitorKey], target: MonitorKey) -> Vec<MonitorKey> {
+    keys.iter().copied().filter(|&key| key != target).collect()
 }
 
 pub fn open_window_with_focus<T, F>(
@@ -305,8 +348,59 @@ fn coord_diff(a: i32, b: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::cursor_adjacent_bounds;
+    use super::{cursor_adjacent_bounds, non_target_keys, MonitorKey};
     use gpui::{point, px, size, Bounds};
+    use proptest::prelude::*;
+
+    fn key(x: i32) -> MonitorKey {
+        MonitorKey {
+            x,
+            y: 0,
+            width: 100,
+            height: 100,
+        }
+    }
+
+    #[test]
+    fn non_target_keys_hides_every_ghost_except_the_target() {
+        let keys = [key(0), key(1), key(2)];
+        assert_eq!(non_target_keys(&keys, key(1)), vec![key(0), key(2)]);
+    }
+
+    #[test]
+    fn non_target_keys_leaves_a_lone_target_hiding_nothing() {
+        assert!(non_target_keys(&[key(5)], key(5)).is_empty());
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        #[test]
+        fn non_target_keys_excludes_only_the_target(
+            xs in prop::collection::hash_set(any::<i32>(), 1..8),
+            pick in any::<prop::sample::Index>(),
+        ) {
+            let keys: Vec<MonitorKey> = xs.into_iter().map(key).collect();
+            let target = keys[pick.index(keys.len())];
+
+            let hidden = non_target_keys(&keys, target);
+
+            prop_assert!(!hidden.contains(&target));
+            let showing: Vec<MonitorKey> =
+                keys.iter().copied().filter(|k| !hidden.contains(k)).collect();
+            prop_assert_eq!(showing, vec![target]);
+        }
+
+        #[test]
+        fn non_target_keys_of_a_fresh_monitor_is_every_existing_key(
+            xs in prop::collection::hash_set(any::<i32>(), 0..8),
+            target_x in any::<i32>(),
+        ) {
+            prop_assume!(!xs.contains(&target_x));
+            let keys: Vec<MonitorKey> = xs.into_iter().map(key).collect();
+            prop_assert_eq!(non_target_keys(&keys, key(target_x)).len(), keys.len());
+        }
+    }
 
     #[test]
     fn cursor_adjacent_bounds_flips_and_clamps_at_monitor_edges() {

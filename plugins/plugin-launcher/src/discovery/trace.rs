@@ -20,7 +20,7 @@ pub(super) fn filter(sample: FilterSample<'_>) {
         sample.path,
         sample.mode.label(),
         sample.fuzziness.label(),
-        quoted(sample.query),
+        qol_runtime::probe::quoted(sample.query, 120),
         sample.query.chars().count(),
         sample.app_count,
         sample.file_count,
@@ -59,20 +59,4 @@ pub(super) fn count_name_lower() {
 
 fn counters() -> (usize, usize, usize) {
     (FUZZY_CALLS.get(), QUERY_LOWER.get(), NAME_LOWER.get())
-}
-
-fn quoted(value: &str) -> String {
-    value
-        .chars()
-        .take(120)
-        .map(|c| {
-            if c.is_ascii_graphic() && c != '"' && c != '\\' {
-                c
-            } else if c == ' ' {
-                ' '
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }

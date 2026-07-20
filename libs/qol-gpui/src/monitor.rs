@@ -126,6 +126,16 @@ impl MonitorTracker {
             .map(ActiveMonitor::from_bounds)
             .collect()
     }
+
+    /// All monitors, or the single best-guess monitor if the state has none
+    /// (e.g. a fresh daemon that hasn't received a topology snapshot yet).
+    pub fn all_monitors_or_snapshot(&self) -> Vec<ActiveMonitor> {
+        let monitors = self.all_monitors();
+        if !monitors.is_empty() {
+            return monitors;
+        }
+        self.snapshot_monitor().into_iter().collect()
+    }
 }
 
 fn resolve_cursor_snapshot(

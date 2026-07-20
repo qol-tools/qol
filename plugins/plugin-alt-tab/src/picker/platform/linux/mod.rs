@@ -48,15 +48,10 @@ pub fn pre_create(
     let windows = crate::discovery::Platform
         .visible_windows(config.display.show_minimized)
         .unwrap_or_default();
-    let state = qol_gpui::PlatformStateClient::from_env().get_state();
-    let monitors = state
-        .map(|state| state.monitors)
-        .filter(|monitors| !monitors.is_empty());
-    if let Some(monitors) = monitors {
+    let monitors = tracker.all_monitors();
+    if !monitors.is_empty() {
         for monitor in monitors {
-            let placement = qol_gpui::window::PopupPlacement::from_monitor(Some(
-                qol_gpui::monitor::ActiveMonitor::from_bounds(monitor),
-            ));
+            let placement = qol_gpui::window::PopupPlacement::from_monitor(Some(monitor));
             crate::picker::create::pre_create_ghost(
                 config,
                 current,

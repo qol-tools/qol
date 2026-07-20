@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
@@ -312,16 +312,7 @@ pub fn repair_legacy_cleanup_report(path: &Path) -> Result<LegacyCleanupRepair> 
     let run_dir = path
         .parent()
         .with_context(|| format!("report has no run directory: {}", path.display()))?;
-    let lock_path = run_dir.join("cleanup-repair.lock");
-    let lock = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(&lock_path)
-        .with_context(|| format!("failed to open {}", lock_path.display()))?;
-    lock.lock()
-        .with_context(|| format!("failed to lock {}", lock_path.display()))?;
+    let _lock = crate::run_dir::lock_run_directory(run_dir, "cleanup-repair.lock")?;
     let content = match fs::read(path) {
         Ok(content) => content,
         Err(error) if error.kind() == ErrorKind::NotFound => {

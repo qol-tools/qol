@@ -40,7 +40,7 @@ pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Re
     crate::region_selector::select_region_blocking_with(move |tx, cx| {
         let tracker = MonitorTracker::start(cx);
         let cursor = tracker.snapshot_cursor();
-        let monitors = selector_monitors(&tracker);
+        let monitors = tracker.all_monitors_or_snapshot();
         qol_runtime::probe!(
             "SHOT_SELECT_PLATFORM",
             "mode=blocking monitor={} monitors={}",
@@ -230,14 +230,6 @@ impl Drop for CfGuard {
     fn drop(&mut self) {
         unsafe { CFRelease(self.0) }
     }
-}
-
-fn selector_monitors(tracker: &MonitorTracker) -> Vec<ActiveMonitor> {
-    let monitors = tracker.all_monitors();
-    if !monitors.is_empty() {
-        return monitors;
-    }
-    tracker.snapshot_monitor().into_iter().collect()
 }
 
 fn selector_fallback_bounds() -> Bounds<Pixels> {

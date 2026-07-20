@@ -9,6 +9,7 @@ license = "PolyForm-Noncommercial-1.0.0"
 serde.workspace = true
 serde_json.workspace = true
 qol-config.workspace = true
+qol-fs.workspace = true
 qol-hotkeys.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true

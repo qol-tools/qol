@@ -11,6 +11,7 @@ qol-runtime.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
 qol-apps.workspace = true
+qol-fs.workspace = true
 serde.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

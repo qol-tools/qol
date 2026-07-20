@@ -24,9 +24,9 @@ pub(super) fn jump_target(
         row.window_id,
         row.status,
         row.tool,
-        token(&row.project),
-        token(row.name.as_deref().unwrap_or("")),
-        token(row.branch.as_deref().unwrap_or(""))
+        qol_runtime::probe::token(&row.project),
+        qol_runtime::probe::token(row.name.as_deref().unwrap_or("")),
+        qol_runtime::probe::token(row.branch.as_deref().unwrap_or(""))
     );
 
     #[cfg(not(debug_assertions))]
@@ -62,7 +62,7 @@ pub(super) fn focus_result(reason: &'static str, window_id: u64, result: &anyhow
         Err(error) => qol_runtime::probe!(
             "CLI_SESSIONS_FOCUS",
             "phase=done reason={reason} wid={window_id} ok=false err=\"{}\"",
-            quoted(&error.to_string())
+            qol_runtime::probe::quoted(&error.to_string(), 160)
         ),
     }
 
@@ -76,39 +76,4 @@ pub(super) fn open_command(shown: bool) {
 
     #[cfg(not(debug_assertions))]
     let _ = shown;
-}
-
-#[cfg(debug_assertions)]
-fn token(value: &str) -> String {
-    compact(value, 96)
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '@' | ',') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-#[cfg(debug_assertions)]
-fn quoted(value: &str) -> String {
-    compact(value, 160)
-        .chars()
-        .map(|c| {
-            if c.is_ascii_graphic() && c != '"' && c != '\\' {
-                c
-            } else if c == ' ' {
-                ' '
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-#[cfg(debug_assertions)]
-fn compact(value: &str, max_chars: usize) -> String {
-    value.chars().take(max_chars).collect()
 }

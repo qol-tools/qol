@@ -28,8 +28,7 @@ fn maybe_open_settings(args: &[String]) -> bool {
 }
 
 pub(crate) fn open_settings_page() {
-    let settings_url = qol_conventions::settings_url(PLUGIN_ID);
-    if let Err(error) = qol_apps::desktop_integration::open_with_default_app(&settings_url) {
+    if let Err(error) = qol_apps::desktop_integration::open_plugin_settings(PLUGIN_ID) {
         eprintln!("Failed to open settings page: {}", error);
     }
 }
@@ -75,10 +74,5 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use qol_plugin_api::manifest::PluginManifest;
-
-    #[test]
-    fn validate_plugin_contract() {
-        PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
-    }
+    qol_plugin_api::assert_plugin_toml_valid!();
 }

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use gpui::*;
 
 use qol_gpui::ghost::{ghost_window_title, show_ghost_window_topmost, sync_window_layout};
-use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
+use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
 use qol_gpui::theme::{shot_preview_runtime, ShotPreviewPalette};
@@ -159,7 +159,7 @@ fn show_with_completion(
 pub fn pre_create(windows: &PreviewWindows, tracker: &MonitorTracker, cx: &mut App) {
     let default = window_dims(MAX_THUMB_W, MAX_THUMB_H, control_count());
     let default_size = size(px(default.0), px(default.1));
-    for monitor in monitors_or_snapshot(tracker) {
+    for monitor in tracker.all_monitors_or_snapshot() {
         let placement = centered_window_placement(Some(&monitor), default_size, cx);
         let target = placement.target;
         let title = ghost_window_title(PREVIEW_TITLE, target);
@@ -192,12 +192,7 @@ pub fn park_idle(windows: &PreviewWindows, cx: &mut App) {
 }
 
 pub fn any_showing(windows: &PreviewWindows, cx: &mut App) -> bool {
-    let keys: Vec<MonitorKey> = windows
-        .borrow()
-        .iter()
-        .into_iter()
-        .map(|(key, _)| key)
-        .collect();
+    let keys = windows.borrow().keys();
     let mut stale = Vec::new();
     let mut showing = false;
 
@@ -313,33 +308,9 @@ impl GhostContent {
 }
 
 fn mark_non_target_hidden(windows: &PreviewWindows, target: MonitorKey, cx: &mut App) {
-    let keys: Vec<MonitorKey> = windows
-        .borrow()
-        .iter()
-        .into_iter()
-        .map(|(key, _)| key)
-        .filter(|key| *key != target)
-        .collect();
-    let mut stale = Vec::new();
-    for key in keys {
-        let Some(handle) = windows.borrow().existing(key) else {
-            continue;
-        };
-        if handle
-            .update(cx, |view, window, _cx| {
-                view.dismiss(crate::completion::PreviewExit::Superseded, window)
-            })
-            .is_err()
-        {
-            stale.push(key);
-        }
-    }
-    if !stale.is_empty() {
-        let mut windows = windows.borrow_mut();
-        for key in stale {
-            windows.remove(key);
-        }
-    }
+    qol_gpui::window::hide_non_target(windows, target, cx, |view, window, _cx| {
+        view.dismiss(crate::completion::PreviewExit::Superseded, window)
+    });
 }
 
 fn reuse_existing(
@@ -536,14 +507,6 @@ fn preview_bounds(window_size: Size<Pixels>, cx: &mut App) -> Bounds<Pixels> {
     let monitor = snapshot.as_ref().map(|(monitor, _)| monitor);
     let cursor = snapshot.as_ref().and_then(|(_, cursor)| *cursor);
     cursor_window_placement(monitor, cursor, window_size, cx).bounds
-}
-
-fn monitors_or_snapshot(tracker: &MonitorTracker) -> Vec<ActiveMonitor> {
-    let monitors = tracker.all_monitors();
-    if !monitors.is_empty() {
-        return monitors;
-    }
-    tracker.snapshot_monitor().into_iter().collect()
 }
 
 fn bgra_to_render_image(data: Vec<u8>, w: u32, h: u32) -> Option<Arc<RenderImage>> {

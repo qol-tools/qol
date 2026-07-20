@@ -6,13 +6,11 @@ use crate::commands::flow;
 use crate::host_facade;
 use anyhow::{anyhow, bail, Context, Result};
 use qol_dev_env::{CleanupState, ReportStatus, ResolutionState, ResolvedEnvironment, RunSummary};
-use qol_dev_orchestrator::{
-    ImageImportStart, ImageImportWorkerRequest, RunHandle, RunTicket, WaitState,
-};
+use qol_dev_orchestrator::{ImageImportStart, ImageImportWorkerRequest, RunHandle, RunTicket};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -350,96 +348,28 @@ fn wait_for_typed_image_import(
     handle: &mut RunHandle,
     cancellation: &qol_process::CancellationToken,
 ) -> Result<emu::image_import::ImageImportReceipt> {
-    let mut cancellation_requested = false;
-    loop {
-        let mut cancellation_error = None;
-        if cancellation.is_cancelled() && !cancellation_requested {
-            cancellation_requested = true;
-            if let Err(error) = handle.cancel() {
-                cancellation_error = Some(format!("{error:#}"));
-            }
-        }
-        if cancellation.escalation_requested() {
-            return escalate_typed_image_import(handle, cancellation_error.as_deref());
-        }
-        if let Some(error) = cancellation_error {
-            bail!("failed to request graceful image-import cancellation: {error}");
-        }
-        match handle.poll()? {
-            WaitState::Starting | WaitState::Running(_) => {}
-            WaitState::Terminal {
-                report,
-                worker_success,
-            } => return image_import_receipt(handle.ticket(), report, worker_success),
-            WaitState::Failed {
-                report,
-                worker_exit,
-            } => {
-                let status = report
-                    .as_ref()
-                    .map(|report| report.status.as_str())
-                    .unwrap_or("missing");
-                bail!(
-                    "image-import worker exited {worker_exit} without terminal cleanup proof; report status: {status}; evidence: {}; worker log: {}",
-                    handle.ticket().report_path.display(),
-                    handle.ticket().worker_log_path()?.display()
-                );
-            }
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn escalate_typed_image_import(
-    handle: &mut RunHandle,
-    cancellation_error: Option<&str>,
-) -> Result<emu::image_import::ImageImportReceipt> {
-    let terminated = handle
-        .terminate_worker(TYPED_WORKER_TERMINATION_GRACE)
-        .context("failed to terminate the verified image-import worker process tree")?;
-    if terminated.is_some() {
-        emu::image_import::reconcile_leased_imports()
-            .context("image-import worker tree stopped, but its report could not be reconciled")?;
-        dev_env::reconcile_resources().context(
-            "image-import worker tree stopped, but its resource lease could not be reconciled",
-        )?;
-    }
-    match handle.poll()? {
-        WaitState::Terminal {
-            report,
-            worker_success,
-        } => {
-            let result = image_import_receipt(handle.ticket(), report, worker_success)
-                .context("image import stopped after second-signal escalation");
-            match cancellation_error {
-                Some(error) => result.context(format!(
-                    "graceful cancellation could not be persisted before escalation: {error}"
-                )),
-                None => result,
-            }
-        }
-        WaitState::Failed {
-            report,
-            worker_exit,
-        } => {
-            let status = report
-                .as_ref()
-                .map(|report| report.status.as_str())
-                .unwrap_or("missing");
-            let graceful = cancellation_error
-                .map(|error| format!("; graceful cancellation error: {error}"))
-                .unwrap_or_default();
-            bail!(
-                "second signal terminated the verified image-import worker tree; worker exit: {worker_exit}; report status: {status}; evidence: {}; worker log: {}{graceful}",
-                handle.ticket().report_path.display(),
-                handle.ticket().worker_log_path()?.display(),
-            )
-        }
-        WaitState::Starting | WaitState::Running(_) => bail!(
-            "verified image-import worker tree terminated, but its worker still appears active; evidence: {}",
-            handle.ticket().report_path.display()
-        ),
-    }
+    let worker_log = handle.ticket().worker_log_path()?;
+    handle.wait_with_cancellation(
+        cancellation,
+        "image-import",
+        TYPED_WORKER_TERMINATION_GRACE,
+        Some(&worker_log),
+        |_report| {},
+        || {},
+        || {},
+        || {
+            emu::image_import::reconcile_leased_imports().context(
+                "image-import worker tree stopped, but its report could not be reconciled",
+            )?;
+            dev_env::reconcile_resources().context(
+                "image-import worker tree stopped, but its resource lease could not be reconciled",
+            )?;
+            Ok(())
+        },
+        |handle, report, worker_success| {
+            image_import_receipt(handle.ticket(), report, worker_success)
+        },
+    )
 }
 
 fn image_import_receipt(
@@ -1669,16 +1599,7 @@ fn write_unpublished_batch_failure(run_dir: &Path, batch_id: &str, error: &str) 
 }
 
 fn remove_unpublished_batch_dir(run_dir: &Path) -> Result<()> {
-    match fs::remove_dir_all(run_dir) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| {
-            format!(
-                "failed to remove unpublished environment batch {}",
-                run_dir.display()
-            )
-        }),
-    }
+    qol_dev_env::remove_unpublished_run_dir(run_dir, "environment batch")
 }
 
 fn combine_unpublished_errors(
@@ -1872,11 +1793,7 @@ fn validate_lane_paths(lane: &Lane) -> Result<()> {
 }
 
 fn safe_run_id(run_id: &str) -> bool {
-    !run_id.is_empty()
-        && run_id != "."
-        && run_id != ".."
-        && !run_id.contains('/')
-        && !run_id.contains('\\')
+    qol_dev_env::is_safe_run_id_component(run_id)
 }
 
 fn teardown_lanes(lanes: &[Lane], verbose: bool) -> Vec<TeardownResult> {
@@ -2550,7 +2467,9 @@ fn write_batch_files(batch: &Batch<'_>) -> Result<()> {
         &effective_environment,
     )?;
     let preflight = host_preflight(batch);
-    atomic_write(&batch.run_dir.join("host-preflight.txt"), &preflight)?;
+    let preflight_path = batch.run_dir.join("host-preflight.txt");
+    qol_fs::atomic_write(&preflight_path, preflight.as_bytes())
+        .with_context(|| format!("failed to write {}", preflight_path.display()))?;
     let report = batch_report(batch);
     write_json(
         &batch.run_dir.join("steps/lifecycle.json"),
@@ -2560,19 +2479,7 @@ fn write_batch_files(batch: &Batch<'_>) -> Result<()> {
 }
 
 fn lock_batch_run(run_dir: &Path) -> Result<File> {
-    fs::create_dir_all(run_dir)
-        .with_context(|| format!("failed to create {}", run_dir.display()))?;
-    let path = run_dir.join("reconcile.lock");
-    let lock = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(&path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
-    lock.lock()
-        .with_context(|| format!("failed to lock {}", path.display()))?;
-    Ok(lock)
+    qol_dev_env::lock_run_directory(run_dir, "reconcile.lock")
 }
 
 fn batch_report(batch: &Batch<'_>) -> Value {
@@ -2788,13 +2695,7 @@ fn display_optional_number(value: Option<u64>) -> String {
 }
 
 fn write_json(path: &Path, value: &Value) -> Result<()> {
-    let content = serde_json::to_string_pretty(value).context("failed to serialize JSON")?;
-    atomic_write(path, &format!("{content}\n"))
-}
-
-fn atomic_write(path: &Path, content: &str) -> Result<()> {
-    qol_fs::atomic_write(path, content.as_bytes())
-        .with_context(|| format!("failed to write {}", path.display()))
+    qol_dev_env::write_json_report(path, value)
 }
 
 fn forward_emu(command: &str, selector: &str, verbose: bool, run_roots: &[PathBuf]) -> Result<()> {

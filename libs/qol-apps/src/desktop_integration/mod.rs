@@ -13,6 +13,11 @@ pub fn open_with_default_app(target: impl AsRef<OsStr>) -> io::Result<()> {
     open_with_default_app_using(target.as_ref(), &mut qol_process::spawn_detached)
 }
 
+/// Opens a plugin's settings page in the default browser.
+pub fn open_plugin_settings(plugin_id: &str) -> io::Result<()> {
+    open_with_default_app(qol_conventions::settings_url(plugin_id))
+}
+
 /// Reveals an existing path in the platform file manager without blocking the
 /// caller on the file manager process.
 pub fn reveal_in_file_manager(path: &Path) -> io::Result<()> {
