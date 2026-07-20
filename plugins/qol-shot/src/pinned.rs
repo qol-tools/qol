@@ -679,39 +679,34 @@ impl PinnedView {
         self.action_pending = true;
         let file_ready = self.file_ready.clone();
         let path = self.path.clone();
+        let perform = move || {
+            action.perform(&path)?;
+            platform::show_notification(action.done_message(), &path.display().to_string(), 1400);
+            Ok(())
+        };
+        if self.dismiss == PinnedDismiss::Remove {
+            if let Err(error) =
+                crate::actions::spawn_file_action("pinned", action, file_ready, perform)
+            {
+                eprintln!("[qol-shot] pinned action worker failed: {error:#}");
+                self.action_pending = false;
+                return;
+            }
+            self.action_pending = false;
+            self.close(window, cx);
+            return;
+        }
+        let action_task = cx.background_spawn(async move {
+            crate::actions::perform_when_file_ready("pinned", action, file_ready, perform)
+        });
         let reveal_generation = self.reveal_generation;
-        qol_runtime::probe!(
-            "SHOT_FILE_ACTION",
-            "surface=pinned action={} phase=waiting",
-            action.label()
-        );
         cx.spawn(async move |_view, cx| {
-            let ready = cx.background_spawn(async move { file_ready.wait() }).await;
+            let _result = action_task.await;
             let _ = handle.update(cx, move |view, window, cx| {
                 if !view.active || view.reveal_generation != reveal_generation {
-                    qol_runtime::probe!(
-                        "SHOT_FILE_ACTION",
-                        "surface=pinned action={} phase=complete outcome=stale",
-                        action.label()
-                    );
                     return;
                 }
                 view.action_pending = false;
-                let result = ready.and_then(|()| action.perform(&path));
-                qol_runtime::probe!(
-                    "SHOT_FILE_ACTION",
-                    "surface=pinned action={} phase=complete outcome={}",
-                    action.label(),
-                    if result.is_ok() { "ok" } else { "failed" }
-                );
-                match result {
-                    Ok(()) => platform::show_notification(
-                        action.done_message(),
-                        &path.display().to_string(),
-                        1400,
-                    ),
-                    Err(error) => eprintln!("[qol-shot] pinned action failed: {error:#}"),
-                }
                 view.close(window, cx);
             });
         })

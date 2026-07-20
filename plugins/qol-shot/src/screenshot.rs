@@ -90,10 +90,12 @@ impl CaptureFileReady {
     }
 
     fn complete(&self, result: FileWriteResult) {
+        let outcome = if result.is_ok() { "ok" } else { "failed" };
         let (state, wake) = &*self.state;
         if let Ok(mut state) = state.lock() {
             *state = Some(result);
             wake.notify_all();
+            qol_runtime::probe!("SHOT_FILE_READY", "phase=signaled outcome={outcome}");
         }
     }
 
@@ -113,6 +115,16 @@ impl CaptureFileReady {
             Some(Err(error)) => Err(anyhow!(error.clone())),
             None => Err(anyhow!("screenshot file did not become ready")),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_pending() -> Self {
+        Self::pending()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_complete(&self, result: FileWriteResult) {
+        self.complete(result);
     }
 }
 

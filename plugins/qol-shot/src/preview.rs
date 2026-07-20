@@ -833,39 +833,33 @@ impl PreviewView {
         } else {
             crate::completion::PreviewExit::Intentional
         };
-        qol_runtime::probe!(
-            "SHOT_FILE_ACTION",
-            "surface=preview action={} phase=waiting",
-            action.label()
-        );
+        let perform = move || match action {
+            ShotAction::OpenFolder => match saved_completion {
+                Some(completion) => completion.open(crate::completion::RevealSource::PreviewAction),
+                None => crate::completion::reveal(&path),
+            },
+            _ => action.perform(&path),
+        };
+        if self.mode == DismissMode::Ghost {
+            if let Err(error) =
+                crate::actions::spawn_file_action("preview", action, file_ready, perform)
+            {
+                eprintln!("[qol-shot] preview action worker failed: {error:#}");
+                self.action_pending = false;
+                return;
+            }
+            self.action_pending = false;
+            self.close(exit, window, cx);
+            return;
+        }
+        let action_task = cx.background_spawn(async move {
+            crate::actions::perform_when_file_ready("preview", action, file_ready, perform)
+        });
         cx.spawn(async move |_view, cx| {
-            let ready = cx.background_spawn(async move { file_ready.wait() }).await;
+            let result = action_task.await;
             let _ = handle.update(cx, move |view, window, cx| {
                 if view.seq != seq {
-                    qol_runtime::probe!(
-                        "SHOT_FILE_ACTION",
-                        "surface=preview action={} phase=complete outcome=stale",
-                        action.label()
-                    );
                     return;
-                }
-                let result = ready.and_then(|()| match action {
-                    ShotAction::OpenFolder => match saved_completion {
-                        Some(completion) => {
-                            completion.open(crate::completion::RevealSource::PreviewAction)
-                        }
-                        None => crate::completion::reveal(&path),
-                    },
-                    _ => action.perform(&path),
-                });
-                qol_runtime::probe!(
-                    "SHOT_FILE_ACTION",
-                    "surface=preview action={} phase=complete outcome={}",
-                    action.label(),
-                    if result.is_ok() { "ok" } else { "failed" }
-                );
-                if let Err(error) = &result {
-                    eprintln!("[qol-shot] preview action failed: {error:#}");
                 }
                 if let Ok(mut slot) = completion.lock() {
                     if slot.is_none() {
