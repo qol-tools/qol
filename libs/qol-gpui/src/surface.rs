@@ -642,6 +642,13 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
             };
             let bounds = resolved_bounds(self.anchor, self.size, &monitor);
             crate::popup_window::capture_focus_return();
+            let resized = self
+                .handle
+                .update(cx, |_, window, _| window.resize(self.size))
+                .is_ok();
+            if !resized {
+                return false;
+            }
             let prepared = {
                 let _reason = crate::popup_window::reason_scope("surface-reuse");
                 crate::popup_window::prepare_window_reveal_by_title(&self.title)
@@ -650,7 +657,7 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
                 return false;
             }
             let Some(fresh_frame) = schedule_fresh_frame(self.handle, bounds.size, cx) else {
-                let _ = crate::popup_window::park_window_by_title(&self.title);
+                let _ = crate::popup_window::hide_invisible(&self.title);
                 return false;
             };
             self.reveal_pending.set(true);
@@ -739,7 +746,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
         if !readiness.ready() {
             reveal_pending.set(false);
             let _reason = crate::popup_window::reason_scope("surface-reuse-timeout");
-            let _ = crate::popup_window::park_window_by_title(&title);
+            let _ = crate::popup_window::hide_invisible(&title);
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
                 "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown=false reused=true reason=frame-not-ready",
