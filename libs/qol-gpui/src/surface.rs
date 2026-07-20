@@ -202,9 +202,23 @@ impl Surface {
         let handle = cx.open_window(options, move |window, cx| {
             window.set_window_title(&window_title);
             let inner = cx.new(|cx| build(build_dismisser, window, cx));
-            cx.new(|_| SurfaceRoot {
-                inner,
-                render_epoch: Rc::new(Cell::new(0)),
+            cx.new(|cx| {
+                let bounds_subscription =
+                    cx.observe_window_bounds(window, |root: &mut SurfaceRoot<V>, window, cx| {
+                        root.layout_epoch
+                            .set(root.layout_epoch.get().wrapping_add(1));
+                        root.observed_viewport.set(window.viewport_size());
+                        cx.notify();
+                    });
+                SurfaceRoot {
+                    inner,
+                    render_epoch: Rc::new(Cell::new(0)),
+                    layout_epoch: Rc::new(Cell::new(0)),
+                    rendered_layout_epoch: Rc::new(Cell::new(0)),
+                    observed_viewport: Rc::new(Cell::new(size(px(0.0), px(0.0)))),
+                    rendered_viewport: Rc::new(Cell::new(size(px(0.0), px(0.0)))),
+                    _bounds_subscription: bounds_subscription,
+                }
             })
         })?;
         let dismiss_title = title.clone();
@@ -231,7 +245,9 @@ impl Surface {
         if native_reveal_gate {
             let _reason = crate::popup_window::reason_scope("surface-open");
             let hidden = crate::popup_window::prepare_window_reveal_by_title(&title);
-            let fresh_frame = hidden.then(|| schedule_fresh_frame(handle, cx)).flatten();
+            let fresh_frame = hidden
+                .then(|| schedule_fresh_frame(handle, bounds.size, cx))
+                .flatten();
             let frame_scheduled = fresh_frame.is_some();
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
@@ -290,12 +306,19 @@ impl Surface {
 pub(crate) struct SurfaceRoot<V> {
     pub(crate) inner: Entity<V>,
     render_epoch: Rc<Cell<u64>>,
+    layout_epoch: Rc<Cell<u64>>,
+    rendered_layout_epoch: Rc<Cell<u64>>,
+    observed_viewport: Rc<Cell<Size<Pixels>>>,
+    rendered_viewport: Rc<Cell<Size<Pixels>>>,
+    _bounds_subscription: Subscription,
 }
 
 impl<V: Render + 'static> Render for SurfaceRoot<V> {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         self.render_epoch
             .set(self.render_epoch.get().wrapping_add(1));
+        self.rendered_layout_epoch.set(self.layout_epoch.get());
+        self.rendered_viewport.set(window.viewport_size());
         div().size_full().child(self.inner.clone())
     }
 }
@@ -338,7 +361,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
     } = pending;
     cx.spawn(async move |cx: &mut AsyncApp| {
         let (readiness, attempts) =
-            await_reveal_readiness(cx, &title, origin, &fresh_frame).await;
+            await_reveal_readiness(cx, handle, &title, origin, &fresh_frame).await;
         let window_exists = cx.update(|cx| handle.update(cx, |_, _, _| ()).is_ok());
         if !matches!(window_exists, Ok(true)) {
             reveal_pending.set(false);
@@ -350,10 +373,23 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
         }
         qol_runtime::probe!(
             "SURFACE_REVEAL",
-            "title={title} phase=frame-ready moved={} fresh_frame={} content_rendered={} attempts={attempts}",
+            "title={title} phase=frame-ready moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} layout_epoch={}/{} render_epoch={}/{} presented_epoch={} expected={}x{} observed={}x{} rendered={}x{}",
             readiness.moved,
+            readiness.layout_confirmed,
+            readiness.viewport_ready,
             readiness.fresh_frame,
-            readiness.content_rendered
+            readiness.content_rendered,
+            fresh_frame.layout_epoch.get(),
+            fresh_frame.required_layout_epoch,
+            fresh_frame.render_epoch.get(),
+            fresh_frame.required_render_epoch,
+            fresh_frame.presented_render_epoch.get(),
+            fresh_frame.expected_viewport.width.to_f64(),
+            fresh_frame.expected_viewport.height.to_f64(),
+            fresh_frame.observed_viewport.get().width.to_f64(),
+            fresh_frame.observed_viewport.get().height.to_f64(),
+            fresh_frame.rendered_viewport.get().width.to_f64(),
+            fresh_frame.rendered_viewport.get().height.to_f64()
         );
         if !readiness.ready() {
             reveal_pending.set(false);
@@ -362,8 +398,10 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             });
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
-                "title={title} phase=revealed moved={} fresh_frame={} content_rendered={} attempts={attempts} shown=false reason=frame-not-ready",
+                "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown=false reason=frame-not-ready",
                 readiness.moved,
+                readiness.layout_confirmed,
+                readiness.viewport_ready,
                 readiness.fresh_frame,
                 readiness.content_rendered
             );
@@ -381,8 +419,10 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
         reveal_pending.set(false);
         qol_runtime::probe!(
             "SURFACE_REVEAL",
-            "title={title} phase=revealed moved={} fresh_frame={} content_rendered={} attempts={attempts} shown={shown} repaint_requested={repaint_requested}",
+            "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown={shown} repaint_requested={repaint_requested}",
             readiness.moved,
+            readiness.layout_confirmed,
+            readiness.viewport_ready,
             readiness.fresh_frame,
             readiness.content_rendered
         );
@@ -409,57 +449,129 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct RevealReadiness {
     moved: bool,
+    layout_confirmed: bool,
+    viewport_ready: bool,
     fresh_frame: bool,
     content_rendered: bool,
 }
 
 impl RevealReadiness {
     fn ready(self) -> bool {
-        self.moved && self.fresh_frame && self.content_rendered
+        self.moved
+            && self.layout_confirmed
+            && self.viewport_ready
+            && self.fresh_frame
+            && self.content_rendered
     }
 }
 
 #[derive(Clone)]
 struct FreshFrame {
-    presented: Rc<Cell<bool>>,
     render_epoch: Rc<Cell<u64>>,
     required_render_epoch: u64,
+    layout_epoch: Rc<Cell<u64>>,
+    required_layout_epoch: u64,
+    rendered_layout_epoch: Rc<Cell<u64>>,
+    observed_viewport: Rc<Cell<Size<Pixels>>>,
+    rendered_viewport: Rc<Cell<Size<Pixels>>>,
+    expected_viewport: Size<Pixels>,
+    presented_render_epoch: Rc<Cell<u64>>,
+    presented_layout_epoch: Rc<Cell<u64>>,
 }
 
 impl FreshFrame {
+    fn layout_confirmed(&self) -> bool {
+        if !cfg!(target_os = "linux") {
+            return true;
+        }
+        self.layout_epoch.get() >= self.required_layout_epoch
+            && viewport_matches(self.observed_viewport.get(), self.expected_viewport)
+    }
+
+    fn viewport_ready(&self) -> bool {
+        viewport_matches(self.rendered_viewport.get(), self.expected_viewport)
+    }
+
     fn presented(&self) -> bool {
-        self.presented.get()
+        self.presented_render_epoch.get() >= self.required_render_epoch
+            && self.presented_layout_epoch.get() >= self.required_layout_epoch
     }
 
     fn content_rendered(&self) -> bool {
         self.render_epoch.get() >= self.required_render_epoch
+            && self.rendered_layout_epoch.get() >= self.required_layout_epoch
+            && self.viewport_ready()
+    }
+
+    fn request<V: Render + 'static>(
+        &self,
+        root: &mut SurfaceRoot<V>,
+        window: &mut Window,
+        cx: &mut Context<SurfaceRoot<V>>,
+    ) {
+        let render_epoch = self.render_epoch.clone();
+        let rendered_layout_epoch = self.rendered_layout_epoch.clone();
+        let presented_render_epoch = self.presented_render_epoch.clone();
+        let presented_layout_epoch = self.presented_layout_epoch.clone();
+        window.on_next_frame(move |_, _| {
+            presented_render_epoch.set(render_epoch.get());
+            presented_layout_epoch.set(rendered_layout_epoch.get());
+        });
+        root.inner.update(cx, |_, cx| cx.notify());
+        cx.notify();
+        window.refresh();
     }
 }
 
 fn schedule_fresh_frame<V: Render + 'static>(
     handle: WindowHandle<SurfaceRoot<V>>,
+    expected_viewport: Size<Pixels>,
     cx: &mut App,
 ) -> Option<FreshFrame> {
-    let presented = Rc::new(Cell::new(false));
-    let presented_after_frame = presented.clone();
     let mut request = None;
     handle
         .update(cx, |root, window, cx| {
-            request = Some(FreshFrame {
-                presented,
+            let fresh_frame = FreshFrame {
                 render_epoch: root.render_epoch.clone(),
                 required_render_epoch: root.render_epoch.get().wrapping_add(1),
-            });
-            window.on_next_frame(move |window, _| {
-                window.on_next_frame(move |_, _| presented_after_frame.set(true));
-                window.refresh();
-            });
-            root.inner.update(cx, |_, cx| cx.notify());
-            cx.notify();
-            window.refresh();
+                layout_epoch: root.layout_epoch.clone(),
+                required_layout_epoch: required_layout_epoch(root.layout_epoch.get()),
+                rendered_layout_epoch: root.rendered_layout_epoch.clone(),
+                observed_viewport: root.observed_viewport.clone(),
+                rendered_viewport: root.rendered_viewport.clone(),
+                expected_viewport,
+                presented_render_epoch: Rc::new(Cell::new(0)),
+                presented_layout_epoch: Rc::new(Cell::new(0)),
+            };
+            fresh_frame.request(root, window, cx);
+            request = Some(fresh_frame);
         })
         .ok()?;
     request
+}
+
+fn required_layout_epoch(current: u64) -> u64 {
+    if cfg!(target_os = "linux") {
+        return current.wrapping_add(1);
+    }
+    current
+}
+
+fn viewport_matches(actual: Size<Pixels>, expected: Size<Pixels>) -> bool {
+    (actual.width.to_f64() - expected.width.to_f64()).abs() < 1.0
+        && (actual.height.to_f64() - expected.height.to_f64()).abs() < 1.0
+}
+
+fn request_pending_frame<V: Render + 'static>(
+    handle: WindowHandle<SurfaceRoot<V>>,
+    fresh_frame: &FreshFrame,
+    cx: &mut App,
+) -> bool {
+    handle
+        .update(cx, |root, window, cx| {
+            fresh_frame.request(root, window, cx);
+        })
+        .is_ok()
 }
 
 fn request_surface_repaint<V: Render + 'static>(
@@ -475,8 +587,9 @@ fn request_surface_repaint<V: Render + 'static>(
         .is_ok()
 }
 
-async fn await_reveal_readiness(
+async fn await_reveal_readiness<V: Render + 'static>(
     cx: &mut AsyncApp,
+    handle: WindowHandle<SurfaceRoot<V>>,
     title: &str,
     origin: Point<Pixels>,
     fresh_frame: &FreshFrame,
@@ -491,9 +604,17 @@ async fn await_reveal_readiness(
             origin.x.to_f64(),
             origin.y.to_f64(),
         );
+        readiness.layout_confirmed = fresh_frame.layout_confirmed();
+        readiness.viewport_ready = fresh_frame.viewport_ready();
         readiness.fresh_frame = fresh_frame.presented();
         readiness.content_rendered = fresh_frame.content_rendered();
         if readiness.ready() {
+            return (readiness, attempt);
+        }
+        let frame_requested = cx
+            .update(|cx| request_pending_frame(handle, fresh_frame, cx))
+            .unwrap_or(false);
+        if !frame_requested {
             return (readiness, attempt);
         }
     }
@@ -524,7 +645,7 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
             if !prepared {
                 return false;
             }
-            let Some(fresh_frame) = schedule_fresh_frame(self.handle, cx) else {
+            let Some(fresh_frame) = schedule_fresh_frame(self.handle, bounds.size, cx) else {
                 let _ = crate::popup_window::park_window_by_title(&self.title);
                 return false;
             };
@@ -581,7 +702,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
     } = pending;
     cx.spawn(async move |cx: &mut AsyncApp| {
         let (readiness, attempts) =
-            await_reveal_readiness(cx, &title, origin, &fresh_frame).await;
+            await_reveal_readiness(cx, handle, &title, origin, &fresh_frame).await;
         let window_exists = cx.update(|cx| handle.update(cx, |_, _, _| ()).is_ok());
         if !matches!(window_exists, Ok(true)) {
             reveal_pending.set(false);
@@ -593,10 +714,23 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
         }
         qol_runtime::probe!(
             "SURFACE_REVEAL",
-            "title={title} phase=frame-ready moved={} fresh_frame={} content_rendered={} attempts={attempts} reused=true",
+            "title={title} phase=frame-ready moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} reused=true layout_epoch={}/{} render_epoch={}/{} presented_epoch={} expected={}x{} observed={}x{} rendered={}x{}",
             readiness.moved,
+            readiness.layout_confirmed,
+            readiness.viewport_ready,
             readiness.fresh_frame,
-            readiness.content_rendered
+            readiness.content_rendered,
+            fresh_frame.layout_epoch.get(),
+            fresh_frame.required_layout_epoch,
+            fresh_frame.render_epoch.get(),
+            fresh_frame.required_render_epoch,
+            fresh_frame.presented_render_epoch.get(),
+            fresh_frame.expected_viewport.width.to_f64(),
+            fresh_frame.expected_viewport.height.to_f64(),
+            fresh_frame.observed_viewport.get().width.to_f64(),
+            fresh_frame.observed_viewport.get().height.to_f64(),
+            fresh_frame.rendered_viewport.get().width.to_f64(),
+            fresh_frame.rendered_viewport.get().height.to_f64()
         );
         if !readiness.ready() {
             reveal_pending.set(false);
@@ -604,8 +738,10 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
             let _ = crate::popup_window::park_window_by_title(&title);
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
-                "title={title} phase=revealed moved={} fresh_frame={} content_rendered={} attempts={attempts} shown=false reused=true reason=frame-not-ready",
+                "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown=false reused=true reason=frame-not-ready",
                 readiness.moved,
+                readiness.layout_confirmed,
+                readiness.viewport_ready,
                 readiness.fresh_frame,
                 readiness.content_rendered
             );
@@ -636,8 +772,10 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
             .unwrap_or(false);
         qol_runtime::probe!(
             "SURFACE_REVEAL",
-            "title={title} phase=revealed moved={} fresh_frame={} content_rendered={} attempts={attempts} shown=true reused=true repaint_requested={repaint_requested}",
+            "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown=true reused=true repaint_requested={repaint_requested}",
             readiness.moved,
+            readiness.layout_confirmed,
+            readiness.viewport_ready,
             readiness.fresh_frame,
             readiness.content_rendered
         );
@@ -805,24 +943,29 @@ mod tests {
     }
 
     #[test]
-    fn reveal_requires_placement_rendered_content_and_a_presented_frame() {
+    fn reveal_requires_placement_layout_viewport_content_and_a_presented_frame() {
         let cases = [
-            (false, false, false, false),
-            (true, false, true, false),
-            (true, true, false, false),
-            (false, true, true, false),
-            (true, true, true, true),
+            (false, false, false, false, false, false),
+            (true, false, true, true, true, false),
+            (true, true, false, true, true, false),
+            (true, true, true, false, true, false),
+            (true, true, true, true, false, false),
+            (true, true, true, true, true, true),
         ];
-        for (moved, fresh_frame, content_rendered, expected) in cases {
+        for (moved, layout_confirmed, viewport_ready, fresh_frame, content_rendered, expected) in
+            cases
+        {
             assert_eq!(
                 RevealReadiness {
                     moved,
+                    layout_confirmed,
+                    viewport_ready,
                     fresh_frame,
                     content_rendered,
                 }
                 .ready(),
                 expected,
-                "moved={moved} fresh_frame={fresh_frame} content_rendered={content_rendered}"
+                "moved={moved} layout_confirmed={layout_confirmed} viewport_ready={viewport_ready} fresh_frame={fresh_frame} content_rendered={content_rendered}"
             );
         }
     }
