@@ -233,7 +233,7 @@ impl Surface {
                 dismiss_reveal_pending.set(false);
                 if retain_on_dismiss {
                     let _reason = crate::popup_window::reason_scope("surface-dismiss");
-                    if crate::popup_window::park_window_by_title(&dismiss_title) {
+                    if crate::popup_window::hide_invisible(&dismiss_title) {
                         return;
                     }
                 }
@@ -373,7 +373,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
         }
         qol_runtime::probe!(
             "SURFACE_REVEAL",
-            "title={title} phase=frame-ready moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} layout_epoch={}/{} render_epoch={}/{} presented_epoch={} expected={}x{} observed={}x{} rendered={}x{}",
+            "title={title} phase=frame-ready moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} layout_epoch={}/{} render_epoch={}/{} gpu_completed_epoch={} expected={}x{} observed={}x{} rendered={}x{}",
             readiness.moved,
             readiness.layout_confirmed,
             readiness.viewport_ready,
@@ -714,7 +714,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
         }
         qol_runtime::probe!(
             "SURFACE_REVEAL",
-            "title={title} phase=frame-ready moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} reused=true layout_epoch={}/{} render_epoch={}/{} presented_epoch={} expected={}x{} observed={}x{} rendered={}x{}",
+            "title={title} phase=frame-ready moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} reused=true layout_epoch={}/{} render_epoch={}/{} gpu_completed_epoch={} expected={}x{} observed={}x{} rendered={}x{}",
             readiness.moved,
             readiness.layout_confirmed,
             readiness.viewport_ready,
@@ -943,7 +943,7 @@ mod tests {
     }
 
     #[test]
-    fn reveal_requires_placement_layout_viewport_content_and_a_presented_frame() {
+    fn reveal_requires_placement_layout_viewport_content_and_a_completed_frame() {
         let cases = [
             (false, false, false, false, false, false),
             (true, false, true, true, true, false),
