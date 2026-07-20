@@ -87,6 +87,8 @@ pub fn hide_window_by_title(title: &str) -> bool {
     true
 }
 
+pub fn capture_focus_return() {}
+
 pub fn hide_invisible(title: &str) -> bool {
     let Some(window) = resolve_window(title) else {
         return false;

@@ -9,6 +9,8 @@ pub fn sync_window_layout(
     true
 }
 
+pub fn capture_focus_return() {}
+
 pub fn hide_invisible(title: &str) -> bool {
     hide_window_by_title(title)
 }

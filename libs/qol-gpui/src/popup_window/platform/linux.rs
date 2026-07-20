@@ -359,9 +359,7 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
         qol_runtime::probe!("HIDE_WIN", "title={title} wid=NONE reason={reason}");
         return false;
     };
-    if window_is_override_redirect(&conn, wid) {
-        release_input_focus(&conn, wid);
-    }
+    release_input_focus(&conn, root, wid);
     if cached_card(title) == Some(target) {
         return true;
     }
@@ -673,22 +671,30 @@ fn window_is_override_redirect(conn: &impl Connection, wid: u32) -> bool {
 
 static FOCUS_RETURN: Mutex<Option<u32>> = Mutex::new(None);
 
+pub fn capture_focus_return() {
+    let Some((conn, _screen_num, root, _list_atom, _name_atom, _utf8_atom)) = connect_with_atoms()
+    else {
+        return;
+    };
+    let target = active_window(&conn, root);
+    if let Ok(mut slot) = FOCUS_RETURN.lock() {
+        *slot = target;
+    }
+    qol_runtime::probe!("FOCUS_RETURN", "phase=captured target={target:?}");
+}
+
 fn take_input_focus(
     conn: &impl Connection,
     root: u32,
     wid: u32,
     active_before: Option<u32>,
 ) -> bool {
+    let previous = focus_return_target(wid, active_before, active_window(conn, root));
+    if let (Some(previous), Ok(mut slot)) = (previous, FOCUS_RETURN.lock()) {
+        *slot = Some(previous);
+    }
     if !window_is_override_redirect(conn, wid) {
         return false;
-    }
-    let previous = active_before
-        .or_else(|| active_window(conn, root))
-        .filter(|&active| active != wid);
-    if let Ok(mut slot) = FOCUS_RETURN.lock() {
-        if previous.is_some() {
-            *slot = previous;
-        }
     }
     conn.set_input_focus(InputFocus::PARENT, wid, x11rb::CURRENT_TIME)
         .ok()
@@ -722,10 +728,20 @@ pub fn release_focus_by_title(title: &str) {
     let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
         return;
     };
-    release_input_focus(&conn, wid);
+    release_input_focus(&conn, root, wid);
 }
 
-fn release_input_focus(conn: &impl Connection, wid: u32) {
+fn focus_return_target(
+    wid: u32,
+    active_before: Option<u32>,
+    active_current: Option<u32>,
+) -> Option<u32> {
+    active_before
+        .filter(|&active| active != wid)
+        .or_else(|| active_current.filter(|&active| active != wid))
+}
+
+fn release_input_focus(conn: &impl Connection, root: u32, wid: u32) {
     let holds = conn
         .get_input_focus()
         .ok()
@@ -740,9 +756,21 @@ fn release_input_focus(conn: &impl Connection, wid: u32) {
         .ok()
         .and_then(|mut slot| slot.take())
         .unwrap_or_else(|| u32::from(InputFocus::POINTER_ROOT));
-    let _ = conn.set_input_focus(InputFocus::PARENT, target, x11rb::CURRENT_TIME);
-    let _ = conn.flush();
-    qol_runtime::probe!("FOCUS_RETURN", "from={wid} to={target}");
+    let activated = if target == u32::from(InputFocus::POINTER_ROOT) {
+        false
+    } else {
+        activate_window(conn, root, target).0
+    };
+    let focused = conn
+        .set_input_focus(InputFocus::PARENT, target, x11rb::CURRENT_TIME)
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some();
+    let flushed = conn.flush().is_ok();
+    qol_runtime::probe!(
+        "FOCUS_RETURN",
+        "from={wid} to={target} activated={activated} focused={focused} flushed={flushed}"
+    );
 }
 
 struct CompositeLease {
@@ -1440,7 +1468,10 @@ fn intern(conn: &impl Connection, name: &[u8]) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{keepalive_wm_hints, normalize_opacity, opacity_to_cardinal, CompositeLease};
+    use super::{
+        focus_return_target, keepalive_wm_hints, normalize_opacity, opacity_to_cardinal,
+        CompositeLease,
+    };
     use x11rb::properties::{WmHints, WmHintsState};
 
     #[test]
@@ -1469,6 +1500,24 @@ mod tests {
         assert_eq!(configured.icon_mask, Some(5));
         assert_eq!(configured.window_group, Some(6));
         assert!(configured.urgent);
+    }
+
+    #[test]
+    fn focus_return_prefers_the_window_active_before_the_panel() {
+        let cases = [
+            (7, Some(3), Some(7), Some(3)),
+            (7, None, Some(3), Some(3)),
+            (7, Some(7), Some(3), Some(3)),
+            (7, None, Some(7), None),
+            (7, None, None, None),
+        ];
+        for (wid, before, current, expected) in cases {
+            assert_eq!(
+                focus_return_target(wid, before, current),
+                expected,
+                "wid={wid} before={before:?} current={current:?}"
+            );
+        }
     }
 
     #[test]

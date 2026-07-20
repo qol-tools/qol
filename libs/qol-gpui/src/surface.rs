@@ -199,6 +199,9 @@ impl Surface {
         let window_title = title.clone();
         let visible = Rc::new(Cell::new(!native_reveal_gate));
         let reveal_pending = Rc::new(Cell::new(native_reveal_gate));
+        if self.takes_focus() {
+            crate::popup_window::capture_focus_return();
+        }
         let handle = cx.open_window(options, move |window, cx| {
             window.set_window_title(&window_title);
             let inner = cx.new(|cx| build(build_dismisser, window, cx));
@@ -638,6 +641,7 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
                 return false;
             };
             let bounds = resolved_bounds(self.anchor, self.size, &monitor);
+            crate::popup_window::capture_focus_return();
             let prepared = {
                 let _reason = crate::popup_window::reason_scope("surface-reuse");
                 crate::popup_window::prepare_window_reveal_by_title(&self.title)
