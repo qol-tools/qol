@@ -235,6 +235,43 @@ pub fn park_window_by_title(title: &str) -> bool {
     parked && flushed
 }
 
+pub fn prepare_window_reveal_by_title(title: &str) -> bool {
+    let reason = crate::popup_window::change_reason();
+    let Some((conn, screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
+    else {
+        return false;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        qol_runtime::probe!("PREPARE_WIN", "title={title} wid=NONE reason={reason}");
+        return false;
+    };
+    if !compositor_running(&conn, screen_num) {
+        qol_runtime::probe!(
+            "PREPARE_WIN",
+            "title={title} wid={wid} compositor=false reason={reason}"
+        );
+        return false;
+    }
+    let input_ok = set_input_passthrough(&conn, wid, true);
+    let opacity_ok = set_window_opacity(&conn, wid, 0.0);
+    let map_ok = conn
+        .map_window(wid)
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some();
+    add_window_state(&conn, root, wid);
+    let flush_ok = conn.flush().is_ok();
+    let prepared = input_ok && opacity_ok && map_ok && flush_ok;
+    if prepared {
+        store_card(title, wid, Some(opacity_to_cardinal(0.0)));
+    }
+    qol_runtime::probe!(
+        "PREPARE_WIN",
+        "title={title} wid={wid} compositor=true input_shape_ok={input_ok} opacity=0 opacity_ok={opacity_ok} map={map_ok} flush={flush_ok} prepared={prepared} reason={reason}"
+    );
+    prepared
+}
+
 pub fn configure_keepalive_window(title: &str) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {

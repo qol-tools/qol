@@ -47,6 +47,7 @@ pub(crate) struct OpenedSurface<V> {
     anchor: Anchor,
     size: Size<Pixels>,
     visible: Rc<Cell<bool>>,
+    reveal_pending: Rc<Cell<bool>>,
 }
 
 type CloseWindow = Box<dyn Fn(&mut App)>;
@@ -197,19 +198,25 @@ impl Surface {
         let build_dismisser = dismisser.clone();
         let window_title = title.clone();
         let visible = Rc::new(Cell::new(!native_reveal_gate));
+        let reveal_pending = Rc::new(Cell::new(native_reveal_gate));
         let handle = cx.open_window(options, move |window, cx| {
             window.set_window_title(&window_title);
             let inner = cx.new(|cx| build(build_dismisser, window, cx));
-            cx.new(|_| SurfaceRoot { inner })
+            cx.new(|_| SurfaceRoot {
+                inner,
+                render_epoch: Rc::new(Cell::new(0)),
+            })
         })?;
         let dismiss_title = title.clone();
         let dismiss_visible = visible.clone();
+        let dismiss_reveal_pending = reveal_pending.clone();
         dismisser
             .state
             .close
             .borrow_mut()
             .replace(Box::new(move |cx: &mut App| {
                 dismiss_visible.set(false);
+                dismiss_reveal_pending.set(false);
                 if retain_on_dismiss {
                     let _reason = crate::popup_window::reason_scope("surface-dismiss");
                     if crate::popup_window::park_window_by_title(&dismiss_title) {
@@ -223,20 +230,30 @@ impl Surface {
         }
         if native_reveal_gate {
             let _reason = crate::popup_window::reason_scope("surface-open");
-            let hidden = crate::popup_window::hide_invisible(&title);
+            let hidden = crate::popup_window::prepare_window_reveal_by_title(&title);
+            let fresh_frame = hidden.then(|| schedule_fresh_frame(handle, cx)).flatten();
+            let frame_scheduled = fresh_frame.is_some();
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
-                "title={title} phase=opened hidden={hidden} x={} y={}",
+                "title={title} phase=opened hidden={hidden} frame_scheduled={frame_scheduled} x={} y={}",
                 bounds.origin.x.to_f64(),
                 bounds.origin.y.to_f64()
             );
+            if !frame_scheduled {
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+                return Err(anyhow!("surface could not prepare a fresh frame"));
+            }
             settle_then_reveal(
-                handle,
-                title.clone(),
-                bounds.origin,
-                visible.clone(),
-                dismisser.state.generation.get(),
-                dismisser.state.clone(),
+                PendingReveal {
+                    handle,
+                    title: title.clone(),
+                    origin: bounds.origin,
+                    visible: visible.clone(),
+                    reveal_pending: reveal_pending.clone(),
+                    fresh_frame: fresh_frame.expect("fresh frame was scheduled"),
+                    dismiss_generation: dismisser.state.generation.get(),
+                    dismiss_state: dismisser.state.clone(),
+                },
                 cx,
             );
         }
@@ -247,6 +264,7 @@ impl Surface {
             anchor: self.anchor,
             size: self.size,
             visible,
+            reveal_pending,
         })
     }
 
@@ -271,10 +289,13 @@ impl Surface {
 
 pub(crate) struct SurfaceRoot<V> {
     pub(crate) inner: Entity<V>,
+    render_epoch: Rc<Cell<u64>>,
 }
 
 impl<V: Render + 'static> Render for SurfaceRoot<V> {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_epoch
+            .set(self.render_epoch.get().wrapping_add(1));
         div().size_full().child(self.inner.clone())
     }
 }
@@ -293,47 +314,77 @@ const fn supports_native_reveal_gate() -> bool {
     cfg!(any(target_os = "linux", target_os = "macos"))
 }
 
-fn settle_then_reveal<V: Render + 'static>(
+struct PendingReveal<V: Render + 'static> {
     handle: WindowHandle<SurfaceRoot<V>>,
     title: String,
     origin: Point<Pixels>,
     visible: Rc<Cell<bool>>,
+    reveal_pending: Rc<Cell<bool>>,
+    fresh_frame: FreshFrame,
     dismiss_generation: u64,
     dismiss_state: Rc<DismissState>,
-    cx: &mut App,
-) {
+}
+
+fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut App) {
+    let PendingReveal {
+        handle,
+        title,
+        origin,
+        visible,
+        reveal_pending,
+        fresh_frame,
+        dismiss_generation,
+        dismiss_state,
+    } = pending;
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let mut attempts = 0;
-        let mut moved = false;
-        for attempt in 1..=40 {
-            cx.background_executor()
-                .timer(Duration::from_millis(15))
-                .await;
-            attempts = attempt;
-            moved = crate::popup_window::reposition_window_by_title(
-                &title,
-                origin.x.to_f64(),
-                origin.y.to_f64(),
-            );
-            if moved {
-                break;
-            }
-        }
+        let (readiness, attempts) =
+            await_reveal_readiness(cx, &title, origin, &fresh_frame).await;
         let window_exists = cx.update(|cx| handle.update(cx, |_, _, _| ()).is_ok());
         if !matches!(window_exists, Ok(true)) {
+            reveal_pending.set(false);
             return;
         }
         if dismiss_state.generation.get() != dismiss_generation {
+            reveal_pending.set(false);
+            return;
+        }
+        qol_runtime::probe!(
+            "SURFACE_REVEAL",
+            "title={title} phase=frame-ready moved={} fresh_frame={} content_rendered={} attempts={attempts}",
+            readiness.moved,
+            readiness.fresh_frame,
+            readiness.content_rendered
+        );
+        if !readiness.ready() {
+            reveal_pending.set(false);
+            let _ = cx.update(|cx| {
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            });
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={title} phase=revealed moved={} fresh_frame={} content_rendered={} attempts={attempts} shown=false reason=frame-not-ready",
+                readiness.moved,
+                readiness.fresh_frame,
+                readiness.content_rendered
+            );
             return;
         }
         let shown = {
             let _reason = crate::popup_window::reason_scope("surface-reveal");
             crate::popup_window::show_window_by_title(&title)
         };
+        let repaint_requested = shown
+            && cx
+                .update(|cx| request_surface_repaint(handle, cx))
+                .unwrap_or(false);
         visible.set(shown);
+        reveal_pending.set(false);
         qol_runtime::probe!(
             "SURFACE_REVEAL",
-            "title={title} phase=revealed moved={moved} attempts={attempts} shown={shown}"
+            "title={title} phase=revealed moved={} fresh_frame={} content_rendered={} attempts={attempts} shown={shown} repaint_requested={repaint_requested}",
+            readiness.moved,
+            readiness.fresh_frame,
+            readiness.content_rendered
         );
         let focus_commit = PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         crate::popup_window::reassert_focus_until_held(
@@ -355,6 +406,100 @@ fn settle_then_reveal<V: Render + 'static>(
     .detach();
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RevealReadiness {
+    moved: bool,
+    fresh_frame: bool,
+    content_rendered: bool,
+}
+
+impl RevealReadiness {
+    fn ready(self) -> bool {
+        self.moved && self.fresh_frame && self.content_rendered
+    }
+}
+
+#[derive(Clone)]
+struct FreshFrame {
+    presented: Rc<Cell<bool>>,
+    render_epoch: Rc<Cell<u64>>,
+    required_render_epoch: u64,
+}
+
+impl FreshFrame {
+    fn presented(&self) -> bool {
+        self.presented.get()
+    }
+
+    fn content_rendered(&self) -> bool {
+        self.render_epoch.get() >= self.required_render_epoch
+    }
+}
+
+fn schedule_fresh_frame<V: Render + 'static>(
+    handle: WindowHandle<SurfaceRoot<V>>,
+    cx: &mut App,
+) -> Option<FreshFrame> {
+    let presented = Rc::new(Cell::new(false));
+    let presented_after_frame = presented.clone();
+    let mut request = None;
+    handle
+        .update(cx, |root, window, cx| {
+            request = Some(FreshFrame {
+                presented,
+                render_epoch: root.render_epoch.clone(),
+                required_render_epoch: root.render_epoch.get().wrapping_add(1),
+            });
+            window.on_next_frame(move |window, _| {
+                window.on_next_frame(move |_, _| presented_after_frame.set(true));
+                window.refresh();
+            });
+            root.inner.update(cx, |_, cx| cx.notify());
+            cx.notify();
+            window.refresh();
+        })
+        .ok()?;
+    request
+}
+
+fn request_surface_repaint<V: Render + 'static>(
+    handle: WindowHandle<SurfaceRoot<V>>,
+    cx: &mut App,
+) -> bool {
+    handle
+        .update(cx, |root, window, cx| {
+            root.inner.update(cx, |_, cx| cx.notify());
+            cx.notify();
+            window.refresh();
+        })
+        .is_ok()
+}
+
+async fn await_reveal_readiness(
+    cx: &mut AsyncApp,
+    title: &str,
+    origin: Point<Pixels>,
+    fresh_frame: &FreshFrame,
+) -> (RevealReadiness, usize) {
+    let mut readiness = RevealReadiness::default();
+    for attempt in 1..=40 {
+        cx.background_executor()
+            .timer(Duration::from_millis(15))
+            .await;
+        readiness.moved |= crate::popup_window::reposition_window_by_title(
+            title,
+            origin.x.to_f64(),
+            origin.y.to_f64(),
+        );
+        readiness.fresh_frame = fresh_frame.presented();
+        readiness.content_rendered = fresh_frame.content_rendered();
+        if readiness.ready() {
+            return (readiness, attempt);
+        }
+    }
+    (readiness, 40)
+}
+
 impl<V: Render + Focusable + 'static> OpenedSurface<V> {
     pub(crate) fn is_visible(&self) -> bool {
         self.visible.get()
@@ -365,31 +510,46 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
             return false;
         }
         if !self.visible.get() {
+            if self.reveal_pending.get() {
+                return true;
+            }
             let Some(monitor) = tracker.snapshot_monitor() else {
                 return false;
             };
             let bounds = resolved_bounds(self.anchor, self.size, &monitor);
-            let moved_before = crate::popup_window::reposition_window_by_title(
-                &self.title,
-                bounds.origin.x.to_f64(),
-                bounds.origin.y.to_f64(),
-            );
-            let shown = {
+            let prepared = {
                 let _reason = crate::popup_window::reason_scope("surface-reuse");
-                crate::popup_window::show_window_by_title(&self.title)
+                crate::popup_window::prepare_window_reveal_by_title(&self.title)
             };
-            let moved_after = shown
-                && crate::popup_window::reposition_window_by_title(
-                    &self.title,
-                    bounds.origin.x.to_f64(),
-                    bounds.origin.y.to_f64(),
-                );
-            let moved = moved_before || moved_after;
-            self.visible.set(shown);
-            if !shown {
+            if !prepared {
                 return false;
             }
-            trace_reused_reveal(self.title.clone(), moved, cx);
+            let Some(fresh_frame) = schedule_fresh_frame(self.handle, cx) else {
+                let _ = crate::popup_window::park_window_by_title(&self.title);
+                return false;
+            };
+            self.reveal_pending.set(true);
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={} phase=opened hidden=true frame_scheduled=true reused=true x={} y={}",
+                self.title,
+                bounds.origin.x.to_f64(),
+                bounds.origin.y.to_f64()
+            );
+            settle_then_reveal_reused(
+                PendingReveal {
+                    handle: self.handle,
+                    title: self.title.clone(),
+                    origin: bounds.origin,
+                    visible: self.visible.clone(),
+                    reveal_pending: self.reveal_pending.clone(),
+                    fresh_frame,
+                    dismiss_generation: self.dismisser.state.generation.get(),
+                    dismiss_state: self.dismisser.state.clone(),
+                },
+                cx,
+            );
+            return true;
         }
         self.handle
             .update(cx, |root, window, cx| {
@@ -405,21 +565,100 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
     }
 }
 
-fn trace_reused_reveal(title: String, moved: bool, cx: &mut App) {
+fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
+    pending: PendingReveal<V>,
+    cx: &mut App,
+) {
+    let PendingReveal {
+        handle,
+        title,
+        origin,
+        visible,
+        reveal_pending,
+        fresh_frame,
+        dismiss_generation,
+        dismiss_state,
+    } = pending;
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let mut revealed = false;
+        let (readiness, attempts) =
+            await_reveal_readiness(cx, &title, origin, &fresh_frame).await;
+        let window_exists = cx.update(|cx| handle.update(cx, |_, _, _| ()).is_ok());
+        if !matches!(window_exists, Ok(true)) {
+            reveal_pending.set(false);
+            return;
+        }
+        if dismiss_state.generation.get() != dismiss_generation {
+            reveal_pending.set(false);
+            return;
+        }
+        qol_runtime::probe!(
+            "SURFACE_REVEAL",
+            "title={title} phase=frame-ready moved={} fresh_frame={} content_rendered={} attempts={attempts} reused=true",
+            readiness.moved,
+            readiness.fresh_frame,
+            readiness.content_rendered
+        );
+        if !readiness.ready() {
+            reveal_pending.set(false);
+            let _reason = crate::popup_window::reason_scope("surface-reuse-timeout");
+            let _ = crate::popup_window::park_window_by_title(&title);
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={title} phase=revealed moved={} fresh_frame={} content_rendered={} attempts={attempts} shown=false reused=true reason=frame-not-ready",
+                readiness.moved,
+                readiness.fresh_frame,
+                readiness.content_rendered
+            );
+            return;
+        }
+        let shown = {
+            let _reason = crate::popup_window::reason_scope("surface-reuse-reveal");
+            crate::popup_window::show_window_by_title(&title)
+        };
+        visible.set(shown);
+        reveal_pending.set(false);
+        if !shown {
+            return;
+        }
+        let repaint_requested = cx
+            .update(|cx| {
+                handle
+                    .update(cx, |root, window, cx| {
+                        let focus = root.inner.read(cx).focus_handle(cx);
+                        window.activate_window();
+                        window.focus(&focus);
+                        root.inner.update(cx, |_, cx| cx.notify());
+                        cx.notify();
+                        window.refresh();
+                    })
+                    .is_ok()
+            })
+            .unwrap_or(false);
+        qol_runtime::probe!(
+            "SURFACE_REVEAL",
+            "title={title} phase=revealed moved={} fresh_frame={} content_rendered={} attempts={attempts} shown=true reused=true repaint_requested={repaint_requested}",
+            readiness.moved,
+            readiness.fresh_frame,
+            readiness.content_rendered
+        );
+        let focus_commit = PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+        crate::popup_window::reassert_focus_until_held(
+            &title,
+            &PANEL_FOCUS_GENERATION,
+            focus_commit,
+        );
+        let _ = cx.update(|cx| trace_reused_ready(title, cx));
+    })
+    .detach();
+}
+
+fn trace_reused_ready(title: String, cx: &mut App) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
         for attempt in 0..=REUSED_REVEAL_MAX_ATTEMPTS {
             let visible = cx
                 .update(|_| crate::popup_window::visible_windows_by_title_prefix(&title))
                 .unwrap_or_default()
                 > 0;
-            if visible && !revealed {
-                qol_runtime::probe!(
-                    "SURFACE_REVEAL",
-                    "title={title} phase=revealed moved={moved} attempts={attempt} shown=true reused=true"
-                );
-                revealed = true;
-            }
             let focused = visible
                 && cx
                     .update(|_| crate::popup_window::window_holds_input_focus(&title))
@@ -436,12 +675,6 @@ fn trace_reused_reveal(title: String, moved: bool, cx: &mut App) {
             cx.background_executor()
                 .timer(REUSED_REVEAL_SAMPLE_INTERVAL)
                 .await;
-        }
-        if !revealed {
-            qol_runtime::probe!(
-                "SURFACE_REVEAL",
-                "title={title} phase=revealed moved={moved} attempts={REUSED_REVEAL_MAX_ATTEMPTS} shown=false reused=true"
-            );
         }
         qol_runtime::probe!(
             "SURFACE_REVEAL",
@@ -521,7 +754,7 @@ fn corner_anchored_bounds(
 
 #[cfg(test)]
 mod tests {
-    use super::{corner_anchored_bounds, Corner};
+    use super::{corner_anchored_bounds, Corner, RevealReadiness};
     use gpui::{point, px, size, Bounds};
 
     #[test]
@@ -569,5 +802,28 @@ mod tests {
         );
         assert_eq!(tiny.origin.x.to_f64(), 24.0);
         assert_eq!(tiny.origin.y.to_f64(), 24.0);
+    }
+
+    #[test]
+    fn reveal_requires_placement_rendered_content_and_a_presented_frame() {
+        let cases = [
+            (false, false, false, false),
+            (true, false, true, false),
+            (true, true, false, false),
+            (false, true, true, false),
+            (true, true, true, true),
+        ];
+        for (moved, fresh_frame, content_rendered, expected) in cases {
+            assert_eq!(
+                RevealReadiness {
+                    moved,
+                    fresh_frame,
+                    content_rendered,
+                }
+                .ready(),
+                expected,
+                "moved={moved} fresh_frame={fresh_frame} content_rendered={content_rendered}"
+            );
+        }
     }
 }

@@ -107,6 +107,22 @@ pub fn park_window_by_title(title: &str) -> bool {
     hide_invisible(title)
 }
 
+pub fn prepare_window_reveal_by_title(title: &str) -> bool {
+    let Some(window) = resolve_window(title) else {
+        return false;
+    };
+    window.setLevel(NSPopUpMenuWindowLevel);
+    window.setAlphaValue(0.0);
+    window.setIgnoresMouseEvents(true);
+    window.orderFrontRegardless();
+    qol_runtime::probe!(
+        "PREPARE_WIN",
+        "title={title} prepared=true reason={}",
+        crate::popup_window::change_reason()
+    );
+    true
+}
+
 pub fn configure_keepalive_window(title: &str) -> bool {
     hide_invisible(title)
 }

@@ -152,14 +152,17 @@ impl SettingsWindowHost {
         };
         let plugin_id = prepared.panel.plugin_id.clone();
         let dismisser = active.surface.dismisser.clone();
+        let visible = active.surface.is_visible();
         active.surface.handle.update(cx, move |root, window, cx| {
             window.resize(prepared.size);
             let inner =
                 cx.new(|cx| SettingsPanelView::new(prepared.panel, prepared.state, dismisser, cx));
             let focus = inner.read(cx).focus_handle(cx);
             root.inner = inner;
-            window.activate_window();
             window.focus(&focus);
+            if visible {
+                window.activate_window();
+            }
             cx.notify();
         })?;
         active.surface.resize(prepared.size);

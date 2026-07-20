@@ -17,6 +17,10 @@ pub fn park_window_by_title(_title: &str) -> bool {
     false
 }
 
+pub fn prepare_window_reveal_by_title(_title: &str) -> bool {
+    false
+}
+
 pub fn configure_keepalive_window(_title: &str) -> bool {
     false
 }
