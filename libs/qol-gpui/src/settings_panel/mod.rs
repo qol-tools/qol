@@ -32,34 +32,6 @@ pub struct SettingsPanel {
     pub plugin_id: String,
     pub contract: String,
     pub heading: String,
-    pub initial_config_key: Option<String>,
-}
-
-impl SettingsPanel {
-    pub fn new(
-        plugin_id: impl Into<String>,
-        heading: impl Into<String>,
-        contract: impl Into<String>,
-    ) -> Self {
-        Self {
-            plugin_id: plugin_id.into(),
-            contract: contract.into(),
-            heading: heading.into(),
-            initial_config_key: None,
-        }
-    }
-
-    pub fn select(mut self, config_key: impl Into<String>) -> Self {
-        self.initial_config_key = Some(config_key.into());
-        self
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SettingsCatalogRow {
-    pub config_key: String,
-    pub section: Option<String>,
-    pub label: String,
 }
 
 type QueryHandler = dyn Fn(&str) -> Result<serde_json::Value, String> + Send + Sync;
@@ -134,13 +106,8 @@ impl SettingsWindowHost {
             self.active.as_ref().map(|active| active.plugin_id.as_str()),
             &plugin_id,
         );
-        if decision == ActivationDecision::Focus {
-            if let Some(config_key) = prepared.panel.initial_config_key.as_deref() {
-                self.select_active(config_key, cx);
-            }
-            if self.present(tracker, cx) {
-                return Ok(SettingsActivation::Focused);
-            }
+        if decision == ActivationDecision::Focus && self.present(tracker, cx) {
+            return Ok(SettingsActivation::Focused);
         }
 
         let prepared = size_prepared_panel(prepared, tracker)?;
@@ -151,17 +118,6 @@ impl SettingsWindowHost {
 
         self.active = Some(open_prepared(prepared, tracker, cx)?);
         Ok(SettingsActivation::Opened)
-    }
-
-    fn select_active(&mut self, config_key: &str, cx: &mut App) {
-        let Some(active) = self.active.as_mut() else {
-            return;
-        };
-        let _ = active.surface.handle.update(cx, |root, _, cx| {
-            root.inner.update(cx, |view, cx| {
-                view.select_config_key(config_key, cx);
-            });
-        });
     }
 
     fn present(&mut self, tracker: &MonitorTracker, cx: &mut App) -> bool {
@@ -293,7 +249,14 @@ pub fn run_plugin_settings(
     contract: impl Into<String>,
     runtime: SettingsRuntime,
 ) -> anyhow::Result<()> {
-    run_standalone(SettingsPanel::new(plugin_id, heading, contract), runtime)
+    run_standalone(
+        SettingsPanel {
+            plugin_id: plugin_id.into(),
+            contract: contract.into(),
+            heading: heading.into(),
+        },
+        runtime,
+    )
 }
 
 pub fn run_standalone(panel: SettingsPanel, runtime: SettingsRuntime) -> anyhow::Result<()> {
@@ -363,20 +326,16 @@ pub async fn open_plugin_settings(
     cx: &AsyncApp,
 ) -> anyhow::Result<()> {
     open_from_async(
-        SettingsPanel::new(plugin_id, heading, contract),
+        SettingsPanel {
+            plugin_id: plugin_id.into(),
+            contract: contract.into(),
+            heading: heading.into(),
+        },
         tracker,
         runtime,
         cx,
     )
     .await
-}
-
-pub fn catalog_rows(
-    spec: &qol_config::contract::ConfigSpec,
-) -> anyhow::Result<Vec<SettingsCatalogRow>> {
-    let resolved = qol_config::normalized::resolve_config(spec, &serde_json::json!({}))
-        .map_err(|errors| anyhow::anyhow!("contract resolve failed: {errors:?}"))?;
-    Ok(rows::catalog_rows(&resolved))
 }
 
 fn prepare_panel(
@@ -459,8 +418,8 @@ fn panel_height(rows: &[Row]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        activation_decision, catalog_rows, panel_height, ActivationDecision, Row,
-        PANEL_CHROME_HEIGHT, PANEL_ROW_HEIGHT,
+        activation_decision, panel_height, ActivationDecision, Row, PANEL_CHROME_HEIGHT,
+        PANEL_ROW_HEIGHT,
     };
     use crate::settings_panel::rows::RowControl;
 
@@ -497,52 +456,5 @@ mod tests {
                 "active={active:?} requested={requested}"
             );
         }
-    }
-
-    #[test]
-    fn catalog_contains_only_rows_the_native_panel_can_render() {
-        let spec = qol_config::contract::parse_spec_str(
-            r#"
-schema_version = 1
-
-[section.connection]
-label = "Connection"
-
-[field.enabled]
-type = "boolean"
-label = "Enabled"
-default = true
-
-[field.retry]
-type = "number"
-config_key = "connection.retry"
-label = "Retry delay"
-section = "connection"
-default = 1
-
-[field.health]
-type = "status"
-label = "Health"
-section = "connection"
-query = "health"
-"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            catalog_rows(&spec).unwrap(),
-            [
-                super::SettingsCatalogRow {
-                    config_key: "enabled".into(),
-                    section: None,
-                    label: "Enabled".into(),
-                },
-                super::SettingsCatalogRow {
-                    config_key: "connection.retry".into(),
-                    section: Some("Connection".into()),
-                    label: "Retry delay".into(),
-                },
-            ]
-        );
     }
 }
