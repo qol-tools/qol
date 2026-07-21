@@ -45,6 +45,7 @@ impl Phase {
         }
     }
 
+    #[cfg(debug_assertions)]
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Start => "start",

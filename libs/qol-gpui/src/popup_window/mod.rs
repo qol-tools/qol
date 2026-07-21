@@ -126,6 +126,8 @@ pub fn reassert_focus_until_held(
         },
         move || {
             let shown = show_window_by_title(&assert_title);
+            #[cfg(not(debug_assertions))]
+            let _ = shown;
             qol_runtime::probe!(
                 "FOCUS_REASSERT",
                 "title={assert_title} step=reassert shown={shown}"

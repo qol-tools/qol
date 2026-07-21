@@ -7,9 +7,9 @@ use anyhow::{bail, Context};
 use gpui::{App, AppContext, Application};
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
-use qol_gpui::settings_panel::{
-    SettingsActivation, SettingsPanel, SettingsRuntime, SettingsWindowHost,
-};
+#[cfg(debug_assertions)]
+use qol_gpui::settings_panel::SettingsActivation;
+use qol_gpui::settings_panel::{SettingsPanel, SettingsRuntime, SettingsWindowHost};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
@@ -73,6 +73,8 @@ pub(in crate::settings_surface) fn stop() {
     } else {
         "stopped"
     };
+    #[cfg(not(debug_assertions))]
+    let _ = &outcome;
     qol_runtime::probe!(
         "SURFACE_ACTIVATION",
         "plugin=none phase=stop outcome={outcome}"
@@ -182,6 +184,8 @@ async fn activate(
         }
         Ok(false) => {}
         Err(error) => {
+            #[cfg(not(debug_assertions))]
+            let _ = &error;
             qol_runtime::probe!(
                 "SURFACE_ACTIVATION",
                 "plugin={plugin_id} phase=activate outcome=app_update_failed error={error}"
@@ -213,12 +217,18 @@ async fn activate(
         Err(error) => Err(error),
     };
     match activation {
-        Ok(activation) => qol_runtime::probe!(
-            "SURFACE_ACTIVATION",
-            "plugin={plugin_id} phase=activate outcome={} visible_windows=1",
-            activation_name(activation)
-        ),
+        Ok(activation) => {
+            #[cfg(not(debug_assertions))]
+            let _ = &activation;
+            qol_runtime::probe!(
+                "SURFACE_ACTIVATION",
+                "plugin={plugin_id} phase=activate outcome={} visible_windows=1",
+                activation_name(activation)
+            )
+        }
         Err(error) => {
+            #[cfg(not(debug_assertions))]
+            let _ = &error;
             qol_runtime::probe!(
                 "SURFACE_ACTIVATION",
                 "plugin={plugin_id} phase=activate outcome=failed error={error}"
@@ -289,6 +299,7 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
     }
 }
 
+#[cfg(debug_assertions)]
 fn activation_name(activation: SettingsActivation) -> &'static str {
     match activation {
         SettingsActivation::Focused => "focused",
@@ -299,6 +310,8 @@ fn activation_name(activation: SettingsActivation) -> &'static str {
 
 fn open_browser_fallback(plugin_id: &str, reason: &str) {
     let result = crate::paths::open_url(&qol_conventions::settings_url(plugin_id));
+    #[cfg(not(debug_assertions))]
+    let _ = (&reason, &result);
     qol_runtime::probe!(
         "SURFACE_ACTIVATION",
         "plugin={plugin_id} phase=fallback reason={reason} outcome={}",

@@ -236,6 +236,7 @@ pub fn park_window_by_title(title: &str) -> bool {
 }
 
 pub fn prepare_window_reveal_by_title(title: &str) -> bool {
+    #[cfg(debug_assertions)]
     let reason = crate::popup_window::change_reason();
     let Some((conn, screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
@@ -394,6 +395,7 @@ pub fn show_window_passive_by_title(title: &str) -> bool {
 }
 
 fn show_window_by_title_with_focus(title: &str, focus: bool) -> bool {
+    #[cfg(debug_assertions)]
     let reason = crate::popup_window::change_reason();
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
@@ -429,6 +431,21 @@ fn show_window_by_title_with_focus(title: &str, focus: bool) -> bool {
     let flush_ok = conn.flush().is_ok();
     let active_after = active_window(&conn, root);
     let after = show_window_state(&conn, root, wid, active_after);
+    #[cfg(not(debug_assertions))]
+    let _ = (
+        &before,
+        &clear_ok,
+        &input_ok,
+        &map_ok,
+        &stack.frame,
+        &stack.client,
+        &stack.frame_ok,
+        &activate_ok,
+        &timestamp,
+        &focus_ok,
+        &flush_ok,
+        &after,
+    );
     qol_runtime::probe!(
         "SHOW_WIN_STATE",
         "reason={reason} phase=after title={title} wid={wid} frame={} clear_opacity={clear_ok} input_shape_ok={input_ok} map={map_ok} stack_client={} stack_frame={} focus_requested={focus} activate={activate_ok} focus={focus_ok} timestamp={timestamp} flush={flush_ok} {after}",
@@ -644,6 +661,8 @@ pub fn make_override_redirect(title: &str) -> bool {
         let _ = conn.map_window(wid);
     }
     let stack = raise_window(&conn, root, wid);
+    #[cfg(not(debug_assertions))]
+    let _ = (&stack.frame, &stack.client, &stack.frame_ok);
     let _ = conn.flush();
     if !already {
         qol_runtime::probe!(
@@ -791,6 +810,8 @@ fn release_input_focus(conn: &impl Connection, root: u32, wid: u32) {
         .and_then(|cookie| cookie.check().ok())
         .is_some();
     let flushed = conn.flush().is_ok();
+    #[cfg(not(debug_assertions))]
+    let _ = (&activated, &focused, &flushed);
     qol_runtime::probe!(
         "FOCUS_RETURN",
         "from={wid} to={target} activated={activated} focused={focused} flushed={flushed}"

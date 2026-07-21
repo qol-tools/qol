@@ -59,6 +59,8 @@ pub fn show_ghost_window(target_title: &str, all_titles: &[String]) {
         }
     }
     let shown = popup_window::show_window_by_title(target_title);
+    #[cfg(not(debug_assertions))]
+    let _ = &shown;
     qol_runtime::probe!(
         "SHOW_GHOST_RESULT",
         "reason={reason} target={target_title} shown={shown}"
@@ -166,6 +168,7 @@ pub fn dismiss_to_ghost_with(
     ));
 }
 
+#[cfg(debug_assertions)]
 fn trace_dismiss_decision(
     label: &'static str,
     event: &str,
@@ -181,6 +184,17 @@ fn trace_dismiss_decision(
             .saturating_duration_since(std::time::Instant::now())
             .as_millis(),
     );
+}
+
+#[cfg(not(debug_assertions))]
+fn trace_dismiss_decision(
+    _label: &'static str,
+    _event: &str,
+    _showing: bool,
+    _active: &str,
+    _guard: std::time::Instant,
+    _decision: &str,
+) {
 }
 
 fn rearm_on_new_show(

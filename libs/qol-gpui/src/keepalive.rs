@@ -22,6 +22,8 @@ pub fn open_keepalive(cx: &mut App, app_id: Option<&str>) -> Option<AnyWindowHan
         .ok()?;
     let _reason = crate::popup_window::reason_scope("keepalive-open");
     let configured = crate::popup_window::configure_keepalive_window(&title);
+    #[cfg(not(debug_assertions))]
+    let _ = configured;
     qol_runtime::probe!(
         "KEEPALIVE",
         "title={title} configured={configured} phase=initial contract=non_focusable_unmapped"
@@ -30,6 +32,8 @@ pub fn open_keepalive(cx: &mut App, app_id: Option<&str>) -> Option<AnyWindowHan
     cx.defer(move |_| {
         let _reason = crate::popup_window::reason_scope("keepalive-open");
         let configured = crate::popup_window::configure_keepalive_window(&title);
+        #[cfg(not(debug_assertions))]
+        let _ = configured;
         qol_runtime::probe!(
             "KEEPALIVE",
             "title={title} configured={configured} phase=settled contract=non_focusable_unmapped"

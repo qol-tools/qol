@@ -272,7 +272,9 @@ pub async fn prepare_from_async(
     runtime: SettingsRuntime,
     cx: &AsyncApp,
 ) -> anyhow::Result<PreparedSettingsPanel> {
+    #[cfg(debug_assertions)]
     let plugin_id = panel.plugin_id.clone();
+    #[cfg(debug_assertions)]
     let started = std::time::Instant::now();
     let prepared = cx
         .background_spawn(async move { prepare_panel(panel, runtime) })

@@ -376,6 +376,8 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
     cx.spawn(async move |cx: &mut AsyncApp| {
         let (readiness, attempts) =
             await_reveal_readiness(cx, handle, &title, origin, &fresh_frame).await;
+        #[cfg(not(debug_assertions))]
+        let _ = &attempts;
         let window_exists = cx.update(|cx| handle.update(cx, |_, _, _| ()).is_ok());
         if !matches!(window_exists, Ok(true)) {
             reveal_pending.set(false);
@@ -430,6 +432,8 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             && cx
                 .update(|cx| request_surface_repaint(handle, cx))
                 .unwrap_or(false);
+        #[cfg(not(debug_assertions))]
+        let _ = &repaint_requested;
         visible.set(shown);
         reveal_pending.set(false);
         qol_runtime::probe!(
@@ -726,6 +730,8 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
     cx.spawn(async move |cx: &mut AsyncApp| {
         let (readiness, attempts) =
             await_reveal_readiness(cx, handle, &title, origin, &fresh_frame).await;
+        #[cfg(not(debug_assertions))]
+        let _ = &attempts;
         let window_exists = cx.update(|cx| handle.update(cx, |_, _, _| ()).is_ok());
         if !matches!(window_exists, Ok(true)) {
             reveal_pending.set(false);
@@ -794,6 +800,8 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
                     .is_ok()
             })
             .unwrap_or(false);
+        #[cfg(not(debug_assertions))]
+        let _ = &repaint_requested;
         qol_runtime::probe!(
             "SURFACE_REVEAL",
             "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown=true reused=true repaint_requested={repaint_requested}",
@@ -817,6 +825,8 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
 fn trace_reused_ready(title: String, cx: &mut App) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         for attempt in 0..=REUSED_REVEAL_MAX_ATTEMPTS {
+            #[cfg(not(debug_assertions))]
+            let _ = attempt;
             let visible = cx
                 .update(|_| crate::popup_window::visible_windows_by_title_prefix(&title))
                 .unwrap_or_default()
