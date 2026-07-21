@@ -125,6 +125,18 @@ pub fn plugin_config_paths_from_env(fallback_id: &str) -> Vec<PathBuf> {
     plugin_config_paths(&[id.as_str()])
 }
 
+/// The single canonical path for a plugin's config: the host store, always
+/// the last root `plugin_config_paths` searches. A pinned install (env var or
+/// active-install-id file) is checked first on *read* so it can override the
+/// host store for testing, but any direct write must converge on one file or
+/// it orphans a copy the host store never sees. The host owns config
+/// persistence (see `PluginConfigManager`); this exists for callers that fall
+/// back to a direct file write when the host is unreachable, not for a plugin
+/// to persist its own settings.
+pub fn plugin_config_write_path(name: &str) -> Option<PathBuf> {
+    plugin_config_paths(&[name]).pop()
+}
+
 /// The canonical plugin id the host injected at launch, or `fallback_id` when
 /// run standalone. Aborts loudly on a present-but-invalid injected id.
 pub fn plugin_id_from_env(fallback_id: &str) -> String {

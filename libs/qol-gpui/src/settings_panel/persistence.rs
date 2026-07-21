@@ -4,9 +4,7 @@ use std::time::Duration;
 use qol_conventions::DEFAULT_PORT;
 
 pub(super) fn config_path(plugin_id: &str) -> anyhow::Result<PathBuf> {
-    qol_config::plugin_config_paths(&[plugin_id])
-        .into_iter()
-        .next()
+    qol_config::plugin_config_write_path(plugin_id)
         .ok_or_else(|| anyhow::anyhow!("no plugin config path available"))
 }
 

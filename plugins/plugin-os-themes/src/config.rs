@@ -19,7 +19,6 @@ pub struct Config {
 
 pub fn load() -> Config {
     let config = load_from_disk();
-    persist(&config);
     log_config(&config);
     config
 }
@@ -31,20 +30,6 @@ fn load_from_disk() -> Config {
 #[cfg(test)]
 fn contract_defaults() -> Config {
     qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).expect("contract defaults must parse")
-}
-
-fn persist(config: &Config) {
-    let Some(path) = config_paths().into_iter().next() else {
-        return;
-    };
-    match serde_json::to_string_pretty(config) {
-        Ok(json) => {
-            if let Err(error) = qol_fs::atomic_write(&path, json.as_bytes()) {
-                eprintln!("[shake-to-grow] failed to write config: {error}");
-            }
-        }
-        Err(error) => eprintln!("[shake-to-grow] failed to write config: {error}"),
-    }
 }
 
 fn log_config(config: &Config) {
@@ -61,10 +46,6 @@ fn log_config(config: &Config) {
         config.grow_ms,
         config.shrink_ms,
     );
-}
-
-fn config_paths() -> Vec<std::path::PathBuf> {
-    qol_config::plugin_config_paths_from_env(PLUGIN_ID)
 }
 
 #[cfg(test)]

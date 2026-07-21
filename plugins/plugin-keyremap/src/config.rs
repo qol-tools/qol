@@ -89,26 +89,7 @@ pub struct ScrollRule {
 }
 
 pub fn load_config() -> RemapConfig {
-    let paths = qol_config::plugin_config_paths_from_env(PLUGIN_ID);
-    let has_file = paths.iter().any(|p| p.exists());
-
-    let config = if has_file {
-        qol_config::load_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
-    } else {
-        let defaults = builtin_defaults();
-        if let Some(path) = paths.first() {
-            match serde_json::to_string_pretty(&defaults) {
-                Ok(json) => match qol_fs::atomic_write(path, json.as_bytes()) {
-                    Ok(()) => eprintln!("[keyremap] wrote default config to {}", path.display()),
-                    Err(e) => eprintln!("[keyremap] failed to write default config: {e}"),
-                },
-                Err(e) => eprintln!("[keyremap] failed to write default config: {e}"),
-            }
-        }
-        defaults
-    };
-
-    config
+    qol_config::load_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
 }
 
 #[cfg(test)]
