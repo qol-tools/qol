@@ -1313,14 +1313,16 @@ impl Render for SettingsPanelView {
             .overflow_hidden()
             .flex()
             .flex_col()
-            .gap_1()
-            .p_4()
             .rounded_xl()
             .border_1()
             .border_color(rgb(self.palette.panel_border))
             .bg(rgb(self.palette.window_bg))
             .child(
                 div()
+                    .w_full()
+                    .pt_4()
+                    .px_4()
+                    .pb_1()
                     .text_sm()
                     .text_color(rgb(self.palette.label_text))
                     .on_mouse_down(MouseButton::Left, |_, window, _| {
@@ -1328,7 +1330,15 @@ impl Render for SettingsPanelView {
                     })
                     .child(self.panel.heading.clone()),
             )
-            .children(items)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .px_4()
+                    .pb_4()
+                    .children(items),
+            )
     }
 }
 
