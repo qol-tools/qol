@@ -1,14 +1,12 @@
 use gpui::AsyncApp;
 use qol_gpui::monitor::MonitorTracker;
-use qol_gpui::settings_panel::{SettingsPanel, SettingsRuntime};
+use qol_gpui::settings_panel::SettingsRuntime;
 
 pub(crate) async fn open_from_async(tracker: MonitorTracker, cx: &AsyncApp) -> anyhow::Result<()> {
-    qol_gpui::settings_panel::open_from_async(
-        SettingsPanel {
-            plugin_id: crate::PLUGIN_ID.into(),
-            contract: crate::config::contract().into(),
-            heading: "QoL Shot Settings".into(),
-        },
+    qol_gpui::settings_panel::open_plugin_settings(
+        crate::PLUGIN_ID,
+        "QoL Shot Settings",
+        crate::config::contract(),
         tracker,
         SettingsRuntime::new(query_options),
         cx,

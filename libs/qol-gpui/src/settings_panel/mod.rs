@@ -243,6 +243,22 @@ impl SettingsRuntime {
     }
 }
 
+pub fn run_plugin_settings(
+    plugin_id: impl Into<String>,
+    heading: impl Into<String>,
+    contract: impl Into<String>,
+    runtime: SettingsRuntime,
+) -> anyhow::Result<()> {
+    run_standalone(
+        SettingsPanel {
+            plugin_id: plugin_id.into(),
+            contract: contract.into(),
+            heading: heading.into(),
+        },
+        runtime,
+    )
+}
+
 pub fn run_standalone(panel: SettingsPanel, runtime: SettingsRuntime) -> anyhow::Result<()> {
     let failure = Rc::new(RefCell::new(None));
     let reported_failure = failure.clone();
@@ -299,6 +315,27 @@ pub async fn open_from_async(
         let prepared = size_prepared_panel(prepared, &tracker)?;
         open_prepared(prepared, &tracker, cx).map(|_| ())
     })?
+}
+
+pub async fn open_plugin_settings(
+    plugin_id: impl Into<String>,
+    heading: impl Into<String>,
+    contract: impl Into<String>,
+    tracker: MonitorTracker,
+    runtime: SettingsRuntime,
+    cx: &AsyncApp,
+) -> anyhow::Result<()> {
+    open_from_async(
+        SettingsPanel {
+            plugin_id: plugin_id.into(),
+            contract: contract.into(),
+            heading: heading.into(),
+        },
+        tracker,
+        runtime,
+        cx,
+    )
+    .await
 }
 
 fn prepare_panel(

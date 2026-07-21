@@ -144,12 +144,10 @@ fn spawn_daemon_loop(cx: &mut App, rx: mpsc::Receiver<daemon::Command>, state: P
 }
 
 async fn dispatch_settings(cx: &AsyncApp, state: &PickerState) {
-    let opened = qol_gpui::settings_panel::open_from_async(
-        qol_gpui::settings_panel::SettingsPanel {
-            plugin_id: crate::config::PLUGIN_ID.into(),
-            contract: crate::config::contract().into(),
-            heading: "Alt Tab Settings".into(),
-        },
+    let opened = qol_gpui::settings_panel::open_plugin_settings(
+        crate::config::PLUGIN_ID,
+        "Alt Tab Settings",
+        crate::config::contract(),
         state.tracker.clone(),
         qol_gpui::settings_panel::SettingsRuntime::empty(),
         cx,
