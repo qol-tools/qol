@@ -172,7 +172,7 @@ fn open_window(
         window_bounds: Some(WindowBounds::Windowed(spec.bounds)),
         titlebar: None,
         window_decorations: Some(WindowDecorations::Client),
-        kind: WindowKind::Normal,
+        kind: qol_gpui::popup_window::pinned_window_kind(),
         focus: spec.focus,
         show: true,
         is_movable: true,

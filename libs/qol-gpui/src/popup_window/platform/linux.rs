@@ -516,6 +516,10 @@ pub fn configure_pinned_window(title: &str) -> bool {
     true
 }
 
+pub fn pinned_window_kind() -> gpui::WindowKind {
+    gpui::WindowKind::PopUp
+}
+
 fn keep_content_on_resize(conn: &impl Connection, wid: u32) {
     let attributes = ChangeWindowAttributesAux::new().bit_gravity(Gravity::NORTH_WEST);
     let _ = conn.change_window_attributes(wid, &attributes);
@@ -1534,9 +1538,15 @@ fn intern(conn: &impl Connection, name: &[u8]) -> Option<u32> {
 mod tests {
     use super::{
         focus_return_target, keepalive_wm_hints, normalize_opacity, opacity_to_cardinal,
-        CompositeLease,
+        pinned_window_kind, CompositeLease,
     };
+    use gpui::WindowKind;
     use x11rb::properties::{WmHints, WmHintsState};
+
+    #[test]
+    fn pinned_windows_are_popups_before_their_first_map() {
+        assert_eq!(pinned_window_kind(), WindowKind::PopUp);
+    }
 
     #[test]
     fn keepalive_hints_refuse_focus_without_clobbering_other_hints() {
