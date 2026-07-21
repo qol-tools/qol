@@ -12,9 +12,6 @@ use macos as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-compile_error!("plugin-alt-tab picker: unsupported target OS");
-
 pub fn picker_window_kind() -> gpui::WindowKind {
     imp::picker_window_kind()
 }
@@ -52,10 +49,6 @@ pub fn reuse_picker_across_targets() -> bool {
 }
 pub fn is_modifier_held() -> bool {
     qol_gpui::platform::is_modifier_held()
-}
-#[allow(dead_code)]
-pub fn is_shift_held() -> bool {
-    qol_gpui::platform::is_shift_held()
 }
 pub fn disable_window_shadow(title: &str) {
     imp::disable_window_shadow(title)

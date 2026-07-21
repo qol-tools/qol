@@ -9,12 +9,7 @@ const CONFIG: DaemonConfig = DaemonConfig {
     support_replace_existing: true,
 };
 
-pub enum Command {
-    Screenshot,
-    Preview,
-    Cli(String),
-    Kill,
-}
+use super::super::Command;
 
 pub fn start_listener(tx: Sender<Command>) -> bool {
     let started = core_daemon::start_listener(&CONFIG, tx, parse_command);

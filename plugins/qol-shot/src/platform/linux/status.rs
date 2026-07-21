@@ -12,7 +12,7 @@ pub fn show_capture_status(
         super::window::configure_status_window(&title);
     });
     super::SELECTOR_CACHE.with(|cache| {
-        crate::region_selector::show_cached_guide(
+        crate::region_selector::platform::show_cached_guide(
             cache,
             bounds,
             title.into(),
@@ -26,6 +26,6 @@ pub fn show_capture_status(
 
 pub fn hide_capture_status(cx: &mut App) {
     super::SELECTOR_CACHE.with(|cache| {
-        crate::region_selector::hide_cached_guide(cache, cx);
+        crate::region_selector::platform::hide_cached_guide(cache, cx);
     });
 }

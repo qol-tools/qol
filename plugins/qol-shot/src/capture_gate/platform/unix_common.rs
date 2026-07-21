@@ -1,6 +1,4 @@
-#[cfg(unix)]
 use std::fs::{File, OpenOptions};
-#[cfg(unix)]
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -8,39 +6,19 @@ const LOCK_FILE_NAME: &str = "qol-shot-capture.lock";
 
 pub(crate) struct CaptureGuard {
     action: &'static str,
-    #[cfg(unix)]
     file: File,
 }
 
 impl CaptureGuard {
-    #[cfg(unix)]
     fn new(action: &'static str, file: File) -> Self {
         Self { action, file }
-    }
-
-    #[cfg(not(unix))]
-    fn new(action: &'static str) -> Self {
-        Self { action }
     }
 }
 
 pub(crate) fn try_acquire(action: &'static str) -> Option<CaptureGuard> {
-    #[cfg(unix)]
-    {
-        try_acquire_unix(action)
-    }
-
-    #[cfg(not(unix))]
-    {
-        qol_runtime::probe!(
-            "SHOT_CAPTURE_LOCK",
-            "action={action} result=acquired platform=noop"
-        );
-        Some(CaptureGuard::new(action))
-    }
+    try_acquire_unix(action)
 }
 
-#[cfg(unix)]
 fn try_acquire_unix(action: &'static str) -> Option<CaptureGuard> {
     use std::os::fd::AsRawFd;
 
@@ -80,23 +58,11 @@ fn try_acquire_unix(action: &'static str) -> Option<CaptureGuard> {
     Some(CaptureGuard::new(action, file))
 }
 
-#[cfg(unix)]
 impl Drop for CaptureGuard {
     fn drop(&mut self) {
         use std::os::fd::AsRawFd;
 
         let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
-        qol_runtime::probe!(
-            "SHOT_CAPTURE_LOCK",
-            "action={} result=released",
-            self.action
-        );
-    }
-}
-
-#[cfg(not(unix))]
-impl Drop for CaptureGuard {
-    fn drop(&mut self) {
         qol_runtime::probe!(
             "SHOT_CAPTURE_LOCK",
             "action={} result=released",

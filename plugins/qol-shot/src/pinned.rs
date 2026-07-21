@@ -1,6 +1,4 @@
-#[cfg(target_os = "linux")]
 use std::cell::RefCell;
-#[cfg(target_os = "linux")]
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,14 +23,11 @@ const SCROLL_STEP: f32 = 1.1;
 const PIXELS_PER_NOTCH: f32 = 60.0;
 const RESIZE_TICK: std::time::Duration = std::time::Duration::from_millis(8);
 const SCROLL_COMMIT: std::time::Duration = std::time::Duration::from_millis(200);
-#[cfg(target_os = "linux")]
 const PIN_CACHE_CAPACITY: usize = 2;
-#[cfg(target_os = "linux")]
 const PIN_CACHE_SIZE: (f32, f32) = (360.0, 240.0);
 
 static PIN_SEQ: AtomicU64 = AtomicU64::new(0);
 
-#[cfg(target_os = "linux")]
 thread_local! {
     static PIN_CACHE: RefCell<VecDeque<WindowHandle<PinnedView>>> =
         const { RefCell::new(VecDeque::new()) };
@@ -71,8 +66,10 @@ struct PinReveal {
     source_preview: Option<String>,
 }
 
-#[cfg(target_os = "linux")]
 pub fn pre_create(cx: &mut App) {
+    if !platform::pin_cache_enabled() {
+        return;
+    }
     for _ in 0..PIN_CACHE_CAPACITY {
         let seq = PIN_SEQ.fetch_add(1, Ordering::Relaxed);
         let title = format!("qol-shot-pin-{}-{seq}", std::process::id());
@@ -124,8 +121,9 @@ pub fn open(
         origin: (origin.x.to_f64(), origin.y.to_f64()),
         source_preview,
     };
-    #[cfg(target_os = "linux")]
-    if cache::open(content.clone(), origin, dismiss, reveal.clone(), cx) {
+    if platform::pin_cache_enabled()
+        && cache::open(content.clone(), origin, dismiss, reveal.clone(), cx)
+    {
         return true;
     }
     let seq = PIN_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -153,8 +151,7 @@ pub fn open(
         eprintln!("[qol-shot] pinned window open failed");
         return false;
     };
-    #[cfg(target_os = "linux")]
-    qol_gpui::popup_window::hide_invisible(&title);
+    platform::after_pin_open(&title);
     qol_runtime::probe!(
         "SHOT_PIN_OPEN",
         "path=create ms={}",
@@ -192,12 +189,10 @@ fn open_window(
             view
         })
         .ok()?;
-    #[cfg(target_os = "linux")]
     let _ = handle.update(cx, |view, _window, _cx| view.handle = Some(handle));
     Some(handle)
 }
 
-#[cfg(target_os = "linux")]
 mod cache {
     use super::*;
 
@@ -320,17 +315,13 @@ pub struct PinnedView {
     reveal_generation: u64,
     scheduled_reveal_generation: Option<u64>,
     pending_reveal: Option<PinReveal>,
-    #[cfg(target_os = "linux")]
     cacheable: bool,
-    #[cfg(target_os = "linux")]
     handle: Option<WindowHandle<PinnedView>>,
     focus_handle: FocusHandle,
 }
 
 impl PinnedView {
     fn new(content: PinnedContent, spec: PinnedWindowSpec, cx: &mut Context<Self>) -> Self {
-        #[cfg(not(target_os = "linux"))]
-        let _ = spec.cacheable;
         let ratio = if content.size.1 > 0.0 {
             content.size.0 / content.size.1
         } else {
@@ -359,9 +350,7 @@ impl PinnedView {
             reveal_generation,
             scheduled_reveal_generation: None,
             pending_reveal: spec.reveal,
-            #[cfg(target_os = "linux")]
             cacheable: spec.cacheable,
-            #[cfg(target_os = "linux")]
             handle: None,
             focus_handle: cx.focus_handle(),
         }
@@ -618,8 +607,8 @@ impl PinnedView {
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         platform::pin_release_focus(&self.title);
         qol_gpui::popup_window::restore_composite(&self.title);
-        #[cfg(target_os = "linux")]
-        if self.dismiss == PinnedDismiss::Remove && self.cacheable {
+        if platform::pin_cache_enabled() && self.dismiss == PinnedDismiss::Remove && self.cacheable
+        {
             self.recycle(window, cx);
             return;
         }
@@ -629,7 +618,6 @@ impl PinnedView {
         }
     }
 
-    #[cfg(target_os = "linux")]
     fn recycle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(handle) = self.handle else {
             window.remove_window();

@@ -16,6 +16,18 @@ pub use recording::{
     stop_capture,
 };
 pub use selector::{select_region, select_region_in_app};
+
+pub fn pre_create_selector(_cx: &mut gpui::App) {}
+
+pub fn pre_create_pins(cx: &mut gpui::App) {
+    crate::pinned::pre_create(cx);
+}
+
+pub fn pin_cache_enabled() -> bool {
+    false
+}
+
+pub fn after_pin_open(_title: &str) {}
 pub use status::{hide_capture_status, show_capture_status};
 pub use system::{
     capture_frozen_frame, configure_pin_window, configure_preview_window, grab_preview_rgba,

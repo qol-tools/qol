@@ -1,5 +1,5 @@
-use crate::discovery::macos::ffi;
-use crate::discovery::macos::ffi::{
+use crate::discovery::platform::macos::ffi;
+use crate::discovery::platform::macos::ffi::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFDataGetBytePtr, CFDataGetLength, CFDictionaryRef,
     CFRelease, CGDataProviderCopyData, CGImageGetBytesPerRow, CGImageGetDataProvider,
     CGImageGetHeight, CGImageGetWidth, CGImageRef, K_CG_NULL_WINDOW_ID,
@@ -31,10 +31,18 @@ pub fn capture_frontmost_preview(wid: u32, max_w: usize, max_h: usize) -> Option
 }
 
 pub fn get_app_icons(windows: &[WindowInfo]) -> HashMap<String, RgbaImage> {
+    let mut icons: HashMap<String, RgbaImage> = windows
+        .iter()
+        .filter_map(|window| {
+            window
+                .icon
+                .as_ref()
+                .map(|icon| (window.app_name.clone(), icon.clone()))
+        })
+        .collect();
     let needed: std::collections::HashSet<&str> =
         windows.iter().map(|w| w.app_name.as_str()).collect();
     let app_pids = resolve_app_pids();
-    let mut icons = HashMap::new();
     for (name, pid) in &app_pids {
         if !needed.contains(name.as_str()) {
             continue;

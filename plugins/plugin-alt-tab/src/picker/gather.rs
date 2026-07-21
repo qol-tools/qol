@@ -544,8 +544,6 @@ mod preview_target_selection_tests {
             app_name: String::new(),
             preview_path: None,
             icon: None,
-            x: 0.0,
-            y: 0.0,
             width: 0.0,
             height: 0.0,
             is_minimized: minimized,

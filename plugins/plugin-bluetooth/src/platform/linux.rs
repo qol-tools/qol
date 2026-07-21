@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
-use std::process::Command;
 use std::sync::{mpsc, LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
@@ -310,24 +309,7 @@ fn discovery_state() -> Result<DiscoveryState> {
         .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))
 }
 
-pub fn open_settings() -> Result<()> {
-    qol_apps::desktop_integration::open_plugin_settings(crate::PLUGIN_ID)
-        .context("failed to open Bluetooth settings URL")
-}
-
-pub fn run_settings_panel() -> Result<()> {
-    let runtime = qol_gpui::settings_panel::SettingsRuntime::new(settings_query)
-        .with_input_action(settings_action)
-        .poll_every(Duration::from_millis(500));
-    qol_gpui::settings_panel::run_plugin_settings(
-        crate::PLUGIN_ID,
-        "Bluetooth Settings",
-        crate::config::contract(),
-        runtime,
-    )
-}
-
-fn settings_query(query: &str) -> std::result::Result<serde_json::Value, String> {
+pub fn settings_query(query: &str) -> std::result::Result<serde_json::Value, String> {
     match core_daemon::send_request(
         &DAEMON_CONFIG,
         query,
@@ -342,7 +324,7 @@ fn settings_query(query: &str) -> std::result::Result<serde_json::Value, String>
     }
 }
 
-fn settings_action(action: &str, input: serde_json::Value) -> std::result::Result<(), String> {
+pub fn settings_action(action: &str, input: serde_json::Value) -> std::result::Result<(), String> {
     match core_daemon::send_request(&DAEMON_CONFIG, action, input, Duration::from_secs(2)) {
         Ok(DaemonResponse::Handled { .. }) => Ok(()),
         Ok(DaemonResponse::Error { message }) => Err(message),
@@ -353,13 +335,6 @@ fn settings_action(action: &str, input: serde_json::Value) -> std::result::Resul
 
 fn current_managed_device_options() -> Result<Vec<DeviceOption>> {
     Ok(managed_device_options(&list_devices()?))
-}
-
-fn spawn_settings_panel() -> Result<()> {
-    let executable = std::env::current_exe().context("failed to locate Bluetooth executable")?;
-    let mut command = Command::new(executable);
-    command.arg(crate::SETTINGS_SURFACE_ARG);
-    qol_process::spawn_detached(&mut command).context("failed to launch native Bluetooth settings")
 }
 
 pub fn run_daemon(config: ReconnectConfig) -> Result<()> {
@@ -1084,9 +1059,9 @@ async fn daemon_loop(
                     return Ok(());
                 }
                 if matches!(command, DaemonCommand::Settings) {
-                    if let Err(error) = spawn_settings_panel() {
+                    if let Err(error) = crate::settings::spawn_panel() {
                         eprintln!("failed to launch native Bluetooth settings: {error:#}");
-                        if let Err(error) = open_settings() {
+                        if let Err(error) = crate::settings::open_browser() {
                             eprintln!("failed to open Bluetooth settings fallback: {error:#}");
                         }
                     }

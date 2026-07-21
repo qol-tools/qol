@@ -378,20 +378,11 @@ fn present_capture(output_file: &Path, completion: crate::completion::PreviewCom
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn show_preview(
     output_file: &Path,
     completion: crate::completion::PreviewCompletion,
 ) -> Result<()> {
     crate::preview::show_saved(output_file, completion)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn show_preview(
-    _output_file: &Path,
-    _completion: crate::completion::PreviewCompletion,
-) -> Result<()> {
-    Err(anyhow!("preview is not supported on this platform"))
 }
 
 #[cfg(test)]

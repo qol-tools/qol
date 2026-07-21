@@ -7,7 +7,26 @@ use objc2::runtime::AnyObject;
 use objc2_app_kit::{NSApplication, NSEvent, NSEventMask, NSWindow};
 use objc2_foundation::MainThreadMarker;
 
-use super::super::{click_is_outside, ScreenFrame, ScreenPoint};
+#[derive(Clone, Copy)]
+struct ScreenPoint {
+    x: f64,
+    y: f64,
+}
+
+#[derive(Clone, Copy)]
+struct ScreenFrame {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+fn click_is_outside(frame: ScreenFrame, point: ScreenPoint) -> bool {
+    point.x < frame.x
+        || point.x > frame.x + frame.width
+        || point.y < frame.y
+        || point.y > frame.y + frame.height
+}
 
 pub(crate) struct Monitor {
     token: Retained<AnyObject>,
@@ -68,4 +87,38 @@ fn find_visible_window(title: &str) -> Option<Retained<NSWindow>> {
             win.title().to_string() == title && win.alphaValue() > 0.0 && !win.ignoresMouseEvents()
         })
         .last()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{click_is_outside, ScreenFrame, ScreenPoint};
+
+    fn sample_frame() -> ScreenFrame {
+        ScreenFrame {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        }
+    }
+
+    #[test]
+    fn point_classification_respects_frame_edges() {
+        let cases = [
+            (10.0, 20.0, false),
+            (60.0, 45.0, false),
+            (110.0, 70.0, false),
+            (9.9, 30.0, true),
+            (200.0, 30.0, true),
+            (30.0, 19.9, true),
+            (30.0, 70.1, true),
+        ];
+        for (x, y, expected) in cases {
+            assert_eq!(
+                click_is_outside(sample_frame(), ScreenPoint { x, y }),
+                expected,
+                "point=({x}, {y})"
+            );
+        }
+    }
 }

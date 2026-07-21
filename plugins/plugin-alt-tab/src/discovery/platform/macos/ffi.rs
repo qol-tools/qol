@@ -61,8 +61,6 @@ extern "C" {
     pub(crate) fn CGImageGetWidth(image: CGImageRef) -> usize;
     pub(crate) fn CGImageGetHeight(image: CGImageRef) -> usize;
     pub(crate) fn CGImageGetBytesPerRow(image: CGImageRef) -> usize;
-    #[allow(dead_code)]
-    pub(crate) fn CGImageGetBitsPerPixel(image: CGImageRef) -> usize;
     pub(crate) fn CGImageGetDataProvider(image: CGImageRef) -> CGDataProviderRef;
     pub(crate) fn CGDataProviderCopyData(provider: CGDataProviderRef) -> CFDataRef;
     fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CGRect) -> bool;

@@ -6,12 +6,7 @@ pub struct WindowInfo {
     pub title: String,
     pub app_name: String,
     pub preview_path: Option<String>,
-    #[allow(dead_code)] // read on Linux, not on macOS
     pub icon: Option<RgbaImage>,
-    #[allow(dead_code)] // discovery geometry; retained metadata, no current consumer
-    pub x: f32,
-    #[allow(dead_code)]
-    pub y: f32,
     pub width: f32,
     pub height: f32,
     pub is_minimized: bool,
@@ -31,46 +26,16 @@ pub trait WindowDiscovery {
 }
 
 #[derive(Debug)]
-pub enum DiscoveryError {
-    #[allow(dead_code)] // only constructed on Windows / unsupported hosts
-    Unsupported,
-}
+pub struct DiscoveryError;
 
 impl std::fmt::Display for DiscoveryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DiscoveryError::Unsupported => {
-                write!(f, "window discovery is not implemented on this platform")
-            }
-        }
+        write!(f, "window discovery is not implemented on this platform")
     }
 }
 
 impl std::error::Error for DiscoveryError {}
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "macos")]
-pub(crate) mod macos;
-#[cfg(target_os = "windows")]
-mod windows;
+pub(crate) mod platform;
 
-#[cfg(target_os = "linux")]
-pub use linux::Platform;
-#[cfg(target_os = "macos")]
-pub use macos::Platform;
-#[cfg(target_os = "windows")]
-pub use windows::Platform;
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-mod unsupported {
-    use super::{DiscoveryError, WindowDiscovery, WindowInfo};
-    pub struct Platform;
-    impl WindowDiscovery for Platform {
-        fn visible_windows(&self, _: bool) -> Result<Vec<WindowInfo>, DiscoveryError> {
-            Err(DiscoveryError::Unsupported)
-        }
-    }
-}
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-pub use unsupported::Platform;
+pub use platform::Platform;

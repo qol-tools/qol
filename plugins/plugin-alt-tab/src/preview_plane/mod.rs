@@ -1,6 +1,5 @@
 use serde::Serialize;
 
-mod backends;
 mod platform;
 
 const DEFAULT_TTL_MS: u64 = 30_000;

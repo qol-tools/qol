@@ -1,4 +1,4 @@
-use super::{DiscoveryError, WindowDiscovery, WindowInfo};
+use super::super::{DiscoveryError, WindowDiscovery, WindowInfo};
 use qol_app_icon::RgbaImage;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -195,7 +195,7 @@ fn get_open_windows_with(session: &DiscoverySession) -> Vec<WindowInfo> {
     }
     let filtered = filter_normal_windows(&session.conn, &ids, &session.atoms);
     let (mut windows, above, focused) =
-        collect_window_info(&session.conn, session.root, &filtered, &session.atoms);
+        collect_window_info(&session.conn, &filtered, &session.atoms);
     let active = read_active_window(&session.conn, session.root, &session.atoms);
     order_picker(&mut windows, &above, &focused, active);
 
@@ -290,14 +290,13 @@ struct ResolvedProps {
 
 fn collect_window_info(
     conn: &impl Connection,
-    root: u32,
     ids: &[u32],
     atoms: &AtomMap,
 ) -> (Vec<WindowInfo>, Vec<bool>, Vec<bool>) {
     let hidden_atom = atoms.get("_NET_WM_STATE_HIDDEN").copied().unwrap_or(0);
     let above_atom = atoms.get("_NET_WM_STATE_ABOVE").copied().unwrap_or(0);
     let focused_atom = atoms.get("_NET_WM_STATE_FOCUSED").copied().unwrap_or(0);
-    let mut props = pipeline_and_resolve(conn, root, ids, atoms);
+    let mut props = pipeline_and_resolve(conn, ids, atoms);
     let mut windows = Vec::with_capacity(ids.len());
     let mut above = Vec::with_capacity(ids.len());
     let mut focused = Vec::with_capacity(ids.len());
@@ -316,12 +315,7 @@ fn collect_window_info(
     (windows, above, focused)
 }
 
-fn pipeline_and_resolve(
-    conn: &impl Connection,
-    root: u32,
-    ids: &[u32],
-    atoms: &AtomMap,
-) -> ResolvedProps {
+fn pipeline_and_resolve(conn: &impl Connection, ids: &[u32], atoms: &AtomMap) -> ResolvedProps {
     let state_atom = atoms.get("_NET_WM_STATE").copied();
     let net_name_atom = atoms.get("_NET_WM_NAME").copied();
     let wm_class_atom = atoms.get("WM_CLASS").copied().unwrap_or(0);
@@ -342,18 +336,12 @@ fn pipeline_and_resolve(
                 .ok()
         }),
         geom: {
-            let roots: Vec<_> = ids
-                .iter()
-                .map(|&id| conn.translate_coordinates(id, root, 0, 0).ok())
-                .collect();
             let geometries: Vec<_> = ids.iter().map(|&id| conn.get_geometry(id).ok()).collect();
             geometries
                 .into_iter()
-                .zip(roots)
-                .map(|(geom, root)| {
+                .map(|geom| {
                     let geom = geom.and_then(|c| c.reply().ok())?;
-                    let root = root.and_then(|c| c.reply().ok());
-                    Some(WindowGeometry::from_replies(&geom, root.as_ref()))
+                    Some(WindowGeometry::from_reply(&geom))
                 })
                 .collect()
         },
@@ -394,8 +382,6 @@ fn build_window_info(
             app_name,
             preview_path: None,
             icon: None,
-            x: props.geom[idx].as_ref().map_or(0.0, |r| r.x),
-            y: props.geom[idx].as_ref().map_or(0.0, |r| r.y),
             width: props.geom[idx].as_ref().map_or(0.0, |r| r.width),
             height: props.geom[idx].as_ref().map_or(0.0, |r| r.height),
             is_minimized,
@@ -407,37 +393,17 @@ fn build_window_info(
 
 #[derive(Clone, Copy)]
 struct WindowGeometry {
-    x: f32,
-    y: f32,
     width: f32,
     height: f32,
 }
 
 impl WindowGeometry {
-    fn from_replies(
-        geom: &x11rb::protocol::xproto::GetGeometryReply,
-        root: Option<&x11rb::protocol::xproto::TranslateCoordinatesReply>,
-    ) -> Self {
-        Self::from_parts(
-            geom.x,
-            geom.y,
-            geom.width,
-            geom.height,
-            root.map(|r| (r.dst_x, r.dst_y)),
-        )
+    fn from_reply(geom: &x11rb::protocol::xproto::GetGeometryReply) -> Self {
+        Self::from_parts(geom.width, geom.height)
     }
 
-    fn from_parts(
-        local_x: i16,
-        local_y: i16,
-        width: u16,
-        height: u16,
-        root: Option<(i16, i16)>,
-    ) -> Self {
-        let (x, y) = root.unwrap_or((local_x, local_y));
+    fn from_parts(width: u16, height: u16) -> Self {
         Self {
-            x: x as f32,
-            y: y as f32,
             width: width as f32,
             height: height as f32,
         }
@@ -668,16 +634,6 @@ mod tests {
         assert_icon(cache.get(1, ""), 9);
     }
 
-    #[test]
-    fn root_translation_wins_over_parent_relative_geometry() {
-        let geom = WindowGeometry::from_parts(0, 0, 1920, 1080, Some((2560, 0)));
-
-        assert_eq!(geom.x, 2560.0);
-        assert_eq!(geom.y, 0.0);
-        assert_eq!(geom.width, 1920.0);
-        assert_eq!(geom.height, 1080.0);
-    }
-
     type NextMruCase = (
         &'static str,
         &'static [u32],
@@ -790,15 +746,5 @@ mod tests {
             eprintln!("[live] slot {i}: {:?} id={:#x}", w.title, w.id);
         }
         assert!(!windows.is_empty(), "expected at least one live window");
-    }
-
-    #[test]
-    fn geometry_falls_back_to_local_position_without_translation() {
-        let geom = WindowGeometry::from_parts(12, 34, 800, 600, None);
-
-        assert_eq!(geom.x, 12.0);
-        assert_eq!(geom.y, 34.0);
-        assert_eq!(geom.width, 800.0);
-        assert_eq!(geom.height, 600.0);
     }
 }

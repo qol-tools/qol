@@ -16,6 +16,11 @@ impl Platform {
 
 const UNSUPPORTED: &str = "removeapp: not implemented on this platform yet";
 
+pub(crate) fn metadata_identity(meta: &std::fs::Metadata) -> (Option<u64>, Option<u64>) {
+    use std::os::unix::fs::MetadataExt;
+    (Some(meta.dev()), Some(meta.ino()))
+}
+
 impl AppPlatform for Platform {
     fn installed_apps(&self) -> Result<Vec<InstalledApp>> {
         Err(anyhow!(UNSUPPORTED))

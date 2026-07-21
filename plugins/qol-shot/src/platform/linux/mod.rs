@@ -38,21 +38,36 @@ use window::{configure_selector_window, prepare_selector_window};
 const MIN_DETECTED_TARGET_PX: i32 = 24;
 
 thread_local! {
-    static SELECTOR_CACHE: crate::region_selector::SelectorCache =
-        crate::region_selector::SelectorCache::default();
+    static SELECTOR_CACHE: crate::region_selector::platform::SelectorCache =
+        crate::region_selector::platform::SelectorCache::default();
 }
 
 pub fn pre_create_selector(cx: &mut gpui::App) {
     let bounds = selector_bounds(None);
     let selector = selector_window(bounds, None, None, None, None, None);
     SELECTOR_CACHE.with(|cache| {
-        let Some(title) =
-            crate::region_selector::pre_create_cached(cache, selector, CaptureKind::Screenshot, cx)
-        else {
+        let Some(title) = crate::region_selector::platform::pre_create_cached(
+            cache,
+            selector,
+            CaptureKind::Screenshot,
+            cx,
+        ) else {
             return;
         };
         prepare_selector_window(&title, rect_from_bounds(bounds));
     });
+}
+
+pub fn pre_create_pins(cx: &mut gpui::App) {
+    crate::pinned::pre_create(cx);
+}
+
+pub fn pin_cache_enabled() -> bool {
+    true
+}
+
+pub fn after_pin_open(title: &str) {
+    qol_gpui::popup_window::hide_invisible(title);
 }
 
 pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Result<Option<Rect>> {
@@ -133,7 +148,14 @@ fn open_region_selector_with_sender(
             configure_selector_window(title, reveal_bounds);
         });
         let title = SELECTOR_CACHE.with(|cache| {
-            crate::region_selector::open_cached(cache, &mut tx, &mut selector, kind, reveal, cx)
+            crate::region_selector::platform::open_cached(
+                cache,
+                &mut tx,
+                &mut selector,
+                kind,
+                reveal,
+                cx,
+            )
         });
         if title.is_some() {
             cx.activate(true);
@@ -191,7 +213,7 @@ fn selector_window(
             focus: true,
         },
         crate::region_selector::SelectorWindowSources {
-            map_rect: crate::region_selector::identity_rect_mapper(),
+            map_rect: crate::region_selector::platform::identity_rect_mapper(),
             global_pointer: None,
             cancel_signal: Some(Rc::new(qol_gpui::platform::is_escape_held)),
             active_bounds,

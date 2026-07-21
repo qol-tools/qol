@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RevealSource {
     Automatic,
-    #[cfg(target_os = "linux")]
     Notification,
     PreviewAction,
     Toast,
@@ -16,7 +15,6 @@ impl RevealSource {
     fn label(self) -> &'static str {
         match self {
             Self::Automatic => "automatic",
-            #[cfg(target_os = "linux")]
             Self::Notification => "notification",
             Self::PreviewAction => "preview-action",
             Self::Toast => "toast",

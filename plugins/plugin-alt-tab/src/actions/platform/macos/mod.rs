@@ -1,7 +1,7 @@
 use super::CloseOutcome;
-use crate::discovery::macos::ax::{ax_find_window, ax_find_window_brute_force};
-use crate::discovery::macos::ffi;
-use crate::discovery::macos::ffi::{
+use crate::discovery::platform::macos::ax::{ax_find_window, ax_find_window_brute_force};
+use crate::discovery::platform::macos::ffi;
+use crate::discovery::platform::macos::ffi::{
     copy_window_list_timed, CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryRef, CFRelease,
     K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LAYER_NORMAL, K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
     K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
@@ -131,7 +131,8 @@ pub fn activate_window(window_id: u32) {
                 }
                 #[cfg(debug_assertions)]
                 if !matches!(state, FrontState::Gone) {
-                    let focused = unsafe { crate::discovery::macos::ax::ax_focused_window_id(pid) };
+                    let focused =
+                        unsafe { crate::discovery::platform::macos::ax::ax_focused_window_id(pid) };
                     if !key_focus_sampled {
                         key_focus_sampled = true;
                         qol_runtime::probe!(
@@ -638,7 +639,7 @@ mod tests {
     use super::{
         classify_front_state, front_before_other_apps, should_quit_on_close_fallback, FrontState,
     };
-    use crate::discovery::macos::ffi::K_CG_WINDOW_LAYER_NORMAL;
+    use crate::discovery::platform::macos::ffi::K_CG_WINDOW_LAYER_NORMAL;
     use qol_gpui::platform::ReassertStep;
 
     type Case = (&'static str, u32, i32, &'static [(u32, i32)], bool);

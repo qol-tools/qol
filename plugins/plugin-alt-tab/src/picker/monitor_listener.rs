@@ -4,13 +4,15 @@ use std::time::Duration;
 
 use gpui::*;
 use qol_gpui::monitor::MonitorTracker;
-use qol_gpui::protocol::{RuntimeEvent, RuntimeEventKind};
+use qol_gpui::protocol::RuntimeEvent;
 use qol_gpui::window::PopupPlacement;
 
 use super::run::{SharedPreviewCache, WindowCache};
 use crate::app::PICKER_VISIBLE;
 use crate::discovery::{Platform, WindowDiscovery};
 use crate::{PickerWindowState, SharedIconCache};
+
+mod platform;
 
 const DATA_REFRESH_DELAY_MS: u64 = 75;
 
@@ -111,28 +113,8 @@ fn request_refresh(request: RefreshRequest) {
 }
 
 fn spawn_data_refresh_listener_thread() {
-    std::thread::spawn(data_refresh_listener_loop);
+    std::thread::spawn(platform::data_refresh_listener_loop);
 }
-
-#[cfg(unix)]
-fn data_refresh_listener_loop() {
-    let client = qol_gpui::PlatformStateClient::from_env();
-    let Some(mut subscription) = client.subscribe(vec![
-        RuntimeEventKind::WindowListChanged,
-        RuntimeEventKind::FocusChanged,
-    ]) else {
-        return;
-    };
-    while let Some(event) = subscription.next_event() {
-        match event {
-            RuntimeEvent::FocusChanged { .. } => request_previous_frontmost_preview_refresh(),
-            _ => request_data_refresh(),
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn data_refresh_listener_loop() {}
 
 fn spawn_data_refresh_router(
     cx: &mut App,

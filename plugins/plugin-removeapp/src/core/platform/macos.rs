@@ -152,6 +152,11 @@ fn trash_path(path: &Path) -> std::result::Result<(), String> {
 const BREW_TIMEOUT: Duration = Duration::from_secs(5);
 const STDERR_CAP: usize = 4096;
 
+pub(crate) fn metadata_identity(meta: &std::fs::Metadata) -> (Option<u64>, Option<u64>) {
+    use std::os::unix::fs::MetadataExt;
+    (Some(meta.dev()), Some(meta.ino()))
+}
+
 fn resolve_brew(candidates: &[PathBuf]) -> Option<PathBuf> {
     candidates.iter().find(|p| p.exists()).cloned()
 }

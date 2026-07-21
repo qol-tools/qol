@@ -1,4 +1,4 @@
-use super::{DiscoveryError, WindowDiscovery, WindowInfo};
+use super::super::{DiscoveryError, WindowDiscovery, WindowInfo};
 use ffi::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryRef, CFRelease,
     CGWindowListCopyWindowInfo, K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
@@ -48,8 +48,6 @@ impl CgWindow {
             app_name: self.app_name,
             preview_path: None,
             icon: None,
-            x: self.x,
-            y: self.y,
             width: self.w,
             height: self.h,
             is_minimized,
@@ -63,8 +61,6 @@ impl CgWindow {
             app_name: self.app_name.clone(),
             preview_path: None,
             icon: None,
-            x: self.x,
-            y: self.y,
             width: self.w,
             height: self.h,
             is_minimized,

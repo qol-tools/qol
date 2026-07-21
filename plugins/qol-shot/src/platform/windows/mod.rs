@@ -7,6 +7,18 @@ use crate::platform::CaptureSession;
 use crate::space::CaptureKind;
 use crate::{Config, Monitor, Rect};
 
+pub fn pre_create_selector(_cx: &mut gpui::App) {}
+
+pub fn pre_create_pins(cx: &mut gpui::App) {
+    crate::pinned::pre_create(cx);
+}
+
+pub fn pin_cache_enabled() -> bool {
+    false
+}
+
+pub fn after_pin_open(_title: &str) {}
+
 pub fn select_region(
     _kind: CaptureKind,
     _frozen_frame: Option<FrozenFrame>,

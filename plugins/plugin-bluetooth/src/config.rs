@@ -2,8 +2,7 @@ use serde::{Deserialize, Serialize};
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 
-#[cfg(target_os = "linux")]
-pub(crate) fn contract() -> &'static str {
+pub fn contract() -> &'static str {
     CONFIG_CONTRACT
 }
 

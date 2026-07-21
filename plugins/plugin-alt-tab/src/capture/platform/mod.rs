@@ -15,9 +15,6 @@ use macos as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-compile_error!("plugin-alt-tab capture: unsupported target OS");
-
 #[cfg(not(target_os = "macos"))]
 mod shots_stub;
 

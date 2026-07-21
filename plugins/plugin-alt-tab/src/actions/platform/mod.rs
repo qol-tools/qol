@@ -12,9 +12,6 @@ use macos as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-compile_error!("plugin-alt-tab actions: unsupported target OS");
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CloseWindowResult {
     ClosedWindow,

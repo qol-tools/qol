@@ -54,17 +54,20 @@ impl IdentitySnapshot {
         let canonical_parent = path.parent().and_then(|p| std::fs::canonicalize(p).ok());
         let ancestor_symlink = ancestor_has_symlink(path);
         match std::fs::symlink_metadata(path) {
-            Ok(m) => IdentitySnapshot {
-                exists: true,
-                is_symlink: m.file_type().is_symlink(),
-                is_dir: m.is_dir(),
-                is_file: m.is_file(),
-                dev: metadata_dev(&m),
-                ino: metadata_ino(&m),
-                file_name,
-                canonical_parent,
-                ancestor_symlink,
-            },
+            Ok(m) => {
+                let (dev, ino) = platform::metadata_identity(&m);
+                IdentitySnapshot {
+                    exists: true,
+                    is_symlink: m.file_type().is_symlink(),
+                    is_dir: m.is_dir(),
+                    is_file: m.is_file(),
+                    dev,
+                    ino,
+                    file_name,
+                    canonical_parent,
+                    ancestor_symlink,
+                }
+            }
             Err(_) => IdentitySnapshot {
                 file_name,
                 canonical_parent,
@@ -77,28 +80,6 @@ impl IdentitySnapshot {
     pub fn matches(&self, path: &std::path::Path) -> bool {
         *self == IdentitySnapshot::capture(path)
     }
-}
-
-#[cfg(unix)]
-fn metadata_dev(meta: &std::fs::Metadata) -> Option<u64> {
-    use std::os::unix::fs::MetadataExt;
-    Some(meta.dev())
-}
-
-#[cfg(not(unix))]
-fn metadata_dev(_meta: &std::fs::Metadata) -> Option<u64> {
-    None
-}
-
-#[cfg(unix)]
-fn metadata_ino(meta: &std::fs::Metadata) -> Option<u64> {
-    use std::os::unix::fs::MetadataExt;
-    Some(meta.ino())
-}
-
-#[cfg(not(unix))]
-fn metadata_ino(_meta: &std::fs::Metadata) -> Option<u64> {
-    None
 }
 
 fn ancestor_has_symlink(path: &Path) -> bool {

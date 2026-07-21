@@ -1,5 +1,6 @@
-use crate::preview_plane::backends::cinnamon_shell;
 use crate::preview_plane::PreviewPlanePayload;
+
+mod cinnamon_shell;
 
 pub(crate) fn show_async(payload: PreviewPlanePayload) {
     if let Some(reason) = cinnamon_shell::disabled_reason() {

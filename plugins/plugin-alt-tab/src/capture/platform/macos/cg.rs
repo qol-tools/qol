@@ -1,5 +1,5 @@
 use super::extract_cgimage_pixels;
-use crate::discovery::macos::ffi::{
+use crate::discovery::platform::macos::ffi::{
     CFRelease, CGWindowListCreateImage, CG_RECT_NULL, K_CG_WINDOW_IMAGE_BOUNDS_IGNORE_FRAMING,
     K_CG_WINDOW_IMAGE_NOMINAL_RESOLUTION, K_CG_WINDOW_LIST_OPTION_INCLUDING_WINDOW,
 };

@@ -5,7 +5,6 @@ use qol_headless::{
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::Duration;
 
 use crate::actions::ShotAction;
@@ -29,17 +28,10 @@ fn app(binary_name: &'static str) -> HeadlessApp {
     with_preview_command(app, binary_name).doctor_checks(doctor_checks())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn with_preview_command(app: HeadlessApp, binary_name: &'static str) -> HeadlessApp {
     app.command(preview_command(binary_name))
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn with_preview_command(app: HeadlessApp, _binary_name: &'static str) -> HeadlessApp {
-    app
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn preview_command(binary_name: &'static str) -> Command {
     Command::new("preview")
         .about("Open the screenshot preview window.")
@@ -76,7 +68,6 @@ fn record_command(binary_name: &'static str) -> Command {
         })
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn forward_host_fallback_record_to_daemon() -> bool {
     if std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_none()
         || std::env::var_os(qol_conventions::ENV_DAEMON_REPLACE_EXISTING).is_some()
@@ -86,11 +77,6 @@ fn forward_host_fallback_record_to_daemon() -> bool {
 
     qol_runtime::probe!("SHOT_RECORD_FORWARD", "action=record reason=host-fallback");
     crate::daemon::wait_and_send_action("record", Duration::from_millis(4_000))
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn forward_host_fallback_record_to_daemon() -> bool {
-    false
 }
 
 fn screenshot_command(binary_name: &'static str) -> Command {
