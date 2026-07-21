@@ -3,7 +3,7 @@ id = "plugin-bluetooth"
 uid = "c30275fa-eb76-42af-bdce-2e7596976fba"
 name = "Bluetooth"
 description = "Reliably reconnect selected Bluetooth devices through BlueZ"
-version = "0.6.1"
+version = "0.7.0"
 author = "KMRH47"
 platforms = ["linux"]
 
