@@ -44,6 +44,7 @@ const DEVICE_CONNECT_RETRY_DELAY: Duration = Duration::from_millis(1500);
 const EXPLICIT_DEVICE_ACTION_TIMEOUT: Duration = Duration::from_secs(45);
 const BREDR_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(15);
 const AUDIO_SINK_PROFILE: u16 = 0x110b;
+const PIPEWIRE_SELF_HEAL_SETTLE: Duration = Duration::from_millis(750);
 
 struct DiscoverySession {
     deadline: Instant,
@@ -741,7 +742,35 @@ async fn ensure_audio_playback_profile(
     mode: ConnectionMode,
 ) -> Result<()> {
     connect_audio_profile(device, address, mode).await?;
-    activate_pipewire_a2dp(address, mode).await
+    if activate_pipewire_a2dp(address, mode).await.is_ok() {
+        return Ok(());
+    }
+    heal_stale_pipewire_transport(device, address, mode).await?;
+    let _ = connect_audio_profile(device, address, mode).await;
+    activate_pipewire_a2dp(address, mode)
+        .await
+        .with_context(|| {
+            format!("PipeWire A2DP activation for {address} still failed after a self-heal retry")
+        })
+}
+
+async fn heal_stale_pipewire_transport(
+    device: &Device,
+    address: Address,
+    mode: ConnectionMode,
+) -> Result<()> {
+    let profile = Uuid::from_u16(AUDIO_SINK_PROFILE);
+    device.disconnect_profile(&profile).await.with_context(|| {
+        format!("BlueZ failed to disconnect the A2DP profile for {address} during self-heal")
+    })?;
+    qol_runtime::probe!(
+        "BLUETOOTH_PROFILE_REPAIR",
+        "device={} stage=self_heal mode={}",
+        redacted(address),
+        mode.label(),
+    );
+    tokio::time::sleep(PIPEWIRE_SELF_HEAL_SETTLE).await;
+    Ok(())
 }
 
 async fn activate_pipewire_a2dp(address: Address, mode: ConnectionMode) -> Result<()> {
