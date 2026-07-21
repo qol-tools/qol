@@ -170,6 +170,8 @@ pub fn visible_windows_by_title_prefix(prefix: &str) -> usize {
 }
 
 pub fn hide_for_capture(title: &str, window: &mut gpui::Window) -> bool {
+    #[cfg(not(debug_assertions))]
+    let _ = title;
     let Ok(handle) = HasWindowHandle::window_handle(window) else {
         qol_runtime::probe!("HIDE_WIN_CAPTURE", "title={title} result=handle_error");
         return false;
