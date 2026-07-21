@@ -1323,6 +1323,9 @@ impl Render for SettingsPanelView {
                 div()
                     .text_sm()
                     .text_color(rgb(self.palette.label_text))
+                    .on_mouse_down(MouseButton::Left, |_, window, _| {
+                        window.start_window_move();
+                    })
                     .child(self.panel.heading.clone()),
             )
             .children(items)
