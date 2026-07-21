@@ -74,6 +74,7 @@ impl SettingsPanelView {
         dismisser: SurfaceDismisser,
         cx: &mut Context<Self>,
     ) -> Self {
+        let selected = selected_row_index(&state.rows, panel.initial_config_key.as_deref());
         let row_bounds = (0..state.rows.len())
             .map(|_| Rc::new(Cell::new(None)))
             .collect();
@@ -87,7 +88,7 @@ impl SettingsPanelView {
             rows: state.rows,
             values: state.values,
             path: state.path,
-            selected: 0,
+            selected,
             scroll_offset: 0,
             body_max: state.body_max,
             active_control: None,
@@ -98,8 +99,24 @@ impl SettingsPanelView {
             palette: settings_panel_runtime(),
             focus_handle: cx.focus_handle(),
         };
+        view.sync_scroll();
         view.resume_runtime_poll(cx);
         view
+    }
+
+    pub(super) fn select_config_key(&mut self, config_key: &str, cx: &mut Context<Self>) {
+        let Some(index) = self
+            .rows
+            .iter()
+            .position(|row| row.config_key == config_key)
+        else {
+            return;
+        };
+        self.close_wheel_popup(cx);
+        self.active_control = None;
+        self.selected = index;
+        self.sync_scroll();
+        cx.notify();
     }
 
     pub(super) fn resume_runtime_poll(&mut self, cx: &mut Context<Self>) {
@@ -1521,12 +1538,18 @@ fn scroll_offset_for(rows: &[Row], selected: usize, offset: usize, body_max: f32
     offset
 }
 
+fn selected_row_index(rows: &[Row], config_key: Option<&str>) -> usize {
+    config_key
+        .and_then(|config_key| rows.iter().position(|row| row.config_key == config_key))
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         action_shows_spinner, binary_state_label, intent, is_number_seed, list_action_affordance,
-        list_intent, parsed_color, parsed_number, scroll_offset_for, visible_row_range, Intent,
-        ListIntent, Row, RowControl,
+        list_intent, parsed_color, parsed_number, scroll_offset_for, selected_row_index,
+        visible_row_range, Intent, ListIntent, Row, RowControl,
     };
     use crate::scroll_list::ScrollList;
 
@@ -1608,6 +1631,18 @@ mod tests {
                 "selected {selected} offset {offset}"
             );
         }
+    }
+
+    #[test]
+    fn initial_config_key_selects_the_matching_row() {
+        let mut rows = rows(&[false, false, false]);
+        rows[0].config_key = "alpha".into();
+        rows[1].config_key = "beta.value".into();
+        rows[2].config_key = "gamma".into();
+
+        assert_eq!(selected_row_index(&rows, Some("beta.value")), 1);
+        assert_eq!(selected_row_index(&rows, Some("missing")), 0);
+        assert_eq!(selected_row_index(&rows, None), 0);
     }
 
     #[test]

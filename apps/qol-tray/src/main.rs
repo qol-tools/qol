@@ -34,6 +34,9 @@ fn main() -> Result<()> {
     if let Some(code) = try_handle_cli_flag() {
         std::process::exit(code);
     }
+    if let Some(code) = try_settings_search_subcommand() {
+        std::process::exit(code);
+    }
     if let Some(code) = try_exec_subcommand() {
         std::process::exit(code);
     }
@@ -214,9 +217,32 @@ fn print_usage() {
     println!(
         "    qol-tray open <route>                 Open the app at an in-app route (e.g. shortcuts/add)"
     );
+    println!("    qol-tray settings-search              Search settings across QoL plugins");
     println!("    qol-tray --write-mode=<dev|prod>      Write mode.json then run the tray");
     println!("    qol-tray --version, -V                Print version and exit");
     println!("    qol-tray --help, -h                   Print this message and exit");
+}
+
+fn try_settings_search_subcommand() -> Option<i32> {
+    let args = std::env::args().collect::<Vec<_>>();
+    if args.get(1).map(String::as_str) != Some("settings-search") {
+        return None;
+    }
+    if args.len() != 2 {
+        eprintln!("Usage: qol-tray settings-search");
+        return Some(1);
+    }
+    Some(match qol_tray::settings_surface::request_search() {
+        Ok(true) => 0,
+        Ok(false) => {
+            eprintln!("Settings search is unavailable");
+            1
+        }
+        Err(error) => {
+            eprintln!("Failed to open settings search: {error}");
+            1
+        }
+    })
 }
 
 fn try_open_subcommand() -> Option<i32> {

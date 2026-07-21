@@ -6,6 +6,8 @@ use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection};
 use crate::scroll_list::ScrollList;
 use crate::status_indicator::StatusTone;
 
+use super::SettingsCatalogRow;
+
 pub(super) const LIST_MAX_VISIBLE: usize = 5;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -106,6 +108,34 @@ pub(super) fn rows_from_resolved(config: &ResolvedConfig) -> Vec<Row> {
         push_section_rows(&mut rows, section);
     }
     rows
+}
+
+pub(super) fn catalog_rows(config: &ResolvedConfig) -> Vec<SettingsCatalogRow> {
+    let mut rows = Vec::new();
+    for field in &config.fields {
+        push_catalog_row(&mut rows, None, field);
+    }
+    for section in &config.sections {
+        for field in &section.fields {
+            push_catalog_row(&mut rows, Some(section.label.clone()), field);
+        }
+    }
+    rows
+}
+
+fn push_catalog_row(
+    rows: &mut Vec<SettingsCatalogRow>,
+    section: Option<String>,
+    field: &ResolvedField,
+) {
+    if control_for(field).is_none() {
+        return;
+    }
+    rows.push(SettingsCatalogRow {
+        config_key: field.config_key.clone(),
+        section,
+        label: field.label.clone(),
+    });
 }
 
 fn push_section_rows(rows: &mut Vec<Row>, section: &ResolvedSection) {

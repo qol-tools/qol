@@ -5733,6 +5733,7 @@ dependencies = [
  "qol-config",
  "qol-conventions",
  "qol-runtime",
+ "qol-search",
  "qol-theme",
  "raw-window-handle",
  "serde",

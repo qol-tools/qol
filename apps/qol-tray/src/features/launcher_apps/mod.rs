@@ -47,6 +47,17 @@ pub fn collect_command_entries() -> Vec<LauncherEntry> {
         .collect()
 }
 
+pub fn settings_search_entry() -> LauncherEntry {
+    LauncherEntry {
+        file_stem: "settings-search".into(),
+        display_name: "QoL › Search Settings".into(),
+        description: "Search settings across QoL plugins".into(),
+        bundle_id: "com.qol-tools.settings-search".into(),
+        exec_args: vec!["settings-search".into()],
+        shortcut_action: None,
+    }
+}
+
 pub fn collect_plugin_settings_entries<'a>(
     plugins: impl IntoIterator<Item = &'a Plugin>,
 ) -> Vec<LauncherEntry> {
@@ -115,6 +126,7 @@ fn sync_launcher_entries(plugin_settings_entries: Vec<LauncherEntry>) {
     let mut entries = collect_shortcut_entries(&shortcut_config.shortcuts);
     entries.extend(collect_command_entries());
     entries.extend(plugin_settings_entries);
+    entries.push(settings_search_entry());
     let gen = SYNC_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     std::thread::spawn(move || {
         let _guard = SYNC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -175,6 +187,17 @@ mod tests {
         assert_eq!(entries[0].bundle_id, "com.qol-tools.plugin-settings.foo");
         assert_eq!(entries[0].exec_args, ["exec", "foo", "settings"]);
         assert!(entries[0].shortcut_action.is_none());
+    }
+
+    #[test]
+    fn settings_search_is_exported_as_one_launcher_entry() {
+        let entry = settings_search_entry();
+
+        assert_eq!(entry.file_stem, "settings-search");
+        assert_eq!(entry.display_name, "QoL › Search Settings");
+        assert_eq!(entry.bundle_id, "com.qol-tools.settings-search");
+        assert_eq!(entry.exec_args, ["settings-search"]);
+        assert!(entry.shortcut_action.is_none());
     }
 
     fn url_shortcut(id: &str, enabled: bool, export_to_launcher: bool, url: &str) -> Shortcut {
