@@ -604,6 +604,30 @@ pub fn configure_popup_window(title: &str) -> bool {
     true
 }
 
+pub fn set_window_type_dock_by_title(title: &str) -> bool {
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
+    else {
+        return false;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        return false;
+    };
+    set_window_type_dock(&conn, wid);
+    conn.flush().is_ok()
+}
+
+pub fn clear_window_type_by_title(title: &str) -> bool {
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
+    else {
+        return false;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        return false;
+    };
+    clear_window_type(&conn, wid);
+    conn.flush().is_ok()
+}
+
 pub fn make_override_redirect(title: &str) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
@@ -1246,6 +1270,25 @@ fn clear_window_opacity(conn: &impl Connection, wid: u32) -> bool {
         .ok()
         .and_then(|cookie| cookie.check().ok())
         .is_some()
+}
+
+fn clear_window_type(conn: &impl Connection, wid: u32) -> bool {
+    let Some(type_atom) = intern(conn, b"_NET_WM_WINDOW_TYPE") else {
+        return false;
+    };
+    let Some(normal_atom) = intern(conn, b"_NET_WM_WINDOW_TYPE_NORMAL") else {
+        return false;
+    };
+    conn.change_property32(
+        PropMode::REPLACE,
+        wid,
+        type_atom,
+        AtomEnum::ATOM,
+        &[normal_atom],
+    )
+    .ok()
+    .and_then(|cookie| cookie.check().ok())
+    .is_some()
 }
 
 #[cfg(debug_assertions)]

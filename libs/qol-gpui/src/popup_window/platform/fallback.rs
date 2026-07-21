@@ -63,6 +63,14 @@ pub fn configure_popup_window(_title: &str) -> bool {
     false
 }
 
+pub fn set_window_type_dock_by_title(_title: &str) -> bool {
+    false
+}
+
+pub fn clear_window_type_by_title(_title: &str) -> bool {
+    false
+}
+
 pub fn configure_overlay_window(_title: &str) -> bool {
     false
 }

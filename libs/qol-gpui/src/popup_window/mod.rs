@@ -85,10 +85,11 @@ fn composite_owner(title: &str) -> &str {
     title.split('@').next().unwrap_or(title)
 }
 pub use platform::{
-    capture_focus_return, configure_keepalive_window, configure_overlay_window,
-    configure_pinned_window, configure_popup_window, disable_window_shadow, dump_ghost_windows,
-    hide_for_capture, hide_invisible, hide_window_by_title, hide_windows_by_title_prefix,
-    park_window_by_title, prepare_window_reveal_by_title, reposition_window_by_title,
+    capture_focus_return, clear_window_type_by_title, configure_keepalive_window,
+    configure_overlay_window, configure_pinned_window, configure_popup_window,
+    disable_window_shadow, dump_ghost_windows, hide_for_capture, hide_invisible,
+    hide_window_by_title, hide_windows_by_title_prefix, park_window_by_title,
+    prepare_window_reveal_by_title, reposition_window_by_title, set_window_type_dock_by_title,
     show_window_by_title, show_window_passive_by_title, sync_window_layout,
     visible_windows_by_title_prefix, window_backing_scale, window_holds_input_focus,
 };

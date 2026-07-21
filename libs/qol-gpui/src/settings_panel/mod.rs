@@ -164,10 +164,12 @@ impl SettingsWindowHost {
             ));
         };
         let plugin_id = prepared.panel.plugin_id.clone();
+        let heading = prepared.panel.heading.clone();
         let dismisser = active.surface.dismisser.clone();
         let visible = active.surface.is_visible();
         active.surface.handle.update(cx, move |root, window, cx| {
             window.resize(prepared.size);
+            dismisser.retitle(window, heading);
             let inner =
                 cx.new(|cx| SettingsPanelView::new(prepared.panel, prepared.state, dismisser, cx));
             let focus = inner.read(cx).focus_handle(cx);
@@ -347,7 +349,7 @@ fn open_prepared(
     cx: &mut App,
 ) -> anyhow::Result<ActivePanel> {
     let plugin_id = prepared.panel.plugin_id.clone();
-    let title = format!("{}-settings-{}", plugin_id, std::process::id());
+    let title = prepared.panel.heading.clone();
     let opened = Surface::new(SurfaceKind::Panel)
         .title(title)
         .anchor(Anchor::MonitorCenter)

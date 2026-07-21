@@ -43,7 +43,6 @@ pub struct Surface {
 pub(crate) struct OpenedSurface<V> {
     pub(crate) handle: WindowHandle<SurfaceRoot<V>>,
     pub(crate) dismisser: SurfaceDismisser,
-    title: String,
     anchor: Anchor,
     size: Size<Pixels>,
     visible: Rc<Cell<bool>>,
@@ -56,6 +55,7 @@ struct DismissState {
     close: RefCell<Option<CloseWindow>>,
     generation: Cell<u64>,
     reusable: bool,
+    title: RefCell<String>,
 }
 
 #[derive(Clone)]
@@ -64,14 +64,24 @@ pub struct SurfaceDismisser {
 }
 
 impl SurfaceDismisser {
-    fn new(reusable: bool) -> Self {
+    fn new(reusable: bool, title: String) -> Self {
         Self {
             state: Rc::new(DismissState {
                 close: RefCell::new(None),
                 generation: Cell::new(0),
                 reusable,
+                title: RefCell::new(title),
             }),
         }
+    }
+
+    pub(crate) fn current_title(&self) -> String {
+        self.state.title.borrow().clone()
+    }
+
+    pub(crate) fn retitle(&self, window: &mut Window, title: String) {
+        window.set_window_title(&title);
+        *self.state.title.borrow_mut() = title;
     }
 
     pub fn dismiss(&self, cx: &mut App) {
@@ -194,7 +204,7 @@ impl Surface {
             app_id: Some(title.clone()),
             ..Default::default()
         };
-        let dismisser = SurfaceDismisser::new(retain_on_dismiss);
+        let dismisser = SurfaceDismisser::new(retain_on_dismiss, title.clone());
         let build_dismisser = dismisser.clone();
         let window_title = title.clone();
         let visible = Rc::new(Cell::new(!native_reveal_gate));
@@ -224,7 +234,7 @@ impl Surface {
                 }
             })
         })?;
-        let dismiss_title = title.clone();
+        let dismiss_state = dismisser.state.clone();
         let dismiss_visible = visible.clone();
         let dismiss_reveal_pending = reveal_pending.clone();
         dismisser
@@ -235,8 +245,10 @@ impl Surface {
                 dismiss_visible.set(false);
                 dismiss_reveal_pending.set(false);
                 if retain_on_dismiss {
+                    let current_title = dismiss_state.title.borrow().clone();
                     let _reason = crate::popup_window::reason_scope("surface-dismiss");
-                    if crate::popup_window::hide_invisible(&dismiss_title) {
+                    crate::popup_window::set_window_type_dock_by_title(&current_title);
+                    if crate::popup_window::hide_invisible(&current_title) {
                         return;
                     }
                 }
@@ -279,7 +291,6 @@ impl Surface {
         Ok(OpenedSurface {
             handle,
             dismisser,
-            title,
             anchor: self.anchor,
             size: self.size,
             visible,
@@ -412,6 +423,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
         }
         let shown = {
             let _reason = crate::popup_window::reason_scope("surface-reveal");
+            crate::popup_window::clear_window_type_by_title(&title);
             crate::popup_window::show_window_by_title(&title)
         };
         let repaint_requested = shown
@@ -649,29 +661,29 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
             if !resized {
                 return false;
             }
+            let title = self.dismisser.current_title();
             let prepared = {
                 let _reason = crate::popup_window::reason_scope("surface-reuse");
-                crate::popup_window::prepare_window_reveal_by_title(&self.title)
+                crate::popup_window::prepare_window_reveal_by_title(&title)
             };
             if !prepared {
                 return false;
             }
             let Some(fresh_frame) = schedule_fresh_frame(self.handle, bounds.size, cx) else {
-                let _ = crate::popup_window::hide_invisible(&self.title);
+                let _ = crate::popup_window::hide_invisible(&title);
                 return false;
             };
             self.reveal_pending.set(true);
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
-                "title={} phase=opened hidden=true frame_scheduled=true reused=true x={} y={}",
-                self.title,
+                "title={title} phase=opened hidden=true frame_scheduled=true reused=true x={} y={}",
                 bounds.origin.x.to_f64(),
                 bounds.origin.y.to_f64()
             );
             settle_then_reveal_reused(
                 PendingReveal {
                     handle: self.handle,
-                    title: self.title.clone(),
+                    title,
                     origin: bounds.origin,
                     visible: self.visible.clone(),
                     reveal_pending: self.reveal_pending.clone(),
@@ -760,6 +772,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
         }
         let shown = {
             let _reason = crate::popup_window::reason_scope("surface-reuse-reveal");
+            crate::popup_window::clear_window_type_by_title(&title);
             crate::popup_window::show_window_by_title(&title)
         };
         visible.set(shown);
