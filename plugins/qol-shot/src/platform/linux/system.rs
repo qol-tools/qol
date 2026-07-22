@@ -24,7 +24,7 @@ pub fn show_saved_notification(
     title: &str,
     message: &str,
     timeout_ms: u32,
-    target: crate::completion::RevealTarget,
+    target: crate::capture::completion::RevealTarget,
 ) {
     let mut command = saved_notification_command(title, message, timeout_ms);
     let title = title.to_string();
@@ -52,7 +52,7 @@ pub fn show_saved_notification(
         if !clicked {
             return;
         }
-        if let Err(error) = target.open(crate::completion::RevealSource::Notification) {
+        if let Err(error) = target.open(crate::capture::completion::RevealSource::Notification) {
             eprintln!("[qol-shot] notification folder reveal failed: {error:#}");
         }
     });

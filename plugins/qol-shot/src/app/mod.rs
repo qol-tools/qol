@@ -1,3 +1,5 @@
+pub(crate) mod daemon;
+
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -9,10 +11,9 @@ use gpui::*;
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::window::ActiveWindows;
 
-use crate::daemon;
-use crate::geometry::rect_label;
-use crate::preview::PreviewWindows;
-use crate::screenshot::PreviewCapture;
+use crate::capture::geometry::rect_label;
+use crate::capture::screenshot::PreviewCapture;
+use crate::ui::preview::PreviewWindows;
 
 const APP_ID: &str = "qol-tray-shot";
 
@@ -21,7 +22,7 @@ struct State {
     windows: PreviewWindows,
     tracker: MonitorTracker,
     flow: ShotFlowGate,
-    capture_status: crate::capture_status::CaptureStatusUi,
+    capture_status: crate::ui::capture_status::CaptureStatusUi,
 }
 
 #[derive(Clone)]
@@ -31,7 +32,7 @@ struct ShotFlowGate {
 
 struct ShotFlowGuard {
     active: Rc<Cell<bool>>,
-    _capture: crate::capture_gate::CaptureGuard,
+    _capture: crate::capture::gate::CaptureGuard,
 }
 
 impl ShotFlowGate {
@@ -45,7 +46,7 @@ impl ShotFlowGate {
         if self.active.get() {
             return None;
         }
-        let capture = crate::capture_gate::try_acquire("daemon-flow")?;
+        let capture = crate::capture::gate::try_acquire("daemon-flow")?;
         self.active.set(true);
         Some(ShotFlowGuard {
             active: self.active.clone(),
@@ -78,10 +79,10 @@ pub fn run() {
             windows: Rc::new(RefCell::new(ActiveWindows::default())),
             tracker: tracker.clone(),
             flow: ShotFlowGate::new(),
-            capture_status: crate::capture_status::CaptureStatusUi::new(tracker),
+            capture_status: crate::ui::capture_status::CaptureStatusUi::new(tracker),
         };
         spawn_active_monitor_cache(cx);
-        crate::preview::pre_create(&state.windows, &state.tracker, cx);
+        crate::ui::preview::pre_create(&state.windows, &state.tracker, cx);
         crate::platform::pre_create_selector(cx);
         crate::platform::pre_create_pins(cx);
         spawn_screenshot_loop(rx, state, cx);
@@ -189,12 +190,12 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
     };
     park_preview_before_capture(cx, state, "screenshot").await;
     let frozen_frame = cx
-        .background_spawn(async { crate::screenshot::freeze_frame() })
+        .background_spawn(async { crate::capture::screenshot::freeze_frame() })
         .await;
     let Some(selected) = select_region(
         cx,
         state,
-        crate::space::CaptureKind::Screenshot,
+        crate::capture::space::CaptureKind::Screenshot,
         frozen_frame.clone(),
     )
     .await
@@ -204,7 +205,7 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
     show_capture_status(
         cx,
         &state.capture_status,
-        crate::capture_status::CaptureStatus::persistent(
+        crate::ui::capture_status::CaptureStatus::persistent(
             "screenshot",
             "saving",
             "Screenshot captured",
@@ -213,7 +214,10 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
     );
     let captured = cx
         .background_spawn(async move {
-            crate::screenshot::capture_selected_for_preview(selected, frozen_frame.as_ref())
+            crate::capture::screenshot::capture_selected_for_preview(
+                selected,
+                frozen_frame.as_ref(),
+            )
         })
         .await;
     let capture = match captured {
@@ -242,10 +246,10 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
 
 async fn complete_screenshot(
     path: std::path::PathBuf,
-    file_ready: crate::screenshot::CaptureFileReady,
-    completion: Option<crate::completion::PreviewCompletion>,
+    file_ready: crate::capture::screenshot::CaptureFileReady,
+    completion: Option<crate::capture::completion::PreviewCompletion>,
     presented: bool,
-    status: crate::capture_status::CaptureStatusUi,
+    status: crate::ui::capture_status::CaptureStatusUi,
     tracker: MonitorTracker,
     cx: &mut AsyncApp,
 ) {
@@ -258,24 +262,24 @@ async fn complete_screenshot(
     if let Some(completion) = completion {
         announce_saved_feedback(&completion, &tracker, cx);
         if !presented {
-            completion.finish(crate::completion::PreviewExit::Unavailable);
+            completion.finish(crate::capture::completion::PreviewExit::Unavailable);
         }
     }
     show_capture_status(
         cx,
         &status,
-        crate::capture_status::CaptureStatus::timed(
+        crate::ui::capture_status::CaptureStatus::timed(
             "screenshot",
             "saved",
             "Screenshot saved",
-            crate::completion::file_label(&path),
+            crate::capture::completion::file_label(&path),
             Duration::from_millis(2_800),
         ),
     );
 }
 
 fn announce_saved_feedback(
-    completion: &crate::completion::PreviewCompletion,
+    completion: &crate::capture::completion::PreviewCompletion,
     tracker: &MonitorTracker,
     cx: &mut AsyncApp,
 ) {
@@ -289,7 +293,7 @@ fn announce_saved_feedback(
     let toast_announcement = announcement.clone();
     let toast_tracker = tracker.clone();
     let shown = cx
-        .update(move |cx| crate::saved_toast::show(toast_announcement, &toast_tracker, cx))
+        .update(move |cx| crate::ui::saved_toast::show(toast_announcement, &toast_tracker, cx))
         .unwrap_or_else(|error| Err(anyhow::anyhow!("app unavailable: {error}")));
     match shown {
         Ok(()) => qol_runtime::probe!("SHOT_SAVED_TOAST", "result=shown"),
@@ -311,13 +315,13 @@ fn announce_saved_feedback(
 
 fn show_screenshot_failure(
     cx: &AsyncApp,
-    status: &crate::capture_status::CaptureStatusUi,
+    status: &crate::ui::capture_status::CaptureStatusUi,
     subtitle: &'static str,
 ) {
     show_capture_status(
         cx,
         status,
-        crate::capture_status::CaptureStatus::timed(
+        crate::ui::capture_status::CaptureStatus::timed(
             "screenshot",
             "failed",
             "Screenshot failed",
@@ -329,8 +333,8 @@ fn show_screenshot_failure(
 
 fn show_capture_status(
     cx: &AsyncApp,
-    ui: &crate::capture_status::CaptureStatusUi,
-    status: crate::capture_status::CaptureStatus,
+    ui: &crate::ui::capture_status::CaptureStatusUi,
+    status: crate::ui::capture_status::CaptureStatus,
 ) {
     let _ = cx.update(|cx| ui.show(status, cx));
 }
@@ -344,7 +348,7 @@ async fn preview_latest(cx: &AsyncApp, state: &State) {
         return;
     }
     match cx
-        .background_spawn(async { crate::output::latest_screenshot() })
+        .background_spawn(async { crate::capture::output::latest_screenshot() })
         .await
     {
         Ok(path) => {
@@ -354,7 +358,7 @@ async fn preview_latest(cx: &AsyncApp, state: &State) {
                 PreviewCapture {
                     path,
                     pixels: None,
-                    file_ready: crate::screenshot::CaptureFileReady::ready(),
+                    file_ready: crate::capture::screenshot::CaptureFileReady::ready(),
                     started_at: std::time::Instant::now(),
                     completion: None,
                 },
@@ -374,16 +378,16 @@ fn begin_shot_flow(state: &State, action: &str) -> Option<ShotFlowGuard> {
 
 fn preview_showing(cx: &AsyncApp, state: &State) -> bool {
     let windows = state.windows.clone();
-    cx.update(|cx| crate::preview::any_showing(&windows, cx))
+    cx.update(|cx| crate::ui::preview::any_showing(&windows, cx))
         .unwrap_or(false)
 }
 
 fn park_preview(cx: &AsyncApp, state: &State, action: &str) -> bool {
     let visible_windows =
-        qol_gpui::popup_window::visible_windows_by_title_prefix(crate::preview::PREVIEW_TITLE);
+        qol_gpui::popup_window::visible_windows_by_title_prefix(crate::ui::preview::PREVIEW_TITLE);
     let windows = state.windows.clone();
     cx.update(|cx| {
-        let showing = crate::preview::any_showing(&windows, cx);
+        let showing = crate::ui::preview::any_showing(&windows, cx);
         if showing || visible_windows != 0 {
             qol_runtime::probe!(
                 "SHOT_PREVIEW_CLOSE",
@@ -391,7 +395,7 @@ fn park_preview(cx: &AsyncApp, state: &State, action: &str) -> bool {
                 if showing { "showing" } else { "stale" }
             );
         }
-        crate::preview::park_idle(&windows, cx);
+        crate::ui::preview::park_idle(&windows, cx);
         showing || visible_windows != 0
     })
     .unwrap_or(false)
@@ -404,7 +408,7 @@ async fn park_preview_before_capture(cx: &AsyncApp, state: &State, action: &str)
     let mut barrier_cx = cx.clone();
     let barrier = qol_gpui::popup_window::wait_for_hidden_windows(
         &mut barrier_cx,
-        crate::preview::PREVIEW_TITLE,
+        crate::ui::preview::PREVIEW_TITLE,
     )
     .await;
     qol_runtime::probe!(
@@ -431,7 +435,7 @@ fn present(cx: &AsyncApp, state: &State, capture: PreviewCapture) -> bool {
     let windows = state.windows.clone();
     let tracker = state.tracker.clone();
     cx.update(|cx| {
-        if let Err(error) = crate::preview::show_capture(&windows, &tracker, capture, cx) {
+        if let Err(error) = crate::ui::preview::show_capture(&windows, &tracker, capture, cx) {
             eprintln!("[qol-shot] preview failed: {error:#}");
             return false;
         }
@@ -443,8 +447,8 @@ fn present(cx: &AsyncApp, state: &State, capture: PreviewCapture) -> bool {
 async fn select_region(
     cx: &AsyncApp,
     state: &State,
-    kind: crate::space::CaptureKind,
-    frozen_frame: Option<crate::frozen_frame::FrozenFrame>,
+    kind: crate::capture::space::CaptureKind,
+    frozen_frame: Option<crate::capture::frozen_frame::FrozenFrame>,
 ) -> Option<crate::Rect> {
     let status = state.capture_status.clone();
     let _ = cx.update(|cx| status.prepare_selector(cx));
@@ -499,7 +503,7 @@ async fn run_cli(cx: &AsyncApp, state: &State, action: String) {
     }
 
     if action == "settings" {
-        match crate::settings_panel::open_from_async(state.tracker.clone(), cx).await {
+        match crate::ui::settings_panel::open_from_async(state.tracker.clone(), cx).await {
             Ok(()) => {
                 qol_runtime::probe!("SHOT_SETTINGS_PANEL", "result=shown");
                 return;
@@ -523,17 +527,17 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
     let config = crate::config::load();
     let stop_config = config.clone();
     match cx
-        .background_spawn(
-            async move { crate::recording::begin_stop_active_recording(&stop_config) },
-        )
+        .background_spawn(async move {
+            crate::capture::recording::begin_stop_active_recording(&stop_config)
+        })
         .await
     {
-        Ok(crate::recording::StopOutcome::Stopped(job)) => {
+        Ok(crate::capture::recording::StopOutcome::Stopped(job)) => {
             qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon result=stopped");
             show_capture_status(
                 cx,
                 &state.capture_status,
-                crate::capture_status::CaptureStatus::persistent(
+                crate::ui::capture_status::CaptureStatus::persistent(
                     "recording",
                     "saving",
                     "Recording stopped",
@@ -542,14 +546,14 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
             );
             let output_file = cx.background_spawn(async move { job.run() }).await;
             let saved_status = match output_file.as_deref() {
-                Some(path) => crate::capture_status::CaptureStatus::timed(
+                Some(path) => crate::ui::capture_status::CaptureStatus::timed(
                     "recording",
                     "saved",
                     "Recording saved",
-                    crate::completion::file_label(path),
+                    crate::capture::completion::file_label(path),
                     Duration::from_millis(2_800),
                 ),
-                None => crate::capture_status::CaptureStatus::timed(
+                None => crate::ui::capture_status::CaptureStatus::timed(
                     "recording",
                     "delayed",
                     "Save delayed",
@@ -560,7 +564,7 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
             show_capture_status(cx, &state.capture_status, saved_status);
             return;
         }
-        Ok(crate::recording::StopOutcome::Idle) => {
+        Ok(crate::capture::recording::StopOutcome::Idle) => {
             qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon state=idle")
         }
         Err(error) => {
@@ -574,14 +578,20 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
         return;
     };
     park_preview_before_capture(cx, state, "record").await;
-    let Some(selected) = select_region(cx, state, crate::space::CaptureKind::Recording, None).await
+    let Some(selected) = select_region(
+        cx,
+        state,
+        crate::capture::space::CaptureKind::Recording,
+        None,
+    )
+    .await
     else {
         qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon result=select-cancel");
         return;
     };
     let result = cx
         .background_spawn(async move {
-            crate::recording::start_recording_from_selection(selected, &config)
+            crate::capture::recording::start_recording_from_selection(selected, &config)
         })
         .await;
     if let Err(error) = result {
@@ -593,7 +603,7 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
     show_capture_status(
         cx,
         &state.capture_status,
-        crate::capture_status::CaptureStatus::timed(
+        crate::ui::capture_status::CaptureStatus::timed(
             "recording",
             "started",
             "Recording started",

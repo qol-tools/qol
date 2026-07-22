@@ -1,6 +1,6 @@
 use gpui::{Keystroke, Modifiers};
 
-use crate::actions::ShotAction;
+use crate::capture::actions::ShotAction;
 use crate::config::CopyCommand;
 
 pub(crate) fn resolve_copy_command(command: CopyCommand) -> ShotAction {

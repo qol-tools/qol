@@ -3,15 +3,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::frozen_frame::{FrozenCrop, FrozenFrame};
-use crate::{geometry, platform, Rect};
+use crate::capture::frozen_frame::{FrozenCrop, FrozenFrame};
+use crate::{capture::geometry, platform, Rect};
 
 pub fn capture_screenshot() -> Result<Option<PathBuf>> {
     let Some(output_file) = capture_to_file()? else {
         return Ok(None);
     };
     let config = crate::config::load();
-    let completion = crate::completion::PreviewCompletion::new(
+    let completion = crate::capture::completion::PreviewCompletion::new(
         &output_file,
         config.capture.open_folder_after_save,
     );
@@ -21,13 +21,15 @@ pub fn capture_screenshot() -> Result<Option<PathBuf>> {
 }
 
 pub fn capture_to_file() -> Result<Option<PathBuf>> {
-    let Some(_capture) = crate::capture_gate::try_acquire("cli-screenshot") else {
+    let Some(_capture) = crate::capture::gate::try_acquire("cli-screenshot") else {
         qol_runtime::probe!("SHOT_SKIP", "action=screenshot reason=busy");
         return Ok(None);
     };
     let frozen_frame = freeze_frame();
-    let Some(selected) =
-        platform::select_region(crate::space::CaptureKind::Screenshot, frozen_frame.clone())?
+    let Some(selected) = platform::select_region(
+        crate::capture::space::CaptureKind::Screenshot,
+        frozen_frame.clone(),
+    )?
     else {
         return Ok(None);
     };
@@ -40,7 +42,7 @@ pub struct PreviewCapture {
     pub(crate) pixels: Option<PreviewPixels>,
     pub(crate) file_ready: CaptureFileReady,
     pub(crate) started_at: Instant,
-    pub(crate) completion: Option<crate::completion::PreviewCompletion>,
+    pub(crate) completion: Option<crate::capture::completion::PreviewCompletion>,
 }
 
 pub(crate) enum PreviewPixels {
@@ -129,13 +131,15 @@ impl CaptureFileReady {
 }
 
 pub fn capture_for_preview() -> Result<Option<PreviewCapture>> {
-    let Some(_capture) = crate::capture_gate::try_acquire("cli-preview-capture") else {
+    let Some(_capture) = crate::capture::gate::try_acquire("cli-preview-capture") else {
         qol_runtime::probe!("SHOT_SKIP", "action=preview-capture reason=busy");
         return Ok(None);
     };
     let frozen_frame = freeze_frame();
-    let Some(selected) =
-        platform::select_region(crate::space::CaptureKind::Screenshot, frozen_frame.clone())?
+    let Some(selected) = platform::select_region(
+        crate::capture::space::CaptureKind::Screenshot,
+        frozen_frame.clone(),
+    )?
     else {
         return Ok(None);
     };
@@ -205,7 +209,7 @@ fn prepare_screenshot_rect(selected: Rect) -> Result<Rect> {
 }
 
 fn capture_rect_to_file(rect: Rect, frozen_frame: Option<&FrozenFrame>) -> Result<PathBuf> {
-    let output_file = crate::output::screenshot_output_file_path()?;
+    let output_file = crate::capture::output::screenshot_output_file_path()?;
     let started = std::time::Instant::now();
     if let Some(crop) = frozen_crop(frozen_frame, rect)? {
         crop.save_png(&output_file)?;
@@ -234,7 +238,7 @@ fn capture_rect_for_preview(
     frozen_frame: Option<&FrozenFrame>,
 ) -> Result<PreviewCapture> {
     let started_at = Instant::now();
-    let output_file = crate::output::screenshot_output_file_path()?;
+    let output_file = crate::capture::output::screenshot_output_file_path()?;
     let started = Instant::now();
     if let Some(crop) = frozen_crop(frozen_frame, rect)? {
         let (bgra, width, height) = crop.clone().into_bgra_parts();
@@ -288,9 +292,9 @@ fn capture_rect_for_preview(
     })
 }
 
-fn preview_completion(path: &Path) -> crate::completion::PreviewCompletion {
+fn preview_completion(path: &Path) -> crate::capture::completion::PreviewCompletion {
     let config = crate::config::load();
-    crate::completion::PreviewCompletion::new(path, config.capture.open_folder_after_save)
+    crate::capture::completion::PreviewCompletion::new(path, config.capture.open_folder_after_save)
 }
 
 fn frozen_crop(frozen_frame: Option<&FrozenFrame>, rect: Rect) -> Result<Option<FrozenCrop>> {
@@ -366,7 +370,7 @@ fn swap_red_blue(data: &mut [u8]) {
     }
 }
 
-fn present_capture(output_file: &Path, completion: crate::completion::PreviewCompletion) {
+fn present_capture(output_file: &Path, completion: crate::capture::completion::PreviewCompletion) {
     let fallback = completion.clone();
     if let Err(error) = show_preview(output_file, completion) {
         eprintln!("[qol-shot] preview unavailable, copying instead: {error:#}");
@@ -374,15 +378,15 @@ fn present_capture(output_file: &Path, completion: crate::completion::PreviewCom
             eprintln!("[qol-shot] failed to copy screenshot to clipboard: {error:#}");
         }
         platform::show_notification("Screenshot saved", &output_file.display().to_string(), 1800);
-        fallback.finish(crate::completion::PreviewExit::Unavailable);
+        fallback.finish(crate::capture::completion::PreviewExit::Unavailable);
     }
 }
 
 fn show_preview(
     output_file: &Path,
-    completion: crate::completion::PreviewCompletion,
+    completion: crate::capture::completion::PreviewCompletion,
 ) -> Result<()> {
-    crate::preview::show_saved(output_file, completion)
+    crate::ui::preview::show_saved(output_file, completion)
 }
 
 #[cfg(test)]

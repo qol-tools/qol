@@ -2,8 +2,8 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::screenshot::CaptureFileReady;
-use crate::{output, platform};
+use crate::capture::screenshot::CaptureFileReady;
+use crate::{capture::output, platform};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShotAction {
@@ -24,7 +24,7 @@ impl ShotAction {
         match self {
             ShotAction::Copy => platform::copy_image_to_clipboard(path),
             ShotAction::CopyPath => platform::copy_path_to_clipboard(path),
-            ShotAction::OpenFolder => crate::completion::reveal(path),
+            ShotAction::OpenFolder => crate::capture::completion::reveal(path),
         }
     }
 
@@ -126,7 +126,7 @@ pub(crate) fn spawn_file_action(
 #[cfg(test)]
 mod tests {
     use super::{spawn_file_action, ShotAction};
-    use crate::screenshot::CaptureFileReady;
+    use crate::capture::screenshot::CaptureFileReady;
     use std::sync::mpsc;
     use std::time::Duration;
 

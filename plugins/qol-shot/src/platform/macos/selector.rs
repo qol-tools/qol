@@ -7,8 +7,8 @@ use std::ffi::c_void;
 use std::sync::mpsc;
 use std::time::Instant;
 
-use crate::frozen_frame::FrozenFrame;
-use crate::space::CaptureKind;
+use crate::capture::frozen_frame::FrozenFrame;
+use crate::capture::space::CaptureKind;
 use crate::{Monitor, Rect};
 
 use super::display::{active_display_bounds, rect_intersection};
@@ -37,7 +37,7 @@ extern "C" {
 }
 
 pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Result<Option<Rect>> {
-    crate::region_selector::select_region_blocking_with(move |tx, cx| {
+    crate::ui::region_selector::select_region_blocking_with(move |tx, cx| {
         let tracker = MonitorTracker::start(cx);
         let cursor = tracker.snapshot_cursor();
         let monitors = tracker.all_monitors_or_snapshot();
@@ -105,7 +105,7 @@ fn open_region_selector_with_sender(
         "mode=open selectors={} quit_on_finish={quit_on_finish}",
         titles.len()
     );
-    if crate::region_selector::open_all(tx, quit_on_finish, selectors, kind, cx) {
+    if crate::ui::region_selector::open_all(tx, quit_on_finish, selectors, kind, cx) {
         for title in titles {
             configure_selector_window(title, cx);
         }
@@ -118,10 +118,10 @@ fn selector_windows(
     monitors: Vec<ActiveMonitor>,
     frozen_frame: Option<&FrozenFrame>,
     cx: &gpui::App,
-) -> Vec<crate::region_selector::SelectorWindow> {
+) -> Vec<crate::ui::region_selector::SelectorWindow> {
     let active_bounds = monitor.map(|monitor| monitor.bounds());
     let map_rect = selector_rect_mapper();
-    let global_pointer: Option<crate::region_selector::GlobalPointerSource> =
+    let global_pointer: Option<crate::ui::region_selector::GlobalPointerSource> =
         Some(std::rc::Rc::new(MacPointerSource));
     let monitors = if monitors.is_empty() {
         monitor.cloned().into_iter().collect()
@@ -162,21 +162,21 @@ fn selector_window(
     active_bounds: Option<Bounds<Pixels>>,
     display_id: Option<gpui::DisplayId>,
     focus: bool,
-    map_rect: crate::region_selector::RectMapper,
-    global_pointer: Option<crate::region_selector::GlobalPointerSource>,
+    map_rect: crate::ui::region_selector::RectMapper,
+    global_pointer: Option<crate::ui::region_selector::GlobalPointerSource>,
     frozen_frame: Option<FrozenFrame>,
-) -> crate::region_selector::SelectorWindow {
-    crate::region_selector::SelectorWindow::new(
+) -> crate::ui::region_selector::SelectorWindow {
+    crate::ui::region_selector::SelectorWindow::new(
         bounds,
         active_bounds,
         None,
-        crate::region_selector::SelectorWindowOptions {
+        crate::ui::region_selector::SelectorWindowOptions {
             display_id,
             kind: ghost_window_kind(),
             decorations: ghost_window_decorations(false),
             focus,
         },
-        crate::region_selector::SelectorWindowSources {
+        crate::ui::region_selector::SelectorWindowSources {
             map_rect,
             global_pointer,
             cancel_signal: None,
@@ -196,7 +196,7 @@ fn selector_focus(bounds: Bounds<Pixels>, active_bounds: Option<Bounds<Pixels>>)
 
 struct MacPointerSource;
 
-impl crate::region_selector::GlobalPointer for MacPointerSource {
+impl crate::ui::region_selector::GlobalPointer for MacPointerSource {
     fn position(&self) -> Option<gpui::Point<Pixels>> {
         let event = CfGuard::new(unsafe { CGEventCreate(std::ptr::null()) })?;
         let location = unsafe { CGEventGetLocation(event.as_ptr()) };
@@ -238,11 +238,11 @@ fn selector_fallback_bounds() -> Bounds<Pixels> {
         .filter(|displays| !displays.is_empty())
         .and_then(|displays| displays.into_iter().next());
     displays
-        .map(crate::region_selector::bounds_from_monitor)
-        .unwrap_or_else(crate::region_selector::fallback_bounds)
+        .map(crate::ui::region_selector::bounds_from_monitor)
+        .unwrap_or_else(crate::ui::region_selector::fallback_bounds)
 }
 
-fn selector_rect_mapper() -> crate::region_selector::RectMapper {
+fn selector_rect_mapper() -> crate::ui::region_selector::RectMapper {
     let displays = active_display_bounds().unwrap_or_default();
     std::rc::Rc::new(move |rect| map_selector_rect_to_capture(rect, &displays))
 }

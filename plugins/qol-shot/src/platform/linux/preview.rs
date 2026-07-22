@@ -5,7 +5,7 @@ use x11rb::protocol::shm::{self, ConnectionExt as ShmExt};
 use x11rb::protocol::xproto::{ConnectionExt, ImageFormat};
 use x11rb::rust_connection::RustConnection;
 
-use crate::frozen_frame::FrozenFrame;
+use crate::capture::frozen_frame::FrozenFrame;
 use crate::Rect;
 
 pub fn capture_frozen_frame() -> Result<Option<FrozenFrame>> {

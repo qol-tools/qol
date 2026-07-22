@@ -12,6 +12,8 @@ Related skills (load these for surrounding context): `qol-tray:qol-tray-core`
 (plugin contract overview), `qol-project:qol-arch-channels` (which channel to use
 when adding a new one), `qol-tray:qol-tray-rust` (host backend), `qol-langs:gpui-conventions`
 (gpui), `qol-tray:qol-tray-dev-recompile` (the reload-everything button).
+Source ownership and the `ui/` versus `src/ui/` distinction are defined in
+[`plugin-layout.md`](plugin-layout.md).
 
 ## Contents
 

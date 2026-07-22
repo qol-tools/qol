@@ -2,15 +2,15 @@ use anyhow::{anyhow, Context, Result};
 use qol_headless::DoctorCheckResult;
 use std::path::Path;
 
-use crate::frozen_frame::FrozenFrame;
+use crate::capture::frozen_frame::FrozenFrame;
+use crate::capture::space::CaptureKind;
 use crate::platform::CaptureSession;
-use crate::space::CaptureKind;
 use crate::{Config, Monitor, Rect};
 
 pub fn pre_create_selector(_cx: &mut gpui::App) {}
 
 pub fn pre_create_pins(cx: &mut gpui::App) {
-    crate::pinned::pre_create(cx);
+    crate::ui::pinned::pre_create(cx);
 }
 
 pub fn pin_cache_enabled() -> bool {
@@ -78,7 +78,7 @@ pub fn recording_started(_session: &CaptureSession) {
 
 pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<std::path::PathBuf> {
     let output_file = session.output_file.clone()?;
-    crate::completion::background_saved(
+    crate::capture::completion::background_saved(
         "Recording saved",
         "Saved to Videos",
         &output_file,
@@ -103,7 +103,7 @@ pub fn show_saved_notification(
     title: &str,
     message: &str,
     timeout_ms: u32,
-    _target: crate::completion::RevealTarget,
+    _target: crate::capture::completion::RevealTarget,
 ) {
     show_notification(title, message, timeout_ms);
 }

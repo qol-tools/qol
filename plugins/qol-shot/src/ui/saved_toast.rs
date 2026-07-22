@@ -5,7 +5,7 @@ use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::surface::{Anchor, Corner, Surface, SurfaceDismisser, SurfaceKind};
 use qol_gpui::theme::{shot_preview_runtime, ShotPreviewPalette};
 
-use crate::completion::{RevealSource, SavedAnnouncement};
+use crate::capture::completion::{RevealSource, SavedAnnouncement};
 
 const TOAST_WIDTH: f32 = 340.0;
 const TOAST_HEIGHT: f32 = 76.0;

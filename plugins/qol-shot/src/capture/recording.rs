@@ -4,7 +4,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::geometry::{self, monitor_label, rect_label};
+use crate::capture::geometry::{self, monitor_label, rect_label};
 use crate::{platform, Config, Rect};
 
 const STATE_FILE_NAME: &str = "record-region.pid";
@@ -24,13 +24,14 @@ pub fn toggle_recording(config: &Config) -> Result<()> {
         return Ok(());
     }
 
-    let Some(_capture) = crate::capture_gate::try_acquire("cli-record") else {
+    let Some(_capture) = crate::capture::gate::try_acquire("cli-record") else {
         qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=cli result=busy");
         return Ok(());
     };
 
     qol_runtime::probe!("SHOT_SELECT_REQUEST", "source=cli");
-    let Some(selected) = platform::select_region(crate::space::CaptureKind::Recording, None)?
+    let Some(selected) =
+        platform::select_region(crate::capture::space::CaptureKind::Recording, None)?
     else {
         qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=cli result=select-cancel");
         return Ok(());
@@ -106,7 +107,7 @@ pub fn start_recording_from_selection(selected: Rect, config: &Config) -> Result
         rect.h
     );
     let output_format = platform::recording_format(&config.video.format);
-    let output_file = crate::output::recording_output_file_path(&output_format)?;
+    let output_file = crate::capture::output::recording_output_file_path(&output_format)?;
     qol_runtime::probe!(
         "SHOT_RECORD_OUTPUT",
         "format={output_format} file={} ext={}",

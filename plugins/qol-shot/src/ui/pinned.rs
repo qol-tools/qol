@@ -7,11 +7,11 @@ use std::time::Instant;
 
 use gpui::*;
 
-use crate::actions::ShotAction;
+use crate::capture::actions::ShotAction;
+use crate::capture::screenshot::CaptureFileReady;
 use crate::platform;
-use crate::preview::{current_palette, PREVIEW_APP_ID};
-use crate::screenshot::CaptureFileReady;
-use crate::shortcuts::{resolve_copy_command, shot_action_for_keystroke};
+use crate::ui::preview::{current_palette, PREVIEW_APP_ID};
+use crate::ui::shortcuts::{resolve_copy_command, shot_action_for_keystroke};
 
 const MIN_DIM: f32 = 48.0;
 const MAX_DIM: f32 = 4096.0;
@@ -674,7 +674,7 @@ impl PinnedView {
         };
         if self.dismiss == PinnedDismiss::Remove {
             if let Err(error) =
-                crate::actions::spawn_file_action("pinned", action, file_ready, perform)
+                crate::capture::actions::spawn_file_action("pinned", action, file_ready, perform)
             {
                 eprintln!("[qol-shot] pinned action worker failed: {error:#}");
                 self.action_pending = false;
@@ -685,7 +685,7 @@ impl PinnedView {
             return;
         }
         let action_task = cx.background_spawn(async move {
-            crate::actions::perform_when_file_ready("pinned", action, file_ready, perform)
+            crate::capture::actions::perform_when_file_ready("pinned", action, file_ready, perform)
         });
         let reveal_generation = self.reveal_generation;
         cx.spawn(async move |_view, cx| {

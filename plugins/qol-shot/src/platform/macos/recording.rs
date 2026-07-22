@@ -149,7 +149,7 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Pa
                     (reveal_file, message)
                 }
             };
-        crate::completion::background_saved(
+        crate::capture::completion::background_saved(
             "Recording saved",
             &message,
             &reveal_file,

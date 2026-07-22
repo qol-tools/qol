@@ -11,7 +11,7 @@ fn main() -> ExitCode {
             std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_some(),
             std::env::var_os(qol_conventions::ENV_DAEMON_REPLACE_EXISTING).is_some()
         );
-        qol_shot::daemon_app::run();
+        qol_shot::app::run();
         return ExitCode::SUCCESS;
     }
 

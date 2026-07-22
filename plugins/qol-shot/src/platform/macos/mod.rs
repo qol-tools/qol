@@ -20,7 +20,7 @@ pub use selector::{select_region, select_region_in_app};
 pub fn pre_create_selector(_cx: &mut gpui::App) {}
 
 pub fn pre_create_pins(cx: &mut gpui::App) {
-    crate::pinned::pre_create(cx);
+    crate::ui::pinned::pre_create(cx);
 }
 
 pub fn pin_cache_enabled() -> bool {

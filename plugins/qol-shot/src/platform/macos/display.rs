@@ -105,7 +105,8 @@ fn screencapture_display_order(display_ids: &[CGDirectDisplayID]) -> Vec<CGDirec
 }
 
 fn union_bounds(monitors: &[Monitor]) -> Result<Monitor> {
-    crate::geometry::union_bounds(monitors).ok_or_else(|| anyhow!("no active displays found"))
+    crate::capture::geometry::union_bounds(monitors)
+        .ok_or_else(|| anyhow!("no active displays found"))
 }
 
 fn monitor_from_cg_bounds(bounds: CGRect) -> Monitor {
@@ -122,5 +123,5 @@ fn round_i32(value: f64) -> i32 {
 }
 
 pub(super) fn rect_intersection(left: Rect, right: Monitor) -> Option<Rect> {
-    crate::geometry::rect_intersection(left, right)
+    crate::capture::geometry::rect_intersection(left, right)
 }

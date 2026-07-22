@@ -8,9 +8,9 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use crate::frozen_frame::FrozenFrame;
+use crate::capture::frozen_frame::FrozenFrame;
+use crate::capture::space::CaptureKind;
 use crate::platform::{CaptureProcess, CaptureSession};
-use crate::space::CaptureKind;
 use crate::{Config, Monitor, Rect};
 
 mod clipboard;
@@ -38,15 +38,15 @@ use window::{configure_selector_window, prepare_selector_window};
 const MIN_DETECTED_TARGET_PX: i32 = 24;
 
 thread_local! {
-    static SELECTOR_CACHE: crate::region_selector::platform::SelectorCache =
-        crate::region_selector::platform::SelectorCache::default();
+    static SELECTOR_CACHE: crate::ui::region_selector::platform::SelectorCache =
+        crate::ui::region_selector::platform::SelectorCache::default();
 }
 
 pub fn pre_create_selector(cx: &mut gpui::App) {
     let bounds = selector_bounds(None);
     let selector = selector_window(bounds, None, None, None, None, None);
     SELECTOR_CACHE.with(|cache| {
-        let Some(title) = crate::region_selector::platform::pre_create_cached(
+        let Some(title) = crate::ui::region_selector::platform::pre_create_cached(
             cache,
             selector,
             CaptureKind::Screenshot,
@@ -59,7 +59,7 @@ pub fn pre_create_selector(cx: &mut gpui::App) {
 }
 
 pub fn pre_create_pins(cx: &mut gpui::App) {
-    crate::pinned::pre_create(cx);
+    crate::ui::pinned::pre_create(cx);
 }
 
 pub fn pin_cache_enabled() -> bool {
@@ -71,7 +71,7 @@ pub fn after_pin_open(title: &str) {
 }
 
 pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Result<Option<Rect>> {
-    crate::region_selector::select_region_blocking_with(move |tx, cx| {
+    crate::ui::region_selector::select_region_blocking_with(move |tx, cx| {
         let tracker = MonitorTracker::start(cx);
         let cursor = tracker.snapshot_cursor();
         let active_bounds = Some(tracker_active_bounds_source(tracker));
@@ -100,7 +100,7 @@ fn open_region_selector(
     cx: &mut gpui::App,
     kind: CaptureKind,
     cursor: Option<(ActiveMonitor, Option<Point<Pixels>>)>,
-    active_bounds: Option<crate::region_selector::ActiveBoundsSource>,
+    active_bounds: Option<crate::ui::region_selector::ActiveBoundsSource>,
     frozen_frame: Option<FrozenFrame>,
 ) -> mpsc::Receiver<Option<Rect>> {
     let (tx, rx) = mpsc::channel();
@@ -113,7 +113,7 @@ fn open_region_selector_with_sender(
     quit_on_finish: bool,
     kind: CaptureKind,
     cursor: Option<(ActiveMonitor, Option<Point<Pixels>>)>,
-    active_bounds: Option<crate::region_selector::ActiveBoundsSource>,
+    active_bounds: Option<crate::ui::region_selector::ActiveBoundsSource>,
     frozen_frame: Option<FrozenFrame>,
     cx: &mut gpui::App,
 ) {
@@ -144,11 +144,11 @@ fn open_region_selector_with_sender(
         let mut tx = Some(tx);
         let mut selector = Some(selector);
         let reveal_bounds = rect_from_bounds(bounds);
-        let reveal: crate::region_selector::SelectorReveal = Rc::new(move |title| {
+        let reveal: crate::ui::region_selector::SelectorReveal = Rc::new(move |title| {
             configure_selector_window(title, reveal_bounds);
         });
         let title = SELECTOR_CACHE.with(|cache| {
-            crate::region_selector::platform::open_cached(
+            crate::ui::region_selector::platform::open_cached(
                 cache,
                 &mut tx,
                 &mut selector,
@@ -165,14 +165,14 @@ fn open_region_selector_with_sender(
             return;
         };
         let title = selector.title().to_string();
-        if crate::region_selector::open_all(tx, false, vec![selector], kind, cx) {
+        if crate::ui::region_selector::open_all(tx, false, vec![selector], kind, cx) {
             configure_selector_window(title, rect_from_bounds(bounds));
             cx.activate(true);
         }
         return;
     }
     let title = selector.title().to_string();
-    if crate::region_selector::open_all(tx, true, vec![selector], kind, cx) {
+    if crate::ui::region_selector::open_all(tx, true, vec![selector], kind, cx) {
         configure_selector_window(title, rect_from_bounds(bounds));
         cx.activate(true);
     }
@@ -180,40 +180,40 @@ fn open_region_selector_with_sender(
 
 fn initial_default_target(
     pointer: Option<Point<Pixels>>,
-    hover_target: Option<&dyn crate::region_selector::HoverTarget>,
+    hover_target: Option<&dyn crate::ui::region_selector::HoverTarget>,
     focused_window: Option<Rect>,
     monitor: Option<Rect>,
-) -> Option<crate::region_selector::DetectedTarget> {
+) -> Option<crate::ui::region_selector::DetectedTarget> {
     let pointer_target = pointer.and_then(|point| hover_target?.target_at(point));
     let pointer_monitor = pointer
         .zip(monitor)
-        .map(|(_, rect)| crate::region_selector::DetectedTarget::Monitor(rect));
+        .map(|(_, rect)| crate::ui::region_selector::DetectedTarget::Monitor(rect));
     pointer_target
         .or(pointer_monitor)
-        .or_else(|| focused_window.map(crate::region_selector::DetectedTarget::Window))
-        .or_else(|| monitor.map(crate::region_selector::DetectedTarget::Monitor))
+        .or_else(|| focused_window.map(crate::ui::region_selector::DetectedTarget::Window))
+        .or_else(|| monitor.map(crate::ui::region_selector::DetectedTarget::Monitor))
 }
 
 fn selector_window(
     bounds: Bounds<Pixels>,
     monitor: Option<ActiveMonitor>,
-    active_bounds: Option<crate::region_selector::ActiveBoundsSource>,
-    hover_target: Option<crate::region_selector::HoverTargetSource>,
-    default_target: Option<crate::region_selector::DetectedTarget>,
+    active_bounds: Option<crate::ui::region_selector::ActiveBoundsSource>,
+    hover_target: Option<crate::ui::region_selector::HoverTargetSource>,
+    default_target: Option<crate::ui::region_selector::DetectedTarget>,
     frozen_frame: Option<FrozenFrame>,
-) -> crate::region_selector::SelectorWindow {
-    crate::region_selector::SelectorWindow::new(
+) -> crate::ui::region_selector::SelectorWindow {
+    crate::ui::region_selector::SelectorWindow::new(
         bounds,
         monitor.map(|monitor| monitor.bounds()),
         default_target,
-        crate::region_selector::SelectorWindowOptions {
+        crate::ui::region_selector::SelectorWindowOptions {
             display_id: None,
             kind: WindowKind::PopUp,
             decorations: WindowDecorations::Client,
             focus: true,
         },
-        crate::region_selector::SelectorWindowSources {
-            map_rect: crate::region_selector::platform::identity_rect_mapper(),
+        crate::ui::region_selector::SelectorWindowSources {
+            map_rect: crate::ui::region_selector::platform::identity_rect_mapper(),
             global_pointer: None,
             cancel_signal: Some(Rc::new(qol_gpui::platform::is_escape_held)),
             active_bounds,
@@ -225,7 +225,7 @@ fn selector_window(
 
 fn snapshot_hover_target(
     selector_bounds: Bounds<Pixels>,
-) -> Option<crate::region_selector::HoverTargetSource> {
+) -> Option<crate::ui::region_selector::HoverTargetSource> {
     let include_frame = crate::config::load().capture.include_window_frame;
     let windows: Vec<Rect> = x11_stacked_window_rects(include_frame)
         .into_iter()
@@ -269,23 +269,23 @@ struct SnapshotHoverTarget {
     monitors: Vec<Rect>,
 }
 
-impl crate::region_selector::HoverTarget for SnapshotHoverTarget {
+impl crate::ui::region_selector::HoverTarget for SnapshotHoverTarget {
     fn target_at(
         &self,
         point: gpui::Point<Pixels>,
-    ) -> Option<crate::region_selector::DetectedTarget> {
+    ) -> Option<crate::ui::region_selector::DetectedTarget> {
         let x = f32::from(point.x).round() as i32;
         let y = f32::from(point.y).round() as i32;
         let hit =
             |rect: &Rect| x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h;
         if let Some(window) = self.windows.iter().copied().find(hit) {
-            return Some(crate::region_selector::DetectedTarget::Window(window));
+            return Some(crate::ui::region_selector::DetectedTarget::Window(window));
         }
         self.monitors
             .iter()
             .copied()
             .find(hit)
-            .map(crate::region_selector::DetectedTarget::Monitor)
+            .map(crate::ui::region_selector::DetectedTarget::Monitor)
     }
 }
 
@@ -522,9 +522,9 @@ fn trace_target_candidate(
     selector_bounds: Bounds<Pixels>,
     usable: bool,
 ) {
-    let rect = crate::geometry::rect_label(rect);
+    let rect = crate::capture::geometry::rect_label(rect);
     let bounds = rect_from_bounds(selector_bounds);
-    let bounds = crate::geometry::rect_label(bounds);
+    let bounds = crate::capture::geometry::rect_label(bounds);
     qol_runtime::probe!(
         "SHOT_SELECT_TARGET",
         "source={source} rect={rect} selector={bounds} usable={usable}"
@@ -532,20 +532,20 @@ fn trace_target_candidate(
 }
 
 fn trace_default_target(
-    target: Option<crate::region_selector::DetectedTarget>,
+    target: Option<crate::ui::region_selector::DetectedTarget>,
     selector_bounds: Bounds<Pixels>,
 ) {
     let target = match target {
-        Some(crate::region_selector::DetectedTarget::Window(rect)) => {
-            format!("window:{}", crate::geometry::rect_label(rect))
+        Some(crate::ui::region_selector::DetectedTarget::Window(rect)) => {
+            format!("window:{}", crate::capture::geometry::rect_label(rect))
         }
-        Some(crate::region_selector::DetectedTarget::Monitor(rect)) => {
-            format!("monitor:{}", crate::geometry::rect_label(rect))
+        Some(crate::ui::region_selector::DetectedTarget::Monitor(rect)) => {
+            format!("monitor:{}", crate::capture::geometry::rect_label(rect))
         }
         None => "none".to_string(),
     };
     let bounds = rect_from_bounds(selector_bounds);
-    let bounds = crate::geometry::rect_label(bounds);
+    let bounds = crate::capture::geometry::rect_label(bounds);
     qol_runtime::probe!("SHOT_SELECT_TARGET", "default={target} selector={bounds}");
 }
 
@@ -562,7 +562,7 @@ const ACTIVE_BOUNDS_SAMPLE_TTL: std::time::Duration = std::time::Duration::from_
 
 fn tracker_active_bounds_source(
     tracker: MonitorTracker,
-) -> crate::region_selector::ActiveBoundsSource {
+) -> crate::ui::region_selector::ActiveBoundsSource {
     Rc::new(TrackerActiveBounds {
         tracker,
         cache: std::cell::RefCell::new(None),
@@ -574,7 +574,7 @@ struct TrackerActiveBounds {
     cache: std::cell::RefCell<Option<(std::time::Instant, Option<Bounds<Pixels>>)>>,
 }
 
-impl crate::region_selector::ActiveBounds for TrackerActiveBounds {
+impl crate::ui::region_selector::ActiveBounds for TrackerActiveBounds {
     fn active_bounds(&self) -> Option<Bounds<Pixels>> {
         if let Some((sampled_at, bounds)) = *self.cache.borrow() {
             if sampled_at.elapsed() < ACTIVE_BOUNDS_SAMPLE_TTL {
@@ -593,7 +593,7 @@ impl crate::region_selector::ActiveBounds for TrackerActiveBounds {
 fn selector_bounds(frozen_frame: Option<&FrozenFrame>) -> Bounds<Pixels> {
     if let Some(frame) = frozen_frame {
         let bounds = frame.bounds();
-        return crate::region_selector::bounds_from_monitor(Monitor {
+        return crate::ui::region_selector::bounds_from_monitor(Monitor {
             x: bounds.x,
             y: bounds.y,
             w: bounds.w,
@@ -601,8 +601,8 @@ fn selector_bounds(frozen_frame: Option<&FrozenFrame>) -> Bounds<Pixels> {
         });
     }
     full_screen_bounds()
-        .map(crate::region_selector::bounds_from_monitor)
-        .unwrap_or_else(|_| crate::region_selector::fallback_bounds())
+        .map(crate::ui::region_selector::bounds_from_monitor)
+        .unwrap_or_else(|_| crate::ui::region_selector::fallback_bounds())
 }
 
 pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
@@ -747,7 +747,7 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Pa
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("Saved in Videos");
-    crate::completion::background_saved(
+    crate::capture::completion::background_saved(
         "Recording saved",
         message,
         output_file,
@@ -808,7 +808,7 @@ mod tests {
         capturable_window_type, framed_rect, initial_default_target, parse_xdotool_geometry,
         usable_target, SnapshotHoverTarget,
     };
-    use crate::region_selector::{DetectedTarget, HoverTarget};
+    use crate::ui::region_selector::{DetectedTarget, HoverTarget};
     use crate::Rect;
     use gpui::{point, px, size, Bounds};
 

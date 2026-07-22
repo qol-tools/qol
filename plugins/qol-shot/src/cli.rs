@@ -7,8 +7,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use crate::actions::ShotAction;
-use crate::{actions, platform, recording, screenshot, settings, Config, PLUGIN_ID};
+use crate::capture::{actions, recording, screenshot};
+use crate::config::settings;
+use crate::{platform, Config, PLUGIN_ID};
+
+use actions::ShotAction;
 
 const BINARY_NAME: &str = "qol-shot";
 
@@ -43,9 +46,9 @@ fn preview_command(binary_name: &'static str) -> Command {
         .run_plain_text(|ctx| {
             let path = match ctx.args().first() {
                 Some(arg) => PathBuf::from(arg),
-                None => crate::output::latest_screenshot()?,
+                None => crate::capture::output::latest_screenshot()?,
             };
-            crate::preview::show(&path)?;
+            crate::ui::preview::show(&path)?;
             Ok(PlainTextOutput::empty())
         })
 }
@@ -76,7 +79,7 @@ fn forward_host_fallback_record_to_daemon() -> bool {
     }
 
     qol_runtime::probe!("SHOT_RECORD_FORWARD", "action=record reason=host-fallback");
-    crate::daemon::wait_and_send_action("record", Duration::from_millis(4_000))
+    crate::app::daemon::wait_and_send_action("record", Duration::from_millis(4_000))
 }
 
 fn screenshot_command(binary_name: &'static str) -> Command {

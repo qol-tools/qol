@@ -18,9 +18,9 @@ use qol_gpui::window::{
     centered_window_placement, cursor_window_placement, ActiveWindows, MonitorKey, WindowPlacement,
 };
 
-use crate::screenshot::{CaptureFileReady, PreviewCapture};
-use crate::shortcuts::{resolve_copy_command, shot_action_for_keystroke};
-use crate::{actions::ShotAction, platform};
+use crate::capture::screenshot::{CaptureFileReady, PreviewCapture};
+use crate::ui::shortcuts::{resolve_copy_command, shot_action_for_keystroke};
+use crate::{capture::actions::ShotAction, platform};
 
 const MAX_THUMB_W: f32 = 360.0;
 const MAX_THUMB_H: f32 = 240.0;
@@ -111,14 +111,14 @@ pub fn show(path: &Path) -> Result<()> {
 
 pub(crate) fn show_saved(
     path: &Path,
-    completion: crate::completion::PreviewCompletion,
+    completion: crate::capture::completion::PreviewCompletion,
 ) -> Result<()> {
     show_with_completion(path, Some(completion))
 }
 
 fn show_with_completion(
     path: &Path,
-    saved_completion: Option<crate::completion::PreviewCompletion>,
+    saved_completion: Option<crate::capture::completion::PreviewCompletion>,
 ) -> Result<()> {
     let thumb = read_thumb(path)?;
     let path = path.to_path_buf();
@@ -186,7 +186,7 @@ pub fn pre_create(windows: &PreviewWindows, tracker: &MonitorTracker, cx: &mut A
 pub fn park_idle(windows: &PreviewWindows, cx: &mut App) {
     for (_, handle) in windows.borrow().iter() {
         let _ = handle.update(cx, |view, window, _cx| {
-            view.dismiss(crate::completion::PreviewExit::Superseded, window);
+            view.dismiss(crate::capture::completion::PreviewExit::Superseded, window);
         });
     }
 }
@@ -270,7 +270,7 @@ struct GhostContent {
     file_ready: CaptureFileReady,
     started_at: Instant,
     ready: bool,
-    saved_completion: Option<crate::completion::PreviewCompletion>,
+    saved_completion: Option<crate::capture::completion::PreviewCompletion>,
 }
 
 impl GhostContent {
@@ -309,7 +309,7 @@ impl GhostContent {
 
 fn mark_non_target_hidden(windows: &PreviewWindows, target: MonitorKey, cx: &mut App) {
     qol_gpui::window::hide_non_target(windows, target, cx, |view, window, _cx| {
-        view.dismiss(crate::completion::PreviewExit::Superseded, window)
+        view.dismiss(crate::capture::completion::PreviewExit::Superseded, window)
     });
 }
 
@@ -460,7 +460,7 @@ fn open_quit_window(
     thumb: (f32, f32),
     completion: Completion,
     image: Option<Arc<RenderImage>>,
-    saved_completion: Option<crate::completion::PreviewCompletion>,
+    saved_completion: Option<crate::capture::completion::PreviewCompletion>,
     cx: &mut App,
 ) -> bool {
     let (win_w, win_h) = window_dims(thumb.0, thumb.1, control_count());
@@ -569,7 +569,7 @@ pub struct PreviewView {
     window_origin: Point<Pixels>,
     dismiss_sub: Option<DismissSub>,
     copy_command: ShotAction,
-    saved_completion: Option<crate::completion::PreviewCompletion>,
+    saved_completion: Option<crate::capture::completion::PreviewCompletion>,
     action_pending: bool,
     scheduled_reveal_seq: Option<u64>,
     pending_reveal: Option<PreviewReveal>,
@@ -663,7 +663,7 @@ impl PreviewView {
     }
 
     fn reset_for_show(&mut self, content: GhostContent, seq: u64, reveal: PreviewReveal) {
-        self.finish_completion(crate::completion::PreviewExit::Superseded);
+        self.finish_completion(crate::capture::completion::PreviewExit::Superseded);
         self.path = content.path;
         self.thumb = content.thumb;
         self.image = content.image;
@@ -733,7 +733,7 @@ impl PreviewView {
     fn pin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let started_at = Instant::now();
         qol_runtime::probe!("SHOT_PIN_ACTION", "seq={}", self.seq);
-        let content = crate::pinned::PinnedContent {
+        let content = crate::ui::pinned::PinnedContent {
             path: self.path.clone(),
             image: self.image.clone(),
             size: self.thumb,
@@ -746,14 +746,14 @@ impl PreviewView {
         };
         let origin = window_origin + point(px(MARGIN), px(MARGIN));
         let dismiss = match self.mode {
-            DismissMode::Quit => crate::pinned::PinnedDismiss::Quit,
-            DismissMode::Ghost => crate::pinned::PinnedDismiss::Remove,
+            DismissMode::Quit => crate::ui::pinned::PinnedDismiss::Quit,
+            DismissMode::Ghost => crate::ui::pinned::PinnedDismiss::Remove,
         };
         let source_preview = match self.mode {
             DismissMode::Quit => None,
             DismissMode::Ghost => Some(self.title.clone()),
         };
-        if !crate::pinned::open(content, origin, dismiss, source_preview, cx) {
+        if !crate::ui::pinned::open(content, origin, dismiss, source_preview, cx) {
             return;
         }
         match self.mode {
@@ -767,7 +767,7 @@ impl PreviewView {
             }
             DismissMode::Ghost => self.set_showing(false),
         }
-        self.finish_completion(crate::completion::PreviewExit::Pinned);
+        self.finish_completion(crate::capture::completion::PreviewExit::Pinned);
     }
 
     fn choose(&mut self, action: ShotAction, window: &mut Window, cx: &mut Context<Self>) {
@@ -792,20 +792,22 @@ impl PreviewView {
         let completion = self.completion.clone();
         let seq = self.seq;
         let exit = if action == ShotAction::OpenFolder {
-            crate::completion::PreviewExit::OpenFolder
+            crate::capture::completion::PreviewExit::OpenFolder
         } else {
-            crate::completion::PreviewExit::Intentional
+            crate::capture::completion::PreviewExit::Intentional
         };
         let perform = move || match action {
             ShotAction::OpenFolder => match saved_completion {
-                Some(completion) => completion.open(crate::completion::RevealSource::PreviewAction),
-                None => crate::completion::reveal(&path),
+                Some(completion) => {
+                    completion.open(crate::capture::completion::RevealSource::PreviewAction)
+                }
+                None => crate::capture::completion::reveal(&path),
             },
             _ => action.perform(&path),
         };
         if self.mode == DismissMode::Ghost {
             if let Err(error) =
-                crate::actions::spawn_file_action("preview", action, file_ready, perform)
+                crate::capture::actions::spawn_file_action("preview", action, file_ready, perform)
             {
                 eprintln!("[qol-shot] preview action worker failed: {error:#}");
                 self.action_pending = false;
@@ -816,7 +818,7 @@ impl PreviewView {
             return;
         }
         let action_task = cx.background_spawn(async move {
-            crate::actions::perform_when_file_ready("preview", action, file_ready, perform)
+            crate::capture::actions::perform_when_file_ready("preview", action, file_ready, perform)
         });
         cx.spawn(async move |_view, cx| {
             let result = action_task.await;
@@ -838,7 +840,7 @@ impl PreviewView {
 
     fn close(
         &mut self,
-        exit: crate::completion::PreviewExit,
+        exit: crate::capture::completion::PreviewExit,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -854,13 +856,13 @@ impl PreviewView {
         park_ghost(&self.title, window, self.window_origin);
     }
 
-    fn dismiss(&mut self, exit: crate::completion::PreviewExit, window: &mut Window) {
+    fn dismiss(&mut self, exit: crate::capture::completion::PreviewExit, window: &mut Window) {
         FOCUS_REASSERT_GEN.store(u64::MAX, Ordering::SeqCst);
         self.hide_to_ghost(window);
         self.finish_completion(exit);
     }
 
-    fn finish_completion(&mut self, exit: crate::completion::PreviewExit) {
+    fn finish_completion(&mut self, exit: crate::capture::completion::PreviewExit) {
         let Some(completion) = self.saved_completion.take() else {
             return;
         };
@@ -874,7 +876,11 @@ impl PreviewView {
         }
 
         match event.keystroke.key.as_str() {
-            "escape" | "esc" => self.close(crate::completion::PreviewExit::Intentional, window, cx),
+            "escape" | "esc" => self.close(
+                crate::capture::completion::PreviewExit::Intentional,
+                window,
+                cx,
+            ),
             "left" | "up" => self.move_selection(-1, cx),
             "right" | "down" | "tab" => self.move_selection(1, cx),
             "enter" | "return" | "space" => {
@@ -920,7 +926,9 @@ impl PreviewView {
                 )
             },
             cx,
-            |this, window, _cx| this.dismiss(crate::completion::PreviewExit::LostFocus, window),
+            |this, window, _cx| {
+                this.dismiss(crate::capture::completion::PreviewExit::LostFocus, window)
+            },
         ));
         if !self.is_showing {
             hide_invisible(&self.title);

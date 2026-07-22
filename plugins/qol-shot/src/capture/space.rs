@@ -135,7 +135,7 @@ fn intersection_area(a: Rect, b: Rect) -> u64 {
         w: b.w,
         h: b.h,
     };
-    crate::geometry::rect_intersection(a, bounds)
+    crate::capture::geometry::rect_intersection(a, bounds)
         .map(|r| r.w as u64 * r.h as u64)
         .unwrap_or(0)
 }

@@ -7,12 +7,12 @@ pub fn show_capture_status(
     subtitle: String,
     cx: &mut App,
 ) -> bool {
-    let bounds = crate::region_selector::guide_panel_bounds(monitor_bounds);
-    let reveal: crate::region_selector::SelectorReveal = Rc::new(|title| {
+    let bounds = crate::ui::region_selector::guide_panel_bounds(monitor_bounds);
+    let reveal: crate::ui::region_selector::SelectorReveal = Rc::new(|title| {
         super::window::configure_status_window(&title);
     });
     super::SELECTOR_CACHE.with(|cache| {
-        crate::region_selector::platform::show_cached_guide(
+        crate::ui::region_selector::platform::show_cached_guide(
             cache,
             bounds,
             title.into(),
@@ -26,6 +26,6 @@ pub fn show_capture_status(
 
 pub fn hide_capture_status(cx: &mut App) {
     super::SELECTOR_CACHE.with(|cache| {
-        crate::region_selector::platform::hide_cached_guide(cache, cx);
+        crate::ui::region_selector::platform::hide_cached_guide(cache, cx);
     });
 }

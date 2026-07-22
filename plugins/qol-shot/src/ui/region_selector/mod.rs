@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, LazyLock};
 use std::time::Duration;
 
-use crate::frozen_frame::FrozenFrame;
-use crate::geometry::rect_label;
-use crate::space::{self, CaptureKind, Level};
+use crate::capture::frozen_frame::FrozenFrame;
+use crate::capture::geometry::rect_label;
+use crate::capture::space::{self, CaptureKind, Level};
 use crate::{Monitor, Rect};
 use qol_gpui::theme::{shot_selector_runtime, ShotSelectorPalette};
 
@@ -1588,7 +1588,7 @@ mod tests {
         shift_rect, ChipModel, DetectedTarget, SelectionState, CHIP_TOP, GUIDE_H, GUIDE_TOP,
         GUIDE_W,
     };
-    use crate::space::{CaptureKind, DisplayScale, Quality};
+    use crate::capture::space::{CaptureKind, DisplayScale, Quality};
     use crate::Rect;
     use gpui::{point, px, size, Bounds};
     use std::sync::mpsc;

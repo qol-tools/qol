@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::frozen_frame::FrozenFrame;
+use crate::capture::frozen_frame::FrozenFrame;
 use crate::Rect;
 
 pub fn process_alive(pid: u32) -> bool {
@@ -34,7 +34,7 @@ pub fn show_saved_notification(
     title: &str,
     message: &str,
     timeout_ms: u32,
-    _target: crate::completion::RevealTarget,
+    _target: crate::capture::completion::RevealTarget,
 ) {
     show_notification(title, message, timeout_ms);
 }
