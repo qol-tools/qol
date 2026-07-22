@@ -497,8 +497,8 @@ mod boot_wires_independent_reconcilers {
     use super::read_src;
 
     #[test]
-    fn main_spawns_one_reconciler_for_hotkeys_and_one_for_launcher_apps() {
-        let src = read_src("main.rs");
+    fn app_spawns_one_reconciler_for_hotkeys_and_one_for_launcher_apps() {
+        let src = read_src("app/mod.rs");
         assert!(
             src.contains("spawn_config_reconcilers"),
             "app_init_inner must spawn the config reconcilers at boot via \
@@ -507,7 +507,7 @@ mod boot_wires_independent_reconcilers {
         let body = src
             .split_once("fn spawn_config_reconcilers")
             .map(|(_, rest)| rest)
-            .expect("spawn_config_reconcilers must be defined in main.rs");
+            .expect("spawn_config_reconcilers must be defined in app/mod.rs");
         assert!(
             body.contains("ConfigKind::Hotkeys")
                 && body.contains("ConfigKind::Plugins")
