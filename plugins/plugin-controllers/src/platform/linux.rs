@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use evdev::{Device, KeyCode};
 
-use crate::detect;
+use crate::detection;
 use crate::fixes::{DetectedDevice, Mac};
 use crate::platform::{
     NativeAdapter, NativeButtonInput, NativeConnection, NativeControllerInput, NativeInputSnapshot,
@@ -449,7 +449,7 @@ pub fn read_devices() -> Vec<DetectedDevice> {
     let Ok(text) = std::fs::read_to_string(INPUT_DEVICES_PATH) else {
         return Vec::new();
     };
-    let mut devices = detect::parse_devices(&text);
+    let mut devices = detection::parse_devices(&text);
     populate_drivers(&mut devices, Path::new(SYSFS_ROOT));
     devices
 }
@@ -490,7 +490,7 @@ mod tests {
     #[test]
     fn populate_drivers_preserves_devices_without_a_driver_link() {
         let root = tempfile::tempdir().expect("tempdir");
-        let mut devices = detect::parse_devices(
+        let mut devices = detection::parse_devices(
             "I: Bus=0003 Vendor=28de Product=11ff Version=0001\n\
              N: Name=\"Virtual pad\"\n\
              S: Sysfs=/devices/virtual/input/input40\n\
@@ -506,7 +506,7 @@ mod tests {
 
     #[test]
     fn stick_click_codes_apply_only_the_gulikit_bluetooth_quirk() {
-        let mut devices = detect::parse_devices(
+        let mut devices = detection::parse_devices(
             "I: Bus=0005 Vendor=045e Product=02e0 Version=0903\n\
              N: Name=\"GuliKit Controller XW\"\n\
              H: Handlers=event21 js0\n\n\

@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use anyhow::Result;
 use qol_headless::{Command, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTextOutput};
 
-use crate::{daemon, PLUGIN_ID};
+use crate::{app, PLUGIN_ID};
 
 const BINARY_NAME: &str = "plugin-controllers";
 
@@ -32,7 +32,7 @@ fn apply_command() -> Command {
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero if no driver-specific fix applies or pkexec fails.")
         .run_plain_text(|_| {
-            daemon::execute_action_once("apply_fixes")?;
+            app::execute_action_once("apply_fixes")?;
             Ok(PlainTextOutput::empty())
         })
 }
@@ -44,15 +44,15 @@ fn status_command() -> Command {
         .output("One line per connected controller.")
         .exit_behavior("Exits zero even when no controller is connected.")
         .run_plain_text(|_| {
-            let snapshot = daemon::snapshot();
+            let snapshot = app::snapshot();
             if snapshot.rows.is_empty() {
                 return Ok(PlainTextOutput::text("no controllers detected"));
             }
             Ok(PlainTextOutput::text(summary_lines(&snapshot.rows)))
         })
         .run_json(|_| {
-            let snapshot = daemon::snapshot();
-            Ok(daemon::snapshot_payload(&snapshot))
+            let snapshot = app::snapshot();
+            Ok(app::snapshot_payload(&snapshot))
         })
 }
 
@@ -84,7 +84,7 @@ fn doctor_checks() -> Vec<DoctorCheck> {
 }
 
 fn pkexec_check() -> Result<DoctorCheckResult> {
-    let snapshot = daemon::snapshot();
+    let snapshot = app::snapshot();
     if !snapshot.rows.iter().any(|row| row.fixable) {
         return Ok(DoctorCheckResult::ok(
             "pkexec_available",
@@ -107,7 +107,7 @@ fn pkexec_check() -> Result<DoctorCheckResult> {
 }
 
 fn fixes_check() -> Result<DoctorCheckResult> {
-    let snapshot = daemon::snapshot();
+    let snapshot = app::snapshot();
     if snapshot.rows.is_empty() {
         return Ok(DoctorCheckResult::ok(
             "controller_fixes",
@@ -125,7 +125,7 @@ fn fixes_check() -> Result<DoctorCheckResult> {
     Ok(DoctorCheckResult::ok("controller_fixes", summary))
 }
 
-fn summary_lines(rows: &[daemon::ControllerRow]) -> String {
+fn summary_lines(rows: &[app::ControllerRow]) -> String {
     rows.iter()
         .map(|row| {
             format!(

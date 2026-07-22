@@ -3,8 +3,8 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
-use crate::fixes::FixTarget;
-use crate::state::desired_quirk;
+use super::state::desired_quirk;
+use super::FixTarget;
 
 fn quirks_by_driver(targets: &[FixTarget]) -> BTreeMap<&'static str, Vec<String>> {
     let mut map: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
@@ -66,8 +66,8 @@ done"#;
 
 #[cfg(test)]
 mod tests {
+    use super::super::{match_devices, DetectedDevice, FixTarget};
     use super::*;
-    use crate::fixes::{match_devices, DetectedDevice, FixTarget};
 
     fn targets() -> Vec<FixTarget> {
         let device = DetectedDevice {

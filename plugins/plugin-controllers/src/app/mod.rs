@@ -5,9 +5,10 @@ use anyhow::{bail, Context, Result};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_plugin_daemon::notification::send_notification;
 
+use crate::fixes::apply;
+use crate::fixes::state::{compute, FixState, SystemPaths};
 use crate::fixes::{match_device, match_devices, DetectedDevice};
-use crate::state::{compute, FixState, SystemPaths};
-use crate::{apply, platform};
+use crate::platform;
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,

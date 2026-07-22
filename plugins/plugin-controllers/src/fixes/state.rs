@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::fixes::FixTarget;
+use super::FixTarget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixState {
@@ -76,8 +76,8 @@ fn live(paths: &SystemPaths, driver: &str, quirk: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{match_devices, DetectedDevice, FixTarget};
     use super::*;
-    use crate::fixes::{match_devices, DetectedDevice, FixTarget};
     use std::fs;
 
     fn target() -> FixTarget {
