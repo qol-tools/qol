@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 
-use crate::core::guards::{CaskIndex, CaskToken};
+use crate::core::guards::{ManagedPackage, PackageIndex};
 use crate::core::{AppPlatform, Disposal, InstalledApp, RemovalOutcome, RemovalPlan};
 
 #[derive(Default)]
@@ -39,10 +39,10 @@ impl AppPlatform for Platform {
     fn quit(&self, _app: &InstalledApp) -> Result<()> {
         Err(anyhow!(UNSUPPORTED))
     }
-    fn cask_index(&self) -> CaskIndex {
-        CaskIndex::absent()
+    fn package_index(&self, _inventory: &[InstalledApp]) -> PackageIndex {
+        PackageIndex::absent()
     }
-    fn brew_uninstall(&self, _token: &CaskToken) -> Result<()> {
+    fn uninstall_package(&self, _app: &InstalledApp, _package: &ManagedPackage) -> Result<()> {
         Err(anyhow!(UNSUPPORTED))
     }
 }

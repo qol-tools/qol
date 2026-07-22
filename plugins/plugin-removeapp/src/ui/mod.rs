@@ -9,7 +9,7 @@ use gpui::{
 };
 
 use crate::core::{
-    self, CaskIndex, CaskStatus, Disposal, Guards, InstalledApp, RemovalOutcome, RemovalPlan,
+    self, Disposal, Guards, InstalledApp, PackageIndex, PackageStatus, RemovalOutcome, RemovalPlan,
 };
 use qol_gpui::scroll_list::ScrollList;
 use qol_gpui::theme::{remove_app_runtime, RemoveAppPalette};
@@ -46,7 +46,7 @@ pub struct RemoveAppView {
     outcome: Option<RemovalOutcome>,
     error: Option<String>,
     guards: Option<Guards>,
-    cask_index: Option<CaskIndex>,
+    package_index: Option<PackageIndex>,
     quit_failed: bool,
     focus_handle: FocusHandle,
 }
@@ -55,7 +55,7 @@ impl RemoveAppView {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let apps = core::installed_apps().unwrap_or_default();
         let matches = core::filter(&apps, "");
-        Self::spawn_cask_prewarm(cx);
+        Self::spawn_package_prewarm(cx, apps.clone());
         Self {
             apps,
             query: String::new(),
@@ -67,21 +67,21 @@ impl RemoveAppView {
             outcome: None,
             error: None,
             guards: None,
-            cask_index: None,
+            package_index: None,
             quit_failed: false,
             focus_handle: cx.focus_handle(),
         }
     }
 
-    fn spawn_cask_prewarm(cx: &mut Context<Self>) {
+    fn spawn_package_prewarm(cx: &mut Context<Self>, apps: Vec<InstalledApp>) {
         cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
                 let index = async_cx
-                    .background_spawn(async { core::cask_index() })
+                    .background_spawn(async move { core::package_index(&apps) })
                     .await;
                 this.update(&mut async_cx, |view, cx| {
-                    view.cask_index = Some(index);
+                    view.package_index = Some(index);
                     if view.mode == Mode::Confirming && view.guards.is_none() {
                         view.refresh_guards();
                     }
@@ -122,9 +122,9 @@ impl RemoveAppView {
             return;
         };
         self.guards = self
-            .cask_index
+            .package_index
             .as_ref()
-            .map(|index| core::guards_with(&plan.app, &self.apps, index));
+            .map(|index| core::guards_with(&plan.app, index));
     }
 
     fn toggle_disposal(&mut self) {
@@ -137,7 +137,7 @@ impl RemoveAppView {
     fn unresolved(&self) -> bool {
         match &self.guards {
             None => true,
-            Some(g) => g.running || matches!(g.cask, CaskStatus::Managed(_)),
+            Some(g) => g.running || matches!(g.package, PackageStatus::Managed(_)),
         }
     }
 
@@ -156,13 +156,13 @@ impl RemoveAppView {
         }
     }
 
-    fn try_brew(&mut self) {
+    fn try_package(&mut self) {
         let Some(plan) = self.plan.clone() else {
             return;
         };
-        let token = match &self.guards {
-            Some(g) if !g.running => match &g.cask {
-                CaskStatus::Managed(t) => t.clone(),
+        let package = match &self.guards {
+            Some(g) if !g.running => match &g.package {
+                PackageStatus::Managed(package) => package.clone(),
                 _ => return,
             },
             _ => return,
@@ -173,10 +173,15 @@ impl RemoveAppView {
             }
             return;
         }
-        match core::brew_uninstall(&token) {
+        match core::uninstall_package(&plan, &package) {
             Ok(()) => {
-                let cask = CaskStatus::Managed(token);
-                self.finish_result(core::remove_after_brew(&plan, Disposal::Trash, &cask, true));
+                let status = PackageStatus::Managed(package);
+                self.finish_result(core::remove_after_package(
+                    &plan,
+                    Disposal::Trash,
+                    &status,
+                    true,
+                ));
             }
             Err(error) => {
                 self.error = Some(error.to_string());
@@ -196,12 +201,12 @@ impl RemoveAppView {
             }
             return;
         }
-        let cask = self
+        let package = self
             .guards
             .as_ref()
-            .map(|g| g.cask.clone())
-            .unwrap_or(CaskStatus::NotManaged);
-        self.finish_result(core::remove(&plan, disposal, &cask));
+            .map(|g| g.package.clone())
+            .unwrap_or(PackageStatus::NotManaged);
+        self.finish_result(core::remove(&plan, disposal, &package));
     }
 
     fn finish_result(&mut self, result: anyhow::Result<RemovalOutcome>) {
@@ -264,8 +269,15 @@ impl RemoveAppView {
                     self.try_quit();
                     cx.notify();
                 }
-                "b" => {
-                    self.try_brew();
+                key if self.guards.as_ref().is_some_and(|guards| {
+                    matches!(
+                        &guards.package,
+                        PackageStatus::Managed(package)
+                            if package.manager().action_key() == key
+                    )
+                }) =>
+                {
+                    self.try_package();
                     cx.notify();
                 }
                 "t" => {
@@ -394,17 +406,35 @@ impl RemoveAppView {
                     )
             })
             .collect();
-        let (disp_label, disp_color) = match self.disposal {
-            Disposal::Trash => ("Move to Trash", palette.success),
-            Disposal::Delete => ("PERMANENTLY DELETE", palette.danger),
+        let managed = self
+            .guards
+            .as_ref()
+            .and_then(|guards| match &guards.package {
+                PackageStatus::Managed(package) => Some(package),
+                _ => None,
+            });
+        let (disp_label, disp_color) = match (managed, self.disposal) {
+            (Some(package), _) => (
+                format!("Uninstall with {}", package.manager().label()),
+                palette.accent,
+            ),
+            (None, Disposal::Trash) => ("Move to Trash".to_string(), palette.success),
+            (None, Disposal::Delete) => ("PERMANENTLY DELETE".to_string(), palette.danger),
         };
         let mut hints: Vec<(&str, &str)> = Vec::new();
         if let Some(g) = &self.guards {
             if g.running {
                 hints.push(("Q", "quit & continue"));
             }
-            if !g.running && matches!(g.cask, CaskStatus::Managed(_)) {
-                hints.push(("B", "brew uninstall"));
+            if !g.running {
+                if let PackageStatus::Managed(package) = &g.package {
+                    let label = match package.manager() {
+                        crate::core::PackageManager::Homebrew => "brew uninstall",
+                        crate::core::PackageManager::Apt => "apt uninstall",
+                        crate::core::PackageManager::Flatpak => "flatpak uninstall",
+                    };
+                    hints.push((package.manager().action_key_label(), label));
+                }
             }
         }
         if !self.unresolved() {
@@ -463,7 +493,7 @@ impl RemoveAppView {
         let Some(g) = self.guards.as_ref() else {
             return Some(banner_container(vec![banner_line(
                 palette.text_muted,
-                "Checking Homebrew\u{2026}",
+                "Checking package manager\u{2026}",
             )
             .into_any_element()]));
         };
@@ -476,22 +506,26 @@ impl RemoveAppView {
             };
             lines.push(banner_line(palette.warning, text).into_any_element());
         }
-        match &g.cask {
-            CaskStatus::Managed(_) => lines.push(
+        match &g.package {
+            PackageStatus::Managed(package) => lines.push(
                 banner_line(
                     palette.accent,
-                    "Homebrew-managed - press B to brew uninstall",
+                    &format!(
+                        "{}-managed - press {} to uninstall",
+                        package.manager().label(),
+                        package.manager().action_key_label()
+                    ),
                 )
                 .into_any_element(),
             ),
-            CaskStatus::Unavailable(_) => lines.push(
+            PackageStatus::Unavailable(reason) => lines.push(
                 banner_line(
                     palette.text_muted,
-                    "couldn't confirm Homebrew - check manually",
+                    &format!("couldn't confirm package ownership - {reason}"),
                 )
                 .into_any_element(),
             ),
-            CaskStatus::NotManaged => {}
+            PackageStatus::NotManaged => {}
         }
         if lines.is_empty() {
             return None;

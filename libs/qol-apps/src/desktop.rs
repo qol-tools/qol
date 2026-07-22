@@ -127,6 +127,9 @@ fn xdg_app_dirs() -> Vec<PathBuf> {
         PathBuf::from("/usr/share/applications"),
         PathBuf::from("/usr/local/share/applications"),
         PathBuf::from(format!("{data_home}/applications")),
+        PathBuf::from(format!(
+            "{home}/.local/share/flatpak/exports/share/applications"
+        )),
         PathBuf::from("/var/lib/flatpak/exports/share/applications"),
         PathBuf::from("/var/lib/snapd/desktop/applications"),
     ];
@@ -166,7 +169,9 @@ fn walk_for_desktop(dir: &Path, depth: usize, max_depth: usize, entries: &mut Ve
             Err(_) => continue,
         };
 
-        if file_type.is_file() && path.extension().is_some_and(|ext| ext == "desktop") {
+        if (file_type.is_file() || file_type.is_symlink())
+            && path.extension().is_some_and(|ext| ext == "desktop")
+        {
             if let Some(parsed) = parse_desktop_entry_file(&path) {
                 entries.push(parsed);
             }
@@ -381,6 +386,38 @@ Exec=hidden
         assert_eq!(
             parse_desktop_entry_content(content, Path::new("/tmp/hidden.desktop")),
             None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_desktop_root_follows_flatpak_style_launcher_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let exports = tmp.path().join("exports/share/applications");
+        let target = tmp
+            .path()
+            .join("app/com.acme.Widget/current/widget.desktop");
+        fs::create_dir_all(&exports).unwrap();
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(
+            &target,
+            "[Desktop Entry]\nName=Widget\nExec=flatpak run com.acme.Widget\n",
+        )
+        .unwrap();
+        symlink(&target, exports.join("com.acme.Widget.desktop")).unwrap();
+
+        let entries = scan_desktop_root(&AppRoot {
+            path: exports,
+            max_depth: 1,
+        });
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "Widget");
+        assert_eq!(
+            entries[0].exec.last().map(String::as_str),
+            Some("com.acme.Widget")
         );
     }
 

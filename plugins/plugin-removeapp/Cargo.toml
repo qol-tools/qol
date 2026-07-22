@@ -30,6 +30,11 @@ objc2 = { workspace = true }
 objc2-app-kit = { workspace = true, features = ["NSWorkspace", "NSRunningApplication"] }
 wait-timeout = "0.2"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+qol-process.workspace = true
+trash = "5"
+wait-timeout = "0.2"
+
 [dev-dependencies]
 qol-plugin-api.workspace = true
 tempfile = "3"

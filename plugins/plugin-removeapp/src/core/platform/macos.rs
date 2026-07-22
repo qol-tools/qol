@@ -6,7 +6,10 @@ use std::time::Duration;
 use anyhow::Result;
 
 use crate::core::classify::{normalize_entry, owner_of};
-use crate::core::guards::{parse_cask_map, sanitize_stderr, CaskIndex, CaskToken};
+use crate::core::guards::{
+    parse_cask_map, sanitize_stderr, CaskIndex, CaskStatus, ManagedPackage, PackageIndex,
+    PackageManager, PackageScope, PackageStatus,
+};
 use crate::core::{
     AppPlatform, Disposal, IdentitySnapshot, InstalledApp, Leftover, LeftoverKind, MatchKind,
     RemovalOutcome, RemovalPlan,
@@ -333,26 +336,60 @@ impl AppPlatform for Platform {
         }
     }
 
-    fn cask_index(&self) -> CaskIndex {
+    fn package_index(&self, inventory: &[InstalledApp]) -> PackageIndex {
         let Some(brew) = brew_path() else {
-            return CaskIndex::absent();
+            return PackageIndex::absent();
         };
         let output = match run_brew(&brew, &["info", "--cask", "--json=v2", "--installed"]) {
             Ok(o) if o.status.success() => o,
-            Ok(o) => return CaskIndex::unavailable(sanitize_stderr(&o.stderr, STDERR_CAP)),
-            Err(e) => return CaskIndex::unavailable(e.to_string()),
+            Ok(o) => return PackageIndex::unavailable(sanitize_stderr(&o.stderr, STDERR_CAP)),
+            Err(e) => return PackageIndex::unavailable(e.to_string()),
         };
-        match parse_cask_map(&String::from_utf8_lossy(&output.stdout)) {
-            Ok(m) => CaskIndex::from_map(m),
-            Err(e) => CaskIndex::unavailable(format!("brew json: {e}")),
+        let casks = match parse_cask_map(&String::from_utf8_lossy(&output.stdout)) {
+            Ok(map) => CaskIndex::from_map(map),
+            Err(e) => return PackageIndex::unavailable(format!("brew json: {e}")),
+        };
+        let basenames: Vec<String> = inventory
+            .iter()
+            .map(|app| {
+                app.path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            })
+            .collect();
+        let mut packages = PackageIndex::absent();
+        for app in inventory {
+            let basename = app
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let status = match casks.classify(&basename, &basenames) {
+                CaskStatus::Managed(token) => ManagedPackage::parse(
+                    PackageManager::Homebrew,
+                    token.as_str(),
+                    PackageScope::User,
+                )
+                .map(PackageStatus::Managed),
+                CaskStatus::NotManaged => None,
+                CaskStatus::Unavailable(reason) => Some(PackageStatus::Unavailable(reason)),
+            };
+            if let Some(status) = status {
+                packages.insert(app.path.clone(), status);
+            }
         }
+        packages
     }
 
-    fn brew_uninstall(&self, token: &CaskToken) -> Result<()> {
+    fn uninstall_package(&self, _app: &InstalledApp, package: &ManagedPackage) -> Result<()> {
+        if package.manager() != PackageManager::Homebrew {
+            anyhow::bail!("removeapp: unsupported package manager on macOS")
+        }
         let Some(brew) = brew_path() else {
             anyhow::bail!("removeapp: brew not found")
         };
-        let out = run_brew(&brew, &["uninstall", "--cask", "--", token.as_str()])?;
+        let out = run_brew(&brew, &["uninstall", "--cask", "--", package.id()])?;
         if out.status.success() {
             Ok(())
         } else {

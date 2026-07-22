@@ -21,7 +21,7 @@ class PlatformExcludeDerivation(unittest.TestCase):
         ubuntu, macos = ac.platform_excludes()
         cases = [
             ("keyremap", ubuntu, True),
-            ("plugin-removeapp", ubuntu, True),
+            ("plugin-removeapp", ubuntu, False),
             ("plugin-os-themes", ubuntu, False),
             ("plugin-os-themes", macos, True),
             ("keyremap", macos, False),

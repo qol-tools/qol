@@ -2,7 +2,10 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, Result};
 
-use crate::core::{self, CaskStatus, Disposal, Guards, RemovalOutcome, RemovalPlan};
+use crate::core::{
+    self, Disposal, Guards, ManagedPackage, PackageManager, PackageStatus, RemovalOutcome,
+    RemovalPlan,
+};
 
 pub fn disposal_from_flags(force: bool) -> Disposal {
     if force {
@@ -22,6 +25,7 @@ struct Flags {
     yes: bool,
     force: bool,
     quit: bool,
+    package: bool,
     brew: bool,
     trash_anyway: bool,
     query: Option<String>,
@@ -33,6 +37,7 @@ fn parse_flags(args: &[String]) -> Result<Flags> {
         yes: false,
         force: false,
         quit: false,
+        package: false,
         brew: false,
         trash_anyway: false,
         query: None,
@@ -43,6 +48,7 @@ fn parse_flags(args: &[String]) -> Result<Flags> {
             "--yes" | "-y" => flags.yes = true,
             "--force" => flags.force = true,
             "--quit" => flags.quit = true,
+            "--package" => flags.package = true,
             "--brew" => flags.brew = true,
             "--trash-anyway" => flags.trash_anyway = true,
             other if !other.starts_with('-') && flags.query.is_none() => {
@@ -59,23 +65,50 @@ fn parse_flags(args: &[String]) -> Result<Flags> {
     Ok(flags)
 }
 
-fn guard_refusal(running: bool, cask: &CaskStatus, flags: &Flags) -> Option<String> {
+fn guard_refusal(running: bool, package: &PackageStatus, flags: &Flags) -> Option<String> {
     if running && !flags.quit && !flags.trash_anyway {
         return Some("app is running; pass --quit or --trash-anyway".into());
     }
-    if matches!(cask, CaskStatus::Managed(_)) && !flags.brew && !flags.trash_anyway {
-        return Some("Homebrew-managed; pass --brew or --trash-anyway".into());
+    if let PackageStatus::Managed(managed) = package {
+        if !package_requested(flags, managed) && !flags.trash_anyway {
+            return Some(format!(
+                "{}-managed; pass --package or --trash-anyway",
+                managed.manager().label()
+            ));
+        }
     }
     None
 }
 
-fn cask_json(cask: &CaskStatus) -> serde_json::Value {
-    match cask {
-        CaskStatus::Managed(t) => serde_json::json!({ "state": "managed", "token": t.as_str() }),
-        CaskStatus::NotManaged => serde_json::json!({ "state": "not_managed" }),
-        CaskStatus::Unavailable(reason) => {
+fn package_requested(flags: &Flags, package: &ManagedPackage) -> bool {
+    flags.package || (flags.brew && package.manager() == PackageManager::Homebrew)
+}
+
+fn package_json(package: &PackageStatus) -> serde_json::Value {
+    match package {
+        PackageStatus::Managed(package) => serde_json::json!({
+            "state": "managed",
+            "manager": package.manager(),
+            "id": package.id(),
+            "scope": package.scope(),
+        }),
+        PackageStatus::NotManaged => serde_json::json!({ "state": "not_managed" }),
+        PackageStatus::Unavailable(reason) => {
             serde_json::json!({ "state": "unavailable", "reason": reason })
         }
+    }
+}
+
+fn legacy_cask_json(package: &PackageStatus) -> serde_json::Value {
+    match package {
+        PackageStatus::Managed(package) if package.manager() == PackageManager::Homebrew => {
+            serde_json::json!({ "state": "managed", "token": package.id() })
+        }
+        PackageStatus::NotManaged => serde_json::json!({ "state": "not_managed" }),
+        PackageStatus::Unavailable(reason) => {
+            serde_json::json!({ "state": "unavailable", "reason": reason })
+        }
+        PackageStatus::Managed(_) => serde_json::Value::Null,
     }
 }
 
@@ -84,7 +117,7 @@ fn output_json(
     guards: &Guards,
     outcome: Option<&RemovalOutcome>,
     dry_run: bool,
-    brew: Option<&str>,
+    uninstalled_package: Option<&ManagedPackage>,
 ) -> String {
     let removed: Vec<String> = outcome
         .map(|o| o.removed.iter().map(|p| p.display().to_string()).collect())
@@ -101,11 +134,15 @@ fn output_json(
         "app": plan.app.name,
         "plan": plan,
         "running": guards.running,
-        "cask": cask_json(&guards.cask),
+        "package": package_json(&guards.package),
+        "cask": legacy_cask_json(&guards.package),
         "removed": removed,
         "failed": failed,
         "freed_bytes": outcome.map(|o| o.freed_bytes).unwrap_or(0),
-        "brew": brew,
+        "package_uninstall": uninstalled_package,
+        "brew": uninstalled_package
+            .filter(|package| package.manager() == PackageManager::Homebrew)
+            .map(ManagedPackage::id),
         "dry_run": dry_run,
     })
     .to_string()
@@ -169,7 +206,7 @@ fn run_remove(flags: &Flags) -> Result<ExitCode> {
         println!("{}", output_json(&plan, &guards, None, true, None));
         return Ok(ExitCode::SUCCESS);
     }
-    if let Some(reason) = guard_refusal(guards.running, &guards.cask, flags) {
+    if let Some(reason) = guard_refusal(guards.running, &guards.package, flags) {
         eprintln!("removeapp: {reason}");
         return Ok(ExitCode::from(2));
     }
@@ -179,7 +216,21 @@ fn run_remove(flags: &Flags) -> Result<ExitCode> {
     } else {
         disposal_from_flags(flags.force)
     };
-    if !flags.yes && !confirm(&plan, requested == Disposal::Delete)? {
+    let package_action = match &guards.package {
+        PackageStatus::Managed(package)
+            if package_requested(flags, package) && !flags.trash_anyway =>
+        {
+            Some(package.clone())
+        }
+        _ => None,
+    };
+    if !flags.yes
+        && !confirm(
+            &plan,
+            requested == Disposal::Delete,
+            package_action.as_ref(),
+        )?
+    {
         eprintln!("removeapp: aborted");
         return Ok(ExitCode::from(1));
     }
@@ -193,18 +244,27 @@ fn run_remove(flags: &Flags) -> Result<ExitCode> {
             app.name
         );
     }
-    let mut brew_token = None;
-    if let CaskStatus::Managed(token) = &guards.cask {
-        if flags.brew && !flags.trash_anyway {
-            core::brew_uninstall(token)?;
-            brew_token = Some(token.as_str().to_string());
-        }
+    let mut uninstalled_package = None;
+    if let Some(package) = package_action {
+        core::uninstall_package(&plan, &package)?;
+        uninstalled_package = Some(package);
     }
 
-    let outcome = core::remove_after_brew(&plan, requested, &guards.cask, brew_token.is_some())?;
+    let outcome = core::remove_after_package(
+        &plan,
+        requested,
+        &guards.package,
+        uninstalled_package.is_some(),
+    )?;
     println!(
         "{}",
-        output_json(&plan, &guards, Some(&outcome), false, brew_token.as_deref())
+        output_json(
+            &plan,
+            &guards,
+            Some(&outcome),
+            false,
+            uninstalled_package.as_ref(),
+        )
     );
     Ok(if outcome.failed.is_empty() {
         ExitCode::SUCCESS
@@ -213,13 +273,9 @@ fn run_remove(flags: &Flags) -> Result<ExitCode> {
     })
 }
 
-fn confirm(plan: &RemovalPlan, force: bool) -> Result<bool> {
+fn confirm(plan: &RemovalPlan, force: bool, package: Option<&ManagedPackage>) -> Result<bool> {
     use std::io::Write;
-    let verb = if force {
-        "PERMANENTLY DELETE"
-    } else {
-        "move to Trash"
-    };
+    let verb = confirmation_verb(force, package);
     eprint!(
         "{verb} {} item(s) for {}? [y/N] ",
         plan.items.len(),
@@ -229,6 +285,16 @@ fn confirm(plan: &RemovalPlan, force: bool) -> Result<bool> {
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
     Ok(matches!(line.trim(), "y" | "Y" | "yes"))
+}
+
+fn confirmation_verb(force: bool, package: Option<&ManagedPackage>) -> String {
+    if let Some(package) = package {
+        format!("UNINSTALL with {}", package.manager().label())
+    } else if force {
+        "PERMANENTLY DELETE".to_string()
+    } else {
+        "move to Trash".to_string()
+    }
 }
 
 #[cfg(test)]
@@ -291,14 +357,14 @@ mod tests {
             "--trash-anyway".into(),
         ])
         .unwrap();
-        assert!(f.quit && f.brew && f.trash_anyway);
+        assert!(f.quit && f.brew && !f.package && f.trash_anyway);
         assert_eq!(f.query.as_deref(), Some("Foo"));
     }
 
     #[test]
     fn guard_refusal_running_names_required_flag() {
         let flags = parse_flags(&["Foo".into(), "--yes".into()]).unwrap();
-        let text = guard_refusal(true, &CaskStatus::NotManaged, &flags).expect("should refuse");
+        let text = guard_refusal(true, &PackageStatus::NotManaged, &flags).expect("should refuse");
         assert!(
             text.contains("--quit") || text.contains("--trash-anyway"),
             "names a flag: {text}"
@@ -308,7 +374,54 @@ mod tests {
     #[test]
     fn guard_refusal_clears_when_flag_present() {
         let flags = parse_flags(&["Foo".into(), "--trash-anyway".into()]).unwrap();
-        assert!(guard_refusal(true, &CaskStatus::NotManaged, &flags).is_none());
+        assert!(guard_refusal(true, &PackageStatus::NotManaged, &flags).is_none());
+    }
+
+    #[test]
+    fn package_flag_is_generic_but_brew_alias_is_homebrew_only() {
+        let apt = PackageStatus::Managed(
+            ManagedPackage::parse(
+                PackageManager::Apt,
+                "firefox",
+                crate::core::PackageScope::System,
+            )
+            .unwrap(),
+        );
+        let plain = parse_flags(&["Firefox".into(), "--yes".into()]).unwrap();
+        assert!(guard_refusal(false, &apt, &plain)
+            .unwrap()
+            .contains("--package"));
+
+        let package = parse_flags(&["Firefox".into(), "--package".into()]).unwrap();
+        assert!(guard_refusal(false, &apt, &package).is_none());
+
+        let brew = parse_flags(&["Firefox".into(), "--brew".into()]).unwrap();
+        assert!(guard_refusal(false, &apt, &brew).is_some());
+        let homebrew = PackageStatus::Managed(
+            ManagedPackage::parse(
+                PackageManager::Homebrew,
+                "firefox",
+                crate::core::PackageScope::System,
+            )
+            .unwrap(),
+        );
+        assert!(guard_refusal(false, &homebrew, &brew).is_none());
+    }
+
+    #[test]
+    fn package_confirmation_names_the_real_operation() {
+        let package = ManagedPackage::parse(
+            PackageManager::Apt,
+            "firefox",
+            crate::core::PackageScope::System,
+        )
+        .unwrap();
+        assert_eq!(
+            confirmation_verb(false, Some(&package)),
+            "UNINSTALL with APT"
+        );
+        assert_eq!(confirmation_verb(false, None), "move to Trash");
+        assert_eq!(confirmation_verb(true, None), "PERMANENTLY DELETE");
     }
 
     #[test]

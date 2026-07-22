@@ -8,7 +8,9 @@ use std::time::Duration;
 use anyhow::Result;
 
 pub use classify::MatchKind;
-pub use guards::{CaskIndex, CaskStatus, CaskToken, Guards};
+pub use guards::{
+    Guards, ManagedPackage, PackageIndex, PackageManager, PackageScope, PackageStatus,
+};
 pub use platform::{AppPlatform, Platform};
 pub use qol_apps::InstalledApp;
 
@@ -25,6 +27,10 @@ pub enum LeftoverKind {
     HttpStorages,
     WebKit,
     LaunchAgent,
+    DesktopEntry,
+    ApplicationBinary,
+    Config,
+    Data,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -41,6 +47,8 @@ pub struct IdentitySnapshot {
     pub is_symlink: bool,
     pub is_dir: bool,
     pub is_file: bool,
+    pub len: Option<u64>,
+    pub modified_ns: Option<u128>,
     pub dev: Option<u64>,
     pub ino: Option<u64>,
     pub file_name: Option<String>,
@@ -56,11 +64,18 @@ impl IdentitySnapshot {
         match std::fs::symlink_metadata(path) {
             Ok(m) => {
                 let (dev, ino) = platform::metadata_identity(&m);
+                let modified_ns = m
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_nanos());
                 IdentitySnapshot {
                     exists: true,
                     is_symlink: m.file_type().is_symlink(),
                     is_dir: m.is_dir(),
                     is_file: m.is_file(),
+                    len: Some(m.len()),
+                    modified_ns,
                     dev,
                     ino,
                     file_name,
@@ -129,29 +144,19 @@ pub fn is_protected(app: &InstalledApp) -> bool {
     platform().is_protected(app)
 }
 
-pub fn cask_index() -> CaskIndex {
-    platform().cask_index()
+pub fn package_index(inventory: &[InstalledApp]) -> PackageIndex {
+    platform().package_index(inventory)
 }
 
 pub fn guards(app: &InstalledApp, inventory: &[InstalledApp]) -> Guards {
-    guards_with(app, inventory, &cask_index())
+    guards_with(app, &package_index(inventory))
 }
 
-pub fn guards_with(app: &InstalledApp, inventory: &[InstalledApp], index: &CaskIndex) -> Guards {
+pub fn guards_with(app: &InstalledApp, index: &PackageIndex) -> Guards {
     Guards {
         running: platform().is_running(app),
-        cask: classify_cask(app, inventory, index),
+        package: index.classify(&app.path),
     }
-}
-
-fn classify_cask(app: &InstalledApp, inventory: &[InstalledApp], index: &CaskIndex) -> CaskStatus {
-    let base = |p: &Path| {
-        p.file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    };
-    let inv: Vec<String> = inventory.iter().map(|a| base(&a.path)).collect();
-    index.classify(&base(&app.path), &inv)
 }
 
 pub fn quit_app(app: &InstalledApp) -> Result<()> {
@@ -185,8 +190,18 @@ pub fn is_running(app: &InstalledApp) -> bool {
     platform().is_running(app)
 }
 
-pub fn brew_uninstall(token: &CaskToken) -> Result<()> {
-    platform().brew_uninstall(token)
+pub fn uninstall_package(plan: &RemovalPlan, package: &ManagedPackage) -> Result<()> {
+    let platform = platform();
+    uninstall_package_with(&platform, plan, package)
+}
+
+fn uninstall_package_with(
+    platform: &impl AppPlatform,
+    plan: &RemovalPlan,
+    package: &ManagedPackage,
+) -> Result<()> {
+    validate_plan_with(platform, plan)?;
+    platform.uninstall_package(&plan.app, package)
 }
 
 pub fn search(query: &str) -> Result<Vec<InstalledApp>> {
@@ -200,35 +215,35 @@ pub fn resolve_unique(inventory: &[InstalledApp], query: &str) -> Result<Install
 pub fn remove(
     plan: &RemovalPlan,
     requested: Disposal,
-    cask: &CaskStatus,
+    package: &PackageStatus,
 ) -> Result<RemovalOutcome> {
-    remove_with(&platform(), plan, requested, cask)
+    remove_with(&platform(), plan, requested, package)
 }
 
-pub fn remove_after_brew(
+pub fn remove_after_package(
     plan: &RemovalPlan,
     requested: Disposal,
-    cask: &CaskStatus,
-    brew_handled_bundle: bool,
+    package: &PackageStatus,
+    package_handled_app: bool,
 ) -> Result<RemovalOutcome> {
-    remove_after_brew_with(&platform(), plan, requested, cask, brew_handled_bundle)
+    remove_after_package_with(&platform(), plan, requested, package, package_handled_app)
 }
 
-fn remove_after_brew_with(
+fn remove_after_package_with(
     plat: &impl AppPlatform,
     plan: &RemovalPlan,
     requested: Disposal,
-    cask: &CaskStatus,
-    brew_handled_bundle: bool,
+    package: &PackageStatus,
+    package_handled_app: bool,
 ) -> Result<RemovalOutcome> {
-    if !brew_handled_bundle {
-        return remove_with(plat, plan, requested, cask);
+    if !package_handled_app {
+        return remove_with(plat, plan, requested, package);
     }
     ensure_snapshot_alignment(plan)?;
     let mut items = Vec::new();
     let mut snapshots = Vec::new();
     for (item, snapshot) in plan.items.iter().zip(&plan.snapshots) {
-        if item.kind == LeftoverKind::AppBundle {
+        if is_primary(item.kind) {
             continue;
         }
         items.push(item.clone());
@@ -241,7 +256,7 @@ fn remove_after_brew_with(
         total_bytes,
         snapshots,
     };
-    remove_with(plat, &sub, Disposal::Trash, cask)
+    remove_with(plat, &sub, Disposal::Trash, package)
 }
 
 pub fn filter(apps: &[InstalledApp], query: &str) -> Vec<InstalledApp> {
@@ -287,8 +302,36 @@ fn remove_with(
     plat: &impl AppPlatform,
     plan: &RemovalPlan,
     requested: Disposal,
-    cask: &CaskStatus,
+    package: &PackageStatus,
 ) -> Result<RemovalOutcome> {
+    validate_plan_with(plat, plan)?;
+    let package_unavailable = matches!(package, PackageStatus::Unavailable(_));
+    let disposal_for = |item: &Leftover| {
+        let primary_override = is_primary(item.kind) && package_unavailable;
+        classify::effective_disposal(item.match_kind, requested, primary_override)
+    };
+
+    let (primary, rest): (Vec<&Leftover>, Vec<&Leftover>) =
+        plan.items.iter().partition(|i| is_primary(i.kind));
+
+    let mut outcome = RemovalOutcome::default();
+    for item in &primary {
+        let res = plat.remove_items(&[(item.path.clone(), disposal_for(item))])?;
+        absorb(&mut outcome, res, plan);
+        if !outcome.failed.is_empty() {
+            return Ok(outcome);
+        }
+    }
+    let rest_items: Vec<(PathBuf, Disposal)> = rest
+        .iter()
+        .map(|i| (i.path.clone(), disposal_for(i)))
+        .collect();
+    let res = plat.remove_items(&rest_items)?;
+    absorb(&mut outcome, res, plan);
+    Ok(outcome)
+}
+
+fn validate_plan_with(plat: &impl AppPlatform, plan: &RemovalPlan) -> Result<()> {
     if plat.is_protected(&plan.app) {
         anyhow::bail!(
             "removeapp: {} is protected and cannot be removed",
@@ -304,32 +347,14 @@ fn remove_with(
             );
         }
     }
-    let cask_unavailable = matches!(cask, CaskStatus::Unavailable(_));
-    let disposal_for = |item: &Leftover| {
-        let bundle_override = item.kind == LeftoverKind::AppBundle && cask_unavailable;
-        classify::effective_disposal(item.match_kind, requested, bundle_override)
-    };
+    Ok(())
+}
 
-    let (bundle, rest): (Vec<&Leftover>, Vec<&Leftover>) = plan
-        .items
-        .iter()
-        .partition(|i| i.kind == LeftoverKind::AppBundle);
-
-    let mut outcome = RemovalOutcome::default();
-    for item in &bundle {
-        let res = plat.remove_items(&[(item.path.clone(), disposal_for(item))])?;
-        absorb(&mut outcome, res, plan);
-        if !outcome.failed.is_empty() {
-            return Ok(outcome);
-        }
-    }
-    let rest_items: Vec<(PathBuf, Disposal)> = rest
-        .iter()
-        .map(|i| (i.path.clone(), disposal_for(i)))
-        .collect();
-    let res = plat.remove_items(&rest_items)?;
-    absorb(&mut outcome, res, plan);
-    Ok(outcome)
+fn is_primary(kind: LeftoverKind) -> bool {
+    matches!(
+        kind,
+        LeftoverKind::AppBundle | LeftoverKind::DesktopEntry | LeftoverKind::ApplicationBinary
+    )
 }
 
 fn ensure_snapshot_alignment(plan: &RemovalPlan) -> Result<()> {
@@ -400,6 +425,7 @@ mod tests {
         fail_bundle: bool,
         running: RefCell<Vec<bool>>,
         removed: RefCell<Vec<(PathBuf, Disposal)>>,
+        uninstalled: RefCell<usize>,
     }
 
     impl AppPlatform for FakePlat {
@@ -430,10 +456,11 @@ mod tests {
         fn quit(&self, _app: &InstalledApp) -> Result<()> {
             Ok(())
         }
-        fn cask_index(&self) -> CaskIndex {
-            CaskIndex::absent()
+        fn package_index(&self, _inventory: &[InstalledApp]) -> PackageIndex {
+            PackageIndex::absent()
         }
-        fn brew_uninstall(&self, _token: &CaskToken) -> Result<()> {
+        fn uninstall_package(&self, _app: &InstalledApp, _package: &ManagedPackage) -> Result<()> {
+            *self.uninstalled.borrow_mut() += 1;
             Ok(())
         }
     }
@@ -464,7 +491,7 @@ mod tests {
             ..Default::default()
         };
         let p = plan_with(app("Defender", "com.microsoft.wdav"), vec![]);
-        assert!(remove_with(&fake, &p, Disposal::Trash, &CaskStatus::NotManaged).is_err());
+        assert!(remove_with(&fake, &p, Disposal::Trash, &PackageStatus::NotManaged).is_err());
         assert!(fake.removed.borrow().is_empty(), "no paths touched");
     }
 
@@ -478,7 +505,7 @@ mod tests {
             app("Foo", "com.acme.foo"),
             vec![leftover("/x/cache", LeftoverKind::Caches, MatchKind::Exact)],
         );
-        let out = remove_with(&fake, &p, Disposal::Trash, &CaskStatus::NotManaged).unwrap();
+        let out = remove_with(&fake, &p, Disposal::Trash, &PackageStatus::NotManaged).unwrap();
         assert_eq!(out.removed.len(), 0, "nothing removed");
         assert_eq!(
             fake.removed.borrow().len(),
@@ -494,7 +521,7 @@ mod tests {
             app("Foo", "com.acme.foo"),
             vec![leftover("/x/fuzzy", LeftoverKind::Caches, MatchKind::Fuzzy)],
         );
-        remove_with(&fake, &p, Disposal::Delete, &CaskStatus::NotManaged).unwrap();
+        remove_with(&fake, &p, Disposal::Delete, &PackageStatus::NotManaged).unwrap();
         let recorded = fake.removed.borrow();
         let fuzzy = recorded.iter().find(|(p, _)| p.ends_with("fuzzy")).unwrap();
         assert_eq!(fuzzy.1, Disposal::Trash, "fuzzy forced to Trash");
@@ -526,7 +553,8 @@ mod tests {
         std::fs::write(&bundle, "now a file").unwrap();
 
         let fake = FakePlat::default();
-        let err = remove_with(&fake, &plan, Disposal::Trash, &CaskStatus::NotManaged).unwrap_err();
+        let err =
+            remove_with(&fake, &plan, Disposal::Trash, &PackageStatus::NotManaged).unwrap_err();
         assert!(
             err.to_string().contains("changed"),
             "aborts on identity change"
@@ -563,7 +591,8 @@ mod tests {
         std::fs::rename(&replacement, &bundle).unwrap();
 
         let fake = FakePlat::default();
-        let err = remove_with(&fake, &plan, Disposal::Trash, &CaskStatus::NotManaged).unwrap_err();
+        let err =
+            remove_with(&fake, &plan, Disposal::Trash, &PackageStatus::NotManaged).unwrap_err();
         assert!(
             err.to_string().contains("changed"),
             "aborts on same-kind identity change"
@@ -580,29 +609,64 @@ mod tests {
         );
         p.snapshots.pop();
 
-        let err = remove_with(&fake, &p, Disposal::Trash, &CaskStatus::NotManaged).unwrap_err();
+        let err = remove_with(&fake, &p, Disposal::Trash, &PackageStatus::NotManaged).unwrap_err();
         assert!(err.to_string().contains("stale plan"));
         assert!(fake.removed.borrow().is_empty(), "no mutation");
     }
 
     #[test]
-    fn remove_after_brew_trashes_remaining_leftovers_even_when_delete_requested() {
+    fn remove_after_package_trashes_remaining_leftovers_even_when_delete_requested() {
         let fake = FakePlat::default();
         let p = plan_with(
             app("Foo", "com.acme.foo"),
             vec![leftover("/x/cache", LeftoverKind::Caches, MatchKind::Exact)],
         );
-        remove_after_brew_with(
+        remove_after_package_with(
             &fake,
             &p,
             Disposal::Delete,
-            &CaskStatus::Managed(CaskToken::parse("foo").unwrap()),
+            &PackageStatus::Managed(
+                ManagedPackage::parse(PackageManager::Homebrew, "foo", PackageScope::User).unwrap(),
+            ),
             true,
         )
         .unwrap();
         let recorded = fake.removed.borrow();
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].1, Disposal::Trash);
+    }
+
+    #[test]
+    fn package_uninstall_revalidates_plan_before_mutating() {
+        let tmp = tempfile::tempdir().unwrap();
+        let launcher = tmp.path().join("app.desktop");
+        std::fs::write(&launcher, "before").unwrap();
+        let app = InstalledApp {
+            name: "App".into(),
+            bundle_id: None,
+            path: launcher.clone(),
+        };
+        let plan = RemovalPlan {
+            app,
+            items: vec![Leftover {
+                path: launcher.clone(),
+                kind: LeftoverKind::DesktopEntry,
+                size_bytes: 6,
+                match_kind: MatchKind::Exact,
+            }],
+            total_bytes: 6,
+            snapshots: vec![IdentitySnapshot::capture(&launcher)],
+        };
+        std::fs::remove_file(&launcher).unwrap();
+        std::fs::write(&launcher, "replacement").unwrap();
+        let package =
+            ManagedPackage::parse(PackageManager::Apt, "fixture", PackageScope::System).unwrap();
+        let fake = FakePlat::default();
+
+        let error = uninstall_package_with(&fake, &plan, &package).unwrap_err();
+
+        assert!(error.to_string().contains("changed"));
+        assert_eq!(*fake.uninstalled.borrow(), 0, "package manager untouched");
     }
 
     #[test]

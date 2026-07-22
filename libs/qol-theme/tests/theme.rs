@@ -979,8 +979,8 @@ fn themed_gpui_surfaces_do_not_use_inline_color_literals() {
         "plugins/plugin-launcher/src/ui/view.rs",
         "plugins/plugin-alt-tab/src/app/render.rs",
         "plugins/plugin-removeapp/src/ui/mod.rs",
-        "plugins/qol-shot/src/region_selector.rs",
-        "plugins/qol-shot/src/preview.rs",
+        "plugins/qol-shot/src/ui/region_selector/mod.rs",
+        "plugins/qol-shot/src/ui/preview.rs",
     ];
     let mut violations = Vec::new();
 

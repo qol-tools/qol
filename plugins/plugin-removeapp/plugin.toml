@@ -5,7 +5,7 @@ name = "Remove App"
 description = "Uninstall an app and its leftovers"
 version = "0.23.1"
 author = "KMRH47"
-platforms = ["macos"]
+platforms = ["linux", "macos"]
 
 [runtime]
 command = "removeapp"
