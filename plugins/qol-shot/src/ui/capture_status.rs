@@ -56,14 +56,18 @@ impl CaptureStatusUi {
         }
     }
 
-    pub(crate) fn prepare_selector(&self, cx: &mut App) {
+    pub(crate) fn hide(&self, cx: &mut App) {
         self.next_generation();
         crate::platform::hide_capture_status(cx);
     }
 
-    pub(crate) fn show(&self, status: CaptureStatus, cx: &mut App) {
+    pub(crate) fn prepare_selector(&self, cx: &mut App) {
+        self.hide(cx);
+    }
+
+    pub(crate) fn show(&self, status: CaptureStatus, cx: &mut App) -> bool {
         let Some((monitor, _)) = self.tracker.snapshot_cursor() else {
-            return;
+            return false;
         };
         let generation = self.next_generation();
         let shown = crate::platform::show_capture_status(
@@ -83,6 +87,7 @@ impl CaptureStatusUi {
         if let Some(timeout) = status.timeout {
             self.dismiss_after(generation, timeout, cx);
         }
+        shown
     }
 
     fn next_generation(&self) -> u64 {

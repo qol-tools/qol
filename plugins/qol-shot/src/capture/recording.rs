@@ -16,6 +16,12 @@ struct PersistedCaptureState {
     session: platform::CaptureSession,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum StartedFeedback {
+    Platform,
+    Countdown,
+}
+
 pub fn toggle_recording(config: &Config) -> Result<()> {
     trace_record_config("cli", config);
     qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=cli");
@@ -96,6 +102,14 @@ pub fn begin_stop_active_recording(config: &Config) -> Result<StopOutcome> {
 }
 
 pub fn start_recording_from_selection(selected: Rect, config: &Config) -> Result<()> {
+    start_recording(selected, config, StartedFeedback::Platform)
+}
+
+pub fn start_recording_after_countdown(selected: Rect, config: &Config) -> Result<()> {
+    start_recording(selected, config, StartedFeedback::Countdown)
+}
+
+fn start_recording(selected: Rect, config: &Config, feedback: StartedFeedback) -> Result<()> {
     qol_runtime::probe!("SHOT_RECORD_SELECTION", "selected={}", rect_label(selected));
     let rect = prepare_recording_rect(selected)?;
     qol_runtime::probe!(
@@ -138,7 +152,7 @@ pub fn start_recording_from_selection(selected: Rect, config: &Config) -> Result
             session.pid_list(),
             session.segments.len()
         );
-        platform::recording_started(&session);
+        announce_recording_started(&session, feedback);
     } else {
         let _ = platform::stop_capture(&session);
         remove_state_file();
@@ -151,6 +165,20 @@ pub fn start_recording_from_selection(selected: Rect, config: &Config) -> Result
     }
 
     Ok(())
+}
+
+fn announce_recording_started(session: &platform::CaptureSession, feedback: StartedFeedback) {
+    #[cfg(target_os = "linux")]
+    if feedback == StartedFeedback::Countdown {
+        qol_runtime::probe!(
+            "SHOT_RECORD_FEEDBACK",
+            "stage=started surface=none reason=countdown-complete"
+        );
+        return;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = feedback;
+    platform::recording_started(session);
 }
 
 fn prepare_recording_rect(selected: Rect) -> Result<Rect> {

@@ -16,6 +16,7 @@ use crate::capture::screenshot::PreviewCapture;
 use crate::ui::preview::PreviewWindows;
 
 const APP_ID: &str = "qol-tray-shot";
+const RECORDING_COUNTDOWN_STEP: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 struct State {
@@ -335,8 +336,71 @@ fn show_capture_status(
     cx: &AsyncApp,
     ui: &crate::ui::capture_status::CaptureStatusUi,
     status: crate::ui::capture_status::CaptureStatus,
-) {
-    let _ = cx.update(|cx| ui.show(status, cx));
+) -> bool {
+    cx.update(|cx| ui.show(status, cx)).unwrap_or(false)
+}
+
+async fn prepare_recording_start(
+    cx: &AsyncApp,
+    ui: &crate::ui::capture_status::CaptureStatusUi,
+) -> bool {
+    let mut shown = false;
+    for seconds in [3, 2, 1] {
+        if show_recording_countdown_step(cx, ui, seconds) {
+            shown = true;
+            cx.background_executor()
+                .timer(RECORDING_COUNTDOWN_STEP)
+                .await;
+            continue;
+        }
+        return !shown || hide_recording_countdown(cx, ui).await;
+    }
+    hide_recording_countdown(cx, ui).await
+}
+
+fn show_recording_countdown_step(
+    cx: &AsyncApp,
+    ui: &crate::ui::capture_status::CaptureStatusUi,
+    seconds: u8,
+) -> bool {
+    let shown = show_capture_status(
+        cx,
+        ui,
+        crate::ui::capture_status::CaptureStatus::persistent(
+            "recording",
+            "countdown",
+            format!("Recording starts in {seconds}"),
+            "Get ready",
+        ),
+    );
+    qol_runtime::probe!(
+        "SHOT_RECORD_COUNTDOWN",
+        "phase={} seconds={seconds}",
+        if shown { "shown" } else { "unavailable" }
+    );
+    shown
+}
+
+async fn hide_recording_countdown(
+    cx: &AsyncApp,
+    ui: &crate::ui::capture_status::CaptureStatusUi,
+) -> bool {
+    let _ = cx.update(|cx| ui.hide(cx));
+    let mut barrier_cx = cx.clone();
+    let barrier = qol_gpui::popup_window::wait_for_hidden_windows(
+        &mut barrier_cx,
+        crate::ui::region_selector::SELECTOR_TITLE_PREFIX,
+    )
+    .await;
+    qol_runtime::probe!(
+        "SHOT_RECORD_COUNTDOWN",
+        "phase=hidden result={} visible={} samples={} ms={}",
+        if barrier.cleared { "clear" } else { "timeout" },
+        barrier.visible,
+        barrier.clear_samples,
+        barrier.elapsed.as_millis()
+    );
+    barrier.cleared
 }
 
 async fn preview_latest(cx: &AsyncApp, state: &State) {
@@ -589,9 +653,27 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
         qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon result=select-cancel");
         return;
     };
+    if !prepare_recording_start(cx, &state.capture_status).await {
+        qol_runtime::probe!(
+            "SHOT_RECORD_TOGGLE",
+            "source=daemon result=countdown-visible"
+        );
+        show_capture_status(
+            cx,
+            &state.capture_status,
+            crate::ui::capture_status::CaptureStatus::timed(
+                "recording",
+                "failed",
+                "Recording not started",
+                "The countdown could not close safely",
+                Duration::from_millis(2_800),
+            ),
+        );
+        return;
+    }
     let result = cx
         .background_spawn(async move {
-            crate::capture::recording::start_recording_from_selection(selected, &config)
+            crate::capture::recording::start_recording_after_countdown(selected, &config)
         })
         .await;
     if let Err(error) = result {
@@ -600,15 +682,4 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
         return;
     }
     qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon result=started");
-    show_capture_status(
-        cx,
-        &state.capture_status,
-        crate::ui::capture_status::CaptureStatus::timed(
-            "recording",
-            "started",
-            "Recording started",
-            "Press your hotkey to stop",
-            Duration::from_millis(1_800),
-        ),
-    );
 }
