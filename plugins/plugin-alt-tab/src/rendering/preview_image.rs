@@ -22,7 +22,7 @@ pub(crate) fn bgra_to_render_image(data: Vec<u8>, w: usize, h: usize) -> Option<
 }
 
 pub(crate) fn shot_request_dims(window_w: f32, window_h: f32) -> (usize, usize) {
-    use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
+    use crate::picker::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
     if window_w <= 0.0 || window_h <= 0.0 {
         return (PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT);
     }

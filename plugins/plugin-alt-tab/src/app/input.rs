@@ -1,6 +1,6 @@
 use super::AltTabApp;
 use crate::actions;
-use crate::shared::layout::picker_layout;
+use crate::picker::layout::picker_layout;
 use gpui::{Context, Window};
 
 pub(crate) fn handle_key_down(

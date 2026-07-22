@@ -2,9 +2,9 @@ use super::AltTabApp;
 use crate::capture::LiveFrame;
 use crate::config::{capitalize_first, ActionMode, LabelConfig, PreviewIconPosition};
 use crate::discovery::WindowInfo;
+use crate::picker::layout::{picker_layout, CardMetrics};
+use crate::picker::{IconMap, LiveFrameMap, PreviewMap};
 use crate::rendering::RenderingFlow;
-use crate::shared::layout::{picker_layout, CardMetrics};
-use crate::{IconMap, LiveFrameMap, PreviewMap};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use qol_gpui::theme::PickerSurfacePalette;
@@ -227,7 +227,7 @@ fn probe_rendered_front(
         return;
     }
     let renders_gpui_preview = rendering.renders_gpui_preview_images();
-    let stamp = |snap: Option<crate::shared::preview_trace::Snapshot>| {
+    let stamp = |snap: Option<crate::rendering::preview_trace::Snapshot>| {
         snap.map(|s| format!("{}:{}ms", s.source, s.age_ms))
             .unwrap_or_else(|| "none".to_string())
     };
@@ -257,8 +257,8 @@ fn probe_rendered_front(
             renders_gpui_preview,
             img_id.is_some(),
             img_id,
-            stamp(crate::shared::preview_trace::shared_snapshot(win.id)),
-            stamp(crate::shared::preview_trace::live_snapshot(win.id)),
+            stamp(crate::rendering::preview_trace::shared_snapshot(win.id)),
+            stamp(crate::rendering::preview_trace::live_snapshot(win.id)),
         );
     }
 }

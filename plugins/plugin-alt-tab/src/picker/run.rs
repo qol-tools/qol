@@ -1,10 +1,10 @@
 use super::{open_picker, OpenPickerRequest};
 use crate::capture;
 use crate::config::AltTabConfig;
-use crate::daemon;
 use crate::discovery::{Platform, WindowDiscovery, WindowInfo};
 use crate::picker::gather::build_icon_cache;
-use crate::{PickerWindowState, SharedIconCache};
+use crate::picker::{PickerWindowState, SharedIconCache};
+use crate::runtime::daemon;
 use gpui::*;
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
-pub(crate) type SharedPreviewCache = Arc<Mutex<crate::PreviewMap>>;
+pub(crate) type SharedPreviewCache = Arc<Mutex<crate::picker::PreviewMap>>;
 static NEXT_SHOW_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
@@ -155,7 +155,7 @@ async fn dispatch_settings(cx: &AsyncApp, state: &PickerState) {
     .await;
     if let Err(error) = opened {
         eprintln!("[alt-tab/daemon] settings panel failed, opening browser: {error:#}");
-        crate::open_settings_page();
+        crate::runtime::open_settings_page();
     }
 }
 
@@ -291,11 +291,11 @@ fn replace_window_cache(window_cache: &WindowCache, windows: Vec<WindowInfo>) {
 fn prune_previews(preview_cache: &SharedPreviewCache, windows: &[WindowInfo], app: &mut App) {
     let active: HashSet<u32> = windows.iter().map(|w| w.id).collect();
     #[cfg(debug_assertions)]
-    crate::shared::preview_trace::retain_active(&active);
+    crate::rendering::preview_trace::retain_active(&active);
     let Ok(mut cache) = preview_cache.lock() else {
         return;
     };
-    crate::shared::image_registry::retain_or_release(&mut *cache, app, None, |id| {
+    crate::rendering::image_registry::retain_or_release(&mut *cache, app, None, |id| {
         active.contains(id)
     });
 }
@@ -305,7 +305,7 @@ fn prune_icons(icon_cache: &SharedIconCache, windows: &[WindowInfo], app: &mut A
     let Ok(mut cache) = icon_cache.lock() else {
         return;
     };
-    crate::shared::image_registry::retain_or_release(&mut *cache, app, None, |name| {
+    crate::rendering::image_registry::retain_or_release(&mut *cache, app, None, |name| {
         active.contains(name)
     });
 }
@@ -314,7 +314,7 @@ pub(super) async fn refresh_icon_cache(
     executor: &gpui::BackgroundExecutor,
     windows: &[WindowInfo],
     icon_cache: &SharedIconCache,
-) -> Option<crate::IconMap> {
+) -> Option<crate::picker::IconMap> {
     let cached_names = cached_icon_names(icon_cache);
     let icon_windows = missing_icon_windows(windows, &cached_names);
     if icon_windows.is_empty() {
@@ -347,13 +347,13 @@ fn missing_icon_windows(windows: &[WindowInfo], cached_names: &HashSet<String>) 
 
 pub(super) fn commit_icons_to_shared_cache(
     icon_cache: &SharedIconCache,
-    rendered: crate::IconMap,
+    rendered: crate::picker::IconMap,
     app: &mut App,
 ) {
     let Ok(mut cache) = icon_cache.lock() else {
         return;
     };
-    crate::shared::image_registry::extend_with(&mut *cache, rendered, app, None);
+    crate::rendering::image_registry::extend_with(&mut *cache, rendered, app, None);
 }
 
 fn has_windows(windows: &[WindowInfo]) -> bool {

@@ -3,7 +3,7 @@ use crate::app::AltTabApp;
 use crate::capture;
 use crate::config::AltTabConfig;
 use crate::discovery::WindowInfo;
-use crate::{IconMap, PreviewMap, SharedIconCache};
+use crate::picker::{IconMap, PreviewMap, SharedIconCache};
 use gpui::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -68,7 +68,7 @@ pub(super) fn capture_frontmost_live_frame(
     windows: &[WindowInfo],
     show_id: u64,
 ) -> Option<(u32, capture::SendCVBuf)> {
-    use crate::shared::preview::shot_request_dims;
+    use crate::rendering::preview_image::shot_request_dims;
 
     let front = windows.first()?;
     if front.is_minimized {
@@ -100,8 +100,8 @@ pub(super) fn capture_frontmost_now(
     windows: &[WindowInfo],
     show_id: u64,
 ) -> Option<(u32, Arc<RenderImage>)> {
-    use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
-    use crate::shared::preview::bgra_to_render_image;
+    use crate::picker::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
+    use crate::rendering::preview_image::bgra_to_render_image;
     let front = windows.first()?;
     if front.is_minimized {
         return None;
@@ -157,13 +157,13 @@ fn probe_preview_gather(windows: &[WindowInfo], previews: &PreviewMap) {
 
 #[cfg(debug_assertions)]
 fn preview_entry(wid: u32, has_shared_preview: bool) -> String {
-    let live = crate::shared::preview_trace::live_snapshot(wid)
+    let live = crate::rendering::preview_trace::live_snapshot(wid)
         .map(|stamp| format!("/{source}:{}ms", stamp.age_ms, source = stamp.source))
         .unwrap_or_default();
     if !has_shared_preview {
         return format!("{wid}:miss{live}");
     }
-    let shared = crate::shared::preview_trace::shared_snapshot(wid)
+    let shared = crate::rendering::preview_trace::shared_snapshot(wid)
         .map(|stamp| format!("{}:{}ms", stamp.source, stamp.age_ms))
         .unwrap_or_else(|| "unknown".to_string());
     format!("{wid}:cache:{shared}{live}")
@@ -210,7 +210,7 @@ fn commit_icons_foreground(
         // None. View update enters handle.update where window IS leased and
         // forwards Some(window) into the registry release path.
         if let Ok(mut icache) = cache.lock() {
-            crate::shared::image_registry::extend_with(&mut *icache, rendered.clone(), cx, None);
+            crate::rendering::image_registry::extend_with(&mut *icache, rendered.clone(), cx, None);
         }
         let _ = handle.update(cx, |view, window, cx| {
             view.update_icons(rendered, window, cx);
@@ -309,8 +309,8 @@ fn select_capture_targets_with_focus(
 }
 
 async fn fill_previews(cx: &mut AsyncApp, req: PreviewFillRequest) {
-    use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
-    use crate::shared::preview::bgra_to_render_image;
+    use crate::picker::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
+    use crate::rendering::preview_image::bgra_to_render_image;
 
     if capture::live_shots_available() && fill_live_frames(cx, &req).await {
         return;
@@ -381,7 +381,7 @@ async fn fill_previews(cx: &mut AsyncApp, req: PreviewFillRequest) {
 }
 
 async fn fill_live_frames(cx: &mut AsyncApp, req: &PreviewFillRequest) -> bool {
-    use crate::shared::preview::shot_request_dims;
+    use crate::rendering::preview_image::shot_request_dims;
 
     let covered = snapshot_live_frame_keys(cx, req.handle);
     let targets = select_capture_targets_with_focus(
@@ -491,9 +491,9 @@ fn commit_previews_foreground(
     let preview_ids = sorted_preview_ids(&previews);
     let _ = cx.update(|cx| {
         if let Ok(mut pcache) = cache.lock() {
-            crate::shared::image_registry::extend_with(&mut *pcache, previews.clone(), cx, None);
+            crate::rendering::image_registry::extend_with(&mut *pcache, previews.clone(), cx, None);
             #[cfg(debug_assertions)]
-            crate::shared::preview_trace::record_shared_fill(preview_ids.iter().copied());
+            crate::rendering::preview_trace::record_shared_fill(preview_ids.iter().copied());
         }
         let _ = handle.update(cx, |view, window, cx| {
             view.update_previews(previews, window, cx);

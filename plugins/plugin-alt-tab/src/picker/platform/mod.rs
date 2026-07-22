@@ -58,7 +58,7 @@ pub fn probe_picker_app_active(at: &'static str) {
 }
 pub fn pre_create(
     config: &crate::config::AltTabConfig,
-    current: &crate::PickerWindowState,
+    current: &crate::picker::PickerWindowState,
     preview_cache: crate::picker::run::SharedPreviewCache,
     tracker: &qol_gpui::monitor::MonitorTracker,
     cx: &mut gpui::App,
@@ -66,14 +66,14 @@ pub fn pre_create(
     imp::pre_create(config, current, preview_cache, tracker, cx)
 }
 pub fn destroy_non_target_windows(
-    current: &crate::PickerWindowState,
+    current: &crate::picker::PickerWindowState,
     target: qol_gpui::window::MonitorKey,
     cx: &mut gpui::App,
 ) {
     imp::destroy_non_target_windows(current, target, cx)
 }
 pub fn discard_old_window(
-    current: &crate::PickerWindowState,
+    current: &crate::picker::PickerWindowState,
     target: qol_gpui::window::MonitorKey,
     handle: gpui::WindowHandle<crate::app::AltTabApp>,
     cx: &mut gpui::App,

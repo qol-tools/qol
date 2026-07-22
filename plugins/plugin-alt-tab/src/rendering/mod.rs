@@ -1,3 +1,8 @@
+pub(crate) mod image_registry;
+pub(crate) mod preview_image;
+#[cfg(debug_assertions)]
+pub(crate) mod preview_trace;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RenderingFlow {
     preview_renderer: PreviewRenderer,

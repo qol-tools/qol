@@ -1,151 +1,105 @@
 # Architecture
 
-## Runtime Flow
+Alt Tab is a long-lived GPUI picker with feature-owned platform adapters. The
+Rust source root contains only the process entrypoint; each directory owns one
+cohesive capability.
 
-1. QoL Tray triggers `alt-tab --show` (or action `open`).
-2. If daemon is already alive, the command is forwarded over local socket.
-3. Daemon receives `Show` and calls `open_picker()`.
-4. Picker checks prewarm preview cache — cached previews are used instantly.
-5. Only missing previews are captured synchronously via CG/X11.
-6. App icons are fetched asynchronously and pushed to the UI.
-7. UI opens with full previews and icons in <50ms (warm path).
+## Source map
 
-## Core Components
+```text
+src/
+├── main.rs                    # module wiring and process entrypoint
+├── runtime/                   # argument routing and daemon transport
+├── config/                    # typed qol-config contract
+├── app/                       # GPUI view, input, rendering, live previews
+│   └── live_preview/          # capture loop, first-fill gate, lane scheduler
+├── picker/                    # retained-window orchestration
+│   ├── state.rs               # selection and retained presentation state
+│   ├── layout.rs              # card/grid geometry
+│   ├── monitor_listener/      # monitor/data refresh routing
+│   └── platform/              # retained-window behavior per OS
+├── discovery/                 # window identity, ordering, and enumeration
+├── capture/                   # preview capture and live-frame adapters
+├── actions/                   # activate, close, quit, and minimize adapters
+├── preview_plane/             # optional compositor-owned live previews
+└── rendering/                 # render flow, image conversion/lifetime, traces
+```
 
-### `src/main.rs`
+Every feature-owned `platform/` directory performs its own target selection in
+`platform/mod.rs`. OS-specific code stays below that boundary. A platform
+directory uses either all OS files or all OS directories, never a mixture.
 
-- App entrypoint: GPUI init, daemon socket bind, command dispatch.
-- Shared type aliases: `PreviewMap`, `IconMap`, `SharedPreviewCache`, `SharedIconCache`, `PickerWindowState`.
+## Runtime flow
 
-### `src/app/mod.rs`
+1. QoL Tray invokes the plugin with a show, reverse-show, settings, or kill
+   argument.
+2. `runtime/` forwards the command to the existing daemon when possible.
+3. The daemon owns GPUI initialization, a keepalive surface, retained picker
+   windows, monitor tracking, and the command loop.
+4. A show request reloads configuration, refreshes window metadata, selects a
+   monitor placement, and either cycles or updates the retained picker.
+5. `picker/` gathers cached images immediately and schedules missing icon or
+   preview work through the relevant capability.
+6. `app/` owns input, selection presentation, dismissal, and live preview
+   updates until the picker is hidden again.
 
-- `AltTabApp` struct: owns delegate, focus handle, action mode, alt poll task.
-- `new()`: creates delegate, starts alt-poll if hold-to-switch, spawns live preview task.
-- `apply_cached_windows()`: hot-updates window list and previews on reuse path.
-- Alt key release polling for hold-to-switch mode (inlined, no separate module).
+## Ownership boundaries
 
-### `src/app/render.rs`
+### Runtime and configuration
 
-- `Render` impl for `AltTabApp`: grid layout via `render_grid`, card styling via `render_card` + `card_bg`.
-- Transparent background mode: conditional header, card bg with configurable color/opacity.
-- `RenderSnapshot`: captures delegate state for render functions.
-- Extracted helpers: `header_bar`, `render_preview`, `render_label`, `preview_tile`, `placeholder_frame`.
+- `main.rs` only declares top-level modules and delegates arguments.
+- `runtime/mod.rs` owns command routing, daemon startup, and browser settings
+  fallback.
+- `runtime/daemon.rs` owns the socket command protocol.
+- `config/mod.rs` owns contract-backed settings types and defaults.
 
-### `src/app/input.rs`
+### GPUI application
 
-- Keyboard event handling: arrow navigation, tab cycling, enter/escape actions.
+- `app/mod.rs` owns `AltTabApp`, focus/dismissal state, and retained-view
+  updates.
+- `app/input.rs` owns keyboard navigation and explicit actions.
+- `app/render.rs` owns GPUI elements and card presentation.
+- `app/live_preview/` owns live capture coordination. Its first-fill gate and
+  lane scheduler are private implementation details, not crate-wide helpers.
 
-### `src/app/live_preview.rs`
+### Picker orchestration
 
-- CG live preview loop: captures selected window + one round-robin window every 500ms.
-- Pipeline: `wait_for_visible` → `read_snapshot` → `pick_targets` → `run_capture` → `diff_captures` → `push_updates`.
-- `LoopState` tracks previous hashes and round-robin position.
+- `picker/mod.rs` owns the show/reuse/create decision and picker cache types.
+- `picker/state.rs` owns window selection and retained preview/icon state.
+- `picker/layout.rs` is the single source of truth for card and grid geometry.
+- `picker/gather.rs` owns discovery-to-presentation gathering and async fills.
+- `picker/create.rs` and `picker/reuse.rs` own the two retained-window paths.
+- `picker/run.rs` owns GPUI application startup and daemon command dispatch.
+- `picker/monitor_listener/` owns topology and data-refresh events.
+- `picker/platform/` owns compositor-specific picker window behavior.
 
-### `src/picker/mod.rs`
+### Discovery, capture, actions, and rendering
 
-- `open_picker()`: the main entry point for showing the picker.
-- Handles reuse path (same window, update data) and fresh-open path.
-- `PickerState` (inline `mod state`): owns window list, selection, hover, label config, preview/icon/surface caches.
+- `discovery/` returns stable window identity and ordering.
+- `capture/` returns preview pixels or native live frames for those identities.
+- `actions/` performs operations on another application window.
+- `preview_plane/` integrates an external compositor preview surface when one
+  is available.
+- `rendering/` selects the preview renderer and owns GPUI image conversion,
+  atlas lifetime accounting, and debug-only preview traces.
 
-### `src/picker/gather.rs`
+Discovery and capture remain separate even when one platform API can provide
+both. Rendering owns image lifetime; every retained image cache must release
+through the registry so a GPUI image ID is never dropped twice.
 
-- Window gathering, preview capture, icon fill.
-- `build_icon_cache()`: converts raw BGRA icon data to `Arc<RenderImage>` keyed by app name.
+## Retained-window invariants
 
-### `src/picker/reuse.rs`
+- The daemon initializes GPUI once and reuses retained picker windows.
+- The keepalive surface must not appear as an empty desktop or Alt-Tab window.
+- Every show reloads config and refreshes window metadata before presentation.
+- Reuse reapplies monitor placement, bounds, transparency, shadow, focus, and
+  first-frame reveal requirements.
+- Dismissal hides the picker without terminating the daemon.
+- Browser settings are only a fallback for the shared native settings panel.
 
-- `try_reuse`: reuses existing picker window, repositions on monitor change via NSWindow API.
+## Navigation model
 
-### `src/picker/create.rs`
-
-- `create_new`: creates a fresh picker window when reuse is not possible.
-
-### `src/picker/run.rs`
-
-- Daemon run loop: socket listener, command dispatch, prewarm scheduling.
-- Prewarm loop: refreshes window/icon caches periodically.
-
-### `src/config.rs`
-
-- Config discovery/loading from install-scoped paths.
-- `DisplayConfig`, `LabelConfig`, `ActionMode`, `OpenBehavior` types.
-
-### `src/shared/layout.rs`
-
-- Sizing/grid math constants + functions (`picker_dimensions`, grid card sizes).
-
-### `src/shared/preview.rs`
-
-- `bgra_to_render_image()`: converts raw BGRA bytes to `Arc<RenderImage>` via image crate.
-- `fast_pixel_hash()`: cheap hash for change detection in live preview loop.
-
-### `src/daemon.rs`
-
-- Socket endpoint and command dispatch (Show/ShowReverse/Kill/Ping).
-
-### `src/discovery/platform/mod.rs`
-
-- Platform facade: `get_open_windows`, `get_on_screen_windows`, `on_screen_window_ids`.
-
-### `src/discovery/platform/macos/`
-
-- `mod.rs` — CG window list parsing (`CgWindow`, `CgKeys` with RAII Drop, `fetch_cg_windows`, `parse_cg_entry`), orchestration (`get_open_windows`, `get_on_screen_windows`).
-- `ffi.rs` — CG/CF type aliases, extern blocks, constants, dictionary helpers (`cfstr`, `dict_get_*`, `cfstring_to_string`).
-- `ax.rs` — AX window queries (`ax_windows`, `ax_find_window`, `ax_is_window_minimized`), dedup logic (`dedup_by_ax`). Uses `AxAttrs` with RAII Drop for attribute keys.
-- `window_enum.rs` — Window enumeration pipeline: `WindowEnumeration` state, `KnownWindowTracker` persistence, `collect_on_screen_windows` + `collect_minimized_windows` with budget-based filtering (`BudgetContext`, `AxData`).
-- `process.rs` — Process identity helpers, regular app detection, known window ID cache.
-
-### `src/discovery/platform/linux.rs`
-
-- Linux/X11: window enumeration via pipelined X11 property queries, `_NET_WM_ICON` icon extraction.
-
-### `src/capture/platform/mod.rs`
-
-- Platform facade: `capture_previews_cg`, `get_app_icons`.
-
-### `src/capture/platform/macos.rs`
-
-- `CGWindowListCreateImage` capture, `BlitSource` + `ScaledRect` for scaled BGRA blitting.
-- `NSImage` icon extraction via `CGBitmapContext`.
-
-### `src/capture/platform/linux.rs`
-
-- X11 `GetImage` capture.
-
-### `src/actions/platform/mod.rs`
-
-- Platform facade: `activate_window`, `close_window`, `quit_app`, `minimize_window_by_id`.
-
-### `src/actions/platform/macos.rs`
-
-- AX-based window actions (raise, unminimize, close, minimize).
-- `NSRunningApplication` for app activation/termination.
-- `cg_window_pid_and_title` for CG→AX window lookup.
-
-### `src/actions/platform/linux.rs`
-
-- X11 window activation.
-
-### `src/picker/platform/`
-
-- `mod.rs` — Facade: `dismiss_picker`, `is_modifier_held`.
-- `macos.rs` — NSWindow resize-to-1x1, `CGEventSourceFlagsState` modifier check.
-- `linux.rs` — Minimize, X11 modifier check.
-
-### `ui/`
-
-- Settings page (HTML/JS/CSS) served by qol-tray.
-
-## Navigation Model
-
-- Arrow keys move in visual grid space using runtime column count.
-- Vertical moves preserve the current column when possible.
-- `Tab`/`Shift+Tab` provide fast cyclic stepping.
-
-## Performance Characteristics
-
-- Picker open uses cached previews instantly; only missing windows are captured synchronously.
-- App icons are fetched asynchronously after picker opens (~50ms).
-- Window reuse path avoids GPU window recreation cost.
-- Picker repositions without close/reopen on monitor change.
-- CG live loop: selected + 1 round-robin every 500ms, diff-based updates only.
+- Arrow keys move in the current visual grid.
+- Vertical movement preserves the column when the destination row permits it.
+- Tab and Shift-Tab cycle through the current window order.
+- Hold-to-switch and sticky confirmation share one selection state machine.

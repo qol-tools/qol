@@ -1,13 +1,16 @@
+mod first_fill;
+mod lanes;
+
+use self::first_fill::FirstFillGate;
+use self::lanes::LaneScheduler;
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::capture;
 use crate::capture::{SendCVBuf, ShotReply};
+use crate::picker::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
 use crate::picker::run::SharedPreviewCache;
 use crate::picker::state::PickerState;
-use crate::shared::first_fill::FirstFillGate;
-use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
-use crate::shared::live_lanes::LaneScheduler;
-use crate::shared::preview::{bgra_to_render_image, fast_pixel_hash, shot_request_dims};
-use crate::PreviewMap;
+use crate::picker::PreviewMap;
+use crate::rendering::preview_image::{bgra_to_render_image, fast_pixel_hash, shot_request_dims};
 use gpui::{AsyncApp, Entity, RenderImage, Task, WeakEntity};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
@@ -327,10 +330,10 @@ async fn preview_loop(
         #[cfg(debug_assertions)]
         {
             if update_result.cache_write {
-                crate::shared::preview_trace::record_shared_live(wid);
+                crate::rendering::preview_trace::record_shared_live(wid);
             }
             if update_result.state_update {
-                crate::shared::preview_trace::record_live_update(wid);
+                crate::rendering::preview_trace::record_live_update(wid);
             }
             probe_live_preview(wid, true, capture_ms, render_ms, stable_ms, update_result);
         }
@@ -400,7 +403,12 @@ fn push_updates(
     cx.update(|app_cx| {
         let mut cache_write = false;
         if let Ok(mut cache) = preview_cache.lock() {
-            crate::shared::image_registry::extend_with(&mut *cache, shared_updates, app_cx, None);
+            crate::rendering::image_registry::extend_with(
+                &mut *cache,
+                shared_updates,
+                app_cx,
+                None,
+            );
             cache_write = true;
         }
         // App-level: no Window leased here, so insert_preview's release path

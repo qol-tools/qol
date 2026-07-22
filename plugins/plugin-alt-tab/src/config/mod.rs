@@ -25,9 +25,9 @@ impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
             max_columns: 6,
-            card_scale: crate::shared::layout::DEFAULT_CARD_SCALE,
+            card_scale: crate::picker::layout::DEFAULT_CARD_SCALE,
             dynamic_card_scale: true,
-            card_padding: crate::shared::layout::DEFAULT_CARD_PADDING,
+            card_padding: crate::picker::layout::DEFAULT_CARD_PADDING,
             transparent_background: false,
             card_background_color: DEFAULT_CARD_BACKGROUND_COLOR.to_string(),
             card_background_brightness: 1.0,

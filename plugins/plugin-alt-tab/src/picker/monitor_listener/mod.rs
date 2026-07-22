@@ -10,7 +10,7 @@ use qol_gpui::window::PopupPlacement;
 use super::run::{SharedPreviewCache, WindowCache};
 use crate::app::PICKER_VISIBLE;
 use crate::discovery::{Platform, WindowDiscovery};
-use crate::{PickerWindowState, SharedIconCache};
+use crate::picker::{PickerWindowState, SharedIconCache};
 
 mod platform;
 
