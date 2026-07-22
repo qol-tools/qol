@@ -29,7 +29,8 @@ pub(crate) fn run_setup(root: &Path, verbose: bool) -> Result<()> {
     let version = package_version(&package)?;
     print_title("qol setup");
     print_hint(verbose);
-    configure_lockfile_merge_driver(root);
+    register_cargo_lock_driver(root).context("failed to configure Cargo.lock merge driver")?;
+    step_label("merge", StepKind::Success, "Cargo.lock auto-resolve");
     let target_display = target.display().to_string();
     if install_is_current(root, &package, &target, &version)? {
         step_label("current", StepKind::Success, &target_display);
@@ -54,17 +55,6 @@ pub(crate) fn run_setup(root: &Path, verbose: bool) -> Result<()> {
 
 pub(crate) fn installed_qol_path() -> Result<PathBuf> {
     Ok(cargo_bin_dir()?.join(exe_name("qol")))
-}
-
-fn configure_lockfile_merge_driver(root: &Path) {
-    match register_cargo_lock_driver(root) {
-        Ok(()) => step_label("merge", StepKind::Success, "Cargo.lock auto-resolve"),
-        Err(error) => step_label(
-            "merge",
-            StepKind::Info,
-            &format!("Cargo.lock driver skipped: {error}"),
-        ),
-    }
 }
 
 fn register_cargo_lock_driver(root: &Path) -> Result<()> {
@@ -226,4 +216,30 @@ fn normalized_path(path: &Path) -> Result<String> {
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", path.display()))?;
     Ok(path.to_string_lossy().replace('\\', "/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setup_fails_when_lockfile_merge_driver_cannot_be_registered() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("tools/qol-cli");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(
+            package.join("Cargo.toml"),
+            "[package]\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
+
+        let error = run_setup(root.path(), false).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to configure Cargo.lock merge driver"),
+            "unexpected setup error: {error:#}"
+        );
+    }
 }

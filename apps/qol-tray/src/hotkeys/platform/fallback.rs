@@ -9,25 +9,25 @@ pub(in crate::hotkeys) struct PhysicalHotkeyState;
 pub(in crate::hotkeys) struct PhysicalHotkeySnapshot;
 
 impl PhysicalHotkeyState {
-    pub(super) fn connect() -> Result<Self, String> {
+    pub(in crate::hotkeys) fn connect() -> Result<Self, String> {
         Ok(Self)
     }
 
-    pub(super) fn snapshot(&self) -> Result<PhysicalHotkeySnapshot, String> {
+    pub(in crate::hotkeys) fn snapshot(&self) -> Result<PhysicalHotkeySnapshot, String> {
         Ok(PhysicalHotkeySnapshot)
     }
 }
 
 impl PhysicalHotkeySnapshot {
-    pub(super) fn supports_reconciliation(&self) -> bool {
+    pub(in crate::hotkeys) fn supports_reconciliation(&self) -> bool {
         false
     }
 
-    pub(super) fn chord_is_pressed(&self, _chord: &Combo) -> bool {
+    pub(in crate::hotkeys) fn chord_is_pressed(&self, _chord: &Combo) -> bool {
         true
     }
 
-    pub(super) fn trace_summary(&self) -> String {
+    pub(in crate::hotkeys) fn trace_summary(&self) -> String {
         "unsupported".into()
     }
 }

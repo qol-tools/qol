@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const ICNS_DATA: &[u8] = include_bytes!("../../../assets/qol-tray.icns");
+const ICNS_DATA: &[u8] = include_bytes!("../../../../assets/qol-tray.icns");
 const APP_NAME: &str = "QoL Tray";
 const BUNDLE_ID: &str = super::MACOS_BUNDLE_ID;
 

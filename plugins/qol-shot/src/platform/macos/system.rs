@@ -80,6 +80,10 @@ pub fn pin_focus(_title: &str) {}
 
 pub fn pin_release_focus(_title: &str) {}
 
+pub fn prepare_pin_window(_title: &str, _origin: (f64, f64)) -> bool {
+    false
+}
+
 pub fn configure_pin_window(title: String, _origin: (f64, f64), source_preview: Option<String>) {
     qol_gpui::popup_window::configure_pinned_window(&title);
     if let Some(source_preview) = source_preview {

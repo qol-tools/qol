@@ -149,6 +149,10 @@ pub fn pin_focus(_title: &str) {}
 
 pub fn pin_release_focus(_title: &str) {}
 
+pub fn prepare_pin_window(_title: &str, _origin: (f64, f64)) -> bool {
+    false
+}
+
 pub fn configure_pin_window(_title: String, _origin: (f64, f64), source_preview: Option<String>) {
     if let Some(source_preview) = source_preview {
         qol_gpui::popup_window::hide_invisible(&source_preview);
