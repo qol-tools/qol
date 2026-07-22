@@ -798,9 +798,7 @@ impl PreviewView {
         };
         let perform = move || match action {
             ShotAction::OpenFolder => match saved_completion {
-                Some(completion) => {
-                    completion.open(crate::capture::completion::RevealSource::PreviewAction)
-                }
+                Some(completion) => completion.open("preview-action"),
                 None => crate::capture::completion::reveal(&path),
             },
             _ => action.perform(&path),

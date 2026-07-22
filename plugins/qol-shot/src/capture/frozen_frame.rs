@@ -7,8 +7,8 @@ use crate::Rect;
 
 #[derive(Clone)]
 pub(crate) struct FrozenFrame {
-    bounds: Rect,
-    image: Arc<RenderImage>,
+    pub(crate) bounds: Rect,
+    pub(crate) image: Arc<RenderImage>,
 }
 
 #[derive(Clone)]
@@ -19,19 +19,6 @@ pub(crate) struct FrozenCrop {
 }
 
 impl FrozenFrame {
-    pub(crate) fn from_bgra(bounds: Rect, pixels: Vec<u8>) -> Option<Self> {
-        let width = u32::try_from(bounds.w).ok()?;
-        let height = u32::try_from(bounds.h).ok()?;
-        let buffer =
-            image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(width, height, pixels)?;
-        Some(Self {
-            bounds,
-            image: Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
-                buffer
-            )])),
-        })
-    }
-
     pub(crate) fn bounds(&self) -> Rect {
         self.bounds
     }
@@ -118,16 +105,20 @@ mod tests {
         let pixels: Vec<u8> = (0..12u8)
             .flat_map(|value| [value + 40, value + 20, value, 255])
             .collect();
-        FrozenFrame::from_bgra(
-            Rect {
-                x: 10,
-                y: 20,
-                w: 4,
-                h: 3,
-            },
-            pixels,
-        )
-        .unwrap()
+        let bounds = Rect {
+            x: 10,
+            y: 20,
+            w: 4,
+            h: 3,
+        };
+        let buffer =
+            image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(4, 3, pixels).unwrap();
+        FrozenFrame {
+            bounds,
+            image: Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
+                buffer,
+            )])),
+        }
     }
 
     #[test]

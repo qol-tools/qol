@@ -3,25 +3,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RevealSource {
-    Automatic,
-    Notification,
-    PreviewAction,
-    Toast,
-}
-
-impl RevealSource {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Automatic => "automatic",
-            Self::Notification => "notification",
-            Self::PreviewAction => "preview-action",
-            Self::Toast => "toast",
-        }
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct RevealTarget {
     state: Arc<RevealState>,
@@ -46,7 +27,7 @@ impl RevealTarget {
         &self.state.path
     }
 
-    pub(crate) fn open(&self, source: RevealSource) -> Result<()> {
+    pub(crate) fn open(&self, source: &str) -> Result<()> {
         let mut opened = self
             .state
             .opened
@@ -92,7 +73,7 @@ pub(crate) struct SavedAnnouncement {
 
 impl SavedAnnouncement {
     pub(crate) fn reveal_automatically(&self) {
-        if let Err(error) = self.target.open(RevealSource::Automatic) {
+        if let Err(error) = self.target.open("automatic") {
             eprintln!("[qol-shot] automatic folder reveal failed: {error:#}");
         }
     }
@@ -177,7 +158,7 @@ impl PreviewCompletion {
         }
     }
 
-    pub(crate) fn open(&self, source: RevealSource) -> Result<()> {
+    pub(crate) fn open(&self, source: &str) -> Result<()> {
         self.target.open(source)
     }
 
@@ -194,7 +175,7 @@ impl PreviewCompletion {
     }
 
     fn open_automatically(&self) {
-        if let Err(error) = self.target.open(RevealSource::Automatic) {
+        if let Err(error) = self.target.open("automatic") {
             eprintln!("[qol-shot] automatic folder reveal failed: {error:#}");
         }
     }
@@ -209,10 +190,10 @@ pub(crate) fn background_saved(
     let target = RevealTarget::new(path);
     crate::platform::show_saved_notification(title, message, 8_000, target.clone());
     if !open_folder_after_save {
-        trace_reveal(RevealSource::Automatic, "disabled", path);
+        trace_reveal("automatic", "disabled", path);
         return;
     }
-    if let Err(error) = target.open(RevealSource::Automatic) {
+    if let Err(error) = target.open("automatic") {
         eprintln!("[qol-shot] automatic folder reveal failed: {error:#}");
     }
 }
@@ -222,11 +203,11 @@ pub(crate) fn reveal(path: &Path) -> Result<()> {
         .with_context(|| format!("failed to open containing folder for {}", path.display()))
 }
 
-fn trace_reveal(source: RevealSource, result: &str, path: &Path) {
+fn trace_reveal(source: &str, result: &str, path: &Path) {
     qol_runtime::probe!(
         "SHOT_SAVED_REVEAL",
         "kind={} result={result} file={}",
-        source.label(),
+        source,
         file_label(path)
     );
 }

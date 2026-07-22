@@ -52,7 +52,7 @@ pub fn show_saved_notification(
         if !clicked {
             return;
         }
-        if let Err(error) = target.open(crate::capture::completion::RevealSource::Notification) {
+        if let Err(error) = target.open("notification") {
             eprintln!("[qol-shot] notification folder reveal failed: {error:#}");
         }
     });
