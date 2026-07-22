@@ -1,5 +1,5 @@
-use crate::status::Status;
-use crate::tool::Tool;
+use crate::session::status::Status;
+use crate::session::tool::Tool;
 
 pub struct Notice {
     pub title: String,

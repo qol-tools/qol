@@ -11,7 +11,7 @@
 //! happened to occupy. `order` is the window-id sequence currently on screen
 //! (the sorted rows); the model is pure and holds no reference to it.
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Selection {
     anchor: Option<u64>,
 }

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::registry::SessionState;
+use crate::session::registry::SessionState;
 
 pub fn load(path: &Path) -> Vec<SessionState> {
     std::fs::read_to_string(path)

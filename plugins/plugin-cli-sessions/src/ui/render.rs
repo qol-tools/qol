@@ -7,9 +7,9 @@ use gpui::{
 };
 use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
 
-use crate::registry::SessionState;
-use crate::status::Status;
-use crate::tool::Tool;
+use crate::session::registry::SessionState;
+use crate::session::status::Status;
+use crate::session::tool::Tool;
 use crate::ui::SessionsView;
 
 static CURRENT_PALETTE: LazyLock<CliSessionsPalette> = LazyLock::new(cli_sessions_runtime);

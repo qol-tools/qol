@@ -1,6 +1,6 @@
 use gpui::{point, px, Bounds, Pixels, Size};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Corner {
     TopLeft,
     TopRight,

@@ -2,9 +2,9 @@ pub mod claude;
 pub mod codex;
 
 use crate::host::Pane;
+use crate::session::status::Status;
+use crate::session::tool::Tool;
 use crate::signal::screen::{has_input_request, has_prompt_markers};
-use crate::status::Status;
-use crate::tool::Tool;
 
 const DONE_THRESHOLD_SECS: u64 = 5;
 

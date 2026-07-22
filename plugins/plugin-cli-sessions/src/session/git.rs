@@ -1,5 +1,6 @@
-use std::collections::HashMap;
 use std::process::Command;
+
+use std::collections::HashMap;
 
 const BRANCH_TTL_SECS: u64 = 30;
 

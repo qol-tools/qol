@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use crate::status::Status;
+use crate::session::status::Status;
 use crate::strategy::Phase;
 
 const RING_CAP: usize = 6;
@@ -136,7 +136,7 @@ static RECORDER: OnceLock<Option<Recorder>> = OnceLock::new();
 fn dir_override() -> Option<PathBuf> {
     match std::env::var("CLI_SESSIONS_ANOMALY_DIR") {
         Ok(d) if !d.is_empty() => Some(PathBuf::from(d)),
-        _ => crate::paths::anomalies_dir(),
+        _ => crate::storage::paths::anomalies_dir(),
     }
 }
 

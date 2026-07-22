@@ -13,15 +13,15 @@ use gpui::{
 use crate::config;
 use crate::daemon::actions::{self, Command};
 use crate::daemon::reconcile;
+use crate::diagnostics::{anomaly, snapshot};
 use crate::host::kitty::Kitty;
 use crate::host::TerminalHost;
-use crate::paths;
-use crate::persist;
-use crate::placement::{corner_bounds, Corner};
-use crate::registry::Registry;
-use crate::service::SystemServiceProbe;
-use crate::status::Status;
+use crate::session::registry::Registry;
+use crate::session::service::SystemServiceProbe;
+use crate::session::status::Status;
+use crate::storage::{paths, persist};
 use crate::strategy::codex::DiskCodexStore;
+use crate::ui::placement::{corner_bounds, Corner};
 use crate::ui::{trace, SessionsView, WINDOW_TITLE};
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
@@ -39,7 +39,7 @@ type AttentionCursor = Arc<Mutex<Option<u64>>>;
 
 pub fn run(show_on_start: bool) -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
-    crate::anomaly::enable();
+    anomaly::enable();
 
     let registry: Arc<Mutex<Registry>> = Arc::new(Mutex::new(Registry::default()));
     let host: Arc<dyn TerminalHost + Send + Sync> = Arc::new(Kitty);
@@ -122,7 +122,7 @@ fn snapshot_now(host: &Arc<dyn TerminalHost + Send + Sync>, registry: &Arc<Mutex
             .collect(),
         Err(_) => HashMap::new(),
     };
-    match crate::snapshot::capture_all(host.as_ref(), &panel, &dir, now_secs()) {
+    match snapshot::capture_all(host.as_ref(), &panel, &dir, now_secs()) {
         Ok(path) => eprintln!("[cli-sessions] snapshot -> {}", path.display()),
         Err(e) => eprintln!("[cli-sessions] snapshot failed: {e}"),
     }
@@ -217,7 +217,7 @@ fn spawn_reconcile_timer(
                 Err(_) => Vec::new(),
             };
             for notice in &notices {
-                crate::notify::send(notice);
+                crate::ui::notify::send(notice);
             }
         })
         .await;
@@ -394,7 +394,7 @@ fn next_attention_window_id(
         .lock()
         .ok()
         .and_then(|cursor| cursor.and_then(|id| rows.iter().position(|row| row.window_id == id)));
-    let index = crate::nav::next_attention(&statuses, current)?;
+    let index = crate::ui::nav::next_attention(&statuses, current)?;
     let window_id = rows.get(index)?.window_id;
     if let Ok(mut cursor) = attention_cursor.lock() {
         *cursor = Some(window_id);

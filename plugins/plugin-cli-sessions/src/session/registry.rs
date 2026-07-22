@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::status::Status;
-use crate::tool::Tool;
+use crate::session::status::Status;
+use crate::session::tool::Tool;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionState {

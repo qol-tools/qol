@@ -1,4 +1,4 @@
-use crate::registry::SessionState;
+use crate::session::registry::SessionState;
 
 pub(super) fn jump_missing(reason: &'static str, index: usize, row_count: usize) {
     #[cfg(debug_assertions)]

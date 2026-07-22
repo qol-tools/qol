@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::host::TerminalHost;
-use crate::status::Status;
-use crate::tool::classify;
+use crate::session::status::Status;
+use crate::session::tool::classify;
 
 /// Dump every live session's frame in the moment - the screen, the title, and
 /// the status the panel is currently showing - so a wrong status (in any

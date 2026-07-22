@@ -1,4 +1,4 @@
-use crate::status::Status;
+use crate::session::status::Status;
 
 /// Index of the attention row to jump to next, over a priority-sorted slice
 /// (NeedsYou before YourTurn, recent before old). With no cursor the jump lands

@@ -1,6 +1,7 @@
-use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::sync::OnceLock;
+
+use std::collections::{HashMap, HashSet};
 
 use crate::host::Pane;
 

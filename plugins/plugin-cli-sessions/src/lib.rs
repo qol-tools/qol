@@ -1,19 +1,14 @@
-pub mod anomaly;
 pub mod config;
 pub mod daemon;
-pub mod git;
+pub mod diagnostics;
 pub mod host;
-pub mod nav;
-pub mod notify;
-pub mod paths;
-pub mod persist;
-pub mod placement;
-pub mod registry;
-pub mod selection;
-pub mod service;
+pub mod session;
 pub mod signal;
-pub mod snapshot;
-pub mod status;
+pub mod storage;
 pub mod strategy;
-pub mod tool;
 pub mod ui;
+
+pub use diagnostics::{anomaly, snapshot};
+pub use session::{git, registry, service, status, tool};
+pub use storage::{paths, persist};
+pub use ui::{nav, notify, placement, selection};

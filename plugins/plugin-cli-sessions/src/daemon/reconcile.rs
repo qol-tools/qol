@@ -1,18 +1,17 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use crate::git;
 use crate::host::{project_of, Pane, TerminalHost};
-use crate::notify::{self, Notice};
-use crate::paths;
-use crate::persist;
-use crate::registry::{summary_for, Registry, SessionState};
-use crate::service::ServiceProbe;
+use crate::session::git;
+use crate::session::registry::{summary_for, Registry, SessionState};
+use crate::session::service::ServiceProbe;
+use crate::session::status::Status;
+use crate::session::tool::{classify, Tool};
 use crate::signal::screen::screen_hash;
-use crate::status::Status;
+use crate::storage::{paths, persist};
 use crate::strategy::codex::CodexStore;
 use crate::strategy::{for_tool, running_since_for, status_for, Ctx, Prev, Reading};
-use crate::tool::{classify, Tool};
+use crate::ui::notify::{self, Notice};
 
 #[derive(Default)]
 pub struct ReconcileCaches {
@@ -103,7 +102,7 @@ pub fn tick_with_caches(
                 notices.push(notice);
             }
             drop(reg);
-            crate::anomaly::observe(
+            crate::diagnostics::anomaly::observe(
                 pane.window_id,
                 now,
                 &pane.title,

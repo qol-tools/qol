@@ -1,5 +1,9 @@
+pub mod nav;
+pub mod notify;
+pub mod placement;
 pub mod render;
 pub mod run;
+pub mod selection;
 mod trace;
 
 use std::sync::{Arc, Mutex};
@@ -7,8 +11,8 @@ use std::sync::{Arc, Mutex};
 use gpui::{App, AppContext, AsyncApp, Context, FocusHandle, Focusable, WeakEntity};
 
 use crate::host::TerminalHost;
-use crate::registry::Registry;
-use crate::selection::Selection;
+use crate::session::registry::Registry;
+use crate::ui::selection::Selection;
 
 pub(crate) const WINDOW_TITLE: &str = "cli-sessions-panel";
 
@@ -37,7 +41,7 @@ impl SessionsView {
         }
     }
 
-    pub fn rows(&self) -> Vec<crate::registry::SessionState> {
+    pub fn rows(&self) -> Vec<crate::session::registry::SessionState> {
         self.registry.lock().map(|r| r.sorted()).unwrap_or_default()
     }
 
@@ -137,11 +141,11 @@ impl SessionsView {
 
     pub fn jump_to_next_attention(&mut self, cx: &mut Context<Self>) {
         let rows = self.rows();
-        let statuses: Vec<crate::status::Status> = rows.iter().map(|r| r.status).collect();
+        let statuses: Vec<crate::session::status::Status> = rows.iter().map(|r| r.status).collect();
         let current = self
             .last_jumped
             .and_then(|wid| rows.iter().position(|r| r.window_id == wid));
-        if let Some(window_id) = crate::nav::next_attention(&statuses, current)
+        if let Some(window_id) = crate::ui::nav::next_attention(&statuses, current)
             .and_then(|index| rows.get(index))
             .map(|row| row.window_id)
         {

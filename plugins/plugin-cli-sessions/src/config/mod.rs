@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::paths::PLUGIN_ID;
-use crate::placement::Corner;
+use crate::storage::paths::PLUGIN_ID;
+use crate::ui::placement::Corner;
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 
