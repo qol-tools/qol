@@ -1,5 +1,5 @@
-use crate::domain::config::ServerConfig;
-use crate::domain::models::ModifierKeys;
+use crate::command::ModifierKeys;
+use crate::config::ServerConfig;
 use crate::input::InputHandlerTrait;
 use anyhow::Result;
 use std::sync::Mutex;

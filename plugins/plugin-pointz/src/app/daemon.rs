@@ -2,8 +2,8 @@ use std::sync::mpsc::Sender;
 
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 
-use crate::domain::config::ServerConfig;
-use crate::utils;
+use crate::config::ServerConfig;
+use crate::network;
 
 const CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -40,8 +40,8 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
         "kill" => ReadResult::Command(Command::Kill),
         "connection_status" => ReadResult::HandledWithData(serde_json::json!({ "state": "ok" })),
         "connection_info" => ReadResult::HandledWithData(serde_json::json!({
-            "hostname": utils::get_hostname(),
-            "ip": utils::get_local_ip().map(|ip| ip.to_string()),
+            "hostname": network::get_hostname(),
+            "ip": network::get_local_ip().map(|ip| ip.to_string()),
             "discovery_port": ServerConfig::DISCOVERY_PORT,
             "command_port": ServerConfig::COMMAND_PORT,
             "app_download_url": APP_DOWNLOAD_URL,

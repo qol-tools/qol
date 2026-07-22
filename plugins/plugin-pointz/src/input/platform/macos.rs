@@ -1,5 +1,5 @@
-use crate::domain::config::ServerConfig;
-use crate::domain::models::ModifierKeys;
+use crate::command::ModifierKeys;
+use crate::config::ServerConfig;
 use crate::input::InputHandlerTrait;
 use anyhow::Result;
 use rdev::{simulate, Button, EventType, Key, SimulateError};
@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 extern "C" {}
 
 const DRAG_BATCH_INTERVAL_MS: u64 = 16;
+const DOUBLE_CLICK_TIMEOUT_MS: u64 = 350;
 
 pub struct InputHandlerImpl {
     current_pos: Mutex<Option<(f64, f64)>>,
@@ -293,7 +294,7 @@ impl InputHandlerImpl {
     fn next_click_count(&self, button: u8) -> i64 {
         let mut last_click = self.last_click.lock().expect("Last click mutex poisoned");
         let now = Instant::now();
-        let timeout = Duration::from_millis(ServerConfig::DOUBLE_CLICK_TIMEOUT_MS);
+        let timeout = Duration::from_millis(DOUBLE_CLICK_TIMEOUT_MS);
 
         let count = if let Some(previous) = &*last_click {
             if previous.button == button

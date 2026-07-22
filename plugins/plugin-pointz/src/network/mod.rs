@@ -1,4 +1,4 @@
-use crate::domain::config::ServerConfig;
+use crate::config::ServerConfig;
 use if_addrs::get_if_addrs;
 use std::net::IpAddr;
 use std::os::fd::FromRawFd;

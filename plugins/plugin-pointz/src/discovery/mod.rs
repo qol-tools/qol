@@ -1,7 +1,9 @@
-use crate::domain::config::ServerConfig;
-use crate::domain::models::DiscoveryResponse;
-use crate::utils::{bind_udp_or_inherit, get_hostname};
+mod model;
+
+use crate::config::ServerConfig;
+use crate::network::{bind_udp_or_inherit, get_hostname};
 use anyhow::Result;
+use model::DiscoveryResponse;
 use tokio::net::UdpSocket;
 
 pub struct DiscoveryService {

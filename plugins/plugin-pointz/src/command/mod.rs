@@ -1,7 +1,10 @@
-use crate::domain::config::ServerConfig;
-use crate::domain::models::Command;
+mod model;
+
+pub(crate) use model::{Command, ModifierKeys};
+
+use crate::config::ServerConfig;
 use crate::input::InputHandler;
-use crate::utils::bind_udp_or_inherit;
+use crate::network::bind_udp_or_inherit;
 use anyhow::Result;
 use std::sync::Arc;
 

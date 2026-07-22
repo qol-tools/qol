@@ -5,7 +5,7 @@
 //! because the constructor never succeeds, but they still return typed `Err`
 //! to satisfy the trait without `unimplemented!()`.
 
-use crate::domain::models::ModifierKeys;
+use crate::command::ModifierKeys;
 use crate::input::InputHandlerTrait;
 use anyhow::{anyhow, Result};
 
