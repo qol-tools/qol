@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use gpui::{px, size, App, Application};
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
-use qol_gpui::surface::{Anchor, OpenedSurface, Surface, SurfaceKind};
+use qol_gpui::surface::{OpenedSurface, Surface, SurfaceKind};
 
 use crate::daemon::actions::{self, Command};
 use crate::ui::{RemoveAppView, WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
@@ -47,8 +47,8 @@ fn open_window(
 ) -> anyhow::Result<OpenedSurface<RemoveAppView>> {
     Surface::new(SurfaceKind::Panel)
         .title(WINDOW_TITLE)
-        .anchor(Anchor::MonitorCenter)
         .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
+        .fixed_size()
         .show_focused(tracker, cx, move |_dismisser, _window, cx| {
             RemoveAppView::new(cx)
         })

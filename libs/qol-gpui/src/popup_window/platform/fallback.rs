@@ -59,6 +59,10 @@ pub fn show_normal_window_by_title(_title: &str) -> bool {
     false
 }
 
+pub fn set_window_fixed_size_by_title(_title: &str, _size: gpui::Size<gpui::Pixels>) -> bool {
+    false
+}
+
 pub fn disable_window_shadow(_title: &str) -> bool {
     false
 }

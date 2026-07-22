@@ -20,12 +20,13 @@ pub enum Corner {
     BottomRight,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anchor {
     CornerStack(Corner),
     MonitorCenter,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceKind {
     Toast,
     Panel,
@@ -37,6 +38,7 @@ pub struct Surface {
     anchor: Anchor,
     timeout: Option<Duration>,
     size: Size<Pixels>,
+    fixed_size: bool,
     retain_on_dismiss: bool,
 }
 
@@ -105,12 +107,17 @@ impl SurfaceDismisser {
 
 impl Surface {
     pub fn new(kind: SurfaceKind) -> Self {
+        let anchor = match kind {
+            SurfaceKind::Toast => Anchor::CornerStack(Corner::BottomRight),
+            SurfaceKind::Panel => Anchor::MonitorCenter,
+        };
         Self {
             kind,
             title: "qol-surface".into(),
-            anchor: Anchor::CornerStack(Corner::BottomRight),
+            anchor,
             timeout: None,
             size: size(px(320.0), px(72.0)),
+            fixed_size: false,
             retain_on_dismiss: false,
         }
     }
@@ -132,6 +139,11 @@ impl Surface {
 
     pub fn size(mut self, size: Size<Pixels>) -> Self {
         self.size = size;
+        self
+    }
+
+    pub fn fixed_size(mut self) -> Self {
+        self.fixed_size = true;
         self
     }
 
@@ -190,6 +202,7 @@ impl Surface {
             focus: self.takes_focus(),
             show: !native_reveal_gate,
             is_movable: true,
+            is_resizable: !self.fixed_size,
             window_background: WindowBackgroundAppearance::Transparent,
             app_id: Some(title.clone()),
             ..Default::default()
@@ -250,18 +263,26 @@ impl Surface {
         if native_reveal_gate {
             let _reason = crate::popup_window::reason_scope("surface-open");
             let hidden = crate::popup_window::prepare_window_reveal_by_title(&title);
-            let fresh_frame = hidden
+            let size_constrained = !self.fixed_size
+                || crate::popup_window::set_window_fixed_size_by_title(&title, bounds.size);
+            let fresh_frame = (hidden && size_constrained)
                 .then(|| schedule_fresh_frame(handle, bounds.size, cx))
                 .flatten();
             let frame_scheduled = fresh_frame.is_some();
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
-                "title={title} phase=opened hidden={hidden} frame_scheduled={frame_scheduled} x={} y={}",
+                "title={title} phase=opened hidden={hidden} fixed_size={} size_constrained={size_constrained} frame_scheduled={frame_scheduled} x={} y={}",
+                self.fixed_size,
                 bounds.origin.x.to_f64(),
                 bounds.origin.y.to_f64()
             );
             if !frame_scheduled {
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
+                if !size_constrained {
+                    return Err(anyhow!(
+                        "surface could not constrain its native window size"
+                    ));
+                }
                 return Err(anyhow!("surface could not prepare a fresh frame"));
             }
             settle_then_reveal(
@@ -914,7 +935,7 @@ fn corner_anchored_bounds(
 
 #[cfg(test)]
 mod tests {
-    use super::{corner_anchored_bounds, Corner, RevealReadiness, Surface, SurfaceKind};
+    use super::{corner_anchored_bounds, Anchor, Corner, RevealReadiness, Surface, SurfaceKind};
     use gpui::{point, px, size, Bounds, WindowKind};
 
     #[test]
@@ -922,6 +943,7 @@ mod tests {
         let surface = Surface::new(SurfaceKind::Panel);
 
         assert_eq!(surface.window_kind(), WindowKind::Normal);
+        assert_eq!(surface.anchor, Anchor::MonitorCenter);
         assert!(surface.takes_focus());
     }
 

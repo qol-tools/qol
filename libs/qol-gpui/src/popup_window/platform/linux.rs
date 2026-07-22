@@ -583,12 +583,35 @@ fn lock_window_size(conn: &impl Connection, wid: u32) {
         return;
     };
     let size = (geometry.width as i32, geometry.height as i32);
+    let _ = set_window_fixed_size(conn, wid, size);
+}
+
+fn set_window_fixed_size(conn: &impl Connection, wid: u32, size: (i32, i32)) -> bool {
     let hints = x11rb::properties::WmSizeHints {
         min_size: Some(size),
         max_size: Some(size),
         ..Default::default()
     };
-    let _ = hints.set(conn, wid, AtomEnum::WM_NORMAL_HINTS);
+    hints
+        .set(conn, wid, AtomEnum::WM_NORMAL_HINTS)
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some()
+}
+
+pub fn set_window_fixed_size_by_title(title: &str, size: gpui::Size<gpui::Pixels>) -> bool {
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
+    else {
+        return false;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        return false;
+    };
+    let size = (
+        size.width.to_f64().round().max(1.0) as i32,
+        size.height.to_f64().round().max(1.0) as i32,
+    );
+    set_window_fixed_size(&conn, wid, size) && conn.flush().is_ok()
 }
 
 fn add_window_state(conn: &impl Connection, root: u32, wid: u32) {

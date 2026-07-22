@@ -1,6 +1,6 @@
 mod platform;
 
-pub(crate) use platform::show_normal_window_by_title;
+pub(crate) use platform::{set_window_fixed_size_by_title, show_normal_window_by_title};
 
 use std::cell::RefCell;
 use std::time::{Duration, Instant};

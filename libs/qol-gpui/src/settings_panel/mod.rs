@@ -11,7 +11,7 @@ use std::time::Duration;
 use gpui::*;
 
 use crate::monitor::MonitorTracker;
-use crate::surface::{Anchor, OpenedSurface, Surface, SurfaceKind};
+use crate::surface::{OpenedSurface, Surface, SurfaceKind};
 use rows::{rows_from_resolved, Row};
 use view::{SettingsPanelState, SettingsPanelView};
 
@@ -391,7 +391,6 @@ fn open_prepared(
     let title = prepared.panel.heading.clone();
     let opened = Surface::new(SurfaceKind::Panel)
         .title(title)
-        .anchor(Anchor::MonitorCenter)
         .size(prepared.size)
         .retain_on_dismiss()
         .show_focused(tracker, cx, move |dismisser, _window, cx| {

@@ -3,7 +3,7 @@ use objc2_app_kit::{
     NSApplication, NSColor, NSPopUpMenuWindowLevel, NSScreen, NSView, NSWindow,
     NSWindowAnimationBehavior,
 };
-use objc2_foundation::{MainThreadMarker, NSPoint};
+use objc2_foundation::{MainThreadMarker, NSPoint, NSSize};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 #[cfg(debug_assertions)]
@@ -245,6 +245,16 @@ pub fn show_window_passive_by_title(title: &str) -> bool {
 
 pub fn show_normal_window_by_title(title: &str) -> bool {
     show_window_by_title_with_focus(title, true)
+}
+
+pub fn set_window_fixed_size_by_title(title: &str, size: gpui::Size<gpui::Pixels>) -> bool {
+    let Some(window) = resolve_window(title) else {
+        return false;
+    };
+    let size = NSSize::new(size.width.to_f64(), size.height.to_f64());
+    window.setContentMinSize(size);
+    window.setContentMaxSize(size);
+    true
 }
 
 fn show_window_by_title_with_focus(title: &str, focus: bool) -> bool {
