@@ -1,12 +1,4 @@
-#[cfg(target_os = "macos")]
-mod config;
-#[cfg(target_os = "macos")]
-mod daemon;
-#[cfg(target_os = "macos")]
-mod keycode;
 mod platform;
-#[cfg(target_os = "macos")]
-mod remap;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

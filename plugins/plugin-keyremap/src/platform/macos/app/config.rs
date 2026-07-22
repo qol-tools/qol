@@ -20,6 +20,7 @@ fn default_enabled() -> bool {
     true
 }
 
+#[cfg(test)]
 pub(crate) fn builtin_defaults() -> RemapConfig {
     qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).expect("contract defaults must parse")
 }

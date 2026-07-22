@@ -13,6 +13,7 @@ use core_graphics::event::{
 };
 use core_graphics::sys::CGEventRef;
 use foreign_types_shared::ForeignType;
+use qol_hotkeys::macos_keycode as keycode;
 use qol_runtime::keyremap_marker;
 
 type RawEventTapCallback = unsafe extern "C" fn(
@@ -36,10 +37,10 @@ extern "C" {
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
 }
 
-use super::app_tracker::AppTracker;
-use crate::remap::{
+use super::app::remap::{
     self, KeyAction, Modifiers, MouseAction, MouseButton, ResolvedConfig, ScrollAction,
 };
+use super::app_tracker::AppTracker;
 
 pub struct TapState {
     config: RwLock<Arc<ResolvedConfig>>,
@@ -338,7 +339,7 @@ fn handle_key_event(
             "[keyremap:dbg] app={} key=0x{:02X}({}) mods={:?} -> {:?}",
             bundle_id,
             keycode,
-            crate::keycode::key_name(keycode),
+            keycode::key_name(keycode),
             mods,
             action,
         );
@@ -362,10 +363,8 @@ fn handle_key_event(
             event.set_flags(clean_flags);
             // Set keycode to SPACE so dead-key positions (like ´ on Nordic)
             // don't trigger the input method's dead-key state machine.
-            event.set_integer_value_field(
-                EventField::KEYBOARD_EVENT_KEYCODE,
-                crate::keycode::SPACE as i64,
-            );
+            event
+                .set_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE, keycode::SPACE as i64);
             event.set_string(text);
             CallbackResult::Keep
         }

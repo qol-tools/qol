@@ -1,12 +1,9 @@
-mod app_tracker;
-mod tap;
-
-use std::sync::Arc;
-
-use crate::{config, daemon, remap};
+pub(crate) mod config;
+pub(crate) mod daemon;
+pub(crate) mod remap;
 
 pub(crate) fn run(args: Vec<String>) -> i32 {
-    if args.iter().any(|a| a == "--kill") {
+    if args.iter().any(|argument| argument == "--kill") {
         if daemon::send_kill() {
             eprintln!("[keyremap] kill sent");
         } else {
@@ -15,7 +12,7 @@ pub(crate) fn run(args: Vec<String>) -> i32 {
         return 0;
     }
 
-    if args.iter().any(|a| a == "--reload") {
+    if args.iter().any(|argument| argument == "--reload") {
         if daemon::send_reload() {
             eprintln!("[keyremap] reload sent");
         } else {
@@ -37,10 +34,9 @@ pub(crate) fn run(args: Vec<String>) -> i32 {
     );
 
     let mut current_key_rules = resolved.key_rules.clone();
-    let app_tracker = app_tracker::AppTracker::start();
-    let state = Arc::new(tap::TapState::new(resolved, app_tracker));
-
-    tap::start_tap(Arc::clone(&state));
+    let app_tracker = super::app_tracker::AppTracker::start();
+    let state = std::sync::Arc::new(super::tap::TapState::new(resolved, app_tracker));
+    super::tap::start_tap(std::sync::Arc::clone(&state));
 
     let (tx, rx) = std::sync::mpsc::channel();
     if !daemon::start_listener(tx) {
@@ -52,8 +48,8 @@ pub(crate) fn run(args: Vec<String>) -> i32 {
 
     eprintln!("[keyremap] daemon started");
 
-    for cmd in rx {
-        match cmd {
+    for command in rx {
+        match command {
             daemon::Command::Reload => {
                 let new_raw = config::load_config();
                 let new_resolved = remap::resolve(&new_raw);

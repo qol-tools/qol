@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
-use crate::config::{CharRule, KeyRule, MouseRule, RemapConfig, ScrollRule};
-use crate::keycode;
+use qol_hotkeys::macos_keycode as keycode;
+
+use super::config::{CharRule, KeyRule, MouseRule, RemapConfig, ScrollRule};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Modifiers {
@@ -528,7 +529,7 @@ mod tests {
     use proptest::prelude::*;
 
     fn test_config() -> ResolvedConfig {
-        let raw = crate::config::builtin_defaults();
+        let raw = super::super::config::builtin_defaults();
         resolve(&raw)
     }
 
@@ -570,7 +571,7 @@ mod tests {
             excluded_apps: vec![],
             char_swaps: vec![],
             char_rules: vec![],
-            key_rules: vec![crate::config::KeyRule::Single {
+            key_rules: vec![super::super::config::KeyRule::Single {
                 from_mods: vec![],
                 from_key: "a".into(),
                 to_mods: vec![],
@@ -586,13 +587,13 @@ mod tests {
             process_key_event(
                 &config,
                 Modifiers::NONE,
-                crate::keycode::ANSI_A,
+                keycode::ANSI_A,
                 None,
                 "com.apple.Safari",
             ),
             KeyAction::Remap {
                 mods: Modifiers::NONE,
-                key: crate::keycode::ANSI_B,
+                key: keycode::ANSI_B,
             }
         );
         assert_eq!(
@@ -605,7 +606,7 @@ mod tests {
                     cmd: false,
                     ralt: false,
                 },
-                crate::keycode::ANSI_A,
+                keycode::ANSI_A,
                 None,
                 "com.apple.Safari",
             ),
@@ -620,7 +621,7 @@ mod tests {
             excluded_apps: vec![],
             char_swaps: vec![],
             char_rules: vec![],
-            key_rules: vec![crate::config::KeyRule::Single {
+            key_rules: vec![super::super::config::KeyRule::Single {
                 from_mods: vec![],
                 from_key: "<".into(),
                 to_mods: vec![],
@@ -636,7 +637,7 @@ mod tests {
             process_key_event(
                 &config,
                 Modifiers::NONE,
-                crate::keycode::ISO_SECTION,
+                keycode::ISO_SECTION,
                 None,
                 "com.apple.Safari",
             ),
@@ -679,7 +680,7 @@ mod tests {
                     cmd: false,
                     ralt: false
                 },
-                crate::keycode::ANSI_4,
+                keycode::ANSI_4,
                 Some("$"),
                 "com.apple.Safari",
             ),
@@ -690,7 +691,7 @@ mod tests {
             process_key_event(
                 &config,
                 Modifiers::NONE,
-                crate::keycode::ANSI_A,
+                keycode::ANSI_A,
                 Some("a"),
                 "com.apple.Safari"
             ),
@@ -774,10 +775,10 @@ mod tests {
         ) {
             let config = test_config();
             let ctrl_only = Modifiers { ctrl: true, shift: false, alt: false, cmd: false, ralt: false };
-            let result = process_key_event(&config, ctrl_only, crate::keycode::ANSI_C, None, &app);
+            let result = process_key_event(&config, ctrl_only, keycode::ANSI_C, None, &app);
             prop_assert_eq!(result, KeyAction::Remap {
                 mods: Modifiers { ctrl: false, shift: false, alt: false, cmd: true, ralt: false },
-                key: crate::keycode::ANSI_C,
+                key: keycode::ANSI_C,
             });
         }
 
@@ -793,13 +794,13 @@ mod tests {
                 char_swaps: vec![],
                 char_rules: vec![],
                 key_rules: vec![
-                    crate::config::KeyRule::Batch {
+                    super::super::config::KeyRule::Batch {
                         from_mods: vec!["ctrl".into()],
                         to_mods: vec!["cmd".into()],
                         keys: vec!["c".into()],
                         global: false,
                     },
-                    crate::config::KeyRule::Single {
+                    super::super::config::KeyRule::Single {
                         from_mods: vec!["ctrl".into()],
                         from_key: "c".into(),
                         to_mods: vec!["alt".into()],
@@ -812,10 +813,10 @@ mod tests {
             };
             let config = resolve(&raw);
             let ctrl_only = Modifiers { ctrl: true, shift: false, alt: false, cmd: false, ralt: false };
-            let result = process_key_event(&config, ctrl_only, crate::keycode::ANSI_C, None, &app);
+            let result = process_key_event(&config, ctrl_only, keycode::ANSI_C, None, &app);
             prop_assert_eq!(result, KeyAction::Remap {
                 mods: Modifiers { ctrl: false, shift: false, alt: false, cmd: true, ralt: false },
-                key: crate::keycode::ANSI_C,
+                key: keycode::ANSI_C,
             });
         }
     }
