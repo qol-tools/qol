@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::WindowActionsConfig;
+use crate::restore::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
 use crate::restore::WindowSystem;
-use crate::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
 
 use geometry::{
     center, maximize, move_monitor_left, move_monitor_right, snap_bottom, snap_left, snap_right,
@@ -24,8 +24,8 @@ impl GlideController {
 
     pub(crate) fn update(
         &mut self,
-        _direction: crate::movement::Direction,
-        _phase: crate::movement::Phase,
+        _direction: crate::glide::Direction,
+        _phase: crate::glide::Phase,
         _speed: f64,
     ) -> Result<String, String> {
         Err("continuous window movement is not yet available on macOS".into())

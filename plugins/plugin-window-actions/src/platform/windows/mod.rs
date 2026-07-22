@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crate::config::WindowActionsConfig;
+use crate::restore::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
 use crate::restore::{self, WindowSystem};
-use crate::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
 
 pub(crate) struct GlideController;
 
@@ -13,8 +13,8 @@ impl GlideController {
 
     pub(crate) fn update(
         &mut self,
-        _direction: crate::movement::Direction,
-        _phase: crate::movement::Phase,
+        _direction: crate::glide::Direction,
+        _phase: crate::glide::Phase,
         _speed: f64,
     ) -> Result<String, String> {
         Err(unsupported("continuous window movement"))

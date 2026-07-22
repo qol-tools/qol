@@ -1,4 +1,4 @@
-pub struct ActionTimer {
+pub(crate) struct ActionTimer {
     #[cfg(debug_assertions)]
     action: String,
     #[cfg(debug_assertions)]

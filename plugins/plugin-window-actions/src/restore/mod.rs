@@ -1,5 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub(crate) mod state_store;
+
 pub const LAST_MINIMIZED_MAX_AGE_SECS: u64 = 60 * 60 * 8;
 
 #[derive(Clone)]

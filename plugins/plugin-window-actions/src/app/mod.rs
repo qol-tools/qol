@@ -5,9 +5,10 @@ use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, S
 use qol_runtime::protocol::DaemonRequest;
 
 use crate::config::load_config;
-use crate::movement::{Direction, Phase};
+use crate::diagnostics::ActionTimer;
+use crate::glide::{Direction, Phase};
 use crate::platform::GlideController;
-use crate::state_store::FileMinimizedStateStore;
+use crate::restore::state_store::FileMinimizedStateStore;
 
 const CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -73,7 +74,7 @@ impl Runtime {
         match command {
             Command::Execute(action) => {
                 let config = load_config();
-                let timer = crate::trace::ActionTimer::start(&action);
+                let timer = ActionTimer::start(&action);
                 let result = crate::platform::execute_action(&action, &self.store, &config);
                 timer.finish(&result);
                 if let Err(error) = result {
@@ -267,7 +268,7 @@ fn trace_glide_watchdog(outcome: &Result<(), String>) {
 #[cfg(test)]
 mod tests {
     use super::{parse_request, should_trace_glide, Command, TraceContext};
-    use crate::movement::{Direction, Phase};
+    use crate::glide::{Direction, Phase};
     use qol_plugin_daemon::daemon::ReadResult;
     use qol_runtime::protocol::DaemonRequest;
 

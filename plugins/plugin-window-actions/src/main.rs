@@ -1,33 +1,32 @@
+mod app;
 mod config;
-mod daemon;
-mod movement;
+mod diagnostics;
+mod glide;
 mod platform;
 mod restore;
-mod state_store;
-mod trace;
 
 use std::env;
 use std::process::ExitCode;
 
 use config::load_config;
-use state_store::FileMinimizedStateStore;
+use restore::state_store::FileMinimizedStateStore;
 
 fn main() -> ExitCode {
     let action = match env::args().nth(1) {
         Some(action) => action,
         None => {
-            return exit_for(daemon::run());
+            return exit_for(app::run());
         }
     };
 
     if action == "daemon" || action == "run" {
-        return exit_for(daemon::run());
+        return exit_for(app::run());
     }
 
     let store = FileMinimizedStateStore::new(platform::state_file_path());
     let config = load_config();
 
-    let timer = trace::ActionTimer::start(&action);
+    let timer = diagnostics::ActionTimer::start(&action);
     let result = platform::execute_action(&action, &store, &config);
     timer.finish(&result);
 

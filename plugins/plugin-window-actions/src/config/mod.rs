@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CenterMode {
     Pixels,

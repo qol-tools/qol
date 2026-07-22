@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use crate::config::WindowActionsConfig;
 use crate::restore;
-use crate::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
+use crate::restore::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
 
 use system::{run_cinnamon_eval, X11WindowSystem};
 

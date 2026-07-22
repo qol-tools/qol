@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use crate::movement::{Direction, Phase};
+use crate::glide::{Direction, Phase};
 
 const WATCHDOG_MS: u64 = 1000;
 

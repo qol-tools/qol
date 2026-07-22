@@ -2,7 +2,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 
-use crate::restore::{MinimizedStateStore, MinimizedWindowRecord};
+use super::{MinimizedStateStore, MinimizedWindowRecord};
 
 pub(crate) const LAST_MINIMIZED_WINDOW_FILE_NAME: &str = "qol-window-actions-last-minimized";
 
