@@ -1,16 +1,18 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::mpsc;
 
-use gpui::{
-    px, size, App, Application, Bounds, Focusable, WindowBackgroundAppearance, WindowBounds,
-    WindowHandle, WindowOptions,
-};
-
+use gpui::{px, size, App, Application};
 use qol_gpui::command_loop::LoopFlow;
+use qol_gpui::monitor::MonitorTracker;
+use qol_gpui::surface::{Anchor, OpenedSurface, Surface, SurfaceKind};
 
 use crate::daemon::actions::{self, Command};
 use crate::ui::{RemoveAppView, WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
 
 const APP_ID: &str = "plugin-removeapp";
+
+type SharedPanel = Rc<RefCell<OpenedSurface<RemoveAppView>>>;
 
 pub fn run() -> anyhow::Result<()> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
@@ -18,73 +20,58 @@ pub fn run() -> anyhow::Result<()> {
         anyhow::bail!("removeapp: action listener failed to bind");
     }
 
+    let failure = Rc::new(RefCell::new(None));
+    let reported_failure = failure.clone();
     Application::new().run(move |cx: &mut App| {
         qol_gpui::keepalive::open_keepalive(cx, Some(APP_ID));
         qol_gpui::platform::set_accessory_policy();
 
-        let view_handle = open_window(cx);
-        spawn_command_poll(cmd_rx, view_handle, cx);
+        let tracker = MonitorTracker::start(cx);
+        let panel = match open_window(&tracker, cx) {
+            Ok(panel) => Rc::new(RefCell::new(panel)),
+            Err(error) => {
+                reported_failure.borrow_mut().replace(error);
+                cx.quit();
+                return;
+            }
+        };
+        spawn_command_poll(cmd_rx, panel, tracker, cx);
     });
-    Ok(())
+    let failure = failure.borrow_mut().take();
+    failure.map_or(Ok(()), Err)
 }
 
-fn window_options(cx: &mut App) -> WindowOptions {
-    let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
-    WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        titlebar: None,
-        window_decorations: Some(qol_gpui::platform::ghost_window_decorations(false)),
-        kind: qol_gpui::platform::ghost_window_kind(),
-        focus: true,
-        is_movable: true,
-        window_background: WindowBackgroundAppearance::Opaque,
-        app_id: Some(APP_ID.to_string()),
-        ..Default::default()
-    }
-}
-
-fn open_window(cx: &mut App) -> Option<WindowHandle<RemoveAppView>> {
-    let options = window_options(cx);
-    let handle = match qol_gpui::window::open_window_with_focus(cx, options, move |window, cx| {
-        window.set_window_title(WINDOW_TITLE);
-        RemoveAppView::new(cx)
-    }) {
-        Ok(handle) => handle,
-        Err(e) => {
-            eprintln!("[removeapp] open_window failed: {e}");
-            return None;
-        }
-    };
-    qol_gpui::popup_window::configure_popup_window(WINDOW_TITLE);
-    let _ = handle.update(cx, |view, window, cx| {
-        window.activate_window();
-        window.focus(&view.focus_handle(cx));
-    });
-    cx.activate(true);
-    Some(handle)
+fn open_window(
+    tracker: &MonitorTracker,
+    cx: &mut App,
+) -> anyhow::Result<OpenedSurface<RemoveAppView>> {
+    Surface::new(SurfaceKind::Panel)
+        .title(WINDOW_TITLE)
+        .anchor(Anchor::MonitorCenter)
+        .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
+        .show_focused(tracker, cx, move |_dismisser, _window, cx| {
+            RemoveAppView::new(cx)
+        })
 }
 
 fn spawn_command_poll(
     cmd_rx: mpsc::Receiver<Command>,
-    view_handle: Option<WindowHandle<RemoveAppView>>,
+    panel: SharedPanel,
+    tracker: MonitorTracker,
     cx: &mut App,
 ) {
     qol_gpui::command_loop::spawn_command_loop(cx, cmd_rx, move |cx, cmd| {
-        let view_handle = view_handle;
+        let panel = panel.clone();
+        let tracker = tracker.clone();
         async move {
             match cmd {
                 Command::Open => {
-                    let _ = cx.update(move |cx| {
-                        if let Some(handle) = &view_handle {
-                            let _ = handle.update(cx, |view, window, cx| {
-                                qol_gpui::popup_window::show_window_by_title(WINDOW_TITLE);
-                                window.activate_window();
-                                window.focus(&view.focus_handle(cx));
-                                cx.notify();
-                            });
-                            cx.activate(true);
-                        }
-                    });
+                    let presented = cx
+                        .update(move |cx| panel.borrow_mut().present(&tracker, cx))
+                        .unwrap_or(false);
+                    if !presented {
+                        eprintln!("[removeapp] panel activation failed");
+                    }
                     LoopFlow::Continue
                 }
                 Command::Kill => LoopFlow::Stop,

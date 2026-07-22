@@ -55,6 +55,10 @@ pub fn show_window_passive_by_title(_title: &str) -> bool {
     false
 }
 
+pub fn show_normal_window_by_title(_title: &str) -> bool {
+    false
+}
+
 pub fn disable_window_shadow(_title: &str) -> bool {
     false
 }
@@ -64,10 +68,6 @@ pub fn configure_popup_window(_title: &str) -> bool {
 }
 
 pub fn set_window_type_dock_by_title(_title: &str) -> bool {
-    false
-}
-
-pub fn clear_window_type_by_title(_title: &str) -> bool {
     false
 }
 

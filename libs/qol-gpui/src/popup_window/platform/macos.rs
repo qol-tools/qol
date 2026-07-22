@@ -243,6 +243,10 @@ pub fn show_window_passive_by_title(title: &str) -> bool {
     show_window_by_title_with_focus(title, false)
 }
 
+pub fn show_normal_window_by_title(title: &str) -> bool {
+    show_window_by_title_with_focus(title, true)
+}
+
 fn show_window_by_title_with_focus(title: &str, focus: bool) -> bool {
     let Some(window) = resolve_window(title) else {
         return false;
@@ -294,10 +298,6 @@ pub fn configure_popup_window(title: &str) -> bool {
 }
 
 pub fn set_window_type_dock_by_title(_title: &str) -> bool {
-    false
-}
-
-pub fn clear_window_type_by_title(_title: &str) -> bool {
     false
 }
 

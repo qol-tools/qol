@@ -394,7 +394,7 @@ fn open_prepared(
         .anchor(Anchor::MonitorCenter)
         .size(prepared.size)
         .retain_on_dismiss()
-        .show_focused_tracked(tracker, cx, move |dismisser, _window, cx| {
+        .show_focused(tracker, cx, move |dismisser, _window, cx| {
             SettingsPanelView::new(prepared.panel, prepared.state, dismisser, cx)
         })?;
     Ok(ActivePanel {

@@ -40,7 +40,7 @@ pub struct Surface {
     retain_on_dismiss: bool,
 }
 
-pub(crate) struct OpenedSurface<V> {
+pub struct OpenedSurface<V> {
     pub(crate) handle: WindowHandle<SurfaceRoot<V>>,
     pub(crate) dismisser: SurfaceDismisser,
     anchor: Anchor,
@@ -153,16 +153,6 @@ impl Surface {
     }
 
     pub fn show_focused<V: Render + Focusable + 'static>(
-        self,
-        tracker: &MonitorTracker,
-        cx: &mut App,
-        build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
-    ) -> Result<SurfaceDismisser> {
-        self.show_focused_tracked(tracker, cx, build)
-            .map(|opened| opened.dismisser)
-    }
-
-    pub(crate) fn show_focused_tracked<V: Render + Focusable + 'static>(
         self,
         tracker: &MonitorTracker,
         cx: &mut App,
@@ -425,8 +415,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
         }
         let shown = {
             let _reason = crate::popup_window::reason_scope("surface-reveal");
-            crate::popup_window::clear_window_type_by_title(&title);
-            crate::popup_window::show_window_by_title(&title)
+            crate::popup_window::show_normal_window_by_title(&title)
         };
         let repaint_requested = shown
             && cx
@@ -446,7 +435,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             readiness.content_rendered
         );
         let focus_commit = PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-        crate::popup_window::reassert_focus_until_held(
+        crate::popup_window::reassert_normal_focus_until_held(
             &title,
             &PANEL_FOCUS_GENERATION,
             focus_commit,
@@ -645,7 +634,7 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
         self.visible.get()
     }
 
-    pub(crate) fn present(&mut self, tracker: &MonitorTracker, cx: &mut App) -> bool {
+    pub fn present(&mut self, tracker: &MonitorTracker, cx: &mut App) -> bool {
         if self.handle.update(cx, |_, _, _| ()).is_err() {
             return false;
         }
@@ -778,8 +767,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
         }
         let shown = {
             let _reason = crate::popup_window::reason_scope("surface-reuse-reveal");
-            crate::popup_window::clear_window_type_by_title(&title);
-            crate::popup_window::show_window_by_title(&title)
+            crate::popup_window::show_normal_window_by_title(&title)
         };
         visible.set(shown);
         reveal_pending.set(false);
@@ -812,7 +800,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
             readiness.content_rendered
         );
         let focus_commit = PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-        crate::popup_window::reassert_focus_until_held(
+        crate::popup_window::reassert_normal_focus_until_held(
             &title,
             &PANEL_FOCUS_GENERATION,
             focus_commit,
@@ -926,8 +914,16 @@ fn corner_anchored_bounds(
 
 #[cfg(test)]
 mod tests {
-    use super::{corner_anchored_bounds, Corner, RevealReadiness};
-    use gpui::{point, px, size, Bounds};
+    use super::{corner_anchored_bounds, Corner, RevealReadiness, Surface, SurfaceKind};
+    use gpui::{point, px, size, Bounds, WindowKind};
+
+    #[test]
+    fn panel_surfaces_are_normal_focusable_windows() {
+        let surface = Surface::new(SurfaceKind::Panel);
+
+        assert_eq!(surface.window_kind(), WindowKind::Normal);
+        assert!(surface.takes_focus());
+    }
 
     #[test]
     fn corner_anchored_bounds_places_each_corner_inside_margins() {

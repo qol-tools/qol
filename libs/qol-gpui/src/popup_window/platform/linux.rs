@@ -387,14 +387,28 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
 }
 
 pub fn show_window_by_title(title: &str) -> bool {
-    show_window_by_title_with_focus(title, true)
+    show_window_by_title_with_focus(title, true, WindowPresentation::Overlay)
 }
 
 pub fn show_window_passive_by_title(title: &str) -> bool {
-    show_window_by_title_with_focus(title, false)
+    show_window_by_title_with_focus(title, false, WindowPresentation::Overlay)
 }
 
-fn show_window_by_title_with_focus(title: &str, focus: bool) -> bool {
+pub fn show_normal_window_by_title(title: &str) -> bool {
+    show_window_by_title_with_focus(title, true, WindowPresentation::Normal)
+}
+
+#[derive(Clone, Copy, Debug)]
+enum WindowPresentation {
+    Overlay,
+    Normal,
+}
+
+fn show_window_by_title_with_focus(
+    title: &str,
+    focus: bool,
+    presentation: WindowPresentation,
+) -> bool {
     #[cfg(debug_assertions)]
     let reason = crate::popup_window::change_reason();
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
@@ -419,7 +433,15 @@ fn show_window_by_title_with_focus(title: &str, focus: bool) -> bool {
         .ok()
         .and_then(|cookie| cookie.check().ok())
         .is_some();
-    add_window_state(&conn, root, wid);
+    let state_ok = match presentation {
+        WindowPresentation::Overlay => {
+            add_window_state(&conn, root, wid);
+            true
+        }
+        WindowPresentation::Normal => {
+            clear_window_type(&conn, wid) && clear_panel_window_state(&conn, root, wid)
+        }
+    };
     let stack = raise_window(&conn, root, wid);
     let (activate_ok, timestamp, focus_ok) = if focus {
         let (activate_ok, timestamp) = activate_window(&conn, root, wid);
@@ -437,6 +459,7 @@ fn show_window_by_title_with_focus(title: &str, focus: bool) -> bool {
         &clear_ok,
         &input_ok,
         &map_ok,
+        &state_ok,
         &stack.frame,
         &stack.client,
         &stack.frame_ok,
@@ -448,14 +471,14 @@ fn show_window_by_title_with_focus(title: &str, focus: bool) -> bool {
     );
     qol_runtime::probe!(
         "SHOW_WIN_STATE",
-        "reason={reason} phase=after title={title} wid={wid} frame={} clear_opacity={clear_ok} input_shape_ok={input_ok} map={map_ok} stack_client={} stack_frame={} focus_requested={focus} activate={activate_ok} focus={focus_ok} timestamp={timestamp} flush={flush_ok} {after}",
+        "reason={reason} phase=after title={title} wid={wid} presentation={presentation:?} frame={} clear_opacity={clear_ok} input_shape_ok={input_ok} map={map_ok} state={state_ok} stack_client={} stack_frame={} focus_requested={focus} activate={activate_ok} focus={focus_ok} timestamp={timestamp} flush={flush_ok} {after}",
         stack.frame,
         stack.client,
         stack.frame_ok,
     );
     qol_runtime::probe!(
         "SHOW_WIN",
-        "title={title} wid={wid} cleared_opacity={clear_ok} source=2 focus_requested={focus} timestamp={timestamp} requester_active=0 reason={reason}",
+        "title={title} wid={wid} presentation={presentation:?} cleared_opacity={clear_ok} state={state_ok} source=2 focus_requested={focus} timestamp={timestamp} requester_active=0 reason={reason}",
     );
     true
 }
@@ -587,6 +610,36 @@ fn add_window_state(conn: &impl Connection, root: u32, wid: u32) {
     }
 }
 
+fn clear_panel_window_state(conn: &impl Connection, root: u32, wid: u32) -> bool {
+    let Some(state_atom) = intern(conn, b"_NET_WM_STATE") else {
+        return false;
+    };
+    const REMOVE: u32 = 0;
+    const SOURCE_APPLICATION: u32 = 1;
+    let states = [
+        intern(conn, b"_NET_WM_STATE_ABOVE"),
+        intern(conn, b"_NET_WM_STATE_SKIP_TASKBAR"),
+        intern(conn, b"_NET_WM_STATE_SKIP_PAGER"),
+        intern(conn, b"_NET_WM_STATE_DEMANDS_ATTENTION"),
+    ];
+    let mask = EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT;
+    let mut cleared = true;
+    for atom in states.into_iter().flatten() {
+        let event = ClientMessageEvent::new(
+            32,
+            wid,
+            state_atom,
+            [REMOVE, atom, 0, SOURCE_APPLICATION, 0],
+        );
+        cleared &= conn
+            .send_event(false, root, mask, event)
+            .ok()
+            .and_then(|cookie| cookie.check().ok())
+            .is_some();
+    }
+    cleared
+}
+
 fn activate_window(conn: &impl Connection, root: u32, wid: u32) -> (bool, u32) {
     let Some(active_atom) = intern(conn, b"_NET_ACTIVE_WINDOW") else {
         return (false, 0);
@@ -634,18 +687,6 @@ pub fn set_window_type_dock_by_title(title: &str) -> bool {
         return false;
     };
     set_window_type_dock(&conn, wid);
-    conn.flush().is_ok()
-}
-
-pub fn clear_window_type_by_title(title: &str) -> bool {
-    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
-    else {
-        return false;
-    };
-    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
-        return false;
-    };
-    clear_window_type(&conn, wid);
     conn.flush().is_ok()
 }
 

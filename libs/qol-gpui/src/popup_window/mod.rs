@@ -1,5 +1,7 @@
 mod platform;
 
+pub(crate) use platform::show_normal_window_by_title;
+
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
@@ -85,13 +87,13 @@ fn composite_owner(title: &str) -> &str {
     title.split('@').next().unwrap_or(title)
 }
 pub use platform::{
-    capture_focus_return, clear_window_type_by_title, configure_keepalive_window,
-    configure_overlay_window, configure_pinned_window, configure_popup_window,
-    disable_window_shadow, dump_ghost_windows, hide_for_capture, hide_invisible,
-    hide_window_by_title, hide_windows_by_title_prefix, park_window_by_title, pinned_window_kind,
-    prepare_window_reveal_by_title, reposition_window_by_title, set_window_type_dock_by_title,
-    show_window_by_title, show_window_passive_by_title, sync_window_layout,
-    visible_windows_by_title_prefix, window_backing_scale, window_holds_input_focus,
+    capture_focus_return, configure_keepalive_window, configure_overlay_window,
+    configure_pinned_window, configure_popup_window, disable_window_shadow, dump_ghost_windows,
+    hide_for_capture, hide_invisible, hide_window_by_title, hide_windows_by_title_prefix,
+    park_window_by_title, pinned_window_kind, prepare_window_reveal_by_title,
+    reposition_window_by_title, set_window_type_dock_by_title, show_window_by_title,
+    show_window_passive_by_title, sync_window_layout, visible_windows_by_title_prefix,
+    window_backing_scale, window_holds_input_focus,
 };
 
 const ENV_GHOST_OPACITY: &str = "QOL_TRAY_GHOST_OPACITY";
@@ -103,6 +105,23 @@ pub fn reassert_focus_until_held(
     title: &str,
     gen: &'static std::sync::atomic::AtomicU64,
     commit_gen: u64,
+) {
+    reassert_focus_until_held_with(title, gen, commit_gen, show_window_by_title);
+}
+
+pub(crate) fn reassert_normal_focus_until_held(
+    title: &str,
+    gen: &'static std::sync::atomic::AtomicU64,
+    commit_gen: u64,
+) {
+    reassert_focus_until_held_with(title, gen, commit_gen, show_normal_window_by_title);
+}
+
+fn reassert_focus_until_held_with(
+    title: &str,
+    gen: &'static std::sync::atomic::AtomicU64,
+    commit_gen: u64,
+    show: fn(&str) -> bool,
 ) {
     if !crate::platform::should_poll_focus() {
         return;
@@ -125,7 +144,7 @@ pub fn reassert_focus_until_held(
             crate::platform::ReassertStep::Reassert
         },
         move || {
-            let shown = show_window_by_title(&assert_title);
+            let shown = show(&assert_title);
             #[cfg(not(debug_assertions))]
             let _ = shown;
             qol_runtime::probe!(
