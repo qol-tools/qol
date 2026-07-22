@@ -46,7 +46,8 @@ pub(super) fn load_plugin(plugin_id: &str) -> Result<LoadedPlugin> {
         .iter()
         .find(|plugin| plugin.id.as_str() == plugin_id)
         .map(PluginLoader::load_resolved_plugin)
-        .transpose()?;
+        .transpose()?
+        .flatten();
     Ok(LoadedPlugin { plugin, report })
 }
 

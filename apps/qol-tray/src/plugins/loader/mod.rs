@@ -35,7 +35,7 @@ impl PluginLoader {
         Ok(resolved
             .iter()
             .filter_map(|r| match Self::load_resolved_plugin(r) {
-                Ok(plugin) => Some(plugin),
+                Ok(plugin) => plugin,
                 Err(e) => {
                     log::warn!("Skipping plugin {}: {}", r.id, e);
                     None
@@ -46,8 +46,17 @@ impl PluginLoader {
 
     pub(crate) fn load_resolved_plugin(
         resolved: &super::resolver::ResolvedPlugin,
-    ) -> Result<Plugin> {
-        manifest_loader::load_resolved_plugin(resolved)
+    ) -> Result<Option<Plugin>> {
+        let plugin = manifest_loader::load_resolved_plugin(resolved)?;
+        if !plugin.manifest.plugin.supports_current_platform() {
+            log::info!(
+                "Skipping plugin {} (unsupported platform: {})",
+                plugin.id,
+                std::env::consts::OS
+            );
+            return Ok(None);
+        }
+        Ok(Some(plugin))
     }
 
     #[cfg(test)]

@@ -1,4 +1,5 @@
 use super::*;
+use crate::plugins::resolver::{PluginSource, ResolutionOrigin, ResolvedPlugin};
 use std::fs;
 use tempfile::TempDir;
 
@@ -298,6 +299,44 @@ fn load_plugin_skips_binary_check_for_unsupported_platform() {
     .unwrap();
     let plugin = PluginLoader::load_plugin(temp_dir.path()).unwrap();
     assert!(!plugin.manifest.plugin.supports_current_platform());
+}
+
+#[test]
+fn load_resolved_excludes_plugins_for_other_platforms() {
+    let temp_dir = TempDir::new().unwrap();
+    let supported_dir = temp_dir.path().join("supported");
+    let unsupported_dir = temp_dir.path().join("unsupported");
+    fs::create_dir(&supported_dir).unwrap();
+    fs::create_dir(&unsupported_dir).unwrap();
+    fs::write(
+        supported_dir.join("plugin.toml"),
+        valid_manifest("supported"),
+    )
+    .unwrap();
+    fs::write(
+        unsupported_dir.join("plugin.toml"),
+        unsupported_platform_manifest(),
+    )
+    .unwrap();
+    let resolved = [
+        resolved_plugin("supported", supported_dir),
+        resolved_plugin("unsupported", unsupported_dir),
+    ];
+
+    let plugins = PluginLoader::load_resolved(&resolved).unwrap();
+
+    assert_eq!(plugins.len(), 1);
+    assert_eq!(plugins[0].id.as_str(), "supported");
+}
+
+fn resolved_plugin(id: &str, path: std::path::PathBuf) -> ResolvedPlugin {
+    ResolvedPlugin {
+        id: crate::plugins::PluginId::new(id),
+        path,
+        source: PluginSource::Installed,
+        resolved_from: ResolutionOrigin::Active,
+        active_failure: None,
+    }
 }
 
 fn unsupported_platform_manifest() -> String {
