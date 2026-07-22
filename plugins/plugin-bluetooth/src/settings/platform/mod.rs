@@ -6,8 +6,8 @@ mod macos;
 mod windows;
 
 #[cfg(target_os = "linux")]
-pub(super) use linux::{run_panel, spawn_panel};
+pub(super) use linux::run_panel;
 #[cfg(target_os = "macos")]
-pub(super) use macos::{run_panel, spawn_panel};
+pub(super) use macos::run_panel;
 #[cfg(target_os = "windows")]
-pub(super) use windows::{run_panel, spawn_panel};
+pub(super) use windows::run_panel;

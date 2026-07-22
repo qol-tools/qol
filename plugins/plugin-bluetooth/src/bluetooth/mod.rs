@@ -4,6 +4,8 @@ use serde::Serialize;
 
 use anyhow::{bail, Result};
 
+pub mod retry;
+
 pub fn normalize_address(value: &str) -> Result<String> {
     let parts = value.trim().split(':').collect::<Vec<_>>();
     if parts.len() != 6

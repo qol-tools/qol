@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
+use std::process::Command;
 use std::sync::{mpsc, LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
@@ -18,12 +19,12 @@ use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 use crate::bluetooth::{
     connection_ready, devices_payload, has_audio_class, is_audio_device, managed_device_options,
-    normalize_address, search_status_payload, supports_audio_sink, AdapterHealth,
-    DeviceActionState, DeviceInfo, DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport,
-    ReconnectSelection,
+    normalize_address,
+    retry::{RetryPolicy, RetryState},
+    search_status_payload, supports_audio_sink, AdapterHealth, DeviceActionState, DeviceInfo,
+    DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport, ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
-use crate::retry::{RetryPolicy, RetryState};
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -1059,7 +1060,7 @@ async fn daemon_loop(
                     return Ok(());
                 }
                 if matches!(command, DaemonCommand::Settings) {
-                    if let Err(error) = crate::settings::spawn_panel() {
+                    if let Err(error) = spawn_settings_panel() {
                         eprintln!("failed to launch native Bluetooth settings: {error:#}");
                         if let Err(error) = crate::settings::open_browser() {
                             eprintln!("failed to open Bluetooth settings fallback: {error:#}");
@@ -1291,6 +1292,13 @@ async fn daemon_loop(
             }
         }
     }
+}
+
+fn spawn_settings_panel() -> Result<()> {
+    let executable = std::env::current_exe().context("failed to locate Bluetooth executable")?;
+    let mut command = Command::new(executable);
+    command.arg(crate::SETTINGS_SURFACE_ARG);
+    qol_process::spawn_detached(&mut command).context("failed to launch native Bluetooth settings")
 }
 
 fn spawn_explicit_device_action(
