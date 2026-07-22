@@ -12,6 +12,7 @@ use crate::core::{
     self, Disposal, Guards, InstalledApp, PackageIndex, PackageStatus, RemovalOutcome, RemovalPlan,
 };
 use qol_gpui::scroll_list::ScrollList;
+use qol_gpui::surface::PanelDragArea;
 use qol_gpui::theme::{remove_app_runtime, RemoveAppPalette};
 
 pub const WINDOW_TITLE: &str = "removeapp";
@@ -374,6 +375,7 @@ impl RemoveAppView {
             .bg(rgb(palette.chrome_bg))
             .border_b_1()
             .border_color(rgb(palette.border))
+            .panel_drag_area()
             .child(div().text_color(rgb(palette.text_muted)).child(">"))
             .child(
                 div()
@@ -572,6 +574,7 @@ impl RemoveAppView {
                 .justify_center()
                 .gap(px(10.0))
                 .px(px(24.0))
+                .panel_drag_area()
                 .child(
                     div()
                         .text_size(px(15.0))
@@ -605,6 +608,7 @@ impl RemoveAppView {
             .justify_center()
             .gap(px(10.0))
             .px(px(24.0))
+            .panel_drag_area()
             .child(
                 div()
                     .text_size(px(15.0))
@@ -743,6 +747,7 @@ fn section_header(title: &str) -> impl IntoElement {
         .bg(rgb(palette.chrome_bg))
         .border_b_1()
         .border_color(rgb(palette.border))
+        .panel_drag_area()
         .child(
             div()
                 .text_color(rgb(palette.text_primary))

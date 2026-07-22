@@ -167,8 +167,8 @@ impl SettingsWindowHost {
         let heading = prepared.panel.heading.clone();
         let dismisser = active.surface.dismisser.clone();
         let visible = active.surface.is_visible();
+        active.surface.resize(prepared.size, cx)?;
         active.surface.handle.update(cx, move |root, window, cx| {
-            window.resize(prepared.size);
             dismisser.retitle(window, heading);
             let inner =
                 cx.new(|cx| SettingsPanelView::new(prepared.panel, prepared.state, dismisser, cx));
@@ -180,7 +180,6 @@ impl SettingsWindowHost {
             }
             cx.notify();
         })?;
-        active.surface.resize(prepared.size);
         active.plugin_id = plugin_id;
         if !active.surface.present(tracker, cx) {
             return Err(anyhow::anyhow!("settings window could not be presented"));

@@ -114,11 +114,22 @@ pub fn center_script(config: &crate::config::WindowActionsConfig) -> String {
         const newHeight = usePercent
             ? Math.min(Math.floor(workArea.height * {height_percent}), workArea.height)
             : Math.min({height}, workArea.height);
-        const newX = workArea.x + Math.floor((workArea.width - newWidth) / 2);
-        const newY = workArea.y + Math.floor((workArea.height - newHeight) / 2);
+        const before = win.get_frame_rect();
+        win.move_resize_frame(true, before.x, before.y, newWidth, newHeight);
 
-        win.move_resize_frame(true, newX, newY, newWidth, newHeight);
-        'Centered window';
+        const resized = win.get_frame_rect();
+        const newX = workArea.x + Math.floor((workArea.width - resized.width) / 2);
+        const newY = workArea.y + Math.floor((workArea.height - resized.height) / 2);
+
+        win.move_frame(true, newX, newY);
+
+        const actual = win.get_frame_rect();
+        if (actual.x !== newX || actual.y !== newY) {{
+            throw new Error('Failed to center window');
+        }}
+
+        'Centered window actual=' + actual.width + 'x' + actual.height
+            + ' position=' + actual.x + ',' + actual.y;
     }}
 "#
     )
@@ -191,13 +202,8 @@ mod tests {
     use super::*;
     use crate::config::{CenterMode, WindowActionsConfig};
 
-    fn no_focused_window_is_guarded(script: &str) -> bool {
-        script.contains("'ERROR: No focused window';\n    } else {")
-    }
-
-    #[test]
-    fn no_focused_window_guards_every_win_dereference() {
-        let config = WindowActionsConfig {
+    fn config() -> WindowActionsConfig {
+        WindowActionsConfig {
             center_mode: CenterMode::Pixels,
             center_width_px: 1152.0,
             center_height_px: 892.0,
@@ -206,7 +212,16 @@ mod tests {
             snap_fraction: 0.5,
             reveal_taskbar_after_move: true,
             glide_speed_px_per_second: 1200.0,
-        };
+        }
+    }
+
+    fn no_focused_window_is_guarded(script: &str) -> bool {
+        script.contains("'ERROR: No focused window';\n    } else {")
+    }
+
+    #[test]
+    fn no_focused_window_guards_every_win_dereference() {
+        let config = config();
         let cases = [
             ("snap_left_script", snap_left_script(0.5)),
             ("snap_right_script", snap_right_script(0.5)),
@@ -270,5 +285,17 @@ mod tests {
                 "{edge}: constrained frame must be moved separately\n{script}",
             );
         }
+    }
+
+    #[test]
+    fn center_script_anchors_the_constrained_frame() {
+        let script = center_script(&config());
+
+        assert!(script
+            .contains("win.move_resize_frame(true, before.x, before.y, newWidth, newHeight);"));
+        assert!(script.contains("const resized = win.get_frame_rect();"));
+        assert!(script.contains("workArea.width - resized.width"));
+        assert!(script.contains("workArea.height - resized.height"));
+        assert!(script.contains("win.move_frame(true, newX, newY);"));
     }
 }

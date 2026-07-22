@@ -48,7 +48,6 @@ fn open_window(
     Surface::new(SurfaceKind::Panel)
         .title(WINDOW_TITLE)
         .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
-        .fixed_size()
         .show_focused(tracker, cx, move |_dismisser, _window, cx| {
             RemoveAppView::new(cx)
         })

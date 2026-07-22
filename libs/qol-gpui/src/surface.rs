@@ -32,13 +32,27 @@ pub enum SurfaceKind {
     Panel,
 }
 
+/// Marks non-interactive panel chrome as a native window drag area.
+///
+/// The surface root cannot safely own this listener because mouse events from
+/// interactive children bubble through it. Views should apply this only to
+/// their semantic top chrome.
+pub trait PanelDragArea: InteractiveElement + Sized {
+    fn panel_drag_area(self) -> Self {
+        self.on_mouse_down(MouseButton::Left, |_, window, _| {
+            window.start_window_move();
+        })
+    }
+}
+
+impl<T: InteractiveElement> PanelDragArea for T {}
+
 pub struct Surface {
     kind: SurfaceKind,
     title: String,
     anchor: Anchor,
     timeout: Option<Duration>,
     size: Size<Pixels>,
-    fixed_size: bool,
     retain_on_dismiss: bool,
 }
 
@@ -47,6 +61,7 @@ pub struct OpenedSurface<V> {
     pub(crate) dismisser: SurfaceDismisser,
     anchor: Anchor,
     size: Size<Pixels>,
+    constrains_size: bool,
     visible: Rc<Cell<bool>>,
     reveal_pending: Rc<Cell<bool>>,
 }
@@ -117,7 +132,6 @@ impl Surface {
             anchor,
             timeout: None,
             size: size(px(320.0), px(72.0)),
-            fixed_size: false,
             retain_on_dismiss: false,
         }
     }
@@ -139,11 +153,6 @@ impl Surface {
 
     pub fn size(mut self, size: Size<Pixels>) -> Self {
         self.size = size;
-        self
-    }
-
-    pub fn fixed_size(mut self) -> Self {
-        self.fixed_size = true;
         self
     }
 
@@ -190,6 +199,7 @@ impl Surface {
         .ok_or_else(|| anyhow!("no monitor state available for surface placement"))?;
         let bounds = self.resolved_bounds(&monitor);
         let title = unique_surface_title(&self.title);
+        let constrains_size = self.constrains_size();
         let reveal_after_move = matches!(self.kind, SurfaceKind::Panel);
         let native_reveal_gate = reveal_after_move && supports_native_reveal_gate();
         let retain_on_dismiss = self.retain_on_dismiss && native_reveal_gate;
@@ -202,7 +212,7 @@ impl Surface {
             focus: self.takes_focus(),
             show: !native_reveal_gate,
             is_movable: true,
-            is_resizable: !self.fixed_size,
+            is_resizable: !constrains_size,
             window_background: WindowBackgroundAppearance::Transparent,
             app_id: Some(title.clone()),
             ..Default::default()
@@ -263,8 +273,7 @@ impl Surface {
         if native_reveal_gate {
             let _reason = crate::popup_window::reason_scope("surface-open");
             let hidden = crate::popup_window::prepare_window_reveal_by_title(&title);
-            let size_constrained = !self.fixed_size
-                || crate::popup_window::set_window_fixed_size_by_title(&title, bounds.size);
+            let size_constrained = !constrains_size || constrain_native_size(&title, bounds.size);
             let fresh_frame = (hidden && size_constrained)
                 .then(|| schedule_fresh_frame(handle, bounds.size, cx))
                 .flatten();
@@ -272,7 +281,7 @@ impl Surface {
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
                 "title={title} phase=opened hidden={hidden} fixed_size={} size_constrained={size_constrained} frame_scheduled={frame_scheduled} x={} y={}",
-                self.fixed_size,
+                constrains_size,
                 bounds.origin.x.to_f64(),
                 bounds.origin.y.to_f64()
             );
@@ -304,6 +313,7 @@ impl Surface {
             dismisser,
             anchor: self.anchor,
             size: self.size,
+            constrains_size,
             visible,
             reveal_pending,
         })
@@ -325,6 +335,10 @@ impl Surface {
             SurfaceKind::Toast => false,
             SurfaceKind::Panel => true,
         }
+    }
+
+    fn constrains_size(&self) -> bool {
+        matches!(self.kind, SurfaceKind::Panel)
     }
 }
 
@@ -360,6 +374,11 @@ fn unique_surface_title(base: &str) -> String {
 
 const fn supports_native_reveal_gate() -> bool {
     cfg!(any(target_os = "linux", target_os = "macos"))
+}
+
+fn constrain_native_size(title: &str, size: Size<Pixels>) -> bool {
+    !supports_native_reveal_gate()
+        || crate::popup_window::set_window_fixed_size_by_title(title, size)
 }
 
 struct PendingReveal<V: Render + 'static> {
@@ -668,6 +687,10 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
             };
             let bounds = resolved_bounds(self.anchor, self.size, &monitor);
             crate::popup_window::capture_focus_return();
+            let title = self.dismisser.current_title();
+            if self.constrains_size && !constrain_native_size(&title, bounds.size) {
+                return false;
+            }
             let resized = self
                 .handle
                 .update(cx, |_, window, _| window.resize(self.size))
@@ -675,7 +698,6 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
             if !resized {
                 return false;
             }
-            let title = self.dismisser.current_title();
             let prepared = {
                 let _reason = crate::popup_window::reason_scope("surface-reuse");
                 crate::popup_window::prepare_window_reveal_by_title(&title)
@@ -718,8 +740,16 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
             .is_ok()
     }
 
-    pub(crate) fn resize(&mut self, size: Size<Pixels>) {
+    pub(crate) fn resize(&mut self, size: Size<Pixels>, cx: &mut App) -> anyhow::Result<()> {
+        let title = self.dismisser.current_title();
+        if self.constrains_size && !constrain_native_size(&title, size) {
+            return Err(anyhow!(
+                "surface could not update its native size constraint"
+            ));
+        }
+        self.handle.update(cx, |_, window, _| window.resize(size))?;
         self.size = size;
+        Ok(())
     }
 }
 
@@ -945,6 +975,7 @@ mod tests {
         assert_eq!(surface.window_kind(), WindowKind::Normal);
         assert_eq!(surface.anchor, Anchor::MonitorCenter);
         assert!(surface.takes_focus());
+        assert!(surface.constrains_size());
     }
 
     #[test]

@@ -15,7 +15,7 @@ use super::{SettingsPanel, SettingsRuntime};
 use crate::dropdown::{Dropdown, DropdownEvent, DropdownStyle};
 use crate::spinner::Spinner;
 use crate::status_indicator::{StatusIndicator, StatusTone};
-use crate::surface::SurfaceDismisser;
+use crate::surface::{PanelDragArea, SurfaceDismisser};
 use crate::theme::{settings_panel_runtime, SettingsPanelPalette};
 
 pub(super) struct SettingsPanelView {
@@ -1325,9 +1325,7 @@ impl Render for SettingsPanelView {
                     .pb_1()
                     .text_sm()
                     .text_color(rgb(self.palette.label_text))
-                    .on_mouse_down(MouseButton::Left, |_, window, _| {
-                        window.start_window_move();
-                    })
+                    .panel_drag_area()
                     .child(self.panel.heading.clone()),
             )
             .child(
