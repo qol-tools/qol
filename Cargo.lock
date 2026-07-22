@@ -5277,6 +5277,7 @@ dependencies = [
  "qol-gpui",
  "qol-plugin-api",
  "qol-plugin-daemon",
+ "qol-process",
  "serde",
  "serde_json",
  "tempfile",

@@ -34,8 +34,6 @@ pub(super) struct CgWindow {
     pub has_title: bool,
     pub is_onscreen: bool,
     pub is_cross_space: bool,
-    pub x: f32,
-    pub y: f32,
     pub w: f32,
     pub h: f32,
 }
@@ -163,7 +161,7 @@ fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<
     if is_system_process(&app_name) {
         return None;
     }
-    let (wx, wy, ww, wh) = ffi::dict_get_rect(dict, keys.bounds).unwrap_or((0.0, 0.0, 0.0, 0.0));
+    let (_, _, ww, wh) = ffi::dict_get_rect(dict, keys.bounds).unwrap_or((0.0, 0.0, 0.0, 0.0));
     let is_onscreen = ffi::dict_get_bool(dict, keys.onscreen).unwrap_or(false);
     let has_title = !title.is_empty();
     let display_title = if title.is_empty() {
@@ -180,8 +178,6 @@ fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<
         has_title,
         is_onscreen,
         is_cross_space: false,
-        x: wx as f32,
-        y: wy as f32,
         w: ww as f32,
         h: wh as f32,
     })

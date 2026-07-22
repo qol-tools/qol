@@ -856,8 +856,6 @@ mod tests {
             has_title: true,
             is_onscreen: false,
             is_cross_space: false,
-            x: 0.0,
-            y: 0.0,
             w: 500.0,
             h: 400.0,
         }

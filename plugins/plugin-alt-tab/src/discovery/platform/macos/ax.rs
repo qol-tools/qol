@@ -627,8 +627,6 @@ mod dedup_tests {
             has_title: true,
             is_onscreen: true,
             is_cross_space: false,
-            x: 0.0,
-            y: 0.0,
             w: 800.0,
             h: 600.0,
         }
