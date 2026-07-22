@@ -3,15 +3,18 @@ mod motion;
 mod runtime;
 mod scale;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use anyhow::{Context, Result};
 
 use crate::config::PLUGIN_ID;
-use crate::cursor::control::request_external_stop;
 use crate::cursor::CursorEffect;
 
 use super::CursorPlatform;
 
 pub struct Platform;
+
+static EXTERNAL_STOP: AtomicBool = AtomicBool::new(false);
 
 impl CursorPlatform for Platform {
     fn create_effect(&self) -> Box<dyn CursorEffect> {
@@ -21,6 +24,14 @@ impl CursorPlatform for Platform {
     fn install_signal_handlers(&self) {
         register(libc::SIGTERM);
         register(libc::SIGINT);
+    }
+
+    fn reset_external_stop(&self) {
+        EXTERNAL_STOP.store(false, Ordering::SeqCst);
+    }
+
+    fn external_stop_requested(&self) -> bool {
+        EXTERNAL_STOP.load(Ordering::Relaxed)
     }
 
     fn open_settings(&self) -> Result<()> {
@@ -37,5 +48,5 @@ fn register(signal: libc::c_int) {
 }
 
 extern "C" fn handle_signal(_: libc::c_int) {
-    request_external_stop();
+    EXTERNAL_STOP.store(true, Ordering::Relaxed);
 }

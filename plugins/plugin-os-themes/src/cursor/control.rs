@@ -1,9 +1,6 @@
-// Some symbols here are only consumed by the Linux cursor effect; the macOS
-// and Windows stubs short-circuit before touching this control loop. The
-// allow keeps clippy quiet on hosts that don't yet have a real impl.
-#![allow(dead_code)]
-
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use super::{CursorPlatform, Platform};
 
 pub trait RunControl {
     fn should_stop(&self) -> bool;
@@ -23,7 +20,7 @@ impl RunState {
     }
 
     pub fn reset(&self) {
-        EXTERNAL_STOP.store(false, Ordering::SeqCst);
+        Platform.reset_external_stop();
         self.running.store(true, Ordering::SeqCst);
         self.reload_requested.store(false, Ordering::SeqCst);
     }
@@ -50,12 +47,6 @@ impl Default for RunState {
 
 impl RunControl for RunState {
     fn should_stop(&self) -> bool {
-        EXTERNAL_STOP.load(Ordering::Relaxed) || !self.running.load(Ordering::Relaxed)
+        Platform.external_stop_requested() || !self.running.load(Ordering::Relaxed)
     }
-}
-
-static EXTERNAL_STOP: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn request_external_stop() {
-    EXTERNAL_STOP.store(true, Ordering::Relaxed);
 }

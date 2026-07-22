@@ -2,8 +2,8 @@ use std::sync::{mpsc, Arc};
 
 use anyhow::{ensure, Result};
 
+use super::daemon;
 use crate::cursor::{CursorPlatform, Platform, RunState};
-use crate::daemon;
 
 pub fn run() -> Result<()> {
     if daemon::send_ping() {

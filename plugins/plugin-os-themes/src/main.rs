@@ -1,7 +1,6 @@
 mod app;
 mod config;
 mod cursor;
-mod daemon;
 mod theme;
 
 use std::env;

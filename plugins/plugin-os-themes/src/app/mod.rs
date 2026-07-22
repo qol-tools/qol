@@ -1,3 +1,4 @@
+mod daemon;
 mod daemon_run;
 
 use std::process::ExitCode;
@@ -5,7 +6,6 @@ use std::process::ExitCode;
 use anyhow::Result;
 
 use crate::cursor::{CursorPlatform, Platform};
-use crate::daemon;
 
 pub fn run(action: Option<&str>) -> ExitCode {
     let result = match action {

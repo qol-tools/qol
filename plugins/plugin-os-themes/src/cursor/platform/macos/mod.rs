@@ -12,13 +12,17 @@ impl CursorPlatform for Platform {
         Box::new(UnsupportedEffect)
     }
 
-    fn install_signal_handlers(&self) {
-        // No-op: nothing to wire up when the cursor effect refuses to run.
+    fn install_signal_handlers(&self) {}
+
+    fn reset_external_stop(&self) {}
+
+    fn external_stop_requested(&self) -> bool {
+        false
     }
 
     fn open_settings(&self) -> Result<()> {
         Err(anyhow!(
-            "plugin-os-themes: settings UI is not implemented on Windows"
+            "plugin-os-themes: settings UI is not implemented on macOS"
         ))
     }
 }
@@ -26,9 +30,10 @@ impl CursorPlatform for Platform {
 struct UnsupportedEffect;
 
 impl CursorEffect for UnsupportedEffect {
-    fn run(&self, _config: &Config, _control: &dyn RunControl) -> Result<()> {
+    fn run(&self, _config: &Config, control: &dyn RunControl) -> Result<()> {
+        let _ = control.should_stop();
         Err(anyhow!(
-            "plugin-os-themes: cursor effects are not implemented on Windows"
+            "plugin-os-themes: cursor effects are not implemented on macOS"
         ))
     }
 }
