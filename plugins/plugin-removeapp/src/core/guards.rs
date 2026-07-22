@@ -17,20 +17,6 @@ impl PackageManager {
             PackageManager::Flatpak => "Flatpak",
         }
     }
-
-    pub fn action_key(self) -> &'static str {
-        match self {
-            PackageManager::Homebrew => "b",
-            PackageManager::Apt | PackageManager::Flatpak => "u",
-        }
-    }
-
-    pub fn action_key_label(self) -> &'static str {
-        match self {
-            PackageManager::Homebrew => "B",
-            PackageManager::Apt | PackageManager::Flatpak => "U",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]

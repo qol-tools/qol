@@ -35,6 +35,19 @@ enum Mode {
     Done,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrimaryAction {
+    Blocked,
+    Package,
+    Remove,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DoneAction {
+    Continue,
+    Quit,
+}
+
 pub struct RemoveAppView {
     apps: Vec<InstalledApp>,
     query: String,
@@ -134,13 +147,6 @@ impl RemoveAppView {
         };
     }
 
-    fn unresolved(&self) -> bool {
-        match &self.guards {
-            None => true,
-            Some(g) => g.running || matches!(g.package, PackageStatus::Managed(_)),
-        }
-    }
-
     fn try_quit(&mut self) {
         let Some(plan) = &self.plan else {
             return;
@@ -223,6 +229,23 @@ impl RemoveAppView {
         self.mode = Mode::Done;
     }
 
+    fn continue_picking(&mut self, cx: &mut Context<Self>) {
+        if let Ok(apps) = core::installed_apps() {
+            self.apps = apps;
+        }
+        self.query.clear();
+        self.refilter();
+        self.mode = Mode::Picking;
+        self.disposal = Disposal::Trash;
+        self.plan = None;
+        self.outcome = None;
+        self.error = None;
+        self.guards = None;
+        self.package_index = None;
+        self.quit_failed = false;
+        Self::spawn_package_prewarm(cx, self.apps.clone());
+    }
+
     fn on_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = ev.keystroke.key.as_str();
         match self.mode {
@@ -269,36 +292,34 @@ impl RemoveAppView {
                     self.try_quit();
                     cx.notify();
                 }
-                key if self.guards.as_ref().is_some_and(|guards| {
-                    matches!(
-                        &guards.package,
-                        PackageStatus::Managed(package)
-                            if package.manager().action_key() == key
-                    )
-                }) =>
-                {
-                    self.try_package();
-                    cx.notify();
-                }
                 "t" => {
                     self.execute(Disposal::Trash, true);
                     cx.notify();
                 }
                 "enter" => {
-                    if !self.unresolved() {
-                        self.execute(self.disposal, false);
+                    match primary_action(self.guards.as_ref()) {
+                        PrimaryAction::Package => self.try_package(),
+                        PrimaryAction::Remove => self.execute(self.disposal, false),
+                        PrimaryAction::Blocked => {}
                     }
                     cx.notify();
                 }
                 "d" | "tab" => {
-                    if !self.unresolved() {
+                    if primary_action(self.guards.as_ref()) == PrimaryAction::Remove {
                         self.toggle_disposal();
                     }
                     cx.notify();
                 }
                 _ => {}
             },
-            Mode::Done => cx.quit(),
+            Mode::Done => match done_action(key) {
+                Some(DoneAction::Continue) => {
+                    self.continue_picking(cx);
+                    cx.notify();
+                }
+                Some(DoneAction::Quit) => cx.quit(),
+                None => {}
+            },
         }
     }
 
@@ -424,20 +445,20 @@ impl RemoveAppView {
         let mut hints: Vec<(&str, &str)> = Vec::new();
         if let Some(g) = &self.guards {
             if g.running {
-                hints.push(("Q", "quit & continue"));
+                hints.push(("Q", "quit app"));
             }
             if !g.running {
                 if let PackageStatus::Managed(package) = &g.package {
                     let label = match package.manager() {
-                        crate::core::PackageManager::Homebrew => "brew uninstall",
-                        crate::core::PackageManager::Apt => "apt uninstall",
-                        crate::core::PackageManager::Flatpak => "flatpak uninstall",
+                        crate::core::PackageManager::Homebrew => "uninstall with Homebrew",
+                        crate::core::PackageManager::Apt => "uninstall with APT",
+                        crate::core::PackageManager::Flatpak => "uninstall with Flatpak",
                     };
-                    hints.push((package.manager().action_key_label(), label));
+                    hints.push(("\u{23CE}", label));
                 }
             }
         }
-        if !self.unresolved() {
+        if primary_action(self.guards.as_ref()) == PrimaryAction::Remove {
             hints.push(("\u{23CE}", "confirm"));
             hints.push(("d", "trash/delete"));
         }
@@ -502,7 +523,7 @@ impl RemoveAppView {
             let text = if self.quit_failed {
                 "still running - couldn't quit; press Q to retry"
             } else {
-                "is running - press Q to quit & continue"
+                "is running - press Q to quit first"
             };
             lines.push(banner_line(palette.warning, text).into_any_element());
         }
@@ -510,11 +531,18 @@ impl RemoveAppView {
             PackageStatus::Managed(package) => lines.push(
                 banner_line(
                     palette.accent,
-                    &format!(
-                        "{}-managed - press {} to uninstall",
-                        package.manager().label(),
-                        package.manager().action_key_label()
-                    ),
+                    &if g.running {
+                        format!(
+                            "{}-managed - quit it before uninstalling",
+                            package.manager().label()
+                        )
+                    } else {
+                        format!(
+                            "{}-managed - Enter uninstalls through {}",
+                            package.manager().label(),
+                            package.manager().label()
+                        )
+                    },
                 )
                 .into_any_element(),
             ),
@@ -560,7 +588,7 @@ impl RemoveAppView {
                     div()
                         .text_color(rgb(palette.text_muted))
                         .text_size(px(11.0))
-                        .child("Press any key to close"),
+                        .child("Enter to continue \u{00b7} Esc to quit"),
                 )
                 .into_any_element();
         }
@@ -601,7 +629,7 @@ impl RemoveAppView {
                 div()
                     .text_color(rgb(palette.text_muted))
                     .text_size(px(11.0))
-                    .child("Press any key to close"),
+                    .child("Enter to continue \u{00b7} Esc to quit"),
             )
             .into_any_element()
     }
@@ -637,6 +665,27 @@ fn is_typed_char(key: &str) -> bool {
         && key
             .chars()
             .all(|c| c.is_alphanumeric() || "-_.".contains(c))
+}
+
+fn primary_action(guards: Option<&Guards>) -> PrimaryAction {
+    let Some(guards) = guards else {
+        return PrimaryAction::Blocked;
+    };
+    if guards.running {
+        return PrimaryAction::Blocked;
+    }
+    if matches!(guards.package, PackageStatus::Managed(_)) {
+        return PrimaryAction::Package;
+    }
+    PrimaryAction::Remove
+}
+
+fn done_action(key: &str) -> Option<DoneAction> {
+    match key {
+        "enter" => Some(DoneAction::Continue),
+        "escape" => Some(DoneAction::Quit),
+        _ => None,
+    }
 }
 
 fn app_row(app: &InstalledApp, selected: bool, protected: bool) -> impl IntoElement {
@@ -778,7 +827,11 @@ fn format_size(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        done_action, primary_action, DoneAction, PrimaryAction, FOOTER_H, MAX_VISIBLE, ROW_H,
+        SEARCH_H, WINDOW_HEIGHT,
+    };
+    use crate::core::{Guards, ManagedPackage, PackageManager, PackageScope, PackageStatus};
 
     #[test]
     fn visible_rows_fit_window_and_are_maximal() {
@@ -793,5 +846,62 @@ mod tests {
             one_more > WINDOW_HEIGHT,
             "MAX_VISIBLE is the most that fit: {one_more} > {WINDOW_HEIGHT}"
         );
+    }
+
+    #[test]
+    fn enter_uses_the_contextual_primary_action() {
+        let managed =
+            ManagedPackage::parse(PackageManager::Apt, "antigravity", PackageScope::System)
+                .expect("valid package");
+        let cases = [
+            (None, PrimaryAction::Blocked),
+            (
+                Some(Guards {
+                    running: true,
+                    package: PackageStatus::Managed(managed.clone()),
+                }),
+                PrimaryAction::Blocked,
+            ),
+            (
+                Some(Guards {
+                    running: false,
+                    package: PackageStatus::Managed(managed),
+                }),
+                PrimaryAction::Package,
+            ),
+            (
+                Some(Guards {
+                    running: false,
+                    package: PackageStatus::NotManaged,
+                }),
+                PrimaryAction::Remove,
+            ),
+            (
+                Some(Guards {
+                    running: false,
+                    package: PackageStatus::Unavailable("offline".to_string()),
+                }),
+                PrimaryAction::Remove,
+            ),
+        ];
+
+        for (guards, expected) in &cases {
+            assert_eq!(primary_action(guards.as_ref()), *expected);
+        }
+    }
+
+    #[test]
+    fn completed_screen_only_handles_enter_and_escape() {
+        let cases = [
+            ("enter", Some(DoneAction::Continue)),
+            ("escape", Some(DoneAction::Quit)),
+            ("u", None),
+            ("space", None),
+            ("q", None),
+        ];
+
+        for (key, expected) in cases {
+            assert_eq!(done_action(key), expected);
+        }
     }
 }
