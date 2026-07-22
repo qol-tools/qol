@@ -2,7 +2,7 @@ use std::sync::mpsc::Sender;
 
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 
-const CONFIG: DaemonConfig = DaemonConfig {
+const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
     support_replace_existing: true,
 };
@@ -15,19 +15,19 @@ pub enum Command {
 }
 
 pub fn send_show() -> bool {
-    core_daemon::send_action(&CONFIG, "show", true)
+    core_daemon::send_action(&DAEMON_CONFIG, "show", true)
 }
 
 pub fn send_kill() -> bool {
-    core_daemon::send_kill(&CONFIG)
+    core_daemon::send_kill(&DAEMON_CONFIG)
 }
 
 pub fn start_listener(tx: Sender<Command>) -> bool {
-    core_daemon::start_listener(&CONFIG, tx, parse_command)
+    core_daemon::start_listener(&DAEMON_CONFIG, tx, parse_command)
 }
 
 pub fn cleanup() {
-    core_daemon::cleanup(&CONFIG);
+    core_daemon::cleanup(&DAEMON_CONFIG);
 }
 
 fn parse_command(cmd: &str) -> ReadResult<Command> {

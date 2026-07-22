@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use gpui::*;
 
-use crate::daemon;
+use crate::app;
 use crate::discovery::{self, SharedEntries, SharedEntryState};
 use crate::monitor::MonitorTracker;
 use qol_gpui::command_loop::LoopFlow;
@@ -21,7 +21,7 @@ pub fn run() {
     eprintln!("[launcher] run start show_immediately={show_immediately}");
 
     if std::env::args().any(|a| a == "--kill") {
-        daemon::send_kill();
+        app::send_kill();
         return;
     }
 
@@ -30,12 +30,12 @@ pub fn run() {
         return;
     }
 
-    if show_immediately && daemon::send_show() {
+    if show_immediately && app::send_show() {
         return;
     }
 
     let (tx, rx) = mpsc::channel();
-    if !daemon::start_listener(tx) {
+    if !app::start_listener(tx) {
         eprintln!("[launcher] daemon listener failed, exiting");
         return;
     }
@@ -84,13 +84,13 @@ pub fn run() {
         }
     });
 
-    daemon::cleanup();
+    app::cleanup();
 }
 
 fn spawn_command_poll(
     entries: SharedEntries,
     active: Rc<RefCell<ActiveLaunchers>>,
-    rx: mpsc::Receiver<daemon::Command>,
+    rx: mpsc::Receiver<app::Command>,
     focus_cache: MonitorTracker,
     cx: &mut App,
 ) {
@@ -100,7 +100,7 @@ fn spawn_command_poll(
         let focus_cache = focus_cache.clone();
         async move {
             match cmd {
-                daemon::Command::Show => {
+                app::Command::Show => {
                     wait_for_entries(&entries, &cx).await;
                     let snapshot = cx
                         .background_spawn(async move { focus_cache.snapshot().map(|(m, _)| m) })
@@ -109,15 +109,15 @@ fn spawn_command_poll(
                         .update(move |cx| activate_or_open_launcher(entries, active, snapshot, cx));
                     LoopFlow::Continue
                 }
-                daemon::Command::Reload => {
+                app::Command::Reload => {
                     let _ = cx.update(move |cx| reload_ghost_debug(&active, cx));
                     LoopFlow::Continue
                 }
-                daemon::Command::Settings => {
+                app::Command::Settings => {
                     dispatch_settings(&cx, focus_cache).await;
                     LoopFlow::Continue
                 }
-                daemon::Command::Kill => LoopFlow::Stop,
+                app::Command::Kill => LoopFlow::Stop,
             }
         }
     });
