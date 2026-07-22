@@ -28,4 +28,11 @@ pub(super) fn exec_restart(binary: &std::path::Path) -> Result<(), String> {
 }
 
 #[cfg(not(any(unix, windows)))]
-compile_error!("Self-recompile restart is not implemented for this platform");
+pub(super) fn binary_name() -> &'static str {
+    "qol-tray"
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(super) fn exec_restart(_binary: &std::path::Path) -> Result<(), String> {
+    Err("self-recompile restart is unavailable on this platform".to_string())
+}

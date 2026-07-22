@@ -2,7 +2,7 @@ use std::sync::{Arc, OnceLock};
 
 use qol_runtime::protocol::RuntimeEvent;
 
-use super::server::shared::SharedState;
+use super::server::state_store::SharedState;
 
 static PUBLISHER: OnceLock<Arc<SharedState>> = OnceLock::new();
 

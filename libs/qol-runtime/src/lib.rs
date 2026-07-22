@@ -9,7 +9,6 @@ pub mod broker;
 
 #[cfg(unix)]
 mod client;
-#[cfg(unix)]
 pub mod plugin_config;
 mod types;
 

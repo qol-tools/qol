@@ -6,9 +6,9 @@ Contributors running qol-tray locally (`make dev` / `make install`) need to pick
 
 - **Single binary, runtime-gated.** Same qol-tray binary regardless of install path; the field surfaces only when dev mode is active (existing `/api/dev/enabled` flag).
 - **Free-form text input.** User types their handle (e.g. `KMRH47`). No dropdown, no `gh auth status --json` listing, no validation against keychain — keep it dumb. If the handle isn't in the keychain, the shell hook silently no-ops.
-- **Reuse existing storage.** `DevConfig` (`src/dev/config.rs`) already exists with one field (`search_paths`) and is JSON-backed at `paths::dev_config_path()`. Add one new field there. Don't invent a parallel storage location.
+- **Reuse existing storage.** `DevConfig` (`src/dev/config/mod.rs`) already exists with one field (`search_paths`) and is JSON-backed at `paths::dev_config_path()`. Add one new field there. Don't invent a parallel storage location.
 - **Reuse existing UI surface.** Dev settings already render via `ui/views/dev/components/DevLayout.js`. Add an input section there.
-- **Reuse existing dev-mode flag.** `/api/dev/enabled` already exists (`meta_handlers.rs:13,19-21`). Don't invent `/dev/status`.
+- **Reuse existing dev-mode flag.** `/api/dev/enabled` already exists in the plugin-store server's meta handlers. Don't invent `/dev/status`.
 - **Cross-platform path resolution.** qol-tray's Rust uses `dirs::config_dir()` via `paths::dev_config_path()` (already platform-aware). The shell hook uses `case "$OSTYPE"` to detect macOS Application Support vs Linux XDG vs Windows AppData.
 
 ## Proposed solution
@@ -63,7 +63,7 @@ EVERY new terminal (automatic)
 ## Affected files
 
 **qol-tray:**
-- `src/dev/config.rs` — add field + setter
+- `src/dev/config/mod.rs` — add field + setter
 - `src/dev/state.rs` (or wherever DevConfig is exposed to HTTP) — extend POST/GET to handle new field
 - `ui/views/dev/components/DevLayout.js` — input section
 - `tests/` — unit test for serde round-trip; integration test for HTTP
@@ -81,9 +81,9 @@ EVERY new terminal (automatic)
 
 ## Verified facts
 
-- ✅ `DevConfig` exists with one field today (`search_paths`) — `src/dev/config.rs:7-14`
-- ✅ `paths::dev_config_path()` already platform-aware via `dirs::config_dir()` — `src/paths.rs`
-- ✅ `/api/dev/enabled` exists for runtime dev-mode detection — `src/features/plugin_store/server/meta_handlers.rs:13,19-21`
+- ✅ `DevConfig` exists with one field today (`search_paths`) — `src/dev/config/mod.rs`
+- ✅ `paths::dev_config_path()` already platform-aware via `dirs::config_dir()` — `src/paths/mod.rs`
+- ✅ `/api/dev/enabled` exists for runtime dev-mode detection in the plugin-store server's meta handlers
 - ✅ Dev settings UI renders at `ui/views/dev/components/DevLayout.js`
 - ✅ qol-tray-install (TRAY-14) wires rc-file source line on first `make install`
 - ✅ python3 ships with macOS and most Linux distros (no new dep for the shell hook)
@@ -96,4 +96,3 @@ EVERY new terminal (automatic)
 ## Research log
 
 - [Ship-readiness 1](https://github.com/qol-tools/qol-tray/issues/17#issuecomment-4378865285) — flagged path mismatch (CICD-2's hardcoded `~/.config/qol-tools/`), wrong UI placement, reinventing `/api/dev/enabled`. Body simplified to one DevConfig field + extend existing UI + activate.sh reads JSON.
-

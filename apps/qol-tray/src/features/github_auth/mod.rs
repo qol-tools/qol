@@ -1,3 +1,4 @@
+pub mod credentials;
 mod http;
 mod service;
 mod storage;

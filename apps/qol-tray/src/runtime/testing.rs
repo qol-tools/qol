@@ -5,8 +5,8 @@ use std::thread::{self, JoinHandle};
 use qol_runtime::protocol::RuntimeEvent;
 use qol_runtime::MonitorBounds;
 
-use super::server::shared::SharedState;
 use super::server::socket;
+use super::server::state_store::SharedState;
 
 #[derive(Clone)]
 pub struct TestRuntime {

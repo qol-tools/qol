@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::sync::OnceLock;
 
 pub(crate) mod platform;
+pub mod version;
 
 static LATEST_VERSION: OnceLock<String> = OnceLock::new();
 

@@ -1,6 +1,3 @@
-#[cfg(not(unix))]
-compile_error!("plugin-lights daemon requires unix domain sockets");
-
 mod state;
 pub mod ws;
 

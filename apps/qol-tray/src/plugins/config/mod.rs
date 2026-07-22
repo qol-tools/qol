@@ -1,3 +1,4 @@
+pub mod drain;
 mod resolver;
 mod scope;
 mod store;

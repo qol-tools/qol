@@ -1,9 +1,11 @@
+pub mod console_guard;
 mod control;
 mod error_capture;
 pub mod file_logger;
 #[cfg(feature = "dev")]
 mod filter;
 pub(crate) mod platform;
+pub mod probe;
 pub(crate) mod rate_limiter;
 pub(crate) mod relay;
 

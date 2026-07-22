@@ -11,9 +11,6 @@ mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod socket_cleanup;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-compile_error!("plugins::daemon_tracker::platform is not implemented for this target OS");
-
 #[cfg(unix)]
 pub(super) fn pid_exe_path(pid: i32) -> Option<PathBuf> {
     #[cfg(target_os = "linux")]
@@ -21,6 +18,12 @@ pub(super) fn pid_exe_path(pid: i32) -> Option<PathBuf> {
 
     #[cfg(target_os = "macos")]
     return macos::pid_exe_path(pid);
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = pid;
+        None
+    }
 }
 
 pub(super) fn kill_orphan_daemons() {
@@ -46,6 +49,11 @@ pub(super) fn managed_processes() -> Vec<super::ManagedProcess> {
     Vec::new()
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub(super) fn managed_processes() -> Vec<super::ManagedProcess> {
+    Vec::new()
+}
+
 pub(super) fn clean_stale_sockets(plugins: &[Plugin]) {
     #[cfg(target_os = "linux")]
     linux::clean_stale_sockets(plugins);
@@ -54,5 +62,8 @@ pub(super) fn clean_stale_sockets(plugins: &[Plugin]) {
     macos::clean_stale_sockets(plugins);
 
     #[cfg(target_os = "windows")]
+    let _ = plugins;
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     let _ = plugins;
 }

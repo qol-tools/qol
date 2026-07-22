@@ -5,11 +5,6 @@ use super::DaemonActionDispatch;
 use std::path::Path;
 use std::time::Duration;
 
-#[cfg(not(any(unix, target_os = "windows")))]
-compile_error!(
-    "plugins::action_transport::platform::dispatch_action is not implemented for this target OS"
-);
-
 #[cfg(unix)]
 pub(super) fn default_io_timeout() -> Duration {
     unix_common::DEFAULT_IO_TIMEOUT
@@ -46,6 +41,26 @@ pub(super) fn dispatch_action(
 }
 
 #[cfg(target_os = "windows")]
+pub(super) fn can_connect(_endpoint: &Path) -> bool {
+    false
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+pub(super) fn default_io_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+pub(super) fn dispatch_action(
+    _endpoint: &Path,
+    _action_id: &str,
+    _input: &serde_json::Value,
+    _timeout: Duration,
+) -> DaemonActionDispatch {
+    DaemonActionDispatch::Unavailable
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 pub(super) fn can_connect(_endpoint: &Path) -> bool {
     false
 }

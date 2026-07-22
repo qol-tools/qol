@@ -1,3 +1,6 @@
+pub mod local_http;
+pub mod net;
+
 pub struct ExportedCommand {
     pub id: &'static str,
     pub label: &'static str,

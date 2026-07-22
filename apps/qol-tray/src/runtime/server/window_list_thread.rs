@@ -4,7 +4,7 @@ use qol_runtime::protocol::RuntimeEvent;
 
 use super::super::channels::window_list::WindowListChannel;
 use super::super::Channel;
-use super::shared::SharedState;
+use super::state_store::SharedState;
 use crate::desktop_state::SharedPlatform;
 
 pub(super) fn run(shared: Arc<SharedState>, platform: SharedPlatform) {

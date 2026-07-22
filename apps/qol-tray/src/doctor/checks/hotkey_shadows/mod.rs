@@ -4,28 +4,7 @@ use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck
 use crate::hotkeys::{HotkeyBinding, HotkeyManager};
 use std::collections::BTreeMap;
 
-mod linux;
-mod macos;
-mod windows;
-
-#[cfg(target_os = "linux")]
-use linux as platform_impl;
-#[cfg(target_os = "macos")]
-use macos as platform_impl;
-#[cfg(target_os = "windows")]
-use windows as platform_impl;
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-use fallback as platform_impl;
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-mod fallback {
-    use super::DetectedShadow;
-    use std::collections::BTreeMap;
-
-    pub(super) fn collect_shadows(_qol_index: &BTreeMap<String, String>) -> Vec<DetectedShadow> {
-        Vec::new()
-    }
-}
+mod platform;
 
 const ID: &str = "hotkey_shadows";
 
@@ -48,7 +27,7 @@ impl DoctorCheck for HotkeyShadowsCheck {
         }
 
         let qol_index = build_qol_index(&bindings);
-        let shadows = platform_impl::collect_shadows(&qol_index);
+        let shadows = platform::collect_shadows(&qol_index);
         diagnose(shadows)
     }
 }

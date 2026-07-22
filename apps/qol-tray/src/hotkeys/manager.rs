@@ -69,9 +69,8 @@ impl HotkeyManager {
     }
 
     pub(super) fn release_active_grab(&self) -> Result<()> {
-        #[cfg(target_os = "linux")]
         if let Some(manager) = self.manager.as_ref() {
-            manager.release_active_grab()?;
+            super::platform::release_active_grab(manager)?;
         }
         Ok(())
     }

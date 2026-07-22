@@ -1,7 +1,7 @@
 use qol_runtime::protocol::RuntimeEvent;
 use qol_runtime::MonitorBounds;
 
-use crate::runtime::server::shared::SharedState;
+use crate::runtime::server::state_store::SharedState;
 use crate::runtime::state::{self, InputState};
 
 pub(super) struct EventTracker {
@@ -137,12 +137,14 @@ mod tests {
         }
     }
 
-    fn shared_with(monitors: Vec<MonitorBounds>) -> crate::runtime::server::shared::SharedState {
-        crate::runtime::server::shared::SharedState::new(monitors)
+    fn shared_with(
+        monitors: Vec<MonitorBounds>,
+    ) -> crate::runtime::server::state_store::SharedState {
+        crate::runtime::server::state_store::SharedState::new(monitors)
     }
 
     fn set_cursor_focus(
-        shared: &crate::runtime::server::shared::SharedState,
+        shared: &crate::runtime::server::state_store::SharedState,
         cursor: Option<MonitorBounds>,
         focus: Option<MonitorBounds>,
         now: Instant,

@@ -35,13 +35,6 @@ fn accent_palette() -> Vec<AccentEntry> {
         .collect()
 }
 
-#[cfg(target_os = "macos")]
-const PLATFORM_LABEL: &str = "macOS";
-#[cfg(target_os = "linux")]
-const PLATFORM_LABEL: &str = "Linux";
-#[cfg(target_os = "windows")]
-const PLATFORM_LABEL: &str = "Windows";
-
 #[derive(Serialize)]
 struct ThemeEntry {
     key: &'static str,
@@ -86,7 +79,16 @@ struct DeviceBoot {
 fn device_boot() -> DeviceBoot {
     DeviceBoot {
         name: gethostname::gethostname().to_string_lossy().into_owned(),
-        platform: PLATFORM_LABEL,
+        platform: platform_label(),
+    }
+}
+
+fn platform_label() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "macOS",
+        "linux" => "Linux",
+        "windows" => "Windows",
+        other => other,
     }
 }
 

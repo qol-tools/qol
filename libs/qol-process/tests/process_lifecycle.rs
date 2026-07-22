@@ -1,3 +1,5 @@
+#![cfg(any(unix, windows))]
+
 use std::process::Command;
 use std::time::Duration;
 

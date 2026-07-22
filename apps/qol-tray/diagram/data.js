@@ -70,10 +70,10 @@ window.QOL_DIAGRAM = (() => {
     // ── 03 Daemon core — pre-tokio / tokio anchor / services / IPC entries
 
     // Pre-tokio strip (main thread, sync)
-    { id: "d-boot",   region: "r3", x:  75, y: 612, w: 270, h: 70, kind: "core", label: "Bootstrap",   sub: "main() · single-instance · install", code: "src/main.rs · installer/", phase: "pre-tokio" },
-    { id: "d-paths",  region: "r3", x: 375, y: 612, w: 270, h: 70, kind: "core", label: "Runtime dirs",sub: "wipe /tmp · recreate",       code: "src/paths.rs",            phase: "pre-tokio" },
-    { id: "d-house",  region: "r3", x: 675, y: 612, w: 270, h: 70, kind: "core", label: "Housekeeping",sub: "migrations · cleanup",       code: "src/housekeeping.rs",     phase: "pre-tokio" },
-    { id: "d-doctor", region: "r3", x: 975, y: 612, w: 270, h: 70, kind: "core", label: "Doctor",      sub: "2 checks · 8 fixes · safe|with_de_fixes policy",       code: "src/doctor/",             phase: "pre-tokio" },
+    { id: "d-boot",   region: "r3", x:  75, y: 612, w: 270, h: 70, kind: "core", label: "Bootstrap",   sub: "entry routing · single-instance · install", code: "src/app/ · installer/", phase: "pre-tokio" },
+    { id: "d-paths",  region: "r3", x: 375, y: 612, w: 270, h: 70, kind: "core", label: "Runtime dirs",sub: "initialize host-owned paths", code: "src/paths/", phase: "pre-tokio" },
+    { id: "d-house",  region: "r3", x: 675, y: 612, w: 270, h: 70, kind: "core", label: "Housekeeping",sub: "startup cleanup", code: "src/installer/housekeeping.rs", phase: "pre-tokio" },
+    { id: "d-doctor", region: "r3", x: 975, y: 612, w: 270, h: 70, kind: "core", label: "Doctor",      sub: "diagnosis · policy-gated fixes", code: "src/doctor/", phase: "pre-tokio" },
 
     // Tokio anchor
     { id: "d-tokio", region: "r3", x: 75, y: 718, w: 1170, h: 72, kind: "core", label: "Tokio runtime",
@@ -102,7 +102,7 @@ window.QOL_DIAGRAM = (() => {
     { id: "d-router", region: "r3", x: 465, y: 920, w: 380, h: 100, kind: "router", label: "Menu router",
       sub: "OS std::thread — not tokio",  code: "src/menu/router.rs",     ipc: "tray-icon::MenuEvent → action_executor" },
     { id: "d-state",  region: "r3", x: 855, y: 920, w: 390, h: 100, kind: "state",  label: "Runtime state socket",
-      sub: "/tmp/qol-tray-state.sock — unix only", code: "src/runtime/server.rs",
+      sub: "/tmp/qol-tray-state.sock — unix only", code: "src/runtime/server/",
       ipc: "monitor · cursor · focus feed · 2× std::thread · STATE_SOCKET env" },
     { id: "d-hotkey", region: "r3", x: 855, y: 920, w: 380, h: 72, kind: "router", label: "Hotkey callback",
       sub: "hotkeys module → action_executor",
@@ -122,7 +122,7 @@ window.QOL_DIAGRAM = (() => {
       code: "src/plugins/action_executor/resolution.rs",
       bullets: ["no daemon socket → runtime if command exists", "daemon socket + no runtime → daemon only", "different runtime/daemon paths → runtime fallback allowed", "same path → fallback only when socket is unreachable"] },
     { id: "pl-exec",  region: "r4", x: 370, y: 1248, w: 280, h: 96, kind: "plug-anchor", label: "Action executor", sub: "fan-in · daemon|runtime fork",
-      code: "src/plugins/action_executor.rs",
+      code: "src/plugins/action_executor/",
       bullets: ["from: menu router · hotkey · axum POST · axum GET", "daemon_socket=Some → execute_via_daemon", "daemon_socket=None → execute_via_runtime"] },
     { id: "pl-trans", region: "r4", x: 670, y: 1248, w: 280, h: 96, kind: "plug", label: "Action transport", sub: "unix socket · ndjson · 10s timeout",
       code: "src/plugins/action_transport/", note: "Unix: qol_runtime JSON request/response · Windows: unavailable" },
@@ -137,7 +137,7 @@ window.QOL_DIAGRAM = (() => {
     { id: "pl-track",region: "r4", x: 370, y: 1364, w: 280, h: 96, kind: "plug", label: "Daemon tracker",
       sub: "PID files · orphan kill",            code: "src/plugins/daemon_tracker/", note: "/tmp/qol-tray/pids/<id>.pid" },
     { id: "pl-sup",  region: "r4", x: 670, y: 1364, w: 280, h: 96, kind: "plug", label: "Supervisor",
-      sub: "5s tick · 5-strike retry",           code: "src/plugins/daemon_supervisor.rs", note: "transition → global_hotkey reload signal" },
+      sub: "health transitions · bounded retry", code: "src/plugins/daemon_supervisor.rs", note: "transition → hotkey reload signal" },
     { id: "pl-mgr",  region: "r4", x: 970, y: 1364, w: 280, h: 96, kind: "plug", label: "PluginManager",
       sub: "HashMap<PluginId, Plugin> + ResolutionReport", code: "src/plugins/manager/",
       bullets: ["in-memory · load · reload · shutdown", "ensure/restart daemon"] },

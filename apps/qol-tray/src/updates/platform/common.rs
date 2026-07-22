@@ -128,7 +128,9 @@ pub(crate) fn arch_suffix() -> &'static str {
         "aarch64"
     }
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    compile_error!("unsupported architecture")
+    {
+        std::env::consts::ARCH
+    }
 }
 
 #[cfg(test)]

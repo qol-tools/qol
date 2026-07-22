@@ -419,7 +419,7 @@ mod write_point_dispatch_contracts {
         );
 
         let notify =
-            read_src("features/plugin_store/server/settings/plugin_config_handlers/notify.rs");
+            read_src("features/plugin_store/server/settings/plugin_config_handlers/notify/mod.rs");
         assert!(
             notify.contains("platform::notify_plugin_reload(socket_path)"),
             "notify::notify_plugin_reload must reach the plugin's socket before falling back"

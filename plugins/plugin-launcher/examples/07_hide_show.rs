@@ -2,6 +2,9 @@
 // Verifies: minimize_window on Linux, hide app on macOS (popup windows can't minimize)
 
 use gpui::*;
+
+#[path = "hide_show/platform/mod.rs"]
+mod platform;
 use launcher::open_window_with_focus;
 
 actions!(test, [Quit, Hide]);
@@ -38,18 +41,7 @@ impl Render for DaemonView {
             .bg(rgb(0x1e1e2e))
             .on_key_down(cx.listener(|_this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key.as_str() == "m" {
-                    #[cfg(target_os = "macos")]
-                    {
-                        let _ = window;
-                        println!("Hiding app (macOS)...");
-                        cx.hide();
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        let _ = cx;
-                        println!("Minimizing window (Linux)...");
-                        window.minimize_window();
-                    }
+                    platform::hide_or_minimize(window, cx);
                 }
             }))
             .child(

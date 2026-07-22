@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use super::AutostartOps;
 
-const BUNDLE_ID: &str = crate::installer::MACOS_BUNDLE_ID;
+const BUNDLE_ID: &str = crate::installer::platform::MACOS_BUNDLE_ID;
 
 pub(crate) struct Platform;
 

@@ -18,6 +18,7 @@ pub mod registry;
 pub mod resolver;
 
 pub use config::PluginConfigManager;
+pub use daemon_lifecycle::lifeline_handoff;
 pub use identity_index::{PluginDisplay, PluginIdentityIndex};
 pub use loader::PluginLoader;
 pub use manager::PluginManager;

@@ -9,6 +9,8 @@ use crate::mode::{ModeConfig, ModeFlag};
 pub mod autostart;
 pub mod boot_environment;
 mod files;
+pub mod housekeeping;
+pub mod mode;
 pub(crate) mod platform;
 mod shell_hook;
 mod source;
@@ -17,9 +19,6 @@ pub use boot_environment::BootEnvironment;
 pub(crate) use platform::binary_filename;
 
 const INSTALL_ID_FILE: &str = "qol-tray.install-id";
-
-#[cfg(target_os = "macos")]
-pub(crate) const MACOS_BUNDLE_ID: &str = "com.qol-tools.qol-tray";
 
 pub fn autostart_path() -> Result<PathBuf> {
     platform::autostart_path()
@@ -100,7 +99,6 @@ fn run_install(
             install_dir.display()
         )
     })?;
-    #[cfg(target_os = "macos")]
     platform::remove_legacy_install();
     let installed_binary = install_dir.join(platform::binary_filename());
     platform::stop_running(&installed_binary)?;

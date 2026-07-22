@@ -1,23 +1,27 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-compile_error!(
-    "features::task_runner::platform::shell_command is not implemented for this target OS"
-);
+mod process_tree;
+
+pub(super) use process_tree::CommandTree;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(super) fn shell_command(script: &str) -> Command {
+pub(super) fn shell_command(script: &str) -> Result<Command, String> {
     let mut command = Command::new("sh");
     command.arg("-c").arg(script);
-    command
+    Ok(command)
 }
 
 #[cfg(target_os = "windows")]
-pub(super) fn shell_command(script: &str) -> Command {
+pub(super) fn shell_command(script: &str) -> Result<Command, String> {
     let mut command = Command::new("cmd");
     command.arg("/C").arg(script);
-    command
+    Ok(command)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub(super) fn shell_command(_script: &str) -> Result<Command, String> {
+    Err("task-runner shell execution is unavailable on this platform".to_string())
 }
 
 pub(super) fn verified_process_tree() -> std::io::Result<qol_process::ProcessTreeGuard> {

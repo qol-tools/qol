@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use super::super::shared::SharedState;
+use super::super::state_store::SharedState;
 
 const IO_TIMEOUT_MS: u64 = 50;
 

@@ -289,7 +289,7 @@ Source: `libs/qol-config/src/lib.rs` (`load_plugin_config_from_env`,
 
 Three entry points converge on one executor:
 `action_executor::try_execute_action(plugin_manager, plugin_id, action_id)`
-(`apps/qol-tray/src/plugins/action_executor.rs`).
+(`apps/qol-tray/src/plugins/action_executor/`).
 
 ### 4.1 What is bindable, and who owns the key
 
@@ -441,7 +441,7 @@ Source: `libs/qol-runtime/src/watchdog.rs`; host side
 ## 6. The platform-state socket
 
 A host-authoritative Unix socket (`QOL_TRAY_STATE_SOCKET`, default
-`/tmp/qol-tray-state.sock`, const in `apps/qol-tray/src/paths.rs`). Client API in
+`/tmp/qol-tray-state.sock`, const in `apps/qol-tray/src/paths/mod.rs`). Client API in
 `libs/qol-runtime/src/client.rs` (`PlatformStateClient`, `Subscription`); protocol
 in `libs/qol-runtime/src/protocol.rs`; server in `apps/qol-tray/src/runtime/server/`.
 

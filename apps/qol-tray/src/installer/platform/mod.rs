@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+mod fallback;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -11,6 +13,8 @@ mod unix_common;
 #[cfg(target_os = "windows")]
 mod windows;
 
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+use fallback as imp;
 #[cfg(target_os = "linux")]
 use linux as imp;
 #[cfg(target_os = "macos")]
@@ -21,8 +25,8 @@ use windows as imp;
 #[cfg(target_os = "linux")]
 pub(crate) use linux::desktop_entry;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-compile_error!("installer platform implementation is required for this target OS");
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_BUNDLE_ID: &str = "com.qol-tools.qol-tray";
 
 pub(crate) fn binary_filename() -> String {
     if cfg!(target_os = "windows") {
@@ -56,14 +60,8 @@ pub(super) fn prepare_atomic_replace(installed_binary: &Path) -> Result<()> {
     imp::prepare_atomic_replace(installed_binary)
 }
 
-#[cfg(target_os = "macos")]
 pub(super) fn should_bootstrap_current_install(binary_path: &Path) -> Result<bool> {
     imp::should_bootstrap_current_install(binary_path)
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(super) fn should_bootstrap_current_install(_binary_path: &Path) -> Result<bool> {
-    Ok(false)
 }
 
 pub(super) fn register_application(binary_path: &Path) -> Result<()> {
@@ -74,7 +72,6 @@ pub(super) fn warn_system_install_conflict() {
     imp::warn_system_install_conflict()
 }
 
-#[cfg(target_os = "macos")]
 pub(super) fn remove_legacy_install() {
     imp::remove_legacy_install();
 }

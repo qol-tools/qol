@@ -54,9 +54,6 @@ fn install_kind_for_path(exe_path: &str, home: Option<&str>) -> InstallKind {
     InstallKind::SystemWide
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-compile_error!("updates::platform::download_and_install is not implemented for this target OS");
-
 #[cfg(target_os = "linux")]
 pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     log::info!("Install kind: {:?}", InstallKind::detect());
@@ -74,6 +71,12 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
 pub(super) async fn download_and_install(_events: Arc<EventBus>) -> Result<()> {
     log::info!("Install kind: {:?}", InstallKind::detect());
     open_latest_release_page()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[allow(clippy::unused_async)]
+pub(super) async fn download_and_install(_events: Arc<EventBus>) -> Result<()> {
+    anyhow::bail!("self-update is unavailable on this platform")
 }
 
 #[cfg(target_os = "windows")]

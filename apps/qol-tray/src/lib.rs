@@ -1,7 +1,4 @@
 pub mod commands;
-pub mod config_drain;
-pub mod console_guard;
-pub mod credentials;
 pub mod daemon;
 #[cfg(unix)]
 pub(crate) mod desktop_state;
@@ -10,23 +7,15 @@ pub mod dev;
 pub mod dev_generation;
 pub mod doctor;
 pub mod features;
-pub(crate) mod file_io;
 pub mod hotkeys;
-pub mod housekeeping;
 pub mod installer;
-pub mod lifeline_handoff;
-pub mod local_http;
 pub mod logging;
 pub mod menu;
-pub mod migrations_startup;
-pub mod mode;
-pub mod net;
+pub mod migrations;
 pub mod paths;
 pub mod plugins;
-pub mod probe;
-pub mod process_utils;
+pub mod process;
 pub mod profile;
-pub mod reconcile;
 #[cfg(unix)]
 pub mod runtime;
 pub mod settings_surface;
@@ -35,7 +24,20 @@ pub mod shortcuts;
 pub(crate) mod signal;
 pub mod sync;
 #[cfg(test)]
-pub(crate) mod test_support;
+mod testing;
 pub mod tray;
 pub mod updates;
-pub mod version;
+
+pub use commands::{local_http, net};
+pub use daemon::reconcile;
+pub use features::github_auth::credentials;
+pub use installer::{housekeeping, mode};
+pub use logging::{console_guard, probe};
+pub use migrations as migrations_startup;
+pub(crate) use paths::file_io;
+pub use plugins::config::drain as config_drain;
+pub use plugins::lifeline_handoff;
+pub use process as process_utils;
+#[cfg(test)]
+pub(crate) use testing as test_support;
+pub use updates::version;

@@ -1,5 +1,6 @@
 mod config_bus;
 mod events;
+pub mod reconcile;
 
 pub use config_bus::ConfigBus;
 pub use events::EventBus;

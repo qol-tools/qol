@@ -8,7 +8,7 @@ use qol_runtime::protocol::{
     SubscribeAck,
 };
 
-use super::super::shared::SharedState;
+use super::super::state_store::SharedState;
 use super::io::{write_flushed_json_line, write_state};
 
 const SUBSCRIBER_WRITE_TIMEOUT_SECS: u64 = 5;

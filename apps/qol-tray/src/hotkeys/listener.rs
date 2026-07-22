@@ -1,6 +1,6 @@
 use super::catalog::load_available_actions;
 use super::manager::RegisteredHotkey;
-use super::physical_state::PhysicalHotkeyState;
+use super::platform::PhysicalHotkeyState;
 use super::reload;
 use super::{HotkeyAction, HotkeyManager};
 use crate::plugins::PluginManager;
@@ -137,10 +137,10 @@ impl<'a> HotkeyListenerLoop<'a> {
 
         loop {
             let physical_state_rx: Receiver<Instant> =
-                if self.held_actions.is_empty() && !super::physical_state::POLL_WHILE_IDLE {
+                if self.held_actions.is_empty() && !super::platform::POLL_WHILE_IDLE {
                     never()
                 } else {
-                    after(super::physical_state::POLL_INTERVAL)
+                    after(super::platform::POLL_INTERVAL)
                 };
             select! {
                 recv(self.reload_rx) -> reload => {
@@ -666,8 +666,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_keeps_physical_reconciliation_available_while_idle() {
-        const { assert!(super::super::physical_state::POLL_WHILE_IDLE) };
-        assert_eq!(super::super::physical_state::POLL_INTERVAL.as_millis(), 8);
+        const { assert!(super::super::platform::POLL_WHILE_IDLE) };
+        assert_eq!(super::super::platform::POLL_INTERVAL.as_millis(), 8);
     }
 
     #[test]

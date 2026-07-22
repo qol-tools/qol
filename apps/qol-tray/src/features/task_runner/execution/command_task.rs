@@ -1,20 +1,13 @@
 use super::super::platform;
 use std::io;
-use std::process::{Child, Command, Output};
-use std::thread;
+use std::process::{Command, Output};
 use std::time::Duration;
-#[cfg(target_os = "macos")]
-use std::time::Instant;
 use tokio::task::{JoinError, JoinHandle};
 
-#[cfg(target_os = "macos")]
-const POLL_INTERVAL: Duration = Duration::from_millis(20);
-#[cfg(target_os = "macos")]
-const STOP_GRACE: Duration = Duration::from_millis(250);
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(super) struct CommandTask {
-    owner: AsyncCommandTree,
+    owner: platform::CommandTree,
     waiter: JoinHandle<io::Result<Output>>,
     timeout: u64,
 }
@@ -25,19 +18,9 @@ pub(super) enum TaskError {
     Timeout { seconds: u64, cleanup: Vec<String> },
 }
 
-struct AsyncCommandTree {
-    cleanup: Option<TreeCleanup>,
-}
-
-enum TreeCleanup {
-    Verified(qol_process::ProcessTreeGuard),
-    #[cfg(target_os = "macos")]
-    ProcessGroup(u32),
-}
-
 impl CommandTask {
     pub(super) fn start(command: Command, timeout: u64) -> Result<Self, TaskError> {
-        let (owner, child) = AsyncCommandTree::spawn(command)?;
+        let (owner, child) = platform::CommandTree::spawn(command).map_err(command_error)?;
         let waiter = tokio::task::spawn_blocking(move || child.wait_with_output());
         Ok(Self {
             owner,
@@ -96,132 +79,6 @@ impl std::fmt::Display for TaskError {
                 write!(formatter, "; cleanup failed: {}", cleanup.join("; "))
             }
         }
-    }
-}
-
-impl AsyncCommandTree {
-    fn spawn(mut command: Command) -> Result<(Self, Child), TaskError> {
-        match platform::verified_process_tree() {
-            Ok(tree) => {
-                qol_process::isolate_owned_session(&mut command).map_err(command_error)?;
-                let prepared = tree.prepare_command(command).map_err(command_error)?;
-                let child = prepared.spawn().map_err(|error| {
-                    let cleanup = error.cleanup();
-                    TaskError::Command(format!("{error}; cleanup state: {cleanup:?}"))
-                })?;
-                Ok((Self::verified(tree), child))
-            }
-            #[cfg(target_os = "macos")]
-            Err(error) if error.kind() == io::ErrorKind::Unsupported => {
-                qol_process::isolate_owned_command(&mut command).map_err(command_error)?;
-                let child = command.spawn().map_err(command_error)?;
-                Ok((Self::process_group(child.id()), child))
-            }
-            Err(error) => Err(command_error(error)),
-        }
-    }
-
-    fn verified(tree: qol_process::ProcessTreeGuard) -> Self {
-        Self {
-            cleanup: Some(TreeCleanup::Verified(tree)),
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn process_group(pid: u32) -> Self {
-        Self {
-            cleanup: Some(TreeCleanup::ProcessGroup(pid)),
-        }
-    }
-
-    fn is_alive(&self) -> io::Result<bool> {
-        match self.cleanup.as_ref() {
-            Some(TreeCleanup::Verified(tree)) => tree.tree_has_exited().map(|exited| !exited),
-            #[cfg(target_os = "macos")]
-            Some(TreeCleanup::ProcessGroup(pid)) => Ok(qol_process::is_group_alive(*pid)),
-            None => Ok(false),
-        }
-    }
-
-    async fn cleanup(&mut self) -> io::Result<()> {
-        let Some(cleanup) = self.cleanup.take() else {
-            return Ok(());
-        };
-        tokio::task::spawn_blocking(move || cleanup.run())
-            .await
-            .map_err(join_error)?
-    }
-}
-
-impl Drop for AsyncCommandTree {
-    fn drop(&mut self) {
-        let Some(cleanup) = self.cleanup.take() else {
-            return;
-        };
-        #[cfg(target_os = "macos")]
-        let fallback_pid = cleanup.process_group_id();
-        let _started = thread::Builder::new()
-            .name("qol-task-cleanup".to_string())
-            .spawn(move || {
-                let _ = cleanup.run();
-            });
-        #[cfg(target_os = "macos")]
-        if _started.is_err() {
-            if let Some(pid) = fallback_pid {
-                let _ = stop_process_group(pid);
-            }
-        }
-    }
-}
-
-impl TreeCleanup {
-    fn run(self) -> io::Result<()> {
-        match self {
-            Self::Verified(tree) => tree.terminate_and_wait(STOP_TIMEOUT).map(drop),
-            #[cfg(target_os = "macos")]
-            Self::ProcessGroup(pid) => stop_process_group(pid),
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn process_group_id(&self) -> Option<u32> {
-        match self {
-            Self::Verified(_) => None,
-            Self::ProcessGroup(pid) => Some(*pid),
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn stop_process_group(pid: u32) -> io::Result<()> {
-    tolerate_stopped(qol_process::signal_term_group(pid), pid)?;
-    let deadline = Instant::now() + STOP_GRACE;
-    while qol_process::is_group_alive(pid) && Instant::now() < deadline {
-        thread::sleep(POLL_INTERVAL);
-    }
-    if !qol_process::is_group_alive(pid) {
-        return Ok(());
-    }
-    tolerate_stopped(qol_process::kill_group(pid), pid)?;
-    let deadline = Instant::now() + STOP_TIMEOUT;
-    while qol_process::is_group_alive(pid) && Instant::now() < deadline {
-        thread::sleep(POLL_INTERVAL);
-    }
-    if qol_process::is_group_alive(pid) {
-        return Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!("command process group {pid} did not exit"),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn tolerate_stopped(result: io::Result<()>, pid: u32) -> io::Result<()> {
-    match result {
-        Ok(()) => Ok(()),
-        Err(_) if !qol_process::is_group_alive(pid) => Ok(()),
-        Err(error) => Err(error),
     }
 }
 
