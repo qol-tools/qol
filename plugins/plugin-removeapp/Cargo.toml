@@ -1,6 +1,6 @@
 [package]
 name = "plugin-removeapp"
-version = "0.24.1"
+version = "0.25.0"
 edition = "2021"
 description = "Uninstall an app and its leftovers for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
