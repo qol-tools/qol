@@ -9,7 +9,8 @@ use super::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle
 use super::persistence::save_values;
 use super::rows::{
     apply_runtime_query, begin_list_item_action, list_item_actions, merged_config,
-    primary_list_item_action, runtime_query_names, Row, RowControl,
+    primary_list_item_action, runtime_query_names, section_label_for, visible_row_indices, Row,
+    RowControl,
 };
 use super::{SettingsPanel, SettingsRuntime};
 use crate::dropdown::{Dropdown, DropdownEvent, DropdownStyle};
@@ -98,6 +99,10 @@ impl SettingsPanelView {
             palette: settings_panel_runtime(),
             focus_handle: cx.focus_handle(),
         };
+        view.selected = visible_row_indices(&view.rows)
+            .into_iter()
+            .next()
+            .unwrap_or(0);
         view.resume_runtime_poll(cx);
         view
     }
@@ -196,11 +201,11 @@ impl SettingsPanelView {
         };
         match intent {
             Intent::Up => {
-                self.selected = self.selected.saturating_sub(1);
+                self.selected = adjacent_visible_row(&self.rows, self.selected, -1);
                 self.sync_scroll();
             }
             Intent::Down => {
-                self.selected = (self.selected + 1).min(self.rows.len().saturating_sub(1));
+                self.selected = adjacent_visible_row(&self.rows, self.selected, 1);
                 self.sync_scroll();
             }
             Intent::Toggle => self.toggle(),
@@ -896,12 +901,12 @@ impl SettingsPanelView {
     fn render_row(&self, index: usize, cx: &mut Context<Self>) -> Div {
         let row = &self.rows[index];
         let mut container = div().flex().flex_col().gap_1();
-        if let Some(section) = &row.section_label {
+        if let Some(section) = section_label_for(&self.rows, index) {
             container = container.child(
                 div()
                     .text_xs()
                     .text_color(rgb(self.palette.section_text))
-                    .child(section.clone()),
+                    .child(section.to_string()),
             );
         }
         if matches!(row.control, RowControl::List { .. }) {
@@ -1302,7 +1307,8 @@ impl Focusable for SettingsPanelView {
 impl Render for SettingsPanelView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let items: Vec<AnyElement> =
-            visible_row_range(&self.rows, self.scroll_offset, self.body_max)
+            visible_row_window(&self.rows, self.scroll_offset, self.body_max)
+                .into_iter()
                 .map(|index| self.render_row(index, cx).into_any_element())
                 .collect();
         div()
@@ -1495,46 +1501,89 @@ pub(super) fn row_height(row: &Row) -> f32 {
     body + header
 }
 
-fn visible_row_range(rows: &[Row], offset: usize, body_max: f32) -> std::ops::Range<usize> {
+fn visible_row_height(rows: &[Row], index: usize) -> f32 {
+    let header = if section_label_for(rows, index).is_some() {
+        super::PANEL_SECTION_HEADER_HEIGHT
+    } else {
+        0.0
+    };
+    let body = if matches!(rows[index].control, RowControl::List { .. }) {
+        super::PANEL_LIST_HEIGHT
+    } else {
+        super::PANEL_ROW_HEIGHT
+    };
+    body + header
+}
+
+fn visible_row_window(rows: &[Row], offset: usize, body_max: f32) -> Vec<usize> {
+    let visible = visible_row_indices(rows);
+    let start = visible
+        .iter()
+        .position(|index| *index >= offset)
+        .unwrap_or(visible.len());
     let mut used = 0.0;
-    let mut end = offset;
-    for row in rows.iter().skip(offset) {
-        used += row_height(row);
-        if used > body_max && end > offset {
+    let mut window = Vec::new();
+    for index in visible.into_iter().skip(start) {
+        used += visible_row_height(rows, index);
+        if used > body_max && !window.is_empty() {
             break;
         }
-        end += 1;
+        window.push(index);
     }
-    offset..end.min(rows.len())
+    window
 }
 
 fn scroll_offset_for(rows: &[Row], selected: usize, offset: usize, body_max: f32) -> usize {
-    if selected < offset {
+    let visible = visible_row_indices(rows);
+    let Some(selected_position) = visible.iter().position(|index| *index == selected) else {
+        return visible.into_iter().next().unwrap_or(0);
+    };
+    let mut offset_position = visible
+        .iter()
+        .position(|index| *index >= offset)
+        .unwrap_or(selected_position);
+    if selected_position < offset_position {
         return selected;
     }
-    let mut offset = offset;
-    while !visible_row_range(rows, offset, body_max).contains(&selected) {
-        offset += 1;
+    while !visible_row_window(rows, visible[offset_position], body_max).contains(&selected) {
+        offset_position += 1;
     }
-    offset
+    visible[offset_position]
+}
+
+fn adjacent_visible_row(rows: &[Row], selected: usize, direction: isize) -> usize {
+    let visible = visible_row_indices(rows);
+    let Some(position) = visible.iter().position(|index| *index == selected) else {
+        return visible.into_iter().next().unwrap_or(0);
+    };
+    let next = if direction < 0 {
+        position.saturating_sub(1)
+    } else {
+        (position + 1).min(visible.len() - 1)
+    };
+    visible[next]
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        action_shows_spinner, binary_state_label, intent, is_number_seed, list_action_affordance,
-        list_intent, parsed_color, parsed_number, scroll_offset_for, visible_row_range, Intent,
-        ListIntent, Row, RowControl,
+        action_shows_spinner, adjacent_visible_row, binary_state_label, intent, is_number_seed,
+        list_action_affordance, list_intent, parsed_color, parsed_number, scroll_offset_for,
+        visible_row_window, Intent, ListIntent, Row, RowControl,
     };
     use crate::scroll_list::ScrollList;
+    use crate::settings_panel::rows::rows_from_resolved;
 
     fn rows(headers: &[bool]) -> Vec<Row> {
         headers
             .iter()
             .map(|header| Row {
+                id: "field".into(),
+                section_id: header.then(|| "section".to_string()),
                 section_label: header.then(|| "Section".to_string()),
                 label: "Label".into(),
                 config_key: "key".into(),
+                visibility: None,
                 control: RowControl::Toggle(false),
             })
             .collect()
@@ -1542,9 +1591,12 @@ mod tests {
 
     fn list_row() -> Row {
         Row {
+            id: "items".into(),
+            section_id: None,
             section_label: None,
             label: "Items".into(),
             config_key: "items".into(),
+            visibility: None,
             control: RowControl::List {
                 query: "items".into(),
                 active_query: None,
@@ -1578,8 +1630,8 @@ mod tests {
         ];
         for (offset, budget, expected) in cases {
             assert_eq!(
-                visible_row_range(&rows, offset, budget),
-                expected,
+                visible_row_window(&rows, offset, budget),
+                expected.collect::<Vec<_>>(),
                 "offset {offset} budget {budget}"
             );
         }
@@ -1591,7 +1643,7 @@ mod tests {
         panel_rows.push(list_row());
         panel_rows.extend(rows(&[true, false, false, false]));
 
-        assert_eq!(visible_row_range(&panel_rows, 0, 480.0), 0..4);
+        assert_eq!(visible_row_window(&panel_rows, 0, 480.0), vec![0, 1, 2, 3]);
     }
 
     #[test]
@@ -1606,6 +1658,36 @@ mod tests {
                 "selected {selected} offset {offset}"
             );
         }
+    }
+
+    #[test]
+    fn keyboard_navigation_skips_conditional_rows() {
+        const SPEC: &str = r#"
+schema_version = 1
+
+[field.enabled]
+type = "boolean"
+default = false
+
+[field.detail]
+type = "number"
+default = 4
+
+[field.detail.show_when]
+field = "enabled"
+equals = true
+
+[field.always]
+type = "string"
+default = "visible"
+"#;
+        let spec = qol_config::contract::parse_spec_str(SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved);
+
+        assert_eq!(adjacent_visible_row(&rows, 0, 1), 2);
+        assert_eq!(adjacent_visible_row(&rows, 2, -1), 0);
     }
 
     #[test]

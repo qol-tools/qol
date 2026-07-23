@@ -423,9 +423,12 @@ mod tests {
 
     fn row(control: RowControl) -> Row {
         Row {
+            id: "field".into(),
+            section_id: None,
             section_label: None,
             label: "Label".into(),
             config_key: "key".into(),
+            visibility: None,
             control,
         }
     }

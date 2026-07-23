@@ -23,6 +23,9 @@ label = "Settings"
 kind = "settings"
 args = ["settings"]
 
+[capabilities]
+gpui = true
+
 [daemon]
 enabled = true
 command = "plugin-os-themes"

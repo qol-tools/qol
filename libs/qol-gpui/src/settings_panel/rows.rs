@@ -1,7 +1,7 @@
 use qol_config::contract::{
     resolve_row_actions, FieldDefault, FieldKind, ResolvedRowAction, RowActionSpec,
 };
-use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection};
+use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection, ResolvedShowWhen};
 
 use crate::scroll_list::ScrollList;
 use crate::status_indicator::StatusTone;
@@ -91,44 +91,126 @@ pub(super) enum RowControl {
 }
 
 pub(super) struct Row {
+    pub(super) id: String,
+    pub(super) section_id: Option<String>,
     pub(super) section_label: Option<String>,
     pub(super) label: String,
     pub(super) config_key: String,
+    pub(super) visibility: Option<RowVisibility>,
     pub(super) control: RowControl,
 }
 
+#[derive(Debug)]
+pub(super) struct RowVisibility {
+    show_when: ResolvedShowWhen,
+    initial_value: FieldDefault,
+}
+
 pub(super) fn rows_from_resolved(config: &ResolvedConfig) -> Vec<Row> {
+    let field_values = resolved_field_values(config);
     let mut rows = Vec::new();
     for field in &config.fields {
-        push_row(&mut rows, None, field);
+        push_row(&mut rows, None, None, field, &field_values);
     }
     for section in &config.sections {
-        push_section_rows(&mut rows, section);
+        push_section_rows(&mut rows, section, &field_values);
     }
     rows
 }
 
-fn push_section_rows(rows: &mut Vec<Row>, section: &ResolvedSection) {
+fn resolved_field_values(
+    config: &ResolvedConfig,
+) -> std::collections::BTreeMap<String, FieldDefault> {
+    config
+        .fields
+        .iter()
+        .chain(config.sections.iter().flat_map(|section| &section.fields))
+        .map(|field| (field.id.clone(), field.value.clone()))
+        .collect()
+}
+
+fn push_section_rows(
+    rows: &mut Vec<Row>,
+    section: &ResolvedSection,
+    field_values: &std::collections::BTreeMap<String, FieldDefault>,
+) {
     let mut label = Some(section.label.clone());
     for field in &section.fields {
         let before = rows.len();
-        push_row(rows, label.clone(), field);
+        push_row(
+            rows,
+            Some(section.id.clone()),
+            label.clone(),
+            field,
+            field_values,
+        );
         if rows.len() > before {
             label = None;
         }
     }
 }
 
-fn push_row(rows: &mut Vec<Row>, section_label: Option<String>, field: &ResolvedField) {
+fn push_row(
+    rows: &mut Vec<Row>,
+    section_id: Option<String>,
+    section_label: Option<String>,
+    field: &ResolvedField,
+    field_values: &std::collections::BTreeMap<String, FieldDefault>,
+) {
     let Some(control) = control_for(field) else {
         return;
     };
+    let visibility = field.show_when.clone().and_then(|show_when| {
+        field_values
+            .get(&show_when.field)
+            .cloned()
+            .map(|initial_value| RowVisibility {
+                show_when,
+                initial_value,
+            })
+    });
     rows.push(Row {
+        id: field.id.clone(),
+        section_id,
         section_label,
         label: field.label.clone(),
         config_key: field.config_key.clone(),
+        visibility,
         control,
     });
+}
+
+pub(super) fn row_is_visible(rows: &[Row], index: usize) -> bool {
+    let Some(visibility) = rows.get(index).and_then(|row| row.visibility.as_ref()) else {
+        return true;
+    };
+    let current = rows
+        .iter()
+        .find(|row| row.id == visibility.show_when.field)
+        .and_then(|row| row_value(&row.control))
+        .unwrap_or_else(|| visibility.initial_value.clone());
+    current == visibility.show_when.equals
+}
+
+pub(super) fn visible_row_indices(rows: &[Row]) -> Vec<usize> {
+    (0..rows.len())
+        .filter(|index| row_is_visible(rows, *index))
+        .collect()
+}
+
+pub(super) fn section_label_for(rows: &[Row], index: usize) -> Option<&str> {
+    let section_id = rows.get(index)?.section_id.as_deref()?;
+    let previous_visible = (0..index)
+        .rev()
+        .find(|candidate| row_is_visible(rows, *candidate));
+    if previous_visible
+        .is_some_and(|candidate| rows[candidate].section_id.as_deref() == Some(section_id))
+    {
+        return None;
+    }
+    rows.iter()
+        .find(|row| row.section_id.as_deref() == Some(section_id))
+        .and_then(|row| row.section_label.as_deref())
 }
 
 fn control_for(field: &ResolvedField) -> Option<RowControl> {
@@ -315,6 +397,32 @@ fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
         RowControl::Text(value) => Some(serde_json::json!(value)),
         RowControl::TextList(values) => Some(serde_json::json!(values)),
         RowControl::Color(value) => Some(serde_json::json!(value)),
+        RowControl::Action { .. } | RowControl::List { .. } => None,
+    }
+}
+
+fn row_value(control: &RowControl) -> Option<FieldDefault> {
+    match control {
+        RowControl::Toggle(value) => Some(FieldDefault::Boolean(*value)),
+        RowControl::Select { options, index, .. } => {
+            Some(FieldDefault::String(options[*index].clone()))
+        }
+        RowControl::MultiSelect {
+            options, selected, ..
+        } => {
+            let values = options
+                .iter()
+                .zip(selected)
+                .filter(|(_, on)| **on)
+                .map(|(option, _)| option.clone())
+                .collect();
+            Some(FieldDefault::StringArray(values))
+        }
+        RowControl::Number { value, .. } => Some(FieldDefault::Number(*value)),
+        RowControl::Text(value) | RowControl::Color(value) => {
+            Some(FieldDefault::String(value.clone()))
+        }
+        RowControl::TextList(values) => Some(FieldDefault::StringArray(values.clone())),
         RowControl::Action { .. } | RowControl::List { .. } => None,
     }
 }
@@ -588,8 +696,9 @@ fn set_config_value(root: &mut serde_json::Value, dotted_key: &str, value: serde
 mod tests {
     use super::{
         apply_runtime_query, begin_list_item_action, list_item_actions, list_items, merged_config,
-        primary_list_item_action, row_value_json, rows_from_resolved, runtime_query_names,
-        set_config_value, ResolvedConfig, Row, RowControl,
+        primary_list_item_action, row_is_visible, row_value_json, rows_from_resolved,
+        runtime_query_names, section_label_for, set_config_value, visible_row_indices,
+        ResolvedConfig, Row, RowControl,
     };
     use crate::status_indicator::StatusTone;
 
@@ -767,6 +876,67 @@ step = 1
     }
 
     #[test]
+    fn conditional_rows_follow_current_controller_values() {
+        const CONDITIONAL_SPEC: &str = r#"
+schema_version = 1
+
+[section.appearance]
+label = "Appearance"
+
+[field.detail]
+type = "number"
+section = "appearance"
+default = 4
+
+[field.detail.show_when]
+field = "enabled"
+equals = true
+
+[field.enabled]
+type = "boolean"
+section = "appearance"
+default = false
+
+[field.mode]
+type = "select"
+section = "appearance"
+default = "compact"
+options = ["compact", "wide"]
+
+[field.width]
+type = "number"
+section = "appearance"
+default = 800
+
+[field.width.show_when]
+field = "mode"
+equals = "wide"
+"#;
+        let spec = qol_config::contract::parse_spec_str(CONDITIONAL_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let mut rows = rows_from_resolved(&resolved);
+
+        assert_eq!(visible_row_indices(&rows), [1, 2]);
+        assert!(!row_is_visible(&rows, 0));
+        assert_eq!(section_label_for(&rows, 1), Some("Appearance"));
+        assert_eq!(section_label_for(&rows, 2), None);
+
+        let RowControl::Toggle(enabled) = &mut rows[1].control else {
+            panic!("expected enabled toggle");
+        };
+        *enabled = true;
+        assert_eq!(visible_row_indices(&rows), [0, 1, 2]);
+        assert_eq!(section_label_for(&rows, 0), Some("Appearance"));
+
+        let RowControl::Select { index, .. } = &mut rows[2].control else {
+            panic!("expected mode select");
+        };
+        *index = 1;
+        assert_eq!(visible_row_indices(&rows), [0, 1, 2, 3]);
+    }
+
+    #[test]
     fn query_select_merges_labeled_dynamic_and_current_options() {
         const QUERY_SPEC: &str = r#"
 schema_version = 1
@@ -900,9 +1070,12 @@ query = "managed_device_options"
         });
         let rows = vec![
             Row {
+                id: "action_mode".into(),
+                section_id: None,
                 section_label: None,
                 label: "Action Mode".into(),
                 config_key: "action_mode".into(),
+                visibility: None,
                 control: RowControl::Select {
                     options: vec!["hold_to_switch".into(), "sticky".into()],
                     labels: vec!["Hold".into(), "Sticky".into()],
@@ -911,9 +1084,12 @@ query = "managed_device_options"
                 },
             },
             Row {
+                id: "max_columns".into(),
+                section_id: None,
                 section_label: None,
                 label: "Max Columns".into(),
                 config_key: "display.max_columns".into(),
+                visibility: None,
                 control: RowControl::Number {
                     value: 4.0,
                     min: None,
@@ -1145,9 +1321,12 @@ input = { address = "{address}" }
     #[test]
     fn runtime_rows_are_not_written_into_plugin_config() {
         let rows = vec![Row {
+            id: "search".into(),
+            section_id: None,
             section_label: None,
             label: "Start search".into(),
             config_key: "search".into(),
+            visibility: None,
             control: RowControl::Action {
                 action: "start_search".into(),
                 active_action: None,
