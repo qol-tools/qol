@@ -5,14 +5,13 @@ use std::time::{Duration, Instant};
 
 use super::objc::{
     ax_attr, cf_boolean_false, cf_boolean_true, cfstr, cfstring_to_string, cg_window_layer,
-    cg_window_owner_pid, cls, dict_get_i32, msg_bool, msg_bool_usize, msg_i32, msg_ptr,
-    msg_ptr_usize, sel, AXUIElementCreateApplication, AXUIElementPerformAction,
-    AXUIElementSetAttributeValue, AXValueCreate, AXValueGetValue, CFArrayGetCount,
-    CFArrayGetValueAtIndex, CFRelease, CGPoint, CGSize, CGWindowListCopyWindowInfo, CfGuard,
-    AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE, CG_WINDOW_LIST_EXCLUDE_DESKTOP,
-    CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
+    cg_window_owner_pid, cls, dict_get_i32, msg_bool, msg_bool_usize, msg_i32, msg_ptr_usize, sel,
+    AXUIElementCreateApplication, AXUIElementPerformAction, AXUIElementSetAttributeValue,
+    AXValueCreate, AXValueGetValue, CFArrayGetCount, CFArrayGetValueAtIndex, CFRelease, CGPoint,
+    CGSize, CGWindowListCopyWindowInfo, CfGuard, AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE,
+    CG_WINDOW_LIST_EXCLUDE_DESKTOP, CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
-use super::trace::{timed_bool, timed_opt, timed_pred};
+use super::trace::{timed_bool, timed_opt, timed_pid, timed_pred};
 
 const VERIFY_TIMEOUT: Duration = Duration::from_millis(120);
 const VERIFY_INTERVAL: Duration = Duration::from_millis(8);
@@ -206,21 +205,29 @@ pub(super) fn is_normal_window(pid: i32) -> bool {
 }
 
 pub(super) fn frontmost_pid() -> Option<i32> {
-    timed_opt("frontmost_pid", 0, || unsafe {
-        let workspace = msg_ptr(cls("NSWorkspace"), sel("sharedWorkspace"));
-        if workspace.is_null() {
-            return None;
-        }
-        let app = msg_ptr(workspace, sel("frontmostApplication"));
-        if app.is_null() {
-            return None;
-        }
-        let pid = msg_i32(app, sel("processIdentifier"));
-        if pid <= 0 {
-            return None;
-        }
-        Some(pid)
+    timed_pid("frontmost_pid", "window_server", || {
+        let list = CfGuard::new(unsafe {
+            CGWindowListCopyWindowInfo(
+                CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | CG_WINDOW_LIST_EXCLUDE_DESKTOP,
+                0,
+            )
+        })?;
+        let count = unsafe { CFArrayGetCount(list.as_ptr()) };
+        let entries = (0..count).map(|index| {
+            let dict = unsafe { CFArrayGetValueAtIndex(list.as_ptr(), index) };
+            (
+                dict_get_i32(dict, cg_window_layer()).unwrap_or(-1),
+                dict_get_i32(dict, cg_window_owner_pid()).unwrap_or(0),
+            )
+        });
+        frontmost_pid_from_window_entries(entries)
     })
+}
+
+fn frontmost_pid_from_window_entries(entries: impl IntoIterator<Item = (i32, i32)>) -> Option<i32> {
+    entries
+        .into_iter()
+        .find_map(|(layer, pid)| (layer == 0 && pid > 0).then_some(pid))
 }
 
 pub(super) fn find_normal_window_pid() -> Option<i32> {
@@ -523,4 +530,35 @@ pub(super) fn unminimize_and_raise(pid: i32) -> bool {
         // Only raise the restored window, not all app windows.
         restored && wait_for_app_active(pid)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::frontmost_pid_from_window_entries;
+
+    #[test]
+    fn frontmost_pid_selects_first_valid_normal_layer_window() {
+        let cases = [
+            ("first normal window", vec![(0, 42), (0, 43)], Some(42)),
+            (
+                "skip elevated and desktop layers",
+                vec![(25, 7), (-1, 8), (0, 9)],
+                Some(9),
+            ),
+            (
+                "skip invalid process identifiers",
+                vec![(0, 0), (0, -1), (0, 17)],
+                Some(17),
+            ),
+            ("no normal window", vec![(3, 42), (-1, 43)], None),
+        ];
+
+        for (name, entries, expected) in cases {
+            assert_eq!(
+                frontmost_pid_from_window_entries(entries),
+                expected,
+                "{name}"
+            );
+        }
+    }
 }
