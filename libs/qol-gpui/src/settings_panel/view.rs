@@ -276,7 +276,18 @@ impl SettingsPanelView {
                 self.sync_scroll();
             }
             Intent::Toggle => self.toggle(),
-            Intent::Left => self.adjust(-1.0),
+            Intent::Left => {
+                let navigates_back = self
+                    .rows
+                    .get(self.selected)
+                    .is_some_and(|row| left_navigates_back(&row.control, self.sections.len() > 1));
+                if navigates_back {
+                    self.open_section_menu();
+                    cx.notify();
+                    return;
+                }
+                self.adjust(-1.0);
+            }
             Intent::Right => self.adjust(1.0),
             Intent::Activate => self.activate(window, cx),
             Intent::CommitEdit => self.commit_edit(),
@@ -1715,6 +1726,14 @@ fn action_shows_spinner(control: &RowControl) -> bool {
     }
 }
 
+fn left_navigates_back(control: &RowControl, has_section_menu: bool) -> bool {
+    has_section_menu
+        && !matches!(
+            control,
+            RowControl::Number { .. } | RowControl::Select { .. }
+        )
+}
+
 fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option<Intent> {
     if editing {
         return match key {
@@ -1842,9 +1861,9 @@ fn initial_active_section(section_count: usize) -> Option<usize> {
 mod tests {
     use super::{
         action_shows_spinner, action_value_label, adjacent_visible_row, binary_state_label,
-        initial_active_section, intent, is_number_seed, list_action_affordance, list_intent,
-        parsed_color, parsed_number, scroll_offset_for, visible_row_window, Intent, ListIntent,
-        Row, RowControl,
+        initial_active_section, intent, is_number_seed, left_navigates_back,
+        list_action_affordance, list_intent, parsed_color, parsed_number, scroll_offset_for,
+        visible_row_window, Intent, ListIntent, Row, RowControl,
     };
     use crate::scroll_list::ScrollList;
     use crate::settings_panel::rows::{rows_from_resolved, visible_row_indices};
@@ -2037,6 +2056,36 @@ default = "visible"
         let cases = [(0, None), (1, Some(0)), (2, None), (8, None)];
         for (count, expected) in cases {
             assert_eq!(initial_active_section(count), expected, "count: {count}");
+        }
+    }
+
+    #[test]
+    fn left_returns_to_sections_unless_the_row_adjusts_horizontally() {
+        let toggle = RowControl::Toggle(false);
+        let number = RowControl::Number {
+            value: 4.0,
+            min: Some(1.0),
+            max: Some(8.0),
+            step: 1.0,
+        };
+        let select = RowControl::Select {
+            options: vec!["one".into(), "two".into()],
+            labels: vec!["One".into(), "Two".into()],
+            index: 0,
+            dynamic: None,
+        };
+        let cases = [
+            (&toggle, false, false),
+            (&toggle, true, true),
+            (&number, true, false),
+            (&select, true, false),
+        ];
+        for (control, has_sections, expected) in cases {
+            assert_eq!(
+                left_navigates_back(control, has_sections),
+                expected,
+                "control: {control:?}, sections: {has_sections}"
+            );
         }
     }
 
