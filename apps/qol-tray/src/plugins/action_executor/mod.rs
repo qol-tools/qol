@@ -141,6 +141,15 @@ pub fn try_execute_action_with_input(
     action_id: &str,
     input: serde_json::Value,
 ) -> Result<(), ActionExecutionError> {
+    try_execute_action_with_input_result(plugin_manager, plugin_id, action_id, input).map(drop)
+}
+
+pub fn try_execute_action_with_input_result(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_id: &str,
+    action_id: &str,
+    input: serde_json::Value,
+) -> Result<Option<serde_json::Value>, ActionExecutionError> {
     let resolved = resolve_plugin_action(plugin_manager, plugin_id, action_id)?;
     if resolved.hosted_settings {
         match crate::settings_surface::request(plugin_id) {
@@ -149,7 +158,7 @@ pub fn try_execute_action_with_input(
                     "SURFACE_ACTIVATION",
                     "plugin={plugin_id} phase=route outcome=hosted"
                 );
-                return Ok(());
+                return Ok(None);
             }
             Ok(false) => qol_runtime::probe!(
                 "SURFACE_ACTIVATION",

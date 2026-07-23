@@ -175,6 +175,8 @@ pub(super) struct UninstallResult {
 pub(super) struct ExecuteActionResult {
     pub(super) success: bool,
     pub(super) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) data: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -306,10 +308,42 @@ pub(super) struct RuntimeGpuiPayload {
     pub(super) ghost_debug_color: Option<String>,
 }
 
-#[cfg(all(test, feature = "dev"))]
+#[cfg(test)]
 mod tests {
+    use super::ExecuteActionResult;
+    #[cfg(feature = "dev")]
     use super::RecompileSelfRequest;
 
+    #[test]
+    fn action_response_adds_daemon_data_only_when_present() {
+        let cases = [
+            (
+                ExecuteActionResult {
+                    success: true,
+                    message: "done".into(),
+                    data: None,
+                },
+                serde_json::json!({"success": true, "message": "done"}),
+            ),
+            (
+                ExecuteActionResult {
+                    success: true,
+                    message: "done".into(),
+                    data: Some(serde_json::json!({"dark": true})),
+                },
+                serde_json::json!({
+                    "success": true,
+                    "message": "done",
+                    "data": {"dark": true},
+                }),
+            ),
+        ];
+        for (response, expected) in cases {
+            assert_eq!(serde_json::to_value(response).unwrap(), expected);
+        }
+    }
+
+    #[cfg(feature = "dev")]
     #[test]
     fn recompile_request_branch_is_optional() {
         let cases = [

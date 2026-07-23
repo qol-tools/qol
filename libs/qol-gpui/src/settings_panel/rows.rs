@@ -662,9 +662,11 @@ pub(super) fn apply_runtime_query(
 }
 
 fn query_flag(value: &serde_json::Value, path: Option<&str>) -> bool {
-    query_value(value, path)
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
+    query_flag_value(value, path).unwrap_or(false)
+}
+
+pub(super) fn query_flag_value(value: &serde_json::Value, path: Option<&str>) -> Option<bool> {
+    query_value(value, path).and_then(serde_json::Value::as_bool)
 }
 
 fn query_value<'a>(

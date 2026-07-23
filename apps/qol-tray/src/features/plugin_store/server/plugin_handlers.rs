@@ -125,7 +125,7 @@ pub(super) async fn execute_plugin_action(
     let worker_action = action.clone();
     let worker_input = input.map(|Json(value)| value).unwrap_or_default();
     match tokio::task::spawn_blocking(move || {
-        crate::plugins::action_executor::try_execute_action_with_input(
+        crate::plugins::action_executor::try_execute_action_with_input_result(
             &plugin_manager,
             &worker_id,
             &worker_action,
@@ -134,11 +134,12 @@ pub(super) async fn execute_plugin_action(
     })
     .await
     {
-        Ok(Ok(())) => (
+        Ok(Ok(data)) => (
             StatusCode::OK,
             Json(ExecuteActionResult {
                 success: true,
                 message: "Action dispatched".to_string(),
+                data,
             }),
         ),
         Ok(Err(error)) => action_error_response(&id, &action, &error),
@@ -154,6 +155,7 @@ pub(super) async fn execute_plugin_action(
                 Json(ExecuteActionResult {
                     success: false,
                     message: "Handler crashed".to_string(),
+                    data: None,
                 }),
             )
         }
@@ -232,6 +234,7 @@ fn invalid_plugin_id_action_result() -> (StatusCode, Json<ExecuteActionResult>) 
         Json(ExecuteActionResult {
             success: false,
             message: "Invalid plugin ID".to_string(),
+            data: None,
         }),
     )
 }
@@ -269,6 +272,7 @@ fn action_error_response(
         Json(ExecuteActionResult {
             success: false,
             message,
+            data: None,
         }),
     )
 }

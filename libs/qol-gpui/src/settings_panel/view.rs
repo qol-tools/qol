@@ -10,7 +10,8 @@ use super::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle
 use super::persistence::save_values;
 use super::rows::{
     apply_runtime_query, begin_list_item_action, list_item_actions, merged_config,
-    primary_list_item_action, runtime_query_names, section_label_for, Row, RowControl, RowSection,
+    primary_list_item_action, query_flag_value, runtime_query_names, section_label_for, Row,
+    RowControl, RowSection,
 };
 use super::{SettingsPanel, SettingsRuntime};
 use crate::dropdown::{Dropdown, DropdownEvent, DropdownStyle};
@@ -169,6 +170,26 @@ impl SettingsPanelView {
     }
 
     pub(super) fn resume_runtime_poll(&mut self, cx: &mut Context<Self>) {
+        let initial_delay = self
+            .rows
+            .iter()
+            .any(|row| {
+                matches!(&row.control, RowControl::Action { pending: true, .. })
+                    || matches!(
+                        &row.control,
+                        RowControl::List { items, .. }
+                            if items.iter().any(|item| item.pending)
+                    )
+            })
+            .then_some(self.runtime.poll_interval);
+        self.start_runtime_poll(initial_delay, cx);
+    }
+
+    fn start_runtime_poll(
+        &mut self,
+        initial_delay: Option<std::time::Duration>,
+        cx: &mut Context<Self>,
+    ) {
         if self.runtime_queries.is_empty() {
             return;
         }
@@ -180,6 +201,9 @@ impl SettingsPanelView {
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
+                if let Some(initial_delay) = initial_delay {
+                    async_cx.background_executor().timer(initial_delay).await;
+                }
                 loop {
                     let active = this
                         .update(&mut async_cx, |this, _| {
@@ -587,6 +611,7 @@ impl SettingsPanelView {
             action,
             active_action,
             active_query,
+            active_value_from,
             active,
             pending,
             error,
@@ -608,6 +633,13 @@ impl SettingsPanelView {
         *error = None;
         let row_index = self.selected;
         let refresh_query = active_query.clone();
+        let refresh_value_from = active_value_from.clone();
+        let plugin_id = self.panel.plugin_id.clone();
+        let dispatched_action = action.clone();
+        let rearm_poll_generation = refresh_query.is_some().then(|| {
+            self.pause_runtime_poll();
+            self.runtime_poll_generation
+        });
         let runtime = self.runtime.clone();
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
@@ -617,7 +649,10 @@ impl SettingsPanelView {
                         let result = runtime.run_action(&action, serde_json::Value::Null);
                         let refreshed = if result.is_ok() {
                             refresh_query.map(|query| {
-                                let result = runtime.query(&query);
+                                let payload =
+                                    action_refresh_payload(&result, refresh_value_from.as_deref());
+                                let result =
+                                    payload.map(Ok).unwrap_or_else(|| runtime.query(&query));
                                 (query, result)
                             })
                         } else {
@@ -636,6 +671,21 @@ impl SettingsPanelView {
                     }
                     if let Some((query, result)) = refreshed {
                         apply_runtime_query(&mut this.rows, &query, result);
+                    }
+                    if let Some(RowControl::Action { active, error, .. }) =
+                        this.rows.get(row_index).map(|row| &row.control)
+                    {
+                        qol_runtime::probe!(
+                            "SETTINGS_ACTION_STATE",
+                            "plugin={} action={} active={} outcome={}",
+                            plugin_id,
+                            dispatched_action,
+                            active,
+                            if error.is_some() { "error" } else { "applied" }
+                        );
+                    }
+                    if rearm_poll_generation == Some(this.runtime_poll_generation) {
+                        this.start_runtime_poll(Some(this.runtime.poll_interval), cx);
                     }
                     cx.notify();
                 });
@@ -1709,6 +1759,18 @@ fn list_intent(key: &str) -> Option<ListIntent> {
     }
 }
 
+fn action_refresh_payload(
+    result: &Result<Option<serde_json::Value>, String>,
+    active_value_from: Option<&str>,
+) -> Option<serde_json::Value> {
+    result
+        .as_ref()
+        .ok()
+        .and_then(Option::as_ref)
+        .filter(|value| query_flag_value(value, active_value_from).is_some())
+        .cloned()
+}
+
 fn action_shows_spinner(control: &RowControl) -> bool {
     match control {
         RowControl::Action {
@@ -1860,8 +1922,8 @@ fn initial_active_section(section_count: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        action_shows_spinner, action_value_label, adjacent_visible_row, binary_state_label,
-        initial_active_section, intent, is_number_seed, left_navigates_back,
+        action_refresh_payload, action_shows_spinner, action_value_label, adjacent_visible_row,
+        binary_state_label, initial_active_section, intent, is_number_seed, left_navigates_back,
         list_action_affordance, list_intent, parsed_color, parsed_number, scroll_offset_for,
         visible_row_window, Intent, ListIntent, Row, RowControl,
     };
@@ -2048,6 +2110,42 @@ default = "visible"
                 action_value_label(active, pending, failed, runtime, &labels),
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn action_refresh_uses_only_payloads_that_answer_the_active_query() {
+        let cases = [
+            (
+                Ok(Some(serde_json::json!({"dark": true}))),
+                Some("dark"),
+                Some(serde_json::json!({"dark": true})),
+            ),
+            (
+                Ok(Some(serde_json::json!({"dark": false}))),
+                Some("dark"),
+                Some(serde_json::json!({"dark": false})),
+            ),
+            (
+                Ok(Some(serde_json::json!({"scheme": "dark"}))),
+                Some("dark"),
+                None,
+            ),
+            (
+                Ok(Some(serde_json::json!({"dark": "yes"}))),
+                Some("dark"),
+                None,
+            ),
+            (
+                Ok(Some(serde_json::json!(true))),
+                None,
+                Some(serde_json::json!(true)),
+            ),
+            (Ok(None), Some("dark"), None),
+            (Err("failed".into()), Some("dark"), None),
+        ];
+        for (result, path, expected) in cases {
+            assert_eq!(action_refresh_payload(&result, path), expected);
         }
     }
 

@@ -12,7 +12,7 @@ use std::time::Instant;
 pub(super) fn execute_resolved_action(
     resolved: &ResolvedAction,
     input: &serde_json::Value,
-) -> Result<(), ActionExecutionError> {
+) -> Result<Option<serde_json::Value>, ActionExecutionError> {
     if let Some(socket_path) = &resolved.daemon_socket {
         return execute_via_daemon(resolved, socket_path, input);
     }
@@ -23,14 +23,14 @@ pub(super) fn execute_resolved_action(
         ));
     }
 
-    execute_via_runtime(resolved)
+    execute_via_runtime(resolved).map(|()| None)
 }
 
 fn execute_via_daemon(
     resolved: &ResolvedAction,
     socket_path: &Path,
     input: &serde_json::Value,
-) -> Result<(), ActionExecutionError> {
+) -> Result<Option<serde_json::Value>, ActionExecutionError> {
     #[cfg(debug_assertions)]
     let started = Instant::now();
     let dispatch = crate::plugins::action_transport::dispatch_daemon_action_with_input(
@@ -48,13 +48,13 @@ fn execute_via_daemon(
     );
     #[cfg(debug_assertions)]
     trace_window_action_dispatch(resolved, input, started.elapsed(), &dispatch);
-    if matches!(dispatch, DaemonActionDispatch::Handled { .. }) {
+    if let DaemonActionDispatch::Handled { payload } = &dispatch {
         log::info!(
             "Plugin action handled via daemon: {}::{}",
             resolved.plugin_id,
             resolved.action_id
         );
-        return Ok(());
+        return Ok(payload.clone());
     }
     let reason = daemon_failure_reason(resolved, &dispatch)?;
     log::warn!("{} {}::{}", reason, resolved.plugin_id, resolved.action_id);
@@ -64,7 +64,7 @@ fn execute_via_daemon(
                 "action input requires an available plugin daemon".into(),
             ));
         }
-        return execute_via_runtime(resolved);
+        return execute_via_runtime(resolved).map(|()| None);
     }
     Err(ActionExecutionError::SpawnFailed(format!(
         "{} {}::{}",

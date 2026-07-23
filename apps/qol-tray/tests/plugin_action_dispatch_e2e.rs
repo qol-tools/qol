@@ -235,6 +235,32 @@ async fn action_dispatch_skips_runtime_when_daemon_replies_handled() {
 }
 
 #[tokio::test]
+async fn action_dispatch_preserves_daemon_result_data() {
+    let _serial = lock_tests().await;
+    let plugin_id = "handled-data-case";
+    let marker = shared_root().path().join(format!("{plugin_id}.marker"));
+    let (_plugin_dir, socket_path) = install_plugin(plugin_id, &marker);
+    let _server = FakeDaemon::start(
+        &socket_path,
+        r#"{"status":"handled","data":{"scheme":"dark","dark":true}}"#,
+    );
+
+    let manager = loaded_manager();
+    let result = action_executor::try_execute_action_with_input_result(
+        &manager,
+        plugin_id,
+        "do-thing",
+        serde_json::Value::Null,
+    )
+    .unwrap();
+
+    assert_eq!(
+        result,
+        Some(serde_json::json!({"scheme": "dark", "dark": true}))
+    );
+}
+
+#[tokio::test]
 async fn query_dispatch_recovers_when_daemon_socket_becomes_ready_after_request() {
     let _serial = lock_tests().await;
     let plugin_id = "delayed-query-case";

@@ -35,7 +35,8 @@ pub struct SettingsPanel {
 }
 
 type QueryHandler = dyn Fn(&str) -> Result<serde_json::Value, String> + Send + Sync;
-type ActionHandler = dyn Fn(&str, serde_json::Value) -> Result<(), String> + Send + Sync;
+type ActionHandler =
+    dyn Fn(&str, serde_json::Value) -> Result<Option<serde_json::Value>, String> + Send + Sync;
 
 #[derive(Clone)]
 pub struct SettingsRuntime {
@@ -208,22 +209,34 @@ impl SettingsRuntime {
     pub fn tray(plugin_id: impl Into<String>) -> Self {
         let plugin_id = plugin_id.into();
         let query_plugin_id = plugin_id.clone();
-        Self::new(move |query| persistence::query(&query_plugin_id, query)).with_input_action(
-            move |action, input| persistence::run_action(&plugin_id, action, &input),
-        )
+        Self::new(move |query| persistence::query(&query_plugin_id, query))
+            .with_input_action_result(move |action, input| {
+                persistence::run_action(&plugin_id, action, &input)
+            })
     }
 
     pub fn with_action(
         mut self,
         action: impl Fn(&str) -> Result<(), String> + Send + Sync + 'static,
     ) -> Self {
-        self.action = Arc::new(move |name, _| action(name));
+        self.action = Arc::new(move |name, _| action(name).map(|()| None));
         self
     }
 
     pub fn with_input_action(
         mut self,
         action: impl Fn(&str, serde_json::Value) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        self.action = Arc::new(move |name, input| action(name, input).map(|()| None));
+        self
+    }
+
+    pub fn with_input_action_result(
+        mut self,
+        action: impl Fn(&str, serde_json::Value) -> Result<Option<serde_json::Value>, String>
+            + Send
+            + Sync
+            + 'static,
     ) -> Self {
         self.action = Arc::new(action);
         self
@@ -238,7 +251,11 @@ impl SettingsRuntime {
         (self.query)(name)
     }
 
-    fn run_action(&self, name: &str, input: serde_json::Value) -> Result<(), String> {
+    fn run_action(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+    ) -> Result<Option<serde_json::Value>, String> {
         (self.action)(name, input)
     }
 }

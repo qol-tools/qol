@@ -3,6 +3,12 @@ use std::time::Duration;
 
 use qol_conventions::DEFAULT_PORT;
 
+#[derive(serde::Deserialize)]
+struct ActionResult {
+    #[serde(default)]
+    data: Option<serde_json::Value>,
+}
+
 pub(super) fn config_path(plugin_id: &str) -> anyhow::Result<PathBuf> {
     qol_config::plugin_config_write_path(plugin_id)
         .ok_or_else(|| anyhow::anyhow!("no plugin config path available"))
@@ -26,17 +32,23 @@ pub(super) fn run_action(
     plugin_id: &str,
     action: &str,
     input: &serde_json::Value,
-) -> Result<(), String> {
+) -> Result<Option<serde_json::Value>, String> {
     let route = format!("/api/plugins/{plugin_id}/actions/{action}");
     let body = serde_json::to_string(input).map_err(|error| error.to_string())?;
     let (status, response) =
         tray_http("POST", &route, Some(&body)).map_err(|error| error.to_string())?;
     if (200..300).contains(&status) {
-        return Ok(());
+        return action_result_data(&response);
     }
     Err(format!(
         "action `{action}` failed with HTTP {status}: {response}"
     ))
+}
+
+fn action_result_data(response: &str) -> Result<Option<serde_json::Value>, String> {
+    let result: ActionResult = serde_json::from_str(response)
+        .map_err(|error| format!("action returned invalid JSON: {error}"))?;
+    Ok(result.data)
 }
 
 pub(super) fn load_values(plugin_id: &str, path: &Path) -> serde_json::Value {
@@ -111,7 +123,7 @@ fn parse_http_response(raw: &str) -> (u16, String) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_http_response;
+    use super::{action_result_data, parse_http_response};
 
     #[test]
     fn http_response_parsing_extracts_status_and_body() {
@@ -131,5 +143,25 @@ mod tests {
                 "raw: {raw}"
             );
         }
+    }
+
+    #[test]
+    fn action_result_extracts_optional_daemon_data() {
+        let cases = [
+            (r#"{"success":true,"message":"Action dispatched"}"#, None),
+            (
+                r#"{"success":true,"message":"Action dispatched","data":{"dark":true}}"#,
+                Some(serde_json::json!({"dark": true})),
+            ),
+        ];
+        for (response, expected) in cases {
+            assert_eq!(action_result_data(response).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn action_result_rejects_invalid_json() {
+        let error = action_result_data("not json").unwrap_err();
+        assert!(error.starts_with("action returned invalid JSON:"));
     }
 }
