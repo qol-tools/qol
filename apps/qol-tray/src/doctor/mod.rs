@@ -10,6 +10,7 @@ pub mod report;
 pub mod trigger;
 
 use anyhow::Result;
+pub use checks::spawn_gpu_driver_sync_watch;
 use diagnosis::{apply_fix, FixAction, FixApplicability};
 use framework::{run_check, DoctorCheckResult, DoctorContext, Selector};
 pub use report::{FixReport, Outcome, OutcomeStatus, Report};

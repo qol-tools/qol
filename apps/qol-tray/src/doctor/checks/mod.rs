@@ -10,6 +10,7 @@ mod config_parse_failures;
 mod dev_link_paths;
 #[cfg(feature = "dev")]
 mod fingerprint_health;
+mod gpu_driver_sync;
 mod hotkey_shadows;
 mod install_identity;
 mod orphan_plugin_configs;
@@ -33,6 +34,7 @@ mod single_source_guard;
 
 #[cfg(feature = "dev")]
 pub(super) use dev_link_paths::relocate_dev_link;
+pub use gpu_driver_sync::spawn_watch as spawn_gpu_driver_sync_watch;
 #[cfg(feature = "dev")]
 pub(super) use plugin_staleness::stale_running_daemons;
 
@@ -44,6 +46,7 @@ pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
         Box::new(install_identity::InstallIdentityCheck),
         Box::new(autostart_target::AutostartTargetCheck),
         Box::new(runtime_prereqs::PluginsDirCheck),
+        Box::new(gpu_driver_sync::GpuDriverSyncCheck),
         Box::new(plugin_process_leaks::PluginProcessLeaksCheck),
         Box::new(shell_hook_present::ShellHookPresentCheck),
         Box::new(hotkey_shadows::HotkeyShadowsCheck),
