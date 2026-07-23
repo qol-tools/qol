@@ -2,3 +2,7 @@ schema_version = 1
 
 [action.toggle_theme]
 description = "Switch the desktop between light and dark"
+
+[query.theme_status]
+description = "Current desktop color scheme"
+poll_interval_ms = 2000

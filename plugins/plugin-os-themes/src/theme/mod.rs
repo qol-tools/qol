@@ -17,6 +17,21 @@ impl ColorScheme {
             ColorScheme::Dark => ColorScheme::Light,
         }
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ColorScheme::Light => "light",
+            ColorScheme::Dark => "dark",
+        }
+    }
+
+    pub fn is_dark(self) -> bool {
+        self == ColorScheme::Dark
+    }
+}
+
+pub fn current() -> Result<ColorScheme> {
+    Platform.current_scheme()
 }
 
 pub fn toggle() -> Result<ColorScheme> {

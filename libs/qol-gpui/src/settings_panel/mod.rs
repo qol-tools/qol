@@ -12,7 +12,7 @@ use gpui::*;
 
 use crate::monitor::MonitorTracker;
 use crate::surface::{OpenedSurface, Surface, SurfaceKind};
-use rows::{rows_from_resolved, Row};
+use rows::{rows_from_resolved, sections_from_resolved, Row, RowSection};
 use view::{SettingsPanelState, SettingsPanelView};
 
 const PANEL_WIDTH: f32 = 520.0;
@@ -64,6 +64,7 @@ struct ActivePanel {
 pub struct PreparedSettingsPanel {
     panel: SettingsPanel,
     rows: Vec<Row>,
+    sections: Vec<RowSection>,
     values: serde_json::Value,
     path: std::path::PathBuf,
     runtime: SettingsRuntime,
@@ -348,9 +349,11 @@ fn prepare_panel(
     let resolved = qol_config::normalized::resolve_config(&spec, &values)
         .map_err(|errors| anyhow::anyhow!("contract resolve failed: {errors:?}"))?;
     let rows = rows_from_resolved(&resolved);
+    let sections = sections_from_resolved(&resolved, &rows);
     Ok(PreparedSettingsPanel {
         panel,
         rows,
+        sections,
         values,
         path,
         runtime,
@@ -372,6 +375,7 @@ fn size_prepared_panel(
         panel: prepared.panel,
         state: SettingsPanelState {
             rows: prepared.rows,
+            sections: prepared.sections,
             values: prepared.values,
             path: prepared.path,
             body_max,

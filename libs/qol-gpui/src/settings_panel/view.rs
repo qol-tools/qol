@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use qol_config::contract::ResolvedRowAction;
 
@@ -9,8 +10,7 @@ use super::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle
 use super::persistence::save_values;
 use super::rows::{
     apply_runtime_query, begin_list_item_action, list_item_actions, merged_config,
-    primary_list_item_action, runtime_query_names, section_label_for, visible_row_indices, Row,
-    RowControl,
+    primary_list_item_action, runtime_query_names, section_label_for, Row, RowControl, RowSection,
 };
 use super::{SettingsPanel, SettingsRuntime};
 use crate::dropdown::{Dropdown, DropdownEvent, DropdownStyle};
@@ -24,6 +24,9 @@ pub(super) struct SettingsPanelView {
     runtime: SettingsRuntime,
     runtime_queries: Vec<String>,
     rows: Vec<Row>,
+    sections: Vec<RowSection>,
+    active_section: Option<usize>,
+    selected_section: usize,
     values: serde_json::Value,
     path: PathBuf,
     selected: usize,
@@ -40,6 +43,7 @@ pub(super) struct SettingsPanelView {
 
 pub(super) struct SettingsPanelState {
     pub(super) rows: Vec<Row>,
+    pub(super) sections: Vec<RowSection>,
     pub(super) values: serde_json::Value,
     pub(super) path: PathBuf,
     pub(super) body_max: f32,
@@ -86,6 +90,9 @@ impl SettingsPanelView {
             runtime: state.runtime,
             runtime_queries,
             rows: state.rows,
+            active_section: initial_active_section(state.sections.len()),
+            sections: state.sections,
+            selected_section: 0,
             values: state.values,
             path: state.path,
             selected: 0,
@@ -99,12 +106,66 @@ impl SettingsPanelView {
             palette: settings_panel_runtime(),
             focus_handle: cx.focus_handle(),
         };
-        view.selected = visible_row_indices(&view.rows)
-            .into_iter()
-            .next()
-            .unwrap_or(0);
+        view.selected = view.current_visible_rows().into_iter().next().unwrap_or(0);
         view.resume_runtime_poll(cx);
         view
+    }
+
+    fn current_visible_rows(&self) -> Vec<usize> {
+        let Some(section) = self
+            .active_section
+            .and_then(|index| self.sections.get(index))
+        else {
+            return Vec::new();
+        };
+        section
+            .rows
+            .iter()
+            .copied()
+            .filter(|index| super::rows::row_is_visible(&self.rows, *index))
+            .collect()
+    }
+
+    fn section_menu_is_open(&self) -> bool {
+        self.sections.len() > 1 && self.active_section.is_none()
+    }
+
+    fn open_selected_section(&mut self) {
+        if self.sections.is_empty() {
+            return;
+        }
+        self.active_section = Some(self.selected_section.min(self.sections.len() - 1));
+        self.selected = self.current_visible_rows().into_iter().next().unwrap_or(0);
+        self.scroll_offset = self.selected;
+        self.active_control = None;
+    }
+
+    fn open_section_menu(&mut self) {
+        let Some(active) = self.active_section else {
+            return;
+        };
+        self.selected_section = active;
+        self.active_section = None;
+        self.active_control = None;
+        self.scroll_offset = 0;
+    }
+
+    fn on_section_menu_key(&mut self, key: &str, cx: &mut Context<Self>) {
+        match key {
+            "up" => self.selected_section = self.selected_section.saturating_sub(1),
+            "down" => {
+                self.selected_section =
+                    (self.selected_section + 1).min(self.sections.len().saturating_sub(1));
+            }
+            "enter" | "return" | "space" | "right" => self.open_selected_section(),
+            "escape" | "left" => {
+                self.pause_runtime_poll();
+                self.dismisser.dismiss(cx);
+                return;
+            }
+            _ => return,
+        }
+        cx.notify();
     }
 
     pub(super) fn resume_runtime_poll(&mut self, cx: &mut Context<Self>) {
@@ -170,6 +231,10 @@ impl SettingsPanelView {
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let key_char = event.keystroke.key_char.as_deref();
+        if self.section_menu_is_open() {
+            self.on_section_menu_key(key, cx);
+            return;
+        }
         if let Some(ActiveControl::Wheel(wheel)) = &self.active_control {
             let popup = wheel.popup;
             let _ = popup.update(cx, |popup, popup_window, popup_cx| {
@@ -201,11 +266,13 @@ impl SettingsPanelView {
         };
         match intent {
             Intent::Up => {
-                self.selected = adjacent_visible_row(&self.rows, self.selected, -1);
+                self.selected =
+                    adjacent_visible_row(&self.current_visible_rows(), self.selected, -1);
                 self.sync_scroll();
             }
             Intent::Down => {
-                self.selected = adjacent_visible_row(&self.rows, self.selected, 1);
+                self.selected =
+                    adjacent_visible_row(&self.current_visible_rows(), self.selected, 1);
                 self.sync_scroll();
             }
             Intent::Toggle => self.toggle(),
@@ -225,6 +292,11 @@ impl SettingsPanelView {
             }
             Intent::CancelEdit => self.active_control = None,
             Intent::Close => {
+                if self.sections.len() > 1 {
+                    self.open_section_menu();
+                    cx.notify();
+                    return;
+                }
                 self.pause_runtime_poll();
                 self.dismisser.dismiss(cx);
                 return;
@@ -416,6 +488,7 @@ impl SettingsPanelView {
             | RowControl::TextList(_)
             | RowControl::Color(_)
             | RowControl::Action { .. }
+            | RowControl::Status { .. }
             | RowControl::List { .. } => self.active_control = None,
         }
     }
@@ -463,6 +536,7 @@ impl SettingsPanelView {
             | RowControl::TextList(_)
             | RowControl::Color(_)
             | RowControl::Action { .. }
+            | RowControl::Status { .. }
             | RowControl::List { .. } => return,
         }
         self.persist();
@@ -486,6 +560,7 @@ impl SettingsPanelView {
             }
             RowControl::Color(_) => self.open_color_wheel(self.selected, window, cx),
             RowControl::Action { .. } => self.dispatch_action(cx),
+            RowControl::Status { .. } => {}
             RowControl::List { items, .. } if !items.is_empty() => {
                 self.active_control = Some(ActiveControl::List)
             }
@@ -500,6 +575,7 @@ impl SettingsPanelView {
         let Some(RowControl::Action {
             action,
             active_action,
+            active_query,
             active,
             pending,
             error,
@@ -520,21 +596,35 @@ impl SettingsPanelView {
         *pending = true;
         *error = None;
         let row_index = self.selected;
+        let refresh_query = active_query.clone();
         let runtime = self.runtime.clone();
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
                 let result = async_cx
                     .background_spawn(async move {
-                        runtime.run_action(&action, serde_json::Value::Null)
+                        let result = runtime.run_action(&action, serde_json::Value::Null);
+                        let refreshed = if result.is_ok() {
+                            refresh_query.map(|query| {
+                                let result = runtime.query(&query);
+                                (query, result)
+                            })
+                        } else {
+                            None
+                        };
+                        (result, refreshed)
                     })
                     .await;
                 let _ = this.update(&mut async_cx, |this, cx| {
+                    let (result, refreshed) = result;
                     if let Some(RowControl::Action { pending, error, .. }) =
                         this.rows.get_mut(row_index).map(|row| &mut row.control)
                     {
                         *pending = false;
                         *error = result.err();
+                    }
+                    if let Some((query, result)) = refreshed {
+                        apply_runtime_query(&mut this.rows, &query, result);
                     }
                     cx.notify();
                 });
@@ -702,6 +792,7 @@ impl SettingsPanelView {
             | RowControl::MultiSelect { .. }
             | RowControl::Color(_)
             | RowControl::Action { .. }
+            | RowControl::Status { .. }
             | RowControl::List { .. } => return,
         };
         self.active_control = Some(ActiveControl::Edit(edit));
@@ -736,6 +827,7 @@ impl SettingsPanelView {
             | RowControl::MultiSelect { .. }
             | RowControl::Color(_)
             | RowControl::Action { .. }
+            | RowControl::Status { .. }
             | RowControl::List { .. } => return,
         }
         self.persist();
@@ -747,8 +839,14 @@ impl SettingsPanelView {
     }
 
     fn sync_scroll(&mut self) {
-        self.scroll_offset =
-            scroll_offset_for(&self.rows, self.selected, self.scroll_offset, self.body_max);
+        self.scroll_offset = scroll_offset_for(
+            &self.rows,
+            &self.current_visible_rows(),
+            self.selected,
+            self.scroll_offset,
+            self.body_max,
+            self.sections.len() <= 1,
+        );
     }
 
     fn display_value(&self, index: usize) -> String {
@@ -787,17 +885,24 @@ impl SettingsPanelView {
             RowControl::TextList(values) => values.join(", "),
             RowControl::Color(value) => value.clone(),
             RowControl::Action {
+                active_query,
+                state_labels,
                 active,
                 pending,
                 error,
                 ..
-            } => {
-                if *pending {
-                    "working...".into()
-                } else if error.is_some() {
-                    "failed".into()
+            } => action_value_label(
+                *active,
+                *pending,
+                error.is_some(),
+                active_query.is_some(),
+                state_labels,
+            ),
+            RowControl::Status { label, error, .. } => {
+                if error.is_some() {
+                    "unavailable".into()
                 } else {
-                    binary_state_label(*active).into()
+                    label.clone().unwrap_or_else(|| "loading...".into())
                 }
             }
             RowControl::List { items, error, .. } => {
@@ -814,18 +919,25 @@ impl SettingsPanelView {
         if index == self.selected && matches!(self.active_control, Some(ActiveControl::Edit(_))) {
             return self.palette.label_text;
         }
-        match self.rows[index].control {
-            RowControl::Toggle(value) => binary_state_color(self.palette, value),
+        match &self.rows[index].control {
+            RowControl::Toggle(value) => binary_state_color(self.palette, *value),
             RowControl::Select { .. }
             | RowControl::MultiSelect { .. }
             | RowControl::Number { .. }
             | RowControl::Text(_)
             | RowControl::TextList(_)
             | RowControl::Color(_) => self.palette.label_text,
-            RowControl::Action { error: Some(_), .. } | RowControl::List { error: Some(_), .. } => {
-                self.palette.state_off
+            RowControl::Action { error: Some(_), .. }
+            | RowControl::Status { error: Some(_), .. }
+            | RowControl::List { error: Some(_), .. } => self.palette.state_off,
+            RowControl::Action { state_labels, .. } if !state_labels.is_empty() => {
+                self.palette.label_text
             }
-            RowControl::Action { active, .. } => binary_state_color(self.palette, active),
+            RowControl::Action {
+                active_query: None, ..
+            } => self.palette.state_on,
+            RowControl::Action { active, .. } => binary_state_color(self.palette, *active),
+            RowControl::Status { tone, .. } => status_tone_color(self.palette, *tone),
             RowControl::List { .. } => self.palette.label_text,
         }
     }
@@ -850,6 +962,13 @@ impl SettingsPanelView {
 
     fn render_value_cell(&self, index: usize) -> Div {
         let mut cell = div().flex().flex_row().items_center().gap_2();
+        if let RowControl::Status { tone, .. } = self.rows[index].control {
+            return cell.child(StatusIndicator::new(
+                ("settings-status", index),
+                self.display_value(index),
+                rgb(status_tone_color(self.palette, tone)),
+            ));
+        }
         if self.action_is_busy(index) {
             cell = cell.child(Spinner::new(
                 ("settings-action-spinner", index),
@@ -901,13 +1020,15 @@ impl SettingsPanelView {
     fn render_row(&self, index: usize, cx: &mut Context<Self>) -> Div {
         let row = &self.rows[index];
         let mut container = div().flex().flex_col().gap_1();
-        if let Some(section) = section_label_for(&self.rows, index) {
-            container = container.child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(self.palette.section_text))
-                    .child(section.to_string()),
-            );
+        if self.sections.len() <= 1 {
+            if let Some(section) = section_label_for(&self.rows, index) {
+                container = container.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(self.palette.section_text))
+                        .child(section.to_string()),
+                );
+            }
         }
         if matches!(row.control, RowControl::List { .. }) {
             return container.child(self.render_list(index, cx));
@@ -985,15 +1106,22 @@ impl SettingsPanelView {
                     | RowControl::TextList(_)
                     | RowControl::Color(_)
                     | RowControl::Action { .. }
+                    | RowControl::Status { .. }
                     | RowControl::List { .. } => {}
                 }
             }
         }
         container = container.child(line);
-        if let RowControl::Action {
-            error: Some(error), ..
-        } = &row.control
-        {
+        let error = match &row.control {
+            RowControl::Action {
+                error: Some(error), ..
+            }
+            | RowControl::Status {
+                error: Some(error), ..
+            } => Some(error),
+            _ => None,
+        };
+        if let Some(error) = error {
             container = container.child(
                 div()
                     .px_2()
@@ -1003,6 +1131,79 @@ impl SettingsPanelView {
             );
         }
         container
+    }
+
+    fn render_section_menu_item(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let section = &self.sections[index];
+        let selected = index == self.selected_section;
+        let mut item = div()
+            .id(("settings-section", index))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .px_3()
+            .py_2()
+            .rounded_lg()
+            .border_1()
+            .border_color(rgb(if selected {
+                self.palette.row_border_selected
+            } else {
+                self.palette.panel_border
+            }))
+            .bg(rgb(if selected {
+                self.palette.row_bg_selected
+            } else {
+                self.palette.window_bg
+            }))
+            .child(
+                div()
+                    .flex()
+                    .min_w_0()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(self.palette.section_text))
+                            .child(section.label.clone()),
+                    )
+                    .when_some(section.description.clone(), |content, description| {
+                        content.child(
+                            div()
+                                .truncate()
+                                .text_xs()
+                                .text_color(rgb(self.palette.label_text))
+                                .child(description),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_sm()
+                    .text_color(rgb(self.palette.label_text))
+                    .child("›"),
+            )
+            .cursor(CursorStyle::PointingHand);
+        item = item.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+            if !event.standard_click() {
+                return;
+            }
+            this.selected_section = index;
+            this.open_selected_section();
+            cx.notify();
+        }));
+        item
+    }
+
+    fn detail_heading(&self) -> Option<String> {
+        if self.sections.len() <= 1 {
+            return None;
+        }
+        self.active_section
+            .and_then(|index| self.sections.get(index))
+            .map(|section| format!("‹ {}", section.label))
     }
 
     fn render_list(&self, index: usize, cx: &mut Context<Self>) -> Div {
@@ -1306,11 +1507,23 @@ impl Focusable for SettingsPanelView {
 
 impl Render for SettingsPanelView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let items: Vec<AnyElement> =
-            visible_row_window(&self.rows, self.scroll_offset, self.body_max)
-                .into_iter()
-                .map(|index| self.render_row(index, cx).into_any_element())
-                .collect();
+        let items: Vec<AnyElement> = if self.section_menu_is_open() {
+            (0..self.sections.len())
+                .map(|index| self.render_section_menu_item(index, cx).into_any_element())
+                .collect()
+        } else {
+            visible_row_window(
+                &self.rows,
+                &self.current_visible_rows(),
+                self.scroll_offset,
+                self.body_max,
+                self.sections.len() <= 1,
+            )
+            .into_iter()
+            .map(|index| self.render_row(index, cx).into_any_element())
+            .collect()
+        };
+        let detail_heading = self.detail_heading();
         div()
             .id("settings-panel")
             .track_focus(&self.focus_handle)
@@ -1332,7 +1545,21 @@ impl Render for SettingsPanelView {
                     .text_sm()
                     .text_color(rgb(self.palette.label_text))
                     .panel_drag_area()
-                    .child(self.panel.heading.clone()),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(self.panel.heading.clone())
+                            .when_some(detail_heading, |header, detail| {
+                                header.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(self.palette.section_text))
+                                        .child(detail),
+                                )
+                            }),
+                    ),
             )
             .child(
                 div()
@@ -1387,6 +1614,28 @@ fn binary_state_label(active: bool) -> &'static str {
     } else {
         "[off]"
     }
+}
+
+fn action_value_label(
+    active: bool,
+    pending: bool,
+    failed: bool,
+    has_runtime_state: bool,
+    state_labels: &std::collections::BTreeMap<String, String>,
+) -> String {
+    if pending {
+        return "working...".into();
+    }
+    if failed {
+        return "failed".into();
+    }
+    if !has_runtime_state {
+        return "[run]".into();
+    }
+    state_labels
+        .get(if active { "true" } else { "false" })
+        .cloned()
+        .unwrap_or_else(|| binary_state_label(active).into())
 }
 
 fn binary_state_color(palette: SettingsPanelPalette, active: bool) -> u32 {
@@ -1501,8 +1750,8 @@ pub(super) fn row_height(row: &Row) -> f32 {
     body + header
 }
 
-fn visible_row_height(rows: &[Row], index: usize) -> f32 {
-    let header = if section_label_for(rows, index).is_some() {
+fn visible_row_height(rows: &[Row], index: usize, show_section_headers: bool) -> f32 {
+    let header = if show_section_headers && section_label_for(rows, index).is_some() {
         super::PANEL_SECTION_HEADER_HEIGHT
     } else {
         0.0
@@ -1515,16 +1764,21 @@ fn visible_row_height(rows: &[Row], index: usize) -> f32 {
     body + header
 }
 
-fn visible_row_window(rows: &[Row], offset: usize, body_max: f32) -> Vec<usize> {
-    let visible = visible_row_indices(rows);
+fn visible_row_window(
+    rows: &[Row],
+    visible: &[usize],
+    offset: usize,
+    body_max: f32,
+    show_section_headers: bool,
+) -> Vec<usize> {
     let start = visible
         .iter()
         .position(|index| *index >= offset)
         .unwrap_or(visible.len());
     let mut used = 0.0;
     let mut window = Vec::new();
-    for index in visible.into_iter().skip(start) {
-        used += visible_row_height(rows, index);
+    for index in visible.iter().copied().skip(start) {
+        used += visible_row_height(rows, index, show_section_headers);
         if used > body_max && !window.is_empty() {
             break;
         }
@@ -1533,10 +1787,16 @@ fn visible_row_window(rows: &[Row], offset: usize, body_max: f32) -> Vec<usize> 
     window
 }
 
-fn scroll_offset_for(rows: &[Row], selected: usize, offset: usize, body_max: f32) -> usize {
-    let visible = visible_row_indices(rows);
+fn scroll_offset_for(
+    rows: &[Row],
+    visible: &[usize],
+    selected: usize,
+    offset: usize,
+    body_max: f32,
+    show_section_headers: bool,
+) -> usize {
     let Some(selected_position) = visible.iter().position(|index| *index == selected) else {
-        return visible.into_iter().next().unwrap_or(0);
+        return visible.first().copied().unwrap_or(0);
     };
     let mut offset_position = visible
         .iter()
@@ -1545,16 +1805,23 @@ fn scroll_offset_for(rows: &[Row], selected: usize, offset: usize, body_max: f32
     if selected_position < offset_position {
         return selected;
     }
-    while !visible_row_window(rows, visible[offset_position], body_max).contains(&selected) {
+    while !visible_row_window(
+        rows,
+        visible,
+        visible[offset_position],
+        body_max,
+        show_section_headers,
+    )
+    .contains(&selected)
+    {
         offset_position += 1;
     }
     visible[offset_position]
 }
 
-fn adjacent_visible_row(rows: &[Row], selected: usize, direction: isize) -> usize {
-    let visible = visible_row_indices(rows);
+fn adjacent_visible_row(visible: &[usize], selected: usize, direction: isize) -> usize {
     let Some(position) = visible.iter().position(|index| *index == selected) else {
-        return visible.into_iter().next().unwrap_or(0);
+        return visible.first().copied().unwrap_or(0);
     };
     let next = if direction < 0 {
         position.saturating_sub(1)
@@ -1564,15 +1831,23 @@ fn adjacent_visible_row(rows: &[Row], selected: usize, direction: isize) -> usiz
     visible[next]
 }
 
+fn initial_active_section(section_count: usize) -> Option<usize> {
+    if section_count == 1 {
+        return Some(0);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        action_shows_spinner, adjacent_visible_row, binary_state_label, intent, is_number_seed,
-        list_action_affordance, list_intent, parsed_color, parsed_number, scroll_offset_for,
-        visible_row_window, Intent, ListIntent, Row, RowControl,
+        action_shows_spinner, action_value_label, adjacent_visible_row, binary_state_label,
+        initial_active_section, intent, is_number_seed, list_action_affordance, list_intent,
+        parsed_color, parsed_number, scroll_offset_for, visible_row_window, Intent, ListIntent,
+        Row, RowControl,
     };
     use crate::scroll_list::ScrollList;
-    use crate::settings_panel::rows::rows_from_resolved;
+    use crate::settings_panel::rows::{rows_from_resolved, visible_row_indices};
 
     fn rows(headers: &[bool]) -> Vec<Row> {
         headers
@@ -1628,9 +1903,10 @@ mod tests {
             (0, 1000.0, 0..4),
             (0, 1.0, 0..1),
         ];
+        let visible = (0..rows.len()).collect::<Vec<_>>();
         for (offset, budget, expected) in cases {
             assert_eq!(
-                visible_row_window(&rows, offset, budget),
+                visible_row_window(&rows, &visible, offset, budget, true),
                 expected.collect::<Vec<_>>(),
                 "offset {offset} budget {budget}"
             );
@@ -1642,8 +1918,12 @@ mod tests {
         let mut panel_rows = rows(&[true]);
         panel_rows.push(list_row());
         panel_rows.extend(rows(&[true, false, false, false]));
+        let visible = (0..panel_rows.len()).collect::<Vec<_>>();
 
-        assert_eq!(visible_row_window(&panel_rows, 0, 480.0), vec![0, 1, 2, 3]);
+        assert_eq!(
+            visible_row_window(&panel_rows, &visible, 0, 480.0, true),
+            vec![0, 1, 2, 3]
+        );
     }
 
     #[test]
@@ -1651,9 +1931,10 @@ mod tests {
         let rows = rows(&[false, false, false, false]);
         let two_rows = 2.0 * super::super::PANEL_ROW_HEIGHT;
         let cases = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 1, 2), (0, 2, 0)];
+        let visible = (0..rows.len()).collect::<Vec<_>>();
         for (selected, offset, expected) in cases {
             assert_eq!(
-                scroll_offset_for(&rows, selected, offset, two_rows),
+                scroll_offset_for(&rows, &visible, selected, offset, two_rows, true),
                 expected,
                 "selected {selected} offset {offset}"
             );
@@ -1685,9 +1966,10 @@ default = "visible"
         let resolved =
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
         let rows = rows_from_resolved(&resolved);
+        let visible = visible_row_indices(&rows);
 
-        assert_eq!(adjacent_visible_row(&rows, 0, 1), 2);
-        assert_eq!(adjacent_visible_row(&rows, 2, -1), 0);
+        assert_eq!(adjacent_visible_row(&visible, 0, 1), 2);
+        assert_eq!(adjacent_visible_row(&visible, 2, -1), 0);
     }
 
     #[test]
@@ -1730,6 +2012,35 @@ default = "visible"
     }
 
     #[test]
+    fn action_values_distinguish_commands_from_semantic_runtime_state() {
+        let labels = std::collections::BTreeMap::from([
+            ("false".into(), "Light".into()),
+            ("true".into(), "Dark".into()),
+        ]);
+        let cases = [
+            (false, false, false, false, "[run]"),
+            (false, true, false, false, "working..."),
+            (false, false, true, false, "failed"),
+            (false, false, false, true, "Light"),
+            (true, false, false, true, "Dark"),
+        ];
+        for (active, pending, failed, runtime, expected) in cases {
+            assert_eq!(
+                action_value_label(active, pending, failed, runtime, &labels),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn multiple_contract_sections_open_in_the_shared_section_menu() {
+        let cases = [(0, None), (1, Some(0)), (2, None), (8, None)];
+        for (count, expected) in cases {
+            assert_eq!(initial_active_section(count), expected, "count: {count}");
+        }
+    }
+
+    #[test]
     fn toggle_actions_show_state_without_a_permanent_spinner() {
         let mut control = RowControl::Action {
             action: "enable_adapter".into(),
@@ -1737,6 +2048,7 @@ default = "visible"
             active_label: Some("Bluetooth".into()),
             active_query: Some("adapter_status".into()),
             active_value_from: Some("powered".into()),
+            state_labels: std::collections::BTreeMap::new(),
             variant: Some("toggle".into()),
             active: true,
             pending: false,

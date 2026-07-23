@@ -69,9 +69,19 @@ pub(super) enum RowControl {
         active_label: Option<String>,
         active_query: Option<String>,
         active_value_from: Option<String>,
+        state_labels: std::collections::BTreeMap<String, String>,
         variant: Option<String>,
         active: bool,
         pending: bool,
+        error: Option<String>,
+    },
+    Status {
+        query: String,
+        value_from: Option<String>,
+        label_map: std::collections::BTreeMap<String, String>,
+        tone_map: std::collections::BTreeMap<String, String>,
+        label: Option<String>,
+        tone: StatusTone,
         error: Option<String>,
     },
     List {
@@ -106,6 +116,13 @@ pub(super) struct RowVisibility {
     initial_value: FieldDefault,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RowSection {
+    pub(super) label: String,
+    pub(super) description: Option<String>,
+    pub(super) rows: Vec<usize>,
+}
+
 pub(super) fn rows_from_resolved(config: &ResolvedConfig) -> Vec<Row> {
     let field_values = resolved_field_values(config);
     let mut rows = Vec::new();
@@ -116,6 +133,40 @@ pub(super) fn rows_from_resolved(config: &ResolvedConfig) -> Vec<Row> {
         push_section_rows(&mut rows, section, &field_values);
     }
     rows
+}
+
+pub(super) fn sections_from_resolved(config: &ResolvedConfig, rows: &[Row]) -> Vec<RowSection> {
+    let mut sections = Vec::new();
+    let root_rows = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.section_id.is_none())
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if !root_rows.is_empty() {
+        sections.push(RowSection {
+            label: "General".into(),
+            description: config.description.clone(),
+            rows: root_rows,
+        });
+    }
+    sections.extend(config.sections.iter().filter_map(|section| {
+        let section_rows = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.section_id.as_deref() == Some(section.id.as_str()))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if section_rows.is_empty() {
+            return None;
+        }
+        Some(RowSection {
+            label: section.label.clone(),
+            description: section.description.clone(),
+            rows: section_rows,
+        })
+    }));
+    sections
 }
 
 fn resolved_field_values(
@@ -192,6 +243,7 @@ pub(super) fn row_is_visible(rows: &[Row], index: usize) -> bool {
     current == visibility.show_when.equals
 }
 
+#[cfg(test)]
 pub(super) fn visible_row_indices(rows: &[Row]) -> Vec<usize> {
     (0..rows.len())
         .filter(|index| row_is_visible(rows, *index))
@@ -275,9 +327,34 @@ fn control_for(field: &ResolvedField) -> Option<RowControl> {
             active_label: field.active_label.clone(),
             active_query: field.active_query.clone(),
             active_value_from: field.active_value_from.clone(),
+            state_labels: field
+                .label_map
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
             variant: field.variant.clone(),
             active: false,
             pending: false,
+            error: None,
+        }),
+        FieldKind::Status => field.query.clone().map(|query| RowControl::Status {
+            query,
+            value_from: field.value_from.clone(),
+            label_map: field
+                .label_map
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
+            tone_map: field
+                .tone_map
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
+            label: None,
+            tone: StatusTone::Muted,
             error: None,
         }),
         FieldKind::List => field.query.clone().map(|query| RowControl::List {
@@ -300,11 +377,9 @@ fn control_for(field: &ResolvedField) -> Option<RowControl> {
             list: ScrollList::new(LIST_MAX_VISIBLE),
             error: None,
         }),
-        FieldKind::ObjectArray
-        | FieldKind::ObjectMap
-        | FieldKind::Status
-        | FieldKind::QrCode
-        | FieldKind::Gamepad => None,
+        FieldKind::ObjectArray | FieldKind::ObjectMap | FieldKind::QrCode | FieldKind::Gamepad => {
+            None
+        }
     }
 }
 
@@ -398,6 +473,7 @@ fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
         RowControl::TextList(values) => Some(serde_json::json!(values)),
         RowControl::Color(value) => Some(serde_json::json!(value)),
         RowControl::Action { .. } | RowControl::List { .. } => None,
+        RowControl::Status { .. } => None,
     }
 }
 
@@ -423,7 +499,7 @@ fn row_value(control: &RowControl) -> Option<FieldDefault> {
             Some(FieldDefault::String(value.clone()))
         }
         RowControl::TextList(values) => Some(FieldDefault::StringArray(values.clone())),
-        RowControl::Action { .. } | RowControl::List { .. } => None,
+        RowControl::Action { .. } | RowControl::Status { .. } | RowControl::List { .. } => None,
     }
 }
 
@@ -445,6 +521,9 @@ pub(super) fn runtime_query_names(rows: &[Row]) -> Vec<String> {
                 active_query: Some(query),
                 ..
             } => {
+                names.insert(query.clone());
+            }
+            RowControl::Status { query, .. } => {
                 names.insert(query.clone());
             }
             RowControl::List {
@@ -524,6 +603,31 @@ pub(super) fn apply_runtime_query(
                 }
                 Err(message) => *error = Some(message.clone()),
             },
+            RowControl::Status {
+                query: row_query,
+                value_from,
+                label_map,
+                tone_map,
+                label,
+                tone,
+                error,
+            } if row_query == query => match &result {
+                Ok(value) => {
+                    let raw = query_value(value, value_from.as_deref()).and_then(query_value_text);
+                    *label = raw
+                        .as_ref()
+                        .and_then(|value| label_map.get(value))
+                        .cloned()
+                        .or(raw.clone());
+                    *tone = raw
+                        .as_ref()
+                        .and_then(|value| tone_map.get(value))
+                        .map(|value| status_tone(value))
+                        .unwrap_or(StatusTone::Muted);
+                    *error = None;
+                }
+                Err(message) => *error = Some(message.clone()),
+            },
             RowControl::List {
                 query: row_query,
                 active_query,
@@ -558,11 +662,40 @@ pub(super) fn apply_runtime_query(
 }
 
 fn query_flag(value: &serde_json::Value, path: Option<&str>) -> bool {
-    let selected = path
-        .filter(|path| !path.is_empty())
-        .and_then(|path| path.split('.').try_fold(value, |value, key| value.get(key)))
-        .unwrap_or(value);
-    selected.as_bool().unwrap_or(false)
+    query_value(value, path)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn query_value<'a>(
+    value: &'a serde_json::Value,
+    path: Option<&str>,
+) -> Option<&'a serde_json::Value> {
+    let Some(path) = path.filter(|path| !path.is_empty()) else {
+        return Some(value);
+    };
+    path.split('.').try_fold(value, |value, key| value.get(key))
+}
+
+fn query_value_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::Null | serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            None
+        }
+    }
+}
+
+fn status_tone(value: &str) -> StatusTone {
+    match value {
+        "accent" => StatusTone::Accent,
+        "success" => StatusTone::Success,
+        "danger" | "error" => StatusTone::Danger,
+        "warning" => StatusTone::Warning,
+        _ => StatusTone::Muted,
+    }
 }
 
 fn list_items(value: &serde_json::Value, label: &str, subtitle: Option<&str>) -> Vec<ListItem> {
@@ -697,8 +830,8 @@ mod tests {
     use super::{
         apply_runtime_query, begin_list_item_action, list_item_actions, list_items, merged_config,
         primary_list_item_action, row_is_visible, row_value_json, rows_from_resolved,
-        runtime_query_names, section_label_for, set_config_value, visible_row_indices,
-        ResolvedConfig, Row, RowControl,
+        runtime_query_names, section_label_for, sections_from_resolved, set_config_value,
+        visible_row_indices, ResolvedConfig, Row, RowControl,
     };
     use crate::status_indicator::StatusTone;
 
@@ -873,6 +1006,55 @@ step = 1
             rows[3].control,
             RowControl::Number { value: 1.0, .. }
         ));
+    }
+
+    #[test]
+    fn section_navigation_preserves_contract_groups_and_descriptions() {
+        const SECTION_SPEC: &str = r#"
+schema_version = 1
+description = "Root settings"
+
+[field.root]
+type = "boolean"
+default = true
+
+[section.cursor]
+label = "Cursor"
+description = "Cursor behavior"
+
+[field.cursor_speed]
+type = "number"
+section = "cursor"
+default = 4
+
+[section.theme]
+label = "Theme"
+description = "Desktop appearance"
+
+[field.switch]
+type = "action"
+section = "theme"
+action = "switch"
+"#;
+        let spec = qol_config::contract::parse_spec_str(SECTION_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved);
+        let sections = sections_from_resolved(&resolved, &rows);
+
+        assert_eq!(sections.len(), 3);
+        assert_eq!(sections[0].label, "General");
+        assert_eq!(sections[0].description.as_deref(), Some("Root settings"));
+        assert_eq!(sections[0].rows, [0]);
+        assert_eq!(sections[1].label, "Cursor");
+        assert_eq!(sections[1].description.as_deref(), Some("Cursor behavior"));
+        assert_eq!(sections[1].rows, [1]);
+        assert_eq!(sections[2].label, "Theme");
+        assert_eq!(
+            sections[2].description.as_deref(),
+            Some("Desktop appearance")
+        );
+        assert_eq!(sections[2].rows, [2]);
     }
 
     #[test]
@@ -1319,6 +1501,49 @@ input = { address = "{address}" }
     }
 
     #[test]
+    fn runtime_status_rows_map_labels_and_tones() {
+        const STATUS_SPEC: &str = r#"
+schema_version = 1
+
+[field.theme]
+type = "status"
+query = "theme_status"
+value_from = "scheme"
+label_map = { light = "Light", dark = "Dark" }
+tone_map = { light = "muted", dark = "accent" }
+"#;
+        let spec = qol_config::contract::parse_spec_str(STATUS_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let mut rows = rows_from_resolved(&resolved);
+        assert_eq!(runtime_query_names(&rows), ["theme_status"]);
+
+        apply_runtime_query(
+            &mut rows,
+            "theme_status",
+            Ok(serde_json::json!({ "scheme": "dark" })),
+        );
+        assert!(matches!(
+            &rows[0].control,
+            RowControl::Status {
+                label: Some(label),
+                tone: StatusTone::Accent,
+                error: None,
+                ..
+            } if label == "Dark"
+        ));
+
+        apply_runtime_query(&mut rows, "theme_status", Err("unavailable".into()));
+        assert!(matches!(
+            &rows[0].control,
+            RowControl::Status {
+                error: Some(error),
+                ..
+            } if error == "unavailable"
+        ));
+    }
+
+    #[test]
     fn runtime_rows_are_not_written_into_plugin_config() {
         let rows = vec![Row {
             id: "search".into(),
@@ -1333,6 +1558,7 @@ input = { address = "{address}" }
                 active_label: None,
                 active_query: None,
                 active_value_from: None,
+                state_labels: std::collections::BTreeMap::new(),
                 variant: None,
                 active: false,
                 pending: false,

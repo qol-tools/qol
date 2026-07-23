@@ -128,7 +128,12 @@ actions = ["toggle_theme"]
 
 [field.toggle_theme]
 type = "action"
-label = "Toggle Light/Dark"
+label = "Switch to Dark"
+active_label = "Switch to Light"
 section = "theme"
 action = "toggle_theme"
-variant = "primary"
+active_action = "toggle_theme"
+active_query = "theme_status"
+active_value_from = "dark"
+label_map = { false = "Light", true = "Dark" }
+variant = "toggle"

@@ -36,6 +36,40 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
         "kill" => ReadResult::Command(Command::Kill),
         "reload" => ReadResult::Command(Command::Reload),
         "toggle_theme" => ReadResult::Command(Command::ToggleTheme),
+        "theme_status" => match crate::theme::current() {
+            Ok(scheme) => ReadResult::HandledWithData(theme_status(scheme)),
+            Err(error) => ReadResult::Error(format!("{error:#}")),
+        },
         _ => ReadResult::Fallback,
+    }
+}
+
+fn theme_status(scheme: crate::theme::ColorScheme) -> serde_json::Value {
+    serde_json::json!({
+        "scheme": scheme.as_str(),
+        "dark": scheme.is_dark(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::theme_status;
+    use crate::theme::ColorScheme;
+
+    #[test]
+    fn theme_status_payload_reports_semantic_and_binary_state() {
+        let cases = [
+            (
+                ColorScheme::Light,
+                serde_json::json!({ "scheme": "light", "dark": false }),
+            ),
+            (
+                ColorScheme::Dark,
+                serde_json::json!({ "scheme": "dark", "dark": true }),
+            ),
+        ];
+        for (scheme, expected) in cases {
+            assert_eq!(theme_status(scheme), expected);
+        }
     }
 }
