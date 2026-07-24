@@ -7,8 +7,8 @@ use super::objc::{
     ax_attr, cf_boolean_false, cf_boolean_true, cfstr, cfstring_to_string, cg_window_layer,
     cg_window_owner_pid, cls, dict_get_i32, msg_bool, msg_bool_usize, msg_i32, msg_ptr_usize, sel,
     AXUIElementCreateApplication, AXUIElementPerformAction, AXUIElementSetAttributeValue,
-    AXValueCreate, AXValueGetValue, CFArrayGetCount, CFArrayGetValueAtIndex, CFRelease, CGPoint,
-    CGSize, CGWindowListCopyWindowInfo, CfGuard, AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE,
+    AXValueCreate, AXValueGetValue, CFArrayGetCount, CFArrayGetValueAtIndex, CGPoint, CGSize,
+    CGWindowListCopyWindowInfo, CfGuard, AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE,
     CG_WINDOW_LIST_EXCLUDE_DESKTOP, CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
 use super::trace::{timed_bool, timed_opt, timed_pid, timed_pred};
@@ -206,73 +206,52 @@ pub(super) fn is_normal_window(pid: i32) -> bool {
 
 pub(super) fn frontmost_pid() -> Option<i32> {
     timed_pid("frontmost_pid", "window_server", || {
-        let list = CfGuard::new(unsafe {
-            CGWindowListCopyWindowInfo(
-                CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | CG_WINDOW_LIST_EXCLUDE_DESKTOP,
-                0,
-            )
-        })?;
-        let count = unsafe { CFArrayGetCount(list.as_ptr()) };
-        let entries = (0..count).map(|index| {
-            let dict = unsafe { CFArrayGetValueAtIndex(list.as_ptr(), index) };
-            (
-                dict_get_i32(dict, cg_window_layer()).unwrap_or(-1),
-                dict_get_i32(dict, cg_window_owner_pid()).unwrap_or(0),
-            )
-        });
-        frontmost_pid_from_window_entries(entries)
+        let list = on_screen_window_list()?;
+        let mut candidates = layer_zero_pids(window_entries(&list));
+        candidates.next()
     })
-}
-
-fn frontmost_pid_from_window_entries(entries: impl IntoIterator<Item = (i32, i32)>) -> Option<i32> {
-    entries
-        .into_iter()
-        .find_map(|(layer, pid)| (layer == 0 && pid > 0).then_some(pid))
 }
 
 pub(super) fn find_normal_window_pid() -> Option<i32> {
-    timed_opt("find_pid", 0, || {
-        let frontmost = frontmost_pid();
-        if frontmost.is_some_and(is_normal_window) {
-            return frontmost;
+    timed_pid("find_pid", "window_server", || {
+        let list = on_screen_window_list()?;
+        let mut candidates = layer_zero_pids(window_entries(&list));
+        let frontmost = candidates.next()?;
+        if is_normal_window(frontmost) {
+            return Some(frontmost);
         }
-
-        let list = unsafe {
-            CGWindowListCopyWindowInfo(
-                CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | CG_WINDOW_LIST_EXCLUDE_DESKTOP,
-                0,
-            )
-        };
-        if list.is_null() {
-            return frontmost;
-        }
-
-        let count = unsafe { CFArrayGetCount(list) };
-        let mut seen = HashSet::new();
-        let mut result = None;
-
-        for i in 0..count {
-            let dict = unsafe { CFArrayGetValueAtIndex(list, i) };
-            let layer = dict_get_i32(dict, cg_window_layer()).unwrap_or(-1);
-            if layer != 0 {
-                continue;
-            }
-            let pid = match dict_get_i32(dict, cg_window_owner_pid()) {
-                Some(p) if p > 0 => p,
-                _ => continue,
-            };
-            if !seen.insert(pid) {
-                continue;
-            }
-            if is_normal_window(pid) {
-                result = Some(pid);
-                break;
-            }
-        }
-
-        unsafe { CFRelease(list) };
-        result.or(frontmost)
+        candidates
+            .find(|pid| is_normal_window(*pid))
+            .or(Some(frontmost))
     })
+}
+
+fn on_screen_window_list() -> Option<CfGuard> {
+    CfGuard::new(unsafe {
+        CGWindowListCopyWindowInfo(
+            CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | CG_WINDOW_LIST_EXCLUDE_DESKTOP,
+            0,
+        )
+    })
+}
+
+fn window_entries(list: &CfGuard) -> impl Iterator<Item = (i32, i32)> + '_ {
+    let count = unsafe { CFArrayGetCount(list.as_ptr()) };
+    (0..count).map(move |index| {
+        let dict = unsafe { CFArrayGetValueAtIndex(list.as_ptr(), index) };
+        (
+            dict_get_i32(dict, cg_window_layer()).unwrap_or(-1),
+            dict_get_i32(dict, cg_window_owner_pid()).unwrap_or(0),
+        )
+    })
+}
+
+fn layer_zero_pids(entries: impl IntoIterator<Item = (i32, i32)>) -> impl Iterator<Item = i32> {
+    let mut seen = HashSet::new();
+    entries
+        .into_iter()
+        .filter_map(|(layer, pid)| (layer == 0 && pid > 0).then_some(pid))
+        .filter(move |pid| seen.insert(*pid))
 }
 
 pub(super) fn front_window_rect(pid: i32) -> Option<super::screen::Rect> {
@@ -534,7 +513,7 @@ pub(super) fn unminimize_and_raise(pid: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::frontmost_pid_from_window_entries;
+    use super::layer_zero_pids;
 
     #[test]
     fn frontmost_pid_selects_first_valid_normal_layer_window() {
@@ -554,8 +533,33 @@ mod tests {
         ];
 
         for (name, entries, expected) in cases {
+            assert_eq!(layer_zero_pids(entries).next(), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn layer_zero_pids_yields_each_owner_once_in_front_to_back_order() {
+        let cases = [
+            (
+                "repeated owner collapses to first position",
+                vec![(0, 42), (0, 42), (0, 43)],
+                vec![42, 43],
+            ),
+            (
+                "interleaved owners keep first sighting",
+                vec![(0, 7), (0, 9), (0, 7)],
+                vec![7, 9],
+            ),
+            (
+                "rejected entries never occupy a slot",
+                vec![(25, 7), (0, 0), (-1, 8), (0, 9)],
+                vec![9],
+            ),
+        ];
+
+        for (name, entries, expected) in cases {
             assert_eq!(
-                frontmost_pid_from_window_entries(entries),
+                layer_zero_pids(entries).collect::<Vec<_>>(),
                 expected,
                 "{name}"
             );
