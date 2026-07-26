@@ -1,18 +1,20 @@
 use crate::preview_plane::PreviewPlanePayload;
-use std::process::Command as ProcessCommand;
+use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use zbus::zvariant::DynamicType;
 
 const BACKEND: &str = "cinnamon_shell";
 const DEST: &str = "org.Cinnamon";
 const OBJECT_PATH: &str = "/org/qol/AltTabPreviewPlane";
-const PING_METHOD: &str = "org.qol.AltTabPreviewPlane.Ping";
-const SHOW_METHOD: &str = "org.qol.AltTabPreviewPlane.Show";
-const HIDE_METHOD: &str = "org.qol.AltTabPreviewPlane.Hide";
+const INTERFACE: &str = "org.qol.AltTabPreviewPlane";
+const PING_METHOD: &str = "Ping";
+const SHOW_METHOD: &str = "Show";
+const HIDE_METHOD: &str = "Hide";
 const AVAILABILITY_TTL: Duration = Duration::from_secs(2);
-const DBUS_TIMEOUT_SECONDS: &str = "1";
+const DBUS_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy)]
 struct Availability {
@@ -29,6 +31,13 @@ enum PlaneCommand {
     Hide {
         reason: &'static str,
     },
+}
+
+#[derive(Deserialize)]
+struct PlaneResponse {
+    ok: bool,
+    code: Option<String>,
+    detail: Option<String>,
 }
 
 fn availability_cache() -> &'static Mutex<Option<Availability>> {
@@ -145,24 +154,7 @@ fn spawn_availability_refresh() {
 }
 
 fn ping_available() -> bool {
-    ProcessCommand::new("gdbus")
-        .args([
-            "call",
-            "--session",
-            "--timeout",
-            DBUS_TIMEOUT_SECONDS,
-            "--dest",
-            DEST,
-            "--object-path",
-            OBJECT_PATH,
-            "--method",
-            PING_METHOD,
-        ])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).contains("\"ok\":true"))
-        .unwrap_or(false)
+    call_plane_method(PING_METHOD, &()).is_ok()
 }
 
 pub(crate) fn show_async(payload: PreviewPlanePayload) {
@@ -224,109 +216,88 @@ pub(crate) fn hide_async(reason: &'static str) {
 
 fn run_show_command(show_id: String, item_count: usize, payload_json: String) {
     let started = Instant::now();
-    let result = ProcessCommand::new("gdbus")
-        .args([
-            "call",
-            "--session",
-            "--timeout",
-            DBUS_TIMEOUT_SECONDS,
-            "--dest",
-            DEST,
-            "--object-path",
-            OBJECT_PATH,
-            "--method",
-            SHOW_METHOD,
-        ])
-        .arg(payload_json)
-        .output();
+    let result = call_plane_method(SHOW_METHOD, &show_arguments(&payload_json));
     probe_show_result(&show_id, item_count, started, result);
 }
 
 fn run_hide_command(reason: &'static str) {
     let started = Instant::now();
-    let result = ProcessCommand::new("gdbus")
-        .args([
-            "call",
-            "--session",
-            "--timeout",
-            DBUS_TIMEOUT_SECONDS,
-            "--dest",
-            DEST,
-            "--object-path",
-            OBJECT_PATH,
-            "--method",
-            HIDE_METHOD,
-        ])
-        .output();
+    let result = call_plane_method(HIDE_METHOD, &());
     probe_hide_result(reason, started, result);
+}
+
+fn show_arguments(payload_json: &str) -> (&str,) {
+    (payload_json,)
+}
+
+fn call_plane_method<B>(method: &str, body: &B) -> Result<String, String>
+where
+    B: serde::Serialize + DynamicType,
+{
+    let connection = zbus::blocking::connection::Builder::session()
+        .map_err(|error| format!("session connection: {error}"))?
+        .method_timeout(DBUS_TIMEOUT)
+        .build()
+        .map_err(|error| format!("session connection: {error}"))?;
+    let proxy = zbus::blocking::Proxy::new(&connection, DEST, OBJECT_PATH, INTERFACE)
+        .map_err(|error| format!("preview plane proxy: {error}"))?;
+    let response: String = proxy
+        .call(method, body)
+        .map_err(|error| format!("{method} call: {error}"))?;
+    validate_plane_response(&response)?;
+    Ok(response)
+}
+
+fn validate_plane_response(response: &str) -> Result<(), String> {
+    let parsed: PlaneResponse =
+        serde_json::from_str(response).map_err(|error| format!("invalid response: {error}"))?;
+    if parsed.ok {
+        return Ok(());
+    }
+    let code = parsed.code.as_deref().unwrap_or("rejected");
+    let detail = parsed.detail.as_deref().unwrap_or("no detail");
+    Err(format!("{code}: {detail}"))
 }
 
 fn probe_show_result(
     show_id: &str,
     item_count: usize,
     started: Instant,
-    result: std::io::Result<std::process::Output>,
+    result: Result<String, String>,
 ) {
     let elapsed_ms = started.elapsed().as_millis();
     match result {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(response) => {
             qol_runtime::probe!(
                 "PREVIEW_PLANE_SHOW",
                 "backend=cinnamon_shell show_id={show_id} outcome=ok items={item_count} elapsed={elapsed_ms}ms result=\"{}\"",
-                trim_for_probe(&stdout)
-            );
-        }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            qol_runtime::probe!(
-                "PREVIEW_PLANE_SHOW",
-                "backend=cinnamon_shell show_id={show_id} outcome=error items={item_count} status={} elapsed={}ms stderr=\"{}\"",
-                output.status,
-                elapsed_ms,
-                trim_for_probe(&stderr)
+                trim_for_probe(&response)
             );
         }
         Err(error) => {
             qol_runtime::probe!(
                 "PREVIEW_PLANE_SHOW",
-                "backend=cinnamon_shell show_id={show_id} outcome=error items={item_count} elapsed={}ms error=\"{}\"",
-                elapsed_ms,
-                error
+                "backend=cinnamon_shell show_id={show_id} outcome=error items={item_count} elapsed={elapsed_ms}ms error=\"{}\"",
+                trim_for_probe(&error)
             );
         }
     }
 }
 
-fn probe_hide_result(
-    reason: &'static str,
-    started: Instant,
-    result: std::io::Result<std::process::Output>,
-) {
+fn probe_hide_result(reason: &'static str, started: Instant, result: Result<String, String>) {
     let elapsed_ms = started.elapsed().as_millis();
     match result {
-        Ok(output) if output.status.success() => {
+        Ok(_) => {
             qol_runtime::probe!(
                 "PREVIEW_PLANE_HIDE",
                 "backend=cinnamon_shell reason={reason} outcome=ok elapsed={elapsed_ms}ms"
             );
         }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            qol_runtime::probe!(
-                "PREVIEW_PLANE_HIDE",
-                "backend=cinnamon_shell reason={reason} outcome=error status={} elapsed={}ms stderr=\"{}\"",
-                output.status,
-                elapsed_ms,
-                trim_for_probe(&stderr)
-            );
-        }
         Err(error) => {
             qol_runtime::probe!(
                 "PREVIEW_PLANE_HIDE",
-                "backend=cinnamon_shell reason={reason} outcome=error elapsed={}ms error=\"{}\"",
-                elapsed_ms,
-                error
+                "backend=cinnamon_shell reason={reason} outcome=error elapsed={elapsed_ms}ms error=\"{}\"",
+                trim_for_probe(&error)
             );
         }
     }
@@ -340,10 +311,43 @@ fn trim_for_probe(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        availability_decision, should_send_show, Availability, AvailabilityDecision,
-        AVAILABILITY_TTL,
+        availability_decision, should_send_show, show_arguments, validate_plane_response,
+        Availability, AvailabilityDecision, AVAILABILITY_TTL,
     };
     use std::time::{Duration, Instant};
+    use zbus::zvariant::{serialized::Context, to_bytes, LE};
+
+    #[test]
+    fn dbus_show_body_preserves_json_escaped_window_titles() {
+        let title = "Difference between >> and >\\> operators? Henry's \"notes\"\nNä";
+        let payload_json = serde_json::to_string(&serde_json::json!({ "title": title })).unwrap();
+        let encoded = to_bytes(Context::new_dbus(LE, 0), &show_arguments(&payload_json)).unwrap();
+        let decoded: (&str,) = encoded.deserialize().unwrap().0;
+        let decoded_json: serde_json::Value = serde_json::from_str(decoded.0).unwrap();
+
+        assert_eq!(decoded.0, payload_json);
+        assert_eq!(decoded_json["title"], title);
+    }
+
+    #[test]
+    fn plane_response_requires_semantic_success() {
+        let cases = [
+            ("success", r#"{"ok":true}"#, true),
+            (
+                "extension rejection",
+                r#"{"ok":false,"code":"invalid_json","detail":"bad escape"}"#,
+                false,
+            ),
+            ("malformed response", "not json", false),
+        ];
+        for (case, response, expected) in cases {
+            assert_eq!(
+                validate_plane_response(response).is_ok(),
+                expected,
+                "case: {case}"
+            );
+        }
+    }
 
     #[test]
     fn should_send_show_skips_only_identical_repeat() {

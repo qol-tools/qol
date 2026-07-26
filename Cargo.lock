@@ -73,6 +73,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "x11rb",
+ "zbus",
 ]
 
 [[package]]
