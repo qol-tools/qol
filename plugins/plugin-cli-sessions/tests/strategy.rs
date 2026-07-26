@@ -1,21 +1,23 @@
-use plugin_cli_sessions::host::Pane;
+use plugin_cli_sessions::host::{kitty_session_id, Pane};
 use plugin_cli_sessions::status::Status;
 use plugin_cli_sessions::strategy::claude::Claude;
-use plugin_cli_sessions::strategy::codex::{Codex, CodexSession, CodexStore, NoCodexStore};
+use plugin_cli_sessions::strategy::codex::Codex;
 use plugin_cli_sessions::strategy::{
     running_since_for, status_for, Cli, Ctx, Phase, Prev, Strategy,
 };
+use qol_terminal_sessions::cli::{codex_tool, CliSessionDescriptor, CliSessionInterpreter};
 
 fn pane(at_prompt: bool, cmd: &str, title: &str) -> Pane {
     Pane {
-        window_id: 1,
+        id: kitty_session_id(1),
         root_pid: 1,
         cwd: "/a/proj".into(),
         title: title.into(),
         at_prompt,
         reported_cmd: Some(cmd.into()),
-        foreground_basenames: vec![],
+        foreground_basenames: vec![cmd.into()],
         foreground_pids: vec![],
+        capabilities: qol_terminal_sessions::SessionCapabilities::ALL,
     }
 }
 
@@ -26,12 +28,36 @@ fn ctx<'a>(
     prev: Option<Prev>,
     now: u64,
 ) -> Ctx<'a> {
+    let cli_session = CliSessionInterpreter::system().describe(p);
     Ctx {
         pane: p,
+        cli_session,
         screen,
         screen_changed: changed,
         prev,
         now,
+        is_service: false,
+    }
+}
+
+fn codex_ctx<'a>(
+    p: &'a Pane,
+    screen: Option<&'a str>,
+    name: Option<&str>,
+    has_activity: Option<bool>,
+) -> Ctx<'a> {
+    Ctx {
+        pane: p,
+        cli_session: CliSessionDescriptor {
+            tool: codex_tool(),
+            display_name: name.map(str::to_owned),
+            external_id: Some("test-session".to_owned()),
+            has_activity,
+        },
+        screen,
+        screen_changed: false,
+        prev: None,
+        now: 0,
         is_service: false,
     }
 }
@@ -41,20 +67,6 @@ fn ran_since(start: u64) -> Option<Prev> {
         status: Status::Working,
         running_since: Some(start),
     })
-}
-
-struct FakeCodex {
-    name: Option<String>,
-    touched: bool,
-}
-
-impl CodexStore for FakeCodex {
-    fn session(&self, _pane: &Pane) -> Option<CodexSession> {
-        Some(CodexSession {
-            name: self.name.clone(),
-            touched: self.touched,
-        })
-    }
 }
 
 #[test]
@@ -228,7 +240,8 @@ fn claude_working_title_overrides_scrolled_screen() {
 
 #[test]
 fn claude_label_strips_status_glyph() {
-    let p = pane(false, "claudedw", "\u{2733} Improve logging");
+    let mut p = pane(false, "claudedw", "\u{2733} Improve logging");
+    p.foreground_basenames = vec!["claude".to_owned()];
     let r = Claude.read(&ctx(&p, Some(""), false, None, 0));
     assert_eq!(r.label.as_deref(), Some("Improve logging"));
 }
@@ -237,13 +250,9 @@ fn claude_label_strips_status_glyph() {
 fn codex_answer_ending_in_numbered_list_is_your_turn_not_blocked() {
     let p = pane(false, "codex", "qol-monorepo");
     let answer = "What remains:\n1. Add committed golden parity tests\n2. Decide when to remove trace-py\n3. Remove the fallback flag once done\n4. Rename the WIP commit";
-    let used = FakeCodex {
-        name: Some("Topic".into()),
-        touched: true,
-    };
     assert_eq!(
-        Codex::new(&used)
-            .read(&ctx(&p, Some(answer), false, None, 0))
+        Codex
+            .read(&codex_ctx(&p, Some(answer), Some("Topic"), Some(true)))
             .phase,
         Phase::Done,
         "a finished turn whose answer ends in a numbered list is your-turn, not a blocking prompt"
@@ -251,34 +260,27 @@ fn codex_answer_ending_in_numbered_list_is_your_turn_not_blocked() {
 }
 
 #[test]
-fn codex_phase_and_label_from_store() {
+fn codex_phase_and_label_from_shared_descriptor() {
     let p = pane(false, "codex", "qol-monorepo");
 
-    let fresh = FakeCodex {
-        name: Some("Asasdsadasd".into()),
-        touched: false,
-    };
-    let r = Codex::new(&fresh).read(&ctx(&p, Some(""), false, None, 0));
+    let r = Codex.read(&codex_ctx(&p, Some(""), Some("Asasdsadasd"), Some(false)));
     assert_eq!(r.phase, Phase::Idle);
     assert_eq!(r.label.as_deref(), Some("Asasdsadasd"));
 
-    let used = FakeCodex {
-        name: Some("Asasdsadasd".into()),
-        touched: true,
-    };
     assert_eq!(
-        Codex::new(&used)
-            .read(&ctx(&p, Some(""), false, None, 0))
+        Codex
+            .read(&codex_ctx(&p, Some(""), Some("Asasdsadasd"), Some(true),))
             .phase,
         Phase::Done
     );
 
-    let busy = FakeCodex {
-        name: None,
-        touched: true,
-    };
     let busy_with_sizes = "  1.9G  /home/user/.cache\n\u{2022} Working (3m 56s \u{00B7} esc to interrupt)\n\u{203A} Use /skills";
-    let r = Codex::new(&busy).read(&ctx(&p, Some(busy_with_sizes), false, None, 0));
+    let r = Codex.read(&codex_ctx(
+        &p,
+        Some(busy_with_sizes),
+        Some("proj"),
+        Some(true),
+    ));
     assert_eq!(
         r.phase,
         Phase::Busy,
@@ -293,15 +295,16 @@ fn codex_phase_and_label_from_store() {
 
 #[test]
 fn codex_working_title_overrides_scrolled_screen() {
-    let store = FakeCodex {
-        name: Some("Fix edge case".into()),
-        touched: true,
-    };
     let scrolled = "previous answer\nDone for 12s\n\u{203A} Use /skills";
     let braille = pane(false, "codex", "\u{2810} Fix edge case");
     assert_eq!(
-        Codex::new(&store)
-            .read(&ctx(&braille, Some(scrolled), false, None, 0))
+        Codex
+            .read(&codex_ctx(
+                &braille,
+                Some(scrolled),
+                Some("Fix edge case"),
+                Some(true),
+            ))
             .phase,
         Phase::Busy,
         "a live Codex working title beats scrolled-up non-working content"
@@ -310,8 +313,13 @@ fn codex_working_title_overrides_scrolled_screen() {
     let marker_like = "old question\n  [ ] Review diff\n  enter to confirm";
     let star = pane(false, "codex", "\u{2736} Fix edge case");
     assert_eq!(
-        Codex::new(&store)
-            .read(&ctx(&star, Some(marker_like), false, None, 0))
+        Codex
+            .read(&codex_ctx(
+                &star,
+                Some(marker_like),
+                Some("Fix edge case"),
+                Some(true),
+            ))
             .phase,
         Phase::Busy,
         "a live Codex working title beats scrolled-up prompt-like content"
@@ -319,17 +327,20 @@ fn codex_working_title_overrides_scrolled_screen() {
 }
 
 #[test]
-fn codex_idle_via_banner_when_store_absent() {
+fn codex_idle_via_banner_when_activity_metadata_is_absent() {
     let p = pane(false, "codex", "qol-monorepo");
-    let fresh = Codex::new(&NoCodexStore).read(&ctx(
+    let fresh = Codex.read(&codex_ctx(
         &p,
         Some("\u{203A} >_ OpenAI Codex (v0.141.0)"),
-        false,
+        Some("proj"),
         None,
-        0,
     ));
     assert_eq!(fresh.phase, Phase::Idle, "welcome banner => fresh => idle");
-    let used =
-        Codex::new(&NoCodexStore).read(&ctx(&p, Some("conversation output"), false, None, 0));
+    let used = Codex.read(&codex_ctx(
+        &p,
+        Some("conversation output"),
+        Some("proj"),
+        None,
+    ));
     assert_eq!(used.phase, Phase::Done, "no banner => a turn happened");
 }

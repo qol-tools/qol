@@ -656,8 +656,6 @@ pub struct CliSessionsPalette {
     pub working_tint_rgba: u32,
     pub service_tint_rgba: u32,
     pub transparent_rgba: u32,
-    pub claude: u32,
-    pub codex: u32,
 }
 
 impl CliSessionsPalette {
@@ -686,8 +684,6 @@ impl CliSessionsPalette {
             working_tint_rgba: with_alpha(system.success, 0x1e),
             service_tint_rgba: with_alpha(system.info, 0x14),
             transparent_rgba: 0x00000000,
-            claude: 0xd97757,
-            codex: 0x10a37f,
         }
     }
 }

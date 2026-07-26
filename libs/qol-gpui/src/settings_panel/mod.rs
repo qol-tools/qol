@@ -276,6 +276,10 @@ pub fn run_plugin_settings(
     )
 }
 
+pub fn request_hosted_settings(plugin_id: &str) -> Result<(), String> {
+    persistence::run_action(plugin_id, "settings", &serde_json::json!({})).map(drop)
+}
+
 pub fn run_standalone(panel: SettingsPanel, runtime: SettingsRuntime) -> anyhow::Result<()> {
     let failure = Rc::new(RefCell::new(None));
     let reported_failure = failure.clone();

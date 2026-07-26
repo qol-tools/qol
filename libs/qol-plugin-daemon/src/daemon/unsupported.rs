@@ -15,6 +15,10 @@ pub enum SocketSource {
         default_socket_name: &'static str,
         use_tmpdir_env: bool,
     },
+    Fixed {
+        socket_name: &'static str,
+        use_tmpdir_env: bool,
+    },
 }
 
 pub enum ReadResult<C> {
@@ -79,6 +83,17 @@ pub fn start_request_listener<C: Send + 'static>(
 pub fn run_stateful_listener<S, F>(_config: &DaemonConfig, _state: S, _handler: F) -> io::Result<()>
 where
     F: FnMut(&mut S, &str) -> ReadResult<()>,
+{
+    Err(unsupported())
+}
+
+pub fn run_stateful_request_listener<S, F>(
+    _config: &DaemonConfig,
+    _state: S,
+    _handler: F,
+) -> io::Result<()>
+where
+    F: FnMut(&mut S, &DaemonRequest) -> ReadResult<()>,
 {
     Err(unsupported())
 }

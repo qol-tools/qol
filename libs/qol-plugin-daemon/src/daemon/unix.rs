@@ -24,6 +24,10 @@ pub enum SocketSource {
         default_socket_name: &'static str,
         use_tmpdir_env: bool,
     },
+    Fixed {
+        socket_name: &'static str,
+        use_tmpdir_env: bool,
+    },
 }
 
 pub enum ReadResult<C> {
@@ -36,15 +40,22 @@ pub enum ReadResult<C> {
 }
 
 pub fn socket_path(config: &DaemonConfig) -> Option<PathBuf> {
-    if let Ok(path) = std::env::var(qol_conventions::ENV_DAEMON_SOCKET) {
-        return Some(PathBuf::from(path));
-    }
     match &config.socket {
-        SocketSource::EnvRequired => None,
+        SocketSource::EnvRequired => std::env::var(qol_conventions::ENV_DAEMON_SOCKET)
+            .ok()
+            .map(PathBuf::from),
         SocketSource::Fallback {
             default_socket_name,
             use_tmpdir_env,
-        } => Some(fallback_socket_path(default_socket_name, *use_tmpdir_env)),
+        } => Some(
+            std::env::var(qol_conventions::ENV_DAEMON_SOCKET)
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| fallback_socket_path(default_socket_name, *use_tmpdir_env)),
+        ),
+        SocketSource::Fixed {
+            socket_name,
+            use_tmpdir_env,
+        } => Some(fallback_socket_path(socket_name, *use_tmpdir_env)),
     }
 }
 
@@ -235,8 +246,40 @@ where
 
     for stream in listener.incoming() {
         match stream {
+            Ok(mut stream) => {
+                let result = read_and_parse(&mut stream, |action| handler(&mut state, action));
+                handle_read_result(&mut stream, result, |_| DaemonResponse::Handled {
+                    data: None,
+                });
+            }
+            Err(error) => {
+                eprintln!("accept error: {error:#}");
+            }
+        }
+    }
+
+    if let Some(socket_path) = socket_path {
+        remove_socket_file(socket_path);
+    }
+    Ok(())
+}
+
+pub fn run_stateful_request_listener<S, F>(
+    config: &DaemonConfig,
+    mut state: S,
+    mut handler: F,
+) -> io::Result<()>
+where
+    F: FnMut(&mut S, &DaemonRequest) -> ReadResult<()>,
+{
+    let (listener, socket_path) = bind_listener(config)?;
+
+    qol_runtime::spawn_host_death_watchdog();
+
+    for stream in listener.incoming() {
+        match stream {
             Ok(mut s) => {
-                let result = read_and_parse(&mut s, |action| handler(&mut state, action));
+                let result = read_request_and_parse(&mut s, |request| handler(&mut state, request));
                 handle_read_result(&mut s, result, |_| DaemonResponse::Handled { data: None });
             }
             Err(error) => {
@@ -519,6 +562,24 @@ mod tests {
     }
 
     #[test]
+    fn fixed_socket_ignores_the_host_daemon_socket() {
+        let _lock = daemon_listener_fd_env_lock();
+        std::env::set_var(qol_conventions::ENV_DAEMON_SOCKET, "/tmp/host.sock");
+        let config = DaemonConfig {
+            socket: SocketSource::Fixed {
+                socket_name: "panel.sock",
+                use_tmpdir_env: false,
+            },
+            support_replace_existing: false,
+        };
+
+        let path = socket_path(&config);
+
+        std::env::remove_var(qol_conventions::ENV_DAEMON_SOCKET);
+        assert_eq!(path, Some(PathBuf::from("/tmp/panel.sock")));
+    }
+
+    #[test]
     fn parses_json_request_action() {
         let mut stream = stream_with_line(r#"{"action":"open"}"#);
         let result = read_and_parse(&mut stream, |action| {
@@ -680,6 +741,27 @@ mod tests {
         }
 
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn stateful_request_handler_receives_input_and_returns_data() {
+        let mut count = 0;
+        let mut stream = stream_with_line(r#"{"action":"add","input":{"value":3}}"#);
+
+        let result = read_request_and_parse(&mut stream, |request| {
+            count += request.input["value"].as_u64().unwrap();
+            ReadResult::<()>::HandledWithData(serde_json::json!({ "count": count }))
+        });
+        let (should_continue, response) =
+            response_for_result(result, |_| DaemonResponse::Handled { data: None });
+
+        assert!(should_continue);
+        match response {
+            DaemonResponse::Handled { data } => {
+                assert_eq!(data, Some(serde_json::json!({ "count": 3 })));
+            }
+            other => panic!("expected handled response, got {other:?}"),
+        }
     }
 
     #[test]

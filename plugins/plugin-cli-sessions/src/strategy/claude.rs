@@ -11,10 +11,6 @@ impl Strategy for Claude {
         true
     }
 
-    fn label(&self, ctx: &Ctx) -> Option<String> {
-        clean_title(&ctx.pane.title)
-    }
-
     fn read(&self, ctx: &Ctx) -> Reading {
         let screen = ctx.screen.unwrap_or("");
         let phase = if claude_working(screen) || title_working(&ctx.pane.title) {
@@ -31,13 +27,4 @@ impl Strategy for Claude {
             label: self.label(ctx),
         }
     }
-}
-
-fn clean_title(title: &str) -> Option<String> {
-    let stripped = title.trim().trim_start_matches(|c: char| {
-        let cp = c as u32;
-        (0x2800..=0x28FF).contains(&cp) || (0x2733..=0x273F).contains(&cp) || c.is_whitespace()
-    });
-    let s = stripped.trim();
-    (!s.is_empty()).then(|| s.to_string())
 }

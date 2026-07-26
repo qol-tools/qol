@@ -5,6 +5,7 @@ use crate::host::Pane;
 use crate::session::status::Status;
 use crate::session::tool::Tool;
 use crate::signal::screen::{has_input_request, has_prompt_markers};
+use qol_terminal_sessions::cli::CliSessionDescriptor;
 
 const DONE_THRESHOLD_SECS: u64 = 5;
 
@@ -25,6 +26,7 @@ pub struct Prev {
 
 pub struct Ctx<'a> {
     pub pane: &'a Pane,
+    pub cli_session: CliSessionDescriptor,
     pub screen: Option<&'a str>,
     pub screen_changed: bool,
     pub prev: Option<Prev>,
@@ -43,7 +45,7 @@ pub trait Strategy {
     }
 
     fn label(&self, ctx: &Ctx) -> Option<String> {
-        ctx.pane.reported_cmd.clone().filter(|c| !c.is_empty())
+        ctx.cli_session.display_name.clone()
     }
 
     fn read(&self, ctx: &Ctx) -> Reading {
@@ -111,10 +113,10 @@ pub fn status_for(prev: Status, phase: Phase) -> Status {
 pub struct Cli;
 impl Strategy for Cli {}
 
-pub fn for_tool<'a>(tool: Tool, codex_store: &'a dyn codex::CodexStore) -> Box<dyn Strategy + 'a> {
+pub fn for_tool(tool: Tool) -> Box<dyn Strategy> {
     match tool {
         Tool::Claude => Box::new(claude::Claude),
-        Tool::Codex => Box::new(codex::Codex::new(codex_store)),
+        Tool::Codex => Box::new(codex::Codex),
         Tool::Generic => Box::new(Cli),
     }
 }

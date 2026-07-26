@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::host::TerminalHost;
+use qol_terminal_sessions::cli::CliSessionInterpreter;
+
+use crate::host::{window_id, TerminalHost};
 use crate::session::status::Status;
-use crate::session::tool::classify;
+use crate::session::tool::Tool;
 
 /// Dump every live session's frame in the moment - the screen, the title, and
 /// the status the panel is currently showing - so a wrong status (in any
@@ -24,14 +26,19 @@ pub fn capture_all(
     std::fs::create_dir_all(&target)?;
 
     let panes = host.discover();
+    let cli_interpreter = CliSessionInterpreter::system();
     let mut index = Vec::new();
     for pane in &panes {
-        let screen = host.get_text(pane.window_id).unwrap_or_default();
-        let panel_status = panel.get(&pane.window_id).map(|s| format!("{s:?}"));
-        let file = format!("win{}.txt", pane.window_id);
+        let cli_session = cli_interpreter.describe(pane);
+        let pane_window_id = window_id(pane);
+        let screen = host
+            .get_text(pane_window_id, pane.root_pid)
+            .unwrap_or_default();
+        let panel_status = panel.get(&pane_window_id).map(|s| format!("{s:?}"));
+        let file = format!("win{pane_window_id}.txt");
         std::fs::write(target.join(&file), &screen)?;
         std::fs::write(
-            target.join(format!("win{}.meta.json", pane.window_id)),
+            target.join(format!("win{pane_window_id}.meta.json")),
             to_pretty(&serde_json::json!({
                 "title": pane.title,
                 "at_prompt": pane.at_prompt,
@@ -41,10 +48,11 @@ pub fn capture_all(
             })),
         )?;
         index.push(serde_json::json!({
-            "window_id": pane.window_id,
+            "window_id": pane_window_id,
             "file": file,
             "title": pane.title,
-            "tool": format!("{:?}", classify(&pane.foreground_basenames)),
+            "tool": format!("{:?}", Tool::from_cli_session(&cli_session)),
+            "cli_tool": cli_session.tool.id.as_str(),
             "panel_status": panel_status,
         }));
     }

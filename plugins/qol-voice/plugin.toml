@@ -1,0 +1,48 @@
+[plugin]
+id = "qol-voice"
+uid = "1236ab1d-880a-49c7-b50a-4ff0970117b4"
+name = "QoL Voice"
+description = "Transcribe speech and route completed turns to live terminal sessions"
+version = "0.1.0"
+author = "KMRH47"
+platforms = ["linux"]
+
+[config]
+default_scope = "os"
+
+[config.scope]
+activation = "device"
+routing = "device"
+
+[runtime]
+command = "qol-voice"
+
+[action.start_listening]
+label = "Start Listening"
+args = ["session", "start"]
+
+[action.stop_listening]
+label = "Stop Listening"
+args = ["session", "stop"]
+
+[action.settings]
+label = "Settings"
+kind = "settings"
+args = ["settings"]
+
+[daemon]
+enabled = true
+command = "qol-voice"
+socket = "/tmp/qol-voice.sock"
+
+[capabilities]
+gpui = true
+
+[menu]
+label = "QoL Voice"
+items = []
+
+[[dependencies.binaries]]
+name = "qol-voice"
+repo = "qol-tools/qol-voice"
+pattern = "qol-voice-{os}-{arch}"

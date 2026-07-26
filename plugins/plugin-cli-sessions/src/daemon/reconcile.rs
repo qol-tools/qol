@@ -1,15 +1,16 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use crate::host::{project_of, Pane, TerminalHost};
+use qol_terminal_sessions::cli::CliSessionInterpreter;
+
+use crate::host::{project_of, window_id, Pane, TerminalHost};
 use crate::session::git;
 use crate::session::registry::{summary_for, Registry, SessionState};
 use crate::session::service::ServiceProbe;
 use crate::session::status::Status;
-use crate::session::tool::{classify, Tool};
+use crate::session::tool::Tool;
 use crate::signal::screen::screen_hash;
 use crate::storage::{paths, persist};
-use crate::strategy::codex::CodexStore;
 use crate::strategy::{for_tool, running_since_for, status_for, Ctx, Prev, Reading};
 use crate::ui::notify::{self, Notice};
 
@@ -25,18 +26,25 @@ fn pid_alive(pid: i32) -> bool {
 pub fn tick(
     registry: &Arc<Mutex<Registry>>,
     host: &dyn TerminalHost,
-    codex_store: &dyn CodexStore,
+    cli_interpreter: &CliSessionInterpreter,
     service_probe: &dyn ServiceProbe,
     now: u64,
 ) -> Vec<Notice> {
     let mut caches = ReconcileCaches::default();
-    tick_with_caches(registry, host, codex_store, service_probe, now, &mut caches)
+    tick_with_caches(
+        registry,
+        host,
+        cli_interpreter,
+        service_probe,
+        now,
+        &mut caches,
+    )
 }
 
 pub fn tick_with_caches(
     registry: &Arc<Mutex<Registry>>,
     host: &dyn TerminalHost,
-    codex_store: &dyn CodexStore,
+    cli_interpreter: &CliSessionInterpreter,
     service_probe: &dyn ServiceProbe,
     now: u64,
     caches: &mut ReconcileCaches,
@@ -54,17 +62,20 @@ pub fn tick_with_caches(
     prune_missing(registry, &panes);
 
     for pane in &panes {
-        let tool = classify(&pane.foreground_basenames);
-        let strategy = for_tool(tool, codex_store);
+        let cli_session = cli_interpreter.describe(pane);
+        #[cfg(debug_assertions)]
+        let cli_tool = cli_session.tool.id.to_string();
+        let tool = Tool::from_cli_session(&cli_session);
+        let strategy = for_tool(tool);
         let wants_screen = strategy.wants_screen(pane);
         let screen = if wants_screen {
-            host.get_text(pane.window_id)
+            host.get_text(window_id(pane), pane.root_pid)
         } else {
             None
         };
         let new_hash = screen.as_deref().map(screen_hash);
 
-        let (prev, prev_hash) = snapshot(registry, pane.window_id);
+        let (prev, prev_hash) = snapshot(registry, window_id(pane));
         let screen_changed = match (new_hash, prev_hash) {
             (Some(n), Some(p)) => n != p,
             (Some(_), None) => true,
@@ -75,6 +86,7 @@ pub fn tick_with_caches(
 
         let reading = strategy.read(&Ctx {
             pane,
+            cli_session,
             screen: screen.as_deref(),
             screen_changed,
             prev,
@@ -85,9 +97,10 @@ pub fn tick_with_caches(
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=pane wid={} tool={:?} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} read_phase={:?} label={:?} title={:?}",
-            pane.window_id,
+            "phase=pane wid={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} read_phase={:?} label={:?} title={:?}",
+            window_id(pane),
             tool,
+            cli_tool,
             pane.at_prompt,
             reading.phase,
             reading.label,
@@ -103,7 +116,7 @@ pub fn tick_with_caches(
             }
             drop(reg);
             crate::diagnostics::anomaly::observe(
-                pane.window_id,
+                window_id(pane),
                 now,
                 &pane.title,
                 screen.as_deref(),
@@ -147,7 +160,7 @@ fn attention_notice(
 }
 
 fn prune_missing(registry: &Arc<Mutex<Registry>>, panes: &[Pane]) {
-    let live: HashSet<u64> = panes.iter().map(|p| p.window_id).collect();
+    let live: HashSet<u64> = panes.iter().map(window_id).collect();
     let Ok(mut reg) = registry.lock() else { return };
     reg.prune(pid_alive);
     let stale: Vec<u64> = reg
@@ -204,7 +217,8 @@ fn apply(
     branch: Option<String>,
     now: u64,
 ) -> (Option<Notice>, Status) {
-    let (prev_status, prev_running) = match reg.get(pane.window_id) {
+    let pane_window_id = window_id(pane);
+    let (prev_status, prev_running) = match reg.get(pane_window_id) {
         Some(s) => (s.status, s.running_since),
         None => (Status::Unknown, None),
     };
@@ -225,7 +239,7 @@ fn apply(
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
             "phase=apply wid={} prev={:?} new={:?} tool={:?} summary={:?}",
-            pane.window_id,
+            pane_window_id,
             prev_status,
             status,
             tool,
@@ -233,7 +247,7 @@ fn apply(
         );
     }
 
-    if let Some(s) = reg.get_mut(pane.window_id) {
+    if let Some(s) = reg.get_mut(pane_window_id) {
         if status != s.status || status == Status::Working {
             s.last_activity = now;
         }
@@ -252,7 +266,7 @@ fn apply(
         return (notice, status);
     }
     reg.upsert(SessionState {
-        window_id: pane.window_id,
+        window_id: pane_window_id,
         root_pid: pane.root_pid,
         project: project_of(&pane.cwd),
         name: reading.label,

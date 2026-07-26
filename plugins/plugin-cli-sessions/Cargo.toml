@@ -18,6 +18,7 @@ qol-gpui.workspace = true
 qol-plugin-daemon.workspace = true
 qol-process.workspace = true
 qol-runtime.workspace = true
+qol-terminal-sessions.workspace = true
 qol-config.workspace = true
 qol-fs.workspace = true
 

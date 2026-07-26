@@ -15,6 +15,21 @@ pub struct DropdownStyle {
     pub text_selected: u32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DropdownItem {
+    pub label: String,
+    pub accent: Option<u32>,
+}
+
+impl DropdownItem {
+    pub fn plain(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            accent: None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Dropdown {
     list: ScrollList,
@@ -67,7 +82,16 @@ impl Dropdown {
     }
 
     pub fn render(&self, labels: &[String], style: DropdownStyle) -> impl IntoElement {
-        self.render_with_click(labels, style, None)
+        let items = labels
+            .iter()
+            .cloned()
+            .map(DropdownItem::plain)
+            .collect::<Vec<_>>();
+        self.render_items_with_click(&items, style, None)
+    }
+
+    pub fn render_items(&self, items: &[DropdownItem], style: DropdownStyle) -> impl IntoElement {
+        self.render_items_with_click(items, style, None)
     }
 
     pub fn render_clickable(
@@ -77,21 +101,26 @@ impl Dropdown {
         style: DropdownStyle,
         on_click: impl Fn(usize, &ClickEvent, &mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
-        self.render_with_click(labels, style, Some((id.into(), Rc::new(on_click))))
+        let items = labels
+            .iter()
+            .cloned()
+            .map(DropdownItem::plain)
+            .collect::<Vec<_>>();
+        self.render_items_with_click(&items, style, Some((id.into(), Rc::new(on_click))))
     }
 
-    fn render_with_click(
+    fn render_items_with_click(
         &self,
-        labels: &[String],
+        items: &[DropdownItem],
         style: DropdownStyle,
         on_click: Option<(SharedString, Rc<DropdownClick>)>,
     ) -> impl IntoElement {
-        let rows: Vec<AnyElement> = labels
+        let rows: Vec<AnyElement> = items
             .iter()
             .enumerate()
             .skip(self.list.scroll_offset)
             .take(self.list.max_visible)
-            .map(|(index, label)| {
+            .map(|(index, item)| {
                 let selected = index == self.list.selected;
                 let mut row = div()
                     .px_2()
@@ -102,7 +131,10 @@ impl Dropdown {
                     } else {
                         style.text
                     }))
-                    .child(label.clone());
+                    .child(item.label.clone());
+                if let Some(accent) = item.accent {
+                    row = row.border_l_2().border_color(rgb(accent));
+                }
                 if selected {
                     row = row.bg(rgb(style.bg_selected));
                 }

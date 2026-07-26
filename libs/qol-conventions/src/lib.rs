@@ -228,7 +228,7 @@ pub fn local_base_url() -> String {
 }
 
 pub fn settings_url(plugin_id: &str) -> String {
-    format!("http://{LOCAL_HOST}:{DEFAULT_PORT}/plugins/{plugin_id}/")
+    format!("http://{LOCAL_HOST}:{DEFAULT_PORT}/#plugins/{plugin_id}/config")
 }
 
 const RESERVED_PLUGIN_IDS: &[&str] = &["plugin-template"];
@@ -252,7 +252,7 @@ mod tests {
     fn settings_url_targets_the_plugin_namespace() {
         assert_eq!(
             settings_url("plugin-foo"),
-            "http://127.0.0.1:42700/plugins/plugin-foo/"
+            "http://127.0.0.1:42700/#plugins/plugin-foo/config"
         );
     }
 

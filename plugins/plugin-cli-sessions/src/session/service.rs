@@ -132,6 +132,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+    use crate::host::kitty_session_id;
 
     static LOADS: AtomicUsize = AtomicUsize::new(0);
     static TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -154,7 +155,7 @@ mod tests {
 
     fn pane(root_pid: i32, command: &str, foreground_pids: Vec<i32>) -> Pane {
         Pane {
-            window_id: 1,
+            id: kitty_session_id(1),
             root_pid,
             cwd: "/tmp".into(),
             title: "test".into(),
@@ -162,6 +163,7 @@ mod tests {
             reported_cmd: Some(command.into()),
             foreground_basenames: vec![command.into()],
             foreground_pids,
+            capabilities: qol_terminal_sessions::SessionCapabilities::ALL,
         }
     }
 

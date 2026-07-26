@@ -50,13 +50,13 @@ Status: shared.
 
 PID liveness, signaling, attached-child waiting, graceful termination escalation, process-group shutdown, and child reaping are shared across the tray, dev CLI, and plugins. Process ownership policy and caller-specific logging stay at each integration point.
 
-## CLI session domain
+## Live terminal sessions
 
-Target: `libs/qol-cli-sessions`
+Target: `libs/qol-terminal-sessions`
 
-Status: conditional.
+Status: shared.
 
-The CLI sessions plugin has clean domain boundaries around panes, terminal hosts, strategies, and registry state. Lift it only when another surface consumes the same live session model.
+CLI Sessions and Voice independently consume backend-neutral terminal identity, live discovery, screen reading, focus, validated text input, and an extensible CLI-session interpreter. The interpreter provides a generic fallback plus registered tool-specific enrichment for Codex, Claude, and future tools; consumers do not reproduce process detection or semantic session naming. Backend adapters, typed transport errors, and CLI interpretation belong in the library. Attention state, screen-state policy, notifications, and persistence remain in CLI Sessions; recognition, target selection, delivery policy, and conversational routing remain in Voice. Neither plugin brokers the other.
 
 ## Doctor report shape
 

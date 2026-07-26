@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 
-use plugin_cli_sessions::host::{Pane, TerminalHost};
+use plugin_cli_sessions::host::{kitty_session_id, Pane, TerminalHost};
 use plugin_cli_sessions::snapshot::capture_all;
 use plugin_cli_sessions::status::Status;
 
@@ -14,17 +14,17 @@ impl TerminalHost for FakeHost {
     fn discover(&self) -> Vec<Pane> {
         self.panes.clone()
     }
-    fn get_text(&self, window_id: u64) -> Option<String> {
+    fn get_text(&self, window_id: u64, _root_pid: i32) -> Option<String> {
         self.screens.get(&window_id).cloned()
     }
-    fn focus(&self, _window_id: u64) -> anyhow::Result<()> {
+    fn focus(&self, _window_id: u64, _root_pid: i32) -> anyhow::Result<()> {
         Ok(())
     }
 }
 
 fn pane(window_id: u64, title: &str, fg: &[&str]) -> Pane {
     Pane {
-        window_id,
+        id: kitty_session_id(window_id),
         root_pid: 1,
         cwd: "/a/proj".into(),
         title: title.into(),
@@ -32,6 +32,7 @@ fn pane(window_id: u64, title: &str, fg: &[&str]) -> Pane {
         reported_cmd: None,
         foreground_basenames: fg.iter().map(|s| s.to_string()).collect(),
         foreground_pids: vec![],
+        capabilities: qol_terminal_sessions::SessionCapabilities::ALL,
     }
 }
 

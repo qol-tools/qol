@@ -1,0 +1,7 @@
+config.json
+*.log
+.DS_Store
+target/
+qol-voice
+qol-voice.new
+.cargo/config.toml

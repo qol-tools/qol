@@ -1,12 +1,14 @@
 use std::sync::{Arc, Mutex};
 
 use plugin_cli_sessions::daemon::reconcile::tick;
-use plugin_cli_sessions::host::{Pane, TerminalHost};
+use plugin_cli_sessions::host::{kitty_session_id, Pane, TerminalHost};
 use plugin_cli_sessions::registry::{Registry, SessionState};
 use plugin_cli_sessions::service::{NoServiceProbe, ServiceProbe};
 use plugin_cli_sessions::status::Status;
-use plugin_cli_sessions::strategy::codex::{CodexSession, CodexStore, NoCodexStore};
 use plugin_cli_sessions::tool::Tool;
+use qol_terminal_sessions::cli::{
+    codex_tool, CliSessionDescriptor, CliSessionInterpreter, CliSessionStrategy, CliTool,
+};
 
 struct FakeHost {
     panes: Vec<Pane>,
@@ -17,10 +19,10 @@ impl TerminalHost for FakeHost {
     fn discover(&self) -> Vec<Pane> {
         self.panes.clone()
     }
-    fn get_text(&self, _window_id: u64) -> Option<String> {
+    fn get_text(&self, _window_id: u64, _root_pid: i32) -> Option<String> {
         Some(self.screen.clone())
     }
-    fn focus(&self, _window_id: u64) -> anyhow::Result<()> {
+    fn focus(&self, _window_id: u64, _root_pid: i32) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -34,22 +36,50 @@ impl ServiceProbe for YesService {
 }
 
 struct FakeCodex {
+    tool: CliTool,
     name: Option<String>,
     touched: bool,
 }
 
-impl CodexStore for FakeCodex {
-    fn session(&self, _pane: &Pane) -> Option<CodexSession> {
-        Some(CodexSession {
-            name: self.name.clone(),
-            touched: self.touched,
-        })
+impl CliSessionStrategy for FakeCodex {
+    fn tool(&self) -> &CliTool {
+        &self.tool
     }
+
+    fn priority(&self) -> i32 {
+        200
+    }
+
+    fn matches(&self, pane: &Pane) -> bool {
+        pane.foreground_basenames.iter().any(|name| name == "codex")
+    }
+
+    fn describe(&self, _pane: &Pane) -> CliSessionDescriptor {
+        CliSessionDescriptor {
+            tool: self.tool.clone(),
+            display_name: self.name.clone(),
+            external_id: Some("test-session".to_owned()),
+            has_activity: Some(self.touched),
+        }
+    }
+}
+
+fn interpreter() -> CliSessionInterpreter {
+    CliSessionInterpreter::system()
+}
+
+fn fake_codex(name: &str, touched: bool) -> CliSessionInterpreter {
+    CliSessionInterpreter::from_strategies([Arc::new(FakeCodex {
+        tool: codex_tool(),
+        name: Some(name.to_owned()),
+        touched,
+    }) as Arc<dyn CliSessionStrategy>])
+    .unwrap()
 }
 
 fn pane(window_id: u64, title: &str, at_prompt: bool, fg: &[&str], cmd: &str) -> Pane {
     Pane {
-        window_id,
+        id: kitty_session_id(window_id),
         root_pid: std::process::id() as i32,
         cwd: "/a/proj".into(),
         title: title.into(),
@@ -57,6 +87,7 @@ fn pane(window_id: u64, title: &str, at_prompt: bool, fg: &[&str], cmd: &str) ->
         reported_cmd: Some(cmd.into()),
         foreground_basenames: fg.iter().map(|s| s.to_string()).collect(),
         foreground_pids: vec![],
+        capabilities: qol_terminal_sessions::SessionCapabilities::ALL,
     }
 }
 
@@ -72,7 +103,7 @@ fn tick_classifies_codex_blocked_from_screen() {
         panes: vec![pane(11, "qol-monorepo", false, &["zsh", "codex"], "codex")],
         screen: SELECTION.into(),
     };
-    tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
     let rows = reg.lock().unwrap().sorted();
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -95,7 +126,7 @@ fn tick_claude_blocked_when_choice_picker_on_screen() {
         )],
         screen: CLAUDE_PICKER.into(),
     };
-    tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
         Status::NeedsYou,
@@ -106,15 +137,12 @@ fn tick_claude_blocked_when_choice_picker_on_screen() {
 #[test]
 fn tick_codex_idle_when_no_turn_taken() {
     let reg = Arc::new(Mutex::new(Registry::default()));
-    let store = FakeCodex {
-        name: Some("Asasdsadasd".into()),
-        touched: false,
-    };
+    let cli_interpreter = fake_codex("Asasdsadasd", false);
     let host = FakeHost {
         panes: vec![pane(12, "qol-monorepo", false, &["zsh", "codex"], "codex")],
         screen: String::new(),
     };
-    tick(&reg, &host, &store, &NoServiceProbe, 100);
+    tick(&reg, &host, &cli_interpreter, &NoServiceProbe, 100);
     let rows = reg.lock().unwrap().sorted();
     assert_eq!(
         rows[0].status,
@@ -135,7 +163,7 @@ fn tick_codex_your_turn_when_answer_ends_in_numbered_list() {
         panes: vec![pane(16, "qol-monorepo", false, &["zsh", "codex"], "codex")],
         screen: "What remains:\n1. Add golden parity tests\n2. Decide when to remove trace-py\n3. Remove the fallback flag\n4. Rename the WIP commit".into(),
     };
-    tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
         Status::YourTurn,
@@ -150,7 +178,7 @@ fn tick_returns_attention_notice_for_new_needs_you() {
         panes: vec![pane(40, "qol-monorepo", false, &["zsh", "codex"], "codex")],
         screen: SELECTION.into(),
     };
-    let notices = tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
+    let notices = tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
     assert_eq!(
         notices.len(),
         1,
@@ -166,9 +194,9 @@ fn tick_does_not_repeat_notice_while_status_holds() {
         panes: vec![pane(41, "qol-monorepo", false, &["zsh", "codex"], "codex")],
         screen: SELECTION.into(),
     };
-    let first = tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
+    let first = tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
     assert_eq!(first.len(), 1, "first transition into needs-you notifies");
-    let second = tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 101);
+    let second = tick(&reg, &host, &interpreter(), &NoServiceProbe, 101);
     assert!(second.is_empty(), "staying needs-you must not re-notify");
 }
 
@@ -179,7 +207,7 @@ fn tick_generic_listening_reads_service() {
         panes: vec![pane(30, "qol dev", false, &["zsh", "qol"], "qol dev")],
         screen: String::new(),
     };
-    tick(&reg, &host, &NoCodexStore, &YesService, 100);
+    tick(&reg, &host, &interpreter(), &YesService, 100);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
         Status::Service,
@@ -200,7 +228,7 @@ fn tick_agent_never_reads_service() {
         )],
         screen: "Welcome to Claude Code\n\u{276F} ".into(),
     };
-    tick(&reg, &host, &NoCodexStore, &YesService, 100);
+    tick(&reg, &host, &interpreter(), &YesService, 100);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
         Status::Unknown,
@@ -211,15 +239,12 @@ fn tick_agent_never_reads_service() {
 #[test]
 fn tick_codex_your_turn_when_turn_taken() {
     let reg = Arc::new(Mutex::new(Registry::default()));
-    let store = FakeCodex {
-        name: Some("Asasdsadasd".into()),
-        touched: true,
-    };
+    let cli_interpreter = fake_codex("Asasdsadasd", true);
     let host = FakeHost {
         panes: vec![pane(13, "qol-monorepo", false, &["zsh", "codex"], "codex")],
         screen: String::new(),
     };
-    tick(&reg, &host, &store, &NoServiceProbe, 100);
+    tick(&reg, &host, &cli_interpreter, &NoServiceProbe, 100);
     assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::YourTurn);
 }
 
@@ -236,7 +261,7 @@ fn tick_marks_claude_your_turn_then_keeps_ack() {
         )],
         screen: CLAUDE_WORKING.into(),
     };
-    tick(&reg, &working, &NoCodexStore, &NoServiceProbe, 100);
+    tick(&reg, &working, &interpreter(), &NoServiceProbe, 100);
     assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::Working);
 
     let parked = FakeHost {
@@ -249,7 +274,7 @@ fn tick_marks_claude_your_turn_then_keeps_ack() {
         )],
         screen: CLAUDE_DONE.into(),
     };
-    tick(&reg, &parked, &NoCodexStore, &NoServiceProbe, 200);
+    tick(&reg, &parked, &interpreter(), &NoServiceProbe, 200);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
         Status::YourTurn,
@@ -257,7 +282,7 @@ fn tick_marks_claude_your_turn_then_keeps_ack() {
     );
 
     reg.lock().unwrap().get_mut(10).unwrap().acknowledge();
-    tick(&reg, &parked, &NoCodexStore, &NoServiceProbe, 300);
+    tick(&reg, &parked, &interpreter(), &NoServiceProbe, 300);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
         Status::Acknowledged,
@@ -278,7 +303,7 @@ fn tick_claude_fresh_is_idle() {
         )],
         screen: "Welcome to Claude Code\n\u{276F} ".into(),
     };
-    tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
         Status::Unknown,
@@ -299,7 +324,7 @@ fn tick_labels_claude_from_title_not_launch_alias() {
         )],
         screen: String::new(),
     };
-    tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
     assert_eq!(
         reg.lock().unwrap().sorted()[0].name.as_deref(),
         Some("Improve logging"),
@@ -314,7 +339,7 @@ fn tick_labels_generic_from_command() {
         panes: vec![pane(21, "qol dev", false, &["zsh", "qol"], "qol dev")],
         screen: String::new(),
     };
-    tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
     let rows = reg.lock().unwrap().sorted();
     assert_eq!(rows[0].name.as_deref(), Some("qol dev"));
     assert_eq!(rows[0].status, Status::Working, "running generic => green");
@@ -342,7 +367,7 @@ fn tick_refreshes_restored_identity_fields() {
         screen: String::new(),
     };
 
-    tick(&reg, &host, &NoCodexStore, &NoServiceProbe, 100);
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
 
     let rows = reg.lock().unwrap().sorted();
     assert_eq!(rows[0].project, "proj");
@@ -363,14 +388,14 @@ fn tick_drops_panes_that_disappear() {
         )],
         screen: String::new(),
     };
-    tick(&reg, &present, &NoCodexStore, &NoServiceProbe, 100);
+    tick(&reg, &present, &interpreter(), &NoServiceProbe, 100);
     assert_eq!(reg.lock().unwrap().sorted().len(), 1);
 
     let gone = FakeHost {
         panes: vec![],
         screen: String::new(),
     };
-    tick(&reg, &gone, &NoCodexStore, &NoServiceProbe, 200);
+    tick(&reg, &gone, &interpreter(), &NoServiceProbe, 200);
     assert_eq!(
         reg.lock().unwrap().sorted().len(),
         0,

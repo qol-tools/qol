@@ -4,24 +4,28 @@
 an always-on-top panel, one row per session, colored by how much each session
 wants your attention.
 
-Two things vary independently, and each is a strategy behind a trait:
+Two things vary independently:
 
-- **where** the sessions live - the terminal (`host::TerminalHost`)
-- **what** a session's on-screen state *means* - the tool running in it
-  (`strategy::Strategy`)
+- **where** the sessions live - the shared `qol-terminal-sessions` capability
+- **what CLI tool** owns a session - the shared `CliSessionInterpreter`
+- **what** that tool's on-screen state means to this dashboard -
+  `strategy::Strategy`
 
 Everything else (the registry, the reconciler, the panel) is written against the
-universal middle vocabulary and never needs to know about kitty, Claude, or
-Codex.
+universal middle vocabulary and never needs to know about Kitty transport or
+tool-specific metadata storage.
 
 ## Data flow
 
 ```
                   every poll tick (reconcile::tick)
                               |
-        host.discover()  -> Vec<Pane>          (TerminalHost: the "where")
+        host.discover() -> Vec<Pane>           (shared terminal capability)
                               |
-        tool::classify(pane) -> Tool           (which CLI is in the foreground)
+        cli_interpreter.describe(pane)
+          -> CliSessionDescriptor              (shared generic/tool enrichment)
+                              |
+        Tool::from_cli_session(descriptor)      (dashboard attention policy)
                               |
         service_probe.is_service(pane)         (deterministic: does it hold a listener?)
                               |  -> Ctx.is_service (generic panes only)
@@ -37,28 +41,44 @@ Codex.
         registry (sorted by attention) -> SessionsView (panel)
 ```
 
-## Axis 1 - terminal host (`src/host`)
+## Axis 1 - terminal sessions
 
-`TerminalHost` is the only thing that talks to a concrete terminal:
+`qol-terminal-sessions` owns backend-neutral session identity, discovery, screen
+reading, focus, text input, and extensible CLI-session interpretation. Its
+session binding combines an opaque backend/session id with the root process id,
+so commands can reject a vanished or reused target.
+
+`CliSessionInterpreter` is a registry of `CliSessionStrategy` implementations.
+It always has a generic fallback, so every terminal works as a normal CLI
+session. Registered strategies enrich recognized tools with a stable tool id,
+display name, external session id, and optional activity evidence. Codex and
+Claude are built-ins; future tools are added at this shared seam rather than
+reimplemented in every consumer.
+
+The plugin-local `TerminalHost` is a narrow compatibility adapter for the
+dashboard:
 
 ```rust
 trait TerminalHost {
-    fn discover(&self) -> Vec<Pane>;          // enumerate live panes
-    fn get_text(&self, window_id: u64) -> Option<String>; // scrollback snapshot
-    fn focus(&self, window_id: u64) -> Result<()>;        // jump-to-session
+    fn discover(&self) -> Vec<Pane>;
+    fn get_text(&self, window_id: u64, root_pid: i32) -> Option<String>;
+    fn focus(&self, window_id: u64, root_pid: i32) -> Result<()>;
 }
 ```
 
-`Pane` is the host-neutral description the rest of the code consumes (window id,
-root pid, cwd, title, `at_prompt`, foreground process names/pids). `kitty` is the
-only implementation today; nothing outside `src/host/kitty` references kitty. The
-`host` config field is meant to select the implementation (only `kitty` is wired
-- see Known gaps).
+`Pane` is the shared `SessionFacts` model. The Kitty parser and command adapter
+live in the shared crate and are consumed independently by CLI Sessions and
+Voice. The same is true of CLI interpretation: both consumers create their own
+shared interpreter and neither brokers the other. This plugin owns only the
+numeric-window compatibility and attention policy needed by its existing
+registry and presentation model.
 
 ### Adding a terminal host
 
-1. Implement `TerminalHost` in a new `src/host/<name>` module, producing `Pane`s.
-2. Select it in `ui::run` where `Kitty` is constructed.
+1. Implement the segregated terminal capability traits in
+   `libs/qol-terminal-sessions`.
+2. Register the backend in `TerminalSessionService`.
+3. Keep dashboard-specific selection and attention behavior in this plugin.
 
 ## Axis 2 - tool strategy (`src/strategy`)
 
@@ -75,8 +95,9 @@ Only the generic `Cli` strategy can reach `Service`. Agents (`Claude`, `Codex`)
 override `read` and never consult `is_service`, so a thinking agent always keeps
 its `Working` spinner - its busy -> your-turn lifecycle is the whole point.
 
-`Claude` and `Codex` override `read`/`label`/`wants_screen` to detect the *same*
-four phases from their own tells instead of the generic prompt heuristics:
+`Claude` and `Codex` override `read`/`wants_screen` to detect the *same* four
+phases from their own tells instead of the generic prompt heuristics. Labels and
+session activity metadata arrive through the shared descriptor:
 
 | Phase   | `Cli` (generic)              | `Claude`                    | `Codex`                       |
 |---------|------------------------------|-----------------------------|-------------------------------|
@@ -90,15 +111,19 @@ The shared detectors live in `signal::screen` and `signal::title`
 `codex_banner`, `title_working`, ...). Strategies compose these; they don't
 re-implement screen parsing.
 
-`tool::classify` picks the `Tool` from the foreground process names, and
-`for_tool` maps it to the strategy.
+`Tool::from_cli_session` maps the shared tool id into the dashboard's known
+attention policies. Unrecognized registered tools retain generic dashboard
+behavior, so adding shared interpretation never requires this plugin to support
+a specialized state machine.
 
 ### Adding a tool strategy
 
-1. Add a `Tool` variant and a rule in `tool::classify`.
-2. Implement `Strategy` (override `read` for the phase detection, `label` for the
-   row title, `wants_screen` if you need the scrollback).
-3. Register it in `strategy::for_tool`.
+1. Implement and register `CliSessionStrategy` in `qol-terminal-sessions` for
+   shared detection and semantic metadata. All consumers immediately gain a
+   useful label while preserving generic CLI behavior.
+2. Only when the dashboard needs specialized attention semantics, add a local
+   `Tool` variant and implement `Strategy`.
+3. Register that optional attention strategy in `strategy::for_tool`.
 
 ## Deterministic service detection (`src/service`)
 

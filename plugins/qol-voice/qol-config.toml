@@ -1,0 +1,175 @@
+schema_version = 1
+title = "QoL Voice"
+description = "Enable speech recognition and route completed turns to a live terminal."
+
+[section.activation]
+label = "Voice"
+
+[field.voice_enabled]
+type = "boolean"
+config_key = "activation.enabled"
+label = "Enable QoL Voice"
+description = "Listen globally and route completed speech while this device is running."
+section = "activation"
+default = false
+
+[section.session]
+label = "Session"
+actions = ["start_listening", "stop_listening"]
+
+[field.session_status]
+type = "status"
+label = "Status"
+section = "session"
+query = "session_status"
+value_from = "state"
+label_map = { idle = "Not Listening", listening = "Listening", stopping = "Stopping", failed = "Failed" }
+tone_map = { listening = "success", stopping = "warning", failed = "error" }
+
+[field.live_transcript]
+type = "list"
+label = "Live Transcript"
+section = "session"
+query = "session_transcripts"
+row_label = "{text}"
+row_subtitle = "{detail}"
+empty_message = "Speak while Voice is listening to see your transcript."
+
+[section.audio]
+label = "Audio Input"
+
+[field.input_device]
+type = "select"
+config_key = "audio.input_device"
+label = "Microphone"
+description = "The source used for speech recognition."
+section = "audio"
+default = "default"
+query = "audio_sources"
+
+[field.input_device.option_labels]
+default = "System Default"
+
+[section.routing]
+label = "Terminal Routing"
+
+[field.terminal_target]
+type = "select"
+config_key = "routing.target"
+label = "Destination"
+description = "The live terminal session that receives completed speech."
+section = "routing"
+default = "none"
+query = "terminal_targets"
+
+[field.terminal_target.option_labels]
+none = "Do not send to a terminal"
+
+[field.delivery_mode]
+type = "select"
+config_key = "routing.delivery_mode"
+label = "Delivery"
+description = "Insert leaves text for review. Submit also presses Enter."
+section = "routing"
+default = "insert"
+options = ["insert", "submit"]
+
+[field.delivery_mode.option_labels]
+insert = "Insert only"
+submit = "Insert and submit"
+
+[section.recognition]
+label = "Speech Recognition"
+
+[field.stt_enabled]
+type = "boolean"
+config_key = "recognition.enabled"
+label = "Enable Transcription"
+section = "recognition"
+default = true
+
+[field.stt_provider]
+type = "select"
+config_key = "recognition.provider"
+label = "Provider"
+description = "Automatic selection prefers an available local provider."
+section = "recognition"
+default = "auto"
+query = "stt_providers"
+
+[field.stt_provider.option_labels]
+auto = "Automatic"
+
+[field.websocket_endpoint]
+type = "string"
+config_key = "recognition.websocket_endpoint"
+label = "WebSocket Endpoint"
+description = "Required when the WebSocket compatibility provider is selected."
+section = "recognition"
+default = ""
+
+[field.websocket_engine]
+type = "string"
+config_key = "recognition.websocket_engine"
+label = "Server Engine"
+description = "Engine identifier understood by the selected WebSocket server."
+section = "recognition"
+default = ""
+
+[section.segmentation]
+label = "Utterance Segmentation"
+
+[field.threshold]
+type = "number"
+variant = "slider"
+config_key = "segmentation.threshold_permille"
+label = "Activation Threshold"
+section = "segmentation"
+default = 10
+min = 1
+max = 200
+step = 1
+
+[field.onset]
+type = "number"
+config_key = "segmentation.onset_ms"
+label = "Onset Duration"
+description = "Continuous voice activity required before opening a turn."
+section = "segmentation"
+default = 100
+min = 10
+max = 2000
+step = 10
+
+[field.silence]
+type = "number"
+config_key = "segmentation.silence_ms"
+label = "Silence Duration"
+description = "Silence required before finalizing a turn."
+section = "segmentation"
+default = 700
+min = 50
+max = 10000
+step = 50
+
+[field.pre_roll]
+type = "number"
+config_key = "segmentation.pre_roll_ms"
+label = "Pre-roll"
+description = "Audio retained before voice activity is confirmed."
+section = "segmentation"
+default = 300
+min = 0
+max = 5000
+step = 50
+
+[field.max_utterance]
+type = "number"
+config_key = "segmentation.max_utterance_ms"
+label = "Maximum Utterance"
+description = "Long speech is segmented at this duration."
+section = "segmentation"
+default = 30000
+min = 1000
+max = 300000
+step = 1000

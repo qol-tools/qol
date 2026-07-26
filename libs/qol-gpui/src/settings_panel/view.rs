@@ -11,10 +11,10 @@ use super::persistence::save_values;
 use super::rows::{
     apply_runtime_query, begin_list_item_action, list_item_actions, merged_config,
     primary_list_item_action, query_flag_value, runtime_query_names, section_label_for, Row,
-    RowControl, RowSection,
+    RowControl, RowSection, SelectOption,
 };
 use super::{SettingsPanel, SettingsRuntime};
-use crate::dropdown::{Dropdown, DropdownEvent, DropdownStyle};
+use crate::dropdown::{Dropdown, DropdownEvent, DropdownItem, DropdownStyle};
 use crate::spinner::Spinner;
 use crate::status_indicator::{StatusIndicator, StatusTone};
 use crate::surface::{PanelDragArea, SurfaceDismisser};
@@ -923,17 +923,18 @@ impl SettingsPanelView {
         }
         match &self.rows[index].control {
             RowControl::Toggle(value) => binary_state_label(*value).into(),
-            RowControl::Select { labels, index, .. } => {
-                labels.get(*index).cloned().unwrap_or_default()
-            }
+            RowControl::Select { options, index, .. } => options
+                .get(*index)
+                .map(|option| option.label.clone())
+                .unwrap_or_default(),
             RowControl::MultiSelect {
-                labels, selected, ..
+                options, selected, ..
             } => {
-                let chosen: Vec<&str> = labels
+                let chosen: Vec<&str> = options
                     .iter()
                     .zip(selected)
                     .filter(|(_, on)| **on)
-                    .map(|(label, _)| label.as_str())
+                    .map(|(option, _)| option.label.as_str())
                     .collect();
                 if chosen.is_empty() {
                     "none".into()
@@ -1047,6 +1048,9 @@ impl SettingsPanelView {
                     .bg(rgb(color)),
             );
         }
+        if let Some(accent) = self.option_accent(index) {
+            cell = cell.child(div().w_2().h_2().rounded_full().bg(rgb(accent)));
+        }
         cell.child(
             div()
                 .text_sm()
@@ -1076,6 +1080,13 @@ impl SettingsPanelView {
             value
         };
         parsed_color(text)
+    }
+
+    fn option_accent(&self, index: usize) -> Option<u32> {
+        let RowControl::Select { options, index, .. } = &self.rows[index].control else {
+            return None;
+        };
+        options.get(*index)?.accent
     }
 
     fn render_row(&self, index: usize, cx: &mut Context<Self>) -> Div {
@@ -1146,20 +1157,26 @@ impl SettingsPanelView {
                 .border_color(rgb(self.palette.row_border_selected));
             if let Some(ActiveControl::Dropdown(dropdown)) = &self.active_control {
                 match &row.control {
-                    RowControl::Select { labels, .. } => {
-                        line = line.child(dropdown.render(labels, self.dropdown_style()));
+                    RowControl::Select { options, .. } => {
+                        let items = dropdown_items(options);
+                        line = line.child(dropdown.render_items(&items, self.dropdown_style()));
                     }
                     RowControl::MultiSelect {
-                        labels, selected, ..
+                        options, selected, ..
                     } => {
-                        let marked: Vec<String> = labels
+                        let items = options
                             .iter()
                             .zip(selected)
-                            .map(|(label, on)| {
-                                format!("{} {label}", if *on { "[x]" } else { "[ ]" })
+                            .map(|(option, on)| DropdownItem {
+                                label: format!(
+                                    "{} {}",
+                                    if *on { "[x]" } else { "[ ]" },
+                                    option.label
+                                ),
+                                accent: option.accent,
                             })
-                            .collect();
-                        line = line.child(dropdown.render(&marked, self.dropdown_style()));
+                            .collect::<Vec<_>>();
+                        line = line.child(dropdown.render_items(&items, self.dropdown_style()));
                     }
                     RowControl::Toggle(_)
                     | RowControl::Number { .. }
@@ -1641,6 +1658,16 @@ fn is_number_seed(ch: &str) -> bool {
             .all(|c| c.is_ascii_digit() || c == '-' || c == '.')
 }
 
+fn dropdown_items(options: &[SelectOption]) -> Vec<DropdownItem> {
+    options
+        .iter()
+        .map(|option| DropdownItem {
+            label: option.label.clone(),
+            accent: option.accent,
+        })
+        .collect()
+}
+
 fn parsed_number(edit: &str, min: Option<f64>, max: Option<f64>) -> Option<f64> {
     let mut value = edit.trim().parse::<f64>().ok().filter(|v| v.is_finite())?;
     if let Some(min) = min {
@@ -1928,7 +1955,7 @@ mod tests {
         visible_row_window, Intent, ListIntent, Row, RowControl,
     };
     use crate::scroll_list::ScrollList;
-    use crate::settings_panel::rows::{rows_from_resolved, visible_row_indices};
+    use crate::settings_panel::rows::{rows_from_resolved, visible_row_indices, SelectOption};
 
     fn rows(headers: &[bool]) -> Vec<Row> {
         headers
@@ -2167,8 +2194,10 @@ default = "visible"
             step: 1.0,
         };
         let select = RowControl::Select {
-            options: vec!["one".into(), "two".into()],
-            labels: vec!["One".into(), "Two".into()],
+            options: vec![
+                SelectOption::plain("one", "One"),
+                SelectOption::plain("two", "Two"),
+            ],
             index: 0,
             dynamic: None,
         };

@@ -9,6 +9,7 @@ use gpui::{
     px, size, AppContext, Application, AsyncApp, Bounds, Focusable, Pixels,
     WindowBackgroundAppearance, WindowBounds, WindowOptions,
 };
+use qol_terminal_sessions::cli::CliSessionInterpreter;
 
 use crate::config;
 use crate::daemon::actions::{self, Command};
@@ -20,7 +21,6 @@ use crate::session::registry::Registry;
 use crate::session::service::SystemServiceProbe;
 use crate::session::status::Status;
 use crate::storage::{paths, persist};
-use crate::strategy::codex::DiskCodexStore;
 use crate::ui::placement::{corner_bounds, Corner};
 use crate::ui::{trace, SessionsView, WINDOW_TITLE};
 use qol_gpui::command_loop::LoopFlow;
@@ -42,7 +42,7 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
     anomaly::enable();
 
     let registry: Arc<Mutex<Registry>> = Arc::new(Mutex::new(Registry::default()));
-    let host: Arc<dyn TerminalHost + Send + Sync> = Arc::new(Kitty);
+    let host: Arc<dyn TerminalHost + Send + Sync> = Arc::new(Kitty::default());
 
     if let Some(path) = paths::state_path() {
         if let Ok(mut reg) = registry.lock() {
@@ -58,13 +58,13 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
     let cfg = config::load();
     let corner = cfg.corner();
     let service_commands: Arc<[String]> = Arc::from(cfg.service_commands);
-    let codex_store = Arc::new(DiskCodexStore::default());
+    let cli_interpreter = Arc::new(CliSessionInterpreter::system());
 
     let probe = SystemServiceProbe::snapshot(service_commands.to_vec());
     reconcile::tick(
         &registry,
         host.as_ref(),
-        codex_store.as_ref(),
+        cli_interpreter.as_ref(),
         &probe,
         now_secs(),
     );
@@ -83,7 +83,7 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
         spawn_reconcile_timer(
             reg_for_app.clone(),
             host_for_app.clone(),
-            codex_store.clone(),
+            cli_interpreter.clone(),
             service_commands.clone(),
             panel.clone(),
             show_on_start,
@@ -187,7 +187,7 @@ fn open_panel(
 fn spawn_reconcile_timer(
     registry: Arc<Mutex<Registry>>,
     host: Arc<dyn TerminalHost + Send + Sync>,
-    codex_store: Arc<DiskCodexStore>,
+    cli_interpreter: Arc<CliSessionInterpreter>,
     service_commands: Arc<[String]>,
     panel: SharedPanel,
     show_on_start: bool,
@@ -199,7 +199,7 @@ fn spawn_reconcile_timer(
         cx.background_executor().timer(interval).await;
         let reg = registry.clone();
         let h = host.clone();
-        let store = codex_store.clone();
+        let interpreter = cli_interpreter.clone();
         let sc = service_commands.clone();
         let cache = caches.clone();
         let now = now_secs();
@@ -209,7 +209,7 @@ fn spawn_reconcile_timer(
                 Ok(mut caches) => reconcile::tick_with_caches(
                     &reg,
                     h.as_ref(),
-                    store.as_ref(),
+                    interpreter.as_ref(),
                     &probe,
                     now,
                     &mut caches,
@@ -376,18 +376,18 @@ fn jump_to_next_attention_without_panel(
     host: &(dyn TerminalHost + Send + Sync),
     attention_cursor: &AttentionCursor,
 ) {
-    let Some(window_id) = next_attention_window_id(registry, attention_cursor) else {
+    let Some((window_id, root_pid)) = next_attention_target(registry, attention_cursor) else {
         return;
     };
     trace::focus_start("next-attention", window_id);
-    let result = host.focus(window_id);
+    let result = host.focus(window_id, root_pid);
     trace::focus_result("next-attention", window_id, &result);
 }
 
-fn next_attention_window_id(
+fn next_attention_target(
     registry: &Arc<Mutex<Registry>>,
     attention_cursor: &AttentionCursor,
-) -> Option<u64> {
+) -> Option<(u64, i32)> {
     let rows = registry.lock().ok()?.sorted();
     let statuses: Vec<Status> = rows.iter().map(|row| row.status).collect();
     let current = attention_cursor
@@ -395,11 +395,12 @@ fn next_attention_window_id(
         .ok()
         .and_then(|cursor| cursor.and_then(|id| rows.iter().position(|row| row.window_id == id)));
     let index = crate::ui::nav::next_attention(&statuses, current)?;
-    let window_id = rows.get(index)?.window_id;
+    let target = rows.get(index)?;
+    let window_id = target.window_id;
     if let Ok(mut cursor) = attention_cursor.lock() {
         *cursor = Some(window_id);
     }
-    Some(window_id)
+    Some((window_id, target.root_pid))
 }
 
 #[cfg(test)]

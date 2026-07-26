@@ -81,15 +81,21 @@ impl SessionsView {
         self.selection.select(window_id);
         self.last_jumped = Some(window_id);
         let rows = self.rows();
-        match rows
+        let root_pid = match rows
             .iter()
             .enumerate()
             .find(|(_, row)| row.window_id == window_id)
         {
-            Some((index, row)) => trace::jump_target(reason, index, rows.len(), row),
-            None => trace::jump_missing(reason, rows.len(), rows.len()),
-        }
-        self.focus_window_async(window_id, reason, cx);
+            Some((index, row)) => {
+                trace::jump_target(reason, index, rows.len(), row);
+                row.root_pid
+            }
+            None => {
+                trace::jump_missing(reason, rows.len(), rows.len());
+                return;
+            }
+        };
+        self.focus_window_async(window_id, root_pid, reason, cx);
     }
 
     pub fn move_selection_down(&mut self) {
@@ -109,14 +115,20 @@ impl SessionsView {
         }
     }
 
-    fn focus_window_async(&self, window_id: u64, reason: &'static str, cx: &mut Context<Self>) {
+    fn focus_window_async(
+        &self,
+        window_id: u64,
+        root_pid: i32,
+        reason: &'static str,
+        cx: &mut Context<Self>,
+    ) {
         let host = self.host.clone();
         trace::focus_start(reason, window_id);
         cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let async_cx = cx.clone();
             async move {
                 let result = async_cx
-                    .background_spawn(async move { host.focus(window_id) })
+                    .background_spawn(async move { host.focus(window_id, root_pid) })
                     .await;
                 trace::focus_result(reason, window_id, &result);
             }

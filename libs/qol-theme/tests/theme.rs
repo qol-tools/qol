@@ -118,8 +118,6 @@ fn cli_sessions_palette_derives_from_system_roles() {
         with_alpha(DARK_SYSTEM.info, 0x14)
     );
     assert_eq!(palette.transparent_rgba, 0x00000000);
-    assert_eq!(palette.claude, 0xd97757);
-    assert_eq!(palette.codex, 0x10a37f);
 }
 
 #[test]

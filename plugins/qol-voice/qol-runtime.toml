@@ -1,0 +1,40 @@
+schema_version = 1
+
+[action.start_listening]
+description = "Start a voice session using the current plugin configuration"
+
+[action.stop_listening]
+description = "Stop the active voice session"
+
+[action.request_assistant_turn]
+description = "Interrupt user speech and begin an assistant turn"
+
+[action.set_activation]
+description = "Persist and apply whether Voice is globally active on this device"
+
+[action.select_terminal_target]
+description = "Persist and activate a live terminal destination"
+
+[query.session_status]
+description = "Current voice-session lifecycle state"
+poll_interval_ms = 1000
+
+[query.session_events]
+description = "Replayable voice-session observations and effects"
+poll_interval_ms = 100
+
+[query.session_transcripts]
+description = "Recent speech hypotheses grouped by conversational turn"
+poll_interval_ms = 250
+
+[query.audio_sources]
+description = "Available microphone sources"
+poll_interval_ms = 5000
+
+[query.stt_providers]
+description = "Registered speech-recognition providers"
+poll_interval_ms = 30000
+
+[query.terminal_targets]
+description = "Live terminal sessions eligible for voice text delivery"
+poll_interval_ms = 2000

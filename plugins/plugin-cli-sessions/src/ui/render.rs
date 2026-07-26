@@ -215,11 +215,12 @@ fn identity_line(s: &SessionState) -> impl IntoElement {
     let palette = current_palette();
     let branch = s.branch.clone().unwrap_or_default();
     let label = s.name.clone().unwrap_or_else(|| s.project.clone());
-    let (tool_tag, tool_color) = match s.tool {
-        Tool::Claude => ("Claude", palette.claude),
-        Tool::Codex => ("Codex", palette.codex),
-        Tool::Generic => ("", palette.text_faint),
+    let tool_tag = match s.tool {
+        Tool::Claude => "Claude",
+        Tool::Codex => "Codex",
+        Tool::Generic => "",
     };
+    let tool_color = s.tool.accent().rgb24();
 
     div()
         .flex()

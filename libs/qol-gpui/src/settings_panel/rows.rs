@@ -36,21 +36,36 @@ pub(super) struct ListActions {
 #[derive(Debug)]
 pub(super) struct OptionQuery {
     name: String,
-    seeded: Vec<(String, String)>,
+    seeded: Vec<SelectOption>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SelectOption {
+    pub(super) value: String,
+    pub(super) label: String,
+    pub(super) accent: Option<u32>,
+}
+
+impl SelectOption {
+    pub(super) fn plain(value: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            label: label.into(),
+            accent: None,
+        }
+    }
 }
 
 #[derive(Debug)]
 pub(super) enum RowControl {
     Toggle(bool),
     Select {
-        options: Vec<String>,
-        labels: Vec<String>,
+        options: Vec<SelectOption>,
         index: usize,
         dynamic: Option<OptionQuery>,
     },
     MultiSelect {
-        options: Vec<String>,
-        labels: Vec<String>,
+        options: Vec<SelectOption>,
         selected: Vec<bool>,
         dynamic: Option<OptionQuery>,
     },
@@ -276,11 +291,10 @@ fn control_for(field: &ResolvedField) -> Option<RowControl> {
                 FieldDefault::String(value) => value.clone(),
                 _ => return None,
             };
-            let (options, labels, dynamic) = field_options(field, std::slice::from_ref(&current));
-            let index = options.iter().position(|o| *o == current)?;
+            let (options, dynamic) = field_options(field, std::slice::from_ref(&current));
+            let index = options.iter().position(|option| option.value == current)?;
             Some(RowControl::Select {
                 options,
-                labels,
                 index,
                 dynamic,
             })
@@ -303,14 +317,13 @@ fn control_for(field: &ResolvedField) -> Option<RowControl> {
                 if field.options.is_empty() && field.query.is_none() {
                     Some(RowControl::TextList(values.clone()))
                 } else {
-                    let (options, labels, dynamic) = field_options(field, values);
+                    let (options, dynamic) = field_options(field, values);
                     Some(RowControl::MultiSelect {
                         selected: options
                             .iter()
-                            .map(|option| values.contains(option))
+                            .map(|option| values.contains(&option.value))
                             .collect(),
                         options,
-                        labels,
                         dynamic,
                     })
                 }
@@ -386,17 +399,17 @@ fn control_for(field: &ResolvedField) -> Option<RowControl> {
 fn field_options(
     field: &ResolvedField,
     current: &[String],
-) -> (Vec<String>, Vec<String>, Option<OptionQuery>) {
+) -> (Vec<SelectOption>, Option<OptionQuery>) {
     let seeded = seeded_options(field);
-    let (options, labels) = merge_options(&seeded, &[], current);
+    let options = merge_options(&seeded, &[], current);
     let dynamic = field.query.as_ref().map(|name| OptionQuery {
         name: name.clone(),
         seeded,
     });
-    (options, labels, dynamic)
+    (options, dynamic)
 }
 
-fn seeded_options(field: &ResolvedField) -> Vec<(String, String)> {
+fn seeded_options(field: &ResolvedField) -> Vec<SelectOption> {
     let mut seeded = field
         .options
         .iter()
@@ -406,13 +419,13 @@ fn seeded_options(field: &ResolvedField) -> Vec<(String, String)> {
                 .get(option)
                 .cloned()
                 .unwrap_or_else(|| option.clone());
-            (option.clone(), label)
+            SelectOption::plain(option, label)
         })
         .collect::<Vec<_>>();
     if field.query.is_some() {
         for (option, label) in &field.option_labels {
-            if !seeded.iter().any(|(candidate, _)| candidate == option) {
-                seeded.push((option.clone(), label.clone()));
+            if !seeded.iter().any(|candidate| &candidate.value == option) {
+                seeded.push(SelectOption::plain(option, label));
             }
         }
     }
@@ -420,23 +433,27 @@ fn seeded_options(field: &ResolvedField) -> Vec<(String, String)> {
 }
 
 fn merge_options(
-    seeded: &[(String, String)],
-    dynamic: &[(String, String)],
+    seeded: &[SelectOption],
+    dynamic: &[SelectOption],
     current: &[String],
-) -> (Vec<String>, Vec<String>) {
+) -> Vec<SelectOption> {
     let mut merged = seeded.to_vec();
-    for (value, label) in dynamic {
-        if !merged.iter().any(|(option, _)| option == value) {
-            merged.push((value.clone(), label.clone()));
+    for option in dynamic {
+        if let Some(seeded) = merged
+            .iter_mut()
+            .find(|candidate| candidate.value == option.value)
+        {
+            seeded.accent = option.accent;
+            continue;
         }
+        merged.push(option.clone());
     }
     for value in current.iter().rev() {
-        if !merged.iter().any(|(option, _)| option == value) {
-            merged.insert(0, (value.clone(), value.clone()));
+        if !merged.iter().any(|option| &option.value == value) {
+            merged.insert(0, SelectOption::plain(value, value));
         }
     }
-    let (options, labels) = merged.into_iter().unzip();
-    (options, labels)
+    merged
 }
 
 pub(super) fn merged_config(base: &serde_json::Value, rows: &[Row]) -> serde_json::Value {
@@ -456,7 +473,7 @@ pub(super) fn merged_config(base: &serde_json::Value, rows: &[Row]) -> serde_jso
 fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
     match control {
         RowControl::Toggle(value) => Some(serde_json::json!(value)),
-        RowControl::Select { options, index, .. } => Some(serde_json::json!(options[*index])),
+        RowControl::Select { options, index, .. } => Some(serde_json::json!(options[*index].value)),
         RowControl::MultiSelect {
             options, selected, ..
         } => {
@@ -464,7 +481,7 @@ fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
                 .iter()
                 .zip(selected)
                 .filter(|(_, on)| **on)
-                .map(|(option, _)| option)
+                .map(|(option, _)| &option.value)
                 .collect();
             Some(serde_json::json!(values))
         }
@@ -481,7 +498,7 @@ fn row_value(control: &RowControl) -> Option<FieldDefault> {
     match control {
         RowControl::Toggle(value) => Some(FieldDefault::Boolean(*value)),
         RowControl::Select { options, index, .. } => {
-            Some(FieldDefault::String(options[*index].clone()))
+            Some(FieldDefault::String(options[*index].value.clone()))
         }
         RowControl::MultiSelect {
             options, selected, ..
@@ -490,7 +507,7 @@ fn row_value(control: &RowControl) -> Option<FieldDefault> {
                 .iter()
                 .zip(selected)
                 .filter(|(_, on)| **on)
-                .map(|(option, _)| option.clone())
+                .map(|(option, _)| option.value.clone())
                 .collect();
             Some(FieldDefault::StringArray(values))
         }
@@ -549,26 +566,25 @@ pub(super) fn apply_runtime_query(
         match &mut row.control {
             RowControl::Select {
                 options,
-                labels,
                 index,
                 dynamic: Some(dynamic),
             } if dynamic.name == query => {
                 if let Ok(value) = &result {
-                    let current = options.get(*index).cloned().unwrap_or_default();
+                    let current = options
+                        .get(*index)
+                        .map(|option| option.value.clone())
+                        .unwrap_or_default();
                     let fetched = options_from_value(value);
-                    let (next_options, next_labels) =
+                    *options =
                         merge_options(&dynamic.seeded, &fetched, std::slice::from_ref(&current));
-                    *index = next_options
+                    *index = options
                         .iter()
-                        .position(|option| option == &current)
+                        .position(|option| option.value == current)
                         .unwrap_or(0);
-                    *options = next_options;
-                    *labels = next_labels;
                 }
             }
             RowControl::MultiSelect {
                 options,
-                labels,
                 selected,
                 dynamic: Some(dynamic),
             } if dynamic.name == query => {
@@ -577,17 +593,14 @@ pub(super) fn apply_runtime_query(
                         .iter()
                         .zip(selected.iter())
                         .filter(|(_, selected)| **selected)
-                        .map(|(option, _)| option.clone())
+                        .map(|(option, _)| option.value.clone())
                         .collect::<Vec<_>>();
                     let fetched = options_from_value(value);
-                    let (next_options, next_labels) =
-                        merge_options(&dynamic.seeded, &fetched, &current);
-                    *selected = next_options
+                    *options = merge_options(&dynamic.seeded, &fetched, &current);
+                    *selected = options
                         .iter()
-                        .map(|option| current.contains(option))
+                        .map(|option| current.contains(&option.value))
                         .collect();
-                    *options = next_options;
-                    *labels = next_labels;
                 }
             }
             RowControl::Action {
@@ -780,14 +793,14 @@ fn render_template(template: &str, row: &serde_json::Value) -> String {
     rendered
 }
 
-fn options_from_value(value: &serde_json::Value) -> Vec<(String, String)> {
+fn options_from_value(value: &serde_json::Value) -> Vec<SelectOption> {
     value
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|item| {
             if let Some(value) = item.as_str() {
-                return Some((value.to_string(), value.to_string()));
+                return Some(SelectOption::plain(value, value));
             }
             let value = item.get("value")?.as_str()?.to_string();
             let label = item
@@ -795,9 +808,21 @@ fn options_from_value(value: &serde_json::Value) -> Vec<(String, String)> {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or(&value)
                 .to_string();
-            Some((value, label))
+            Some(SelectOption {
+                value,
+                label,
+                accent: option_accent(item),
+            })
         })
         .collect()
+}
+
+fn option_accent(item: &serde_json::Value) -> Option<u32> {
+    let color = item.get("accent")?;
+    let red = u8::try_from(color.get("red")?.as_u64()?).ok()?;
+    let green = u8::try_from(color.get("green")?.as_u64()?).ok()?;
+    let blue = u8::try_from(color.get("blue")?.as_u64()?).ok()?;
+    Some(u32::from(red) << 16 | u32::from(green) << 8 | u32::from(blue))
 }
 
 fn number_json(value: f64) -> serde_json::Value {
@@ -831,9 +856,9 @@ fn set_config_value(root: &mut serde_json::Value, dotted_key: &str, value: serde
 mod tests {
     use super::{
         apply_runtime_query, begin_list_item_action, list_item_actions, list_items, merged_config,
-        primary_list_item_action, row_is_visible, row_value_json, rows_from_resolved,
-        runtime_query_names, section_label_for, sections_from_resolved, set_config_value,
-        visible_row_indices, ResolvedConfig, Row, RowControl,
+        option_accent, primary_list_item_action, row_is_visible, row_value_json,
+        rows_from_resolved, runtime_query_names, section_label_for, sections_from_resolved,
+        set_config_value, visible_row_indices, ResolvedConfig, Row, RowControl, SelectOption,
     };
     use crate::status_indicator::StatusTone;
 
@@ -907,6 +932,10 @@ default = "202322"
         qol_config::normalized::resolve_config(&spec, &overrides).unwrap()
     }
 
+    fn option(value: &str, label: &str) -> SelectOption {
+        SelectOption::plain(value, label)
+    }
+
     #[test]
     fn rows_map_every_supported_kind_with_override_values() {
         let rows = rows_from_resolved(&resolved(serde_json::json!({
@@ -918,7 +947,7 @@ default = "202322"
         assert!(matches!(rows[0].control, RowControl::Toggle(false)));
         match &rows[1].control {
             RowControl::Select { index, options, .. } => {
-                assert_eq!(options[*index], "toast");
+                assert_eq!(options[*index].value, "toast");
             }
             other => panic!("expected select, got {other:?}"),
         }
@@ -931,13 +960,15 @@ default = "202322"
         assert!(matches!(&rows[3].control, RowControl::Text(v) if v == "default"));
         match &rows[4].control {
             RowControl::MultiSelect {
-                options,
-                labels,
-                selected,
-                ..
+                options, selected, ..
             } => {
-                assert_eq!(options, &["mic", "system"]);
-                assert_eq!(labels, &["Microphone", "System Audio"]);
+                assert_eq!(
+                    options,
+                    &[
+                        option("mic", "Microphone"),
+                        option("system", "System Audio")
+                    ]
+                );
                 assert_eq!(selected, &[true, false]);
             }
             other => panic!("expected multi select, got {other:?}"),
@@ -1158,22 +1189,63 @@ default = "System Default"
                 &mut rows,
                 "audio_sources",
                 Ok(serde_json::json!([
-                    { "value": "alsa_input.foo", "label": "Built-in Mic" }
+                    {
+                        "value": "alsa_input.foo",
+                        "label": "Built-in Mic",
+                        "accent": { "red": 130, "green": 170, "blue": 255 }
+                    }
                 ])),
             );
             match &rows[0].control {
-                RowControl::Select {
-                    options,
-                    labels,
-                    index,
-                    ..
-                } => {
-                    assert_eq!(options, &expected_options, "overrides: {overrides}");
-                    assert_eq!(labels, &expected_labels, "overrides: {overrides}");
+                RowControl::Select { options, index, .. } => {
+                    assert_eq!(
+                        options
+                            .iter()
+                            .map(|option| option.value.as_str())
+                            .collect::<Vec<_>>(),
+                        expected_options,
+                        "overrides: {overrides}"
+                    );
+                    assert_eq!(
+                        options
+                            .iter()
+                            .map(|option| option.label.as_str())
+                            .collect::<Vec<_>>(),
+                        expected_labels,
+                        "overrides: {overrides}"
+                    );
+                    let dynamic = options
+                        .iter()
+                        .find(|option| option.value == "alsa_input.foo")
+                        .unwrap();
+                    assert_eq!(dynamic.accent, Some(0x82aaff));
                     assert_eq!(*index, expected_index, "overrides: {overrides}");
                 }
                 other => panic!("expected select, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn dynamic_option_accents_accept_only_complete_rgb_bytes() {
+        let cases = [
+            (
+                serde_json::json!({"accent": {"red": 130, "green": 170, "blue": 255}}),
+                Some(0x82aaff),
+            ),
+            (
+                serde_json::json!({"accent": {"red": 256, "green": 170, "blue": 255}}),
+                None,
+            ),
+            (
+                serde_json::json!({"accent": {"red": 130, "green": 170}}),
+                None,
+            ),
+            (serde_json::json!({"accent": "accent"}), None),
+            (serde_json::json!({}), None),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(option_accent(&input), expected, "input: {input}");
         }
     }
 
@@ -1196,7 +1268,9 @@ query = "audio_sources"
         let rows = rows_from_resolved(&resolved);
 
         match &rows[0].control {
-            RowControl::Select { options, .. } => assert_eq!(options, &["default"]),
+            RowControl::Select { options, .. } => {
+                assert_eq!(options, &[option("default", "default")])
+            }
             other => panic!("expected select, got {other:?}"),
         }
         assert_eq!(runtime_query_names(&rows), ["audio_sources"]);
@@ -1233,13 +1307,16 @@ query = "managed_device_options"
 
         match &rows[0].control {
             RowControl::MultiSelect {
-                options,
-                labels,
-                selected,
-                ..
+                options, selected, ..
             } => {
-                assert_eq!(options, &["AA:00", "AA:01", "AA:02"]);
-                assert_eq!(labels, &["AA:00", "Headphones · AA:01", "Keyboard · AA:02"]);
+                assert_eq!(
+                    options,
+                    &[
+                        option("AA:00", "AA:00"),
+                        option("AA:01", "Headphones · AA:01"),
+                        option("AA:02", "Keyboard · AA:02")
+                    ]
+                );
                 assert_eq!(selected, &[true, false, true]);
             }
             other => panic!("expected multi select, got {other:?}"),
@@ -1261,8 +1338,7 @@ query = "managed_device_options"
                 config_key: "action_mode".into(),
                 visibility: None,
                 control: RowControl::Select {
-                    options: vec!["hold_to_switch".into(), "sticky".into()],
-                    labels: vec!["Hold".into(), "Sticky".into()],
+                    options: vec![option("hold_to_switch", "Hold"), option("sticky", "Sticky")],
                     index: 1,
                     dynamic: None,
                 },
@@ -1319,8 +1395,10 @@ query = "managed_device_options"
     #[test]
     fn multi_select_value_json_preserves_option_order() {
         let control = RowControl::MultiSelect {
-            options: vec!["mic".into(), "system".into()],
-            labels: vec!["Microphone".into(), "System Audio".into()],
+            options: vec![
+                option("mic", "Microphone"),
+                option("system", "System Audio"),
+            ],
             selected: vec![false, true],
             dynamic: None,
         };
