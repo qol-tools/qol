@@ -156,12 +156,13 @@ impl AltTabApp {
                             this.action_mode
                         );
                     }
-                    FocusOutDecision::IgnoreAltHeld => {
+                    FocusOutDecision::RefocusAltHeld => {
                         qol_runtime::probe!(
                             "FOCUS_DISMISS_OUTCOME",
-                            "outcome=ignored_alt_held visible={picker_visible} mode={:?} modifier_held={modifier_held}",
+                            "outcome=refocused_alt_held visible={picker_visible} mode={:?} modifier_held={modifier_held}",
                             this.action_mode
                         );
+                        this.focus_for_keys("focus-out/alt-held", None, window);
                     }
                     FocusOutDecision::Dismiss => {
                         qol_runtime::probe!(
@@ -591,7 +592,7 @@ async fn alt_release_check(
 #[derive(Debug, PartialEq, Eq)]
 enum FocusOutDecision {
     IgnoreHidden,
-    IgnoreAltHeld,
+    RefocusAltHeld,
     Dismiss,
 }
 
@@ -604,7 +605,7 @@ fn focus_out_decision(
         return FocusOutDecision::IgnoreHidden;
     }
     if action_mode == &ActionMode::HoldToSwitch && modifier_held {
-        return FocusOutDecision::IgnoreAltHeld;
+        return FocusOutDecision::RefocusAltHeld;
     }
     FocusOutDecision::Dismiss
 }
@@ -680,10 +681,10 @@ mod focus_out_tests {
     }
 
     #[test]
-    fn hold_mode_ignores_focus_out_while_alt_is_held() {
+    fn hold_mode_recovers_focus_out_while_alt_is_held() {
         assert_eq!(
             focus_out_decision(true, &ActionMode::HoldToSwitch, true),
-            FocusOutDecision::IgnoreAltHeld
+            FocusOutDecision::RefocusAltHeld
         );
     }
 
