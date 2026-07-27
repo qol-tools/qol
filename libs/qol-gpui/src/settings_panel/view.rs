@@ -634,7 +634,9 @@ impl SettingsPanelView {
         let row_index = self.selected;
         let refresh_query = active_query.clone();
         let refresh_value_from = active_value_from.clone();
+        #[cfg(debug_assertions)]
         let plugin_id = self.panel.plugin_id.clone();
+        #[cfg(debug_assertions)]
         let dispatched_action = action.clone();
         let rearm_poll_generation = refresh_query.is_some().then(|| {
             self.pause_runtime_poll();
@@ -672,6 +674,7 @@ impl SettingsPanelView {
                     if let Some((query, result)) = refreshed {
                         apply_runtime_query(&mut this.rows, &query, result);
                     }
+                    #[cfg(debug_assertions)]
                     if let Some(RowControl::Action { active, error, .. }) =
                         this.rows.get(row_index).map(|row| &row.control)
                     {
