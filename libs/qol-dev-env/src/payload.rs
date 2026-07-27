@@ -419,7 +419,7 @@ fn make_tree_read_only(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn make_tree_writable(root: &Path) -> Result<()> {
+pub fn make_tree_writable(root: &Path) -> Result<()> {
     if !root.exists() {
         return Ok(());
     }

@@ -23,6 +23,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
 
     let mut progress = LoopProgress::new("clean", crates.len(), verbose);
     for path in &crates {
+        unseal_env_runs(path);
         let _ = progress.step_silent(
             "clean",
             StepKind::Pending,
@@ -35,6 +36,17 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
 
     step_label("done", StepKind::Success, "");
     Ok(())
+}
+
+fn unseal_env_runs(path: &Path) {
+    let runs = path.join("target").join("qol-env");
+    if let Err(error) = qol_dev_env::payload::make_tree_writable(&runs) {
+        step_label(
+            "unseal",
+            StepKind::Info,
+            &format!("{}: {error:#}", runs.display()),
+        );
+    }
 }
 
 fn clean_command(path: &Path, verbose: bool) -> Command {
