@@ -24,6 +24,7 @@ struct State {
     tracker: MonitorTracker,
     flow: ShotFlowGate,
     capture_status: crate::ui::capture_status::CaptureStatusUi,
+    saved_toast: qol_gpui::toast::ToastHost,
 }
 
 #[derive(Clone)]
@@ -80,7 +81,8 @@ pub fn run() {
             windows: Rc::new(RefCell::new(ActiveWindows::default())),
             tracker: tracker.clone(),
             flow: ShotFlowGate::new(),
-            capture_status: crate::ui::capture_status::CaptureStatusUi::new(tracker),
+            capture_status: crate::ui::capture_status::CaptureStatusUi::new(tracker.clone()),
+            saved_toast: qol_gpui::toast::ToastHost::new(tracker),
         };
         spawn_active_monitor_cache(cx);
         crate::ui::preview::pre_create(&state.windows, &state.tracker, cx);
@@ -211,7 +213,8 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
             "saving",
             "Screenshot captured",
             "Saving screenshot…",
-        ),
+        )
+        .tone(qol_gpui::toast::ToastTone::Info),
     );
     let captured = cx
         .background_spawn(async move {
@@ -238,9 +241,18 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
     let completion = capture.completion.clone();
     let presented = present(cx, state, capture);
     let status = state.capture_status.clone();
-    let tracker = state.tracker.clone();
+    let saved_toast = state.saved_toast.clone();
     cx.spawn(async move |cx: &mut AsyncApp| {
-        complete_screenshot(path, file_ready, completion, presented, status, tracker, cx).await;
+        complete_screenshot(
+            path,
+            file_ready,
+            completion,
+            presented,
+            status,
+            saved_toast,
+            cx,
+        )
+        .await;
     })
     .detach();
 }
@@ -251,7 +263,7 @@ async fn complete_screenshot(
     completion: Option<crate::capture::completion::PreviewCompletion>,
     presented: bool,
     status: crate::ui::capture_status::CaptureStatusUi,
-    tracker: MonitorTracker,
+    saved_toast: qol_gpui::toast::ToastHost,
     cx: &mut AsyncApp,
 ) {
     let result = cx.background_spawn(async move { file_ready.wait() }).await;
@@ -261,7 +273,7 @@ async fn complete_screenshot(
         return;
     }
     if let Some(completion) = completion {
-        announce_saved_feedback(&completion, &tracker, cx);
+        announce_saved_feedback(&completion, &saved_toast, cx);
         if !presented {
             completion.finish(crate::capture::completion::PreviewExit::Unavailable);
         }
@@ -275,13 +287,14 @@ async fn complete_screenshot(
             "Screenshot saved",
             crate::capture::completion::file_label(&path),
             Duration::from_millis(2_800),
-        ),
+        )
+        .tone(qol_gpui::toast::ToastTone::Success),
     );
 }
 
 fn announce_saved_feedback(
     completion: &crate::capture::completion::PreviewCompletion,
-    tracker: &MonitorTracker,
+    toast_host: &qol_gpui::toast::ToastHost,
     cx: &mut AsyncApp,
 ) {
     if crate::config::load().capture.saved_feedback == crate::config::SavedFeedback::Notification {
@@ -292,9 +305,21 @@ fn announce_saved_feedback(
         return;
     };
     let toast_announcement = announcement.clone();
-    let toast_tracker = tracker.clone();
+    let toast_host = toast_host.clone();
     let shown = cx
-        .update(move |cx| crate::ui::saved_toast::show(toast_announcement, &toast_tracker, cx))
+        .update(move |cx| {
+            let target = toast_announcement.target.clone();
+            let toast = qol_gpui::toast::Toast::new(
+                toast_announcement.title,
+                toast_announcement.message.clone(),
+            )
+            .on_activate(move |_cx| {
+                if let Err(error) = target.open("toast") {
+                    eprintln!("[qol-shot] toast reveal failed: {error:#}");
+                }
+            });
+            toast_host.show(toast, cx)
+        })
         .unwrap_or_else(|error| Err(anyhow::anyhow!("app unavailable: {error}")));
     match shown {
         Ok(()) => qol_runtime::probe!("SHOT_SAVED_TOAST", "result=shown"),
@@ -328,7 +353,8 @@ fn show_screenshot_failure(
             "Screenshot failed",
             subtitle,
             Duration::from_millis(2_800),
-        ),
+        )
+        .tone(qol_gpui::toast::ToastTone::Danger),
     );
 }
 
@@ -371,7 +397,8 @@ fn show_recording_countdown_step(
             "countdown",
             format!("Recording starts in {seconds}"),
             "Get ready",
-        ),
+        )
+        .tone(qol_gpui::toast::ToastTone::Info),
     );
     qol_runtime::probe!(
         "SHOT_RECORD_COUNTDOWN",
@@ -387,11 +414,7 @@ async fn hide_recording_countdown(
 ) -> bool {
     let _ = cx.update(|cx| ui.hide(cx));
     let mut barrier_cx = cx.clone();
-    let barrier = qol_gpui::popup_window::wait_for_hidden_windows(
-        &mut barrier_cx,
-        crate::ui::region_selector::SELECTOR_TITLE_PREFIX,
-    )
-    .await;
+    let barrier = ui.wait_until_hidden(&mut barrier_cx).await;
     qol_runtime::probe!(
         "SHOT_RECORD_COUNTDOWN",
         "phase=hidden result={} visible={} samples={} ms={}",
@@ -606,7 +629,8 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
                     "saving",
                     "Recording stopped",
                     "Saving recording…",
-                ),
+                )
+                .tone(qol_gpui::toast::ToastTone::Info),
             );
             let output_file = cx.background_spawn(async move { job.run() }).await;
             let saved_status = match output_file.as_deref() {
@@ -616,14 +640,16 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
                     "Recording saved",
                     crate::capture::completion::file_label(path),
                     Duration::from_millis(2_800),
-                ),
+                )
+                .tone(qol_gpui::toast::ToastTone::Success),
                 None => crate::ui::capture_status::CaptureStatus::timed(
                     "recording",
                     "delayed",
                     "Save delayed",
                     "The recorder is still finalizing the file",
                     Duration::from_millis(2_800),
-                ),
+                )
+                .tone(qol_gpui::toast::ToastTone::Warning),
             };
             show_capture_status(cx, &state.capture_status, saved_status);
             return;
@@ -667,7 +693,8 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
                 "Recording not started",
                 "The countdown could not close safely",
                 Duration::from_millis(2_800),
-            ),
+            )
+            .tone(qol_gpui::toast::ToastTone::Danger),
         );
         return;
     }

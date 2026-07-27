@@ -24,9 +24,7 @@ impl ActiveMonitor {
     }
 
     pub fn centered_bounds(&self, win_size: Size<Pixels>) -> Bounds<Pixels> {
-        let x = px(self.inner.x) + (px(self.inner.width) - win_size.width) / 2.0;
-        let y = px(self.inner.y) + (px(self.inner.height) - win_size.height) / 3.0;
-        Bounds::new(point(x, y), win_size)
+        crate::placement::MonitorPlacement::center().bounds(self.bounds(), win_size)
     }
 
     pub fn size(&self) -> (f32, f32) {

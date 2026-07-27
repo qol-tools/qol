@@ -18,7 +18,7 @@ pub(crate) fn pre_create_cached(
     let (tx, _rx) = mpsc::channel();
     let active_bounds = selector.active_bounds;
     let default_target = selector.default_target;
-    let monitor_bounds = vec![selector.bounds];
+    let monitor_bounds = selector.monitor_bounds.clone();
     let titles = vec![selector.title.clone()];
     let state = Rc::new(RefCell::new(SelectionState::new(
         tx,
@@ -59,11 +59,12 @@ pub(crate) fn open_cached(
         let selector = selector.take()?;
         let title = view.title.clone();
         let window_bounds = selector.bounds;
+        let monitor_bounds = selector.monitor_bounds.clone();
         let state = Rc::new(RefCell::new(SelectionState::new(
             tx,
             selector.active_bounds,
             selector.default_target,
-            vec![window_bounds],
+            monitor_bounds,
             vec![title.clone()],
             kind,
         )));
@@ -98,39 +99,6 @@ pub(crate) fn open_cached(
             None
         }
     }
-}
-
-pub(crate) fn show_cached_guide(
-    cache: &SelectorCache,
-    bounds: Bounds<Pixels>,
-    title: SharedString,
-    subtitle: SharedString,
-    reveal: SelectorReveal,
-    cx: &mut App,
-) -> Option<String> {
-    let handle = (*cache.handle.borrow())?;
-    let window_title = handle
-        .update(cx, |view, window, cx| {
-            let window_title = view.title.clone();
-            view.show_guide(bounds, title, subtitle, reveal);
-            qol_gpui::popup_window::sync_window_layout(
-                &window_title,
-                window,
-                bounds.origin,
-                bounds.size,
-            );
-            cx.notify();
-            window_title
-        })
-        .ok()?;
-    Some(window_title)
-}
-
-pub(crate) fn hide_cached_guide(cache: &SelectorCache, cx: &mut App) {
-    let Some(handle) = *cache.handle.borrow() else {
-        return;
-    };
-    let _ = handle.update(cx, |view, window, _cx| view.hide_guide(window));
 }
 
 pub(crate) fn identity_rect_mapper() -> RectMapper {
@@ -170,29 +138,6 @@ impl RegionSelector {
         self.reveal_generation = self.reveal_generation.wrapping_add(1);
         self.scheduled_reveal_generation = None;
         self.pending_reveal = Some(reveal);
-        self.guide_override = None;
         cx.notify();
-    }
-
-    fn show_guide(
-        &mut self,
-        bounds: Bounds<Pixels>,
-        title: SharedString,
-        subtitle: SharedString,
-        reveal: SelectorReveal,
-    ) {
-        self.window_bounds = bounds;
-        self.frozen_image = None;
-        self.guide_override = Some(GuideContent { title, subtitle });
-        self.reveal_generation = self.reveal_generation.wrapping_add(1);
-        self.pending_reveal = Some(reveal);
-        self.scheduled_reveal_generation = None;
-    }
-
-    fn hide_guide(&mut self, window: &mut Window) {
-        if self.guide_override.take().is_none() {
-            return;
-        }
-        qol_gpui::popup_window::hide_for_capture(&self.title, window);
     }
 }

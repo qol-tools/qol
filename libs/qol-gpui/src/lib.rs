@@ -5,6 +5,7 @@ pub mod event_router;
 pub mod ghost;
 pub mod keepalive;
 pub mod monitor;
+pub mod placement;
 pub mod platform;
 pub mod popup_window;
 pub mod probe;
@@ -14,6 +15,7 @@ pub mod settings_panel;
 pub mod spinner;
 pub mod status_indicator;
 pub mod surface;
+pub mod toast;
 pub mod window;
 
 pub use spinner::Spinner;

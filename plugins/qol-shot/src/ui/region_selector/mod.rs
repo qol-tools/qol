@@ -10,20 +10,13 @@ use crate::capture::frozen_frame::FrozenFrame;
 use crate::capture::geometry::rect_label;
 use crate::capture::space::{self, CaptureKind, Level};
 use crate::{Monitor, Rect};
+use qol_gpui::placement::{intersect_bounds, monitor_at_point, project_bounds, MonitorPlacement};
 use qol_gpui::theme::{shot_selector_runtime, ShotSelectorPalette};
+use qol_gpui::toast::{Toast, ToastLayout, ToastTone};
 
 const SELECTOR_TITLE: &str = "qol-shot-selector";
 pub(crate) const SELECTOR_TITLE_PREFIX: &str = "qol-shot-selector-";
 const SELECTOR_APP_ID: &str = "qol-tray-shot";
-const GUIDE_W: f32 = 520.0;
-const GUIDE_H: f32 = 78.0;
-const GUIDE_TOP: f32 = 48.0;
-const GUIDE_MARGIN_X: f32 = 24.0;
-const GUIDE_CONTENT_X: f32 = 18.0;
-const GUIDE_TITLE_TOP: f32 = 12.0;
-const GUIDE_TITLE_H: f32 = 28.0;
-const GUIDE_SUBTITLE_TOP: f32 = 46.0;
-const GUIDE_SUBTITLE_H: f32 = 20.0;
 const LABEL_MIN_W: f32 = 180.0;
 const LABEL_MIN_H: f32 = 80.0;
 const CHIP_W: f32 = 300.0;
@@ -101,6 +94,7 @@ pub struct SelectorWindowOptions {
 pub struct SelectorWindow {
     title: String,
     bounds: Bounds<Pixels>,
+    monitor_bounds: Vec<Bounds<Pixels>>,
     active_bounds: Option<Bounds<Pixels>>,
     default_target: Option<DetectedTarget>,
     display_id: Option<DisplayId>,
@@ -113,6 +107,7 @@ pub struct SelectorWindow {
 impl SelectorWindow {
     pub fn new(
         bounds: Bounds<Pixels>,
+        monitor_bounds: Vec<Bounds<Pixels>>,
         active_bounds: Option<Bounds<Pixels>>,
         default_target: Option<DetectedTarget>,
         options: SelectorWindowOptions,
@@ -121,6 +116,7 @@ impl SelectorWindow {
         Self {
             title: selector_title(),
             bounds,
+            monitor_bounds,
             active_bounds,
             default_target,
             display_id: options.display_id,
@@ -181,8 +177,13 @@ pub fn open_all(
         .find_map(|selector| selector.default_target);
     let monitor_bounds = selectors
         .iter()
-        .map(|selector| selector.bounds)
-        .collect::<Vec<_>>();
+        .flat_map(|selector| selector.monitor_bounds.iter().copied())
+        .fold(Vec::new(), |mut monitors, bounds| {
+            if !monitors.contains(&bounds) {
+                monitors.push(bounds);
+            }
+            monitors
+        });
     let titles = selectors
         .iter()
         .map(|selector| selector.title.clone())
@@ -374,7 +375,7 @@ impl SelectionState {
     }
 
     fn set_active_bounds_for_point(&mut self, point: Point<Pixels>) -> bool {
-        let Some(bounds) = monitor_bounds_for_point(&self.monitor_bounds, point) else {
+        let Some(bounds) = monitor_at_point(&self.monitor_bounds, point) else {
             return false;
         };
         self.set_active_bounds(bounds)
@@ -464,13 +465,6 @@ struct RegionSelector {
     reveal_generation: u64,
     scheduled_reveal_generation: Option<u64>,
     pending_reveal: Option<SelectorReveal>,
-    guide_override: Option<GuideContent>,
-}
-
-#[derive(Clone)]
-struct GuideContent {
-    title: SharedString,
-    subtitle: SharedString,
 }
 
 impl RegionSelector {
@@ -512,7 +506,6 @@ impl RegionSelector {
             reveal_generation: 0,
             scheduled_reveal_generation: None,
             pending_reveal: None,
-            guide_override: None,
         }
     }
 
@@ -565,7 +558,6 @@ impl RegionSelector {
             .global_pointer
             .as_ref()
             .and_then(|pointer| pointer.position());
-        trace_drag_anchor(&self.title, event.position, position, cg);
         {
             let mut state = self.state.borrow_mut();
             state.drag_start = Some(position);
@@ -573,6 +565,9 @@ impl RegionSelector {
             state.pointer_offset = cg.map(|cg| point(cg.x - position.x, cg.y - position.y));
             state.set_active_bounds_for_point(position);
         }
+        let monitor = self.state.borrow().active_bounds;
+        let guide = self.guide_bounds();
+        trace_drag_anchor(&self.title, event.position, position, cg, monitor, guide);
         self.notify_all(cx);
         self.start_global_drag(cx);
     }
@@ -899,20 +894,26 @@ impl RegionSelector {
             .and_then(|selection| selection_bounds_in_window(selection, self.window_bounds))
     }
 
-    fn guide_frame(&self) -> Option<(f32, f32, f32)> {
-        let window_bounds = self.window_bounds;
-        let region = self.state.borrow().active_bounds.unwrap_or(window_bounds);
-        let region = intersect_bounds(region, window_bounds)?;
-        let bounds = guide_panel_bounds(region);
-        Some((
-            f32::from(bounds.origin.x - window_bounds.origin.x),
-            f32::from(bounds.origin.y - window_bounds.origin.y),
-            f32::from(bounds.size.width),
-        ))
+    fn guide_bounds(&self) -> Option<Bounds<Pixels>> {
+        let monitor = self
+            .state
+            .borrow()
+            .active_bounds
+            .unwrap_or(self.window_bounds);
+        ToastLayout::Status.placement().projected_bounds(
+            monitor,
+            ToastLayout::Status.size(),
+            self.window_bounds,
+        )
     }
 
-    fn chip_frame(&self) -> Option<(f32, f32, f32)> {
-        chip_frame_in(self.state.borrow().active_bounds, self.window_bounds)
+    fn chip_bounds(&self) -> Option<Bounds<Pixels>> {
+        let monitor = self.state.borrow().active_bounds?;
+        MonitorPlacement::top_center(CHIP_TOP).projected_bounds(
+            monitor,
+            size(px(CHIP_W), px(CHIP_H)),
+            self.window_bounds,
+        )
     }
 
     fn chip_status(&self) -> (String, Level) {
@@ -1036,27 +1037,7 @@ impl Focusable for RegionSelector {
 impl Render for RegionSelector {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.schedule_reveal_after_present(window, cx);
-        if let Some(guide) = self.guide_override.clone() {
-            return div()
-                .id("shot-region-selector")
-                .size_full()
-                .relative()
-                .child(
-                    OverlayText {
-                        title: guide.title,
-                        subtitle: Some(guide.subtitle),
-                        title_size: 22.0,
-                        subtitle_size: 14.0,
-                    }
-                    .panel(
-                        0.0,
-                        0.0,
-                        self.window_bounds.size.width.to_f64() as f32,
-                        self.window_bounds.size.height.to_f64() as f32,
-                    ),
-                );
-        }
-        let guide_frame = self.guide_frame();
+        let guide_bounds = self.guide_bounds();
         let selection = self.selection_bounds();
         let mut root = div()
             .id("shot-region-selector")
@@ -1084,34 +1065,26 @@ impl Render for RegionSelector {
             root = root.child(backdrop_segment(bounds));
         }
 
-        if let Some((guide_left, guide_top, guide_width)) = guide_frame {
-            root = root.child(
-                OverlayText {
-                    title: self.guide_title().into(),
-                    subtitle: Some(self.guide_subtitle().into()),
-                    title_size: 22.0,
-                    subtitle_size: 14.0,
-                }
-                .panel(guide_left, guide_top, guide_width, GUIDE_H),
-            );
+        if let Some(bounds) = guide_bounds {
+            let guide = Toast::new(self.guide_title(), self.guide_subtitle())
+                .layout(ToastLayout::Status)
+                .tone(ToastTone::Info);
+            root = root.child(guide.positioned(bounds));
         }
 
         if let Some(bounds) = selection {
             root = root.child(selection_frame(bounds));
-            if guide_frame.is_some()
+            if guide_bounds.is_some()
                 && bounds.size.width >= px(LABEL_MIN_W)
                 && bounds.size.height >= px(LABEL_MIN_H)
             {
                 let label_top =
                     f32::from(bounds.origin.y) + f32::from(bounds.size.height) / 2.0 - 13.0;
                 root = root.child(
-                    OverlayText {
+                    SelectionLabel {
                         title: self.selection_label_title().into(),
-                        subtitle: None,
-                        title_size: 18.0,
-                        subtitle_size: 14.0,
                     }
-                    .label(
+                    .positioned(
                         f32::from(bounds.origin.x) + 12.0,
                         label_top,
                         f32::from(bounds.size.width) - 24.0,
@@ -1121,9 +1094,9 @@ impl Render for RegionSelector {
             }
         }
 
-        if let Some((chip_left, chip_top, chip_width)) = self.chip_frame() {
+        if let Some(bounds) = self.chip_bounds() {
             let (text, level) = self.chip_status();
-            root = root.child(chip_element(chip_left, chip_top, chip_width, text, level));
+            root = root.child(chip_element(bounds, text, level));
         }
 
         root
@@ -1149,24 +1122,41 @@ fn fmt_pt(p: Point<Pixels>) -> String {
     format!("{},{}", f32::from(p.x) as i32, f32::from(p.y) as i32)
 }
 
+#[cfg(debug_assertions)]
+fn fmt_bounds(bounds: Bounds<Pixels>) -> String {
+    format!(
+        "{}x{}+{},{}",
+        f32::from(bounds.size.width) as i32,
+        f32::from(bounds.size.height) as i32,
+        f32::from(bounds.origin.x) as i32,
+        f32::from(bounds.origin.y) as i32
+    )
+}
+
 fn trace_drag_anchor(
     title: &str,
     local: Point<Pixels>,
     win_pt: Point<Pixels>,
     cg: Option<Point<Pixels>>,
+    monitor: Option<Bounds<Pixels>>,
+    guide: Option<Bounds<Pixels>>,
 ) {
     #[cfg(debug_assertions)]
     {
         let cg = cg.map(fmt_pt).unwrap_or_else(|| "none".to_string());
+        let monitor = monitor
+            .map(fmt_bounds)
+            .unwrap_or_else(|| "none".to_string());
+        let guide = guide.map(fmt_bounds).unwrap_or_else(|| "none".to_string());
         qol_runtime::probe!(
             "SHOT_DRAG_ANCHOR",
-            "title={title} local={} win_pt={} cg_pt={cg}",
+            "title={title} local={} win_pt={} cg_pt={cg} monitor={monitor} guide={guide}",
             fmt_pt(local),
             fmt_pt(win_pt)
         );
     }
     #[cfg(not(debug_assertions))]
-    let _ = (title, local, win_pt, cg);
+    let _ = (title, local, win_pt, cg, monitor, guide);
 }
 
 fn trace_drag_rect(start: Point<Pixels>, end: Point<Pixels>) {
@@ -1267,50 +1257,18 @@ fn selection_bounds_in_window(
         point(px(selection.x as f32), px(selection.y as f32)),
         size(px(selection.w as f32), px(selection.h as f32)),
     );
-    let clipped = intersect_bounds(selection, window_bounds)?;
-    Some(Bounds::new(
-        point(
-            clipped.origin.x - window_bounds.origin.x,
-            clipped.origin.y - window_bounds.origin.y,
-        ),
-        clipped.size,
-    ))
+    project_bounds(selection, window_bounds)
 }
 
-fn chip_frame_in(
-    active_bounds: Option<Bounds<Pixels>>,
-    window_bounds: Bounds<Pixels>,
-) -> Option<(f32, f32, f32)> {
-    let region = intersect_bounds(active_bounds?, window_bounds)?;
-    let local_x = f32::from(region.origin.x) - f32::from(window_bounds.origin.x);
-    let local_y = f32::from(region.origin.y) - f32::from(window_bounds.origin.y);
-    let region_width = f32::from(region.size.width);
-    let width = CHIP_W.min(region_width - GUIDE_MARGIN_X * 2.0).max(1.0);
-    let left = local_x + (region_width - width) / 2.0;
-    Some((left, local_y + CHIP_TOP, width))
-}
-
-pub(crate) fn guide_panel_bounds(region: Bounds<Pixels>) -> Bounds<Pixels> {
-    let region_width = f32::from(region.size.width);
-    let width = (region_width - GUIDE_MARGIN_X * 2.0).clamp(1.0, GUIDE_W);
-    Bounds::new(
-        point(
-            region.origin.x + px((region_width - width) / 2.0),
-            region.origin.y + px(GUIDE_TOP),
-        ),
-        size(px(width), px(GUIDE_H)),
-    )
-}
-
-fn chip_element(left: f32, top: f32, width: f32, text: String, level: Level) -> Div {
+fn chip_element(bounds: Bounds<Pixels>, text: String, level: Level) -> Div {
     let palette = current_palette();
     let (border, foreground) = chip_colors(level);
     div()
         .absolute()
-        .left(px(left))
-        .top(px(top))
-        .w(px(width))
-        .h(px(CHIP_H))
+        .left(bounds.origin.x)
+        .top(bounds.origin.y)
+        .w(bounds.size.width)
+        .h(bounds.size.height)
         .rounded(px(CHIP_H / 2.0))
         .border_1()
         .border_color(rgba(border))
@@ -1442,70 +1400,12 @@ impl Drop for RegionSelector {
     }
 }
 
-struct OverlayText {
+struct SelectionLabel {
     title: SharedString,
-    subtitle: Option<SharedString>,
-    title_size: f32,
-    subtitle_size: f32,
 }
 
-impl OverlayText {
-    fn panel(self, left: f32, top: f32, width: f32, height: f32) -> impl IntoElement {
-        let palette = current_palette();
-        let content_width = width - GUIDE_CONTENT_X * 2.0;
-        let mut panel = div()
-            .absolute()
-            .left(px(left))
-            .top(px(top))
-            .w(px(width))
-            .h(px(height))
-            .rounded(px(14.0))
-            .border_1()
-            .border_color(rgba(palette.panel_border_rgba))
-            .bg(rgba(palette.panel_bg_rgba))
-            .relative();
-
-        panel = panel.child(
-            div()
-                .absolute()
-                .left(px(GUIDE_CONTENT_X))
-                .top(px(GUIDE_TITLE_TOP))
-                .w(px(content_width))
-                .h(px(GUIDE_TITLE_H))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_center()
-                .text_size(px(self.title_size))
-                .line_height(px(GUIDE_TITLE_H))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(palette.text_primary))
-                .child(self.title),
-        );
-
-        if let Some(subtitle) = self.subtitle {
-            panel = panel.child(
-                div()
-                    .absolute()
-                    .left(px(GUIDE_CONTENT_X))
-                    .top(px(GUIDE_SUBTITLE_TOP))
-                    .w(px(content_width))
-                    .h(px(GUIDE_SUBTITLE_H))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_center()
-                    .text_size(px(self.subtitle_size))
-                    .line_height(px(GUIDE_SUBTITLE_H))
-                    .text_color(rgba(palette.text_subtitle_rgba))
-                    .child(subtitle),
-            );
-        }
-
-        panel
-    }
-
-    fn label(self, left: f32, top: f32, width: f32, height: f32) -> impl IntoElement {
+impl SelectionLabel {
+    fn positioned(self, left: f32, top: f32, width: f32, height: f32) -> impl IntoElement {
         let palette = current_palette();
         div()
             .absolute()
@@ -1517,7 +1417,7 @@ impl OverlayText {
             .items_center()
             .justify_center()
             .text_center()
-            .text_size(px(self.title_size))
+            .text_size(px(18.0))
             .line_height(px(height))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgba(palette.label_text_rgba))
@@ -1542,55 +1442,18 @@ fn selected_rect(origin: Point<Pixels>, start: Point<Pixels>, end: Point<Pixels>
     Some(rect)
 }
 
-fn intersect_bounds(left: Bounds<Pixels>, right: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
-    let x = left.origin.x.to_f64().max(right.origin.x.to_f64());
-    let y = left.origin.y.to_f64().max(right.origin.y.to_f64());
-    let right_edge = (left.origin.x + left.size.width)
-        .to_f64()
-        .min((right.origin.x + right.size.width).to_f64());
-    let bottom_edge = (left.origin.y + left.size.height)
-        .to_f64()
-        .min((right.origin.y + right.size.height).to_f64());
-    let width = right_edge - x;
-    let height = bottom_edge - y;
-    if width <= 0.0 || height <= 0.0 {
-        return None;
-    }
-    Some(Bounds::new(
-        point(px(x as f32), px(y as f32)),
-        size(px(width as f32), px(height as f32)),
-    ))
-}
-
-fn monitor_bounds_for_point(
-    monitors: &[Bounds<Pixels>],
-    point: Point<Pixels>,
-) -> Option<Bounds<Pixels>> {
-    monitors
-        .iter()
-        .copied()
-        .find(|bounds| bounds_contains_point(*bounds, point))
-}
-
-fn bounds_contains_point(bounds: Bounds<Pixels>, point: Point<Pixels>) -> bool {
-    point.x >= bounds.origin.x
-        && point.x < bounds.origin.x + bounds.size.width
-        && point.y >= bounds.origin.y
-        && point.y < bounds.origin.y + bounds.size.height
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        backdrop_segments, capture_estimate, chip_frame_in, format_bytes, format_duration,
-        guide_panel_bounds, intersect_bounds, kind_label, local_from_global,
-        monitor_bounds_for_point, selected_rect, selection_bounds_in_window, selection_global_rect,
-        shift_rect, ChipModel, DetectedTarget, SelectionState, CHIP_TOP, GUIDE_H, GUIDE_TOP,
-        GUIDE_W,
+        backdrop_segments, capture_estimate, format_bytes, format_duration, kind_label,
+        local_from_global, selected_rect, selection_bounds_in_window, selection_global_rect,
+        shift_rect, ChipModel, DetectedTarget, SelectionState, CHIP_H, CHIP_TOP, CHIP_W,
     };
     use crate::capture::space::{CaptureKind, DisplayScale, Quality};
     use crate::Rect;
     use gpui::{point, px, size, Bounds};
+    use qol_gpui::placement::{monitor_at_point, MonitorPlacement};
+    use qol_gpui::toast::ToastLayout;
     use std::sync::mpsc;
 
     fn chip(kind: CaptureKind) -> ChipModel {
@@ -1692,55 +1555,34 @@ mod tests {
     }
 
     #[test]
-    fn chip_frame_renders_only_on_the_active_monitor_window() {
-        let win_a = Bounds::new(point(px(0.0), px(0.0)), size(px(2560.0), px(1440.0)));
-        let win_b = Bounds::new(point(px(2560.0), px(0.0)), size(px(1512.0), px(982.0)));
+    fn shared_transients_target_the_physical_monitor_in_a_spanning_viewport() {
+        let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(4480.0), px(1440.0)));
+        let secondary = Bounds::new(point(px(2560.0), px(0.0)), size(px(1920.0), px(1080.0)));
 
         assert_eq!(
-            chip_frame_in(Some(win_a), win_a),
-            Some((1130.0, CHIP_TOP, 300.0))
+            ToastLayout::Status.placement().projected_bounds(
+                secondary,
+                ToastLayout::Status.size(),
+                viewport,
+            ),
+            Some(Bounds::new(
+                point(px(3260.0), px(48.0)),
+                size(px(520.0), px(78.0)),
+            )),
+            "the guide belongs to the physical display, not the full desktop viewport"
         );
-        assert_eq!(chip_frame_in(Some(win_a), win_b), None);
-        assert!(chip_frame_in(Some(win_b), win_b).is_some());
-        assert_eq!(chip_frame_in(Some(win_b), win_a), None);
-        assert_eq!(chip_frame_in(None, win_a), None);
-    }
-
-    #[test]
-    fn chip_frame_centers_on_the_active_monitor_inside_a_spanning_window() {
-        let window = Bounds::new(point(px(0.0), px(0.0)), size(px(3000.0), px(1080.0)));
-        let monitor = Bounds::new(point(px(1512.0), px(0.0)), size(px(1488.0), px(1080.0)));
         assert_eq!(
-            chip_frame_in(Some(monitor), window),
-            Some((2106.0, CHIP_TOP, 300.0))
+            MonitorPlacement::top_center(CHIP_TOP).projected_bounds(
+                secondary,
+                size(px(CHIP_W), px(CHIP_H)),
+                viewport,
+            ),
+            Some(Bounds::new(
+                point(px(3370.0), px(CHIP_TOP)),
+                size(px(CHIP_W), px(CHIP_H)),
+            )),
+            "the capture chip uses the same monitor-relative projection contract"
         );
-    }
-
-    #[test]
-    fn guide_override_reuses_the_active_monitor_panel_geometry() {
-        let cases = [
-            (
-                Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0))),
-                Bounds::new(
-                    point(px((1920.0 - GUIDE_W) / 2.0), px(GUIDE_TOP)),
-                    size(px(GUIDE_W), px(GUIDE_H)),
-                ),
-            ),
-            (
-                Bounds::new(point(px(1920.0), px(-240.0)), size(px(2560.0), px(1440.0))),
-                Bounds::new(
-                    point(
-                        px(1920.0 + (2560.0 - GUIDE_W) / 2.0),
-                        px(-240.0 + GUIDE_TOP),
-                    ),
-                    size(px(GUIDE_W), px(GUIDE_H)),
-                ),
-            ),
-        ];
-
-        for (monitor, expected) in cases {
-            assert_eq!(guide_panel_bounds(monitor), expected);
-        }
     }
 
     #[test]
@@ -1796,38 +1638,6 @@ mod tests {
                 point(px(8.0), px(8.0)),
                 point(px(8.0), px(12.0))
             ),
-            None
-        );
-    }
-
-    #[test]
-    fn intersect_bounds_returns_overlap() {
-        assert_eq!(
-            intersect_bounds(
-                Bounds::new(point(px(10.0), px(20.0)), size(px(100.0), px(80.0))),
-                Bounds::new(point(px(50.0), px(10.0)), size(px(80.0), px(60.0)))
-            ),
-            Some(Bounds::new(
-                point(px(50.0), px(20.0)),
-                size(px(60.0), px(50.0))
-            ))
-        );
-    }
-
-    #[test]
-    fn monitor_bounds_for_point_handles_vertically_offset_displays() {
-        let laptop = Bounds::new(point(px(0.0), px(0.0)), size(px(2560.0), px(1440.0)));
-        let external = Bounds::new(point(px(-1512.0), px(458.0)), size(px(1512.0), px(982.0)));
-        assert_eq!(
-            monitor_bounds_for_point(&[laptop, external], point(px(-800.0), px(700.0))),
-            Some(external)
-        );
-        assert_eq!(
-            monitor_bounds_for_point(&[laptop, external], point(px(800.0), px(700.0))),
-            Some(laptop)
-        );
-        assert_eq!(
-            monitor_bounds_for_point(&[laptop, external], point(px(-800.0), px(200.0))),
             None
         );
     }
@@ -2027,7 +1837,7 @@ mod tests {
         for owner in monitors {
             let global = point(owner.origin.x + local.x, owner.origin.y + local.y);
             assert_eq!(
-                monitor_bounds_for_point(&monitors, global),
+                monitor_at_point(&monitors, global),
                 Some(owner),
                 "unified window origin keeps a window-local point on its own monitor (origin {:?})",
                 owner.origin
@@ -2040,7 +1850,7 @@ mod tests {
             per_display_origin.y + local.y,
         );
         assert_eq!(
-            monitor_bounds_for_point(&monitors, per_display_point),
+            monitor_at_point(&monitors, per_display_point),
             Some(laptop),
             "regression guard: per-display window.bounds() origin lands the external \
              window's point on the laptop, which flipped active_bounds every frame"

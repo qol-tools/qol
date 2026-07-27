@@ -2,9 +2,9 @@ use qol_color::{mix_rgb, with_alpha};
 use qol_theme::{
     alt_tab_preview_plane_dark, cli_sessions_dark, css, dark_accent_preset, dark_theme,
     dark_theme_with_accent_key, launcher_dark, remove_app_dark, resolve_surface_color,
-    runtime_dark_theme, shot_preview_dark, shot_selector_dark, PickerSurfacePalette, ThemeMode,
-    DARK_ACCENT_PRESETS, DARK_REFERENCE, DARK_SYSTEM, DARK_TRAY_INTERNAL, DEV_ACCENT_KEY,
-    PROD_ACCENT_KEY,
+    runtime_dark_theme, shot_preview_dark, shot_selector_dark, toast_dark, PickerSurfacePalette,
+    ThemeMode, DARK_ACCENT_PRESETS, DARK_REFERENCE, DARK_SYSTEM, DARK_TRAY_INTERNAL,
+    DEV_ACCENT_KEY, PROD_ACCENT_KEY,
 };
 use std::{
     fs,
@@ -167,6 +167,19 @@ fn shot_preview_palette_derives_from_system_roles() {
     );
     assert_eq!(palette.action_border, DARK_SYSTEM.border_subtle);
     assert_eq!(palette.action_border_selected, DARK_SYSTEM.accent);
+}
+
+#[test]
+fn toast_palette_derives_from_system_roles() {
+    let palette = toast_dark();
+    assert_eq!(palette.window_bg, DARK_SYSTEM.surface_elevated);
+    assert_eq!(palette.border, DARK_SYSTEM.border_subtle);
+    assert_eq!(palette.text_primary, DARK_SYSTEM.text_primary);
+    assert_eq!(palette.text_secondary, DARK_SYSTEM.text_secondary);
+    assert_eq!(palette.info, DARK_SYSTEM.info);
+    assert_eq!(palette.success, DARK_SYSTEM.success);
+    assert_eq!(palette.warning, DARK_SYSTEM.warning);
+    assert_eq!(palette.danger, DARK_SYSTEM.danger);
 }
 
 #[test]

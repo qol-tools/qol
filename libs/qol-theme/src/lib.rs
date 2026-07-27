@@ -613,6 +613,7 @@ pub struct ComponentPalettes {
     pub remove_app: RemoveAppPalette,
     pub shot_selector: ShotSelectorPalette,
     pub shot_preview: ShotPreviewPalette,
+    pub toast: ToastPalette,
     pub settings_panel: SettingsPanelPalette,
     pub alt_tab_preview_plane: AltTabPreviewPlanePalette,
 }
@@ -625,6 +626,7 @@ impl ComponentPalettes {
             remove_app: RemoveAppPalette::from_theme(reference, system),
             shot_selector: ShotSelectorPalette::from_theme(reference, system),
             shot_preview: ShotPreviewPalette::from_system(system),
+            toast: ToastPalette::from_system(system),
             settings_panel: SettingsPanelPalette::from_system(system),
             alt_tab_preview_plane: AltTabPreviewPlanePalette::from_theme(reference, system),
         }
@@ -800,6 +802,33 @@ impl ShotPreviewPalette {
             action_border_selected: system.accent,
             state_on: system.success,
             state_off: system.danger,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToastPalette {
+    pub window_bg: u32,
+    pub border: u32,
+    pub text_primary: u32,
+    pub text_secondary: u32,
+    pub info: u32,
+    pub success: u32,
+    pub warning: u32,
+    pub danger: u32,
+}
+
+impl ToastPalette {
+    pub fn from_system(system: SystemPalette) -> Self {
+        Self {
+            window_bg: system.surface_elevated,
+            border: system.border_subtle,
+            text_primary: system.text_primary,
+            text_secondary: system.text_secondary,
+            info: system.info,
+            success: system.success,
+            warning: system.warning,
+            danger: system.danger,
         }
     }
 }
@@ -1047,6 +1076,14 @@ pub fn shot_preview_dark() -> ShotPreviewPalette {
 
 pub fn shot_preview_runtime() -> ShotPreviewPalette {
     runtime_dark_theme().components.shot_preview
+}
+
+pub fn toast_dark() -> ToastPalette {
+    dark_theme().components.toast
+}
+
+pub fn toast_runtime() -> ToastPalette {
+    runtime_dark_theme().components.toast
 }
 
 pub fn settings_panel_runtime() -> SettingsPanelPalette {

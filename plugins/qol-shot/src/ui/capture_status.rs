@@ -1,7 +1,6 @@
 use gpui::*;
 use qol_gpui::monitor::MonitorTracker;
-use std::cell::Cell;
-use std::rc::Rc;
+use qol_gpui::toast::{Toast, ToastHost, ToastLayout, ToastTone};
 use std::time::Duration;
 
 pub(crate) struct CaptureStatus {
@@ -9,6 +8,7 @@ pub(crate) struct CaptureStatus {
     stage: &'static str,
     title: String,
     subtitle: String,
+    tone: ToastTone,
     timeout: Option<Duration>,
 }
 
@@ -24,6 +24,7 @@ impl CaptureStatus {
             stage,
             title: title.into(),
             subtitle: subtitle.into(),
+            tone: ToastTone::Neutral,
             timeout: None,
         }
     }
@@ -40,25 +41,37 @@ impl CaptureStatus {
             ..Self::persistent(context, stage, title, subtitle)
         }
     }
+
+    pub(crate) fn tone(mut self, tone: ToastTone) -> Self {
+        self.tone = tone;
+        self
+    }
+
+    fn into_toast(self) -> Toast {
+        let toast = Toast::new(self.title, self.subtitle)
+            .layout(ToastLayout::Status)
+            .tone(self.tone);
+        match self.timeout {
+            Some(timeout) => toast.timeout(timeout),
+            None => toast.persistent(),
+        }
+    }
 }
 
 #[derive(Clone)]
 pub(crate) struct CaptureStatusUi {
-    generation: Rc<Cell<u64>>,
-    tracker: MonitorTracker,
+    host: ToastHost,
 }
 
 impl CaptureStatusUi {
     pub(crate) fn new(tracker: MonitorTracker) -> Self {
         Self {
-            generation: Rc::new(Cell::new(0)),
-            tracker,
+            host: ToastHost::new(tracker),
         }
     }
 
     pub(crate) fn hide(&self, cx: &mut App) {
-        self.next_generation();
-        crate::platform::hide_capture_status(cx);
+        self.host.dismiss(cx);
     }
 
     pub(crate) fn prepare_selector(&self, cx: &mut App) {
@@ -66,45 +79,20 @@ impl CaptureStatusUi {
     }
 
     pub(crate) fn show(&self, status: CaptureStatus, cx: &mut App) -> bool {
-        let Some((monitor, _)) = self.tracker.snapshot_cursor() else {
-            return false;
-        };
-        let generation = self.next_generation();
-        let shown = crate::platform::show_capture_status(
-            monitor.bounds(),
-            status.title,
-            status.subtitle,
-            cx,
-        );
+        let context = status.context;
+        let stage = status.stage;
+        let shown = self.host.show(status.into_toast(), cx).is_ok();
         qol_runtime::probe!(
             "SHOT_CAPTURE_STATUS",
-            "context={} stage={} surface=selector-guide shown={shown} monitor={},{}",
-            status.context,
-            status.stage,
-            monitor.bounds().origin.x.to_f64(),
-            monitor.bounds().origin.y.to_f64()
+            "context={context} stage={stage} surface=shared-toast shown={shown}"
         );
-        if let Some(timeout) = status.timeout {
-            self.dismiss_after(generation, timeout, cx);
-        }
         shown
     }
 
-    fn next_generation(&self) -> u64 {
-        let generation = self.generation.get().wrapping_add(1);
-        self.generation.set(generation);
-        generation
-    }
-
-    fn dismiss_after(&self, generation: u64, timeout: Duration, cx: &mut App) {
-        let current_generation = self.generation.clone();
-        cx.spawn(async move |cx: &mut AsyncApp| {
-            cx.background_executor().timer(timeout).await;
-            if current_generation.get() != generation {
-                return;
-            }
-            let _ = cx.update(crate::platform::hide_capture_status);
-        })
-        .detach();
+    pub(crate) async fn wait_until_hidden(
+        &self,
+        cx: &mut AsyncApp,
+    ) -> qol_gpui::popup_window::HiddenWindowsBarrier {
+        self.host.wait_until_hidden(cx).await
     }
 }

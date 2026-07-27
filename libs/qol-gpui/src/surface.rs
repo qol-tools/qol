@@ -7,25 +7,11 @@ use anyhow::{anyhow, Result};
 use gpui::*;
 
 use crate::monitor::MonitorTracker;
+use crate::placement::{Corner, MonitorPlacement, CORNER_MARGIN};
 
-pub const CORNER_MARGIN: f32 = 24.0;
 const REUSED_REVEAL_SAMPLE_INTERVAL: Duration = Duration::from_millis(5);
 const REUSED_REVEAL_MAX_ATTEMPTS: usize = 100;
 const VIEWPORT_TOLERANCE: f64 = 1.0;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Corner {
-    TopLeft,
-    TopRight,
-    BottomLeft,
-    BottomRight,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Anchor {
-    CornerStack(Corner),
-    MonitorCenter,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceKind {
@@ -51,7 +37,7 @@ impl<T: InteractiveElement> PanelDragArea for T {}
 pub struct Surface {
     kind: SurfaceKind,
     title: String,
-    anchor: Anchor,
+    placement: MonitorPlacement,
     timeout: Option<Duration>,
     size: Size<Pixels>,
     retain_on_dismiss: bool,
@@ -60,7 +46,7 @@ pub struct Surface {
 pub struct OpenedSurface<V> {
     pub(crate) handle: WindowHandle<SurfaceRoot<V>>,
     pub(crate) dismisser: SurfaceDismisser,
-    anchor: Anchor,
+    placement: MonitorPlacement,
     size: Size<Pixels>,
     constrains_size: bool,
     visible: Rc<Cell<bool>>,
@@ -123,14 +109,14 @@ impl SurfaceDismisser {
 
 impl Surface {
     pub fn new(kind: SurfaceKind) -> Self {
-        let anchor = match kind {
-            SurfaceKind::Toast => Anchor::CornerStack(Corner::BottomRight),
-            SurfaceKind::Panel => Anchor::MonitorCenter,
+        let placement = match kind {
+            SurfaceKind::Toast => MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN),
+            SurfaceKind::Panel => MonitorPlacement::center(),
         };
         Self {
             kind,
             title: "qol-surface".into(),
-            anchor,
+            placement,
             timeout: None,
             size: size(px(320.0), px(72.0)),
             retain_on_dismiss: false,
@@ -142,8 +128,8 @@ impl Surface {
         self
     }
 
-    pub fn anchor(mut self, anchor: Anchor) -> Self {
-        self.anchor = anchor;
+    pub fn placement(mut self, placement: MonitorPlacement) -> Self {
+        self.placement = placement;
         self
     }
 
@@ -187,7 +173,7 @@ impl Surface {
         })
     }
 
-    fn open<V: Render + 'static>(
+    pub(crate) fn open<V: Render + 'static>(
         self,
         tracker: &MonitorTracker,
         cx: &mut App,
@@ -203,6 +189,8 @@ impl Surface {
         let constrains_size = self.constrains_size();
         let reveal_after_move = matches!(self.kind, SurfaceKind::Panel);
         let native_reveal_gate = reveal_after_move && supports_native_reveal_gate();
+        let passive_reveal_gate =
+            matches!(self.kind, SurfaceKind::Toast) && supports_native_reveal_gate();
         let retain_on_dismiss = self.retain_on_dismiss && native_reveal_gate;
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -211,7 +199,7 @@ impl Surface {
             window_decorations: Some(WindowDecorations::Client),
             kind: self.window_kind(),
             focus: self.takes_focus(),
-            show: !native_reveal_gate,
+            show: !native_reveal_gate && !passive_reveal_gate,
             is_movable: true,
             is_resizable: !constrains_size,
             window_background: WindowBackgroundAppearance::Transparent,
@@ -221,7 +209,7 @@ impl Surface {
         let dismisser = SurfaceDismisser::new(retain_on_dismiss, title.clone());
         let build_dismisser = dismisser.clone();
         let window_title = title.clone();
-        let visible = Rc::new(Cell::new(!native_reveal_gate));
+        let visible = Rc::new(Cell::new(!native_reveal_gate && !passive_reveal_gate));
         let reveal_pending = Rc::new(Cell::new(native_reveal_gate));
         if self.takes_focus() {
             crate::popup_window::capture_focus_return();
@@ -271,6 +259,23 @@ impl Surface {
         if let Some(timeout) = self.timeout {
             schedule_dismiss(dismisser.clone(), timeout, cx);
         }
+        if passive_reveal_gate {
+            let _reason = crate::popup_window::reason_scope("surface-toast");
+            let configured = crate::popup_window::configure_popup_window(&title);
+            if configured {
+                crate::popup_window::present_topmost(&title);
+            }
+            let shown = configured && crate::popup_window::show_window_passive_by_title(&title);
+            visible.set(shown);
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={title} phase=toast-ready configured={configured} shown={shown}"
+            );
+            if !shown {
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+                return Err(anyhow!("surface could not present passive toast"));
+            }
+        }
         if native_reveal_gate {
             let _reason = crate::popup_window::reason_scope("surface-open");
             let hidden = crate::popup_window::prepare_window_reveal_by_title(&title);
@@ -312,7 +317,7 @@ impl Surface {
         Ok(OpenedSurface {
             handle,
             dismisser,
-            anchor: self.anchor,
+            placement: self.placement,
             size: self.size,
             constrains_size,
             visible,
@@ -321,7 +326,7 @@ impl Surface {
     }
 
     fn resolved_bounds(&self, monitor: &crate::monitor::ActiveMonitor) -> Bounds<Pixels> {
-        resolved_bounds(self.anchor, self.size, monitor)
+        self.placement.bounds(monitor.bounds(), self.size)
     }
 
     fn window_kind(&self) -> WindowKind {
@@ -686,7 +691,7 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
             let Some(monitor) = tracker.snapshot_monitor() else {
                 return false;
             };
-            let bounds = resolved_bounds(self.anchor, self.size, &monitor);
+            let bounds = self.placement.bounds(monitor.bounds(), self.size);
             crate::popup_window::capture_focus_return();
             let title = self.dismisser.current_title();
             if self.constrains_size && !constrain_native_size(&title, bounds.size) {
@@ -896,21 +901,6 @@ fn trace_reused_ready(title: String, cx: &mut App) {
     .detach();
 }
 
-fn resolved_bounds(
-    anchor: Anchor,
-    size: Size<Pixels>,
-    monitor: &crate::monitor::ActiveMonitor,
-) -> Bounds<Pixels> {
-    match anchor {
-        Anchor::CornerStack(corner) => {
-            corner_anchored_bounds(monitor.bounds(), corner, size, CORNER_MARGIN)
-        }
-        Anchor::MonitorCenter => {
-            monitor.centered_bounds(clamped_to_monitor(size, monitor.bounds()))
-        }
-    }
-}
-
 fn schedule_dismiss(dismisser: SurfaceDismisser, timeout: Duration, cx: &mut App) {
     let scheduled = dismisser.state.generation.get();
     cx.spawn(async move |cx: &mut AsyncApp| {
@@ -923,110 +913,20 @@ fn schedule_dismiss(dismisser: SurfaceDismisser, timeout: Duration, cx: &mut App
     .detach();
 }
 
-fn clamped_to_monitor(win: Size<Pixels>, monitor: Bounds<Pixels>) -> Size<Pixels> {
-    let margin = px(2.0 * CORNER_MARGIN);
-    let max_width = monitor.size.width - margin;
-    let max_height = monitor.size.height - margin;
-    size(
-        if win.width > max_width {
-            max_width
-        } else {
-            win.width
-        },
-        if win.height > max_height {
-            max_height
-        } else {
-            win.height
-        },
-    )
-}
-
-fn corner_anchored_bounds(
-    monitor: Bounds<Pixels>,
-    corner: Corner,
-    win: Size<Pixels>,
-    margin: f32,
-) -> Bounds<Pixels> {
-    let min_x = monitor.origin.x.to_f64() as f32 + margin;
-    let max_x =
-        ((monitor.origin.x + monitor.size.width - win.width).to_f64() as f32 - margin).max(min_x);
-    let min_y = monitor.origin.y.to_f64() as f32 + margin;
-    let max_y =
-        ((monitor.origin.y + monitor.size.height - win.height).to_f64() as f32 - margin).max(min_y);
-    let x = match corner {
-        Corner::TopLeft | Corner::BottomLeft => min_x,
-        Corner::TopRight | Corner::BottomRight => max_x,
-    };
-    let y = match corner {
-        Corner::TopLeft | Corner::TopRight => min_y,
-        Corner::BottomLeft | Corner::BottomRight => max_y,
-    };
-    Bounds::new(point(px(x), px(y)), win)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        corner_anchored_bounds, viewport_matches, Anchor, Corner, RevealReadiness, Surface,
-        SurfaceKind,
-    };
-    use gpui::{point, px, size, Bounds, WindowKind};
+    use super::{viewport_matches, RevealReadiness, Surface, SurfaceKind};
+    use crate::placement::MonitorPlacement;
+    use gpui::{px, size, WindowKind};
 
     #[test]
     fn panel_surfaces_are_normal_focusable_windows() {
         let surface = Surface::new(SurfaceKind::Panel);
 
         assert_eq!(surface.window_kind(), WindowKind::Normal);
-        assert_eq!(surface.anchor, Anchor::MonitorCenter);
+        assert_eq!(surface.placement, MonitorPlacement::center());
         assert!(surface.takes_focus());
         assert!(surface.constrains_size());
-    }
-
-    #[test]
-    fn corner_anchored_bounds_places_each_corner_inside_margins() {
-        let monitor = Bounds::new(point(px(1920.0), px(0.0)), size(px(2560.0), px(1440.0)));
-        let win = size(px(340.0), px(76.0));
-        let cases = [
-            (Corner::TopLeft, (1944.0, 24.0)),
-            (Corner::TopRight, (4116.0, 24.0)),
-            (Corner::BottomLeft, (1944.0, 1340.0)),
-            (Corner::BottomRight, (4116.0, 1340.0)),
-        ];
-
-        for (corner, expected) in cases {
-            let bounds = corner_anchored_bounds(monitor, corner, win, 24.0);
-            assert_eq!(
-                (
-                    bounds.origin.x.to_f64() as f32,
-                    bounds.origin.y.to_f64() as f32
-                ),
-                expected,
-                "corner: {corner:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn corner_anchored_bounds_supports_negative_origins_and_tiny_monitors() {
-        let win = size(px(340.0), px(76.0));
-
-        let negative = corner_anchored_bounds(
-            Bounds::new(point(px(-1920.0), px(-200.0)), size(px(1920.0), px(1080.0))),
-            Corner::BottomRight,
-            win,
-            24.0,
-        );
-        assert_eq!(negative.origin.x.to_f64(), -364.0);
-        assert_eq!(negative.origin.y.to_f64(), 780.0);
-
-        let tiny = corner_anchored_bounds(
-            Bounds::new(point(px(0.0), px(0.0)), size(px(200.0), px(50.0))),
-            Corner::BottomRight,
-            win,
-            24.0,
-        );
-        assert_eq!(tiny.origin.x.to_f64(), 24.0);
-        assert_eq!(tiny.origin.y.to_f64(), 24.0);
     }
 
     #[test]

@@ -389,7 +389,7 @@ fn size_prepared_panel(
         .snapshot_monitor()
         .ok_or_else(|| anyhow::anyhow!("no monitor state available for the settings panel"))?;
     let available =
-        monitor.bounds().size.height.to_f64() as f32 - 2.0 * crate::surface::CORNER_MARGIN;
+        monitor.bounds().size.height.to_f64() as f32 - 2.0 * crate::placement::CORNER_MARGIN;
     let height = panel_height(&prepared.rows).min(available);
     let body_max = height - PANEL_CHROME_HEIGHT;
     Ok(PreparedPanel {

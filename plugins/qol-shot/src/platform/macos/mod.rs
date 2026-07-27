@@ -6,7 +6,6 @@ mod native_capture;
 mod overlay;
 mod recording;
 mod selector;
-mod status;
 mod swift;
 mod system;
 
@@ -29,7 +28,6 @@ pub fn pin_cache_enabled() -> bool {
 }
 
 pub fn after_pin_open(_title: &str) {}
-pub use status::{hide_capture_status, show_capture_status};
 pub use system::{
     capture_frozen_frame, configure_pin_window, configure_preview_window, grab_preview_rgba,
     list_audio_sinks, list_audio_sources, open_url, pin_focus, pin_release_focus,

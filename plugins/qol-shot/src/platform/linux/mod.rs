@@ -16,14 +16,12 @@ use crate::{Config, Monitor, Rect};
 mod clipboard;
 mod display;
 mod preview;
-mod status;
 mod system;
 mod window;
 
 pub use clipboard::{copy_image_to_clipboard, copy_path_to_clipboard};
 pub use display::{full_screen_bounds, get_monitors};
 pub use preview::{capture_frozen_frame, configure_preview_window, grab_preview_rgba};
-pub use status::{hide_capture_status, show_capture_status};
 use system::resolve_command;
 pub use system::{
     list_audio_sinks, list_audio_sources, open_url, platform_supported_check,
@@ -42,9 +40,16 @@ thread_local! {
         crate::ui::region_selector::platform::SelectorCache::default();
 }
 
+struct SelectorTopology {
+    cursor: Option<(ActiveMonitor, Option<Point<Pixels>>)>,
+    monitors: Vec<ActiveMonitor>,
+}
+
 pub fn pre_create_selector(cx: &mut gpui::App) {
     let bounds = selector_bounds(None);
-    let selector = selector_window(bounds, None, None, None, None, None);
+    let monitors = MonitorTracker::start(cx).all_monitors_or_snapshot();
+    let monitor_bounds = selector_monitor_bounds(monitors, bounds);
+    let selector = selector_window(bounds, monitor_bounds, None, None, None, None, None);
     SELECTOR_CACHE.with(|cache| {
         let Some(title) = crate::ui::region_selector::platform::pre_create_cached(
             cache,
@@ -74,8 +79,17 @@ pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Re
     crate::ui::region_selector::select_region_blocking_with(move |tx, cx| {
         let tracker = MonitorTracker::start(cx);
         let cursor = tracker.snapshot_cursor();
+        let monitors = tracker.all_monitors_or_snapshot();
         let active_bounds = Some(tracker_active_bounds_source(tracker));
-        open_region_selector_with_sender(tx, true, kind, cursor, active_bounds, frozen_frame, cx);
+        open_region_selector_with_sender(
+            tx,
+            true,
+            kind,
+            SelectorTopology { cursor, monitors },
+            active_bounds,
+            frozen_frame,
+            cx,
+        );
     })
 }
 
@@ -83,14 +97,14 @@ pub fn select_region_in_app(
     cx: &mut gpui::App,
     kind: CaptureKind,
     cursor: Option<(ActiveMonitor, Option<Point<Pixels>>)>,
-    _monitors: Vec<ActiveMonitor>,
+    monitors: Vec<ActiveMonitor>,
     frozen_frame: Option<FrozenFrame>,
 ) -> Option<mpsc::Receiver<Option<Rect>>> {
     let active_bounds = Some(tracker_active_bounds_source(MonitorTracker::start(cx)));
     Some(open_region_selector(
         cx,
         kind,
-        cursor,
+        SelectorTopology { cursor, monitors },
         active_bounds,
         frozen_frame,
     ))
@@ -99,12 +113,12 @@ pub fn select_region_in_app(
 fn open_region_selector(
     cx: &mut gpui::App,
     kind: CaptureKind,
-    cursor: Option<(ActiveMonitor, Option<Point<Pixels>>)>,
+    topology: SelectorTopology,
     active_bounds: Option<crate::ui::region_selector::ActiveBoundsSource>,
     frozen_frame: Option<FrozenFrame>,
 ) -> mpsc::Receiver<Option<Rect>> {
     let (tx, rx) = mpsc::channel();
-    open_region_selector_with_sender(tx, false, kind, cursor, active_bounds, frozen_frame, cx);
+    open_region_selector_with_sender(tx, false, kind, topology, active_bounds, frozen_frame, cx);
     rx
 }
 
@@ -112,16 +126,17 @@ fn open_region_selector_with_sender(
     tx: mpsc::Sender<Option<Rect>>,
     quit_on_finish: bool,
     kind: CaptureKind,
-    cursor: Option<(ActiveMonitor, Option<Point<Pixels>>)>,
+    topology: SelectorTopology,
     active_bounds: Option<crate::ui::region_selector::ActiveBoundsSource>,
     frozen_frame: Option<FrozenFrame>,
     cx: &mut gpui::App,
 ) {
-    let (monitor, pointer) = match cursor {
+    let (monitor, pointer) = match topology.cursor {
         Some((monitor, pointer)) => (Some(monitor), pointer),
         None => (None, None),
     };
     let bounds = selector_bounds(frozen_frame.as_ref());
+    let monitor_bounds = selector_monitor_bounds(topology.monitors, bounds);
     let hover_target = snapshot_hover_target(bounds);
     let default_target = initial_default_target(
         pointer,
@@ -134,6 +149,7 @@ fn open_region_selector_with_sender(
     trace_default_target(default_target, bounds);
     let selector = selector_window(
         bounds,
+        monitor_bounds,
         monitor,
         active_bounds,
         hover_target,
@@ -196,6 +212,7 @@ fn initial_default_target(
 
 fn selector_window(
     bounds: Bounds<Pixels>,
+    monitor_bounds: Vec<Bounds<Pixels>>,
     monitor: Option<ActiveMonitor>,
     active_bounds: Option<crate::ui::region_selector::ActiveBoundsSource>,
     hover_target: Option<crate::ui::region_selector::HoverTargetSource>,
@@ -204,6 +221,7 @@ fn selector_window(
 ) -> crate::ui::region_selector::SelectorWindow {
     crate::ui::region_selector::SelectorWindow::new(
         bounds,
+        monitor_bounds,
         monitor.map(|monitor| monitor.bounds()),
         default_target,
         crate::ui::region_selector::SelectorWindowOptions {
@@ -221,6 +239,20 @@ fn selector_window(
             frozen_frame,
         },
     )
+}
+
+fn selector_monitor_bounds(
+    monitors: Vec<ActiveMonitor>,
+    fallback: Bounds<Pixels>,
+) -> Vec<Bounds<Pixels>> {
+    let bounds = monitors
+        .into_iter()
+        .map(|monitor| monitor.bounds())
+        .collect::<Vec<_>>();
+    if bounds.is_empty() {
+        return vec![fallback];
+    }
+    bounds
 }
 
 fn snapshot_hover_target(
@@ -806,11 +838,13 @@ pub fn process_alive(pid: u32) -> bool {
 mod tests {
     use super::{
         capturable_window_type, framed_rect, initial_default_target, parse_xdotool_geometry,
-        usable_target, SnapshotHoverTarget,
+        selector_monitor_bounds, usable_target, SnapshotHoverTarget,
     };
     use crate::ui::region_selector::{DetectedTarget, HoverTarget};
     use crate::Rect;
     use gpui::{point, px, size, Bounds};
+    use qol_gpui::monitor::ActiveMonitor;
+    use qol_runtime::MonitorBounds;
 
     #[test]
     fn window_type_filter_accepts_capture_surfaces() {
@@ -955,6 +989,43 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn selector_keeps_physical_monitors_separate_from_the_spanning_viewport() {
+        let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(4480.0), px(1440.0)));
+        let primary = MonitorBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 2560.0,
+            height: 1440.0,
+        };
+        let secondary = MonitorBounds {
+            x: 2560.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        };
+
+        assert_eq!(
+            selector_monitor_bounds(
+                vec![
+                    ActiveMonitor::from_bounds(primary),
+                    ActiveMonitor::from_bounds(secondary),
+                ],
+                viewport,
+            ),
+            vec![
+                Bounds::new(point(px(0.0), px(0.0)), size(px(2560.0), px(1440.0))),
+                Bounds::new(point(px(2560.0), px(0.0)), size(px(1920.0), px(1080.0))),
+            ],
+            "the Linux selector viewport must not masquerade as one physical monitor"
+        );
+        assert_eq!(
+            selector_monitor_bounds(Vec::new(), viewport),
+            vec![viewport],
+            "the viewport remains the last-resort fallback when topology is unavailable"
+        );
     }
 
     #[test]

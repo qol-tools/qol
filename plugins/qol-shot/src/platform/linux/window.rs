@@ -116,20 +116,6 @@ pub(super) fn configure_selector_window(title: String, bounds: Rect) {
     });
 }
 
-pub(super) fn configure_status_window(title: &str) -> bool {
-    let configured = qol_gpui::popup_window::configure_popup_window(title);
-    if configured {
-        qol_gpui::popup_window::present_topmost(title);
-    }
-    let shown = configured && qol_gpui::popup_window::show_window_passive_by_title(title);
-    qol_runtime::probe!(
-        "SHOT_STATUS_OVERLAY",
-        "title={title} result={}",
-        if shown { "shown" } else { "failed" }
-    );
-    shown
-}
-
 pub(super) fn prepare_selector_window(title: &str, bounds: Rect) {
     let Some(expected) = exact_window_bounds(bounds) else {
         qol_runtime::probe!("SHOT_SELECT_PREPARE", "title={title} result=invalid");

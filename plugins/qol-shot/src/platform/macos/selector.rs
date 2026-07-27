@@ -168,6 +168,7 @@ fn selector_window(
 ) -> crate::ui::region_selector::SelectorWindow {
     crate::ui::region_selector::SelectorWindow::new(
         bounds,
+        vec![bounds],
         active_bounds,
         None,
         crate::ui::region_selector::SelectorWindowOptions {
