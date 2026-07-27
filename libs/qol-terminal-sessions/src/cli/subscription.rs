@@ -21,12 +21,17 @@ impl CliSessionSubscription {
         path: impl AsRef<Path>,
         on_change: CliSessionChangeHandler,
     ) -> Result<Self, CliSessionSubscriptionError> {
-        let path = path.as_ref().to_path_buf();
+        let path = path.as_ref();
+        let file_name = path
+            .file_name()
+            .ok_or(CliSessionSubscriptionError::InvalidPath)?;
         let watched_directory = path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .ok_or(CliSessionSubscriptionError::InvalidPath)?;
-        let expected_path = path.clone();
+        let watched_directory = std::fs::canonicalize(watched_directory)
+            .unwrap_or_else(|_| watched_directory.to_path_buf());
+        let expected_path = watched_directory.join(file_name);
         let mut watcher: RecommendedWatcher = notify::recommended_watcher(
             move |result: notify::Result<notify::Event>| match result {
                 Ok(event)
@@ -46,7 +51,7 @@ impl CliSessionSubscription {
         )
         .map_err(CliSessionSubscriptionError::Watcher)?;
         watcher
-            .watch(watched_directory, RecursiveMode::NonRecursive)
+            .watch(&watched_directory, RecursiveMode::NonRecursive)
             .map_err(CliSessionSubscriptionError::Watcher)?;
         Ok(Self::from_guard(watcher))
     }
