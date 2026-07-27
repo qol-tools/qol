@@ -50,6 +50,39 @@ pub(super) fn timed_pid(
     result
 }
 
+#[inline]
+pub(super) fn trace_geometry(
+    pid: i32,
+    expected: super::screen::Rect,
+    actual: Option<super::screen::Rect>,
+    matches: bool,
+) {
+    #[cfg(not(debug_assertions))]
+    let _ = (pid, expected, actual, matches);
+    #[cfg(debug_assertions)]
+    {
+        let actual = actual.unwrap_or(super::screen::Rect {
+            x: f64::NAN,
+            y: f64::NAN,
+            w: f64::NAN,
+            h: f64::NAN,
+        });
+        qol_runtime::probe!(
+            "WINACT_AX",
+            "op=verify_geometry pid={pid} expected={:.1},{:.1},{:.1},{:.1} actual={:.1},{:.1},{:.1},{:.1} outcome={}",
+            expected.x,
+            expected.y,
+            expected.w,
+            expected.h,
+            actual.x,
+            actual.y,
+            actual.w,
+            actual.h,
+            if matches { "ok" } else { "mismatch" }
+        );
+    }
+}
+
 #[cfg(debug_assertions)]
 fn emit(op: &str, pid: i32, start: std::time::Instant, outcome: &str) {
     qol_runtime::probe!(

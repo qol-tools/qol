@@ -59,11 +59,8 @@ pub(super) fn screen_for_point(cx: f64, cy: f64) -> Option<Rect> {
 }
 
 pub(super) fn all_screens_sorted() -> Vec<Rect> {
-    let mut result = read_cached_screens().unwrap_or_else(|| {
-        let screens = system_screens();
-        write_cached_screens(&screens);
-        screens
-    });
+    let mut result = system_screens();
+    write_cached_screens(&result);
     result.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
     result
 }
