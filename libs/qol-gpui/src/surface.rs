@@ -11,6 +11,7 @@ use crate::monitor::MonitorTracker;
 pub const CORNER_MARGIN: f32 = 24.0;
 const REUSED_REVEAL_SAMPLE_INTERVAL: Duration = Duration::from_millis(5);
 const REUSED_REVEAL_MAX_ATTEMPTS: usize = 100;
+const VIEWPORT_TOLERANCE: f64 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Corner {
@@ -606,8 +607,8 @@ fn required_layout_epoch(current: u64) -> u64 {
 }
 
 fn viewport_matches(actual: Size<Pixels>, expected: Size<Pixels>) -> bool {
-    (actual.width.to_f64() - expected.width.to_f64()).abs() < 1.0
-        && (actual.height.to_f64() - expected.height.to_f64()).abs() < 1.0
+    (actual.width.to_f64() - expected.width.to_f64()).abs() <= VIEWPORT_TOLERANCE
+        && (actual.height.to_f64() - expected.height.to_f64()).abs() <= VIEWPORT_TOLERANCE
 }
 
 fn request_pending_frame<V: Render + 'static>(
@@ -965,7 +966,10 @@ fn corner_anchored_bounds(
 
 #[cfg(test)]
 mod tests {
-    use super::{corner_anchored_bounds, Anchor, Corner, RevealReadiness, Surface, SurfaceKind};
+    use super::{
+        corner_anchored_bounds, viewport_matches, Anchor, Corner, RevealReadiness, Surface,
+        SurfaceKind,
+    };
     use gpui::{point, px, size, Bounds, WindowKind};
 
     #[test]
@@ -1050,6 +1054,22 @@ mod tests {
                 expected,
                 "moved={moved} layout_confirmed={layout_confirmed} viewport_ready={viewport_ready} fresh_frame={fresh_frame} content_rendered={content_rendered}"
             );
+        }
+    }
+
+    #[test]
+    fn viewport_matching_accepts_native_rounding_only() {
+        let expected = size(px(520.0), px(644.0));
+        let cases = [
+            ("exact", size(px(520.0), px(644.0)), true),
+            ("one point taller", size(px(520.0), px(645.0)), true),
+            ("one point narrower", size(px(519.0), px(644.0)), true),
+            ("too tall", size(px(520.0), px(646.0)), false),
+            ("too wide", size(px(522.0), px(644.0)), false),
+        ];
+
+        for (name, actual, matches) in cases {
+            assert_eq!(viewport_matches(actual, expected), matches, "{name}");
         }
     }
 }
