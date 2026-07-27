@@ -1,12 +1,14 @@
 pub(crate) mod daemon;
+mod recording_action;
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use futures::channel::mpsc::{self as async_mpsc, UnboundedReceiver};
+use futures::StreamExt;
 use gpui::*;
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::window::ActiveWindows;
@@ -17,12 +19,14 @@ use crate::ui::preview::PreviewWindows;
 
 const APP_ID: &str = "qol-tray-shot";
 const RECORDING_COUNTDOWN_STEP: Duration = Duration::from_secs(1);
+const CAPTURE_STATUS_TIMEOUT: Duration = Duration::from_millis(2_800);
 
 #[derive(Clone)]
 struct State {
     windows: PreviewWindows,
     tracker: MonitorTracker,
     flow: ShotFlowGate,
+    recording_action: recording_action::RecordingActionController,
     capture_status: crate::ui::capture_status::CaptureStatusUi,
     saved_toast: qol_gpui::toast::ToastHost,
 }
@@ -81,6 +85,7 @@ pub fn run() {
             windows: Rc::new(RefCell::new(ActiveWindows::default())),
             tracker: tracker.clone(),
             flow: ShotFlowGate::new(),
+            recording_action: recording_action::RecordingActionController::default(),
             capture_status: crate::ui::capture_status::CaptureStatusUi::new(tracker.clone()),
             saved_toast: qol_gpui::toast::ToastHost::new(tracker),
         };
@@ -97,23 +102,38 @@ pub fn run() {
 }
 
 fn spawn_screenshot_loop(rx: mpsc::Receiver<daemon::Command>, state: State, cx: &mut App) {
-    let rx = Arc::new(Mutex::new(rx));
+    let (tx, mut async_rx) = async_mpsc::unbounded();
+    let bridge = std::thread::Builder::new()
+        .name("qol-shot-command-bridge".to_string())
+        .spawn(move || {
+            while let Ok(cmd) = rx.recv() {
+                if tx.unbounded_send(cmd).is_err() {
+                    break;
+                }
+            }
+        });
+    if let Err(error) = bridge {
+        qol_runtime::probe!("SHOT_CMD_LOOP", "state=bridge-error error={error}");
+        cx.quit();
+        return;
+    }
+
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let mut cx = cx.clone();
+        let cx = cx.clone();
         let mut pending = VecDeque::new();
         loop {
-            let Some(cmd) = next_command(&rx, &mut pending, &mut cx).await else {
+            let Some(cmd) = next_command(&mut async_rx, &mut pending).await else {
                 qol_runtime::probe!("SHOT_CMD_LOOP", "state=closed");
                 break;
             };
             trace_command("dequeued", &cmd);
-            let was_capture = is_capture_command(&cmd);
+            let was_screenshot = matches!(cmd, daemon::Command::Screenshot);
             let keep_running = handle_command(&cx, &state, cmd).await;
             if !keep_running {
                 break;
             }
-            if was_capture {
-                let dropped = drain_stale_capture_commands(&rx, &mut pending);
+            if was_screenshot {
+                let dropped = drain_stale_screenshot_commands(&mut async_rx, &mut pending);
                 if dropped > 0 {
                     qol_runtime::probe!("SHOT_CAPTURE_DROP_QUEUED", "count={}", dropped);
                 }
@@ -125,16 +145,13 @@ fn spawn_screenshot_loop(rx: mpsc::Receiver<daemon::Command>, state: State, cx: 
 }
 
 async fn next_command(
-    rx: &Arc<Mutex<mpsc::Receiver<daemon::Command>>>,
+    rx: &mut UnboundedReceiver<daemon::Command>,
     pending: &mut VecDeque<daemon::Command>,
-    cx: &mut AsyncApp,
 ) -> Option<daemon::Command> {
     if let Some(cmd) = pending.pop_front() {
         return Some(cmd);
     }
-    let rx = rx.clone();
-    cx.background_spawn(async move { rx.lock().ok()?.recv().ok() })
-        .await
+    rx.next().await
 }
 
 async fn handle_command(cx: &AsyncApp, state: &State, cmd: daemon::Command) -> bool {
@@ -163,27 +180,19 @@ fn trace_command(stage: &'static str, cmd: &daemon::Command) {
     }
 }
 
-fn drain_stale_capture_commands(
-    rx: &Arc<Mutex<mpsc::Receiver<daemon::Command>>>,
+fn drain_stale_screenshot_commands(
+    rx: &mut UnboundedReceiver<daemon::Command>,
     pending: &mut VecDeque<daemon::Command>,
 ) -> usize {
-    let Ok(rx) = rx.lock() else {
-        return 0;
-    };
     let mut dropped = 0;
     while let Ok(cmd) = rx.try_recv() {
-        if is_capture_command(&cmd) {
+        if matches!(cmd, daemon::Command::Screenshot) {
             dropped += 1;
-        } else {
-            pending.push_back(cmd);
+            continue;
         }
+        pending.push_back(cmd);
     }
     dropped
-}
-
-fn is_capture_command(cmd: &daemon::Command) -> bool {
-    matches!(cmd, daemon::Command::Screenshot)
-        || matches!(cmd, daemon::Command::Cli(action) if action == "record")
 }
 
 async fn capture_and_preview(cx: &AsyncApp, state: &State) {
@@ -286,7 +295,7 @@ async fn complete_screenshot(
             "saved",
             "Screenshot saved",
             crate::capture::completion::file_label(&path),
-            Duration::from_millis(2_800),
+            CAPTURE_STATUS_TIMEOUT,
         )
         .tone(qol_gpui::toast::ToastTone::Success),
     );
@@ -352,7 +361,7 @@ fn show_screenshot_failure(
             "failed",
             "Screenshot failed",
             subtitle,
-            Duration::from_millis(2_800),
+            CAPTURE_STATUS_TIMEOUT,
         )
         .tone(qol_gpui::toast::ToastTone::Danger),
     );
@@ -366,7 +375,29 @@ fn show_capture_status(
     cx.update(|cx| ui.show(status, cx)).unwrap_or(false)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecordingStartPreparation {
+    Ready,
+    Cancelled,
+    Blocked,
+}
+
 async fn prepare_recording_start(
+    cx: &AsyncApp,
+    controller: &recording_action::RecordingActionController,
+    ui: &crate::ui::capture_status::CaptureStatusUi,
+) -> RecordingStartPreparation {
+    let Some(hidden) = controller.countdown(run_recording_countdown(cx, ui)).await else {
+        qol_runtime::probe!("SHOT_RECORD_COUNTDOWN", "phase=cancelled");
+        return RecordingStartPreparation::Cancelled;
+    };
+    if hidden {
+        return RecordingStartPreparation::Ready;
+    }
+    RecordingStartPreparation::Blocked
+}
+
+async fn run_recording_countdown(
     cx: &AsyncApp,
     ui: &crate::ui::capture_status::CaptureStatusUi,
 ) -> bool {
@@ -585,7 +616,7 @@ fn trace_selected(source: &'static str, selected: Option<crate::Rect>) {
 
 async fn run_cli(cx: &AsyncApp, state: &State, action: String) {
     if action == "record" {
-        toggle_recording(cx, state).await;
+        dispatch_recording(cx, state);
         return;
     }
 
@@ -607,6 +638,26 @@ async fn run_cli(cx: &AsyncApp, state: &State, action: String) {
             crate::cli::exit_code(std::iter::once(action));
         })
         .await;
+}
+
+fn dispatch_recording(cx: &AsyncApp, state: &State) {
+    if state.recording_action.cancel_countdown() {
+        qol_runtime::probe!(
+            "SHOT_RECORD_TOGGLE",
+            "source=daemon result=countdown-cancel-request"
+        );
+        return;
+    }
+    let Some(action) = state.recording_action.try_begin() else {
+        qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon result=busy");
+        return;
+    };
+    let state = state.clone();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        toggle_recording(cx, &state).await;
+        drop(action);
+    })
+    .detach();
 }
 
 async fn toggle_recording(cx: &AsyncApp, state: &State) {
@@ -639,7 +690,7 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
                     "saved",
                     "Recording saved",
                     crate::capture::completion::file_label(path),
-                    Duration::from_millis(2_800),
+                    CAPTURE_STATUS_TIMEOUT,
                 )
                 .tone(qol_gpui::toast::ToastTone::Success),
                 None => crate::ui::capture_status::CaptureStatus::timed(
@@ -647,7 +698,7 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
                     "delayed",
                     "Save delayed",
                     "The recorder is still finalizing the file",
-                    Duration::from_millis(2_800),
+                    CAPTURE_STATUS_TIMEOUT,
                 )
                 .tone(qol_gpui::toast::ToastTone::Warning),
             };
@@ -679,24 +730,46 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
         qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon result=select-cancel");
         return;
     };
-    if !prepare_recording_start(cx, &state.capture_status).await {
-        qol_runtime::probe!(
-            "SHOT_RECORD_TOGGLE",
-            "source=daemon result=countdown-visible"
-        );
-        show_capture_status(
-            cx,
-            &state.capture_status,
-            crate::ui::capture_status::CaptureStatus::timed(
-                "recording",
-                "failed",
-                "Recording not started",
-                "The countdown could not close safely",
-                Duration::from_millis(2_800),
-            )
-            .tone(qol_gpui::toast::ToastTone::Danger),
-        );
-        return;
+    match prepare_recording_start(cx, &state.recording_action, &state.capture_status).await {
+        RecordingStartPreparation::Ready => {}
+        RecordingStartPreparation::Cancelled => {
+            qol_runtime::probe!(
+                "SHOT_RECORD_TOGGLE",
+                "source=daemon result=countdown-cancelled"
+            );
+            show_capture_status(
+                cx,
+                &state.capture_status,
+                crate::ui::capture_status::CaptureStatus::timed(
+                    "recording",
+                    "cancelled",
+                    "Recording cancelled",
+                    "No video was captured",
+                    CAPTURE_STATUS_TIMEOUT,
+                )
+                .tone(qol_gpui::toast::ToastTone::Info),
+            );
+            return;
+        }
+        RecordingStartPreparation::Blocked => {
+            qol_runtime::probe!(
+                "SHOT_RECORD_TOGGLE",
+                "source=daemon result=countdown-visible"
+            );
+            show_capture_status(
+                cx,
+                &state.capture_status,
+                crate::ui::capture_status::CaptureStatus::timed(
+                    "recording",
+                    "failed",
+                    "Recording not started",
+                    "The countdown could not close safely",
+                    CAPTURE_STATUS_TIMEOUT,
+                )
+                .tone(qol_gpui::toast::ToastTone::Danger),
+            );
+            return;
+        }
     }
     let result = cx
         .background_spawn(async move {
@@ -709,4 +782,35 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
         return;
     }
     qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon result=started");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use futures::channel::mpsc;
+
+    use super::{daemon, drain_stale_screenshot_commands};
+
+    #[test]
+    fn stale_screenshot_drain_preserves_record_toggle() {
+        let (tx, mut rx) = mpsc::unbounded();
+        tx.unbounded_send(daemon::Command::Screenshot)
+            .expect("screenshot");
+        tx.unbounded_send(daemon::Command::Cli("record".to_string()))
+            .expect("record");
+        tx.unbounded_send(daemon::Command::Preview)
+            .expect("preview");
+        let mut pending = VecDeque::new();
+
+        assert_eq!(drain_stale_screenshot_commands(&mut rx, &mut pending), 1);
+        assert!(matches!(
+            pending.pop_front(),
+            Some(daemon::Command::Cli(action)) if action == "record"
+        ));
+        assert!(matches!(
+            pending.pop_front(),
+            Some(daemon::Command::Preview)
+        ));
+    }
 }

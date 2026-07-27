@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -24,6 +25,7 @@ const PAYLOAD_INSTALLER: &str = "/usr/local/libexec/qol-sandbox-payload";
 const TRAY_BINARY: &str = "/home/qol/.local/bin/qol-tray";
 const CAPTURE_MARKER: &str = "/tmp/qol-workflow-capture-start";
 const PIN_DRAG_HOLD: Duration = Duration::from_millis(80);
+const STATUS_SETTLE: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct WindowGeometry {
@@ -275,6 +277,8 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
     let after_move = wait_for_window_move(&mut guest, &pin_id, before_move, CAPTURE_TIMEOUT)?;
     let pinned = artifacts_dir.join("pinned.ppm");
     qmp.screendump(&pinned)?;
+    let recording_cancellation =
+        exercise_recording_cancellation(&mut guest, &mut qmp, width, height, &artifacts_dir)?;
 
     let captured = wait_for_command(
         &mut guest,
@@ -307,7 +311,7 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
             "/usr/bin/grep",
             &[
                 "-E",
-                "SHOT_(DAEMON_APP|SELECT_REVEAL|SELECT_OVERLAY|SELECT_RESULT|PREVIEW_REVEAL|PIN_REVEAL|PIN_TICK)|SHOW_WIN_STATE",
+                "SHOT_(CAPTURE_STATUS|DAEMON_APP|PIN_REVEAL|PIN_TICK|PREVIEW_REVEAL|RECORD_COUNTDOWN|RECORD_TOGGLE|SELECT_OVERLAY|SELECT_RESULT|SELECT_REVEAL)|SHOW_WIN_STATE",
                 TRACE_LOG_PATH,
             ],
         ),
@@ -324,11 +328,76 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
         "pin_move={},{}->{},{}",
         before_move.x, before_move.y, after_move.x, after_move.y
     ));
+    let mut artifacts = vec![selector, preview, pinned];
+    artifacts.extend(recording_cancellation);
     Ok(Verdict {
         pass: true,
         traces,
-        artifacts: vec![selector, preview, pinned],
+        artifacts,
     })
+}
+
+fn exercise_recording_cancellation(
+    guest: &mut GuestControlClient,
+    qmp: &mut qmp::QmpClient,
+    width: u32,
+    height: u32,
+    artifacts_dir: &Path,
+) -> Result<[PathBuf; 2]> {
+    let pointer_x = 300_u32.min(width.saturating_sub(1));
+    let pointer_y = 220_u32.min(height.saturating_sub(1));
+    qmp.move_pointer_absolute(pointer_x, pointer_y, width, height)?;
+    let trace = current_trace_cursor(guest)?;
+    require_exec(
+        guest,
+        command(TRAY_BINARY, &["exec", "qol-shot", "record"]),
+        GUEST_COMMAND_TIMEOUT,
+    )?;
+    wait_for_probe_line(
+        guest,
+        trace,
+        "SHOT_SELECT_REVEAL",
+        "state=presented",
+        CAPTURE_TIMEOUT,
+    )?;
+    qmp.click_left()?;
+    wait_for_probe_fields(
+        guest,
+        trace,
+        "SHOT_RECORD_COUNTDOWN",
+        &["phase=shown", "seconds=3"],
+        CAPTURE_TIMEOUT,
+    )?;
+    let countdown = artifacts_dir.join("recording-countdown.ppm");
+    qmp.screendump(&countdown)?;
+    require_exec(
+        guest,
+        command(TRAY_BINARY, &["exec", "qol-shot", "record"]),
+        GUEST_COMMAND_TIMEOUT,
+    )?;
+    wait_for_probe_fields(
+        guest,
+        trace,
+        "SHOT_RECORD_TOGGLE",
+        &["source=daemon", "result=countdown-cancelled"],
+        CAPTURE_TIMEOUT,
+    )?;
+    wait_for_probe_fields(
+        guest,
+        trace,
+        "SHOT_CAPTURE_STATUS",
+        &[
+            "context=recording",
+            "stage=cancelled",
+            "surface=shared-toast",
+            "shown=true",
+        ],
+        CAPTURE_TIMEOUT,
+    )?;
+    thread::sleep(STATUS_SETTLE);
+    let cancelled = artifacts_dir.join("recording-cancelled.ppm");
+    qmp.screendump(&cancelled)?;
+    Ok([countdown, cancelled])
 }
 
 fn command(program: &str, args: &[&str]) -> CommandSpec {
@@ -799,7 +868,13 @@ mod tests {
     #[test]
     fn evidence_paths_stay_inside_the_lane_run() {
         let root = std::path::Path::new("/runs/cases/lane-1");
-        for name in ["selector.ppm", "preview.ppm", "pinned.ppm"] {
+        for name in [
+            "selector.ppm",
+            "preview.ppm",
+            "pinned.ppm",
+            "recording-countdown.ppm",
+            "recording-cancelled.ppm",
+        ] {
             let path: std::path::PathBuf = root.join("artifacts").join(name);
             assert!(path.starts_with(root));
         }

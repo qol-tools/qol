@@ -6362,6 +6362,7 @@ dependencies = [
  "anyhow",
  "block2",
  "chrono",
+ "futures",
  "gpui",
  "image",
  "libc",
