@@ -1,18 +1,31 @@
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
-use super::objc::{cls, msg_ptr, msg_ptr_usize, msg_rect, msg_usize, sel, CGRect};
-use super::trace::timed_opt;
+use super::objc::{
+    cls, msg_ptr, msg_ptr_usize, msg_rect, msg_usize, sel, CGDisplayBounds, CGGetActiveDisplayList,
+    CGRect,
+};
+use super::trace::{timed_opt, trace_screen_snapshot};
 
-const SCREEN_CACHE_TTL: Duration = Duration::from_secs(10);
+const MAX_DISPLAYS: usize = 16;
+static SCREEN_CACHE: OnceLock<Mutex<Option<ScreenSnapshot>>> = OnceLock::new();
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Rect {
     pub x: f64,
     pub y: f64,
     pub w: f64,
     pub h: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ScreenSnapshot {
+    layout: Vec<Rect>,
+    preferences: u64,
+    visible: Vec<Rect>,
 }
 
 fn primary_screen_height() -> f64 {
@@ -42,27 +55,105 @@ fn cocoa_to_ax(frame: CGRect, primary_h: f64) -> Rect {
 
 pub(super) fn screen_for_point(cx: f64, cy: f64) -> Option<Rect> {
     timed_opt("screen_for_point", 0, || {
-        if let Some(screens) = read_cached_screens() {
-            if let Some(screen) = screen_containing_point(&screens, cx, cy) {
-                return Some(screen);
-            }
-        }
-
-        let screens = system_screens();
-        if screens.is_empty() {
-            return None;
-        }
-
-        write_cached_screens(&screens);
-        screen_containing_point(&screens, cx, cy).or_else(|| screens.first().copied())
+        let snapshot = screen_snapshot()?;
+        screen_containing_point(&snapshot.visible, cx, cy)
+            .or_else(|| snapshot.visible.first().copied())
     })
 }
 
 pub(super) fn all_screens_sorted() -> Vec<Rect> {
-    let mut result = system_screens();
-    write_cached_screens(&result);
+    let mut result = screen_snapshot()
+        .map(|snapshot| snapshot.visible)
+        .unwrap_or_default();
     result.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
     result
+}
+
+fn screen_snapshot() -> Option<ScreenSnapshot> {
+    let start = Instant::now();
+    let layout = physical_screens();
+    if layout.is_empty() {
+        trace_screen_snapshot("unavailable", 0, start);
+        return None;
+    }
+    let preferences = screen_preferences_generation();
+    if let Some(snapshot) = memory_snapshot(&layout, preferences) {
+        trace_screen_snapshot("memory", snapshot.visible.len(), start);
+        return Some(snapshot);
+    }
+    if let Some(snapshot) = read_cached_snapshot()
+        .filter(|cached| cached.layout == layout && cached.preferences == preferences)
+    {
+        store_memory_snapshot(snapshot.clone());
+        trace_screen_snapshot("disk", snapshot.visible.len(), start);
+        return Some(snapshot);
+    }
+
+    let visible = system_screens();
+    if visible.is_empty() {
+        trace_screen_snapshot("unavailable", 0, start);
+        return None;
+    }
+    let snapshot = ScreenSnapshot {
+        layout,
+        preferences,
+        visible,
+    };
+    write_cached_snapshot(&snapshot);
+    store_memory_snapshot(snapshot.clone());
+    trace_screen_snapshot("nsscreen", snapshot.visible.len(), start);
+    Some(snapshot)
+}
+
+fn physical_screens() -> Vec<Rect> {
+    let mut ids = [0u32; MAX_DISPLAYS];
+    let mut count = 0u32;
+    let result =
+        unsafe { CGGetActiveDisplayList(MAX_DISPLAYS as u32, ids.as_mut_ptr(), &mut count) };
+    if result != 0 {
+        return Vec::new();
+    }
+    let mut screens = ids[..count.min(MAX_DISPLAYS as u32) as usize]
+        .iter()
+        .map(|id| unsafe { CGDisplayBounds(*id) })
+        .map(|bounds| Rect {
+            x: bounds.origin.x,
+            y: bounds.origin.y,
+            w: bounds.size.width,
+            h: bounds.size.height,
+        })
+        .filter(valid_rect)
+        .collect::<Vec<_>>();
+    screens.sort_by(rect_order);
+    screens
+}
+
+fn screen_preferences_generation() -> u64 {
+    let Some(home) = std::env::var_os("HOME") else {
+        return 0;
+    };
+    let preferences = PathBuf::from(home).join("Library/Preferences");
+    let mut hasher = DefaultHasher::new();
+    for name in [
+        "com.apple.dock.plist",
+        ".GlobalPreferences.plist",
+        "com.apple.controlcenter.plist",
+    ] {
+        name.hash(&mut hasher);
+        let Ok(metadata) = fs::metadata(preferences.join(name)) else {
+            continue;
+        };
+        metadata.len().hash(&mut hasher);
+        metadata.modified().ok().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn rect_order(a: &Rect, b: &Rect) -> std::cmp::Ordering {
+    a.x.total_cmp(&b.x)
+        .then_with(|| a.y.total_cmp(&b.y))
+        .then_with(|| a.w.total_cmp(&b.w))
+        .then_with(|| a.h.total_cmp(&b.h))
 }
 
 fn system_screens() -> Vec<Rect> {
@@ -98,56 +189,94 @@ fn screen_containing_point(screens: &[Rect], cx: f64, cy: f64) -> Option<Rect> {
 }
 
 fn screen_cache_path() -> PathBuf {
-    std::env::temp_dir().join("qol-window-actions-screens-v1")
+    std::env::temp_dir().join("qol-window-actions-screens-v2")
 }
 
-fn read_cached_screens() -> Option<Vec<Rect>> {
-    let path = screen_cache_path();
-    let metadata = fs::metadata(&path).ok()?;
-    let modified = metadata.modified().ok()?;
-    if SystemTime::now().duration_since(modified).ok()? > SCREEN_CACHE_TTL {
-        return None;
+fn memory_snapshot(layout: &[Rect], preferences: u64) -> Option<ScreenSnapshot> {
+    let cached = SCREEN_CACHE.get_or_init(|| Mutex::new(None));
+    let snapshot = cached.lock().ok()?.as_ref()?.clone();
+    (snapshot.layout == layout && snapshot.preferences == preferences).then_some(snapshot)
+}
+
+fn store_memory_snapshot(snapshot: ScreenSnapshot) {
+    let cached = SCREEN_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut cached) = cached.lock() {
+        *cached = Some(snapshot);
     }
-
-    let contents = fs::read_to_string(path).ok()?;
-    parse_cached_screens(&contents)
 }
 
-fn parse_cached_screens(contents: &str) -> Option<Vec<Rect>> {
-    let mut screens = Vec::new();
+fn read_cached_snapshot() -> Option<ScreenSnapshot> {
+    let contents = fs::read_to_string(screen_cache_path()).ok()?;
+    parse_cached_snapshot(&contents)
+}
+
+fn parse_cached_snapshot(contents: &str) -> Option<ScreenSnapshot> {
+    let mut layout = Vec::new();
+    let mut visible = Vec::new();
+    let mut preferences = None;
     for line in contents.lines() {
-        let mut fields = line.split(',');
-        let x: f64 = fields.next()?.parse().ok()?;
-        let y: f64 = fields.next()?.parse().ok()?;
-        let w: f64 = fields.next()?.parse().ok()?;
-        let h: f64 = fields.next()?.parse().ok()?;
-        if fields.next().is_some()
-            || ![x, y, w, h].iter().all(|value| value.is_finite())
-            || w <= 0.0
-            || h <= 0.0
-        {
-            return None;
+        if let Some(value) = line.strip_prefix("preferences,") {
+            if preferences.is_some() || value.contains(',') {
+                return None;
+            }
+            preferences = value.parse().ok();
+            continue;
         }
-        screens.push(Rect { x, y, w, h });
+        let (kind, rect) = parse_cache_row(line)?;
+        match kind {
+            "layout" => layout.push(rect),
+            "visible" => visible.push(rect),
+            _ => return None,
+        }
     }
-
-    if screens.is_empty() {
+    if layout.is_empty() || visible.is_empty() || preferences.is_none() {
         return None;
     }
-    Some(screens)
+    layout.sort_by(rect_order);
+    Some(ScreenSnapshot {
+        layout,
+        preferences: preferences?,
+        visible,
+    })
 }
 
-fn write_cached_screens(screens: &[Rect]) {
-    if screens.is_empty() {
-        return;
+fn parse_cache_row(line: &str) -> Option<(&str, Rect)> {
+    let mut fields = line.split(',');
+    let kind = fields.next()?;
+    let rect = Rect {
+        x: fields.next()?.parse().ok()?,
+        y: fields.next()?.parse().ok()?,
+        w: fields.next()?.parse().ok()?,
+        h: fields.next()?.parse().ok()?,
+    };
+    if fields.next().is_some() || !valid_rect(&rect) {
+        return None;
     }
+    Some((kind, rect))
+}
 
-    let path = screen_cache_path();
-    let contents = screens
+fn valid_rect(rect: &Rect) -> bool {
+    [rect.x, rect.y, rect.w, rect.h]
         .iter()
-        .map(|s| format!("{},{},{},{}\n", s.x, s.y, s.w, s.h))
-        .collect::<String>();
-    let _ = qol_fs::atomic_write(&path, contents.as_bytes());
+        .all(|value| value.is_finite())
+        && rect.w > 0.0
+        && rect.h > 0.0
+}
+
+fn write_cached_snapshot(snapshot: &ScreenSnapshot) {
+    let mut contents = format!("preferences,{}\n", snapshot.preferences);
+    append_cache_rows(&mut contents, "layout", &snapshot.layout);
+    append_cache_rows(&mut contents, "visible", &snapshot.visible);
+    let _ = qol_fs::atomic_write(&screen_cache_path(), contents.as_bytes());
+}
+
+fn append_cache_rows(contents: &mut String, kind: &str, screens: &[Rect]) {
+    for screen in screens {
+        contents.push_str(&format!(
+            "{kind},{},{},{},{}\n",
+            screen.x, screen.y, screen.w, screen.h
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -159,22 +288,52 @@ mod tests {
     }
 
     #[test]
-    fn parse_cached_screens_accepts_valid_rows() {
-        let screens = parse_cached_screens("0,25,1440,875\n1440,0,1920,1080\n").unwrap();
-        assert_eq!(screens.len(), 2);
-        assert_eq!(screens[0].x, 0.0);
-        assert_eq!(screens[0].y, 25.0);
-        assert_eq!(screens[0].w, 1440.0);
-        assert_eq!(screens[0].h, 875.0);
+    fn cached_snapshot_round_trips_layout_and_visible_frames() {
+        let snapshot = ScreenSnapshot {
+            layout: vec![
+                rect(1440.0, 0.0, 1920.0, 1080.0),
+                rect(0.0, 0.0, 1440.0, 900.0),
+            ],
+            preferences: 42,
+            visible: vec![
+                rect(0.0, 25.0, 1440.0, 875.0),
+                rect(1440.0, 0.0, 1920.0, 1080.0),
+            ],
+        };
+        let mut contents = format!("preferences,{}\n", snapshot.preferences);
+        append_cache_rows(&mut contents, "layout", &snapshot.layout);
+        append_cache_rows(&mut contents, "visible", &snapshot.visible);
+        let parsed = parse_cached_snapshot(&contents).unwrap();
+        assert_eq!(
+            parsed.layout,
+            vec![
+                rect(0.0, 0.0, 1440.0, 900.0),
+                rect(1440.0, 0.0, 1920.0, 1080.0)
+            ]
+        );
+        assert_eq!(parsed.visible, snapshot.visible);
     }
 
     #[test]
-    fn parse_cached_screens_rejects_invalid_rows() {
-        assert!(parse_cached_screens("").is_none());
-        assert!(parse_cached_screens("NaN,0,100,100\n").is_none());
-        assert!(parse_cached_screens("0,0,0,100\n").is_none());
-        assert!(parse_cached_screens("0,0,100\n").is_none());
-        assert!(parse_cached_screens("0,0,100,100,extra\n").is_none());
+    fn cached_snapshot_rejects_invalid_contracts() {
+        let cases = [
+            "",
+            "preferences,42\nlayout,0,0,100,100\n",
+            "preferences,42\nvisible,0,0,100,100\n",
+            "preferences,nope\nlayout,0,0,100,100\nvisible,0,0,100,100\n",
+            "preferences,42,extra\nlayout,0,0,100,100\nvisible,0,0,100,100\n",
+            "preferences,42\npreferences,43\nlayout,0,0,100,100\nvisible,0,0,100,100\n",
+            "layout,0,0,100,100\n",
+            "visible,0,0,100,100\n",
+            "other,0,0,100,100\nvisible,0,0,100,100\n",
+            "layout,NaN,0,100,100\nvisible,0,0,100,100\n",
+            "layout,0,0,0,100\nvisible,0,0,100,100\n",
+            "layout,0,0,100\nvisible,0,0,100,100\n",
+            "layout,0,0,100,100,extra\nvisible,0,0,100,100\n",
+        ];
+        for contents in cases {
+            assert!(parse_cached_snapshot(contents).is_none(), "{contents:?}");
+        }
     }
 
     #[test]

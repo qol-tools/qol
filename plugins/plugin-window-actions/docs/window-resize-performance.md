@@ -2,33 +2,40 @@
 
 ## Scope
 
-- Goal: improve speed of macOS resize actions.
-- Actions measured: `snap-left`, `snap-right`, `snap-bottom`, `center`, `maximize`.
-- Out of scope: minimize/restore behavior, activation reliability, and window identity changes.
-- Method: trace-bounded local runs against a temporary TextEdit document, with before/after tables recorded before accepting the implementation.
+- Goal: make macOS window actions react as quickly and reliably as the Cinnamon path.
+- Actions measured: `snap-left`, `snap-right`, `center`, `maximize`, `move-monitor-left`, and `move-monitor-right`.
+- Method: trace-bounded local runs against real application windows on multiple displays.
 
 ## Summary
 
-The winning change caches macOS visible-screen geometry for short bursts of window actions. The resize path launches as a short-lived process per action, and repeated `NSScreen` visible-frame lookup was costing roughly 39ms per invocation. A 10s cache drops that lookup to near-zero for repeated left/right/bottom/center/maximize actions while keeping the cache short enough to recover quickly from monitor-layout changes.
+The macOS path now keeps the development daemon resident, resolves the focused application through Accessibility, reuses screen geometry until the physical display topology or work-area preferences change, and verifies a resize without polling for an impossible exact frame. Final warm center runs settled to 10–25ms, with occasional Accessibility or scheduler spikes; monitor moves measured 4–27ms.
 
-## Accepted Change: 10s Screen Geometry Cache
+## Accepted Changes
 
-Baseline A/B run: `qol-resize-baseline-ab-1783068370`.
-Accepted cold-cache run: `qol-resize-h6-screen-cache-10s-cold-1783068765`.
+### Resident development daemon
 
-| Action | Baseline Avg ms | Baseline Median ms | After Avg ms | After Median ms | Avg Delta ms | Median Delta ms | Verdict |
-|---|---:|---:|---:|---:|---:|---:|---|
-| `center` | 82.3 | 80.5 | 49.2 | 50.5 | -33.1 | -30.0 | pass |
-| `maximize` | 84.7 | 82.5 | 50.8 | 51.0 | -33.9 | -31.5 | pass |
-| `snap-bottom` | 85.8 | 86.0 | 50.3 | 51.0 | -35.5 | -35.0 | pass |
-| `snap-left` | 87.8 | 87.0 | 60.7 | 50.0 | -27.1 | -37.0 | pass |
-| `snap-right` | 81.8 | 81.0 | 46.0 | 49.5 | -35.8 | -31.5 | pass |
+The `.qol-tray-dev-autostart` marker starts Window Actions with the host. This removes the roughly 260ms first-action daemon startup from development-linked installs.
 
-| Operation | Before Avg ms | Before Median ms | After Avg ms | After Median ms | Result |
-|---|---:|---:|---:|---:|---|
-| `screen_for_point` | 38.9 | 38.0 | 1.9 | 0.0 | Cache removes repeated cold `NSScreen` lookup |
+### Topology-keyed screen snapshot
 
-Final rebuilt smoke run: `qol-resize-final-screen-cache-smoke-1783068818`; `screen_for_point` averaged 3.2ms with cold cache included, median 0.0ms.
+Visible `NSScreen` frames are cached in memory and on disk with a key containing CoreGraphics display bounds and the metadata generation of Dock, global, and Control Center preferences. Repeated actions avoid AppKit startup while display rearrangement, resolution changes, and work-area preference changes invalidate the snapshot immediately.
+
+### Focused application lookup
+
+The system-wide Accessibility element supplies the focused application PID before `NSWorkspace` and WindowServer fallbacks. This avoids stale `NSWorkspace` results observed after a host rebuild, including incorrectly targeting `loginwindow`.
+
+### Constraint-aware geometry verification
+
+The setter reads the window frame once after applying position and size. It accepts exact frames, legitimate macOS work-area constraints, and other real adjustments, while rejecting unchanged or unreadable windows. The old 120ms polling loop waited for exact geometry even when macOS intentionally clamped the requested frame around the menu bar.
+
+## Measured Result
+
+| Path | Before | After |
+|---|---:|---:|
+| First action with daemon startup | about 329ms | about 4ms dispatch |
+| Cold in-daemon action | up to 328ms | 59–81ms |
+| Warm resize action | 128–224ms | 10–28ms typical |
+| Warm monitor move | 202–224ms | 4–27ms |
 
 ## Rejected Hypotheses
 
@@ -40,4 +47,4 @@ Final rebuilt smoke run: `qol-resize-final-screen-cache-smoke-1783068818`; `scre
 
 ## Tradeoff
 
-The cache can be stale for up to 10 seconds after a monitor layout, resolution, Dock/menu-bar, or visible-frame change. The short TTL keeps resize bursts fast while limiting the stale-layout window. If this still feels risky, reduce the TTL or invalidate it from a future monitor-change signal.
+The persistent snapshot depends on CoreGraphics topology plus preference-file metadata rather than a timer. A future work-area change that affects neither signal would require an additional invalidation source, but ordinary display and Dock/menu-bar configuration changes are covered without imposing a recurring latency tax.

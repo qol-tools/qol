@@ -55,10 +55,10 @@ pub(super) fn trace_geometry(
     pid: i32,
     expected: super::screen::Rect,
     actual: Option<super::screen::Rect>,
-    matches: bool,
+    outcome: &str,
 ) {
     #[cfg(not(debug_assertions))]
-    let _ = (pid, expected, actual, matches);
+    let _ = (pid, expected, actual, outcome);
     #[cfg(debug_assertions)]
     {
         let actual = actual.unwrap_or(super::screen::Rect {
@@ -78,9 +78,21 @@ pub(super) fn trace_geometry(
             actual.y,
             actual.w,
             actual.h,
-            if matches { "ok" } else { "mismatch" }
+            outcome
         );
     }
+}
+
+#[inline]
+pub(super) fn trace_screen_snapshot(source: &str, displays: usize, start: std::time::Instant) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "WINACT_AX",
+        "op=screen_snapshot source={source} displays={displays} dur_ms={}",
+        start.elapsed().as_millis()
+    );
+    #[cfg(not(debug_assertions))]
+    let _ = (source, displays, start);
 }
 
 #[cfg(debug_assertions)]

@@ -6,17 +6,42 @@ use std::time::{Duration, Instant};
 use super::objc::{
     ax_attr, cf_boolean_false, cf_boolean_true, cfstr, cfstring_to_string, cg_window_layer,
     cg_window_owner_pid, cls, dict_get_i32, msg_bool, msg_bool_usize, msg_i32, msg_ptr,
-    msg_ptr_usize, sel, AXUIElementCreateApplication, AXUIElementPerformAction,
-    AXUIElementSetAttributeValue, AXValueCreate, AXValueGetValue, CFArrayGetCount,
-    CFArrayGetValueAtIndex, CGPoint, CGSize, CGWindowListCopyWindowInfo, CfGuard,
-    AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE, CG_WINDOW_LIST_EXCLUDE_DESKTOP,
-    CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
+    msg_ptr_usize, sel, AXUIElementCreateApplication, AXUIElementCreateSystemWide,
+    AXUIElementGetPid, AXUIElementPerformAction, AXUIElementSetAttributeValue, AXValueCreate,
+    AXValueGetValue, CFArrayGetCount, CFArrayGetValueAtIndex, CGPoint, CGSize,
+    CGWindowListCopyWindowInfo, CfGuard, AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE,
+    CG_WINDOW_LIST_EXCLUDE_DESKTOP, CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
 use super::trace::{timed_bool, timed_opt, timed_pid, timed_pred, trace_geometry};
 
 const VERIFY_TIMEOUT: Duration = Duration::from_millis(120);
 const VERIFY_INTERVAL: Duration = Duration::from_millis(8);
 const RECT_TOLERANCE: f64 = 1.0;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeometryOutcome {
+    Exact,
+    Constrained,
+    Adjusted,
+    Unchanged,
+    Unreadable,
+}
+
+impl GeometryOutcome {
+    fn applied(self) -> bool {
+        matches!(self, Self::Exact | Self::Constrained | Self::Adjusted)
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Constrained => "constrained",
+            Self::Adjusted => "adjusted",
+            Self::Unchanged => "unchanged",
+            Self::Unreadable => "unreadable",
+        }
+    }
+}
 
 /// App element + the best target window (focused, or AXWindows[0] fallback).
 /// `_keeper` owns the CF reference that `win` points into.
@@ -234,17 +259,32 @@ pub(super) fn is_normal_window(pid: i32) -> bool {
 }
 
 pub(super) fn frontmost_pid() -> Option<i32> {
-    timed_pid("frontmost_pid", "workspace", workspace_frontmost_pid)
+    timed_pid("frontmost_pid", "ax_then_workspace", || {
+        system_focused_pid().or_else(workspace_frontmost_pid)
+    })
 }
 
 pub(super) fn find_normal_window_pid() -> Option<i32> {
-    timed_pid("find_pid", "workspace_then_window_server", || {
-        let frontmost = workspace_frontmost_pid();
+    timed_pid("find_pid", "ax_workspace_window_server", || {
+        let focused = system_focused_pid();
+        let workspace = workspace_frontmost_pid();
         let Some(list) = on_screen_window_list() else {
-            return frontmost;
+            return focused.or(workspace);
         };
-        select_normal_window_pid(frontmost, window_entries(&list), is_normal_window)
+        select_normal_window_pid(
+            [focused, workspace].into_iter().flatten(),
+            window_entries(&list),
+            is_normal_window,
+        )
     })
+}
+
+fn system_focused_pid() -> Option<i32> {
+    let system = CfGuard::new(unsafe { AXUIElementCreateSystemWide() })?;
+    let app = ax_attr(system.as_ptr(), "AXFocusedApplication")?;
+    let mut pid = 0;
+    let result = unsafe { AXUIElementGetPid(app.as_const(), &mut pid) };
+    (result == 0 && pid > 0).then_some(pid)
 }
 
 fn workspace_frontmost_pid() -> Option<i32> {
@@ -263,16 +303,20 @@ fn workspace_frontmost_pid() -> Option<i32> {
 }
 
 fn select_normal_window_pid(
-    frontmost: Option<i32>,
+    preferred: impl IntoIterator<Item = i32>,
     entries: impl IntoIterator<Item = (i32, i32)>,
     mut is_normal: impl FnMut(i32) -> bool,
 ) -> Option<i32> {
-    if frontmost.is_some_and(&mut is_normal) {
-        return frontmost;
+    let mut fallback = None;
+    for pid in preferred {
+        fallback.get_or_insert(pid);
+        if is_normal(pid) {
+            return Some(pid);
+        }
     }
     layer_zero_pids(entries)
         .find(|pid| is_normal(*pid))
-        .or(frontmost)
+        .or(fallback)
 }
 
 fn on_screen_window_list() -> Option<CfGuard> {
@@ -315,6 +359,7 @@ pub(super) fn set_position_and_size(pid: i32, rect: super::screen::Rect) -> bool
         let Some(ft) = front_target(pid) else {
             return false;
         };
+        let before = read_window_rect(ft.win);
         let pos = CGPoint {
             x: rect.x,
             y: rect.y,
@@ -345,24 +390,31 @@ pub(super) fn set_position_and_size(pid: i32, rect: super::screen::Rect) -> bool
         if size_before != 0 || position != 0 || size_after != 0 {
             return false;
         }
-        wait_for_window_rect(pid, ft.win, rect)
+        let actual = read_window_rect(ft.win);
+        let outcome = geometry_outcome(before, actual, rect);
+        trace_geometry(pid, rect, actual, outcome.as_str());
+        outcome.applied()
     })
 }
 
-fn wait_for_window_rect(pid: i32, win: *const c_void, expected: super::screen::Rect) -> bool {
-    let deadline = Instant::now() + VERIFY_TIMEOUT;
-    loop {
-        let actual = read_window_rect(win);
-        if actual.is_some_and(|rect| rect_matches(rect, expected)) {
-            trace_geometry(pid, expected, actual, true);
-            return true;
-        }
-        if Instant::now() >= deadline {
-            trace_geometry(pid, expected, actual, false);
-            return false;
-        }
-        sleep(VERIFY_INTERVAL);
+fn geometry_outcome(
+    before: Option<super::screen::Rect>,
+    actual: Option<super::screen::Rect>,
+    expected: super::screen::Rect,
+) -> GeometryOutcome {
+    let Some(actual) = actual else {
+        return GeometryOutcome::Unreadable;
+    };
+    if rect_matches(actual, expected) {
+        return GeometryOutcome::Exact;
     }
+    if constrained_rect_matches(actual, expected) {
+        return GeometryOutcome::Constrained;
+    }
+    if before.is_none_or(|before| !rect_matches(actual, before)) {
+        return GeometryOutcome::Adjusted;
+    }
+    GeometryOutcome::Unchanged
 }
 
 fn rect_matches(actual: super::screen::Rect, expected: super::screen::Rect) -> bool {
@@ -370,6 +422,20 @@ fn rect_matches(actual: super::screen::Rect, expected: super::screen::Rect) -> b
         && (actual.y - expected.y).abs() <= RECT_TOLERANCE
         && (actual.w - expected.w).abs() <= RECT_TOLERANCE
         && (actual.h - expected.h).abs() <= RECT_TOLERANCE
+}
+
+fn constrained_rect_matches(actual: super::screen::Rect, expected: super::screen::Rect) -> bool {
+    let left = (actual.x - expected.x).abs() <= RECT_TOLERANCE;
+    let top = (actual.y - expected.y).abs() <= RECT_TOLERANCE;
+    let right = (actual.x + actual.w - expected.x - expected.w).abs() <= RECT_TOLERANCE;
+    let bottom = (actual.y + actual.h - expected.y - expected.h).abs() <= RECT_TOLERANCE;
+    let width = (actual.w - expected.w).abs() <= RECT_TOLERANCE;
+    let height = (actual.h - expected.h).abs() <= RECT_TOLERANCE;
+    actual.w <= expected.w + RECT_TOLERANCE
+        && actual.h <= expected.h + RECT_TOLERANCE
+        && (left || right)
+        && (top || bottom)
+        && (width || height)
 }
 
 /// Minimize the focused window.
@@ -569,7 +635,9 @@ pub(super) fn unminimize_and_raise(pid: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{layer_zero_pids, rect_matches, select_normal_window_pid};
+    use super::{
+        geometry_outcome, layer_zero_pids, rect_matches, select_normal_window_pid, GeometryOutcome,
+    };
     use crate::platform::macos::screen::Rect;
 
     #[test]
@@ -598,45 +666,52 @@ mod tests {
     fn normal_window_selection_prefers_workspace_and_validates_fallbacks() {
         let cases = [
             (
-                "workspace frontmost wins over global window order",
-                Some(42),
+                "accessibility focus wins over workspace and global order",
+                vec![42, 77],
                 vec![(0, 99), (0, 42)],
-                vec![42, 99],
+                vec![42, 77, 99],
                 Some(42),
             ),
             (
-                "non-window workspace owner falls back to normal layer zero window",
-                Some(42),
+                "workspace wins when accessibility focus has no normal window",
+                vec![42, 77],
+                vec![(0, 99), (0, 77)],
+                vec![77, 99],
+                Some(77),
+            ),
+            (
+                "non-window preferred owners fall back to normal layer zero window",
+                vec![42, 77],
                 vec![(25, 7), (0, 99), (0, 100)],
                 vec![99, 100],
                 Some(99),
             ),
             (
-                "workspace owner survives when no normal fallback exists",
-                Some(42),
+                "first preferred owner survives when no normal fallback exists",
+                vec![42, 77],
                 vec![(25, 7), (0, 99)],
                 vec![],
                 Some(42),
             ),
             (
-                "missing workspace owner uses first normal layer zero window",
-                None,
+                "missing preferred owner uses first normal layer zero window",
+                vec![],
                 vec![(0, 99), (0, 100)],
                 vec![100],
                 Some(100),
             ),
             (
-                "missing workspace and normal windows returns none",
-                None,
+                "missing preferred and normal windows returns none",
+                vec![],
                 vec![(3, 99), (0, 100)],
                 vec![],
                 None,
             ),
         ];
 
-        for (name, frontmost, entries, normal, expected) in cases {
+        for (name, preferred, entries, normal, expected) in cases {
             assert_eq!(
-                select_normal_window_pid(frontmost, entries, |pid| normal.contains(&pid)),
+                select_normal_window_pid(preferred, entries, |pid| normal.contains(&pid)),
                 expected,
                 "{name}"
             );
@@ -683,6 +758,70 @@ mod tests {
 
         for (name, actual, matches) in cases {
             assert_eq!(rect_matches(actual, expected), matches, "{name}");
+        }
+    }
+
+    #[test]
+    fn geometry_outcome_accepts_mac_constraints_without_accepting_noops() {
+        let expected = Rect {
+            x: 4360.0,
+            y: -716.0,
+            w: 1920.0,
+            h: 1080.0,
+        };
+        let before = Rect {
+            x: 1800.0,
+            y: -716.0,
+            w: 2560.0,
+            h: 1440.0,
+        };
+        let cases = [
+            (
+                "exact",
+                Some(before),
+                Some(expected),
+                GeometryOutcome::Exact,
+            ),
+            (
+                "menu bar clamp",
+                Some(before),
+                Some(Rect {
+                    y: -685.0,
+                    h: 1049.0,
+                    ..expected
+                }),
+                GeometryOutcome::Constrained,
+            ),
+            (
+                "application adjustment",
+                Some(before),
+                Some(Rect {
+                    x: 4400.0,
+                    y: -680.0,
+                    w: 1800.0,
+                    h: 1000.0,
+                }),
+                GeometryOutcome::Adjusted,
+            ),
+            (
+                "unchanged unrelated frame",
+                Some(before),
+                Some(before),
+                GeometryOutcome::Unchanged,
+            ),
+            (
+                "unreadable",
+                Some(before),
+                None,
+                GeometryOutcome::Unreadable,
+            ),
+        ];
+        for (name, before, actual, outcome) in cases {
+            assert_eq!(
+                geometry_outcome(before, actual, expected),
+                outcome,
+                "{name}"
+            );
         }
     }
 

@@ -193,14 +193,8 @@ where
 
     let host_death_tx = tx.clone();
     qol_runtime::spawn_host_death_watchdog_with(move || {
-        let request = DaemonRequest {
-            action: "kill".into(),
-            input: serde_json::Value::Null,
-        };
-        if let ReadResult::Command(cmd) = parser(&request) {
-            if host_death_tx.send(cmd).is_ok() {
-                std::thread::sleep(HOST_DEATH_GRACE);
-            }
+        if dispatch_shutdown_command(&host_death_tx, parser) {
+            std::thread::sleep(HOST_DEATH_GRACE);
         }
         std::process::exit(0);
     });
@@ -227,9 +221,26 @@ where
         if let Some(socket_path) = socket_path {
             remove_socket_file(&socket_path);
         }
+        if !dispatch_shutdown_command(&tx, parser) {
+            std::process::exit(0);
+        }
     });
 
     true
+}
+
+fn dispatch_shutdown_command<C, F>(tx: &Sender<C>, parser: F) -> bool
+where
+    F: Fn(&DaemonRequest) -> ReadResult<C>,
+{
+    let request = DaemonRequest {
+        action: "kill".into(),
+        input: serde_json::Value::Null,
+    };
+    let ReadResult::Command(command) = parser(&request) else {
+        return false;
+    };
+    tx.send(command).is_ok()
 }
 
 pub fn run_stateful_listener<S, F>(
@@ -706,6 +717,29 @@ mod tests {
             DaemonResponse::Fallback => {}
             _ => panic!("expected fallback response"),
         }
+    }
+
+    #[test]
+    fn listener_shutdown_dispatches_the_parser_kill_command() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let dispatched = dispatch_shutdown_command(&tx, |request| {
+            if request.action == "kill" {
+                return ReadResult::Command(request.action.clone());
+            }
+            ReadResult::Fallback
+        });
+
+        assert!(dispatched);
+        assert_eq!(rx.recv().unwrap(), "kill");
+    }
+
+    #[test]
+    fn listener_shutdown_rejects_parsers_without_a_kill_command() {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let dispatched = dispatch_shutdown_command(&tx, |_| ReadResult::<String>::Handled);
+
+        assert!(!dispatched);
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

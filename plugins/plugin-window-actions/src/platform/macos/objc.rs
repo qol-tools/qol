@@ -35,11 +35,13 @@ pub(super) const CF_NUMBER_SINT32_TYPE: i32 = 3;
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     pub(super) fn AXUIElementCreateApplication(pid: i32) -> *mut c_void;
+    pub(super) fn AXUIElementCreateSystemWide() -> *mut c_void;
     pub(super) fn AXUIElementCopyAttributeValue(
         element: *const c_void,
         attribute: *const c_void,
         value: *mut *mut c_void,
     ) -> i32;
+    pub(super) fn AXUIElementGetPid(element: *const c_void, pid: *mut i32) -> i32;
     pub(super) fn AXUIElementSetAttributeValue(
         element: *const c_void,
         attribute: *const c_void,
@@ -94,6 +96,8 @@ pub(super) fn cf_boolean_true() -> *const c_void {
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
+    pub(super) fn CGDisplayBounds(display: u32) -> CGRect;
+    pub(super) fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
     pub(super) fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> *mut c_void;
     #[link_name = "kCGWindowLayer"]
     static CG_WINDOW_LAYER: *const c_void;
