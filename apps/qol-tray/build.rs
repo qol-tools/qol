@@ -17,6 +17,15 @@ fn main() {
 
     println!("cargo:rustc-env=GIT_COMMIT_HASH={}", hash);
     if profile == "release" {
-        println!("cargo:rerun-if-changed=.git/HEAD");
+        if let Some(head) = Command::new("git")
+            .args(["rev-parse", "--git-path", "HEAD"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|p| !p.is_empty())
+        {
+            println!("cargo:rerun-if-changed={head}");
+        }
     }
 }
