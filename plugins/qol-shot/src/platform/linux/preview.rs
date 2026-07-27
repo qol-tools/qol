@@ -1,7 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use gpui::RenderImage;
 use std::os::fd::AsRawFd;
-use std::sync::Arc;
 use x11rb::connection::Connection;
 use x11rb::protocol::shm::{self, ConnectionExt as ShmExt};
 use x11rb::protocol::xproto::{ConnectionExt, ImageFormat};
@@ -32,13 +30,7 @@ pub fn capture_frozen_frame() -> Result<Option<FrozenFrame>> {
 fn frozen_frame_from_bgra(bounds: Rect, pixels: Vec<u8>) -> Option<FrozenFrame> {
     let width = u32::try_from(bounds.w).ok()?;
     let height = u32::try_from(bounds.h).ok()?;
-    let buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(width, height, pixels)?;
-    Some(FrozenFrame {
-        bounds,
-        image: Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
-            buffer,
-        )])),
-    })
+    FrozenFrame::from_bgra_segments(vec![(bounds, pixels, width, height)])
 }
 
 pub fn grab_preview_rgba(rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {

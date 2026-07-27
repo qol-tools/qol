@@ -1,14 +1,20 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use qol_headless::DoctorCheckResult;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::capture::frozen_frame::FrozenFrame;
-use crate::Rect;
+use crate::{Monitor, Rect};
+
+use super::display::{active_displays, DisplayInfo};
+use super::native_capture;
+
+static FROZEN_CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub fn process_alive(pid: u32) -> bool {
     crate::platform::unix_process_alive(pid)
@@ -48,7 +54,190 @@ pub fn grab_preview_rgba(_rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {
 }
 
 pub fn capture_frozen_frame() -> Result<Option<FrozenFrame>> {
-    Ok(None)
+    let displays = active_displays()?;
+    let sequence = FROZEN_CAPTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let mut files = FrozenCaptureFiles::default();
+    let jobs = displays
+        .into_iter()
+        .map(|display| FrozenCaptureJob {
+            display,
+            path: files.path(sequence, display.display_index),
+        })
+        .collect();
+    let segments = capture_frozen_displays(jobs)?;
+    FrozenFrame::from_bgra_segments(segments)
+        .map(Some)
+        .context("captured macOS displays could not form a frozen frame")
+}
+
+type FrozenSegmentData = (Rect, Vec<u8>, u32, u32);
+
+struct FrozenCaptureJob {
+    display: DisplayInfo,
+    path: PathBuf,
+}
+
+fn capture_frozen_displays(jobs: Vec<FrozenCaptureJob>) -> Result<Vec<FrozenSegmentData>> {
+    thread::scope(|scope| {
+        let handles = jobs
+            .into_iter()
+            .map(|job| scope.spawn(move || capture_frozen_display(job)))
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .map_err(|_| anyhow!("frozen display capture worker panicked"))?
+            })
+            .collect()
+    })
+}
+
+fn capture_frozen_display(job: FrozenCaptureJob) -> Result<FrozenSegmentData> {
+    match native_capture::capture_display(job.display.bounds) {
+        Ok(Some(frame)) => {
+            let bounds = rect_from_monitor(job.display.bounds);
+            qol_runtime::probe!(
+                "SHOT_FREEZE",
+                "stage=display backend=sck index={} logical={}x{} pixels={}x{} capture_ms={} copy_ms={} total_ms={}",
+                job.display.display_index,
+                bounds.w,
+                bounds.h,
+                frame.width,
+                frame.height,
+                frame.capture_ms,
+                frame.copy_ms,
+                frame.total_ms
+            );
+            return Ok((bounds, frame.pixels, frame.width, frame.height));
+        }
+        Ok(None) => {
+            qol_runtime::probe!(
+                "SHOT_FREEZE",
+                "stage=fallback index={} reason=sck-unavailable",
+                job.display.display_index
+            );
+        }
+        Err(error) => {
+            eprintln!(
+                "[qol-shot] native frozen display {} capture failed: {error:#}",
+                job.display.display_index
+            );
+            qol_runtime::probe!(
+                "SHOT_FREEZE",
+                "stage=fallback index={} reason=sck-error",
+                job.display.display_index
+            );
+        }
+    }
+    capture_frozen_display_fallback(job)
+}
+
+fn capture_frozen_display_fallback(job: FrozenCaptureJob) -> Result<FrozenSegmentData> {
+    let started = Instant::now();
+    let capture_started = Instant::now();
+    let output = run_frozen_screencapture(&job)?;
+    let capture_ms = capture_started.elapsed().as_millis();
+    ensure_frozen_capture_succeeded(&job, &output)?;
+    let decode_started = Instant::now();
+    let mut pixels = image::open(&job.path)
+        .with_context(|| {
+            format!(
+                "failed to decode frozen display {}",
+                job.display.display_index
+            )
+        })?
+        .to_rgba8();
+    let decode_ms = decode_started.elapsed().as_millis();
+    let (pixel_width, pixel_height) = pixels.dimensions();
+    rgba_to_bgra(pixels.as_mut());
+    let bounds = rect_from_monitor(job.display.bounds);
+    qol_runtime::probe!(
+        "SHOT_FREEZE",
+        "stage=display backend=screencapture index={} logical={}x{} pixels={}x{} capture_ms={} decode_ms={} total_ms={}",
+        job.display.display_index,
+        bounds.w,
+        bounds.h,
+        pixel_width,
+        pixel_height,
+        capture_ms,
+        decode_ms,
+        started.elapsed().as_millis()
+    );
+    Ok((bounds, pixels.into_raw(), pixel_width, pixel_height))
+}
+
+fn run_frozen_screencapture(job: &FrozenCaptureJob) -> Result<std::process::Output> {
+    ensure_capture_work_dir()?;
+    Command::new("screencapture")
+        .args(screencapture_frozen_args(job.display.display_index))
+        .arg(&job.path)
+        .stdin(Stdio::null())
+        .output()
+        .context("failed to run screencapture frozen-frame capture")
+}
+
+fn ensure_frozen_capture_succeeded(
+    job: &FrozenCaptureJob,
+    output: &std::process::Output,
+) -> Result<()> {
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "screencapture display {} exited with {}: {}",
+        job.display.display_index,
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
+}
+
+#[derive(Default)]
+struct FrozenCaptureFiles(Vec<PathBuf>);
+
+impl FrozenCaptureFiles {
+    fn path(&mut self, sequence: u64, display_index: u32) -> PathBuf {
+        let path = capture_work_dir().join(format!(
+            "qol-shot-freeze-{}-{sequence}-{display_index}.png",
+            std::process::id()
+        ));
+        self.0.push(path.clone());
+        path
+    }
+}
+
+impl Drop for FrozenCaptureFiles {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+pub(super) fn screencapture_frozen_args(display_index: u32) -> Vec<String> {
+    vec![
+        "-D".into(),
+        display_index.to_string(),
+        "-x".into(),
+        "-t".into(),
+        "png".into(),
+    ]
+}
+
+fn rect_from_monitor(monitor: Monitor) -> Rect {
+    Rect {
+        x: monitor.x,
+        y: monitor.y,
+        w: monitor.w,
+        h: monitor.h,
+    }
+}
+
+fn rgba_to_bgra(pixels: &mut [u8]) {
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
 }
 
 pub fn configure_preview_window(_title: String) {}

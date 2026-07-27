@@ -110,6 +110,14 @@ fn screencapture_full_display_recording_args_avoid_area_selection() {
 }
 
 #[test]
+fn screencapture_frozen_args_capture_one_display_without_ui() {
+    assert_eq!(
+        system::screencapture_frozen_args(3),
+        vec!["-D", "3", "-x", "-t", "png"]
+    );
+}
+
+#[test]
 fn rect_intersection_returns_overlap() {
     let rect = Rect {
         x: 1800,

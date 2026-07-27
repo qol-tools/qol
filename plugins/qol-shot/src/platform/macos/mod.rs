@@ -2,6 +2,7 @@ mod clipboard;
 mod conversion;
 mod display;
 mod labels;
+mod native_capture;
 mod overlay;
 mod recording;
 mod selector;

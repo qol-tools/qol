@@ -6360,10 +6360,12 @@ name = "qol-shot"
 version = "1.37.0"
 dependencies = [
  "anyhow",
+ "block2",
  "chrono",
  "gpui",
  "image",
  "libc",
+ "objc2",
  "qol-apps",
  "qol-config",
  "qol-conventions",
