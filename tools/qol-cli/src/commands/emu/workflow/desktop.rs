@@ -192,20 +192,22 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
     )?;
     qmp.click_left()?;
 
-    wait_for_probe_line(
+    let selected_probe = wait_for_probe_line(
         &mut guest,
         capture_trace,
         "SHOT_SELECT_RESULT",
         "rect=",
         CAPTURE_TIMEOUT,
     )?;
-    wait_for_probe_line(
+    let preview_probe = wait_for_probe_line(
         &mut guest,
         capture_trace,
         "SHOT_PREVIEW_REVEAL",
         "state=presented",
         CAPTURE_TIMEOUT,
     )?;
+    let preview_latency_ms =
+        screenshot_preview_latency_ms(&selected_probe.stdout, &preview_probe.stdout)?;
     wait_for_probe_fields(
         &mut guest,
         capture_trace,
@@ -311,7 +313,7 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
             "/usr/bin/grep",
             &[
                 "-E",
-                "SHOT_(CAPTURE_STATUS|DAEMON_APP|PIN_REVEAL|PIN_TICK|PREVIEW_REVEAL|RECORD_COUNTDOWN|RECORD_TOGGLE|SELECT_OVERLAY|SELECT_RESULT|SELECT_REVEAL)|SHOW_WIN_STATE",
+                "SHOT_(CAPTURE_STATUS|DAEMON_APP|PIN_REVEAL|PIN_TICK|PREVIEW_REVEAL|RECORD_COUNTDOWN|RECORD_TOGGLE|SCREENSHOT_READY|SELECT_OVERLAY|SELECT_RESULT|SELECT_REVEAL)|SHOW_WIN_STATE",
                 TRACE_LOG_PATH,
             ],
         ),
@@ -328,6 +330,7 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
         "pin_move={},{}->{},{}",
         before_move.x, before_move.y, after_move.x, after_move.y
     ));
+    traces.push(format!("preview_latency_ms={preview_latency_ms}"));
     let mut artifacts = vec![selector, preview, pinned];
     artifacts.extend(recording_cancellation);
     Ok(Verdict {
@@ -551,6 +554,45 @@ fn probe_field<'a>(line: &'a str, field: &str) -> Option<&'a str> {
         .find_map(|token| token.strip_prefix(&prefix))
 }
 
+fn screenshot_preview_latency_ms(selected_trace: &str, preview_trace: &str) -> Result<u64> {
+    let selected = matching_probe_line(selected_trace, "SHOT_SELECT_RESULT", &["rect="])
+        .context("screenshot selection trace was missing")?;
+    let preview = matching_probe_line(preview_trace, "SHOT_PREVIEW_REVEAL", &["state=presented"])
+        .context("screenshot preview trace was missing")?;
+    let selected_ms = probe_timestamp_ms(selected)?;
+    let preview_ms = probe_timestamp_ms(preview)?;
+    for line in preview_trace.lines() {
+        if !probe_line_matches(
+            line,
+            "SHOT_CAPTURE_STATUS",
+            &["context=screenshot", "stage=saving"],
+        ) {
+            continue;
+        }
+        if probe_timestamp_ms(line)? <= preview_ms {
+            bail!("screenshot saving status was presented before the thumbnail preview");
+        }
+    }
+    preview_ms
+        .checked_sub(selected_ms)
+        .context("screenshot preview trace preceded its selection result")
+}
+
+fn matching_probe_line<'a>(trace: &'a str, tag: &str, required: &[&str]) -> Option<&'a str> {
+    trace
+        .lines()
+        .rev()
+        .find(|line| probe_line_matches(line, tag, required))
+}
+
+fn probe_timestamp_ms(line: &str) -> Result<u64> {
+    line.split_ascii_whitespace()
+        .next()
+        .context("probe line had no timestamp")?
+        .parse()
+        .context("probe timestamp was not an unsigned integer")
+}
+
 fn wait_for_window_id(
     guest: &mut GuestControlClient,
     title: &str,
@@ -768,6 +810,35 @@ mod tests {
             &["state=mapped"]
         ));
         assert_eq!(probe_field(line, "title"), Some("qol-shot-pin-7"));
+    }
+
+    #[test]
+    fn screenshot_preview_latency_rejects_status_before_thumbnail() {
+        let selected = "100 pid=1 SHOT_SELECT_RESULT rect=10x10+0,0\n";
+        let healthy = concat!(
+            "100 pid=1 SHOT_SELECT_RESULT rect=10x10+0,0\n",
+            "145 pid=1 SHOT_PREVIEW_REVEAL state=presented preview_ms=40\n"
+        );
+        let regressed = concat!(
+            "100 pid=1 SHOT_SELECT_RESULT rect=10x10+0,0\n",
+            "120 pid=1 SHOT_CAPTURE_STATUS context=screenshot stage=saving\n",
+            "145 pid=1 SHOT_PREVIEW_REVEAL state=presented preview_ms=40\n"
+        );
+        let deferred = concat!(
+            "100 pid=1 SHOT_SELECT_RESULT rect=10x10+0,0\n",
+            "145 pid=1 SHOT_PREVIEW_REVEAL state=presented preview_ms=40\n",
+            "150 pid=1 SHOT_CAPTURE_STATUS context=screenshot stage=saving\n"
+        );
+
+        assert_eq!(
+            screenshot_preview_latency_ms(selected, healthy).unwrap(),
+            45
+        );
+        assert!(screenshot_preview_latency_ms(selected, regressed).is_err());
+        assert_eq!(
+            screenshot_preview_latency_ms(selected, deferred).unwrap(),
+            45
+        );
     }
 
     #[cfg(unix)]

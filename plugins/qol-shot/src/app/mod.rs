@@ -214,17 +214,6 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
     else {
         return;
     };
-    show_capture_status(
-        cx,
-        &state.capture_status,
-        crate::ui::capture_status::CaptureStatus::persistent(
-            "screenshot",
-            "saving",
-            "Screenshot captured",
-            "Saving screenshot…",
-        )
-        .tone(qol_gpui::toast::ToastTone::Info),
-    );
     let captured = cx
         .background_spawn(async move {
             crate::capture::screenshot::capture_selected_for_preview(
@@ -245,29 +234,18 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
             return;
         }
     };
-    let path = capture.path.clone();
     let file_ready = capture.file_ready.clone();
     let completion = capture.completion.clone();
     let presented = present(cx, state, capture);
     let status = state.capture_status.clone();
     let saved_toast = state.saved_toast.clone();
     cx.spawn(async move |cx: &mut AsyncApp| {
-        complete_screenshot(
-            path,
-            file_ready,
-            completion,
-            presented,
-            status,
-            saved_toast,
-            cx,
-        )
-        .await;
+        complete_screenshot(file_ready, completion, presented, status, saved_toast, cx).await;
     })
     .detach();
 }
 
 async fn complete_screenshot(
-    path: std::path::PathBuf,
     file_ready: crate::capture::screenshot::CaptureFileReady,
     completion: Option<crate::capture::completion::PreviewCompletion>,
     presented: bool,
@@ -287,17 +265,9 @@ async fn complete_screenshot(
             completion.finish(crate::capture::completion::PreviewExit::Unavailable);
         }
     }
-    show_capture_status(
-        cx,
-        &status,
-        crate::ui::capture_status::CaptureStatus::timed(
-            "screenshot",
-            "saved",
-            "Screenshot saved",
-            crate::capture::completion::file_label(&path),
-            CAPTURE_STATUS_TIMEOUT,
-        )
-        .tone(qol_gpui::toast::ToastTone::Success),
+    qol_runtime::probe!(
+        "SHOT_SCREENSHOT_READY",
+        "result=saved preview_dispatched={presented}"
     );
 }
 

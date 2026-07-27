@@ -710,7 +710,11 @@ impl PreviewView {
         let Some(reveal) = self.pending_reveal.take() else {
             return;
         };
-        qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=presented");
+        qol_runtime::probe!(
+            "SHOT_PREVIEW_REVEAL",
+            "seq={seq} state=presented preview_ms={}",
+            self.preview_started_at.elapsed().as_millis()
+        );
         self.blur_guard_until = Instant::now() + BLUR_GUARD;
         show_ghost_window_topmost(&reveal.title, &reveal.all_titles);
         FOCUS_REASSERT_GEN.store(seq, Ordering::SeqCst);
