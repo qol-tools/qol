@@ -94,6 +94,28 @@ impl FrozenFrame {
         }
         compose_crop(rect, &intersecting)
     }
+
+    pub(crate) fn thumbnail(
+        &self,
+        rect: Rect,
+        max_width: u32,
+        max_height: u32,
+    ) -> Option<FrozenCrop> {
+        if !rect_within(rect, self.bounds) || max_width == 0 || max_height == 0 {
+            return None;
+        }
+        let intersecting = self
+            .segments
+            .iter()
+            .filter_map(|segment| {
+                rect_intersection(rect, segment.bounds).map(|area| (segment, area))
+            })
+            .collect::<Vec<_>>();
+        if intersecting.len() == 1 && intersecting[0].1 == rect {
+            return intersecting[0].0.thumbnail(rect, max_width, max_height);
+        }
+        compose_thumbnail(rect, &intersecting, max_width, max_height)
+    }
 }
 
 impl FrozenSegment {
@@ -114,21 +136,7 @@ impl FrozenSegment {
     }
 
     fn crop(&self, rect: Rect) -> Option<FrozenCrop> {
-        if !rect_within(rect, self.bounds) {
-            return None;
-        }
-        let left = scaled_edge(rect.x - self.bounds.x, self.bounds.w, self.pixel_width)?;
-        let top = scaled_edge(rect.y - self.bounds.y, self.bounds.h, self.pixel_height)?;
-        let right = scaled_edge(
-            rect.x - self.bounds.x + rect.w,
-            self.bounds.w,
-            self.pixel_width,
-        )?;
-        let bottom = scaled_edge(
-            rect.y - self.bounds.y + rect.h,
-            self.bounds.h,
-            self.pixel_height,
-        )?;
+        let (left, top, right, bottom) = self.pixel_rect(rect)?;
         let width = right.checked_sub(left)?;
         let height = bottom.checked_sub(top)?;
         let row_bytes = width as usize * 4;
@@ -144,6 +152,95 @@ impl FrozenSegment {
             height,
         })
     }
+
+    fn thumbnail(&self, rect: Rect, max_width: u32, max_height: u32) -> Option<FrozenCrop> {
+        let (left, top, right, bottom) = self.pixel_rect(rect)?;
+        let width = right.checked_sub(left)?;
+        let height = bottom.checked_sub(top)?;
+        let (target_width, target_height) =
+            thumbnail_dimensions(width, height, max_width, max_height)?;
+        let source = image::ImageBuffer::<image::Rgba<u8>, &[u8]>::from_raw(
+            self.pixel_width,
+            self.pixel_height,
+            self.image.as_bytes(0)?,
+        )?;
+        let view = image::imageops::crop_imm(&source, left, top, width, height);
+        let thumbnail = image::imageops::thumbnail(&*view, target_width, target_height);
+        Some(FrozenCrop {
+            pixels: thumbnail.into_raw(),
+            width: target_width,
+            height: target_height,
+        })
+    }
+
+    fn pixel_rect(&self, rect: Rect) -> Option<(u32, u32, u32, u32)> {
+        if !rect_within(rect, self.bounds) {
+            return None;
+        }
+        let left = scaled_edge(rect.x - self.bounds.x, self.bounds.w, self.pixel_width)?;
+        let top = scaled_edge(rect.y - self.bounds.y, self.bounds.h, self.pixel_height)?;
+        let right = scaled_edge(
+            rect.x - self.bounds.x + rect.w,
+            self.bounds.w,
+            self.pixel_width,
+        )?;
+        let bottom = scaled_edge(
+            rect.y - self.bounds.y + rect.h,
+            self.bounds.h,
+            self.pixel_height,
+        )?;
+        (right > left && bottom > top).then_some((left, top, right, bottom))
+    }
+}
+
+fn thumbnail_dimensions(
+    width: u32,
+    height: u32,
+    max_width: u32,
+    max_height: u32,
+) -> Option<(u32, u32)> {
+    if width == 0 || height == 0 || max_width == 0 || max_height == 0 {
+        return None;
+    }
+    let width_scale = max_width as f64 / width as f64;
+    let height_scale = max_height as f64 / height as f64;
+    let scale = width_scale.min(height_scale).min(1.0);
+    Some((
+        ((width as f64 * scale).round() as u32).max(1),
+        ((height as f64 * scale).round() as u32).max(1),
+    ))
+}
+
+fn compose_thumbnail(
+    rect: Rect,
+    segments: &[(&FrozenSegment, Rect)],
+    max_width: u32,
+    max_height: u32,
+) -> Option<FrozenCrop> {
+    let scale = segments.iter().map(|(segment, _)| segment.scale()).max()?;
+    let source_width = u32::try_from(rect.w).ok()?.checked_mul(scale)?;
+    let source_height = u32::try_from(rect.h).ok()?.checked_mul(scale)?;
+    let (width, height) = thumbnail_dimensions(source_width, source_height, max_width, max_height)?;
+    let mut canvas = image::RgbaImage::from_pixel(width, height, image::Rgba([0, 0, 0, 255]));
+    for (segment, area) in segments {
+        let left = scaled_edge(area.x - rect.x, rect.w, width)?;
+        let top = scaled_edge(area.y - rect.y, rect.h, height)?;
+        let right = scaled_edge(area.x - rect.x + area.w, rect.w, width)?;
+        let bottom = scaled_edge(area.y - rect.y + area.h, rect.h, height)?;
+        let target_width = right.checked_sub(left)?;
+        let target_height = bottom.checked_sub(top)?;
+        if target_width == 0 || target_height == 0 {
+            continue;
+        }
+        let resized = segment.thumbnail(*area, target_width, target_height)?;
+        let resized = image::RgbaImage::from_raw(resized.width, resized.height, resized.pixels)?;
+        image::imageops::overlay(&mut canvas, &resized, i64::from(left), i64::from(top));
+    }
+    Some(FrozenCrop {
+        pixels: canvas.into_raw(),
+        width,
+        height,
+    })
 }
 
 fn compose_crop(rect: Rect, segments: &[(&FrozenSegment, Rect)]) -> Option<FrozenCrop> {
@@ -334,6 +431,46 @@ mod tests {
     }
 
     #[test]
+    fn thumbnail_is_bounded_without_changing_aspect_ratio() {
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 400,
+            h: 200,
+        };
+        let pixels = [40, 20, 10, 255].repeat(400 * 200);
+        let frame = FrozenFrame::from_bgra_segments(vec![(bounds, pixels, 400, 200)]).unwrap();
+        let thumbnail = frame.thumbnail(bounds, 360, 240).unwrap();
+        let (pixels, width, height) = thumbnail.into_bgra_parts();
+
+        assert_eq!((width, height), (360, 180));
+        assert_eq!(pixels.len(), 360 * 180 * 4);
+        assert!(pixels
+            .chunks_exact(4)
+            .all(|pixel| pixel == [40, 20, 10, 255]));
+    }
+
+    #[test]
+    fn thumbnail_uses_the_selected_source_rect() {
+        let thumbnail = frame()
+            .thumbnail(
+                Rect {
+                    x: 12,
+                    y: 21,
+                    w: 2,
+                    h: 1,
+                },
+                1,
+                1,
+            )
+            .unwrap();
+        let (pixels, width, height) = thumbnail.into_bgra_parts();
+
+        assert_eq!((width, height), (1, 1));
+        assert_eq!(pixels, vec![47, 27, 7, 255]);
+    }
+
+    #[test]
     fn saved_crop_converts_render_pixels_to_png_channels() {
         let path = std::env::temp_dir().join(format!(
             "qol-shot-frozen-crop-{}-{}.png",
@@ -436,6 +573,34 @@ mod tests {
             ]
             .concat()
         );
+    }
+
+    #[test]
+    fn cross_display_thumbnail_composes_directly_at_preview_size() {
+        let left = Rect {
+            x: -1,
+            y: 0,
+            w: 1,
+            h: 1,
+        };
+        let right = Rect {
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+        };
+        let left_pixels = [10, 0, 0, 255].repeat(4);
+        let right_pixels = vec![20, 0, 0, 255];
+        let frame = FrozenFrame::from_bgra_segments(vec![
+            (left, left_pixels, 2, 2),
+            (right, right_pixels, 1, 1),
+        ])
+        .unwrap();
+        let thumbnail = frame.thumbnail(frame.bounds(), 2, 1).unwrap();
+        let (pixels, width, height) = thumbnail.into_bgra_parts();
+
+        assert_eq!((width, height), (2, 1));
+        assert_eq!(pixels, [[10, 0, 0, 255], [20, 0, 0, 255]].concat());
     }
 
     #[test]

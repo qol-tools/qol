@@ -235,8 +235,12 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
         }
     };
     let file_ready = capture.file_ready.clone();
+    let file_start = capture.file_start.clone();
     let completion = capture.completion.clone();
     let presented = present(cx, state, capture);
+    if !presented {
+        file_start.start();
+    }
     let status = state.capture_status.clone();
     let saved_toast = state.saved_toast.clone();
     cx.spawn(async move |cx: &mut AsyncApp| {
@@ -447,6 +451,7 @@ async fn preview_latest(cx: &AsyncApp, state: &State) {
                     path,
                     pixels: None,
                     file_ready: crate::capture::screenshot::CaptureFileReady::ready(),
+                    file_start: crate::capture::screenshot::CaptureFileStart::ready(),
                     started_at: std::time::Instant::now(),
                     completion: None,
                 },

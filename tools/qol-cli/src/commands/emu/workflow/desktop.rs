@@ -190,7 +190,17 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
         command("/usr/bin/touch", &[CAPTURE_MARKER]),
         GUEST_COMMAND_TIMEOUT,
     )?;
-    qmp.click_left()?;
+    let selection_start = (width / 32, height / 32);
+    let selection_end = (
+        width.saturating_sub(selection_start.0 + 1),
+        height.saturating_sub(selection_start.1 + 1),
+    );
+    qmp.move_pointer_absolute(selection_start.0, selection_start.1, width, height)?;
+    qmp.set_left_button(true)?;
+    thread::sleep(PIN_DRAG_HOLD);
+    qmp.move_pointer_absolute(selection_end.0, selection_end.1, width, height)?;
+    thread::sleep(PIN_DRAG_HOLD);
+    qmp.set_left_button(false)?;
 
     let selected_probe = wait_for_probe_line(
         &mut guest,
@@ -208,6 +218,14 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
     )?;
     let preview_latency_ms =
         screenshot_preview_latency_ms(&selected_probe.stdout, &preview_probe.stdout)?;
+    let preview_dimensions = screenshot_preview_dimensions(&preview_probe.stdout)?;
+    if preview_dimensions.0 > 360 || preview_dimensions.1 > 240 {
+        bail!(
+            "screenshot preview carried full-resolution pixels: {}x{}",
+            preview_dimensions.0,
+            preview_dimensions.1
+        );
+    }
     wait_for_probe_fields(
         &mut guest,
         capture_trace,
@@ -313,7 +331,7 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
             "/usr/bin/grep",
             &[
                 "-E",
-                "SHOT_(CAPTURE_STATUS|DAEMON_APP|PIN_REVEAL|PIN_TICK|PREVIEW_REVEAL|RECORD_COUNTDOWN|RECORD_TOGGLE|SCREENSHOT_READY|SELECT_OVERLAY|SELECT_RESULT|SELECT_REVEAL)|SHOW_WIN_STATE",
+                "SHOT_(CAPTURE|CAPTURE_STATUS|DAEMON_APP|FILE|FREEZE|PIN_REVEAL|PIN_TICK|PREVIEW_PLACE|PREVIEW_REVEAL|RECORD_COUNTDOWN|RECORD_TOGGLE|RECV|SCREENSHOT_READY|SELECT_OVERLAY|SELECT_RESULT|SELECT_REVEAL|WINDOW_OPEN)|SHOW_WIN_STATE",
                 TRACE_LOG_PATH,
             ],
         ),
@@ -331,6 +349,10 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
         before_move.x, before_move.y, after_move.x, after_move.y
     ));
     traces.push(format!("preview_latency_ms={preview_latency_ms}"));
+    traces.push(format!(
+        "preview_dimensions={}x{}",
+        preview_dimensions.0, preview_dimensions.1
+    ));
     let mut artifacts = vec![selector, preview, pinned];
     artifacts.extend(recording_cancellation);
     Ok(Verdict {
@@ -562,20 +584,43 @@ fn screenshot_preview_latency_ms(selected_trace: &str, preview_trace: &str) -> R
     let selected_ms = probe_timestamp_ms(selected)?;
     let preview_ms = probe_timestamp_ms(preview)?;
     for line in preview_trace.lines() {
-        if !probe_line_matches(
+        if probe_line_matches(
             line,
             "SHOT_CAPTURE_STATUS",
             &["context=screenshot", "stage=saving"],
-        ) {
-            continue;
-        }
-        if probe_timestamp_ms(line)? <= preview_ms {
+        ) && probe_timestamp_ms(line)? <= preview_ms
+        {
             bail!("screenshot saving status was presented before the thumbnail preview");
+        }
+        if probe_line_matches(line, "SHOT_FILE", &[]) && probe_timestamp_ms(line)? <= preview_ms {
+            bail!("screenshot file encoding ran before the thumbnail preview");
         }
     }
     preview_ms
         .checked_sub(selected_ms)
         .context("screenshot preview trace preceded its selection result")
+}
+
+fn screenshot_preview_dimensions(trace: &str) -> Result<(u32, u32)> {
+    let capture = matching_probe_line(
+        trace,
+        "SHOT_CAPTURE",
+        &["source=frozen-preview", "preview="],
+    )
+    .context("screenshot trace did not contain a bounded frozen preview")?;
+    let dimensions =
+        probe_field(capture, "preview").context("screenshot preview dimensions were missing")?;
+    let (width, height) = dimensions
+        .split_once('x')
+        .context("screenshot preview dimensions were malformed")?;
+    Ok((
+        width
+            .parse()
+            .context("screenshot preview width was malformed")?,
+        height
+            .parse()
+            .context("screenshot preview height was malformed")?,
+    ))
 }
 
 fn matching_probe_line<'a>(trace: &'a str, tag: &str, required: &[&str]) -> Option<&'a str> {
@@ -829,16 +874,37 @@ mod tests {
             "145 pid=1 SHOT_PREVIEW_REVEAL state=presented preview_ms=40\n",
             "150 pid=1 SHOT_CAPTURE_STATUS context=screenshot stage=saving\n"
         );
+        let encoding_first = concat!(
+            "100 pid=1 SHOT_SELECT_RESULT rect=10x10+0,0\n",
+            "130 pid=1 SHOT_FILE source=frozen ms=20 result=ok\n",
+            "145 pid=1 SHOT_PREVIEW_REVEAL state=presented preview_ms=40\n"
+        );
 
         assert_eq!(
             screenshot_preview_latency_ms(selected, healthy).unwrap(),
             45
         );
         assert!(screenshot_preview_latency_ms(selected, regressed).is_err());
+        assert!(screenshot_preview_latency_ms(selected, encoding_first).is_err());
         assert_eq!(
             screenshot_preview_latency_ms(selected, deferred).unwrap(),
             45
         );
+    }
+
+    #[test]
+    fn screenshot_preview_dimensions_require_the_bounded_preview_path() {
+        let trace = concat!(
+            "100 pid=1 SHOT_SELECT_RESULT rect=3840x2160+0,0\n",
+            "108 pid=1 SHOT_CAPTURE source=frozen-preview ms=7 ",
+            "rect=3840x2160 preview=360x203\n"
+        );
+
+        assert_eq!(screenshot_preview_dimensions(trace).unwrap(), (360, 203));
+        assert!(screenshot_preview_dimensions(
+            "108 pid=1 SHOT_CAPTURE source=frozen ms=7 rect=3840x2160\n"
+        )
+        .is_err());
     }
 
     #[cfg(unix)]

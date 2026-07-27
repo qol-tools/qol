@@ -18,7 +18,7 @@ use qol_gpui::window::{
     centered_window_placement, cursor_window_placement, ActiveWindows, MonitorKey, WindowPlacement,
 };
 
-use crate::capture::screenshot::{CaptureFileReady, PreviewCapture};
+use crate::capture::screenshot::{CaptureFileReady, CaptureFileStart, PreviewCapture};
 use crate::ui::shortcuts::{resolve_copy_command, shot_action_for_keystroke};
 use crate::{capture::actions::ShotAction, platform};
 
@@ -268,6 +268,7 @@ struct GhostContent {
     thumb: (f32, f32),
     image: Option<Arc<RenderImage>>,
     file_ready: CaptureFileReady,
+    file_start: CaptureFileStart,
     started_at: Instant,
     ready: bool,
     saved_completion: Option<crate::capture::completion::PreviewCompletion>,
@@ -280,6 +281,7 @@ impl GhostContent {
             thumb: window_thumb_default(),
             image: None,
             file_ready: CaptureFileReady::ready(),
+            file_start: CaptureFileStart::ready(),
             started_at: Instant::now(),
             ready: false,
             saved_completion: None,
@@ -300,6 +302,7 @@ impl GhostContent {
             thumb,
             image: render_image,
             file_ready: capture.file_ready,
+            file_start: capture.file_start,
             started_at: capture.started_at,
             ready: true,
             saved_completion: capture.completion,
@@ -482,6 +485,7 @@ fn open_quit_window(
         thumb,
         image,
         file_ready: CaptureFileReady::ready(),
+        file_start: CaptureFileStart::ready(),
         started_at: Instant::now(),
         ready: true,
         saved_completion,
@@ -556,6 +560,7 @@ pub struct PreviewView {
     thumb: (f32, f32),
     image: Option<Arc<RenderImage>>,
     file_ready: CaptureFileReady,
+    file_start: CaptureFileStart,
     preview_started_at: Instant,
     ready: bool,
     mode: DismissMode,
@@ -637,6 +642,7 @@ impl PreviewView {
             thumb: content.thumb,
             image: content.image,
             file_ready: content.file_ready,
+            file_start: content.file_start,
             preview_started_at: content.started_at,
             ready: content.ready,
             mode,
@@ -663,11 +669,13 @@ impl PreviewView {
     }
 
     fn reset_for_show(&mut self, content: GhostContent, seq: u64, reveal: PreviewReveal) {
+        self.file_start.start();
         self.finish_completion(crate::capture::completion::PreviewExit::Superseded);
         self.path = content.path;
         self.thumb = content.thumb;
         self.image = content.image;
         self.file_ready = content.file_ready;
+        self.file_start = content.file_start;
         self.preview_started_at = content.started_at;
         self.ready = content.ready;
         self.selected = 0;
@@ -717,6 +725,7 @@ impl PreviewView {
         );
         self.blur_guard_until = Instant::now() + BLUR_GUARD;
         show_ghost_window_topmost(&reveal.title, &reveal.all_titles);
+        self.file_start.start();
         FOCUS_REASSERT_GEN.store(seq, Ordering::SeqCst);
         qol_gpui::popup_window::reassert_focus_until_held(&reveal.title, &FOCUS_REASSERT_GEN, seq);
     }
@@ -846,6 +855,7 @@ impl PreviewView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.file_start.start();
         match self.mode {
             DismissMode::Quit => cx.quit(),
             DismissMode::Ghost => self.hide_to_ghost(window),
@@ -860,6 +870,7 @@ impl PreviewView {
 
     fn dismiss(&mut self, exit: crate::capture::completion::PreviewExit, window: &mut Window) {
         FOCUS_REASSERT_GEN.store(u64::MAX, Ordering::SeqCst);
+        self.file_start.start();
         self.hide_to_ghost(window);
         self.finish_completion(exit);
     }

@@ -6,6 +6,9 @@ use std::time::{Duration, Instant};
 use crate::capture::frozen_frame::{FrozenCrop, FrozenFrame};
 use crate::{capture::geometry, platform, Rect};
 
+const PREVIEW_MAX_WIDTH: u32 = 360;
+const PREVIEW_MAX_HEIGHT: u32 = 240;
+
 pub fn capture_screenshot() -> Result<Option<PathBuf>> {
     let Some(output_file) = capture_to_file()? else {
         return Ok(None);
@@ -41,6 +44,7 @@ pub struct PreviewCapture {
     pub(crate) path: PathBuf,
     pub(crate) pixels: Option<PreviewPixels>,
     pub(crate) file_ready: CaptureFileReady,
+    pub(crate) file_start: CaptureFileStart,
     pub(crate) started_at: Instant,
     pub(crate) completion: Option<crate::capture::completion::PreviewCompletion>,
 }
@@ -73,6 +77,11 @@ impl PreviewPixels {
 #[derive(Clone)]
 pub(crate) struct CaptureFileReady {
     state: Arc<FileReadyState>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CaptureFileStart {
+    state: Arc<(Mutex<bool>, Condvar)>,
 }
 
 type FileWriteResult = std::result::Result<(), String>;
@@ -127,6 +136,39 @@ impl CaptureFileReady {
     #[cfg(test)]
     pub(crate) fn test_complete(&self, result: FileWriteResult) {
         self.complete(result);
+    }
+}
+
+impl CaptureFileStart {
+    pub(crate) fn ready() -> Self {
+        Self {
+            state: Arc::new((Mutex::new(true), Condvar::new())),
+        }
+    }
+
+    fn pending() -> Self {
+        Self {
+            state: Arc::new((Mutex::new(false), Condvar::new())),
+        }
+    }
+
+    pub(crate) fn start(&self) {
+        let (state, wake) = &*self.state;
+        if let Ok(mut started) = state.lock() {
+            *started = true;
+            wake.notify_all();
+        }
+    }
+
+    fn wait(&self) -> Result<()> {
+        let (state, wake) = &*self.state;
+        let started = state
+            .lock()
+            .map_err(|_| anyhow!("screenshot file start lock poisoned"))?;
+        let _started = wake
+            .wait_while(started, |started| !*started)
+            .map_err(|_| anyhow!("screenshot file start lock poisoned"))?;
+        Ok(())
     }
 }
 
@@ -240,21 +282,28 @@ fn capture_rect_for_preview(
     let started_at = Instant::now();
     let output_file = crate::capture::output::screenshot_output_file_path()?;
     let started = Instant::now();
-    if let Some(crop) = frozen_crop(frozen_frame, rect)? {
-        let (bgra, width, height) = crop.clone().into_bgra_parts();
-        let file_ready = spawn_frozen_file_write(crop, output_file.clone());
+    if let Some(frame) = frozen_frame {
+        let crop = frame
+            .thumbnail(rect, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
+            .ok_or_else(|| frozen_frame_crop_error(frame, rect))?;
+        let (bgra, width, height) = crop.into_bgra_parts();
+        let (file_ready, file_start) =
+            spawn_frozen_file_write(frame.clone(), rect, output_file.clone());
         qol_runtime::probe!(
             "SHOT_CAPTURE",
-            "source=frozen ms={} rect={}x{}",
+            "source=frozen-preview ms={} rect={}x{} preview={}x{}",
             started.elapsed().as_millis(),
             rect.w,
-            rect.h
+            rect.h,
+            width,
+            height
         );
         return Ok(PreviewCapture {
             completion: Some(preview_completion(&output_file)),
             path: output_file,
             pixels: Some(PreviewPixels::bgra(bgra, width, height)),
             file_ready,
+            file_start,
             started_at,
         });
     }
@@ -265,12 +314,13 @@ fn capture_rect_for_preview(
             "ms={} dims={w}x{h}",
             grabbed.elapsed().as_millis()
         );
-        let file_ready = spawn_file_write(rect, output_file.clone());
+        let (file_ready, file_start) = spawn_file_write(rect, output_file.clone());
         return Ok(PreviewCapture {
             completion: Some(preview_completion(&output_file)),
             path: output_file,
             pixels: Some(PreviewPixels::rgba(rgba, w, h)),
             file_ready,
+            file_start,
             started_at,
         });
     }
@@ -288,6 +338,7 @@ fn capture_rect_for_preview(
         path: output_file,
         pixels: None,
         file_ready: CaptureFileReady::ready(),
+        file_start: CaptureFileStart::ready(),
         started_at,
     })
 }
@@ -300,30 +351,47 @@ fn preview_completion(path: &Path) -> crate::capture::completion::PreviewComplet
 fn frozen_crop(frozen_frame: Option<&FrozenFrame>, rect: Rect) -> Result<Option<FrozenCrop>> {
     frozen_frame
         .map(|frame| {
-            frame.crop(rect).ok_or_else(|| {
-                let bounds = frame.bounds();
-                anyhow!(
-                    "selected screenshot {}x{}+{},{} falls outside frozen frame {}x{}+{},{}",
-                    rect.w,
-                    rect.h,
-                    rect.x,
-                    rect.y,
-                    bounds.w,
-                    bounds.h,
-                    bounds.x,
-                    bounds.y
-                )
-            })
+            frame
+                .crop(rect)
+                .ok_or_else(|| frozen_frame_crop_error(frame, rect))
         })
         .transpose()
 }
 
-fn spawn_frozen_file_write(crop: FrozenCrop, path: PathBuf) -> CaptureFileReady {
+fn frozen_frame_crop_error(frame: &FrozenFrame, rect: Rect) -> anyhow::Error {
+    let bounds = frame.bounds();
+    anyhow!(
+        "selected screenshot {}x{}+{},{} falls outside frozen frame {}x{}+{},{}",
+        rect.w,
+        rect.h,
+        rect.x,
+        rect.y,
+        bounds.w,
+        bounds.h,
+        bounds.x,
+        bounds.y
+    )
+}
+
+fn spawn_frozen_file_write(
+    frame: FrozenFrame,
+    rect: Rect,
+    path: PathBuf,
+) -> (CaptureFileReady, CaptureFileStart) {
     let ready = CaptureFileReady::pending();
     let worker_ready = ready.clone();
+    let start = CaptureFileStart::pending();
+    let worker_start = start.clone();
     std::thread::spawn(move || {
+        if let Err(error) = worker_start.wait() {
+            worker_ready.complete(Err(format!("{error:#}")));
+            return;
+        }
         let started = Instant::now();
-        let result = save_frozen_crop_atomic(crop, &path);
+        let result = frame
+            .crop(rect)
+            .ok_or_else(|| frozen_frame_crop_error(&frame, rect))
+            .and_then(|crop| save_frozen_crop_atomic(crop, &path));
         match &result {
             Ok(()) => qol_runtime::probe!(
                 "SHOT_FILE",
@@ -334,7 +402,7 @@ fn spawn_frozen_file_write(crop: FrozenCrop, path: PathBuf) -> CaptureFileReady 
         }
         worker_ready.complete(result.map_err(|error| format!("{error:#}")));
     });
-    ready
+    (ready, start)
 }
 
 fn save_frozen_crop_atomic(crop: FrozenCrop, path: &Path) -> Result<()> {
@@ -349,10 +417,16 @@ fn save_frozen_crop_atomic(crop: FrozenCrop, path: &Path) -> Result<()> {
     result
 }
 
-fn spawn_file_write(rect: Rect, path: PathBuf) -> CaptureFileReady {
+fn spawn_file_write(rect: Rect, path: PathBuf) -> (CaptureFileReady, CaptureFileStart) {
     let ready = CaptureFileReady::pending();
     let worker_ready = ready.clone();
+    let start = CaptureFileStart::pending();
+    let worker_start = start.clone();
     std::thread::spawn(move || {
+        if let Err(error) = worker_start.wait() {
+            worker_ready.complete(Err(format!("{error:#}")));
+            return;
+        }
         let started = Instant::now();
         let result = platform::capture_screenshot(&rect, &path);
         match &result {
@@ -361,7 +435,7 @@ fn spawn_file_write(rect: Rect, path: PathBuf) -> CaptureFileReady {
         }
         worker_ready.complete(result.map_err(|error| format!("{error:#}")));
     });
-    ready
+    (ready, start)
 }
 
 fn swap_red_blue(data: &mut [u8]) {
@@ -413,5 +487,55 @@ mod tests {
         ready.complete(Err("encode failed".to_string()));
 
         assert_eq!(ready.wait().unwrap_err().to_string(), "encode failed");
+    }
+
+    #[test]
+    fn file_write_start_waits_for_the_preview_signal() {
+        let start = CaptureFileStart::pending();
+        let worker_start = start.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            worker_start.wait().unwrap();
+            tx.send(()).unwrap();
+        });
+
+        assert!(rx.recv_timeout(Duration::from_millis(20)).is_err());
+        start.start();
+        rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    }
+
+    #[test]
+    fn deferred_frozen_write_preserves_full_selected_resolution() {
+        let bounds = Rect {
+            x: 10,
+            y: 20,
+            w: 4,
+            h: 3,
+        };
+        let pixels = [40, 20, 10, 255].repeat(4 * 3);
+        let frame =
+            FrozenFrame::from_bgra_segments(vec![(bounds, pixels, 4, 3)]).expect("frozen frame");
+        let selected = Rect {
+            x: 11,
+            y: 20,
+            w: 2,
+            h: 3,
+        };
+        let output = std::env::temp_dir().join(format!(
+            "qol-shot-deferred-write-{}-{}.png",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let (ready, start) = spawn_frozen_file_write(frame, selected, output.clone());
+
+        assert!(!output.exists());
+        start.start();
+        ready.wait().unwrap();
+
+        assert_eq!(image::image_dimensions(&output).unwrap(), (2, 3));
+        let _ = std::fs::remove_file(output);
     }
 }
