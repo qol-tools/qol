@@ -2,8 +2,7 @@ mod bounded_output;
 mod platform;
 
 pub use bounded_output::{
-    run_guarded_with_output_timeout, run_with_output_timeout, BoundedCommandOutput, CapturedOutput,
-    CompletedCommandOutput,
+    run_guarded_with_output_timeout, BoundedCommandOutput, CapturedOutput, CompletedCommandOutput,
 };
 
 use std::io;
