@@ -81,6 +81,7 @@ type ResultHandler = Box<dyn Fn(&CommandContext) -> Result<CommandResult> + Send
 type StreamingHandler =
     Box<dyn Fn(&CommandContext, &mut dyn OutputSink) -> Result<u8> + Send + Sync>;
 type JsonHandler = Box<dyn Fn(&CommandContext) -> Result<Value> + Send + Sync>;
+type DoctorProvider = Box<dyn Fn() -> Result<Vec<DoctorCheckResult>> + Send + Sync>;
 
 enum ModeHandler {
     PlainText(PlainTextHandler),
@@ -317,6 +318,7 @@ pub struct HeadlessApp {
     default_command: Option<Vec<String>>,
     commands: Vec<Command>,
     doctor_checks: Vec<DoctorCheck>,
+    doctor_provider: Option<DoctorProvider>,
 }
 
 impl HeadlessApp {
@@ -328,6 +330,7 @@ impl HeadlessApp {
             default_command: None,
             commands: Vec::new(),
             doctor_checks: Vec::new(),
+            doctor_provider: None,
         }
     }
 
@@ -360,6 +363,14 @@ impl HeadlessApp {
         I: IntoIterator<Item = DoctorCheck>,
     {
         self.doctor_checks.extend(checks);
+        self
+    }
+
+    pub fn doctor_provider<F>(mut self, provider: F) -> Self
+    where
+        F: Fn() -> Result<Vec<DoctorCheckResult>> + Send + Sync + 'static,
+    {
+        self.doctor_provider = Some(Box::new(provider));
         self
     }
 
@@ -593,7 +604,7 @@ impl HeadlessApp {
             .iter()
             .map(|command| (command.name.as_str(), command.about.as_str()))
             .collect::<Vec<_>>();
-        if !self.doctor_checks.is_empty() {
+        if self.has_doctor() {
             command_rows.push(("doctor", "Run read-only health checks."));
         }
         command_rows.sort_by(|left, right| left.0.cmp(right.0));
@@ -672,7 +683,7 @@ impl HeadlessApp {
     }
 
     fn doctor_help(&self, path: &[String]) -> std::result::Result<String, DispatchError> {
-        if self.doctor_checks.is_empty() {
+        if !self.has_doctor() {
             return Err(DispatchError::Usage(format!(
                 "`{}` does not register doctor checks.",
                 self.binary_name
@@ -737,6 +748,9 @@ impl HeadlessApp {
         for check in &self.doctor_checks {
             lines.push(format_command_row(&check.id, &check.about));
         }
+        if self.doctor_provider.is_some() {
+            lines.push("  Additional checks are discovered when doctor runs.".to_string());
+        }
 
         lines.extend([
             String::new(),
@@ -757,7 +771,7 @@ impl HeadlessApp {
         args: &[String],
         output_format: OutputFormat,
     ) -> std::result::Result<Execution, DispatchError> {
-        if self.doctor_checks.is_empty() {
+        if !self.has_doctor() {
             return Err(DispatchError::Usage(format!(
                 "`{}` does not register doctor checks.",
                 self.binary_name
@@ -774,10 +788,16 @@ impl HeadlessApp {
 
         let selected = args.first().map(String::as_str);
         let checks = self.selected_doctor_checks(selected)?;
-        let report = DoctorReport::from_results(
-            self.app_id.clone(),
-            checks.into_iter().map(DoctorCheck::run_check).collect(),
-        );
+        let mut results = checks
+            .into_iter()
+            .map(DoctorCheck::run_check)
+            .collect::<Vec<_>>();
+        if selected.is_none() {
+            if let Some(provider) = &self.doctor_provider {
+                results.extend(provider().map_err(DispatchError::Runtime)?);
+            }
+        }
+        let report = DoctorReport::from_results(self.app_id.clone(), results);
 
         match output_format {
             OutputFormat::PlainText => {
@@ -803,6 +823,10 @@ impl HeadlessApp {
             .find(|check| check.id == selected)
             .map(|check| vec![check])
             .ok_or_else(|| DispatchError::Usage(format!("Unknown doctor check `{selected}`.")))
+    }
+
+    fn has_doctor(&self) -> bool {
+        !self.doctor_checks.is_empty() || self.doctor_provider.is_some()
     }
 
     fn doctor_plain_text_output(&self, report: &DoctorReport) -> String {
@@ -1067,6 +1091,8 @@ fn write_and_flush_stream(stream: &mut impl Write, bytes: &[u8]) {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     fn app() -> HeadlessApp {
         HeadlessApp::new("plugin-test", "test-bin")
@@ -1184,6 +1210,53 @@ mod tests {
         assert_eq!(report.plugin_id, "plugin-test");
         assert_eq!(report.status, DoctorStatus::Warn);
         assert_eq!(serde_json::to_value(report).unwrap(), value);
+    }
+
+    #[test]
+    fn doctor_provider_is_lazy_and_runs_only_after_doctor_dispatch() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider_calls = Arc::clone(&calls);
+        let app = HeadlessApp::new("host-test", "host-test")
+            .command(
+                Command::new("status")
+                    .about("Show status.")
+                    .run_plain_text(|_| Ok(PlainTextOutput::text("running"))),
+            )
+            .doctor_provider(move || {
+                provider_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![DoctorCheckResult::warn(
+                    "plugin-test/required_binaries",
+                    "ffmpeg is missing",
+                )])
+            });
+
+        let help = app.execute(vec!["help".to_string(), "doctor".to_string()]);
+        let status = app.execute(vec!["status".to_string()]);
+
+        assert_eq!(help.exit_code, EXIT_SUCCESS);
+        assert!(help.stdout.contains("discovered when doctor runs"));
+        assert_eq!(status.stdout, "running\n");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        let doctor = app.execute(vec!["doctor".to_string(), "--json".to_string()]);
+        let report: DoctorReport = serde_json::from_str(&doctor.stdout).unwrap();
+
+        assert_eq!(doctor.exit_code, EXIT_SUCCESS);
+        assert_eq!(report.status, DoctorStatus::Warn);
+        assert_eq!(report.checks[0].id, "plugin-test/required_binaries");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn doctor_provider_failure_is_a_runtime_error_with_clean_stdout() {
+        let app = HeadlessApp::new("host-test", "host-test")
+            .doctor_provider(|| Err(anyhow::anyhow!("plugin aggregation failed")));
+
+        let execution = app.execute(vec!["--json".to_string(), "doctor".to_string()]);
+
+        assert_eq!(execution.exit_code, EXIT_RUNTIME_ERROR);
+        assert!(execution.stdout.is_empty());
+        assert!(execution.stderr.contains("plugin aggregation failed"));
     }
 
     #[test]
