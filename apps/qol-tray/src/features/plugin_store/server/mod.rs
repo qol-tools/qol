@@ -138,7 +138,6 @@ async fn promote_shadow_to_stable(app_state: AppState) -> Result<u16> {
         }
     });
     crate::dev_generation::promote_to_stable();
-    tokio::task::spawn_blocking(repair_boot_selection_after_promotion);
     complete_promotion_in_background(app_state);
     Ok(port)
 }
@@ -159,6 +158,22 @@ fn claim_promotion(is_shadow: bool, promoted: &std::sync::atomic::AtomicBool) ->
 #[cfg(feature = "dev")]
 fn complete_promotion_in_background(app_state: AppState) {
     tokio::spawn(async move {
+        let repair_state = app_state.clone();
+        let dev_links_repaired = tokio::task::spawn_blocking(repair_startup_state_after_promotion)
+            .await
+            .unwrap_or_else(|error| {
+                log::error!("promoted startup repair task failed: {}", error);
+                false
+            });
+        if dev_links_repaired {
+            tokio::task::spawn_blocking(move || {
+                helpers::reload_manager_and_notify_without_profile_sync(&repair_state);
+            })
+            .await
+            .unwrap_or_else(|error| {
+                log::error!("promoted plugin reload task failed: {}", error);
+            });
+        }
         let plugin_manager = app_state.plugin_manager.clone();
         let missing_daemons = tokio::task::spawn_blocking(move || match plugin_manager.lock() {
             Ok(mut manager) => {
@@ -187,6 +202,26 @@ fn complete_promotion_in_background(app_state: AppState) {
         start_sync_loop(&app_state);
         start_dev_discovery(&app_state);
     });
+}
+
+#[cfg(feature = "dev")]
+fn repair_startup_state_after_promotion() -> bool {
+    repair_boot_selection_after_promotion();
+    let report = crate::doctor::auto_fix_startup();
+    log::info!(
+        "Promoted dev generation: startup repairs attempted={} applied={} failures={}",
+        report.attempted,
+        report.applied,
+        report.failures.len()
+    );
+    let was_broken = report.before.outcomes().any(|outcome| {
+        outcome.id == "dev_link_paths"
+            && !matches!(outcome.status, crate::doctor::OutcomeStatus::Ok)
+    });
+    let is_healthy = report.after.outcomes().any(|outcome| {
+        outcome.id == "dev_link_paths" && matches!(outcome.status, crate::doctor::OutcomeStatus::Ok)
+    });
+    was_broken && is_healthy
 }
 
 #[cfg(feature = "dev")]

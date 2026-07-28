@@ -43,8 +43,7 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
 
-    fn write_plugin_toml(dir: &Path, name: &str) {
-        let id = dir.file_name().unwrap().to_str().unwrap();
+    fn write_plugin_toml_with_id(dir: &Path, id: &str, name: &str) {
         fs::write(
             dir.join("plugin.toml"),
             format!(
@@ -52,6 +51,11 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    fn write_plugin_toml(dir: &Path, name: &str) {
+        let id = dir.file_name().unwrap().to_str().unwrap();
+        write_plugin_toml_with_id(dir, id, name);
     }
 
     #[test]
@@ -109,6 +113,24 @@ mod tests {
         create_link(&source, tmp.path()).unwrap();
         let err = create_link(&source, tmp.path()).unwrap_err();
         assert!(err.contains("Already linked"));
+    }
+
+    #[test]
+    fn create_link_relocates_an_existing_link_when_its_source_disappears() {
+        let tmp = TempDir::new().unwrap();
+        let old_source = tmp.path().join("plugin-foo");
+        fs::create_dir(&old_source).unwrap();
+        write_plugin_toml_with_id(&old_source, "plugin-foo", "Foo");
+        create_link(&old_source, tmp.path()).unwrap();
+        fs::remove_dir_all(&old_source).unwrap();
+
+        let new_source = tmp.path().join("foo");
+        fs::create_dir(&new_source).unwrap();
+        write_plugin_toml_with_id(&new_source, "plugin-foo", "Foo");
+
+        assert_eq!(create_link(&new_source, tmp.path()).unwrap(), "plugin-foo");
+        let links = crate::plugins::registry::dev_linked_paths(tmp.path());
+        assert_eq!(links["plugin-foo"], new_source.canonicalize().unwrap());
     }
 
     #[test]

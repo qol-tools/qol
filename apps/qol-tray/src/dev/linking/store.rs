@@ -14,8 +14,23 @@ pub fn get_active_worktree_branch(config_dir: &Path) -> Option<String> {
 pub fn create_link(source: &Path, config_dir: &Path) -> Result<String, String> {
     let (plugin_id, plugin_root) = validate_link_source(source)?;
 
-    if crate::plugins::registry::dev_linked_paths(config_dir).contains_key(&plugin_id) {
-        return Err("Already linked".to_string());
+    if let Some(linked_path) =
+        crate::plugins::registry::dev_linked_paths(config_dir).get(&plugin_id)
+    {
+        if linked_path.exists() {
+            return Err("Already linked".to_string());
+        }
+        crate::plugins::registry::record_dev_link_create(
+            config_dir,
+            &plugin_id,
+            plugin_root.clone(),
+        )?;
+        log::info!(
+            "Relocated missing dev-link: {} -> {:?}",
+            plugin_id,
+            plugin_root
+        );
+        return Ok(plugin_id);
     }
 
     crate::plugins::registry::record_dev_link_create(config_dir, &plugin_id, plugin_root.clone())?;
