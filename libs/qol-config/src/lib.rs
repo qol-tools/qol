@@ -37,6 +37,14 @@ pub fn config_dir() -> Option<PathBuf> {
     resolve_namespaced(dirs::config_dir())
 }
 
+pub fn http_auth_token_path() -> Option<PathBuf> {
+    config_dir().map(|path| path.join(qol_conventions::HTTP_AUTH_TOKEN_FILE))
+}
+
+pub fn runtime_dir() -> Option<PathBuf> {
+    data_dir().map(|path| path.join("runtime"))
+}
+
 pub fn data_subdir(name: &str) -> Option<PathBuf> {
     data_dir().map(|path| path.join(name))
 }

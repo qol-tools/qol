@@ -8,11 +8,15 @@
 pub const DEFAULT_PORT: u16 = 42700;
 pub const LOCAL_HOST: &str = "127.0.0.1";
 
+pub const STATE_SOCKET_FILE: &str = "qol-tray-state.sock";
 pub const STATE_SOCKET_PATH: &str = "/tmp/qol-tray-state.sock";
 pub const TRACE_LOG_PATH: &str = "/tmp/qol-altmon.log";
 pub const RUNTIME_DIR_PATH: &str = "/tmp/qol-tray";
 pub const RUNTIME_PIDS_DIR_PATH: &str = "/tmp/qol-tray/pids";
 pub const SETTINGS_SURFACE_SOCKET_NAME: &str = "qol-tray/settings-surface.sock";
+pub const HTTP_AUTH_TOKEN_FILE: &str = ".http-token";
+pub const HTTP_AUTH_HEADER: &str = "x-qol-token";
+pub const HTTP_AUTH_FRAGMENT_KEY: &str = "qol_token";
 
 pub const ENV_STATE_SOCKET: &str = "QOL_TRAY_STATE_SOCKET";
 pub const ENV_INSTALL_ID: &str = "QOL_TRAY_INSTALL_ID";
@@ -23,6 +27,7 @@ pub const ENV_DAEMON_LISTENER_FD: &str = "QOL_TRAY_DAEMON_LISTENER_FD";
 pub const ENV_DAEMON_PORT_FD: &str = "QOL_TRAY_DAEMON_PORT_FD";
 pub const ENV_THEME_ACCENT: &str = "QOL_TRAY_THEME_ACCENT";
 pub const ENV_THEME_NAME: &str = "QOL_TRAY_THEME_NAME";
+pub const ENV_HTTP_TOKEN: &str = "QOL_TRAY_HTTP_TOKEN";
 
 pub const ENV_DEV_GENERATION_MODE: &str = "QOL_DEV_GENERATION_MODE";
 pub const ENV_DEV_GENERATION_ID: &str = "QOL_DEV_GENERATION_ID";
@@ -228,7 +233,25 @@ pub fn local_base_url() -> String {
 }
 
 pub fn settings_url(plugin_id: &str) -> String {
-    format!("http://{LOCAL_HOST}:{DEFAULT_PORT}/#plugins/{plugin_id}/config")
+    local_hash_url(&format!("plugins/{plugin_id}/config"), DEFAULT_PORT)
+}
+
+pub fn local_hash_url(route: &str, port: u16) -> String {
+    let route = route.trim_start_matches('#').trim_start_matches('/');
+    let token = std::env::var(ENV_HTTP_TOKEN).ok();
+    local_hash_url_with_token(route, port, token.as_deref())
+}
+
+pub fn local_hash_url_with_token(route: &str, port: u16, token: Option<&str>) -> String {
+    let separator = if route.contains('?') { '&' } else { '?' };
+    match token.filter(|value| !value.is_empty()) {
+        Some(token) => {
+            format!(
+                "http://{LOCAL_HOST}:{port}/#{route}{separator}{HTTP_AUTH_FRAGMENT_KEY}={token}"
+            )
+        }
+        None => format!("http://{LOCAL_HOST}:{port}/#{route}"),
+    }
 }
 
 const RESERVED_PLUGIN_IDS: &[&str] = &["plugin-template"];
@@ -253,6 +276,14 @@ mod tests {
         assert_eq!(
             settings_url("plugin-foo"),
             "http://127.0.0.1:42700/#plugins/plugin-foo/config"
+        );
+    }
+
+    #[test]
+    fn local_hash_url_carries_authentication_in_the_fragment() {
+        assert_eq!(
+            local_hash_url_with_token("shortcuts", 1234, Some("secret")),
+            "http://127.0.0.1:1234/#shortcuts?qol_token=secret"
         );
     }
 
