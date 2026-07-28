@@ -1,6 +1,9 @@
 use crate::plugins::registry::{Entry, Registry, Slot, SlotSource};
 use crate::plugins::PluginId;
-use std::path::PathBuf;
+#[cfg(feature = "dev")]
+use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct ResolvedPlugin {
@@ -51,14 +54,61 @@ pub struct ResolutionReport {
     pub unavailable: Vec<PluginUnavailable>,
 }
 
+pub(crate) fn resolve_effective_registry(
+    registry: &Registry,
+    config_dir: &Path,
+) -> ResolutionReport {
+    let mut effective = registry.clone();
+    apply_worktree_override(&mut effective, config_dir);
+    resolve_from_registry(&effective)
+}
+
 pub fn resolve_from_registry(registry: &Registry) -> ResolutionReport {
     let mut report = ResolutionReport::default();
+    let entry_counts = registry
+        .entries
+        .iter()
+        .filter(|entry| !crate::plugins::is_reserved_plugin_id(&entry.id))
+        .fold(BTreeMap::<&str, usize>::new(), |mut counts, entry| {
+            *counts.entry(entry.id.as_str()).or_default() += 1;
+            counts
+        });
+    let mut reported_duplicates = BTreeSet::new();
     for entry in &registry.entries {
         if crate::plugins::is_reserved_plugin_id(&entry.id) {
             log::warn!(
                 "Refusing to resolve reserved plugin id from registry: {}",
                 entry.id
             );
+            continue;
+        }
+        if entry_counts
+            .get(entry.id.as_str())
+            .copied()
+            .unwrap_or_default()
+            > 1
+        {
+            if reported_duplicates.insert(entry.id.as_str()) {
+                report.unavailable.push(PluginUnavailable {
+                    id: entry.id.clone(),
+                    active: SlotFailure {
+                        path: entry.active.path.clone(),
+                        reason: "duplicate registry entries share this plugin id".to_string(),
+                    },
+                    fallback: None,
+                });
+            }
+            continue;
+        }
+        if !crate::plugins::manifest::is_valid_plugin_id(&entry.id) {
+            report.unavailable.push(PluginUnavailable {
+                id: entry.id.clone(),
+                active: SlotFailure {
+                    path: entry.active.path.clone(),
+                    reason: "registry entry has an invalid plugin id".to_string(),
+                },
+                fallback: None,
+            });
             continue;
         }
         let (active, fallback) = visible_slots(entry);
@@ -119,6 +169,53 @@ pub fn resolve_from_registry(registry: &Registry) -> ResolutionReport {
     report.unavailable.sort_by(|a, b| a.id.cmp(&b.id));
     report
 }
+
+#[cfg(feature = "dev")]
+fn apply_worktree_override(registry: &mut Registry, config_dir: &Path) {
+    let branch = crate::dev::get_active_worktree_branch(config_dir);
+    let Some(branch) = branch else { return };
+    let base_links: HashMap<String, PathBuf> = registry
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.active.source,
+                SlotSource::DevLink { .. } | SlotSource::WorktreeLink { .. }
+            )
+        })
+        .map(|entry| (entry.id.clone(), entry.active.path.clone()))
+        .collect();
+    let resolved = crate::dev::resolve_worktree_paths(&base_links, Some(&branch));
+    for entry in &mut registry.entries {
+        if let Some(new_path) = resolved.get(&entry.id) {
+            override_entry_to_worktree(entry, new_path);
+        }
+    }
+}
+
+/// Repoint an entry's active slot at the worktree, making the pre-override slot
+/// the fallback so a plugin whose binary was not built in the worktree resolves
+/// to its main-clone build. The override only runs on dev-linked actives, so the
+/// pre-override slot is always the main-clone build; it replaces any stale
+/// installed-release fallback (which would be protocol-incompatible with a
+/// freshly built host).
+#[cfg(feature = "dev")]
+fn override_entry_to_worktree(entry: &mut Entry, new_path: &Path) {
+    if *new_path == entry.active.path {
+        return;
+    }
+    log::info!(
+        "[worktree] overriding {} path: {} → {}",
+        entry.id,
+        entry.active.path.display(),
+        new_path.display()
+    );
+    entry.fallback = Some(entry.active.clone());
+    entry.active.path = new_path.to_path_buf();
+}
+
+#[cfg(not(feature = "dev"))]
+fn apply_worktree_override(_registry: &mut Registry, _config_dir: &Path) {}
 
 fn visible_slots(entry: &Entry) -> (Option<&Slot>, Option<&Slot>) {
     let active = is_visible_slot(&entry.active).then_some(&entry.active);
@@ -292,6 +389,33 @@ mod tests {
             report.plugins
         );
         assert!(report.unavailable.is_empty());
+    }
+
+    #[test]
+    fn resolve_from_registry_rejects_duplicate_and_unsafe_ids_before_loading() {
+        let registry = Registry {
+            version: 1,
+            entries: vec![
+                installed_entry("plugin-duplicate", Path::new("/first")),
+                installed_entry("plugin-duplicate", Path::new("/second")),
+                installed_entry("../unsafe", Path::new("/unsafe")),
+            ],
+        };
+
+        let report = resolve_from_registry(&registry);
+
+        assert!(report.plugins.is_empty());
+        assert_eq!(report.unavailable.len(), 2);
+        assert_eq!(report.unavailable[0].id, "../unsafe");
+        assert!(report.unavailable[0]
+            .active
+            .reason
+            .contains("invalid plugin id"));
+        assert_eq!(report.unavailable[1].id, "plugin-duplicate");
+        assert!(report.unavailable[1]
+            .active
+            .reason
+            .contains("duplicate registry entries"));
     }
 
     #[cfg(feature = "dev")]
@@ -761,6 +885,72 @@ mod tests {
         assert_eq!(report.unavailable.len(), 0);
         assert_eq!(report.plugins[0].resolved_from, ResolutionOrigin::Active);
         assert_eq!(report.plugins[0].source, PluginSource::DevLinked);
+    }
+
+    #[cfg(feature = "dev")]
+    fn dev_linked_entry(active: &str, fallback: Option<&str>) -> Entry {
+        Entry {
+            id: "plugin-foo".to_string(),
+            active: Slot {
+                path: PathBuf::from(active),
+                source: SlotSource::DevLink {
+                    origin_path: PathBuf::from(active),
+                },
+            },
+            fallback: fallback.map(|path| Slot {
+                path: PathBuf::from(path),
+                source: SlotSource::ReleaseAsset,
+            }),
+        }
+    }
+
+    #[cfg(feature = "dev")]
+    #[test]
+    fn worktree_override_preserves_the_main_clone_as_fallback() {
+        let cases = [
+            (
+                "missing fallback is filled from prior active",
+                None,
+                "/wt",
+                "/wt",
+                Some("/main"),
+            ),
+            (
+                "stale installed fallback is replaced by main clone",
+                Some("/rel"),
+                "/wt",
+                "/wt",
+                Some("/main"),
+            ),
+            ("no-op when path is unchanged", None, "/main", "/main", None),
+        ];
+        for (label, initial_fallback, new_path, want_active, want_fallback) in cases {
+            let mut entry = dev_linked_entry("/main", initial_fallback);
+            override_entry_to_worktree(&mut entry, &PathBuf::from(new_path));
+            assert_eq!(
+                entry.active.path,
+                PathBuf::from(want_active),
+                "active path: {label}"
+            );
+            assert_eq!(
+                entry.fallback.as_ref().map(|slot| slot.path.clone()),
+                want_fallback.map(PathBuf::from),
+                "fallback path: {label}"
+            );
+        }
+    }
+
+    #[cfg(feature = "dev")]
+    #[test]
+    fn worktree_fallback_keeps_the_original_dev_link_source() {
+        let mut entry = dev_linked_entry("/main", None);
+        override_entry_to_worktree(&mut entry, &PathBuf::from("/wt"));
+        let fallback = entry.fallback.expect("fallback populated");
+
+        assert!(
+            matches!(fallback.source, SlotSource::DevLink { .. }),
+            "fallback keeps the original dev-link source so resolution targets the main clone"
+        );
     }
 
     #[test]

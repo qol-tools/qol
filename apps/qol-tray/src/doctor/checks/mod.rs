@@ -41,8 +41,7 @@ pub(super) use plugin_staleness::stale_running_daemons;
 use super::framework::DoctorCheck;
 
 pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
-    #[allow(unused_mut)]
-    let mut checks: Vec<Box<dyn DoctorCheck>> = vec![
+    let checks: Vec<Box<dyn DoctorCheck>> = vec![
         Box::new(install_identity::InstallIdentityCheck),
         Box::new(autostart_target::AutostartTargetCheck),
         Box::new(runtime_prereqs::PluginsDirCheck),
@@ -56,17 +55,23 @@ pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
         Box::new(plugin_port_collisions::PluginPortCollisionsCheck),
     ];
     #[cfg(feature = "dev")]
-    {
-        checks.push(Box::new(cargo_target_cache::CargoTargetCacheCheck));
-        checks.push(Box::new(cargo_target_total::CargoTargetTotalCheck));
-        checks.push(Box::new(plugin_daemon_health::PluginDaemonHealthCheck));
-        checks.push(Box::new(plugin_staleness::PluginStalenessCheck));
-        checks.push(Box::new(dev_link_paths::DevLinkPathsCheck));
-        checks.push(Box::new(fingerprint_health::FingerprintHealthCheck));
-        checks.push(Box::new(reserved_plugin_ids::ReservedPluginIdsCheck));
-        checks.push(Box::new(single_source_guard::SingleSourceGuardCheck));
-        checks.push(Box::new(rust_formatting::RustFormattingCheck));
-        checks.push(Box::new(rust_clippy::RustClippyCheck));
-    }
+    let checks = checks.into_iter().chain(dev_checks()).collect();
     checks
+}
+
+#[cfg(feature = "dev")]
+fn dev_checks() -> impl Iterator<Item = Box<dyn DoctorCheck>> {
+    [
+        Box::new(cargo_target_cache::CargoTargetCacheCheck) as Box<dyn DoctorCheck>,
+        Box::new(cargo_target_total::CargoTargetTotalCheck),
+        Box::new(plugin_daemon_health::PluginDaemonHealthCheck),
+        Box::new(plugin_staleness::PluginStalenessCheck),
+        Box::new(dev_link_paths::DevLinkPathsCheck),
+        Box::new(fingerprint_health::FingerprintHealthCheck),
+        Box::new(reserved_plugin_ids::ReservedPluginIdsCheck),
+        Box::new(single_source_guard::SingleSourceGuardCheck),
+        Box::new(rust_formatting::RustFormattingCheck),
+        Box::new(rust_clippy::RustClippyCheck),
+    ]
+    .into_iter()
 }

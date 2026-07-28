@@ -19,13 +19,16 @@ use qol_conventions::DEFAULT_PORT;
 const DEV_GENERATION_DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(8);
 
 pub(crate) fn run() -> Result<()> {
-    if process_guardian_requested() {
+    if qol_process::process_tree_guardian_requested() {
         qol_process::run_process_tree_guardian_entry()
             .context("task command process-tree guardian failed")?;
         return Ok(());
     }
     if let Some(result) = qol_tray::settings_surface::run_from_current_args() {
         return result;
+    }
+    if let Some(code) = qol_tray::doctor::try_run_host_cli_from_env() {
+        std::process::exit(code);
     }
     qol_tray::console_guard::guard_console_pipes();
 
@@ -145,13 +148,6 @@ pub(crate) fn run() -> Result<()> {
     tray::platform::run_app(app_init)
 }
 
-fn process_guardian_requested() -> bool {
-    std::env::args_os().nth(1).as_deref()
-        == Some(std::ffi::OsStr::new(
-            qol_process::PROCESS_TREE_GUARDIAN_COMMAND,
-        ))
-}
-
 fn try_handle_cli_flag() -> Option<i32> {
     let args: Vec<String> = std::env::args().collect();
     let flag = args.get(1).map(|s| s.as_str())?;
@@ -160,7 +156,7 @@ fn try_handle_cli_flag() -> Option<i32> {
             println!("qol-tray {}", qol_tray_version());
             Some(0)
         }
-        "--help" | "-h" => {
+        "help" | "--help" | "-h" => {
             print_usage();
             Some(0)
         }
@@ -212,9 +208,10 @@ fn print_usage() {
     println!(
         "    qol-tray open <route>                 Open the app at an in-app route (e.g. shortcuts/add)"
     );
+    println!("    qol-tray doctor                       Run read-only host and plugin checks");
     println!("    qol-tray --write-mode=<dev|prod>      Write mode.json then run the tray");
     println!("    qol-tray --version, -V                Print version and exit");
-    println!("    qol-tray --help, -h                   Print this message and exit");
+    println!("    qol-tray help, --help, -h             Print this message and exit");
 }
 
 fn try_open_subcommand() -> Option<i32> {

@@ -1,8 +1,10 @@
+mod aggregation;
 mod checks;
 mod cli;
 mod de_bindings;
 mod diagnosis;
 mod framework;
+mod host_cli;
 mod install_id;
 pub(crate) mod platform;
 mod progress;
@@ -174,7 +176,16 @@ fn check_enabled_for_build(dev_only: bool) -> bool {
 }
 
 pub fn run_cli_from_env() -> Result<i32> {
-    cli::run_cli_from_env()
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if cli::is_legacy_invocation(&args) {
+        cli::run_cli_from_env()
+    } else {
+        Ok(host_cli::run_aggregate("qol-tray-doctor", args))
+    }
+}
+
+pub fn try_run_host_cli_from_env() -> Option<i32> {
+    host_cli::try_run_from_env()
 }
 
 fn apply_fixes(results: Vec<DoctorCheckResult>, policy: FixPolicy) -> FixSummary {

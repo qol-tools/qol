@@ -1,6 +1,8 @@
 mod migration;
 
 pub use migration::ensure_registry_initialized;
+#[cfg(feature = "dev")]
+pub(crate) use migration::legacy_dev_links_path;
 pub use qol_dev_build::registry::{
     dev_linked_paths, load_registry, registry_path, save_registry, Entry, Registry, Slot,
     SlotSource, CURRENT_REGISTRY_VERSION, REGISTRY_FILE_NAME,

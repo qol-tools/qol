@@ -22,6 +22,23 @@ pub(super) fn run_cli_from_env() -> Result<i32> {
     }
 }
 
+pub(super) fn is_legacy_invocation(args: &[String]) -> bool {
+    let args = args
+        .iter()
+        .filter(|arg| arg.as_str() != ARG_JSON)
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let has_contextual_help = args.iter().enumerate().any(|(index, arg)| {
+        let is_id_value = index > 0 && args[index - 1] == ARG_ID;
+        matches!(*arg, "--help" | "-h") || (*arg == "help" && !is_id_value)
+    });
+    if has_contextual_help {
+        return false;
+    }
+
+    matches!(args.first().copied(), None | Some(ARG_CHECK | ARG_FIX))
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum CheckSelection {
     All,
@@ -245,6 +262,36 @@ mod tests {
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn legacy_dispatch_is_limited_to_existing_check_and_fix_forms() {
+        for values in [
+            vec![],
+            vec!["check"],
+            vec!["--json", "check"],
+            vec!["fix", "--id", "install_identity"],
+            vec!["check", "--id", "help"],
+            vec!["--json"],
+        ] {
+            assert!(is_legacy_invocation(&args(&values)), "{values:?}");
+        }
+        for values in [
+            vec!["doctor"],
+            vec!["--json", "doctor"],
+            vec!["help"],
+            vec!["doctor", "help"],
+            vec!["check", "help"],
+            vec!["help", "check"],
+            vec!["check", "--help"],
+            vec!["check", "-h"],
+            vec!["fix", "help"],
+            vec!["help", "fix"],
+            vec!["fix", "--help"],
+            vec!["fix", "-h"],
+        ] {
+            assert!(!is_legacy_invocation(&args(&values)), "{values:?}");
+        }
     }
 
     #[test]

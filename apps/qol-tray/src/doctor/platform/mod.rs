@@ -1,7 +1,10 @@
 use std::path::Path;
 
-pub(crate) trait DoctorPlatformOps {
+use super::framework::PlatformScope;
+
+pub(super) trait DoctorPlatformOps {
     fn install_marker_required(&self, current_exe: &Path) -> bool;
+    fn matches_scope(&self, scope: PlatformScope) -> bool;
 }
 
 #[cfg(target_os = "linux")]
@@ -24,4 +27,8 @@ pub(crate) use windows::Platform;
 
 pub(super) fn install_marker_required(current_exe: &Path) -> bool {
     Platform.install_marker_required(current_exe)
+}
+
+pub(super) fn matches_scope(scope: PlatformScope) -> bool {
+    Platform.matches_scope(scope)
 }

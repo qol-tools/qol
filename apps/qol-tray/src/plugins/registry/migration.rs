@@ -8,6 +8,10 @@ const LEGACY_DEV_LINKS_RELPATH: &str = "dev/links.json";
 #[cfg(feature = "dev")]
 const LEGACY_DEV_LINKS_CORRUPT_PREFIX: &str = "dev/links.json.corrupt.";
 
+pub(crate) fn legacy_dev_links_path(config_dir: &Path) -> PathBuf {
+    config_dir.join(LEGACY_DEV_LINKS_RELPATH)
+}
+
 pub fn ensure_registry_initialized(
     config_dir: &Path,
     plugins_dir: &Path,
@@ -23,7 +27,7 @@ pub fn ensure_registry_initialized(
 }
 
 fn clean_up_legacy_dev_links(config_dir: &Path) {
-    let path = config_dir.join(LEGACY_DEV_LINKS_RELPATH);
+    let path = legacy_dev_links_path(config_dir);
     if !path.exists() {
         return;
     }
@@ -106,7 +110,7 @@ enum LegacyDevLinks {
 
 #[cfg(feature = "dev")]
 fn read_legacy_dev_links(config_dir: &Path) -> LegacyDevLinks {
-    let path = config_dir.join(LEGACY_DEV_LINKS_RELPATH);
+    let path = legacy_dev_links_path(config_dir);
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return LegacyDevLinks::Absent,
@@ -269,7 +273,7 @@ mod tests {
         let dev_dir = config_dir.join("dev");
         fs::create_dir_all(&dev_dir).unwrap();
         let json = serde_json::to_string_pretty(links).unwrap();
-        fs::write(config_dir.join(LEGACY_DEV_LINKS_RELPATH), json).unwrap();
+        fs::write(legacy_dev_links_path(config_dir), json).unwrap();
     }
 
     #[test]

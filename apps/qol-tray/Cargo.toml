@@ -36,6 +36,7 @@ linux_evdev = ["dep:evdev"]
 qol-conventions.workspace = true
 qol-dev-build.workspace = true
 qol-fs.workspace = true
+qol-headless.workspace = true
 qol-process.workspace = true
 qol-workspace.workspace = true
 # Core async runtime

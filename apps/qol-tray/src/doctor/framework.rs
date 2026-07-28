@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use super::diagnosis::FixAction;
 use super::report::{Outcome, OutcomeStatus};
 use std::cell::OnceCell;
@@ -97,18 +95,11 @@ pub(super) enum CheckCategory {
 pub(super) enum PlatformScope {
     Any,
     Linux,
-    Macos,
-    Windows,
 }
 
 impl PlatformScope {
     pub(super) fn matches_current(self) -> bool {
-        match self {
-            Self::Any => true,
-            Self::Linux => cfg!(target_os = "linux"),
-            Self::Macos => cfg!(target_os = "macos"),
-            Self::Windows => cfg!(target_os = "windows"),
-        }
+        super::platform::matches_scope(self)
     }
 }
 
@@ -120,7 +111,6 @@ pub(super) struct CheckMeta {
     pub groups: &'static [&'static str],
     pub platform: PlatformScope,
     pub dev_only: bool,
-    pub order: u16,
 }
 
 impl CheckMeta {
@@ -136,7 +126,6 @@ impl CheckMeta {
             groups: &[],
             platform: PlatformScope::Any,
             dev_only: false,
-            order: 0,
         }
     }
 
@@ -150,6 +139,7 @@ impl CheckMeta {
         self
     }
 
+    #[cfg(feature = "dev")]
     pub(super) const fn dev_only(mut self) -> Self {
         self.dev_only = true;
         self
@@ -161,8 +151,6 @@ pub(super) enum Selector {
     All,
     Quick,
     Id(String),
-    Group(String),
-    Category(CheckCategory),
 }
 
 impl Selector {
@@ -171,18 +159,13 @@ impl Selector {
             Self::All => true,
             Self::Quick => meta.category != CheckCategory::DevBuild,
             Self::Id(id) => meta.id == id,
-            Self::Group(group) => meta.groups.contains(&group.as_str()),
-            Self::Category(category) => meta.category == *category,
         }
     }
 }
 
-pub(super) type BuildFingerprints = std::collections::HashMap<String, String>;
-
 pub(super) struct DoctorContext {
     config_dir: PathBuf,
     registry: OnceCell<Result<crate::plugins::registry::Registry, String>>,
-    fingerprints: OnceCell<BuildFingerprints>,
     #[cfg(feature = "dev")]
     linked: OnceCell<Vec<crate::dev::LinkedPlugin>>,
 }
@@ -193,7 +176,6 @@ impl DoctorContext {
         Self {
             config_dir,
             registry: OnceCell::new(),
-            fingerprints: OnceCell::new(),
             #[cfg(feature = "dev")]
             linked: OnceCell::new(),
         }
@@ -204,12 +186,12 @@ impl DoctorContext {
         Self {
             config_dir,
             registry: OnceCell::new(),
-            fingerprints: OnceCell::new(),
             #[cfg(feature = "dev")]
             linked: OnceCell::new(),
         }
     }
 
+    #[cfg(feature = "dev")]
     pub(super) fn config_dir(&self) -> &std::path::Path {
         &self.config_dir
     }
@@ -219,12 +201,6 @@ impl DoctorContext {
             .get_or_init(|| crate::plugins::registry::load_registry(&self.config_dir))
             .as_ref()
             .map_err(String::as_str)
-    }
-
-    #[cfg(feature = "dev")]
-    pub(super) fn fingerprints(&self) -> &BuildFingerprints {
-        self.fingerprints
-            .get_or_init(|| crate::dev::load_build_fingerprints(&self.config_dir))
     }
 
     #[cfg(feature = "dev")]
@@ -248,9 +224,36 @@ pub(super) fn run_check(check: &dyn DoctorCheck, ctx: &DoctorContext) -> DoctorC
     let start = Instant::now();
     let caught = std::panic::catch_unwind(AssertUnwindSafe(|| check.run(ctx)));
     let duration = start.elapsed();
-    match caught {
+    let result = match caught {
         Ok(report) => derive_result(meta, report, duration),
         Err(panic_payload) => crash_result(meta, panic_payload_message(&panic_payload), duration),
+    };
+    trace_result(meta, &result);
+    result
+}
+
+fn trace_result(meta: CheckMeta, result: &DoctorCheckResult) {
+    log::trace!(
+        "doctor check complete id={} label={} category={:?} groups={:?} status={:?} \
+         duration_ms={} issue_count={} advice_count={} fix_count={}",
+        meta.id,
+        meta.label,
+        meta.category,
+        meta.groups,
+        result.outcome.status,
+        result.duration.as_millis(),
+        result.issues.len(),
+        result.advice.len(),
+        result.fixes.len()
+    );
+    for issue in &result.issues {
+        log::trace!(
+            "doctor check issue id={} code={} severity={:?} evidence_count={}",
+            meta.id,
+            issue.code,
+            issue.severity,
+            issue.evidence.len()
+        );
     }
 }
 
@@ -464,34 +467,11 @@ mod tests {
     }
 
     #[test]
-    fn selector_matches_by_id_group_category_or_all() {
-        let meta =
-            CheckMeta::new("foo", "Foo", CheckCategory::Plugins).group(&["dev-loop", "boot"]);
+    fn selector_matches_by_id_or_all() {
+        let meta = CheckMeta::new("foo", "Foo", CheckCategory::Plugins);
         assert!(Selector::All.matches(&meta));
         assert!(Selector::Id("foo".into()).matches(&meta));
         assert!(!Selector::Id("bar".into()).matches(&meta));
-        assert!(Selector::Group("dev-loop".into()).matches(&meta));
-        assert!(Selector::Group("boot".into()).matches(&meta));
-        assert!(!Selector::Group("missing".into()).matches(&meta));
-        assert!(Selector::Category(CheckCategory::Plugins).matches(&meta));
-        assert!(!Selector::Category(CheckCategory::Install).matches(&meta));
-    }
-
-    #[test]
-    fn platform_scope_matches_current_target() {
-        assert!(PlatformScope::Any.matches_current());
-        assert_eq!(
-            PlatformScope::Linux.matches_current(),
-            cfg!(target_os = "linux")
-        );
-        assert_eq!(
-            PlatformScope::Macos.matches_current(),
-            cfg!(target_os = "macos")
-        );
-        assert_eq!(
-            PlatformScope::Windows.matches_current(),
-            cfg!(target_os = "windows")
-        );
     }
 
     #[test]
@@ -500,10 +480,10 @@ mod tests {
         assert!(meta.groups.is_empty());
         assert_eq!(meta.platform, PlatformScope::Any);
         assert!(!meta.dev_only);
-        assert_eq!(meta.order, 0);
     }
 
     #[test]
+    #[cfg(feature = "dev")]
     fn meta_builder_chains_set_fields() {
         let meta = CheckMeta::new("id", "Label", CheckCategory::DevBuild)
             .group(&["dev-loop"])
