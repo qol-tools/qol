@@ -140,7 +140,7 @@ impl CursorSession {
         if self.active_cursor.is_none() {
             return;
         }
-        restore_root_cursor(self.display, self.root, &self.base);
+        self.restore_pre_grow_cursor();
         clear_children(self.display, self.root);
         self.flush();
         if let Some(cursor) = self.active_cursor.take() {
@@ -155,21 +155,38 @@ impl CursorSession {
         sync(self.display);
     }
 
+    fn restore_pre_grow_cursor(&mut self) {
+        let pre_grow = self
+            .grow_cursor
+            .as_ref()
+            .and_then(|image| scale_cursor_for_display(self.display, self.root, image, 1.0))
+            .and_then(|scaled| make_cursor_from_frames(self.display, &scaled.frames));
+        let Some(cursor) = pre_grow else {
+            restore_root_cursor(self.display, self.root, &self.base);
+            return;
+        };
+        unsafe { xlib::XDefineCursor(self.display, self.root, cursor) };
+        unsafe { xlib::XFreeCursor(self.display, cursor) };
+    }
+
     fn capture_live_cursors(&mut self) {
-        let live_cursor =
-            load_live_cursor_image(self.display, self.base.default_size).map(|cursor| {
-                with_best_source(
-                    self.display,
-                    &self.base,
-                    &mut self.catalog,
-                    cursor,
-                    self.preferred_source_size,
-                )
-            });
-        let Some(live_cursor) = live_cursor else {
+        let Some(live_cursor) = load_live_cursor_image(self.display, self.base.default_size) else {
             eprintln!("[shake-to-grow] failed to capture live cursor at grow-start");
             return;
         };
+        if is_empty_cursor(&live_cursor) {
+            eprintln!(
+                "[shake-to-grow] live cursor is hidden at grow-start, growing the base cursor"
+            );
+            return;
+        }
+        let live_cursor = with_best_source(
+            self.display,
+            &self.base,
+            &mut self.catalog,
+            live_cursor,
+            self.preferred_source_size,
+        );
         log_cursor_image("captured live cursor", &live_cursor);
         self.grow_cursor = Some(live_cursor);
     }
