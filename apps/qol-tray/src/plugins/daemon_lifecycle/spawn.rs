@@ -104,6 +104,9 @@ fn apply_daemon_env(command: &mut Command, daemon_config: &DaemonConfig) {
         qol_conventions::ENV_STATE_SOCKET,
         crate::dev_generation::state_socket_path(),
     );
+    if let Some(token) = crate::features::plugin_store::server::security::current_token() {
+        command.env(qol_conventions::ENV_HTTP_TOKEN, token);
+    }
     command.env_remove("XMODIFIERS");
 }
 

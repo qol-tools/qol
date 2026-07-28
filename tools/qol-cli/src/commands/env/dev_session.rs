@@ -18,6 +18,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(90);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const PAYLOAD_INSTALLER: &str = "/run/qol-payload/installer/qol-sandbox-payload";
 const PAYLOAD_ROOT: &str = "/run/qol-payload";
+const HTTP_TOKEN_PATH: &str = "/home/qol/.config/qol-tray/.http-token";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -161,7 +162,14 @@ fn wait_until_ready(
                 "guest qol dev unit {unit} stopped before readiness with state `{active_state}`; inspect it with `journalctl --user -u {unit}` in the guest"
             );
         }
-        let installed = installed_plugins(guest, &url, cancelled)?;
+        let Some(token) = http_auth_token(guest, cancelled)? else {
+            if Instant::now() >= deadline {
+                bail!("timed out waiting for artifact-backed qol dev inside the guest");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        };
+        let installed = installed_plugins(guest, &url, &token, cancelled)?;
         let ready = active_state == "active"
             && installed.state == ProcessState::Exited
             && installed.exit_code == Some(0)
@@ -199,17 +207,45 @@ fn unit_state(
 fn installed_plugins(
     guest: &mut GuestControlClient,
     url: &str,
+    token: &str,
     cancelled: &mut impl FnMut() -> bool,
 ) -> Result<qol_dev_guest::ProcessOutcome> {
+    let auth_header = format!("X-Qol-Token: {token}");
     process(
         guest,
         RequestAction::Exec {
-            command: command("/usr/bin/curl", &["--fail", "--silent", url]),
+            command: command(
+                "/usr/bin/curl",
+                &["--fail", "--silent", "--header", &auth_header, url],
+            ),
             timeout_ms: duration_millis(REQUEST_TIMEOUT)?,
         },
         REQUEST_TIMEOUT + Duration::from_secs(1),
         cancelled,
     )
+}
+
+fn http_auth_token(
+    guest: &mut GuestControlClient,
+    cancelled: &mut impl FnMut() -> bool,
+) -> Result<Option<String>> {
+    let outcome = process(
+        guest,
+        RequestAction::Exec {
+            command: command("/usr/bin/cat", &[HTTP_TOKEN_PATH]),
+            timeout_ms: duration_millis(REQUEST_TIMEOUT)?,
+        },
+        REQUEST_TIMEOUT + Duration::from_secs(1),
+        cancelled,
+    )?;
+    if outcome.state != ProcessState::Exited || outcome.exit_code != Some(0) {
+        return Ok(None);
+    }
+    let token = outcome.stdout.trim();
+    if token.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(token.to_owned()))
 }
 
 fn require_process(

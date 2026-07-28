@@ -32,7 +32,7 @@ mod plugin_handlers;
 mod plugin_services;
 #[cfg(feature = "dev")]
 mod restart;
-mod security;
+pub(crate) mod security;
 mod settings;
 mod types;
 mod ui_trace_handlers;
@@ -90,8 +90,9 @@ pub(crate) async fn start_ui_server(
     } else {
         log::info!("Shadow dev generation: skipping sync loop and dev discovery");
     }
-    let app = assemble_app(app_state, plugins_dir);
     let (listener, port) = bind_listener().await?;
+    let http_security = security::HttpSecurity::initialize(port)?;
+    let app = assemble_app(app_state, plugins_dir, http_security);
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
             log::error!("UI server error: {}", e);
@@ -108,7 +109,6 @@ async fn promote_shadow_to_stable(app_state: AppState) -> Result<u16> {
     )? {
         return Ok(qol_conventions::DEFAULT_PORT);
     }
-    let app = assemble_app(app_state.clone(), app_state.plugins_dir.clone());
     let listener = match bind_listener_at(qol_conventions::DEFAULT_PORT).await {
         Ok((listener, port)) => (listener, port),
         Err(error) => {
@@ -117,6 +117,12 @@ async fn promote_shadow_to_stable(app_state: AppState) -> Result<u16> {
         }
     };
     let (listener, port) = listener;
+    let http_security = security::HttpSecurity::initialize(port)?;
+    let app = assemble_app(
+        app_state.clone(),
+        app_state.plugins_dir.clone(),
+        http_security,
+    );
     if let Err(error) = crate::dev_generation::drain_predecessor_daemons_for_promotion() {
         app_state.promoted_to_stable.store(false, Ordering::Release);
         return Err(error);
@@ -226,7 +232,7 @@ fn schedule_post_restart_rebuild(app_state: &AppState) {
     });
 }
 
-fn api_router(app_state: AppState) -> Router {
+fn api_router(app_state: AppState, http_security: security::HttpSecurity) -> Router {
     let api = plugin_handlers::routes()
         .merge(settings::routes())
         .merge(crate::features::github_auth::routes())
@@ -237,7 +243,10 @@ fn api_router(app_state: AppState) -> Router {
     #[cfg(feature = "dev")]
     let api = api.merge(dev_api_router());
     api.with_state(app_state)
-        .layer(middleware::from_fn(security::reject_cross_site_mutations))
+        .layer(middleware::from_fn_with_state(
+            http_security,
+            security::require_api_access,
+        ))
 }
 
 #[cfg(feature = "dev")]
@@ -252,14 +261,20 @@ fn dev_api_router() -> Router<AppState> {
         .route_layer(middleware::from_fn(dev_gate::require_dev_mode))
 }
 
-fn assemble_app(app_state: AppState, plugins_dir: PathBuf) -> Router {
-    let api = api_router(app_state);
+fn assemble_app(
+    app_state: AppState,
+    plugins_dir: PathBuf,
+    http_security: security::HttpSecurity,
+) -> Router {
+    let api = api_router(app_state, http_security.clone());
     let no_cache = SetResponseHeaderLayer::overriding(
         header::CACHE_CONTROL,
         HeaderValue::from_static("no-cache, no-store, must-revalidate"),
     );
-    let task_runner = super::super::task_runner::router()
-        .layer(middleware::from_fn(security::reject_cross_site_mutations));
+    let task_runner = super::super::task_runner::router().layer(middleware::from_fn_with_state(
+        http_security.clone(),
+        security::require_api_access,
+    ));
     Router::new()
         .nest("/api", api)
         .nest("/api/task-runner", task_runner)
@@ -267,6 +282,10 @@ fn assemble_app(app_state: AppState, plugins_dir: PathBuf) -> Router {
         .route("/", get(assets::serve_embedded_index))
         .route("/{*path}", get(assets::serve_embedded))
         .layer(no_cache)
+        .layer(middleware::from_fn_with_state(
+            http_security,
+            security::require_local_host,
+        ))
 }
 
 fn start_sync_loop(app_state: &AppState) {

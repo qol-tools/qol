@@ -242,7 +242,7 @@ fn forward_route(route: &str) -> i32 {
     if navigated_open_tab(route) {
         return 0;
     }
-    let url = qol_tray::commands::deeplink_url(route, DEFAULT_PORT);
+    let url = qol_tray::local_http::browser_url(route, DEFAULT_PORT);
     match qol_tray::paths::open_url(&url) {
         Ok(()) => 0,
         Err(e) => {
@@ -315,7 +315,7 @@ fn courier_forward_with_retry(route: &str) -> i32 {
 
 fn open_pending_cold_route(route: &str) {
     wait_for_server_ready();
-    let url = qol_tray::commands::deeplink_url(route, DEFAULT_PORT);
+    let url = qol_tray::local_http::browser_url(route, DEFAULT_PORT);
     let _ = qol_tray::paths::open_url(&url);
 }
 
@@ -702,7 +702,7 @@ fn show_first_run_welcome() {
 
     wait_for_server_ready();
 
-    let url = format!("http://localhost:{DEFAULT_PORT}");
+    let url = qol_tray::local_http::browser_url("", DEFAULT_PORT);
     let _ = qol_tray::paths::open_url(&url);
 }
 

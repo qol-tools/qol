@@ -23,6 +23,8 @@ const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAYLOAD_ROOT: &str = "/run/qol-payload";
 const PAYLOAD_INSTALLER: &str = "/usr/local/libexec/qol-sandbox-payload";
 const TRAY_BINARY: &str = "/home/qol/.local/bin/qol-tray";
+const HTTP_TOKEN_PATH: &str = "/home/qol/.config/qol-tray/.http-token";
+const QOL_SHOT_SOCKET_PATH: &str = "/home/qol/.local/share/qol-tray/runtime/sockets/qol-shot.sock";
 const CAPTURE_MARKER: &str = "/tmp/qol-workflow-capture-start";
 const PIN_DRAG_HOLD: Duration = Duration::from_millis(80);
 const STATUS_SETTLE: Duration = Duration::from_millis(250);
@@ -100,17 +102,28 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
     );
 
     spawn(&mut guest, command(TRAY_BINARY, &[]))?;
+    let token = wait_for_command(
+        &mut guest,
+        command("/usr/bin/cat", &[HTTP_TOKEN_PATH]),
+        DESKTOP_READY_TIMEOUT,
+        |outcome| !outcome.stdout.trim().is_empty(),
+        "the qol-tray HTTP token",
+    )?;
+    let auth_header = format!("X-Qol-Token: {}", token.stdout.trim());
     let plugin_api = format!("{}/api/installed", local_base_url());
     wait_for_command(
         &mut guest,
-        command("/usr/bin/curl", &["--fail", "--silent", &plugin_api]),
+        command(
+            "/usr/bin/curl",
+            &["--fail", "--silent", "--header", &auth_header, &plugin_api],
+        ),
         DESKTOP_READY_TIMEOUT,
         |outcome| outcome.stdout.contains("qol-shot"),
         "qol-shot to appear in the tray plugin API",
     )?;
     wait_for_command(
         &mut guest,
-        command("/usr/bin/test", &["-S", "/tmp/qol-shot.sock"]),
+        command("/usr/bin/test", &["-S", QOL_SHOT_SOCKET_PATH]),
         DESKTOP_READY_TIMEOUT,
         |_| true,
         "the qol-shot daemon socket",

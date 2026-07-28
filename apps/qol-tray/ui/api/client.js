@@ -34,6 +34,7 @@ async function wrappedFetch(url, options) {
         fetchOptions = { ...options };
         delete fetchOptions.qolSuppressErrorToast;
     }
+    fetchOptions = withAuthentication(url, fetchOptions);
     try {
         const response = await originalFetch(url, fetchOptions);
         if (!response.ok && !suppressErrorToast && !isHostRestarting()) {
@@ -46,6 +47,21 @@ async function wrappedFetch(url, options) {
         }
         throw error;
     }
+}
+
+function withAuthentication(url, options) {
+    const token = window.__QOL_HTTP_TOKEN__;
+    if (!token) return options;
+    let target;
+    try {
+        target = new URL(typeof url === 'string' ? url : url.url, location.origin);
+    } catch {
+        return options;
+    }
+    if (target.origin !== location.origin || !target.pathname.startsWith('/api/')) return options;
+    const headers = new Headers(options?.headers);
+    headers.set('X-Qol-Token', token);
+    return { ...options, headers };
 }
 
 function extractPath(url) {

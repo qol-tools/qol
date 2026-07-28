@@ -213,20 +213,9 @@ fn reload_stale_dev_daemons() {
 
 #[cfg(feature = "dev")]
 fn request_daemon_reload(plugin_id: &str) -> Result<()> {
-    use std::io::{Read, Write};
-
-    let port = crate::features::plugin_store::DEFAULT_SERVER_PORT;
-    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))
-        .with_context(|| format!("qol-tray host not reachable on 127.0.0.1:{port}"))?;
-    let request = format!(
-        "POST /api/dev/reload/{plugin_id} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    );
-    stream.write_all(request.as_bytes())?;
-    let mut response = String::new();
-    stream.read_to_string(&mut response)?;
-
-    let status = response.lines().next().unwrap_or_default();
-    if status.contains(" 200") || status.contains(" 202") {
+    let path = format!("/api/dev/reload/{plugin_id}");
+    let (status, _) = crate::local_http::post_to_daemon(&path, "")?;
+    if status == 200 || status == 202 {
         Ok(())
     } else {
         Err(anyhow!("reload endpoint returned: {status}"))

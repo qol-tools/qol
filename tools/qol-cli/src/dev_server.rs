@@ -378,8 +378,11 @@ fn http_exchange(method: &str, url: &str, body: Option<&str>) -> Result<(u16, St
     stream.set_read_timeout(Some(HTTP_TIMEOUT))?;
     stream.set_write_timeout(Some(HTTP_TIMEOUT))?;
     let body = body.unwrap_or("");
+    let token_header = http_auth_token()
+        .map(|token| format!("X-Qol-Token: {token}\r\n"))
+        .unwrap_or_default();
     let request = format!(
-        "{method} {} HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "{method} {} HTTP/1.1\r\nHost: {}:{}\r\n{token_header}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         target.path,
         target.host,
         target.port,
@@ -391,6 +394,14 @@ fn http_exchange(method: &str, url: &str, body: Option<&str>) -> Result<(u16, St
     stream.read_to_string(&mut response)?;
     let status = parse_http_status(&response)?;
     Ok((status, response_body(&response)))
+}
+
+fn http_auth_token() -> Option<String> {
+    let path = qol_config::http_auth_token_path()?;
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
 }
 
 pub(crate) fn api_port_open() -> bool {
