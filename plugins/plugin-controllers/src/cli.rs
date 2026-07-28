@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use anyhow::Result;
 use qol_headless::{Command, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTextOutput};
 
+use crate::platform::PlatformSupport;
 use crate::{app, PLUGIN_ID};
 
 const BINARY_NAME: &str = "plugin-controllers";
@@ -89,20 +90,26 @@ fn doctor_checks() -> Vec<DoctorCheck> {
 }
 
 fn platform_supported_check() -> Result<DoctorCheckResult> {
-    Ok(platform_supported_result(std::env::consts::OS))
+    Ok(platform_supported_result(
+        crate::platform::platform_support(),
+    ))
 }
 
-fn platform_supported_result(platform: &str) -> DoctorCheckResult {
-    if platform == "linux" {
+fn platform_supported_result(support: PlatformSupport) -> DoctorCheckResult {
+    if support.supported {
         return DoctorCheckResult::ok(
             "platform_supported",
-            "Linux is declared and has native controller discovery and driver-fix backends",
+            format!(
+                "{} is declared and has native controller discovery and driver-fix backends",
+                support.label
+            ),
         );
     }
     DoctorCheckResult::fail(
         "platform_supported",
         format!(
-            "{platform} is not declared by Controllers and has no native controller discovery or driver-fix backend"
+            "{} is not declared by Controllers and has no native controller discovery or driver-fix backend",
+            support.label
         ),
     )
     .with_fix("Run Controllers on Linux")
@@ -176,16 +183,40 @@ mod tests {
     #[test]
     fn platform_check_rejects_unsupported_controller_backends() {
         let cases = [
-            ("linux", DoctorStatus::Ok, "Linux is declared"),
-            ("macos", DoctorStatus::Fail, "macos is not declared"),
-            ("windows", DoctorStatus::Fail, "windows is not declared"),
+            (
+                PlatformSupport {
+                    label: "Linux",
+                    supported: true,
+                },
+                DoctorStatus::Ok,
+                "Linux is declared",
+            ),
+            (
+                PlatformSupport {
+                    label: "macOS",
+                    supported: false,
+                },
+                DoctorStatus::Fail,
+                "macOS is not declared",
+            ),
+            (
+                PlatformSupport {
+                    label: "Windows",
+                    supported: false,
+                },
+                DoctorStatus::Fail,
+                "Windows is not declared",
+            ),
         ];
-        for (platform, expected_status, expected_message) in cases {
-            let result = platform_supported_result(platform);
-            assert_eq!(result.status, expected_status, "platform: {platform}");
+        for (support, expected_status, expected_message) in cases {
+            let result = platform_supported_result(support);
+            assert_eq!(
+                result.status, expected_status,
+                "expected: {expected_message}"
+            );
             assert!(
                 result.message.contains(expected_message),
-                "platform: {platform}, message: {}",
+                "expected: {expected_message}, message: {}",
                 result.message
             );
         }

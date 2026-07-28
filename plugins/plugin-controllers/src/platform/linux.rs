@@ -9,7 +9,7 @@ use crate::detection;
 use crate::fixes::{DetectedDevice, Mac};
 use crate::platform::{
     NativeAdapter, NativeButtonInput, NativeConnection, NativeControllerInput, NativeInputSnapshot,
-    NativeSignal,
+    NativeSignal, PlatformSupport,
 };
 
 const INPUT_DEVICES_PATH: &str = "/proc/bus/input/devices";
@@ -19,6 +19,13 @@ const DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const SIGNAL_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const LEFT_STICK_BUTTON: usize = 10;
 const RIGHT_STICK_BUTTON: usize = 11;
+
+pub(crate) fn platform_support() -> PlatformSupport {
+    PlatformSupport {
+        label: "Linux",
+        supported: true,
+    }
+}
 
 #[derive(Default)]
 pub struct InputMonitor {

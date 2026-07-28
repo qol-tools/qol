@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use qol_headless::{
     Command, CommandContext, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTextOutput,
 };
@@ -16,7 +16,8 @@ fn app() -> HeadlessApp {
     app_with_handlers(
         |_| Ok(PlainTextOutput::text("Hello from My Plugin")),
         |_| {
-            crate::platform::open_settings()?;
+            qol_apps::desktop_integration::open_plugin_settings(PLUGIN_ID)
+                .context("failed to open settings URL")?;
             Ok(PlainTextOutput::empty())
         },
     )
@@ -70,18 +71,21 @@ fn doctor_checks() -> Vec<DoctorCheck> {
 }
 
 fn platform_supported_check() -> Result<DoctorCheckResult> {
-    let support = crate::platform::current_support();
+    Ok(platform_supported_result(crate::platform::current_support()))
+}
+
+fn platform_supported_result(support: crate::platform::PlatformSupport) -> DoctorCheckResult {
     if support.supported {
-        return Ok(DoctorCheckResult::ok(
+        return DoctorCheckResult::ok(
             "platform_supported",
             format!("{} is supported.", support.name),
-        ));
+        );
     }
-    Ok(DoctorCheckResult::fail(
+    DoctorCheckResult::fail(
         "platform_supported",
         format!("{} is not declared by this plugin.", support.name),
     )
-    .with_fix("Run the plugin on Linux or macOS."))
+    .with_fix("Run the plugin on Linux or macOS.")
 }
 
 #[cfg(test)]
@@ -180,6 +184,43 @@ mod tests {
                 .status,
             DoctorStatus::Ok
         );
+    }
+
+    #[test]
+    fn platform_support_results_match_the_manifest_contract() {
+        let cases = [
+            ("linux", true, DoctorStatus::Ok, None),
+            ("macos", true, DoctorStatus::Ok, None),
+            (
+                "windows",
+                false,
+                DoctorStatus::Fail,
+                Some("Run the plugin on Linux or macOS."),
+            ),
+            (
+                "other",
+                false,
+                DoctorStatus::Fail,
+                Some("Run the plugin on Linux or macOS."),
+            ),
+        ];
+
+        for (name, supported, status, fix) in cases {
+            let result =
+                platform_supported_result(crate::platform::PlatformSupport { name, supported });
+
+            assert_eq!(result.status, status, "platform: {name}");
+            assert_eq!(
+                result.message,
+                if supported {
+                    format!("{name} is supported.")
+                } else {
+                    format!("{name} is not declared by this plugin.")
+                },
+                "platform: {name}"
+            );
+            assert_eq!(result.fix.as_deref(), fix, "platform: {name}");
+        }
     }
 
     #[test]

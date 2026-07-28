@@ -1,5 +1,12 @@
 use crate::fixes::DetectedDevice;
-use crate::platform::NativeInputSnapshot;
+use crate::platform::{NativeInputSnapshot, PlatformSupport};
+
+pub(crate) fn platform_support() -> PlatformSupport {
+    PlatformSupport {
+        label: "macOS",
+        supported: false,
+    }
+}
 
 #[derive(Default)]
 pub struct InputMonitor;

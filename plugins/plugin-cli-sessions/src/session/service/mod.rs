@@ -1,9 +1,9 @@
-use std::process::Command;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
-use std::collections::{HashMap, HashSet};
-
 use crate::host::Pane;
+
+mod platform;
 
 pub trait ServiceProbe {
     fn is_service(&self, pane: &Pane) -> bool;
@@ -23,6 +23,7 @@ pub struct SystemServiceProbe {
     load: fn() -> ProcessSnapshot,
 }
 
+#[derive(Default)]
 struct ProcessSnapshot {
     listeners: HashSet<i32>,
     children: HashMap<i32, Vec<i32>>,
@@ -33,7 +34,7 @@ impl SystemServiceProbe {
         Self {
             declared,
             snapshot: OnceLock::new(),
-            load: process_snapshot,
+            load: platform::process_snapshot,
         }
     }
 
@@ -86,44 +87,6 @@ impl ServiceProbe for SystemServiceProbe {
     fn is_service(&self, pane: &Pane) -> bool {
         self.declares(pane) || self.subtree_listens(pane)
     }
-}
-
-fn process_snapshot() -> ProcessSnapshot {
-    ProcessSnapshot {
-        listeners: listening_pids(),
-        children: child_map(),
-    }
-}
-
-fn listening_pids() -> HashSet<i32> {
-    let Ok(out) = Command::new("lsof")
-        .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-Fp"])
-        .output()
-    else {
-        return HashSet::new();
-    };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(|line| line.strip_prefix('p'))
-        .filter_map(|pid| pid.trim().parse::<i32>().ok())
-        .collect()
-}
-
-fn child_map() -> HashMap<i32, Vec<i32>> {
-    let Ok(out) = Command::new("ps").args(["-axo", "pid=,ppid="]).output() else {
-        return HashMap::new();
-    };
-    let mut map: HashMap<i32, Vec<i32>> = HashMap::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let mut it = line.split_whitespace();
-        let (Some(pid), Some(ppid)) = (it.next(), it.next()) else {
-            continue;
-        };
-        if let (Ok(pid), Ok(ppid)) = (pid.parse::<i32>(), ppid.parse::<i32>()) {
-            map.entry(ppid).or_default().push(pid);
-        }
-    }
-    map
 }
 
 #[cfg(test)]

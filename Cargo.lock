@@ -68,12 +68,14 @@ dependencies = [
  "qol-config",
  "qol-conventions",
  "qol-gpui",
+ "qol-headless",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
  "serde",
  "serde_json",
  "smallvec",
+ "tempfile",
  "x11rb",
  "zbus",
 ]
@@ -4139,6 +4141,7 @@ dependencies = [
 name = "keyremap"
 version = "1.21.0"
 dependencies = [
+ "anyhow",
  "core-foundation 0.10.0",
  "core-graphics 0.25.0",
  "foreign-types-shared 0.3.1",
@@ -4147,6 +4150,7 @@ dependencies = [
  "proptest",
  "qol-config",
  "qol-conventions",
+ "qol-headless",
  "qol-hotkeys",
  "qol-plugin-api",
  "qol-plugin-daemon",
@@ -4215,6 +4219,7 @@ checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 name = "launcher"
 version = "1.40.0"
 dependencies = [
+ "anyhow",
  "block2",
  "gpui",
  "notify",
@@ -4227,6 +4232,7 @@ dependencies = [
  "qol-conventions",
  "qol-frecency",
  "qol-gpui",
+ "qol-headless",
  "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
@@ -4234,6 +4240,8 @@ dependencies = [
  "qol-runtime",
  "qol-search",
  "serde",
+ "serde_json",
+ "tempfile",
  "toml 0.9.12+spec-1.1.0",
 ]
 
@@ -5688,6 +5696,7 @@ dependencies = [
  "qol-conventions",
  "qol-fs",
  "qol-gpui",
+ "qol-headless",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-process",
@@ -5695,6 +5704,7 @@ dependencies = [
  "qol-terminal-sessions",
  "serde",
  "serde_json",
+ "tempfile",
  "toml 0.9.12+spec-1.1.0",
 ]
 
@@ -5725,12 +5735,14 @@ dependencies = [
  "qol-color",
  "qol-config",
  "qol-conventions",
+ "qol-headless",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
  "serde",
  "serde_json",
  "serialport",
+ "tempfile",
  "tungstenite 0.26.2",
 ]
 
@@ -5743,6 +5755,7 @@ dependencies = [
  "qol-apps",
  "qol-config",
  "qol-conventions",
+ "qol-headless",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
@@ -5762,7 +5775,9 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "qol-apps",
+ "qol-conventions",
  "qol-gpui",
+ "qol-headless",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-process",
@@ -5828,12 +5843,14 @@ dependencies = [
  "qol-config",
  "qol-conventions",
  "qol-fs",
+ "qol-headless",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "rdev",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "tokio",
  "windows 0.52.0",
  "x11",
@@ -6102,6 +6119,7 @@ dependencies = [
  "qol-dev-guest",
  "qol-dev-orchestrator",
  "qol-fs",
+ "qol-headless",
  "qol-platform",
  "qol-process",
  "qol-workspace",
@@ -6147,10 +6165,12 @@ version = "0.2.0"
 name = "qol-config"
 version = "1.3.0"
 dependencies = [
+ "anyhow",
  "dirs 6.0.0",
  "indexmap",
  "proptest",
  "qol-conventions",
+ "qol-headless",
  "serde",
  "serde_json",
  "tempfile",
@@ -6267,6 +6287,7 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "qol-dev-guest",
+ "qol-headless",
  "serde_json",
  "tempfile",
 ]
@@ -6408,8 +6429,12 @@ dependencies = [
 name = "qol-theme"
 version = "1.0.0"
 dependencies = [
+ "anyhow",
  "qol-color",
  "qol-conventions",
+ "qol-headless",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -8237,6 +8262,7 @@ version = "1.18.0"
 dependencies = [
  "qol-config",
  "qol-conventions",
+ "qol-headless",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
@@ -9707,12 +9733,14 @@ dependencies = [
  "qol-config",
  "qol-conventions",
  "qol-fs",
+ "qol-headless",
  "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
  "serde",
  "serde_json",
+ "tempfile",
  "toml 0.9.12+spec-1.1.0",
 ]
 

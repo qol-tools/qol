@@ -8,11 +8,23 @@ mod macos;
 mod windows;
 
 #[cfg(target_os = "linux")]
+pub(crate) use linux::platform_support;
+#[cfg(target_os = "linux")]
 pub use linux::{read_devices, InputMonitor};
+#[cfg(target_os = "macos")]
+pub(crate) use macos::platform_support;
 #[cfg(target_os = "macos")]
 pub use macos::{read_devices, InputMonitor};
 #[cfg(target_os = "windows")]
+pub(crate) use windows::platform_support;
+#[cfg(target_os = "windows")]
 pub use windows::{read_devices, InputMonitor};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlatformSupport {
+    pub(crate) label: &'static str,
+    pub(crate) supported: bool,
+}
 
 pub struct NativeInputSnapshot {
     pub available: bool,
