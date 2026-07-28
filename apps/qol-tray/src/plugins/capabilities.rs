@@ -99,7 +99,7 @@ fn user_in_persistent_group(group: &str) -> bool {
     let output = Command::new("getent").args(["group", group]).output();
     let Ok(output) = output else { return false };
     let line = String::from_utf8_lossy(&output.stdout);
-    let Ok(user) = std::env::var("USER") else {
+    let Ok(user) = current_user_name() else {
         return false;
     };
     let found = parse_group_members(&line).any(|member| member == user);
@@ -164,12 +164,12 @@ fn resolve_serial_request_state(
 }
 
 fn request_serial_linux() -> PermissionStatus {
-    let user = match std::env::var("USER") {
+    let user = match current_user_name() {
         Ok(user) => user,
         Err(_) => {
             return PermissionStatus {
                 state: PermissionState::Denied,
-                hint: Some("USER env var not set".to_string()),
+                hint: Some("Could not resolve current user".to_string()),
             }
         }
     };
@@ -183,7 +183,7 @@ fn request_serial_linux() -> PermissionStatus {
     let devices = serial_devices();
     if !devices.is_empty() {
         if let Ok(cmd) = device_access_fix_command() {
-            let args = device_access_fix_args(&cmd, &user, &devices);
+            let args = device_access_fix_args(&user, &devices);
             let _ = run_pkexec(&cmd, &args);
         }
     }
@@ -231,8 +231,23 @@ fn is_serial_device_name(name: &str) -> bool {
     name.starts_with("ttyUSB") || name.starts_with("ttyACM")
 }
 
-fn chmod_command_path() -> Result<PathBuf> {
-    existing_command_path(&["/bin/chmod", "/usr/bin/chmod"]).context("no chmod command found")
+fn current_user_name() -> Result<String> {
+    let command =
+        existing_command_path(&["/usr/bin/id", "/bin/id"]).context("no id command found")?;
+    let output = Command::new(command).arg("-un").output()?;
+    if !output.status.success() {
+        bail!("id -un failed");
+    }
+    let user = String::from_utf8(output.stdout)?.trim().to_string();
+    if user.is_empty()
+        || user.starts_with('-')
+        || !user.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
+        })
+    {
+        bail!("current user name is invalid");
+    }
+    Ok(user)
 }
 
 fn setfacl_command_path() -> Result<PathBuf> {
@@ -244,45 +259,17 @@ fn pkexec_command_path() -> Result<PathBuf> {
 }
 
 fn device_access_fix_command() -> Result<PathBuf> {
-    if let Ok(path) = setfacl_command_path() {
-        return Ok(path);
-    }
-
-    chmod_command_path()
+    setfacl_command_path()
 }
 
-fn device_access_fix_args(
-    command_path: &Path,
-    user: &str,
-    device_paths: &[PathBuf],
-) -> Vec<String> {
-    let mut args = Vec::new();
-
-    if is_setfacl_command(command_path) {
-        args.push(String::from("-m"));
-        args.push(format!("u:{}:rw", user));
-        args.extend(
-            device_paths
-                .iter()
-                .filter_map(|path| path.to_str().map(str::to_string)),
-        );
-        return args;
-    }
-
-    args.push(String::from("666"));
+fn device_access_fix_args(user: &str, device_paths: &[PathBuf]) -> Vec<String> {
+    let mut args = vec![String::from("-m"), format!("u:{}:rw", user)];
     args.extend(
         device_paths
             .iter()
             .filter_map(|path| path.to_str().map(str::to_string)),
     );
     args
-}
-
-fn is_setfacl_command(command_path: &Path) -> bool {
-    command_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name == "setfacl")
 }
 
 fn existing_command_path(candidates: &[&str]) -> Option<PathBuf> {
