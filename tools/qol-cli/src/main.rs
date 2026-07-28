@@ -54,7 +54,7 @@ fn run(args: Vec<OsString>) -> Result<()> {
         "install" => commands::install::run(args.verbose),
         "trace" => commands::trace::run(rest),
         "trace-rs" => commands::trace_rs::run(rest),
-        "doctor" => commands::doctor::run(rest, args.verbose),
+        "doctor" => commands::doctor::run(rest),
         "sync" => bail!("`qol sync` is not implemented yet - use `make sync` for now"),
         "help" | "-h" | "--help" => print_help(),
         other => bail!("unknown command `{other}`\n\n{}", help_text()),
