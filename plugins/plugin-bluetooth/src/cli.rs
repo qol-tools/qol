@@ -287,6 +287,11 @@ fn doctor_checks() -> Vec<DoctorCheck> {
             adapter_powered_check,
         ),
         DoctorCheck::new(
+            "config_readable",
+            "Verify the plugin config can be read and parsed without changing it.",
+            config_readable_check,
+        ),
+        DoctorCheck::new(
             "managed_devices",
             "Verify the automatic reconnect allowlist contains valid addresses.",
             managed_devices_check,
@@ -318,8 +323,18 @@ fn adapter_powered_check() -> Result<DoctorCheckResult> {
     .with_fix(format!("run: {BINARY_NAME} reconnect_trusted")))
 }
 
+fn config_readable_check() -> Result<DoctorCheckResult> {
+    let inspection = config::inspect()?;
+    let message = if inspection.source.is_some() {
+        "plugin config is readable"
+    } else {
+        "no plugin config found; contract defaults are valid"
+    };
+    Ok(DoctorCheckResult::ok("config_readable", message))
+}
+
 fn managed_devices_check() -> Result<DoctorCheckResult> {
-    let config = config::load();
+    let config = config::inspect()?.config;
     let invalid = config
         .managed_devices
         .iter()
@@ -461,5 +476,17 @@ mod tests {
             );
             assert!(first.stdout.contains("Exit:"), "command={command}");
         }
+    }
+
+    #[test]
+    fn doctor_registers_read_only_config_check() {
+        let execution = app().execute(vec![
+            "doctor".to_string(),
+            "config_readable".to_string(),
+            "help".to_string(),
+        ]);
+
+        assert_eq!(execution.exit_code, qol_headless::EXIT_SUCCESS);
+        assert!(execution.stdout.contains("without changing it"));
     }
 }

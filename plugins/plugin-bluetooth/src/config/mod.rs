@@ -19,6 +19,13 @@ pub fn load() -> ReconnectConfig {
     qol_config::load_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT)
 }
 
+pub fn inspect() -> Result<
+    qol_config::PluginConfigInspection<ReconnectConfig>,
+    qol_config::PluginConfigInspectionError,
+> {
+    qol_config::inspect_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

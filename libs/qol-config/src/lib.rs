@@ -1,5 +1,6 @@
 pub mod contract;
 pub mod defaults;
+mod inspection;
 pub mod normalized;
 pub mod validation;
 
@@ -7,6 +8,10 @@ pub use defaults::{
     defaults_json_from_contract, defaults_json_from_spec, deserialize_with_contract_defaults,
     typed_defaults_from_contract, typed_defaults_from_spec, validate_contract_defaults_match_type,
     validate_defaults_match_type,
+};
+pub use inspection::{
+    inspect_plugin_config_from_env_with_contract, PluginConfigInspection,
+    PluginConfigInspectionError,
 };
 
 use qol_conventions::ENV_PLUGIN_ID;
@@ -226,7 +231,7 @@ fn clear_parse_failure(path: &Path) {
     let _ = fs::remove_file(parse_error_marker_path(path));
 }
 
-fn canonicalize_whole_floats(value: serde_json::Value) -> serde_json::Value {
+pub(crate) fn canonicalize_whole_floats(value: serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::Number(number) => serde_json::Value::Number(canonical_number(number)),
         serde_json::Value::Array(items) => {
