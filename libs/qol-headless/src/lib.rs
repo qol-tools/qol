@@ -1,5 +1,5 @@
 use anyhow::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{self, Write};
 use std::process::ExitCode;
@@ -846,7 +846,7 @@ impl DispatchError {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DoctorStatus {
     Ok,
@@ -922,7 +922,7 @@ impl DoctorCheck {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct DoctorReport {
     pub plugin_id: String,
     pub status: DoctorStatus,
@@ -940,7 +940,7 @@ impl DoctorReport {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct DoctorCheckResult {
     pub id: String,
     pub status: DoctorStatus,
@@ -1154,6 +1154,36 @@ mod tests {
         assert_eq!(value["plugin_id"], "plugin-test");
         assert_eq!(value["status"], "warn");
         assert_eq!(value["checks"][0]["id"], "required_binaries");
+    }
+
+    #[test]
+    fn doctor_report_json_round_trips_through_the_shared_contract() {
+        let value = json!({
+            "plugin_id": "plugin-test",
+            "status": "warn",
+            "checks": [
+                {
+                    "id": "required_binaries",
+                    "status": "warn",
+                    "message": "ffmpeg is missing",
+                    "fix": "Install ffmpeg.",
+                    "details": {
+                        "binary": "ffmpeg"
+                    }
+                },
+                {
+                    "id": "runtime_dirs",
+                    "status": "ok",
+                    "message": "Runtime directories are ready"
+                }
+            ]
+        });
+
+        let report: DoctorReport = serde_json::from_value(value.clone()).unwrap();
+
+        assert_eq!(report.plugin_id, "plugin-test");
+        assert_eq!(report.status, DoctorStatus::Warn);
+        assert_eq!(serde_json::to_value(report).unwrap(), value);
     }
 
     #[test]
