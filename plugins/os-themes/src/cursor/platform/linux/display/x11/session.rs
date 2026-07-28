@@ -140,7 +140,7 @@ impl CursorSession {
         if self.active_cursor.is_none() {
             return;
         }
-        self.restore_pre_grow_cursor();
+        restore_root_cursor(self.display, self.root, &self.base);
         clear_children(self.display, self.root);
         self.flush();
         if let Some(cursor) = self.active_cursor.take() {
@@ -153,20 +153,6 @@ impl CursorSession {
 
     fn flush(&self) {
         sync(self.display);
-    }
-
-    fn restore_pre_grow_cursor(&mut self) {
-        let pre_grow = self
-            .grow_cursor
-            .as_ref()
-            .and_then(|image| scale_cursor_for_display(self.display, self.root, image, 1.0))
-            .and_then(|scaled| make_cursor_from_frames(self.display, &scaled.frames));
-        let Some(cursor) = pre_grow else {
-            restore_root_cursor(self.display, self.root, &self.base);
-            return;
-        };
-        unsafe { xlib::XDefineCursor(self.display, self.root, cursor) };
-        unsafe { xlib::XFreeCursor(self.display, cursor) };
     }
 
     fn capture_live_cursors(&mut self) {
