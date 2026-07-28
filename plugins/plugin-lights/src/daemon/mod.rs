@@ -185,7 +185,7 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
         return state.handle_action(action);
     }
 
-    if action != "reload" {
+    if action != crate::runtime::actions::RELOAD {
         if let DaemonRuntime::Unavailable(message) = runtime {
             return DaemonOutcome::Error(user_facing_unavailable_message(message));
         }

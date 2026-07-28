@@ -7,6 +7,10 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>> {
     bail!("plugin-bluetooth is not implemented on macOS")
 }
 
+pub fn set_adapter_powered(_powered: bool) -> Result<AdapterHealth> {
+    bail!("plugin-bluetooth is not implemented on macOS")
+}
+
 pub fn connect_device(_address: &str, _power_on_adapter: bool) -> Result<DeviceInfo> {
     bail!("plugin-bluetooth is not implemented on macOS")
 }

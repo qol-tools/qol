@@ -12,7 +12,6 @@ use crate::service::light_service::LightService;
 
 const BRIGHTNESS_STEP: u8 = 10;
 const MIREK_STEP: u16 = 25;
-const RELOAD_ACTION: &str = "reload";
 
 #[derive(Clone)]
 pub enum DaemonOutcome {
@@ -69,7 +68,7 @@ impl DaemonState {
     }
 
     pub fn handle_action(&mut self, action: &str) -> DaemonOutcome {
-        if action == RELOAD_ACTION {
+        if action == actions::RELOAD {
             return self.reload();
         }
         if action == actions::TOGGLE_MAIN {

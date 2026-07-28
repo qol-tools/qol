@@ -3,7 +3,9 @@ use std::process::ExitCode;
 use anyhow::{bail, Result};
 use qol_headless::{Command, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTextOutput};
 
-use crate::bluetooth::{normalize_address, DeviceInfo, ReconnectReport, ReconnectSelection};
+use crate::bluetooth::{
+    normalize_address, AdapterHealth, DeviceInfo, ReconnectReport, ReconnectSelection,
+};
 use crate::{config, platform, PLUGIN_ID};
 
 const BINARY_NAME: &str = "plugin-bluetooth";
@@ -17,6 +19,8 @@ fn app() -> HeadlessApp {
         .about("Inspect and reliably reconnect Bluetooth devices through the platform backend.")
         .default_command(["list"])
         .command(list_command())
+        .command(enable_adapter_command())
+        .command(disable_adapter_command())
         .command(search_command())
         .command(stop_search_command())
         .command(pair_command())
@@ -29,6 +33,39 @@ fn app() -> HeadlessApp {
         .command(reconnect_trusted_command())
         .command(settings_command())
         .doctor_checks(doctor_checks())
+}
+
+fn enable_adapter_command() -> Command {
+    adapter_power_command("enable_adapter", true)
+}
+
+fn disable_adapter_command() -> Command {
+    adapter_power_command("disable_adapter", false)
+}
+
+fn adapter_power_command(name: &'static str, powered: bool) -> Command {
+    let intent = if powered {
+        "Power on the default Bluetooth adapter."
+    } else {
+        "Power off the default Bluetooth adapter."
+    };
+    Command::new(name)
+        .about(intent)
+        .usage(format!("{BINARY_NAME} {name}"))
+        .output("The resulting adapter state.")
+        .exit_behavior("Exits non-zero when BlueZ or the default adapter is unavailable.")
+        .run_plain_text(move |context| {
+            reject_args(context.args())?;
+            Ok(PlainTextOutput::text(adapter_health_line(
+                &platform::set_adapter_powered(powered)?,
+            )))
+        })
+        .run_json(move |context| {
+            reject_args(context.args())?;
+            Ok(serde_json::to_value(platform::set_adapter_powered(
+                powered,
+            )?)?)
+        })
 }
 
 fn stop_search_command() -> Command {
@@ -350,6 +387,13 @@ fn device_line(device: &DeviceInfo) -> String {
     )
 }
 
+fn adapter_health_line(health: &AdapterHealth) -> String {
+    format!(
+        "{}  {}  powered={}",
+        health.name, health.address, health.powered
+    )
+}
+
 fn report_lines(report: &ReconnectReport) -> String {
     let mut lines = report
         .connected
@@ -372,4 +416,50 @@ fn report_lines(report: &ReconnectReport) -> String {
         return "no eligible Bluetooth devices".to_string();
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::app;
+    use qol_plugin_api::manifest::PluginManifest;
+
+    #[test]
+    fn manifest_actions_have_cli_commands() {
+        let manifest =
+            PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
+
+        for action in manifest.executable_actions() {
+            let args = manifest
+                .catalog_runtime_args(&action.id)
+                .expect("executable action must have runtime args");
+            let command = args.first().expect("runtime args must name a command");
+            let execution = app().execute(vec!["help".to_string(), command.clone()]);
+
+            assert_eq!(
+                execution.exit_code,
+                qol_headless::EXIT_SUCCESS,
+                "action={} command={} stderr={}",
+                action.id,
+                command,
+                execution.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn adapter_power_help_is_equivalent_and_structured() {
+        for command in ["enable_adapter", "disable_adapter"] {
+            let first = app().execute(vec!["help".to_string(), command.to_string()]);
+            let final_token = app().execute(vec![command.to_string(), "help".to_string()]);
+
+            assert_eq!(first.exit_code, qol_headless::EXIT_SUCCESS);
+            assert_eq!(first.stdout, final_token.stdout, "command={command}");
+            assert!(first.stdout.contains("Output:"), "command={command}");
+            assert!(
+                first.stdout.contains("Supports --json"),
+                "command={command}"
+            );
+            assert!(first.stdout.contains("Exit:"), "command={command}");
+        }
+    }
 }

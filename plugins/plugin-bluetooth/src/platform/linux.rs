@@ -185,6 +185,23 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>> {
     })
 }
 
+pub fn set_adapter_powered(powered: bool) -> Result<AdapterHealth> {
+    let result = (|| {
+        runtime()?.block_on(async {
+            let adapter = default_adapter().await?;
+            let mut discovery = None;
+            set_adapter_power(&adapter, powered, &mut discovery).await?;
+            adapter_health_with(&adapter).await
+        })
+    })();
+    let outcome = if result.is_ok() { "ok" } else { "failed" };
+    qol_runtime::probe!(
+        "BLUETOOTH_ADAPTER_POWER",
+        "source=cli powered={powered} outcome={outcome}"
+    );
+    result
+}
+
 pub fn connect_device(address: &str, power_on_adapter: bool) -> Result<DeviceInfo> {
     let address = parse_address(address)?;
     runtime()?.block_on(async {
@@ -242,11 +259,15 @@ pub fn reconnect_devices(
 pub fn adapter_health() -> Result<AdapterHealth> {
     runtime()?.block_on(async {
         let adapter = default_adapter().await?;
-        Ok(AdapterHealth {
-            name: adapter.name().to_string(),
-            address: adapter.address().await?.to_string(),
-            powered: adapter.is_powered().await?,
-        })
+        adapter_health_with(&adapter).await
+    })
+}
+
+async fn adapter_health_with(adapter: &Adapter) -> Result<AdapterHealth> {
+    Ok(AdapterHealth {
+        name: adapter.name().to_string(),
+        address: adapter.address().await?.to_string(),
+        powered: adapter.is_powered().await?,
     })
 }
 

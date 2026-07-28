@@ -19,6 +19,7 @@ pub const STOP_PAIR: &str = "stop_pair";
 pub const SET_COLOR_MAIN: &str = "set_color_main";
 pub const SET_BRIGHTNESS_MAIN: &str = "set_brightness_main";
 pub const SET_COLORTEMP_MAIN: &str = "set_colortemp_main";
+pub const RELOAD: &str = "reload";
 
 pub const RUN_ACTIONS: &[&str] = &[
     TOGGLE_MAIN,
@@ -41,6 +42,7 @@ pub const RUN_ACTIONS: &[&str] = &[
     SET_COLOR_MAIN,
     SET_BRIGHTNESS_MAIN,
     SET_COLORTEMP_MAIN,
+    RELOAD,
 ];
 
 pub const ALL_ACTIONS: &[&str] = &[
@@ -65,6 +67,7 @@ pub const ALL_ACTIONS: &[&str] = &[
     SET_COLOR_MAIN,
     SET_BRIGHTNESS_MAIN,
     SET_COLORTEMP_MAIN,
+    RELOAD,
 ];
 
 pub fn is_run_action(action: &str) -> bool {
@@ -73,4 +76,43 @@ pub fn is_run_action(action: &str) -> bool {
 
 pub fn is_supported_action(action: &str) -> bool {
     ALL_ACTIONS.contains(&action)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_run_action, is_supported_action};
+    use qol_plugin_api::manifest::PluginManifest;
+
+    #[test]
+    fn manifest_actions_have_runtime_handlers() {
+        let manifest =
+            PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
+
+        for action in manifest.executable_actions() {
+            let args = manifest
+                .catalog_runtime_args(&action.id)
+                .expect("executable action must have runtime args");
+            let command = args.first().expect("runtime args must name a command");
+
+            assert!(
+                is_supported_action(command),
+                "action={} command={}",
+                action.id,
+                command
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_contract_actions_have_runtime_handlers() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("qol-runtime.toml");
+        let runtime = qol_config::contract::parse_runtime_spec(path).expect("runtime contract");
+
+        for action in runtime.actions.keys() {
+            assert!(
+                is_run_action(action),
+                "qol-runtime action {action} has no Rust runtime backing"
+            );
+        }
+    }
 }
