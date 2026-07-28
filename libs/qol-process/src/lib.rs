@@ -2,7 +2,8 @@ mod bounded_output;
 mod platform;
 
 pub use bounded_output::{
-    run_with_output_timeout, BoundedCommandOutput, CapturedOutput, CompletedCommandOutput,
+    run_guarded_with_output_timeout, run_with_output_timeout, BoundedCommandOutput, CapturedOutput,
+    CompletedCommandOutput,
 };
 
 use std::io;
@@ -12,6 +13,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub const PROCESS_TREE_GUARDIAN_COMMAND: &str = "__process-tree-guardian";
+
+pub fn process_tree_guardian_requested() -> bool {
+    is_process_tree_guardian_argument(std::env::args_os().nth(1).as_deref())
+}
+
+fn is_process_tree_guardian_argument(argument: Option<&std::ffi::OsStr>) -> bool {
+    argument == Some(std::ffi::OsStr::new(PROCESS_TREE_GUARDIAN_COMMAND))
+}
 
 #[derive(Clone, Debug)]
 pub struct CancellationToken {
@@ -300,6 +309,17 @@ mod tests {
     #[test]
     fn current_process_is_alive() {
         assert!(is_pid_alive(std::process::id()));
+    }
+
+    #[test]
+    fn guardian_request_requires_the_exact_first_argument() {
+        assert!(is_process_tree_guardian_argument(Some(
+            std::ffi::OsStr::new(PROCESS_TREE_GUARDIAN_COMMAND)
+        )));
+        assert!(!is_process_tree_guardian_argument(None));
+        assert!(!is_process_tree_guardian_argument(Some(
+            std::ffi::OsStr::new("--process-tree-guardian")
+        )));
     }
 
     #[test]
