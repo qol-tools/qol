@@ -90,15 +90,15 @@ fn screen_snapshot() -> Option<ScreenSnapshot> {
     }
 
     let visible = system_screens();
-    if visible.is_empty() {
-        trace_screen_snapshot("unavailable", 0, start);
-        return None;
-    }
     let snapshot = ScreenSnapshot {
         layout,
         preferences,
         visible,
     };
+    if !snapshot_covers_every_display(&snapshot) {
+        trace_screen_snapshot("incomplete", snapshot.visible.len(), start);
+        return None;
+    }
     write_cached_snapshot(&snapshot);
     store_memory_snapshot(snapshot.clone());
     trace_screen_snapshot("nsscreen", snapshot.visible.len(), start);
@@ -229,15 +229,21 @@ fn parse_cached_snapshot(contents: &str) -> Option<ScreenSnapshot> {
             _ => return None,
         }
     }
-    if layout.is_empty() || visible.is_empty() || preferences.is_none() {
-        return None;
-    }
     layout.sort_by(rect_order);
-    Some(ScreenSnapshot {
+    let snapshot = ScreenSnapshot {
         layout,
         preferences: preferences?,
         visible,
-    })
+    };
+    snapshot_covers_every_display(&snapshot).then_some(snapshot)
+}
+
+/// AppKit can report fewer screens than the window server while a display is
+/// waking or the daemon's cached screen list is stale. Such a snapshot maximizes
+/// onto a work area that belongs to no real display and makes monitor moves a
+/// silent no-op, so it must never be trusted or persisted.
+fn snapshot_covers_every_display(snapshot: &ScreenSnapshot) -> bool {
+    !snapshot.layout.is_empty() && snapshot.visible.len() == snapshot.layout.len()
 }
 
 fn parse_cache_row(line: &str) -> Option<(&str, Rect)> {
@@ -330,6 +336,8 @@ mod tests {
             "layout,0,0,0,100\nvisible,0,0,100,100\n",
             "layout,0,0,100\nvisible,0,0,100,100\n",
             "layout,0,0,100,100,extra\nvisible,0,0,100,100\n",
+            "preferences,42\nlayout,0,0,100,100\nlayout,100,0,100,100\nvisible,0,0,100,100\n",
+            "preferences,42\nlayout,0,0,100,100\nvisible,0,0,100,100\nvisible,100,0,100,100\n",
         ];
         for contents in cases {
             assert!(parse_cached_snapshot(contents).is_none(), "{contents:?}");
