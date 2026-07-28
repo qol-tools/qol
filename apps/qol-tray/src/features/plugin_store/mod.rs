@@ -2,6 +2,7 @@ pub(crate) mod github;
 pub mod installer;
 mod plugin_ui;
 mod release_assets;
+pub(crate) mod release_integrity;
 pub(crate) mod server;
 pub(crate) mod source;
 mod validation;
@@ -75,7 +76,8 @@ impl MenuProvider for Plugins {
     fn handle_event(&self, event_id: &str) -> Result<()> {
         log::info!("Plugins feature received event: {}", event_id);
         if event_id.ends_with(&format!("::{}", MENU_ITEM_ID)) {
-            crate::paths::open_url(&format!("http://127.0.0.1:{}", server_port()))?;
+            let url = server::security::browser_url("", server_port());
+            crate::paths::open_url(&url)?;
         }
         Ok(())
     }

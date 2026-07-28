@@ -190,5 +190,11 @@ jobs:
           files: artifacts/**/*
           fail_on_unmatched_files: true
           allow_updates: false
-          draft: false
+          draft: true
           prerelease: false
+
+      - name: Publish immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "${RELEASE_TAG}" --draft=false

@@ -97,6 +97,7 @@ walkdir = "2"
 # Archive extraction for self-update
 flate2 = "1"
 tar = "0.4"
+tempfile = "3.8"
 
 qol-runtime.workspace = true
 qol-apps.workspace = true
@@ -132,7 +133,6 @@ qol-plugin-daemon.workspace = true
 
 [dev-dependencies]
 proptest = "1.6"
-tempfile = "3.8"
 tower = { version = "0.5", features = ["util"] }
 
 [lints.rust]

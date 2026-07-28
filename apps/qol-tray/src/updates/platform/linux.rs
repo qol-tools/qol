@@ -1,50 +1,21 @@
 use anyhow::Result;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::daemon::{DaemonEvent, EventBus};
+use crate::features::plugin_store::release_integrity;
 
 use super::super::{latest_version, GITHUB_REPO};
 use super::common;
 use super::InstallKind;
 
-fn asset_url(version: &str) -> String {
-    format!(
-        "https://github.com/{}/releases/download/qol-tray-v{}/qol-tray-linux-{}.tar.gz",
-        GITHUB_REPO,
-        version,
-        common::arch_suffix()
-    )
-}
-
-fn asset_filename(version: &str) -> String {
-    format!("qol-tray-linux-{}.tar.gz", version)
-}
-
-fn resolve_update_url() -> Result<(String, PathBuf)> {
-    #[cfg(feature = "dev")]
-    if let Ok(url) = std::env::var("QOL_TRAY_DEV_UPDATE_URL") {
-        let filename = url
-            .split('/')
-            .next_back()
-            .unwrap_or("dev-update.tar.gz")
-            .to_string();
-        return Ok((url, std::env::temp_dir().join(filename)));
-    }
-
-    let version = latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?;
-    Ok((
-        asset_url(version),
-        std::env::temp_dir().join(asset_filename(version)),
-    ))
+fn asset_name() -> String {
+    format!("qol-tray-linux-{}.tar.gz", common::arch_suffix())
 }
 
 pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
-    #[cfg(feature = "dev")]
-    let dev_override = std::env::var("QOL_TRAY_DEV_UPDATE_URL").is_ok();
-    #[cfg(not(feature = "dev"))]
-    let dev_override = false;
+    let dev_url = common::dev_update_url();
+    let dev_override = dev_url.is_some();
 
     if !dev_override {
         match InstallKind::detect() {
@@ -60,18 +31,36 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
         }
     }
 
-    let (url, dest) = resolve_update_url()?;
+    let work_dir = tempfile::Builder::new()
+        .prefix("qol-tray-update-")
+        .tempdir()?;
+    let dest = work_dir.path().join("update.tar.gz");
+    let verified_asset = if dev_override {
+        None
+    } else {
+        let version =
+            latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?;
+        let release =
+            release_integrity::fetch_release(GITHUB_REPO, &format!("qol-tray-v{version}")).await?;
+        Some(release_integrity::verified_asset(&release, &asset_name())?)
+    };
+    let url = dev_url
+        .or_else(|| {
+            verified_asset
+                .as_ref()
+                .map(|asset| asset.browser_download_url.clone())
+        })
+        .ok_or_else(|| anyhow::anyhow!("No verified update asset available"))?;
 
     log::info!("Downloading update from {}", url);
-    if let Err(e) = common::download_asset(&url, &dest, &events).await {
-        common::cleanup_archive(&dest);
-        return Err(e);
+    common::download_asset(&url, &dest, &events).await?;
+    if let Some(asset) = &verified_asset {
+        release_integrity::verify_file(asset, &dest)?;
     }
 
     let current_exe = std::env::current_exe()?;
     let install_result = common::extract_tar_gz(&dest, "qol-tray")
         .and_then(|binary| common::atomic_replace(&binary, &current_exe));
-    common::cleanup_archive(&dest);
     install_result?;
 
     events.send(DaemonEvent::UpdateComplete);
@@ -88,25 +77,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn linux_release_asset_contract_is_stable() {
+    fn linux_release_asset_name_is_stable() {
         let arch = common::arch_suffix();
-        let cases = [
-            (
-                "1.2.3",
-                format!(
-                    "https://github.com/qol-tools/qol/releases/download/qol-tray-v1.2.3/qol-tray-linux-{arch}.tar.gz"
-                ),
-            ),
-            (
-                "9.9.9-beta.1",
-                format!(
-                    "https://github.com/qol-tools/qol/releases/download/qol-tray-v9.9.9-beta.1/qol-tray-linux-{arch}.tar.gz"
-                ),
-            ),
-        ];
-
-        for (version, expected_url) in cases {
-            assert_eq!(asset_url(version), expected_url, "version: {version}");
-        }
+        assert_eq!(asset_name(), format!("qol-tray-linux-{arch}.tar.gz"));
     }
 }

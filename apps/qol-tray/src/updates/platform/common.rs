@@ -7,6 +7,16 @@ use tokio_stream::StreamExt;
 
 use crate::daemon::{DaemonEvent, EventBus};
 
+#[cfg(feature = "dev")]
+pub(crate) fn dev_update_url() -> Option<String> {
+    std::env::var("QOL_TRAY_DEV_UPDATE_URL").ok()
+}
+
+#[cfg(not(feature = "dev"))]
+pub(crate) fn dev_update_url() -> Option<String> {
+    None
+}
+
 pub(crate) async fn download_asset(url: &str, dest: &Path, events: &EventBus) -> Result<()> {
     let request = crate::features::plugin_store::github::build_github_request(
         &reqwest::Client::new(),
@@ -52,11 +62,26 @@ fn extract_tar_gz_entry(archive: &Path, name: &str, want_dir: bool) -> Result<Pa
     let mut reader = tar::Archive::new(tar);
 
     let extract_dir = archive.with_extension("extracted");
-    if extract_dir.exists() {
-        let _ = std::fs::remove_dir_all(&extract_dir);
+    qol_fs::recreate_private_dir(&extract_dir)?;
+    for entry in reader.entries()? {
+        let mut entry = entry?;
+        let entry_type = entry.header().entry_type();
+        if !entry_type.is_file() && !entry_type.is_dir() {
+            anyhow::bail!("update archive contains a link or special file");
+        }
+        let path = entry.path()?;
+        if path.components().any(|component| {
+            !matches!(
+                component,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        }) {
+            anyhow::bail!("update archive contains an unsafe path");
+        }
+        if !entry.unpack_in(&extract_dir)? {
+            anyhow::bail!("update archive entry escapes the extraction directory");
+        }
     }
-    std::fs::create_dir_all(&extract_dir)?;
-    reader.unpack(&extract_dir)?;
 
     for entry in walkdir::WalkDir::new(&extract_dir).max_depth(2) {
         let entry = entry?;
@@ -109,12 +134,6 @@ fn atomic_replace_inner(source: &Path, target: &Path, staged: &Path) -> Result<(
     std::fs::rename(staged, target)
         .with_context(|| format!("Failed to replace {}", target.display()))?;
     Ok(())
-}
-
-pub(crate) fn cleanup_archive(archive: &Path) {
-    let _ = std::fs::remove_file(archive);
-    let extract_dir = archive.with_extension("extracted");
-    let _ = std::fs::remove_dir_all(&extract_dir);
 }
 
 #[cfg(target_os = "linux")]
@@ -185,6 +204,23 @@ mod tests {
         archive_path
     }
 
+    fn create_symlink_tar_gz(dir: &Path) -> PathBuf {
+        let archive_path = dir.join("symlink-test.tar.gz");
+        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        let mut tar = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_mode(0o777);
+        header.set_size(0);
+        header.set_link_name("/tmp/target").unwrap();
+        header.set_cksum();
+        tar.append_data(&mut header, "bundle/qol-tray", std::io::empty())
+            .unwrap();
+        let bytes = tar.into_inner().unwrap().finish().unwrap();
+        std::fs::write(&archive_path, bytes).unwrap();
+        archive_path
+    }
+
     #[test]
     fn extract_finds_binary_at_depth_one() {
         let dir = tempfile::tempdir().unwrap();
@@ -203,6 +239,14 @@ mod tests {
         let result = extract_tar_gz(&archive, "qol-tray");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn extract_rejects_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = create_symlink_tar_gz(dir.path());
+        let error = extract_tar_gz(&archive, "qol-tray").unwrap_err();
+        assert!(error.to_string().contains("link or special"));
     }
 
     #[test]

@@ -148,7 +148,8 @@ jobs:
             echo "- Ref: \`${RELEASE_REF}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" release_files/* --clobber
-          else
-            gh release create "$tag" --title "$tag" --generate-notes --latest=false release_files/*
+            echo "Release ${tag} already exists; immutable releases are never updated" >&2
+            exit 1
           fi
+          gh release create "$tag" --draft --title "$tag" --generate-notes --latest=false release_files/*
+          gh release edit "$tag" --draft=false

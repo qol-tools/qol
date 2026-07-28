@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::daemon::{DaemonEvent, EventBus};
+use crate::features::plugin_store::release_integrity;
 
 use super::super::{latest_version, GITHUB_REPO};
 use super::common;
@@ -12,35 +13,6 @@ use super::InstallKind;
 
 const APP_BUNDLE_NAME: &str = "QoL Tray.app";
 const MACOS_RELEASE_ASSET: &str = "qol-tray-macos-universal.tar.gz";
-
-fn asset_url(version: &str) -> String {
-    format!(
-        "https://github.com/{}/releases/download/qol-tray-v{}/{}",
-        GITHUB_REPO, version, MACOS_RELEASE_ASSET
-    )
-}
-
-fn asset_filename(_: &str) -> String {
-    MACOS_RELEASE_ASSET.to_string()
-}
-
-fn resolve_update_url() -> Result<(String, PathBuf)> {
-    #[cfg(feature = "dev")]
-    if let Ok(url) = std::env::var("QOL_TRAY_DEV_UPDATE_URL") {
-        let filename = url
-            .split('/')
-            .next_back()
-            .unwrap_or("dev-update.tar.gz")
-            .to_string();
-        return Ok((url, std::env::temp_dir().join(filename)));
-    }
-
-    let version = latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?;
-    Ok((
-        asset_url(version),
-        std::env::temp_dir().join(asset_filename(version)),
-    ))
-}
 
 fn ad_hoc_codesign_bundle(bundle_path: &Path) {
     let sign_status = std::process::Command::new("codesign")
@@ -184,10 +156,8 @@ fn copy_bundle_dir(source: &Path, destination: &Path) -> Result<()> {
 }
 
 pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
-    #[cfg(feature = "dev")]
-    let dev_override = std::env::var("QOL_TRAY_DEV_UPDATE_URL").is_ok();
-    #[cfg(not(feature = "dev"))]
-    let dev_override = false;
+    let dev_url = common::dev_update_url();
+    let dev_override = dev_url.is_some();
 
     if !dev_override {
         match InstallKind::detect() {
@@ -203,12 +173,36 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
         }
     }
 
-    let (url, dest) = resolve_update_url()?;
+    let work_dir = tempfile::Builder::new()
+        .prefix("qol-tray-update-")
+        .tempdir()?;
+    let dest = work_dir.path().join("update.tar.gz");
+    let verified_asset = if dev_override {
+        None
+    } else {
+        let version =
+            latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?;
+        let release =
+            release_integrity::fetch_release(GITHUB_REPO, &format!("qol-tray-v{version}")).await?;
+        Some(release_integrity::verified_asset(
+            &release,
+            MACOS_RELEASE_ASSET,
+        )?)
+    };
+    let url = dev_url
+        .or_else(|| {
+            verified_asset
+                .as_ref()
+                .map(|asset| asset.browser_download_url.clone())
+        })
+        .ok_or_else(|| anyhow::anyhow!("No verified update asset available"))?;
 
     log::info!("Downloading update from {}", url);
     if let Err(e) = common::download_asset(&url, &dest, &events).await {
-        common::cleanup_archive(&dest);
         return Err(e);
+    }
+    if let Some(asset) = &verified_asset {
+        release_integrity::verify_file(asset, &dest)?;
     }
 
     let current_exe = std::env::current_exe()?;
@@ -216,7 +210,6 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
         find_app_bundle(&current_exe).context("Current executable is not inside an app bundle")?;
     let install_result = super::common::extract_tar_gz_dir(&dest, APP_BUNDLE_NAME)
         .and_then(|bundle| replace_app_bundle(&bundle, &current_bundle));
-    common::cleanup_archive(&dest);
     install_result?;
 
     if dev_override {
@@ -307,24 +300,8 @@ mod tests {
     }
 
     #[test]
-    fn macos_release_asset_contract_is_stable() {
-        let cases = [
-            (
-                "1.2.3",
-                "qol-tray-macos-universal.tar.gz",
-                "https://github.com/qol-tools/qol/releases/download/qol-tray-v1.2.3/qol-tray-macos-universal.tar.gz",
-            ),
-            (
-                "9.9.9-beta.1",
-                "qol-tray-macos-universal.tar.gz",
-                "https://github.com/qol-tools/qol/releases/download/qol-tray-v9.9.9-beta.1/qol-tray-macos-universal.tar.gz",
-            ),
-        ];
-
-        for (version, expected_name, expected_url) in cases {
-            assert_eq!(asset_filename(version), expected_name, "version: {version}");
-            assert_eq!(asset_url(version), expected_url, "version: {version}");
-        }
+    fn macos_release_asset_name_is_stable() {
+        assert_eq!(MACOS_RELEASE_ASSET, "qol-tray-macos-universal.tar.gz");
     }
 
     #[test]

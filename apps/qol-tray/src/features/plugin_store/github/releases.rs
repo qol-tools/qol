@@ -4,19 +4,9 @@ use super::super::source::{
 };
 use super::catalog::normalized_release_tag;
 use super::GitHubClient;
+use crate::features::plugin_store::release_integrity;
+pub(super) use crate::features::plugin_store::release_integrity::GitHubRelease;
 use anyhow::Result;
-use serde::Deserialize;
-
-#[derive(Debug, Clone, Deserialize)]
-pub(super) struct GitHubRelease {
-    pub(super) tag_name: String,
-    pub(super) assets: Vec<GitHubAsset>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(super) struct GitHubAsset {
-    pub(super) name: String,
-}
 
 impl GitHubClient {
     pub(super) async fn fetch_source_releases(&self) -> Result<Vec<GitHubRelease>> {
@@ -74,19 +64,20 @@ fn verify_release_assets(
     }
     let names = required_release_asset_names(&dependencies.binaries, target);
     for asset_name in names {
-        if !release_has_asset(release, &asset_name) {
-            anyhow::bail!(
-                "missing asset '{}' in release {} of {} (required by plugin '{}')",
-                asset_name,
+        release_integrity::asset_with_digest(release, &asset_name).map_err(|error| {
+            anyhow::anyhow!(
+                "{} in release {} of {} (required by plugin '{}')",
+                error,
                 release.tag_name,
                 source_repo,
                 plugin_id
-            );
-        }
+            )
+        })?;
     }
     Ok(())
 }
 
+#[cfg(test)]
 fn release_has_asset(release: &GitHubRelease, asset_name: &str) -> bool {
     release.assets.iter().any(|asset| asset.name == asset_name)
 }
@@ -98,10 +89,13 @@ mod tests {
     fn release(tag: &str, asset_names: &[&str]) -> GitHubRelease {
         GitHubRelease {
             tag_name: tag.to_string(),
+            immutable: true,
             assets: asset_names
                 .iter()
-                .map(|n| GitHubAsset {
+                .map(|n| release_integrity::GitHubAsset {
                     name: (*n).to_string(),
+                    browser_download_url: format!("https://example.invalid/{n}"),
+                    digest: Some(format!("sha256:{}", "00".repeat(32))),
                 })
                 .collect(),
         }
