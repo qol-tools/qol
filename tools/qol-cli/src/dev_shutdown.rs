@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 #[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const GRACEFUL_TIMEOUT: Duration = Duration::from_secs(8);
@@ -57,7 +57,7 @@ pub(crate) fn finish_daemon_shutdown(daemons: Vec<TrackedDaemonPid>) -> Vec<Trac
 
 #[cfg(unix)]
 pub(crate) fn snapshot_runtime_daemon_pids() -> Vec<TrackedDaemonPid> {
-    runtime_daemon_pids_from_dir(Path::new(qol_conventions::RUNTIME_PIDS_DIR_PATH))
+    runtime_daemon_pids_from_dir(&runtime_pids_dir())
         .into_iter()
         .filter(daemon_group_is_owned)
         .collect()
@@ -127,7 +127,7 @@ fn wait_for_clean_shutdown(
 fn merge_current_daemons(daemons: &mut Vec<TrackedDaemonPid>) {
     #[cfg(unix)]
     daemons.extend(
-        runtime_daemon_pids_from_dir(Path::new(qol_conventions::RUNTIME_PIDS_DIR_PATH))
+        runtime_daemon_pids_from_dir(&runtime_pids_dir())
             .into_iter()
             .filter(daemon_group_is_owned),
     );
@@ -137,6 +137,12 @@ fn merge_current_daemons(daemons: &mut Vec<TrackedDaemonPid>) {
             .then(left.pid.cmp(&right.pid))
     });
     daemons.dedup();
+}
+
+fn runtime_pids_dir() -> PathBuf {
+    qol_config::runtime_dir()
+        .map(|path| path.join("pids"))
+        .unwrap_or_else(|| PathBuf::from(qol_conventions::RUNTIME_PIDS_DIR_PATH))
 }
 
 #[cfg(unix)]

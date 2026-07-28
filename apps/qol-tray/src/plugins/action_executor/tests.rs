@@ -11,7 +11,6 @@ use crate::plugins::manifest::{
 use crate::plugins::{Plugin, PluginId};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use tempfile::TempDir;
 
@@ -165,7 +164,9 @@ fn resolve_action_routes_to_daemon_when_runtime_binary_is_missing() {
     );
     assert_eq!(
         resolved.daemon_socket,
-        Some(PathBuf::from("/tmp/qol-test.sock"))
+        Some(crate::dev_generation::daemon_socket_path(
+            "/tmp/qol-test.sock"
+        ))
     );
     assert!(!resolved.runtime_fallback_allowed);
 }
@@ -331,7 +332,9 @@ fn resolve_action_accepts_daemon_only_target() {
     assert!(resolved.command_path.is_none());
     assert_eq!(
         resolved.daemon_socket,
-        Some(PathBuf::from("/tmp/qol-test.sock"))
+        Some(crate::dev_generation::daemon_socket_path(
+            "/tmp/qol-test.sock"
+        ))
     );
     assert!(resolved.args.is_empty());
 }

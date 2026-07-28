@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, BufRead, BufReader, ErrorKind, Write};
+use std::io::{self, BufReader, ErrorKind, Write};
 use std::net::Shutdown;
 use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::fs::FileTypeExt;
@@ -7,11 +7,11 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
+use qol_runtime::local_ipc;
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 const ACK_TIMEOUT_MS: u64 = 80;
 const HOST_DEATH_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
-const REPLACE_EXISTING_ENV: &str = qol_conventions::ENV_DAEMON_REPLACE_EXISTING;
 
 pub struct DaemonConfig {
     pub socket: SocketSource,
@@ -98,19 +98,19 @@ pub fn send_request(
         ));
     };
     let mut stream = UnixStream::connect(path)?;
+    local_ipc::authorize_peer(&stream)?;
     stream.set_write_timeout(Some(timeout))?;
     stream.set_read_timeout(Some(timeout))?;
     write_request(&mut stream, action, input)?;
     stream.shutdown(Shutdown::Write)?;
 
     let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    if reader.read_line(&mut line)? == 0 {
+    let Some(line) = local_ipc::read_line(&mut reader)? else {
         return Err(io::Error::new(
             ErrorKind::UnexpectedEof,
             "daemon closed without a response",
         ));
-    }
+    };
     serde_json::from_str::<DaemonResponse>(line.trim())
         .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))
 }
@@ -126,6 +126,9 @@ fn send_request_without_reply(
     let Ok(mut stream) = UnixStream::connect(path) else {
         return false;
     };
+    if local_ipc::authorize_peer(&stream).is_err() {
+        return false;
+    }
     let timeout = std::time::Duration::from_millis(ACK_TIMEOUT_MS);
     let _ = stream.set_write_timeout(Some(timeout));
     write_request(&mut stream, action, input).is_ok()
@@ -203,6 +206,9 @@ where
         for stream in listener.incoming() {
             match stream {
                 Ok(mut s) => {
+                    if local_ipc::authorize_peer(&s).is_err() {
+                        continue;
+                    }
                     let result = read_request_and_parse(&mut s, parser);
                     let should_continue = handle_read_result(&mut s, result, |cmd| {
                         if tx.send(cmd).is_ok() {
@@ -258,6 +264,9 @@ where
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
+                if local_ipc::authorize_peer(&stream).is_err() {
+                    continue;
+                }
                 let result = read_and_parse(&mut stream, |action| handler(&mut state, action));
                 handle_read_result(&mut stream, result, |_| DaemonResponse::Handled {
                     data: None,
@@ -290,6 +299,9 @@ where
     for stream in listener.incoming() {
         match stream {
             Ok(mut s) => {
+                if local_ipc::authorize_peer(&s).is_err() {
+                    continue;
+                }
                 let result = read_request_and_parse(&mut s, |request| handler(&mut state, request));
                 handle_read_result(&mut s, result, |_| DaemonResponse::Handled { data: None });
             }
@@ -313,9 +325,8 @@ fn bind_listener(config: &DaemonConfig) -> io::Result<(UnixListener, Option<Path
     }
 
     // Every daemon-bearing plugin in this repo is spawned with a pre-bound fd
-    // today, so this self-bind path (and support_replace_existing below) is
-    // not the common case anymore. It stays as the fallback for a plugin
-    // binary launched by hand outside qol-tray, and for any pre-bind attempt
+    // today, so this self-bind path is only a fallback for a plugin binary
+    // launched by hand outside qol-tray, and for any pre-bind attempt
     // that failed and gracefully degraded (see daemon_lifecycle::listener in
     // qol-tray).
     let Some(socket_path) = socket_path(config) else {
@@ -329,28 +340,22 @@ fn bind_listener(config: &DaemonConfig) -> io::Result<(UnixListener, Option<Path
             format!("{} is not set", qol_conventions::ENV_DAEMON_SOCKET),
         ));
     };
-    let support_replace = config.support_replace_existing;
-
     #[cfg(debug_assertions)]
     eprintln!("[daemon] binding to {:?}", socket_path);
 
-    let listener = match UnixListener::bind(&socket_path) {
+    let listener = match local_ipc::bind_listener(&socket_path) {
         Ok(listener) => listener,
         Err(error) if error.kind() == ErrorKind::AddrInUse => {
             if send_ping(config) {
-                if !support_replace || !replace_existing_enabled() {
-                    #[cfg(debug_assertions)]
-                    eprintln!("[daemon] existing instance alive, exiting");
-                    return Err(io::Error::new(
-                        ErrorKind::AddrInUse,
-                        "existing daemon instance is alive",
-                    ));
-                }
                 #[cfg(debug_assertions)]
-                eprintln!("[daemon] replacing existing socket owner");
+                eprintln!("[daemon] existing instance alive, exiting");
+                return Err(io::Error::new(
+                    ErrorKind::AddrInUse,
+                    "existing daemon instance is alive",
+                ));
             }
             remove_socket_file(&socket_path);
-            UnixListener::bind(&socket_path)?
+            local_ipc::bind_listener(&socket_path)?
         }
         Err(error) => return Err(error),
     };
@@ -438,9 +443,8 @@ where
     let _ = stream.set_read_timeout(Some(timeout));
 
     let mut reader = BufReader::new(&*stream);
-    let mut line = String::new();
-    match reader.read_line(&mut line) {
-        Ok(0) => {
+    let line = match local_ipc::read_line(&mut reader) {
+        Ok(None) => {
             #[cfg(debug_assertions)]
             eprintln!("[daemon] read_line EOF (0 bytes)");
             return ReadResult::Ignore;
@@ -452,8 +456,8 @@ where
             let _ = e;
             return ReadResult::Ignore;
         }
-        Ok(_) => {}
-    }
+        Ok(Some(line)) => line,
+    };
 
     let trimmed = line.trim();
 
@@ -507,15 +511,6 @@ fn write_response(stream: &mut UnixStream, response: &DaemonResponse) {
     }
 }
 
-fn replace_existing_enabled() -> bool {
-    std::env::var(REPLACE_EXISTING_ENV).ok().is_some_and(|v| {
-        matches!(
-            v.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
-}
-
 fn remove_socket_file(path: impl AsRef<std::path::Path>) {
     let path = path.as_ref();
     let Ok(meta) = fs::symlink_metadata(path) else {
@@ -529,6 +524,7 @@ fn remove_socket_file(path: impl AsRef<std::path::Path>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::BufRead;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static NEXT_SOCKET_ID: AtomicUsize = AtomicUsize::new(0);

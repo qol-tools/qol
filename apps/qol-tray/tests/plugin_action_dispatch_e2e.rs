@@ -96,7 +96,9 @@ fn install_plugin(plugin_id: &str, marker_path: &Path) -> (PathBuf, PathBuf) {
     record_dev_link_create(&config_dir(), plugin_id, plugin_dir.clone())
         .expect("dev-link the plugin");
 
-    (plugin_dir, socket_path)
+    let effective_socket_path =
+        qol_tray::dev_generation::daemon_socket_path(socket_path.to_str().unwrap());
+    (plugin_dir, effective_socket_path)
 }
 
 struct FakeDaemon {
@@ -107,7 +109,10 @@ struct FakeDaemon {
 impl FakeDaemon {
     fn start(socket_path: &Path, response_line: &'static str) -> Self {
         let _ = fs::remove_file(socket_path);
-        let listener = UnixListener::bind(socket_path).expect("bind fake daemon socket");
+        qol_fs::create_private_dir(socket_path.parent().unwrap())
+            .expect("create fake daemon socket directory");
+        let listener =
+            qol_runtime::local_ipc::bind_listener(socket_path).expect("bind fake daemon socket");
         let handle = thread::Builder::new()
             .name("fake-daemon".into())
             .spawn(move || serve_fake_daemon(listener, response_line))
@@ -126,7 +131,9 @@ impl FakeDaemon {
             .spawn(move || {
                 thread::sleep(delay);
                 let _ = fs::remove_file(&thread_socket_path);
-                let listener = UnixListener::bind(&thread_socket_path)
+                qol_fs::create_private_dir(thread_socket_path.parent().unwrap())
+                    .expect("create delayed fake daemon socket directory");
+                let listener = qol_runtime::local_ipc::bind_listener(&thread_socket_path)
                     .expect("bind delayed fake daemon socket");
                 serve_fake_daemon(listener, response_line);
             })
@@ -139,7 +146,7 @@ impl FakeDaemon {
 }
 
 fn serve_fake_daemon(listener: UnixListener, response_line: &str) {
-    for _ in 0..4 {
+    loop {
         let Ok((mut stream, _)) = listener.accept() else {
             return;
         };
@@ -150,6 +157,9 @@ fn serve_fake_daemon(listener: UnixListener, response_line: &str) {
             return;
         };
         if line.is_empty() {
+            continue;
+        }
+        if line.trim() == "shutdown" {
             return;
         }
 
@@ -168,7 +178,9 @@ fn serve_fake_daemon(listener: UnixListener, response_line: &str) {
 impl Drop for FakeDaemon {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
-            let _ = std::os::unix::net::UnixStream::connect(&self.socket_path);
+            if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&self.socket_path) {
+                let _ = stream.write_all(b"shutdown\n");
+            }
             let _ = handle.join();
         }
     }

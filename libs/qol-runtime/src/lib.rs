@@ -6,6 +6,8 @@ pub mod xrandr;
 
 #[cfg(unix)]
 pub mod broker;
+#[cfg(unix)]
+pub mod local_ipc;
 
 #[cfg(unix)]
 mod client;

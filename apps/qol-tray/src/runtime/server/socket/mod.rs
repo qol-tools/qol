@@ -3,6 +3,7 @@ mod requests;
 
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -12,6 +13,8 @@ use io::{prepare_stream, read_request};
 use requests::{handle_request, request_is_long_lived};
 
 const CONNECTION_WORKERS: usize = 4;
+const MAX_PENDING_CONNECTIONS: usize = 128;
+const MAX_LONG_LIVED_CONNECTIONS: usize = 64;
 
 pub(crate) fn run_at(shared: Arc<SharedState>, path: &Path) {
     let Some(listener) = bind_at(path) else {
@@ -37,7 +40,7 @@ pub(crate) fn run_listener(shared: Arc<SharedState>, listener: UnixListener) {
 }
 
 fn bind_listener(path: &Path) -> Option<UnixListener> {
-    match UnixListener::bind(path) {
+    match qol_runtime::local_ipc::bind_listener(path) {
         Ok(listener) => Some(listener),
         Err(error) => {
             log::error!(
@@ -60,10 +63,20 @@ impl ConnectionDispatcher {
     }
 
     fn with_worker_count(shared: Arc<SharedState>, workers: usize) -> Self {
-        let (tx, rx) = crossbeam_channel::unbounded::<UnixStream>();
+        Self::with_limits(shared, workers, MAX_LONG_LIVED_CONNECTIONS)
+    }
+
+    fn with_limits(shared: Arc<SharedState>, workers: usize, max_subscriptions: usize) -> Self {
+        let (tx, rx) = crossbeam_channel::bounded::<UnixStream>(MAX_PENDING_CONNECTIONS);
+        let subscriptions = Arc::new(SubscriptionLimiter::new(max_subscriptions));
         let workers = workers.max(1);
         for idx in 0..workers {
-            spawn_connection_worker(idx, rx.clone(), Arc::clone(&shared));
+            spawn_connection_worker(
+                idx,
+                rx.clone(),
+                Arc::clone(&shared),
+                Arc::clone(&subscriptions),
+            );
         }
         Self { tx }
     }
@@ -72,8 +85,11 @@ impl ConnectionDispatcher {
         let Ok(stream) = stream else {
             return;
         };
+        if qol_runtime::local_ipc::authorize_peer(&stream).is_err() {
+            return;
+        }
 
-        let _ = self.tx.send(stream);
+        let _ = self.tx.try_send(stream);
     }
 }
 
@@ -98,13 +114,20 @@ fn read_connection(stream: UnixStream) -> Option<PreparedConnection> {
     Some(PreparedConnection { request, writer })
 }
 
-fn handle_dispatched_connection(stream: UnixStream, shared: &Arc<SharedState>) {
+fn handle_dispatched_connection(
+    stream: UnixStream,
+    shared: &Arc<SharedState>,
+    subscriptions: &Arc<SubscriptionLimiter>,
+) {
     let Some(connection) = read_connection(stream) else {
         return;
     };
 
     if request_is_long_lived(&connection.request) {
-        spawn_long_lived_connection(connection, Arc::clone(shared));
+        let Some(permit) = subscriptions.try_acquire() else {
+            return;
+        };
+        spawn_long_lived_connection(connection, Arc::clone(shared), permit);
         return;
     }
 
@@ -115,23 +138,70 @@ fn handle_prepared_connection(mut connection: PreparedConnection, shared: &Share
     handle_request(&connection.request, &mut connection.writer, shared);
 }
 
-fn spawn_connection_worker(idx: usize, rx: Receiver<UnixStream>, shared: Arc<SharedState>) {
+fn spawn_connection_worker(
+    idx: usize,
+    rx: Receiver<UnixStream>,
+    shared: Arc<SharedState>,
+    subscriptions: Arc<SubscriptionLimiter>,
+) {
     std::thread::Builder::new()
         .name(format!("runtime-conn-{idx}"))
-        .spawn(move || run_connection_worker(rx, shared))
+        .spawn(move || run_connection_worker(rx, shared, subscriptions))
         .expect("failed to spawn runtime socket worker");
 }
 
-fn run_connection_worker(rx: Receiver<UnixStream>, shared: Arc<SharedState>) {
+fn run_connection_worker(
+    rx: Receiver<UnixStream>,
+    shared: Arc<SharedState>,
+    subscriptions: Arc<SubscriptionLimiter>,
+) {
     for stream in rx {
-        handle_dispatched_connection(stream, &shared);
+        handle_dispatched_connection(stream, &shared, &subscriptions);
     }
 }
 
-fn spawn_long_lived_connection(connection: PreparedConnection, shared: Arc<SharedState>) {
+fn spawn_long_lived_connection(
+    connection: PreparedConnection,
+    shared: Arc<SharedState>,
+    permit: SubscriptionPermit,
+) {
     let _ = std::thread::Builder::new()
         .name("runtime-sub".into())
-        .spawn(move || handle_prepared_connection(connection, &shared));
+        .spawn(move || {
+            let _permit = permit;
+            handle_prepared_connection(connection, &shared);
+        });
+}
+
+struct SubscriptionLimiter {
+    active: AtomicUsize,
+    maximum: usize,
+}
+
+impl SubscriptionLimiter {
+    fn new(maximum: usize) -> Self {
+        Self {
+            active: AtomicUsize::new(0),
+            maximum,
+        }
+    }
+
+    fn try_acquire(self: &Arc<Self>) -> Option<SubscriptionPermit> {
+        self.active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < self.maximum).then_some(active + 1)
+            })
+            .ok()?;
+        Some(SubscriptionPermit(Arc::clone(self)))
+    }
+}
+
+struct SubscriptionPermit(Arc<SubscriptionLimiter>);
+
+impl Drop for SubscriptionPermit {
+    fn drop(&mut self) {
+        self.0.active.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 #[cfg(test)]
@@ -343,6 +413,28 @@ mod tests {
             response.contains("monitors"),
             "short request must not wait behind held-open subscriptions: {response:?}",
         );
+    }
+
+    #[test]
+    fn connection_dispatcher_limits_long_lived_connections() {
+        let shared = Arc::new(SharedState::new(vec![mon(0.0)]));
+        let dispatcher = ConnectionDispatcher::with_limits(shared, 1, 1);
+        let (first_server, mut first_client) = pair();
+        first_client
+            .write_all(br#"{"cmd":"subscribe","events":["cursor_moved"]}"#)
+            .unwrap();
+        first_client.write_all(b"\n").unwrap();
+        dispatcher.dispatch(Ok(first_server));
+        assert!(read_response(&mut first_client, 1_000).contains("subscribed"));
+
+        let (second_server, mut second_client) = pair();
+        second_client
+            .write_all(br#"{"cmd":"subscribe","events":["cursor_moved"]}"#)
+            .unwrap();
+        second_client.write_all(b"\n").unwrap();
+        dispatcher.dispatch(Ok(second_server));
+
+        assert!(read_response(&mut second_client, 200).is_empty());
     }
 
     #[test]

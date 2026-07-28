@@ -234,6 +234,10 @@ pub fn github_auth_path() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join(".github-auth.json"))
 }
 
+pub fn http_auth_token_path() -> Result<PathBuf> {
+    qol_config::http_auth_token_path().context("Could not determine HTTP auth token path")
+}
+
 pub fn sync_dir() -> Result<PathBuf> {
     active_scope_store().map(|s| s.device_sync_dir())
 }
@@ -267,10 +271,16 @@ pub fn runtime_gpui_config_path() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join("runtime/gpui.json"))
 }
 
-const RUNTIME_DIR: &str = qol_conventions::RUNTIME_DIR_PATH;
-
 pub fn runtime_dir() -> PathBuf {
-    PathBuf::from(RUNTIME_DIR)
+    #[cfg(any(test, debug_assertions))]
+    if let Some(root) = test_path_root() {
+        return root
+            .join("data")
+            .join(qol_config::NAMESPACE)
+            .join("runtime");
+    }
+
+    qol_config::runtime_dir().unwrap_or_else(|| PathBuf::from(qol_conventions::RUNTIME_DIR_PATH))
 }
 
 pub fn runtime_pids_dir() -> PathBuf {
@@ -286,12 +296,10 @@ pub fn init_runtime_dirs() -> Result<()> {
 }
 
 fn init_runtime_dirs_at(base: &Path) -> Result<()> {
-    if base.exists() {
-        fs::remove_dir_all(base)
-            .with_context(|| format!("Failed to wipe runtime dir {}", base.display()))?;
-    }
-    for subdir in ["pids", "cache"] {
-        fs::create_dir_all(base.join(subdir))
+    qol_fs::recreate_private_dir(base)
+        .with_context(|| format!("Failed to recreate runtime dir {}", base.display()))?;
+    for subdir in ["pids", "cache", "sockets"] {
+        qol_fs::create_private_dir(&base.join(subdir))
             .with_context(|| format!("Failed to create runtime subdir {}", subdir))?;
     }
     Ok(())
@@ -348,14 +356,9 @@ mod tests {
     }
 
     #[test]
-    fn runtime_dir_is_under_tmp() {
+    fn runtime_dir_is_user_scoped() {
         let dir = runtime_dir();
-        assert!(
-            dir.starts_with("/tmp"),
-            "runtime dir {:?} should be under /tmp",
-            dir
-        );
-        assert!(dir.ends_with("qol-tray"));
+        assert!(dir.ends_with("qol-tray/runtime"));
     }
 
     #[test]
@@ -375,19 +378,20 @@ mod tests {
     fn plugin_cache_path_is_under_runtime() {
         let path = plugin_cache_path().unwrap();
         assert!(
-            path.starts_with("/tmp/qol-tray"),
-            "cache path {:?} should be under /tmp/qol-tray",
+            path.starts_with(runtime_dir()),
+            "cache path {:?} should be under the private runtime directory",
             path
         );
     }
 
     #[test]
     fn init_runtime_dirs_creates_fresh_structure() {
-        let test_dir = PathBuf::from("/tmp/qol-tray-test-init");
+        let temp = tempfile::TempDir::new().unwrap();
+        let test_dir = temp.path().join("runtime");
         let pids = test_dir.join("pids");
         let cache = test_dir.join("cache");
+        let sockets = test_dir.join("sockets");
 
-        let _ = std::fs::remove_dir_all(&test_dir);
         std::fs::create_dir_all(&pids).unwrap();
         std::fs::write(pids.join("stale.pid"), "999").unwrap();
 
@@ -395,12 +399,11 @@ mod tests {
 
         assert!(pids.is_dir(), "pids dir should exist");
         assert!(cache.is_dir(), "cache dir should exist");
+        assert!(sockets.is_dir(), "sockets dir should exist");
         assert!(
             !pids.join("stale.pid").exists(),
             "stale files should be wiped"
         );
-
-        let _ = std::fs::remove_dir_all(&test_dir);
     }
 
     #[test]

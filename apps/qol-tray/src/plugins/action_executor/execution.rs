@@ -304,7 +304,7 @@ mod tests {
             entry.expect("action spawns must set the state-socket env var so the watchdog arms");
         assert_eq!(
             value,
-            Some(OsStr::new(crate::paths::STATE_SOCKET_PATH)),
+            Some(crate::dev_generation::state_socket_path().as_os_str()),
             "watchdog lifeline must point at the host state socket",
         );
     }

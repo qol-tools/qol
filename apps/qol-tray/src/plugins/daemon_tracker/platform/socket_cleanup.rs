@@ -33,7 +33,10 @@ fn clean_orphan_managed_sockets(policy: &SocketPathPolicy) {
 }
 
 fn scan_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![std::env::temp_dir()];
+    let mut dirs = vec![
+        crate::paths::runtime_dir().join("sockets"),
+        std::env::temp_dir(),
+    ];
     if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
         dirs.push(PathBuf::from(runtime_dir));
     }
@@ -138,6 +141,9 @@ fn is_managed_daemon_socket_path(path: &Path, policy: &SocketPathPolicy) -> bool
     let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
+    if path.parent() == Some(crate::paths::runtime_dir().join("sockets").as_path()) {
+        return file_name.ends_with(".sock");
+    }
     if !file_name.starts_with("qol-") || !file_name.ends_with(".sock") {
         return false;
     }
@@ -242,6 +248,17 @@ mod tests {
             path.exists(),
             "regular files must not be removed even if name matches"
         );
+    }
+
+    #[test]
+    fn private_runtime_socket_is_managed_for_any_plugin_filename() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let path = crate::paths::runtime_dir()
+            .join("sockets")
+            .join("plugin-foo.sock");
+
+        assert!(is_managed_daemon_socket_path(&path, &policy()));
     }
 
     fn wait_for_listener_to_close(socket_path: &Path) {

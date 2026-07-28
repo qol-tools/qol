@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use qol_conventions::{
     DEFAULT_PORT, DEV_GENERATION_MODE_SHADOW, ENV_DEV_GENERATION_ID, ENV_DEV_GENERATION_MODE,
-    ENV_DEV_READY_FILE, ENV_DEV_ROLLING_RESTART, ENV_DEV_UI_PORT, STATE_SOCKET_PATH,
+    ENV_DEV_READY_FILE, ENV_DEV_ROLLING_RESTART, ENV_DEV_UI_PORT, STATE_SOCKET_FILE,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,14 +70,21 @@ impl GenerationContext {
     }
 
     pub fn state_socket_path(&self) -> PathBuf {
+        let path = crate::paths::runtime_dir()
+            .join("sockets")
+            .join(STATE_SOCKET_FILE);
         if !self.is_shadow() {
-            return PathBuf::from(STATE_SOCKET_PATH);
+            return path;
         }
-        namespaced_socket(Path::new(STATE_SOCKET_PATH), self.id())
+        namespaced_socket(&path, self.id())
     }
 
     pub fn daemon_socket_path(&self, socket: &str) -> PathBuf {
-        let path = PathBuf::from(socket);
+        let file_name = Path::new(socket)
+            .file_name()
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| std::ffi::OsStr::new("qol-plugin.sock"));
+        let path = crate::paths::runtime_dir().join("sockets").join(file_name);
         if !self.is_shadow() {
             return path;
         }
@@ -328,27 +335,29 @@ mod tests {
     #[test]
     fn stable_generation_keeps_public_addresses() {
         let ctx = GenerationContext::stable();
+        let sockets = crate::paths::runtime_dir().join("sockets");
 
         assert_eq!(ctx.ui_bind_port(), DEFAULT_PORT);
-        assert_eq!(ctx.state_socket_path(), PathBuf::from(STATE_SOCKET_PATH));
+        assert_eq!(ctx.state_socket_path(), sockets.join(STATE_SOCKET_FILE));
         assert_eq!(
             ctx.daemon_socket_path("/tmp/qol-launcher.sock"),
-            PathBuf::from("/tmp/qol-launcher.sock")
+            sockets.join("qol-launcher.sock")
         );
     }
 
     #[test]
     fn shadow_generation_namespaces_socket_files() {
         let ctx = GenerationContext::shadow("blue-1");
+        let sockets = crate::paths::runtime_dir().join("sockets");
 
         assert_eq!(ctx.ui_bind_port(), 0);
         assert_eq!(
             ctx.state_socket_path(),
-            PathBuf::from("/tmp/qol-tray-state.blue-1.sock")
+            sockets.join("qol-tray-state.blue-1.sock")
         );
         assert_eq!(
             ctx.daemon_socket_path("/tmp/qol-launcher.sock"),
-            PathBuf::from("/tmp/qol-launcher.blue-1.sock")
+            sockets.join("qol-launcher.blue-1.sock")
         );
     }
 
@@ -358,7 +367,9 @@ mod tests {
 
         assert_eq!(
             ctx.daemon_socket_path("/tmp/qol.sock"),
-            PathBuf::from("/tmp/qol.abcd.sock")
+            crate::paths::runtime_dir()
+                .join("sockets")
+                .join("qol.abcd.sock")
         );
     }
 
@@ -372,16 +383,25 @@ mod tests {
         assert!(is_shadow());
         assert_eq!(
             state_socket_path(),
-            PathBuf::from("/tmp/qol-tray-state.blue-1.sock")
+            crate::paths::runtime_dir()
+                .join("sockets")
+                .join("qol-tray-state.blue-1.sock")
         );
 
         promote_to_stable();
 
         assert!(!is_shadow());
-        assert_eq!(state_socket_path(), PathBuf::from(STATE_SOCKET_PATH));
+        assert_eq!(
+            state_socket_path(),
+            crate::paths::runtime_dir()
+                .join("sockets")
+                .join(STATE_SOCKET_FILE)
+        );
         assert_eq!(
             daemon_socket_path("/tmp/qol-launcher.sock"),
-            PathBuf::from("/tmp/qol-launcher.sock")
+            crate::paths::runtime_dir()
+                .join("sockets")
+                .join("qol-launcher.sock")
         );
         reset_generation_state();
     }

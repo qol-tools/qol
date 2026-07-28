@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
@@ -16,11 +16,7 @@ pub(super) fn prepare_stream(stream: UnixStream) -> Option<(BufReader<UnixStream
 }
 
 pub(super) fn read_request(reader: &mut BufReader<UnixStream>) -> Option<String> {
-    let mut line = String::new();
-    if reader.read_line(&mut line).is_err() {
-        return None;
-    }
-
+    let line = qol_runtime::local_ipc::read_line(reader).ok()??;
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return None;

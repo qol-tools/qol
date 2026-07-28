@@ -9,7 +9,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use qol_conventions::{ENV_PLUGIN_ID, ENV_STATE_SOCKET, STATE_SOCKET_PATH};
+use qol_conventions::{ENV_PLUGIN_ID, ENV_STATE_SOCKET};
 
 const TIMEOUT: Duration = Duration::from_millis(50);
 
@@ -24,11 +24,16 @@ pub struct Subscription {
 
 impl PlatformStateClient {
     pub fn from_env() -> Self {
-        let path =
-            std::env::var(ENV_STATE_SOCKET).unwrap_or_else(|_| STATE_SOCKET_PATH.to_string());
-        Self {
-            socket_path: PathBuf::from(path),
-        }
+        let path = std::env::var_os(ENV_STATE_SOCKET)
+            .map(PathBuf::from)
+            .or_else(|| {
+                qol_config::runtime_dir().map(|path| {
+                    path.join("sockets")
+                        .join(qol_conventions::STATE_SOCKET_FILE)
+                })
+            })
+            .unwrap_or_else(|| PathBuf::from(qol_conventions::STATE_SOCKET_PATH));
+        Self { socket_path: path }
     }
 
     pub fn new(socket_path: PathBuf) -> Self {
@@ -49,6 +54,7 @@ impl PlatformStateClient {
         read_timeout: Option<Duration>,
     ) -> Option<BufReader<UnixStream>> {
         let mut stream = UnixStream::connect(&self.socket_path).ok()?;
+        crate::local_ipc::authorize_peer(&stream).ok()?;
         stream.set_read_timeout(read_timeout).ok()?;
         stream.set_write_timeout(Some(TIMEOUT)).ok()?;
 
@@ -63,6 +69,9 @@ impl PlatformStateClient {
         let Ok(mut stream) = UnixStream::connect(&self.socket_path) else {
             return;
         };
+        if crate::local_ipc::authorize_peer(&stream).is_err() {
+            return;
+        }
         let _ = stream.set_write_timeout(Some(TIMEOUT));
         let request = RuntimeRequest::SetFocus { monitor_idx };
         let Ok(mut payload) = serde_json::to_string(&request) else {

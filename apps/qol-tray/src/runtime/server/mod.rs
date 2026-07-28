@@ -38,7 +38,7 @@ impl RuntimeServer {
     }
 
     pub fn bind_public_socket() -> bool {
-        let path = std::path::PathBuf::from(qol_conventions::STATE_SOCKET_PATH);
+        let path = crate::dev_generation::GenerationContext::stable().state_socket_path();
         let Some(shared) = super::publisher::shared() else {
             log::error!(
                 "Cannot bind promoted runtime socket at {}: runtime publisher is not installed",

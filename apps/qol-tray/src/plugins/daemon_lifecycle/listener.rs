@@ -127,6 +127,17 @@ mod imp {
 
     fn bind_unix_socket(plugin: &Plugin, socket: &str) -> Option<UnixListener> {
         let socket_path = crate::dev_generation::daemon_socket_path(socket);
+        if let Some(parent) = socket_path.parent() {
+            if let Err(error) = qol_fs::create_private_dir(parent) {
+                log::warn!(
+                    "Failed to prepare private daemon socket directory for plugin {} at {:?}: {}",
+                    plugin.id,
+                    parent,
+                    error
+                );
+                return None;
+            }
+        }
         match bind_reclaiming_stale_socket(&socket_path) {
             Ok(listener) => Some(listener),
             Err(error) => {
@@ -159,14 +170,14 @@ mod imp {
     fn bind_reclaiming_stale_socket(
         socket_path: &std::path::Path,
     ) -> std::io::Result<UnixListener> {
-        match UnixListener::bind(socket_path) {
+        match qol_runtime::local_ipc::bind_listener(socket_path) {
             Ok(listener) => Ok(listener),
             Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
                 if crate::plugins::action_transport::daemon_listener_reachable(socket_path) {
                     return Err(error);
                 }
                 let _ = std::fs::remove_file(socket_path);
-                UnixListener::bind(socket_path)
+                qol_runtime::local_ipc::bind_listener(socket_path)
             }
             Err(error) => Err(error),
         }
@@ -355,8 +366,9 @@ items = []
             );
             let _ = std::fs::remove_file(&socket_path);
             let daemon_config = socket_daemon_config(&socket_path);
+            let effective_path = crate::dev_generation::daemon_socket_path(&socket_path);
             let bound = bind_for_plugin(&plugin, &daemon_config).unwrap();
-            std::fs::remove_file(&socket_path).unwrap();
+            std::fs::remove_file(&effective_path).unwrap();
 
             let refreshed = refresh_for_respawn(bound, &plugin, &daemon_config);
 
@@ -404,7 +416,11 @@ items = []
                     protocol: PortProtocol::Udp,
                 }],
             };
-            let unix = UnixListener::bind(&socket_path).unwrap();
+            let effective_path = crate::dev_generation::daemon_socket_path(&socket_path);
+            if let Some(parent) = effective_path.parent() {
+                qol_fs::create_private_dir(parent).unwrap();
+            }
+            let unix = qol_runtime::local_ipc::bind_listener(&effective_path).unwrap();
             let partial = DaemonListener {
                 unix: Some(unix),
                 port: None,
@@ -425,7 +441,7 @@ items = []
                 "missing extra ports must be re-attempted"
             );
             assert_eq!(refreshed.extra[0].0, "discovery");
-            let _ = std::fs::remove_file(&socket_path);
+            let _ = std::fs::remove_file(&effective_path);
         }
 
         #[test]

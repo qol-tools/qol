@@ -35,6 +35,7 @@ pub(super) fn can_connect(endpoint: &Path) -> bool {
 
 fn connect_stream(endpoint: &Path, timeout: Duration) -> DispatchResult<UnixStream> {
     let stream = UnixStream::connect(endpoint).map_err(|_| ())?;
+    qol_runtime::local_ipc::authorize_peer(&stream).map_err(|_| ())?;
     apply_timeout(&stream, timeout);
     Ok(stream)
 }
