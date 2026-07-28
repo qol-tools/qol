@@ -198,9 +198,7 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("No verified update asset available"))?;
 
     log::info!("Downloading update from {}", url);
-    if let Err(e) = common::download_asset(&url, &dest, &events).await {
-        return Err(e);
-    }
+    common::download_asset(&url, &dest, &events).await?;
     if let Some(asset) = &verified_asset {
         release_integrity::verify_file(asset, &dest)?;
     }
