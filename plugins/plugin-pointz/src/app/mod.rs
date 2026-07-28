@@ -3,6 +3,8 @@ pub(crate) mod daemon;
 use crate::command::CommandService;
 use crate::discovery::DiscoveryService;
 use crate::input::InputHandler;
+use crate::security::CommandGate;
+use std::sync::Arc;
 
 #[tokio::main]
 pub(crate) async fn run() {
@@ -21,6 +23,14 @@ pub(crate) async fn run() {
         log::debug!("Binary built: {}", dt);
     }
 
+    let security = match CommandGate::load() {
+        Ok(security) => Arc::new(security),
+        Err(error) => {
+            log::error!("Failed to initialize PointZ security: {}", error);
+            return;
+        }
+    };
+
     let (tx, rx) = std::sync::mpsc::channel();
     if !daemon::start_listener(tx) {
         if daemon::send_action("settings") {
@@ -31,11 +41,15 @@ pub(crate) async fn run() {
 
     eprintln!("[pointz] daemon started");
 
+    let daemon_security = Arc::clone(&security);
     std::thread::spawn(move || {
         for cmd in rx {
             match cmd {
                 daemon::Command::Settings => {
                     crate::qol::open_settings();
+                }
+                daemon::Command::BeginPairing => {
+                    daemon_security.begin_pairing();
                 }
                 daemon::Command::Kill => {
                     eprintln!("[pointz] kill received, shutting down");
@@ -55,7 +69,7 @@ pub(crate) async fn run() {
         }
     };
 
-    let discovery_service = match DiscoveryService::new().await {
+    let discovery_service = match DiscoveryService::new(Arc::clone(&security)).await {
         Ok(service) => service,
         Err(error) => {
             log::error!("Failed to create discovery service: {}", error);
@@ -64,7 +78,7 @@ pub(crate) async fn run() {
         }
     };
 
-    let command_service = match CommandService::new(input_handler) {
+    let command_service = match CommandService::new(input_handler, security) {
         Ok(service) => service,
         Err(error) => {
             log::error!("Failed to create command service: {}", error);

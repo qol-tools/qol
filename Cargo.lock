@@ -5814,18 +5814,24 @@ name = "pointzerver"
 version = "1.18.2"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "env_logger",
  "gethostname",
+ "getrandom 0.3.4",
+ "hmac",
  "if-addrs",
  "log",
  "qol-apps",
+ "qol-config",
  "qol-conventions",
+ "qol-fs",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "rdev",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "windows 0.52.0",
  "x11",
@@ -6343,9 +6349,11 @@ name = "qol-runtime"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "qol-config",
  "qol-conventions",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

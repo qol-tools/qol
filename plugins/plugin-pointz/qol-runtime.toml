@@ -3,6 +3,9 @@ schema_version = 1
 [action.settings]
 description = "Open the PointZ settings window"
 
+[action.begin_pairing]
+description = "Allow a nearby PointZ client to pair for two minutes"
+
 [query.connection_status]
 description = "Current pointzerver daemon state"
 poll_interval_ms = 3000

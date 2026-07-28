@@ -2,23 +2,22 @@ mod model;
 
 use crate::config::ServerConfig;
 use crate::network::{bind_udp_or_inherit, get_hostname};
+use crate::security::CommandGate;
 use anyhow::Result;
 use model::DiscoveryResponse;
+use std::sync::Arc;
 use tokio::net::UdpSocket;
 
 pub struct DiscoveryService {
     pub(crate) socket: UdpSocket,
-    pub(crate) response: DiscoveryResponse,
+    security: Arc<CommandGate>,
 }
 
 impl DiscoveryService {
-    pub async fn new() -> Result<Self> {
+    pub async fn new(security: Arc<CommandGate>) -> Result<Self> {
         let socket = bind_udp_or_inherit("discovery", ServerConfig::DISCOVERY_PORT).await?;
         socket.set_broadcast(true)?;
-        let response = DiscoveryResponse {
-            hostname: get_hostname(),
-        };
-        Ok(Self { socket, response })
+        Ok(Self { socket, security })
     }
 
     pub fn is_discovery_request(&self, request: &str) -> bool {
@@ -26,7 +25,14 @@ impl DiscoveryService {
     }
 
     async fn send_response(&self, addr: std::net::SocketAddr) {
-        let Ok(json) = serde_json::to_string(&self.response) else {
+        let auth = self.security.discovery_auth();
+        let response = DiscoveryResponse {
+            hostname: get_hostname(),
+            server_id: auth.server_id,
+            authentication: "hmac-sha256-v1",
+            pairing_secret: auth.pairing_secret,
+        };
+        let Ok(json) = serde_json::to_string(&response) else {
             return;
         };
         let _ = self.socket.send_to(json.as_bytes(), addr).await;

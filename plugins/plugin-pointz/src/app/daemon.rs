@@ -14,6 +14,7 @@ const APP_DOWNLOAD_URL: &str = "https://github.com/qol-tools/pointz/releases/lat
 
 pub enum Command {
     Settings,
+    BeginPairing,
     Kill,
 }
 
@@ -37,6 +38,7 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
     match cmd {
         "ping" => ReadResult::Handled,
         "settings" => ReadResult::Command(Command::Settings),
+        "begin_pairing" => ReadResult::Command(Command::BeginPairing),
         "kill" => ReadResult::Command(Command::Kill),
         "connection_status" => ReadResult::HandledWithData(serde_json::json!({ "state": "ok" })),
         "connection_info" => ReadResult::HandledWithData(serde_json::json!({
