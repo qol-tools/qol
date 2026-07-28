@@ -1,7 +1,5 @@
-use anyhow::Context;
 use anyhow::Result;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tokio_stream::StreamExt;
 
@@ -43,10 +41,6 @@ pub(crate) async fn download_asset(url: &str, dest: &Path, events: &EventBus) ->
     }
     file.sync_all()?;
     Ok(())
-}
-
-pub(crate) fn extract_tar_gz(archive: &Path, binary_name: &str) -> Result<PathBuf> {
-    extract_tar_gz_entry(archive, binary_name, false)
 }
 
 pub(super) fn extract_tar_gz_entry(archive: &Path, name: &str, want_dir: bool) -> Result<PathBuf> {
@@ -91,44 +85,6 @@ pub(super) fn extract_tar_gz_entry(archive: &Path, name: &str, want_dir: bool) -
     }
 
     anyhow::bail!("Binary '{name}' not found in archive")
-}
-
-pub(crate) fn atomic_replace(source: &Path, target: &Path) -> Result<()> {
-    let staged = target.with_extension("new");
-    let result = atomic_replace_inner(source, target, &staged);
-    if result.is_err() && staged.exists() {
-        let _ = std::fs::remove_file(&staged);
-    }
-    result
-}
-
-fn atomic_replace_inner(source: &Path, target: &Path, staged: &Path) -> Result<()> {
-    if staged.exists() {
-        let _ = std::fs::remove_file(staged);
-    }
-    std::fs::copy(source, staged).with_context(|| {
-        format!(
-            "Failed to stage {} to {}",
-            source.display(),
-            staged.display()
-        )
-    })?;
-
-    let mut perms = std::fs::metadata(staged)?.permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(staged, perms)?;
-
-    std::fs::rename(staged, target)
-        .with_context(|| format!("Failed to replace {}", target.display()))?;
-    Ok(())
-}
-
-pub(crate) fn arch_suffix() -> &'static str {
-    match std::env::consts::ARCH {
-        "x86_64" => "x86_64",
-        "aarch64" => "aarch64",
-        other => other,
-    }
 }
 
 #[cfg(test)]
@@ -204,7 +160,7 @@ mod tests {
     fn extract_finds_binary_at_depth_one() {
         let dir = tempfile::tempdir().unwrap();
         let archive = create_test_tar_gz(dir.path(), "qol-tray-linux-x86_64", "qol-tray");
-        let result = extract_tar_gz(&archive, "qol-tray");
+        let result = extract_tar_gz_entry(&archive, "qol-tray", false);
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let path = result.unwrap();
         assert_eq!(path.file_name().unwrap(), "qol-tray");
@@ -215,7 +171,7 @@ mod tests {
     fn extract_fails_when_binary_missing() {
         let dir = tempfile::tempdir().unwrap();
         let archive = create_test_tar_gz(dir.path(), "bundle", "other-binary");
-        let result = extract_tar_gz(&archive, "qol-tray");
+        let result = extract_tar_gz_entry(&archive, "qol-tray", false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -224,7 +180,7 @@ mod tests {
     fn extract_rejects_symlinks() {
         let dir = tempfile::tempdir().unwrap();
         let archive = create_symlink_tar_gz(dir.path());
-        let error = extract_tar_gz(&archive, "qol-tray").unwrap_err();
+        let error = extract_tar_gz_entry(&archive, "qol-tray", false).unwrap_err();
         assert!(error.to_string().contains("link or special"));
     }
 
@@ -237,27 +193,5 @@ mod tests {
         let path = result.unwrap();
         assert_eq!(path.file_name().unwrap(), "QoL Tray.app");
         assert!(path.is_dir());
-    }
-
-    #[test]
-    fn atomic_replace_swaps_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source");
-        let target = dir.path().join("target");
-        std::fs::write(&source, b"new content").unwrap();
-        std::fs::write(&target, b"old content").unwrap();
-        atomic_replace(&source, &target).unwrap();
-        assert_eq!(std::fs::read(&target).unwrap(), b"new content");
-        assert!(!dir.path().join("target.new").exists());
-    }
-
-    #[test]
-    fn atomic_replace_creates_target_if_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source");
-        let target = dir.path().join("target");
-        std::fs::write(&source, b"content").unwrap();
-        atomic_replace(&source, &target).unwrap();
-        assert_eq!(std::fs::read(&target).unwrap(), b"content");
     }
 }
