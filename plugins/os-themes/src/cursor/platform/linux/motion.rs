@@ -93,7 +93,7 @@ impl Trail {
             if let Some(last) = self.vertices.back_mut() {
                 *last = vertex;
             }
-            return None;
+            return self.shape();
         }
         self.vertices.push_back(vertex);
         self.shape()
@@ -284,12 +284,12 @@ mod tests {
         Config {
             enabled: true,
             shake_strictness: 6.5,
-            regrow_strictness: 3.0,
+            regrow_strictness: 2.5,
             shake_min_extent_px: 150,
             regrow_min_extent_px: 60,
             shake_window_ms: 1000,
             scale_factor: 4,
-            calm_duration_ms: 250,
+            calm_duration_ms: 100,
             grow_ms: 250,
             shrink_ms: 225,
         }
@@ -407,6 +407,62 @@ mod tests {
         assert!(mid < 2.5, "shrink must front-load via ease-out, got {mid}");
         let done = tick(&mut shrinker, t0, 416, 640);
         assert_eq!(done, 1.0, "shrink must complete within 225ms, got {done}");
+    }
+
+    #[test]
+    fn sustained_shakes_hold_full_scale_across_shake_speeds() {
+        for half_period_ms in [48, 64, 96, 128] {
+            let mut detector = ShakeDetector::new(&config());
+            let t0 = Instant::now();
+            let mut grown = false;
+            let mut lowest = 4.0;
+            for (ms, dx, dy) in wiggle(240, half_period_ms, 3000) {
+                let at = t0 + Duration::from_millis(ms);
+                detector.record(MotionSample::new(at, dx, dy));
+                grown |= detector.current_scale >= 4.0;
+                if grown {
+                    lowest = detector.current_scale.min(lowest);
+                }
+            }
+            assert!(
+                grown,
+                "half period {half_period_ms}ms must reach full scale"
+            );
+            assert_eq!(
+                lowest, 4.0,
+                "half period {half_period_ms}ms must not shrink mid-shake"
+            );
+        }
+    }
+
+    #[test]
+    fn shrink_starts_one_calm_duration_after_the_shake_stops() {
+        let mut detector = ShakeDetector::new(&config());
+        let t0 = Instant::now();
+        let trace = wiggle(240, 64, 2000);
+        for (ms, dx, dy) in &trace {
+            detector.record(MotionSample::new(t0 + Duration::from_millis(*ms), *dx, *dy));
+        }
+        assert_eq!(detector.current_scale, 4.0, "shake must reach full scale");
+        let last_shake = detector.last_shake.expect("shake must be recorded");
+
+        let mut ms = trace.last().expect("trace must not be empty").0;
+        let shrink_at = loop {
+            ms += 16;
+            let at = t0 + Duration::from_millis(ms);
+            assert!(at - last_shake < Duration::from_secs(1), "never shrank");
+            if detector
+                .record(MotionSample::new(at, 0, 0))
+                .scale_changed
+                .is_some()
+            {
+                break at - last_shake;
+            }
+        };
+        assert!(
+            shrink_at > Duration::from_millis(100) && shrink_at <= Duration::from_millis(132),
+            "shrink must start one calm duration after the last shake, got {shrink_at:?}"
+        );
     }
 
     #[test]

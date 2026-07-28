@@ -89,7 +89,7 @@ equals = true
 type = "number"
 label = "Calm Duration"
 section = "shake_to_grow"
-default = 250
+default = 100
 min = 50
 step = 25
 
