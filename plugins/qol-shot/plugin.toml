@@ -40,6 +40,7 @@ args = ["settings"]
 
 [capabilities]
 gpui = true
+doctor = true
 
 [menu]
 label = "QoL Shot"

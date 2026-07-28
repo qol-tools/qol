@@ -25,6 +25,9 @@ command = "plugin-controllers"
 socket = "/tmp/plugin-controllers.sock"
 port = 42730
 
+[capabilities]
+doctor = true
+
 [menu]
 label = "Controllers"
 items = []

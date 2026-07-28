@@ -71,6 +71,7 @@ port = 42740
 
 [capabilities]
 gpui = true
+doctor = true
 
 [menu]
 label = "Bluetooth"

@@ -366,6 +366,8 @@ pub struct Capabilities {
     pub serial: bool,
     #[serde(default)]
     pub gpui: bool,
+    #[serde(default)]
+    pub doctor: bool,
     #[serde(flatten)]
     pub extras: HashMap<String, toml::Value>,
 }

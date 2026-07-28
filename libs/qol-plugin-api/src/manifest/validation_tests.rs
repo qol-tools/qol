@@ -269,6 +269,53 @@ mod runtime_rules {
     use super::*;
 
     #[test]
+    fn validate_rejects_doctor_capability_without_runtime() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [capabilities]
+            doctor = true
+        "#;
+
+        let error = validate_toml(toml).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("capabilities.doctor requires a standalone [runtime] command"));
+    }
+
+    #[test]
+    fn validate_accepts_doctor_capability_with_runtime() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "plugin-test"
+
+            [capabilities]
+            doctor = true
+        "#;
+
+        assert!(validate_toml(toml).is_ok());
+    }
+
+    #[test]
     fn validate_rejects_invalid_action_id_in_runtime_map() {
         let toml = r#"
             [plugin]

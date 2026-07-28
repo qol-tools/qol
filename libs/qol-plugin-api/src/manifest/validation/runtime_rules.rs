@@ -28,6 +28,17 @@ pub(super) fn validate_optional_runtime_config(
     validate_runtime_action_coverage(runtime.actions.as_ref(), executable_action_ids)
 }
 
+pub(super) fn validate_doctor_runtime(
+    doctor_capability: bool,
+    runtime: Option<&RuntimeConfig>,
+) -> Result<()> {
+    if !doctor_capability || runtime.is_some() {
+        return Ok(());
+    }
+
+    bail!("capabilities.doctor requires a standalone [runtime] command")
+}
+
 fn validate_runtime_actions(actions: Option<&HashMap<String, Vec<String>>>) -> Result<()> {
     let Some(actions) = actions else {
         return Ok(());

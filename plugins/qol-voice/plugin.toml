@@ -37,6 +37,7 @@ socket = "/tmp/qol-voice.sock"
 
 [capabilities]
 gpui = true
+doctor = true
 
 [menu]
 label = "QoL Voice"

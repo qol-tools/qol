@@ -281,6 +281,7 @@ fn parse_minimal_manifest() {
     assert!(manifest.plugin.platforms.is_none());
     assert!(manifest.daemon.is_none());
     assert!(!manifest.capabilities.serial);
+    assert!(!manifest.capabilities.doctor);
     assert!(manifest.menu.items.is_empty());
     assert!(manifest.shortcuts.is_empty());
 }
@@ -300,10 +301,12 @@ fn parse_capabilities_section() {
 
         [capabilities]
         serial = true
+        doctor = true
     "#;
 
     let manifest: PluginManifest = toml::from_str(toml).unwrap();
     assert!(manifest.capabilities.serial);
+    assert!(manifest.capabilities.doctor);
 }
 
 #[test]
