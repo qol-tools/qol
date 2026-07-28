@@ -39,6 +39,7 @@ pub fn git_checkout(
     config: &Config,
 ) -> Result<Checkout, CheckoutError> {
     validate_path(project_path)?;
+    validate_branch(branch)?;
     if !Path::new(project_path).is_dir() {
         return Err(CheckoutError::InvalidParams(format!(
             "Project path does not exist: {project_path}"
@@ -63,11 +64,33 @@ pub fn git_checkout(
     })
 }
 
+fn validate_branch(branch: &str) -> Result<(), CheckoutError> {
+    if branch.is_empty() || branch.starts_with('-') || branch.contains('\0') {
+        return Err(CheckoutError::InvalidParams(
+            "Branch name is invalid".to_string(),
+        ));
+    }
+    let output = git_capture(
+        &["check-ref-format", "--branch", branch],
+        None,
+        Duration::from_secs(5),
+    )?;
+    if !output.status.success() {
+        return Err(CheckoutError::InvalidParams(
+            "Branch name is invalid".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn open_app(app_id: &str, path: &str, config: &Config) -> Result<(), CheckoutError> {
     let executable = find_executable(app_id, config)
         .ok_or_else(|| CheckoutError::ExecutionFailed(format!("App '{app_id}' not found")))?;
+    let launch_path = std::fs::canonicalize(path).map_err(|error| {
+        CheckoutError::InvalidParams(format!("Could not resolve app path: {error}"))
+    })?;
     Command::new(executable)
-        .arg(path)
+        .arg(launch_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -168,6 +191,7 @@ fn clone_fresh(remote: &str, branch: &str, temp_path: &Path) -> Result<(), Check
             "--branch",
             branch,
             "--single-branch",
+            "--",
             remote,
             &temp,
         ],
@@ -178,7 +202,11 @@ fn clone_fresh(remote: &str, branch: &str, temp_path: &Path) -> Result<(), Check
         return Ok(());
     }
 
-    let full = git_status(&["clone", remote, &temp], None, Duration::from_secs(300))?;
+    let full = git_status(
+        &["clone", "--", remote, &temp],
+        None,
+        Duration::from_secs(300),
+    )?;
     if !full.success() {
         return Err(CheckoutError::ExecutionFailed(
             "git clone failed".to_string(),
@@ -303,6 +331,16 @@ mod tests {
             assert!(validate_path(case).is_err(), "should reject {case:?}");
         }
         assert!(validate_path("/a/b/c").is_ok());
+    }
+
+    #[test]
+    fn validate_branch_rejects_git_options_and_invalid_refnames() {
+        for branch in ["", "--help", "bad..branch", "branch lock", "branch\0name"] {
+            assert!(validate_branch(branch).is_err(), "branch={branch:?}");
+        }
+        for branch in ["main", "feature/x", "release-1.2"] {
+            assert!(validate_branch(branch).is_ok(), "branch={branch:?}");
+        }
     }
 
     #[test]
