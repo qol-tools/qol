@@ -3,6 +3,8 @@ use std::time::{Duration, Instant};
 
 use crate::config::Config;
 
+const REVERSALS_TO_RESUME: u32 = 2;
+
 pub struct ShakeDetector {
     trail: Trail,
     window: Duration,
@@ -18,6 +20,7 @@ pub struct ShakeDetector {
     current_scale: f32,
     growing: bool,
     last_shake: Option<Instant>,
+    shrink_reversals: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -62,6 +65,11 @@ struct TrailShape {
     tortuosity: f64,
 }
 
+struct TrailAdvance {
+    shape: TrailShape,
+    reversed: bool,
+}
+
 impl Trail {
     fn new() -> Self {
         Self {
@@ -74,7 +82,7 @@ impl Trail {
         self.vertices.clear();
     }
 
-    fn advance(&mut self, sample: MotionSample, window: Duration) -> Option<TrailShape> {
+    fn advance(&mut self, sample: MotionSample, window: Duration) -> Option<TrailAdvance> {
         self.position.0 += f64::from(sample.dx);
         self.position.1 += f64::from(sample.dy);
         while self
@@ -93,10 +101,17 @@ impl Trail {
             if let Some(last) = self.vertices.back_mut() {
                 *last = vertex;
             }
-            return self.shape();
+            return self.advanced(false);
         }
         self.vertices.push_back(vertex);
-        self.shape()
+        self.advanced(true)
+    }
+
+    fn advanced(&self, reversed: bool) -> Option<TrailAdvance> {
+        Some(TrailAdvance {
+            shape: self.shape()?,
+            reversed,
+        })
     }
 
     fn extends_last_segment(&self, next: Vertex) -> bool {
@@ -157,6 +172,7 @@ impl ShakeDetector {
             current_scale: 1.0,
             growing: false,
             last_shake: None,
+            shrink_reversals: 0,
         }
     }
 
@@ -174,21 +190,37 @@ impl ShakeDetector {
         } else {
             (self.strictness, self.min_extent)
         };
-        let shape = self.trail.advance(sample, self.window)?;
-        if shape.extent < min_extent || shape.tortuosity <= strictness {
+        let advance = self.trail.advance(sample, self.window)?;
+        if self.is_shrinking() && !self.resumed_shaking(advance.reversed) {
             return None;
         }
-        Some(shape.tortuosity)
+        if advance.shape.extent < min_extent || advance.shape.tortuosity <= strictness {
+            return None;
+        }
+        Some(advance.shape.tortuosity)
     }
 
     fn is_scaled(&self) -> bool {
         self.current_scale > 1.0 + f32::EPSILON
     }
 
+    fn is_shrinking(&self) -> bool {
+        self.is_scaled() && !self.growing
+    }
+
+    fn resumed_shaking(&mut self, reversed: bool) -> bool {
+        if !reversed {
+            return false;
+        }
+        self.shrink_reversals += 1;
+        self.shrink_reversals >= REVERSALS_TO_RESUME
+    }
+
     fn update(&mut self, now: Instant, shake: Option<f64>) -> ScaleUpdate {
         if shake.is_some() {
             self.growing = true;
             self.last_shake = Some(now);
+            self.shrink_reversals = 0;
         } else {
             self.maybe_stop_growing(now);
         }
@@ -198,9 +230,14 @@ impl ShakeDetector {
         let next_scale = self.next_scale(target_scale, now);
         self.current_scale = next_scale;
 
+        let event = scale_event(previous_scale, next_scale, shake);
+        if matches!(event, Some(ScaleEvent::Restored)) {
+            self.trail.reset();
+        }
+
         ScaleUpdate {
             scale_changed: scale_changed(previous_scale, next_scale),
-            event: scale_event(previous_scale, next_scale, shake),
+            event,
         }
     }
 
@@ -213,7 +250,6 @@ impl ShakeDetector {
             .is_some_and(|last_shake| now - last_shake > self.calm_duration)
         {
             self.growing = false;
-            self.trail.reset();
         }
     }
 
@@ -234,11 +270,12 @@ impl ShakeDetector {
                 animation
             }
         };
-        let duration = if target > animation.from {
+        let full_travel = if target > animation.from {
             self.grow_duration
         } else {
             self.shrink_duration
         };
+        let duration = full_travel.mul_f32(self.travelled_fraction(animation));
         let progress = (now
             .saturating_duration_since(animation.started)
             .as_secs_f32()
@@ -246,6 +283,14 @@ impl ShakeDetector {
         .min(1.0);
         let eased = 1.0 - (1.0 - progress) * (1.0 - progress);
         animation.from + (target - animation.from) * eased
+    }
+
+    fn travelled_fraction(&self, animation: ScaleAnimation) -> f32 {
+        let span = self.scale_factor - 1.0;
+        if span <= f32::EPSILON {
+            return 1.0;
+        }
+        ((animation.target - animation.from).abs() / span).clamp(0.0, 1.0)
     }
 }
 
@@ -432,6 +477,74 @@ mod tests {
                 lowest, 4.0,
                 "half period {half_period_ms}ms must not shrink mid-shake"
             );
+        }
+    }
+
+    fn shake_then_shrink(detector: &mut ShakeDetector, t0: Instant, shrink_ticks: u32) -> u64 {
+        let trace = wiggle(240, 64, 1500);
+        for (ms, dx, dy) in &trace {
+            detector.record(MotionSample::new(t0 + Duration::from_millis(*ms), *dx, *dy));
+        }
+        let mut ms = trace.last().expect("trace must not be empty").0;
+        let mut shrinking = false;
+        for _ in 0..shrink_ticks.max(1) {
+            loop {
+                ms += 16;
+                let at = t0 + Duration::from_millis(ms);
+                let shrank = detector.record(MotionSample::new(at, 0, 0)).scale_changed;
+                if shrinking || shrank.is_some() {
+                    shrinking = true;
+                    break;
+                }
+            }
+        }
+        assert!(detector.current_scale < 4.0, "shrink must have begun");
+        ms
+    }
+
+    #[test]
+    fn resumed_shake_regrows_while_the_cursor_is_still_shrinking() {
+        for shrink_ticks in [1, 4, 7] {
+            let mut detector = ShakeDetector::new(&config());
+            let t0 = Instant::now();
+            let resume_at = shake_then_shrink(&mut detector, t0, shrink_ticks);
+            let scale_at_resume = detector.current_scale;
+
+            let mut regrown_at = None;
+            for (ms, dx, dy) in wiggle(240, 64, 500) {
+                let at = t0 + Duration::from_millis(ms + resume_at);
+                detector.record(MotionSample::new(at, dx, dy));
+                if detector.current_scale >= 4.0 {
+                    regrown_at = Some(ms);
+                    break;
+                }
+            }
+            let regrown_at = regrown_at
+                .unwrap_or_else(|| panic!("resumed shake must regrow from {scale_at_resume}"));
+            assert!(
+                regrown_at <= 350,
+                "resumed shake from {scale_at_resume} must regrow promptly, took {regrown_at}ms"
+            );
+        }
+    }
+
+    #[test]
+    fn straight_glide_while_shrinking_never_regrows() {
+        for speed in [10, 25, 40, 80] {
+            let mut detector = ShakeDetector::new(&config());
+            let t0 = Instant::now();
+            let mut ms = shake_then_shrink(&mut detector, t0, 1);
+            let mut previous = detector.current_scale;
+            for _ in 0..60 {
+                ms += 16;
+                detector.record(MotionSample::new(t0 + Duration::from_millis(ms), speed, 0));
+                assert!(
+                    detector.current_scale <= previous,
+                    "glide at {speed}px/tick must not regrow the cursor"
+                );
+                previous = detector.current_scale;
+            }
+            assert_eq!(previous, 1.0, "glide at {speed}px/tick must fully restore");
         }
     }
 
