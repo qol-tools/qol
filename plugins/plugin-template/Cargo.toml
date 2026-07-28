@@ -10,9 +10,11 @@ edition = "2021"
 anyhow = "1"
 qol-conventions.workspace = true
 qol-apps.workspace = true
+qol-headless.workspace = true
 
 [build-dependencies]
 qol-conventions.workspace = true
 
 [dev-dependencies]
 qol-plugin-api.workspace = true
+serde_json.workspace = true

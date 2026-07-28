@@ -22,6 +22,9 @@ label = "Settings"
 kind = "settings"
 args = ["settings"]
 
+[capabilities]
+doctor = true
+
 [menu]
 label = "My Plugin"
 items = []
