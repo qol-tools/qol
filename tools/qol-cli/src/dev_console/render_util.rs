@@ -93,8 +93,33 @@ pub(super) struct Sign {
     pub(super) content: Line<'static>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct NavigationOverflow {
+    pub(super) above: bool,
+    pub(super) below: bool,
+}
+
+impl NavigationOverflow {
+    pub(super) fn from_window(start: usize, height: usize, total: usize) -> Self {
+        Self {
+            above: start > 0,
+            below: start.saturating_add(height) < total,
+        }
+    }
+}
+
+const NAVIGATION_CUE_WIDTH: u16 = 5;
+const NAVIGATION_CUE_HEIGHT: u16 = 3;
+const NAVIGATION_CUE_GAP: u16 = 1;
+
 impl Sign {
-    pub(super) fn render_bottom(self, frame: &mut Frame, body: Rect, accent: Color) {
+    pub(super) fn render_bottom(
+        self,
+        frame: &mut Frame,
+        body: Rect,
+        accent: Color,
+        navigation: NavigationOverflow,
+    ) {
         let span = self.content.width() as u16 + 2;
         let width = span + 2;
         if width + 2 > body.width || body.height < 3 {
@@ -111,6 +136,7 @@ impl Sign {
         if y + 1 < frame.area().y + frame.area().height {
             render_overlay(frame, x, y + 1, Line::from(format!("╰{bar}╯").fg(accent)));
         }
+        render_navigation_flanks(frame, body, x, y - 1, width, accent, navigation);
     }
 
     pub(super) fn render(self, frame: &mut Frame, body: Rect, accent: Color) {
@@ -138,6 +164,57 @@ impl Sign {
             Line::from(format!("╰{bar}╯").fg(accent)),
         );
     }
+}
+
+fn render_navigation_flanks(
+    frame: &mut Frame,
+    body: Rect,
+    sign_x: u16,
+    y: u16,
+    sign_width: u16,
+    accent: Color,
+    navigation: NavigationOverflow,
+) {
+    if navigation.below {
+        let offset = NAVIGATION_CUE_WIDTH + NAVIGATION_CUE_GAP;
+        if let Some(x) = sign_x.checked_sub(offset) {
+            render_navigation_box(frame, body, x, y, accent, "v");
+        }
+    }
+    if navigation.above {
+        let x = sign_x
+            .saturating_add(sign_width)
+            .saturating_add(NAVIGATION_CUE_GAP);
+        render_navigation_box(frame, body, x, y, accent, "^");
+    }
+}
+
+fn render_navigation_box(
+    frame: &mut Frame,
+    body: Rect,
+    x: u16,
+    y: u16,
+    accent: Color,
+    glyph: &'static str,
+) {
+    let right = x.saturating_add(NAVIGATION_CUE_WIDTH);
+    let body_right = body.x.saturating_add(body.width);
+    if x <= body.x || right >= body_right {
+        return;
+    }
+    let rows = vec![
+        Line::from("┌───┐".fg(accent)),
+        Line::from(vec![
+            "│ ".fg(accent),
+            glyph.fg(accent).bold(),
+            " │".fg(accent),
+        ]),
+        Line::from("└───┘".fg(accent)),
+    ];
+    frame.render_widget(
+        Paragraph::new(rows),
+        Rect::new(x, y, NAVIGATION_CUE_WIDTH, NAVIGATION_CUE_HEIGHT),
+    );
 }
 
 fn render_overlay(frame: &mut Frame, x: u16, y: u16, line: Line<'static>) {

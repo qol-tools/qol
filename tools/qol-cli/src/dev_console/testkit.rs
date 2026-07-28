@@ -131,8 +131,12 @@ pub(super) fn render_text(dash: &mut Dash) -> String {
 }
 
 pub(super) fn render_rows(dash: &mut Dash) -> Vec<String> {
+    render_rows_at(dash, 110, 30)
+}
+
+pub(super) fn render_rows_at(dash: &mut Dash, width: u16, height: u16) -> Vec<String> {
     use ratatui::backend::TestBackend;
-    let mut terminal = ratatui::Terminal::new(TestBackend::new(110, 30)).unwrap();
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|frame| draw(frame, dash)).unwrap();
     let backend = terminal.backend();
     let buffer = backend.buffer();

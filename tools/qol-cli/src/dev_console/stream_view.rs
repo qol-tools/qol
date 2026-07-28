@@ -15,7 +15,9 @@ use crate::dev_server::EndpointStatus;
 
 use super::filters::{line_matches_filters, LogFilter};
 use super::log_pane::{clamp_offset, dev_log_dir, window_start, LogRing};
-use super::render_util::{accent, list_status, styled_line, view_content, SignBox};
+use super::render_util::{
+    accent, list_status, styled_line, view_content, NavigationOverflow, SignBox,
+};
 use super::{copy_highlight, spawn_forwarders, Dash, TraceRenderer, View};
 
 pub(super) enum EndpointsState {
@@ -294,11 +296,11 @@ fn open_with_os_default(path: &Path) -> bool {
     crate::host_facade::open_text_file(path)
 }
 
-pub(super) fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+pub(super) fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
     let highlight = copy_highlight(dash);
     let header = log_source_header(dash);
     let body_height = area.height.saturating_sub(header.len() as u16) as usize;
-    let (rows, _) = stream_rows(
+    let (rows, _, overflow) = stream_rows(
         &dash.logs.ring,
         &dash.filters.logs,
         &mut dash.scroll_offset,
@@ -308,17 +310,21 @@ pub(super) fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         area.width as usize,
     );
     frame.render_widget(Paragraph::new(join_header_rows(header, rows)), area);
+    overflow
 }
 
-pub(super) fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+pub(super) fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
     let header = log_source_header(dash);
     let body_height = area.height.saturating_sub(header.len() as u16) as usize;
     let highlight = copy_highlight(dash);
-    let rows = if dash.trace.ring.lines.is_empty() && dash.active_filters().is_empty() {
+    let (rows, overflow) = if dash.trace.ring.lines.is_empty() && dash.active_filters().is_empty() {
         dash.log_height = body_height;
-        vec![Line::from("  waiting for trace events")]
+        (
+            vec![Line::from("  waiting for trace events")],
+            NavigationOverflow::default(),
+        )
     } else {
-        stream_rows(
+        let (rows, _, overflow) = stream_rows(
             &dash.trace.ring,
             &dash.filters.trace,
             &mut dash.scroll_offset,
@@ -326,10 +332,11 @@ pub(super) fn draw_trace(frame: &mut Frame, dash: &mut Dash, area: Rect) {
             body_height,
             highlight,
             area.width as usize,
-        )
-        .0
+        );
+        (rows, overflow)
     };
     frame.render_widget(Paragraph::new(join_header_rows(header, rows)), area);
+    overflow
 }
 
 fn join_header_rows<'a>(header: Vec<Line<'static>>, body: Vec<Line<'a>>) -> Vec<Line<'a>> {
@@ -371,7 +378,7 @@ fn stream_rows<'a>(
     height: usize,
     highlight_tail: Option<usize>,
     inner_width: usize,
-) -> (Vec<Line<'a>>, usize) {
+) -> (Vec<Line<'a>>, usize, NavigationOverflow) {
     *log_height = height;
     let filtered: Vec<&'a String> = ring
         .lines
@@ -395,7 +402,11 @@ fn stream_rows<'a>(
             }
         })
         .collect();
-    (rows, total)
+    (
+        rows,
+        total,
+        NavigationOverflow::from_window(start, height, total),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -408,10 +419,10 @@ pub(super) fn draw_run_log(
     log_height: &mut usize,
     accent: Color,
     highlight_tail: Option<usize>,
-) {
+) -> NavigationOverflow {
     let height = SignBox::capacity(area.height);
     let inner_width = area.width.saturating_sub(2) as usize;
-    let (rows, total) = stream_rows(
+    let (rows, total, overflow) = stream_rows(
         ring,
         filters,
         scroll_offset,
@@ -426,6 +437,7 @@ pub(super) fn draw_run_log(
         rows,
     }
     .render(frame, area, accent);
+    overflow
 }
 
 fn highlight_bar(line: Line<'_>, inner_width: usize) -> Line<'_> {
@@ -447,12 +459,13 @@ pub(super) fn trace_value(dash: &Dash) -> Vec<Span<'static>> {
     vec!["idle · → open".fg(Color::DarkGray)]
 }
 
-pub(super) fn draw_endpoints(frame: &mut Frame, dash: &Dash, area: Rect) {
+pub(super) fn draw_endpoints(frame: &mut Frame, dash: &Dash, area: Rect) -> NavigationOverflow {
     let lines: Vec<Line> = match &dash.endpoints {
         EndpointsState::Probing => vec![Line::from("  probing endpoints".fg(Color::DarkGray))],
         EndpointsState::Done(items) => items.iter().map(endpoint_line).collect(),
     };
     view_content(frame, area, lines);
+    NavigationOverflow::default()
 }
 
 fn endpoint_line(status: &EndpointStatus) -> Line<'static> {

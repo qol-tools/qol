@@ -13,7 +13,9 @@ use ratatui::Frame;
 
 use crate::poller::Poller;
 
-use super::render_util::{accent, list_window_head, now_unix_ms, relative_age, view_content};
+use super::render_util::{
+    accent, list_window_head, now_unix_ms, relative_age, view_content, NavigationOverflow,
+};
 use super::{Dash, View, DOCTOR_BASE_INTERVAL, DOCTOR_CAP_INTERVAL};
 
 pub(super) fn spawn_doctor_probe() -> Poller<Result<DoctorRun, String>> {
@@ -129,7 +131,7 @@ pub(super) fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Spa
     (color, value)
 }
 
-pub(super) fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+pub(super) fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
     let lines = doctor_view_lines(&dash.doctor);
     if lines.is_empty() {
         let message = match &dash.doctor.manual {
@@ -144,7 +146,7 @@ pub(super) fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
             None => "  no checks reported · press d to run".to_string(),
         };
         view_content(frame, area, vec![Line::from(message)]);
-        return;
+        return NavigationOverflow::default();
     }
     let total = lines.len();
     let (start, height) = list_window_head(dash, area, total);
@@ -160,6 +162,7 @@ pub(super) fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         .map(|line| render(line))
         .collect();
     view_content(frame, area, visible);
+    NavigationOverflow::from_window(start, height, total)
 }
 
 pub(super) fn doctor_scroll_len(panel: &DoctorPanel) -> usize {

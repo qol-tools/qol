@@ -21,7 +21,7 @@ use qol_dev_orchestrator::{FlowStart, ImageImportStart, RunHandle, WaitState};
 
 use super::render_util::{
     accent, cursor_window_start, list_capacity, list_window, now_unix_ms, relative_age,
-    spaced_height, view_content,
+    spaced_height, view_content, NavigationOverflow,
 };
 use super::{
     copy_highlight, draw_run_log, frame_accent, spawn_forwarders, Dash, LogPane, LogRing, View,
@@ -1727,7 +1727,7 @@ fn environment_line(
     Line::from(spans)
 }
 
-pub(super) fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+pub(super) fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
     let selectable = emu_env_count(dash) + dash.emu_candidates.len();
     if selectable > 0 && dash.emu_cursor >= selectable {
         dash.emu_cursor = selectable - 1;
@@ -1755,6 +1755,7 @@ pub(super) fn draw_emu(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let start = cursor_window_start(total, height, selected_line.unwrap_or_default());
     let visible: Vec<Line> = lines.into_iter().skip(start).take(height).collect();
     view_content(frame, area, visible);
+    NavigationOverflow::from_window(start, height, total)
 }
 
 fn sandbox_inventory_lines(
@@ -1874,14 +1875,18 @@ fn attention_run_line(run: &RunSummary, concern: RunConcern) -> Line<'static> {
     ])
 }
 
-pub(super) fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+pub(super) fn draw_emu_detail(
+    frame: &mut Frame,
+    dash: &mut Dash,
+    area: Rect,
+) -> NavigationOverflow {
     let accent = frame_accent(dash);
     let Some((id, info)) = dash
         .emu_detail
         .as_ref()
         .map(|detail| (detail.id.clone(), detail.info.clone()))
     else {
-        return;
+        return NavigationOverflow::default();
     };
     let info_height = spaced_height(info.len(), ITEM_GAP).min(area.height);
     view_content(
@@ -1894,7 +1899,7 @@ pub(super) fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     );
     let used = info_height.saturating_add(1);
     if used >= area.height {
-        return;
+        return NavigationOverflow::default();
     }
     let log_area = Rect {
         y: area.y + used,
@@ -1921,11 +1926,11 @@ pub(super) fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) {
             })
             .unwrap_or_default();
         view_content(frame, log_area, visible);
-        return;
+        return NavigationOverflow::from_window(start, height, warning_count);
     }
     let highlight = copy_highlight(dash);
     if let Some(run) = dash.active_runs.get(&id) {
-        draw_run_log(
+        return draw_run_log(
             frame,
             log_area,
             &run.pane.ring,
@@ -1935,7 +1940,6 @@ pub(super) fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) {
             accent,
             highlight,
         );
-        return;
     }
     match dash
         .emu_detail
@@ -1952,13 +1956,16 @@ pub(super) fn draw_emu_detail(frame: &mut Frame, dash: &mut Dash, area: Rect) {
             accent,
             highlight,
         ),
-        None => view_content(
-            frame,
-            log_area,
-            vec![Line::from(
-                "  no run.log yet · boot to create one".fg(Color::DarkGray),
-            )],
-        ),
+        None => {
+            view_content(
+                frame,
+                log_area,
+                vec![Line::from(
+                    "  no run.log yet · boot to create one".fg(Color::DarkGray),
+                )],
+            );
+            NavigationOverflow::default()
+        }
     }
 }
 

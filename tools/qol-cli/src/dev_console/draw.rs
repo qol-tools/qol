@@ -14,8 +14,8 @@ use super::filters::{draw_filter_panel, filter_scope, FilterState};
 use super::key_bindings::{context_action_bindings, global_action_bindings, unique_hints, KeyHint};
 use super::render_util;
 use super::render_util::{
-    accent, cursor_window_start, format_duration, list_capacity, now_unix_ms, view_content, Sign,
-    SignBox,
+    accent, cursor_window_start, format_duration, list_capacity, now_unix_ms, view_content,
+    NavigationOverflow, Sign, SignBox,
 };
 use super::stream_view::{draw_endpoints, draw_logs, draw_trace, trace_value};
 use super::worktrees_panel::{draw_worktrees_panel, target_label};
@@ -36,16 +36,7 @@ pub(super) fn draw(frame: &mut Frame, dash: &mut Dash) {
     let inner = block.inner(body);
     frame.render_widget(block, body);
     let content = page_header(frame, dash.view, inner);
-    match dash.view {
-        View::Dashboard => draw_dashboard(frame, dash, content),
-        View::Logs => draw_logs(frame, dash, content),
-        View::Doctor => draw_doctor(frame, dash, content),
-        View::Plugins => draw_plugins(frame, dash, content),
-        View::Emu => draw_emu(frame, dash, content),
-        View::EmuDetail => draw_emu_detail(frame, dash, content),
-        View::Trace => draw_trace(frame, dash, content),
-        View::Endpoints => draw_endpoints(frame, dash, content),
-    }
+    let navigation = draw_view_with_navigation(frame, dash, content);
     draw_filter_panel(frame, dash, inner, accent);
     draw_feature_flags_panel(frame, dash, inner, accent);
     draw_worktrees_panel(frame, dash, inner, accent);
@@ -54,8 +45,37 @@ pub(super) fn draw(frame: &mut Frame, dash: &mut Dash) {
         content: breadcrumb(dash, accent),
     }
     .render(frame, body, accent);
-    draw_branch_sign(frame, dash, body, accent);
+    draw_branch_sign(frame, dash, body, accent, navigation);
     draw_keys_hud(frame, dash, inner);
+}
+
+fn draw_view_with_navigation(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
+    let overflow = draw_view(frame, dash, area);
+    if !navigation_cue_unobstructed(dash) {
+        return NavigationOverflow::default();
+    }
+    overflow
+}
+
+fn draw_view(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
+    match dash.view {
+        View::Dashboard => draw_dashboard(frame, dash, area),
+        View::Logs => draw_logs(frame, dash, area),
+        View::Doctor => draw_doctor(frame, dash, area),
+        View::Plugins => draw_plugins(frame, dash, area),
+        View::Emu => draw_emu(frame, dash, area),
+        View::EmuDetail => draw_emu_detail(frame, dash, area),
+        View::Trace => draw_trace(frame, dash, area),
+        View::Endpoints => draw_endpoints(frame, dash, area),
+    }
+}
+
+fn navigation_cue_unobstructed(dash: &Dash) -> bool {
+    !dash.worktree_panel.is_active()
+        && !dash.feature_panel.is_active()
+        && !dash.filter_state.is_active()
+        && !dash.copying
+        && !dash.quit_prompt_active()
 }
 
 pub(super) fn page_header(frame: &mut Frame, view: View, inner: Rect) -> Rect {
@@ -181,11 +201,17 @@ pub(super) fn branch_sign_line(dash: &Dash) -> Line<'static> {
     ])
 }
 
-pub(super) fn draw_branch_sign(frame: &mut Frame, dash: &Dash, body: Rect, accent: Color) {
+pub(super) fn draw_branch_sign(
+    frame: &mut Frame,
+    dash: &Dash,
+    body: Rect,
+    accent: Color,
+    navigation: NavigationOverflow,
+) {
     Sign {
         content: branch_sign_line(dash),
     }
-    .render_bottom(frame, body, accent);
+    .render_bottom(frame, body, accent, navigation);
 }
 
 pub(super) fn quit_prompt_rows() -> Vec<Line<'static>> {
@@ -360,7 +386,7 @@ pub(super) fn draw_keys_hud(frame: &mut Frame, dash: &Dash, area: Rect) {
     .render(frame, rect, frame_accent(dash));
 }
 
-pub(super) fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
+pub(super) fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) -> NavigationOverflow {
     let (tray_color, tray_value) = tray_status(dash);
     let (web_color, web_value) = web_status(dash.web);
     let (plugins_color, plugins_value) =
@@ -388,7 +414,12 @@ pub(super) fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
         ),
     ];
 
-    view_content(frame, area, rows);
+    let total = rows.len();
+    let height = list_capacity(area.height);
+    let start = cursor_window_start(total, height, dash.cursor);
+    let visible = rows.into_iter().skip(start).take(height).collect();
+    view_content(frame, area, visible);
+    NavigationOverflow::from_window(start, height, total)
 }
 
 pub(super) fn tray_status(dash: &Dash) -> (Color, Vec<Span<'static>>) {
@@ -538,7 +569,7 @@ pub(super) fn plugin_row_count(dash: &Dash) -> usize {
     }
 }
 
-pub(super) fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
+pub(super) fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
     let height = list_capacity(area.height);
     dash.log_height = height;
     let total = plugin_row_count(dash);
@@ -549,7 +580,7 @@ pub(super) fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
             LinksState::Live(_) => "  no workspace plugins found",
         };
         view_content(frame, area, vec![Line::from(message.fg(Color::DarkGray))]);
-        return;
+        return NavigationOverflow::default();
     }
     if dash.plugin_cursor >= total {
         dash.plugin_cursor = total - 1;
@@ -557,7 +588,7 @@ pub(super) fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     let cursor = dash.plugin_cursor;
     let start = cursor_window_start(total, height, cursor);
     let LinksState::Live(rows) = &dash.links else {
-        return;
+        return NavigationOverflow::default();
     };
     let lines: Vec<Line> = rows
         .iter()
@@ -575,6 +606,7 @@ pub(super) fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: Rect) {
         })
         .collect();
     view_content(frame, area, lines);
+    NavigationOverflow::from_window(start, height, total)
 }
 
 pub(super) fn plugin_row_line(
@@ -1181,6 +1213,115 @@ mod tests {
             cap.contains('╰') && cap.contains('╯'),
             "sign undercurve must not be cut off: {cap}"
         );
+    }
+
+    #[test]
+    fn navigation_cues_only_render_for_clipped_content() {
+        let mut dash = Dash::new(Vec::new());
+        let rows = render_rows(&mut dash);
+        assert!(
+            rows.iter()
+                .all(|row| !row.contains("│ ^ │") && !row.contains("│ v │")),
+            "fully visible dashboard must not render navigation cues"
+        );
+
+        let rows = render_rows_at(&mut dash, 110, 14);
+        let border = &rows[rows.len() - 2];
+        let down = border
+            .find("│ v │")
+            .expect("clipped dashboard must render a down cue");
+        let sign = border
+            .find("┤ base ├")
+            .expect("worktree sign missing from bottom border");
+        assert!(
+            rows[rows.len() - 3].contains("┌───┐") && rows[rows.len() - 1].contains("└───┘"),
+            "down cue must be a square-cornered box containing v"
+        );
+        assert!(down < sign, "down cue must sit left of the worktree sign");
+        for label in ["tray", "web", "plugins", "sandboxes"] {
+            assert!(
+                rows.iter().any(|row| row.contains(label)),
+                "down cue pushed {label} out of the viewport"
+            );
+        }
+        assert!(
+            rows.iter().all(|row| !row.contains("│ ^ │")),
+            "top cue rendered with no content above"
+        );
+
+        dash.cursor = ROWS.len() - 1;
+        let rows = render_rows_at(&mut dash, 110, 14);
+        let border = &rows[rows.len() - 2];
+        let up = border
+            .find("│ ^ │")
+            .expect("scrolled dashboard must render an up cue");
+        let sign = border
+            .find("┤ base ├")
+            .expect("worktree sign missing from bottom border");
+        assert!(
+            rows[rows.len() - 3].contains("┌───┐") && rows[rows.len() - 1].contains("└───┘"),
+            "up cue must be a square-cornered box containing ^"
+        );
+        assert!(up > sign, "up cue must sit right of the worktree sign");
+        for label in ["sandboxes", "doctor", "logs", "trace"] {
+            assert!(
+                rows.iter().any(|row| row.contains(label)),
+                "up cue pushed {label} out of the viewport"
+            );
+        }
+        assert!(
+            rows.iter().all(|row| !row.contains("│ v │")),
+            "down cue remained when the viewport reached the final row"
+        );
+
+        dash.cursor = 4;
+        let rows = render_rows_at(&mut dash, 110, 14);
+        let border = &rows[rows.len() - 2];
+        let down = border.find("│ v │").expect("middle viewport needs down");
+        let sign = border.find("┤ base ├").expect("worktree sign missing");
+        let up = border.find("│ ^ │").expect("middle viewport needs up");
+        assert!(down < sign && sign < up, "cue order: {border}");
+    }
+
+    #[test]
+    fn viewport_detects_content_above_and_below() {
+        let cases = [
+            (0, 7, 7, NavigationOverflow::default()),
+            (
+                0,
+                4,
+                7,
+                NavigationOverflow {
+                    above: false,
+                    below: true,
+                },
+            ),
+            (
+                2,
+                3,
+                7,
+                NavigationOverflow {
+                    above: true,
+                    below: true,
+                },
+            ),
+            (
+                3,
+                4,
+                7,
+                NavigationOverflow {
+                    above: true,
+                    below: false,
+                },
+            ),
+        ];
+        for (start, height, total, expected) in cases {
+            assert_eq!(
+                NavigationOverflow::from_window(start, height, total),
+                expected,
+                "start={start} height={height} total={total}"
+            );
+        }
     }
 
     #[test]
