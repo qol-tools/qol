@@ -315,10 +315,7 @@ items = []
     #[test]
     fn stop_daemon_drops_the_pre_bound_listener() {
         let mut plugin = migrated_plugin();
-        let socket_path = format!(
-            "/tmp/qol-daemon-lifecycle-test-stop-{}.sock",
-            std::process::id()
-        );
+        let socket_path = format!("/tmp/qol-dl-stop-{}.sock", std::process::id());
         let _ = std::fs::remove_file(&socket_path);
         let daemon_config = crate::plugins::manifest::DaemonConfig {
             enabled: true,
@@ -349,10 +346,7 @@ items = []
     #[test]
     fn stop_daemon_drops_the_listener_even_when_the_daemon_already_exited() {
         let mut plugin = migrated_plugin();
-        let socket_path = format!(
-            "/tmp/qol-daemon-lifecycle-test-stop-reaped-{}.sock",
-            std::process::id()
-        );
+        let socket_path = format!("/tmp/qol-dl-reaped-{}.sock", std::process::id());
         let _ = std::fs::remove_file(&socket_path);
         let daemon_config = crate::plugins::manifest::DaemonConfig {
             enabled: true,
@@ -409,10 +403,7 @@ socket = "{socket_path}"
     #[cfg(unix)]
     #[test]
     fn existing_daemon_socket_ready_is_not_satisfied_by_the_trays_own_listener() {
-        let socket_path = format!(
-            "/tmp/qol-daemon-lifecycle-test-ready-{}.sock",
-            std::process::id()
-        );
+        let socket_path = format!("/tmp/qol-dl-ready-{}.sock", std::process::id());
         let _ = std::fs::remove_file(&socket_path);
         let mut plugin = migrated_plugin_with_daemon(&socket_path);
         let daemon_config = plugin.manifest.daemon.clone().unwrap();

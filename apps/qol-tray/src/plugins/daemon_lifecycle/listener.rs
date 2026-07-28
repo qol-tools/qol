@@ -360,10 +360,7 @@ items = []
         #[test]
         fn refresh_for_respawn_drops_a_listener_whose_socket_path_was_unlinked() {
             let plugin = plugin_with_id("plugin-alt-tab");
-            let socket_path = format!(
-                "/tmp/qol-listener-test-refresh-unlinked-{}.sock",
-                std::process::id()
-            );
+            let socket_path = format!("/tmp/qol-ln-unlinked-{}.sock", std::process::id());
             let _ = std::fs::remove_file(&socket_path);
             let daemon_config = socket_daemon_config(&socket_path);
             let effective_path = crate::dev_generation::daemon_socket_path(&socket_path);
@@ -382,10 +379,7 @@ items = []
         #[test]
         fn refresh_for_respawn_keeps_a_listener_whose_socket_path_is_intact() {
             let plugin = plugin_with_id("plugin-alt-tab");
-            let socket_path = format!(
-                "/tmp/qol-listener-test-refresh-intact-{}.sock",
-                std::process::id()
-            );
+            let socket_path = format!("/tmp/qol-ln-intact-{}.sock", std::process::id());
             let _ = std::fs::remove_file(&socket_path);
             let daemon_config = socket_daemon_config(&socket_path);
             let bound = bind_for_plugin(&plugin, &daemon_config).unwrap();
@@ -400,10 +394,7 @@ items = []
         #[test]
         fn refresh_for_respawn_binds_ports_that_failed_the_first_time() {
             let plugin = plugin_with_id("plugin-alt-tab");
-            let socket_path = format!(
-                "/tmp/qol-listener-test-refresh-ports-{}.sock",
-                std::process::id()
-            );
+            let socket_path = format!("/tmp/qol-ln-ports-{}.sock", std::process::id());
             let _ = std::fs::remove_file(&socket_path);
             let daemon_config = DaemonConfig {
                 enabled: true,
@@ -567,10 +558,7 @@ items = []
         #[test]
         fn bind_for_plugin_includes_the_primary_port_for_a_migrated_plugin() {
             let plugin = plugin_with_id("plugin-alt-tab");
-            let socket_path = format!(
-                "/tmp/qol-listener-test-primary-port-{}.sock",
-                std::process::id()
-            );
+            let socket_path = format!("/tmp/qol-ln-primary-{}.sock", std::process::id());
             let _ = std::fs::remove_file(&socket_path);
             let daemon_config = DaemonConfig {
                 enabled: true,
