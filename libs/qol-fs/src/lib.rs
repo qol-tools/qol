@@ -6,18 +6,56 @@ use std::path::Path;
 use tempfile::Builder;
 
 pub fn atomic_write(path: &Path, content: &[u8]) -> io::Result<()> {
-    atomic_write_inner(path, content, false)
+    atomic_write_inner(path, content, false, false)
 }
 
 pub fn atomic_write_durable(path: &Path, content: &[u8]) -> io::Result<()> {
-    atomic_write_inner(path, content, true)
+    atomic_write_inner(path, content, true, false)
+}
+
+pub fn atomic_write_private(path: &Path, content: &[u8]) -> io::Result<()> {
+    atomic_write_inner(path, content, true, true)
 }
 
 pub fn sync_directory(path: &Path) -> io::Result<()> {
     platform::sync_parent(path)
 }
 
-fn atomic_write_inner(path: &Path, content: &[u8], durable: bool) -> io::Result<()> {
+pub fn create_private_dir(path: &Path) -> io::Result<()> {
+    if let Ok(metadata) = fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "private directory path is not a directory",
+            ));
+        }
+    }
+    fs::create_dir_all(path)?;
+    platform::set_private_dir(path)
+}
+
+pub fn recreate_private_dir(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "private directory path is a symlink",
+            ));
+        }
+        Ok(metadata) if !metadata.file_type().is_dir() => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "private directory path is not a directory",
+            ));
+        }
+        Ok(_) => fs::remove_dir_all(path)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    create_private_dir(path)
+}
+
+fn atomic_write_inner(path: &Path, content: &[u8], durable: bool, private: bool) -> io::Result<()> {
     let parent = parent_dir(path);
     fs::create_dir_all(parent)?;
     let prefix = temp_prefix(path);
@@ -25,7 +63,11 @@ fn atomic_write_inner(path: &Path, content: &[u8], durable: bool) -> io::Result<
         .prefix(&prefix)
         .suffix(".tmp")
         .tempfile_in(parent)?;
-    preserve_permissions(path, temp.as_file())?;
+    if private {
+        platform::set_private(temp.as_file())?;
+    } else {
+        preserve_permissions(path, temp.as_file())?;
+    }
     temp.as_file_mut().write_all(content)?;
     if durable {
         temp.as_file().sync_all()?;
@@ -97,6 +139,61 @@ mod tests {
 
         assert_eq!(fs::read(&path).unwrap(), b"durable content");
         assert!(temp_files(path.parent().unwrap(), "state.json").is_empty());
+    }
+
+    #[test]
+    fn atomic_write_private_replaces_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret");
+
+        atomic_write_private(&path, b"secret").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"secret");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_private_uses_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret");
+
+        atomic_write_private(&path, b"secret").unwrap();
+
+        let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_directory_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("private");
+
+        create_private_dir(&path).unwrap();
+
+        let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recreate_private_directory_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        let link = dir.path().join("link");
+        fs::create_dir(&target).unwrap();
+        symlink(&target, &link).unwrap();
+
+        let error = recreate_private_dir(&link).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(target.is_dir());
     }
 
     #[test]

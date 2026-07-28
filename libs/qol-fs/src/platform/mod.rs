@@ -6,8 +6,8 @@ mod macos;
 mod windows;
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::sync_parent;
+pub(crate) use linux::{set_private, set_private_dir, sync_parent};
 #[cfg(target_os = "macos")]
-pub(crate) use macos::sync_parent;
+pub(crate) use macos::{set_private, set_private_dir, sync_parent};
 #[cfg(target_os = "windows")]
-pub(crate) use windows::sync_parent;
+pub(crate) use windows::{set_private, set_private_dir, sync_parent};
