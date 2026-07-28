@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use super::objc::{
     ax_attr, ax_attr_result, cf_boolean_false, cf_boolean_true, cfstr, cfstring_to_string,
     cg_window_layer, cg_window_owner_pid, cls, dict_get_i32, msg_bool, msg_bool_usize, msg_i32,
-    msg_ptr, msg_ptr_usize, sel, AXUIElementCreateApplication, AXUIElementCreateSystemWide,
+    msg_ptr_usize, sel, AXUIElementCreateApplication, AXUIElementCreateSystemWide,
     AXUIElementGetPid, AXUIElementPerformAction, AXUIElementSetAttributeValue, AXValueCreate,
     AXValueGetValue, CFArrayGetCount, CFArrayGetValueAtIndex, CGPoint, CGSize,
     CGWindowListCopyWindowInfo, CfGuard, AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE,
@@ -259,30 +259,36 @@ pub(super) fn is_normal_window(pid: i32) -> bool {
 }
 
 pub(super) fn frontmost_pid() -> Option<i32> {
-    timed_pid("frontmost_pid", "ax_then_workspace", || {
+    timed_pid("frontmost_pid", "window_server_then_ax", || {
         let ax = system_focused_pid();
-        let workspace = workspace_frontmost_pid();
-        let chosen = ax.pid().or(workspace);
-        trace_focus_sources("frontmost_pid", ax, workspace, chosen);
+        let window_server = window_server_front_pid();
+        let chosen = window_server.or_else(|| ax.pid());
+        trace_focus_sources("frontmost_pid", ax, window_server, chosen);
         chosen
     })
 }
 
 pub(super) fn find_normal_window_pid() -> Option<i32> {
-    timed_pid("find_pid", "ax_workspace_window_server", || {
+    timed_pid("find_pid", "window_server_then_ax", || {
         let ax = system_focused_pid();
-        let workspace = workspace_frontmost_pid();
-        let focused = ax.pid();
-        trace_focus_sources("find_pid", ax, workspace, focused.or(workspace));
         let Some(list) = on_screen_window_list() else {
-            return focused.or(workspace);
+            trace_focus_sources("find_pid", ax, None, ax.pid());
+            return ax.pid();
         };
-        select_normal_window_pid(
-            [focused, workspace].into_iter().flatten(),
-            window_entries(&list),
-            is_normal_window,
-        )
+        let window_server = layer_zero_pids(window_entries(&list)).next();
+        let chosen = select_normal_window_pid(ax.pid(), window_entries(&list), is_normal_window);
+        trace_focus_sources("find_pid", ax, window_server, chosen);
+        chosen
     })
+}
+
+/// The owner of the frontmost normal-layer window, straight from the window server.
+/// Unlike `AXFocusedApplication` and `NSWorkspace.frontmostApplication`, this needs no
+/// run loop, so it is the only focus source that stays correct inside a plugin daemon.
+fn window_server_front_pid() -> Option<i32> {
+    let list = on_screen_window_list()?;
+    let front = layer_zero_pids(window_entries(&list)).next();
+    front
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -321,7 +327,7 @@ fn system_focused_pid() -> AxFocus {
     AxFocus::Pid(pid)
 }
 
-fn trace_focus_sources(op: &str, ax: AxFocus, workspace: Option<i32>, chosen: Option<i32>) {
+fn trace_focus_sources(op: &str, ax: AxFocus, window_server: Option<i32>, chosen: Option<i32>) {
     #[cfg(debug_assertions)]
     {
         let ax = match ax {
@@ -332,28 +338,13 @@ fn trace_focus_sources(op: &str, ax: AxFocus, workspace: Option<i32>, chosen: Op
         };
         qol_runtime::probe!(
             "WINACT_AX",
-            "op=focus_sources caller={op} ax={ax} workspace={} chosen={}",
-            workspace.map_or_else(|| "none".to_string(), |pid| pid.to_string()),
+            "op=focus_sources caller={op} ax={ax} window_server={} chosen={}",
+            window_server.map_or_else(|| "none".to_string(), |pid| pid.to_string()),
             chosen.map_or_else(|| "none".to_string(), |pid| pid.to_string()),
         );
     }
     #[cfg(not(debug_assertions))]
-    let _ = (op, ax, workspace, chosen);
-}
-
-fn workspace_frontmost_pid() -> Option<i32> {
-    unsafe {
-        let workspace = msg_ptr(cls("NSWorkspace"), sel("sharedWorkspace"));
-        if workspace.is_null() {
-            return None;
-        }
-        let app = msg_ptr(workspace, sel("frontmostApplication"));
-        if app.is_null() {
-            return None;
-        }
-        let pid = msg_i32(app, sel("processIdentifier"));
-        (pid > 0).then_some(pid)
-    }
+    let _ = (op, ax, window_server, chosen);
 }
 
 fn select_normal_window_pid(
