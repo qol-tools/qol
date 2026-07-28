@@ -11,6 +11,7 @@ pub struct CursorSession {
     grow_cursor: Option<CursorImage>,
     xfixes_event_base: Option<i32>,
     catalog: ShapeCatalog,
+    tree: Vec<xlib::Window>,
 }
 
 unsafe extern "C" fn log_x_error(
@@ -46,6 +47,7 @@ impl CursorSession {
             grow_cursor: None,
             xfixes_event_base: subscribe_cursor_notifications(display, root),
             catalog: ShapeCatalog::new(),
+            tree: Vec::new(),
         })
     }
 
@@ -57,6 +59,7 @@ impl CursorSession {
         }
         if self.active_cursor.is_none() {
             self.capture_live_cursors();
+            self.tree = collect_tree(self.display, self.root);
         }
         let scaled = self.grow_cursor.as_ref().and_then(|grow_cursor| {
             scale_cursor_for_display(self.display, self.root, grow_cursor, scale)
@@ -69,7 +72,7 @@ impl CursorSession {
         let Some(cursor) = cursor else {
             return false;
         };
-        apply_to_tree(self.display, self.root, cursor);
+        self.apply_cursor(cursor);
         self.flush();
         self.applied_cursor = scaled
             .map(|scaled| scaled.applied)
@@ -141,7 +144,7 @@ impl CursorSession {
             return;
         }
         restore_root_cursor(self.display, self.root, &self.base);
-        clear_children(self.display, self.root);
+        self.clear_tree_cursors();
         self.flush();
         if let Some(cursor) = self.active_cursor.take() {
             unsafe { xlib::XFreeCursor(self.display, cursor) };
@@ -149,10 +152,26 @@ impl CursorSession {
         self.current_scale = 1.0;
         self.applied_cursor = None;
         self.grow_cursor = None;
+        self.tree = Vec::new();
     }
 
     fn flush(&self) {
         sync(self.display);
+    }
+
+    fn apply_cursor(&self, cursor: xlib::Cursor) {
+        for window in &self.tree {
+            unsafe { xlib::XDefineCursor(self.display, *window, cursor) };
+        }
+    }
+
+    fn clear_tree_cursors(&self) {
+        for window in &self.tree {
+            if *window == self.root {
+                continue;
+            }
+            unsafe { xlib::XUndefineCursor(self.display, *window) };
+        }
     }
 
     fn capture_live_cursors(&mut self) {
@@ -188,7 +207,7 @@ impl CursorSession {
             eprintln!("[shake-to-grow] live refresh failed to build scaled cursor");
             return false;
         };
-        apply_to_tree(self.display, self.root, next_cursor);
+        self.apply_cursor(next_cursor);
         self.flush();
         self.applied_cursor = scaled.map(|scaled| scaled.applied);
         if let Some(old_cursor) = self.active_cursor.replace(next_cursor) {
@@ -219,7 +238,7 @@ impl CursorSession {
         let Some(cursor) = self.active_cursor else {
             return false;
         };
-        apply_to_tree(self.display, self.root, cursor);
+        self.apply_cursor(cursor);
         self.flush();
         true
     }
@@ -255,28 +274,16 @@ impl Drop for CursorSession {
     }
 }
 
-pub(super) fn apply_to_tree(
-    display: *mut xlib::Display,
-    window: xlib::Window,
-    cursor: xlib::Cursor,
-) {
-    let mut stack = vec![window];
+pub(super) fn collect_tree(display: *mut xlib::Display, root: xlib::Window) -> Vec<xlib::Window> {
+    let mut stack = vec![root];
+    let mut tree = Vec::new();
     while let Some(window) = stack.pop() {
-        unsafe { xlib::XDefineCursor(display, window, cursor) };
+        tree.push(window);
         for child in window_children(display, window) {
             stack.push(child);
         }
     }
-}
-
-pub(super) fn clear_children(display: *mut xlib::Display, root: xlib::Window) {
-    let mut stack = window_children(display, root);
-    while let Some(window) = stack.pop() {
-        unsafe { xlib::XUndefineCursor(display, window) };
-        for child in window_children(display, window) {
-            stack.push(child);
-        }
-    }
+    tree
 }
 
 pub(super) fn restore_root_cursor(

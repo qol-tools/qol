@@ -11,7 +11,7 @@ use crate::cursor::{CursorEffect, RunControl};
 
 use super::motion::{MotionSample, ScaleEvent, ScaleUpdate, ShakeDetector};
 
-const TICK_INTERVAL: Duration = Duration::from_millis(16);
+const TICK_INTERVAL: Duration = Duration::from_millis(8);
 const IDLE_WAKE_INTERVAL: Duration = Duration::from_millis(250);
 
 pub fn create_effect() -> Box<dyn CursorEffect> {
