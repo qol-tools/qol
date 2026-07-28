@@ -26,6 +26,13 @@ pub fn load_launcher_config() -> LauncherConfig {
     qol_config::load_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
 }
 
+pub(crate) fn inspect_launcher_config() -> Result<
+    qol_config::PluginConfigInspection<LauncherConfig>,
+    qol_config::PluginConfigInspectionError,
+> {
+    qol_config::inspect_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
+}
+
 #[cfg(test)]
 fn contract_defaults() -> LauncherConfig {
     qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).expect("contract defaults must parse")

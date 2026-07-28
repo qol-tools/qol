@@ -7,6 +7,7 @@ edition = "2021"
 qol-config.workspace = true
 qol-conventions.workspace = true
 qol-fs.workspace = true
+qol-headless.workspace = true
 qol-platform.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
@@ -19,4 +20,5 @@ qol-conventions.workspace = true
 [dev-dependencies]
 proptest = "1"
 qol-plugin-api.workspace = true
+tempfile = "3"
 toml.workspace = true

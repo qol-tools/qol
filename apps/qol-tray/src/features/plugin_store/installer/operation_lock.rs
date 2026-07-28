@@ -60,7 +60,7 @@ fn write_lock_owner(file: &mut std::fs::File, plugin_id: &str) {
 }
 
 fn reacquire_stale_lock(path: &Path, plugin_id: &str) -> Result<PluginOperationLock> {
-    if !stale_lockfile(path, super::LOCKFILE_MAX_AGE) {
+    if !stale_lockfile(path, super::super::platform::lockfile_max_age()) {
         anyhow::bail!("Plugin operation already in progress: {}", plugin_id);
     }
 

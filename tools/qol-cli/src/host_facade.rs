@@ -1,12 +1,9 @@
+pub(crate) use crate::platform::OpenPathOutcome;
 use crate::platform::{Platform, PlatformOps};
 use anyhow::Result;
 
 pub(crate) fn exe_name(name: &str) -> String {
     Platform.exe_name(name)
-}
-
-pub(crate) fn os_name() -> &'static str {
-    Platform.os_name()
 }
 
 pub(crate) fn force_stop_qol_tray() -> Result<()> {
@@ -21,8 +18,8 @@ pub(crate) fn open_url(url: &str) {
     let _ = qol_apps::desktop_integration::open_with_default_app(url);
 }
 
-pub(crate) fn open_path(dir: &std::path::Path) {
-    let _ = qol_apps::desktop_integration::open_with_default_app(dir);
+pub(crate) fn open_path(dir: &std::path::Path) -> Result<OpenPathOutcome> {
+    Platform.open_path(dir)
 }
 
 pub(crate) fn copy_to_clipboard(text: &str) -> Result<()> {
@@ -31,6 +28,22 @@ pub(crate) fn copy_to_clipboard(text: &str) -> Result<()> {
 
 pub(crate) fn available_memory_mb() -> Option<u64> {
     Platform.available_memory_mb()
+}
+
+pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
+    Platform.home_dir()
+}
+
+pub(crate) fn core_log_dir() -> std::path::PathBuf {
+    Platform.core_log_dir()
+}
+
+pub(crate) fn supports_qol_shot_payload() -> bool {
+    Platform.supports_qol_shot_payload()
+}
+
+pub(crate) fn open_text_file(path: &std::path::Path) -> bool {
+    Platform.open_text_file(path)
 }
 
 pub(crate) fn available_cpus() -> Option<u64> {

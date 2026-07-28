@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::platform::{BuildPlatform, Platform, PluginSupport};
+
 pub(super) struct SelectedPlugin {
     pub(super) plugin_id: String,
     pub(super) path: PathBuf,
@@ -33,19 +35,9 @@ fn select_plugin(plugin_id: &str, path: &Path) -> SelectedPlugin {
     }
 }
 
-struct PlatformSupport {
-    supported: bool,
-    reason: String,
-}
-
-fn check_plugin_platform(path: &Path) -> PlatformSupport {
+fn check_plugin_platform(path: &Path) -> PluginSupport {
     match load_manifest(path) {
-        ManifestLoad::Ok(manifest) => {
-            if manifest.plugin.supports_current_platform() {
-                return supported_platform();
-            }
-            unsupported_platform(*manifest)
-        }
+        ManifestLoad::Ok(manifest) => Platform.plugin_support(&manifest),
         ManifestLoad::Missing => missing_manifest(),
         ManifestLoad::Unparseable(error) => unparseable_manifest(error),
     }
@@ -72,40 +64,16 @@ fn load_manifest(path: &Path) -> ManifestLoad {
     }
 }
 
-fn missing_manifest() -> PlatformSupport {
-    PlatformSupport {
+fn missing_manifest() -> PluginSupport {
+    PluginSupport {
         supported: false,
         reason: "plugin.toml missing at dev-link path".to_string(),
     }
 }
 
-fn unparseable_manifest(error: String) -> PlatformSupport {
-    PlatformSupport {
+fn unparseable_manifest(error: String) -> PluginSupport {
+    PluginSupport {
         supported: false,
         reason: format!("plugin.toml unreadable: {}", error),
-    }
-}
-
-fn supported_platform() -> PlatformSupport {
-    PlatformSupport {
-        supported: true,
-        reason: String::new(),
-    }
-}
-
-fn unsupported_platform(manifest: qol_plugin_api::manifest::PluginManifest) -> PlatformSupport {
-    let declared = manifest
-        .plugin
-        .platforms
-        .as_ref()
-        .map(|platforms| platforms.join(", "))
-        .unwrap_or_else(|| "none".to_string());
-    PlatformSupport {
-        supported: false,
-        reason: format!(
-            "Not supported on {} (requires {})",
-            std::env::consts::OS,
-            declared
-        ),
     }
 }

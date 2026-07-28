@@ -74,11 +74,7 @@ fn sanitize(name: &str) -> String {
 }
 
 pub(crate) fn current_os_subdir() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "macos",
-        "windows" => "windows",
-        _ => "linux",
-    }
+    crate::portability::current_os_bucket()
 }
 
 pub(crate) fn is_safe_path_component(name: &str) -> bool {

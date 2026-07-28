@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 #[cfg(target_os = "linux")]
@@ -20,13 +21,32 @@ pub(crate) use unsupported::Platform;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::Platform;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OpenPathOutcome {
+    desktop_opened: bool,
+}
+
+impl OpenPathOutcome {
+    pub(super) const fn new(desktop_opened: bool) -> Self {
+        Self { desktop_opened }
+    }
+
+    pub(crate) const fn desktop_opened(self) -> bool {
+        self.desktop_opened
+    }
+}
+
 pub(crate) trait PlatformOps {
-    fn os_name(&self) -> &'static str;
     fn exe_name(&self, name: &str) -> String;
     fn stop_qol_tray(&self) -> Result<()>;
     fn qol_tray_running(&self) -> bool;
     fn copy_to_clipboard(&self, text: &str) -> Result<()>;
     fn available_memory_mb(&self) -> Option<u64>;
+    fn home_dir(&self) -> Option<PathBuf>;
+    fn core_log_dir(&self) -> PathBuf;
+    fn open_path(&self, path: &Path) -> Result<OpenPathOutcome>;
+    fn supports_qol_shot_payload(&self) -> bool;
+    fn open_text_file(&self, path: &Path) -> bool;
 }
 
 pub(super) fn pipe_to_clipboard(program: &str, args: &[&str], text: &str) -> Result<()> {

@@ -411,7 +411,6 @@ async fn async_init_inner(
         check_for_updates().await
     };
     let (shutdown_tx, shutdown_rx) = broadcast::channel::<()>(1);
-    #[cfg(unix)]
     let _state_server = qol_tray::runtime::RuntimeServer::start();
     qol_tray::doctor::spawn_gpu_driver_sync_watch();
     let plugins_dir = qol_tray::plugins::PluginLoader::ensure_plugin_dir()?;

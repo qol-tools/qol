@@ -1,4 +1,25 @@
+use anyhow::{Context, Result};
 use serialport::SerialPortInfo;
+
+use super::{DoctorPlatformMetadata, SerialMetadata};
+
+pub(crate) fn doctor_platform_metadata() -> DoctorPlatformMetadata {
+    DoctorPlatformMetadata {
+        name: "macOS",
+        supported: true,
+        serial_enumeration:
+            "IOKit registry metadata with port opening and coordinator probing disabled",
+    }
+}
+
+pub(crate) fn enumerate_serial_metadata() -> Result<SerialMetadata> {
+    let ports =
+        serialport::available_ports().context("failed to enumerate macOS serial metadata")?;
+    Ok(SerialMetadata {
+        source: "iokit_registry",
+        ports,
+    })
+}
 
 pub(crate) fn detect_coordinator_port(ports: &[SerialPortInfo]) -> Option<String> {
     super::port_detection::select_best_port(ports, score_port)

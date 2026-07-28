@@ -1,5 +1,6 @@
+mod cli;
 mod platform;
 
-fn main() -> anyhow::Result<()> {
-    platform::run()
+fn main() -> std::process::ExitCode {
+    cli::exit_code(std::env::args().skip(1))
 }

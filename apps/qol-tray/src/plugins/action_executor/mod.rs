@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod execution;
+mod platform;
 mod resolution;
 mod tracking;
 
@@ -196,14 +197,15 @@ pub fn dispatch_query(
         return query_dispatch_result(initial_dispatch, plugin_id, query_name);
     }
 
-    if let Err(error) = ensure_daemon_ready(
+    let readiness = ensure_daemon_ready(
         plugin_manager,
         plugin_id,
         query_name,
         &socket_path,
         query_daemon_socket_ready,
-    ) {
-        #[cfg(debug_assertions)]
+    );
+    #[cfg(debug_assertions)]
+    if let Err(error) = &readiness {
         qol_runtime::probe!(
             "QUERY_DISPATCH",
             "plugin={} query={} attempt=recovery outcome=not_ready error={}",
@@ -211,8 +213,8 @@ pub fn dispatch_query(
             query_name,
             error
         );
-        return Err(error);
     }
+    readiness?;
 
     let retry_dispatch =
         crate::plugins::action_transport::dispatch_daemon_action(&socket_path, query_name);

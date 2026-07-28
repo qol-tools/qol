@@ -11,11 +11,13 @@ use std::time::{Duration, Instant};
 use crate::capture::frozen_frame::FrozenFrame;
 use crate::capture::space::CaptureKind;
 use crate::platform::{CaptureProcess, CaptureSession};
+use crate::ui::region_selector::{DetectedTarget, DetectedTargetRole};
 use crate::{Config, Monitor, Rect};
 
 mod clipboard;
 mod display;
 mod preview;
+mod selector_cache;
 mod system;
 mod window;
 
@@ -36,8 +38,7 @@ use window::{configure_selector_window, prepare_selector_window};
 const MIN_DETECTED_TARGET_PX: i32 = 24;
 
 thread_local! {
-    static SELECTOR_CACHE: crate::ui::region_selector::platform::SelectorCache =
-        crate::ui::region_selector::platform::SelectorCache::default();
+    static SELECTOR_CACHE: selector_cache::SelectorCache = selector_cache::SelectorCache::default();
 }
 
 struct SelectorTopology {
@@ -51,12 +52,9 @@ pub fn pre_create_selector(cx: &mut gpui::App) {
     let monitor_bounds = selector_monitor_bounds(monitors, bounds);
     let selector = selector_window(bounds, monitor_bounds, None, None, None, None, None);
     SELECTOR_CACHE.with(|cache| {
-        let Some(title) = crate::ui::region_selector::platform::pre_create_cached(
-            cache,
-            selector,
-            CaptureKind::Screenshot,
-            cx,
-        ) else {
+        let Some(title) =
+            selector_cache::pre_create_cached(cache, selector, CaptureKind::Screenshot, cx)
+        else {
             return;
         };
         prepare_selector_window(&title, rect_from_bounds(bounds));
@@ -164,14 +162,7 @@ fn open_region_selector_with_sender(
             configure_selector_window(title, reveal_bounds);
         });
         let title = SELECTOR_CACHE.with(|cache| {
-            crate::ui::region_selector::platform::open_cached(
-                cache,
-                &mut tx,
-                &mut selector,
-                kind,
-                reveal,
-                cx,
-            )
+            selector_cache::open_cached(cache, &mut tx, &mut selector, kind, reveal, cx)
         });
         if title.is_some() {
             cx.activate(true);
@@ -201,13 +192,25 @@ fn initial_default_target(
     monitor: Option<Rect>,
 ) -> Option<crate::ui::region_selector::DetectedTarget> {
     let pointer_target = pointer.and_then(|point| hover_target?.target_at(point));
-    let pointer_monitor = pointer
-        .zip(monitor)
-        .map(|(_, rect)| crate::ui::region_selector::DetectedTarget::Monitor(rect));
+    let pointer_monitor = pointer.zip(monitor).map(|(_, rect)| detected_monitor(rect));
     pointer_target
         .or(pointer_monitor)
-        .or_else(|| focused_window.map(crate::ui::region_selector::DetectedTarget::Window))
-        .or_else(|| monitor.map(crate::ui::region_selector::DetectedTarget::Monitor))
+        .or_else(|| focused_window.map(detected_window))
+        .or_else(|| monitor.map(detected_monitor))
+}
+
+fn detected_window(rect: Rect) -> DetectedTarget {
+    DetectedTarget {
+        rect,
+        role: DetectedTargetRole { is_window: true },
+    }
+}
+
+fn detected_monitor(rect: Rect) -> DetectedTarget {
+    DetectedTarget {
+        rect,
+        role: DetectedTargetRole { is_window: false },
+    }
 }
 
 fn selector_window(
@@ -231,7 +234,7 @@ fn selector_window(
             focus: true,
         },
         crate::ui::region_selector::SelectorWindowSources {
-            map_rect: crate::ui::region_selector::platform::identity_rect_mapper(),
+            map_rect: selector_cache::identity_rect_mapper(),
             global_pointer: None,
             cancel_signal: Some(Rc::new(qol_gpui::platform::is_escape_held)),
             active_bounds,
@@ -311,13 +314,13 @@ impl crate::ui::region_selector::HoverTarget for SnapshotHoverTarget {
         let hit =
             |rect: &Rect| x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h;
         if let Some(window) = self.windows.iter().copied().find(hit) {
-            return Some(crate::ui::region_selector::DetectedTarget::Window(window));
+            return Some(detected_window(window));
         }
         self.monitors
             .iter()
             .copied()
             .find(hit)
-            .map(crate::ui::region_selector::DetectedTarget::Monitor)
+            .map(detected_monitor)
     }
 }
 
@@ -567,18 +570,27 @@ fn trace_default_target(
     target: Option<crate::ui::region_selector::DetectedTarget>,
     selector_bounds: Bounds<Pixels>,
 ) {
-    let target = match target {
-        Some(crate::ui::region_selector::DetectedTarget::Window(rect)) => {
-            format!("window:{}", crate::capture::geometry::rect_label(rect))
-        }
-        Some(crate::ui::region_selector::DetectedTarget::Monitor(rect)) => {
-            format!("monitor:{}", crate::capture::geometry::rect_label(rect))
-        }
-        None => "none".to_string(),
-    };
-    let bounds = rect_from_bounds(selector_bounds);
-    let bounds = crate::capture::geometry::rect_label(bounds);
-    qol_runtime::probe!("SHOT_SELECT_TARGET", "default={target} selector={bounds}");
+    #[cfg(debug_assertions)]
+    {
+        let target = target
+            .map(|target| {
+                let role = if target.role.is_window {
+                    "window"
+                } else {
+                    "monitor"
+                };
+                format!(
+                    "{role}:{}",
+                    crate::capture::geometry::rect_label(target.rect)
+                )
+            })
+            .unwrap_or_else(|| "none".to_string());
+        let bounds = rect_from_bounds(selector_bounds);
+        let bounds = crate::capture::geometry::rect_label(bounds);
+        qol_runtime::probe!("SHOT_SELECT_TARGET", "default={target} selector={bounds}");
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (target, selector_bounds);
 }
 
 fn rect_from_bounds(bounds: Bounds<Pixels>) -> Rect {
@@ -759,7 +771,14 @@ pub fn recording_format(format: &str) -> String {
     format.to_string()
 }
 
-pub fn recording_started(_session: &CaptureSession) {
+pub fn recording_started(_session: &CaptureSession, countdown_completed: bool) {
+    if countdown_completed {
+        qol_runtime::probe!(
+            "SHOT_RECORD_FEEDBACK",
+            "stage=started surface=none reason=countdown-complete"
+        );
+        return;
+    }
     show_notification("Recording started", "Press your hotkey to stop", 1200);
 }
 
@@ -824,23 +843,24 @@ fn wait_for_recording_file(session: &CaptureSession, output_file: &Path) -> Resu
 
 pub fn stop_capture(session: &CaptureSession) -> Result<()> {
     for process in &session.processes {
-        super::unix_signal_process(process.pid, libc::SIGINT)
+        super::unix::signal_process(process.pid, libc::SIGINT)
             .context("failed to send SIGINT to ffmpeg")?;
     }
     Ok(())
 }
 
 pub fn process_alive(pid: u32) -> bool {
-    super::unix_process_alive(pid)
+    super::unix::process_alive(pid)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        capturable_window_type, framed_rect, initial_default_target, parse_xdotool_geometry,
-        selector_monitor_bounds, usable_target, SnapshotHoverTarget,
+        capturable_window_type, detected_monitor, detected_window, framed_rect,
+        initial_default_target, parse_xdotool_geometry, selector_monitor_bounds, usable_target,
+        SnapshotHoverTarget,
     };
-    use crate::ui::region_selector::{DetectedTarget, HoverTarget};
+    use crate::ui::region_selector::HoverTarget;
     use crate::Rect;
     use gpui::{point, px, size, Bounds};
     use qol_gpui::monitor::ActiveMonitor;
@@ -901,26 +921,11 @@ mod tests {
             monitors: vec![monitor],
         };
         let cases = [
-            (
-                point(px(150.0), px(150.0)),
-                Some(DetectedTarget::Window(top)),
-            ),
-            (
-                point(px(50.0), px(50.0)),
-                Some(DetectedTarget::Window(bottom)),
-            ),
-            (
-                point(px(499.0), px(399.0)),
-                Some(DetectedTarget::Window(top)),
-            ),
-            (
-                point(px(500.0), px(400.0)),
-                Some(DetectedTarget::Window(bottom)),
-            ),
-            (
-                point(px(3000.0), px(50.0)),
-                Some(DetectedTarget::Monitor(monitor)),
-            ),
+            (point(px(150.0), px(150.0)), Some(detected_window(top))),
+            (point(px(50.0), px(50.0)), Some(detected_window(bottom))),
+            (point(px(499.0), px(399.0)), Some(detected_window(top))),
+            (point(px(500.0), px(400.0)), Some(detected_window(bottom))),
+            (point(px(3000.0), px(50.0)), Some(detected_monitor(monitor))),
             (point(px(5000.0), px(50.0)), None),
         ];
         for (pointer, expected) in cases {
@@ -958,28 +963,28 @@ mod tests {
                 Some(&source as &dyn HoverTarget),
                 Some(focused),
                 Some(cursor_monitor),
-                Some(DetectedTarget::Window(hovered)),
+                Some(detected_window(hovered)),
             ),
             (
                 Some(point(px(5000.0), px(500.0))),
                 Some(&source as &dyn HoverTarget),
                 Some(focused),
                 Some(cursor_monitor),
-                Some(DetectedTarget::Monitor(cursor_monitor)),
+                Some(detected_monitor(cursor_monitor)),
             ),
             (
                 None,
                 Some(&source as &dyn HoverTarget),
                 Some(focused),
                 Some(cursor_monitor),
-                Some(DetectedTarget::Window(focused)),
+                Some(detected_window(focused)),
             ),
             (
                 None,
                 None,
                 None,
                 Some(cursor_monitor),
-                Some(DetectedTarget::Monitor(cursor_monitor)),
+                Some(detected_monitor(cursor_monitor)),
             ),
             (None, None, None, None, None),
         ];

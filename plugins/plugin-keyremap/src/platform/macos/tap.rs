@@ -78,11 +78,7 @@ pub fn start_tap(state: Arc<TapState>) {
 }
 
 fn wait_for_accessibility() {
-    extern "C" {
-        fn AXIsProcessTrusted() -> bool;
-    }
-
-    if unsafe { AXIsProcessTrusted() } {
+    if accessibility_trusted() {
         return;
     }
 
@@ -91,11 +87,19 @@ fn wait_for_accessibility() {
 
     loop {
         std::thread::sleep(std::time::Duration::from_secs(2));
-        if unsafe { AXIsProcessTrusted() } {
+        if accessibility_trusted() {
             eprintln!("[keyremap] Accessibility permission granted");
             return;
         }
     }
+}
+
+pub(super) fn accessibility_trusted() -> bool {
+    extern "C" {
+        fn AXIsProcessTrusted() -> bool;
+    }
+
+    unsafe { AXIsProcessTrusted() }
 }
 
 fn run_tap(state: Arc<TapState>) {

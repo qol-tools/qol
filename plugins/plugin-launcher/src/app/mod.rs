@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
@@ -28,6 +29,10 @@ pub fn start_listener(tx: Sender<Command>) -> bool {
 
 pub fn cleanup() {
     core_daemon::cleanup(&DAEMON_CONFIG);
+}
+
+pub(crate) fn socket_path() -> Option<PathBuf> {
+    core_daemon::socket_path(&DAEMON_CONFIG)
 }
 
 fn parse_command(cmd: &str) -> ReadResult<Command> {

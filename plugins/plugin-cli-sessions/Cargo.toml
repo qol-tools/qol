@@ -15,6 +15,7 @@ serde.workspace = true
 serde_json.workspace = true
 gpui.workspace = true
 qol-gpui.workspace = true
+qol-headless.workspace = true
 qol-plugin-daemon.workspace = true
 qol-process.workspace = true
 qol-runtime.workspace = true
@@ -28,4 +29,5 @@ qol-conventions.workspace = true
 [dev-dependencies]
 proptest = "1"
 qol-plugin-api.workspace = true
+tempfile = "3"
 toml.workspace = true

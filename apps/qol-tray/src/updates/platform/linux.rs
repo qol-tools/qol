@@ -6,19 +6,33 @@ use crate::daemon::{DaemonEvent, EventBus};
 use crate::features::plugin_store::release_integrity;
 
 use super::super::{latest_version, GITHUB_REPO};
-use super::common;
+use super::unix;
 use super::InstallKind;
 
+pub(super) fn detect_install_kind() -> InstallKind {
+    let executable = std::env::current_exe()
+        .and_then(|path| std::fs::canonicalize(&path).or(Ok(path)))
+        .ok();
+    let executable = executable
+        .as_deref()
+        .and_then(|path| path.to_str())
+        .unwrap_or_default();
+    let home = dirs::home_dir().and_then(|path| path.to_str().map(String::from));
+    InstallKind::for_path(executable, home.as_deref(), false)
+}
+
 fn asset_name() -> String {
-    format!("qol-tray-linux-{}.tar.gz", common::arch_suffix())
+    format!("qol-tray-linux-{}.tar.gz", unix::arch_suffix())
 }
 
 pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
-    let dev_url = common::dev_update_url();
+    let install_kind = InstallKind::detect();
+    log::info!("Install kind: {install_kind:?}");
+    let dev_url = unix::dev_update_url();
     let dev_override = dev_url.is_some();
 
     if !dev_override {
-        match InstallKind::detect() {
+        match install_kind {
             InstallKind::SystemWide => {
                 log::warn!(
                     "Updating a system-wide installation — binary will be replaced in place"
@@ -53,14 +67,14 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("No verified update asset available"))?;
 
     log::info!("Downloading update from {}", url);
-    common::download_asset(&url, &dest, &events).await?;
+    unix::download_asset(&url, &dest, &events).await?;
     if let Some(asset) = &verified_asset {
         release_integrity::verify_file(asset, &dest)?;
     }
 
     let current_exe = std::env::current_exe()?;
-    let install_result = common::extract_tar_gz(&dest, "qol-tray")
-        .and_then(|binary| common::atomic_replace(&binary, &current_exe));
+    let install_result = unix::extract_tar_gz(&dest, "qol-tray")
+        .and_then(|binary| unix::atomic_replace(&binary, &current_exe));
     install_result?;
 
     events.send(DaemonEvent::UpdateComplete);
@@ -78,7 +92,7 @@ mod tests {
 
     #[test]
     fn linux_release_asset_name_is_stable() {
-        let arch = common::arch_suffix();
+        let arch = unix::arch_suffix();
         assert_eq!(asset_name(), format!("qol-tray-linux-{arch}.tar.gz"));
     }
 }

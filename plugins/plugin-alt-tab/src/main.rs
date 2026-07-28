@@ -8,9 +8,8 @@ mod preview_plane;
 mod rendering;
 mod runtime;
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    runtime::run(args);
+fn main() -> std::process::ExitCode {
+    runtime::exit_code(std::env::args().skip(1))
 }
 
 #[cfg(test)]

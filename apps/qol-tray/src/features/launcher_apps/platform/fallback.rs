@@ -7,6 +7,4 @@ pub(super) fn sync(
     anyhow::bail!("launcher application integration is unavailable on this platform")
 }
 
-pub(super) fn apps_dir() -> Option<std::path::PathBuf> {
-    None
-}
+pub(super) fn publish_synced() {}

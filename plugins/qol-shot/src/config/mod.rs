@@ -42,22 +42,8 @@ pub enum SavedFeedback {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CaptureConfig {
     #[serde(default = "default_true")]
-    #[cfg_attr(
-        not(target_os = "linux"),
-        allow(
-            dead_code,
-            reason = "window frame extents are only applied by the X11 selector"
-        )
-    )]
     pub include_window_frame: bool,
     #[serde(default = "default_true")]
-    #[cfg_attr(
-        not(any(target_os = "linux", target_os = "macos")),
-        allow(
-            dead_code,
-            reason = "the pinned preview window only exists on linux and macos"
-        )
-    )]
     pub pin_border: bool,
     #[serde(default)]
     pub open_folder_after_save: bool,
@@ -79,40 +65,12 @@ impl Default for CaptureConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AudioConfig {
     #[serde(default = "default_true")]
-    #[cfg_attr(
-        not(any(target_os = "linux", target_os = "macos")),
-        allow(
-            dead_code,
-            reason = "audio capture is not implemented on this platform"
-        )
-    )]
     pub enabled: bool,
     #[serde(default = "default_audio_inputs")]
-    #[cfg_attr(
-        not(target_os = "linux"),
-        allow(
-            dead_code,
-            reason = "explicit audio inputs are supported by linux only"
-        )
-    )]
     pub inputs: Vec<String>,
     #[serde(default = "default_string_default")]
-    #[cfg_attr(
-        not(target_os = "linux"),
-        allow(
-            dead_code,
-            reason = "explicit audio devices are supported by linux only"
-        )
-    )]
     pub mic_device: String,
     #[serde(default = "default_string_default")]
-    #[cfg_attr(
-        not(target_os = "linux"),
-        allow(
-            dead_code,
-            reason = "explicit audio devices are supported by linux only"
-        )
-    )]
     pub system_device: String,
 }
 
@@ -130,31 +88,10 @@ impl Default for AudioConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VideoConfig {
     #[serde(default = "default_crf")]
-    #[cfg_attr(
-        not(any(target_os = "linux", target_os = "macos")),
-        allow(
-            dead_code,
-            reason = "video encoding is not implemented on this platform"
-        )
-    )]
     pub crf: i32,
     #[serde(default = "default_preset")]
-    #[cfg_attr(
-        not(any(target_os = "linux", target_os = "macos")),
-        allow(
-            dead_code,
-            reason = "video encoding is not implemented on this platform"
-        )
-    )]
     pub preset: String,
     #[serde(default = "default_framerate")]
-    #[cfg_attr(
-        not(target_os = "linux"),
-        allow(
-            dead_code,
-            reason = "framerate is controlled by linux ffmpeg capture only"
-        )
-    )]
     pub framerate: u32,
     #[serde(default = "default_format")]
     pub format: String,

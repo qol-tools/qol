@@ -15,8 +15,6 @@
 //! Refs: workspace/docs/superpowers/plans/2026-05-12-terminal-workspace-restore-security-plan.md (card 07, "Defense in depth")
 //! Closes: RUNTIME-1.2 (argv-truncation sub-invariant).
 
-#![cfg(unix)]
-
 use qol_runtime::broker::{check_field_access, FieldCheckError, PaneField};
 
 #[test]

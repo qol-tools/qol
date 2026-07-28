@@ -8,16 +8,12 @@ mod linux;
 mod macos;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(crate) fn create() -> impl Platform {
-    fallback::FallbackQueries
-}
-
+use fallback as active;
 #[cfg(target_os = "linux")]
-pub(crate) fn create() -> impl Platform {
-    linux::LinuxQueries::new()
-}
-
+use linux as active;
 #[cfg(target_os = "macos")]
+use macos as active;
+
 pub(crate) fn create() -> impl Platform {
-    macos::MacQueries::new(std::process::id() as i32)
+    active::create()
 }

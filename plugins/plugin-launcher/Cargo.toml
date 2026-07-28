@@ -10,13 +10,16 @@ autoexamples = false
 examples = []
 
 [dependencies]
+anyhow = "1"
 gpui.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 notify = { version = "8", default-features = false, features = [
   "macos_fsevent",
 ] }
 qol-plugin-daemon.workspace = true
 qol-gpui.workspace = true
+qol-headless.workspace = true
 qol-runtime.workspace = true
 qol-search.workspace = true
 qol-frecency.workspace = true
@@ -44,6 +47,7 @@ qol-conventions.workspace = true
 [dev-dependencies]
 proptest = "1.0"
 qol-plugin-api.workspace = true
+tempfile = "3"
 
 [[example]]
 name = "01_minimal_window"

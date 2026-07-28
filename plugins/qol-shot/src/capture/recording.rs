@@ -168,17 +168,7 @@ fn start_recording(selected: Rect, config: &Config, feedback: StartedFeedback) -
 }
 
 fn announce_recording_started(session: &platform::CaptureSession, feedback: StartedFeedback) {
-    #[cfg(target_os = "linux")]
-    if feedback == StartedFeedback::Countdown {
-        qol_runtime::probe!(
-            "SHOT_RECORD_FEEDBACK",
-            "stage=started surface=none reason=countdown-complete"
-        );
-        return;
-    }
-    #[cfg(not(target_os = "linux"))]
-    let _ = feedback;
-    platform::recording_started(session);
+    platform::recording_started(session, feedback == StartedFeedback::Countdown);
 }
 
 fn prepare_recording_rect(selected: Rect) -> Result<Rect> {

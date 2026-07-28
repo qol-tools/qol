@@ -19,12 +19,6 @@ impl CursorPlatform for Platform {
     fn external_stop_requested(&self) -> bool {
         false
     }
-
-    fn open_settings(&self) -> Result<()> {
-        Err(anyhow!(
-            "plugin-os-themes: settings UI is not implemented on Windows"
-        ))
-    }
 }
 
 struct UnsupportedEffect;

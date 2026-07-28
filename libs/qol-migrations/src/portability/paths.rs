@@ -15,12 +15,6 @@ use super::unicode::normalize_to_nfc;
 
 const MAX_PROFILE_NAME_BYTES: usize = 32;
 
-#[cfg(target_os = "windows")]
-const PLATFORM_PATH_LIMIT: usize = 260;
-
-#[cfg(not(target_os = "windows"))]
-const PLATFORM_PATH_LIMIT: usize = 4096;
-
 /// Validate a profile name against the cross-OS rule set.
 ///
 /// Rules (checked in order):
@@ -63,7 +57,7 @@ pub fn validate_profile_name(name: &str) -> Result<()> {
 /// Windows: 260 bytes. Linux/macOS: 4096 bytes. Length is measured as
 /// `path.as_os_str().len()`.
 pub fn ensure_path_within_platform_limit(path: &Path) -> Result<()> {
-    ensure_length_within_limit(path.as_os_str().len(), PLATFORM_PATH_LIMIT)
+    ensure_length_within_limit(path.as_os_str().len(), super::platform::path_limit())
 }
 
 fn ensure_length_within_limit(len: usize, limit: usize) -> Result<()> {

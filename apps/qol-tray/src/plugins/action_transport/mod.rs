@@ -1,9 +1,6 @@
 use std::path::Path;
 use std::time::Duration;
 
-#[cfg(any(unix, test))]
-mod protocol;
-
 mod platform;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

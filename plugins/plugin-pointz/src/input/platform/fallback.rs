@@ -6,10 +6,18 @@
 //! to satisfy the trait without `unimplemented!()`.
 
 use crate::command::ModifierKeys;
-use crate::input::InputHandlerTrait;
+use crate::input::{InputHandlerTrait, PlatformSupport};
 use anyhow::{anyhow, Result};
 
 pub struct InputHandlerImpl;
+
+pub(in crate::input) fn platform_support() -> PlatformSupport {
+    PlatformSupport {
+        name: "unsupported",
+        declared: false,
+        input_backend: false,
+    }
+}
 
 impl InputHandlerImpl {
     pub fn new() -> Result<Self> {

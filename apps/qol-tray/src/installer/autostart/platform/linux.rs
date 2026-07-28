@@ -2,14 +2,14 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 use super::AutostartOps;
-use crate::installer::platform::desktop_entry::{
+use crate::installer::platform::linux::desktop_entry::{
     format_desktop_exec_command, parse_desktop_exec_program,
 };
 
 const DESKTOP_TEMPLATE: &str =
     include_str!("../../../../scripts/installer/platform/linux/desktop/qol-tray.desktop");
 
-pub(crate) struct Platform;
+pub(super) struct Platform;
 
 impl AutostartOps for Platform {
     fn read_target(&self) -> Result<Option<PathBuf>> {

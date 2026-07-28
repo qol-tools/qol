@@ -1,7 +1,10 @@
 use std::fmt;
 
 pub mod apply;
+mod platform;
 pub mod state;
+
+pub(crate) use platform::authorization_available;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Mac([u8; 6]);

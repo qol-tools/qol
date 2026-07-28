@@ -60,6 +60,23 @@ impl SharedEntryState {
 
 pub type SharedEntries = Arc<Mutex<SharedEntryState>>;
 
+pub(crate) struct DiscoveryPaths {
+    pub(crate) application_roots: Vec<PathBuf>,
+    pub(crate) file_roots: Vec<PathBuf>,
+    pub(crate) cache: Option<PathBuf>,
+}
+
+pub(crate) fn paths() -> DiscoveryPaths {
+    DiscoveryPaths {
+        application_roots: platform::app_roots()
+            .into_iter()
+            .map(|root| root.path)
+            .collect(),
+        file_roots: platform::file_watch_roots(),
+        cache: file_cache::cache_path(),
+    }
+}
+
 pub fn load_file_entries() -> Vec<FileEntry> {
     let roots = platform::file_watch_roots();
     if let Some(entries) = file_cache::load(&roots) {

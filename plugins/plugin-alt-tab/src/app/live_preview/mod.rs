@@ -136,11 +136,11 @@ fn drain_shot_results(
                 *failures = 0;
                 frames.push((wid, buf));
             }
-            Some(buf) => {
+            Some(_buf) => {
                 qol_runtime::probe!(
                     "PREVIEW_LIVE",
                     "source=shots outcome=dropped reason=pixel_format format={:#x}",
-                    buf.pixel_format()
+                    _buf.pixel_format()
                 );
                 *failures += 1;
                 failed.push(wid);
@@ -254,6 +254,7 @@ async fn preview_loop(
         }
         let rendering = crate::rendering::RenderingFlow::current();
         if !rendering.captures_live_selection() {
+            #[cfg(debug_assertions)]
             let backend = rendering.preview_plane_backend().unwrap_or("none");
             qol_runtime::probe!(
                 "PREVIEW_LIVE",
@@ -326,7 +327,7 @@ async fn preview_loop(
             &cx,
         );
         #[cfg(not(debug_assertions))]
-        let _ = update_result;
+        let _ = (update_result.state_update, update_result.cache_write);
         #[cfg(debug_assertions)]
         {
             if update_result.cache_write {
@@ -379,7 +380,6 @@ async fn run_capture(
 }
 
 #[derive(Clone, Copy, Default)]
-#[cfg_attr(not(debug_assertions), allow(dead_code))]
 struct PreviewUpdateResult {
     state_update: bool,
     cache_write: bool,

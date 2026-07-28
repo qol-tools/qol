@@ -1,14 +1,12 @@
-use super::PlatformOps;
-use anyhow::Result;
-use std::process::Command;
+use super::{OpenPathOutcome, PlatformOps};
+use anyhow::{Context, Result};
+use std::env;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 pub(crate) struct Platform;
 
 impl PlatformOps for Platform {
-    fn os_name(&self) -> &'static str {
-        "macos"
-    }
-
     fn exe_name(&self, name: &str) -> String {
         name.to_string()
     }
@@ -35,6 +33,37 @@ impl PlatformOps for Platform {
             return None;
         }
         parse_available_memory_mb(&String::from_utf8_lossy(&output.stdout))
+    }
+
+    fn home_dir(&self) -> Option<PathBuf> {
+        env::var_os("HOME").map(PathBuf::from)
+    }
+
+    fn core_log_dir(&self) -> PathBuf {
+        self.home_dir()
+            .map(|home| home.join("Library/Logs/qol-tray"))
+            .unwrap_or_else(|| env::temp_dir().join("qol-tray/logs"))
+    }
+
+    fn open_path(&self, path: &Path) -> Result<OpenPathOutcome> {
+        qol_apps::desktop_integration::open_with_default_app(path)
+            .with_context(|| format!("could not open {}", path.display()))?;
+        Ok(OpenPathOutcome::new(true))
+    }
+
+    fn supports_qol_shot_payload(&self) -> bool {
+        false
+    }
+
+    fn open_text_file(&self, path: &Path) -> bool {
+        Command::new("open")
+            .arg("-t")
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok()
     }
 }
 

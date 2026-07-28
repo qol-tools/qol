@@ -13,6 +13,7 @@ qol-apps.workspace = true
 qol-conventions.workspace = true
 qol-color.workspace = true
 qol-config.workspace = true
+qol-headless.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
 serde_json.workspace = true
@@ -24,3 +25,4 @@ qol-conventions.workspace = true
 
 [dev-dependencies]
 qol-plugin-api.workspace = true
+tempfile = "3"

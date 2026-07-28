@@ -172,12 +172,9 @@ pub(super) fn promote_image(
 }
 
 pub(super) fn remove_stage(path: &Path) -> Result<()> {
-    #[cfg(windows)]
     if let Ok(metadata) = fs::metadata(path) {
-        let mut permissions = metadata.permissions();
-        if permissions.readonly() {
-            permissions.set_readonly(false);
-            fs::set_permissions(path, permissions).with_context(|| {
+        if metadata.permissions().readonly() {
+            qol_fs::prepare_file_removal(path).with_context(|| {
                 format!("failed to make staged image {} removable", path.display())
             })?;
         }

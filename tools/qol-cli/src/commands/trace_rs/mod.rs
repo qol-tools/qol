@@ -8,12 +8,7 @@ use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, IsTerminal, Read, Seek, SeekFrom, Write};
-#[cfg(unix)]
-use std::mem::MaybeUninit;
-#[cfg(unix)]
-use std::os::fd::AsRawFd;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -50,6 +45,7 @@ mod cli;
 mod format;
 mod model;
 mod parse;
+mod platform;
 mod runner;
 mod tail_input;
 use cli::Args;
@@ -66,8 +62,8 @@ use parse::{
     arrow_status, bracket_field, ewmh_payload, field, first_quoted, hide_opacity,
     launcher_pos_size, launcher_window, parse_at_bounds, parse_ghost_window,
     parse_monitor_bounds_debug, parse_python_cycle, parse_python_ghost_dump,
-    parse_qol_title_origin, parse_xrandr_geometry_line, quoted_field, reason, reason_suffix,
-    sequence, show_opacity, title_contains_match, tuple_field,
+    parse_qol_title_origin, quoted_field, reason, reason_suffix, sequence, show_opacity,
+    title_contains_match, tuple_field,
 };
 use runner::TraceRunner;
 use tail_input::{detail_control_hint, DetailToggleInput, TailControl};

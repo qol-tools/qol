@@ -1,11 +1,90 @@
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Result};
+use qol_headless::{Command, CommandContext, CommandResult, HeadlessApp};
 
 use crate::core::{
     self, Disposal, Guards, ManagedPackage, PackageManager, PackageStatus, RemovalOutcome,
     RemovalPlan,
 };
+
+const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+const BINARY_NAME: &str = "removeapp";
+
+pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
+    app().run(args)
+}
+
+fn app() -> HeadlessApp {
+    app_with_handlers(open_command, scan_command, remove_command)
+}
+
+fn app_with_handlers<Open, Scan, Remove>(open: Open, scan: Scan, remove: Remove) -> HeadlessApp
+where
+    Open: Fn(&CommandContext) -> Result<CommandResult> + Send + Sync + 'static,
+    Scan: Fn(&CommandContext) -> Result<CommandResult> + Send + Sync + 'static,
+    Remove: Fn(&CommandContext) -> Result<CommandResult> + Send + Sync + 'static,
+{
+    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+        .about("Inspect installed applications and remove an app with its owned leftovers.")
+        .default_command(["open"])
+        .command(
+            Command::new("open")
+                .about("Open the Remove App picker.")
+                .usage(format!("{BINARY_NAME} open"))
+                .output("No stdout on success.")
+                .exit_behavior("Exits non-zero if the picker cannot be opened.")
+                .run_result(open),
+        )
+        .command(
+            Command::new("scan")
+                .about("Print the read-only removal plan for one installed app.")
+                .usage(format!("{BINARY_NAME} scan <app>"))
+                .detail("The app query must resolve to one installed application.")
+                .detail("Prints the plan without moving, deleting, or quitting anything.")
+                .output("Pretty-printed removal-plan JSON on stdout.")
+                .exit_behavior("Exits non-zero if inventory or plan inspection fails.")
+                .run_result(scan),
+        )
+        .command(
+            Command::new("remove")
+                .about("Remove one installed app and its owned leftovers.")
+                .usage(format!("{BINARY_NAME} remove <app> [flags]"))
+                .detail("--dry-run prints the guarded plan without removing anything.")
+                .detail("--yes skips confirmation; --force permanently deletes.")
+                .detail("--quit asks a running app to exit before removal.")
+                .detail("--package uninstalls a managed package; --brew is its Homebrew alias.")
+                .detail("--trash-anyway bypasses running/package guards and uses Trash.")
+                .output("Removal outcome JSON on stdout; prompts and diagnostics on stderr.")
+                .exit_behavior("Exits non-zero on refusal, cancellation, or a failed removal.")
+                .run_result(remove),
+        )
+        .doctor_checks(crate::doctor::checks())
+}
+
+fn open_command(context: &CommandContext) -> Result<CommandResult> {
+    if !context.args().is_empty() {
+        return Ok(CommandResult::usage(format!(
+            "removeapp: unexpected argument {:?}",
+            context.args()[0]
+        )));
+    }
+
+    use qol_plugin_daemon::daemon as core_daemon;
+    if core_daemon::send_action(&crate::daemon::actions::CONFIG, "open", false) {
+        return Ok(CommandResult::success(""));
+    }
+    crate::daemon::run()?;
+    Ok(CommandResult::success(""))
+}
+
+fn scan_command(context: &CommandContext) -> Result<CommandResult> {
+    Ok(scan_execution(context.args()))
+}
+
+fn remove_command(context: &CommandContext) -> Result<CommandResult> {
+    Ok(remove_execution(context.args()))
+}
 
 pub fn disposal_from_flags(force: bool) -> Disposal {
     if force {
@@ -155,60 +234,48 @@ fn require_query(flags: &Flags) -> Result<&str> {
         .ok_or_else(|| anyhow!("removeapp: missing <app> argument"))
 }
 
-pub fn scan(args: &[String]) -> ExitCode {
+fn scan_execution(args: &[String]) -> CommandResult {
     let flags = match parse_flags(args) {
         Ok(flags) => flags,
-        Err(e) => {
-            eprintln!("{e:#}");
-            return ExitCode::from(2);
-        }
+        Err(error) => return CommandResult::usage(format!("{error:#}")),
     };
     match run_scan(&flags) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("{e:#}");
-            ExitCode::from(1)
-        }
+        Ok(output) => CommandResult::success(format!("{output}\n")),
+        Err(error) => CommandResult::runtime_error(format!("{error:#}")),
     }
 }
 
-fn run_scan(flags: &Flags) -> Result<()> {
+fn run_scan(flags: &Flags) -> Result<String> {
     let inventory = core::installed_apps()?;
     let app = core::resolve_unique(&inventory, require_query(flags)?)?;
-    println!("{}", plan_json(&core::plan(&app, &inventory)?));
-    Ok(())
+    Ok(plan_json(&core::plan(&app, &inventory)?))
 }
 
-pub fn remove(args: &[String]) -> ExitCode {
+fn remove_execution(args: &[String]) -> CommandResult {
     let flags = match parse_flags(args) {
         Ok(flags) => flags,
-        Err(e) => {
-            eprintln!("{e:#}");
-            return ExitCode::from(2);
-        }
+        Err(error) => return CommandResult::usage(format!("{error:#}")),
     };
     match run_remove(&flags) {
-        Ok(code) => code,
-        Err(e) => {
-            eprintln!("{e:#}");
-            ExitCode::from(1)
-        }
+        Ok(execution) => execution,
+        Err(error) => CommandResult::runtime_error(format!("{error:#}")),
     }
 }
 
-fn run_remove(flags: &Flags) -> Result<ExitCode> {
+fn run_remove(flags: &Flags) -> Result<CommandResult> {
     let inventory = core::installed_apps()?;
     let app = core::resolve_unique(&inventory, require_query(flags)?)?;
     let plan = core::plan(&app, &inventory)?;
     let guards = core::guards(&app, &inventory);
 
     if flags.dry_run {
-        println!("{}", output_json(&plan, &guards, None, true, None));
-        return Ok(ExitCode::SUCCESS);
+        return Ok(CommandResult::success(format!(
+            "{}\n",
+            output_json(&plan, &guards, None, true, None)
+        )));
     }
     if let Some(reason) = guard_refusal(guards.running, &guards.package, flags) {
-        eprintln!("removeapp: {reason}");
-        return Ok(ExitCode::from(2));
+        return Ok(CommandResult::new("", format!("removeapp: {reason}\n"), 2));
     }
 
     let requested = if flags.trash_anyway {
@@ -231,8 +298,7 @@ fn run_remove(flags: &Flags) -> Result<ExitCode> {
             package_action.as_ref(),
         )?
     {
-        eprintln!("removeapp: aborted");
-        return Ok(ExitCode::from(1));
+        return Ok(CommandResult::runtime_error("removeapp: aborted"));
     }
 
     if guards.running && flags.quit {
@@ -256,8 +322,8 @@ fn run_remove(flags: &Flags) -> Result<ExitCode> {
         &guards.package,
         uninstalled_package.is_some(),
     )?;
-    println!(
-        "{}",
+    let stdout = format!(
+        "{}\n",
         output_json(
             &plan,
             &guards,
@@ -267,9 +333,9 @@ fn run_remove(flags: &Flags) -> Result<ExitCode> {
         )
     );
     Ok(if outcome.failed.is_empty() {
-        ExitCode::SUCCESS
+        CommandResult::success(stdout)
     } else {
-        ExitCode::from(1)
+        CommandResult::new(stdout, "", 1)
     })
 }
 
@@ -299,9 +365,42 @@ fn confirmation_verb(force: bool, package: Option<&ManagedPackage>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use qol_headless::{DoctorReport, EXIT_SUCCESS, EXIT_USAGE};
+
     use super::*;
     use crate::core::{InstalledApp, Leftover, LeftoverKind, MatchKind};
-    use std::path::PathBuf;
+
+    #[derive(Default)]
+    struct OperationCalls {
+        open: AtomicUsize,
+        scan: AtomicUsize,
+        remove: AtomicUsize,
+    }
+
+    fn sentinel_app(calls: Arc<OperationCalls>) -> HeadlessApp {
+        let open_calls = Arc::clone(&calls);
+        let scan_calls = Arc::clone(&calls);
+        let remove_calls = Arc::clone(&calls);
+
+        app_with_handlers(
+            move |_| {
+                open_calls.open.fetch_add(1, Ordering::SeqCst);
+                Ok(CommandResult::success(""))
+            },
+            move |_| {
+                scan_calls.scan.fetch_add(1, Ordering::SeqCst);
+                Ok(CommandResult::success("{\"scan\":\"sentinel\"}\n"))
+            },
+            move |_| {
+                remove_calls.remove.fetch_add(1, Ordering::SeqCst);
+                Ok(CommandResult::success("{\"remove\":\"sentinel\"}\n"))
+            },
+        )
+    }
 
     fn sample_plan() -> RemovalPlan {
         let app = InstalledApp {
@@ -437,10 +536,133 @@ mod tests {
     }
 
     #[test]
-    fn remove_returns_usage_code_for_parse_errors() {
+    fn remove_returns_standard_usage_code_for_parse_errors() {
         assert_eq!(
-            remove(&["Foo".into(), "--dryrun".into(), "--yes".into()]),
-            ExitCode::from(2)
+            remove_execution(&["Foo".into(), "--dryrun".into(), "--yes".into()]).exit_code,
+            EXIT_USAGE
         );
+    }
+
+    #[test]
+    fn operational_routes_remain_explicit_and_default_open_is_preserved() {
+        let calls = Arc::new(OperationCalls::default());
+        let app = sentinel_app(Arc::clone(&calls));
+
+        assert_eq!(app.execute(Vec::new()).exit_code, EXIT_SUCCESS);
+        assert_eq!(app.execute(["open".to_string()]).exit_code, EXIT_SUCCESS);
+        assert_eq!(
+            app.execute(["scan".to_string(), "Foo".to_string()])
+                .exit_code,
+            EXIT_SUCCESS
+        );
+        assert_eq!(
+            app.execute(["remove".to_string(), "Foo".to_string()])
+                .exit_code,
+            EXIT_SUCCESS
+        );
+
+        assert_eq!(calls.open.load(Ordering::SeqCst), 2);
+        assert_eq!(calls.scan.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.remove.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn help_first_and_final_are_equivalent() {
+        let first = app().execute(["help".to_string(), "remove".to_string()]);
+        let final_token = app().execute(["remove".to_string(), "help".to_string()]);
+
+        assert_eq!(first.exit_code, EXIT_SUCCESS);
+        assert_eq!(first.stdout, final_token.stdout);
+        assert!(first.stdout.contains("--trash-anyway"));
+        assert!(first.stdout.contains("Does not support --json."));
+    }
+
+    #[test]
+    fn doctor_help_documents_the_stable_check_ids() {
+        let first = app().execute(["help".to_string(), "doctor".to_string()]);
+        let final_token = app().execute(["doctor".to_string(), "help".to_string()]);
+
+        assert_eq!(first.exit_code, EXIT_SUCCESS);
+        assert_eq!(first.stdout, final_token.stdout);
+        for id in [
+            "platform_supported",
+            "config_readable",
+            "inventory_readable",
+            "removal_prerequisites",
+        ] {
+            assert!(first.stdout.contains(id), "missing check id {id}");
+        }
+    }
+
+    #[test]
+    fn doctor_json_matches_the_shared_contract_in_both_flag_positions() {
+        let before = app().execute(["--json".to_string(), "doctor".to_string()]);
+        let after = app().execute(["doctor".to_string(), "--json".to_string()]);
+
+        assert_eq!(before.exit_code, EXIT_SUCCESS);
+        assert_eq!(before.stdout, after.stdout);
+        let report: DoctorReport =
+            serde_json::from_str(&before.stdout).expect("doctor output must be valid JSON");
+        assert_eq!(report.plugin_id, PLUGIN_ID);
+        assert_eq!(report.checks.len(), 4);
+        assert!(report
+            .checks
+            .iter()
+            .all(|check| !check.id.is_empty() && !check.message.is_empty()));
+    }
+
+    #[test]
+    fn doctor_and_help_never_invoke_operational_handlers() {
+        let cases = [
+            vec!["help"],
+            vec!["--help"],
+            vec!["help", "open"],
+            vec!["open", "help"],
+            vec!["help", "scan"],
+            vec!["scan", "help"],
+            vec!["help", "remove"],
+            vec!["remove", "help"],
+            vec!["doctor"],
+            vec!["--json", "doctor"],
+            vec!["doctor", "--json"],
+            vec!["help", "doctor"],
+            vec!["doctor", "help"],
+            vec!["help", "doctor", "platform_supported"],
+            vec!["doctor", "platform_supported", "help"],
+        ];
+
+        for args in cases {
+            let calls = Arc::new(OperationCalls::default());
+            let execution =
+                sentinel_app(Arc::clone(&calls)).execute(args.iter().map(|arg| (*arg).to_string()));
+
+            assert_eq!(execution.exit_code, EXIT_SUCCESS, "args: {args:?}");
+            assert_eq!(calls.open.load(Ordering::SeqCst), 0, "args: {args:?}");
+            assert_eq!(calls.scan.load(Ordering::SeqCst), 0, "args: {args:?}");
+            assert_eq!(calls.remove.load(Ordering::SeqCst), 0, "args: {args:?}");
+        }
+    }
+
+    #[test]
+    fn unsupported_json_is_rejected_before_open_runs() {
+        for args in [
+            vec!["--json"],
+            vec!["--json", "open"],
+            vec!["open", "--json"],
+            vec!["--json", "help"],
+        ] {
+            let calls = Arc::new(OperationCalls::default());
+            let execution =
+                sentinel_app(Arc::clone(&calls)).execute(args.iter().map(|arg| (*arg).to_string()));
+
+            assert_eq!(execution.exit_code, EXIT_USAGE, "args: {args:?}");
+            assert!(
+                execution.stderr.contains("does not support --json"),
+                "args: {args:?}"
+            );
+            assert_eq!(calls.open.load(Ordering::SeqCst), 0, "args: {args:?}");
+            assert_eq!(calls.scan.load(Ordering::SeqCst), 0, "args: {args:?}");
+            assert_eq!(calls.remove.load(Ordering::SeqCst), 0, "args: {args:?}");
+        }
     }
 }

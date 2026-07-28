@@ -1,5 +1,4 @@
 pub mod command_loop;
-#[cfg(unix)]
 pub mod dropdown;
 pub mod event_router;
 pub mod ghost;
@@ -26,6 +25,6 @@ pub mod theme {
 }
 
 pub use qol_runtime::protocol;
-pub use qol_runtime::{CursorPos, MonitorBounds, PlatformState, WindowBounds};
-#[cfg(unix)]
-pub use qol_runtime::{PlatformStateClient, Subscription};
+pub use qol_runtime::{
+    CursorPos, MonitorBounds, PlatformState, PlatformStateClient, Subscription, WindowBounds,
+};

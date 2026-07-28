@@ -1,6 +1,6 @@
 use super::screen::Rect;
 use super::{ax, screen};
-use crate::config::WindowActionsConfig;
+use crate::config::{CenterMode, WindowActionsConfig};
 
 fn frontmost_screen() -> Result<(i32, Rect), String> {
     let pid = ax::frontmost_pid().ok_or("No frontmost application")?;
@@ -67,7 +67,7 @@ pub fn maximize() -> Result<(), String> {
 
 pub fn center(config: &WindowActionsConfig) -> Result<(), String> {
     let (pid, s) = frontmost_screen()?;
-    let (w, h) = config.center_size_for_monitor(s.w, s.h);
+    let (w, h) = center_size_for_monitor(config, s.w, s.h);
     let target = Rect {
         x: s.x + (s.w - w) / 2.0,
         y: s.y + (s.h - h) / 2.0,
@@ -75,6 +75,27 @@ pub fn center(config: &WindowActionsConfig) -> Result<(), String> {
         h,
     };
     ax_set(pid, target)
+}
+
+fn center_size_for_monitor(
+    config: &WindowActionsConfig,
+    monitor_width: f64,
+    monitor_height: f64,
+) -> (f64, f64) {
+    let width = if config.center_mode == CenterMode::Percent {
+        monitor_width * config.center_width_percent
+    } else {
+        config.center_width_px
+    };
+    let height = if config.center_mode == CenterMode::Percent {
+        monitor_height * config.center_height_percent
+    } else {
+        config.center_height_px
+    };
+    (
+        width.clamp(1.0, monitor_width),
+        height.clamp(1.0, monitor_height),
+    )
 }
 
 pub fn move_monitor_left() -> Result<(), String> {
@@ -128,6 +149,8 @@ fn screen_index_at(screens: &[Rect], cx: f64, cy: f64) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
 
     fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
@@ -150,6 +173,35 @@ mod tests {
                 expected,
                 "point ({cx},{cy})"
             );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        #[test]
+        fn prop_percent_center_size_tracks_monitor_dimensions(
+            monitor_width in 100.0f64..6000.0,
+            monitor_height in 100.0f64..4000.0,
+            width_percent in 0.1f64..1.0,
+            height_percent in 0.1f64..1.0
+        ) {
+            let config = WindowActionsConfig {
+                center_mode: CenterMode::Percent,
+                center_width_px: 1152.0,
+                center_height_px: 892.0,
+                center_width_percent: width_percent,
+                center_height_percent: height_percent,
+                snap_fraction: 0.5,
+                reveal_taskbar_after_move: true,
+                glide_speed_px_per_second: 1200.0,
+            };
+
+            let (width, height) =
+                center_size_for_monitor(&config, monitor_width, monitor_height);
+
+            prop_assert_eq!(width, monitor_width * width_percent);
+            prop_assert_eq!(height, monitor_height * height_percent);
         }
     }
 }

@@ -4,13 +4,13 @@ use super::request::RequestEngine;
 use super::transport::{Transport, TransportConfig};
 
 pub fn detect_coordinator_port() -> Option<String> {
-    let ports = serialport::available_ports().ok()?;
-    crate::platform::detect_coordinator_port(&ports)
+    let metadata = crate::platform::enumerate_serial_metadata().ok()?;
+    crate::platform::detect_coordinator_port(&metadata.ports)
 }
 
 pub fn candidate_coordinator_ports() -> Vec<String> {
-    serialport::available_ports()
-        .map(|ports| crate::platform::candidate_coordinator_ports(&ports))
+    crate::platform::enumerate_serial_metadata()
+        .map(|metadata| crate::platform::candidate_coordinator_ports(&metadata.ports))
         .unwrap_or_default()
 }
 
@@ -22,9 +22,10 @@ pub fn probe_candidate_coordinator_ports(ports: &[String]) -> Option<String> {
 }
 
 pub fn available_port_descriptions() -> Vec<String> {
-    serialport::available_ports()
-        .map(|ports| {
-            ports
+    crate::platform::enumerate_serial_metadata()
+        .map(|metadata| {
+            metadata
+                .ports
                 .into_iter()
                 .map(|port| crate::platform::describe_port(&port))
                 .collect()

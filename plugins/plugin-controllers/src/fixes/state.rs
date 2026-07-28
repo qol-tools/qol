@@ -10,16 +10,13 @@ pub enum FixState {
 }
 
 pub struct SystemPaths {
-    pub modprobe_dir: PathBuf,
-    pub sys_module_dir: PathBuf,
+    pub modprobe_dir: Option<PathBuf>,
+    pub sys_module_dir: Option<PathBuf>,
 }
 
 impl SystemPaths {
     pub fn real() -> SystemPaths {
-        SystemPaths {
-            modprobe_dir: PathBuf::from("/etc/modprobe.d"),
-            sys_module_dir: PathBuf::from("/sys/module"),
-        }
+        super::platform::system_paths()
     }
 }
 
@@ -39,7 +36,10 @@ pub fn compute(paths: &SystemPaths, target: &FixTarget) -> FixState {
 }
 
 fn persisted(paths: &SystemPaths, driver: &str, quirk: &str) -> bool {
-    let Ok(entries) = std::fs::read_dir(&paths.modprobe_dir) else {
+    let Some(modprobe_dir) = paths.modprobe_dir.as_ref() else {
+        return false;
+    };
+    let Ok(entries) = std::fs::read_dir(modprobe_dir) else {
         return false;
     };
     for entry in entries.flatten() {
@@ -68,7 +68,10 @@ fn options_line_has_quirk(line: &str, driver: &str, quirk: &str) -> bool {
 }
 
 fn live(paths: &SystemPaths, driver: &str, quirk: &str) -> bool {
-    let param = paths.sys_module_dir.join(driver).join("parameters/quirks");
+    let Some(sys_module_dir) = paths.sys_module_dir.as_ref() else {
+        return false;
+    };
+    let param = sys_module_dir.join(driver).join("parameters/quirks");
     std::fs::read_to_string(param)
         .map(|value| value.contains(quirk))
         .unwrap_or(false)
@@ -145,8 +148,8 @@ mod tests {
                 fs::write(params.join("quirks"), value).expect("quirks");
             }
             let paths = SystemPaths {
-                modprobe_dir,
-                sys_module_dir,
+                modprobe_dir: Some(modprobe_dir),
+                sys_module_dir: Some(sys_module_dir),
             };
             assert_eq!(compute(&paths, &target()), expected, "case: {label}");
         }

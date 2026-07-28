@@ -2,7 +2,11 @@ use qol_runtime::MonitorBounds;
 
 use crate::desktop_state::Platform;
 
-pub(super) struct FallbackQueries;
+pub(super) fn create() -> impl Platform {
+    FallbackQueries
+}
+
+struct FallbackQueries;
 
 impl Platform for FallbackQueries {
     fn poll_focused_window(&self) -> bool {

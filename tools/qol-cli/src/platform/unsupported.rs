@@ -1,13 +1,11 @@
-use super::PlatformOps;
+use super::{OpenPathOutcome, PlatformOps};
 use anyhow::{anyhow, Result};
+use std::env;
+use std::path::{Path, PathBuf};
 
 pub(crate) struct Platform;
 
 impl PlatformOps for Platform {
-    fn os_name(&self) -> &'static str {
-        "unknown"
-    }
-
     fn exe_name(&self, name: &str) -> String {
         name.to_string()
     }
@@ -26,5 +24,25 @@ impl PlatformOps for Platform {
 
     fn available_memory_mb(&self) -> Option<u64> {
         None
+    }
+
+    fn home_dir(&self) -> Option<PathBuf> {
+        env::var_os("HOME").map(PathBuf::from)
+    }
+
+    fn core_log_dir(&self) -> PathBuf {
+        env::temp_dir().join("qol-tray/logs")
+    }
+
+    fn open_path(&self, _path: &Path) -> Result<OpenPathOutcome> {
+        Err(anyhow!("opening paths is not supported on this platform"))
+    }
+
+    fn supports_qol_shot_payload(&self) -> bool {
+        false
+    }
+
+    fn open_text_file(&self, path: &Path) -> bool {
+        qol_apps::desktop_integration::open_with_default_app(path).is_ok()
     }
 }

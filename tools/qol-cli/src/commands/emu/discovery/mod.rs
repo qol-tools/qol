@@ -8,12 +8,8 @@ mod dedupe;
 mod filesystem;
 mod libvirt;
 
-#[allow(unused_imports)]
-pub(crate) use super::arch::Firmware;
 pub(crate) use candidate::{Discovered, ImageCandidate};
 pub(crate) use config::{parse_emu_dir, parse_image_overrides};
-#[allow(unused_imports)]
-pub(crate) use filesystem::infer_candidate;
 
 pub(crate) struct DiscoveryContext {
     pub(crate) config_path: Option<PathBuf>,
@@ -38,6 +34,10 @@ pub(crate) fn discover(context: DiscoveryContext) -> Result<Discovered> {
     let entries =
         filesystem::collect_image_paths(std::slice::from_ref(&context.emu_dir), &mut seen);
     Ok(Discovered::partition(environments, &entries))
+}
+
+pub(crate) fn infer_candidate(path: &std::path::Path) -> ImageCandidate {
+    filesystem::infer_candidate(path)
 }
 
 #[cfg(test)]

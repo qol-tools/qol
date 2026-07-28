@@ -19,19 +19,13 @@ pub(super) struct ParsedArgs {
     pub(super) source: Option<PathBuf>,
     pub(super) skip_shell_hook: bool,
     pub(super) dev_mode: bool,
-    pub(super) help: bool,
 }
 
-pub(super) fn parse_args() -> Result<ParsedArgs> {
-    parse_args_from_iter(env::args().skip(1))
-}
-
-fn parse_args_from_iter<I: IntoIterator<Item = String>>(iter: I) -> Result<ParsedArgs> {
+pub(super) fn parse_args<I: IntoIterator<Item = String>>(iter: I) -> Result<ParsedArgs> {
     let mut mode = Mode::Install;
     let mut source = None;
     let mut skip_shell_hook = false;
     let mut dev_mode = false;
-    let mut help = false;
 
     let mut iter = iter.into_iter();
     while let Some(arg) = iter.next() {
@@ -45,7 +39,6 @@ fn parse_args_from_iter<I: IntoIterator<Item = String>>(iter: I) -> Result<Parse
             "--uninstall" => mode = Mode::Uninstall,
             "--skip-shell-hook" => skip_shell_hook = true,
             "--dev" => dev_mode = true,
-            "--help" | "-h" => help = true,
             _ => return Err(anyhow!("Unknown argument: {}", arg)),
         }
     }
@@ -55,7 +48,6 @@ fn parse_args_from_iter<I: IntoIterator<Item = String>>(iter: I) -> Result<Parse
         source,
         skip_shell_hook,
         dev_mode,
-        help,
     })
 }
 
@@ -201,7 +193,7 @@ mod tests {
     }
 
     fn parse(args: &[&str]) -> Result<ParsedArgs> {
-        parse_args_from_iter(args.iter().map(|s| s.to_string()))
+        parse_args(args.iter().map(|s| s.to_string()))
     }
 
     struct Case {
@@ -210,7 +202,6 @@ mod tests {
         source: Option<&'static str>,
         skip_shell_hook: bool,
         dev_mode: bool,
-        help: bool,
     }
 
     #[test]
@@ -222,7 +213,6 @@ mod tests {
                 source: None,
                 skip_shell_hook: false,
                 dev_mode: false,
-                help: false,
             },
             Case {
                 input: &["--uninstall"],
@@ -230,7 +220,6 @@ mod tests {
                 source: None,
                 skip_shell_hook: false,
                 dev_mode: false,
-                help: false,
             },
             Case {
                 input: &["--skip-shell-hook"],
@@ -238,7 +227,6 @@ mod tests {
                 source: None,
                 skip_shell_hook: true,
                 dev_mode: false,
-                help: false,
             },
             Case {
                 input: &["--uninstall", "--skip-shell-hook"],
@@ -246,7 +234,6 @@ mod tests {
                 source: None,
                 skip_shell_hook: true,
                 dev_mode: false,
-                help: false,
             },
             Case {
                 input: &["--source", "/tmp/binary"],
@@ -254,7 +241,6 @@ mod tests {
                 source: Some("/tmp/binary"),
                 skip_shell_hook: false,
                 dev_mode: false,
-                help: false,
             },
             Case {
                 input: &["--dev"],
@@ -262,23 +248,6 @@ mod tests {
                 source: None,
                 skip_shell_hook: false,
                 dev_mode: true,
-                help: false,
-            },
-            Case {
-                input: &["--help"],
-                mode: Mode::Install,
-                source: None,
-                skip_shell_hook: false,
-                dev_mode: false,
-                help: true,
-            },
-            Case {
-                input: &["-h"],
-                mode: Mode::Install,
-                source: None,
-                skip_shell_hook: false,
-                dev_mode: false,
-                help: true,
             },
             Case {
                 input: &["--source", "/x", "--uninstall", "--skip-shell-hook"],
@@ -286,7 +255,6 @@ mod tests {
                 source: Some("/x"),
                 skip_shell_hook: true,
                 dev_mode: false,
-                help: false,
             },
             Case {
                 input: &["--dev", "--source", "/y", "--skip-shell-hook"],
@@ -294,7 +262,6 @@ mod tests {
                 source: Some("/y"),
                 skip_shell_hook: true,
                 dev_mode: true,
-                help: false,
             },
         ];
         for case in cases {
@@ -316,7 +283,6 @@ mod tests {
                 "dev_mode for input={:?}",
                 case.input
             );
-            assert_eq!(parsed.help, case.help, "help for input={:?}", case.input);
         }
     }
 

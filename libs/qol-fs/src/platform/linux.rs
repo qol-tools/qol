@@ -14,3 +14,7 @@ pub(crate) fn set_private_dir(path: &Path) -> io::Result<()> {
 pub(crate) fn sync_parent(path: &Path) -> io::Result<()> {
     File::open(path)?.sync_all()
 }
+
+pub(crate) fn prepare_file_removal(_: &Path) -> io::Result<()> {
+    Ok(())
+}

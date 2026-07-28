@@ -21,8 +21,8 @@ fn broker_socket_path_is_per_uid() {
     // Two different uids must resolve to two different socket paths.
     // A shared path would let any same-machine user squat the file and
     // intercept connections at bind time.
-    let a = broker::broker_socket_path_for_uid(1000, None);
-    let b = broker::broker_socket_path_for_uid(1001, None);
+    let a = broker::broker_socket_path_for_uid(1000, None).unwrap();
+    let b = broker::broker_socket_path_for_uid(1001, None).unwrap();
     assert_ne!(
         a, b,
         "broker_socket_path_for_uid produced the same path for different uids: {a:?}. \
@@ -43,7 +43,7 @@ fn broker_socket_path_prefers_xdg_runtime_dir() {
     // beneath it (Linux convention; macOS lacks this var by default).
     // The fallback to /tmp/qol-runtime-<uid>.sock is exercised in the
     // None case in `broker_socket_path_is_per_uid` above.
-    let with_xdg = broker::broker_socket_path_for_uid(1000, Some("/run/user/1000"));
+    let with_xdg = broker::broker_socket_path_for_uid(1000, Some("/run/user/1000")).unwrap();
     let s = with_xdg.to_string_lossy();
     assert!(
         s.starts_with("/run/user/1000/"),
@@ -59,7 +59,7 @@ fn broker_socket_path_prefers_xdg_runtime_dir() {
 fn broker_socket_path_fallback_is_tmp_with_uid() {
     // Without XDG_RUNTIME_DIR the broker falls back to /tmp/qol-runtime-<uid>.sock.
     // The fallback path must still be uid-scoped so two users cannot collide.
-    let fallback = broker::broker_socket_path_for_uid(1000, None);
+    let fallback = broker::broker_socket_path_for_uid(1000, None).unwrap();
     let s = fallback.to_string_lossy();
     assert!(
         s.starts_with("/tmp/qol-runtime-"),

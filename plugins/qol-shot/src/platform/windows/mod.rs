@@ -72,7 +72,7 @@ pub fn recording_format(format: &str) -> String {
     format.to_string()
 }
 
-pub fn recording_started(_session: &CaptureSession) {
+pub fn recording_started(_session: &CaptureSession, _countdown_completed: bool) {
     show_notification("Recording started", "Press your hotkey to stop", 1200);
 }
 

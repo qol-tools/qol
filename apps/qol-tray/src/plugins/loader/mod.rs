@@ -49,11 +49,7 @@ impl PluginLoader {
     ) -> Result<Option<Plugin>> {
         let plugin = manifest_loader::load_resolved_plugin(resolved)?;
         if !plugin.manifest.plugin.supports_current_platform() {
-            log::info!(
-                "Skipping plugin {} (unsupported platform: {})",
-                plugin.id,
-                std::env::consts::OS
-            );
+            log::info!("Skipping plugin {} (unsupported platform)", plugin.id);
             return Ok(None);
         }
         Ok(Some(plugin))

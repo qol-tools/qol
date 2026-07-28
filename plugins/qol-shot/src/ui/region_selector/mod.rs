@@ -39,23 +39,26 @@ pub trait ActiveBounds {
 pub type ActiveBoundsSource = Rc<dyn ActiveBounds>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(target_os = "linux"),
-    allow(
-        dead_code,
-        reason = "only the linux backend constructs hover-detected targets"
-    )
-)]
-pub enum DetectedTarget {
-    Window(Rect),
-    Monitor(Rect),
+pub(crate) struct DetectedTargetRole {
+    pub(crate) is_window: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DetectedTarget {
+    pub(crate) rect: Rect,
+    pub(crate) role: DetectedTargetRole,
 }
 
 impl DetectedTarget {
     pub fn rect(self) -> Rect {
-        match self {
-            Self::Window(rect) | Self::Monitor(rect) => rect,
+        self.rect
+    }
+
+    fn guide_title(self) -> &'static str {
+        if self.role.is_window {
+            return "Detected window";
         }
+        "Full monitor"
     }
 }
 
@@ -92,16 +95,16 @@ pub struct SelectorWindowOptions {
 }
 
 pub struct SelectorWindow {
-    title: String,
-    bounds: Bounds<Pixels>,
-    monitor_bounds: Vec<Bounds<Pixels>>,
-    active_bounds: Option<Bounds<Pixels>>,
-    default_target: Option<DetectedTarget>,
+    pub(crate) title: String,
+    pub(crate) bounds: Bounds<Pixels>,
+    pub(crate) monitor_bounds: Vec<Bounds<Pixels>>,
+    pub(crate) active_bounds: Option<Bounds<Pixels>>,
+    pub(crate) default_target: Option<DetectedTarget>,
     display_id: Option<DisplayId>,
     kind: WindowKind,
     decorations: WindowDecorations,
     focus: bool,
-    sources: SelectorWindowSources,
+    pub(crate) sources: SelectorWindowSources,
 }
 
 impl SelectorWindow {
@@ -160,8 +163,6 @@ where
     });
     Ok(rx.recv().ok().flatten())
 }
-
-pub(crate) mod platform;
 
 pub fn open_all(
     tx: mpsc::Sender<Option<Rect>>,
@@ -223,7 +224,7 @@ pub fn open_all(
     true
 }
 
-fn open_window(
+pub(crate) fn open_window(
     selector: SelectorWindow,
     state: Rc<RefCell<SelectionState>>,
     quit_on_finish: bool,
@@ -317,7 +318,7 @@ impl ChipModel {
     }
 }
 
-struct SelectionState {
+pub(crate) struct SelectionState {
     tx: Option<mpsc::Sender<Option<Rect>>>,
     active_bounds: Option<Bounds<Pixels>>,
     default_target: Option<DetectedTarget>,
@@ -326,7 +327,7 @@ struct SelectionState {
     drag_start: Option<Point<Pixels>>,
     drag_current: Option<Point<Pixels>>,
     pointer_offset: Option<Point<Pixels>>,
-    handles: Vec<WindowHandle<RegionSelector>>,
+    pub(crate) handles: Vec<WindowHandle<RegionSelector>>,
     polling: bool,
     active_monitor_polling: bool,
     chip: ChipModel,
@@ -334,7 +335,7 @@ struct SelectionState {
 }
 
 impl SelectionState {
-    fn new(
+    pub(crate) fn new(
         tx: mpsc::Sender<Option<Rect>>,
         active_bounds: Option<Bounds<Pixels>>,
         default_target: Option<DetectedTarget>,
@@ -359,7 +360,7 @@ impl SelectionState {
         }
     }
 
-    fn record_display(&mut self, bounds: Rect, scale: f64) {
+    pub(crate) fn record_display(&mut self, bounds: Rect, scale: f64) {
         if self.displays.iter().any(|display| display.bounds == bounds) {
             return;
         }
@@ -448,23 +449,23 @@ impl SelectionCompletion {
     }
 }
 
-struct RegionSelector {
-    state: Rc<RefCell<SelectionState>>,
-    handle: Option<WindowHandle<RegionSelector>>,
-    title: String,
-    quit_on_finish: bool,
-    window_bounds: Bounds<Pixels>,
-    map_rect: RectMapper,
-    global_pointer: Option<GlobalPointerSource>,
-    cancel_signal: Option<CancelSignalSource>,
-    active_bounds: Option<ActiveBoundsSource>,
-    hover_target: Option<HoverTargetSource>,
-    frozen_image: Option<Arc<RenderImage>>,
+pub(crate) struct RegionSelector {
+    pub(crate) state: Rc<RefCell<SelectionState>>,
+    pub(crate) handle: Option<WindowHandle<RegionSelector>>,
+    pub(crate) title: String,
+    pub(crate) quit_on_finish: bool,
+    pub(crate) window_bounds: Bounds<Pixels>,
+    pub(crate) map_rect: RectMapper,
+    pub(crate) global_pointer: Option<GlobalPointerSource>,
+    pub(crate) cancel_signal: Option<CancelSignalSource>,
+    pub(crate) active_bounds: Option<ActiveBoundsSource>,
+    pub(crate) hover_target: Option<HoverTargetSource>,
+    pub(crate) frozen_image: Option<Arc<RenderImage>>,
     focus_handle: FocusHandle,
     reusable: bool,
-    reveal_generation: u64,
-    scheduled_reveal_generation: Option<u64>,
-    pending_reveal: Option<SelectorReveal>,
+    pub(crate) reveal_generation: u64,
+    pub(crate) scheduled_reveal_generation: Option<u64>,
+    pub(crate) pending_reveal: Option<SelectorReveal>,
 }
 
 impl RegionSelector {
@@ -674,7 +675,7 @@ impl RegionSelector {
         .detach();
     }
 
-    fn start_active_monitor_poll(&self, cx: &mut Context<Self>) {
+    pub(crate) fn start_active_monitor_poll(&self, cx: &mut Context<Self>) {
         {
             let mut state = self.state.borrow_mut();
             if state.active_monitor_polling {
@@ -871,11 +872,11 @@ impl RegionSelector {
         if self.state.borrow().drag_start.is_some() {
             return "Release mouse to capture";
         }
-        match self.state.borrow().default_target {
-            Some(DetectedTarget::Window(_)) => "Detected window",
-            Some(DetectedTarget::Monitor(_)) => "Full monitor",
-            None => "No window detected",
-        }
+        self.state
+            .borrow()
+            .default_target
+            .map(DetectedTarget::guide_title)
+            .unwrap_or("No window detected")
     }
 
     fn guide_subtitle(&self) -> &'static str {
@@ -957,11 +958,10 @@ impl RegionSelector {
         if manual_selection_global_rect(&state).is_some() {
             return "Capture area";
         }
-        match state.default_target {
-            Some(DetectedTarget::Window(_)) => "Detected window",
-            Some(DetectedTarget::Monitor(_)) => "Full monitor",
-            None => "Capture area",
-        }
+        state
+            .default_target
+            .map(DetectedTarget::guide_title)
+            .unwrap_or("Capture area")
     }
 
     fn notify_all(&self, cx: &mut Context<Self>) {
@@ -1106,11 +1106,16 @@ impl Render for RegionSelector {
 fn trace_hover_target(target: Option<DetectedTarget>) {
     #[cfg(debug_assertions)]
     {
-        let target = match target {
-            Some(DetectedTarget::Window(rect)) => format!("window:{}", rect_label(rect)),
-            Some(DetectedTarget::Monitor(rect)) => format!("monitor:{}", rect_label(rect)),
-            None => "none".to_string(),
-        };
+        let target = target
+            .map(|target| {
+                let role = if target.role.is_window {
+                    "window"
+                } else {
+                    "monitor"
+                };
+                format!("{role}:{}", rect_label(target.rect))
+            })
+            .unwrap_or_else(|| "none".to_string());
         qol_runtime::probe!("SHOT_SELECT_TARGET", "hover={target}");
     }
     #[cfg(not(debug_assertions))]
@@ -1191,7 +1196,7 @@ fn backdrop_segment(bounds: Bounds<Pixels>) -> Div {
         .bg(rgba(palette.backdrop_rgba))
 }
 
-fn rect_from_bounds(bounds: Bounds<Pixels>) -> Rect {
+pub(crate) fn rect_from_bounds(bounds: Bounds<Pixels>) -> Rect {
     Rect {
         x: f32::from(bounds.origin.x) as i32,
         y: f32::from(bounds.origin.y) as i32,
@@ -1447,7 +1452,8 @@ mod tests {
     use super::{
         backdrop_segments, capture_estimate, format_bytes, format_duration, kind_label,
         local_from_global, selected_rect, selection_bounds_in_window, selection_global_rect,
-        shift_rect, ChipModel, DetectedTarget, SelectionState, CHIP_H, CHIP_TOP, CHIP_W,
+        shift_rect, ChipModel, DetectedTarget, DetectedTargetRole, SelectionState, CHIP_H,
+        CHIP_TOP, CHIP_W,
     };
     use crate::capture::space::{CaptureKind, DisplayScale, Quality};
     use crate::Rect;
@@ -1779,7 +1785,10 @@ mod tests {
         let mut state = SelectionState::new(
             tx,
             Some(screen),
-            Some(DetectedTarget::Window(target)),
+            Some(DetectedTarget {
+                rect: target,
+                role: DetectedTargetRole { is_window: true },
+            }),
             vec![screen],
             Vec::new(),
             CaptureKind::Recording,

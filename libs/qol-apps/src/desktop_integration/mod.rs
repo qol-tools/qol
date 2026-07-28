@@ -29,9 +29,7 @@ pub fn reveal_in_file_manager(path: &Path) -> io::Result<()> {
     }
 
     match platform::reveal_plan(path) {
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         RevealPlan::Open(target) => open_with_default_app(target),
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
         RevealPlan::Command(mut command) => {
             prepare_external_command(&mut command);
             qol_process::spawn_detached(&mut command)

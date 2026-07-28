@@ -34,10 +34,10 @@ impl RenderingFlow {
         }
     }
 
-    pub(crate) fn trace_show(self, show_id: u64) {
+    pub(crate) fn trace_show(self, _show_id: u64) {
         qol_runtime::probe!(
             "RENDERING_FLOW",
-            "show_id={show_id} preview_renderer={} backend={} gpui_preview_images={} on_open_capture={} live_capture={} preview_fill_capture={}",
+            "show_id={_show_id} preview_renderer={} backend={} gpui_preview_images={} on_open_capture={} live_capture={} preview_fill_capture={}",
             self.preview_renderer_name(),
             self.backend_name(),
             self.renders_gpui_preview_images(),
@@ -70,6 +70,7 @@ impl RenderingFlow {
         }
     }
 
+    #[cfg(debug_assertions)]
     pub(crate) fn preview_renderer_name(self) -> &'static str {
         match self.preview_renderer {
             PreviewRenderer::GpuiSnapshots => "gpui_snapshots",
@@ -77,6 +78,7 @@ impl RenderingFlow {
         }
     }
 
+    #[cfg(debug_assertions)]
     pub(crate) fn backend_name(self) -> &'static str {
         self.preview_plane_backend().unwrap_or("none")
     }

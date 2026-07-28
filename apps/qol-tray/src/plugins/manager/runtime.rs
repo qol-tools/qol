@@ -52,7 +52,6 @@ pub(super) fn reload_plugins(manager: &mut PluginManager) -> Result<()> {
     Ok(())
 }
 
-#[cfg_attr(not(debug_assertions), allow(unused_variables, unused_assignments))]
 pub(super) fn reload_plugin(manager: &mut PluginManager, plugin_id: &str) -> Result<()> {
     log::info!("Reloading plugin: {plugin_id}");
     qol_runtime::probe!(
@@ -61,11 +60,12 @@ pub(super) fn reload_plugin(manager: &mut PluginManager, plugin_id: &str) -> Res
     );
 
     let loaded = loading::load_plugin(plugin_id)?;
+    #[cfg(debug_assertions)]
     let old_pid = manager.plugins.get(plugin_id).and_then(Plugin::daemon_pid);
     kill_plugin_processes(plugin_id);
     drop(manager.plugins.remove(plugin_id));
 
-    let mut new_pid = None;
+    #[cfg(debug_assertions)]
     let loaded_plugin = loaded.plugin.is_some();
     if let Some(plugin) = loaded.plugin {
         if !crate::dev_generation::is_shadow() && !crate::dev_generation::is_rolling_restart() {
@@ -75,13 +75,14 @@ pub(super) fn reload_plugin(manager: &mut PluginManager, plugin_id: &str) -> Res
         manager.plugins.insert(id.clone(), plugin);
         if let Some(plugin) = manager.plugins.get_mut(&id) {
             autostart::start_plugin_daemons(std::iter::once(&mut *plugin));
-            new_pid = plugin.daemon_pid();
         }
     }
 
     loading::rebuild_identity_index(manager);
     manager.set_resolution_report(loaded.report);
     sync_ignore_pids(manager);
+    #[cfg(debug_assertions)]
+    let new_pid = manager.plugins.get(plugin_id).and_then(Plugin::daemon_pid);
     qol_runtime::probe!(
         "PLUGIN_RELOAD",
         "plugin={plugin_id} stage=done scope=single loaded={loaded_plugin} old_pid={old_pid:?} new_pid={new_pid:?}"
@@ -131,8 +132,7 @@ pub(super) fn sync_ignore_pids(manager: &PluginManager) {
             continue;
         };
         log::info!("Ignoring daemon pid {} for plugin {}", pid, plugin.id);
-        #[cfg(unix)]
-        crate::desktop_state::add_ignore_pid(pid);
+        super::super::daemon_lifecycle::track_desktop_state_pid(pid);
     }
 }
 

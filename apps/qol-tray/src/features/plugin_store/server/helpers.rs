@@ -201,7 +201,7 @@ pub(super) fn infer_load_error(
     if !manifest.plugin.supports_current_platform() {
         return Some(format!(
             "Unsupported platform: current platform is {}",
-            std::env::consts::OS
+            super::super::platform::current_manifest_token()
         ));
     }
 

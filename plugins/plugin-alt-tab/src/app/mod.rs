@@ -74,18 +74,22 @@ impl AltTabApp {
         picker::platform::picker_window_title(target) == self.picker_title
     }
 
-    pub(crate) fn focus_for_keys(&self, phase: &str, show_id: Option<u64>, window: &mut Window) {
-        let show_id = show_id
+    pub(crate) fn focus_for_keys(&self, _phase: &str, _show_id: Option<u64>, window: &mut Window) {
+        #[cfg(debug_assertions)]
+        let show_id = _show_id
             .map(|id| id.to_string())
             .unwrap_or_else(|| "none".to_string());
+        #[cfg(debug_assertions)]
         let before = self.focus_handle.is_focused(window);
         window.focus(&self.focus_handle);
         window.activate_window();
+        #[cfg(debug_assertions)]
         let after = self.focus_handle.is_focused(window);
+        #[cfg(debug_assertions)]
         let visible = PICKER_VISIBLE.load(Ordering::Relaxed);
         qol_runtime::probe!(
             "KEY_FOCUS",
-            "phase={phase} show_id={show_id} before={before} after={after} visible={visible} title={}",
+            "phase={_phase} show_id={show_id} before={before} after={after} visible={visible} title={}",
             self.picker_title
         );
     }
@@ -286,14 +290,13 @@ impl AltTabApp {
         self.delegate.update(cx, |s, _| s.cycle(req.reverse));
     }
 
-    #[allow(unused_variables)]
-    fn probe_show_list(&self, path: &str, show_id: Option<u64>, cx: &Context<Self>) {
+    fn probe_show_list(&self, _path: &str, _show_id: Option<u64>, _cx: &Context<Self>) {
         #[cfg(debug_assertions)]
         {
-            let show_id = show_id
+            let show_id = _show_id
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| "none".to_string());
-            let state = self.delegate.read(cx);
+            let state = self.delegate.read(_cx);
             let head: Vec<String> = state
                 .windows
                 .iter()
@@ -308,7 +311,7 @@ impl AltTabApp {
                 .collect();
             qol_runtime::probe!(
                 "SHOW_LIST",
-                "show_id={show_id} path={path} sel={:?} n={} head=[{}] order=[{}]",
+                "show_id={show_id} path={_path} sel={:?} n={} head=[{}] order=[{}]",
                 state.selected_index,
                 state.windows.len(),
                 head.join(" "),
@@ -404,6 +407,7 @@ impl AltTabApp {
 
     pub(crate) fn ensure_live_preview(&mut self, cx: &mut Context<Self>) {
         if !self.rendering.captures_live_selection() {
+            #[cfg(debug_assertions)]
             let backend = self.rendering.preview_plane_backend().unwrap_or("none");
             qol_runtime::probe!(
                 "PREVIEW_LIVE",

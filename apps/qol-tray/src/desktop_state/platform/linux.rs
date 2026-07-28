@@ -1,10 +1,14 @@
 use crate::desktop_state::Platform;
-use qol_runtime::{xrandr, MonitorBounds};
+use qol_runtime::{display::x11, MonitorBounds};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
 use x11rb::rust_connection::RustConnection;
 
-pub(super) struct LinuxQueries {
+pub(super) fn create() -> impl Platform {
+    LinuxQueries::new()
+}
+
+struct LinuxQueries {
     conn: Option<RustConnection>,
     root: u32,
     active_window_atom: u32,
@@ -15,7 +19,7 @@ pub(super) struct LinuxQueries {
 }
 
 impl LinuxQueries {
-    pub(super) fn new() -> Self {
+    fn new() -> Self {
         if is_wayland() {
             return Self::disconnected();
         }
@@ -236,7 +240,7 @@ fn xrandr_monitors() -> Vec<MonitorBounds> {
     };
 
     let stdout = String::from_utf8_lossy(&out.stdout);
-    xrandr::parse_monitors(&stdout)
+    x11::parse_monitors(&stdout)
         .into_iter()
         .map(|monitor| monitor.bounds)
         .collect()

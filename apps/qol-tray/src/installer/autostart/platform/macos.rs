@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 
 use super::AutostartOps;
 
-const BUNDLE_ID: &str = crate::installer::platform::MACOS_BUNDLE_ID;
+const BUNDLE_ID: &str = crate::installer::platform::macos::BUNDLE_ID;
 
-pub(crate) struct Platform;
+pub(super) struct Platform;
 
 impl AutostartOps for Platform {
     fn read_target(&self) -> Result<Option<PathBuf>> {

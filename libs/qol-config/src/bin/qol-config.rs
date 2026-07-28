@@ -3,32 +3,59 @@ use qol_config::contract::{
 };
 use qol_config::normalized::resolve_config;
 use qol_config::validation::validate_spec;
+use qol_headless::{Command, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTextOutput};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    match run() {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(message) => {
-            eprintln!("{message}");
-            ExitCode::from(1)
-        }
-    }
+    app().run(std::env::args().skip(1))
 }
 
-fn run() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let command = match args.first().map(String::as_str) {
-        Some(command) => command,
-        None => return Err(usage()),
-    };
-    if command == "validate" {
-        return run_validate(&args[1..]);
-    }
-    if command == "normalize" {
-        return run_normalize(&args[1..]);
-    }
-    Err(usage())
+fn app() -> HeadlessApp {
+    HeadlessApp::new("qol-config", "qol-config")
+        .about("Validate and normalize qol plugin configuration contracts.")
+        .command(
+            Command::new("validate")
+                .about("Validate a plugin's configuration and runtime contracts.")
+                .usage("qol-config validate --plugin-root <path>")
+                .output("Prints `valid` on success.")
+                .exit_behavior("Exits non-zero when a contract is missing or invalid.")
+                .run_plain_text(|context| {
+                    run_validate(context.args()).map_err(anyhow::Error::msg)?;
+                    Ok(PlainTextOutput::text("valid"))
+                })
+                .run_json(|context| {
+                    run_validate(context.args()).map_err(anyhow::Error::msg)?;
+                    Ok(serde_json::json!({ "valid": true }))
+                }),
+        )
+        .command(
+            Command::new("normalize")
+                .about("Resolve a plugin contract with optional JSON overrides.")
+                .usage("qol-config normalize --plugin-root <path> [--overrides <path>] [--pretty]")
+                .output("Prints the resolved configuration as JSON.")
+                .exit_behavior("Exits non-zero when input cannot be read, parsed, or resolved.")
+                .run_plain_text(|context| {
+                    let value = normalized_value(context.args()).map_err(anyhow::Error::msg)?;
+                    let text = if context.args().iter().any(|arg| arg == "--pretty") {
+                        serde_json::to_string_pretty(&value)?
+                    } else {
+                        serde_json::to_string(&value)?
+                    };
+                    Ok(PlainTextOutput::text(text))
+                })
+                .run_json(|context| normalized_value(context.args()).map_err(anyhow::Error::msg)),
+        )
+        .doctor_check(DoctorCheck::new(
+            "contract_engine",
+            "Verify the contract parser and normalizer are available.",
+            || {
+                Ok(DoctorCheckResult::ok(
+                    "contract_engine",
+                    "configuration contract engine is available",
+                ))
+            },
+        ))
 }
 
 fn run_validate(args: &[String]) -> Result<(), String> {
@@ -37,29 +64,16 @@ fn run_validate(args: &[String]) -> Result<(), String> {
     validate_spec(&spec).map_err(format_validation_errors)?;
     let runtime = load_runtime_spec(&plugin_root)?;
     validate_contracts(&spec, runtime.as_ref()).map_err(format_validation_errors)?;
-    println!("valid");
     Ok(())
 }
 
-fn run_normalize(args: &[String]) -> Result<(), String> {
+fn normalized_value(args: &[String]) -> Result<serde_json::Value, String> {
     let plugin_root = parse_plugin_root(args)?;
     let overrides_path = parse_optional_value(args, "--overrides");
-    let pretty = args.iter().any(|arg| arg == "--pretty");
     let spec = parse_spec(spec_path(&plugin_root)).map_err(format_parse_error)?;
     let overrides = load_overrides(overrides_path.as_deref())?;
     let resolved = resolve_config(&spec, &overrides).map_err(format_validation_errors)?;
-    if pretty {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&resolved).map_err(|error| error.to_string())?
-        );
-        return Ok(());
-    }
-    println!(
-        "{}",
-        serde_json::to_string(&resolved).map_err(|error| error.to_string())?
-    );
-    Ok(())
+    serde_json::to_value(resolved).map_err(|error| error.to_string())
 }
 
 fn parse_plugin_root(args: &[String]) -> Result<PathBuf, String> {
@@ -125,7 +139,38 @@ fn format_validation_errors(errors: Vec<qol_config::validation::ValidationError>
         .join("\n")
 }
 
-fn usage() -> String {
-    "usage: qol-config <validate|normalize> --plugin-root <path> [--overrides <path>] [--pretty]"
-        .to_string()
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qol_headless::DoctorReport;
+
+    #[test]
+    fn contextual_help_is_equivalent_in_both_positions() {
+        for args in [["help", "normalize"], ["normalize", "help"]] {
+            let output = app().execute(args.map(str::to_string));
+            assert_eq!(output.exit_code, 0, "{}", output.stderr);
+            assert!(output.stdout.contains("--plugin-root <path>"));
+        }
+    }
+
+    #[test]
+    fn doctor_json_is_stable_in_both_global_positions() {
+        for args in [["--json", "doctor"], ["doctor", "--json"]] {
+            let output = app().execute(args.map(str::to_string));
+            assert_eq!(output.exit_code, 0, "{}", output.stderr);
+            let report: DoctorReport = serde_json::from_str(&output.stdout).unwrap();
+            assert_eq!(report.plugin_id, "qol-config");
+            assert_eq!(report.checks.len(), 1);
+        }
+    }
+
+    #[test]
+    fn json_validation_reports_input_errors_without_mutating_files() {
+        let output = app().execute(
+            ["--json", "validate", "--plugin-root", "/definitely/missing"].map(str::to_string),
+        );
+        assert_eq!(output.exit_code, 1);
+        assert!(output.stdout.is_empty());
+        assert!(!output.stderr.trim().is_empty());
+    }
 }

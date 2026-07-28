@@ -5,9 +5,6 @@ mod scale;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::{Context, Result};
-
-use crate::config::PLUGIN_ID;
 use crate::cursor::CursorEffect;
 
 use super::CursorPlatform;
@@ -32,11 +29,6 @@ impl CursorPlatform for Platform {
 
     fn external_stop_requested(&self) -> bool {
         EXTERNAL_STOP.load(Ordering::Relaxed)
-    }
-
-    fn open_settings(&self) -> Result<()> {
-        qol_apps::desktop_integration::open_plugin_settings(PLUGIN_ID)
-            .context("failed to open settings URL")
     }
 }
 

@@ -61,6 +61,7 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     crate::actions::cancel_pending_activation();
     let is_visible = PICKER_VISIBLE.load(Ordering::Relaxed);
     let placement = resolve_placement(req.tracker, req.current, is_visible);
+    #[cfg(debug_assertions)]
     let target = placement.target();
     let rendering = RenderingFlow::current();
     qol_runtime::probe!(
@@ -109,6 +110,7 @@ fn seed_frontmost_preview(
     cx: &mut App,
 ) {
     if !rendering.captures_on_open() {
+        #[cfg(debug_assertions)]
         let backend = rendering.preview_plane_backend().unwrap_or("none");
         qol_runtime::probe!(
             "PREVIEW_CAPTURE",
@@ -174,13 +176,13 @@ fn stabilize_placement(
     placement
 }
 
-fn placement_from_key(key: MonitorKey, reason: &'static str) -> Option<PopupPlacement> {
+fn placement_from_key(key: MonitorKey, _reason: &'static str) -> Option<PopupPlacement> {
     if key.width <= 0 || key.height <= 0 {
         return None;
     }
     qol_runtime::probe!(
         "PLACEMENT_FALLBACK",
-        "reason={reason} source=existing target={},{},{}x{}",
+        "reason={_reason} source=existing target={},{},{}x{}",
         key.x,
         key.y,
         key.width,
@@ -367,19 +369,19 @@ fn create_from_request(
 fn try_cycle_selection(
     handle: &WindowHandle<AltTabApp>,
     reverse: bool,
-    show_id: u64,
+    _show_id: u64,
     cx: &mut App,
 ) -> bool {
     handle
         .update(cx, |view, window: &mut Window, cx| -> bool {
             if !PICKER_VISIBLE.load(Ordering::Relaxed) {
-                qol_runtime::probe!("CYCLE_SELECTION", "show_id={show_id} outcome=hidden");
+                qol_runtime::probe!("CYCLE_SELECTION", "show_id={_show_id} outcome=hidden");
                 return false;
             }
             if view.action_mode != ActionMode::HoldToSwitch {
                 qol_runtime::probe!(
                     "CYCLE_SELECTION",
-                    "show_id={show_id} outcome=wrong_mode mode={:?}",
+                    "show_id={_show_id} outcome=wrong_mode mode={:?}",
                     view.action_mode
                 );
                 return false;
@@ -397,7 +399,7 @@ fn try_cycle_selection(
             view.delegate.update(cx, |s, _| s.cycle(reverse));
             view.mark_cycle(if reverse { "shift-tab" } else { "tab" }, from);
             cx.notify();
-            qol_runtime::probe!("CYCLE_SELECTION", "show_id={show_id} outcome=cycled");
+            qol_runtime::probe!("CYCLE_SELECTION", "show_id={_show_id} outcome=cycled");
             true
         })
         .unwrap_or(false)

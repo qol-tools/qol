@@ -242,8 +242,7 @@ impl<'a> HotkeyListenerLoop<'a> {
         self.finish_trace_session_if_idle();
     }
 
-    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-    fn dispatch(&mut self, dispatch: HotkeyDispatch, source: DispatchSource, keys: &str) {
+    fn dispatch(&mut self, dispatch: HotkeyDispatch, source: DispatchSource, _keys: &str) {
         let action = dispatch.action();
 
         let plugin_id = match self.plugin_manager.lock() {
@@ -310,7 +309,7 @@ impl<'a> HotkeyListenerLoop<'a> {
                             .strip_prefix("glide-")
                             .unwrap_or(&action.action),
                         active,
-                        keys
+                        _keys
                     );
                 }
                 if phase == ContinuousPhase::Heartbeat {

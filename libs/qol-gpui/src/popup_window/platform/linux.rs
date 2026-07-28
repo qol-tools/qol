@@ -10,6 +10,25 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use super::PopupPresentation;
+
+pub struct Platform;
+
+impl PopupPresentation for Platform {
+    fn present_topmost(title: &str) {
+        force_composite_below(composite_owner(title));
+        make_override_redirect(title);
+    }
+
+    fn restore_composite(title: &str) {
+        restore_composite(composite_owner(title));
+    }
+}
+
+fn composite_owner(title: &str) -> &str {
+    title.split('@').next().unwrap_or(title)
+}
+
 static GHOST_ALPHA: AtomicU32 = AtomicU32::new(0);
 
 static OPACITY_CACHE: Mutex<BTreeMap<String, (u32, Option<u32>)>> = Mutex::new(BTreeMap::new());
@@ -1601,8 +1620,8 @@ fn intern(conn: &impl Connection, name: &[u8]) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        focus_return_target, keepalive_wm_hints, normalize_opacity, opacity_to_cardinal,
-        pinned_window_kind, CompositeLease,
+        composite_owner, focus_return_target, keepalive_wm_hints, normalize_opacity,
+        opacity_to_cardinal, pinned_window_kind, CompositeLease,
     };
     use gpui::WindowKind;
     use x11rb::properties::{WmHints, WmHintsState};
@@ -1610,6 +1629,18 @@ mod tests {
     #[test]
     fn pinned_windows_are_popups_before_their_first_map() {
         assert_eq!(pinned_window_kind(), WindowKind::PopUp);
+    }
+
+    #[test]
+    fn composite_owner_strips_ghost_geometry_suffix() {
+        let cases = [
+            ("foo@0,0,1920x1080", "foo"),
+            ("foo-pin-123-0", "foo-pin-123-0"),
+            ("foo@1,2,3x4@extra", "foo"),
+        ];
+        for (title, expected) in cases {
+            assert_eq!(composite_owner(title), expected, "title: {title}");
+        }
     }
 
     #[test]

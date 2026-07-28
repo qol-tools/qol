@@ -75,10 +75,7 @@ fn spawn_socket_thread(shared: Arc<SharedState>, path: std::path::PathBuf) {
         .expect("failed to spawn runtime socket thread");
 }
 
-fn spawn_socket_listener_thread(
-    shared: Arc<SharedState>,
-    listener: std::os::unix::net::UnixListener,
-) {
+fn spawn_socket_listener_thread(shared: Arc<SharedState>, listener: socket::Listener) {
     std::thread::Builder::new()
         .name("runtime-sock-promoted".into())
         .spawn(move || socket::run_listener(shared, listener))

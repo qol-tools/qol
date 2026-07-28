@@ -15,6 +15,7 @@ mod peer_cred;
 pub use crate::pane_field::PaneField;
 pub use field::{check_field_access, FieldCheckError};
 pub use path::{
-    bind_broker_listener, broker_socket_path, broker_socket_path_for_uid, BrokerPathError,
+    bind_broker_listener, broker_socket_path, broker_socket_path_for_uid, BrokerListener,
+    BrokerPathError,
 };
-pub use peer_cred::{is_same_uid, peer_cred, PeerCred};
+pub use peer_cred::{is_same_uid, peer_cred, PeerCred, PeerStream};

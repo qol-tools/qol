@@ -28,6 +28,16 @@ pub(super) fn apps_dir() -> Option<PathBuf> {
     Some(dirs::home_dir()?.join("Applications").join("QoL"))
 }
 
+pub(super) fn publish_synced() {
+    use qol_runtime::protocol::RuntimeEvent;
+
+    let Some(dir) = apps_dir() else {
+        log::warn!("launcher_apps: no apps dir on this platform; skipping LauncherAppsSynced");
+        return;
+    };
+    crate::runtime::publish(&[RuntimeEvent::LauncherAppsSynced { dir }]);
+}
+
 fn app_dirnames(entries: &[LauncherEntry]) -> HashMap<String, String> {
     let sanitized: Vec<String> = entries.iter().map(sanitized_display_name).collect();
 

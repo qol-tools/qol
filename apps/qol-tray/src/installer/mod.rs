@@ -21,7 +21,7 @@ pub(crate) use platform::binary_filename;
 const INSTALL_ID_FILE: &str = "qol-tray.install-id";
 
 pub fn autostart_path() -> Result<PathBuf> {
-    platform::autostart_path()
+    autostart::autostart_path()
 }
 
 pub fn install_shell_hook() -> Result<()> {
@@ -65,18 +65,20 @@ pub fn bootstrap_current_install() -> Result<()> {
     Ok(())
 }
 
-pub fn run() -> Result<()> {
-    let args = source::parse_args()?;
-    if args.help {
-        print_help();
-        return Ok(());
-    }
+pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
+    let args = source::parse_args(args)?;
     match args.mode {
         source::Mode::Install => {
             run_install(args.source.as_deref(), args.skip_shell_hook, args.dev_mode)
         }
         source::Mode::Uninstall => run_uninstall(args.skip_shell_hook),
     }
+}
+
+pub fn check_platform_paths() -> Result<()> {
+    platform::install_dir()?;
+    autostart::autostart_path()?;
+    Ok(())
 }
 
 fn run_install(
@@ -165,26 +167,6 @@ fn install_shell_hook_warn_only(skip_shell_hook: bool) {
     println!("Shell hook installed. Open a new terminal for changes to take effect.");
 }
 
-fn print_help() {
-    println!(
-        "qol-tray-install\n\
-         \n\
-         Install or uninstall the QoL Tray binary, autostart entry, and shell hook.\n\
-         \n\
-         Usage:\n  \
-           qol-tray-install [--source <path>] [--skip-shell-hook] [--dev]\n  \
-           qol-tray-install --uninstall [--skip-shell-hook]\n  \
-           qol-tray-install --help\n\
-         \n\
-         Flags:\n  \
-           --source <path>      Use the binary at <path> as the install source.\n  \
-           --uninstall          Remove the qol-tools shell hook from rc files.\n  \
-           --skip-shell-hook    Do not touch ~/.zshrc or ~/.bashrc.\n  \
-           --dev                Write runtime mode = dev. Requires --features dev.\n  \
-           --help, -h           Print this help message.\n"
-    );
-}
-
 fn register_install_id(installed_binary: &Path) -> Result<String> {
     let install_id = create_install_id();
     write_install_id_marker(installed_binary, &install_id)?;
@@ -201,7 +183,10 @@ fn print_summary(
     println!("Installation complete.");
     println!("Installed binary: {}", installed_binary.display());
     println!("Install ID: {}", install_id);
-    println!("Autostart entry: {}", platform::autostart_path()?.display());
+    println!(
+        "Autostart entry: {}",
+        autostart::autostart_path()?.display()
+    );
     println!("Plugins directory: {}", plugins_dir.display());
     if !is_in_path(install_dir) {
         println!(

@@ -194,12 +194,16 @@ fn focused_window_bounds_ax(own_pid: i32) -> Option<MonitorBounds> {
     Some(bounds)
 }
 
-pub(super) struct MacQueries {
+pub(super) fn create() -> impl Platform {
+    MacQueries::new(std::process::id() as i32)
+}
+
+struct MacQueries {
     own_pid: i32,
 }
 
 impl MacQueries {
-    pub(super) fn new(own_pid: i32) -> Self {
+    fn new(own_pid: i32) -> Self {
         Self { own_pid }
     }
 }

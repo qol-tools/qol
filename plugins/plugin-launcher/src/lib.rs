@@ -1,7 +1,10 @@
 pub mod app;
+pub mod cli;
 pub mod config;
 pub mod discovery;
+mod doctor;
 pub mod launch;
+mod qol;
 pub mod ui;
 
 pub use app as daemon;

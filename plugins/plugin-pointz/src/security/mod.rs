@@ -10,6 +10,7 @@ use anyhow::Result;
 use crate::command::Command;
 use replay::ReplayWindow;
 use secret::PairingSecret;
+pub(crate) use secret::{ExistingSecretInspection, ExistingSecretState};
 
 const PAIRING_WINDOW: Duration = Duration::from_secs(120);
 const COMMAND_CLOCK_SKEW_MS: u64 = 30_000;
@@ -23,6 +24,10 @@ pub struct CommandGate {
 pub struct DiscoveryAuth {
     pub server_id: String,
     pub pairing_secret: Option<String>,
+}
+
+pub(crate) fn inspect_existing_secret() -> ExistingSecretInspection {
+    PairingSecret::inspect_existing()
 }
 
 impl CommandGate {

@@ -29,6 +29,7 @@ socket = "/tmp/qol-cli-sessions.sock"
 
 [capabilities]
 gpui = true
+doctor = true
 
 [menu]
 label = "CLI Sessions"

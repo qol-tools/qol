@@ -2,25 +2,7 @@ pub(crate) mod config;
 pub(crate) mod daemon;
 pub(crate) mod remap;
 
-pub(crate) fn run(args: Vec<String>) -> i32 {
-    if args.iter().any(|argument| argument == "--kill") {
-        if daemon::send_kill() {
-            eprintln!("[keyremap] kill sent");
-        } else {
-            eprintln!("[keyremap] no daemon running");
-        }
-        return 0;
-    }
-
-    if args.iter().any(|argument| argument == "--reload") {
-        if daemon::send_reload() {
-            eprintln!("[keyremap] reload sent");
-        } else {
-            eprintln!("[keyremap] no daemon running");
-        }
-        return 0;
-    }
-
+pub(crate) fn run() {
     let raw_config = config::load_config();
     let resolved = remap::resolve(&raw_config);
 
@@ -43,7 +25,7 @@ pub(crate) fn run(args: Vec<String>) -> i32 {
         if daemon::send_reload() {
             eprintln!("[keyremap] another instance running, sent reload");
         }
-        return 0;
+        return;
     }
 
     eprintln!("[keyremap] daemon started");
@@ -74,5 +56,4 @@ pub(crate) fn run(args: Vec<String>) -> i32 {
     }
 
     daemon::cleanup();
-    0
 }

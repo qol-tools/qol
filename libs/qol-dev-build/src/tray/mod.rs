@@ -5,6 +5,7 @@ use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::cargo_build::{spawn_piped, CargoChild};
+use crate::platform::{BuildPlatform, Platform};
 use crate::BuildResult;
 
 static LAST_ARTIFACT_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -81,7 +82,7 @@ pub fn debug_binary_path(root: &Path, bin: &str) -> PathBuf {
     artifact_root(root)
         .join("target")
         .join("debug")
-        .join(exe_name(bin))
+        .join(Platform.executable_name(bin))
 }
 
 pub fn artifact_root(root: &Path) -> PathBuf {
@@ -277,7 +278,7 @@ fn tray_build_command(root: &Path, manifest_path: &Path, bins: &[&str]) -> Comma
     command
         .args([
             "--features",
-            dev_feature_set(),
+            Platform.tray_dev_features(),
             "--message-format",
             "json",
             "--manifest-path",
@@ -285,13 +286,6 @@ fn tray_build_command(root: &Path, manifest_path: &Path, bins: &[&str]) -> Comma
         .arg(manifest_path)
         .current_dir(root);
     command
-}
-
-fn dev_feature_set() -> &'static str {
-    if cfg!(target_os = "linux") {
-        return "dev,linux_evdev";
-    }
-    "dev"
 }
 
 fn finish_build<F>(
@@ -368,13 +362,6 @@ fn predicted_artifact_count() -> u32 {
         return 50;
     }
     previous
-}
-
-fn exe_name(name: &str) -> String {
-    if std::env::consts::EXE_SUFFIX.is_empty() || name.ends_with(std::env::consts::EXE_SUFFIX) {
-        return name.to_string();
-    }
-    format!("{}{}", name, std::env::consts::EXE_SUFFIX)
 }
 
 #[cfg(test)]
@@ -524,7 +511,6 @@ path = \"src/main.rs\"
         assert!(result.is_empty(), "expected empty, got: {:?}", result);
     }
 
-    #[cfg(unix)]
     #[test]
     fn scan_finds_feature_grouped_worktree() {
         let tmp = TempDir::new().unwrap();
@@ -538,7 +524,6 @@ path = \"src/main.rs\"
         assert_eq!(result[0].path, tray_worktree);
     }
 
-    #[cfg(unix)]
     #[test]
     fn scan_surfaces_plugin_only_feature() {
         let tmp = TempDir::new().unwrap();
@@ -551,7 +536,6 @@ path = \"src/main.rs\"
         assert_eq!(result[0].branch, "feat/config-contract-v1");
     }
 
-    #[cfg(unix)]
     #[test]
     fn scan_dedupes_when_feature_contains_many_repos() {
         let tmp = TempDir::new().unwrap();
@@ -571,7 +555,6 @@ path = \"src/main.rs\"
         assert_eq!(result[0].branch, "feat/config-contract-v1");
     }
 
-    #[cfg(unix)]
     #[test]
     fn scan_finds_slash_layout_two_levels_deep() {
         let tmp = TempDir::new().unwrap();
@@ -588,7 +571,6 @@ path = \"src/main.rs\"
         assert_eq!(result[0].path, tray_worktree);
     }
 
-    #[cfg(unix)]
     #[test]
     fn scan_finds_slash_layout_three_levels_deep() {
         let tmp = TempDir::new().unwrap();
@@ -606,7 +588,6 @@ path = \"src/main.rs\"
         assert_eq!(result[0].path, tray_worktree);
     }
 
-    #[cfg(unix)]
     #[test]
     fn scan_stops_at_first_repo_anchor() {
         let tmp = TempDir::new().unwrap();
@@ -620,7 +601,6 @@ path = \"src/main.rs\"
         assert_eq!(result[0].path, outer);
     }
 
-    #[cfg(unix)]
     #[test]
     fn scan_skips_repo_dir_without_git() {
         let tmp = TempDir::new().unwrap();
@@ -632,7 +612,6 @@ path = \"src/main.rs\"
         assert!(result.is_empty(), "result: {:?}", result);
     }
 
-    #[cfg(unix)]
     fn create_manifest_dir(root: &Path, repo_name: &str) -> PathBuf {
         let manifest_dir = root.join(repo_name);
         std::fs::create_dir_all(&manifest_dir).unwrap();
@@ -640,12 +619,10 @@ path = \"src/main.rs\"
         manifest_dir
     }
 
-    #[cfg(unix)]
     fn create_git_worktree(path: &Path) -> PathBuf {
         create_worktree(path, true)
     }
 
-    #[cfg(unix)]
     fn create_worktree(path: &Path, with_git_dir: bool) -> PathBuf {
         std::fs::create_dir_all(path).unwrap();
         std::fs::write(path.join("Cargo.toml"), "[package]").unwrap();
@@ -655,7 +632,6 @@ path = \"src/main.rs\"
         path.to_path_buf()
     }
 
-    #[cfg(unix)]
     fn fake_branch_resolver(repo_dir: &Path) -> Option<String> {
         repo_dir
             .join(".git")
@@ -667,7 +643,7 @@ path = \"src/main.rs\"
     fn build_command_uses_requested_bins_dev_features_json_and_manifest_path() {
         let root = Path::new("/repo/qol");
         let manifest = root.join("Cargo.toml");
-        let features = dev_feature_set();
+        let features = Platform.tray_dev_features();
         let cases: [(&[&str], Vec<&str>); 2] = [
             (
                 &["qol-tray"],
@@ -744,7 +720,9 @@ path = \"src/main.rs\"
         let root = Path::new("/repo/qol");
         assert_eq!(
             debug_binary_path(root, "qol-tray"),
-            root.join("target").join("debug").join(exe_name("qol-tray"))
+            root.join("target")
+                .join("debug")
+                .join(Platform.executable_name("qol-tray"))
         );
     }
 
@@ -765,7 +743,7 @@ path = \"src/main.rs\"
             workspace
                 .join("target")
                 .join("debug")
-                .join(exe_name("qol-tray"))
+                .join(Platform.executable_name("qol-tray"))
         );
     }
 
@@ -777,7 +755,7 @@ path = \"src/main.rs\"
         let artifact = workspace
             .join("target")
             .join("debug")
-            .join(exe_name("qol-tray"));
+            .join(Platform.executable_name("qol-tray"));
         write_manifest(
             &workspace,
             "[workspace]\nmembers = [\"apps/qol-tray\"]\nresolver = \"2\"\n",
@@ -792,7 +770,7 @@ path = \"src/main.rs\"
             vec![workspace
                 .join("target")
                 .join("debug")
-                .join(exe_name("qol-tray-doctor"))]
+                .join(Platform.executable_name("qol-tray-doctor"))]
         );
     }
 }

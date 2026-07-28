@@ -115,10 +115,7 @@ impl CloudMigration for V3_15ToV3_16GistToRepo {
         let json: serde_json::Value =
             serde_json::from_str(&raw).context("parsing gist file as JSON")?;
 
-        let target_os = match std::env::consts::OS {
-            "linux" | "macos" | "windows" => std::env::consts::OS,
-            _ => "linux",
-        };
+        let target_os = crate::fs_util::current_os_subdir();
 
         crate::portability::validate_profile_name(&self.active_profile_name)
             .context("active profile name violates portability rules")?;
@@ -340,10 +337,7 @@ mod tests {
         assert_eq!(report.archived.len(), 0, "gist stays on GitHub");
 
         let profile_dir = dir.path().join("profile/default");
-        let target_os = match std::env::consts::OS {
-            "linux" | "macos" | "windows" => std::env::consts::OS,
-            _ => "linux",
-        };
+        let target_os = crate::fs_util::current_os_subdir();
 
         let cases: Vec<String> = vec![
             "manifest.json".to_string(),

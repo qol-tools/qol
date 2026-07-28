@@ -118,7 +118,7 @@ struct MonitorBounds {
 }
 
 impl MonitorBounds {
-    fn from_xrandr(monitor: qol_runtime::xrandr::XrandrMonitor) -> Self {
+    fn from_xrandr(monitor: qol_runtime::display::x11::XrandrMonitor) -> Self {
         Self {
             x: monitor.bounds.x as i32,
             y: monitor.bounds.y as i32,
@@ -154,7 +154,7 @@ fn xrandr_monitor_bounds() -> Vec<MonitorBounds> {
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    qol_runtime::xrandr::parse_monitors(&stdout)
+    qol_runtime::display::x11::parse_monitors(&stdout)
         .into_iter()
         .map(MonitorBounds::from_xrandr)
         .collect()

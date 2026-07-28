@@ -1,5 +1,4 @@
-#[cfg(target_os = "linux")]
-mod candle_whisper;
+mod platform;
 mod websocket;
 
 use std::collections::BTreeMap;
@@ -12,8 +11,6 @@ use serde::Serialize;
 
 use crate::audio::{AudioFormat, AudioFrame};
 
-#[cfg(target_os = "linux")]
-pub use candle_whisper::{CandleWhisperConfig, CandleWhisperTranscriber};
 pub use websocket::{WebSocketTranscriber, WebSocketTranscriberConfig};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -71,14 +68,10 @@ pub(crate) struct TranscriberRegistration {
     pub create: CreateTranscriber,
 }
 
-#[cfg(target_os = "linux")]
-const PROVIDERS: [TranscriberRegistration; 2] =
-    [candle_whisper::REGISTRATION, websocket::REGISTRATION];
-#[cfg(not(target_os = "linux"))]
-const PROVIDERS: [TranscriberRegistration; 1] = [websocket::REGISTRATION];
-
 pub fn transcriber_descriptors() -> impl Iterator<Item = TranscriberDescriptor> {
-    PROVIDERS.iter().map(|provider| provider.descriptor)
+    platform::providers()
+        .iter()
+        .map(|provider| provider.descriptor)
 }
 
 pub fn create_transcriber(
@@ -90,14 +83,17 @@ pub fn create_transcriber(
                 "automatic STT selection does not accept provider-specific options".to_owned(),
             ));
         }
-        let Some(provider) = PROVIDERS.iter().find(|provider| provider.auto_select) else {
+        let Some(provider) = platform::providers()
+            .iter()
+            .find(|provider| provider.auto_select)
+        else {
             return Err(TranscriptionError::ProviderUnavailable(
                 "no automatic STT provider is registered".to_owned(),
             ));
         };
         return instantiate(provider, &request.options);
     }
-    let Some(provider) = PROVIDERS
+    let Some(provider) = platform::providers()
         .iter()
         .find(|provider| provider.descriptor.id == request.provider)
     else {

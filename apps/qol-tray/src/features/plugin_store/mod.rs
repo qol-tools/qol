@@ -1,5 +1,6 @@
 pub(crate) mod github;
 pub mod installer;
+mod platform;
 mod plugin_ui;
 mod release_assets;
 pub(crate) mod release_integrity;

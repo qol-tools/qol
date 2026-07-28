@@ -17,7 +17,7 @@ use super::native_capture;
 static FROZEN_CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub fn process_alive(pid: u32) -> bool {
-    crate::platform::unix_process_alive(pid)
+    super::super::unix::process_alive(pid)
 }
 
 pub fn show_notification(title: &str, message: &str, _timeout_ms: u32) {
@@ -327,7 +327,7 @@ pub fn required_binaries_check() -> DoctorCheckResult {
 }
 
 pub(super) fn signal_process(pid: u32, signal: i32) -> Result<()> {
-    crate::platform::unix_signal_process(pid, signal)
+    super::super::unix::signal_process(pid, signal)
 }
 
 pub(super) fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {

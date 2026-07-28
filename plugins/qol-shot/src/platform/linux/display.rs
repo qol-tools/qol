@@ -12,7 +12,7 @@ pub fn get_monitors() -> Result<Vec<Monitor>> {
         return Err(anyhow!("xrandr failed"));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let monitors: Vec<Monitor> = qol_runtime::xrandr::parse_monitors(&stdout)
+    let monitors: Vec<Monitor> = qol_runtime::display::x11::parse_monitors(&stdout)
         .into_iter()
         .map(monitor_from_xrandr)
         .collect();
@@ -53,7 +53,7 @@ pub fn full_screen_bounds() -> Result<Monitor> {
     Ok(Monitor { x: 0, y: 0, w, h })
 }
 
-fn monitor_from_xrandr(monitor: qol_runtime::xrandr::XrandrMonitor) -> Monitor {
+fn monitor_from_xrandr(monitor: qol_runtime::display::x11::XrandrMonitor) -> Monitor {
     Monitor {
         x: monitor.bounds.x as i32,
         y: monitor.bounds.y as i32,

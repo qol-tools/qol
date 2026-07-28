@@ -1444,15 +1444,7 @@ impl TraceRunner {
         if let Some(name) = self.pid_names.get(pid) {
             return name.clone();
         }
-        let name = Command::new("ps")
-            .args(["-p", pid, "-o", "ucomm="])
-            .output()
-            .ok()
-            .and_then(|output| {
-                let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                (!text.is_empty()).then_some(text)
-            })
-            .unwrap_or_else(|| pid.to_string());
+        let name = platform::process_name(pid).unwrap_or_else(|| pid.to_string());
         self.pid_names.insert(pid.to_string(), name.clone());
         name
     }
@@ -1469,19 +1461,8 @@ impl TraceRunner {
     }
 
     pub(super) fn query_initial_monitors(&mut self) {
-        let Some(stdout) = Command::new("xrandr")
-            .arg("--current")
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| output.stdout)
-        else {
-            return;
-        };
-        for line in String::from_utf8_lossy(&stdout).lines() {
-            if let Some(bounds) = parse_xrandr_geometry_line(line) {
-                self.push_monitor(bounds);
-            }
+        for bounds in platform::initial_monitor_bounds() {
+            self.push_monitor(bounds);
         }
     }
 

@@ -133,8 +133,9 @@ pub(super) fn current_log_source(dash: &Dash) -> Option<LogSourceInfo> {
                 kind: "trace",
                 folder: path
                     .parent()
-                    .unwrap_or_else(|| Path::new("/tmp"))
-                    .to_path_buf(),
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(std::env::temp_dir),
                 file: Some(path),
                 stream_note: "raw probe file",
             })
@@ -166,11 +167,24 @@ pub(super) fn open_current_log_folder(dash: &mut Dash) {
     let Some(source) = current_log_source(dash) else {
         return;
     };
-    crate::host_facade::open_path(&source.folder);
-    dash.notice = Some((
-        Instant::now(),
-        format!("opened {} folder {}", source.kind, source.folder.display()),
-    ));
+    let message = match crate::host_facade::open_path(&source.folder) {
+        Ok(outcome) if outcome.desktop_opened() => {
+            format!("opened {} folder {}", source.kind, source.folder.display())
+        }
+        Ok(_) => {
+            format!(
+                "could not open {} folder {} · no desktop session",
+                source.kind,
+                source.folder.display()
+            )
+        }
+        Err(error) => format!(
+            "could not open {} folder {} · {error:#}",
+            source.kind,
+            source.folder.display()
+        ),
+    };
+    dash.notice = Some((Instant::now(), message));
 }
 
 pub(super) fn open_current_log_editor(dash: &mut Dash, raw: bool) {
@@ -277,17 +291,7 @@ fn strip_ansi_codes(input: &str) -> String {
 }
 
 fn open_with_os_default(path: &Path) -> bool {
-    if crate::host_facade::os_name() == "macos" {
-        return Command::new("open")
-            .arg("-t")
-            .arg(path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .is_ok();
-    }
-    qol_apps::desktop_integration::open_with_default_app(path).is_ok()
+    crate::host_facade::open_text_file(path)
 }
 
 pub(super) fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: Rect) {

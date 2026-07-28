@@ -102,7 +102,7 @@ pub(super) fn finalization_for(output_file: &Path) -> Finalization {
     }
 }
 
-pub fn recording_started(session: &CaptureSession) {
+pub fn recording_started(session: &CaptureSession, _countdown_completed: bool) {
     qol_runtime::probe!("SHOT_RECORD_NOTIFY", "stage=started");
     show_recording_region_overlay(session);
     show_notification("Recording started", "Press your hotkey to stop", 1200);

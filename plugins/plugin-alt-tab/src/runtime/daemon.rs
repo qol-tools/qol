@@ -2,7 +2,7 @@ use std::sync::mpsc::Sender;
 
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 
-const CONFIG: DaemonConfig = DaemonConfig {
+pub(crate) const CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
     support_replace_existing: false,
 };
@@ -48,5 +48,42 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
         "settings" => ReadResult::Command(Command::Settings),
         "kill" => ReadResult::Command(Command::Kill),
         _ => ReadResult::Fallback,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn daemon_parser_preserves_every_runtime_route() {
+        let cases = [
+            ("ping", "handled"),
+            ("show", "show"),
+            ("open", "show"),
+            ("show-reverse", "show-reverse"),
+            ("open-reverse", "show-reverse"),
+            ("reload", "reload"),
+            ("settings", "settings"),
+            ("kill", "kill"),
+            ("unknown", "fallback"),
+        ];
+
+        for (input, expected) in cases {
+            let actual = match parse_command(input) {
+                ReadResult::Handled => "handled",
+                ReadResult::Command(Command::Show) => "show",
+                ReadResult::Command(Command::ShowReverse) => "show-reverse",
+                ReadResult::Command(Command::Reload) => "reload",
+                ReadResult::Command(Command::Settings) => "settings",
+                ReadResult::Command(Command::Kill) => "kill",
+                ReadResult::Fallback => "fallback",
+                ReadResult::HandledWithData(_) => "handled-with-data",
+                ReadResult::Error(_) => "error",
+                ReadResult::Ignore => "ignore",
+            };
+
+            assert_eq!(actual, expected, "input={input}");
+        }
     }
 }

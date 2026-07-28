@@ -7,8 +7,13 @@
 
 pub mod gitattributes;
 pub mod paths;
+mod platform;
 pub mod unicode;
 
 pub use gitattributes::{ensure_gitattributes, GITATTRIBUTES_CONTENT};
 pub use paths::{ensure_path_within_platform_limit, validate_profile_name};
 pub use unicode::normalize_to_nfc;
+
+pub(crate) fn current_os_bucket() -> &'static str {
+    platform::os_bucket()
+}

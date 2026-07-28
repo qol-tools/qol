@@ -16,6 +16,7 @@ args = ["open"]
 
 [capabilities]
 gpui = true
+doctor = true
 
 [menu]
 label = "Remove App"

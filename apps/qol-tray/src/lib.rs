@@ -1,6 +1,5 @@
 pub mod commands;
 pub mod daemon;
-#[cfg(unix)]
 pub(crate) mod desktop_state;
 #[cfg(feature = "dev")]
 pub mod dev;
@@ -16,11 +15,9 @@ pub mod paths;
 pub mod plugins;
 pub mod process;
 pub mod profile;
-#[cfg(unix)]
 pub mod runtime;
 pub mod settings_surface;
 pub mod shortcuts;
-#[cfg(unix)]
 pub(crate) mod signal;
 pub mod sync;
 #[cfg(test)]

@@ -4,6 +4,7 @@ pub mod core;
 mod fingerprint;
 mod fingerprint_store;
 pub mod planning;
+mod platform;
 pub mod registry;
 mod service;
 pub mod tray;

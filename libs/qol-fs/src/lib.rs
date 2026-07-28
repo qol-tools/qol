@@ -21,6 +21,10 @@ pub fn sync_directory(path: &Path) -> io::Result<()> {
     platform::sync_parent(path)
 }
 
+pub fn prepare_file_removal(path: &Path) -> io::Result<()> {
+    platform::prepare_file_removal(path)
+}
+
 pub fn create_private_dir(path: &Path) -> io::Result<()> {
     if let Ok(metadata) = fs::symlink_metadata(path) {
         if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
@@ -177,6 +181,21 @@ mod tests {
 
         let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
+    }
+
+    #[test]
+    fn prepared_read_only_file_can_be_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("payload");
+        fs::write(&path, b"payload").unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).unwrap();
+
+        prepare_file_removal(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+
+        assert!(!path.exists());
     }
 
     #[cfg(unix)]

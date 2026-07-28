@@ -1,7 +1,9 @@
+use qol_config::{PluginConfigInspection, PluginConfigInspectionError};
 use serde::{Deserialize, Serialize};
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+pub(crate) type ConfigInspection = PluginConfigInspection<WindowActionsConfig>;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -26,31 +28,8 @@ pub fn load_config() -> WindowActionsConfig {
     qol_config::load_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
 }
 
-// These target-neutral calculations are consumed by the macOS adapter and exercised on every OS.
-#[allow(dead_code)]
-impl WindowActionsConfig {
-    pub fn center_size_for_monitor(&self, monitor_width: f64, monitor_height: f64) -> (f64, f64) {
-        let width = self.resolve_center_width(monitor_width);
-        let height = self.resolve_center_height(monitor_height);
-        (
-            width.clamp(1.0, monitor_width),
-            height.clamp(1.0, monitor_height),
-        )
-    }
-
-    fn resolve_center_width(&self, monitor_width: f64) -> f64 {
-        if self.center_mode == CenterMode::Percent {
-            return monitor_width * self.center_width_percent;
-        }
-        self.center_width_px
-    }
-
-    fn resolve_center_height(&self, monitor_height: f64) -> f64 {
-        if self.center_mode == CenterMode::Percent {
-            return monitor_height * self.center_height_percent;
-        }
-        self.center_height_px
-    }
+pub(crate) fn inspect_config() -> Result<ConfigInspection, PluginConfigInspectionError> {
+    qol_config::inspect_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
 }
 
 #[cfg(test)]
@@ -115,34 +94,6 @@ mod tests {
             prop_assert_eq!(config.snap_fraction, snap);
             prop_assert_eq!(config.reveal_taskbar_after_move, reveal);
             prop_assert_eq!(config.glide_speed_px_per_second, glide_speed);
-        }
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(200))]
-
-        #[test]
-        fn prop_percent_center_size_tracks_monitor_dimensions(
-            monitor_width in 100.0f64..6000.0,
-            monitor_height in 100.0f64..4000.0,
-            width_percent in 0.1f64..1.0,
-            height_percent in 0.1f64..1.0
-        ) {
-            let config = WindowActionsConfig {
-                center_mode: CenterMode::Percent,
-                center_width_px: 1152.0,
-                center_height_px: 892.0,
-                center_width_percent: width_percent,
-                center_height_percent: height_percent,
-                snap_fraction: 0.5,
-                reveal_taskbar_after_move: true,
-                glide_speed_px_per_second: 1200.0,
-            };
-
-            let (width, height) = config.center_size_for_monitor(monitor_width, monitor_height);
-
-            prop_assert_eq!(width, monitor_width * width_percent);
-            prop_assert_eq!(height, monitor_height * height_percent);
         }
     }
 }

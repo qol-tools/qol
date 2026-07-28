@@ -4,6 +4,8 @@ mod cinnamon_shell;
 
 pub(crate) fn show_async(payload: PreviewPlanePayload) {
     if let Some(reason) = cinnamon_shell::disabled_reason() {
+        #[cfg(not(debug_assertions))]
+        let _ = reason;
         qol_runtime::probe!(
             "PREVIEW_PLANE_SHOW",
             "show_id={} outcome=skipped reason={reason} items={}",
@@ -17,6 +19,8 @@ pub(crate) fn show_async(payload: PreviewPlanePayload) {
 
 pub(crate) fn hide_async(reason: &'static str) {
     if let Some(disabled_reason) = cinnamon_shell::disabled_reason() {
+        #[cfg(not(debug_assertions))]
+        let _ = disabled_reason;
         qol_runtime::probe!(
             "PREVIEW_PLANE_HIDE",
             "reason={reason} outcome=skipped reason={disabled_reason}"

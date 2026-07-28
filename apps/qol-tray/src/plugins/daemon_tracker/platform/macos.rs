@@ -1,7 +1,31 @@
 use crate::plugins::Plugin;
 use std::path::{Path, PathBuf};
 
-use super::super::ManagedProcess;
+use super::{DaemonTrackerPlatform, ManagedProcess};
+
+pub(super) struct Platform;
+
+impl DaemonTrackerPlatform for Platform {
+    fn pid_exe_path(pid: i32) -> Option<PathBuf> {
+        pid_exe_path(pid)
+    }
+
+    fn kill_orphan_daemons() {
+        kill_orphan_daemons();
+    }
+
+    fn managed_processes() -> Vec<ManagedProcess> {
+        managed_processes()
+    }
+
+    fn clean_stale_sockets(plugins: &[Plugin]) {
+        super::unix::clean_stale_sockets(plugins, true);
+    }
+
+    fn kill_managed_process(process: &ManagedProcess, roots: &super::ManagedRoots) -> bool {
+        super::unix::kill_managed_process(process, roots, pid_exe_path)
+    }
+}
 
 const PROC_PIDPATHINFO_MAXSIZE: u32 = 4096;
 
@@ -25,7 +49,7 @@ pub(super) fn pid_exe_path(pid: i32) -> Option<PathBuf> {
 }
 
 pub(super) fn kill_orphan_daemons() {
-    super::super::kill_from_pid_files();
+    super::unix::kill_from_pid_files(pid_exe_path);
     kill_orphan_plugin_processes();
 }
 
@@ -36,7 +60,7 @@ fn kill_orphan_plugin_processes() {
 }
 
 pub(super) fn managed_processes() -> Vec<ManagedProcess> {
-    let roots = super::super::ManagedRoots::load();
+    let roots = super::unix::ManagedRoots::load();
     let Some(pids) = all_pids() else {
         return Vec::new();
     };
@@ -78,7 +102,7 @@ fn truncate_pids(pids: &mut Vec<i32>, actual: i32) {
     pids.retain(|pid| *pid > 0);
 }
 
-fn managed_process(pid: i32, roots: &super::super::ManagedRoots) -> Option<ManagedProcess> {
+fn managed_process(pid: i32, roots: &super::unix::ManagedRoots) -> Option<ManagedProcess> {
     let exe = pid_exe_path(pid)?;
     if !roots.contains(&exe) {
         return None;
@@ -95,11 +119,4 @@ fn terminate_process(pid: i32, exe: &Path) {
     }
     log::info!("Killing orphan plugin process: {} ({})", pid, exe.display());
     crate::process_utils::terminate_group(pid, std::time::Duration::from_millis(50));
-}
-
-pub(super) fn clean_stale_sockets(plugins: &[Plugin]) {
-    super::socket_cleanup::clean_stale_sockets(
-        plugins,
-        super::socket_cleanup::SocketPathPolicy::MacOs,
-    );
 }

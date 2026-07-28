@@ -325,6 +325,7 @@ pub struct HeadlessApp {
     about: String,
     default_command: Option<Vec<String>>,
     commands: Vec<Command>,
+    fallback_command: Option<Command>,
     doctor_checks: Vec<DoctorCheck>,
     doctor_provider: Option<DoctorProvider>,
     doctor_aggregate_provider: Option<DoctorAggregateProvider>,
@@ -338,6 +339,7 @@ impl HeadlessApp {
             about: String::new(),
             default_command: None,
             commands: Vec::new(),
+            fallback_command: None,
             doctor_checks: Vec::new(),
             doctor_provider: None,
             doctor_aggregate_provider: None,
@@ -360,6 +362,17 @@ impl HeadlessApp {
 
     pub fn command(mut self, command: Command) -> Self {
         self.commands.push(command);
+        self
+    }
+
+    /// Handles otherwise unknown command paths after global help, doctor, and
+    /// output-mode routing has completed.
+    ///
+    /// The fallback receives the complete normalized argv in
+    /// [`CommandContext::args`]. It is intended for compatibility surfaces
+    /// that historically forwarded arbitrary action names.
+    pub fn fallback_command(mut self, command: Command) -> Self {
+        self.fallback_command = Some(command);
         self
     }
 
@@ -443,7 +456,7 @@ impl HeadlessApp {
             return self.execute_doctor(&tokens[1..], output_format);
         }
 
-        let resolved = self.resolve_command_path(&tokens).ok_or_else(|| {
+        let resolved = self.resolve_execution_path(&tokens).ok_or_else(|| {
             DispatchError::Usage(format!(
                 "Unknown command `{}`. Run `{}` help`.",
                 tokens.join(" "),
@@ -516,7 +529,7 @@ impl HeadlessApp {
             return Ok(None);
         }
 
-        let resolved = self.resolve_command_path(&tokens).ok_or_else(|| {
+        let resolved = self.resolve_execution_path(&tokens).ok_or_else(|| {
             DispatchError::Usage(format!(
                 "Unknown command `{}`. Run `{}` help`.",
                 tokens.join(" "),
@@ -564,6 +577,18 @@ impl HeadlessApp {
             command,
             path,
             consumed,
+        })
+    }
+
+    fn resolve_execution_path(&self, tokens: &[String]) -> Option<ResolvedCommand<'_>> {
+        self.resolve_command_path(tokens).or_else(|| {
+            self.fallback_command
+                .as_ref()
+                .map(|command| ResolvedCommand {
+                    command,
+                    path: vec![command.name.clone()],
+                    consumed: 0,
+                })
         })
     }
 
@@ -984,7 +1009,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     fn app() -> HeadlessApp {
         HeadlessApp::new("plugin-test", "test-bin")
@@ -1359,6 +1384,74 @@ mod tests {
         assert_eq!(execution.exit_code, EXIT_USAGE);
         assert!(execution.stdout.is_empty());
         assert!(execution.stderr.contains("does not support --json"));
+    }
+
+    #[test]
+    fn fallback_command_receives_the_complete_unknown_argv() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let handler_received = Arc::clone(&received);
+        let app = HeadlessApp::new("plugin-test", "test-bin")
+            .command(
+                Command::new("known").run_result(|_| Ok(CommandResult::success("known command"))),
+            )
+            .fallback_command(Command::new("legacy-action").run_result(move |context| {
+                *handler_received.lock().unwrap() = context.args().to_vec();
+                Ok(CommandResult::success("legacy fallback"))
+            }));
+
+        let execution = app.execute(["future-action".to_string(), "ignored-tail".to_string()]);
+
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert_eq!(execution.stdout, "legacy fallback");
+        assert_eq!(
+            received.lock().unwrap().as_slice(),
+            ["future-action", "ignored-tail"]
+        );
+    }
+
+    #[test]
+    fn named_commands_take_precedence_over_the_fallback() {
+        let fallback_calls = Arc::new(AtomicUsize::new(0));
+        let handler_calls = Arc::clone(&fallback_calls);
+        let app = HeadlessApp::new("plugin-test", "test-bin")
+            .command(
+                Command::new("known").run_result(|_| Ok(CommandResult::success("known command"))),
+            )
+            .fallback_command(Command::new("legacy-action").run_result(move |_| {
+                handler_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(CommandResult::success("legacy fallback"))
+            }));
+
+        let execution = app.execute(["known".to_string()]);
+
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert_eq!(execution.stdout, "known command");
+        assert_eq!(fallback_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn global_gates_run_before_the_fallback() {
+        let fallback_calls = Arc::new(AtomicUsize::new(0));
+        let handler_calls = Arc::clone(&fallback_calls);
+        let app = HeadlessApp::new("plugin-test", "test-bin")
+            .fallback_command(Command::new("legacy-action").run_result(move |_| {
+                handler_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(CommandResult::success("legacy fallback"))
+            }))
+            .doctor_check(DoctorCheck::new("ready", "Check readiness.", || {
+                Ok(DoctorCheckResult::ok("ready", "ready"))
+            }));
+
+        let help = app.execute(["future-action".to_string(), "help".to_string()]);
+        let json = app.execute(["--json".to_string(), "future-action".to_string()]);
+        let doctor = app.execute(["doctor".to_string()]);
+
+        assert_eq!(help.exit_code, EXIT_USAGE);
+        assert!(help.stderr.contains("Unknown help topic"));
+        assert_eq!(json.exit_code, EXIT_USAGE);
+        assert!(json.stderr.contains("does not support --json"));
+        assert_eq!(doctor.exit_code, EXIT_SUCCESS);
+        assert_eq!(fallback_calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

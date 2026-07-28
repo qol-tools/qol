@@ -265,44 +265,55 @@ fn probe_show_result(
     started: Instant,
     result: Result<String, String>,
 ) {
-    let elapsed_ms = started.elapsed().as_millis();
-    match result {
-        Ok(response) => {
-            qol_runtime::probe!(
-                "PREVIEW_PLANE_SHOW",
-                "backend=cinnamon_shell show_id={show_id} outcome=ok items={item_count} elapsed={elapsed_ms}ms result=\"{}\"",
-                trim_for_probe(&response)
-            );
-        }
-        Err(error) => {
-            qol_runtime::probe!(
-                "PREVIEW_PLANE_SHOW",
-                "backend=cinnamon_shell show_id={show_id} outcome=error items={item_count} elapsed={elapsed_ms}ms error=\"{}\"",
-                trim_for_probe(&error)
-            );
+    #[cfg(debug_assertions)]
+    {
+        let elapsed_ms = started.elapsed().as_millis();
+        match result {
+            Ok(response) => {
+                qol_runtime::probe!(
+                    "PREVIEW_PLANE_SHOW",
+                    "backend=cinnamon_shell show_id={show_id} outcome=ok items={item_count} elapsed={elapsed_ms}ms result=\"{}\"",
+                    trim_for_probe(&response)
+                );
+            }
+            Err(error) => {
+                qol_runtime::probe!(
+                    "PREVIEW_PLANE_SHOW",
+                    "backend=cinnamon_shell show_id={show_id} outcome=error items={item_count} elapsed={elapsed_ms}ms error=\"{}\"",
+                    trim_for_probe(&error)
+                );
+            }
         }
     }
+    #[cfg(not(debug_assertions))]
+    let _ = (show_id, item_count, started, result);
 }
 
 fn probe_hide_result(reason: &'static str, started: Instant, result: Result<String, String>) {
-    let elapsed_ms = started.elapsed().as_millis();
-    match result {
-        Ok(_) => {
-            qol_runtime::probe!(
-                "PREVIEW_PLANE_HIDE",
-                "backend=cinnamon_shell reason={reason} outcome=ok elapsed={elapsed_ms}ms"
-            );
-        }
-        Err(error) => {
-            qol_runtime::probe!(
-                "PREVIEW_PLANE_HIDE",
-                "backend=cinnamon_shell reason={reason} outcome=error elapsed={elapsed_ms}ms error=\"{}\"",
-                trim_for_probe(&error)
-            );
+    #[cfg(debug_assertions)]
+    {
+        let elapsed_ms = started.elapsed().as_millis();
+        match result {
+            Ok(_) => {
+                qol_runtime::probe!(
+                    "PREVIEW_PLANE_HIDE",
+                    "backend=cinnamon_shell reason={reason} outcome=ok elapsed={elapsed_ms}ms"
+                );
+            }
+            Err(error) => {
+                qol_runtime::probe!(
+                    "PREVIEW_PLANE_HIDE",
+                    "backend=cinnamon_shell reason={reason} outcome=error elapsed={elapsed_ms}ms error=\"{}\"",
+                    trim_for_probe(&error)
+                );
+            }
         }
     }
+    #[cfg(not(debug_assertions))]
+    let _ = (reason, started, result);
 }
 
+#[cfg(debug_assertions)]
 fn trim_for_probe(s: &str) -> String {
     let one_line = s.replace(['\n', '\r'], " ");
     one_line.chars().take(220).collect()

@@ -187,14 +187,13 @@ mod tests {
         PluginCache {
             format_version: version,
             timestamp,
-            plugins: vec![CachedPlugin {
-                id: "plugin-a".to_string(),
-                name: "A".to_string(),
-                description: "x".to_string(),
-                version: "1.0.0".to_string(),
-                repo_url: "https://example.com".to_string(),
-                platforms: None,
-            }],
+            plugins: vec![CachedPlugin::test_fixture(
+                "plugin-a",
+                "A",
+                "x",
+                "1.0.0",
+                "https://example.com",
+            )],
         }
     }
 
@@ -277,14 +276,13 @@ mod tests {
     #[test]
     fn present_state_returns_cached_plugins_with_age() {
         let snap = CacheSnapshot {
-            plugins: vec![PluginMetadata {
-                id: "plugin-x".to_string(),
-                name: "X".to_string(),
-                description: "d".to_string(),
-                version: "1.0.0".to_string(),
-                repo_url: "https://example.com".to_string(),
-                platforms: None,
-            }],
+            plugins: vec![PluginMetadata::test_fixture(
+                "plugin-x",
+                "X",
+                "d",
+                "1.0.0",
+                "https://example.com",
+            )],
             age_secs: 42,
             fresh: true,
         };

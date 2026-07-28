@@ -4,6 +4,7 @@ use crate::storage::paths::PLUGIN_ID;
 use crate::ui::placement::Corner;
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
+pub(crate) type ConfigInspection = qol_config::PluginConfigInspection<CliSessionsConfig>;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
@@ -20,6 +21,10 @@ impl CliSessionsConfig {
 
 pub fn load() -> CliSessionsConfig {
     qol_config::load_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
+}
+
+pub(crate) fn inspect() -> Result<ConfigInspection, qol_config::PluginConfigInspectionError> {
+    qol_config::inspect_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
 }
 
 #[cfg(test)]

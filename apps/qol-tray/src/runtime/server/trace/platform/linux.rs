@@ -18,8 +18,12 @@ pub(super) fn print_monitor_legend() {
     }
 }
 
-#[cfg(any(debug_assertions, test))]
-fn legend_entry(monitor: &qol_runtime::xrandr::XrandrMonitor, idx: usize, label: &str) -> String {
+#[cfg(debug_assertions)]
+fn legend_entry(
+    monitor: &qol_runtime::display::x11::XrandrMonitor,
+    idx: usize,
+    label: &str,
+) -> String {
     let primary = if monitor.primary { "*primary" } else { "" };
     format!(
         "idx{idx}={}@{},{} \"{label}\"{primary}",
@@ -28,7 +32,7 @@ fn legend_entry(monitor: &qol_runtime::xrandr::XrandrMonitor, idx: usize, label:
 }
 
 #[cfg(debug_assertions)]
-fn xrandr_monitors() -> Vec<qol_runtime::xrandr::XrandrMonitor> {
+fn xrandr_monitors() -> Vec<qol_runtime::display::x11::XrandrMonitor> {
     let Ok(output) = std::process::Command::new("xrandr")
         .arg("--current")
         .output()
@@ -39,7 +43,7 @@ fn xrandr_monitors() -> Vec<qol_runtime::xrandr::XrandrMonitor> {
         return Vec::new();
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut monitors = qol_runtime::xrandr::parse_monitors(&stdout);
+    let mut monitors = qol_runtime::display::x11::parse_monitors(&stdout);
     monitors.sort_by_key(|monitor| (monitor.bounds.x as i32, monitor.bounds.y as i32));
     monitors
 }

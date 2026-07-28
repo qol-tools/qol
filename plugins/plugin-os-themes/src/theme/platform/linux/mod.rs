@@ -3,6 +3,7 @@ mod gsettings;
 
 use anyhow::{bail, Result};
 
+use crate::theme::desktop::{classify_desktop, DesktopEnvironment};
 use crate::theme::ColorScheme;
 
 use super::ThemePlatform;
@@ -26,15 +27,14 @@ fn detect_backend() -> Result<Box<dyn DesktopBackend>> {
 }
 
 fn backend_for(raw: &str) -> Result<Box<dyn DesktopBackend>> {
-    for part in raw.split(':') {
-        match part.trim().to_ascii_lowercase().as_str() {
-            "x-cinnamon" | "cinnamon" => return Ok(Box::new(backends::Cinnamon)),
-            "gnome" => return Ok(Box::new(backends::Gnome)),
-            "kde" => return Ok(Box::new(backends::Kde)),
-            _ => {}
+    match classify_desktop(raw) {
+        DesktopEnvironment::Gnome => Ok(Box::new(backends::Gnome)),
+        DesktopEnvironment::Cinnamon => Ok(Box::new(backends::Cinnamon)),
+        DesktopEnvironment::Kde => Ok(Box::new(backends::Kde)),
+        DesktopEnvironment::Unknown => {
+            bail!("unsupported desktop environment for theme switching: {raw:?}")
         }
     }
-    bail!("unsupported desktop environment for theme switching: {raw:?}")
 }
 
 #[cfg(test)]

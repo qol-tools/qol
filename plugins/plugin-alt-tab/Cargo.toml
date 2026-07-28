@@ -17,6 +17,7 @@ qol-conventions.workspace = true
 qol-plugin-daemon.workspace = true
 qol-app-icon.workspace = true
 qol-gpui.workspace = true
+qol-headless.workspace = true
 qol-runtime.workspace = true
 
 [build-dependencies]
@@ -65,3 +66,4 @@ objc2-app-kit = { version = "0.3", features = [
 
 [dev-dependencies]
 qol-plugin-api.workspace = true
+tempfile = "3"

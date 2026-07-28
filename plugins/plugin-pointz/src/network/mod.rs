@@ -1,8 +1,22 @@
+mod platform;
+
 use crate::config::ServerConfig;
 use if_addrs::get_if_addrs;
 use std::net::IpAddr;
-use std::os::fd::FromRawFd;
 use tokio::net::UdpSocket;
+
+pub(crate) struct InterfaceMetadata {
+    pub name: String,
+    pub address: IpAddr,
+    pub loopback: bool,
+}
+
+pub(crate) struct NetworkMetadata {
+    pub hostname: String,
+    pub local_ipv4: Option<IpAddr>,
+    pub interfaces: Vec<InterfaceMetadata>,
+    pub interface_issue: Option<String>,
+}
 
 pub fn get_local_ip() -> Option<IpAddr> {
     get_if_addrs()
@@ -18,15 +32,52 @@ pub fn get_hostname() -> String {
         .unwrap_or_else(|_| ServerConfig::UNKNOWN_HOSTNAME.to_string())
 }
 
+pub(crate) fn inspect_metadata() -> NetworkMetadata {
+    let hostname = get_hostname();
+    let interfaces = match get_if_addrs() {
+        Ok(interfaces) => interfaces,
+        Err(error) => {
+            return NetworkMetadata {
+                hostname,
+                local_ipv4: None,
+                interfaces: Vec::new(),
+                interface_issue: Some(error.to_string()),
+            };
+        }
+    };
+    let local_ipv4 = interfaces
+        .iter()
+        .find(|interface| !interface.is_loopback() && interface.ip().is_ipv4())
+        .map(|interface| interface.ip());
+    let mut interfaces = interfaces
+        .into_iter()
+        .map(|interface| {
+            let address = interface.ip();
+            let loopback = interface.is_loopback();
+            InterfaceMetadata {
+                name: interface.name,
+                address,
+                loopback,
+            }
+        })
+        .collect::<Vec<_>>();
+    interfaces.sort_by(|left, right| {
+        (&left.name, left.address.to_string()).cmp(&(&right.name, right.address.to_string()))
+    });
+    NetworkMetadata {
+        hostname,
+        local_ipv4,
+        interfaces,
+        interface_issue: None,
+    }
+}
+
 /// Adopts the UDP socket qol-tray pre-bound for the named port (matching a
 /// `[[daemon.extra_ports]]` entry in plugin.toml), or binds it directly if
 /// qol-tray didn't pre-bind it (e.g. when run outside qol-tray's supervision).
 pub async fn bind_udp_or_inherit(name: &str, port: u16) -> anyhow::Result<UdpSocket> {
     if let Some(fd) = qol_plugin_daemon::daemon::inherited_port_fd(name) {
-        qol_plugin_daemon::daemon::restore_cloexec(fd)?;
-        let std_socket = unsafe { std::net::UdpSocket::from_raw_fd(fd) };
-        std_socket.set_nonblocking(true)?;
-        return Ok(UdpSocket::from_std(std_socket)?);
+        return platform::adopt_inherited_udp(fd);
     }
     Ok(UdpSocket::bind(("0.0.0.0", port)).await?)
 }
@@ -34,6 +85,7 @@ pub async fn bind_udp_or_inherit(name: &str, port: u16) -> anyhow::Result<UdpSoc
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::fd::IntoRawFd;
 
     // Each test below uses its own distinct env var suffix
@@ -60,6 +112,7 @@ mod tests {
     // set_nonblocking here previously panicked at daemon startup the moment
     // qol-tray pre-bound a port for this plugin.
     #[tokio::test]
+    #[cfg(unix)]
     async fn bind_udp_or_inherit_adopts_an_inherited_fd_without_panicking() {
         let pre_bound = std::net::UdpSocket::bind(("127.0.0.1", 0)).unwrap();
         let fd = pre_bound.into_raw_fd();

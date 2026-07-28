@@ -1,13 +1,10 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-#[cfg(target_os = "windows")]
 use super::AutostartOps;
 
-#[cfg(target_os = "windows")]
-pub(crate) struct Platform;
+pub(super) struct Platform;
 
-#[cfg(target_os = "windows")]
 impl AutostartOps for Platform {
     fn read_target(&self) -> Result<Option<PathBuf>> {
         let path = autostart_path_impl()?;
@@ -24,7 +21,6 @@ impl AutostartOps for Platform {
     }
 }
 
-#[cfg(target_os = "windows")]
 fn autostart_path_impl() -> Result<PathBuf> {
     let app_data = std::env::var_os("APPDATA").context("APPDATA is not set")?;
     Ok(PathBuf::from(app_data)
@@ -35,6 +31,11 @@ fn autostart_path_impl() -> Result<PathBuf> {
         .join("Startup")
         .join("qol-tray.cmd"))
 }
+
+#[cfg(test)]
+const _: Platform = Platform;
+#[cfg(test)]
+const _: fn() -> Result<PathBuf> = autostart_path_impl;
 
 fn write_cmd_to(path: &Path, binary: &Path) -> Result<()> {
     let escaped = escape_autostart_batch_path(binary);

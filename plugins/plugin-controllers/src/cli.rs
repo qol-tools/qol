@@ -71,6 +71,11 @@ fn settings_command() -> Command {
 fn doctor_checks() -> Vec<DoctorCheck> {
     vec![
         DoctorCheck::new(
+            "platform_supported",
+            "Verify the current platform has native controller discovery and driver-fix backends.",
+            platform_supported_check,
+        ),
+        DoctorCheck::new(
             "pkexec_available",
             "Verify pkexec exists for the privileged apply step.",
             pkexec_check,
@@ -83,6 +88,26 @@ fn doctor_checks() -> Vec<DoctorCheck> {
     ]
 }
 
+fn platform_supported_check() -> Result<DoctorCheckResult> {
+    Ok(platform_supported_result(std::env::consts::OS))
+}
+
+fn platform_supported_result(platform: &str) -> DoctorCheckResult {
+    if platform == "linux" {
+        return DoctorCheckResult::ok(
+            "platform_supported",
+            "Linux is declared and has native controller discovery and driver-fix backends",
+        );
+    }
+    DoctorCheckResult::fail(
+        "platform_supported",
+        format!(
+            "{platform} is not declared by Controllers and has no native controller discovery or driver-fix backend"
+        ),
+    )
+    .with_fix("Run Controllers on Linux")
+}
+
 fn pkexec_check() -> Result<DoctorCheckResult> {
     let snapshot = app::snapshot();
     if !snapshot.rows.iter().any(|row| row.fixable) {
@@ -91,13 +116,7 @@ fn pkexec_check() -> Result<DoctorCheckResult> {
             "no privileged controller fixes currently apply",
         ));
     }
-    let found = std::process::Command::new("pkexec")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false);
+    let found = crate::fixes::authorization_available();
     Ok(if found {
         DoctorCheckResult::ok("pkexec_available", "pkexec found")
     } else {
@@ -135,4 +154,40 @@ fn summary_lines(rows: &[app::ControllerRow]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use qol_headless::DoctorStatus;
+
+    use super::*;
+
+    #[test]
+    fn doctor_registry_checks_platform_before_linux_capabilities() {
+        assert_eq!(
+            doctor_checks()
+                .iter()
+                .map(DoctorCheck::id)
+                .collect::<Vec<_>>(),
+            ["platform_supported", "pkexec_available", "controller_fixes"]
+        );
+    }
+
+    #[test]
+    fn platform_check_rejects_unsupported_controller_backends() {
+        let cases = [
+            ("linux", DoctorStatus::Ok, "Linux is declared"),
+            ("macos", DoctorStatus::Fail, "macos is not declared"),
+            ("windows", DoctorStatus::Fail, "windows is not declared"),
+        ];
+        for (platform, expected_status, expected_message) in cases {
+            let result = platform_supported_result(platform);
+            assert_eq!(result.status, expected_status, "platform: {platform}");
+            assert!(
+                result.message.contains(expected_message),
+                "platform: {platform}, message: {}",
+                result.message
+            );
+        }
+    }
 }

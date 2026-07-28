@@ -524,13 +524,12 @@ fn sole_process_thread(process_id: u32) -> io::Result<ThreadHandle> {
     }
     let mut thread_id = None;
     loop {
-        if entry.th32OwnerProcessID == process_id {
-            if thread_id.replace(entry.th32ThreadID).is_some() {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "suspended prepared process unexpectedly has multiple threads",
-                ));
-            }
+        if entry.th32OwnerProcessID == process_id && thread_id.replace(entry.th32ThreadID).is_some()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "suspended prepared process unexpectedly has multiple threads",
+            ));
         }
         if unsafe { Thread32Next(snapshot.0, &mut entry) } != 0 {
             continue;

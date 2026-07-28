@@ -18,3 +18,7 @@ pub(crate) fn sync_parent(path: &Path) -> io::Result<()> {
         Err(error) => Err(error),
     }
 }
+
+pub(crate) fn prepare_file_removal(_: &Path) -> io::Result<()> {
+    Ok(())
+}

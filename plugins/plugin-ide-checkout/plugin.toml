@@ -10,6 +10,9 @@ platforms = ["macos", "linux"]
 [runtime]
 command = "task-runner"
 
+[capabilities]
+doctor = true
+
 [action.status]
 label = "Status"
 args = ["status"]

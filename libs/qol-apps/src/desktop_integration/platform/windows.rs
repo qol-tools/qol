@@ -9,7 +9,7 @@ pub(super) fn reveal_plan(path: &Path) -> RevealPlan {
     selection.push(path.as_os_str());
     let mut command = Command::new("explorer.exe");
     command.arg(selection);
-    RevealPlan::Command(command)
+    command.into()
 }
 
 #[cfg(test)]
@@ -20,7 +20,9 @@ mod tests {
 
     #[test]
     fn reveal_selects_the_path_in_explorer() {
-        let RevealPlan::Command(command) = reveal_plan(Path::new(r"C:\capture.png"));
+        let RevealPlan::Command(command) = reveal_plan(Path::new(r"C:\capture.png")) else {
+            panic!("Windows reveal must use Explorer");
+        };
         assert_eq!(command.get_program(), OsStr::new("explorer.exe"));
         assert_eq!(
             command.get_args().collect::<Vec<_>>(),

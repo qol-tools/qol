@@ -26,6 +26,7 @@ socket = "/tmp/qol-launcher.sock"
 
 [capabilities]
 gpui = true
+doctor = true
 
 [menu]
 label = "Launcher"

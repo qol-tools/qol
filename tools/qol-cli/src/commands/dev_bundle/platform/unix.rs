@@ -1,0 +1,5 @@
+use std::os::unix::fs::PermissionsExt;
+
+pub(in crate::commands::dev_bundle) fn source_is_executable(metadata: &std::fs::Metadata) -> bool {
+    metadata.permissions().mode() & 0o111 != 0
+}

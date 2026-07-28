@@ -2,81 +2,83 @@ use anyhow::{anyhow, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::InstallerOps;
+
 const ICNS_DATA: &[u8] = include_bytes!("../../../../assets/qol-tray.icns");
 const APP_NAME: &str = "QoL Tray";
-const BUNDLE_ID: &str = super::MACOS_BUNDLE_ID;
+pub(in crate::installer) const BUNDLE_ID: &str = "com.qol-tools.qol-tray";
 
-pub(super) fn install_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Could not determine home directory")?;
-    Ok(home
-        .join("Applications")
-        .join(format!("{APP_NAME}.app"))
-        .join("Contents")
-        .join("MacOS"))
-}
+pub(super) struct Platform;
 
-pub(super) fn autostart_path() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Could not determine home directory")?;
-    Ok(home
-        .join("Library")
-        .join("LaunchAgents")
-        .join(format!("{BUNDLE_ID}.plist")))
-}
-
-pub(super) fn register_application(binary_path: &Path) -> Result<()> {
-    let bundle_root = bundle_root_from_binary(binary_path)?;
-    write_info_plist(&bundle_root)?;
-    write_icon(&bundle_root)?;
-    codesign_bundle(&bundle_root);
-    rebind_url_scheme(&bundle_root);
-    Ok(())
-}
-
-pub(super) fn should_bootstrap_current_install(binary_path: &Path) -> Result<bool> {
-    let bundle_root = match bundle_root_from_binary(binary_path) {
-        Ok(path) => path,
-        Err(_) => return Ok(false),
-    };
-    Ok(bootstrap_allowed_for_bundle_root(
-        &bundle_root,
-        dirs::home_dir().as_deref(),
-    ))
-}
-
-pub(super) fn warn_system_install_conflict() {}
-
-pub(super) fn remove_legacy_install() {
-    let Some(home) = dirs::home_dir() else {
-        return;
-    };
-    let legacy_binary = home.join(".local").join("bin").join("qol-tray");
-    let legacy_marker = home.join(".local").join("bin").join("qol-tray.install-id");
-    if legacy_binary.exists() {
-        println!("Removing legacy install at {}", legacy_binary.display());
-        let _ = std::fs::remove_file(&legacy_binary);
+impl InstallerOps for Platform {
+    fn binary_filename(&self) -> String {
+        "qol-tray".to_string()
     }
-    if legacy_marker.exists() {
-        let _ = std::fs::remove_file(&legacy_marker);
+
+    fn install_dir(&self) -> Result<PathBuf> {
+        let home = dirs::home_dir().context("Could not determine home directory")?;
+        Ok(home
+            .join("Applications")
+            .join(format!("{APP_NAME}.app"))
+            .join("Contents")
+            .join("MacOS"))
     }
-}
 
-pub(super) fn start_now(binary_path: &Path) -> Result<()> {
-    if super::unix_common::is_running("qol-tray") {
-        return Ok(());
+    fn start_now(&self, binary_path: &Path) -> Result<()> {
+        if super::unix_common::is_running("qol-tray") {
+            return Ok(());
+        }
+        super::unix_common::start_now(binary_path)
     }
-    super::unix_common::start_now(binary_path)
-}
 
-pub(super) fn stop_running(binary_path: &Path) -> Result<()> {
-    super::unix_common::stop_running(binary_path, "qol-tray")
-}
+    fn stop_running(&self, _binary_path: &Path) -> Result<()> {
+        super::unix_common::stop_running_by_name("qol-tray")
+    }
 
-pub(super) fn set_executable_permissions(path: &Path) -> Result<()> {
-    super::unix_common::set_executable_permissions(path)
-}
+    fn set_executable_permissions(&self, path: &Path) -> Result<()> {
+        super::unix_common::set_executable_permissions(path)
+    }
 
-pub(super) fn prepare_atomic_replace(_: &Path) -> Result<()> {
-    Ok(())
+    fn prepare_atomic_replace(&self, _installed_binary: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    fn should_bootstrap_current_install(&self, binary_path: &Path) -> Result<bool> {
+        let bundle_root = match bundle_root_from_binary(binary_path) {
+            Ok(path) => path,
+            Err(_) => return Ok(false),
+        };
+        Ok(bootstrap_allowed_for_bundle_root(
+            &bundle_root,
+            dirs::home_dir().as_deref(),
+        ))
+    }
+
+    fn register_application(&self, binary_path: &Path) -> Result<()> {
+        let bundle_root = bundle_root_from_binary(binary_path)?;
+        write_info_plist(&bundle_root)?;
+        write_icon(&bundle_root)?;
+        codesign_bundle(&bundle_root);
+        rebind_url_scheme(&bundle_root);
+        Ok(())
+    }
+
+    fn warn_system_install_conflict(&self) {}
+
+    fn remove_legacy_install(&self) {
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+        let legacy_binary = home.join(".local").join("bin").join("qol-tray");
+        let legacy_marker = home.join(".local").join("bin").join("qol-tray.install-id");
+        if legacy_binary.exists() {
+            println!("Removing legacy install at {}", legacy_binary.display());
+            let _ = std::fs::remove_file(&legacy_binary);
+        }
+        if legacy_marker.exists() {
+            let _ = std::fs::remove_file(&legacy_marker);
+        }
+    }
 }
 
 fn bundle_root_from_binary(binary_path: &Path) -> Result<PathBuf> {

@@ -1,69 +1,76 @@
+use super::ManagedProcess;
 use crate::plugins::Plugin;
-#[cfg(unix)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-#[cfg(target_os = "linux")]
-mod linux;
-
-#[cfg(target_os = "macos")]
-mod macos;
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod socket_cleanup;
-
-#[cfg(unix)]
-pub(super) fn pid_exe_path(pid: i32) -> Option<PathBuf> {
-    #[cfg(target_os = "linux")]
-    return linux::pid_exe_path(pid);
-
-    #[cfg(target_os = "macos")]
-    return macos::pid_exe_path(pid);
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = pid;
-        None
+pub(super) trait DaemonTrackerPlatform {
+    fn pid_exe_path(pid: i32) -> Option<PathBuf>;
+    fn kill_orphan_daemons();
+    fn managed_processes() -> Vec<ManagedProcess>;
+    fn clean_stale_sockets(plugins: &[Plugin]);
+    fn kill_managed_process(process: &ManagedProcess, roots: &ManagedRoots) -> bool;
+    fn is_host_binary(executable: &Path) -> bool {
+        let Some(name) = executable.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        let name = name.strip_suffix(" (deleted)").unwrap_or(name);
+        let name = name.strip_suffix(".exe").unwrap_or(name);
+        let tray = crate::installer::binary_filename();
+        let tray = tray.strip_suffix(".exe").unwrap_or(&tray);
+        name == tray || name == "qol" || name == "qol-tray-doctor"
     }
 }
 
-pub(super) fn kill_orphan_daemons() {
-    #[cfg(target_os = "linux")]
-    linux::kill_orphan_daemons();
-
-    #[cfg(target_os = "macos")]
-    macos::kill_orphan_daemons();
-}
-
+#[cfg(not(any(unix, target_os = "windows")))]
+mod fallback;
 #[cfg(target_os = "linux")]
-pub(super) fn managed_processes() -> Vec<super::ManagedProcess> {
-    linux::managed_processes()
-}
-
+mod linux;
 #[cfg(target_os = "macos")]
-pub(super) fn managed_processes() -> Vec<super::ManagedProcess> {
-    macos::managed_processes()
-}
-
+mod macos;
+#[cfg(unix)]
+mod unix;
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+mod unix_fallback;
 #[cfg(target_os = "windows")]
-pub(super) fn managed_processes() -> Vec<super::ManagedProcess> {
-    Vec::new()
+mod windows;
+
+#[cfg(not(any(unix, target_os = "windows")))]
+use fallback::Platform;
+#[cfg(target_os = "linux")]
+use linux::Platform;
+#[cfg(target_os = "macos")]
+use macos::Platform;
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+use unix_fallback::Platform;
+#[cfg(target_os = "windows")]
+use windows::Platform;
+
+#[cfg(not(any(unix, target_os = "windows")))]
+pub(crate) use fallback::ManagedRoots;
+#[cfg(unix)]
+pub(crate) use unix::ManagedRoots;
+#[cfg(target_os = "windows")]
+pub(crate) use windows::ManagedRoots;
+
+pub(super) fn pid_exe_path(pid: i32) -> Option<PathBuf> {
+    Platform::pid_exe_path(pid)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-pub(super) fn managed_processes() -> Vec<super::ManagedProcess> {
-    Vec::new()
+pub(super) fn kill_orphan_daemons() {
+    Platform::kill_orphan_daemons();
+}
+
+pub(super) fn managed_processes() -> Vec<ManagedProcess> {
+    Platform::managed_processes()
 }
 
 pub(super) fn clean_stale_sockets(plugins: &[Plugin]) {
-    #[cfg(target_os = "linux")]
-    linux::clean_stale_sockets(plugins);
+    Platform::clean_stale_sockets(plugins);
+}
 
-    #[cfg(target_os = "macos")]
-    macos::clean_stale_sockets(plugins);
+pub(super) fn kill_managed_process(process: &ManagedProcess, roots: &ManagedRoots) -> bool {
+    Platform::kill_managed_process(process, roots)
+}
 
-    #[cfg(target_os = "windows")]
-    let _ = plugins;
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    let _ = plugins;
+pub(super) fn is_host_binary(executable: &Path) -> bool {
+    Platform::is_host_binary(executable)
 }

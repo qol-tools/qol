@@ -9,6 +9,12 @@ pub struct InputHandler {
     inner: InputHandlerImpl,
 }
 
+pub(crate) struct PlatformSupport {
+    pub name: &'static str,
+    pub declared: bool,
+    pub input_backend: bool,
+}
+
 impl InputHandler {
     pub fn new() -> Result<Self> {
         Ok(Self {
@@ -29,6 +35,10 @@ impl InputHandler {
             Command::ModifierRelease { modifier } => self.inner.modifier_release(&modifier),
         }
     }
+}
+
+pub(crate) fn platform_support() -> PlatformSupport {
+    platform::platform_support()
 }
 
 pub(crate) trait InputHandlerTrait: Send + Sync {

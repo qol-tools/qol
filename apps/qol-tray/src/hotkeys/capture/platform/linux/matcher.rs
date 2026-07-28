@@ -1,5 +1,6 @@
-use super::super::super::binding::{Binding, CaptureEvent, Combo, Phase};
+use super::super::super::binding::{Binding, CaptureEvent, Phase};
 use qol_hotkeys::evdev;
+use qol_hotkeys::grammar::Modifier;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -29,18 +30,21 @@ impl CaptureDecision {
 
 #[derive(Debug, Default)]
 pub(super) struct BindingMatcher {
-    bindings: Vec<(Combo, Binding)>,
+    bindings: Vec<(LinuxCombo, Binding)>,
     state: evdev::ModifierState,
-    active_continuous: HashMap<u16, (Combo, Binding, Instant)>,
+    active_continuous: HashMap<u16, (LinuxCombo, Binding, Instant)>,
     suppressed_keys: HashSet<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LinuxCombo {
+    mods: BTreeSet<Modifier>,
+    key: u16,
 }
 
 impl BindingMatcher {
     pub(super) fn new(bindings: Vec<Binding>) -> Self {
-        let bindings = bindings
-            .into_iter()
-            .filter_map(|binding| binding.combo.clone().map(|combo| (combo, binding)))
-            .collect();
+        let bindings = linux_bindings(bindings);
         Self {
             bindings,
             ..Self::default()
@@ -60,15 +64,12 @@ impl BindingMatcher {
     }
 
     pub(super) fn reload(&mut self, bindings: Vec<Binding>) -> Vec<CaptureEvent> {
-        self.bindings = bindings
-            .into_iter()
-            .filter_map(|binding| binding.combo.clone().map(|combo| (combo, binding)))
-            .collect();
+        self.bindings = linux_bindings(bindings);
         self.active_continuous
             .drain()
             .map(|(_, (_, binding, _))| CaptureEvent {
                 binding,
-                phase: Phase::Stop,
+                phase: Phase::STOP,
             })
             .collect()
     }
@@ -85,7 +86,7 @@ impl BindingMatcher {
             .filter_map(|code| self.active_continuous.remove(&code))
             .map(|(_, binding, _)| CaptureEvent {
                 binding,
-                phase: Phase::Stop,
+                phase: Phase::STOP,
             })
             .collect();
         CaptureDecision {
@@ -111,7 +112,7 @@ impl BindingMatcher {
         }
         CaptureDecision::suppress(vec![CaptureEvent {
             binding,
-            phase: Phase::Start,
+            phase: Phase::START,
         }])
     }
 
@@ -126,7 +127,7 @@ impl BindingMatcher {
                     *last_heartbeat = Instant::now();
                     Some(CaptureEvent {
                         binding: binding.clone(),
-                        phase: Phase::Heartbeat,
+                        phase: Phase::HEARTBEAT,
                     })
                 });
         CaptureDecision::suppress(event.into_iter().collect())
@@ -139,7 +140,7 @@ impl BindingMatcher {
             .remove(&code)
             .map(|(_, binding, _)| CaptureEvent {
                 binding,
-                phase: Phase::Stop,
+                phase: Phase::STOP,
             });
         if !suppressed {
             return CaptureDecision::forward();
@@ -159,6 +160,23 @@ impl BindingMatcher {
         }
         codes
     }
+}
+
+fn linux_bindings(bindings: Vec<Binding>) -> Vec<(LinuxCombo, Binding)> {
+    bindings
+        .into_iter()
+        .filter_map(|binding| {
+            let combo = binding.combo.as_ref()?;
+            let key = evdev::key_to_keycode(combo.key)?;
+            Some((
+                LinuxCombo {
+                    mods: combo.mods.clone(),
+                    key,
+                },
+                binding,
+            ))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -188,7 +206,7 @@ mod matcher_tests {
         let release = matcher.observe(keycodes::KEY_SPACE, 0);
 
         assert!(!press.forward);
-        assert_eq!(press.events[0].phase, Phase::Start);
+        assert_eq!(press.events[0].phase, Phase::START);
         assert!(!repeat.forward);
         assert!(repeat.events.is_empty());
         assert!(!release.forward);
@@ -210,9 +228,9 @@ mod matcher_tests {
         let repeat = matcher.observe(keycodes::KEY_LEFT, 2);
         let stop = matcher.observe(keycodes::KEY_LEFT, 0);
 
-        assert_eq!(start.events[0].phase, Phase::Start);
-        assert_eq!(repeat.events[0].phase, Phase::Heartbeat);
-        assert_eq!(stop.events[0].phase, Phase::Stop);
+        assert_eq!(start.events[0].phase, Phase::START);
+        assert_eq!(repeat.events[0].phase, Phase::HEARTBEAT);
+        assert_eq!(stop.events[0].phase, Phase::STOP);
         assert!(!start.forward && !repeat.forward && !stop.forward);
     }
 
@@ -228,7 +246,7 @@ mod matcher_tests {
         let key_release = matcher.observe(keycodes::KEY_RIGHT, 0);
 
         assert!(stop.forward);
-        assert_eq!(stop.events[0].phase, Phase::Stop);
+        assert_eq!(stop.events[0].phase, Phase::STOP);
         assert!(!key_release.forward);
         assert!(key_release.events.is_empty());
     }
@@ -290,7 +308,7 @@ mod matcher_tests {
         let release = matcher.observe(keycodes::KEY_SPACE, 0);
 
         assert_eq!(stopped.len(), 1);
-        assert_eq!(stopped[0].phase, Phase::Stop);
+        assert_eq!(stopped[0].phase, Phase::STOP);
         assert!(!release.forward);
         assert!(release.events.is_empty());
         assert_eq!(

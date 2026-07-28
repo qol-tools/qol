@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0"
 qol-dev-guest.workspace = true
+qol-headless.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

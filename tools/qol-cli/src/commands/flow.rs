@@ -2563,7 +2563,7 @@ fn prepare_workflow_payload(
             false,
         ));
     }
-    if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+    if !crate::host_facade::supports_qol_shot_payload() {
         return Err(PayloadPreparationFailure::before_spawn(
             anyhow!(
                 "workflow `{}` currently requires an x86_64 Linux build host",

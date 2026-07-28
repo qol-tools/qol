@@ -15,6 +15,9 @@ label = "Settings"
 kind = "settings"
 args = ["--action", "settings"]
 
+[capabilities]
+doctor = true
+
 [menu]
 label = "PointZ"
 items = []

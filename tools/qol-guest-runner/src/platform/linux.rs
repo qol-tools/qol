@@ -12,91 +12,79 @@ use anyhow::{bail, Context, Result};
 use qol_dev_guest::{
     read_frame, write_frame, CommandSpec, GuestHello, GuestMessage, GuestRequest, GuestResponse,
     GuestSession, ImageIdentity, ProcessOutcome, ProcessState, RequestAction, ResponseResult,
-    DEFAULT_DEVICE_PATH, DEFAULT_IDENTITY_PATH, DEFAULT_RUN_ID_PATH, PROTOCOL_VERSION,
+    PROTOCOL_VERSION,
 };
+use qol_headless::DoctorCheckResult;
+
+use super::GuestRunnerPlatform;
+use crate::cli::RunOptions;
 
 const MAX_COMMAND_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_OUTPUT_BYTES: u64 = 1024 * 1024;
 const RECONNECT_DELAY: Duration = Duration::from_millis(250);
 
-pub(crate) fn run() -> Result<()> {
-    let options = Options::parse(env::args().skip(1))?;
-    let image = read_identity(&options.identity_path)?;
-    let run_id = read_run_id(&options.run_id_path)?;
-    let session = current_session();
-    let hello = GuestHello {
-        protocol_version: PROTOCOL_VERSION,
-        run_id,
-        image,
-        session,
-        runner_pid: std::process::id(),
-    };
-    hello
-        .validate_for(&hello.image.environment_id)
-        .context("guest runner must start inside the prepared graphical session")?;
+pub(super) struct Platform;
 
-    loop {
-        match serve_device(&options.device_path, &hello) {
-            Ok(()) => {}
-            Err(error) => eprintln!("qol-guest-runner: {error:#}"),
-        }
-        thread::sleep(RECONNECT_DELAY);
-    }
-}
+impl GuestRunnerPlatform for Platform {
+    fn run(&self, options: RunOptions) -> Result<()> {
+        let image = read_identity(&options.identity_path)?;
+        let run_id = read_run_id(&options.run_id_path)?;
+        let session = current_session();
+        let hello = GuestHello {
+            protocol_version: PROTOCOL_VERSION,
+            run_id,
+            image,
+            session,
+            runner_pid: std::process::id(),
+        };
+        hello
+            .validate_for(&hello.image.environment_id)
+            .context("guest runner must start inside the prepared graphical session")?;
 
-#[derive(Debug, Eq, PartialEq)]
-struct Options {
-    device_path: PathBuf,
-    identity_path: PathBuf,
-    run_id_path: PathBuf,
-}
-
-impl Options {
-    fn parse(args: impl IntoIterator<Item = String>) -> Result<Self> {
-        let mut device_path = None;
-        let mut identity_path = None;
-        let mut run_id_path = None;
-        let mut args = args.into_iter();
-        while let Some(argument) = args.next() {
-            match argument.as_str() {
-                "--device" => set_once(
-                    &mut device_path,
-                    PathBuf::from(args.next().context("--device needs a path")?),
-                    "--device",
-                )?,
-                "--identity" => set_once(
-                    &mut identity_path,
-                    PathBuf::from(args.next().context("--identity needs a path")?),
-                    "--identity",
-                )?,
-                "--run-id-path" => set_once(
-                    &mut run_id_path,
-                    PathBuf::from(args.next().context("--run-id-path needs a path")?),
-                    "--run-id-path",
-                )?,
-                "-h" | "--help" => {
-                    println!(
-                        "qol-guest-runner [--device PATH] [--identity PATH] [--run-id-path PATH]\n\nRuns inside a prepared disposable qol development image."
-                    );
-                    std::process::exit(0);
-                }
-                other => bail!("unknown argument `{other}`"),
+        loop {
+            match serve_device(&options.device_path, &hello) {
+                Ok(()) => {}
+                Err(error) => eprintln!("qol-guest-runner: {error:#}"),
             }
+            thread::sleep(RECONNECT_DELAY);
         }
-        Ok(Self {
-            device_path: device_path.unwrap_or_else(|| PathBuf::from(DEFAULT_DEVICE_PATH)),
-            identity_path: identity_path.unwrap_or_else(|| PathBuf::from(DEFAULT_IDENTITY_PATH)),
-            run_id_path: run_id_path.unwrap_or_else(|| PathBuf::from(DEFAULT_RUN_ID_PATH)),
-        })
     }
-}
 
-fn set_once<T>(slot: &mut Option<T>, value: T, option: &str) -> Result<()> {
-    if slot.replace(value).is_some() {
-        bail!("{option} was provided more than once");
+    fn platform_check(&self) -> DoctorCheckResult {
+        DoctorCheckResult::ok(
+            "platform_supported",
+            "Linux guest-control runtime is supported",
+        )
     }
-    Ok(())
+
+    fn runtime_paths_check(&self) -> DoctorCheckResult {
+        let options = RunOptions::default();
+        let missing = [
+            ("device", options.device_path),
+            ("identity", options.identity_path),
+            ("run id", options.run_id_path),
+        ]
+        .into_iter()
+        .filter_map(|(label, path)| {
+            (!path.exists()).then_some(format!("{label}: {}", path.display()))
+        })
+        .collect::<Vec<_>>();
+        if missing.is_empty() {
+            return DoctorCheckResult::ok(
+                "runtime_paths",
+                "guest-control device and identity files are available",
+            );
+        }
+        DoctorCheckResult::warn(
+            "runtime_paths",
+            format!(
+                "prepared guest runtime paths are missing: {}",
+                missing.join(", ")
+            ),
+        )
+        .with_fix("run qol-guest-runner inside a prepared qol development guest")
+    }
 }
 
 fn read_identity(path: &Path) -> Result<ImageIdentity> {
@@ -433,31 +421,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_paths_once() {
-        assert_eq!(
-            Options::parse([
-                "--device".to_string(),
-                "/tmp/device".to_string(),
-                "--identity".to_string(),
-                "/tmp/identity".to_string(),
-            ])
-            .unwrap(),
-            Options {
-                device_path: PathBuf::from("/tmp/device"),
-                identity_path: PathBuf::from("/tmp/identity"),
-                run_id_path: PathBuf::from(DEFAULT_RUN_ID_PATH),
-            }
-        );
-        assert!(Options::parse([
-            "--device".to_string(),
-            "a".to_string(),
-            "--device".to_string(),
-            "b".to_string(),
-        ])
-        .is_err());
-    }
-
-    #[test]
     fn normalizes_cinnamon_session_names() {
         assert_eq!(
             normalize_desktop("X-Cinnamon"),
@@ -470,7 +433,6 @@ mod tests {
         assert_eq!(normalize_desktop(""), None);
     }
 
-    #[cfg(unix)]
     #[test]
     fn exec_returns_bounded_typed_output() {
         let mut manager = ProcessManager::default();
@@ -489,7 +451,6 @@ mod tests {
         assert_eq!(outcome.stderr, "err");
     }
 
-    #[cfg(unix)]
     #[test]
     fn spawned_process_can_be_polled_then_terminated() {
         let mut manager = ProcessManager::default();

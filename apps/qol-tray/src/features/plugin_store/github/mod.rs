@@ -5,11 +5,11 @@ mod releases;
 mod token;
 mod tree;
 
-#[cfg(test)]
-pub(crate) use cache::CachedPlugin;
 pub(crate) use cache::{
     current_timestamp, read_cache, update_cached_version, write_cache, PluginCache,
 };
+#[cfg(test)]
+pub(crate) use catalog::CachedPlugin;
 pub(crate) use catalog::PluginMetadata;
 pub(crate) use token::{build_github_request, get_stored_token, send_checked};
 

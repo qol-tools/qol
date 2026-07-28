@@ -1,6 +1,5 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::fd::FromRawFd;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -31,9 +30,8 @@ pub fn serve(port: u16, config: Config) -> std::io::Result<()> {
 }
 
 fn bind_task_runner_listener(port: u16) -> std::io::Result<TcpListener> {
-    if let Some(fd) = qol_plugin_daemon::daemon::inherited_primary_port_fd() {
-        qol_plugin_daemon::daemon::restore_cloexec(fd)?;
-        return Ok(unsafe { TcpListener::from_raw_fd(fd) });
+    if let Some(listener) = super::platform::inherited_listener()? {
+        return Ok(listener);
     }
     takeover::bind_with_takeover(port)
 }
@@ -449,6 +447,7 @@ mod tests {
         LOCK.lock().unwrap_or_else(|error| error.into_inner())
     }
 
+    #[cfg(unix)]
     #[test]
     fn bind_task_runner_listener_adopts_an_inherited_fd() {
         use std::os::fd::{AsRawFd, IntoRawFd};

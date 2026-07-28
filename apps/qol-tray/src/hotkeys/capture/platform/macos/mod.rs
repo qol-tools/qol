@@ -9,7 +9,6 @@ use core_graphics::event::{
     CGEventType, CallbackResult, EventField,
 };
 use crossbeam_channel::Receiver;
-use qol_hotkeys::grammar;
 use qol_hotkeys::grammar::Modifier as Mod;
 use qol_hotkeys::macos_keycode;
 use qol_runtime::keyremap_marker::{self, KeyRemapMarker};
@@ -226,7 +225,7 @@ impl MacBindingMatcher {
             .drain()
             .map(|(_, binding)| CaptureEvent {
                 binding,
-                phase: Phase::Stop,
+                phase: Phase::STOP,
             })
             .collect()
     }
@@ -240,13 +239,13 @@ impl MacBindingMatcher {
             return self
                 .active_continuous
                 .remove(&observed.key)
-                .map(|binding| (binding, Phase::Stop));
+                .map(|binding| (binding, Phase::STOP));
         }
         let binding = self.match_combo(observed)?.clone();
         if binding.continuous {
             self.active_continuous.insert(observed.key, binding.clone());
         }
-        Some((binding, Phase::Start))
+        Some((binding, Phase::START))
     }
 }
 
@@ -310,7 +309,7 @@ fn marker_mods(bits: u8) -> BTreeSet<Mod> {
 
 fn parse_mac_combo(binding: &Binding) -> Option<MacCombo> {
     let combo = binding.combo.as_ref()?;
-    let key = macos_keycode::key_to_keycode(grammar::parse(&binding.raw_key)?.key)?;
+    let key = macos_keycode::key_to_keycode(combo.key)?;
     Some(MacCombo {
         mods: combo.mods.clone(),
         key,
@@ -522,9 +521,9 @@ mod tests {
 
         let stopped = matcher.reload(Vec::new());
 
-        assert_eq!(started.map(|(_, phase)| phase), Some(Phase::Start));
+        assert_eq!(started.map(|(_, phase)| phase), Some(Phase::START));
         assert_eq!(stopped.len(), 1);
-        assert_eq!(stopped[0].phase, Phase::Stop);
+        assert_eq!(stopped[0].phase, Phase::STOP);
         assert_eq!(stopped[0].binding.plugin_uid.as_str(), "first");
         assert_eq!(stopped[0].binding.action, "open");
     }

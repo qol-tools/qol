@@ -10,6 +10,9 @@ platforms = ["linux", "macos"]
 [runtime]
 command = "window-actions"
 
+[capabilities]
+doctor = true
+
 [action.snap-left]
 label = "Snap Left"
 args = ["snap-left"]

@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::path::Path;
 
 type ModuleHandle = isize;
 type WhvGetCapability = unsafe extern "system" fn(i32, *mut c_void, u32, *mut u32) -> i32;
@@ -50,4 +51,8 @@ pub(crate) fn display() -> &'static str {
 
 pub(crate) fn libvirt_uris() -> &'static [&'static str] {
     &[]
+}
+
+pub(crate) fn path_is_executable(path: &Path) -> bool {
+    path.is_file()
 }

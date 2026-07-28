@@ -19,16 +19,10 @@ pub(super) fn stale_lockfile(path: &Path, max_age: Duration) -> bool {
         return lockfile_too_old(path, max_age);
     };
 
-    #[cfg(unix)]
-    {
-        !is_pid_alive(pid)
+    if let Some(alive) = super::super::platform::lock_owner_alive(pid) {
+        return !alive;
     }
-
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        lockfile_too_old(path, max_age)
-    }
+    lockfile_too_old(path, max_age)
 }
 
 fn lockfile_too_old(path: &Path, max_age: Duration) -> bool {
@@ -39,9 +33,4 @@ fn lockfile_too_old(path: &Path, max_age: Duration) -> bool {
         return false;
     };
     modified.elapsed().is_ok_and(|age| age > max_age)
-}
-
-#[cfg(unix)]
-fn is_pid_alive(pid: u32) -> bool {
-    crate::process_utils::is_pid_alive(pid as i32)
 }

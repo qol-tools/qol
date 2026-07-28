@@ -474,8 +474,8 @@ mod tests {
     fn build_rows_applies_fixes_only_to_the_bound_target_driver() {
         let root = tempfile::tempdir().expect("tempdir");
         let paths = SystemPaths {
-            modprobe_dir: root.path().join("modprobe.d"),
-            sys_module_dir: root.path().join("module"),
+            modprobe_dir: Some(root.path().join("modprobe.d")),
+            sys_module_dir: Some(root.path().join("module")),
         };
         let native = device(Some("hid-generic"), false, false);
         let xpadneo = device(Some("xpadneo"), false, true);

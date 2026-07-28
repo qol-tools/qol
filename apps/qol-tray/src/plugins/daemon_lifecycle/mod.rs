@@ -1,5 +1,6 @@
 pub mod lifeline_handoff;
 mod listener;
+mod platform;
 mod spawn;
 
 use super::Plugin;
@@ -95,15 +96,7 @@ fn clear_exited_daemon(plugin: &mut Plugin, reason: &str) {
 }
 
 fn reaped_elsewhere(error: &std::io::Error) -> bool {
-    #[cfg(unix)]
-    {
-        error.raw_os_error() == Some(libc::ECHILD)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = error;
-        false
-    }
+    platform::reaped_elsewhere(error)
 }
 
 pub(super) fn stop_daemon(plugin: &mut Plugin) -> Result<()> {
@@ -136,14 +129,17 @@ pub(super) fn stop_daemon(plugin: &mut Plugin) -> Result<()> {
 fn register_daemon(plugin: &mut Plugin, child: Child) {
     let pid = child.id();
     plugin.daemon_process = Some(child);
-    #[cfg(unix)]
-    crate::desktop_state::add_ignore_pid(pid);
+    track_desktop_state_pid(pid);
     super::daemon_tracker::registry::register(
         &crate::paths::runtime_pids_dir(),
         plugin.id.as_str(),
         pid,
     );
     log::info!("Registered ignore pid {} for plugin {}", pid, plugin.id);
+}
+
+pub(super) fn track_desktop_state_pid(pid: u32) {
+    platform::track_desktop_state_pid(pid);
 }
 
 #[cfg(test)]

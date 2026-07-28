@@ -199,25 +199,9 @@ async fn serve_update_fixture() -> impl IntoResponse {
     }
 }
 
-fn platform_bundle_name() -> String {
-    let os = if cfg!(target_os = "macos") {
-        "macos"
-    } else if cfg!(target_os = "windows") {
-        "windows"
-    } else {
-        "linux"
-    };
-    let arch = if cfg!(target_arch = "aarch64") {
-        "aarch64"
-    } else {
-        "x86_64"
-    };
-    format!("qol-tray-{os}-{arch}")
-}
-
 fn build_update_fixture() -> anyhow::Result<Vec<u8>> {
     let current_exe = std::env::current_exe()?;
-    let bundle_name = platform_bundle_name();
+    let bundle_name = super::super::platform::fixture_bundle_name();
 
     let mut binary_data = std::fs::read(&current_exe)?;
     patch_test_version(&mut binary_data);

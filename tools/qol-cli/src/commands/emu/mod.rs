@@ -32,7 +32,6 @@ mod registry;
 mod serial;
 mod workflow;
 
-#[allow(unused_imports)]
 pub(crate) use arch::{ArchGuess, Firmware, GuestArch};
 pub(crate) use discovery::{parse_emu_dir, Discovered, DiscoveryContext, ImageCandidate};
 pub(crate) use guest::GuestAdapter;
@@ -1892,13 +1891,12 @@ fn cmd_open(args: &[OsString], _verbose: bool) -> Result<()> {
     fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
     print_title("qol emu open");
     step_label("dir", StepKind::Info, &dir.display().to_string());
-    if env::var_os("DISPLAY").is_none()
-        && env::var_os("WAYLAND_DISPLAY").is_none()
-        && crate::host_facade::os_name() == "linux"
-    {
+    let outcome = crate::host_facade::open_path(&dir)?;
+    if outcome.desktop_opened() {
+        step_label("open", StepKind::Success, "desktop file manager");
         return Ok(());
     }
-    crate::host_facade::open_path(&dir);
+    step_label("open", StepKind::Info, "skipped · no desktop session");
     Ok(())
 }
 
@@ -2108,20 +2106,7 @@ pub(crate) fn find_on_path(program: &str) -> Option<PathBuf> {
     let paths = env::var_os("PATH")?;
     env::split_paths(&paths)
         .map(|path| path.join(&executable))
-        .find(|candidate| path_is_executable(candidate))
-}
-
-#[cfg(unix)]
-fn path_is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::metadata(path)
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn path_is_executable(path: &Path) -> bool {
-    path.is_file()
+        .find(|candidate| platform::path_is_executable(candidate))
 }
 
 fn inspect_image(
@@ -2650,9 +2635,9 @@ mod tests {
         let path = dir.path().join("tool");
         fs::write(&path, b"tool").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(!path_is_executable(&path));
+        assert!(!platform::path_is_executable(&path));
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(path_is_executable(&path));
+        assert!(platform::path_is_executable(&path));
     }
 
     #[test]

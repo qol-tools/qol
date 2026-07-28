@@ -797,7 +797,7 @@ fn fire_emu_down(dash: &mut Dash, id: &str) {
     }
 }
 
-pub(super) fn open_emu_dir(dash: &Dash) {
+pub(super) fn open_emu_dir(dash: &mut Dash) {
     let active_dir = selected_environment(dash)
         .and_then(|snapshot| dash.active_runs.get(&snapshot.resolved.definition.id))
         .and_then(ActiveSandboxRun::report_path)
@@ -817,8 +817,22 @@ pub(super) fn open_emu_dir(dash: &Dash) {
     let Some(dir) = dir else {
         return;
     };
-    let _ = std::fs::create_dir_all(&dir);
-    crate::host_facade::open_path(&dir);
+    let message = match std::fs::create_dir_all(&dir) {
+        Ok(()) => match crate::host_facade::open_path(&dir) {
+            Ok(outcome) if outcome.desktop_opened() => {
+                format!("opened emu folder {}", dir.display())
+            }
+            Ok(_) => {
+                format!(
+                    "could not open emu folder {} · no desktop session",
+                    dir.display()
+                )
+            }
+            Err(error) => format!("could not open emu folder {} · {error:#}", dir.display()),
+        },
+        Err(error) => format!("could not prepare emu folder {} · {error}", dir.display()),
+    };
+    dash.notice = Some((Instant::now(), message));
 }
 
 pub(super) fn verify_selected_image(dash: &mut Dash) {

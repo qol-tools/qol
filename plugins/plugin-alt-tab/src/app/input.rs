@@ -10,6 +10,7 @@ pub(crate) fn handle_key_down(
     cx: &mut Context<AltTabApp>,
 ) {
     let visible = crate::app::PICKER_VISIBLE.load(std::sync::atomic::Ordering::Relaxed);
+    #[cfg(debug_assertions)]
     let focused = this.focus_handle.is_focused(window);
     #[cfg(debug_assertions)]
     eprintln!(

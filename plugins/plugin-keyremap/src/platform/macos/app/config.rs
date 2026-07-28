@@ -93,6 +93,12 @@ pub fn load_config() -> RemapConfig {
     qol_config::load_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
 }
 
+pub fn inspect_config(
+) -> Result<qol_config::PluginConfigInspection<RemapConfig>, qol_config::PluginConfigInspectionError>
+{
+    qol_config::inspect_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,6 +1,6 @@
 use crate::command::ModifierKeys;
 use crate::config::ServerConfig;
-use crate::input::InputHandlerTrait;
+use crate::input::{InputHandlerTrait, PlatformSupport};
 use anyhow::Result;
 use rdev::{simulate, Button, EventType, Key, SimulateError};
 use std::sync::Mutex;
@@ -10,6 +10,14 @@ use x11::xlib;
 pub struct InputHandlerImpl {
     current_pos: Mutex<Option<(f64, f64)>>,
     modifier_state: Mutex<ModifierKeys>,
+}
+
+pub(in crate::input) fn platform_support() -> PlatformSupport {
+    PlatformSupport {
+        name: "linux",
+        declared: true,
+        input_backend: true,
+    }
 }
 
 impl InputHandlerImpl {

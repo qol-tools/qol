@@ -1,3 +1,4 @@
-pub mod evdev;
 pub mod grammar;
-pub mod macos_keycode;
+pub mod keycode;
+
+pub use keycode::{evdev, macos_keycode};

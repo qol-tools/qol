@@ -25,6 +25,16 @@ pub(super) fn apps_dir() -> Option<PathBuf> {
     dirs::data_local_dir().map(|p| p.join("applications"))
 }
 
+pub(super) fn publish_synced() {
+    use qol_runtime::protocol::RuntimeEvent;
+
+    let Some(dir) = apps_dir() else {
+        log::warn!("launcher_apps: no apps dir on this platform; skipping LauncherAppsSynced");
+        return;
+    };
+    crate::runtime::publish(&[RuntimeEvent::LauncherAppsSynced { dir }]);
+}
+
 fn desktop_filename(entry: &LauncherEntry) -> String {
     format!("{}{}.desktop", DESKTOP_PREFIX, entry.file_stem)
 }

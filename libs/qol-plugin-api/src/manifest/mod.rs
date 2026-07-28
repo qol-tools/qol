@@ -1,3 +1,4 @@
+mod platform;
 mod schema;
 mod validation;
 
@@ -51,6 +52,6 @@ pub fn supports_current_platform(platforms: &Option<Vec<String>>) -> bool {
         None => true,
         Some(platforms) => platforms
             .iter()
-            .any(|platform| platform == std::env::consts::OS),
+            .any(|platform| platform == platform::current_manifest_token()),
     }
 }

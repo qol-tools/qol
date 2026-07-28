@@ -127,8 +127,7 @@ async fn promote_shadow_to_stable(app_state: AppState) -> Result<u16> {
         app_state.promoted_to_stable.store(false, Ordering::Release);
         return Err(error);
     }
-    #[cfg(unix)]
-    if !crate::runtime::RuntimeServer::bind_public_socket() {
+    if !super::platform::bind_public_runtime_socket() {
         app_state.promoted_to_stable.store(false, Ordering::Release);
         anyhow::bail!("failed to bind promoted runtime state socket");
     }

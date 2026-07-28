@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+pub(crate) type ConfigInspection = qol_config::PluginConfigInspection<Config>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -21,6 +22,10 @@ pub fn load() -> Config {
     let config = load_from_disk();
     log_config(&config);
     config
+}
+
+pub(crate) fn inspect() -> Result<ConfigInspection, qol_config::PluginConfigInspectionError> {
+    qol_config::inspect_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
 }
 
 fn load_from_disk() -> Config {

@@ -358,48 +358,6 @@ pub(super) fn debug_number_field(block: &str, name: &str) -> Option<i64> {
     value.parse::<f64>().ok().map(|value| value as i64)
 }
 
-pub(super) fn parse_xrandr_geometry_line(line: &str) -> Option<(i64, i64, i64, i64)> {
-    if !line.contains(" connected") {
-        return None;
-    }
-    line.split_whitespace()
-        .find_map(parse_xrandr_geometry_token)
-}
-
-pub(super) fn parse_xrandr_geometry_token(token: &str) -> Option<(i64, i64, i64, i64)> {
-    let (w, rest) = token.split_once('x')?;
-    let coord_start = rest.find(['+', '-'])?;
-    let h = &rest[..coord_start];
-    let coords = &rest[coord_start..];
-    let (x, coords) = parse_signed_coord(coords)?;
-    let (y, _) = parse_signed_coord(coords)?;
-    Some((x, y, w.parse().ok()?, h.parse().ok()?))
-}
-
-pub(super) fn parse_signed_coord(input: &str) -> Option<(i64, &str)> {
-    let (sign, rest) = match input.as_bytes().first()? {
-        b'+' => {
-            let rest = &input[1..];
-            if let Some(rest) = rest.strip_prefix('-') {
-                (-1, rest)
-            } else {
-                (1, rest)
-            }
-        }
-        b'-' => (-1, &input[1..]),
-        _ => return None,
-    };
-    let digits = rest
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>();
-    if digits.is_empty() {
-        return None;
-    }
-    let value = digits.parse::<i64>().ok()? * sign;
-    Some((value, &rest[digits.len()..]))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -420,22 +378,5 @@ mod tests {
             ),
             vec![(-1920, 0, 1920, 1080)]
         );
-    }
-
-    #[test]
-    fn parses_monitor_bounds_from_xrandr_connected_line() {
-        assert_eq!(
-            parse_xrandr_geometry_line(
-                "DP-2 connected primary 1800x1169+0+0 (normal left inverted right x axis y axis) 345mm x 223mm"
-            ),
-            Some((0, 0, 1800, 1169))
-        );
-        assert_eq!(
-            parse_xrandr_geometry_line(
-                "HDMI-1 connected 1920x1080-1920+0 (normal left inverted right x axis y axis) 600mm x 340mm"
-            ),
-            Some((-1920, 0, 1920, 1080))
-        );
-        assert_eq!(parse_xrandr_geometry_line("DP-3 disconnected"), None);
     }
 }

@@ -6,7 +6,7 @@ use gpui::*;
 use qol_gpui::window::PopupPlacement;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub(crate) struct ReuseLayout {
     pub bounds: Bounds<Pixels>,
@@ -32,7 +32,8 @@ pub(super) struct LayoutInput<'a> {
 pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
     let reason = format!("show#{}", req.show_id);
     let _reason = qol_gpui::popup_window::reason_scope(reason);
-    let t_show = Instant::now();
+    #[cfg(debug_assertions)]
+    let t_show = std::time::Instant::now();
     req.handle
         .update(cx, |view, window: &mut Window, cx| {
             let was_visible = PICKER_VISIBLE.swap(true, Ordering::Relaxed);
@@ -86,6 +87,7 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
             view.focus_for_keys("reuse-after-show", Some(req.show_id), window);
             let painted = Arc::new(AtomicBool::new(false));
             let painted_for_frame = painted.clone();
+            #[cfg(debug_assertions)]
             let show_id = req.show_id;
             window.on_next_frame(move |_, _| {
                 painted_for_frame.store(true, Ordering::Release);

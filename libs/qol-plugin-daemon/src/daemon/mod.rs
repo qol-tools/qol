@@ -1,9 +1,3 @@
-#[cfg(unix)]
-mod unix;
-#[cfg(not(unix))]
-mod unsupported;
+mod platform;
 
-#[cfg(unix)]
-pub use unix::*;
-#[cfg(not(unix))]
-pub use unsupported::*;
+pub use platform::*;

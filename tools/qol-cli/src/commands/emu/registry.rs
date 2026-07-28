@@ -158,8 +158,7 @@ mod tests {
         );
     }
 
-    use crate::commands::emu::arch::{ArchGuess, GuestArch};
-    use crate::commands::emu::discovery::Firmware;
+    use crate::commands::emu::arch::{ArchGuess, Firmware, GuestArch};
     use crate::commands::emu::discovery::ImageCandidate;
     use crate::commands::emu::BootMedia;
     use tempfile::tempdir;

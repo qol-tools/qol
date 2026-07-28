@@ -289,7 +289,7 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Result<(), Checkou
     }
 }
 
-fn find_executable(app_id: &str, config: &Config) -> Option<PathBuf> {
+pub(crate) fn find_executable(app_id: &str, config: &Config) -> Option<PathBuf> {
     let app = config.apps.get(app_id)?;
     app.paths
         .iter()
@@ -307,11 +307,7 @@ fn expand_tilde(path: &str) -> PathBuf {
 }
 
 fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return false;
-    };
-    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    super::is_executable(path)
 }
 
 #[cfg(test)]
@@ -352,10 +348,13 @@ mod tests {
 
     #[test]
     fn find_executable_returns_first_present_and_executable_path() {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         let exe = dir.path().join("idea");
         std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let mut apps = BTreeMap::new();

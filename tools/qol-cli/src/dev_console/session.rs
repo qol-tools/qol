@@ -677,17 +677,7 @@ pub(super) fn apply_health(dash: &mut Dash, snapshot: HealthSnapshot) {
 }
 
 pub(super) fn core_log_dir() -> PathBuf {
-    match crate::host_facade::os_name() {
-        "macos" => dirs::home_dir()
-            .map(|home| home.join("Library/Logs/qol-tray"))
-            .unwrap_or_else(|| PathBuf::from("/tmp/qol-tray/logs")),
-        "windows" => dirs::data_local_dir()
-            .map(|dir| dir.join("qol-tray/logs"))
-            .unwrap_or_else(|| PathBuf::from("C:/Temp/qol-tray/logs")),
-        _ => qol_config::data_dir()
-            .map(|dir| dir.join("logs"))
-            .unwrap_or_else(|| PathBuf::from("/tmp/qol-tray/logs")),
-    }
+    crate::host_facade::core_log_dir()
 }
 
 pub(super) fn act_plugin(dash: &mut Dash) {

@@ -6,7 +6,7 @@ use super::RevealPlan;
 pub(super) fn reveal_plan(path: &Path) -> RevealPlan {
     let mut command = Command::new("/usr/bin/open");
     command.arg("-R").arg(path);
-    RevealPlan::Command(command)
+    command.into()
 }
 
 #[cfg(test)]
@@ -17,7 +17,9 @@ mod tests {
 
     #[test]
     fn reveal_selects_the_path_in_finder() {
-        let RevealPlan::Command(command) = reveal_plan(Path::new("/tmp/capture.png"));
+        let RevealPlan::Command(command) = reveal_plan(Path::new("/tmp/capture.png")) else {
+            panic!("macOS reveal must use Finder");
+        };
         assert_eq!(command.get_program(), OsStr::new("/usr/bin/open"));
         assert_eq!(
             command.get_args().collect::<Vec<_>>(),

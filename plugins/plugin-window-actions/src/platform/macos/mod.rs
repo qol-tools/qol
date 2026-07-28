@@ -1,4 +1,5 @@
 mod ax;
+mod doctor;
 mod geometry;
 mod objc;
 mod screen;
@@ -14,6 +15,8 @@ use crate::restore::WindowSystem;
 use geometry::{
     center, maximize, move_monitor_left, move_monitor_right, snap_bottom, snap_left, snap_right,
 };
+
+pub(crate) use doctor::{platform_supported_check, required_binaries_check};
 
 pub(crate) struct GlideController;
 

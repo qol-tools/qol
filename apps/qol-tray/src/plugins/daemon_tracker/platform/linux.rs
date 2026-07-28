@@ -1,7 +1,31 @@
 use crate::plugins::Plugin;
 use std::path::{Path, PathBuf};
 
-use super::super::ManagedProcess;
+use super::{DaemonTrackerPlatform, ManagedProcess};
+
+pub(super) struct Platform;
+
+impl DaemonTrackerPlatform for Platform {
+    fn pid_exe_path(pid: i32) -> Option<PathBuf> {
+        pid_exe_path(pid)
+    }
+
+    fn kill_orphan_daemons() {
+        kill_orphan_daemons();
+    }
+
+    fn managed_processes() -> Vec<ManagedProcess> {
+        managed_processes()
+    }
+
+    fn clean_stale_sockets(plugins: &[Plugin]) {
+        super::unix::clean_stale_sockets(plugins, false);
+    }
+
+    fn kill_managed_process(process: &ManagedProcess, roots: &super::ManagedRoots) -> bool {
+        super::unix::kill_managed_process(process, roots, pid_exe_path)
+    }
+}
 
 pub(super) fn pid_exe_path(pid: i32) -> Option<PathBuf> {
     std::fs::read_link(proc_exe_path(pid)).ok()
@@ -13,7 +37,7 @@ fn proc_exe_path(pid: i32) -> PathBuf {
 
 pub(super) fn kill_orphan_daemons() {
     kill_orphan_plugin_binaries();
-    super::super::kill_from_pid_files();
+    super::unix::kill_from_pid_files(pid_exe_path);
 }
 
 fn kill_orphan_plugin_binaries() {
@@ -23,7 +47,7 @@ fn kill_orphan_plugin_binaries() {
 }
 
 pub(super) fn managed_processes() -> Vec<ManagedProcess> {
-    let roots = super::super::ManagedRoots::load();
+    let roots = super::unix::ManagedRoots::load();
     let Some(entries) = proc_entries() else {
         return Vec::new();
     };
@@ -46,7 +70,7 @@ fn entry_pid(entry: &std::fs::DirEntry) -> Option<i32> {
     }
 }
 
-fn managed_process(pid: i32, roots: &super::super::ManagedRoots) -> Option<ManagedProcess> {
+fn managed_process(pid: i32, roots: &super::unix::ManagedRoots) -> Option<ManagedProcess> {
     let target = pid_exe_path(pid)?;
     if !roots.contains(&target) {
         return None;
@@ -67,11 +91,4 @@ fn terminate_process(pid: i32, target: &Path) {
         target.display()
     );
     crate::process_utils::terminate_group(pid, std::time::Duration::from_millis(50));
-}
-
-pub(super) fn clean_stale_sockets(plugins: &[Plugin]) {
-    super::socket_cleanup::clean_stale_sockets(
-        plugins,
-        super::socket_cleanup::SocketPathPolicy::StandardUnix,
-    );
 }

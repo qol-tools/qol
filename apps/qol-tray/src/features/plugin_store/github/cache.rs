@@ -1,3 +1,4 @@
+use super::catalog::CachedPlugin;
 use super::{PluginMetadata, CACHE_FORMAT_VERSION};
 use crate::paths;
 use anyhow::Result;
@@ -15,43 +16,6 @@ pub(crate) struct PluginCache {
     pub format_version: u32,
     pub timestamp: u64,
     pub plugins: Vec<CachedPlugin>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct CachedPlugin {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub version: String,
-    pub repo_url: String,
-    #[serde(default)]
-    pub platforms: Option<Vec<String>>,
-}
-
-impl From<PluginMetadata> for CachedPlugin {
-    fn from(metadata: PluginMetadata) -> Self {
-        Self {
-            id: metadata.id,
-            name: metadata.name,
-            description: metadata.description,
-            version: metadata.version,
-            repo_url: metadata.repo_url,
-            platforms: metadata.platforms,
-        }
-    }
-}
-
-impl From<CachedPlugin> for PluginMetadata {
-    fn from(cached: CachedPlugin) -> Self {
-        Self {
-            id: cached.id,
-            name: cached.name,
-            description: cached.description,
-            version: cached.version,
-            repo_url: cached.repo_url,
-            platforms: cached.platforms,
-        }
-    }
 }
 
 pub(crate) fn current_timestamp() -> u64 {

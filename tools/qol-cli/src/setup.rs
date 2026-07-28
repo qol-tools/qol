@@ -197,18 +197,9 @@ fn cargo_home() -> Result<PathBuf> {
     if let Some(path) = env::var_os("CARGO_HOME") {
         return Ok(PathBuf::from(path));
     }
-    let home = home_dir()
+    let home = crate::host_facade::home_dir()
         .ok_or_else(|| anyhow!("CARGO_HOME is not set and no home directory was found"))?;
     Ok(home.join(".cargo"))
-}
-
-fn home_dir() -> Option<PathBuf> {
-    if cfg!(windows) {
-        if let Some(path) = env::var_os("USERPROFILE") {
-            return Some(PathBuf::from(path));
-        }
-    }
-    env::var_os("HOME").map(PathBuf::from)
 }
 
 fn normalized_path(path: &Path) -> Result<String> {

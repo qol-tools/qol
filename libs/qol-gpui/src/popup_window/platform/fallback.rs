@@ -1,3 +1,50 @@
+use super::PopupPresentation;
+
+pub struct Platform;
+
+impl PopupPresentation for Platform {
+    fn present_topmost(_title: &str) {}
+
+    fn restore_composite(_title: &str) {}
+}
+
+#[derive(Clone)]
+pub struct WindowGeometrySession;
+
+impl WindowGeometrySession {
+    pub fn set_bounds(&self, _x: i32, _y: i32, _width: u32, _height: u32) {}
+
+    pub fn set_position(&self, _x: i32, _y: i32) {}
+
+    pub fn pointer_root(&self) -> Option<(i32, i32)> {
+        None
+    }
+
+    pub fn bounds(&self) -> Option<(i32, i32, u32, u32)> {
+        None
+    }
+
+    pub fn anchor_content(&self, _right: bool, _bottom: bool) {}
+}
+
+pub fn window_geometry_session(_title: &str) -> Option<WindowGeometrySession> {
+    None
+}
+
+pub fn window_position_by_title(_title: &str) -> Option<(i32, i32)> {
+    None
+}
+
+pub fn make_override_redirect(_title: &str) -> bool {
+    false
+}
+
+pub fn focus_window_by_title(_title: &str) -> bool {
+    false
+}
+
+pub fn release_focus_by_title(_title: &str) {}
+
 pub fn sync_window_layout(
     title: &str,
     window: &mut gpui::Window,

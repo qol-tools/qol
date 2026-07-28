@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
-use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 
 use super::state::desired_quirk;
 use super::FixTarget;
@@ -31,11 +30,8 @@ pub fn conf_contents(targets: &[FixTarget]) -> String {
 pub fn sysfs_writes(targets: &[FixTarget]) -> Vec<(String, String)> {
     quirks_by_driver(targets)
         .iter()
-        .map(|(driver, quirks)| {
-            (
-                format!("/sys/module/{driver}/parameters/quirks"),
-                quirks.join(","),
-            )
+        .filter_map(|(driver, quirks)| {
+            super::platform::live_quirk_path(driver).map(|path| (path, quirks.join(",")))
         })
         .collect()
 }
@@ -45,23 +41,7 @@ pub fn apply(targets: &[FixTarget]) -> Result<()> {
         bail!("no known controllers connected");
     }
     let conf = conf_contents(targets);
-    let script = r#"set -e
-printf '%s' "$1" > /etc/modprobe.d/qol-controllers.conf
-shift
-while [ "$#" -ge 2 ]; do
-  if [ -e "$1" ]; then printf '%s' "$2" > "$1"; fi
-  shift 2
-done"#;
-    let mut command = Command::new("pkexec");
-    command.args(["sh", "-c", script, "qol-controllers", &conf]);
-    for (path, value) in sysfs_writes(targets) {
-        command.arg(path).arg(value);
-    }
-    let status = command.status().context("failed to launch pkexec")?;
-    if !status.success() {
-        bail!("pkexec exited with {status}");
-    }
-    Ok(())
+    super::platform::apply(&conf, &sysfs_writes(targets))
 }
 
 #[cfg(test)]

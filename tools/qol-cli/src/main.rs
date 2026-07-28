@@ -13,7 +13,7 @@ mod setup;
 mod workspace;
 
 use anyhow::{bail, Result};
-use cli::{help_text, parse_cli, print_help};
+use cli::{contract_execution, help_text, parse_cli};
 use std::env;
 use std::ffi::OsString;
 
@@ -26,9 +26,17 @@ fn main() {
 
 fn run(args: Vec<OsString>) -> Result<()> {
     let args = parse_cli(args);
+    if let Some(execution) = contract_execution(&args)? {
+        let exit_code = execution.exit_code;
+        let _ = execution.emit();
+        if exit_code != qol_headless::EXIT_SUCCESS {
+            std::process::exit(i32::from(exit_code));
+        }
+        return Ok(());
+    }
     let command = match args.values.first().and_then(|arg| arg.to_str()) {
         Some(command) => command,
-        None => return print_help(),
+        None => return Ok(()),
     };
     let rest = &args.values[1..];
     match command {
@@ -54,9 +62,16 @@ fn run(args: Vec<OsString>) -> Result<()> {
         "install" => commands::install::run(args.verbose),
         "trace" => commands::trace::run(rest),
         "trace-rs" => commands::trace_rs::run(rest),
-        "doctor" => commands::doctor::run(rest),
+        "doctor" => commands::doctor::run(
+            rest,
+            if args.json {
+                qol_headless::OutputFormat::Json
+            } else {
+                qol_headless::OutputFormat::PlainText
+            },
+        ),
         "sync" => bail!("`qol sync` is not implemented yet - use `make sync` for now"),
-        "help" | "-h" | "--help" => print_help(),
+        "help" | "-h" | "--help" => Ok(()),
         other => bail!("unknown command `{other}`\n\n{}", help_text()),
     }
 }

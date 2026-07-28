@@ -16,6 +16,13 @@ pub fn load() -> Result<PluginConfig> {
     Ok(config)
 }
 
+pub fn inspect() -> Result<qol_config::PluginConfigInspection<PluginConfig>> {
+    let inspection =
+        qol_config::inspect_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)?;
+    super::validation::validate(&inspection.config).map_err(Error::msg)?;
+    Ok(inspection)
+}
+
 pub fn save(config: &PluginConfig) -> Result<()> {
     super::validation::validate(config).map_err(Error::msg)?;
     if qol_runtime::plugin_config::save(config) {

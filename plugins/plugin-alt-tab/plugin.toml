@@ -30,6 +30,7 @@ socket = "/tmp/qol-alt-tab.sock"
 
 [capabilities]
 gpui = true
+doctor = true
 
 [menu]
 label = "Alt Tab"

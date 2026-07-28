@@ -1,8 +1,8 @@
+mod cli;
 mod platform;
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    std::process::exit(platform::run(args));
+fn main() -> std::process::ExitCode {
+    cli::exit_code(std::env::args().skip(1))
 }
 
 #[cfg(test)]
@@ -25,14 +25,20 @@ mod tests {
             &vec!["macos".to_string()],
             "keyremap requires CGEventTap; manifest must restrict to macOS so the host never offers it elsewhere"
         );
+        assert!(manifest.capabilities.doctor);
+        assert_eq!(
+            manifest.catalog_runtime_args("reload"),
+            Some(vec!["--reload".to_string()])
+        );
     }
 
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn non_macos_run_exits_with_error_code() {
-        let code = super::platform::run(Vec::new());
+        let code = super::cli::exit_code(["run".to_string()]);
         assert_eq!(
-            code, 1,
+            code,
+            std::process::ExitCode::from(1),
             "on non-macOS hosts keyremap must refuse to start with a non-zero exit code"
         );
     }

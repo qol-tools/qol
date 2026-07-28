@@ -126,23 +126,9 @@ fn sync_launcher_entries(plugin_settings_entries: Vec<LauncherEntry>) {
             Err(_) => return,
         };
         sync_entries(&entries, &bin);
-        publish_synced();
+        platform::publish_synced();
     });
 }
-
-#[cfg(unix)]
-fn publish_synced() {
-    use qol_runtime::protocol::RuntimeEvent;
-
-    let Some(dir) = platform::apps_dir() else {
-        log::warn!("launcher_apps: no apps dir on this platform; skipping LauncherAppsSynced");
-        return;
-    };
-    crate::runtime::publish(&[RuntimeEvent::LauncherAppsSynced { dir }]);
-}
-
-#[cfg(not(unix))]
-fn publish_synced() {}
 
 #[cfg(test)]
 mod tests {

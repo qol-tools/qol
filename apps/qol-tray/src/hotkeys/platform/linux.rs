@@ -48,7 +48,10 @@ impl PhysicalHotkeySnapshot {
     }
 
     pub(in crate::hotkeys) fn chord_is_pressed(&self, combo: &Combo) -> bool {
-        if !self.evdev_key_is_pressed(combo.key) {
+        let Some(keycode) = evdev::key_to_keycode(combo.key) else {
+            return false;
+        };
+        if !self.evdev_key_is_pressed(keycode) {
             return false;
         }
         combo.mods.iter().all(|modifier| {

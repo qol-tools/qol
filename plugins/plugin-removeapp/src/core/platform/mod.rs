@@ -19,19 +19,19 @@ pub trait AppPlatform {
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(target_os = "windows")]
-mod windows;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+mod unsupported;
 
 #[cfg(target_os = "linux")]
 pub use linux::Platform;
 #[cfg(target_os = "macos")]
 pub use macos::Platform;
-#[cfg(target_os = "windows")]
-pub use windows::Platform;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub use unsupported::Platform;
 
 #[cfg(target_os = "linux")]
 pub(super) use linux::metadata_identity;
 #[cfg(target_os = "macos")]
 pub(super) use macos::metadata_identity;
-#[cfg(target_os = "windows")]
-pub(super) use windows::metadata_identity;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(super) use unsupported::metadata_identity;

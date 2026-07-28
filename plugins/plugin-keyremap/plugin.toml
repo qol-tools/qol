@@ -19,6 +19,9 @@ enabled = true
 command = "keyremap"
 socket = "/tmp/qol-keyremap.sock"
 
+[capabilities]
+doctor = true
+
 [menu]
 label = "Key Remap"
 items = []

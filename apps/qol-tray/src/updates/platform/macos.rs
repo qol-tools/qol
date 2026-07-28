@@ -8,11 +8,36 @@ use crate::daemon::{DaemonEvent, EventBus};
 use crate::features::plugin_store::release_integrity;
 
 use super::super::{latest_version, GITHUB_REPO};
-use super::common;
+use super::unix;
 use super::InstallKind;
 
 const APP_BUNDLE_NAME: &str = "QoL Tray.app";
 const MACOS_RELEASE_ASSET: &str = "qol-tray-macos-universal.tar.gz";
+
+fn extract_tar_gz_dir(archive: &Path, dir_name: &str) -> Result<PathBuf> {
+    unix::extract_tar_gz_entry(archive, dir_name, true)
+}
+
+pub(super) fn detect_install_kind() -> InstallKind {
+    let executable = std::env::current_exe()
+        .and_then(|path| std::fs::canonicalize(&path).or(Ok(path)))
+        .ok();
+    let executable = executable
+        .as_deref()
+        .and_then(|path| path.to_str())
+        .unwrap_or_default();
+    let home = dirs::home_dir().and_then(|path| path.to_str().map(String::from));
+    InstallKind::for_path(
+        executable,
+        home.as_deref(),
+        is_user_app_bundle(executable, home.as_deref()),
+    )
+}
+
+fn is_user_app_bundle(executable: &str, home: Option<&str>) -> bool {
+    executable.contains(".app/Contents/MacOS/")
+        && home.is_some_and(|home| executable.starts_with(home))
+}
 
 fn ad_hoc_codesign_bundle(bundle_path: &Path) {
     let sign_status = std::process::Command::new("codesign")
@@ -156,11 +181,13 @@ fn copy_bundle_dir(source: &Path, destination: &Path) -> Result<()> {
 }
 
 pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
-    let dev_url = common::dev_update_url();
+    let install_kind = InstallKind::detect();
+    log::info!("Install kind: {install_kind:?}");
+    let dev_url = unix::dev_update_url();
     let dev_override = dev_url.is_some();
 
     if !dev_override {
-        match InstallKind::detect() {
+        match install_kind {
             InstallKind::SystemWide => {
                 log::warn!(
                     "Updating a system-wide installation — binary will be replaced in place"
@@ -198,7 +225,7 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("No verified update asset available"))?;
 
     log::info!("Downloading update from {}", url);
-    common::download_asset(&url, &dest, &events).await?;
+    unix::download_asset(&url, &dest, &events).await?;
     if let Some(asset) = &verified_asset {
         release_integrity::verify_file(asset, &dest)?;
     }
@@ -206,7 +233,7 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     let current_exe = std::env::current_exe()?;
     let current_bundle =
         find_app_bundle(&current_exe).context("Current executable is not inside an app bundle")?;
-    let install_result = super::common::extract_tar_gz_dir(&dest, APP_BUNDLE_NAME)
+    let install_result = extract_tar_gz_dir(&dest, APP_BUNDLE_NAME)
         .and_then(|bundle| replace_app_bundle(&bundle, &current_bundle));
     install_result?;
 
@@ -300,6 +327,31 @@ mod tests {
     #[test]
     fn macos_release_asset_name_is_stable() {
         assert_eq!(MACOS_RELEASE_ASSET, "qol-tray-macos-universal.tar.gz");
+    }
+
+    #[test]
+    fn user_app_bundle_requires_an_app_path_under_home() {
+        let cases = [
+            (
+                "/a/Applications/Foo.app/Contents/MacOS/foo",
+                Some("/a"),
+                true,
+            ),
+            (
+                "/Applications/Foo.app/Contents/MacOS/foo",
+                Some("/a"),
+                false,
+            ),
+            ("/a/.local/bin/foo", Some("/a"), false),
+            ("/a/Applications/Foo.app/Contents/MacOS/foo", None, false),
+        ];
+        for (executable, home, expected) in cases {
+            assert_eq!(
+                is_user_app_bundle(executable, home),
+                expected,
+                "executable={executable} home={home:?}"
+            );
+        }
     }
 
     #[test]

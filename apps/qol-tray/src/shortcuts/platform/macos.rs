@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 
 use super::super::model::AppRef;
 
-pub(super) fn open_url_in_browser(url: &str, browser: &AppRef) -> Result<()> {
+pub(in crate::shortcuts) fn open_url_in_browser(url: &str, browser: &AppRef) -> Result<()> {
     let mut cmd = std::process::Command::new("open");
     match browser {
         AppRef::BundleId { id } => {
@@ -17,7 +17,7 @@ pub(super) fn open_url_in_browser(url: &str, browser: &AppRef) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn launch_app(app: &AppRef) -> Result<()> {
+pub(in crate::shortcuts) fn launch_app(app: &AppRef) -> Result<()> {
     let mut cmd = std::process::Command::new("open");
     match app {
         AppRef::BundleId { id } => {

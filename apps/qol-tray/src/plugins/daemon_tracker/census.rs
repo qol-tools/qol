@@ -1,4 +1,3 @@
-use super::identity::is_host_binary;
 use super::ManagedProcess;
 use std::collections::HashSet;
 
@@ -14,7 +13,7 @@ pub fn leaked_processes() -> Vec<ManagedProcess> {
 fn without_host_binaries(processes: Vec<ManagedProcess>) -> Vec<ManagedProcess> {
     processes
         .into_iter()
-        .filter(|process| !is_host_binary(&process.executable))
+        .filter(|process| !super::platform::is_host_binary(&process.executable))
         .collect()
 }
 

@@ -205,14 +205,7 @@ mod tests {
     use crate::features::plugin_store::github::PluginMetadata;
 
     fn meta(id: &str, repo_url: &str) -> PluginMetadata {
-        PluginMetadata {
-            id: id.to_string(),
-            name: id.to_string(),
-            description: String::new(),
-            version: "1.0.0".to_string(),
-            repo_url: repo_url.to_string(),
-            platforms: None,
-        }
+        PluginMetadata::test_fixture(id, id, "", "1.0.0", repo_url)
     }
 
     #[test]

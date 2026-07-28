@@ -4,3 +4,5 @@ pub(super) fn sync(
 ) -> anyhow::Result<()> {
     Ok(())
 }
+
+pub(super) fn publish_synced() {}

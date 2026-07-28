@@ -1,12 +1,11 @@
 use crate::plugins::PluginUid;
-use qol_hotkeys::evdev;
-use qol_hotkeys::grammar::{self, Modifier};
+use qol_hotkeys::grammar::{self, Key, Modifier};
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Combo {
     pub(crate) mods: BTreeSet<Modifier>,
-    pub(crate) key: u16,
+    pub(crate) key: Key,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,18 +18,24 @@ pub(crate) struct Binding {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Phase {
-    Start,
-    #[cfg_attr(
-        not(all(target_os = "linux", feature = "linux_evdev")),
-        allow(dead_code)
-    )]
-    Heartbeat,
-    #[cfg_attr(
-        not(any(target_os = "macos", all(target_os = "linux", feature = "linux_evdev"))),
-        allow(dead_code)
-    )]
-    Stop,
+pub(crate) struct Phase(u8);
+
+impl Phase {
+    pub(crate) const START: Self = Self(0);
+    pub(crate) const HEARTBEAT: Self = Self(1);
+    pub(crate) const STOP: Self = Self(2);
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        if self.0 == Self::START.0 {
+            "start"
+        } else if self.0 == Self::HEARTBEAT.0 {
+            "heartbeat"
+        } else if self.0 == Self::STOP.0 {
+            "stop"
+        } else {
+            "unknown"
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,26 +45,26 @@ pub(crate) struct CaptureEvent {
 }
 
 /// Parse a qol-tray combo string ("Super+Space", "Shift+Super+R", "Ctrl+Alt+Shift+F12")
-/// into a `Combo` of evdev keycodes. Returns `None` for unknown keys or
+/// into a platform-neutral `Combo`. Returns `None` for unknown keys or
 /// modifier-only inputs.
 pub(crate) fn parse_combo(input: &str) -> Option<Combo> {
     let parsed = grammar::parse(input)?;
     Some(Combo {
         mods: parsed.mods,
-        key: evdev::key_to_keycode(parsed.key)?,
+        key: parsed.key,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use qol_hotkeys::evdev as keycodes;
+    use qol_hotkeys::grammar::{Key, NamedKey};
 
     #[test]
     fn parses_super_space() {
         let combo = parse_combo("Super+Space").unwrap();
         assert_eq!(combo.mods, BTreeSet::from([Modifier::Super]));
-        assert_eq!(combo.key, keycodes::KEY_SPACE);
+        assert_eq!(combo.key, Key::Named(NamedKey::Space));
     }
 
     #[test]
@@ -69,7 +74,7 @@ mod tests {
             combo.mods,
             BTreeSet::from([Modifier::Shift, Modifier::Super])
         );
-        assert_eq!(combo.key, 19);
+        assert_eq!(combo.key, Key::Letter(17));
     }
 
     #[test]
@@ -79,14 +84,14 @@ mod tests {
             combo.mods,
             BTreeSet::from([Modifier::Ctrl, Modifier::Alt, Modifier::Shift])
         );
-        assert_eq!(combo.key, keycodes::KEY_F12);
+        assert_eq!(combo.key, Key::Function(12));
     }
 
     #[test]
     fn parses_alt_tab() {
         let combo = parse_combo("Alt+Tab").unwrap();
         assert_eq!(combo.mods, BTreeSet::from([Modifier::Alt]));
-        assert_eq!(combo.key, keycodes::KEY_TAB);
+        assert_eq!(combo.key, Key::Named(NamedKey::Tab));
     }
 
     #[test]
@@ -113,25 +118,37 @@ mod tests {
 
     #[test]
     fn function_keys_in_range() {
-        assert_eq!(parse_combo("F1").unwrap().key, keycodes::KEY_F1);
-        assert_eq!(parse_combo("F12").unwrap().key, keycodes::KEY_F12);
+        assert_eq!(parse_combo("F1").unwrap().key, Key::Function(1));
+        assert_eq!(parse_combo("F12").unwrap().key, Key::Function(12));
         assert!(parse_combo("F13").is_none());
         assert!(parse_combo("F0").is_none());
     }
 
     #[test]
     fn arrow_keys() {
-        assert_eq!(parse_combo("Super+Up").unwrap().key, keycodes::KEY_UP);
-        assert_eq!(parse_combo("Super+Down").unwrap().key, keycodes::KEY_DOWN);
-        assert_eq!(parse_combo("Super+Left").unwrap().key, keycodes::KEY_LEFT);
-        assert_eq!(parse_combo("Super+Right").unwrap().key, keycodes::KEY_RIGHT);
+        assert_eq!(
+            parse_combo("Super+Up").unwrap().key,
+            Key::Named(NamedKey::Up)
+        );
+        assert_eq!(
+            parse_combo("Super+Down").unwrap().key,
+            Key::Named(NamedKey::Down)
+        );
+        assert_eq!(
+            parse_combo("Super+Left").unwrap().key,
+            Key::Named(NamedKey::Left)
+        );
+        assert_eq!(
+            parse_combo("Super+Right").unwrap().key,
+            Key::Named(NamedKey::Right)
+        );
     }
 
     #[test]
     fn digits() {
-        assert_eq!(parse_combo("Super+1").unwrap().key, 2);
-        assert_eq!(parse_combo("Super+9").unwrap().key, 10);
-        assert_eq!(parse_combo("Super+0").unwrap().key, 11);
+        assert_eq!(parse_combo("Super+1").unwrap().key, Key::Digit(1));
+        assert_eq!(parse_combo("Super+9").unwrap().key, Key::Digit(9));
+        assert_eq!(parse_combo("Super+0").unwrap().key, Key::Digit(0));
     }
 
     #[test]

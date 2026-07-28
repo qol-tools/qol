@@ -16,23 +16,15 @@ use super::window_host::{
     spawn_topology_listener, ActiveLaunchers,
 };
 
-pub fn run() {
-    let show_immediately = std::env::args().any(|a| a == "--show");
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupIntent {
+    Hidden,
+    Visible,
+}
+
+pub fn run(intent: StartupIntent) {
+    let show_immediately = intent == StartupIntent::Visible;
     eprintln!("[launcher] run start show_immediately={show_immediately}");
-
-    if std::env::args().any(|a| a == "--kill") {
-        app::send_kill();
-        return;
-    }
-
-    if std::env::args().any(|a| a == "--settings") {
-        open_settings_page();
-        return;
-    }
-
-    if show_immediately && app::send_show() {
-        return;
-    }
 
     let (tx, rx) = mpsc::channel();
     if !app::start_listener(tx) {
@@ -135,15 +127,9 @@ async fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {
     .await;
     if let Err(error) = opened {
         eprintln!("[launcher] settings panel failed, opening browser: {error:#}");
-        open_settings_page();
-    }
-}
-
-fn open_settings_page() {
-    if let Err(error) =
-        qol_apps::desktop_integration::open_plugin_settings(crate::config::plugin_id())
-    {
-        eprintln!("[launcher] failed to open settings page: {error}");
+        if let Err(error) = crate::qol::open() {
+            eprintln!("[launcher] failed to open settings page: {error}");
+        }
     }
 }
 

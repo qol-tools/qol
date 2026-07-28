@@ -1,3 +1,4 @@
+use qol_config::{PluginConfigInspection, PluginConfigInspectionError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -29,6 +30,10 @@ impl Config {
         qol_config::typed_defaults_from_contract(CONFIG_CONTRACT)
             .expect("config contract defaults must parse")
     }
+}
+
+pub(crate) fn inspect() -> Result<PluginConfigInspection<Config>, PluginConfigInspectionError> {
+    qol_config::inspect_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
 }
 
 #[cfg(test)]

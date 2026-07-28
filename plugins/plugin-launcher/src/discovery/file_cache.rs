@@ -72,7 +72,7 @@ pub fn store(roots: &[PathBuf], entries: &[FileEntry]) {
     }
 }
 
-fn cache_path() -> Option<PathBuf> {
+pub(super) fn cache_path() -> Option<PathBuf> {
     Some(
         super::platform::cache_dir()?
             .join("gpui-test")

@@ -25,6 +25,7 @@ args = ["settings"]
 
 [capabilities]
 gpui = true
+doctor = true
 
 [daemon]
 enabled = true

@@ -79,16 +79,7 @@ struct DeviceBoot {
 fn device_boot() -> DeviceBoot {
     DeviceBoot {
         name: gethostname::gethostname().to_string_lossy().into_owned(),
-        platform: platform_label(),
-    }
-}
-
-fn platform_label() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "macOS",
-        "linux" => "Linux",
-        "windows" => "Windows",
-        other => other,
+        platform: super::super::platform::display_label(),
     }
 }
 

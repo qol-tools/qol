@@ -1,6 +1,6 @@
 use crate::command::ModifierKeys;
 use crate::config::ServerConfig;
-use crate::input::InputHandlerTrait;
+use crate::input::{InputHandlerTrait, PlatformSupport};
 use anyhow::Result;
 use rdev::{simulate, Button, EventType, Key, SimulateError};
 use std::sync::Mutex;
@@ -18,6 +18,14 @@ pub struct InputHandlerImpl {
     button_state: Mutex<Option<Button>>,
     last_click: Mutex<Option<ClickState>>,
     drag_state: Mutex<DragState>,
+}
+
+pub(in crate::input) fn platform_support() -> PlatformSupport {
+    PlatformSupport {
+        name: "macos",
+        declared: true,
+        input_backend: true,
+    }
 }
 
 struct DragState {
@@ -47,11 +55,6 @@ impl InputHandlerImpl {
                 button: None,
             }),
         })
-    }
-
-    #[allow(dead_code)]
-    fn get_cursor_position() -> Option<(f64, f64)> {
-        None
     }
 }
 

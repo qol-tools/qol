@@ -98,7 +98,7 @@ pub(super) fn capture_frontmost_live_frame(
 
 pub(super) fn capture_frontmost_now(
     windows: &[WindowInfo],
-    show_id: u64,
+    _show_id: u64,
 ) -> Option<(u32, Arc<RenderImage>)> {
     use crate::picker::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
     use crate::rendering::preview_image::bgra_to_render_image;
@@ -112,7 +112,7 @@ pub(super) fn capture_frontmost_now(
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
         "PREVIEW_CAPTURE",
-        "show_id={show_id} source=on_open targets=1 ids=[{wid}]"
+        "show_id={_show_id} source=on_open targets=1 ids=[{wid}]"
     );
     Some((wid, img))
 }
@@ -251,7 +251,9 @@ pub(super) fn spawn_preview_fill(req: PreviewFillRequest, cx: &mut App) {
     }
     let rendering = crate::rendering::RenderingFlow::current();
     if !rendering.captures_preview_fill() {
+        #[cfg(debug_assertions)]
         let backend = rendering.preview_plane_backend().unwrap_or("none");
+        #[cfg(debug_assertions)]
         let visible = crate::app::PICKER_VISIBLE.load(Ordering::Relaxed);
         qol_runtime::probe!(
             "PREVIEW_CAPTURE",

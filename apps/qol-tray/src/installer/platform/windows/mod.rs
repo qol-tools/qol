@@ -3,59 +3,59 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-pub(super) fn install_dir() -> Result<PathBuf> {
-    let local_data = dirs::data_local_dir().context("Could not determine local data directory")?;
-    Ok(local_data.join("Programs").join("qol-tray").join("bin"))
-}
+use super::InstallerOps;
 
-pub(super) fn autostart_path() -> Result<PathBuf> {
-    let app_data = std::env::var_os("APPDATA").context("APPDATA is not set")?;
-    Ok(PathBuf::from(app_data)
-        .join("Microsoft")
-        .join("Windows")
-        .join("Start Menu")
-        .join("Programs")
-        .join("Startup")
-        .join("qol-tray.cmd"))
-}
+pub(super) struct Platform;
 
-pub(super) fn start_now(binary_path: &Path) -> Result<()> {
-    super::spawn_detached(binary_path)
-}
+impl InstallerOps for Platform {
+    fn binary_filename(&self) -> String {
+        "qol-tray.exe".to_string()
+    }
 
-pub(super) fn stop_running(_: &Path) -> Result<()> {
-    let _ = Command::new("taskkill")
-        .args(["/F", "/IM", "qol-tray.exe"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    Ok(())
-}
+    fn install_dir(&self) -> Result<PathBuf> {
+        let local_data =
+            dirs::data_local_dir().context("Could not determine local data directory")?;
+        Ok(local_data.join("Programs").join("qol-tray").join("bin"))
+    }
 
-pub(super) fn set_executable_permissions(_: &Path) -> Result<()> {
-    Ok(())
-}
+    fn start_now(&self, binary_path: &Path) -> Result<()> {
+        super::spawn_detached(binary_path)
+    }
 
-pub(super) fn prepare_atomic_replace(installed_binary: &Path) -> Result<()> {
-    if installed_binary.exists() {
+    fn stop_running(&self, _binary_path: &Path) -> Result<()> {
+        let _ = Command::new("taskkill")
+            .args(["/F", "/IM", "qol-tray.exe"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        Ok(())
+    }
+
+    fn set_executable_permissions(&self, _path: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    fn prepare_atomic_replace(&self, installed_binary: &Path) -> Result<()> {
+        if !installed_binary.exists() {
+            return Ok(());
+        }
         fs::remove_file(installed_binary).with_context(|| {
             format!(
                 "Failed to remove existing installed binary {}",
                 installed_binary.display()
             )
-        })?;
+        })
     }
-    Ok(())
+
+    fn should_bootstrap_current_install(&self, _binary_path: &Path) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn register_application(&self, _binary_path: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    fn warn_system_install_conflict(&self) {}
+
+    fn remove_legacy_install(&self) {}
 }
-
-pub(super) fn should_bootstrap_current_install(_: &Path) -> Result<bool> {
-    Ok(false)
-}
-
-pub(super) fn remove_legacy_install() {}
-
-pub(super) fn register_application(_binary_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-pub(super) fn warn_system_install_conflict() {}

@@ -1,6 +1,4 @@
 use std::path::{Path, PathBuf};
-#[cfg(all(feature = "dev", unix))]
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "dev")]
 use std::time::{Duration, Instant};
@@ -9,6 +7,9 @@ use qol_conventions::{
     DEFAULT_PORT, DEV_GENERATION_MODE_SHADOW, ENV_DEV_GENERATION_ID, ENV_DEV_GENERATION_MODE,
     ENV_DEV_READY_FILE, ENV_DEV_ROLLING_RESTART, ENV_DEV_UI_PORT, STATE_SOCKET_FILE,
 };
+
+#[cfg(feature = "dev")]
+mod platform;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenerationContext {
@@ -231,47 +232,9 @@ fn wait_for_predecessor_daemons_to_exit(
     }
 }
 
-#[cfg(all(feature = "dev", unix))]
+#[cfg(feature = "dev")]
 fn process_holds_handoff_resources(pid: u32) -> bool {
-    if !crate::process_utils::is_pid_alive(pid as i32) || process_is_zombie(pid) {
-        return false;
-    }
-    let Some(executable) = crate::plugins::daemon_tracker::running_exe_path(pid as i32) else {
-        return false;
-    };
-    current_build_dir()
-        .as_ref()
-        .is_some_and(|dir| executable.starts_with(dir))
-        || crate::plugins::daemon_tracker::ManagedRoots::load().contains(&executable)
-}
-
-#[cfg(all(feature = "dev", not(unix)))]
-fn process_holds_handoff_resources(pid: u32) -> bool {
-    crate::process_utils::is_pid_alive(pid as i32)
-}
-
-#[cfg(all(feature = "dev", unix))]
-fn current_build_dir() -> Option<PathBuf> {
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(Path::to_path_buf))
-}
-
-#[cfg(all(feature = "dev", unix))]
-fn process_is_zombie(pid: u32) -> bool {
-    let pid_arg = pid.to_string();
-    let output = Command::new("ps")
-        .args(["-p", pid_arg.as_str(), "-o", "stat="])
-        .output();
-    let Ok(output) = output else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .trim_start()
-        .starts_with('Z')
+    platform::process_holds_handoff_resources(pid)
 }
 
 #[cfg(feature = "dev")]

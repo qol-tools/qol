@@ -1,14 +1,12 @@
-use super::PlatformOps;
-use anyhow::Result;
+use super::{OpenPathOutcome, PlatformOps};
+use anyhow::{Context, Result};
+use std::env;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(crate) struct Platform;
 
 impl PlatformOps for Platform {
-    fn os_name(&self) -> &'static str {
-        "windows"
-    }
-
     fn exe_name(&self, name: &str) -> String {
         format!("{name}.exe")
     }
@@ -38,6 +36,32 @@ impl PlatformOps for Platform {
 
     fn available_memory_mb(&self) -> Option<u64> {
         available_memory_mb()
+    }
+
+    fn home_dir(&self) -> Option<PathBuf> {
+        env::var_os("USERPROFILE")
+            .or_else(|| env::var_os("HOME"))
+            .map(PathBuf::from)
+    }
+
+    fn core_log_dir(&self) -> PathBuf {
+        dirs::data_local_dir()
+            .map(|dir| dir.join("qol-tray/logs"))
+            .unwrap_or_else(|| env::temp_dir().join("qol-tray/logs"))
+    }
+
+    fn open_path(&self, path: &Path) -> Result<OpenPathOutcome> {
+        qol_apps::desktop_integration::open_with_default_app(path)
+            .with_context(|| format!("could not open {}", path.display()))?;
+        Ok(OpenPathOutcome::new(true))
+    }
+
+    fn supports_qol_shot_payload(&self) -> bool {
+        false
+    }
+
+    fn open_text_file(&self, path: &Path) -> bool {
+        qol_apps::desktop_integration::open_with_default_app(path).is_ok()
     }
 }
 

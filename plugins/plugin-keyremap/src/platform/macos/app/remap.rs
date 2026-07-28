@@ -129,6 +129,158 @@ pub enum ScrollAction {
     Remap { mods: Modifiers },
 }
 
+pub fn validation_issues(config: &RemapConfig) -> Vec<String> {
+    let mut issues = Vec::new();
+
+    for (index, app) in config.excluded_apps.iter().enumerate() {
+        if app.trim().is_empty() {
+            issues.push(format!("excluded_apps[{index}] is empty"));
+        }
+    }
+    for (index, (from, to)) in config.char_swaps.iter().enumerate() {
+        if from.trim().is_empty() || to.trim().is_empty() {
+            issues.push(format!("char_swaps[{index}] contains an empty value"));
+        }
+    }
+    for (index, rule) in config.char_rules.iter().enumerate() {
+        match rule {
+            CharRule::ByKey {
+                from_mods,
+                from_key,
+                to_char,
+                ..
+            } => {
+                validate_modifiers(
+                    &format!("char_rules[{index}].from_mods"),
+                    from_mods,
+                    &mut issues,
+                );
+                if keycode::parse_key(from_key).is_none() {
+                    issues.push(format!(
+                        "char_rules[{index}].from_key {from_key:?} is unknown"
+                    ));
+                }
+                if to_char.is_empty() {
+                    issues.push(format!("char_rules[{index}].to_char is empty"));
+                }
+            }
+            CharRule::ByChar {
+                from_char, to_char, ..
+            } => {
+                if from_char.trim().is_empty() || to_char.trim().is_empty() {
+                    issues.push(format!("char_rules[{index}] contains an empty character"));
+                }
+            }
+        }
+    }
+    for (index, rule) in config.key_rules.iter().enumerate() {
+        match rule {
+            KeyRule::Batch {
+                from_mods,
+                to_mods,
+                keys,
+                ..
+            } => {
+                validate_modifiers(
+                    &format!("key_rules[{index}].from_mods"),
+                    from_mods,
+                    &mut issues,
+                );
+                validate_modifiers(&format!("key_rules[{index}].to_mods"), to_mods, &mut issues);
+                if keys.is_empty() {
+                    issues.push(format!("key_rules[{index}].keys is empty"));
+                }
+                for (key_index, key) in keys.iter().enumerate() {
+                    if keycode::parse_key(key).is_none() {
+                        issues.push(format!(
+                            "key_rules[{index}].keys[{key_index}] {key:?} is unknown"
+                        ));
+                    }
+                }
+            }
+            KeyRule::Single {
+                from_mods,
+                from_key,
+                to_mods,
+                to_key,
+                ..
+            } => {
+                validate_modifiers(
+                    &format!("key_rules[{index}].from_mods"),
+                    from_mods,
+                    &mut issues,
+                );
+                validate_modifiers(&format!("key_rules[{index}].to_mods"), to_mods, &mut issues);
+                if keycode::parse_key(from_key).is_none() {
+                    issues.push(format!(
+                        "key_rules[{index}].from_key {from_key:?} is unknown"
+                    ));
+                }
+                let target_is_key = keycode::parse_key(to_key).is_some();
+                let target_is_char = to_mods.is_empty() && to_key.trim().chars().count() == 1;
+                if !target_is_key && !target_is_char {
+                    issues.push(format!(
+                        "key_rules[{index}].to_key {to_key:?} is not a key or unmodified character"
+                    ));
+                }
+            }
+        }
+    }
+    for (index, rule) in config.mouse_rules.iter().enumerate() {
+        validate_modifiers(
+            &format!("mouse_rules[{index}].from_mods"),
+            &rule.from_mods,
+            &mut issues,
+        );
+        validate_modifiers(
+            &format!("mouse_rules[{index}].to_mods"),
+            &rule.to_mods,
+            &mut issues,
+        );
+        if !matches!(rule.button.to_ascii_lowercase().as_str(), "left" | "right") {
+            issues.push(format!(
+                "mouse_rules[{index}].button {:?} is unknown",
+                rule.button
+            ));
+        }
+    }
+    for (index, rule) in config.scroll_rules.iter().enumerate() {
+        validate_modifiers(
+            &format!("scroll_rules[{index}].from_mods"),
+            &rule.from_mods,
+            &mut issues,
+        );
+        validate_modifiers(
+            &format!("scroll_rules[{index}].to_mods"),
+            &rule.to_mods,
+            &mut issues,
+        );
+    }
+
+    issues
+}
+
+fn validate_modifiers(path: &str, modifiers: &[String], issues: &mut Vec<String>) {
+    for modifier in modifiers {
+        if !matches!(
+            modifier.to_ascii_lowercase().as_str(),
+            "ctrl"
+                | "control"
+                | "shift"
+                | "alt"
+                | "option"
+                | "opt"
+                | "cmd"
+                | "command"
+                | "super"
+                | "ralt"
+                | "altgr"
+        ) {
+            issues.push(format!("{path} contains unknown modifier {modifier:?}"));
+        }
+    }
+}
+
 pub fn resolve(config: &RemapConfig) -> ResolvedConfig {
     let key_rules: Vec<ResolvedKeyRule> =
         config.key_rules.iter().flat_map(resolve_key_rule).collect();
@@ -562,6 +714,43 @@ mod tests {
             Just("org.mozilla.firefox".to_string()),
             "[a-z]{3,10}\\.[a-z]{3,10}\\.[a-z]{3,10}",
         ]
+    }
+
+    #[test]
+    fn contract_defaults_pass_semantic_validation() {
+        let raw = super::super::config::builtin_defaults();
+        assert_eq!(validation_issues(&raw), Vec::<String>::new());
+    }
+
+    #[test]
+    fn semantic_validation_reports_values_the_runtime_would_skip() {
+        let raw = RemapConfig {
+            enabled: true,
+            excluded_apps: vec![String::new()],
+            char_swaps: vec![(String::new(), "$".into())],
+            char_rules: vec![],
+            key_rules: vec![KeyRule::Single {
+                from_mods: vec!["hyper".into()],
+                from_key: "not-a-key".into(),
+                to_mods: vec!["cmd".into()],
+                to_key: "two characters".into(),
+                global: false,
+            }],
+            mouse_rules: vec![MouseRule {
+                from_mods: vec![],
+                button: "middle".into(),
+                to_mods: vec![],
+                global: false,
+            }],
+            scroll_rules: vec![],
+        };
+
+        let issues = validation_issues(&raw);
+        assert!(issues.iter().any(|issue| issue.contains("is empty")));
+        assert!(issues.iter().any(|issue| issue.contains("hyper")));
+        assert!(issues.iter().any(|issue| issue.contains("not-a-key")));
+        assert!(issues.iter().any(|issue| issue.contains("two characters")));
+        assert!(issues.iter().any(|issue| issue.contains("middle")));
     }
 
     #[test]

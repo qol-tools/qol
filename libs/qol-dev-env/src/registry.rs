@@ -1293,15 +1293,7 @@ run_root = "/var/tmp/qol-runs"
         let image_root = root.path().join("images");
         fs::create_dir_all(&image_root).unwrap();
         let registration = verified_fixture(&image_root, "linux/mint", "mint-22.3-qol-1");
-        let mut permissions = fs::metadata(&registration.path).unwrap().permissions();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            permissions.set_mode(permissions.mode() | 0o200);
-        }
-        #[cfg(not(unix))]
-        permissions.set_readonly(false);
-        fs::set_permissions(&registration.path, permissions).unwrap();
+        crate::payload::make_file_writable(&registration.path).unwrap();
         fs::write(&registration.path, b"other").unwrap();
         let mut permissions = fs::metadata(&registration.path).unwrap().permissions();
         permissions.set_readonly(true);
@@ -1335,15 +1327,7 @@ run_root = "/var/tmp/qol-runs"
             { "id": "linux-mint-release", "verdict": "pass" },
             { "id": "linux-mint-edition", "verdict": "pass" },
         ]);
-        let mut permissions = fs::metadata(&registration.report).unwrap().permissions();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            permissions.set_mode(permissions.mode() | 0o200);
-        }
-        #[cfg(not(unix))]
-        permissions.set_readonly(false);
-        fs::set_permissions(&registration.report, permissions).unwrap();
+        crate::payload::make_file_writable(&registration.report).unwrap();
         fs::write(
             &registration.report,
             serde_json::to_vec_pretty(&report).unwrap(),

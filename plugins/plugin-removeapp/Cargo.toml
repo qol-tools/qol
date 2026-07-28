@@ -17,6 +17,7 @@ path = "src/main.rs"
 anyhow = "1"
 serde.workspace = true
 serde_json.workspace = true
+qol-headless.workspace = true
 qol-plugin-daemon.workspace = true
 qol-apps.workspace = true
 gpui.workspace = true
@@ -34,6 +35,9 @@ wait-timeout = "0.2"
 qol-process.workspace = true
 trash = "5"
 wait-timeout = "0.2"
+
+[build-dependencies]
+qol-conventions.workspace = true
 
 [dev-dependencies]
 qol-plugin-api.workspace = true

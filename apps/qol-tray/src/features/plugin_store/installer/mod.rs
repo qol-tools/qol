@@ -18,10 +18,6 @@ pub mod testing;
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 const DEFAULT_CARGO_BUILD_JOBS: usize = 4;
 const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(300);
-#[cfg(unix)]
-const LOCKFILE_MAX_AGE: Duration = Duration::from_secs(30);
-#[cfg(not(unix))]
-const LOCKFILE_MAX_AGE: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone)]
 pub(super) enum InstallSource {

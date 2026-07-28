@@ -118,18 +118,8 @@ fn apply_log_env(command: &mut Command) {
     command.env("RUST_LOG", "warn");
 }
 
-fn apply_process_group(_command: &mut Command) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-
-        unsafe {
-            _command.pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            });
-        }
-    }
+fn apply_process_group(command: &mut Command) {
+    super::platform::configure_process_group(command);
 }
 
 #[cfg(feature = "dev")]

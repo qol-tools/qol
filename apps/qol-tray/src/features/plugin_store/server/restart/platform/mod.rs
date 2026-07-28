@@ -1,38 +1,43 @@
+mod fallback_non_unix;
+#[cfg(unix)]
+mod fallback_unix;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(all(unix, not(target_os = "macos")))]
-mod unix;
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 mod windows;
 
-#[cfg(unix)]
-pub(super) fn binary_name() -> &'static str {
-    "qol-tray"
-}
-#[cfg(windows)]
-pub(super) fn binary_name() -> &'static str {
-    windows::binary_name()
-}
-
+#[cfg(all(
+    not(unix),
+    not(any(target_os = "linux", target_os = "macos", target_os = "windows"))
+))]
+use fallback_non_unix as imp;
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "macos", target_os = "windows"))
+))]
+use fallback_unix as imp;
+#[cfg(target_os = "linux")]
+use linux as imp;
 #[cfg(target_os = "macos")]
-pub(super) fn exec_restart(binary: &std::path::Path) -> Result<(), String> {
-    macos::exec_restart(binary)
-}
-#[cfg(all(unix, not(target_os = "macos")))]
-pub(super) fn exec_restart(binary: &std::path::Path) -> Result<(), String> {
-    unix::exec_restart(binary)
-}
-#[cfg(windows)]
-pub(super) fn exec_restart(binary: &std::path::Path) -> Result<(), String> {
-    windows::exec_restart(binary)
+use macos as imp;
+#[cfg(target_os = "windows")]
+use windows as imp;
+
+trait RestartPlatformOps {
+    fn binary_name() -> &'static str;
+    fn exec_restart(binary: &std::path::Path) -> Result<(), String>;
 }
 
-#[cfg(not(any(unix, windows)))]
 pub(super) fn binary_name() -> &'static str {
-    "qol-tray"
+    imp::Platform::binary_name()
 }
 
-#[cfg(not(any(unix, windows)))]
-pub(super) fn exec_restart(_binary: &std::path::Path) -> Result<(), String> {
-    Err("self-recompile restart is unavailable on this platform".to_string())
+pub(super) fn exec_restart(binary: &std::path::Path) -> Result<(), String> {
+    imp::Platform::exec_restart(binary)
 }
+
+const _: fallback_non_unix::Platform = fallback_non_unix::Platform;
+#[cfg(unix)]
+const _: fallback_unix::Platform = fallback_unix::Platform;

@@ -84,18 +84,14 @@ pub fn start_capture(
             return;
         };
         if event.binding.continuous {
-            let phase = match event.phase {
-                capture::Phase::Start => "start",
-                capture::Phase::Heartbeat => "heartbeat",
-                capture::Phase::Stop => "stop",
-            };
+            let phase = event.phase.as_str();
             action_executor::execute_action_with_input(
                 &plugin_manager_for_fire,
                 &plugin_id,
                 &event.binding.action,
                 serde_json::json!({ "phase": phase }),
             );
-        } else if event.phase == capture::Phase::Start {
+        } else if event.phase == capture::Phase::START {
             action_executor::execute_action(
                 &plugin_manager_for_fire,
                 &plugin_id,

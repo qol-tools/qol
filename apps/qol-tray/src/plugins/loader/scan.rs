@@ -109,11 +109,7 @@ impl LoadDiagnostics {
 
     fn record_skipped_platform(&mut self, plugin: &Plugin) {
         self.skipped_platform += 1;
-        log::info!(
-            "Skipping plugin {} (unsupported platform: {})",
-            plugin.id,
-            std::env::consts::OS
-        );
+        log::info!("Skipping plugin {} (unsupported platform)", plugin.id);
     }
 
     fn record_error(&mut self, id: &str, path: &Path, error: anyhow::Error) {

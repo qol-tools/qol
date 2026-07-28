@@ -1,6 +1,8 @@
+pub mod cli;
 pub mod config;
 pub mod daemon;
 pub mod diagnostics;
+mod doctor;
 pub mod host;
 pub mod session;
 pub mod signal;
