@@ -33,11 +33,17 @@ fn require_doctor_binary(binary: &Path) -> Result<()> {
 
 fn doctor_command(root: &Path, binary: &Path, step: Option<&str>) -> Command {
     let mut command = Command::new(binary);
-    command
-        .current_dir(root)
-        .arg(qol_conventions::doctor_cli::ARG_CHECK);
-    if let Some(step) = step {
-        command.arg(qol_conventions::doctor_cli::ARG_ID).arg(step);
+    command.current_dir(root);
+    match step {
+        Some(step) => {
+            command
+                .arg(qol_conventions::doctor_cli::ARG_CHECK)
+                .arg(qol_conventions::doctor_cli::ARG_ID)
+                .arg(step);
+        }
+        None => {
+            command.arg("doctor");
+        }
     }
     command
 }
@@ -54,10 +60,7 @@ mod tests {
         let root = Path::new("/repo/qol");
         let binary = Path::new("/repo/qol/target/debug/qol-tray-doctor");
         let cases = [
-            (
-                None,
-                vec![OsStr::new(qol_conventions::doctor_cli::ARG_CHECK)],
-            ),
+            (None, vec![OsStr::new("doctor")]),
             (
                 Some("autostart_target"),
                 vec![
