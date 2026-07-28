@@ -158,15 +158,19 @@ impl Drop for CfGuard {
 // -- AX attribute helper --
 
 pub(super) fn ax_attr(element: *const c_void, name: &str) -> Option<CfGuard> {
+    ax_attr_result(element, name).ok()
+}
+
+pub(super) fn ax_attr_result(element: *const c_void, name: &str) -> Result<CfGuard, i32> {
     unsafe {
         let attr = cfstr(name);
         let mut value: *mut c_void = std::ptr::null_mut();
         let err = AXUIElementCopyAttributeValue(element, attr, &mut value);
         CFRelease(attr);
         if err != 0 {
-            return None;
+            return Err(err);
         }
-        CfGuard::new(value)
+        CfGuard::new(value).ok_or(0)
     }
 }
 

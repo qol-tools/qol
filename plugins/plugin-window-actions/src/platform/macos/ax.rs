@@ -4,9 +4,9 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use super::objc::{
-    ax_attr, cf_boolean_false, cf_boolean_true, cfstr, cfstring_to_string, cg_window_layer,
-    cg_window_owner_pid, cls, dict_get_i32, msg_bool, msg_bool_usize, msg_i32, msg_ptr,
-    msg_ptr_usize, sel, AXUIElementCreateApplication, AXUIElementCreateSystemWide,
+    ax_attr, ax_attr_result, cf_boolean_false, cf_boolean_true, cfstr, cfstring_to_string,
+    cg_window_layer, cg_window_owner_pid, cls, dict_get_i32, msg_bool, msg_bool_usize, msg_i32,
+    msg_ptr, msg_ptr_usize, sel, AXUIElementCreateApplication, AXUIElementCreateSystemWide,
     AXUIElementGetPid, AXUIElementPerformAction, AXUIElementSetAttributeValue, AXValueCreate,
     AXValueGetValue, CFArrayGetCount, CFArrayGetValueAtIndex, CGPoint, CGSize,
     CGWindowListCopyWindowInfo, CfGuard, AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE,
@@ -260,14 +260,20 @@ pub(super) fn is_normal_window(pid: i32) -> bool {
 
 pub(super) fn frontmost_pid() -> Option<i32> {
     timed_pid("frontmost_pid", "ax_then_workspace", || {
-        system_focused_pid().or_else(workspace_frontmost_pid)
+        let ax = system_focused_pid();
+        let workspace = workspace_frontmost_pid();
+        let chosen = ax.pid().or(workspace);
+        trace_focus_sources("frontmost_pid", ax, workspace, chosen);
+        chosen
     })
 }
 
 pub(super) fn find_normal_window_pid() -> Option<i32> {
     timed_pid("find_pid", "ax_workspace_window_server", || {
-        let focused = system_focused_pid();
+        let ax = system_focused_pid();
         let workspace = workspace_frontmost_pid();
+        let focused = ax.pid();
+        trace_focus_sources("find_pid", ax, workspace, focused.or(workspace));
         let Some(list) = on_screen_window_list() else {
             return focused.or(workspace);
         };
@@ -279,12 +285,60 @@ pub(super) fn find_normal_window_pid() -> Option<i32> {
     })
 }
 
-fn system_focused_pid() -> Option<i32> {
-    let system = CfGuard::new(unsafe { AXUIElementCreateSystemWide() })?;
-    let app = ax_attr(system.as_ptr(), "AXFocusedApplication")?;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AxFocus {
+    Pid(i32),
+    Error(i32),
+    NoSystemElement,
+    InvalidPid(i32),
+}
+
+impl AxFocus {
+    fn pid(self) -> Option<i32> {
+        match self {
+            Self::Pid(pid) => Some(pid),
+            Self::Error(_) | Self::NoSystemElement | Self::InvalidPid(_) => None,
+        }
+    }
+}
+
+fn system_focused_pid() -> AxFocus {
+    let Some(system) = CfGuard::new(unsafe { AXUIElementCreateSystemWide() }) else {
+        return AxFocus::NoSystemElement;
+    };
+    let app = match ax_attr_result(system.as_ptr(), "AXFocusedApplication") {
+        Ok(app) => app,
+        Err(code) => return AxFocus::Error(code),
+    };
     let mut pid = 0;
     let result = unsafe { AXUIElementGetPid(app.as_const(), &mut pid) };
-    (result == 0 && pid > 0).then_some(pid)
+    if result != 0 {
+        return AxFocus::Error(result);
+    }
+    if pid <= 0 {
+        return AxFocus::InvalidPid(pid);
+    }
+    AxFocus::Pid(pid)
+}
+
+fn trace_focus_sources(op: &str, ax: AxFocus, workspace: Option<i32>, chosen: Option<i32>) {
+    #[cfg(debug_assertions)]
+    {
+        let ax = match ax {
+            AxFocus::Pid(pid) => format!("{pid}"),
+            AxFocus::Error(code) => format!("err:{code}"),
+            AxFocus::NoSystemElement => "no_system_element".to_string(),
+            AxFocus::InvalidPid(pid) => format!("invalid_pid:{pid}"),
+        };
+        qol_runtime::probe!(
+            "WINACT_AX",
+            "op=focus_sources caller={op} ax={ax} workspace={} chosen={}",
+            workspace.map_or_else(|| "none".to_string(), |pid| pid.to_string()),
+            chosen.map_or_else(|| "none".to_string(), |pid| pid.to_string()),
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (op, ax, workspace, chosen);
 }
 
 fn workspace_frontmost_pid() -> Option<i32> {
