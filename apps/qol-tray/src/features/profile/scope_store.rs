@@ -254,6 +254,12 @@ impl ProfileScopeStore {
     }
 
     pub fn is_sync_allowlisted(rel: &Path) -> bool {
+        if rel
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return false;
+        }
         let parts: Vec<&str> = rel
             .components()
             .filter_map(|c| match c {
@@ -450,6 +456,9 @@ mod tests {
             "default/os/macos",
             "default/os",
             "default",
+            "../default/core/plugins.lock.json",
+            "/default/core/plugins.lock.json",
+            "default/../core/plugins.lock.json",
         ];
         for raw in cases {
             assert!(

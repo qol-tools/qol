@@ -8,6 +8,7 @@ pub fn archive_path(config_dir: &Path, migration_name: &str) -> Result<PathBuf> 
 }
 
 pub(crate) fn move_into_archive(src: &Path, archive_dir: &Path) -> Result<PathBuf> {
+    ensure_tree_has_no_symlink(src)?;
     let name = src
         .file_name()
         .with_context(|| format!("source has no file name: {}", src.display()))?;
@@ -27,12 +28,33 @@ pub(crate) fn move_into_archive(src: &Path, archive_dir: &Path) -> Result<PathBu
     }
 }
 
+fn ensure_tree_has_no_symlink(path: &Path) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(path)
+        .with_context(|| format!("reading source metadata: {}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        anyhow::bail!("refusing to archive migration symlink: {}", path.display());
+    }
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(path)? {
+        ensure_tree_has_no_symlink(&entry?.path())?;
+    }
+    Ok(())
+}
+
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let ty = entry.file_type()?;
         let dst_path = dst.join(entry.file_name());
+        if ty.is_symlink() {
+            anyhow::bail!(
+                "refusing to archive symlink during migration: {}",
+                entry.path().display()
+            );
+        }
         if ty.is_dir() {
             copy_dir_all(&entry.path(), &dst_path)?;
         } else {
@@ -193,5 +215,42 @@ mod tests {
             assert!(dst.exists(), "dst should exist: {}", dst.display());
         }
         assert!(archive.join("b").join("nested").join("c.json").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn move_into_archive_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let work = tempfile::tempdir().unwrap();
+        let archive = work.path().join("archive");
+        std::fs::create_dir_all(&archive).unwrap();
+        let target = work.path().join("target");
+        let link = work.path().join("link");
+        std::fs::write(&target, b"secret").unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert!(move_into_archive(&link, &archive).is_err());
+        assert!(link.is_symlink());
+        assert!(!archive.join("link").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn move_into_archive_rejects_nested_symlinks_before_moving() {
+        use std::os::unix::fs::symlink;
+
+        let work = tempfile::tempdir().unwrap();
+        let archive = work.path().join("archive");
+        let source = work.path().join("source");
+        std::fs::create_dir_all(&archive).unwrap();
+        std::fs::create_dir_all(&source).unwrap();
+        let target = work.path().join("target");
+        std::fs::write(&target, b"secret").unwrap();
+        symlink(&target, source.join("link")).unwrap();
+
+        assert!(move_into_archive(&source, &archive).is_err());
+        assert!(source.is_dir());
+        assert!(!archive.join("source").exists());
     }
 }
