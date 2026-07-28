@@ -1,9 +1,14 @@
+mod doctor;
+
+pub use doctor::{
+    DoctorAggregateReport, DoctorCheck, DoctorCheckResult, DoctorReport, DoctorStatus,
+    PluginDoctorReport, PreservedDoctorReport,
+};
+
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::io::{self, Write};
-use std::ops::Deref;
 use std::process::ExitCode;
 
 pub const EXIT_SUCCESS: u8 = 0;
@@ -823,10 +828,7 @@ impl HeadlessApp {
             }
         }
         let checks = self.selected_doctor_checks(selected)?;
-        let mut results = checks
-            .into_iter()
-            .map(DoctorCheck::run_check)
-            .collect::<Vec<_>>();
+        let mut results = checks.into_iter().map(DoctorCheck::run).collect::<Vec<_>>();
         if selected.is_none() {
             if let Some(provider) = &self.doctor_provider {
                 results.extend(provider().map_err(DispatchError::Runtime)?);
@@ -835,9 +837,7 @@ impl HeadlessApp {
         let report = DoctorReport::from_results(self.app_id.clone(), results);
 
         match output_format {
-            OutputFormat::PlainText => {
-                Ok(Execution::success(self.doctor_plain_text_output(&report)))
-            }
+            OutputFormat::PlainText => Ok(Execution::success(doctor::render_report(&report))),
             OutputFormat::Json => {
                 let stdout = json_stdout(&report).map_err(DispatchError::Runtime)?;
                 Ok(Execution::success(stdout))
@@ -851,13 +851,13 @@ impl HeadlessApp {
         output_format: OutputFormat,
     ) -> std::result::Result<Execution, DispatchError> {
         let stdout = match output_format {
-            OutputFormat::PlainText => self.doctor_aggregate_plain_text_output(report),
+            OutputFormat::PlainText => doctor::render_aggregate_report(&self.app_id, report),
             OutputFormat::Json => json_stdout(report).map_err(DispatchError::Runtime)?,
         };
         Ok(Execution::new(
             stdout,
             String::new(),
-            aggregate_doctor_exit_code(report.status),
+            doctor::aggregate_exit_code(report.status),
         ))
     }
 
@@ -881,62 +881,6 @@ impl HeadlessApp {
             || self.doctor_provider.is_some()
             || self.doctor_aggregate_provider.is_some()
     }
-
-    fn doctor_plain_text_output(&self, report: &DoctorReport) -> String {
-        let mut lines = vec![format!(
-            "{} doctor: {}",
-            report.plugin_id,
-            report.status.as_str()
-        )];
-
-        for check in &report.checks {
-            lines.push(format!(
-                "[{}] {} - {}",
-                check.status.as_str(),
-                check.id,
-                check.message
-            ));
-            if let Some(fix) = &check.fix {
-                lines.push(format!("  fix: {fix}"));
-            }
-        }
-
-        ensure_trailing_newline(lines.join("\n"))
-    }
-
-    fn doctor_aggregate_plain_text_output(&self, report: &DoctorAggregateReport) -> String {
-        let mut lines = vec![
-            format!("{} doctor: {}", self.app_id, report.status.as_str()),
-            String::new(),
-            format!(
-                "Host {}: {}",
-                report.host.plugin_id,
-                report.host.status.as_str()
-            ),
-        ];
-        push_doctor_results(&mut lines, &report.host.checks, "  ");
-
-        for plugin in &report.plugins {
-            lines.extend([
-                String::new(),
-                format!("Plugin {}: {}", plugin.plugin_id, plugin.status.as_str()),
-            ]);
-            if !plugin.diagnostics.is_empty() {
-                lines.push("  Diagnostics:".to_string());
-                push_doctor_results(&mut lines, &plugin.diagnostics, "    ");
-            }
-            if let Some(plugin_report) = &plugin.report {
-                lines.push(format!(
-                    "  Report {}: {}",
-                    plugin_report.plugin_id,
-                    plugin_report.status.as_str()
-                ));
-                push_doctor_results(&mut lines, &plugin_report.checks, "    ");
-            }
-        }
-
-        ensure_trailing_newline(lines.join("\n"))
-    }
 }
 
 struct ResolvedCommand<'a> {
@@ -954,290 +898,6 @@ enum DispatchError {
 impl DispatchError {
     fn unsupported_json(command_path: &str) -> Self {
         Self::Usage(format!("Command `{command_path}` does not support --json."))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DoctorStatus {
-    Ok,
-    Warn,
-    Fail,
-}
-
-impl DoctorStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-            Self::Warn => "warn",
-            Self::Fail => "fail",
-        }
-    }
-
-    fn aggregate(results: &[DoctorCheckResult]) -> Self {
-        Self::aggregate_statuses(results.iter().map(|result| result.status))
-    }
-
-    fn aggregate_statuses(statuses: impl IntoIterator<Item = DoctorStatus>) -> Self {
-        let mut aggregate = Self::Ok;
-        for status in statuses {
-            if status == Self::Fail {
-                return Self::Fail;
-            }
-            if status == Self::Warn {
-                aggregate = Self::Warn;
-            }
-        }
-        aggregate
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-pub struct PluginDoctorReport {
-    pub plugin_id: String,
-    pub status: DoctorStatus,
-    pub diagnostics: Vec<DoctorCheckResult>,
-    pub report: Option<PreservedDoctorReport>,
-}
-
-impl PluginDoctorReport {
-    pub fn new(
-        plugin_id: impl Into<String>,
-        diagnostics: Vec<DoctorCheckResult>,
-        report: Option<DoctorReport>,
-    ) -> Self {
-        Self::new_preserved(
-            plugin_id,
-            diagnostics,
-            report.map(PreservedDoctorReport::new),
-        )
-    }
-
-    pub fn new_preserved(
-        plugin_id: impl Into<String>,
-        diagnostics: Vec<DoctorCheckResult>,
-        report: Option<PreservedDoctorReport>,
-    ) -> Self {
-        let status = DoctorStatus::aggregate_statuses(
-            diagnostics
-                .iter()
-                .map(|diagnostic| diagnostic.status)
-                .chain(report.iter().map(|report| report.status)),
-        );
-        Self {
-            plugin_id: plugin_id.into(),
-            status,
-            diagnostics,
-            report,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct PreservedDoctorReport {
-    report: DoctorReport,
-    raw: Value,
-}
-
-impl PreservedDoctorReport {
-    pub fn new(report: DoctorReport) -> Self {
-        let raw = serde_json::to_value(&report)
-            .expect("serializing a doctor report containing JSON values cannot fail");
-        Self { report, raw }
-    }
-
-    pub fn from_value(raw: Value) -> serde_json::Result<Self> {
-        let report = serde_json::from_value(raw.clone())?;
-        Ok(Self { report, raw })
-    }
-
-    pub fn from_slice(bytes: &[u8]) -> serde_json::Result<Self> {
-        Self::from_value(serde_json::from_slice(bytes)?)
-    }
-
-    pub fn raw(&self) -> &Value {
-        &self.raw
-    }
-}
-
-impl Deref for PreservedDoctorReport {
-    type Target = DoctorReport;
-
-    fn deref(&self) -> &Self::Target {
-        &self.report
-    }
-}
-
-impl Serialize for PreservedDoctorReport {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.raw.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for PreservedDoctorReport {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = Value::deserialize(deserializer)?;
-        Self::from_value(raw).map_err(serde::de::Error::custom)
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-pub struct DoctorAggregateReport {
-    pub status: DoctorStatus,
-    pub host: DoctorReport,
-    pub plugins: Vec<PluginDoctorReport>,
-}
-
-impl DoctorAggregateReport {
-    pub fn new(host: DoctorReport, mut plugins: Vec<PluginDoctorReport>) -> Self {
-        plugins.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
-        let status = DoctorStatus::aggregate_statuses(
-            std::iter::once(host.status).chain(plugins.iter().map(|plugin| plugin.status)),
-        );
-        Self {
-            status,
-            host,
-            plugins,
-        }
-    }
-}
-
-fn push_doctor_results(lines: &mut Vec<String>, results: &[DoctorCheckResult], indent: &str) {
-    for result in results {
-        lines.push(format!(
-            "{indent}[{}] {} - {}",
-            result.status.as_str(),
-            result.id,
-            result.message
-        ));
-        if let Some(fix) = &result.fix {
-            lines.push(format!("{indent}  fix: {fix}"));
-        }
-    }
-}
-
-pub struct DoctorCheck {
-    id: String,
-    about: String,
-    handler: Box<dyn Fn() -> Result<DoctorCheckResult> + Send + Sync>,
-}
-
-impl DoctorCheck {
-    pub fn new<F>(id: impl Into<String>, about: impl Into<String>, handler: F) -> Self
-    where
-        F: Fn() -> Result<DoctorCheckResult> + Send + Sync + 'static,
-    {
-        Self {
-            id: id.into(),
-            about: about.into(),
-            handler: Box::new(handler),
-        }
-    }
-
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    pub fn about(&self) -> &str {
-        &self.about
-    }
-
-    fn run_check(&self) -> DoctorCheckResult {
-        match (self.handler)() {
-            Ok(mut result) => {
-                if result.id.is_empty() {
-                    result.id = self.id.clone();
-                }
-                result
-            }
-            Err(error) => DoctorCheckResult::fail(
-                self.id.clone(),
-                format!("{} failed: {error:#}", self.about),
-            ),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-pub struct DoctorReport {
-    pub plugin_id: String,
-    pub status: DoctorStatus,
-    pub checks: Vec<DoctorCheckResult>,
-    #[serde(default, flatten)]
-    pub extensions: BTreeMap<String, Value>,
-}
-
-impl DoctorReport {
-    pub fn from_results(plugin_id: impl Into<String>, checks: Vec<DoctorCheckResult>) -> Self {
-        let status = DoctorStatus::aggregate(&checks);
-        Self {
-            plugin_id: plugin_id.into(),
-            status,
-            checks,
-            extensions: BTreeMap::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-pub struct DoctorCheckResult {
-    pub id: String,
-    pub status: DoctorStatus,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fix: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub details: Option<Value>,
-    #[serde(default, flatten)]
-    pub extensions: BTreeMap<String, Value>,
-}
-
-impl DoctorCheckResult {
-    pub fn ok(id: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::new(id, DoctorStatus::Ok, message)
-    }
-
-    pub fn warn(id: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::new(id, DoctorStatus::Warn, message)
-    }
-
-    pub fn fail(id: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::new(id, DoctorStatus::Fail, message)
-    }
-
-    pub fn with_fix(mut self, fix: impl Into<String>) -> Self {
-        self.fix = Some(fix.into());
-        self
-    }
-
-    pub fn with_details(mut self, details: Value) -> Self {
-        self.details = Some(details);
-        self
-    }
-
-    fn new(id: impl Into<String>, status: DoctorStatus, message: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            status,
-            message: message.into(),
-            fix: None,
-            details: None,
-            extensions: BTreeMap::new(),
-        }
-    }
-}
-
-fn aggregate_doctor_exit_code(status: DoctorStatus) -> u8 {
-    match status {
-        DoctorStatus::Ok => 0,
-        DoctorStatus::Warn => 1,
-        DoctorStatus::Fail => 2,
     }
 }
 
@@ -1572,9 +1232,9 @@ mod tests {
 
     #[test]
     fn aggregate_doctor_exit_codes_preserve_health_gate_semantics() {
-        assert_eq!(aggregate_doctor_exit_code(DoctorStatus::Ok), 0);
-        assert_eq!(aggregate_doctor_exit_code(DoctorStatus::Warn), 1);
-        assert_eq!(aggregate_doctor_exit_code(DoctorStatus::Fail), 2);
+        assert_eq!(doctor::aggregate_exit_code(DoctorStatus::Ok), 0);
+        assert_eq!(doctor::aggregate_exit_code(DoctorStatus::Warn), 1);
+        assert_eq!(doctor::aggregate_exit_code(DoctorStatus::Fail), 2);
     }
 
     #[test]
