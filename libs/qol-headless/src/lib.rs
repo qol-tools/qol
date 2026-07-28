@@ -1,7 +1,9 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::io::{self, Write};
+use std::ops::Deref;
 use std::process::ExitCode;
 
 pub const EXIT_SUCCESS: u8 = 0;
@@ -82,6 +84,7 @@ type StreamingHandler =
     Box<dyn Fn(&CommandContext, &mut dyn OutputSink) -> Result<u8> + Send + Sync>;
 type JsonHandler = Box<dyn Fn(&CommandContext) -> Result<Value> + Send + Sync>;
 type DoctorProvider = Box<dyn Fn() -> Result<Vec<DoctorCheckResult>> + Send + Sync>;
+type DoctorAggregateProvider = Box<dyn Fn() -> Result<DoctorAggregateReport> + Send + Sync>;
 
 enum ModeHandler {
     PlainText(PlainTextHandler),
@@ -319,6 +322,7 @@ pub struct HeadlessApp {
     commands: Vec<Command>,
     doctor_checks: Vec<DoctorCheck>,
     doctor_provider: Option<DoctorProvider>,
+    doctor_aggregate_provider: Option<DoctorAggregateProvider>,
 }
 
 impl HeadlessApp {
@@ -331,6 +335,7 @@ impl HeadlessApp {
             commands: Vec::new(),
             doctor_checks: Vec::new(),
             doctor_provider: None,
+            doctor_aggregate_provider: None,
         }
     }
 
@@ -371,6 +376,14 @@ impl HeadlessApp {
         F: Fn() -> Result<Vec<DoctorCheckResult>> + Send + Sync + 'static,
     {
         self.doctor_provider = Some(Box::new(provider));
+        self
+    }
+
+    pub fn doctor_aggregate_provider<F>(mut self, provider: F) -> Self
+    where
+        F: Fn() -> Result<DoctorAggregateReport> + Send + Sync + 'static,
+    {
+        self.doctor_aggregate_provider = Some(Box::new(provider));
         self
     }
 
@@ -739,11 +752,15 @@ impl HeadlessApp {
             format!("  {} doctor", self.binary_name),
             format!("  {} --json doctor", self.binary_name),
             format!("  {} doctor --json", self.binary_name),
-            format!("  {} doctor <check-id>", self.binary_name),
+        ];
+        if !self.doctor_checks.is_empty() {
+            lines.push(format!("  {} doctor <check-id>", self.binary_name));
+        }
+        lines.extend([
             format!("  {} doctor help", self.binary_name),
             String::new(),
             "Checks:".to_string(),
-        ];
+        ]);
 
         for check in &self.doctor_checks {
             lines.push(format_command_row(&check.id, &check.about));
@@ -751,17 +768,29 @@ impl HeadlessApp {
         if self.doctor_provider.is_some() {
             lines.push("  Additional checks are discovered when doctor runs.".to_string());
         }
+        if self.doctor_aggregate_provider.is_some() {
+            lines.push("  Host and plugin checks are discovered when doctor runs.".to_string());
+        }
 
         lines.extend([
             String::new(),
             "Output:".to_string(),
             "  Plain-text report by default.".to_string(),
-            "  Supports --json and returns plugin_id, status, and checks.".to_string(),
-            String::new(),
-            "Exit:".to_string(),
-            "  Exits 0 when checks run; inspect the report status for ok, warn, or fail."
-                .to_string(),
         ]);
+        if self.doctor_aggregate_provider.is_some() {
+            lines.push("  Supports --json and returns status, host, and plugins.".to_string());
+        } else {
+            lines.push("  Supports --json and returns plugin_id, status, and checks.".to_string());
+        }
+        lines.extend([String::new(), "Exit:".to_string()]);
+        if self.doctor_aggregate_provider.is_some() {
+            lines.push("  Exits 0 when healthy, 1 for warnings, and 2 for failures.".to_string());
+        } else {
+            lines.push(
+                "  Exits 0 when checks run; inspect the report status for ok, warn, or fail."
+                    .to_string(),
+            );
+        }
 
         ensure_trailing_newline(lines.join("\n"))
     }
@@ -787,6 +816,12 @@ impl HeadlessApp {
         }
 
         let selected = args.first().map(String::as_str);
+        if selected.is_none() {
+            if let Some(provider) = &self.doctor_aggregate_provider {
+                let report = provider().map_err(DispatchError::Runtime)?;
+                return self.execute_doctor_aggregate(&report, output_format);
+            }
+        }
         let checks = self.selected_doctor_checks(selected)?;
         let mut results = checks
             .into_iter()
@@ -810,6 +845,22 @@ impl HeadlessApp {
         }
     }
 
+    fn execute_doctor_aggregate(
+        &self,
+        report: &DoctorAggregateReport,
+        output_format: OutputFormat,
+    ) -> std::result::Result<Execution, DispatchError> {
+        let stdout = match output_format {
+            OutputFormat::PlainText => self.doctor_aggregate_plain_text_output(report),
+            OutputFormat::Json => json_stdout(report).map_err(DispatchError::Runtime)?,
+        };
+        Ok(Execution::new(
+            stdout,
+            String::new(),
+            aggregate_doctor_exit_code(report.status),
+        ))
+    }
+
     fn selected_doctor_checks(
         &self,
         selected: Option<&str>,
@@ -826,7 +877,9 @@ impl HeadlessApp {
     }
 
     fn has_doctor(&self) -> bool {
-        !self.doctor_checks.is_empty() || self.doctor_provider.is_some()
+        !self.doctor_checks.is_empty()
+            || self.doctor_provider.is_some()
+            || self.doctor_aggregate_provider.is_some()
     }
 
     fn doctor_plain_text_output(&self, report: &DoctorReport) -> String {
@@ -845,6 +898,40 @@ impl HeadlessApp {
             ));
             if let Some(fix) = &check.fix {
                 lines.push(format!("  fix: {fix}"));
+            }
+        }
+
+        ensure_trailing_newline(lines.join("\n"))
+    }
+
+    fn doctor_aggregate_plain_text_output(&self, report: &DoctorAggregateReport) -> String {
+        let mut lines = vec![
+            format!("{} doctor: {}", self.app_id, report.status.as_str()),
+            String::new(),
+            format!(
+                "Host {}: {}",
+                report.host.plugin_id,
+                report.host.status.as_str()
+            ),
+        ];
+        push_doctor_results(&mut lines, &report.host.checks, "  ");
+
+        for plugin in &report.plugins {
+            lines.extend([
+                String::new(),
+                format!("Plugin {}: {}", plugin.plugin_id, plugin.status.as_str()),
+            ]);
+            if !plugin.diagnostics.is_empty() {
+                lines.push("  Diagnostics:".to_string());
+                push_doctor_results(&mut lines, &plugin.diagnostics, "    ");
+            }
+            if let Some(plugin_report) = &plugin.report {
+                lines.push(format!(
+                    "  Report {}: {}",
+                    plugin_report.plugin_id,
+                    plugin_report.status.as_str()
+                ));
+                push_doctor_results(&mut lines, &plugin_report.checks, "    ");
             }
         }
 
@@ -888,19 +975,150 @@ impl DoctorStatus {
     }
 
     fn aggregate(results: &[DoctorCheckResult]) -> Self {
-        if results
-            .iter()
-            .any(|result| result.status == DoctorStatus::Fail)
-        {
-            return Self::Fail;
+        Self::aggregate_statuses(results.iter().map(|result| result.status))
+    }
+
+    fn aggregate_statuses(statuses: impl IntoIterator<Item = DoctorStatus>) -> Self {
+        let mut aggregate = Self::Ok;
+        for status in statuses {
+            if status == Self::Fail {
+                return Self::Fail;
+            }
+            if status == Self::Warn {
+                aggregate = Self::Warn;
+            }
         }
-        if results
-            .iter()
-            .any(|result| result.status == DoctorStatus::Warn)
-        {
-            return Self::Warn;
+        aggregate
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct PluginDoctorReport {
+    pub plugin_id: String,
+    pub status: DoctorStatus,
+    pub diagnostics: Vec<DoctorCheckResult>,
+    pub report: Option<PreservedDoctorReport>,
+}
+
+impl PluginDoctorReport {
+    pub fn new(
+        plugin_id: impl Into<String>,
+        diagnostics: Vec<DoctorCheckResult>,
+        report: Option<DoctorReport>,
+    ) -> Self {
+        Self::new_preserved(
+            plugin_id,
+            diagnostics,
+            report.map(PreservedDoctorReport::new),
+        )
+    }
+
+    pub fn new_preserved(
+        plugin_id: impl Into<String>,
+        diagnostics: Vec<DoctorCheckResult>,
+        report: Option<PreservedDoctorReport>,
+    ) -> Self {
+        let status = DoctorStatus::aggregate_statuses(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.status)
+                .chain(report.iter().map(|report| report.status)),
+        );
+        Self {
+            plugin_id: plugin_id.into(),
+            status,
+            diagnostics,
+            report,
         }
-        Self::Ok
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreservedDoctorReport {
+    report: DoctorReport,
+    raw: Value,
+}
+
+impl PreservedDoctorReport {
+    pub fn new(report: DoctorReport) -> Self {
+        let raw = serde_json::to_value(&report)
+            .expect("serializing a doctor report containing JSON values cannot fail");
+        Self { report, raw }
+    }
+
+    pub fn from_value(raw: Value) -> serde_json::Result<Self> {
+        let report = serde_json::from_value(raw.clone())?;
+        Ok(Self { report, raw })
+    }
+
+    pub fn from_slice(bytes: &[u8]) -> serde_json::Result<Self> {
+        Self::from_value(serde_json::from_slice(bytes)?)
+    }
+
+    pub fn raw(&self) -> &Value {
+        &self.raw
+    }
+}
+
+impl Deref for PreservedDoctorReport {
+    type Target = DoctorReport;
+
+    fn deref(&self) -> &Self::Target {
+        &self.report
+    }
+}
+
+impl Serialize for PreservedDoctorReport {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.raw.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PreservedDoctorReport {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = Value::deserialize(deserializer)?;
+        Self::from_value(raw).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct DoctorAggregateReport {
+    pub status: DoctorStatus,
+    pub host: DoctorReport,
+    pub plugins: Vec<PluginDoctorReport>,
+}
+
+impl DoctorAggregateReport {
+    pub fn new(host: DoctorReport, mut plugins: Vec<PluginDoctorReport>) -> Self {
+        plugins.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+        let status = DoctorStatus::aggregate_statuses(
+            std::iter::once(host.status).chain(plugins.iter().map(|plugin| plugin.status)),
+        );
+        Self {
+            status,
+            host,
+            plugins,
+        }
+    }
+}
+
+fn push_doctor_results(lines: &mut Vec<String>, results: &[DoctorCheckResult], indent: &str) {
+    for result in results {
+        lines.push(format!(
+            "{indent}[{}] {} - {}",
+            result.status.as_str(),
+            result.id,
+            result.message
+        ));
+        if let Some(fix) = &result.fix {
+            lines.push(format!("{indent}  fix: {fix}"));
+        }
     }
 }
 
@@ -951,6 +1169,8 @@ pub struct DoctorReport {
     pub plugin_id: String,
     pub status: DoctorStatus,
     pub checks: Vec<DoctorCheckResult>,
+    #[serde(default, flatten)]
+    pub extensions: BTreeMap<String, Value>,
 }
 
 impl DoctorReport {
@@ -960,6 +1180,7 @@ impl DoctorReport {
             plugin_id: plugin_id.into(),
             status,
             checks,
+            extensions: BTreeMap::new(),
         }
     }
 }
@@ -973,6 +1194,8 @@ pub struct DoctorCheckResult {
     pub fix: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
+    #[serde(default, flatten)]
+    pub extensions: BTreeMap<String, Value>,
 }
 
 impl DoctorCheckResult {
@@ -1005,7 +1228,16 @@ impl DoctorCheckResult {
             message: message.into(),
             fix: None,
             details: None,
+            extensions: BTreeMap::new(),
         }
+    }
+}
+
+fn aggregate_doctor_exit_code(status: DoctorStatus) -> u8 {
+    match status {
+        DoctorStatus::Ok => 0,
+        DoctorStatus::Warn => 1,
+        DoctorStatus::Fail => 2,
     }
 }
 
@@ -1213,6 +1445,139 @@ mod tests {
     }
 
     #[test]
+    fn doctor_aggregate_json_round_trips_without_flattening_plugin_reports() {
+        let value = json!({
+            "status": "fail",
+            "host": {
+                "plugin_id": "host-test",
+                "status": "warn",
+                "checks": [
+                    {
+                        "id": "host-second",
+                        "status": "warn",
+                        "message": "second host check"
+                    },
+                    {
+                        "id": "host-first",
+                        "status": "ok",
+                        "message": "first host check"
+                    }
+                ]
+            },
+            "plugins": [
+                {
+                    "plugin_id": "plugin-z",
+                    "status": "fail",
+                    "diagnostics": [
+                        {
+                            "id": "invocation",
+                            "status": "fail",
+                            "message": "plugin invocation failed"
+                        }
+                    ],
+                    "report": null
+                },
+                {
+                    "plugin_id": "plugin-a",
+                    "status": "warn",
+                    "diagnostics": [],
+                    "report": {
+                        "plugin_id": "plugin-a",
+                        "status": "warn",
+                        "schema_version": 2,
+                        "checks": [
+                            {
+                                "id": "second",
+                                "status": "warn",
+                                "message": "second plugin check",
+                                "fix": null,
+                                "future_metric": {
+                                    "latency_ms": 7
+                                }
+                            },
+                            {
+                                "id": "first",
+                                "status": "ok",
+                                "message": "first plugin check"
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let report: DoctorAggregateReport = serde_json::from_value(value.clone()).unwrap();
+
+        assert_eq!(report.status, DoctorStatus::Fail);
+        assert_eq!(
+            report.plugins[1].report.as_ref().unwrap().checks[0].id,
+            "second"
+        );
+        assert_eq!(
+            report.plugins[1].report.as_ref().unwrap().raw()["schema_version"],
+            2
+        );
+        assert_eq!(serde_json::to_value(report).unwrap(), value);
+    }
+
+    #[test]
+    fn aggregate_constructors_derive_status_and_sort_only_plugin_groups() {
+        let host = DoctorReport::from_results(
+            "host-test",
+            vec![
+                DoctorCheckResult::warn("host-second", "second host check"),
+                DoctorCheckResult::ok("host-first", "first host check"),
+            ],
+        );
+        let plugin_report = DoctorReport::from_results(
+            "plugin-z",
+            vec![
+                DoctorCheckResult::warn("second", "second plugin check"),
+                DoctorCheckResult::ok("first", "first plugin check"),
+            ],
+        );
+        let plugin_z = PluginDoctorReport::new(
+            "plugin-z",
+            vec![
+                DoctorCheckResult::ok("diagnostic-second", "second diagnostic"),
+                DoctorCheckResult::fail("diagnostic-first", "first diagnostic"),
+            ],
+            Some(plugin_report),
+        );
+        let plugin_a = PluginDoctorReport::new(
+            "plugin-a",
+            vec![DoctorCheckResult::ok("ready", "plugin is ready")],
+            None,
+        );
+
+        let aggregate = DoctorAggregateReport::new(host, vec![plugin_z, plugin_a]);
+
+        assert_eq!(aggregate.status, DoctorStatus::Fail);
+        assert_eq!(
+            aggregate
+                .plugins
+                .iter()
+                .map(|plugin| plugin.plugin_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["plugin-a", "plugin-z"]
+        );
+        assert_eq!(aggregate.host.checks[0].id, "host-second");
+        assert_eq!(aggregate.plugins[1].status, DoctorStatus::Fail);
+        assert_eq!(aggregate.plugins[1].diagnostics[0].id, "diagnostic-second");
+        assert_eq!(
+            aggregate.plugins[1].report.as_ref().unwrap().checks[0].id,
+            "second"
+        );
+    }
+
+    #[test]
+    fn aggregate_doctor_exit_codes_preserve_health_gate_semantics() {
+        assert_eq!(aggregate_doctor_exit_code(DoctorStatus::Ok), 0);
+        assert_eq!(aggregate_doctor_exit_code(DoctorStatus::Warn), 1);
+        assert_eq!(aggregate_doctor_exit_code(DoctorStatus::Fail), 2);
+    }
+
+    #[test]
     fn doctor_provider_is_lazy_and_runs_only_after_doctor_dispatch() {
         let calls = Arc::new(AtomicUsize::new(0));
         let provider_calls = Arc::clone(&calls);
@@ -1235,6 +1600,7 @@ mod tests {
 
         assert_eq!(help.exit_code, EXIT_SUCCESS);
         assert!(help.stdout.contains("discovered when doctor runs"));
+        assert!(!help.stdout.contains("doctor <check-id>"));
         assert_eq!(status.stdout, "running\n");
         assert_eq!(calls.load(Ordering::SeqCst), 0);
 
@@ -1244,6 +1610,74 @@ mod tests {
         assert_eq!(doctor.exit_code, EXIT_SUCCESS);
         assert_eq!(report.status, DoctorStatus::Warn);
         assert_eq!(report.checks[0].id, "plugin-test/required_binaries");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn doctor_aggregate_provider_is_lazy_and_renders_grouped_plain_text() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider_calls = Arc::clone(&calls);
+        let app = HeadlessApp::new("host-test", "host-test")
+            .command(
+                Command::new("status")
+                    .about("Show status.")
+                    .run_plain_text(|_| Ok(PlainTextOutput::text("running"))),
+            )
+            .doctor_aggregate_provider(move || {
+                provider_calls.fetch_add(1, Ordering::SeqCst);
+                let host = DoctorReport::from_results(
+                    "host-test",
+                    vec![DoctorCheckResult::warn("runtime", "host needs attention")
+                        .with_fix("Repair host.")],
+                );
+                let plugin_z = PluginDoctorReport::new(
+                    "plugin-z",
+                    vec![DoctorCheckResult::fail("invocation", "plugin failed")
+                        .with_fix("Reinstall plugin.")],
+                    None,
+                );
+                let plugin_a = PluginDoctorReport::new(
+                    "plugin-a",
+                    Vec::new(),
+                    Some(DoctorReport::from_results(
+                        "plugin-a",
+                        vec![DoctorCheckResult::ok("ready", "plugin ready")],
+                    )),
+                );
+                Ok(DoctorAggregateReport::new(host, vec![plugin_z, plugin_a]))
+            });
+
+        let help = app.execute(vec!["help".to_string(), "doctor".to_string()]);
+        let status = app.execute(vec!["status".to_string()]);
+
+        assert_eq!(help.exit_code, EXIT_SUCCESS);
+        assert!(help.stdout.contains("returns status, host, and plugins"));
+        assert!(!help.stdout.contains("doctor <check-id>"));
+        assert_eq!(status.stdout, "running\n");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        let doctor = app.execute(vec!["doctor".to_string()]);
+
+        assert_eq!(doctor.exit_code, 2);
+        assert_eq!(
+            doctor.stdout,
+            concat!(
+                "host-test doctor: fail\n",
+                "\n",
+                "Host host-test: warn\n",
+                "  [warn] runtime - host needs attention\n",
+                "    fix: Repair host.\n",
+                "\n",
+                "Plugin plugin-a: ok\n",
+                "  Report plugin-a: ok\n",
+                "    [ok] ready - plugin ready\n",
+                "\n",
+                "Plugin plugin-z: fail\n",
+                "  Diagnostics:\n",
+                "    [fail] invocation - plugin failed\n",
+                "      fix: Reinstall plugin.\n",
+            )
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
