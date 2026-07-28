@@ -1,7 +1,7 @@
 # CLI Sessions - UI Upgrade + Architecture Docs
 
 Date: 2026-06-20
-Plugin: `plugins/plugin-cli-sessions`
+Plugin: `plugins/cli-sessions`
 
 ## Context
 

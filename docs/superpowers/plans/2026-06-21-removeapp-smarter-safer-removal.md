@@ -40,15 +40,15 @@
 ## Task 1: Pure matching rule and MatchKind
 
 **Files:**
-- Create: `plugins/plugin-removeapp/src/core/classify.rs`
-- Modify: `plugins/plugin-removeapp/src/core/mod.rs` (add `pub mod classify;` + re-export)
+- Create: `plugins/removeapp/src/core/classify.rs`
+- Modify: `plugins/removeapp/src/core/mod.rs` (add `pub mod classify;` + re-export)
 
 **Interfaces:**
 - Produces: `pub enum MatchKind { Exact, Fuzzy }` (Copy, Eq, Serialize); `pub fn normalize_entry(entry: &str) -> &str`; `pub fn belongs_to(entry: &str, bid: &str) -> bool`; `pub fn owner_of<'a>(entry: &str, bids: &'a [String]) -> Option<&'a str>`.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `plugins/plugin-removeapp/src/core/classify.rs`:
+Create `plugins/removeapp/src/core/classify.rs`:
 
 ```rust
 #[cfg(test)]
@@ -92,7 +92,7 @@ Expected: FAIL - `cannot find function belongs_to` (module not yet wired / fns m
 
 - [ ] **Step 3: Write minimal implementation**
 
-Prepend to `plugins/plugin-removeapp/src/core/classify.rs`:
+Prepend to `plugins/removeapp/src/core/classify.rs`:
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -121,7 +121,7 @@ pub fn owner_of<'a>(entry: &str, bids: &'a [String]) -> Option<&'a str> {
 }
 ```
 
-In `plugins/plugin-removeapp/src/core/mod.rs`, add near the top (after `pub mod platform;`):
+In `plugins/removeapp/src/core/mod.rs`, add near the top (after `pub mod platform;`):
 
 ```rust
 pub mod classify;
@@ -136,7 +136,7 @@ Expected: PASS (2 tests).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/plugin-removeapp/src/core/classify.rs plugins/plugin-removeapp/src/core/mod.rs
+git add plugins/removeapp/src/core/classify.rs plugins/removeapp/src/core/mod.rs
 git commit -m "feat(removeapp): pure owner-aware leftover matching rule"
 ```
 
@@ -145,9 +145,9 @@ git commit -m "feat(removeapp): pure owner-aware leftover matching rule"
 ## Task 2: Leftover provenance and effective disposal
 
 **Files:**
-- Modify: `plugins/plugin-removeapp/src/core/mod.rs` (add `match_kind` to `Leftover`, `freed_bytes` to `RemovalOutcome`)
-- Modify: `plugins/plugin-removeapp/src/core/classify.rs` (add `effective_disposal`)
-- Modify: `plugins/plugin-removeapp/src/core/platform/macos.rs`, `src/cli/mod.rs` (fix `Leftover { .. }` literals to set `match_kind`)
+- Modify: `plugins/removeapp/src/core/mod.rs` (add `match_kind` to `Leftover`, `freed_bytes` to `RemovalOutcome`)
+- Modify: `plugins/removeapp/src/core/classify.rs` (add `effective_disposal`)
+- Modify: `plugins/removeapp/src/core/platform/macos.rs`, `src/cli/mod.rs` (fix `Leftover { .. }` literals to set `match_kind`)
 
 **Interfaces:**
 - Consumes: `MatchKind`, `Disposal` (existing), `LeftoverKind::AppBundle`.
@@ -155,7 +155,7 @@ git commit -m "feat(removeapp): pure owner-aware leftover matching rule"
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `plugins/plugin-removeapp/src/core/classify.rs` `tests` module:
+Add to `plugins/removeapp/src/core/classify.rs` `tests` module:
 
 ```rust
     #[test]
@@ -235,7 +235,7 @@ Expected: PASS (all existing tests + `effective_disposal_*`). Fix any remaining 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/plugin-removeapp/src/core
+git add plugins/removeapp/src/core
 git commit -m "feat(removeapp): per-item match provenance and effective disposal"
 ```
 
@@ -244,15 +244,15 @@ git commit -m "feat(removeapp): per-item match provenance and effective disposal
 ## Task 3: Guard types, cask map parser, stderr sanitizer (pure)
 
 **Files:**
-- Create: `plugins/plugin-removeapp/src/core/guards.rs`
-- Modify: `plugins/plugin-removeapp/src/core/mod.rs` (`pub mod guards;` + re-exports)
+- Create: `plugins/removeapp/src/core/guards.rs`
+- Modify: `plugins/removeapp/src/core/mod.rs` (`pub mod guards;` + re-exports)
 
 **Interfaces:**
 - Produces: `pub struct CaskToken(String)` with `pub fn parse(&str) -> Option<CaskToken>` + `pub fn as_str(&self) -> &str`; `pub enum CaskStatus { Managed(CaskToken), NotManaged, Unavailable(String) }`; `pub struct Guards { pub running: bool, pub cask: CaskStatus }`; `pub enum BasenameOwner { One(CaskToken), Many }`; `pub fn parse_cask_map(json: &str) -> anyhow::Result<std::collections::BTreeMap<String, BasenameOwner>>`; `pub fn cask_status_for(target_basename: &str, map: &BTreeMap<String, BasenameOwner>, inventory_basenames: &[String]) -> CaskStatus`; `pub fn sanitize_stderr(raw: &[u8], cap: usize) -> String`.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `plugins/plugin-removeapp/src/core/guards.rs`:
+Create `plugins/removeapp/src/core/guards.rs`:
 
 ```rust
 #[cfg(test)]
@@ -480,7 +480,7 @@ Expected: PASS (4 tests).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/plugin-removeapp/src/core/guards.rs plugins/plugin-removeapp/src/core/mod.rs
+git add plugins/removeapp/src/core/guards.rs plugins/removeapp/src/core/mod.rs
 git commit -m "feat(removeapp): cask token, tri-state status, and brew json parser"
 ```
 
@@ -489,10 +489,10 @@ git commit -m "feat(removeapp): cask token, tri-state status, and brew json pars
 ## Task 4: Trait reshape, inventory threading, two-phase removal, stubs
 
 **Files:**
-- Modify: `plugins/plugin-removeapp/src/core/platform/mod.rs` (trait)
-- Modify: `plugins/plugin-removeapp/src/core/platform/linux.rs`, `windows.rs` (stubs)
-- Modify: `plugins/plugin-removeapp/src/core/platform/macos.rs` (adapt signatures + `remove_items`)
-- Modify: `plugins/plugin-removeapp/src/core/mod.rs` (free fns: `plan`, `remove`, `guards`, `resolve_unique`)
+- Modify: `plugins/removeapp/src/core/platform/mod.rs` (trait)
+- Modify: `plugins/removeapp/src/core/platform/linux.rs`, `windows.rs` (stubs)
+- Modify: `plugins/removeapp/src/core/platform/macos.rs` (adapt signatures + `remove_items`)
+- Modify: `plugins/removeapp/src/core/mod.rs` (free fns: `plan`, `remove`, `guards`, `resolve_unique`)
 
 **Interfaces:**
 - Produces (trait):
@@ -739,7 +739,7 @@ Expected: PASS. Then `cargo clippy -p plugin-removeapp --all-targets -- -D warni
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/plugin-removeapp/src
+git add plugins/removeapp/src
 git commit -m "feat(removeapp): thread inventory, per-item disposal, two-phase removal"
 ```
 
@@ -748,7 +748,7 @@ git commit -m "feat(removeapp): thread inventory, per-item disposal, two-phase r
 ## Task 5: Owner-aware macOS scan (enumerate + classify + canonical bundle)
 
 **Files:**
-- Modify: `plugins/plugin-removeapp/src/core/platform/macos.rs`
+- Modify: `plugins/removeapp/src/core/platform/macos.rs`
 
 **Interfaces:**
 - Consumes: `classify::{belongs_to, owner_of, MatchKind}`, the `inventory: &[InstalledApp]`.
@@ -854,7 +854,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/plugin-removeapp/src/core/platform/macos.rs
+git add plugins/removeapp/src/core/platform/macos.rs
 git commit -m "feat(removeapp): owner-aware library enumeration with match provenance"
 ```
 
@@ -863,8 +863,8 @@ git commit -m "feat(removeapp): owner-aware library enumeration with match prove
 ## Task 6: macOS guards - running (objc2), cask (brew), Spotlight discovery
 
 **Files:**
-- Modify: `plugins/plugin-removeapp/src/core/platform/macos.rs`
-- Modify: `plugins/plugin-removeapp/Cargo.toml`
+- Modify: `plugins/removeapp/src/core/platform/macos.rs`
+- Modify: `plugins/removeapp/Cargo.toml`
 
 **Interfaces:**
 - Consumes: `guards::{parse_cask_map, cask_status_for, sanitize_stderr, CaskStatus, CaskToken}`.
@@ -872,7 +872,7 @@ git commit -m "feat(removeapp): owner-aware library enumeration with match prove
 
 - [ ] **Step 1: Add dependencies**
 
-In `plugins/plugin-removeapp/Cargo.toml`, under `[target.'cfg(target_os = "macos")'.dependencies]` add:
+In `plugins/removeapp/Cargo.toml`, under `[target.'cfg(target_os = "macos")'.dependencies]` add:
 
 ```toml
 objc2 = "0.5"
@@ -1041,7 +1041,7 @@ Expected: tests PASS, build clean.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add plugins/plugin-removeapp/Cargo.toml plugins/plugin-removeapp/src/core/platform/macos.rs
+git add plugins/removeapp/Cargo.toml plugins/removeapp/src/core/platform/macos.rs
 git commit -m "feat(removeapp): running, homebrew, and spotlight platform guards"
 ```
 
@@ -1050,8 +1050,8 @@ git commit -m "feat(removeapp): running, homebrew, and spotlight platform guards
 ## Task 7: Canonical identity and execution-boundary recheck
 
 **Files:**
-- Modify: `plugins/plugin-removeapp/src/core/mod.rs` (real `IdentitySnapshot`, recheck in `remove_with`)
-- Modify: `plugins/plugin-removeapp/src/core/platform/macos.rs` (capture snapshots in `scan`, canonical paths, protection on canonical path, refuse symlink bundle)
+- Modify: `plugins/removeapp/src/core/mod.rs` (real `IdentitySnapshot`, recheck in `remove_with`)
+- Modify: `plugins/removeapp/src/core/platform/macos.rs` (capture snapshots in `scan`, canonical paths, protection on canonical path, refuse symlink bundle)
 
 **Interfaces:**
 - Produces: `pub struct IdentitySnapshot { file_type, dev, ino, name, ancestor_symlink }` with `capture(path) -> IdentitySnapshot` and `matches(&self, path) -> bool`; `remove_with` rechecks every planned path + `is_running` before mutating.
@@ -1153,7 +1153,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/plugin-removeapp/src/core
+git add plugins/removeapp/src/core
 git commit -m "feat(removeapp): canonical identity snapshots and pre-mutation recheck"
 ```
 
@@ -1162,7 +1162,7 @@ git commit -m "feat(removeapp): canonical identity snapshots and pre-mutation re
 ## Task 8: CLI guard contract and JSON output
 
 **Files:**
-- Modify: `plugins/plugin-removeapp/src/cli/mod.rs`
+- Modify: `plugins/removeapp/src/cli/mod.rs`
 
 **Interfaces:**
 - Consumes: `core::{installed_apps, resolve_unique, plan, guards, remove}`, `guards::CaskStatus`.
@@ -1244,7 +1244,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/plugin-removeapp/src/cli/mod.rs plugins/plugin-removeapp/src/core/mod.rs
+git add plugins/removeapp/src/cli/mod.rs plugins/removeapp/src/core/mod.rs
 git commit -m "feat(removeapp): cli guard contract and json output"
 ```
 
@@ -1253,7 +1253,7 @@ git commit -m "feat(removeapp): cli guard contract and json output"
 ## Task 9: Picker guard banner and state machine
 
 **Files:**
-- Modify: `plugins/plugin-removeapp/src/ui/mod.rs`
+- Modify: `plugins/removeapp/src/ui/mod.rs`
 
 **Interfaces:**
 - Consumes: `core::{guards, remove_after_brew, quit_app, brew_uninstall}`, `guards::{Guards, CaskStatus}`.
@@ -1284,7 +1284,7 @@ Expected: builds; manual flow matches the transition table.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add plugins/plugin-removeapp/src/ui/mod.rs
+git add plugins/removeapp/src/ui/mod.rs
 git commit -m "feat(removeapp): picker guard banner and state machine"
 ```
 
@@ -1321,7 +1321,7 @@ Run: `cargo check -p plugin-removeapp --target x86_64-unknown-linux-gnu` if the 
 If this plan replaced the stale file in place, confirm there is no second stale plan lingering. Commit any fix-ups:
 
 ```bash
-git add -A plugins/plugin-removeapp
+git add -A plugins/removeapp
 git commit -m "test(removeapp): verify smarter, safer removal end to end"
 ```
 

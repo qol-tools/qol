@@ -101,7 +101,7 @@ fn sibling_crate(path: &Path) -> bool {
     if name == "qol-tray" {
         return false;
     }
-    if !name.starts_with("plugin-") && !name.starts_with("qol-") {
+    if !path.join("plugin.toml").is_file() && !name.starts_with("qol-") {
         return false;
     }
     path.join("Cargo.toml").is_file()
@@ -356,7 +356,7 @@ mod tests {
         write_workspace(&workspace);
         let plugins = workspace.join("plugins");
         write_plugin_dir(
-            &plugins.join("plugin-a"),
+            &plugins.join("a"),
             "a-pkg",
             &plugin_toml(
                 "plugin-a",
@@ -365,7 +365,7 @@ mod tests {
             ),
         );
         write_plugin_dir(
-            &plugins.join("plugin-b"),
+            &plugins.join("b"),
             "b-pkg",
             &plugin_toml(
                 "plugin-b",
@@ -380,7 +380,7 @@ mod tests {
             .into_iter()
             .map(|p| display_name(&p))
             .collect();
-        assert_eq!(names, vec!["plugin-a".to_string(), "plugin-b".to_string()]);
+        assert_eq!(names, vec!["a".to_string(), "b".to_string()]);
     }
 
     #[test]
@@ -390,7 +390,7 @@ mod tests {
         fs::create_dir_all(&workspace).unwrap();
         write_workspace(&workspace);
         write_plugin_dir(
-            &workspace.join("plugins").join("plugin-x"),
+            &workspace.join("plugins").join("x"),
             "x-pkg",
             &plugin_toml(
                 "plugin-x",
@@ -405,7 +405,7 @@ mod tests {
             .into_iter()
             .map(|p| display_name(&p))
             .collect();
-        assert_eq!(names, vec!["plugin-x".to_string()]);
+        assert_eq!(names, vec!["x".to_string()]);
     }
 
     #[test]

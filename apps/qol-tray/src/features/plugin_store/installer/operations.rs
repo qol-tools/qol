@@ -1,6 +1,8 @@
 use super::super::source::PluginSource;
 use super::dependency::install_dependencies;
-use super::source::{clone_source_repo, prepare_update_repo, resolve_latest_plugin_version};
+use super::source::{
+    clone_source_repo, find_plugin_source_dir, prepare_update_repo, resolve_latest_plugin_version,
+};
 use super::staging::{
     cleanup_temp_dir, install_staging_dir, swap_plugin_dirs, update_backup_dir, update_staging_dir,
 };
@@ -220,22 +222,8 @@ async fn extract_plugin_subdir(
     extracted_dir: &Path,
     plugin_id: &str,
 ) -> Result<()> {
-    let source_subdir = clone_dir.join("plugins").join(plugin_id);
-    if !source_subdir.is_dir() {
-        anyhow::bail!(
-            "Cloned source does not contain plugins/{}/ at {:?}",
-            plugin_id,
-            clone_dir
-        );
-    }
+    let source_subdir = find_plugin_source_dir(clone_dir, plugin_id)?;
     let manifest_path = source_subdir.join("plugin.toml");
-    if !manifest_path.is_file() {
-        anyhow::bail!(
-            "Cloned source is missing plugins/{}/plugin.toml at {:?}",
-            plugin_id,
-            clone_dir
-        );
-    }
     if extracted_dir.exists() {
         tokio::fs::remove_dir_all(extracted_dir)
             .await
@@ -245,8 +233,10 @@ async fn extract_plugin_subdir(
         .await
         .with_context(|| {
             format!(
-                "Failed to extract plugins/{}/ from {:?} to {:?}",
-                plugin_id, clone_dir, extracted_dir
+                "Failed to extract {} from {:?} to {:?}",
+                manifest_path.display(),
+                clone_dir,
+                extracted_dir
             )
         })?;
     Ok(())
@@ -306,11 +296,14 @@ mod tests {
     async fn extract_plugin_subdir_moves_plugin_dir_out_of_clone() {
         let temp = TempDir::new().unwrap();
         let clone = temp.path().join("clone");
-        let plugin_subdir = clone.join("plugins").join("plugin-alt-tab");
+        let plugin_subdir = clone.join("plugins").join("alt-tab");
         tokio::fs::create_dir_all(&plugin_subdir).await.unwrap();
-        tokio::fs::write(plugin_subdir.join("plugin.toml"), b"[plugin]\nname=\"x\"\n")
-            .await
-            .unwrap();
+        tokio::fs::write(
+            plugin_subdir.join("plugin.toml"),
+            b"[plugin]\nid=\"plugin-alt-tab\"\nname=\"x\"\ndescription=\"\"\nversion=\"1.0.0\"\n\n[menu]\nlabel=\"x\"\nitems=[]\n",
+        )
+        .await
+        .unwrap();
         tokio::fs::create_dir_all(clone.join("apps").join("qol-tray"))
             .await
             .unwrap();
@@ -322,7 +315,7 @@ mod tests {
 
         assert!(extracted.join("plugin.toml").is_file());
         assert!(
-            !clone.join("plugins").join("plugin-alt-tab").exists(),
+            !clone.join("plugins").join("alt-tab").exists(),
             "subdir must be moved, not copied"
         );
         assert!(
@@ -342,8 +335,8 @@ mod tests {
             .unwrap_err();
         let msg = format!("{}", err);
         assert!(
-            msg.contains("plugins/plugin-missing/"),
-            "error must name the missing subdir, got: {}",
+            msg.contains("plugin-missing"),
+            "error must name the missing plugin, got: {}",
             msg
         );
     }
@@ -352,13 +345,13 @@ mod tests {
     async fn extract_plugin_subdir_errors_when_manifest_missing() {
         let temp = TempDir::new().unwrap();
         let clone = temp.path().join("clone");
-        let plugin_subdir = clone.join("plugins").join("plugin-alt-tab");
+        let plugin_subdir = clone.join("plugins").join("alt-tab");
         tokio::fs::create_dir_all(&plugin_subdir).await.unwrap();
         let extracted = temp.path().join("extracted");
         let err = extract_plugin_subdir(&clone, &extracted, "plugin-alt-tab")
             .await
             .unwrap_err();
         let msg = format!("{}", err);
-        assert!(msg.contains("plugin.toml"), "error: {}", msg);
+        assert!(msg.contains("does not declare plugin"), "error: {}", msg);
     }
 }

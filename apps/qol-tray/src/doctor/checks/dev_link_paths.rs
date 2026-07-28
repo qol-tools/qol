@@ -246,6 +246,13 @@ fn resolve(
     }
 
     if let Some(root) = dev_root {
+        let repository_root = root.parent().unwrap_or(root);
+        let matches = matching_subplugins(repository_root, plugin_id, subplugins_probe);
+        match matches.as_slice() {
+            [path] => return Resolution::Relocate(path.clone()),
+            [_, _, ..] => return Resolution::Ambiguous(matches),
+            [] => {}
+        }
         let monorepo = root.join(plugin_id);
         if matches!(manifest_probe(&monorepo), ManifestStatus::WithId(ref id) if id == plugin_id) {
             return Resolution::Relocate(monorepo);
@@ -255,15 +262,23 @@ fn resolve(
     if matches!(manifest_probe(&direct), ManifestStatus::WithId(ref id) if id == plugin_id) {
         return Resolution::Relocate(direct);
     }
-    let matches: Vec<PathBuf> = subplugins_probe(path)
-        .into_iter()
-        .filter_map(|(found_id, sub_path)| (found_id == plugin_id).then_some(sub_path))
-        .collect();
+    let matches = matching_subplugins(path, plugin_id, subplugins_probe);
     match matches.len() {
         0 => Resolution::NoMatch,
         1 => Resolution::Relocate(matches.into_iter().next().expect("len checked")),
         _ => Resolution::Ambiguous(matches),
     }
+}
+
+fn matching_subplugins(
+    root: &Path,
+    plugin_id: &str,
+    subplugins_probe: &dyn Fn(&Path) -> Vec<(String, PathBuf)>,
+) -> Vec<PathBuf> {
+    subplugins_probe(root)
+        .into_iter()
+        .filter_map(|(found_id, sub_path)| (found_id == plugin_id).then_some(sub_path))
+        .collect()
 }
 
 fn registered_successor(
@@ -683,6 +698,31 @@ mod tests {
             Some(FixAction::RelocateDevLink {
                 plugin_id: "plugin-foo".into(),
                 to: PathBuf::from("/mono/plugins/plugin-foo"),
+            })
+        );
+    }
+
+    #[test]
+    fn missing_path_resolves_prefixless_monorepo_directory_by_manifest_id() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/old/plugin-foo")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/old/plugin-foo"), ManifestStatus::Missing);
+        let dev_root = PathBuf::from("/mono/plugins");
+        let subprobe = |path: &Path| {
+            if path == Path::new("/mono") {
+                vec![("plugin-foo".to_string(), PathBuf::from("/mono/plugins/foo"))]
+            } else {
+                Vec::new()
+            }
+        };
+
+        let findings = collect_findings(&registry, Some(&dev_root), &map_probe(probe), &subprobe);
+
+        assert_eq!(
+            findings[0].fix_action(),
+            Some(FixAction::RelocateDevLink {
+                plugin_id: "plugin-foo".into(),
+                to: PathBuf::from("/mono/plugins/foo"),
             })
         );
     }

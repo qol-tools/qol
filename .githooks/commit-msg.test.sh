@@ -72,7 +72,7 @@ mk_fixture() {
 test_derive_today() {
   local root; root="$(mktemp -d)"
   mk_fixture "$root" \
-    plugins/plugin-alt-tab plugins/plugin-template \
+    plugins/alt-tab plugins/template \
     libs/qol-color libs/qol-plugin-api apps/qol-tray tools/qol-cli
   local got exp
   got="$(qol_derive_scopes "$root" | tr '\n' ' ')"
@@ -84,7 +84,7 @@ test_derive_today() {
 # Proves scaling: a brand-new services/ family derives correctly with NO code change.
 test_derive_scales_to_new_family() {
   local root; root="$(mktemp -d)"
-  mk_fixture "$root" plugins/plugin-alt-tab services/service-sync services/qol-special
+  mk_fixture "$root" plugins/alt-tab services/service-sync services/qol-special
   local got exp
   got="$(qol_derive_scopes "$root" | tr '\n' ' ')"
   exp="alt-tab plugins qol-special services sync workspace "

@@ -10,7 +10,7 @@
       64 +  console.log(`saved ${label} (${frame.screen.split("\n").length} lines) expect=${expect} -> ${classify(frame)}`);     
       65  } else if (mode === "watch") {
       66    const seconds = Number(process.argv[3] || 600);
-      67    const dir = `${REPO}/plugins/plugin-cli-sessions/tests/fixtures/suspects`;
+      67    const dir = `${REPO}/plugins/cli-sessions/tests/fixtures/suspects`;
 
 ⏺ Let me check the watcher's early output before capturing more.
 
@@ -21,9 +21,9 @@
 
 ⏺ Running 1 shell command… 
   ⎿  $ cd /Users/dev/repos/private/qol-monorepo
-     node plugins/plugin-cli-sessions/tools/capture-classify.mjs snapshot 4 working_me Working
-     node plugins/plugin-cli-sessions/tools/capture-classify.mjs snapshot 1 done_session YourTurn
-     node plugins/plugin-cli-sessions/tools/capture-classify.mjs snapshot 6 c…
+     node plugins/cli-sessions/tools/capture-classify.mjs snapshot 4 working_me Working
+     node plugins/cli-sessions/tools/capture-classify.mjs snapshot 1 done_session YourTurn
+     node plugins/cli-sessions/tools/capture-classify.mjs snapshot 6 c…
 
 ✻ Fermenting… (10m 48s · ↓ 41.4k tokens)
   ⎿  Tip: Connect Claude to your IDE · /ide

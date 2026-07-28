@@ -491,7 +491,7 @@ The rendering contract is the `libs/qol-gpui` crate that such plugins depend on:
 - `window::open_window_with_focus` - create + eager OS focus steal; `ghost.rs` -
   one warm ghost per monitor reconciliation; `event_router::spawn_runtime_event_router`.
 
-Worked consumer: `plugins/plugin-cli-sessions/src/ui/run.rs` uses keepalive,
+Worked consumer: `plugins/cli-sessions/src/ui/run.rs` uses keepalive,
 accessory policy, MonitorTracker placement, ghost decorations/kind,
 `open_window_with_focus`, and `spawn_command_loop`. Platform divergence is sharp
 (macOS `Normal` windows + opacity vs Linux/X11 `PopUp` + unmap; ghosts must be
@@ -524,7 +524,7 @@ see `qol-project:qol-trace`.
 
 There is no plugin-to-tray notification/status channel. A plugin that notifies the
 user shells out directly (`osascript display notification` on macOS, `notify-send`
-on Linux), as in `plugins/plugin-cli-sessions/src/notify.rs`.
+on Linux), as in `plugins/cli-sessions/src/notify.rs`.
 
 ### 8.4 Adding a new channel
 
@@ -602,4 +602,4 @@ a global hotkey to:
    running instance. (Host-owned daemons skip this - the action arrives over the
    socket directly.)
 4. The user binds a key to the "My Plugin: Foo" shortcut in qol-tray; qol-tray owns
-   the key. Worked example: the `next` action in `plugins/plugin-cli-sessions/`.
+   the key. Worked example: the `next` action in `plugins/cli-sessions/`.

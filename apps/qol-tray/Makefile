@@ -123,12 +123,16 @@ diagram-build:
 	@cd diagram && [ -d node_modules ] || npm install
 	@cd diagram && npm run build
 
-SIBLINGS := $(shell for d in ../plugin-* ../qol-*; do \
-  [ -d "$$d" ] && [ -f "$$d/Cargo.toml" ] && [ "$$d" != "../qol-tray" ] && basename "$$d"; \
-done | sort)
+SIBLINGS := $(shell { \
+  for manifest in ../*/plugin.toml; do \
+    d=$${manifest%/plugin.toml}; \
+    [ -f "$$d/Cargo.toml" ] && basename "$$d"; \
+  done; \
+  for d in ../qol-*; do \
+    [ -d "$$d" ] && [ -f "$$d/Cargo.toml" ] && [ "$$d" != "../qol-tray" ] && basename "$$d"; \
+  done; \
+} | sort -u)
 
-# `make clean`      clean qol-tray only
-# `make clean-all`  clean qol-tray and every sibling plugin / qol-* crate
 .PHONY: clean clean-all
 
 clean:
@@ -173,4 +177,3 @@ install:
 install-dev:
 	cargo build --release --bins --features dev
 	target/release/qol-tray-install --dev
-

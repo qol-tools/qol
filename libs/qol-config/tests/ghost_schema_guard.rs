@@ -1,10 +1,10 @@
 use std::path::Path;
 
-fn plugin_config(plugin_id: &str) -> toml::Value {
+fn plugin_config(source_directory: &str) -> toml::Value {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let path = manifest_dir
         .join("../../plugins")
-        .join(plugin_id)
+        .join(source_directory)
         .join("qol-config.toml");
     let content = std::fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
@@ -35,8 +35,8 @@ fn assert_shared_keys_match(
 
 #[test]
 fn ghost_debug_fields_keep_their_shared_schema_contract() {
-    let launcher = plugin_config("plugin-launcher");
-    let alt_tab = plugin_config("plugin-alt-tab");
+    let launcher = plugin_config("launcher");
+    let alt_tab = plugin_config("alt-tab");
 
     assert_shared_keys_match(
         field(&launcher, "display_ghost_opacity"),

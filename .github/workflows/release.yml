@@ -49,23 +49,7 @@ jobs:
           fi
           plugin_id="${BASH_REMATCH[1]}"
           tag_version="${BASH_REMATCH[2]}"
-          crate_dir="plugins/${plugin_id}"
-          if [[ ! -f "$crate_dir/plugin.toml" ]]; then
-            echo "::error::no plugin.toml at $crate_dir"
-            exit 1
-          fi
-          manifest_id="$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["plugin"]["id"])' "$crate_dir/plugin.toml")"
-          if [[ "$manifest_id" != "${plugin_id}" ]]; then
-            echo "::error::tag $tag expects manifest id ${plugin_id}, got $manifest_id"
-            exit 1
-          fi
-          cargo_version="$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["version"])' "$crate_dir/Cargo.toml")"
-          plugin_version="$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["plugin"]["version"])' "$crate_dir/plugin.toml")"
-          if [[ "$cargo_version" != "$tag_version" || "$plugin_version" != "$tag_version" ]]; then
-            echo "::error::tag $tag expects version $tag_version, got cargo=$cargo_version plugin=$plugin_version"
-            exit 1
-          fi
-          python3 .github/scripts/plugin_matrix.py "$crate_dir" "$plugin_id" >> "$GITHUB_OUTPUT"
+          python3 .github/scripts/plugin_matrix.py . "$plugin_id" "$tag_version" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.target }}

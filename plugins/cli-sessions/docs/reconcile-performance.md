@@ -3,7 +3,7 @@
 Date: 2026-07-03
 Worktree: `/Users/kaho/repos/private/worktrees/qol-monorepo/cli-sessions-reconcile-perf`
 Branch: `cli-sessions-reconcile-perf`
-Target: `plugins/plugin-cli-sessions`
+Target: `plugins/cli-sessions`
 
 Rule: every new performance test needs before and after numbers before it can justify an implementation change.
 

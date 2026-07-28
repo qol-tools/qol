@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-21
 **Status:** Design, revised after two code-review board rounds (block -> addressed); pending a fresh implementation plan
-**Plugin:** `plugins/plugin-removeapp`
+**Plugin:** `plugins/removeapp`
 
 ## Goal
 

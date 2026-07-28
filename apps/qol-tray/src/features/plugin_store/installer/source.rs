@@ -4,7 +4,7 @@ use super::command::{run_git, run_git_checked};
 use super::InstallSource;
 use anyhow::Result;
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub(super) async fn resolve_latest_plugin_version(
@@ -37,6 +37,50 @@ pub(super) async fn resolve_latest_plugin_version(
 #[derive(Deserialize)]
 struct ReleaseListEntry {
     tag_name: String,
+}
+
+pub(super) fn find_plugin_source_dir(repo_root: &Path, plugin_id: &str) -> Result<PathBuf> {
+    let plugins_dir = repo_root.join("plugins");
+    let entries = std::fs::read_dir(&plugins_dir).map_err(|error| {
+        anyhow::anyhow!(
+            "Cloned source does not declare plugin '{}' under {}: {error}",
+            plugin_id,
+            plugins_dir.display()
+        )
+    })?;
+    let mut matches = Vec::new();
+    for entry in entries {
+        let path = entry?.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let manifest_path = path.join("plugin.toml");
+        if !manifest_path.is_file() {
+            continue;
+        }
+        let Ok(manifest) =
+            crate::plugins::manifest::PluginManifest::load_and_validate(&manifest_path)
+        else {
+            continue;
+        };
+        let Ok(declared_id) = manifest.plugin.require_declared_id() else {
+            continue;
+        };
+        if declared_id.as_str() == plugin_id {
+            matches.push(path);
+        }
+    }
+    match matches.as_slice() {
+        [] => anyhow::bail!(
+            "Cloned source does not declare plugin '{}' under plugins/",
+            plugin_id
+        ),
+        [path] => Ok(path.clone()),
+        _ => anyhow::bail!(
+            "Cloned source declares plugin '{}' in multiple directories",
+            plugin_id
+        ),
+    }
 }
 
 pub(super) async fn clone_source_repo(
@@ -210,6 +254,40 @@ mod tests {
 
     fn core_source() -> PluginSource {
         PluginSource::new("core", "qol-tools/qol", "main")
+    }
+
+    fn write_plugin(repo_root: &Path, directory: &str, plugin_id: &str) {
+        let plugin_dir = repo_root.join("plugins").join(directory);
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            format!(
+                "[plugin]\nid = \"{plugin_id}\"\nname = \"Fixture\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"Fixture\"\nitems = []\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn source_directory_is_resolved_from_declared_identity() {
+        let repo = tempfile::tempdir().unwrap();
+        write_plugin(repo.path(), "alt-tab", "plugin-alt-tab");
+        write_plugin(repo.path(), "launcher", "plugin-launcher");
+
+        let found = find_plugin_source_dir(repo.path(), "plugin-alt-tab").unwrap();
+
+        assert_eq!(found, repo.path().join("plugins/alt-tab"));
+    }
+
+    #[test]
+    fn duplicate_declared_identity_is_rejected() {
+        let repo = tempfile::tempdir().unwrap();
+        write_plugin(repo.path(), "first", "plugin-duplicate");
+        write_plugin(repo.path(), "second", "plugin-duplicate");
+
+        let error = find_plugin_source_dir(repo.path(), "plugin-duplicate").unwrap_err();
+
+        assert!(error.to_string().contains("multiple directories"));
     }
 
     #[test]

@@ -531,6 +531,7 @@ def selection_matches(plugin_id: str, selected: str) -> bool:
 def discover_plugins(root: Path, packages: dict[str, Package], selected: str | None) -> list[ReleaseUnit]:
     selected = selected.strip() if selected else None
     plugins: list[ReleaseUnit] = []
+    seen_ids: set[str] = set()
     for directory in sorted((root / "plugins").iterdir()):
         cargo_manifest = directory / "Cargo.toml"
         plugin_manifest = directory / "plugin.toml"
@@ -539,11 +540,9 @@ def discover_plugins(root: Path, packages: dict[str, Package], selected: str | N
         plugin_id = str(toml_at(plugin_manifest)["plugin"]["id"])
         if not PLUGIN_ID_RE.match(plugin_id):
             raise RuntimeError(f"Invalid plugin id in {plugin_manifest}: {plugin_id!r}")
-        if directory.name != plugin_id:
-            raise RuntimeError(
-                f"Plugin dir/id mismatch: directory {directory.name!r} declares id {plugin_id!r}; "
-                f"a plugin.toml id must equal its directory name"
-            )
+        if plugin_id in seen_ids:
+            raise RuntimeError(f"Duplicate plugin id {plugin_id!r} declared under plugins/")
+        seen_ids.add(plugin_id)
         if selected is None and plugin_id in AUTO_EXCLUDED_PLUGIN_IDS:
             continue
         if selected is not None and not selection_matches(plugin_id, selected):

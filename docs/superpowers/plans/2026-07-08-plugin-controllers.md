@@ -23,7 +23,7 @@
 ### Task 1: Scaffold crate from plugin-template
 
 **Files:**
-- Create: `plugins/plugin-controllers/` (Cargo.toml, plugin.toml, build.rs, Makefile, .gitignore, src/main.rs, src/lib.rs, src/platform/mod.rs)
+- Create: `plugins/controllers/` (Cargo.toml, plugin.toml, build.rs, Makefile, .gitignore, src/main.rs, src/lib.rs, src/platform/mod.rs)
 
 **Interfaces:**
 - Produces: crate `plugin-controllers` with `PLUGIN_ID` via `env!("QOL_PLUGIN_ID")`, `platform::open_settings()`.
@@ -31,8 +31,8 @@
 - [ ] **Step 1: Copy template and prune**
 
 ```bash
-cp -r plugins/plugin-template plugins/plugin-controllers
-rm -rf plugins/plugin-controllers/.github plugins/plugin-controllers/LICENSE
+cp -r plugins/template plugins/controllers
+rm -rf plugins/controllers/.github plugins/controllers/LICENSE
 ```
 
 - [ ] **Step 2: Rewrite Cargo.toml**
@@ -144,7 +144,7 @@ Run: `cargo build -p plugin-controllers && cargo test -p plugin-controllers`
 Expected: build OK, `validate_plugin_contract` PASS.
 
 ```bash
-git add plugins/plugin-controllers
+git add plugins/controllers
 git commit -m "feat(plugin-controllers): scaffold plugin from template"
 ```
 
@@ -153,7 +153,7 @@ git commit -m "feat(plugin-controllers): scaffold plugin from template"
 ### Task 2: Fix database and matching (`src/fixes.rs`)
 
 **Files:**
-- Create: `plugins/plugin-controllers/src/fixes.rs`
+- Create: `plugins/controllers/src/fixes.rs`
 - Modify: `src/lib.rs` (add `pub mod fixes;`)
 
 **Interfaces:**
@@ -325,7 +325,7 @@ Add `#[derive(Clone)]` on `DetectedDevice` (tests clone it).
 ### Task 3: /proc/bus/input/devices parser (`src/detect.rs`)
 
 **Files:**
-- Create: `plugins/plugin-controllers/src/detect.rs`
+- Create: `plugins/controllers/src/detect.rs`
 - Modify: `src/lib.rs` (add `pub mod detect;`)
 
 **Interfaces:**
@@ -444,7 +444,7 @@ Note: `parse_ids` returns `None` on unparseable hex via the `?` on `split_once` 
 ### Task 4: Fix-state computation (`src/state.rs`)
 
 **Files:**
-- Create: `plugins/plugin-controllers/src/state.rs`
+- Create: `plugins/controllers/src/state.rs`
 - Modify: `src/lib.rs` (add `pub mod state;`)
 
 **Interfaces:**
@@ -630,7 +630,7 @@ fn live(paths: &SystemPaths, driver: &str, quirk: &str) -> bool {
 ### Task 5: Apply action (`src/apply.rs`)
 
 **Files:**
-- Create: `plugins/plugin-controllers/src/apply.rs`
+- Create: `plugins/controllers/src/apply.rs`
 - Modify: `src/lib.rs` (add `pub mod apply;`)
 
 **Interfaces:**
@@ -765,7 +765,7 @@ done"#;
 ### Task 6: Daemon (`src/daemon.rs` + `src/platform` driver check)
 
 **Files:**
-- Create: `plugins/plugin-controllers/src/daemon.rs`
+- Create: `plugins/controllers/src/daemon.rs`
 - Modify: `src/lib.rs` (add `pub mod daemon;`), `src/platform/mod.rs` (add `driver_installed`)
 
 **Interfaces:**
@@ -981,7 +981,7 @@ Check `run_stateful_listener`'s exact handler signature (`FnMut(&mut S, &str) ->
 ### Task 7: CLI, doctor, main dispatch, final verification
 
 **Files:**
-- Create: `plugins/plugin-controllers/src/cli.rs`
+- Create: `plugins/controllers/src/cli.rs`
 - Modify: `src/lib.rs` (add `pub mod cli;`), `src/main.rs` (real dispatch)
 
 **Interfaces:**

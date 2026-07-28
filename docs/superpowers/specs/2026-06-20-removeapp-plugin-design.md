@@ -60,7 +60,7 @@ change** - it is entirely expressible plugin-side:
 
 ## Architecture
 
-New plugin crate `plugins/plugin-removeapp` (package `plugin-removeapp`, binary
+New plugin crate `plugins/removeapp` (package `plugin-removeapp`, binary
 `removeapp`, lib `plugin_removeapp`), same layout as `plugin-cli-sessions`. One
 crate, three layers; the core never knows about gpui, and the UI and CLI never
 re-implement removal logic.

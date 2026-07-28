@@ -1,21 +1,9 @@
 #!/usr/bin/env node
-// Single-source-of-truth guard for cross-process constants.
-//
-// The dev-server port, the platform state-socket path, and the env-var names the
-// host injects into plugins live in ONE place: libs/qol-conventions. Per-plugin
-// daemon ports live in ONE place: each plugin's plugin.toml [daemon] port. A
-// plugin's daemon socket likewise lives in ONE place: plugin.toml [daemon].socket,
-// which the host injects via QOL_TRAY_DAEMON_SOCKET - so such a plugin must not
-// also hardcode a fallback socket name in Rust. This guard blocks the raw literals
-// from reappearing in code, so a value a plugin/CLI/tray/UI process uses can never
-// drift from its single source. Root .github/workflows owns monorepo automation;
-// plugin-template alone embeds nested workflows as distributable scaffold assets.
-// Run by the pre-commit hook and by the CI "Single source guard" step.
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const TEMPLATE_WORKFLOW_PREFIX = 'plugins/plugin-template/.github/workflows/';
+const TEMPLATE_WORKFLOW_PREFIX = 'plugins/template/.github/workflows/';
 
 function repoRoot() {
     try {
@@ -99,6 +87,16 @@ function nestedWorkflowHits(cwd) {
         .join('\n');
 }
 
+function prefixedPluginDirectoryHits(cwd) {
+    const pluginsDir = resolve(cwd, 'plugins');
+    if (!existsSync(pluginsDir)) return '';
+    return readdirSync(pluginsDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && entry.name.startsWith('plugin-'))
+        .filter((entry) => existsSync(resolve(pluginsDir, entry.name, 'plugin.toml')))
+        .map((entry) => `plugins/${entry.name}/plugin.toml:1`)
+        .join('\n');
+}
+
 const root = repoRoot();
 if (!root) process.exit(0);
 
@@ -132,8 +130,16 @@ const socketHits = manifestSocketFallbackHits(root);
 const contractDefaultHits = contractDefaultDriftHits(root);
 const launcherHits = launcherIdentityHits(root);
 const nestedWorkflows = nestedWorkflowHits(root);
+const prefixedPluginDirectories = prefixedPluginDirectoryHits(root);
 
-if (constantHits || socketHits || contractDefaultHits || launcherHits || nestedWorkflows) {
+if (
+    constantHits ||
+    socketHits ||
+    contractDefaultHits ||
+    launcherHits ||
+    nestedWorkflows ||
+    prefixedPluginDirectories
+) {
     const out = process.stderr;
     out.write('\n  single-source guard rejected\n');
     if (constantHits) {
@@ -174,7 +180,13 @@ if (constantHits || socketHits || contractDefaultHits || launcherHits || nestedW
         out.write('\n  nested GitHub workflows are inert inside the monorepo and duplicate automation\n');
         out.write('  offending occurrences:\n');
         for (const line of nestedWorkflows.split('\n')) out.write(`    ${line}\n`);
-        out.write('\n  fix: keep executable workflows at root (or in qol-cicd); only plugin-template may embed scaffold workflows.\n');
+        out.write('\n  fix: keep executable workflows at root; only the plugin template may embed scaffold workflows.\n');
+    }
+    if (prefixedPluginDirectories) {
+        out.write('\n  plugin source directories must not repeat the plugin- namespace\n');
+        out.write('  offending occurrences:\n');
+        for (const line of prefixedPluginDirectories.split('\n')) out.write(`    ${line}\n`);
+        out.write('\n  fix: name source directories by capability; plugin.toml owns stable identity.\n');
     }
     out.write('\n');
     process.exit(1);

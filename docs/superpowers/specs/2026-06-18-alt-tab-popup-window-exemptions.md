@@ -38,7 +38,7 @@ For an **on-screen** window, the only gate the panel fails is the first
 predicate in `parse_cg_entry`:
 
 ```rust
-// plugins/plugin-alt-tab/src/discovery/macos/mod.rs:149
+// plugins/alt-tab/src/discovery/macos/mod.rs:149
 let layer = ffi::dict_get_i32(dict, keys.layer)?;
 if layer != K_CG_WINDOW_LAYER_NORMAL {   // 0; returns None with NO probe/log
     return None;
@@ -422,19 +422,19 @@ keepalive, and one tiny layer-0 keepalive.
 
 ## Files referenced
 
-- `plugins/plugin-alt-tab/src/discovery/macos/mod.rs` - `parse_cg_entry`,
+- `plugins/alt-tab/src/discovery/macos/mod.rs` - `parse_cg_entry`,
   `fetch_cg_windows`, `discover_live_windows`
-- `plugins/plugin-alt-tab/src/discovery/macos/window_enum.rs` -
+- `plugins/alt-tab/src/discovery/macos/window_enum.rs` -
   `collect_on_screen_windows`, `filter_visible`, `MIN_WINDOW_DIM`
-- `plugins/plugin-alt-tab/src/discovery/macos/process.rs` -
+- `plugins/alt-tab/src/discovery/macos/process.rs` -
   `is_switchable_app`, `policy_is_switchable`
-- `plugins/plugin-alt-tab/src/discovery/macos/ffi.rs` - CF/CG dictionary readers
-- `plugins/plugin-alt-tab/src/discovery/linux.rs` - `_NET_WM_WINDOW_TYPE_NORMAL`
+- `plugins/alt-tab/src/discovery/macos/ffi.rs` - CF/CG dictionary readers
+- `plugins/alt-tab/src/discovery/linux.rs` - `_NET_WM_WINDOW_TYPE_NORMAL`
   filtering and `WM_CLASS`/title collection
-- `plugins/plugin-alt-tab/src/actions/platform/macos.rs` - activation,
+- `plugins/alt-tab/src/actions/platform/macos.rs` - activation,
   reassert loop, `target_effectively_front`
-- `plugins/plugin-alt-tab/src/config.rs` - serde config loaded per show
-- `plugins/plugin-alt-tab/src/picker/run.rs` - `dispatch_show` config reload and
+- `plugins/alt-tab/src/config.rs` - serde config loaded per show
+- `plugins/alt-tab/src/picker/run.rs` - `dispatch_show` config reload and
   live discovery call
 - `libs/qol-gpui/src/popup_window/platform/macos.rs:188` -
   `configure_popup_window` (sets `NSPopUpMenuWindowLevel`)

@@ -1,28 +1,15 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Build every sibling plugin / qol-* crate that exposes a plugin.toml so the
-# tray finds a fresh target binary on launch. Mirrors the sibling glob used by
-# `make clean-all` so a wipe + dev cycle leaves no missing-binary holes.
-#
-# Behaviour:
-# - Crate without plugin.toml (lib crate, support tool): skip, it builds
-#   transitively when plugins need it.
-# - plugin.toml without runtime.command and without daemon.command: skip,
-#   nothing executable to provide.
-# - target/debug/<command> already present: skip, cargo would no-op anyway.
-# - cargo build failure: report once at the end, exit 0 so the user can still
-#   reach the GUI Recompile pane.
-
 script_dir=$(cd "$(dirname "$0")" && pwd)
 workspace_root=$(cd "$script_dir/../.." && pwd)
 
 shopt -s nullglob
 siblings=()
-for d in "$workspace_root"/plugin-* "$workspace_root"/qol-*; do
+for d in "$workspace_root"/*; do
     [ -d "$d" ] || continue
     [ -f "$d/Cargo.toml" ] || continue
-    [ "$(basename "$d")" != "qol-tray" ] || continue
+    [ -f "$d/plugin.toml" ] || continue
     siblings+=("$d")
 done
 shopt -u nullglob
@@ -33,8 +20,6 @@ if [ "${#siblings[@]}" -eq 0 ]; then
 fi
 
 extract_command() {
-    # Read the value of `command = "..."` from a named TOML section.
-    # Stops at the next `[section]` header so we do not bleed across tables.
     local file=$1 section=$2
     awk -v want="[$section]" '
         $0 == want { in_sec=1; next }
@@ -49,8 +34,6 @@ extract_command() {
 }
 
 extract_platforms() {
-    # Read the `platforms = [...]` array from the [plugin] section as
-    # space-separated tokens. Empty output means "no constraint, all platforms".
     local file=$1
     awk '
         $0 == "[plugin]" { in_sec=1; next }

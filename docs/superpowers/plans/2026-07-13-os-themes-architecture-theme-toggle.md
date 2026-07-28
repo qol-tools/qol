@@ -25,10 +25,10 @@
 ### Task 1: Display-server seam for cursor code
 
 **Files:**
-- Create: `plugins/plugin-os-themes/src/cursor/platform/linux/display/mod.rs`
-- Move: `plugins/plugin-os-themes/src/cursor/platform/linux/x11.rs` -> `plugins/plugin-os-themes/src/cursor/platform/linux/display/x11.rs` (content untouched)
-- Modify: `plugins/plugin-os-themes/src/cursor/platform/linux/mod.rs:1-4` (module list)
-- Modify: `plugins/plugin-os-themes/src/cursor/platform/linux/runtime.rs:88-93` (`open_session`)
+- Create: `plugins/os-themes/src/cursor/platform/linux/display/mod.rs`
+- Move: `plugins/os-themes/src/cursor/platform/linux/x11.rs` -> `plugins/os-themes/src/cursor/platform/linux/display/x11.rs` (content untouched)
+- Modify: `plugins/os-themes/src/cursor/platform/linux/mod.rs:1-4` (module list)
+- Modify: `plugins/os-themes/src/cursor/platform/linux/runtime.rs:88-93` (`open_session`)
 
 **Interfaces:**
 - Consumes: existing `super::x11::CursorSession::open(scale_factor)`.
@@ -113,7 +113,7 @@ pub(super) fn ensure_cursor_support() -> Result<()> {
 - [ ] **Step 4: Move x11.rs and rewire**
 
 ```bash
-git mv plugins/plugin-os-themes/src/cursor/platform/linux/x11.rs plugins/plugin-os-themes/src/cursor/platform/linux/display/x11.rs
+git mv plugins/os-themes/src/cursor/platform/linux/x11.rs plugins/os-themes/src/cursor/platform/linux/display/x11.rs
 ```
 
 In `linux/mod.rs` delete the `mod x11;` line (keep `mod display;` from Step 1).
@@ -140,7 +140,7 @@ Expected: PASS, including `session_type_detection_table` and the existing 8 moti
 - [ ] **Step 6: Commit**
 
 ```bash
-git add -A plugins/plugin-os-themes && git commit -m "refactor(os-themes): seam cursor code behind a display-server layer"
+git add -A plugins/os-themes && git commit -m "refactor(os-themes): seam cursor code behind a display-server layer"
 ```
 
 ---
@@ -148,7 +148,7 @@ git add -A plugins/plugin-os-themes && git commit -m "refactor(os-themes): seam 
 ### Task 2: Split display/x11.rs into concern modules (move-only)
 
 **Files:**
-- Move: `display/x11.rs` -> `display/x11/mod.rs` plus create `display/x11/{session.rs,sampling.rs,source.rs,animation.rs}` (all paths under `plugins/plugin-os-themes/src/cursor/platform/linux/`)
+- Move: `display/x11.rs` -> `display/x11/mod.rs` plus create `display/x11/{session.rs,sampling.rs,source.rs,animation.rs}` (all paths under `plugins/os-themes/src/cursor/platform/linux/`)
 - Modify: Xephyr rig `#[path]` include at `/tmp/claude-1000/-media-kmrh47-WD-SN850X-Git-qol-monorepo/5d184a27-0bdb-41af-8aab-1c1151b95e8c/scratchpad/os-themes-verify/src/main.rs`
 
 **Interfaces:**
@@ -192,7 +192,7 @@ Expected: identical results to pre-split (all detector sims correct; static shap
 - [ ] **Step 5: Commit**
 
 ```bash
-git add -A plugins/plugin-os-themes && git commit -m "refactor(os-themes): split x11 cursor module by concern"
+git add -A plugins/os-themes && git commit -m "refactor(os-themes): split x11 cursor module by concern"
 ```
 
 ---
@@ -200,18 +200,18 @@ git add -A plugins/plugin-os-themes && git commit -m "refactor(os-themes): split
 ### Task 3: Theme toggle (API, naming, Cinnamon backend, action wiring)
 
 **Files:**
-- Modify: `plugins/plugin-os-themes/src/theme/mod.rs` (currently `pub mod platform;` only)
-- Modify: `plugins/plugin-os-themes/src/theme/platform/mod.rs` (new trait, drop allows)
-- Delete: `plugins/plugin-os-themes/src/theme/platform/linux.rs`
-- Create: `plugins/plugin-os-themes/src/theme/platform/linux/mod.rs`
-- Create: `plugins/plugin-os-themes/src/theme/platform/linux/gsettings.rs`
-- Create: `plugins/plugin-os-themes/src/theme/platform/linux/backends/{mod.rs,naming.rs,cinnamon.rs,kde.rs}`
-- Modify: `plugins/plugin-os-themes/src/theme/platform/{macos.rs,windows.rs}` (new trait stubs)
-- Modify: `plugins/plugin-os-themes/src/config.rs` (two fields + contract test)
-- Modify: `plugins/plugin-os-themes/qol-config.toml` (theme section)
-- Modify: `plugins/plugin-os-themes/plugin.toml` (toggle-theme action)
-- Modify: `plugins/plugin-os-themes/src/app/mod.rs` (CLI dispatch)
-- Modify: `plugins/plugin-os-themes/src/daemon.rs` + `src/app/daemon_run.rs` (socket dispatch)
+- Modify: `plugins/os-themes/src/theme/mod.rs` (currently `pub mod platform;` only)
+- Modify: `plugins/os-themes/src/theme/platform/mod.rs` (new trait, drop allows)
+- Delete: `plugins/os-themes/src/theme/platform/linux.rs`
+- Create: `plugins/os-themes/src/theme/platform/linux/mod.rs`
+- Create: `plugins/os-themes/src/theme/platform/linux/gsettings.rs`
+- Create: `plugins/os-themes/src/theme/platform/linux/backends/{mod.rs,naming.rs,cinnamon.rs,kde.rs}`
+- Modify: `plugins/os-themes/src/theme/platform/{macos.rs,windows.rs}` (new trait stubs)
+- Modify: `plugins/os-themes/src/config.rs` (two fields + contract test)
+- Modify: `plugins/os-themes/qol-config.toml` (theme section)
+- Modify: `plugins/os-themes/plugin.toml` (toggle-theme action)
+- Modify: `plugins/os-themes/src/app/mod.rs` (CLI dispatch)
+- Modify: `plugins/os-themes/src/daemon.rs` + `src/app/daemon_run.rs` (socket dispatch)
 
 **Interfaces:**
 - Consumes: `crate::config::Config`, `qol_config` contract loading.
@@ -787,7 +787,7 @@ Expected: PASS. New tests: 5 naming + 1 detection + updated contract test.
 - [ ] **Step 10: Commit**
 
 ```bash
-git add -A plugins/plugin-os-themes && git commit -m "feat(os-themes): toggle light/dark theme on cinnamon"
+git add -A plugins/os-themes && git commit -m "feat(os-themes): toggle light/dark theme on cinnamon"
 ```
 
 ---
@@ -825,7 +825,7 @@ Report observed transitions to the user before proceeding to Task 5. If any step
 ### Task 5: GNOME backend (best-effort, not locally verifiable)
 
 **Files:**
-- Create: `plugins/plugin-os-themes/src/theme/platform/linux/backends/gnome.rs`
+- Create: `plugins/os-themes/src/theme/platform/linux/backends/gnome.rs`
 - Modify: `backends/mod.rs` (declare + re-export), `linux/mod.rs` (detection arm + test case)
 
 **Interfaces:**
@@ -911,5 +911,5 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add -A plugins/plugin-os-themes && git commit -m "feat(os-themes): add gnome theme toggle backend"
+git add -A plugins/os-themes && git commit -m "feat(os-themes): add gnome theme toggle backend"
 ```

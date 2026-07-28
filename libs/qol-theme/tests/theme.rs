@@ -626,15 +626,15 @@ fn generated_artifacts_are_current() {
             css::tray_css(),
         ),
         (
-            "plugins/plugin-lights/ui/generated-theme-tokens.css",
+            "plugins/lights/ui/generated-theme-tokens.css",
             css::plugin_lights_css(),
         ),
         (
-            "plugins/plugin-keyremap/ui/generated-theme-tokens.css",
+            "plugins/keyremap/ui/generated-theme-tokens.css",
             css::plugin_keyremap_css(),
         ),
         (
-            "plugins/plugin-alt-tab/shell/cinnamon/qol-alt-tab-preview-plane@qol-tools/generated-theme-tokens.js",
+            "plugins/alt-tab/shell/cinnamon/qol-alt-tab-preview-plane@qol-tools/generated-theme-tokens.js",
             css::alt_tab_cinnamon_js(),
         ),
         (
@@ -681,13 +681,13 @@ fn migrated_web_plugin_css_imports_generated_base() {
     let migrated_plugins = [
         (
             "plugin-lights",
-            "plugins/plugin-lights/ui/style.css",
+            "plugins/lights/ui/style.css",
             Some("rgb(var(--qol-system-success-rgb))"),
             "var(--qol-lights-accent-btn-shadow)",
         ),
         (
             "plugin-keyremap",
-            "plugins/plugin-keyremap/ui/style.css",
+            "plugins/keyremap/ui/style.css",
             None,
             "var(--qol-keyremap-card-bg)",
         ),
@@ -718,8 +718,8 @@ fn migrated_web_plugin_css_imports_generated_base() {
 fn web_plugin_indexes_bootstrap_theme_accent() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let files = [
-        ("plugin-lights", "plugins/plugin-lights/ui/index.html"),
-        ("plugin-keyremap", "plugins/plugin-keyremap/ui/index.html"),
+        ("plugin-lights", "plugins/lights/ui/index.html"),
+        ("plugin-keyremap", "plugins/keyremap/ui/index.html"),
     ];
 
     for (plugin, file) in files {
@@ -740,9 +740,8 @@ fn web_plugin_indexes_bootstrap_theme_accent() {
 #[test]
 fn cinnamon_extension_requires_generated_tokens() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let extension_path = workspace.join(
-        "plugins/plugin-alt-tab/shell/cinnamon/qol-alt-tab-preview-plane@qol-tools/extension.js",
-    );
+    let extension_path = workspace
+        .join("plugins/alt-tab/shell/cinnamon/qol-alt-tab-preview-plane@qol-tools/extension.js");
     let extension = fs::read_to_string(&extension_path)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", extension_path.display()));
     assert!(
@@ -756,10 +755,10 @@ fn migrated_css_and_js_have_no_raw_color_literals() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut violations = Vec::new();
     let files = [
-        "plugins/plugin-lights/ui/style.css",
-        "plugins/plugin-lights/ui/components/hue-wheel.js",
-        "plugins/plugin-keyremap/ui/style.css",
-        "plugins/plugin-alt-tab/shell/cinnamon/qol-alt-tab-preview-plane@qol-tools/extension.js",
+        "plugins/lights/ui/style.css",
+        "plugins/lights/ui/components/hue-wheel.js",
+        "plugins/keyremap/ui/style.css",
+        "plugins/alt-tab/shell/cinnamon/qol-alt-tab-preview-plane@qol-tools/extension.js",
     ];
 
     for file in files {
@@ -986,10 +985,10 @@ fn generated_css_tokens_are_namespaced() {
 fn themed_gpui_surfaces_do_not_use_inline_color_literals() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let files = [
-        "plugins/plugin-cli-sessions/src/ui/render.rs",
-        "plugins/plugin-launcher/src/ui/view.rs",
-        "plugins/plugin-alt-tab/src/app/render.rs",
-        "plugins/plugin-removeapp/src/ui/mod.rs",
+        "plugins/cli-sessions/src/ui/render.rs",
+        "plugins/launcher/src/ui/view.rs",
+        "plugins/alt-tab/src/app/render.rs",
+        "plugins/removeapp/src/ui/mod.rs",
         "plugins/qol-shot/src/ui/region_selector/mod.rs",
         "plugins/qol-shot/src/ui/preview.rs",
     ];

@@ -473,7 +473,7 @@ path = \"src/main.rs\"
     fn resolve_missing_tray_root_finds_monorepo_app_member() {
         let tmp = TempDir::new().unwrap();
         write_manifest(
-            &tmp.path().join("plugins").join("plugin-alt-tab"),
+            &tmp.path().join("plugins").join("alt-tab"),
             &plugin_manifest("alt-tab"),
         );
         write_manifest(
@@ -482,7 +482,7 @@ path = \"src/main.rs\"
         );
 
         let resolved = resolve_tray_root(
-            Some(&tmp.path().join("plugins").join("plugin-alt-tab")),
+            Some(&tmp.path().join("plugins").join("alt-tab")),
             Path::new("/fallback"),
         );
         assert_eq!(resolved, tmp.path().join("apps").join("qol-tray"));

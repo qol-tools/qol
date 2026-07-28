@@ -49,12 +49,12 @@ class DiscoverPluginsTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_discovers_prefixless_plugin_by_manifest_presence(self):
+    def test_discovers_plugins_by_manifest_identity(self):
         write_plugin(self.root / "plugins", "qol-shot", "qol-shot", "1.7.1", "qol-shot")
-        write_plugin(self.root / "plugins", "plugin-alt-tab", "plugin-alt-tab", "0.1.0", "alt-tab")
+        write_plugin(self.root / "plugins", "alt-tab", "plugin-alt-tab", "0.1.0", "alt-tab")
         plugins = pv.discover_plugins(self.root, package_map("qol-shot", "alt-tab"), None)
         ids = sorted(p.id for p in plugins)
-        self.assertEqual(ids, ["plugin-alt-tab", "qol-shot"], "prefix-less dir must be discovered")
+        self.assertEqual(ids, ["plugin-alt-tab", "qol-shot"])
 
     def test_ignores_dirs_without_plugin_toml(self):
         write_plugin(self.root / "plugins", "qol-shot", "qol-shot", "1.7.1", "qol-shot")
@@ -64,15 +64,22 @@ class DiscoverPluginsTests(unittest.TestCase):
         self.assertEqual([p.id for p in plugins], ["qol-shot"])
 
     def test_excludes_template(self):
-        write_plugin(self.root / "plugins", "plugin-template", "plugin-template", "0.1.0", "tmpl")
+        write_plugin(self.root / "plugins", "template", "plugin-template", "0.1.0", "tmpl")
         write_plugin(self.root / "plugins", "qol-shot", "qol-shot", "1.7.1", "qol-shot")
         plugins = pv.discover_plugins(self.root, package_map("tmpl", "qol-shot"), None)
         self.assertEqual([p.id for p in plugins], ["qol-shot"])
 
-    def test_rejects_dir_id_mismatch(self):
+    def test_directory_name_is_independent_from_plugin_id(self):
         write_plugin(self.root / "plugins", "shot", "qol-shot", "1.7.1", "qol-shot")
+        plugins = pv.discover_plugins(self.root, package_map("qol-shot"), None)
+        self.assertEqual(plugins[0].id, "qol-shot")
+        self.assertEqual(plugins[0].directory.name, "shot")
+
+    def test_rejects_duplicate_declared_ids(self):
+        write_plugin(self.root / "plugins", "first", "qol-shot", "1.7.1", "first")
+        write_plugin(self.root / "plugins", "second", "qol-shot", "1.7.1", "second")
         with self.assertRaises(RuntimeError):
-            pv.discover_plugins(self.root, package_map("qol-shot"), None)
+            pv.discover_plugins(self.root, package_map("first", "second"), None)
 
 
 class InitialReleasePlanTests(unittest.TestCase):

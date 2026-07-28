@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build `plugins/plugin-removeapp` - a qol-tray `window`-kind plugin that uninstalls an app and its leftovers, with a headless core, a CLI, and a gpui picker. macOS is iteration 1.
+**Goal:** Build `plugins/removeapp` - a qol-tray `window`-kind plugin that uninstalls an app and its leftovers, with a headless core, a CLI, and a gpui picker. macOS is iteration 1.
 
 **Architecture:** One crate, three layers. A pure `core` engine delegates all OS-specific work to an `AppPlatform` strategy (`platform/{macos,linux,windows}`). A headless CLI (`scan`/`remove`) and a gpui picker (`open`) are two thin front-ends over the same core. The window lifecycle (lazy launch, singleton, die-with-host) mirrors `plugin-cli-sessions` exactly and needs no qol-tray change.
 
@@ -23,7 +23,7 @@
 ## File Structure
 
 ```
-plugins/plugin-removeapp/
+plugins/removeapp/
   Cargo.toml
   plugin.toml
   Makefile
@@ -55,12 +55,12 @@ plugins/plugin-removeapp/
 ### Task 1: Scaffold the crate
 
 **Files:**
-- Create: `plugins/plugin-removeapp/Cargo.toml`
-- Create: `plugins/plugin-removeapp/plugin.toml`
-- Create: `plugins/plugin-removeapp/Makefile`
-- Create: `plugins/plugin-removeapp/.gitignore`
-- Create: `plugins/plugin-removeapp/README.md`, `LICENSE`
-- Create: `plugins/plugin-removeapp/src/main.rs`, `src/lib.rs`
+- Create: `plugins/removeapp/Cargo.toml`
+- Create: `plugins/removeapp/plugin.toml`
+- Create: `plugins/removeapp/Makefile`
+- Create: `plugins/removeapp/.gitignore`
+- Create: `plugins/removeapp/README.md`, `LICENSE`
+- Create: `plugins/removeapp/src/main.rs`, `src/lib.rs`
 - Create: `src/core/mod.rs`, `src/core/platform/{mod,macos,linux,windows}.rs` (skeletons)
 - Modify: workspace root `Cargo.toml` (add member if the workspace lists members explicitly - check first)
 
@@ -183,13 +183,13 @@ mod tests {
 
 - [ ] **Step 6: Build + test**
 
-Run: `cd plugins/plugin-removeapp && cargo build && cargo test`
+Run: `cd plugins/removeapp && cargo build && cargo test`
 Expected: builds; `validate_plugin_contract` PASSES.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add plugins/plugin-removeapp
+git add plugins/removeapp
 git commit -m "feat(removeapp): scaffold window-kind plugin crate"
 ```
 
@@ -427,7 +427,7 @@ fn plan_serializes_to_json_with_total() {
 - Consumes: `qol_plugin_daemon::daemon::{DaemonConfig, send_action, start_listener, ReadResult}`, `ui::run::run`.
 - Produces: `daemon::actions::CONFIG`, `daemon::actions::start_listener`, `daemon::run`, `daemon::actions::Command`.
 
-This mirrors `plugins/plugin-cli-sessions/src/daemon/actions.rs`, `daemon/mod.rs`, and `main.rs`. No unit tests (IPC/process wiring); verify by running.
+This mirrors `plugins/cli-sessions/src/daemon/actions.rs`, `daemon/mod.rs`, and `main.rs`. No unit tests (IPC/process wiring); verify by running.
 
 - [ ] **Step 1: `src/daemon/actions.rs`** - define `CONFIG: DaemonConfig` with `default_socket_name: "qol-removeapp.sock"`, `use_tmpdir_env: false`, `support_replace_existing: true`. `enum Command { Open, Kill }`. `parse_command`: `"ping" => Handled`, `"open"|"show" => Command(Open)`, `"kill" => Command(Kill)`, `_ => Fallback`. `start_listener(tx)` calls `core_daemon::start_listener(&CONFIG, tx, parse_command)`.
 
@@ -483,7 +483,7 @@ gpui views are not unit-tested in this workspace (consistent with the spec). Ver
 
 **Files:** none new (dev-link + verify).
 
-- [ ] **Step 1: Verification gate** - `cd plugins/plugin-removeapp && make ci-local`. Expected: fmt/clippy/test all green, cross-checks skip-or-pass.
+- [ ] **Step 1: Verification gate** - `cd plugins/removeapp && make ci-local`. Expected: fmt/clippy/test all green, cross-checks skip-or-pass.
 
 - [ ] **Step 2: Dev-link + run host** - dev-link `plugin-removeapp` into qol-tray (per `qol dev` / worktree resolver), `qol dev`, confirm: the "Remove App" menu item opens the picker; a `Remove App.app` appears under `~/Applications/QoL/` and launches via Spotlight; the launcher exports the shortcut.
 

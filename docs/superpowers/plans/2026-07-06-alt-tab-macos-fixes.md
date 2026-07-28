@@ -6,19 +6,19 @@
 
 **Architecture:** Issues 1+4 are one layout change: `picker_layout` becomes the single resolver of an *effective card scale* (shrink-to-fit always; grow-to-fill when the new `dynamic_card_scale` config is on) and exposes the resolved `CardMetrics` so render, navigation, and the preview plane can never disagree. Issues 2+3 are evidence-first debugging tasks with a leading hypothesis each; they end in a fix only if the evidence confirms it.
 
-**Tech Stack:** Rust, GPUI, macOS CoreGraphics/AX. Crate: `plugins/plugin-alt-tab` (package name `alt-tab`).
+**Tech Stack:** Rust, GPUI, macOS CoreGraphics/AX. Crate: `plugins/alt-tab` (package name `alt-tab`).
 
 ## Global Constraints
 
 - Comment-free codebase. No code comments except where a constraint cannot be expressed in code (existing file style wins).
 - Conventional commits, one-liners, no co-authors, no push.
-- Gates before every commit: `cargo fmt --all --check`, `cargo clippy --all-targets --all-features --keep-going -- -D warnings`, `cargo build`, `cargo test` (run from `plugins/plugin-alt-tab/`).
+- Gates before every commit: `cargo fmt --all --check`, `cargo clippy --all-targets --all-features --keep-going -- -D warnings`, `cargo build`, `cargo test` (run from `plugins/alt-tab/`).
 - Every bug fix starts with a failing test (plugin CLAUDE.md).
 - Debug logging only under `#[cfg(debug_assertions)]`, prefixed `[alt-tab/...]`.
 - No `#[cfg(target_os)]` in business logic; platform code stays in per-OS modules.
 - A resident daemon serves the old binary until restarted: after building, restart the daemon (qol-tray Recompile or kill + relaunch) before judging behavior by hand.
 - The show path must never capture screenshots synchronously (plugin CLAUDE.md non-negotiable #4).
-- Read `plugins/plugin-alt-tab/CLAUDE.md` before starting any task.
+- Read `plugins/alt-tab/CLAUDE.md` before starting any task.
 
 ---
 
@@ -27,9 +27,9 @@
 Fixes the overshoot (issue 1) and implements dynamic sizing (issue 4) in the layout core. `picker_layout` gains a `dynamic_card_scale: bool` parameter and resolves an effective scale; `PickerLayout` gains the resolved `metrics`. Callers are updated in Task 2 - to keep this task compiling on its own, update the four call sites mechanically here with `false` and leave behavior-visible adoption to Task 2.
 
 **Files:**
-- Modify: `plugins/plugin-alt-tab/src/shared/layout.rs`
-- Modify (mechanical, pass `false`): `plugins/plugin-alt-tab/src/app/render.rs:135`, `plugins/plugin-alt-tab/src/app/mod.rs:435`, `plugins/plugin-alt-tab/src/app/input.rs:139`, `plugins/plugin-alt-tab/src/picker/create.rs:90`
-- Test: `plugins/plugin-alt-tab/src/shared/layout.rs` (inline `mod tests`)
+- Modify: `plugins/alt-tab/src/shared/layout.rs`
+- Modify (mechanical, pass `false`): `plugins/alt-tab/src/app/render.rs:135`, `plugins/alt-tab/src/app/mod.rs:435`, `plugins/alt-tab/src/app/input.rs:139`, `plugins/alt-tab/src/picker/create.rs:90`
+- Test: `plugins/alt-tab/src/shared/layout.rs` (inline `mod tests`)
 
 **Interfaces:**
 - Produces: `pub fn picker_layout(window_count: usize, max_columns: usize, monitor_size: Option<(f32, f32)>, show_hotkey_hints: bool, card_scale: f32, card_padding: f32, dynamic_card_scale: bool) -> PickerLayout`
@@ -170,12 +170,12 @@ Also update every existing test call of `picker_layout(...)` in this file to pas
 
 - [ ] **Step 2: Run tests to verify the new ones fail to compile (missing param/field), existing pass after the mechanical arg**
 
-Run: `cd plugins/plugin-alt-tab && cargo test --lib shared::layout`
+Run: `cd plugins/alt-tab && cargo test --lib shared::layout`
 Expected: compile error `this function takes 6 arguments but 7 were supplied` until Step 3.
 
 - [ ] **Step 3: Implement the solver**
 
-Replace `PickerLayout` and `picker_layout` in `plugins/plugin-alt-tab/src/shared/layout.rs`:
+Replace `PickerLayout` and `picker_layout` in `plugins/alt-tab/src/shared/layout.rs`:
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -280,20 +280,20 @@ fn fit_scale(cols: usize, rows: usize, max_w: f32, max_h: f32, padding: f32) -> 
 
 Then make the four external call sites compile by appending `false` as the last argument (exact adoption happens in Task 2):
 
-- `plugins/plugin-alt-tab/src/app/render.rs:135`
-- `plugins/plugin-alt-tab/src/app/mod.rs:435`
-- `plugins/plugin-alt-tab/src/app/input.rs:139`
-- `plugins/plugin-alt-tab/src/picker/create.rs:90`
+- `plugins/alt-tab/src/app/render.rs:135`
+- `plugins/alt-tab/src/app/mod.rs:435`
+- `plugins/alt-tab/src/app/input.rs:139`
+- `plugins/alt-tab/src/picker/create.rs:90`
 
 - [ ] **Step 4: Run the full plugin gate**
 
-Run: `cd plugins/plugin-alt-tab && cargo fmt --all --check && cargo clippy --all-targets --all-features --keep-going -- -D warnings && cargo test`
+Run: `cd plugins/alt-tab && cargo fmt --all --check && cargo clippy --all-targets --all-features --keep-going -- -D warnings && cargo test`
 Expected: all tests pass, including the five new ones.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/plugin-alt-tab/src
+git add plugins/alt-tab/src
 git commit -m "feat(alt-tab): resolve effective card scale in picker layout"
 ```
 
@@ -304,13 +304,13 @@ git commit -m "feat(alt-tab): resolve effective card scale in picker layout"
 Adds `display.dynamic_card_scale` (default **true**), threads it along the exact same path `card_scale` takes, and switches every consumer to the layout-resolved `metrics` so render/nav/preview-plane share one geometry.
 
 **Files:**
-- Modify: `plugins/plugin-alt-tab/src/config.rs` (DisplayConfig struct + `Default` impl at lines 8-27; the debug log line at 149-152 may include the new flag)
-- Modify: `plugins/plugin-alt-tab/qol-config.toml` (new `[field.display_dynamic_card_scale]`)
-- Modify: `plugins/plugin-alt-tab/src/picker/create.rs` (PickerInit field at :114, init at :149, layout call at :90-97)
-- Modify: `plugins/plugin-alt-tab/src/picker/mod.rs` (state field at :549, init copy at :581, per-show reload at :724, test fixtures at :968 and :1133)
-- Modify: `plugins/plugin-alt-tab/src/app/render.rs` (RenderSnap metrics at :123, layout call at :135-141)
-- Modify: `plugins/plugin-alt-tab/src/app/mod.rs` (layout call at :435-442, metrics at :443)
-- Modify: `plugins/plugin-alt-tab/src/app/input.rs` (layout calls at :139-145 and around :160)
+- Modify: `plugins/alt-tab/src/config.rs` (DisplayConfig struct + `Default` impl at lines 8-27; the debug log line at 149-152 may include the new flag)
+- Modify: `plugins/alt-tab/qol-config.toml` (new `[field.display_dynamic_card_scale]`)
+- Modify: `plugins/alt-tab/src/picker/create.rs` (PickerInit field at :114, init at :149, layout call at :90-97)
+- Modify: `plugins/alt-tab/src/picker/mod.rs` (state field at :549, init copy at :581, per-show reload at :724, test fixtures at :968 and :1133)
+- Modify: `plugins/alt-tab/src/app/render.rs` (RenderSnap metrics at :123, layout call at :135-141)
+- Modify: `plugins/alt-tab/src/app/mod.rs` (layout call at :435-442, metrics at :443)
+- Modify: `plugins/alt-tab/src/app/input.rs` (layout calls at :139-145 and around :160)
 
 **Interfaces:**
 - Consumes: Task 1's `picker_layout(..., dynamic_card_scale)` and `PickerLayout.metrics`.
@@ -331,7 +331,7 @@ If `config.rs` has no `contract_defaults()` helper, mirror how its existing test
 
 - [ ] **Step 2: Run it, expect compile failure on the missing field**
 
-Run: `cd plugins/plugin-alt-tab && cargo test --lib config`
+Run: `cd plugins/alt-tab && cargo test --lib config`
 
 - [ ] **Step 3: Implement config + contract**
 
@@ -355,7 +355,7 @@ Copy the exact `section` value from the neighboring `display_card_scale` field i
 
 Add `dynamic_card_scale: bool` beside every `card_scale` listed in Files above (create.rs:114/149, picker/mod.rs:549/581/724/968/1133 - fixtures use `true`). Then change the four `picker_layout` call sites from the Task 1 placeholder `false` to the threaded value (`d.dynamic_card_scale`, `state.dynamic_card_scale`, `req.config.display.dynamic_card_scale`). Grep to guarantee nothing is missed:
 
-Run: `grep -rn "card_scale" plugins/plugin-alt-tab/src --include='*.rs' | grep -v layout.rs`
+Run: `grep -rn "card_scale" plugins/alt-tab/src --include='*.rs' | grep -v layout.rs`
 Expected: every hit has a `dynamic_card_scale` sibling or is the layout call itself.
 
 - [ ] **Step 5: Adopt layout metrics as the single geometry source**
@@ -365,12 +365,12 @@ Expected: every hit has a `dynamic_card_scale` sibling or is the layout call its
 - `input.rs`: only consumes `layout.columns`; just thread the flag.
 - `create.rs`: only consumes width/height; just thread the flag.
 
-Run: `grep -rn "CardMetrics::from_config" plugins/plugin-alt-tab/src --include='*.rs' | grep -v layout.rs`
+Run: `grep -rn "CardMetrics::from_config" plugins/alt-tab/src --include='*.rs' | grep -v layout.rs`
 Expected: zero hits outside `layout.rs` (the picker consumers all go through `PickerLayout.metrics`).
 
 - [ ] **Step 6: Full gate + manual verification**
 
-Run: `cd plugins/plugin-alt-tab && cargo fmt --all --check && cargo clippy --all-targets --all-features --keep-going -- -D warnings && cargo build && cargo test`
+Run: `cd plugins/alt-tab && cargo fmt --all --check && cargo clippy --all-targets --all-features --keep-going -- -D warnings && cargo build && cargo test`
 Expected: green.
 
 Manual (requires daemon restart first - see Global Constraints): with 2 windows open, cards render noticeably larger than before; with ~20 windows on a laptop screen, the grid stays inside the monitor; toggling `display.dynamic_card_scale = false` in the plugin config restores configured-size cards.
@@ -378,7 +378,7 @@ Manual (requires daemon restart first - see Global Constraints): with 2 windows 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add plugins/plugin-alt-tab
+git add plugins/alt-tab
 git commit -m "feat(alt-tab): dynamic card sizing on by default with shrink-to-fit"
 ```
 
@@ -386,10 +386,10 @@ git commit -m "feat(alt-tab): dynamic card sizing on by default with shrink-to-f
 
 ### Task 3: Duplicate window cards - evidence first, then the budget-slack fix
 
-Leading hypothesis: `should_keep` in `plugins/plugin-alt-tab/src/discovery/macos/ax.rs:426-444` lets a second CG entry of the same logical window through whenever the AX budget exceeds the AX id list (`budget = accepted.max(id_map.len())` at ax.rs:386, and the `ax_ids.len() >= dedup.budget` guard at ax.rs:435 goes inert when `accepted > id_map.len()`). This degrades exactly when AX is slow or the `_AXWindowID` attribute is missing - timing-dependent, matching "sometimes".
+Leading hypothesis: `should_keep` in `plugins/alt-tab/src/discovery/macos/ax.rs:426-444` lets a second CG entry of the same logical window through whenever the AX budget exceeds the AX id list (`budget = accepted.max(id_map.len())` at ax.rs:386, and the `ax_ids.len() >= dedup.budget` guard at ax.rs:435 goes inert when `accepted > id_map.len()`). This degrades exactly when AX is slow or the `_AXWindowID` attribute is missing - timing-dependent, matching "sometimes".
 
 **Files:**
-- Modify: `plugins/plugin-alt-tab/src/discovery/macos/ax.rs`
+- Modify: `plugins/alt-tab/src/discovery/macos/ax.rs`
 - Test: inline tests in `ax.rs` (or the existing dedup test module if one exists - grep `mod.*tests` in the file first)
 
 **Interfaces:**
@@ -450,7 +450,7 @@ Build debug (`cargo build`), restart the daemon, and when a duplicate appears ca
 
 - [ ] **Step 3: Run it, expect failure**
 
-Run: `cd plugins/plugin-alt-tab && cargo test budget_slack_never_readmits`
+Run: `cd plugins/alt-tab && cargo test budget_slack_never_readmits`
 Expected: FAIL with `ids == [10, 11]`.
 
 - [ ] **Step 4: Implement the fix in `should_keep`**
@@ -473,7 +473,7 @@ Keep the existing `#[cfg(debug_assertions)]` eprintln blocks inside the branches
 
 - [ ] **Step 5: Full gate**
 
-Run: `cd plugins/plugin-alt-tab && cargo fmt --all --check && cargo clippy --all-targets --all-features --keep-going -- -D warnings && cargo test`
+Run: `cd plugins/alt-tab && cargo fmt --all --check && cargo clippy --all-targets --all-features --keep-going -- -D warnings && cargo test`
 Expected: green, including all pre-existing dedup tests.
 
 - [ ] **Step 6: Manual soak**
@@ -483,7 +483,7 @@ Restart the daemon; open/close the picker across the apps recorded in Step 1 ove
 - [ ] **Step 7: Commit**
 
 ```bash
-git add plugins/plugin-alt-tab/src/discovery/macos/ax.rs
+git add plugins/alt-tab/src/discovery/macos/ax.rs
 git commit -m "fix(alt-tab): drop CG entries missing from a non-empty AX window list"
 ```
 
@@ -493,13 +493,13 @@ git commit -m "fix(alt-tab): drop CG entries missing from a non-empty AX window 
 
 **Status note (2026-07-06):** a previous run stopped "Task 4" citing SCK/live-frame trace evidence - that rationale belongs to Task 5 (the fill-batching hypothesis from an earlier plan revision), not to this task. This task is still open: its Step 1 gate (`REUSE_SHOW_WINDOW` → `SHOW_PAINTED` gap) has not been evaluated, and the capture backend is irrelevant to reveal ordering.
 
-Root cause (traced 2026-07-06, supersedes the earlier cold-cache hypothesis as the primary fix): on the reuse path, `try_reuse` (`plugins/plugin-alt-tab/src/picker/reuse.rs:32-113`) applies the new window list synchronously (`apply_reuse`), then calls `super::platform::show_picker_window(&title, req.all_titles)` at reuse.rs:79 - an instant alpha flip. The window's surface still holds the last frame presented at the previous dismissal; GPUI paints the new state one or more frames later (the existing `SHOW_PAINTED` / `SHOW_PAINT_TIMEOUT` probes at reuse.rs:87-109 measure exactly this gap). Whenever the window set changed while the picker was hidden, the user sees the stale grid snap into the new one - "sometimes" - and dynamic card sizing (Task 1) amplifies it because a count change now also resizes every card.
+Root cause (traced 2026-07-06, supersedes the earlier cold-cache hypothesis as the primary fix): on the reuse path, `try_reuse` (`plugins/alt-tab/src/picker/reuse.rs:32-113`) applies the new window list synchronously (`apply_reuse`), then calls `super::platform::show_picker_window(&title, req.all_titles)` at reuse.rs:79 - an instant alpha flip. The window's surface still holds the last frame presented at the previous dismissal; GPUI paints the new state one or more frames later (the existing `SHOW_PAINTED` / `SHOW_PAINT_TIMEOUT` probes at reuse.rs:87-109 measure exactly this gap). Whenever the window set changed while the picker was hidden, the user sees the stale grid snap into the new one - "sometimes" - and dynamic card sizing (Task 1) amplifies it because a count change now also resizes every card.
 
 Fix: reveal inside the already-registered `on_next_frame` callback (paint-then-reveal), with the existing 120ms timer as a reveal fallback so a stalled paint can never leave the picker invisible.
 
 **Files:**
-- Modify: `plugins/plugin-alt-tab/src/picker/reuse.rs`
-- Investigate afterward if pop-in persists: `plugins/plugin-alt-tab/src/picker/gather.rs` (see Task 5)
+- Modify: `plugins/alt-tab/src/picker/reuse.rs`
+- Investigate afterward if pop-in persists: `plugins/alt-tab/src/picker/gather.rs` (see Task 5)
 
 **Interfaces:**
 - Consumes: `super::platform::show_picker_window(&str, &[String])`, `window.on_next_frame`, `AltTabApp::focus_for_keys`.
@@ -562,7 +562,7 @@ Then extend the existing 120ms watchdog (reuse.rs:98-109) into a reveal fallback
 
 - [ ] **Step 4: Full gate**
 
-Run: `cd plugins/plugin-alt-tab && cargo fmt --all --check && cargo clippy --all-targets --all-features --keep-going -- -D warnings && cargo test`
+Run: `cd plugins/alt-tab && cargo fmt --all --check && cargo clippy --all-targets --all-features --keep-going -- -D warnings && cargo test`
 Expected: green.
 
 - [ ] **Step 5: Manual verification**
@@ -572,7 +572,7 @@ Restart the daemon. Repeatedly: change the window set while the picker is hidden
 - [ ] **Step 6: Commit**
 
 ```bash
-git add plugins/plugin-alt-tab/src/picker/reuse.rs
+git add plugins/alt-tab/src/picker/reuse.rs
 git commit -m "fix(alt-tab): reveal reused picker only after the new frame paints"
 ```
 
@@ -582,14 +582,14 @@ git commit -m "fix(alt-tab): reveal reused picker only after the new frame paint
 
 Re-aimed on 2026-07-06 trace evidence: `PREVIEW_GATHER missed=5` on shows 2 AND 3 with `PREVIEW_CAPTURE source=fill_sck` - the ScreenCaptureKit live-frame path re-captures the same windows on every open and commits them after reveal. Two distinct suspects, in order:
 
-1. **Retention:** live frames should survive between shows (the whole point of the warm cache), but the show-path repeatedly reports the same windows uncovered. Investigate `plugins/plugin-alt-tab/src/shared/live_lanes.rs` (lane eviction) and `snapshot_live_frame_keys` in `plugins/plugin-alt-tab/src/picker/gather.rs:443` (it reads `view.delegate.live_frames` - confirm dismissal does not drain that map, and confirm `PREVIEW_GATHER`'s `missed` is not just accounting that ignores live frames).
+1. **Retention:** live frames should survive between shows (the whole point of the warm cache), but the show-path repeatedly reports the same windows uncovered. Investigate `plugins/alt-tab/src/shared/live_lanes.rs` (lane eviction) and `snapshot_live_frame_keys` in `plugins/alt-tab/src/picker/gather.rs:443` (it reads `view.delegate.live_frames` - confirm dismissal does not drain that map, and confirm `PREVIEW_GATHER`'s `missed` is not just accounting that ignores live frames).
 2. **Commit batching:** `commit_live_frames_foreground` (`gather.rs:454`) inserts frames the moment each capture lands, after reveal - only the background warmer path goes through `FirstFillGate`. If retention is working as designed and refills are expected, batch this commit through a `FirstFillGate<capture::LiveFrame>` exactly like `app/live_preview.rs` does (read it fully first; follow its ownership pattern).
 
 The old CG-path batching hypothesis (`commit_previews_foreground`) is dead for this machine: the trace shows the SCK path, not CG cache writes. Keep it in mind only for machines where `capture::live_shots_available()` is false.
 
 **Files:**
-- Investigate: `plugins/plugin-alt-tab/src/shared/live_lanes.rs`, `plugins/plugin-alt-tab/src/picker/gather.rs:383-472`, `plugins/plugin-alt-tab/src/app/live_preview.rs`
-- Modify (per evidence): `plugins/plugin-alt-tab/src/picker/gather.rs` or `plugins/plugin-alt-tab/src/shared/live_lanes.rs`
+- Investigate: `plugins/alt-tab/src/shared/live_lanes.rs`, `plugins/alt-tab/src/picker/gather.rs:383-472`, `plugins/alt-tab/src/app/live_preview.rs`
+- Modify (per evidence): `plugins/alt-tab/src/picker/gather.rs` or `plugins/alt-tab/src/shared/live_lanes.rs`
 
 **Interfaces:**
 - Consumes: `FirstFillGate<T>` (`new(first_fill: bool)`, `admit(frames, visible) -> Option<Vec<(u32, T)>>`, `note_failure(wid)`, `take_pending()`), `fill_live_frames`, `commit_live_frames_foreground`.
@@ -623,7 +623,7 @@ In `fill_previews` (`gather.rs:311`), batch the commit: instead of committing wh
 
 - [ ] **Step 4: Full gate**
 
-Run: `cd plugins/plugin-alt-tab && cargo fmt --all --check && cargo clippy --all-targets --all-features --keep-going -- -D warnings && cargo test`
+Run: `cd plugins/alt-tab && cargo fmt --all --check && cargo clippy --all-targets --all-features --keep-going -- -D warnings && cargo test`
 Expected: green.
 
 - [ ] **Step 5: Manual verification**
@@ -633,7 +633,7 @@ Kill the daemon, relaunch, open the picker with 8+ windows: cards should appear 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add plugins/plugin-alt-tab/src
+git add plugins/alt-tab/src
 git commit -m "fix(alt-tab): batch cold-cache preview fill into one commit"
 ```
 

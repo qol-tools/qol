@@ -1,20 +1,22 @@
 use super::super::super::source::PluginSource;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 pub(in crate::features::plugin_store::github) fn build_plugin_metadata(
-    plugin_id: &str,
+    plugin_dir: &str,
     source: &PluginSource,
     manifest: crate::plugins::PluginManifest,
     version: String,
-) -> PluginMetadata {
-    PluginMetadata {
-        id: plugin_id.to_string(),
+) -> Result<PluginMetadata> {
+    let plugin_id = manifest.plugin.require_declared_id()?.as_str().to_string();
+    Ok(PluginMetadata {
+        id: plugin_id,
         name: manifest.plugin.name,
         description: manifest.plugin.description,
         version,
-        repo_url: source.plugin_subdir_html_url(plugin_id),
+        repo_url: source.plugin_subdir_html_url(plugin_dir),
         platforms: manifest.plugin.platforms,
-    }
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]

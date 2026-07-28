@@ -3,11 +3,11 @@ use super::*;
 use crate::features::plugin_store::source::PluginSource;
 use crate::plugins::manifest::{BuildInfo, Capabilities, MenuConfig, PluginInfo, PluginManifest};
 
-fn make_manifest(name: &str, version: &str) -> PluginManifest {
+fn make_manifest(id: &str, name: &str, version: &str) -> PluginManifest {
     PluginManifest {
         manifest_version: crate::plugins::manifest::CURRENT_MANIFEST_VERSION,
         plugin: PluginInfo {
-            id: Some("test-plugin".into()),
+            id: Some(id.into()),
             uid: None,
             name: name.to_string(),
             description: "Test plugin".to_string(),
@@ -38,28 +38,24 @@ fn core_source() -> PluginSource {
 
 #[test]
 fn build_plugin_metadata_uses_provided_version() {
-    let manifest = make_manifest("Test", "1.0.0");
+    let manifest = make_manifest("plugin-test", "Test", "1.0.0");
     let metadata =
-        build_plugin_metadata("plugin-test", &core_source(), manifest, "1.0.0".to_string());
+        build_plugin_metadata("test", &core_source(), manifest, "1.0.0".to_string()).unwrap();
     assert_eq!(metadata.version, "1.0.0");
 }
 
 #[test]
 fn build_plugin_metadata_extracts_all_fields_and_uses_source_subdir_url() {
-    let manifest = make_manifest("Example Plugin", "2.5.0");
-    let metadata = build_plugin_metadata(
-        "plugin-example",
-        &core_source(),
-        manifest,
-        "3.0.0".to_string(),
-    );
+    let manifest = make_manifest("plugin-example", "Example Plugin", "2.5.0");
+    let metadata =
+        build_plugin_metadata("example", &core_source(), manifest, "3.0.0".to_string()).unwrap();
 
     assert_eq!(metadata.id, "plugin-example");
     assert_eq!(metadata.name, "Example Plugin");
     assert_eq!(metadata.description, "Test plugin");
     assert_eq!(metadata.version, "3.0.0");
     assert_eq!(
-        metadata.repo_url, "https://github.com/qol-tools/qol/tree/main/plugins/plugin-example",
+        metadata.repo_url, "https://github.com/qol-tools/qol/tree/main/plugins/example",
         "repo_url must point at the subdir within the source repo, not a per-plugin repo"
     );
 }

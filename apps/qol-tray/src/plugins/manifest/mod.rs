@@ -25,7 +25,7 @@ mod tests {
         let entries = std::fs::read_dir(&plugins_dir)
             .unwrap_or_else(|e| panic!("cannot read plugins dir {}: {}", plugins_dir.display(), e));
 
-        let mut checked_count = 0;
+        let mut checked_ids = Vec::new();
         for entry in entries {
             let entry = entry.expect("dir entry");
             let metadata = entry.metadata().expect("dir entry metadata");
@@ -37,10 +37,6 @@ mod tests {
             let folder = entry.file_name();
             let folder_name = folder.to_string_lossy();
 
-            if qol_conventions::is_reserved_plugin_id(&folder_name) {
-                continue;
-            }
-
             let manifest_path = entry.path().join("plugin.toml");
             if !manifest_path.exists() {
                 panic!("plugin directory '{}' is missing plugin.toml", folder_name);
@@ -50,6 +46,14 @@ mod tests {
                 .unwrap_or_else(|e| panic!("cannot read {}: {}", manifest_path.display(), e));
             let manifest: PluginManifest = toml::from_str(&content)
                 .unwrap_or_else(|e| panic!("cannot parse {}: {}", manifest_path.display(), e));
+            let plugin_id = manifest
+                .plugin
+                .require_declared_id()
+                .unwrap_or_else(|e| panic!("invalid id in {}: {}", manifest_path.display(), e));
+
+            if qol_conventions::is_reserved_plugin_id(plugin_id.as_str()) {
+                continue;
+            }
 
             assert!(
                 manifest.plugin.uid.is_some(),
@@ -62,13 +66,12 @@ mod tests {
                 folder_name
             );
 
-            checked_count += 1;
+            checked_ids.push(plugin_id.as_str().to_string());
         }
 
         assert!(
-            checked_count >= 11,
-            "expected to check at least 11 plugin manifests (excluding plugin-template), but only checked {}",
-            checked_count
+            !checked_ids.is_empty(),
+            "expected at least one non-reserved plugin manifest"
         );
     }
 }

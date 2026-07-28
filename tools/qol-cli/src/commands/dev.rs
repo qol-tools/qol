@@ -699,7 +699,7 @@ mod tests {
                 id: "plugin-launcher".to_string(),
                 name: "Launcher".to_string(),
                 version: "1.0.0".to_string(),
-                source: "/repo/plugins/plugin-launcher".to_string(),
+                source: "/repo/plugins/launcher".to_string(),
                 needs_rebuild: false,
                 rebuild_reason: String::new(),
             },

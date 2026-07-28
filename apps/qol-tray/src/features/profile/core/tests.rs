@@ -970,7 +970,8 @@ fn create_monorepo_style_source_repo(
     contract: Option<&str>,
 ) -> MonorepoSourceRepo {
     let repo_dir = plugins_dir.join(format!("{plugin_id}-source-monorepo"));
-    let plugin_subdir = repo_dir.join("plugins").join(plugin_id);
+    let source_directory = plugin_id.strip_prefix("plugin-").unwrap_or(plugin_id);
+    let plugin_subdir = repo_dir.join("plugins").join(source_directory);
     fs::create_dir_all(&plugin_subdir).unwrap();
     fs::write(
         plugin_subdir.join("plugin.toml"),

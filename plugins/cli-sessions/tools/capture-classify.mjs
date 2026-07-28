@@ -4,10 +4,9 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
-// tools/ -> plugin-cli-sessions -> plugins -> repo root
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
-const PLUGIN = resolve(REPO, "plugins", "plugin-cli-sessions");
+const PLUGIN = resolve(REPO, "plugins", "cli-sessions");
 const BIN = resolve(REPO, "target", "debug", "examples", "classify");
 
 function kitten(args) {

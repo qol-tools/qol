@@ -123,14 +123,7 @@ impl PluginInstaller {
         let result = source::clone_source_repo(source, &staging_dir, plugin_id, &install_source)
             .await
             .and_then(|_| {
-                let plugin_subdir = staging_dir.join("plugins").join(plugin_id);
-                if !plugin_subdir.is_dir() {
-                    anyhow::bail!(
-                        "Cloned source {} does not contain plugins/{}/",
-                        source.repo,
-                        plugin_id
-                    );
-                }
+                let plugin_subdir = source::find_plugin_source_dir(&staging_dir, plugin_id)?;
                 crate::plugins::config::load_config_contract_from_root(&plugin_subdir)
             });
         staging::cleanup_temp_dir(&staging_dir).await;

@@ -5,7 +5,7 @@
 - Plugin daemons spawn via `command.spawn()` + `libc::setsid()` with a different PID than qol-tray, so `_NET_WM_PID == own_pid` checks won't catch picker windows.
 
 ## 2026-06-04
-- In this monorepo, cargo package names don't match dir names: `plugins/plugin-alt-tab/` is package `alt-tab`; check `Cargo.toml` `name =` before `cargo -p`.
+- In this monorepo, cargo package names don't match dir names: `plugins/alt-tab/` is package `alt-tab`; check `Cargo.toml` `name =` before `cargo -p`.
 - Under `-D warnings`, test-only helpers tripped `dead_code`; gate pure invariant helpers behind `#[cfg(test)]` rather than `pub(crate)` when no production caller exists.
 - GPUI X11 `set_bounds` drops origin on size-bearing ConfigureNotify, so `window.window_bounds()` reports stale origin after resize - don't trust it; use `translate_coordinates(wid, root, 0, 0)`.
 

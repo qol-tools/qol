@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(crate) use qol_workspace::{
-    display_name, monorepo_plugin_dirs, non_host_plugin_packages, scan_buildable_plugins,
-    sibling_crates, BuildablePlugin,
+    cargo_package_name, display_name, monorepo_plugin_dirs, non_host_plugin_packages,
+    read_plugin_source, scan_buildable_plugins, sibling_crates, BuildablePlugin,
 };
 
 #[cfg(test)]
-use qol_workspace::{cargo_package_name, discover_plugin_dirs};
+use qol_workspace::discover_plugin_dirs;
 
 pub(crate) const DOCTOR_BUILD_ARGS: [&str; 7] = [
     "build",
@@ -115,27 +115,44 @@ fn default_workspace_path(config_dir: &Path) -> PathBuf {
 }
 
 pub(crate) fn resolve_crate_target(root: &Path, name: &str) -> Result<PathBuf> {
-    let mut candidates = vec![(root.to_path_buf(), "qol-tray".to_string())];
+    let mut candidates = vec![(root.to_path_buf(), vec!["qol-tray".to_string()])];
     for sibling in sibling_crates(root)? {
-        let dn = display_name(&sibling);
-        candidates.push((sibling, dn));
+        let names = crate_target_names(&sibling);
+        candidates.push((sibling, names));
     }
     for plugin in monorepo_plugin_dirs(root)? {
-        let dn = display_name(&plugin);
-        candidates.push((plugin, dn));
+        let names = crate_target_names(&plugin);
+        candidates.push((plugin, names));
     }
-    let matches: Vec<&(PathBuf, String)> = candidates
+    let matches: Vec<&(PathBuf, Vec<String>)> = candidates
         .iter()
-        .filter(|(_, dn)| crate_name_matches(dn, name))
+        .filter(|(_, names)| {
+            names
+                .iter()
+                .any(|candidate| crate_name_matches(candidate, name))
+        })
         .collect();
     match matches.as_slice() {
         [] => bail!("no qol-tray or sibling crate matching `{name}`"),
         [only] => Ok(only.0.clone()),
         many => {
-            let names: Vec<&str> = many.iter().map(|(_, dn)| dn.as_str()).collect();
+            let names: Vec<String> = many.iter().map(|(path, _)| display_name(path)).collect();
             bail!("ambiguous `{name}` - matches: {}", names.join(", "));
         }
     }
+}
+
+fn crate_target_names(path: &Path) -> Vec<String> {
+    let mut names = vec![display_name(path)];
+    if let Some(plugin) = read_plugin_source(path) {
+        names.push(plugin.id);
+    }
+    if let Ok(package) = cargo_package_name(path) {
+        names.push(package);
+    }
+    names.sort();
+    names.dedup();
+    names
 }
 
 fn crate_name_matches(display: &str, query: &str) -> bool {
@@ -178,7 +195,7 @@ mod tests {
         .unwrap();
     }
 
-    fn write_plugin_dir(dir: &Path, pkg_name: &str, platforms: &str) {
+    fn write_plugin_dir(dir: &Path, plugin_id: &str, pkg_name: &str, platforms: &str) {
         fs::create_dir_all(dir).unwrap();
         fs::write(
             dir.join("Cargo.toml"),
@@ -187,7 +204,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.join("plugin.toml"),
-            format!("[plugin]\nname = \"{pkg_name}\"\nversion = \"0.0.0\"\nplatforms = [{platforms}]\n\n[menu]\nlabel = \"x\"\nitems = []\n"),
+            format!("[plugin]\nid = \"{plugin_id}\"\nname = \"{pkg_name}\"\nversion = \"0.0.0\"\nplatforms = [{platforms}]\n\n[menu]\nlabel = \"x\"\nitems = []\n"),
         )
         .unwrap();
     }
@@ -198,17 +215,22 @@ mod tests {
         let repo = tmp.path().join("qol-tray");
         fs::create_dir_all(&repo).unwrap();
         fs::write(repo.join("Cargo.toml"), "[package]\nname = \"qol-tray\"\n").unwrap();
-        for name in ["plugin-a", "qol-lib", "other"] {
+        for name in ["alt-tab", "qol-lib", "other"] {
             let dir = tmp.path().join(name);
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
         }
+        fs::write(
+            tmp.path().join("alt-tab/plugin.toml"),
+            "[plugin]\nid=\"plugin-alt-tab\"\nname=\"Alt Tab\"\n",
+        )
+        .unwrap();
         let names: Vec<_> = sibling_crates(&repo)
             .unwrap()
             .into_iter()
             .map(|path| display_name(&path))
             .collect();
-        assert_eq!(names, vec!["plugin-a".to_string(), "qol-lib".to_string()]);
+        assert_eq!(names, vec!["alt-tab".to_string(), "qol-lib".to_string()]);
     }
 
     #[test]
@@ -217,15 +239,20 @@ mod tests {
         let repo = tmp.path().join("worktrees").join("feat").join("qol-tray");
         fs::create_dir_all(&repo).unwrap();
         fs::write(repo.join("Cargo.toml"), "[package]\nname = \"qol-tray\"\n").unwrap();
-        let plugin = tmp.path().join("plugin-a");
+        let plugin = tmp.path().join("alt-tab");
         fs::create_dir_all(&plugin).unwrap();
         fs::write(plugin.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(
+            plugin.join("plugin.toml"),
+            "[plugin]\nid=\"plugin-alt-tab\"\nname=\"Alt Tab\"\n",
+        )
+        .unwrap();
         let names: Vec<_> = sibling_crates(&repo)
             .unwrap()
             .into_iter()
             .map(|path| display_name(&path))
             .collect();
-        assert_eq!(names, vec!["plugin-a".to_string()]);
+        assert_eq!(names, vec!["alt-tab".to_string()]);
     }
 
     #[test]
@@ -234,9 +261,14 @@ mod tests {
         let repo = tmp.path().join("qol-tray");
         fs::create_dir_all(&repo).unwrap();
         fs::write(repo.join("Cargo.toml"), "[package]\nname = \"qol-tray\"\n").unwrap();
-        let plugin = tmp.path().join("plugin-alt-tab");
+        let plugin = tmp.path().join("alt-tab");
         fs::create_dir_all(&plugin).unwrap();
         fs::write(plugin.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(
+            plugin.join("plugin.toml"),
+            "[plugin]\nid=\"plugin-alt-tab\"\nname=\"Alt Tab\"\n",
+        )
+        .unwrap();
         let lib = tmp.path().join("qol-color");
         fs::create_dir_all(&lib).unwrap();
         fs::write(lib.join("Cargo.toml"), "[package]\nname = \"y\"\n").unwrap();
@@ -259,15 +291,20 @@ mod tests {
         let repo = tmp.path().join("qol-tray");
         fs::create_dir_all(&repo).unwrap();
         fs::write(repo.join("Cargo.toml"), "[package]\nname = \"qol-tray\"\n").unwrap();
-        for name in ["plugin-foo", "qol-foo"] {
+        for name in ["foo-plugin", "qol-foo"] {
             let dir = tmp.path().join(name);
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join("Cargo.toml"), "[package]\nname = \"z\"\n").unwrap();
         }
+        fs::write(
+            tmp.path().join("foo-plugin/plugin.toml"),
+            "[plugin]\nid=\"plugin-foo\"\nname=\"Foo\"\n",
+        )
+        .unwrap();
         let err = resolve_crate_target(&repo, "foo").unwrap_err().to_string();
         assert!(err.contains("ambiguous"), "got: {err}");
         assert!(
-            err.contains("plugin-foo") && err.contains("qol-foo"),
+            err.contains("foo-plugin") && err.contains("qol-foo"),
             "got: {err}"
         );
     }
@@ -280,8 +317,13 @@ mod tests {
         write_workspace(&workspace);
         let plugins = workspace.join("plugins");
         fs::create_dir_all(&plugins).unwrap();
-        write_plugin_dir(&plugins.join("plugin-a"), "a-pkg", "\"linux\"");
-        write_plugin_dir(&plugins.join("plugin-b"), "b-pkg", "\"linux\", \"macos\"");
+        write_plugin_dir(&plugins.join("a"), "plugin-a", "a-pkg", "\"linux\"");
+        write_plugin_dir(
+            &plugins.join("b"),
+            "plugin-b",
+            "b-pkg",
+            "\"linux\", \"macos\"",
+        );
         fs::create_dir_all(plugins.join("not-a-plugin")).unwrap();
 
         let names: Vec<_> = monorepo_plugin_dirs(&workspace)
@@ -289,7 +331,7 @@ mod tests {
             .into_iter()
             .map(|p| display_name(&p))
             .collect();
-        assert_eq!(names, vec!["plugin-a".to_string(), "plugin-b".to_string()]);
+        assert_eq!(names, vec!["a".to_string(), "b".to_string()]);
     }
 
     #[test]
@@ -308,7 +350,7 @@ mod tests {
         fs::create_dir_all(&workspace).unwrap();
         write_workspace(&workspace);
         let plugins = workspace.join("plugins");
-        write_plugin_dir(&plugins.join("plugin-x"), "x-pkg", "\"linux\"");
+        write_plugin_dir(&plugins.join("x"), "plugin-x", "x-pkg", "\"linux\"");
         write_package(&workspace.join("plugin-sibling"), "y-pkg");
 
         let names: Vec<_> = discover_plugin_dirs(&workspace)
@@ -316,7 +358,7 @@ mod tests {
             .into_iter()
             .map(|p| display_name(&p))
             .collect();
-        assert_eq!(names, vec!["plugin-x".to_string()]);
+        assert_eq!(names, vec!["x".to_string()]);
     }
 
     #[test]
@@ -324,13 +366,18 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("qol-tray");
         write_package(&repo, "qol-tray");
-        write_package(&tmp.path().join("plugin-old"), "old-pkg");
+        write_plugin_dir(
+            &tmp.path().join("old"),
+            "plugin-old",
+            "old-pkg",
+            "\"linux\"",
+        );
         let names: Vec<_> = discover_plugin_dirs(&repo)
             .unwrap()
             .into_iter()
             .map(|p| display_name(&p))
             .collect();
-        assert_eq!(names, vec!["plugin-old".to_string()]);
+        assert_eq!(names, vec!["old".to_string()]);
     }
 
     #[test]
@@ -422,12 +469,13 @@ mod tests {
         fs::create_dir_all(&workspace).unwrap();
         write_workspace(&workspace);
         write_plugin_dir(
-            &workspace.join("plugins").join("plugin-alt-tab"),
+            &workspace.join("plugins").join("alt-tab"),
+            "plugin-alt-tab",
             "alt-tab",
             "\"linux\"",
         );
 
         let resolved = resolve_crate_target(&workspace, "plugin-alt-tab").unwrap();
-        assert_eq!(display_name(&resolved), "plugin-alt-tab");
+        assert_eq!(display_name(&resolved), "alt-tab");
     }
 }

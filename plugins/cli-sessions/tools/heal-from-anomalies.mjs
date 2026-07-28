@@ -15,7 +15,7 @@ import { dirname, resolve, join } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
-const PLUGIN = resolve(REPO, "plugins", "plugin-cli-sessions");
+const PLUGIN = resolve(REPO, "plugins", "cli-sessions");
 const BIN = resolve(REPO, "target", "debug", "examples", "classify");
 const CANDIDATES = join(PLUGIN, "tests", "fixtures", "candidates");
 

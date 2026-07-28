@@ -32,10 +32,10 @@ impl PluginSource {
         format!("https://github.com/{}.git", self.repo)
     }
 
-    pub(crate) fn plugin_subdir_html_url(&self, plugin_id: &str) -> String {
+    pub(crate) fn plugin_subdir_html_url(&self, plugin_dir: &str) -> String {
         format!(
             "https://github.com/{}/tree/{}/plugins/{}",
-            self.repo, self.git_ref, plugin_id
+            self.repo, self.git_ref, plugin_dir
         )
     }
 
@@ -53,10 +53,10 @@ impl PluginSource {
         )
     }
 
-    pub(crate) fn manifest_raw_url(&self, plugin_id: &str) -> String {
+    pub(crate) fn manifest_raw_url(&self, plugin_dir: &str) -> String {
         format!(
             "https://raw.githubusercontent.com/{}/{}/plugins/{}/plugin.toml",
-            self.repo, self.git_ref, plugin_id
+            self.repo, self.git_ref, plugin_dir
         )
     }
 
@@ -122,7 +122,7 @@ pub(crate) mod test_seam {
 
 const PLUGINS_DIR: &str = "plugins";
 
-pub(super) fn plugin_id_from_tree_path(path: &str) -> Option<&str> {
+pub(super) fn plugin_dir_from_tree_path(path: &str) -> Option<&str> {
     let mut parts = path.split('/');
     if parts.next()? != PLUGINS_DIR {
         return None;
@@ -279,8 +279,8 @@ mod tests {
         let s = PluginSource::new("core", "qol-tools/qol", "main");
         assert_eq!(s.repo_clone_url(), "https://github.com/qol-tools/qol.git");
         assert_eq!(
-            s.plugin_subdir_html_url("plugin-alt-tab"),
-            "https://github.com/qol-tools/qol/tree/main/plugins/plugin-alt-tab"
+            s.plugin_subdir_html_url("alt-tab"),
+            "https://github.com/qol-tools/qol/tree/main/plugins/alt-tab"
         );
         assert_eq!(
             s.tree_api_url(),
@@ -291,8 +291,8 @@ mod tests {
             "https://api.github.com/repos/qol-tools/qol/releases?per_page=100"
         );
         assert_eq!(
-            s.manifest_raw_url("plugin-alt-tab"),
-            "https://raw.githubusercontent.com/qol-tools/qol/main/plugins/plugin-alt-tab/plugin.toml"
+            s.manifest_raw_url("alt-tab"),
+            "https://raw.githubusercontent.com/qol-tools/qol/main/plugins/alt-tab/plugin.toml"
         );
         assert_eq!(
             s.plugin_release_tag("plugin-alt-tab", "1.2.3"),
@@ -301,19 +301,16 @@ mod tests {
     }
 
     #[test]
-    fn plugin_id_from_tree_path_table() {
+    fn plugin_dir_from_tree_path_table() {
         let cases: &[(&str, Option<&str>)] = &[
-            ("plugins/plugin-alt-tab/plugin.toml", Some("plugin-alt-tab")),
-            (
-                "plugins/plugin-launcher/plugin.toml",
-                Some("plugin-launcher"),
-            ),
+            ("plugins/alt-tab/plugin.toml", Some("alt-tab")),
+            ("plugins/launcher/plugin.toml", Some("launcher")),
             ("plugins/task-runner/plugin.toml", Some("task-runner")),
             ("plugins/p/plugin.toml", Some("p")),
-            ("plugins/plugin-alt-tab/src/plugin.toml", None),
-            ("plugins/plugin-alt-tab/Cargo.toml", None),
-            ("plugin-alt-tab/plugin.toml", None),
-            ("plugins/plugin-alt-tab", None),
+            ("plugins/alt-tab/src/plugin.toml", None),
+            ("plugins/alt-tab/Cargo.toml", None),
+            ("alt-tab/plugin.toml", None),
+            ("plugins/alt-tab", None),
             ("plugins/plugin.toml", None),
             ("", None),
             ("plugins//plugin.toml", None),
@@ -326,7 +323,7 @@ mod tests {
         ];
         for (path, expected) in cases {
             assert_eq!(
-                plugin_id_from_tree_path(path),
+                plugin_dir_from_tree_path(path),
                 *expected,
                 "path: {:?}",
                 path

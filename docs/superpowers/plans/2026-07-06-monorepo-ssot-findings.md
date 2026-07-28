@@ -42,7 +42,7 @@ The same unhoisted-literal pattern has since spread to at least 4 more sibling h
 
 `libs/qol-hotkeys/src/grammar.rs` already has both `NamedKey::Backspace` and `NamedKey::Delete` as **separate** variants (line 97: `"backspace" => NamedKey::Backspace`; line 98: `"delete" | "del" => NamedKey::Delete`). `macos_keycode.rs::named_to_keycode` resolves them to different physical keys: `NamedKey::Backspace => DELETE` (`0x33`, the everyday Mac "delete" key that behaves like backspace), `NamedKey::Delete => FORWARD_DELETE` (`0x75`, `fn+delete` / the PC-style forward-delete). This matches the standard cross-platform convention (Backspace deletes left, Delete deletes right) and is covered by an existing test asserting `code("delete") == Some(FORWARD_DELETE)`. This path is used by `apps/qol-tray/src/hotkeys/{parser.rs, capture/binding.rs, capture/platform/macos.rs}` - the shortcuts/hotkey-capture feature.
 
-The standalone `libs/qol-hotkeys/src/macos_keycode.rs::parse_key` (line 91, the **only** entry point used by `plugins/plugin-keyremap/src/remap.rs`) instead **conflates** the two: line 133, `"delete" | "backspace" => Some(DELETE)` (`0x33`) - treating them as synonyms - while requiring a separate string `"forwarddelete"` (line 134) to reach `0x75`.
+The standalone `libs/qol-hotkeys/src/macos_keycode.rs::parse_key` (line 91, the **only** entry point used by `plugins/keyremap/src/remap.rs`) instead **conflates** the two: line 133, `"delete" | "backspace" => Some(DELETE)` (`0x33`) - treating them as synonyms - while requiring a separate string `"forwarddelete"` (line 134) to reach `0x75`.
 
 **Read on which side is the bug:** `parse_key` is the outlier. The rest of the same crate already encodes the "Backspace ≠ Delete" distinction correctly and has a test enforcing it; `parse_key` re-implements a second, informal string table that quietly drops that distinction, most likely written by someone thinking of "the key labeled delete on my Mac keyboard" without checking that the crate already has a canonical answer two files away.
 
@@ -111,7 +111,7 @@ Not just one duplicated function - two complete 4-file platform splits for the s
 
 ### 9. Notification dispatch duplicated
 
-`plugins/plugin-cli-sessions/src/notify.rs` (lines 38, 49) and `plugins/plugin-ide-checkout/src/main.rs` (`send_notification`/`send_osascript_notification`, lines 77-109) each independently shell out to `osascript` + `notify-send`.
+`plugins/cli-sessions/src/notify.rs` (lines 38, 49) and `plugins/ide-checkout/src/main.rs` (`send_notification`/`send_osascript_notification`, lines 77-109) each independently shell out to `osascript` + `notify-send`.
 
 **Escaping diffed this pass - no security concern.** Both use the literal same logic: `s.replace('\\', "\\\\").replace('"', "\\\"")`. No injection-risk drift between the two; this really is "just" duplication, not a divergent-correctness bug.
 
@@ -119,7 +119,7 @@ Not just one duplicated function - two complete 4-file platform splits for the s
 
 ### 10. Ghost-debug config-field schema duplicated
 
-`ghost_opacity`/`ghost_debug_color` field blocks are byte-identical TOML between `plugins/plugin-launcher/qol-config.toml` (lines 15-28) and `plugins/plugin-alt-tab/qol-config.toml` (lines 124-137) - same `config_key` strings, same field definitions.
+`ghost_opacity`/`ghost_debug_color` field blocks are byte-identical TOML between `plugins/launcher/qol-config.toml` (lines 15-28) and `plugins/alt-tab/qol-config.toml` (lines 124-137) - same `config_key` strings, same field definitions.
 
 **Checked: `qol-config.toml` has no include/extends mechanism.** `libs/qol-config/src/lib.rs`'s loaders (`load_plugin_config`, `load_plugin_config_with_contract`, etc.) parse a single file each - there's no multi-file merge or `[import]`-style feature to hang a "shared schema" off of. Inventing one would be a real format-design change touching every plugin's config loading, not a small fix.
 
@@ -148,15 +148,15 @@ apps/qol-tray/src/doctor/checks/hotkey_shadows/mod.rs
 apps/qol-tray/src/features/plugin_store/server/boot.rs
 apps/qol-tray/src/features/plugin_store/server/logs_handlers.rs
 apps/qol-tray/src/installer/mod.rs
-plugins/plugin-window-actions/src/state_store.rs
-plugins/plugin-launcher/examples/07_hide_show.rs
-plugins/plugin-launcher/src/launch/mod.rs
+plugins/window-actions/src/state_store.rs
+plugins/launcher/examples/07_hide_show.rs
+plugins/launcher/src/launch/mod.rs
 plugins/qol-shot/src/region_selector.rs
-plugins/plugin-keyremap/src/main.rs
-plugins/plugin-pointz/src/input/mod.rs
-plugins/plugin-alt-tab/src/preview_plane/backends/mod.rs
-plugins/plugin-alt-tab/src/discovery/mod.rs
-plugins/plugin-cli-sessions/src/notify.rs
+plugins/keyremap/src/main.rs
+plugins/pointz/src/input/mod.rs
+plugins/alt-tab/src/preview_plane/backends/mod.rs
+plugins/alt-tab/src/discovery/mod.rs
+plugins/cli-sessions/src/notify.rs
 ```
 
 ### 13. Frecency silent error swallow (carried from 2026-07-01 backlog, still open)
@@ -165,7 +165,7 @@ plugins/plugin-cli-sessions/src/notify.rs
 
 ### 14. Dead file (carried from 2026-07-01 backlog, still open)
 
-`plugins/plugin-os-themes/src/cursor/platform/linux/x11_xfixes.rs` (19 lines) - not declared in the sibling `mod.rs`, zero references anywhere in the crate (reconfirmed with a fresh repo-wide grep this pass), not even compiled. Delete the file.
+`plugins/os-themes/src/cursor/platform/linux/x11_xfixes.rs` (19 lines) - not declared in the sibling `mod.rs`, zero references anywhere in the crate (reconfirmed with a fresh repo-wide grep this pass), not even compiled. Delete the file.
 
 ---
 
