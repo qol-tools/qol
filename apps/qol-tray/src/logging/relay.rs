@@ -86,10 +86,11 @@ fn relay_lines(
         if should_suppress(&line, suppress) {
             continue;
         }
-        let _ = console.write_all(line.as_bytes());
+        let redacted = super::redaction::redact_secrets(&line);
+        let _ = console.write_all(redacted.as_bytes());
         let _ = console.flush();
         if let Some(file) = file.as_deref_mut() {
-            let _ = file.write_all(format!("[{label}] {line}").as_bytes());
+            let _ = file.write_all(format!("[{label}] {redacted}").as_bytes());
             let _ = file.flush();
         }
     }
@@ -125,9 +126,12 @@ pub(crate) fn attach_with_prod_log(
             }
             let trimmed = line.trim_end();
             if is_error_line(trimmed) {
-                crate::log_error!(&key, source = source, "[{}] {}", id, trimmed);
+                let redacted = super::redaction::redact_secrets(trimmed);
+                crate::log_error!(&key, source = source, "[{}] {}", id, redacted);
+                eprintln!("{redacted}");
+            } else {
+                eprint!("{}", super::redaction::redact_secrets(&line));
             }
-            eprint!("{}", line);
         }
     });
 }
