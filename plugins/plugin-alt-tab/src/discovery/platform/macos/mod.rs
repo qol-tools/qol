@@ -4,6 +4,7 @@ use ffi::{
     CGWindowListCopyWindowInfo, K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
     K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
+use qol_conventions::launcher;
 use std::collections::HashSet;
 use std::ffi::c_void;
 use window_enum::{
@@ -71,6 +72,16 @@ fn is_system_process(app_name: &str) -> bool {
     app.contains("screencapturekit")
         || app.contains("screensharingindicator")
         || app.contains("registerassistantservice")
+}
+
+fn is_launcher_surface(title: &str) -> bool {
+    title == launcher::WINDOW_TITLE
+        || title
+            .strip_prefix(launcher::WINDOW_TITLE)
+            .is_some_and(|suffix| suffix.starts_with('@'))
+        || title
+            .strip_prefix(launcher::APP_ID)
+            .is_some_and(|suffix| suffix.starts_with("-keepalive-"))
 }
 
 struct CgKeys {
@@ -159,6 +170,17 @@ fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<
         return None;
     }
     if is_system_process(&app_name) {
+        return None;
+    }
+    if is_launcher_surface(&title) {
+        qol_runtime::probe!(
+            "FILTERED",
+            "reason=launcher-surface wid={} pid={} app={:?} title={:?}",
+            id,
+            pid,
+            app_name,
+            title
+        );
         return None;
     }
     let (_, _, ww, wh) = ffi::dict_get_rect(dict, keys.bounds).unwrap_or((0.0, 0.0, 0.0, 0.0));
@@ -285,4 +307,30 @@ fn pids_with_multiple_windows(windows: &[CgWindow]) -> HashSet<i32> {
         repeated.insert(window.pid);
     }
     repeated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_launcher_surface, launcher};
+
+    #[test]
+    fn launcher_surfaces_are_never_switcher_candidates() {
+        let cases = [
+            (launcher::WINDOW_TITLE.to_string(), true),
+            (format!("{}@0,0,1800x1169", launcher::WINDOW_TITLE), true),
+            (format!("{}@", launcher::WINDOW_TITLE), true),
+            (format!("{}-keepalive-5943", launcher::APP_ID), true),
+            ("launcher".to_string(), false),
+            (format!("{} settings", launcher::WINDOW_TITLE), false),
+            (
+                format!("not-{}@0,0,1800x1169", launcher::WINDOW_TITLE),
+                false,
+            ),
+            (format!("{}-keepalive", launcher::APP_ID), false),
+        ];
+
+        for (title, expected) in cases {
+            assert_eq!(is_launcher_surface(&title), expected, "title: {title}");
+        }
+    }
 }
