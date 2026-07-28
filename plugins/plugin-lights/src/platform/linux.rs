@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serialport::SerialPortInfo;
 
-use super::{DoctorPlatformMetadata, SerialMetadata};
+use super::{DoctorPlatformMetadata, SerialAccess, SerialMetadata};
 
 pub(crate) fn doctor_platform_metadata() -> DoctorPlatformMetadata {
     DoctorPlatformMetadata {
@@ -27,6 +27,10 @@ pub(crate) fn detect_coordinator_port(ports: &[SerialPortInfo]) -> Option<String
 
 pub(crate) fn candidate_coordinator_ports(ports: &[SerialPortInfo]) -> Vec<String> {
     super::port_detection::ranked_port_names(ports, candidate_score)
+}
+
+pub(crate) fn inspect_serial_access(path: &str) -> SerialAccess {
+    super::unix::inspect_serial_access(path)
 }
 
 fn score_port(port: &SerialPortInfo) -> Option<u16> {

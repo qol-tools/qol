@@ -2,12 +2,13 @@ use qol_headless::{DoctorCheck, DoctorCheckResult};
 use serde_json::{json, Value};
 
 use crate::config::model::PluginConfig;
-use crate::platform::SerialMetadata;
+use crate::platform::{SerialAccess, SerialMetadata};
 
-const CHECK_IDS: [&str; 3] = [
+const CHECK_IDS: [&str; 4] = [
     "platform_supported",
     "config_readable",
     "coordinator_candidates",
+    "permissions",
 ];
 
 pub(crate) fn checks() -> Vec<DoctorCheck> {
@@ -27,7 +28,97 @@ pub(crate) fn checks() -> Vec<DoctorCheck> {
             "Enumerate serial metadata and rank coordinator candidates without opening or probing ports.",
             || Ok(coordinator_candidates_check()),
         ),
+        DoctorCheck::new(
+            CHECK_IDS[3],
+            "Inspect effective read/write access to candidate serial paths without opening them.",
+            || Ok(permissions_check()),
+        ),
     ]
+}
+
+fn permissions_check() -> DoctorCheckResult {
+    let inspection = match crate::config::store::inspect() {
+        Ok(inspection) => inspection,
+        Err(error) => {
+            return DoctorCheckResult::fail(CHECK_IDS[3], error.to_string())
+                .with_fix("Repair or remove the invalid Lights config file");
+        }
+    };
+    let metadata = match crate::platform::enumerate_serial_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return DoctorCheckResult::warn(
+                CHECK_IDS[3],
+                format!("Serial access cannot be inspected: {error}"),
+            )
+            .with_fix("Reconnect the coordinator and verify its serial device permissions")
+            .with_details(permission_details(&[], false));
+        }
+    };
+    let paths = permission_paths(&inspection.config, &metadata);
+    let observations = paths
+        .iter()
+        .map(|path| crate::platform::inspect_serial_access(path))
+        .collect::<Vec<_>>();
+    permissions_result(&observations)
+}
+
+fn permission_paths(config: &PluginConfig, metadata: &SerialMetadata) -> Vec<String> {
+    if config.backend.serial_port != "auto" {
+        return vec![config.backend.serial_port.clone()];
+    }
+    if let Some(detected) = crate::platform::detect_coordinator_port(&metadata.ports) {
+        return vec![detected];
+    }
+    crate::platform::candidate_coordinator_ports(&metadata.ports)
+}
+
+fn permissions_result(observations: &[SerialAccess]) -> DoctorCheckResult {
+    let details = permission_details(observations, true);
+    if observations.is_empty() {
+        return DoctorCheckResult::warn(
+            CHECK_IDS[3],
+            "No coordinator serial path is available for an access check",
+        )
+        .with_fix("Connect a compatible Zigbee coordinator or configure its serial path")
+        .with_details(details);
+    }
+    let inaccessible = observations
+        .iter()
+        .filter(|observation| !observation.readable_writable)
+        .collect::<Vec<_>>();
+    if !inaccessible.is_empty() {
+        return DoctorCheckResult::fail(
+            CHECK_IDS[3],
+            format!(
+                "{} coordinator serial path(s) are not readable and writable",
+                inaccessible.len()
+            ),
+        )
+        .with_fix("Grant the current user read/write access to the reported serial device paths")
+        .with_details(details);
+    }
+    DoctorCheckResult::ok(
+        CHECK_IDS[3],
+        format!(
+            "{} coordinator serial path(s) are readable and writable",
+            observations.len()
+        ),
+    )
+    .with_details(details)
+}
+
+fn permission_details(observations: &[SerialAccess], enumeration_succeeded: bool) -> Value {
+    json!({
+        "enumeration_succeeded": enumeration_succeeded,
+        "paths": observations.iter().map(|observation| json!({
+            "path": observation.path,
+            "readable_writable": observation.readable_writable,
+            "issue": observation.issue,
+        })).collect::<Vec<_>>(),
+        "port_open_attempted": false,
+        "coordinator_probe_attempted": false,
+    })
 }
 
 fn platform_supported_check() -> DoctorCheckResult {
@@ -305,6 +396,38 @@ mod tests {
 
         assert_eq!(details["network_key_state"], "configured");
         assert!(!encoded.contains("00:11:22"));
+    }
+
+    #[test]
+    fn permission_results_are_semantic_and_never_claim_to_open_ports() {
+        let cases = [
+            (
+                vec![SerialAccess {
+                    path: "/dev/tty.ok".to_string(),
+                    readable_writable: true,
+                    issue: None,
+                }],
+                DoctorStatus::Ok,
+            ),
+            (
+                vec![SerialAccess {
+                    path: "/dev/tty.denied".to_string(),
+                    readable_writable: false,
+                    issue: Some("permission denied".to_string()),
+                }],
+                DoctorStatus::Fail,
+            ),
+            (Vec::new(), DoctorStatus::Warn),
+        ];
+
+        for (observations, status) in cases {
+            let result = permissions_result(&observations);
+            let details = result.details.unwrap();
+
+            assert_eq!(result.status, status);
+            assert_eq!(details["port_open_attempted"], false);
+            assert_eq!(details["coordinator_probe_attempted"], false);
+        }
     }
 
     fn unknown_port(name: &str) -> SerialPortInfo {

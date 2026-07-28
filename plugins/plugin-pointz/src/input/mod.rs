@@ -15,6 +15,15 @@ pub(crate) struct PlatformSupport {
     pub input_backend: bool,
 }
 
+pub(crate) struct InputReadiness {
+    pub platform: &'static str,
+    pub ready: bool,
+    pub authorization_granted: Option<bool>,
+    pub display_env_set: Option<bool>,
+    pub backend: &'static str,
+    pub issue: Option<String>,
+}
+
 impl InputHandler {
     pub fn new() -> Result<Self> {
         Ok(Self {
@@ -39,6 +48,10 @@ impl InputHandler {
 
 pub(crate) fn platform_support() -> PlatformSupport {
     platform::platform_support()
+}
+
+pub(crate) fn inspect_readiness() -> InputReadiness {
+    platform::inspect_readiness()
 }
 
 pub(crate) trait InputHandlerTrait: Send + Sync {

@@ -1,6 +1,6 @@
 use crate::command::ModifierKeys;
 use crate::config::ServerConfig;
-use crate::input::{InputHandlerTrait, PlatformSupport};
+use crate::input::{InputHandlerTrait, InputReadiness, PlatformSupport};
 use anyhow::Result;
 use rdev::{simulate, Button, EventType, Key, SimulateError};
 use std::sync::Mutex;
@@ -17,6 +17,54 @@ pub(in crate::input) fn platform_support() -> PlatformSupport {
         name: "linux",
         declared: true,
         input_backend: true,
+    }
+}
+
+pub(in crate::input) fn inspect_readiness() -> InputReadiness {
+    let display_env_set = std::env::var_os("DISPLAY").is_some_and(|value| !value.is_empty());
+    if !display_env_set {
+        return InputReadiness {
+            platform: "linux",
+            ready: false,
+            authorization_granted: Some(false),
+            display_env_set: Some(false),
+            backend: "x11-xtest",
+            issue: Some("DISPLAY is not set".to_string()),
+        };
+    }
+    let display = unsafe { xlib::XOpenDisplay(std::ptr::null()) };
+    if display.is_null() {
+        return InputReadiness {
+            platform: "linux",
+            ready: false,
+            authorization_granted: Some(false),
+            display_env_set: Some(true),
+            backend: "x11-xtest",
+            issue: Some("the X11 display cannot be opened".to_string()),
+        };
+    }
+    let extension = std::ffi::CString::new("XTEST").expect("static extension name is valid");
+    let mut opcode = 0;
+    let mut event = 0;
+    let mut error = 0;
+    let xtest_available = unsafe {
+        let available = xlib::XQueryExtension(
+            display,
+            extension.as_ptr(),
+            &mut opcode,
+            &mut event,
+            &mut error,
+        ) != 0;
+        xlib::XCloseDisplay(display);
+        available
+    };
+    InputReadiness {
+        platform: "linux",
+        ready: xtest_available,
+        authorization_granted: Some(true),
+        display_env_set: Some(true),
+        backend: "x11-xtest",
+        issue: (!xtest_available).then(|| "the XTEST extension is unavailable".to_string()),
     }
 }
 

@@ -18,3 +18,14 @@ pub(crate) fn required_binaries_check() -> DoctorCheckResult {
     )
     .with_fix("Run Window Actions on Linux or macOS")
 }
+
+pub(crate) fn permissions_check() -> DoctorCheckResult {
+    DoctorCheckResult::fail(
+        "permissions",
+        format!(
+            "Window Actions cannot inspect permissions on unsupported {}",
+            std::env::consts::OS
+        ),
+    )
+    .with_fix("Run Window Actions on Linux or macOS")
+}

@@ -7,16 +7,16 @@ mod unsupported;
 
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{
-    execute_action, platform_supported_check, required_binaries_check, state_file_path,
-    GlideController,
+    execute_action, permissions_check, platform_supported_check, required_binaries_check,
+    state_file_path, GlideController,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{
-    execute_action, platform_supported_check, required_binaries_check, state_file_path,
-    GlideController,
+    execute_action, permissions_check, platform_supported_check, required_binaries_check,
+    state_file_path, GlideController,
 };
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) use unsupported::{
-    execute_action, platform_supported_check, required_binaries_check, state_file_path,
-    GlideController,
+    execute_action, permissions_check, platform_supported_check, required_binaries_check,
+    state_file_path, GlideController,
 };

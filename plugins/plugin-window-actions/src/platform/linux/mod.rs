@@ -13,7 +13,7 @@ use crate::restore::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW
 
 use system::{run_cinnamon_eval, X11WindowSystem};
 
-pub(crate) use doctor::{platform_supported_check, required_binaries_check};
+pub(crate) use doctor::{permissions_check, platform_supported_check, required_binaries_check};
 pub(crate) use glide::GlideController;
 
 pub(crate) fn execute_action(

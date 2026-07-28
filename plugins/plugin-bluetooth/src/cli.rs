@@ -292,6 +292,11 @@ fn doctor_checks() -> Vec<DoctorCheck> {
             config_readable_check,
         ),
         DoctorCheck::new(
+            "required_binaries",
+            "Inspect required platform helper metadata without executing it.",
+            || Ok(platform::required_binaries_check()),
+        ),
+        DoctorCheck::new(
             "managed_devices",
             "Verify the automatic reconnect allowlist contains valid addresses.",
             managed_devices_check,
@@ -488,5 +493,17 @@ mod tests {
 
         assert_eq!(execution.exit_code, qol_headless::EXIT_SUCCESS);
         assert!(execution.stdout.contains("without changing it"));
+    }
+
+    #[test]
+    fn doctor_registers_required_binary_check() {
+        let execution = app().execute(vec![
+            "doctor".to_string(),
+            "required_binaries".to_string(),
+            "help".to_string(),
+        ]);
+
+        assert_eq!(execution.exit_code, qol_headless::EXIT_SUCCESS);
+        assert!(execution.stdout.contains("without executing it"));
     }
 }

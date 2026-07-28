@@ -1,4 +1,4 @@
-use super::Inspection;
+use super::{Inspection, PermissionInspection};
 
 pub(in crate::runtime::doctor) fn inspect() -> Inspection {
     Inspection {
@@ -9,6 +9,15 @@ pub(in crate::runtime::doctor) fn inspect() -> Inspection {
         display_env_set: env_is_set("DISPLAY"),
         wayland_env_set: env_is_set("WAYLAND_DISPLAY"),
         session_type: session_type(),
+    }
+}
+
+pub(in crate::runtime::doctor) fn inspect_permissions() -> PermissionInspection {
+    PermissionInspection {
+        platform: "linux",
+        supported: true,
+        accessibility_trusted: None,
+        screen_recording_trusted: None,
     }
 }
 

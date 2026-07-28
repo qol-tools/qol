@@ -6,6 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
+use x11rb::connection::Connection;
 
 pub fn show_notification(title: &str, message: &str, timeout_ms: u32) {
     let _ = Command::new("notify-send")
@@ -112,6 +113,56 @@ pub fn required_binaries_check() -> DoctorCheckResult {
         format!("Missing required binaries: {}.", missing.join(", ")),
     )
     .with_fix("Install ffmpeg, xrandr, and xdpyinfo.")
+}
+
+pub fn permissions_check() -> DoctorCheckResult {
+    DoctorCheckResult::ok(
+        "permissions",
+        "Linux X11 capture requires no separate OS permission grant.",
+    )
+    .with_details(serde_json::json!({
+        "platform": "linux",
+        "authorization": "x11_session",
+        "prompted": false,
+        "capture_attempted": false,
+    }))
+}
+
+pub fn external_services_check() -> DoctorCheckResult {
+    let display = std::env::var_os("DISPLAY")
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string_lossy().into_owned());
+    let observation = x11rb::connect(None)
+        .map(|(connection, _)| connection.setup().roots.len())
+        .map_err(|error| error.to_string());
+    external_services_result(display, observation)
+}
+
+fn external_services_result(
+    display: Option<String>,
+    observation: Result<usize, String>,
+) -> DoctorCheckResult {
+    let details = serde_json::json!({
+        "platform": "linux",
+        "service": "x11",
+        "display": display,
+        "screen_count": observation.as_ref().ok(),
+        "connected": observation.is_ok(),
+        "capture_attempted": false,
+    });
+    match observation {
+        Ok(count) => DoctorCheckResult::ok(
+            "external_services",
+            format!("The X11 display service responded with {count} screen(s)."),
+        )
+        .with_details(details),
+        Err(error) => DoctorCheckResult::fail(
+            "external_services",
+            format!("The X11 display service is unavailable: {error}"),
+        )
+        .with_fix("Run qol-shot in an authorized X11 or XWayland graphical session.")
+        .with_details(details),
+    }
 }
 
 pub(super) fn resolve_command(command: &str) -> Option<PathBuf> {
@@ -231,6 +282,25 @@ mod tests {
 
         for (output, expected) in cases {
             assert_eq!(notification_action(output), expected);
+        }
+    }
+
+    #[test]
+    fn display_service_results_never_claim_to_capture() {
+        let cases = [
+            (Ok(1), qol_headless::DoctorStatus::Ok),
+            (
+                Err("connection refused".to_string()),
+                qol_headless::DoctorStatus::Fail,
+            ),
+        ];
+
+        for (observation, status) in cases {
+            let result = external_services_result(Some(":99".to_string()), observation);
+            let details = result.details.unwrap();
+
+            assert_eq!(result.status, status);
+            assert_eq!(details["capture_attempted"], false);
         }
     }
 }

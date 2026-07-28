@@ -5,14 +5,16 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use qol_headless::{DoctorCheck, DoctorCheckResult};
+use qol_terminal_sessions::SessionInventory;
 use serde_json::{json, Value};
 
 use crate::daemon::actions::CONFIG;
 
-const CHECK_IDS: [&str; 5] = [
+const CHECK_IDS: [&str; 6] = [
     "platform_supported",
     "config_readable",
     "required_binaries",
+    "external_services",
     "runtime_dirs",
     "daemon_endpoint",
 ];
@@ -36,11 +38,16 @@ pub(crate) fn checks() -> Vec<DoctorCheck> {
         ),
         DoctorCheck::new(
             CHECK_IDS[3],
+            "Query Kitty remote control for its current read-only session inventory.",
+            external_services_check,
+        ),
+        DoctorCheck::new(
+            CHECK_IDS[4],
             "Inspect session-state and snapshot path metadata without reading or creating them.",
             runtime_dirs_check,
         ),
         DoctorCheck::new(
-            CHECK_IDS[4],
+            CHECK_IDS[5],
             "Inspect the configured daemon endpoint without connecting to it.",
             daemon_endpoint_check,
         ),
@@ -136,6 +143,51 @@ fn required_binaries_check() -> Result<DoctorCheckResult> {
     .with_details(details))
 }
 
+fn external_services_check() -> Result<DoctorCheckResult> {
+    let inspection = platform::inspect();
+    if !inspection.supported {
+        return Ok(external_services_result(Err(
+            "Kitty integration is unsupported on this platform".to_string(),
+        )));
+    }
+    if inspection.kitten.is_none() {
+        return Ok(external_services_result(Err(
+            "The kitten remote-control client is unavailable on PATH".to_string(),
+        )));
+    }
+    let inventory = qol_terminal_sessions::kitty::KittyBackend::default()
+        .discover()
+        .map(|sessions| sessions.len())
+        .map_err(|error| error.to_string());
+    Ok(external_services_result(inventory))
+}
+
+fn external_services_result(inventory: Result<usize, String>) -> DoctorCheckResult {
+    match inventory {
+        Ok(count) => DoctorCheckResult::ok(
+            CHECK_IDS[3],
+            format!("Kitty remote control responded with {count} session(s)."),
+        )
+        .with_details(json!({
+            "service": "kitty_remote_control",
+            "query": "session_inventory",
+            "session_count": count,
+            "mutated": false,
+        })),
+        Err(error) => DoctorCheckResult::fail(
+            CHECK_IDS[3],
+            format!("Kitty remote control is not ready: {error}"),
+        )
+        .with_fix("Start Kitty with remote control enabled and make its control socket available.")
+        .with_details(json!({
+            "service": "kitty_remote_control",
+            "query": "session_inventory",
+            "session_count": null,
+            "mutated": false,
+        })),
+    }
+}
+
 fn runtime_dirs_check() -> Result<DoctorCheckResult> {
     runtime_dirs_result([
         PathSpec::new(
@@ -159,7 +211,7 @@ fn runtime_dirs_check() -> Result<DoctorCheckResult> {
 fn runtime_dirs_result<const N: usize>(specs: [PathSpec; N]) -> Result<DoctorCheckResult> {
     if specs.iter().any(|spec| spec.path.is_none()) {
         return Ok(DoctorCheckResult::fail(
-            CHECK_IDS[3],
+            CHECK_IDS[4],
             "The CLI Sessions data directory cannot be resolved.",
         )
         .with_fix("Run with a valid platform user-data directory."));
@@ -194,19 +246,19 @@ fn runtime_dirs_result<const N: usize>(specs: [PathSpec; N]) -> Result<DoctorChe
 
     let result = if invalid > 0 {
         DoctorCheckResult::fail(
-            CHECK_IDS[3],
+            CHECK_IDS[4],
             format!("{invalid} runtime path(s) have an unreadable or unexpected type."),
         )
         .with_fix("Repair or remove the reported CLI Sessions runtime paths.")
     } else if symlinks > 0 {
         DoctorCheckResult::warn(
-            CHECK_IDS[3],
+            CHECK_IDS[4],
             format!("{symlinks} runtime path(s) are symbolic links."),
         )
         .with_fix("Replace symbolic links with plugin-owned runtime paths.")
     } else {
         DoctorCheckResult::ok(
-            CHECK_IDS[3],
+            CHECK_IDS[4],
             format!(
                 "Runtime path metadata is valid; {missing} path(s) will be created only by operational commands."
             ),
@@ -218,7 +270,7 @@ fn runtime_dirs_result<const N: usize>(specs: [PathSpec; N]) -> Result<DoctorChe
 fn daemon_endpoint_check() -> Result<DoctorCheckResult> {
     let Some(path) = qol_plugin_daemon::daemon::socket_path(&CONFIG) else {
         return Ok(DoctorCheckResult::warn(
-            CHECK_IDS[4],
+            CHECK_IDS[5],
             "No daemon socket path is injected for this standalone process.",
         )
         .with_fix("Run CLI Sessions through qol-tray to inject its daemon endpoint.")
@@ -240,26 +292,26 @@ fn endpoint_result(path: PathBuf) -> Result<DoctorCheckResult> {
     });
     let result = match &observation.state {
         PathState::Expected => DoctorCheckResult::ok(
-            CHECK_IDS[4],
+            CHECK_IDS[5],
             "Daemon endpoint metadata is present; no connection was attempted.",
         ),
         PathState::Missing => DoctorCheckResult::warn(
-            CHECK_IDS[4],
+            CHECK_IDS[5],
             "The configured daemon endpoint does not currently exist.",
         )
         .with_fix("Start CLI Sessions through qol-tray when resident monitoring is needed."),
         PathState::Symlink => DoctorCheckResult::warn(
-            CHECK_IDS[4],
+            CHECK_IDS[5],
             "The configured daemon endpoint is a symbolic link.",
         )
         .with_fix("Use a plugin-owned daemon socket path."),
         PathState::WrongType => DoctorCheckResult::fail(
-            CHECK_IDS[4],
+            CHECK_IDS[5],
             "The configured daemon endpoint has an unexpected filesystem type.",
         )
         .with_fix("Remove the stale endpoint before starting CLI Sessions."),
         PathState::Unreadable(error) => DoctorCheckResult::fail(
-            CHECK_IDS[4],
+            CHECK_IDS[5],
             format!("The configured daemon endpoint cannot be inspected: {error}"),
         )
         .with_fix("Repair the endpoint path permissions."),
@@ -405,5 +457,26 @@ mod tests {
         assert_eq!(result.status, DoctorStatus::Warn);
         assert!(!endpoint.exists());
         assert_eq!(result.details.unwrap()["connected"], false);
+    }
+
+    #[test]
+    fn external_service_result_preserves_read_only_query_semantics() {
+        let cases = [
+            (Ok(2), DoctorStatus::Ok, Some(2)),
+            (
+                Err("remote control disabled".to_string()),
+                DoctorStatus::Fail,
+                None,
+            ),
+        ];
+
+        for (observation, status, count) in cases {
+            let result = external_services_result(observation);
+            let details = result.details.unwrap();
+
+            assert_eq!(result.status, status);
+            assert_eq!(details["mutated"], false);
+            assert_eq!(details["session_count"].as_u64(), count);
+        }
     }
 }

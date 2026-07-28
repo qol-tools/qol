@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{mpsc, LazyLock, RwLock};
 use std::time::{Duration, Instant};
@@ -14,6 +16,7 @@ use bluer::{
 use futures::future::pending;
 use futures::stream::{LocalBoxStream, SelectAll};
 use futures::{Stream, StreamExt};
+use qol_headless::DoctorCheckResult;
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
@@ -45,6 +48,43 @@ const EXPLICIT_DEVICE_ACTION_TIMEOUT: Duration = Duration::from_secs(45);
 const BREDR_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(15);
 const AUDIO_SINK_PROFILE: u16 = 0x110b;
 const PIPEWIRE_SELF_HEAL_SETTLE: Duration = Duration::from_millis(750);
+
+pub fn required_binaries_check() -> DoctorCheckResult {
+    let pactl = executable_on_path("pactl");
+    let details = serde_json::json!({
+        "platform": "linux",
+        "pactl": pactl,
+        "executed": false,
+    });
+    let Some(path) = pactl else {
+        return DoctorCheckResult::fail(
+            "required_binaries",
+            "The pactl audio-profile helper is unavailable on PATH",
+        )
+        .with_fix("Install PulseAudio utilities or the PipeWire pactl compatibility client")
+        .with_details(details);
+    };
+    DoctorCheckResult::ok(
+        "required_binaries",
+        format!(
+            "pactl executable metadata is available at {}",
+            path.display()
+        ),
+    )
+    .with_details(details)
+}
+
+fn executable_on_path(program: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|directory| directory.join(program))
+        .find(|candidate| is_executable(candidate))
+}
+
+fn is_executable(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
 
 struct DiscoverySession {
     deadline: Instant,

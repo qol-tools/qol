@@ -6,9 +6,10 @@ use serde_json::json;
 use crate::config::ServerConfig;
 use crate::security::{ExistingSecretInspection, ExistingSecretState};
 
-const CHECK_IDS: [&str; 5] = [
+const CHECK_IDS: [&str; 6] = [
     "platform_supported",
     "config_readable",
+    "permissions",
     "network_metadata",
     "runtime_endpoints",
     "pairing_secret",
@@ -28,16 +29,21 @@ pub(crate) fn checks() -> Vec<DoctorCheck> {
         ),
         DoctorCheck::new(
             CHECK_IDS[2],
+            "Query input-backend authorization and display readiness without sending input events.",
+            || Ok(permissions_result(crate::input::inspect_readiness())),
+        ),
+        DoctorCheck::new(
+            CHECK_IDS[3],
             "Inspect hostname and network-interface metadata without binding, connecting, or sending.",
             || Ok(network_metadata_result()),
         ),
         DoctorCheck::new(
-            CHECK_IDS[3],
+            CHECK_IDS[4],
             "Report expected daemon and UDP endpoints without binding or connecting.",
             || Ok(runtime_endpoints_result()),
         ),
         DoctorCheck::new(
-            CHECK_IDS[4],
+            CHECK_IDS[5],
             "Inspect existing pairing-secret path metadata without reading, creating, or revealing it.",
             || Ok(pairing_secret_result()),
         ),
@@ -105,12 +111,47 @@ fn config_readable_result() -> DoctorCheckResult {
     }))
 }
 
+fn permissions_result(readiness: crate::input::InputReadiness) -> DoctorCheckResult {
+    let details = json!({
+        "platform": readiness.platform,
+        "backend": readiness.backend,
+        "authorization_granted": readiness.authorization_granted,
+        "display_env_set": readiness.display_env_set,
+        "issue": readiness.issue,
+        "input_event_sent": false,
+        "input_handler_initialized": false,
+    });
+    if readiness.ready {
+        return DoctorCheckResult::ok(
+            CHECK_IDS[2],
+            format!(
+                "The {} input backend is authorized and ready",
+                readiness.backend
+            ),
+        )
+        .with_details(details);
+    }
+    DoctorCheckResult::fail(
+        CHECK_IDS[2],
+        readiness
+            .issue
+            .as_deref()
+            .unwrap_or("The PointZ input backend is not ready"),
+    )
+    .with_fix(match readiness.platform {
+        "macos" => "Enable PointZ in System Settings > Privacy & Security > Accessibility",
+        "linux" => "Run PointZ in an authorized X11 session with the XTEST extension",
+        _ => "Run PointZ on Linux or macOS",
+    })
+    .with_details(details)
+}
+
 fn network_metadata_result() -> DoctorCheckResult {
     let metadata = crate::network::inspect_metadata();
     let details = network_details(&metadata);
     if let Some(issue) = metadata.interface_issue {
         return DoctorCheckResult::warn(
-            CHECK_IDS[2],
+            CHECK_IDS[3],
             format!("Hostname is available, but interfaces could not be inspected: {issue}"),
         )
         .with_fix("Allow PointZ to inspect local network-interface metadata")
@@ -118,7 +159,7 @@ fn network_metadata_result() -> DoctorCheckResult {
     }
     if metadata.local_ipv4.is_none() {
         return DoctorCheckResult::warn(
-            CHECK_IDS[2],
+            CHECK_IDS[3],
             "Hostname is available, but no non-loopback IPv4 interface was found",
         )
         .with_fix("Connect this host to an IPv4 network reachable by the PointZ client")
@@ -126,7 +167,7 @@ fn network_metadata_result() -> DoctorCheckResult {
     }
 
     DoctorCheckResult::ok(
-        CHECK_IDS[2],
+        CHECK_IDS[3],
         format!(
             "Hostname and {} network interface address(es) are available",
             metadata.interfaces.len()
@@ -163,7 +204,7 @@ fn runtime_endpoints_result() -> DoctorCheckResult {
         .clone()
         .unwrap_or_else(|| PathBuf::from(ServerConfig::DAEMON_SOCKET));
     DoctorCheckResult::ok(
-        CHECK_IDS[3],
+        CHECK_IDS[4],
         format!(
             "Expected daemon socket and UDP ports {} and {} are defined",
             ServerConfig::DISCOVERY_PORT,
@@ -224,18 +265,18 @@ fn pairing_secret_inspection_result(inspection: ExistingSecretInspection) -> Doc
     let details = secret_details(&inspection);
     match inspection.state {
         ExistingSecretState::Missing => DoctorCheckResult::warn(
-            CHECK_IDS[4],
+            CHECK_IDS[5],
             "No pairing secret exists; the daemon will create one when it starts",
         )
         .with_fix("Start PointZ normally to initialize its pairing secret")
         .with_details(details),
         ExistingSecretState::Present => DoctorCheckResult::ok(
-            CHECK_IDS[4],
+            CHECK_IDS[5],
             "Existing pairing-secret regular-file metadata is present; contents were not inspected",
         )
         .with_details(details),
         ExistingSecretState::Invalid => DoctorCheckResult::fail(
-            CHECK_IDS[4],
+            CHECK_IDS[5],
             inspection
                 .issue
                 .as_deref()
@@ -244,7 +285,7 @@ fn pairing_secret_inspection_result(inspection: ExistingSecretInspection) -> Doc
         .with_fix("Remove the invalid pairing-secret path, then start PointZ to regenerate it")
         .with_details(details),
         ExistingSecretState::Unavailable => DoctorCheckResult::fail(
-            CHECK_IDS[4],
+            CHECK_IDS[5],
             inspection
                 .issue
                 .as_deref()
@@ -338,5 +379,42 @@ mod tests {
             result.details.expect("secret details missing")["content_inspected"],
             false
         );
+    }
+
+    #[test]
+    fn input_readiness_result_never_sends_an_event() {
+        let cases = [
+            (
+                crate::input::InputReadiness {
+                    platform: "linux",
+                    ready: true,
+                    authorization_granted: Some(true),
+                    display_env_set: Some(true),
+                    backend: "x11-xtest",
+                    issue: None,
+                },
+                DoctorStatus::Ok,
+            ),
+            (
+                crate::input::InputReadiness {
+                    platform: "macos",
+                    ready: false,
+                    authorization_granted: Some(false),
+                    display_env_set: None,
+                    backend: "coregraphics-accessibility",
+                    issue: Some("Accessibility permission is not granted".to_string()),
+                },
+                DoctorStatus::Fail,
+            ),
+        ];
+
+        for (readiness, status) in cases {
+            let result = permissions_result(readiness);
+            let details = result.details.unwrap();
+
+            assert_eq!(result.status, status);
+            assert_eq!(details["input_event_sent"], false);
+            assert_eq!(details["input_handler_initialized"], false);
+        }
     }
 }

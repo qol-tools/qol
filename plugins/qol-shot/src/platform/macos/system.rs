@@ -16,6 +16,11 @@ use super::native_capture;
 
 static FROZEN_CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+}
+
 pub fn process_alive(pid: u32) -> bool {
     super::super::unix::process_alive(pid)
 }
@@ -324,6 +329,60 @@ pub fn required_binaries_check() -> DoctorCheckResult {
         "required_binaries",
         "Required macOS capture, composition, and conversion tools are available.",
     )
+}
+
+pub fn permissions_check() -> DoctorCheckResult {
+    let trusted = unsafe { CGPreflightScreenCaptureAccess() };
+    let details = serde_json::json!({
+        "platform": "macos",
+        "screen_recording_trusted": trusted,
+        "prompted": false,
+        "capture_attempted": false,
+    });
+    if trusted {
+        return DoctorCheckResult::ok(
+            "permissions",
+            "macOS Screen Recording permission is granted.",
+        )
+        .with_details(details);
+    }
+    DoctorCheckResult::fail(
+        "permissions",
+        "macOS Screen Recording permission is not granted.",
+    )
+    .with_fix(
+        "Enable QoL Shot in System Settings > Privacy & Security > Screen & System Audio Recording.",
+    )
+    .with_details(details)
+}
+
+pub fn external_services_check() -> DoctorCheckResult {
+    match active_displays() {
+        Ok(displays) => DoctorCheckResult::ok(
+            "external_services",
+            format!(
+                "The macOS WindowServer display service reports {} active display(s).",
+                displays.len()
+            ),
+        )
+        .with_details(serde_json::json!({
+            "platform": "macos",
+            "service": "window_server",
+            "display_count": displays.len(),
+            "capture_attempted": false,
+        })),
+        Err(error) => DoctorCheckResult::fail(
+            "external_services",
+            format!("The macOS WindowServer display service is unavailable: {error}"),
+        )
+        .with_fix("Run QoL Shot in an active macOS graphical login session.")
+        .with_details(serde_json::json!({
+            "platform": "macos",
+            "service": "window_server",
+            "display_count": null,
+            "capture_attempted": false,
+        })),
+    }
 }
 
 pub(super) fn signal_process(pid: u32, signal: i32) -> Result<()> {

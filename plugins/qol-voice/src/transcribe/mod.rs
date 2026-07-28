@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::audio::{AudioFormat, AudioFrame};
 
+pub(crate) use websocket::probe_endpoint;
 pub use websocket::{WebSocketTranscriber, WebSocketTranscriberConfig};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]

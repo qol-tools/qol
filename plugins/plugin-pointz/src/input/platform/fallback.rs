@@ -6,7 +6,7 @@
 //! to satisfy the trait without `unimplemented!()`.
 
 use crate::command::ModifierKeys;
-use crate::input::{InputHandlerTrait, PlatformSupport};
+use crate::input::{InputHandlerTrait, InputReadiness, PlatformSupport};
 use anyhow::{anyhow, Result};
 
 pub struct InputHandlerImpl;
@@ -16,6 +16,17 @@ pub(in crate::input) fn platform_support() -> PlatformSupport {
         name: "unsupported",
         declared: false,
         input_backend: false,
+    }
+}
+
+pub(in crate::input) fn inspect_readiness() -> InputReadiness {
+    InputReadiness {
+        platform: "unsupported",
+        ready: false,
+        authorization_granted: None,
+        display_env_set: None,
+        backend: "unsupported",
+        issue: Some("PointZ has no input backend for this OS".to_string()),
     }
 }
 

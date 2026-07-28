@@ -1,6 +1,6 @@
 use crate::command::ModifierKeys;
 use crate::config::ServerConfig;
-use crate::input::{InputHandlerTrait, PlatformSupport};
+use crate::input::{InputHandlerTrait, InputReadiness, PlatformSupport};
 use anyhow::Result;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -17,6 +17,17 @@ pub(in crate::input) fn platform_support() -> PlatformSupport {
         name: "windows",
         declared: false,
         input_backend: true,
+    }
+}
+
+pub(in crate::input) fn inspect_readiness() -> InputReadiness {
+    InputReadiness {
+        platform: "windows",
+        ready: false,
+        authorization_granted: None,
+        display_env_set: None,
+        backend: "send-input",
+        issue: Some("PointZ is not declared for Windows".to_string()),
     }
 }
 

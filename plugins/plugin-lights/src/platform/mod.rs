@@ -8,24 +8,26 @@ mod macos;
 mod port_description;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod port_detection;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod unix;
 #[cfg(target_os = "windows")]
 mod windows;
 
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{
     candidate_coordinator_ports, detect_coordinator_port, doctor_platform_metadata,
-    enumerate_serial_metadata,
+    enumerate_serial_metadata, inspect_serial_access,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{
     candidate_coordinator_ports, detect_coordinator_port, doctor_platform_metadata,
-    enumerate_serial_metadata,
+    enumerate_serial_metadata, inspect_serial_access,
 };
 pub(crate) use port_description::describe_port;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::{
     candidate_coordinator_ports, detect_coordinator_port, doctor_platform_metadata,
-    enumerate_serial_metadata,
+    enumerate_serial_metadata, inspect_serial_access,
 };
 
 use crate::config::store::PLUGIN_ID;
@@ -41,6 +43,13 @@ pub(crate) struct DoctorPlatformMetadata {
 pub(crate) struct SerialMetadata {
     pub source: &'static str,
     pub ports: Vec<SerialPortInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SerialAccess {
+    pub path: String,
+    pub readable_writable: bool,
+    pub issue: Option<String>,
 }
 
 pub fn open_settings() -> Result<()> {

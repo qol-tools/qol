@@ -64,6 +64,7 @@ fn doctor_never_changes_config_key_state_or_runtime_paths() {
                 "platform_supported",
                 "config_readable",
                 "coordinator_candidates",
+                "permissions",
             ]
         );
     }

@@ -148,6 +148,16 @@ fn doctor_checks() -> Vec<DoctorCheck> {
             || Ok(platform::required_binaries_check()),
         ),
         DoctorCheck::new(
+            "permissions",
+            "Query capture permission state without prompting or capturing.",
+            || Ok(platform::permissions_check()),
+        ),
+        DoctorCheck::new(
+            "external_services",
+            "Query the active display service without capturing any content.",
+            || Ok(platform::external_services_check()),
+        ),
+        DoctorCheck::new(
             "config_readable",
             "Verify plugin config files can be read and parsed.",
             config_readable_check,
@@ -361,6 +371,26 @@ mod tests {
         assert!(execution
             .stdout
             .contains(&format!("\"plugin_id\":\"{PLUGIN_ID}\"")));
+    }
+
+    #[test]
+    fn doctor_registers_complete_diagnostic_categories() {
+        let ids = doctor_checks()
+            .into_iter()
+            .map(|check| check.id().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            ids,
+            [
+                "platform_supported",
+                "required_binaries",
+                "permissions",
+                "external_services",
+                "config_readable",
+                "runtime_dirs",
+            ]
+        );
     }
 
     #[test]

@@ -5,10 +5,11 @@ use std::path::Path;
 use qol_headless::{DoctorCheck, DoctorCheckResult};
 use serde_json::json;
 
-const CHECK_IDS: [&str; 4] = [
+const CHECK_IDS: [&str; 5] = [
     "platform_supported",
     "config_readable",
     "required_binaries",
+    "permissions",
     "restore_state",
 ];
 
@@ -31,6 +32,11 @@ pub(crate) fn checks() -> Vec<DoctorCheck> {
         ),
         DoctorCheck::new(
             CHECK_IDS[3],
+            "Query platform authorization without prompting or performing a window operation.",
+            || Ok(crate::platform::permissions_check()),
+        ),
+        DoctorCheck::new(
+            CHECK_IDS[4],
             "Inspect existing minimized-window state metadata without changing it.",
             || Ok(restore_state_check()),
         ),

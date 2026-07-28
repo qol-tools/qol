@@ -1,7 +1,21 @@
 use anyhow::{bail, Result};
+use qol_headless::DoctorCheckResult;
 
 use crate::bluetooth::{AdapterHealth, DeviceInfo, ReconnectReport, ReconnectSelection};
 use crate::config::ReconnectConfig;
+
+pub fn required_binaries_check() -> DoctorCheckResult {
+    DoctorCheckResult::fail(
+        "required_binaries",
+        "Bluetooth has no supported macOS backend",
+    )
+    .with_fix("Run Bluetooth on Linux")
+    .with_details(serde_json::json!({
+        "platform": "macos",
+        "pactl": null,
+        "executed": false,
+    }))
+}
 
 pub fn list_devices() -> Result<Vec<DeviceInfo>> {
     bail!("plugin-bluetooth is not implemented on macOS")

@@ -150,6 +150,11 @@ pub fn load() -> Config {
     qol_config::load_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT)
 }
 
+pub fn inspect(
+) -> Result<qol_config::PluginConfigInspection<Config>, qol_config::PluginConfigInspectionError> {
+    qol_config::inspect_plugin_config_from_env_with_contract(crate::PLUGIN_ID, CONFIG_CONTRACT)
+}
+
 fn default_true() -> bool {
     true
 }

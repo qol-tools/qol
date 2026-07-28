@@ -20,6 +20,9 @@ serde_json.workspace = true
 serialport = { version = "4", default-features = false }
 tungstenite = "0.26"
 
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+libc = "0.2"
+
 [build-dependencies]
 qol-conventions.workspace = true
 

@@ -252,6 +252,7 @@ mod tests {
                 "platform_supported",
                 "config_readable",
                 "required_binaries",
+                "permissions",
                 "restore_state",
             ]
         );

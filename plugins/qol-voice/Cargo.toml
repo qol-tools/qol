@@ -32,6 +32,7 @@ qol-conventions.workspace = true
 
 [dev-dependencies]
 qol-plugin-api.workspace = true
+tempfile = "3"
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -14,6 +14,19 @@ pub(crate) fn platform_supported_check() -> DoctorCheckResult {
     )
 }
 
+pub(crate) fn permissions_check() -> DoctorCheckResult {
+    DoctorCheckResult::ok(
+        "permissions",
+        "The Linux X11 backend requires no separate OS permission grant",
+    )
+    .with_details(json!({
+        "platform": "linux",
+        "authorization": "x11_session",
+        "prompted": false,
+        "window_operation_run": false,
+    }))
+}
+
 pub(crate) fn required_binaries_check() -> DoctorCheckResult {
     let found = REQUIRED_BINARIES
         .iter()

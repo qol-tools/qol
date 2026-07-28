@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use serialport::SerialPortInfo;
 
-use super::{DoctorPlatformMetadata, SerialMetadata};
+use super::{DoctorPlatformMetadata, SerialAccess, SerialMetadata};
 
 pub(crate) fn doctor_platform_metadata() -> DoctorPlatformMetadata {
     DoctorPlatformMetadata {
@@ -21,4 +21,12 @@ pub(crate) fn detect_coordinator_port(_ports: &[SerialPortInfo]) -> Option<Strin
 
 pub(crate) fn candidate_coordinator_ports(_ports: &[SerialPortInfo]) -> Vec<String> {
     Vec::new()
+}
+
+pub(crate) fn inspect_serial_access(path: &str) -> SerialAccess {
+    SerialAccess {
+        path: path.to_string(),
+        readable_writable: false,
+        issue: Some("serial access inspection is unavailable on unsupported Windows".to_string()),
+    }
 }

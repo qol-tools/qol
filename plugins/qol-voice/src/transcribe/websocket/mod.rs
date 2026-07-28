@@ -67,6 +67,37 @@ impl WebSocketTranscriber {
     }
 }
 
+pub(crate) fn probe_endpoint(endpoint: &str) -> Result<(), TranscriptionError> {
+    if endpoint.trim().is_empty() {
+        return Err(TranscriptionError::InvalidConfiguration(
+            "WebSocket endpoint cannot be empty".to_owned(),
+        ));
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| TranscriptionError::ConnectionFailed(error.to_string()))?;
+    runtime.block_on(async {
+        let (mut socket, _) = timeout(
+            Duration::from_secs(2),
+            tokio_tungstenite::connect_async(endpoint),
+        )
+        .await
+        .map_err(|_| {
+            TranscriptionError::ConnectionFailed(format!("timed out connecting to {endpoint}"))
+        })?
+        .map_err(|error| TranscriptionError::ConnectionFailed(error.to_string()))?;
+        timeout(Duration::from_secs(2), socket.close(None))
+            .await
+            .map_err(|_| {
+                TranscriptionError::StreamClosed(
+                    "timed out closing diagnostic WebSocket".to_owned(),
+                )
+            })?
+            .map_err(|error| TranscriptionError::StreamClosed(error.to_string()))
+    })
+}
+
 fn create_from_options(
     options: &BTreeMap<String, String>,
 ) -> Result<Box<dyn Transcriber>, TranscriptionError> {

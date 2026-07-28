@@ -1,6 +1,6 @@
 use crate::command::ModifierKeys;
 use crate::config::ServerConfig;
-use crate::input::{InputHandlerTrait, PlatformSupport};
+use crate::input::{InputHandlerTrait, InputReadiness, PlatformSupport};
 use anyhow::Result;
 use rdev::{simulate, Button, EventType, Key, SimulateError};
 use std::sync::Mutex;
@@ -8,6 +8,11 @@ use std::time::{Duration, Instant};
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {}
+
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXIsProcessTrusted() -> bool;
+}
 
 const DRAG_BATCH_INTERVAL_MS: u64 = 16;
 const DOUBLE_CLICK_TIMEOUT_MS: u64 = 350;
@@ -25,6 +30,18 @@ pub(in crate::input) fn platform_support() -> PlatformSupport {
         name: "macos",
         declared: true,
         input_backend: true,
+    }
+}
+
+pub(in crate::input) fn inspect_readiness() -> InputReadiness {
+    let trusted = unsafe { AXIsProcessTrusted() };
+    InputReadiness {
+        platform: "macos",
+        ready: trusted,
+        authorization_granted: Some(trusted),
+        display_env_set: None,
+        backend: "coregraphics-accessibility",
+        issue: (!trusted).then(|| "Accessibility permission is not granted".to_string()),
     }
 }
 

@@ -26,8 +26,8 @@ pub use display::{full_screen_bounds, get_monitors};
 pub use preview::{capture_frozen_frame, configure_preview_window, grab_preview_rgba};
 use system::resolve_command;
 pub use system::{
-    list_audio_sinks, list_audio_sources, open_url, platform_supported_check,
-    required_binaries_check, show_notification, show_saved_notification,
+    external_services_check, list_audio_sinks, list_audio_sources, open_url, permissions_check,
+    platform_supported_check, required_binaries_check, show_notification, show_saved_notification,
 };
 pub use window::{
     configure_pin_window, pin_focus, pin_release_focus, pin_resize_session, prepare_pin_window,

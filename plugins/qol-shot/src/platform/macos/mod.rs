@@ -29,10 +29,11 @@ pub fn pin_cache_enabled() -> bool {
 
 pub fn after_pin_open(_title: &str) {}
 pub use system::{
-    capture_frozen_frame, configure_pin_window, configure_preview_window, grab_preview_rgba,
-    list_audio_sinks, list_audio_sources, open_url, pin_focus, pin_release_focus,
-    pin_resize_session, platform_supported_check, prepare_pin_window, process_alive,
-    required_binaries_check, show_notification, show_saved_notification, PinResizeSession,
+    capture_frozen_frame, configure_pin_window, configure_preview_window, external_services_check,
+    grab_preview_rgba, list_audio_sinks, list_audio_sources, open_url, permissions_check,
+    pin_focus, pin_release_focus, pin_resize_session, platform_supported_check, prepare_pin_window,
+    process_alive, required_binaries_check, show_notification, show_saved_notification,
+    PinResizeSession,
 };
 
 #[cfg(test)]
