@@ -526,6 +526,7 @@ mod tests {
         command
     }
 
+    #[cfg(any(target_os = "linux", windows))]
     fn text(output: &CapturedOutput) -> String {
         String::from_utf8_lossy(output.as_bytes()).into_owned()
     }

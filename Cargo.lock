@@ -5780,7 +5780,9 @@ dependencies = [
  "anyhow",
  "qol-apps",
  "qol-conventions",
+ "qol-headless",
  "qol-plugin-api",
+ "serde_json",
 ]
 
 [[package]]

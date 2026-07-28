@@ -1,73 +1,46 @@
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::BTreeSet;
 use std::io;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::os::unix::process::CommandExt;
+use std::process::{Child, Command};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::{PlatformSpawnFailure, PreparedSpawnCleanup};
 
-#[cfg(target_os = "linux")]
-#[path = "linux_guardian.rs"]
-mod linux_guardian;
+use super::super::unix::{pid_t, signal_target_alive};
 
-#[cfg(target_os = "linux")]
+mod guardian;
 use std::ffi::CString;
-#[cfg(target_os = "linux")]
 use std::fs::{File, OpenOptions};
-#[cfg(target_os = "linux")]
 use std::io::{Read, Write};
-#[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-#[cfg(target_os = "linux")]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
-#[cfg(target_os = "linux")]
 use std::sync::atomic::AtomicBool;
-#[cfg(target_os = "linux")]
 use std::sync::{Arc, Condvar};
 
 const WAIT_INTERVAL: Duration = Duration::from_millis(50);
-const REAP_DELAY: Duration = Duration::from_millis(10);
-#[cfg(target_os = "linux")]
 const PREPARED_ABORT_TIMEOUT: Duration = Duration::from_millis(250);
-#[cfg(target_os = "linux")]
 const MAX_CGROUP_DEPTH: usize = 64;
-#[cfg(target_os = "linux")]
 const MAX_CGROUP_NODES: usize = 4096;
-#[cfg(target_os = "linux")]
 const STALE_RECOVERY_TIMEOUT: Duration = Duration::from_secs(2);
-#[cfg(target_os = "linux")]
 const MAX_STALE_RECOVERY_RECORDS: usize = 256;
-#[cfg(target_os = "linux")]
 const MAX_STALE_RECOVERY_WORK: usize = 8192;
-#[cfg(target_os = "linux")]
 const MAX_QUARANTINED_JOURNALS: usize = 256;
-static CANCELLATION_SIGNAL_COUNT: AtomicUsize = AtomicUsize::new(0);
-static CANCELLATION_INSTALL: OnceLock<Result<(), i32>> = OnceLock::new();
 static NEXT_PROCESS_GENERATION: AtomicU64 = AtomicU64::new(1);
-#[cfg(target_os = "linux")]
 static NEXT_CGROUP_ID: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) struct ProcessTreeGuard {
     target: Mutex<Option<ProcessTreeTarget>>,
-    #[cfg(target_os = "linux")]
-    guardian: Option<linux_guardian::Guardian>,
-    #[cfg(target_os = "linux")]
+    guardian: Option<guardian::Guardian>,
     cgroup: LinuxCgroup,
-    #[cfg(target_os = "linux")]
     prepared: AtomicBool,
 }
-
-#[cfg(target_os = "linux")]
 pub(crate) struct PreparedSpawn {
     acknowledgement: OwnedFd,
     failed_child_reaper: FailedChildReaper,
 }
-
-#[cfg(not(target_os = "linux"))]
-pub(crate) struct PreparedSpawn;
 
 #[derive(Clone, Debug)]
 struct ProcessTreeTarget {
@@ -81,7 +54,6 @@ struct OwnedProcess {
     pid: libc::pid_t,
     identity: String,
     generation: u64,
-    #[cfg(target_os = "linux")]
     handle: Arc<LinuxProcessHandle>,
 }
 
@@ -104,14 +76,10 @@ impl Ord for OwnedProcess {
         self.generation.cmp(&other.generation)
     }
 }
-
-#[cfg(target_os = "linux")]
 #[derive(Debug)]
 struct LinuxProcessHandle {
     fd: OwnedFd,
 }
-
-#[cfg(target_os = "linux")]
 #[derive(Debug)]
 struct LinuxCgroup {
     creator_pid: libc::pid_t,
@@ -121,8 +89,6 @@ struct LinuxCgroup {
     _journal_lock: File,
     sealed: AtomicBool,
 }
-
-#[cfg(target_os = "linux")]
 struct LinuxCgroupAllocation {
     parent: std::path::PathBuf,
     journal_root: std::path::PathBuf,
@@ -130,63 +96,45 @@ struct LinuxCgroupAllocation {
     timestamp: u128,
     _registry_lock: File,
 }
-
-#[cfg(target_os = "linux")]
 struct CgroupJournal {
     boot_id: String,
     path: std::path::PathBuf,
     device: u64,
     inode: u64,
 }
-
-#[cfg(target_os = "linux")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LinuxProcessIdentityVersion {
     Legacy,
     ProcDirectory,
 }
-
-#[cfg(target_os = "linux")]
 struct LinuxProcessIdentity<'a> {
     boot_id: &'a str,
     start_ticks: u64,
     version: LinuxProcessIdentityVersion,
 }
-
-#[cfg(target_os = "linux")]
 struct CgroupRecoveryBudget {
     deadline: Instant,
     records_remaining: usize,
     work_remaining: usize,
 }
-
-#[cfg(target_os = "linux")]
 struct RecoverableCgroup {
     _journal: File,
     journal_path: std::path::PathBuf,
     record: CgroupJournal,
     directory: OwnedFd,
 }
-
-#[cfg(target_os = "linux")]
 enum RecoverableCgroupState {
     Pending,
     Cleaned,
     Ready(RecoverableCgroup),
 }
-
-#[cfg(target_os = "linux")]
 struct FailedChildReaper {
     state: Arc<(Mutex<FailedChildReaperState>, Condvar)>,
 }
-
-#[cfg(target_os = "linux")]
 struct FailedChildReaperState {
     child: Option<Child>,
     closed: bool,
 }
-
-#[cfg(target_os = "linux")]
 impl CgroupJournal {
     fn encode(&self) -> String {
         format!(
@@ -234,8 +182,6 @@ impl CgroupJournal {
         })
     }
 }
-
-#[cfg(target_os = "linux")]
 impl CgroupRecoveryBudget {
     fn standard() -> io::Result<Self> {
         let deadline = Instant::now()
@@ -284,32 +230,19 @@ impl CgroupRecoveryBudget {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 enum ProcessScope {
     Process(libc::pid_t),
-    #[cfg(not(target_os = "linux"))]
-    ProcessGroup(libc::pid_t),
-    #[cfg(not(target_os = "linux"))]
-    Session(libc::pid_t),
 }
 
 impl ProcessTreeGuard {
     pub(crate) fn prepare_command(&self, command: &mut Command) -> io::Result<PreparedSpawn> {
-        #[cfg(target_os = "linux")]
-        {
-            if self.prepared.swap(true, Ordering::AcqRel) {
-                return Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    "process tree already prepared a command",
-                ));
-            }
-            self.cgroup.prepare_command(command)
+        if self.prepared.swap(true, Ordering::AcqRel) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "process tree already prepared a command",
+            ));
         }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = command;
-            Err(unsupported_process_tree_containment())
-        }
+        self.cgroup.prepare_command(command)
     }
 
     pub(crate) fn spawn_prepared(
@@ -317,38 +250,24 @@ impl ProcessTreeGuard {
         command: &mut Command,
         prepared: PreparedSpawn,
     ) -> Result<Child, PlatformSpawnFailure> {
-        #[cfg(target_os = "linux")]
-        {
-            let child = match command.spawn() {
-                Ok(child) => child,
-                Err(error) => {
-                    return Err(prepared_spawn_failure(error, self.abort_prepared_result()));
-                }
-            };
-            if let Err(error) = self.assign_prepared_child(&child, &prepared) {
-                return Err(prepared_spawn_failure(
-                    error,
-                    self.abort_spawned_child(child, prepared.failed_child_reaper),
-                ));
+        let child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                return Err(prepared_spawn_failure(error, self.abort_prepared_result()));
             }
-            Ok(child)
+        };
+        if let Err(error) = self.assign_prepared_child(&child, &prepared) {
+            return Err(prepared_spawn_failure(
+                error,
+                self.abort_spawned_child(child, prepared.failed_child_reaper),
+            ));
         }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = (command, prepared);
-            Err(PlatformSpawnFailure {
-                source: unsupported_process_tree_containment(),
-                cleanup: PreparedSpawnCleanup::NotStarted,
-            })
-        }
+        Ok(child)
     }
 
     pub(crate) fn abort_prepared(&self) {
-        #[cfg(target_os = "linux")]
         let _ = self.abort_prepared_result();
     }
-
-    #[cfg(target_os = "linux")]
     fn assign_prepared_child(&self, child: &Child, prepared: &PreparedSpawn) -> io::Result<()> {
         let mut target = self
             .target
@@ -388,14 +307,10 @@ impl ProcessTreeGuard {
         });
         Ok(())
     }
-
-    #[cfg(target_os = "linux")]
     fn abort_prepared_result(&self) -> io::Result<()> {
         self.cgroup.force_kill_and_seal(PREPARED_ABORT_TIMEOUT)?;
         self.disarm_guardian()
     }
-
-    #[cfg(target_os = "linux")]
     fn abort_spawned_child(
         &self,
         mut child: Child,
@@ -443,57 +358,27 @@ impl ProcessTreeGuard {
                 "process-tree timeout is too large",
             )
         })?;
-        #[cfg(target_os = "linux")]
-        {
-            terminate_cgroup_scope(&target, &self.cgroup, started, deadline, timeout)?;
-            self.disarm_guardian()
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            terminate_process_scope(&target, started, deadline, timeout)
-        }
+        terminate_cgroup_scope(&target, &self.cgroup, started, deadline, timeout)?;
+        self.disarm_guardian()
     }
 
     pub(crate) fn request_stop(&self) -> io::Result<()> {
-        #[cfg(target_os = "linux")]
-        {
-            let target = self.assigned_target()?;
-            let observed = cgroup_members(&self.cgroup, &BTreeSet::new())?
-                .into_iter()
-                .collect::<BTreeSet<_>>();
-            signal_new_members(&target, &observed, libc::SIGTERM, &mut BTreeSet::new())
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            Err(unsupported_process_tree_containment())
-        }
+        let target = self.assigned_target()?;
+        let observed = cgroup_members(&self.cgroup, &BTreeSet::new())?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        signal_new_members(&target, &observed, libc::SIGTERM, &mut BTreeSet::new())
     }
 
     pub(crate) fn force_stop_and_wait(&self, timeout: Duration) -> io::Result<()> {
-        #[cfg(target_os = "linux")]
-        {
-            self.assigned_target()?;
-            self.cgroup.force_kill_and_seal(timeout)?;
-            self.disarm_guardian()
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = timeout;
-            Err(unsupported_process_tree_containment())
-        }
+        self.assigned_target()?;
+        self.cgroup.force_kill_and_seal(timeout)?;
+        self.disarm_guardian()
     }
 
     pub(crate) fn recover_pending_spawn(&self, timeout: Duration) -> io::Result<()> {
-        #[cfg(target_os = "linux")]
-        {
-            self.cgroup.force_kill_and_seal(timeout)?;
-            self.disarm_guardian()
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = timeout;
-            Err(unsupported_process_tree_containment())
-        }
+        self.cgroup.force_kill_and_seal(timeout)?;
+        self.disarm_guardian()
     }
 
     pub(crate) fn terminate_root_and_wait(&self, timeout: Duration) -> io::Result<()> {
@@ -522,17 +407,10 @@ impl ProcessTreeGuard {
     }
 
     pub(crate) fn tree_has_exited(&self) -> io::Result<bool> {
-        #[cfg(target_os = "linux")]
-        {
-            if self.cgroup.sealed.load(Ordering::Acquire) {
-                return Ok(true);
-            }
-            self.cgroup.populated().map(|populated| !populated)
+        if self.cgroup.sealed.load(Ordering::Acquire) {
+            return Ok(true);
         }
-        #[cfg(not(target_os = "linux"))]
-        {
-            Err(unsupported_process_tree_containment())
-        }
+        self.cgroup.populated().map(|populated| !populated)
     }
 
     fn assigned_target(&self) -> io::Result<ProcessTreeTarget> {
@@ -547,24 +425,12 @@ impl ProcessTreeGuard {
                 )
             })
     }
-
-    #[cfg(target_os = "linux")]
     fn disarm_guardian(&self) -> io::Result<()> {
         self.guardian
             .as_ref()
             .map_or(Ok(()), |guardian| guardian.disarm())
     }
 }
-
-#[cfg(not(target_os = "linux"))]
-fn unsupported_process_tree_containment() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::Unsupported,
-        "verified process-tree containment is unavailable on this Unix platform",
-    )
-}
-
-#[cfg(target_os = "linux")]
 fn prepared_spawn_failure(error: io::Error, cleanup: io::Result<()>) -> PlatformSpawnFailure {
     match cleanup {
         Ok(()) => PlatformSpawnFailure {
@@ -580,8 +446,6 @@ fn prepared_spawn_failure(error: io::Error, cleanup: io::Result<()>) -> Platform
         },
     }
 }
-
-#[cfg(target_os = "linux")]
 impl PreparedSpawn {
     fn acknowledged_pid(&self) -> io::Result<libc::pid_t> {
         let mut bytes = [0_u8; std::mem::size_of::<libc::pid_t>()];
@@ -614,8 +478,6 @@ impl PreparedSpawn {
         Ok(libc::pid_t::from_ne_bytes(bytes))
     }
 }
-
-#[cfg(target_os = "linux")]
 impl FailedChildReaper {
     fn start() -> io::Result<Self> {
         let state = Arc::new((
@@ -658,8 +520,6 @@ impl FailedChildReaper {
         drop(state);
     }
 }
-
-#[cfg(target_os = "linux")]
 impl Drop for FailedChildReaper {
     fn drop(&mut self) {
         let (state, ready) = &*self.state;
@@ -668,25 +528,10 @@ impl Drop for FailedChildReaper {
         ready.notify_one();
     }
 }
-
-#[cfg(target_os = "linux")]
 fn raw_preexec_error() -> io::Error {
     let code = unsafe { *libc::__errno_location() };
     io::Error::from_raw_os_error(code)
 }
-
-#[cfg(target_os = "macos")]
-fn raw_preexec_error() -> io::Error {
-    let code = unsafe { *libc::__error() };
-    io::Error::from_raw_os_error(code)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn raw_preexec_error() -> io::Error {
-    io::Error::last_os_error()
-}
-
-#[cfg(target_os = "linux")]
 fn raw_preexec_write_all(descriptor: libc::c_int, bytes: &[u8]) -> io::Result<()> {
     let mut offset = 0;
     while offset < bytes.len() {
@@ -712,20 +557,6 @@ fn raw_preexec_write_all(descriptor: libc::c_int, bytes: &[u8]) -> io::Result<()
     }
     Ok(())
 }
-
-pub(crate) struct CurrentProcessTreeGuard;
-
-impl CurrentProcessTreeGuard {
-    pub(crate) fn disarm(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-pub(crate) fn guard_current_process_tree() -> io::Result<CurrentProcessTreeGuard> {
-    Ok(CurrentProcessTreeGuard)
-}
-
-#[cfg(target_os = "linux")]
 fn terminate_cgroup_scope(
     target: &ProcessTreeTarget,
     cgroup: &LinuxCgroup,
@@ -741,8 +572,6 @@ fn terminate_cgroup_scope(
     let forced = cgroup.force_kill_and_seal_until(deadline, timeout);
     combine_cgroup_shutdown(graceful, forced)
 }
-
-#[cfg(target_os = "linux")]
 fn terminate_cgroup_members(
     target: &ProcessTreeTarget,
     cgroup: &LinuxCgroup,
@@ -763,8 +592,6 @@ fn terminate_cgroup_members(
     }
     Ok(())
 }
-
-#[cfg(target_os = "linux")]
 fn combine_cgroup_shutdown(graceful: io::Result<()>, forced: io::Result<()>) -> io::Result<()> {
     match (graceful.err(), forced) {
         (_, Ok(())) => Ok(()),
@@ -775,8 +602,6 @@ fn combine_cgroup_shutdown(graceful: io::Result<()>, forced: io::Result<()>) -> 
         )),
     }
 }
-
-#[cfg(target_os = "linux")]
 fn cgroup_members(
     cgroup: &LinuxCgroup,
     known: &BTreeSet<OwnedProcess>,
@@ -801,70 +626,6 @@ fn cgroup_members(
         .collect::<BTreeSet<_>>();
     captured.retain(|process| verified.contains(&process.pid));
     Ok(captured)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn terminate_process_scope(
-    target: &ProcessTreeTarget,
-    started: Instant,
-    deadline: Instant,
-    timeout: Duration,
-) -> io::Result<()> {
-    if !matches!(target.scope, ProcessScope::Process(_)) {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "verified process-tree containment is unavailable on this Unix platform",
-        ));
-    }
-    let graceful_deadline = started.checked_add(timeout / 2).unwrap_or(deadline);
-    let initial = scope_members(target)?;
-    if initial.is_empty() {
-        return Ok(());
-    }
-    let mut observed = initial.into_iter().collect::<BTreeSet<_>>();
-    let mut terminated = BTreeSet::new();
-    signal_new_members(target, &observed, libc::SIGTERM, &mut terminated)?;
-    if wait_for_scope_exit(
-        target,
-        graceful_deadline,
-        libc::SIGTERM,
-        &mut observed,
-        &mut terminated,
-    )? {
-        return Ok(());
-    }
-    let mut killed = BTreeSet::new();
-    observed.extend(scope_members(target)?);
-    signal_new_members(target, &observed, libc::SIGKILL, &mut killed)?;
-    if wait_for_scope_exit(target, deadline, libc::SIGKILL, &mut observed, &mut killed)? {
-        return Ok(());
-    }
-    Err(surviving_scope_error(target, observed, timeout))
-}
-
-#[cfg(not(target_os = "linux"))]
-fn surviving_scope_error(
-    target: &ProcessTreeTarget,
-    observed: BTreeSet<OwnedProcess>,
-    timeout: Duration,
-) -> io::Error {
-    let survivors = observed
-        .into_iter()
-        .filter_map(|process| {
-            owned_process_alive(&process)
-                .unwrap_or(true)
-                .then_some(process)
-        })
-        .map(|process| process.pid.to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    io::Error::new(
-        io::ErrorKind::TimedOut,
-        format!(
-            "owned process scope {:?} retained PID(s) {survivors} after {timeout:?}",
-            target.scope
-        ),
-    )
 }
 
 fn terminate_owned_process(
@@ -916,36 +677,6 @@ fn wait_for_owned_process_exit(process: &OwnedProcess, deadline: Instant) -> io:
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-fn wait_for_scope_exit(
-    target: &ProcessTreeTarget,
-    deadline: Instant,
-    signal_number: libc::c_int,
-    observed: &mut BTreeSet<OwnedProcess>,
-    signaled: &mut BTreeSet<OwnedProcess>,
-) -> io::Result<bool> {
-    loop {
-        observed.extend(scope_members(target)?);
-        let alive = observed
-            .iter()
-            .filter_map(|process| match owned_process_alive(process) {
-                Ok(true) => Some(Ok(process.clone())),
-                Ok(false) => None,
-                Err(error) => Some(Err(error)),
-            })
-            .collect::<io::Result<BTreeSet<_>>>()?;
-        if alive.is_empty() {
-            return Ok(true);
-        }
-        signal_new_members(target, &alive, signal_number, signaled)?;
-        let now = Instant::now();
-        if now >= deadline {
-            return Ok(false);
-        }
-        std::thread::sleep(WAIT_INTERVAL.min(deadline.duration_since(now)));
-    }
-}
-
 fn signal_new_members(
     target: &ProcessTreeTarget,
     members: &BTreeSet<OwnedProcess>,
@@ -977,65 +708,6 @@ fn signal_owned_process(
     signal_owned_process_handle(process, signal_number)
 }
 
-#[cfg(not(target_os = "linux"))]
-fn scope_members(target: &ProcessTreeTarget) -> io::Result<Vec<OwnedProcess>> {
-    verify_scope_generation(target)?;
-    let root = target.root.as_ref().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotConnected,
-            "numeric process scope has no captured root generation",
-        )
-    })?;
-    match target.scope {
-        ProcessScope::Process(_) => {
-            if owned_process_alive(root)? {
-                return Ok(vec![root.clone()]);
-            }
-            Ok(Vec::new())
-        }
-        ProcessScope::ProcessGroup(_) | ProcessScope::Session(_) => {
-            let mut members = Vec::new();
-            for pid in list_process_ids()? {
-                if !process_in_scope(pid, target.scope)? {
-                    continue;
-                }
-                let Some(process) = capture_owned_process(pid)? else {
-                    continue;
-                };
-                if !process_in_scope(pid, target.scope)? {
-                    continue;
-                }
-                members.push(process);
-            }
-            verify_scope_generation(target)?;
-            Ok(members)
-        }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn verify_scope_generation(target: &ProcessTreeTarget) -> io::Result<()> {
-    let root = target.root.as_ref().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotConnected,
-            "numeric process scope has no captured root generation",
-        )
-    })?;
-    if !owned_process_alive(root)? {
-        return Ok(());
-    }
-    if !process_in_scope(root.pid, target.scope)? {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "owned process root PID {} left scope {:?}",
-                root.pid, target.scope
-            ),
-        ));
-    }
-    Ok(())
-}
-
 fn current_process_identity(pid: libc::pid_t) -> io::Result<Option<String>> {
     let pid_u32 = u32::try_from(pid)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "pid is out of range"))?;
@@ -1053,8 +725,6 @@ fn next_process_generation() -> io::Result<u64> {
         })
         .map_err(|_| io::Error::other("owned process generation counter exhausted"))
 }
-
-#[cfg(target_os = "linux")]
 fn capture_owned_process(pid: libc::pid_t) -> io::Result<Option<OwnedProcess>> {
     let handle = match LinuxProcessHandle::open(pid) {
         Ok(handle) => Arc::new(handle),
@@ -1089,20 +759,6 @@ fn capture_owned_process(pid: libc::pid_t) -> io::Result<Option<OwnedProcess>> {
         handle,
     }))
 }
-
-#[cfg(not(target_os = "linux"))]
-fn capture_owned_process(pid: libc::pid_t) -> io::Result<Option<OwnedProcess>> {
-    let Some(identity) = current_process_identity(pid)? else {
-        return Ok(None);
-    };
-    Ok(Some(OwnedProcess {
-        pid,
-        identity,
-        generation: next_process_generation()?,
-    }))
-}
-
-#[cfg(target_os = "linux")]
 fn owned_process_alive(process: &OwnedProcess) -> io::Result<bool> {
     if !process.handle.is_alive()? {
         return Ok(false);
@@ -1126,13 +782,6 @@ fn owned_process_alive(process: &OwnedProcess) -> io::Result<bool> {
         None => Ok(false),
     }
 }
-
-#[cfg(not(target_os = "linux"))]
-fn owned_process_alive(process: &OwnedProcess) -> io::Result<bool> {
-    Ok(current_process_identity(process.pid)?.as_deref() == Some(process.identity.as_str()))
-}
-
-#[cfg(target_os = "linux")]
 fn signal_owned_process_handle(
     process: &OwnedProcess,
     signal_number: libc::c_int,
@@ -1142,22 +791,6 @@ fn signal_owned_process_handle(
     }
     process.handle.send_signal(signal_number)
 }
-
-#[cfg(not(target_os = "linux"))]
-fn signal_owned_process_handle(
-    process: &OwnedProcess,
-    _signal_number: libc::c_int,
-) -> io::Result<bool> {
-    if !owned_process_alive(process)? {
-        return Ok(false);
-    }
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "atomic identity-bound process signaling is unsupported on this Unix platform",
-    ))
-}
-
-#[cfg(target_os = "linux")]
 impl LinuxProcessHandle {
     fn open(pid: libc::pid_t) -> io::Result<Self> {
         let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
@@ -1242,8 +875,6 @@ impl LinuxProcessHandle {
         Err(error)
     }
 }
-
-#[cfg(target_os = "linux")]
 impl LinuxCgroup {
     fn create() -> io::Result<Self> {
         let allocation = LinuxCgroupAllocation::start()?;
@@ -1445,8 +1076,6 @@ impl LinuxCgroup {
         Ok(true)
     }
 }
-
-#[cfg(target_os = "linux")]
 impl LinuxCgroupAllocation {
     fn start() -> io::Result<Self> {
         let root = stable_cgroup_root()?;
@@ -1527,8 +1156,6 @@ impl LinuxCgroupAllocation {
         Ok(Some((path, directory)))
     }
 }
-
-#[cfg(target_os = "linux")]
 fn cloexec_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     let mut pipe = [0; 2];
     if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) } == -1 {
@@ -1536,8 +1163,6 @@ fn cloexec_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     }
     Ok(unsafe { (OwnedFd::from_raw_fd(pipe[0]), OwnedFd::from_raw_fd(pipe[1])) })
 }
-
-#[cfg(target_os = "linux")]
 fn attach_preexec_cgroup(
     directory: &OwnedFd,
     expected_parent: libc::pid_t,
@@ -1578,8 +1203,6 @@ fn attach_preexec_cgroup(
     let pid = unsafe { libc::getpid() }.to_ne_bytes();
     raw_preexec_write_all(acknowledge.as_raw_fd(), &pid)
 }
-
-#[cfg(target_os = "linux")]
 impl Drop for LinuxCgroup {
     fn drop(&mut self) {
         if unsafe { libc::getpid() } != self.creator_pid {
@@ -1592,8 +1215,6 @@ impl Drop for LinuxCgroup {
         let _ = self.remove_if_empty();
     }
 }
-
-#[cfg(target_os = "linux")]
 fn stable_cgroup_root() -> io::Result<std::path::PathBuf> {
     let uid = unsafe { libc::geteuid() };
     let canonical = canonical_cgroup_root(uid)?;
@@ -1608,8 +1229,6 @@ fn stable_cgroup_root() -> io::Result<std::path::PathBuf> {
     }
     Ok(canonical)
 }
-
-#[cfg(target_os = "linux")]
 fn canonical_cgroup_root(uid: libc::uid_t) -> io::Result<std::path::PathBuf> {
     let configured = std::env::var_os("QOL_PROCESS_CGROUP_ROOT");
     let path = configured.as_ref().map_or_else(
@@ -1642,8 +1261,6 @@ fn canonical_cgroup_root(uid: libc::uid_t) -> io::Result<std::path::PathBuf> {
     }
     Ok(canonical)
 }
-
-#[cfg(target_os = "linux")]
 fn validate_cgroup_filesystem(path: &std::path::Path) -> io::Result<()> {
     let path_c = CString::new(path.as_os_str().as_encoded_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "cgroup path contains NUL"))?;
@@ -1662,8 +1279,6 @@ fn validate_cgroup_filesystem(path: &std::path::Path) -> io::Result<()> {
     }
     Ok(())
 }
-
-#[cfg(target_os = "linux")]
 fn validate_cgroup_controls(path: &std::path::Path) -> io::Result<()> {
     for control in [
         "cgroup.controllers",
@@ -1680,8 +1295,6 @@ fn validate_cgroup_controls(path: &std::path::Path) -> io::Result<()> {
     }
     Ok(())
 }
-
-#[cfg(target_os = "linux")]
 fn current_cgroup_path() -> io::Result<std::path::PathBuf> {
     let content = std::fs::read_to_string("/proc/self/cgroup")?;
     let current = content
@@ -1696,8 +1309,6 @@ fn current_cgroup_path() -> io::Result<std::path::PathBuf> {
     let current = std::path::Path::new("/sys/fs/cgroup").join(current.trim_start_matches('/'));
     std::fs::canonicalize(current)
 }
-
-#[cfg(target_os = "linux")]
 fn owned_cgroup_parent(
     root: &std::path::Path,
     journal_root: &std::path::Path,
@@ -1738,8 +1349,6 @@ fn owned_cgroup_parent(
     }
     Ok(current)
 }
-
-#[cfg(target_os = "linux")]
 fn path_has_owned_component(root: &std::path::Path, path: &std::path::Path) -> bool {
     path.strip_prefix(root).is_ok_and(|relative| {
         relative.components().any(|component| {
@@ -1751,8 +1360,6 @@ fn path_has_owned_component(root: &std::path::Path, path: &std::path::Path) -> b
         })
     })
 }
-
-#[cfg(target_os = "linux")]
 fn valid_owned_cgroup_path(root: &std::path::Path, path: &std::path::Path) -> bool {
     let Ok(relative) = path.strip_prefix(root) else {
         return false;
@@ -1768,8 +1375,6 @@ fn valid_owned_cgroup_path(root: &std::path::Path, path: &std::path::Path) -> bo
             .to_str()
             .is_some_and(|name| name.starts_with("qol-process-v1-"))
 }
-
-#[cfg(target_os = "linux")]
 fn validate_journal_record_identity(
     root: &std::path::Path,
     journal_path: &std::path::Path,
@@ -1801,8 +1406,6 @@ fn validate_journal_record_identity(
     let (device, inode) = directory_identity(&directory)?;
     Ok(device == record.device && inode == record.inode)
 }
-
-#[cfg(target_os = "linux")]
 fn cgroup_journal_root() -> io::Result<std::path::PathBuf> {
     let uid = unsafe { libc::geteuid() };
     let configured = std::env::var_os("QOL_PROCESS_CGROUP_JOURNAL_ROOT");
@@ -1846,8 +1449,6 @@ fn cgroup_journal_root() -> io::Result<std::path::PathBuf> {
     }
     Ok(root)
 }
-
-#[cfg(target_os = "linux")]
 fn validate_journal_parent(root: &std::path::Path, uid: libc::uid_t) -> io::Result<()> {
     let parent = root.parent().ok_or_else(|| {
         io::Error::new(
@@ -1874,8 +1475,6 @@ fn validate_journal_parent(root: &std::path::Path, uid: libc::uid_t) -> io::Resu
     }
     Ok(())
 }
-
-#[cfg(target_os = "linux")]
 fn create_journal_leaf(root: &std::path::Path) -> io::Result<()> {
     let mut builder = std::fs::DirBuilder::new();
     match builder.mode(0o700).create(root) {
@@ -1884,15 +1483,11 @@ fn create_journal_leaf(root: &std::path::Path) -> io::Result<()> {
         Err(error) => Err(error),
     }
 }
-
-#[cfg(target_os = "linux")]
 fn journal_namespace(root: &std::path::Path) -> io::Result<String> {
     let directory = open_directory(root)?;
     let (device, inode) = directory_identity(&directory)?;
     Ok(format!("{device:x}-{inode:x}"))
 }
-
-#[cfg(target_os = "linux")]
 fn recover_stale_cgroups(
     root: &std::path::Path,
     journal_root: &std::path::Path,
@@ -1908,8 +1503,6 @@ fn recover_stale_cgroups(
         }
     }
 }
-
-#[cfg(target_os = "linux")]
 fn recover_stale_cgroup_pass(
     root: &std::path::Path,
     journal_root: &std::path::Path,
@@ -1942,8 +1535,6 @@ fn recover_stale_cgroup_pass(
     }
     Ok(remove_empty_orphaned_cgroups(root, journal_root, budget)? || cleaned)
 }
-
-#[cfg(target_os = "linux")]
 fn load_recoverable_cgroup(
     root: &std::path::Path,
     journal_path: &std::path::Path,
@@ -1956,8 +1547,6 @@ fn load_recoverable_cgroup(
     };
     open_recoverable_cgroup(journal_path, journal, record)
 }
-
-#[cfg(target_os = "linux")]
 fn open_stale_journal(path: &std::path::Path) -> io::Result<Option<File>> {
     let journal = match OpenOptions::new()
         .read(true)
@@ -1974,8 +1563,6 @@ fn open_stale_journal(path: &std::path::Path) -> io::Result<Option<File>> {
     }
     Ok(Some(journal))
 }
-
-#[cfg(target_os = "linux")]
 fn read_stale_cgroup_record(
     root: &std::path::Path,
     journal_path: &std::path::Path,
@@ -2001,8 +1588,6 @@ fn read_stale_cgroup_record(
     quarantine_journal(journal_path)?;
     Ok(None)
 }
-
-#[cfg(target_os = "linux")]
 fn open_recoverable_cgroup(
     journal_path: &std::path::Path,
     journal: File,
@@ -2035,8 +1620,6 @@ fn open_recoverable_cgroup(
         directory,
     }))
 }
-
-#[cfg(target_os = "linux")]
 fn recover_stale_cgroup(
     cgroup: RecoverableCgroup,
     budget: &mut CgroupRecoveryBudget,
@@ -2055,8 +1638,6 @@ fn recover_stale_cgroup(
     std::fs::remove_file(&cgroup.journal_path)?;
     Ok(true)
 }
-
-#[cfg(target_os = "linux")]
 fn wait_for_recovered_cgroup_empty(
     directory: &OwnedFd,
     budget: &CgroupRecoveryBudget,
@@ -2071,8 +1652,6 @@ fn wait_for_recovered_cgroup_empty(
         std::thread::sleep(WAIT_INTERVAL.min(remaining));
     }
 }
-
-#[cfg(target_os = "linux")]
 fn remove_file_if_present(path: &std::path::Path) -> io::Result<()> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -2080,8 +1659,6 @@ fn remove_file_if_present(path: &std::path::Path) -> io::Result<()> {
         Err(error) => Err(error),
     }
 }
-
-#[cfg(target_os = "linux")]
 fn remove_empty_orphaned_cgroups(
     root: &std::path::Path,
     journal_root: &std::path::Path,
@@ -2107,8 +1684,6 @@ fn remove_empty_orphaned_cgroups(
     }
     Ok(cleaned)
 }
-
-#[cfg(target_os = "linux")]
 fn is_unrepresented_owned_cgroup(
     path: &std::path::Path,
     owned_prefix: &str,
@@ -2122,8 +1697,6 @@ fn is_unrepresented_owned_cgroup(
             .iter()
             .any(|recorded| recorded.starts_with(path))
 }
-
-#[cfg(target_os = "linux")]
 fn remove_empty_orphaned_cgroup(
     path: &std::path::Path,
     budget: &mut CgroupRecoveryBudget,
@@ -2147,8 +1720,6 @@ fn remove_empty_orphaned_cgroup(
         Err(error) => Err(error),
     }
 }
-
-#[cfg(target_os = "linux")]
 fn represented_cgroup_paths(
     root: &std::path::Path,
     journal_root: &std::path::Path,
@@ -2182,8 +1753,6 @@ fn represented_cgroup_paths(
     }
     Ok(Some(represented))
 }
-
-#[cfg(target_os = "linux")]
 fn cgroup_populated(directory: libc::c_int) -> io::Result<bool> {
     read_at(directory, "cgroup.events")?
         .lines()
@@ -2203,8 +1772,6 @@ fn cgroup_populated(directory: libc::c_int) -> io::Result<bool> {
             ))
         })
 }
-
-#[cfg(target_os = "linux")]
 fn quarantine_journal(path: &std::path::Path) -> io::Result<()> {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2221,8 +1788,6 @@ fn quarantine_journal(path: &std::path::Path) -> io::Result<()> {
     };
     prune_quarantined_journals(root, Some(&quarantine))
 }
-
-#[cfg(target_os = "linux")]
 fn prune_quarantined_journals(
     root: &std::path::Path,
     retained: Option<&std::path::Path>,
@@ -2247,8 +1812,6 @@ fn prune_quarantined_journals(
     }
     Ok(())
 }
-
-#[cfg(target_os = "linux")]
 fn quarantined_journal_timestamp(path: &std::path::Path) -> Option<u128> {
     let name = path.file_name()?.to_str()?;
     let (journal, timestamp) = name.rsplit_once(".quarantine-")?;
@@ -2258,8 +1821,6 @@ fn quarantined_journal_timestamp(path: &std::path::Path) -> Option<u128> {
     let parsed = timestamp.parse::<u128>().ok()?;
     (parsed.to_string() == timestamp).then_some(parsed)
 }
-
-#[cfg(target_os = "linux")]
 fn linux_boot_id() -> io::Result<String> {
     let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?
         .trim()
@@ -2272,8 +1833,6 @@ fn linux_boot_id() -> io::Result<String> {
     }
     Ok(boot_id)
 }
-
-#[cfg(target_os = "linux")]
 fn lock_cgroup_registry(root: &std::path::Path, budget: &CgroupRecoveryBudget) -> io::Result<File> {
     let path = root.join("registry.guard");
     let file = OpenOptions::new()
@@ -2308,16 +1867,12 @@ fn lock_cgroup_registry(root: &std::path::Path, budget: &CgroupRecoveryBudget) -
         std::thread::sleep(WAIT_INTERVAL.min(remaining));
     }
 }
-
-#[cfg(target_os = "linux")]
 fn lock_journal(file: &File) -> io::Result<()> {
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
         return Ok(());
     }
     Err(io::Error::last_os_error())
 }
-
-#[cfg(target_os = "linux")]
 fn try_lock_journal(file: &File) -> io::Result<bool> {
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
         return Ok(true);
@@ -2330,15 +1885,13 @@ fn try_lock_journal(file: &File) -> io::Result<bool> {
     Err(error)
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 fn unlock_journal(file: &File) -> io::Result<()> {
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) } == 0 {
         return Ok(());
     }
     Err(io::Error::last_os_error())
 }
-
-#[cfg(target_os = "linux")]
 fn open_directory(path: &std::path::Path) -> io::Result<OwnedFd> {
     let path = CString::new(path.as_os_str().as_encoded_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "cgroup path contains NUL"))?;
@@ -2353,8 +1906,6 @@ fn open_directory(path: &std::path::Path) -> io::Result<OwnedFd> {
     }
     Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
 }
-
-#[cfg(target_os = "linux")]
 fn open_at(directory: libc::c_int, name: &str, flags: libc::c_int) -> io::Result<OwnedFd> {
     let name = CString::new(name)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "control name contains NUL"))?;
@@ -2370,8 +1921,6 @@ fn open_at(directory: libc::c_int, name: &str, flags: libc::c_int) -> io::Result
     }
     Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
 }
-
-#[cfg(target_os = "linux")]
 fn read_at(directory: libc::c_int, name: &str) -> io::Result<String> {
     let descriptor = open_at(directory, name, libc::O_RDONLY)?;
     let mut file = File::from(descriptor);
@@ -2379,15 +1928,11 @@ fn read_at(directory: libc::c_int, name: &str) -> io::Result<String> {
     file.read_to_string(&mut content)?;
     Ok(content)
 }
-
-#[cfg(target_os = "linux")]
 fn write_at(directory: libc::c_int, name: &str, content: &[u8]) -> io::Result<()> {
     let descriptor = open_at(directory, name, libc::O_WRONLY)?;
     let mut file = File::from(descriptor);
     file.write_all(content)
 }
-
-#[cfg(target_os = "linux")]
 fn parse_cgroup_processes(content: &str) -> io::Result<Vec<libc::pid_t>> {
     content
         .lines()
@@ -2401,8 +1946,6 @@ fn parse_cgroup_processes(content: &str) -> io::Result<Vec<libc::pid_t>> {
         })
         .collect()
 }
-
-#[cfg(target_os = "linux")]
 fn collect_descendant_members(
     root: &std::path::Path,
     members: &mut Vec<libc::pid_t>,
@@ -2422,8 +1965,6 @@ fn collect_descendant_members(
     }
     Ok(())
 }
-
-#[cfg(target_os = "linux")]
 fn remove_descendant_cgroups(root: &std::path::Path) -> io::Result<bool> {
     let mut descendants = descendant_cgroups(root)?;
     descendants.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.1));
@@ -2437,8 +1978,6 @@ fn remove_descendant_cgroups(root: &std::path::Path) -> io::Result<bool> {
     }
     Ok(true)
 }
-
-#[cfg(target_os = "linux")]
 fn remove_descendant_cgroups_for_recovery(
     root: &std::path::Path,
     budget: &mut CgroupRecoveryBudget,
@@ -2460,8 +1999,6 @@ fn remove_descendant_cgroups_for_recovery(
     }
     Ok(true)
 }
-
-#[cfg(target_os = "linux")]
 fn descendant_cgroups_for_recovery(
     root: &std::path::Path,
     budget: &mut CgroupRecoveryBudget,
@@ -2504,8 +2041,6 @@ fn descendant_cgroups_for_recovery(
     }
     Ok(Some(descendants))
 }
-
-#[cfg(target_os = "linux")]
 fn descendant_cgroups(root: &std::path::Path) -> io::Result<Vec<(std::path::PathBuf, usize)>> {
     let mut pending = vec![(root.to_path_buf(), 0_usize)];
     let mut descendants = Vec::new();
@@ -2545,8 +2080,6 @@ fn descendant_cgroups(root: &std::path::Path) -> io::Result<Vec<(std::path::Path
     }
     Ok(descendants)
 }
-
-#[cfg(target_os = "linux")]
 fn retryable_cgroup_removal(error: &io::Error) -> bool {
     matches!(
         error.kind(),
@@ -2556,8 +2089,6 @@ fn retryable_cgroup_removal(error: &io::Error) -> bool {
         Some(code) if code == libc::EBUSY || code == libc::ENOTEMPTY
     )
 }
-
-#[cfg(target_os = "linux")]
 fn verify_open_directory_path(directory: &OwnedFd, path: &std::path::Path) -> io::Result<()> {
     let reopened = open_directory(path)?;
     if directory_identity(directory)? != directory_identity(&reopened)? {
@@ -2568,8 +2099,6 @@ fn verify_open_directory_path(directory: &OwnedFd, path: &std::path::Path) -> io
     }
     Ok(())
 }
-
-#[cfg(target_os = "linux")]
 fn directory_identity(directory: &OwnedFd) -> io::Result<(u64, u64)> {
     let mut metadata: libc::stat = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstat(directory.as_raw_fd(), &mut metadata) } == -1 {
@@ -2577,120 +2106,33 @@ fn directory_identity(directory: &OwnedFd) -> io::Result<(u64, u64)> {
     }
     Ok((metadata.st_dev, metadata.st_ino))
 }
-
-#[cfg(target_os = "linux")]
 fn process_in_scope(pid: libc::pid_t, scope: ProcessScope) -> io::Result<bool> {
     let ProcessScope::Process(expected) = scope;
     Ok(pid == expected)
 }
 
-#[cfg(not(target_os = "linux"))]
-fn process_in_scope(pid: libc::pid_t, scope: ProcessScope) -> io::Result<bool> {
-    let actual = match scope {
-        ProcessScope::Process(expected) => return Ok(pid == expected),
-        ProcessScope::ProcessGroup(_) => unsafe { libc::getpgid(pid) },
-        ProcessScope::Session(_) => unsafe { libc::getsid(pid) },
-    };
-    if actual == -1 {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) {
-            return Ok(false);
-        }
-        return Err(error);
-    }
-    Ok(match scope {
-        ProcessScope::Process(_) => unreachable!(),
-        ProcessScope::ProcessGroup(expected) | ProcessScope::Session(expected) => {
-            actual == expected
-        }
-    })
-}
-
-#[cfg(target_os = "macos")]
-fn list_process_ids() -> io::Result<Vec<libc::pid_t>> {
-    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-    if count < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let mut capacity = usize::try_from(count)
-        .unwrap_or_default()
-        .saturating_add(64)
-        .max(64);
-    loop {
-        let mut pids = vec![0; capacity];
-        let bytes = i32::try_from(capacity.saturating_mul(std::mem::size_of::<libc::pid_t>()))
-            .map_err(|_| io::Error::other("process list buffer is too large"))?;
-        let read = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
-        if read < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let read = usize::try_from(read).unwrap_or_default();
-        if read >= capacity {
-            capacity = capacity
-                .checked_mul(2)
-                .ok_or_else(|| io::Error::other("process list capacity overflow"))?;
-            continue;
-        }
-        pids.truncate(read);
-        pids.retain(|pid| *pid > 0);
-        pids.sort_unstable();
-        return Ok(pids);
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn list_process_ids() -> io::Result<Vec<libc::pid_t>> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "verified process-scope enumeration is unsupported on this Unix platform",
-    ))
-}
-
 pub(crate) fn own_current_process_tree_with_guardian(
     guardian_command: Command,
 ) -> io::Result<ProcessTreeGuard> {
-    #[cfg(target_os = "linux")]
-    {
-        process_tree_containment_support()?;
-        let cgroup = LinuxCgroup::create()?;
-        let (kill, events) = cgroup.guardian_controls()?;
-        let guardian = linux_guardian::Guardian::spawn(guardian_command, kill, events)?;
-        Ok(ProcessTreeGuard {
-            target: Mutex::new(None),
-            guardian: Some(guardian),
-            cgroup,
-            prepared: AtomicBool::new(false),
-        })
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = guardian_command;
-        Err(unsupported_process_tree_containment())
-    }
+    process_tree_containment_support()?;
+    let cgroup = LinuxCgroup::create()?;
+    let (kill, events) = cgroup.guardian_controls()?;
+    let guardian = guardian::Guardian::spawn(guardian_command, kill, events)?;
+    Ok(ProcessTreeGuard {
+        target: Mutex::new(None),
+        guardian: Some(guardian),
+        cgroup,
+        prepared: AtomicBool::new(false),
+    })
 }
 
 pub(crate) fn run_process_tree_guardian_entry() -> io::Result<()> {
-    #[cfg(target_os = "linux")]
-    {
-        linux_guardian::run_entry()
-    }
-    #[cfg(not(target_os = "linux"))]
-    Err(unsupported_process_tree_containment())
+    guardian::run_entry()
 }
 
 pub(crate) fn process_tree_containment_support() -> io::Result<()> {
-    #[cfg(target_os = "linux")]
-    {
-        let _ = stable_cgroup_root()?;
-        let _ = cgroup_journal_root()?;
-        Ok(())
-    }
-    #[cfg(not(target_os = "linux"))]
-    Err(unsupported_process_tree_containment())
-}
-
-pub(crate) fn isolate_owned_command(command: &mut Command) -> io::Result<()> {
-    command.process_group(0);
+    let _ = stable_cgroup_root()?;
+    let _ = cgroup_journal_root()?;
     Ok(())
 }
 
@@ -2708,59 +2150,6 @@ pub(crate) fn isolate_owned_session(command: &mut Command) -> io::Result<()> {
     }
     Ok(())
 }
-
-pub(crate) fn install_cancellation_handler() -> io::Result<()> {
-    let result = CANCELLATION_INSTALL.get_or_init(install_signal_handlers);
-    match result {
-        Ok(()) => Ok(()),
-        Err(code) => Err(io::Error::from_raw_os_error(*code)),
-    }
-}
-
-pub(crate) fn cancellation_requested() -> bool {
-    cancellation_signal_count() > 0
-}
-
-pub(crate) fn cancellation_signal_count() -> usize {
-    CANCELLATION_SIGNAL_COUNT.load(Ordering::Acquire)
-}
-
-fn install_signal_handlers() -> Result<(), i32> {
-    for signal in [libc::SIGINT, libc::SIGTERM] {
-        let previous = unsafe {
-            libc::signal(
-                signal,
-                cancellation_signal_handler as *const () as libc::sighandler_t,
-            )
-        };
-        if previous == libc::SIG_ERR {
-            return Err(io::Error::last_os_error()
-                .raw_os_error()
-                .unwrap_or(libc::EINVAL));
-        }
-    }
-    Ok(())
-}
-
-extern "C" fn cancellation_signal_handler(_: libc::c_int) {
-    CANCELLATION_SIGNAL_COUNT.fetch_add(1, Ordering::Release);
-}
-
-pub(crate) fn is_pid_alive(pid: u32) -> bool {
-    let Ok(pid) = pid_t(pid) else {
-        return false;
-    };
-    signal_target_alive(pid)
-}
-
-pub(crate) fn is_group_alive(pid: u32) -> bool {
-    let Ok(pid) = pid_t(pid) else {
-        return false;
-    };
-    signal_target_alive(-pid)
-}
-
-#[cfg(target_os = "linux")]
 pub(crate) fn is_pid_zombie(pid: u32) -> bool {
     let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
         return false;
@@ -2769,13 +2158,6 @@ pub(crate) fn is_pid_zombie(pid: u32) -> bool {
         .and_then(|(_, fields)| fields.chars().next())
         == Some('Z')
 }
-
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn is_pid_zombie(_pid: u32) -> bool {
-    false
-}
-
-#[cfg(target_os = "linux")]
 pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
     let pid = pid_t(pid)?;
     let process_directory = open_directory(std::path::Path::new(&format!("/proc/{pid}")))?;
@@ -2800,8 +2182,6 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
         linux_boot_id()?
     ))
 }
-
-#[cfg(target_os = "linux")]
 pub(crate) fn process_identity_matches(actual: &str, expected: &str) -> bool {
     let exact = actual == expected;
     let Some(actual_identity) = parse_linux_process_identity(actual) else {
@@ -2820,8 +2200,6 @@ pub(crate) fn process_identity_matches(actual: &str, expected: &str) -> bool {
         && actual_identity.boot_id == expected_identity.boot_id
         && actual_identity.start_ticks == expected_identity.start_ticks
 }
-
-#[cfg(target_os = "linux")]
 fn parse_linux_process_identity(identity: &str) -> Option<LinuxProcessIdentity<'_>> {
     let fields = identity.split(':').collect::<Vec<_>>();
     let (boot_id, start_ticks, version) = match fields.as_slice() {
@@ -2848,219 +2226,15 @@ fn parse_linux_process_identity(identity: &str) -> Option<LinuxProcessIdentity<'
         version,
     })
 }
-
-#[cfg(target_os = "linux")]
 fn canonical_decimal(value: &str) -> Option<u64> {
     let parsed = value.parse::<u64>().ok()?;
     (parsed.to_string() == value).then_some(parsed)
 }
 
-#[cfg(target_os = "macos")]
-pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
-    let pid = pid_t(pid)?;
-    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_bsdinfo>();
-    let read = unsafe {
-        libc::proc_pidinfo(
-            pid,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            std::ptr::from_mut(&mut info).cast(),
-            i32::try_from(size).map_err(|_| io::Error::other("process info is too large"))?,
-        )
-    };
-    if read != i32::try_from(size).unwrap_or(i32::MAX) {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(format!(
-        "macos:{}:{}",
-        info.pbi_start_tvsec, info.pbi_start_tvusec
-    ))
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn process_identity_matches(actual: &str, expected: &str) -> bool {
-    actual == expected
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(crate) fn process_identity(_pid: u32) -> io::Result<String> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "durable process identity is unsupported on this Unix platform",
-    ))
-}
-
-fn signal_target_alive(target: libc::pid_t) -> bool {
-    if unsafe { libc::kill(target, 0) } == 0 {
-        return true;
-    }
-    io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-pub(crate) fn signal_term_pid(pid: u32) -> io::Result<()> {
-    signal(pid_t(pid)?, libc::SIGTERM)
-}
-
-pub(crate) fn signal_term_group(pid: u32) -> io::Result<()> {
-    signal(-pid_t(pid)?, libc::SIGTERM)
-}
-
-pub(crate) fn kill_pid(pid: u32) -> io::Result<()> {
-    signal(pid_t(pid)?, libc::SIGKILL)
-}
-
-pub(crate) fn kill_group(pid: u32) -> io::Result<()> {
-    signal(-pid_t(pid)?, libc::SIGKILL)
-}
-
-pub(crate) fn try_wait_pid(pid: u32) -> io::Result<Option<ExitStatus>> {
-    let pid = pid_t(pid)?;
-    loop {
-        let mut status = 0;
-        let result = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-        if result == 0 {
-            return Ok(None);
-        }
-        if result == pid {
-            return Ok(Some(ExitStatus::from_raw(status)));
-        }
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::EINTR) {
-            continue;
-        }
-        return Err(error);
-    }
-}
-
-pub(crate) fn wait_pid(pid: u32) -> io::Result<ExitStatus> {
-    loop {
-        if let Some(status) = try_wait_pid(pid)? {
-            return Ok(status);
-        }
-        if !is_pid_alive(pid) {
-            return Ok(ExitStatus::from_raw(0));
-        }
-        std::thread::sleep(WAIT_INTERVAL);
-    }
-}
-
-pub(crate) fn terminate_pid(pid: u32, grace: Duration) {
-    let Ok(pid) = pid_t(pid) else {
-        return;
-    };
-    escalate(pid, pid, grace);
-}
-
-pub(crate) fn terminate_group(pid: u32, grace: Duration) {
-    let Ok(pid) = pid_t(pid) else {
-        return;
-    };
-    escalate_group(pid, grace);
-}
-
-fn escalate(pid: libc::pid_t, signal_target: libc::pid_t, grace: Duration) {
-    if !is_pid_alive(pid as u32) {
-        return;
-    }
-    let _ = signal(signal_target, libc::SIGTERM);
-    std::thread::sleep(grace);
-    if is_pid_alive(pid as u32) {
-        let _ = signal(signal_target, libc::SIGKILL);
-    }
-    std::thread::sleep(REAP_DELAY);
-    let _ = try_wait_pid(pid as u32);
-}
-
-fn escalate_group(pid: libc::pid_t, grace: Duration) {
-    let signal_target = -pid;
-    if signal_target_alive(signal_target) {
-        let _ = signal(signal_target, libc::SIGTERM);
-        let deadline = Instant::now() + grace;
-        while signal_target_alive(signal_target) && Instant::now() < deadline {
-            std::thread::sleep(WAIT_INTERVAL);
-        }
-        if signal_target_alive(signal_target) {
-            let _ = signal(signal_target, libc::SIGKILL);
-        }
-    }
-    std::thread::sleep(REAP_DELAY);
-    let _ = try_wait_pid(pid as u32);
-}
-
-pub(crate) fn terminate_owned(child: &mut Child, grace: Duration) -> io::Result<()> {
-    let pid = pid_t(child.id())?;
-    let signal_target = owned_signal_target(pid);
-    let _ = signal(signal_target, libc::SIGTERM);
-    let deadline = Instant::now() + grace;
-    loop {
-        if child.try_wait()?.is_some() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            break;
-        }
-        std::thread::sleep(WAIT_INTERVAL);
-    }
-    let _ = signal(signal_target, libc::SIGKILL);
-    child.wait()?;
-    Ok(())
-}
-
-pub(crate) fn spawn_detached(command: &mut Command) -> io::Result<()> {
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    unsafe {
-        command.pre_exec(|| {
-            match libc::fork() {
-                -1 => return Err(io::Error::last_os_error()),
-                0 => {}
-                _ => libc::_exit(0),
-            }
-            if libc::setsid() == -1 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let mut intermediate = command.spawn()?;
-    intermediate.wait()?;
-    Ok(())
-}
-
-fn pid_t(pid: u32) -> io::Result<libc::pid_t> {
-    let pid = libc::pid_t::try_from(pid)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "pid is out of range"))?;
-    if pid <= 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "pid must be positive",
-        ));
-    }
-    Ok(pid)
-}
-
-fn signal(target: libc::pid_t, signal: libc::c_int) -> io::Result<()> {
-    if unsafe { libc::kill(target, signal) } == 0 {
-        return Ok(());
-    }
-    Err(io::Error::last_os_error())
-}
-
-fn owned_signal_target(pid: libc::pid_t) -> libc::pid_t {
-    if unsafe { libc::getpgid(pid) } == pid {
-        return -pid;
-    }
-    pid
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(target_os = "linux")]
+    use crate::platform::unix::{is_pid_alive, terminate_owned};
     #[test]
     fn reused_root_identity_is_never_signaled() {
         let mut command = Command::new("sleep");
@@ -3077,8 +2251,6 @@ mod tests {
         assert!(is_pid_alive(child.id()));
         terminate_owned(&mut child, Duration::from_millis(20)).unwrap();
     }
-
-    #[cfg(target_os = "linux")]
     #[test]
     fn pidfd_generation_mismatch_is_never_signaled() {
         let mut first = Command::new("sleep").arg("30").spawn().unwrap();
@@ -3103,8 +2275,6 @@ mod tests {
         terminate_owned(&mut first, Duration::from_millis(20)).unwrap();
         terminate_owned(&mut second, Duration::from_millis(20)).unwrap();
     }
-
-    #[cfg(target_os = "linux")]
     #[test]
     fn recovery_removes_an_empty_unjournaled_owned_cgroup() {
         let root = stable_cgroup_root().unwrap();
@@ -3129,8 +2299,6 @@ mod tests {
         assert!(!orphan.exists());
         drop(replacement);
     }
-
-    #[cfg(target_os = "linux")]
     #[test]
     fn registry_lock_contention_ends_at_the_shared_recovery_deadline() {
         let root = tempfile::tempdir().unwrap();
@@ -3147,8 +2315,6 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(1));
         drop(holder);
     }
-
-    #[cfg(target_os = "linux")]
     #[test]
     fn cgroup_walk_rejects_hierarchies_beyond_the_depth_bound() {
         let temp = tempfile::tempdir().unwrap();
@@ -3162,8 +2328,6 @@ mod tests {
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
-    #[cfg(target_os = "linux")]
     #[test]
     fn stale_recovery_retains_records_beyond_its_global_budget() {
         let root = tempfile::tempdir().unwrap();
@@ -3185,8 +2349,6 @@ mod tests {
             .count();
         assert_eq!(pending, 2);
     }
-
-    #[cfg(target_os = "linux")]
     #[test]
     fn stale_recovery_leaves_evidence_when_its_deadline_has_elapsed() {
         let root = tempfile::tempdir().unwrap();
@@ -3200,8 +2362,6 @@ mod tests {
         assert!(!cleaned);
         assert!(pending.exists());
     }
-
-    #[cfg(target_os = "linux")]
     #[test]
     fn stale_recovery_leaves_evidence_when_its_work_cap_is_exhausted() {
         let root = tempfile::tempdir().unwrap();
@@ -3216,8 +2376,6 @@ mod tests {
         assert!(!cleaned);
         assert!(pending.exists());
     }
-
-    #[cfg(target_os = "linux")]
     #[test]
     fn quarantine_retention_only_prunes_old_generated_evidence() {
         let journals = tempfile::tempdir().unwrap();
@@ -3264,8 +2422,6 @@ mod tests {
                 .is_some_and(|name| name.starts_with("incoming.lock.quarantine-"))
         }));
     }
-
-    #[cfg(target_os = "linux")]
     #[test]
     fn linux_process_identity_includes_proc_directory_generation() {
         let identity = process_identity(std::process::id()).unwrap();
@@ -3277,8 +2433,6 @@ mod tests {
         assert!(fields[3].parse::<u64>().is_ok());
         assert!(fields[4].parse::<u64>().is_ok());
     }
-
-    #[cfg(target_os = "linux")]
     #[test]
     fn linux_identity_migration_only_accepts_the_same_legacy_generation() {
         let cases = [
@@ -3302,8 +2456,6 @@ mod tests {
             );
         }
     }
-
-    #[cfg(target_os = "linux")]
     #[test]
     fn owned_cgroup_paths_allow_safe_arbitrary_intermediate_descendants() {
         let root = std::path::Path::new("/delegated");
@@ -3318,8 +2470,6 @@ mod tests {
             &root.join("arbitrary-child")
         ));
     }
-
-    #[cfg(target_os = "linux")]
     #[test]
     fn stale_journal_recovery_kills_and_removes_the_exact_recorded_cgroup() {
         let stale = LinuxCgroup::create().unwrap();
@@ -3344,20 +2494,5 @@ mod tests {
         assert!(!stale_path.exists());
         assert!(!stale_journal.exists());
         drop(replacement);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn exact_process_signaling_fails_closed_without_an_identity_bound_handle() {
-        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
-        let pid = pid_t(child.id()).unwrap();
-        let process = capture_owned_process(pid).unwrap().unwrap();
-
-        let error = signal_owned_process_handle(&process, libc::SIGTERM)
-            .expect_err("raw PID signaling must not follow an identity check on macOS");
-
-        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
-        assert!(is_pid_alive(child.id()));
-        terminate_owned(&mut child, Duration::from_millis(20)).unwrap();
     }
 }
