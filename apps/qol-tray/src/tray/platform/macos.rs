@@ -50,7 +50,7 @@ pub(super) fn run_event_loop() {
 /// is present in the bundle plist, AppKit installs the GetURL Apple-Event
 /// handler and bridges it to `application:openURLs:`. Each URL is forwarded by
 /// re-executing this binary as a pure courier (`URL_COURIER_FLAG` + the URL),
-/// which `main`'s `try_url_courier` forwards to this running daemon and exits -
+/// which the host CLI courier route forwards to this running daemon and exits -
 /// it never starts a second daemon, so there is no port-bind race with us. The
 /// delegate is held weakly by `NSApp`, so the instance is leaked for process
 /// life.

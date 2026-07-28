@@ -1,3 +1,5 @@
+mod host_cli;
+
 use anyhow::{Context, Result};
 use qol_tray::daemon::Daemon;
 
@@ -27,21 +29,9 @@ pub(crate) fn run() -> Result<()> {
     if let Some(result) = qol_tray::settings_surface::run_from_current_args() {
         return result;
     }
-    if let Some(code) = qol_tray::doctor::try_run_host_cli_from_env() {
-        std::process::exit(code);
-    }
     qol_tray::console_guard::guard_console_pipes();
 
-    if let Some(code) = try_handle_cli_flag() {
-        std::process::exit(code);
-    }
-    if let Some(code) = try_exec_subcommand() {
-        std::process::exit(code);
-    }
-    if let Some(code) = try_open_subcommand() {
-        std::process::exit(code);
-    }
-    if let Some(code) = try_url_courier() {
+    if let Some(code) = dispatch_host_cli(host_cli::from_env()) {
         std::process::exit(code);
     }
 
@@ -148,27 +138,41 @@ pub(crate) fn run() -> Result<()> {
     tray::platform::run_app(app_init)
 }
 
-fn try_handle_cli_flag() -> Option<i32> {
-    let args: Vec<String> = std::env::args().collect();
-    let flag = args.get(1).map(|s| s.as_str())?;
-    match flag {
-        "--version" | "-V" => {
-            println!("qol-tray {}", qol_tray_version());
-            Some(0)
-        }
-        "help" | "--help" | "-h" => {
+fn dispatch_host_cli(invocation: host_cli::Invocation) -> Option<i32> {
+    match invocation {
+        host_cli::Invocation::Daemon => None,
+        host_cli::Invocation::Help => {
             print_usage();
             Some(0)
         }
-        s if s.starts_with("--write-mode=") => {
-            let exit = write_mode_flag(&s["--write-mode=".len()..]);
+        host_cli::Invocation::Version => {
+            println!("qol-tray {}", qol_tray_version());
+            Some(0)
+        }
+        host_cli::Invocation::WriteMode(value) => {
+            let exit = write_mode_flag(&value);
             if exit != 0 {
                 Some(exit)
             } else {
                 None
             }
         }
-        _ => None,
+        host_cli::Invocation::Headless(args) => Some(qol_tray::doctor::run_host_cli(args)),
+        host_cli::Invocation::Exec { target, action } => Some(exec_subcommand(&target, &action)),
+        host_cli::Invocation::Open(route) => Some(forward_route(&route)),
+        host_cli::Invocation::UrlCourier(route) => Some(courier_forward_with_retry(&route)),
+        host_cli::Invocation::Url(route) => {
+            if is_already_running() {
+                Some(forward_route(&route))
+            } else {
+                let _ = PENDING_COLD_ROUTE.set(route);
+                None
+            }
+        }
+        host_cli::Invocation::Invalid => {
+            eprintln!("Invalid qol-tray invocation. Run `qol-tray help` for supported forms.");
+            Some(2)
+        }
     }
 }
 
@@ -214,23 +218,11 @@ fn print_usage() {
     println!("    qol-tray help, --help, -h             Print this message and exit");
 }
 
-fn try_open_subcommand() -> Option<i32> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.get(1).map(|s| s.as_str()) != Some("open") {
-        return None;
-    }
-    let Some(route) = args.get(2) else {
-        eprintln!("Usage: qol-tray open <route>   e.g. qol-tray open shortcuts/add");
-        return Some(1);
-    };
-    Some(forward_route(route))
-}
-
 /// Route stashed when a bare `qol://` URL arrives in argv on a Linux cold launch
 /// (daemon not yet running); opened once the server is listening. macOS cold
 /// launches do not use this - the daemon process never sees the URL in argv;
 /// it arrives post-launch via the `openURLs` delegate, which spawns a separate
-/// courier process. See `try_url_courier`.
+/// courier process classified by `host_cli`.
 static PENDING_COLD_ROUTE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Navigate an already-open UI tab to `route`, falling back to opening a fresh
@@ -249,58 +241,6 @@ fn forward_route(route: &str) -> i32 {
     }
 }
 
-/// How this invocation carries a `qol://` URL, decided purely from argv.
-#[derive(Debug, PartialEq, Eq)]
-enum UrlInvocation {
-    /// macOS `openURLs` delegate re-exec (`URL_COURIER_FLAG` + URL): forward the
-    /// route (when valid) to the running daemon and exit. NEVER starts a daemon.
-    Courier(Option<String>),
-    /// Bare `qol://` URL in argv (Linux `.desktop %u`, or any direct invocation):
-    /// forward if a daemon is running, otherwise become the daemon for it.
-    Argv(String),
-    /// Not a `qol://` invocation; normal startup continues.
-    NotUrl,
-}
-
-fn classify_url_args(args: &[String]) -> UrlInvocation {
-    if args.get(1).map(String::as_str) == Some(qol_tray::commands::URL_COURIER_FLAG) {
-        let route = args
-            .get(2)
-            .and_then(|u| qol_tray::commands::parse_qol_url(u));
-        return UrlInvocation::Courier(route);
-    }
-    match args
-        .get(1)
-        .and_then(|u| qol_tray::commands::parse_qol_url(u))
-    {
-        Some(route) => UrlInvocation::Argv(route),
-        None => UrlInvocation::NotUrl,
-    }
-}
-
-/// Handle a `qol://<route>` URL. Linux `.desktop %u` passes it bare in argv; the
-/// macOS `openURLs` delegate re-execs us as a courier (`URL_COURIER_FLAG`). A
-/// courier always forwards-then-exits so it can never race the parent daemon for
-/// the port. A bare argv URL forwards to a running daemon, or - on a cold launch
-/// where this process becomes the daemon - stashes the route for `app_init_inner`
-/// to open once the server is listening.
-fn try_url_courier() -> Option<i32> {
-    let args: Vec<String> = std::env::args().collect();
-    match classify_url_args(&args) {
-        UrlInvocation::Courier(Some(route)) => Some(courier_forward_with_retry(&route)),
-        UrlInvocation::Courier(None) => Some(1),
-        UrlInvocation::Argv(route) => {
-            if is_already_running() {
-                Some(forward_route(&route))
-            } else {
-                let _ = PENDING_COLD_ROUTE.set(route);
-                None
-            }
-        }
-        UrlInvocation::NotUrl => None,
-    }
-}
-
 /// A macOS courier is spawned by the running daemon's URL delegate, but that
 /// daemon's HTTP server may still be binding. Wait briefly (up to ~2s) for it to
 /// accept connections so we navigate the live tab instead of opening a dead one,
@@ -316,30 +256,19 @@ fn open_pending_cold_route(route: &str) {
     let _ = qol_tray::paths::open_url(&url);
 }
 
-fn try_exec_subcommand() -> Option<i32> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.get(1).map(|s| s.as_str()) != Some("exec") {
-        return None;
+fn exec_subcommand(target: &str, action: &str) -> i32 {
+    if target == "shortcut" {
+        return exec_shortcut(action);
     }
-    if args.len() == 4 && args[2] == "shortcut" {
-        return Some(exec_shortcut(&args[3]));
+    if !qol_tray::plugins::manifest::is_valid_plugin_id(target) {
+        eprintln!("Invalid plugin id: {target}");
+        return 1;
     }
-    if args.len() != 4 {
-        eprintln!("Usage: qol-tray exec shortcut <shortcut_id>");
-        eprintln!("       qol-tray exec <plugin_id> <action_id>");
-        return Some(1);
+    if !qol_tray::plugins::manifest::is_valid_action_id(action) {
+        eprintln!("Invalid action id: {action}");
+        return 1;
     }
-    let plugin_id = &args[2];
-    let action_id = &args[3];
-    if !qol_tray::plugins::manifest::is_valid_action_id(plugin_id) {
-        eprintln!("Invalid plugin id: {}", plugin_id);
-        return Some(1);
-    }
-    if !qol_tray::plugins::manifest::is_valid_action_id(action_id) {
-        eprintln!("Invalid action id: {}", action_id);
-        return Some(1);
-    }
-    Some(fire_action_request(plugin_id, action_id))
+    fire_action_request(target, action)
 }
 
 fn exec_shortcut(id: &str) -> i32 {
@@ -717,57 +646,5 @@ async fn check_for_updates() -> bool {
             log::debug!("Update check timed out");
             false
         }
-    }
-}
-
-#[cfg(test)]
-mod url_courier_tests {
-    use super::{classify_url_args, UrlInvocation};
-    use qol_tray::commands::URL_COURIER_FLAG;
-
-    fn args(parts: &[&str]) -> Vec<String> {
-        parts.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn courier_flag_with_valid_url_is_courier_with_route() {
-        let a = args(&["qol-tray", URL_COURIER_FLAG, "qol://shortcuts/add?type=url"]);
-        assert_eq!(
-            classify_url_args(&a),
-            UrlInvocation::Courier(Some("shortcuts/add?type=url".to_string()))
-        );
-    }
-
-    #[test]
-    fn courier_flag_with_bad_url_stays_courier_so_it_never_starts_a_daemon() {
-        let a = args(&["qol-tray", URL_COURIER_FLAG, "https://evil.example"]);
-        assert_eq!(classify_url_args(&a), UrlInvocation::Courier(None));
-        let missing = args(&["qol-tray", URL_COURIER_FLAG]);
-        assert_eq!(classify_url_args(&missing), UrlInvocation::Courier(None));
-    }
-
-    #[test]
-    fn bare_qol_url_in_argv_is_argv_route() {
-        let a = args(&["qol-tray", "qol://shortcuts"]);
-        assert_eq!(
-            classify_url_args(&a),
-            UrlInvocation::Argv("shortcuts".to_string())
-        );
-    }
-
-    #[test]
-    fn non_url_invocations_are_not_url() {
-        assert_eq!(
-            classify_url_args(&args(&["qol-tray"])),
-            UrlInvocation::NotUrl
-        );
-        assert_eq!(
-            classify_url_args(&args(&["qol-tray", "exec", "p", "a"])),
-            UrlInvocation::NotUrl
-        );
-        assert_eq!(
-            classify_url_args(&args(&["qol-tray", "open", "shortcuts"])),
-            UrlInvocation::NotUrl
-        );
     }
 }

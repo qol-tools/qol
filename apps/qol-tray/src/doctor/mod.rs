@@ -184,8 +184,8 @@ pub fn run_cli_from_env() -> Result<i32> {
     }
 }
 
-pub fn try_run_host_cli_from_env() -> Option<i32> {
-    host_cli::try_run_from_env()
+pub fn run_host_cli(args: Vec<String>) -> i32 {
+    host_cli::run_aggregate("qol-tray", args)
 }
 
 fn apply_fixes(results: Vec<DoctorCheckResult>, policy: FixPolicy) -> FixSummary {

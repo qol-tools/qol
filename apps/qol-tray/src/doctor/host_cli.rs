@@ -1,17 +1,5 @@
 use qol_headless::{Command, DoctorAggregateReport, HeadlessApp};
 
-pub(super) fn try_run_from_env() -> Option<i32> {
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
-    match classify_invocation(&args) {
-        HostDispatch::NotCli => None,
-        HostDispatch::RunHeadless => Some(run_aggregate("qol-tray", args)),
-        HostDispatch::Reject => {
-            eprintln!("Invalid qol-tray invocation. Run `qol-tray help` for supported forms.");
-            Some(2)
-        }
-    }
-}
-
 pub(super) fn run_aggregate(binary_name: &str, args: Vec<String>) -> i32 {
     let args = normalize_headless_args(args);
     let execution = app(binary_name).execute(args);
@@ -87,182 +75,15 @@ where
     )
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HostDispatch {
-    NotCli,
-    RunHeadless,
-    Reject,
-}
-
-fn classify_invocation(args: &[String]) -> HostDispatch {
-    if args.is_empty() {
-        return HostDispatch::NotCli;
-    }
-    if matches!(args, [argument] if matches!(argument.as_str(), "help" | "--help" | "-h")) {
-        return HostDispatch::NotCli;
-    }
-
-    let tokens = args
-        .iter()
-        .filter(|arg| arg.as_str() != "--json")
-        .map(|arg| match arg.as_str() {
-            "--help" | "-h" => "help",
-            token => token,
-        })
-        .collect::<Vec<_>>();
-
-    let known_help_topic = |token: &str| matches!(token, "doctor" | "exec" | "open");
-    let is_headless_help = matches!(
-        tokens.as_slice(),
-        ["help", topic, ..] if known_help_topic(topic)
-    ) || matches!(
-        tokens.as_slice(),
-        [topic, "help"] if known_help_topic(topic)
-    );
-
-    if matches!(tokens.first(), Some(&"doctor")) || is_headless_help {
-        return HostDispatch::RunHeadless;
-    }
-
-    if matches!(tokens.first(), Some(&"exec") | Some(&"open")) {
-        let expected_len = if tokens.first() == Some(&"exec") {
-            3
-        } else {
-            2
-        };
-        if args.iter().any(|arg| arg == "--json") || args.len() != expected_len {
-            return HostDispatch::Reject;
-        }
-        return HostDispatch::NotCli;
-    }
-
-    if tokens.contains(&"doctor") || tokens.contains(&"help") {
-        return HostDispatch::Reject;
-    }
-
-    if matches!(args, [flag] if matches!(flag.as_str(), "--version" | "-V" | "-h"))
-        || matches!(args, [mode] if mode.starts_with("--write-mode="))
-        || matches!(
-            args,
-            [courier, url]
-                if courier == crate::commands::URL_COURIER_FLAG
-                    && crate::commands::parse_qol_url(url).is_some()
-        )
-        || matches!(
-            args,
-            [url] if crate::commands::parse_qol_url(url).is_some()
-        )
-    {
-        return HostDispatch::NotCli;
-    }
-
-    HostDispatch::Reject
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{app_with_provider, classify_invocation, normalize_headless_args, HostDispatch};
+    use super::{app_with_provider, normalize_headless_args};
     use qol_headless::{
         DoctorAggregateReport, DoctorCheckResult, DoctorReport, DoctorStatus, PluginDoctorReport,
     };
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
-    }
-
-    #[test]
-    fn recognizes_every_supported_doctor_and_contextual_help_form() {
-        for values in [
-            vec!["doctor"],
-            vec!["--json", "doctor"],
-            vec!["doctor", "--json"],
-            vec!["help", "doctor"],
-            vec!["doctor", "help"],
-            vec!["--help", "doctor"],
-            vec!["doctor", "--help"],
-        ] {
-            assert_eq!(
-                classify_invocation(&args(&values)),
-                HostDispatch::RunHeadless,
-                "doctor route was not recognized: {values:?}",
-            );
-        }
-    }
-
-    #[test]
-    fn recognizes_literal_and_contextual_help_without_starting_the_host() {
-        for values in [
-            vec!["help", "open"],
-            vec!["open", "help"],
-            vec!["help", "exec"],
-            vec!["exec", "help"],
-            vec!["-h", "doctor"],
-            vec!["doctor", "-h"],
-        ] {
-            assert_eq!(
-                classify_invocation(&args(&values)),
-                HostDispatch::RunHeadless,
-                "help route was not recognized: {values:?}",
-            );
-        }
-    }
-
-    #[test]
-    fn leaves_daemon_and_existing_side_effecting_cli_routes_on_the_existing_path() {
-        for values in [
-            vec![],
-            vec!["help"],
-            vec!["--help"],
-            vec!["-h"],
-            vec!["--version"],
-            vec!["--write-mode=dev"],
-            vec!["exec", "plugin-test", "toggle"],
-            vec!["exec", "plugin-test", "doctor"],
-            vec!["exec", "plugin-test", "help"],
-            vec!["open", "settings"],
-            vec!["open", "doctor"],
-            vec!["qol://shortcuts/add"],
-            vec![crate::commands::URL_COURIER_FLAG, "qol://shortcuts/add"],
-        ] {
-            assert_eq!(
-                classify_invocation(&args(&values)),
-                HostDispatch::NotCli,
-                "unrelated route was captured: {values:?}",
-            );
-        }
-    }
-
-    #[test]
-    fn rejects_unknown_or_malformed_args_that_would_otherwise_reach_host_startup() {
-        for values in [
-            vec!["--bogus", "doctor"],
-            vec!["help", "status", "doctor"],
-            vec!["--write-mode=dev", "doctor"],
-            vec!["status", "doctor"],
-            vec!["--doctor"],
-            vec!["--json"],
-            vec!["unknown"],
-            vec!["--write-mode=dev", "extra"],
-            vec!["help", "status"],
-            vec!["status", "help"],
-            vec!["--help", "status"],
-            vec!["status", "--help"],
-            vec!["qol://shortcuts/add", "doctor"],
-            vec![crate::commands::URL_COURIER_FLAG],
-            vec![crate::commands::URL_COURIER_FLAG, "https://example.com"],
-            vec!["--json", "exec", "plugin-test", "toggle"],
-            vec!["exec", "plugin-test", "toggle", "--json"],
-            vec!["--json", "open", "settings"],
-            vec!["open", "settings", "--json"],
-            vec!["open", "settings", "extra"],
-            vec!["exec", "plugin-test", "toggle", "extra"],
-        ] {
-            assert_eq!(
-                classify_invocation(&args(&values)),
-                HostDispatch::Reject,
-                "malformed host route was not rejected: {values:?}",
-            );
-        }
     }
 
     #[test]

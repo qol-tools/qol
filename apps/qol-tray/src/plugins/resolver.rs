@@ -205,10 +205,8 @@ fn override_entry_to_worktree(entry: &mut Entry, new_path: &Path) {
         return;
     }
     log::info!(
-        "[worktree] overriding {} path: {} → {}",
-        entry.id,
-        entry.active.path.display(),
-        new_path.display()
+        "[worktree] overriding plugin={} with active worktree slot",
+        entry.id
     );
     entry.fallback = Some(entry.active.clone());
     entry.active.path = new_path.to_path_buf();
