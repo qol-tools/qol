@@ -1,4 +1,9 @@
+mod bounded_output;
 mod platform;
+
+pub use bounded_output::{
+    run_with_output_timeout, BoundedCommandOutput, CapturedOutput, CompletedCommandOutput,
+};
 
 use std::io;
 use std::process::{Child, Command, ExitStatus};
