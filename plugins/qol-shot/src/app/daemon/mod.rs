@@ -6,6 +6,7 @@ mod platform;
 pub enum Command {
     Screenshot,
     Preview,
+    Reload,
     Cli(String),
     Kill,
 }

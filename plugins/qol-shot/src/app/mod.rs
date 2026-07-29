@@ -158,6 +158,7 @@ async fn handle_command(cx: &AsyncApp, state: &State, cmd: daemon::Command) -> b
     match cmd {
         daemon::Command::Screenshot => capture_and_preview(cx, state).await,
         daemon::Command::Preview => preview_latest(cx, state).await,
+        daemon::Command::Reload => reload_config(cx, state).await,
         daemon::Command::Cli(action) => run_cli(cx, state, action).await,
         daemon::Command::Kill => {
             qol_runtime::probe!("SHOT_CMD", "action=kill");
@@ -173,11 +174,28 @@ fn trace_command(stage: &'static str, cmd: &daemon::Command) {
             qol_runtime::probe!("SHOT_CMD", "stage={stage} action=screenshot")
         }
         daemon::Command::Preview => qol_runtime::probe!("SHOT_CMD", "stage={stage} action=preview"),
+        daemon::Command::Reload => qol_runtime::probe!("SHOT_CMD", "stage={stage} action=reload"),
         daemon::Command::Cli(action) => {
             qol_runtime::probe!("SHOT_CMD", "stage={stage} action={action}")
         }
         daemon::Command::Kill => qol_runtime::probe!("SHOT_CMD", "stage={stage} action=kill"),
     }
+}
+
+async fn reload_config(cx: &AsyncApp, state: &State) {
+    let default_copy_action = cx
+        .background_spawn(async { crate::config::load().shortcuts.copy_command })
+        .await;
+    let windows = state.windows.clone();
+    let updated = cx
+        .update(move |cx| {
+            crate::ui::preview::apply_default_copy_action(&windows, default_copy_action, cx)
+        })
+        .unwrap_or(0);
+    qol_runtime::probe!(
+        "SHOT_CONFIG_RELOAD",
+        "copy_action={default_copy_action:?} previews_updated={updated}"
+    );
 }
 
 fn drain_stale_screenshot_commands(

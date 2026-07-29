@@ -249,6 +249,27 @@ pub fn any_showing(windows: &PreviewWindows, cx: &mut App) -> bool {
     showing
 }
 
+pub(crate) fn apply_default_copy_action(
+    windows: &PreviewWindows,
+    default_copy_action: CopyCommand,
+    cx: &mut App,
+) -> usize {
+    windows
+        .borrow()
+        .iter()
+        .into_iter()
+        .filter(|(_, handle)| {
+            handle
+                .update(cx, |view, _window, cx| {
+                    view.default_copy_action = default_copy_action;
+                    view.selected = 0;
+                    cx.notify();
+                })
+                .is_ok()
+        })
+        .count()
+}
+
 fn park_ghost(title: &str, window: &mut Window, origin: Point<Pixels>) {
     sync_window_layout(title, window, origin, size(px(1.0), px(1.0)));
     hide_invisible(title);

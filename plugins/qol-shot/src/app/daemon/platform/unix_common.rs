@@ -53,6 +53,7 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
         "kill" => ReadResult::Command(Command::Kill),
         "screenshot" => ReadResult::Command(Command::Screenshot),
         "preview" => ReadResult::Command(Command::Preview),
+        "reload" => ReadResult::Command(Command::Reload),
         "audio_sources" => audio_device_payload(crate::platform::list_audio_sources()),
         "audio_sinks" => audio_device_payload(crate::platform::list_audio_sinks()),
         other => ReadResult::Command(Command::Cli(other.to_string())),
@@ -63,5 +64,41 @@ fn audio_device_payload(devices: Vec<crate::platform::AudioDevice>) -> ReadResul
     match serde_json::to_value(devices) {
         Ok(payload) => ReadResult::HandledWithData(payload),
         Err(_) => ReadResult::HandledWithData(serde_json::json!([])),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use qol_plugin_daemon::daemon::ReadResult;
+
+    use super::{parse_command, Command};
+
+    #[test]
+    fn daemon_parser_preserves_runtime_command_routes() {
+        let cases = [
+            ("ping", "handled"),
+            ("kill", "kill"),
+            ("screenshot", "screenshot"),
+            ("preview", "preview"),
+            ("reload", "reload"),
+            ("copy", "cli:copy"),
+        ];
+
+        for (input, expected) in cases {
+            let actual = match parse_command(input) {
+                ReadResult::Handled => "handled".to_string(),
+                ReadResult::Command(Command::Kill) => "kill".to_string(),
+                ReadResult::Command(Command::Screenshot) => "screenshot".to_string(),
+                ReadResult::Command(Command::Preview) => "preview".to_string(),
+                ReadResult::Command(Command::Reload) => "reload".to_string(),
+                ReadResult::Command(Command::Cli(action)) => format!("cli:{action}"),
+                ReadResult::HandledWithData(_) => "handled-with-data".to_string(),
+                ReadResult::Fallback => "fallback".to_string(),
+                ReadResult::Error(_) => "error".to_string(),
+                ReadResult::Ignore => "ignore".to_string(),
+            };
+
+            assert_eq!(actual, expected, "input: {input}");
+        }
     }
 }

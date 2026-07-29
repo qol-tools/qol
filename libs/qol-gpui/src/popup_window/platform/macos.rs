@@ -305,6 +305,9 @@ pub fn set_window_fixed_size_by_title(title: &str, size: gpui::Size<gpui::Pixels
 }
 
 fn show_window_by_title_with_focus(title: &str, focus: bool) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
     let Some(window) = resolve_window(title) else {
         return false;
     };
@@ -313,6 +316,9 @@ fn show_window_by_title_with_focus(title: &str, focus: bool) -> bool {
     window.setAlphaValue(1.0);
     window.setIgnoresMouseEvents(!focus);
     if focus {
+        let app = NSApplication::sharedApplication(mtm);
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
         window.makeKeyAndOrderFront(None);
     }
     if !focus {
@@ -320,7 +326,8 @@ fn show_window_by_title_with_focus(title: &str, focus: bool) -> bool {
     }
     qol_runtime::probe!(
         "SHOW_WIN",
-        "title={title} focus_requested={focus} reason={}",
+        "title={title} focus_requested={focus} key_window={} reason={}",
+        window.isKeyWindow(),
         crate::popup_window::change_reason()
     );
     true
