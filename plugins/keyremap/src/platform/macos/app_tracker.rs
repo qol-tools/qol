@@ -4,41 +4,55 @@ use std::time::Duration;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+#[derive(Clone, Default)]
+struct AppSnapshot {
+    pid: i32,
+    bundle_id: String,
+}
+
 pub struct AppTracker {
-    bundle_id: Arc<RwLock<String>>,
+    snapshot: Arc<RwLock<AppSnapshot>>,
 }
 
 impl AppTracker {
     pub fn start() -> Arc<Self> {
-        let bundle_id = Arc::new(RwLock::new(frontmost_bundle_id().unwrap_or_default()));
+        let snapshot = Arc::new(RwLock::new(frontmost_app().unwrap_or_default()));
 
-        let poll_ref = Arc::clone(&bundle_id);
+        let poll_ref = Arc::clone(&snapshot);
         std::thread::spawn(move || loop {
-            if let Some(id) = frontmost_bundle_id() {
+            if let Some(snapshot) = frontmost_app() {
                 if let Ok(mut guard) = poll_ref.write() {
-                    *guard = id;
+                    *guard = snapshot;
                 }
             }
             std::thread::sleep(POLL_INTERVAL);
         });
 
-        Arc::new(Self { bundle_id })
+        Arc::new(Self { snapshot })
     }
 
-    pub fn bundle_id(&self) -> String {
-        self.bundle_id.read().map(|g| g.clone()).unwrap_or_default()
+    pub fn bundle_id_for_target(&self, target_pid: i32) -> String {
+        self.snapshot
+            .read()
+            .map(|snapshot| {
+                bundle_id_for_event_target(snapshot.pid, &snapshot.bundle_id, target_pid).to_owned()
+            })
+            .unwrap_or_default()
     }
 }
 
-/// Get the frontmost app's bundle ID via the window server.
-///
-/// `NSWorkspace.frontmostApplication()` caches state and only refreshes when
-/// the thread's Cocoa run loop processes workspace notifications — a plain
-/// background thread never receives those updates so the value goes stale.
-///
-/// `CGWindowListCopyWindowInfo` queries the window server directly and always
-/// returns a live result regardless of thread or run-loop context.
-fn frontmost_bundle_id() -> Option<String> {
+fn bundle_id_for_event_target(
+    frontmost_pid: i32,
+    frontmost_bundle_id: &str,
+    target_pid: i32,
+) -> &str {
+    if target_pid > 0 && target_pid != frontmost_pid {
+        return "";
+    }
+    frontmost_bundle_id
+}
+
+fn frontmost_app() -> Option<AppSnapshot> {
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
     use objc2::rc::autoreleasepool;
@@ -104,15 +118,39 @@ fn frontmost_bundle_id() -> Option<String> {
                 continue;
             }
 
-            result = autoreleasepool(|_| {
-                let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?;
-                let bundle_id = app.bundleIdentifier()?;
-                Some(bundle_id.to_string())
+            let bundle_id = autoreleasepool(|_| {
+                NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+                    .and_then(|app| app.bundleIdentifier())
+                    .map(|bundle_id| bundle_id.to_string())
+                    .unwrap_or_default()
             });
+            result = Some(AppSnapshot { pid, bundle_id });
             break;
         }
 
         CFRelease(list);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bundle_id_for_event_target;
+
+    #[test]
+    fn event_target_does_not_inherit_another_process_exclusion() {
+        let cases = [
+            (10, "com.example.excluded", 10, "com.example.excluded"),
+            (10, "com.example.excluded", 20, ""),
+            (10, "com.example.excluded", 0, "com.example.excluded"),
+            (20, "", 20, ""),
+        ];
+
+        for (frontmost_pid, frontmost_bundle, target_pid, expected) in cases {
+            assert_eq!(
+                bundle_id_for_event_target(frontmost_pid, frontmost_bundle, target_pid),
+                expected
+            );
+        }
     }
 }

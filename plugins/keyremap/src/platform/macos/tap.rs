@@ -117,7 +117,7 @@ fn run_tap(state: Arc<TapState>) {
     ];
 
     let tap = RawEventTap::new(
-        CGEventTapLocation::HID,
+        CGEventTapLocation::AnnotatedSession,
         CGEventTapPlacement::HeadInsertEventTap,
         CGEventTapOptions::Default,
         events,
@@ -279,11 +279,14 @@ fn handle_event(
     if !config.enabled {
         return CallbackResult::Keep;
     }
-    let bundle_id = state.app_tracker.bundle_id();
+    let target_pid =
+        i32::try_from(event.get_integer_value_field(EventField::EVENT_TARGET_UNIX_PROCESS_ID))
+            .unwrap_or_default();
+    let bundle_id = state.app_tracker.bundle_id_for_target(target_pid);
 
     match event_type {
         CGEventType::KeyDown | CGEventType::KeyUp => {
-            handle_key_event(config.as_ref(), event, &bundle_id)
+            handle_key_event(config.as_ref(), event, target_pid, &bundle_id)
         }
         CGEventType::LeftMouseDown | CGEventType::LeftMouseUp => {
             handle_mouse_event(config.as_ref(), event, MouseButton::Left, &bundle_id)
@@ -324,6 +327,7 @@ fn event_character(event: &core_graphics::event::CGEvent) -> Option<String> {
 fn handle_key_event(
     config: &ResolvedConfig,
     event: &core_graphics::event::CGEvent,
+    target_pid: i32,
     bundle_id: &str,
 ) -> CallbackResult {
     let flags = event.get_flags();
@@ -340,7 +344,8 @@ fn handle_key_event(
     #[cfg(debug_assertions)]
     if !matches!(action, KeyAction::Passthrough) || config.excluded_apps.contains(bundle_id) {
         eprintln!(
-            "[keyremap:dbg] app={} key=0x{:02X}({}) mods={:?} -> {:?}",
+            "[keyremap:dbg] target_pid={} app={} key=0x{:02X}({}) mods={:?} -> {:?}",
+            target_pid,
             bundle_id,
             keycode,
             keycode::key_name(keycode),
