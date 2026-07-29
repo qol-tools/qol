@@ -1434,11 +1434,19 @@ async fn daemon_loop(
                 match event {
                     Some(AdapterEvent::DeviceAdded(address)) => {
                         subscribe_one(&adapter, &mut device_streams, &mut subscribed, address).await;
+                        if discovery.is_some() {
+                            track_discovered_device(&adapter, address).await;
+                        }
                         if config.auto_reconnect && retries.contains_key(&address) {
                             retries.entry(address).or_default().request_now(Instant::now());
                         }
                         spawn_audio_profile_ensure(address);
-                        qol_runtime::probe!("BLUETOOTH_DEVICE_ADDED", "device={}", redacted(address));
+                        qol_runtime::probe!(
+                            "BLUETOOTH_DEVICE_ADDED",
+                            "device={} search_active={}",
+                            redacted(address),
+                            discovery.is_some()
+                        );
                     }
                     Some(AdapterEvent::DeviceRemoved(address)) => {
                         subscribed.remove(&address);
@@ -1665,7 +1673,7 @@ async fn start_search_session(
     }
     ensure_powered(adapter, power_on_adapter).await?;
     let stream = adapter
-        .discover_devices_with_changes()
+        .discover_devices()
         .await
         .context("BlueZ failed to start Bluetooth discovery")?
         .boxed_local();
@@ -1763,13 +1771,19 @@ fn reset_discovery_state(reason: &'static str) -> Result<()> {
 }
 
 async fn track_discovered_device(adapter: &Adapter, address: Address) {
-    {
+    let total = {
         let Ok(mut state) = DISCOVERY_STATE.write() else {
             eprintln!("Bluetooth discovery state is unavailable");
             return;
         };
         state.record(address.to_string());
-    }
+        state.discovered_count()
+    };
+    qol_runtime::probe!(
+        "BLUETOOTH_SEARCH_DEVICE",
+        "device={} total={total} outcome=recorded",
+        redacted(address)
+    );
 
     let device = match adapter.device(address) {
         Ok(device) => device,
