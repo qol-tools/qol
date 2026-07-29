@@ -288,9 +288,7 @@ items = []
 
     #[test]
     fn bind_for_plugin_binds_for_a_migrated_plugin() {
-        // A migrated plugin id but a throwaway test-only socket name -
-        // never the plugin's real declared socket - so this can't collide
-        // with an actual running daemon on this machine.
+        let _env = crate::test_support::env_lock().blocking_lock();
         let plugin = plugin_with_id("plugin-alt-tab");
         let socket_path = format!("/tmp/qol-listener-test-{}.sock", std::process::id());
         let _ = std::fs::remove_file(&socket_path);
@@ -342,6 +340,7 @@ items = []
 
     #[test]
     fn refresh_for_respawn_drops_a_listener_whose_socket_path_was_unlinked() {
+        let _env = crate::test_support::env_lock().blocking_lock();
         let plugin = plugin_with_id("plugin-alt-tab");
         let socket_path = format!("/tmp/qol-ln-unlinked-{}.sock", std::process::id());
         let _ = std::fs::remove_file(&socket_path);
@@ -361,6 +360,7 @@ items = []
 
     #[test]
     fn refresh_for_respawn_keeps_a_listener_whose_socket_path_is_intact() {
+        let _env = crate::test_support::env_lock().blocking_lock();
         let plugin = plugin_with_id("plugin-alt-tab");
         let socket_path = format!("/tmp/qol-ln-intact-{}.sock", std::process::id());
         let _ = std::fs::remove_file(&socket_path);
@@ -376,6 +376,7 @@ items = []
 
     #[test]
     fn refresh_for_respawn_binds_ports_that_failed_the_first_time() {
+        let _env = crate::test_support::env_lock().blocking_lock();
         let plugin = plugin_with_id("plugin-alt-tab");
         let socket_path = format!("/tmp/qol-ln-ports-{}.sock", std::process::id());
         let _ = std::fs::remove_file(&socket_path);

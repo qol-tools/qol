@@ -209,6 +209,7 @@ items = []
 
     #[test]
     fn reap_daemon_if_exited_reaps_dead_child_and_unregisters_pid() {
+        let _env = crate::test_support::env_lock().blocking_lock();
         let mut plugin = minimal_plugin();
         let child = spawn_short_lived();
         let pid = child.id();
@@ -310,6 +311,7 @@ items = []
     #[cfg(unix)]
     #[test]
     fn stop_daemon_drops_the_pre_bound_listener() {
+        let _env = crate::test_support::env_lock().blocking_lock();
         let mut plugin = migrated_plugin();
         let socket_path = format!("/tmp/qol-dl-stop-{}.sock", std::process::id());
         let _ = std::fs::remove_file(&socket_path);
@@ -341,6 +343,7 @@ items = []
     #[cfg(unix)]
     #[test]
     fn stop_daemon_drops_the_listener_even_when_the_daemon_already_exited() {
+        let _env = crate::test_support::env_lock().blocking_lock();
         let mut plugin = migrated_plugin();
         let socket_path = format!("/tmp/qol-dl-reaped-{}.sock", std::process::id());
         let _ = std::fs::remove_file(&socket_path);
@@ -399,6 +402,7 @@ socket = "{socket_path}"
     #[cfg(unix)]
     #[test]
     fn existing_daemon_socket_ready_is_not_satisfied_by_the_trays_own_listener() {
+        let _env = crate::test_support::env_lock().blocking_lock();
         let socket_path = format!("/tmp/qol-dl-ready-{}.sock", std::process::id());
         let _ = std::fs::remove_file(&socket_path);
         let mut plugin = migrated_plugin_with_daemon(&socket_path);

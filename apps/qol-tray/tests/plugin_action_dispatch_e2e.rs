@@ -81,7 +81,7 @@ fn install_plugin(plugin_id: &str, marker_path: &Path) -> (PathBuf, PathBuf) {
     let plugin_dir = plugins_dir().join(plugin_id);
     fs::create_dir_all(&plugin_dir).expect("plugin dir");
 
-    let socket_path = shared_root().path().join(format!("{plugin_id}.sock"));
+    let socket_path = shared_root().path().join("t.sock");
 
     write_executable(
         &plugin_dir.join("fake-daemon"),
