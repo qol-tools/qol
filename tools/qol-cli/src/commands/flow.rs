@@ -2805,6 +2805,12 @@ fn prepare_workflow_payload(
 
 fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
     match workflow_id {
+        "launcher-storm" => Some(DesktopPayloadRecipe {
+            package: "launcher",
+            binary: "launcher",
+            plugin_dir: "launcher",
+            plugin_id: "plugin-launcher",
+        }),
         "qol-shot-capture" => Some(DesktopPayloadRecipe {
             package: "qol-shot",
             binary: "qol-shot",
@@ -4472,6 +4478,15 @@ mod tests {
     #[test]
     fn desktop_payload_recipes_cover_registered_payload_workflows() {
         let expected = [
+            (
+                "launcher-storm",
+                DesktopPayloadRecipe {
+                    package: "launcher",
+                    binary: "launcher",
+                    plugin_dir: "launcher",
+                    plugin_id: "plugin-launcher",
+                },
+            ),
             (
                 "qol-shot-capture",
                 DesktopPayloadRecipe {
@@ -6307,9 +6322,11 @@ mod tests {
         assert!(!definition.mounts.workspace);
         let adapter = configured_flow_adapter(&definition.capabilities).unwrap();
         let serial = emu::workflow_definition("leaves-no-trace").unwrap();
+        let launcher = emu::workflow_definition("launcher-storm").unwrap();
         let desktop = emu::workflow_definition("qol-shot-capture").unwrap();
         let window_actions = emu::workflow_definition("window-actions-storm").unwrap();
         assert!(emu::validate_workflow_adapter(serial, adapter).is_err());
+        emu::validate_workflow_adapter(launcher, adapter).unwrap();
         emu::validate_workflow_adapter(desktop, adapter).unwrap();
         emu::validate_workflow_adapter(window_actions, adapter).unwrap();
     }

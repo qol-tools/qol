@@ -10,6 +10,7 @@ use super::serial::SerialClient;
 use super::BootedVm;
 
 mod desktop;
+mod launcher;
 mod window_actions;
 
 pub(crate) struct Verdict {
@@ -94,12 +95,14 @@ pub(crate) type SerialWorkflow = fn(&mut Run) -> Result<Verdict>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DesktopWorkflow {
+    LauncherStorm,
     QolShotCapture,
     WindowActionsStorm,
 }
 
 pub(crate) fn run_desktop(vm: &BootedVm, workflow: DesktopWorkflow) -> Result<Verdict> {
     match workflow {
+        DesktopWorkflow::LauncherStorm => launcher::run(vm),
         DesktopWorkflow::QolShotCapture => desktop::run(vm),
         DesktopWorkflow::WindowActionsStorm => window_actions::run(vm),
     }
@@ -109,6 +112,10 @@ const REGISTRY: &[Definition] = &[
     Definition::Serial {
         id: "leaves-no-trace",
         run: leaves_no_trace,
+    },
+    Definition::Desktop {
+        id: "launcher-storm",
+        run: DesktopWorkflow::LauncherStorm,
     },
     Definition::Desktop {
         id: "qol-shot-capture",
@@ -150,7 +157,12 @@ mod tests {
 
     #[test]
     fn find_resolves_only_registered_workflows() {
-        let cases = [("leaves-no-trace", true), ("unknown", false), ("", false)];
+        let cases = [
+            ("leaves-no-trace", true),
+            ("launcher-storm", true),
+            ("unknown", false),
+            ("", false),
+        ];
         for (id, expected) in cases {
             assert_eq!(find(id).is_some(), expected, "id: {id}");
         }
@@ -162,6 +174,7 @@ mod tests {
             ids(),
             vec![
                 "leaves-no-trace",
+                "launcher-storm",
                 "qol-shot-capture",
                 "window-actions-storm"
             ]
@@ -171,6 +184,7 @@ mod tests {
     #[test]
     fn only_desktop_workflows_require_a_payload() {
         assert!(!find("leaves-no-trace").unwrap().requires_payload());
+        assert!(find("launcher-storm").unwrap().requires_payload());
         assert!(find("qol-shot-capture").unwrap().requires_payload());
         assert!(find("window-actions-storm").unwrap().requires_payload());
     }

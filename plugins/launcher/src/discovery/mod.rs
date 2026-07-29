@@ -151,6 +151,13 @@ fn find_containing_root<'a>(path: &Path, roots: &'a [AppRoot]) -> Option<&'a App
         .max_by_key(|r| r.path.as_os_str().len())
 }
 
+fn find_containing_file_root<'a>(path: &Path, roots: &'a [PathBuf]) -> Option<&'a PathBuf> {
+    roots
+        .iter()
+        .filter(|root| path.starts_with(root))
+        .max_by_key(|root| root.as_os_str().len())
+}
+
 fn spawn_host_subscriber(tx: std::sync::mpsc::Sender<WatchSignal>) {
     std::thread::spawn(move || {
         let client = PlatformStateClient::from_env();
@@ -172,16 +179,17 @@ fn spawn_host_subscriber(tx: std::sync::mpsc::Sender<WatchSignal>) {
 pub(crate) fn start(entries: SharedEntries) {
     std::thread::spawn(move || {
         let roots = platform::app_roots();
+        let file_roots = platform::file_watch_roots();
         let mut cache = AppCache::default();
         cache.rescan_all(&roots);
-        let file_entries = Arc::new(load_file_entries());
+        let mut file_entries = Arc::new(load_file_entries());
         publish(&entries, &cache, &file_entries);
         eprintln!(
             "[launcher] index: initial load complete ({} roots)",
             roots.len()
         );
 
-        if roots.is_empty() {
+        if roots.is_empty() && file_roots.iter().all(|root| !root.is_dir()) {
             eprintln!("[launcher] index: no watch roots, exiting watcher thread");
             return;
         }
@@ -208,12 +216,21 @@ pub(crate) fn start(entries: SharedEntries) {
                 );
             }
         }
+        for root in file_roots.iter().filter(|root| root.is_dir()) {
+            if let Err(e) = watcher.watch(root, RecursiveMode::Recursive) {
+                eprintln!(
+                    "[launcher] index: file watch failed for {}: {e}",
+                    root.display()
+                );
+            }
+        }
 
         spawn_host_subscriber(tx);
 
         let mut dirty: HashSet<PathBuf> = HashSet::new();
+        let mut dirty_files: HashSet<PathBuf> = HashSet::new();
         loop {
-            let timeout = if !dirty.is_empty() {
+            let timeout = if !dirty.is_empty() || !dirty_files.is_empty() {
                 DEBOUNCE
             } else {
                 RECV_TIMEOUT
@@ -225,10 +242,16 @@ pub(crate) fn start(entries: SharedEntries) {
                     }
                     for path in &event.paths {
                         if !is_app_relevant(path) {
+                            if find_containing_file_root(path, &file_roots).is_some() {
+                                dirty_files.insert(path.clone());
+                            }
                             continue;
                         }
                         if let Some(root) = find_containing_root(path, &roots) {
                             dirty.insert(root.path.clone());
+                        }
+                        if find_containing_file_root(path, &file_roots).is_some() {
+                            dirty_files.insert(path.clone());
                         }
                     }
                     continue;
@@ -257,7 +280,7 @@ pub(crate) fn start(entries: SharedEntries) {
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
 
-            if dirty.is_empty() {
+            if dirty.is_empty() && dirty_files.is_empty() {
                 continue;
             }
 
@@ -267,7 +290,6 @@ pub(crate) fn start(entries: SharedEntries) {
                     cache.rescan(root);
                 }
             }
-            publish(&entries, &cache, &file_entries);
             eprintln!(
                 "[launcher] index: rescanned {} root(s): {}",
                 dirty_now.len(),
@@ -277,6 +299,27 @@ pub(crate) fn start(entries: SharedEntries) {
                     .collect::<Vec<_>>()
                     .join(", ")
             );
+            if !dirty_files.is_empty() {
+                let changed_count = dirty_files.len();
+                file_entries = Arc::new(file_scan::refresh_files(
+                    &file_entries,
+                    &file_roots,
+                    &dirty_files,
+                ));
+                dirty_files.clear();
+                file_cache::store(&file_roots, &file_entries);
+                qol_runtime::probe!(
+                    "LAUNCHER_INDEX",
+                    "kind=files changed={} entries={}",
+                    changed_count,
+                    file_entries.len(),
+                );
+                eprintln!(
+                    "[launcher] index: refreshed {changed_count} file path(s), {} entries",
+                    file_entries.len()
+                );
+            }
+            publish(&entries, &cache, &file_entries);
         }
     });
 }
