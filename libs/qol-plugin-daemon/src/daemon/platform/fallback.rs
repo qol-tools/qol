@@ -13,6 +13,7 @@ pub struct DaemonConfig {
 
 pub enum SocketSource {
     EnvRequired,
+    Path(PathBuf),
     Fallback {
         default_socket_name: &'static str,
         use_tmpdir_env: bool,

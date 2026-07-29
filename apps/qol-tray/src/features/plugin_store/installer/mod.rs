@@ -6,6 +6,7 @@ use super::source::PluginSource;
 
 mod command;
 mod dependency;
+mod local;
 mod lock;
 mod operation_lock;
 mod operations;
@@ -39,6 +40,23 @@ impl PluginInstaller {
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
         operations::install(&self.plugins_dir, source, plugin_id, InstallSource::Latest).await?;
         self.record_release_install(plugin_id)
+    }
+
+    pub(crate) async fn install_local_workspace(
+        &self,
+        workspace_root: &std::path::Path,
+    ) -> Result<usize> {
+        let scan = qol_workspace::scan_buildable_plugins(workspace_root)?;
+        let mut installed = 0;
+        for plugin in scan.buildable {
+            let plugin_id = local::plugin_id(&plugin.dir)?;
+            let _operation_lock =
+                operation_lock::acquire_operation_lock(&self.plugins_dir, &plugin_id)?;
+            local::install(&self.plugins_dir, workspace_root, &plugin.dir, &plugin_id).await?;
+            self.record_release_install(&plugin_id)?;
+            installed += 1;
+        }
+        Ok(installed)
     }
 
     pub(crate) async fn install_exact(

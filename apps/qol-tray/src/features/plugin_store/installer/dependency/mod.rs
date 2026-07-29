@@ -10,7 +10,11 @@ mod source_build;
 
 use manifest::{load_plugin_manifest, validate_execution_contract};
 use release::download_dependency_binary;
-use source_build::{build_fallback_binary, set_executable_permissions};
+use source_build::build_fallback_binary;
+
+pub(super) async fn set_executable_permissions(path: &Path) -> Result<()> {
+    source_build::set_executable_permissions(path).await
+}
 
 pub(super) async fn install_dependencies(
     source: &PluginSource,

@@ -41,6 +41,7 @@ pub(crate) fn run(verbose: bool) -> Result<()> {
         .join(host_facade::exe_name("qol-tray-install"));
     let installer_display = installer.display().to_string();
     let mut command = Command::new(installer);
+    command.arg("--workspace").arg(&root);
     run_step(
         "install",
         StepKind::Pending,

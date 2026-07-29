@@ -68,9 +68,12 @@ pub fn bootstrap_current_install() -> Result<()> {
 pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     let args = source::parse_args(args)?;
     match args.mode {
-        source::Mode::Install => {
-            run_install(args.source.as_deref(), args.skip_shell_hook, args.dev_mode)
-        }
+        source::Mode::Install => run_install(
+            args.source.as_deref(),
+            args.workspace.as_deref(),
+            args.skip_shell_hook,
+            args.dev_mode,
+        ),
         source::Mode::Uninstall => run_uninstall(args.skip_shell_hook),
     }
 }
@@ -83,6 +86,7 @@ pub fn check_platform_paths() -> Result<()> {
 
 fn run_install(
     source_override: Option<&Path>,
+    workspace_root: Option<&Path>,
     skip_shell_hook: bool,
     dev_mode: bool,
 ) -> Result<()> {
@@ -108,6 +112,7 @@ fn run_install(
     platform::set_executable_permissions(&installed_binary)?;
     let install_id = register_install_id(&installed_binary)?;
     let plugins_dir = files::ensure_plugin_dir()?;
+    install_workspace_plugins(workspace_root, &plugins_dir)?;
     #[cfg(feature = "dev")]
     {
         let env = boot_environment::InstallBootEnvironment {
@@ -128,6 +133,21 @@ fn run_install(
     platform::start_now(&installed_binary)?;
     open_ui_after_start();
     print_summary(&installed_binary, &install_id, &plugins_dir, &install_dir)
+}
+
+fn install_workspace_plugins(workspace_root: Option<&Path>, plugins_dir: &Path) -> Result<()> {
+    let Some(workspace_root) = workspace_root else {
+        return Ok(());
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to start the local plugin installer")?;
+    let installer =
+        crate::features::plugin_store::installer::PluginInstaller::new(plugins_dir.to_path_buf());
+    let installed = runtime.block_on(installer.install_local_workspace(workspace_root))?;
+    println!("Installed local plugins: {installed}");
+    Ok(())
 }
 
 fn run_uninstall(skip_shell_hook: bool) -> Result<()> {

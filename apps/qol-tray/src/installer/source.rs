@@ -17,6 +17,7 @@ pub(super) enum Mode {
 pub(super) struct ParsedArgs {
     pub(super) mode: Mode,
     pub(super) source: Option<PathBuf>,
+    pub(super) workspace: Option<PathBuf>,
     pub(super) skip_shell_hook: bool,
     pub(super) dev_mode: bool,
 }
@@ -24,6 +25,7 @@ pub(super) struct ParsedArgs {
 pub(super) fn parse_args<I: IntoIterator<Item = String>>(iter: I) -> Result<ParsedArgs> {
     let mut mode = Mode::Install;
     let mut source = None;
+    let mut workspace = None;
     let mut skip_shell_hook = false;
     let mut dev_mode = false;
 
@@ -36,6 +38,12 @@ pub(super) fn parse_args<I: IntoIterator<Item = String>>(iter: I) -> Result<Pars
                     .ok_or_else(|| anyhow!("--source requires a path"))?;
                 source = Some(PathBuf::from(value));
             }
+            "--workspace" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--workspace requires a path"))?;
+                workspace = Some(PathBuf::from(value));
+            }
             "--uninstall" => mode = Mode::Uninstall,
             "--skip-shell-hook" => skip_shell_hook = true,
             "--dev" => dev_mode = true,
@@ -46,6 +54,7 @@ pub(super) fn parse_args<I: IntoIterator<Item = String>>(iter: I) -> Result<Pars
     Ok(ParsedArgs {
         mode,
         source,
+        workspace,
         skip_shell_hook,
         dev_mode,
     })
@@ -200,6 +209,7 @@ mod tests {
         input: &'static [&'static str],
         mode: Mode,
         source: Option<&'static str>,
+        workspace: Option<&'static str>,
         skip_shell_hook: bool,
         dev_mode: bool,
     }
@@ -211,6 +221,7 @@ mod tests {
                 input: &[],
                 mode: Mode::Install,
                 source: None,
+                workspace: None,
                 skip_shell_hook: false,
                 dev_mode: false,
             },
@@ -218,6 +229,7 @@ mod tests {
                 input: &["--uninstall"],
                 mode: Mode::Uninstall,
                 source: None,
+                workspace: None,
                 skip_shell_hook: false,
                 dev_mode: false,
             },
@@ -225,6 +237,7 @@ mod tests {
                 input: &["--skip-shell-hook"],
                 mode: Mode::Install,
                 source: None,
+                workspace: None,
                 skip_shell_hook: true,
                 dev_mode: false,
             },
@@ -232,6 +245,7 @@ mod tests {
                 input: &["--uninstall", "--skip-shell-hook"],
                 mode: Mode::Uninstall,
                 source: None,
+                workspace: None,
                 skip_shell_hook: true,
                 dev_mode: false,
             },
@@ -239,6 +253,7 @@ mod tests {
                 input: &["--source", "/tmp/binary"],
                 mode: Mode::Install,
                 source: Some("/tmp/binary"),
+                workspace: None,
                 skip_shell_hook: false,
                 dev_mode: false,
             },
@@ -246,6 +261,7 @@ mod tests {
                 input: &["--dev"],
                 mode: Mode::Install,
                 source: None,
+                workspace: None,
                 skip_shell_hook: false,
                 dev_mode: true,
             },
@@ -253,6 +269,7 @@ mod tests {
                 input: &["--source", "/x", "--uninstall", "--skip-shell-hook"],
                 mode: Mode::Uninstall,
                 source: Some("/x"),
+                workspace: None,
                 skip_shell_hook: true,
                 dev_mode: false,
             },
@@ -260,8 +277,17 @@ mod tests {
                 input: &["--dev", "--source", "/y", "--skip-shell-hook"],
                 mode: Mode::Install,
                 source: Some("/y"),
+                workspace: None,
                 skip_shell_hook: true,
                 dev_mode: true,
+            },
+            Case {
+                input: &["--workspace", "/workspace"],
+                mode: Mode::Install,
+                source: None,
+                workspace: Some("/workspace"),
+                skip_shell_hook: false,
+                dev_mode: false,
             },
         ];
         for case in cases {
@@ -271,6 +297,12 @@ mod tests {
                 parsed.source.as_deref().map(|p| p.to_str().unwrap()),
                 case.source,
                 "source for input={:?}",
+                case.input
+            );
+            assert_eq!(
+                parsed.workspace.as_deref().map(|p| p.to_str().unwrap()),
+                case.workspace,
+                "workspace for input={:?}",
                 case.input
             );
             assert_eq!(
@@ -296,6 +328,12 @@ mod tests {
     fn parse_args_rejects_source_without_value() {
         let err = parse(&["--source"]).unwrap_err();
         assert!(err.to_string().contains("--source requires a path"));
+    }
+
+    #[test]
+    fn parse_args_rejects_workspace_without_value() {
+        let err = parse(&["--workspace"]).unwrap_err();
+        assert!(err.to_string().contains("--workspace requires a path"));
     }
 
     #[test]

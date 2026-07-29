@@ -15,17 +15,6 @@ pub(crate) const DEV_BUNDLE_ID: &str = "qol-dev-session";
 pub(crate) const GUEST_BUNDLE_ROOT: &str = "/home/qol/.local/share/qol-dev/current";
 pub(crate) const ARTIFACT_ROOT_ENV: &str = "QOL_DEV_ARTIFACT_ROOT";
 
-const EXCLUDED_DIRECTORIES: [&str; 8] = [
-    ".git",
-    ".github",
-    "benches",
-    "examples",
-    "node_modules",
-    "reports",
-    "src",
-    "target",
-];
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DevBundleDescriptor {
@@ -192,43 +181,20 @@ fn collect_plugin_files(
     runtime_command: &str,
     output: &mut Vec<PayloadFileSpec>,
 ) -> Result<()> {
-    let mut pending = vec![plugin_root.to_path_buf()];
-    while let Some(directory) = pending.pop() {
-        for entry in fs::read_dir(&directory)
-            .with_context(|| format!("failed to read {}", directory.display()))?
-        {
-            let entry = entry?;
-            let file_type = entry.file_type()?;
-            let path = entry.path();
-            if file_type.is_dir() {
-                if !excluded_directory(&entry.file_name()) {
-                    pending.push(path);
-                }
-                continue;
-            }
-            if !file_type.is_file() {
-                continue;
-            }
-            let relative = path
-                .strip_prefix(plugin_root)
-                .with_context(|| format!("plugin file escaped {}", plugin_root.display()))?
-                .to_path_buf();
-            if relative == Path::new(runtime_command) {
-                continue;
-            }
-            output.push(PayloadFileSpec {
-                source: path,
-                relative_path: Path::new("plugins").join(plugin_id).join(relative),
-                executable: platform::source_is_executable(&entry.metadata()?),
-            });
-        }
+    let executable_name = crate::workspace::exe_name(runtime_command);
+    for file in
+        qol_workspace::plugin_delivery_files(plugin_root, &[runtime_command, &executable_name])?
+    {
+        let metadata = fs::metadata(&file.source)?;
+        output.push(PayloadFileSpec {
+            source: file.source,
+            relative_path: Path::new("plugins")
+                .join(plugin_id)
+                .join(file.relative_path),
+            executable: platform::source_is_executable(&metadata),
+        });
     }
     Ok(())
-}
-
-fn excluded_directory(name: &std::ffi::OsStr) -> bool {
-    name.to_str()
-        .is_some_and(|name| EXCLUDED_DIRECTORIES.contains(&name))
 }
 
 fn validate_component(value: &str, field: &str) -> Result<()> {

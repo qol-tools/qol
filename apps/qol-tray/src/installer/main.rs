@@ -54,7 +54,7 @@ where
         .command(operation_command(
             "install",
             "Install QoL Tray.",
-            "qol-tray-install install [--source <PATH>] [--skip-shell-hook] [--dev]",
+            "qol-tray-install install [--source <PATH>] [--workspace <PATH>] [--skip-shell-hook] [--dev]",
             false,
             operations.clone(),
         ))
@@ -94,6 +94,7 @@ where
         .about(about)
         .usage(usage)
         .detail("--source <PATH> selects an existing install source.")
+        .detail("--workspace <PATH> installs its locally built plugin bundles.")
         .detail("--skip-shell-hook leaves shell rc files unchanged.")
         .detail("--dev selects dev runtime mode and requires a dev-enabled build.")
         .output("Progress is written to stdout; diagnostics are written to stderr.")

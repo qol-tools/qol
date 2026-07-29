@@ -6,6 +6,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::{DirEntry, WalkDir};
 
+const PLUGIN_DELIVERY_EXCLUDED_DIRECTORIES: [&str; 8] = [
+    ".git",
+    ".github",
+    "benches",
+    "examples",
+    "node_modules",
+    "reports",
+    "src",
+    "target",
+];
+
 pub fn workspace_root_from_cwd() -> Result<PathBuf> {
     let cwd = env::current_dir().context("failed to read current directory")?;
     workspace_root_from(&cwd)
@@ -300,6 +311,60 @@ pub fn display_name(path: &Path) -> String {
         .to_string()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginDeliveryFile {
+    pub source: PathBuf,
+    pub relative_path: PathBuf,
+}
+
+pub fn plugin_delivery_files(
+    plugin_root: &Path,
+    excluded_root_files: &[&str],
+) -> Result<Vec<PluginDeliveryFile>> {
+    let mut files = Vec::new();
+    let entries = WalkDir::new(plugin_root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(plugin_delivery_entry);
+    for entry in entries {
+        let entry = entry.with_context(|| format!("failed to walk {}", plugin_root.display()))?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let relative_path = entry
+            .path()
+            .strip_prefix(plugin_root)
+            .with_context(|| format!("plugin file escaped {}", plugin_root.display()))?
+            .to_path_buf();
+        if relative_path
+            .parent()
+            .is_none_or(|parent| parent.as_os_str().is_empty())
+            && relative_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| excluded_root_files.contains(&name))
+        {
+            continue;
+        }
+        files.push(PluginDeliveryFile {
+            source: entry.path().to_path_buf(),
+            relative_path,
+        });
+    }
+    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(files)
+}
+
+fn plugin_delivery_entry(entry: &DirEntry) -> bool {
+    if entry.depth() == 0 || !entry.file_type().is_dir() {
+        return true;
+    }
+    entry
+        .file_name()
+        .to_str()
+        .is_none_or(|name| !PLUGIN_DELIVERY_EXCLUDED_DIRECTORIES.contains(&name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,6 +471,40 @@ mod tests {
             .map(|p| display_name(&p))
             .collect();
         assert_eq!(names, vec!["x".to_string()]);
+    }
+
+    #[test]
+    fn plugin_delivery_files_exclude_sources_build_outputs_and_stale_binaries() {
+        let root = tempfile::tempdir().unwrap();
+        let plugin = root.path().join("plugin");
+        for directory in ["src", "target/release", "assets"] {
+            fs::create_dir_all(plugin.join(directory)).unwrap();
+        }
+        for (path, content) in [
+            ("plugin.toml", "manifest"),
+            ("qol-config.toml", "contract"),
+            ("assets/icon.png", "icon"),
+            ("src/main.rs", "source"),
+            ("target/release/plugin-test", "build"),
+            ("plugin-test", "stale"),
+        ] {
+            fs::write(plugin.join(path), content).unwrap();
+        }
+
+        let files = plugin_delivery_files(&plugin, &["plugin-test"]).unwrap();
+        let relative = files
+            .into_iter()
+            .map(|file| file.relative_path)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            relative,
+            [
+                PathBuf::from("assets/icon.png"),
+                PathBuf::from("plugin.toml"),
+                PathBuf::from("qol-config.toml"),
+            ]
+        );
     }
 
     #[test]

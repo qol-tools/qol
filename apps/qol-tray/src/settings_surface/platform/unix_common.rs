@@ -13,18 +13,21 @@ use qol_gpui::settings_panel::{SettingsPanel, SettingsRuntime, SettingsWindowHos
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
-const CONFIG: DaemonConfig = DaemonConfig {
-    socket: SocketSource::Fallback {
-        default_socket_name: qol_conventions::SETTINGS_SURFACE_SOCKET_NAME,
-        use_tmpdir_env: false,
-    },
-    support_replace_existing: false,
-};
-
 #[derive(Debug)]
 enum Command {
     Open(String),
     Kill,
+}
+
+fn config() -> DaemonConfig {
+    DaemonConfig {
+        socket: SocketSource::Path(
+            crate::paths::runtime_dir()
+                .join("sockets")
+                .join(qol_conventions::SETTINGS_SURFACE_SOCKET_FILE),
+        ),
+        support_replace_existing: false,
+    }
 }
 
 pub(in crate::settings_surface) fn request(plugin_id: &str) -> anyhow::Result<bool> {
@@ -61,14 +64,15 @@ pub(in crate::settings_surface) fn request(plugin_id: &str) -> anyhow::Result<bo
 }
 
 pub(in crate::settings_surface) fn stop() {
-    let stopped = core_daemon::send_kill(&CONFIG);
+    let config = config();
+    let stopped = core_daemon::send_kill(&config);
     let deadline = std::time::Instant::now() + Duration::from_secs(1);
-    while stopped && core_daemon::send_ping(&CONFIG) && std::time::Instant::now() < deadline {
+    while stopped && core_daemon::send_ping(&config) && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
     let outcome = if !stopped {
         "not_running"
-    } else if core_daemon::send_ping(&CONFIG) {
+    } else if core_daemon::send_ping(&config) {
         "timeout"
     } else {
         "stopped"
@@ -83,7 +87,11 @@ pub(in crate::settings_surface) fn stop() {
 
 pub(in crate::settings_surface) fn run(plugin_id: String) -> anyhow::Result<()> {
     let result = run_host(plugin_id.clone());
-    if result.is_err() {
+    if let Err(error) = &result {
+        qol_runtime::probe!(
+            "SURFACE_ACTIVATION",
+            "plugin={plugin_id} phase=host outcome=failed error={error}"
+        );
         open_browser_fallback(&plugin_id, "host_failed");
     }
     result
@@ -101,10 +109,16 @@ fn run_host(plugin_id: String) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    std::fs::create_dir_all(crate::paths::runtime_dir())
-        .context("failed to create the qol runtime directory")?;
+    let config = config();
+    let socket_path =
+        core_daemon::socket_path(&config).context("native settings socket path is unavailable")?;
+    let socket_parent = socket_path
+        .parent()
+        .context("native settings socket path has no parent")?;
+    qol_fs::create_private_dir(socket_parent)
+        .context("failed to create the native settings socket directory")?;
     let (command_tx, command_rx) = mpsc::channel();
-    if !core_daemon::start_request_listener(&CONFIG, command_tx, parse_request) {
+    if !core_daemon::start_request_listener(&config, command_tx, parse_request) {
         if forward_open(&plugin_id) {
             qol_runtime::probe!(
                 "SURFACE_ACTIVATION",
@@ -132,7 +146,7 @@ fn run_host(plugin_id: String) -> anyhow::Result<()> {
         .detach();
         spawn_command_loop(command_rx, host, tracker, cx);
     });
-    core_daemon::cleanup(&CONFIG);
+    core_daemon::cleanup(&config);
     Ok(())
 }
 
@@ -273,9 +287,10 @@ fn load_panel(plugin_id: &str) -> anyhow::Result<(SettingsPanel, SettingsRuntime
 }
 
 fn forward_open(plugin_id: &str) -> bool {
+    let config = config();
     matches!(
         core_daemon::send_request(
-            &CONFIG,
+            &config,
             "open",
             serde_json::json!({ "plugin_id": plugin_id }),
             Duration::from_millis(500),
@@ -324,7 +339,22 @@ mod tests {
     use qol_plugin_daemon::daemon::ReadResult;
     use qol_runtime::protocol::DaemonRequest;
 
-    use super::{parse_request, Command};
+    use super::{config, parse_request, Command};
+
+    #[test]
+    fn settings_socket_lives_in_the_private_runtime_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        let path = qol_plugin_daemon::daemon::socket_path(&config()).unwrap();
+
+        assert_eq!(
+            path,
+            crate::paths::runtime_dir()
+                .join("sockets")
+                .join(qol_conventions::SETTINGS_SURFACE_SOCKET_FILE)
+        );
+    }
 
     #[test]
     fn activation_protocol_rejects_untrusted_plugin_ids() {

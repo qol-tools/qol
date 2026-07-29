@@ -22,6 +22,7 @@ pub struct DaemonConfig {
 
 pub enum SocketSource {
     EnvRequired,
+    Path(PathBuf),
     Fallback {
         default_socket_name: &'static str,
         use_tmpdir_env: bool,
@@ -46,6 +47,7 @@ pub fn socket_path(config: &DaemonConfig) -> Option<PathBuf> {
         SocketSource::EnvRequired => std::env::var(qol_conventions::ENV_DAEMON_SOCKET)
             .ok()
             .map(PathBuf::from),
+        SocketSource::Path(path) => Some(path.clone()),
         SocketSource::Fallback {
             default_socket_name,
             use_tmpdir_env,
