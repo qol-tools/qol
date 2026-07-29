@@ -5,13 +5,12 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use super::objc::{
-    cls, drain_run_loop, msg_ptr, msg_ptr_usize, msg_rect, msg_usize, sel, CGDisplayBounds,
-    CGGetActiveDisplayList, CGRect,
+    cls, msg_ptr, msg_ptr_usize, msg_rect, msg_usize, sel, CGDisplayBounds, CGGetActiveDisplayList,
+    CGRect,
 };
 use super::trace::{timed_opt, trace_screen_snapshot};
 
 const MAX_DISPLAYS: usize = 16;
-const RUN_LOOP_DRAIN_SECONDS: f64 = 0.02;
 static SCREEN_CACHE: OnceLock<Mutex<Option<ScreenSnapshot>>> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -90,7 +89,7 @@ fn screen_snapshot() -> Option<ScreenSnapshot> {
         return Some(snapshot);
     }
 
-    let visible = system_screens();
+    let (source, visible) = work_areas(&layout);
     let snapshot = ScreenSnapshot {
         layout,
         preferences,
@@ -102,8 +101,24 @@ fn screen_snapshot() -> Option<ScreenSnapshot> {
     }
     write_cached_snapshot(&snapshot);
     store_memory_snapshot(snapshot.clone());
-    trace_screen_snapshot("nsscreen", snapshot.visible.len(), start);
+    trace_screen_snapshot(source, snapshot.visible.len(), start);
     Some(snapshot)
+}
+
+/// AppKit caches `NSScreen.screens` at first use and never refreshes it, not even
+/// with a running run loop, so a daemon that outlives a docking change reports the
+/// screens it saw at startup. Only a newly started process reads them correctly,
+/// so ask one when this process's own list no longer covers every display.
+fn work_areas(layout: &[Rect]) -> (&'static str, Vec<Rect>) {
+    let visible = system_screens();
+    if visible.len() == layout.len() || is_screen_helper() {
+        return ("nsscreen", visible);
+    }
+    let relayed = helper_screens();
+    if relayed.len() == layout.len() {
+        return ("helper", relayed);
+    }
+    ("nsscreen", visible)
 }
 
 fn physical_screens() -> Vec<Rect> {
@@ -157,8 +172,52 @@ fn rect_order(a: &Rect, b: &Rect) -> std::cmp::Ordering {
         .then_with(|| a.h.total_cmp(&b.h))
 }
 
+pub(super) const SCREENS_ACTION: &str = "print-work-areas";
+const SCREEN_HELPER_ENV: &str = "QOL_WINDOW_ACTIONS_SCREEN_HELPER";
+
+fn is_screen_helper() -> bool {
+    std::env::var_os(SCREEN_HELPER_ENV).is_some()
+}
+
+/// Prints one `x,y,w,h` work area per line for the `SCREENS_ACTION` subcommand.
+pub(super) fn print_work_areas() {
+    for rect in system_screens() {
+        println!("{},{},{},{}", rect.x, rect.y, rect.w, rect.h);
+    }
+}
+
+fn helper_screens() -> Vec<Rect> {
+    let Ok(exe) = std::env::current_exe() else {
+        return Vec::new();
+    };
+    let Ok(output) = std::process::Command::new(exe)
+        .arg(SCREENS_ACTION)
+        .env(SCREEN_HELPER_ENV, "1")
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(parse_work_area_row)
+        .collect()
+}
+
+fn parse_work_area_row(line: &str) -> Option<Rect> {
+    let mut fields = line.trim().split(',');
+    let rect = Rect {
+        x: fields.next()?.trim().parse().ok()?,
+        y: fields.next()?.trim().parse().ok()?,
+        w: fields.next()?.trim().parse().ok()?,
+        h: fields.next()?.trim().parse().ok()?,
+    };
+    (fields.next().is_none() && valid_rect(&rect)).then_some(rect)
+}
+
 fn system_screens() -> Vec<Rect> {
-    drain_run_loop(RUN_LOOP_DRAIN_SECONDS);
     unsafe {
         let primary_h = primary_screen_height();
         if primary_h == 0.0 {
@@ -343,6 +402,25 @@ mod tests {
         ];
         for contents in cases {
             assert!(parse_cached_snapshot(contents).is_none(), "{contents:?}");
+        }
+    }
+
+    #[test]
+    fn work_area_rows_survive_a_round_trip_and_reject_noise() {
+        let rect = rect(-1512.0, 778.0, 1512.0, 950.0);
+        let row = format!("{},{},{},{}", rect.x, rect.y, rect.w, rect.h);
+        assert_eq!(parse_work_area_row(&row), Some(rect), "round trip");
+
+        let rejected = [
+            "[config] loaded from /a/b/c",
+            "",
+            "0,0,100",
+            "0,0,100,100,extra",
+            "0,0,0,100",
+            "0,0,NaN,100",
+        ];
+        for line in rejected {
+            assert!(parse_work_area_row(line).is_none(), "{line:?}");
         }
     }
 

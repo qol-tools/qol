@@ -47,6 +47,12 @@ impl GlideController {
     }
 }
 
+pub(crate) const DIAGNOSTIC_ACTIONS: &[crate::cli::ActionSpec] =
+    &[crate::cli::ActionSpec::ordinary(
+        screen::SCREENS_ACTION,
+        "Print each display's work area as x,y,w,h lines.",
+    )];
+
 pub(crate) fn execute_action(
     action: &str,
     store: &FileMinimizedStateStore,
@@ -63,6 +69,10 @@ pub(crate) fn execute_action(
         "center" => center(config),
         "move-monitor-left" => move_monitor_left(),
         "move-monitor-right" => move_monitor_right(),
+        screen::SCREENS_ACTION => {
+            screen::print_work_areas();
+            Ok(())
+        }
         _ => Err(format!("Unknown action: {action}")),
     }
 }

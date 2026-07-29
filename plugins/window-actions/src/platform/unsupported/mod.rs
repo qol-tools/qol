@@ -37,6 +37,8 @@ impl GlideController {
     }
 }
 
+pub(crate) const DIAGNOSTIC_ACTIONS: &[crate::cli::ActionSpec] = &[];
+
 pub(crate) fn execute_action(
     action: &str,
     store: &FileMinimizedStateStore,

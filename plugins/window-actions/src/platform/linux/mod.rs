@@ -16,6 +16,8 @@ use system::{run_cinnamon_eval, X11WindowSystem};
 pub(crate) use doctor::{permissions_check, platform_supported_check, required_binaries_check};
 pub(crate) use glide::GlideController;
 
+pub(crate) const DIAGNOSTIC_ACTIONS: &[crate::cli::ActionSpec] = &[];
+
 pub(crate) fn execute_action(
     action: &str,
     store: &FileMinimizedStateStore,

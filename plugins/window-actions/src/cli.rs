@@ -28,14 +28,14 @@ const ACTIONS: [ActionSpec; 13] = [
 ];
 
 #[derive(Clone, Copy)]
-struct ActionSpec {
+pub(crate) struct ActionSpec {
     name: &'static str,
     about: &'static str,
     continuous: bool,
 }
 
 impl ActionSpec {
-    const fn ordinary(name: &'static str, about: &'static str) -> Self {
+    pub(crate) const fn ordinary(name: &'static str, about: &'static str) -> Self {
         Self {
             name,
             about,
@@ -75,6 +75,9 @@ where
 
     for spec in ACTIONS {
         app = app.command(action_command(spec, Arc::clone(&action)));
+    }
+    for spec in crate::platform::DIAGNOSTIC_ACTIONS {
+        app = app.command(action_command(*spec, Arc::clone(&action)));
     }
     app
 }
