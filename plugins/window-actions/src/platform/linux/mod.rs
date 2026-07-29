@@ -32,16 +32,16 @@ pub(crate) fn execute_action(
         "snap-bottom" => {
             run_cinnamon_eval(&scripts::snap_bottom_script(config.snap_fraction)).map(|_| ())
         }
-        "maximize" => run_cinnamon_eval(scripts::MAXIMIZE_SCRIPT).map(|_| ()),
+        "maximize" => run_cinnamon_eval(&scripts::maximize_script()).map(|_| ()),
         "minimize" => restore::minimize_window(&system, store),
         "restore" => restore::restore_window(&system, store),
         "center" => run_cinnamon_eval(&scripts::center_script(config)).map(|_| ()),
         "move-monitor-left" => monitor_move::move_monitor(
-            scripts::MOVE_MONITOR_LEFT_SCRIPT,
+            &scripts::move_monitor_left_script(),
             config.reveal_taskbar_after_move,
         ),
         "move-monitor-right" => monitor_move::move_monitor(
-            scripts::MOVE_MONITOR_RIGHT_SCRIPT,
+            &scripts::move_monitor_right_script(),
             config.reveal_taskbar_after_move,
         ),
         _ => Err(format!("Unknown action: {action}")),

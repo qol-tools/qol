@@ -14,12 +14,6 @@ from pathlib import Path
 
 PAYLOAD_ROOT = Path("/run/qol-payload")
 QOL_HOME = Path("/home/qol")
-EXPECTED_FILES = {
-    "bin/qol-tray": True,
-    "plugins/qol-shot/plugin.toml": False,
-    "plugins/qol-shot/qol-config.toml": False,
-    "plugins/qol-shot/qol-shot": True,
-}
 DEV_BUNDLE_ID = "qol-dev-session"
 
 
@@ -103,11 +97,6 @@ def read_manifest(root):
         executable = entry["executable"]
         require(type(executable) is bool, f"invalid executable flag: {relative}")
         validated[relative] = (parts, size, digest, executable)
-    if workflow_id != DEV_BUNDLE_ID:
-        require(
-            {path: entry[3] for path, entry in validated.items()} == EXPECTED_FILES,
-            "payload file set does not match the Mint Cinnamon sandbox contract",
-        )
     return workflow_id, validated
 
 
@@ -166,7 +155,42 @@ def remove_path(path):
         path.unlink()
 
 
-def publish(staged, stage):
+def validate_prod_payload(files):
+    require(files.get("bin/qol-tray", (None, None, None, False))[3], "missing tray binary")
+    require(
+        files.get("installer/qol-sandbox-payload", (None, None, None, False))[3] is True,
+        "missing payload installer",
+    )
+    plugin_paths = [path for path in files if path.startswith("plugins/")]
+    require(plugin_paths, "production payload has no plugin files")
+    plugin_ids = {path.split("/")[1] for path in plugin_paths if len(path.split("/")) == 3}
+    require(len(plugin_ids) == 1, "production payload must contain exactly one plugin")
+    plugin_id = next(iter(plugin_ids))
+    root = f"plugins/{plugin_id}/"
+    require(
+        files.get(f"{root}plugin.toml", (None, None, None, True))[3] is False,
+        "production plugin manifest is missing or executable",
+    )
+    commands = [
+        path
+        for path in plugin_paths
+        if path != f"{root}plugin.toml"
+        and path != f"{root}qol-config.toml"
+        and files[path][3]
+    ]
+    require(len(commands) == 1, "production payload must contain one plugin command")
+    allowed = {
+        "bin/qol-tray",
+        "installer/qol-sandbox-payload",
+        f"{root}plugin.toml",
+        f"{root}qol-config.toml",
+        commands[0],
+    }
+    require(set(files) <= allowed, "production payload contains an unowned file")
+    return plugin_id
+
+
+def publish(staged, stage, plugin_id):
     generated = stage / "generated"
     generated.mkdir(mode=0o700)
     mode_file = generated / "mode.json"
@@ -178,8 +202,8 @@ def publish(staged, stage):
     destinations = [
         (staged / "bin/qol-tray", QOL_HOME / ".local/bin/qol-tray"),
         (
-            staged / "plugins/qol-shot",
-            QOL_HOME / ".config/qol-tray/plugins/qol-shot",
+            staged / "plugins" / plugin_id,
+            QOL_HOME / ".config/qol-tray/plugins" / plugin_id,
         ),
         (mode_file, QOL_HOME / ".config/qol-tray/mode.json"),
         (first_run, QOL_HOME / ".config/qol-tray/.first-run-done"),
@@ -335,7 +359,9 @@ def install(root):
             shutil.rmtree(staged / "installer")
             publish_dev(staged, stage)
         else:
-            publish(staged, stage)
+            plugin_id = validate_prod_payload(files)
+            shutil.rmtree(staged / "installer")
+            publish(staged, stage, plugin_id)
         clear_stale_state()
     except BaseException:
         shutil.rmtree(stage, ignore_errors=True)

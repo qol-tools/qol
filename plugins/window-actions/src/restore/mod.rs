@@ -44,10 +44,12 @@ pub fn minimize_window<S: WindowSystem, T: MinimizedStateStore>(
     store: &T,
 ) -> Result<(), String> {
     let Some(window_id) = system.active_window_id()? else {
+        trace_restore("minimize", "none", "no-active-window");
         return Ok(());
     };
 
     if query_or(system.is_excluded_window_type(&window_id), false) {
+        trace_restore("minimize", &window_id, "excluded");
         return Ok(());
     }
 
@@ -57,7 +59,12 @@ pub fn minimize_window<S: WindowSystem, T: MinimizedStateStore>(
         return Err("Failed to minimize window".to_string());
     }
 
-    push_minimized_window(system, store, &window_id, saved_rect);
+    let recorded = push_minimized_window(system, store, &window_id, saved_rect);
+    trace_restore(
+        "minimize",
+        &window_id,
+        if recorded { "recorded" } else { "unrecorded" },
+    );
     Ok(())
 }
 
@@ -83,15 +90,18 @@ fn restore_last_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
     store: &T,
 ) -> Result<bool, String> {
     let Some(record) = store.peek()? else {
+        trace_restore("restore", "none", "empty");
         return Ok(false);
     };
 
     if is_record_expired(&record) {
+        trace_restore("restore", &record.window_id, "expired");
         store.pop().ok();
         return Ok(false);
     }
 
     if !is_record_current(system, &record)? {
+        trace_restore("restore", &record.window_id, "stale");
         store.pop().ok();
         return Ok(false);
     }
@@ -102,9 +112,12 @@ fn restore_last_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
                 let _ = system.restore_rect(&record.window_id, rect);
             }
             store.pop().ok();
+            trace_restore("restore", &record.window_id, "restored");
             return Ok(true);
         }
-        RestoreAttempt::Skipped => {}
+        RestoreAttempt::Skipped => {
+            trace_restore("restore", &record.window_id, "skipped");
+        }
     }
 
     store.pop().ok();
@@ -156,17 +169,17 @@ fn push_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
     store: &T,
     window_id: &str,
     saved_rect: Option<[f64; 4]>,
-) {
+) -> bool {
     let Some(window_id) = system.normalize_window_id(window_id) else {
-        return;
+        return false;
     };
 
     let Some(pid) = system.window_pid(&window_id).ok().flatten() else {
-        return;
+        return false;
     };
 
     let Some(process_start_ticks) = system.process_start_ticks(pid) else {
-        return;
+        return false;
     };
 
     let record = MinimizedWindowRecord {
@@ -178,6 +191,17 @@ fn push_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
     };
 
     store.push(&record);
+    true
+}
+
+fn trace_restore(phase: &str, target: &str, outcome: &str) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "WINACT_RESTORE",
+        "phase={phase} target={target} outcome={outcome}"
+    );
+    #[cfg(not(debug_assertions))]
+    let _ = (phase, target, outcome);
 }
 
 fn is_record_expired(record: &MinimizedWindowRecord) -> bool {

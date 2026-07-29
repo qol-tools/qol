@@ -38,7 +38,7 @@ impl PlatformOps for Platform {
         Err(anyhow!("opening paths is not supported on this platform"))
     }
 
-    fn supports_qol_shot_payload(&self) -> bool {
+    fn supports_desktop_payload(&self) -> bool {
         false
     }
 

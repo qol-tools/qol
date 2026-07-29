@@ -3,6 +3,8 @@ use std::time::{Duration, Instant};
 
 use crate::glide::{Direction, Phase};
 
+use super::scripts::EXCLUDED_WINDOW_TYPE_EXPRESSION;
+
 const WATCHDOG_MS: u64 = 1000;
 
 pub(crate) struct GlideController {
@@ -176,6 +178,9 @@ fn start_script(direction: Direction, speed: f64, watchdog_ms: u64) -> String {
             const win = global.display.focus_window;
             if (!win) {{
                 return 'ERROR: No focused window';
+            }}
+            if ({EXCLUDED_WINDOW_TYPE_EXPRESSION}) {{
+                return 'ERROR: Focused surface is not an app window';
             }}
             if (win.maximized_horizontally || win.maximized_vertically) {{
                 win.unmaximize(3);
@@ -409,7 +414,10 @@ const STOP_ALL_SCRIPT: &str = r#"
 
 #[cfg(test)]
 mod tests {
-    use super::{heartbeat_script, start_script, stop_script, Direction, WATCHDOG_MS};
+    use super::{
+        heartbeat_script, start_script, stop_script, Direction, EXCLUDED_WINDOW_TYPE_EXPRESSION,
+        WATCHDOG_MS,
+    };
 
     #[test]
     fn glide_uses_render_rate_time_based_motion_and_watchdog() {
@@ -448,6 +456,15 @@ mod tests {
         let stop = stop_script(Direction::Right);
         assert!(stop.contains("global.display.end_grab_op(global.get_current_time())"));
         assert!(stop.contains("native_move=' + (active ? 'active' : 'released')"));
+    }
+
+    #[test]
+    fn glide_rejects_desktop_and_dock_surfaces_before_window_mutation() {
+        let script = start_script(Direction::Right, 1200.0, WATCHDOG_MS);
+        let guard = script.find(EXCLUDED_WINDOW_TYPE_EXPRESSION).unwrap();
+        let mutation = script.find("win.unmaximize(3)").unwrap();
+
+        assert!(guard < mutation, "{script}");
     }
 
     #[test]

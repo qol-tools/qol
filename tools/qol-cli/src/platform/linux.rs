@@ -61,7 +61,7 @@ impl PlatformOps for Platform {
         Ok(OpenPathOutcome::new(true))
     }
 
-    fn supports_qol_shot_payload(&self) -> bool {
+    fn supports_desktop_payload(&self) -> bool {
         cfg!(target_arch = "x86_64")
     }
 

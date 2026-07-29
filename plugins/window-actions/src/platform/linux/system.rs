@@ -1,7 +1,12 @@
 use std::fs;
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::restore::WindowSystem;
+
+const WINDOW_STATE_TIMEOUT: Duration = Duration::from_secs(2);
+const WINDOW_STATE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Copy, Default)]
 pub struct X11WindowSystem;
@@ -30,7 +35,10 @@ impl WindowSystem for X11WindowSystem {
             .args(["windowminimize", window_id])
             .status()
             .map_err(|error| format!("Failed to run xdotool: {error}"))?;
-        Ok(status.success())
+        if !status.success() {
+            return Ok(false);
+        }
+        wait_for_window_state(self, window_id, true)
     }
 
     fn window_rect(&self, _window_id: &str) -> Option<[f64; 4]> {
@@ -85,11 +93,7 @@ impl WindowSystem for X11WindowSystem {
     }
 
     fn activate_window(&self, window_id: &str) -> Result<bool, String> {
-        let status = Command::new("wmctrl")
-            .args(["-ia", window_id])
-            .status()
-            .map_err(|error| format!("Failed to run wmctrl: {error}"))?;
-        Ok(status.success())
+        wait_for_window_activation(self, window_id)
     }
 
     fn restore_rect(&self, _window_id: &str, _rect: [f64; 4]) -> Result<(), String> {
@@ -109,6 +113,49 @@ impl WindowSystem for X11WindowSystem {
 
     fn process_start_ticks(&self, pid: u32) -> Option<u64> {
         process_start_ticks(pid)
+    }
+}
+
+fn wait_for_window_state(
+    system: &X11WindowSystem,
+    window_id: &str,
+    hidden: bool,
+) -> Result<bool, String> {
+    let deadline = Instant::now() + WINDOW_STATE_TIMEOUT;
+    loop {
+        if system.is_hidden_window(window_id)? == hidden {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(WINDOW_STATE_POLL_INTERVAL);
+    }
+}
+
+fn wait_for_window_activation(system: &X11WindowSystem, window_id: &str) -> Result<bool, String> {
+    let expected = system
+        .normalize_window_id(window_id)
+        .ok_or_else(|| format!("Invalid window id: {window_id}"))?;
+    let deadline = Instant::now() + WINDOW_STATE_TIMEOUT;
+    loop {
+        let status = Command::new("wmctrl")
+            .args(["-ia", window_id])
+            .status()
+            .map_err(|error| format!("Failed to run wmctrl: {error}"))?;
+        if !status.success() {
+            return Ok(false);
+        }
+        let active = system
+            .active_window_id()?
+            .and_then(|value| system.normalize_window_id(&value));
+        if !system.is_hidden_window(window_id)? && active.as_deref() == Some(expected.as_str()) {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(WINDOW_STATE_POLL_INTERVAL);
     }
 }
 

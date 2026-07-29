@@ -141,6 +141,14 @@ struct FlowPayload {
     cleanup: PayloadCleanup,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DesktopPayloadRecipe {
+    package: &'static str,
+    binary: &'static str,
+    plugin_dir: &'static str,
+    plugin_id: &'static str,
+}
+
 #[derive(Debug)]
 struct PayloadCleanup {
     status: String,
@@ -2554,16 +2562,16 @@ fn prepare_workflow_payload(
     if !workflow.requires_payload() {
         return Ok((None, FlowPreparation::pending(false)));
     }
-    if workflow.id() != "qol-shot-capture" {
-        return Err(PayloadPreparationFailure::before_spawn(
+    let recipe = desktop_payload_recipe(workflow.id()).ok_or_else(|| {
+        PayloadPreparationFailure::before_spawn(
             anyhow!(
                 "workflow `{}` declares a payload but has no payload recipe",
                 workflow.id()
             ),
             false,
-        ));
-    }
-    if !crate::host_facade::supports_qol_shot_payload() {
+        )
+    })?;
+    if !crate::host_facade::supports_desktop_payload() {
         return Err(PayloadPreparationFailure::before_spawn(
             anyhow!(
                 "workflow `{}` currently requires an x86_64 Linux build host",
@@ -2586,7 +2594,10 @@ fn prepare_workflow_payload(
     step_label(
         "build",
         StepKind::Pending,
-        "qol-tray + qol-shot · optimized probe-enabled sandbox profile",
+        &format!(
+            "qol-tray + {} · optimized probe-enabled sandbox profile",
+            recipe.package
+        ),
     );
     let mut build = Command::new(&cargo);
     build.current_dir(worktree).args([
@@ -2598,9 +2609,9 @@ fn prepare_workflow_payload(
         "--bin",
         "qol-tray",
         "-p",
-        "qol-shot",
+        recipe.package,
         "--bin",
-        "qol-shot",
+        recipe.binary,
     ]);
     if !verbose {
         build.arg("--quiet");
@@ -2656,6 +2667,8 @@ fn prepare_workflow_payload(
         None => worktree.join("target"),
     };
     let binary_dir = target_root.join("sandbox");
+    let plugin_root = Path::new("plugins").join(recipe.plugin_dir);
+    let installed_root = Path::new("plugins").join(recipe.plugin_id);
     let files = [
         qol_dev_env::payload::PayloadFileSpec {
             source: binary_dir.join(crate::workspace::exe_name("qol-tray")),
@@ -2663,18 +2676,23 @@ fn prepare_workflow_payload(
             executable: true,
         },
         qol_dev_env::payload::PayloadFileSpec {
-            source: worktree.join("plugins/qol-shot/plugin.toml"),
-            relative_path: PathBuf::from("plugins/qol-shot/plugin.toml"),
+            source: worktree.join(plugin_root.join("plugin.toml")),
+            relative_path: installed_root.join("plugin.toml"),
             executable: false,
         },
         qol_dev_env::payload::PayloadFileSpec {
-            source: worktree.join("plugins/qol-shot/qol-config.toml"),
-            relative_path: PathBuf::from("plugins/qol-shot/qol-config.toml"),
+            source: worktree.join(plugin_root.join("qol-config.toml")),
+            relative_path: installed_root.join("qol-config.toml"),
             executable: false,
         },
         qol_dev_env::payload::PayloadFileSpec {
-            source: binary_dir.join(crate::workspace::exe_name("qol-shot")),
-            relative_path: PathBuf::from("plugins/qol-shot/qol-shot"),
+            source: binary_dir.join(crate::workspace::exe_name(recipe.binary)),
+            relative_path: installed_root.join(recipe.binary),
+            executable: true,
+        },
+        qol_dev_env::payload::PayloadFileSpec {
+            source: worktree.join("flows/envs/linux-mint-cinnamon/qol-sandbox-payload"),
+            relative_path: PathBuf::from("installer/qol-sandbox-payload"),
             executable: true,
         },
     ];
@@ -2783,6 +2801,24 @@ fn prepare_workflow_payload(
         }),
         preparation,
     ))
+}
+
+fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
+    match workflow_id {
+        "qol-shot-capture" => Some(DesktopPayloadRecipe {
+            package: "qol-shot",
+            binary: "qol-shot",
+            plugin_dir: "qol-shot",
+            plugin_id: "qol-shot",
+        }),
+        "window-actions-storm" => Some(DesktopPayloadRecipe {
+            package: "window-actions",
+            binary: "window-actions",
+            plugin_dir: "window-actions",
+            plugin_id: "plugin-window-actions",
+        }),
+        _ => None,
+    }
 }
 
 fn failed_preparation(mut preparation: FlowPreparation, cancelled: bool) -> FlowPreparation {
@@ -4431,6 +4467,34 @@ mod tests {
 
     fn argv(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn desktop_payload_recipes_cover_registered_payload_workflows() {
+        let expected = [
+            (
+                "qol-shot-capture",
+                DesktopPayloadRecipe {
+                    package: "qol-shot",
+                    binary: "qol-shot",
+                    plugin_dir: "qol-shot",
+                    plugin_id: "qol-shot",
+                },
+            ),
+            (
+                "window-actions-storm",
+                DesktopPayloadRecipe {
+                    package: "window-actions",
+                    binary: "window-actions",
+                    plugin_dir: "window-actions",
+                    plugin_id: "plugin-window-actions",
+                },
+            ),
+        ];
+        for (workflow, recipe) in expected {
+            assert_eq!(desktop_payload_recipe(workflow), Some(recipe));
+        }
+        assert_eq!(desktop_payload_recipe("leaves-no-trace"), None);
     }
 
     fn immutable_flow_plan(root: &Path) -> FlowPlan {
@@ -6244,7 +6308,9 @@ mod tests {
         let adapter = configured_flow_adapter(&definition.capabilities).unwrap();
         let serial = emu::workflow_definition("leaves-no-trace").unwrap();
         let desktop = emu::workflow_definition("qol-shot-capture").unwrap();
+        let window_actions = emu::workflow_definition("window-actions-storm").unwrap();
         assert!(emu::validate_workflow_adapter(serial, adapter).is_err());
         emu::validate_workflow_adapter(desktop, adapter).unwrap();
+        emu::validate_workflow_adapter(window_actions, adapter).unwrap();
     }
 }

@@ -1,3 +1,23 @@
+pub(super) const EXCLUDED_WINDOW_TYPE_EXPRESSION: &str =
+    "win.get_window_type() === Meta.WindowType.DESKTOP \
+    || win.get_window_type() === Meta.WindowType.DOCK";
+
+fn focused_window_script(body: &str) -> String {
+    format!(
+        r#"
+    const Meta = imports.gi.Meta;
+    const win = global.display.focus_window;
+    if (!win) {{
+        'ERROR: No focused window';
+    }} else if ({EXCLUDED_WINDOW_TYPE_EXPRESSION}) {{
+        'ERROR: Focused surface is not an app window';
+    }} else {{
+{body}
+    }}
+"#
+    )
+}
+
 fn snap_script(
     edge: &str,
     fraction: f64,
@@ -6,12 +26,8 @@ fn snap_script(
     target_x: &str,
     target_y: &str,
 ) -> String {
-    format!(
+    let body = format!(
         r#"
-    const win = global.display.focus_window;
-    if (!win) {{
-        'ERROR: No focused window';
-    }} else {{
         if (win.maximized_horizontally || win.maximized_vertically) {{
             win.unmaximize(3);
         }}
@@ -38,9 +54,9 @@ fn snap_script(
         'snap edge={edge} requested=' + requestedWidth + 'x' + requestedHeight
             + ' actual=' + actual.width + 'x' + actual.height
             + ' position=' + actual.x + ',' + actual.y;
-    }}
 "#
-    )
+    );
+    focused_window_script(&body)
 }
 
 pub fn snap_left_script(fraction: f64) -> String {
@@ -76,15 +92,14 @@ pub fn snap_bottom_script(fraction: f64) -> String {
     )
 }
 
-pub const MAXIMIZE_SCRIPT: &str = r#"
-    const win = global.display.focus_window;
-    if (!win) {
-        'ERROR: No focused window';
-    } else {
+pub fn maximize_script() -> String {
+    focused_window_script(
+        r#"
         win.maximize(3);
         'Maximized window';
-    }
-"#;
+"#,
+    )
+}
 
 pub fn center_script(config: &crate::config::WindowActionsConfig) -> String {
     let width = config.center_width_px.round().max(1.0);
@@ -96,12 +111,8 @@ pub fn center_script(config: &crate::config::WindowActionsConfig) -> String {
     } else {
         "false"
     };
-    format!(
+    let body = format!(
         r#"
-    const win = global.display.focus_window;
-    if (!win) {{
-        'ERROR: No focused window';
-    }} else {{
         if (win.maximized_horizontally || win.maximized_vertically) {{
             win.unmaximize(3);
         }}
@@ -130,16 +141,14 @@ pub fn center_script(config: &crate::config::WindowActionsConfig) -> String {
 
         'Centered window actual=' + actual.width + 'x' + actual.height
             + ' position=' + actual.x + ',' + actual.y;
-    }}
 "#
-    )
+    );
+    focused_window_script(&body)
 }
 
-pub const MOVE_MONITOR_LEFT_SCRIPT: &str = r#"
-    const win = global.display.focus_window;
-    if (!win) {
-        'ERROR: No focused window';
-    } else {
+pub fn move_monitor_left_script() -> String {
+    focused_window_script(
+        r#"
         const beforeRect = win.get_frame_rect();
         const beforeWorkArea = win.get_work_area_current_monitor();
         const beforeMonitor = win.get_monitor();
@@ -163,14 +172,13 @@ pub const MOVE_MONITOR_LEFT_SCRIPT: &str = r#"
         win.move_resize_frame(true, newX, newY, newWidth, newHeight);
 
         'Moved from monitor ' + beforeMonitor + ' to ' + prevMonitor + ' | fullscreen=' + win.is_fullscreen();
-    }
-"#;
+"#,
+    )
+}
 
-pub const MOVE_MONITOR_RIGHT_SCRIPT: &str = r#"
-    const win = global.display.focus_window;
-    if (!win) {
-        'ERROR: No focused window';
-    } else {
+pub fn move_monitor_right_script() -> String {
+    focused_window_script(
+        r#"
         const beforeRect = win.get_frame_rect();
         const beforeWorkArea = win.get_work_area_current_monitor();
         const beforeMonitor = win.get_monitor();
@@ -194,8 +202,9 @@ pub const MOVE_MONITOR_RIGHT_SCRIPT: &str = r#"
         win.move_resize_frame(true, newX, newY, newWidth, newHeight);
 
         'Moved from monitor ' + beforeMonitor + ' to ' + nextMonitor + ' | fullscreen=' + win.is_fullscreen();
-    }
-"#;
+"#,
+    )
+}
 
 #[cfg(test)]
 mod tests {
@@ -216,31 +225,60 @@ mod tests {
     }
 
     fn no_focused_window_is_guarded(script: &str) -> bool {
-        script.contains("'ERROR: No focused window';\n    } else {")
+        let guard = script.find("'ERROR: No focused window';");
+        guard
+            .zip(first_window_mutation(script))
+            .is_some_and(|(guard, mutation)| guard < mutation)
+    }
+
+    fn first_window_mutation(script: &str) -> Option<usize> {
+        [
+            script.find("win.maximize("),
+            script.find("win.unmaximize("),
+            script.find("win.move_frame("),
+            script.find("win.move_resize_frame("),
+            script.find("win.move_to_monitor("),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    fn excluded_window_types_are_guarded(script: &str) -> bool {
+        let guard = script.find(EXCLUDED_WINDOW_TYPE_EXPRESSION);
+        guard
+            .zip(first_window_mutation(script))
+            .is_some_and(|(guard, mutation)| guard < mutation)
+    }
+
+    fn action_scripts() -> Vec<(&'static str, String)> {
+        vec![
+            ("snap_left_script", snap_left_script(0.5)),
+            ("snap_right_script", snap_right_script(0.5)),
+            ("snap_bottom_script", snap_bottom_script(0.5)),
+            ("center_script", center_script(&config())),
+            ("maximize_script", maximize_script()),
+            ("move_monitor_left_script", move_monitor_left_script()),
+            ("move_monitor_right_script", move_monitor_right_script()),
+        ]
     }
 
     #[test]
     fn no_focused_window_guards_every_win_dereference() {
-        let config = config();
-        let cases = [
-            ("snap_left_script", snap_left_script(0.5)),
-            ("snap_right_script", snap_right_script(0.5)),
-            ("snap_bottom_script", snap_bottom_script(0.5)),
-            ("center_script", center_script(&config)),
-            ("MAXIMIZE_SCRIPT", MAXIMIZE_SCRIPT.to_string()),
-            (
-                "MOVE_MONITOR_LEFT_SCRIPT",
-                MOVE_MONITOR_LEFT_SCRIPT.to_string(),
-            ),
-            (
-                "MOVE_MONITOR_RIGHT_SCRIPT",
-                MOVE_MONITOR_RIGHT_SCRIPT.to_string(),
-            ),
-        ];
-        for (name, script) in cases {
+        for (name, script) in action_scripts() {
             assert!(
                 no_focused_window_is_guarded(&script),
                 "{name}: `win` must not be dereferenced outside the `else` branch of the focus_window null check\n{script}",
+            );
+        }
+    }
+
+    #[test]
+    fn desktop_and_dock_guards_precede_every_window_mutation() {
+        for (name, script) in action_scripts() {
+            assert!(
+                excluded_window_types_are_guarded(&script),
+                "{name}: desktop and dock surfaces must be rejected before mutation\n{script}",
             );
         }
     }

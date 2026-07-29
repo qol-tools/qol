@@ -12,7 +12,7 @@ use qol_dev_guest::{
 
 use crate::progress::{step_label, StepKind};
 
-use super::{DesktopWorkflow, Verdict};
+use super::Verdict;
 use crate::commands::emu::{qmp, BootedVm};
 
 const GUEST_CONNECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -21,7 +21,7 @@ const GUEST_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const DESKTOP_READY_TIMEOUT: Duration = Duration::from_secs(90);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAYLOAD_ROOT: &str = "/run/qol-payload";
-const PAYLOAD_INSTALLER: &str = "/usr/local/libexec/qol-sandbox-payload";
+const PAYLOAD_INSTALLER: &str = "/run/qol-payload/installer/qol-sandbox-payload";
 const TRAY_BINARY: &str = "/home/qol/.local/bin/qol-tray";
 const HTTP_TOKEN_PATH: &str = "/home/qol/.config/qol-tray/.http-token";
 const QOL_SHOT_SOCKET_PATH: &str = "/home/qol/.local/share/qol-tray/runtime/sockets/qol-shot.sock";
@@ -30,97 +30,26 @@ const PIN_DRAG_HOLD: Duration = Duration::from_millis(80);
 const STATUS_SETTLE: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct WindowGeometry {
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
+pub(super) struct WindowGeometry {
+    pub(super) x: i32,
+    pub(super) y: i32,
+    pub(super) width: u32,
+    pub(super) height: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct TraceCursor {
+pub(super) struct TraceCursor {
     bytes: u64,
 }
 
-pub(super) fn run(vm: &BootedVm, workflow: DesktopWorkflow) -> Result<Verdict> {
-    match workflow {
-        DesktopWorkflow::QolShotCapture => qol_shot_capture(vm),
-    }
+pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
+    qol_shot_capture(vm)
 }
 
 fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
-    let environment_id = vm.environment.id.as_str();
-    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), vm.guest_control_port);
-    let expected_revision = vm
-        .launch
-        .guest_image_revision
-        .as_deref()
-        .context("desktop workflow has no expected guest image revision")?;
-    step_label(
-        "guest",
-        StepKind::Pending,
-        "waiting for the headless Cinnamon guest desktop",
-    );
-    let mut guest = GuestControlClient::connect_verified_identity(
-        address,
-        GUEST_CONNECT_TIMEOUT,
-        GUEST_HELLO_TIMEOUT,
-        environment_id,
-        expected_revision,
-        &vm.run_id,
-    )?;
-    step_label(
-        "guest",
-        StepKind::Success,
-        &format!(
-            "{} · {} · {}",
-            guest.hello().image.revision,
-            guest.hello().session.user,
-            guest
-                .hello()
-                .session
-                .display
-                .as_deref()
-                .unwrap_or("unknown display")
-        ),
-    );
-
-    step_label(
-        "payload",
-        StepKind::Pending,
-        "verifying and installing the staged binaries",
-    );
-    require_exec(
-        &mut guest,
-        command(PAYLOAD_INSTALLER, &["install", PAYLOAD_ROOT]),
-        Duration::from_secs(60),
-    )?;
-    step_label(
-        "payload",
-        StepKind::Success,
-        "installed inside the disposable guest overlay",
-    );
-
-    spawn(&mut guest, command(TRAY_BINARY, &[]))?;
-    let token = wait_for_command(
-        &mut guest,
-        command("/usr/bin/cat", &[HTTP_TOKEN_PATH]),
-        DESKTOP_READY_TIMEOUT,
-        |outcome| !outcome.stdout.trim().is_empty(),
-        "the qol-tray HTTP token",
-    )?;
-    let auth_header = format!("X-Qol-Token: {}", token.stdout.trim());
-    let plugin_api = format!("{}/api/installed", local_base_url());
-    wait_for_command(
-        &mut guest,
-        command(
-            "/usr/bin/curl",
-            &["--fail", "--silent", "--header", &auth_header, &plugin_api],
-        ),
-        DESKTOP_READY_TIMEOUT,
-        |outcome| outcome.stdout.contains("qol-shot"),
-        "qol-shot to appear in the tray plugin API",
-    )?;
+    let mut guest = connect_desktop_guest(vm)?;
+    install_payload(&mut guest)?;
+    start_tray_and_wait_plugin(&mut guest, "qol-shot")?;
     wait_for_command(
         &mut guest,
         command("/usr/bin/test", &["-S", QOL_SHOT_SOCKET_PATH]),
@@ -438,7 +367,94 @@ fn exercise_recording_cancellation(
     Ok([countdown, cancelled])
 }
 
-fn command(program: &str, args: &[&str]) -> CommandSpec {
+pub(super) fn connect_desktop_guest(vm: &BootedVm) -> Result<GuestControlClient> {
+    let expected_revision = vm
+        .launch
+        .guest_image_revision
+        .as_deref()
+        .context("desktop workflow has no expected guest image revision")?;
+    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), vm.guest_control_port);
+    step_label(
+        "guest",
+        StepKind::Pending,
+        "waiting for the headless Cinnamon guest desktop",
+    );
+    let guest = GuestControlClient::connect_verified_identity(
+        address,
+        GUEST_CONNECT_TIMEOUT,
+        GUEST_HELLO_TIMEOUT,
+        &vm.environment.id,
+        expected_revision,
+        &vm.run_id,
+    )?;
+    step_label(
+        "guest",
+        StepKind::Success,
+        &format!(
+            "{} · {} · {}",
+            guest.hello().image.revision,
+            guest.hello().session.user,
+            guest
+                .hello()
+                .session
+                .display
+                .as_deref()
+                .unwrap_or("unknown")
+        ),
+    );
+    Ok(guest)
+}
+
+pub(super) fn install_payload(guest: &mut GuestControlClient) -> Result<()> {
+    step_label(
+        "payload",
+        StepKind::Pending,
+        "verifying and installing the staged binaries",
+    );
+    require_exec(
+        guest,
+        command(
+            "/usr/bin/python3",
+            &[PAYLOAD_INSTALLER, "install", PAYLOAD_ROOT],
+        ),
+        Duration::from_secs(60),
+    )?;
+    step_label(
+        "payload",
+        StepKind::Success,
+        "installed inside the disposable guest overlay",
+    );
+    Ok(())
+}
+
+pub(super) fn start_tray_and_wait_plugin(
+    guest: &mut GuestControlClient,
+    plugin_id: &str,
+) -> Result<String> {
+    spawn(guest, command(TRAY_BINARY, &[]))?;
+    let token = wait_for_command(
+        guest,
+        command("/usr/bin/cat", &[HTTP_TOKEN_PATH]),
+        DESKTOP_READY_TIMEOUT,
+        |outcome| !outcome.stdout.trim().is_empty(),
+        "the qol-tray HTTP token",
+    )?;
+    let auth_header = format!("X-Qol-Token: {}", token.stdout.trim());
+    let plugin_api = format!("{}/api/installed", local_base_url());
+    wait_for_command(
+        guest,
+        command(
+            "/usr/bin/curl",
+            &["--fail", "--silent", "--header", &auth_header, &plugin_api],
+        ),
+        DESKTOP_READY_TIMEOUT,
+        |outcome| outcome.stdout.contains(plugin_id),
+        &format!("{plugin_id} to appear in the tray plugin API"),
+    )?;
+    Ok(auth_header)
+}
+
+pub(super) fn command(program: &str, args: &[&str]) -> CommandSpec {
     CommandSpec {
         program: program.to_string(),
         args: args.iter().map(|value| (*value).to_string()).collect(),
@@ -447,7 +463,7 @@ fn command(program: &str, args: &[&str]) -> CommandSpec {
     }
 }
 
-fn spawn(guest: &mut GuestControlClient, command: CommandSpec) -> Result<u64> {
+pub(super) fn spawn(guest: &mut GuestControlClient, command: CommandSpec) -> Result<u64> {
     match guest.request(RequestAction::Spawn { command }, GUEST_COMMAND_TIMEOUT)? {
         ResponseResult::Spawned { process_id, .. } => Ok(process_id),
         result => bail!("guest spawn returned an unexpected response: {result:?}"),
@@ -472,7 +488,7 @@ fn exec(
     }
 }
 
-fn require_exec(
+pub(super) fn require_exec(
     guest: &mut GuestControlClient,
     command: CommandSpec,
     timeout: Duration,
@@ -490,7 +506,7 @@ fn require_exec(
     )
 }
 
-fn wait_for_command(
+pub(super) fn wait_for_command(
     guest: &mut GuestControlClient,
     command: CommandSpec,
     timeout: Duration,
@@ -519,7 +535,7 @@ fn wait_for_command(
     }
 }
 
-fn wait_for_probe_line(
+pub(super) fn wait_for_probe_line(
     guest: &mut GuestControlClient,
     cursor: TraceCursor,
     tag: &str,
@@ -529,7 +545,7 @@ fn wait_for_probe_line(
     wait_for_probe_fields(guest, cursor, tag, &[required], timeout)
 }
 
-fn wait_for_probe_fields(
+pub(super) fn wait_for_probe_fields(
     guest: &mut GuestControlClient,
     cursor: TraceCursor,
     tag: &str,
@@ -550,7 +566,7 @@ fn wait_for_probe_fields(
     )
 }
 
-fn current_trace_cursor(guest: &mut GuestControlClient) -> Result<TraceCursor> {
+pub(super) fn current_trace_cursor(guest: &mut GuestControlClient) -> Result<TraceCursor> {
     let outcome = require_exec(
         guest,
         command("/usr/bin/stat", &["--format=%s", TRACE_LOG_PATH]),
@@ -651,7 +667,7 @@ fn probe_timestamp_ms(line: &str) -> Result<u64> {
         .context("probe timestamp was not an unsigned integer")
 }
 
-fn wait_for_window_id(
+pub(super) fn wait_for_window_id(
     guest: &mut GuestControlClient,
     title: &str,
     timeout: Duration,
@@ -749,7 +765,10 @@ fn parse_window_id(output: &str) -> Option<u64> {
         .find_map(|line| line.parse().ok())
 }
 
-fn window_geometry(guest: &mut GuestControlClient, window_id: &str) -> Result<WindowGeometry> {
+pub(super) fn window_geometry(
+    guest: &mut GuestControlClient,
+    window_id: &str,
+) -> Result<WindowGeometry> {
     let outcome = require_exec(
         guest,
         command(

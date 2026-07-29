@@ -10,6 +10,7 @@ use super::serial::SerialClient;
 use super::BootedVm;
 
 mod desktop;
+mod window_actions;
 
 pub(crate) struct Verdict {
     pub(crate) pass: bool,
@@ -94,10 +95,14 @@ pub(crate) type SerialWorkflow = fn(&mut Run) -> Result<Verdict>;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DesktopWorkflow {
     QolShotCapture,
+    WindowActionsStorm,
 }
 
 pub(crate) fn run_desktop(vm: &BootedVm, workflow: DesktopWorkflow) -> Result<Verdict> {
-    desktop::run(vm, workflow)
+    match workflow {
+        DesktopWorkflow::QolShotCapture => desktop::run(vm),
+        DesktopWorkflow::WindowActionsStorm => window_actions::run(vm),
+    }
 }
 
 const REGISTRY: &[Definition] = &[
@@ -108,6 +113,10 @@ const REGISTRY: &[Definition] = &[
     Definition::Desktop {
         id: "qol-shot-capture",
         run: DesktopWorkflow::QolShotCapture,
+    },
+    Definition::Desktop {
+        id: "window-actions-storm",
+        run: DesktopWorkflow::WindowActionsStorm,
     },
 ];
 
@@ -149,12 +158,20 @@ mod tests {
 
     #[test]
     fn ids_lists_every_registered_workflow() {
-        assert_eq!(ids(), vec!["leaves-no-trace", "qol-shot-capture"]);
+        assert_eq!(
+            ids(),
+            vec![
+                "leaves-no-trace",
+                "qol-shot-capture",
+                "window-actions-storm"
+            ]
+        );
     }
 
     #[test]
     fn only_desktop_workflows_require_a_payload() {
         assert!(!find("leaves-no-trace").unwrap().requires_payload());
         assert!(find("qol-shot-capture").unwrap().requires_payload());
+        assert!(find("window-actions-storm").unwrap().requires_payload());
     }
 }
