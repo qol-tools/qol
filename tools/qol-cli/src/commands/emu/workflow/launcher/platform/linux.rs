@@ -141,7 +141,7 @@ fn wait_for_active_title(
 }
 
 fn launcher_focus_args() -> &'static [&'static str] {
-    &["getactivewindow", "getwindowname"]
+    &["getwindowfocus", "getwindowname"]
 }
 
 fn wait_for_window_title(
