@@ -21,6 +21,10 @@ fn tray_config_route(plugin_id: &str) -> String {
 pub(super) fn query(plugin_id: &str, query: &str) -> Result<serde_json::Value, String> {
     let route = format!("/api/plugins/{plugin_id}/queries/{query}");
     let (status, body) = tray_http("GET", &route, None).map_err(|error| error.to_string())?;
+    qol_runtime::probe!(
+        "SURFACE_ACTIVATION",
+        "plugin={plugin_id} phase=runtime-query query={query} status={status}"
+    );
     if status != 200 {
         return Err(format!("query `{query}` failed with HTTP {status}: {body}"));
     }
@@ -97,15 +101,22 @@ fn tray_http(method: &str, route: &str, body: Option<&str>) -> anyhow::Result<(u
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     let mut stream = stream;
     let body = body.unwrap_or("");
-    let request = format!(
-        "{method} {route} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        qol_conventions::LOCAL_HOST,
-        body.len()
-    );
+    let token = std::env::var(qol_conventions::ENV_HTTP_TOKEN)
+        .map_err(|_| anyhow::anyhow!("tray HTTP auth token is unavailable"))?;
+    let request = tray_http_request(method, route, body, &token);
     stream.write_all(request.as_bytes())?;
     let mut raw = String::new();
     stream.read_to_string(&mut raw)?;
     Ok(parse_http_response(&raw))
+}
+
+fn tray_http_request(method: &str, route: &str, body: &str, token: &str) -> String {
+    format!(
+        "{method} {route} HTTP/1.1\r\nHost: {}:{DEFAULT_PORT}\r\n{}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        qol_conventions::LOCAL_HOST,
+        qol_conventions::HTTP_AUTH_HEADER,
+        body.len()
+    )
 }
 
 fn parse_http_response(raw: &str) -> (u16, String) {
