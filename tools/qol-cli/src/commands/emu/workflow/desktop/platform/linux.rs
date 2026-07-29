@@ -238,7 +238,21 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
         "mode=move",
         CAPTURE_TIMEOUT,
     )?;
+    wait_for_probe_fields(
+        &mut guest,
+        drag_trace,
+        "SHOT_PIN_CONTROLS",
+        &[
+            "source=release",
+            "drag=false",
+            "retained=true",
+            "window=true",
+            "visible=true",
+        ],
+        CAPTURE_TIMEOUT,
+    )?;
     let after_move = wait_for_window_move(&mut guest, &pin_id, before_move, CAPTURE_TIMEOUT)?;
+    thread::sleep(PIN_DRAG_HOLD);
     let pinned = artifacts_dir.join("pinned.ppm");
     qmp.screendump(&pinned)?;
     let recording_cancellation =
@@ -275,7 +289,7 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
             "/usr/bin/grep",
             &[
                 "-E",
-                "SHOT_(CAPTURE|CAPTURE_STATUS|DAEMON_APP|FILE|FREEZE|PIN_REVEAL|PIN_TICK|PREVIEW_PLACE|PREVIEW_REVEAL|RECORD_COUNTDOWN|RECORD_TOGGLE|RECV|SCREENSHOT_READY|SELECT_OVERLAY|SELECT_RESULT|SELECT_REVEAL|WINDOW_OPEN)|SHOW_WIN_STATE",
+                "SHOT_(CAPTURE|CAPTURE_STATUS|DAEMON_APP|FILE|FREEZE|PIN_CONTROLS|PIN_REVEAL|PIN_TICK|PREVIEW_PLACE|PREVIEW_REVEAL|RECORD_COUNTDOWN|RECORD_TOGGLE|RECV|SCREENSHOT_READY|SELECT_OVERLAY|SELECT_RESULT|SELECT_REVEAL|WINDOW_OPEN)|SHOW_WIN_STATE",
                 TRACE_LOG_PATH,
             ],
         ),

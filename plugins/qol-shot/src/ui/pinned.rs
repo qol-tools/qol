@@ -1277,9 +1277,43 @@ fn clamp_scale_factor(factor: f32, width: f32, height: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        action_row_fits, clamp_scale_factor, drag_bounds, resize_rect, scroll_steps, PinRect,
+        action_row_fits, clamp_scale_factor, controls_visible, drag_bounds, hover_after_event,
+        resize_rect, scroll_steps, PinRect,
     };
     use gpui::ResizeEdge;
+
+    #[test]
+    fn drag_hover_suppression_preserves_pin_control_visibility() {
+        let hover_cases = [
+            (false, false, false, false),
+            (false, true, false, true),
+            (true, false, false, false),
+            (true, true, false, true),
+            (false, false, true, false),
+            (true, false, true, true),
+        ];
+        for (current, event_hovered, drag_active, expected) in hover_cases {
+            assert_eq!(
+                hover_after_event(current, event_hovered, drag_active),
+                expected,
+                "current={current} event_hovered={event_hovered} drag_active={drag_active}"
+            );
+        }
+
+        let visibility_cases = [
+            (true, false, false, true),
+            (false, true, true, true),
+            (false, true, false, false),
+            (false, false, true, false),
+        ];
+        for (drag_active, hovered, window_hovered, expected) in visibility_cases {
+            assert_eq!(
+                controls_visible(drag_active, hovered, window_hovered),
+                expected,
+                "drag_active={drag_active} hovered={hovered} window_hovered={window_hovered}"
+            );
+        }
+    }
 
     #[test]
     fn resize_rect_locks_ratio_and_anchors_opposite_side() {
