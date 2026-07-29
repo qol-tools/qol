@@ -94,8 +94,7 @@ fn open_region_selector_with_sender(
     frozen_frame: Option<FrozenFrame>,
     cx: &mut gpui::App,
 ) {
-    let monitor = cursor.as_ref().map(|(monitor, _)| monitor);
-    let selectors = selector_windows(monitor, monitors, frozen_frame.as_ref(), cx);
+    let selectors = selector_windows(cursor.as_ref(), monitors, frozen_frame.as_ref(), cx);
     let titles = selectors
         .iter()
         .map(|selector| selector.title().to_string())
@@ -114,11 +113,12 @@ fn open_region_selector_with_sender(
 }
 
 fn selector_windows(
-    monitor: Option<&ActiveMonitor>,
+    cursor: Option<&(ActiveMonitor, Option<gpui::Point<Pixels>>)>,
     monitors: Vec<ActiveMonitor>,
     frozen_frame: Option<&FrozenFrame>,
     cx: &gpui::App,
 ) -> Vec<crate::ui::region_selector::SelectorWindow> {
+    let monitor = cursor.map(|(monitor, _)| monitor);
     let active_bounds = monitor.map(|monitor| monitor.bounds());
     let map_rect = selector_rect_mapper();
     let global_pointer: Option<crate::ui::region_selector::GlobalPointerSource> =
@@ -128,6 +128,16 @@ fn selector_windows(
     } else {
         monitors
     };
+    let hover_target = super::selector_target::snapshot(&monitors);
+    let pointer = cursor
+        .and_then(|(_, pointer)| *pointer)
+        .or_else(mac_pointer_position);
+    let default_target = pointer.and_then(|point| hover_target.as_ref()?.target_at(point));
+    let interaction = SelectorInteraction {
+        default_target,
+        global_pointer,
+        hover_target,
+    };
     if monitors.is_empty() {
         return vec![selector_window(
             selector_fallback_bounds(),
@@ -135,7 +145,7 @@ fn selector_windows(
             None,
             true,
             map_rect,
-            global_pointer,
+            interaction,
             frozen_frame.cloned(),
         )];
     }
@@ -150,11 +160,18 @@ fn selector_windows(
                 placement.display_id,
                 selector_focus(bounds, active_bounds),
                 map_rect.clone(),
-                global_pointer.clone(),
+                interaction.clone(),
                 frozen_frame.cloned(),
             )
         })
         .collect()
+}
+
+#[derive(Clone)]
+struct SelectorInteraction {
+    default_target: Option<crate::ui::region_selector::DetectedTarget>,
+    global_pointer: Option<crate::ui::region_selector::GlobalPointerSource>,
+    hover_target: Option<crate::ui::region_selector::HoverTargetSource>,
 }
 
 fn selector_window(
@@ -163,14 +180,14 @@ fn selector_window(
     display_id: Option<gpui::DisplayId>,
     focus: bool,
     map_rect: crate::ui::region_selector::RectMapper,
-    global_pointer: Option<crate::ui::region_selector::GlobalPointerSource>,
+    interaction: SelectorInteraction,
     frozen_frame: Option<FrozenFrame>,
 ) -> crate::ui::region_selector::SelectorWindow {
     crate::ui::region_selector::SelectorWindow::new(
         bounds,
         vec![bounds],
         active_bounds,
-        None,
+        interaction.default_target,
         crate::ui::region_selector::SelectorWindowOptions {
             display_id,
             kind: ghost_window_kind(),
@@ -179,10 +196,10 @@ fn selector_window(
         },
         crate::ui::region_selector::SelectorWindowSources {
             map_rect,
-            global_pointer,
+            global_pointer: interaction.global_pointer,
             cancel_signal: None,
             active_bounds: None,
-            hover_target: None,
+            hover_target: interaction.hover_target,
             frozen_frame,
         },
     )
@@ -199,17 +216,21 @@ struct MacPointerSource;
 
 impl crate::ui::region_selector::GlobalPointer for MacPointerSource {
     fn position(&self) -> Option<gpui::Point<Pixels>> {
-        let event = CfGuard::new(unsafe { CGEventCreate(std::ptr::null()) })?;
-        let location = unsafe { CGEventGetLocation(event.as_ptr()) };
-        Some(gpui::point(
-            gpui::px(location.x as f32),
-            gpui::px(location.y as f32),
-        ))
+        mac_pointer_position()
     }
 
     fn primary_button_down(&self) -> bool {
         unsafe { CGEventSourceButtonState(CG_EVENT_SOURCE_STATE_HID_SYSTEM, CG_MOUSE_BUTTON_LEFT) }
     }
+}
+
+fn mac_pointer_position() -> Option<gpui::Point<Pixels>> {
+    let event = CfGuard::new(unsafe { CGEventCreate(std::ptr::null()) })?;
+    let location = unsafe { CGEventGetLocation(event.as_ptr()) };
+    Some(gpui::point(
+        gpui::px(location.x as f32),
+        gpui::px(location.y as f32),
+    ))
 }
 
 struct CfGuard(*const c_void);

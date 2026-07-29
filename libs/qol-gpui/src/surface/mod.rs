@@ -637,8 +637,7 @@ fn required_layout_epoch(current: u64) -> u64 {
 }
 
 fn viewport_matches(actual: Size<Pixels>, expected: Size<Pixels>) -> bool {
-    (actual.width.to_f64() - expected.width.to_f64()).abs() <= VIEWPORT_TOLERANCE
-        && (actual.height.to_f64() - expected.height.to_f64()).abs() <= VIEWPORT_TOLERANCE
+    Platform::viewport_matches(actual, expected, VIEWPORT_TOLERANCE)
 }
 
 fn request_pending_frame<V: Render + 'static>(

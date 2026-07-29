@@ -19,6 +19,8 @@ pub(super) trait SurfacePlatform {
 
     fn required_layout_epoch(current: u64) -> u64;
 
+    fn viewport_matches(actual: Size<Pixels>, expected: Size<Pixels>, tolerance: f64) -> bool;
+
     fn layout_confirmed(
         current: u64,
         required: u64,
@@ -26,4 +28,13 @@ pub(super) trait SurfacePlatform {
         expected: Size<Pixels>,
         tolerance: f64,
     ) -> bool;
+}
+
+pub(super) fn dimensions_match(
+    actual: Size<Pixels>,
+    expected: Size<Pixels>,
+    tolerance: f64,
+) -> bool {
+    (actual.width.to_f64() - expected.width.to_f64()).abs() <= tolerance
+        && (actual.height.to_f64() - expected.height.to_f64()).abs() <= tolerance
 }

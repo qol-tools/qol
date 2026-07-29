@@ -1,6 +1,6 @@
 use gpui::{Pixels, Size};
 
-use super::SurfacePlatform;
+use super::{dimensions_match, SurfacePlatform};
 
 pub(crate) struct Platform;
 
@@ -11,6 +11,10 @@ impl SurfacePlatform for Platform {
 
     fn required_layout_epoch(current: u64) -> u64 {
         current
+    }
+
+    fn viewport_matches(actual: Size<Pixels>, expected: Size<Pixels>, tolerance: f64) -> bool {
+        dimensions_match(actual, expected, tolerance)
     }
 
     fn layout_confirmed(

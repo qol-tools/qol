@@ -16,6 +16,7 @@ const MANUAL_SCENARIOS = [
   ["selection-manual", "selection", "A manually dragged region captures the selected pixels."],
   ["selection-window-target", "selection", "A detected window can be selected without drawing a region."],
   ["screenshot-preview", "screenshot", "A completed screenshot opens the preview for the captured image."],
+  ["preview-editor-drawing", "preview", "The screenshot editor reveals, draws strokes, undoes them, and cancels without saving."],
   ["preview-actions", "preview", "Preview copy, copy-path, pin, and dismiss actions complete correctly."],
   ["pin-interaction", "pin", "Pinned images move and resize predictably by drag and wheel."],
   ["clipboard-image", "clipboard", "Copy places the latest screenshot image on the native clipboard."],

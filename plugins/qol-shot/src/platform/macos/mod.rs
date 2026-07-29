@@ -6,6 +6,7 @@ mod native_capture;
 mod overlay;
 mod recording;
 mod selector;
+mod selector_target;
 mod swift;
 mod system;
 

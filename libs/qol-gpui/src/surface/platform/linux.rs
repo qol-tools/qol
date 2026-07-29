@@ -1,6 +1,6 @@
 use gpui::{Pixels, Size};
 
-use super::SurfacePlatform;
+use super::{dimensions_match, SurfacePlatform};
 
 pub(crate) struct Platform;
 
@@ -13,6 +13,10 @@ impl SurfacePlatform for Platform {
         current.wrapping_add(1)
     }
 
+    fn viewport_matches(actual: Size<Pixels>, expected: Size<Pixels>, tolerance: f64) -> bool {
+        dimensions_match(actual, expected, tolerance)
+    }
+
     fn layout_confirmed(
         current: u64,
         required: u64,
@@ -20,8 +24,6 @@ impl SurfacePlatform for Platform {
         expected: Size<Pixels>,
         tolerance: f64,
     ) -> bool {
-        current >= required
-            && (observed.width.to_f64() - expected.width.to_f64()).abs() <= tolerance
-            && (observed.height.to_f64() - expected.height.to_f64()).abs() <= tolerance
+        current >= required && dimensions_match(observed, expected, tolerance)
     }
 }
