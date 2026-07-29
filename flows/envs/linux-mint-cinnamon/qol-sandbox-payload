@@ -163,7 +163,7 @@ def validate_prod_payload(files):
     )
     plugin_paths = [path for path in files if path.startswith("plugins/")]
     require(plugin_paths, "production payload has no plugin files")
-    plugin_ids = {path.split("/")[1] for path in plugin_paths if len(path.split("/")) == 3}
+    plugin_ids = {path.split("/")[1] for path in plugin_paths}
     require(len(plugin_ids) == 1, "production payload must contain exactly one plugin")
     plugin_id = next(iter(plugin_ids))
     root = f"plugins/{plugin_id}/"
@@ -185,6 +185,7 @@ def validate_prod_payload(files):
         f"{root}plugin.toml",
         f"{root}qol-config.toml",
         commands[0],
+        *plugin_paths,
     }
     require(set(files) <= allowed, "production payload contains an unowned file")
     return plugin_id

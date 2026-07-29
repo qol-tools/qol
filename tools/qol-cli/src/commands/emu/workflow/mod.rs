@@ -11,6 +11,7 @@ use super::BootedVm;
 
 mod desktop;
 mod launcher;
+mod qol_shot;
 mod window_actions;
 
 pub(crate) struct Verdict {
@@ -97,6 +98,7 @@ pub(crate) type SerialWorkflow = fn(&mut Run) -> Result<Verdict>;
 pub(crate) enum DesktopWorkflow {
     LauncherStorm,
     QolShotCapture,
+    QolShotStorm,
     WindowActionsStorm,
 }
 
@@ -104,6 +106,7 @@ pub(crate) fn run_desktop(vm: &BootedVm, workflow: DesktopWorkflow) -> Result<Ve
     match workflow {
         DesktopWorkflow::LauncherStorm => launcher::run(vm),
         DesktopWorkflow::QolShotCapture => desktop::run(vm),
+        DesktopWorkflow::QolShotStorm => qol_shot::run(vm),
         DesktopWorkflow::WindowActionsStorm => window_actions::run(vm),
     }
 }
@@ -120,6 +123,10 @@ const REGISTRY: &[Definition] = &[
     Definition::Desktop {
         id: "qol-shot-capture",
         run: DesktopWorkflow::QolShotCapture,
+    },
+    Definition::Desktop {
+        id: "qol-shot-storm",
+        run: DesktopWorkflow::QolShotStorm,
     },
     Definition::Desktop {
         id: "window-actions-storm",
@@ -160,6 +167,7 @@ mod tests {
         let cases = [
             ("leaves-no-trace", true),
             ("launcher-storm", true),
+            ("qol-shot-storm", true),
             ("unknown", false),
             ("", false),
         ];
@@ -176,6 +184,7 @@ mod tests {
                 "leaves-no-trace",
                 "launcher-storm",
                 "qol-shot-capture",
+                "qol-shot-storm",
                 "window-actions-storm"
             ]
         );
@@ -186,6 +195,7 @@ mod tests {
         assert!(!find("leaves-no-trace").unwrap().requires_payload());
         assert!(find("launcher-storm").unwrap().requires_payload());
         assert!(find("qol-shot-capture").unwrap().requires_payload());
+        assert!(find("qol-shot-storm").unwrap().requires_payload());
         assert!(find("window-actions-storm").unwrap().requires_payload());
     }
 }

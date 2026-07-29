@@ -470,7 +470,7 @@ pub(super) fn spawn(guest: &mut GuestControlClient, command: CommandSpec) -> Res
     }
 }
 
-fn exec(
+pub(super) fn exec(
     guest: &mut GuestControlClient,
     command: CommandSpec,
     timeout: Duration,
@@ -524,9 +524,10 @@ pub(super) fn wait_for_command(
         }
         if Instant::now() >= deadline {
             let detail = format!(
-                "last state={:?}, exit={:?}, stderr={}",
+                "last state={:?}, exit={:?}, stdout={}, stderr={}",
                 outcome.state,
                 outcome.exit_code,
+                outcome.stdout.trim(),
                 outcome.stderr.trim()
             );
             bail!("timed out waiting for {description}: {detail}");
