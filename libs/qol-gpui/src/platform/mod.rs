@@ -52,6 +52,14 @@ pub fn process_focus_truth() -> Option<bool> {
     should_poll_focus().then(has_process_focus)
 }
 
+pub fn start_window_move(window: &mut gpui::Window) {
+    #[cfg(target_os = "macos")]
+    if imp::start_window_move(window) {
+        return;
+    }
+    window.start_window_move();
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ReassertStep {
     Settled,

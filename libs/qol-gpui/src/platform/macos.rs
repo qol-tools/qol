@@ -1,3 +1,7 @@
+use objc2::rc::Retained;
+use objc2_app_kit::NSView;
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
 pub fn set_accessory_policy() {
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
     use objc2_foundation::MainThreadMarker;
@@ -50,5 +54,25 @@ pub fn should_poll_focus() -> bool {
 }
 
 pub fn has_process_focus() -> bool {
+    true
+}
+
+pub fn start_window_move(window: &mut gpui::Window) -> bool {
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return false;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return false;
+    };
+    let Some(view) = (unsafe { Retained::<NSView>::retain(handle.ns_view.as_ptr().cast()) }) else {
+        return false;
+    };
+    let Some(native_window) = view.window() else {
+        return false;
+    };
+    let Some(event) = native_window.currentEvent() else {
+        return false;
+    };
+    native_window.performWindowDragWithEvent(&event);
     true
 }

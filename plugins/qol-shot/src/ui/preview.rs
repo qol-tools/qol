@@ -975,6 +975,11 @@ impl PreviewView {
         completion.finish(exit);
     }
 
+    fn begin_move(&mut self, _: &MouseDownEvent, window: &mut Window, _: &mut Context<Self>) {
+        qol_runtime::probe!("SHOT_PREVIEW_MOVE", "seq={} state=requested", self.seq);
+        qol_gpui::platform::start_window_move(window);
+    }
+
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(action) = shot_action_for_keystroke(&event.keystroke, self.copy_command) {
             self.activate(PreviewControl::Action(action), window, cx);
@@ -1066,6 +1071,7 @@ impl Render for PreviewView {
             .id("shot-preview")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_move))
             .size_full()
             .relative()
             .bg(rgb(palette.window_bg));
@@ -1149,6 +1155,7 @@ impl Render for PreviewView {
                     })
                     .text_color(rgb(palette.action_glyph))
                     .child(control.glyph())
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         this.activate(control, window, cx)
                     })),

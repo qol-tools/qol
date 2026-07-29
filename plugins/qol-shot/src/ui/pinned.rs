@@ -489,7 +489,7 @@ impl PinnedView {
         let Some(session) = platform::pin_resize_session(&self.title) else {
             match edge {
                 Some(edge) => window.start_window_resize(edge),
-                None => window.start_window_move(),
+                None => qol_gpui::platform::start_window_move(window),
             }
             return;
         };
