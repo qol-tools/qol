@@ -473,6 +473,11 @@ impl PinnedView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.hovered {
+            self.hovered = true;
+            cx.notify();
+        }
+        self.trace_controls("press", "true", self.resize_drag.is_some(), window);
         platform::pin_focus(&self.title);
         if self.scroll_resize.is_some() {
             self.end_resize(window, cx);
@@ -632,6 +637,7 @@ impl PinnedView {
         let Some(drag) = self.resize_drag.take() else {
             return;
         };
+        self.trace_controls("release", "none", false, window);
         let last = if scroll {
             drag.bounds
         } else {
@@ -782,6 +788,29 @@ impl PinnedView {
             "escape" | "esc" => self.close(window, cx),
             _ => {}
         }
+    }
+
+    fn on_hover(&mut self, hovered: &bool, window: &mut Window, cx: &mut Context<Self>) {
+        let drag_active = self.resize_drag.is_some();
+        let next = hover_after_event(self.hovered, *hovered, drag_active);
+        if self.hovered == next {
+            self.trace_controls("hover", bool_field(*hovered), drag_active, window);
+            return;
+        }
+        self.hovered = next;
+        self.trace_controls("hover", bool_field(*hovered), drag_active, window);
+        cx.notify();
+    }
+
+    fn trace_controls(&self, source: &str, event: &str, drag_active: bool, window: &Window) {
+        let window_hovered = window.is_window_hovered();
+        let visible = controls_visible(drag_active, self.hovered, window_hovered);
+        qol_runtime::probe!(
+            "SHOT_PIN_CONTROLS",
+            "title={} source={source} event={event} drag={drag_active} retained={} window={window_hovered} visible={visible}",
+            self.title,
+            self.hovered,
+        );
     }
 
     fn on_scroll(&mut self, event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -1001,8 +1030,11 @@ impl Render for PinnedView {
                 )
                 .child(picture_frame);
         }
-        let show_controls =
-            self.resize_drag.is_some() || (self.hovered && window.is_window_hovered());
+        let show_controls = controls_visible(
+            self.resize_drag.is_some(),
+            self.hovered,
+            window.is_window_hovered(),
+        );
         let mut root = div()
             .id("shot-pin")
             .track_focus(&self.focus_handle)
@@ -1010,12 +1042,7 @@ impl Render for PinnedView {
             .size_full()
             .relative()
             .bg(rgb(palette.window_bg))
-            .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
-                if this.hovered != *hovered {
-                    this.hovered = *hovered;
-                    cx.notify();
-                }
-            }))
+            .on_hover(cx.listener(Self::on_hover))
             .on_scroll_wheel(cx.listener(Self::on_scroll))
             .on_mouse_down(
                 MouseButton::Left,
@@ -1053,6 +1080,24 @@ impl Render for PinnedView {
 
         root
     }
+}
+
+fn bool_field(value: bool) -> &'static str {
+    if value {
+        return "true";
+    }
+    "false"
+}
+
+fn hover_after_event(current: bool, event_hovered: bool, drag_active: bool) -> bool {
+    if drag_active && !event_hovered {
+        return current;
+    }
+    event_hovered
+}
+
+fn controls_visible(drag_active: bool, hovered: bool, window_hovered: bool) -> bool {
+    drag_active || (hovered && window_hovered)
 }
 
 fn resize_cursor(edge: ResizeEdge) -> CursorStyle {
