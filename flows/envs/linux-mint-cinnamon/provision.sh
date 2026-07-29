@@ -65,7 +65,7 @@ echo 'lightdm shared/default-x-display-manager select lightdm' | debconf-set-sel
 apt-get install --yes --no-install-recommends "${packages[@]}"
 
 if [[ "$(cinnamon --version)" != "Cinnamon 6.6.7" ]]; then
-  echo "base OS does not match mint-22.3-cinnamon-6.6.7-qol-1" >&2
+  echo "base OS does not match mint-22.3-cinnamon-6.6.7-qol-2" >&2
   exit 1
 fi
 
@@ -99,6 +99,10 @@ for desktop_entry in "$asset_root/rootfs/etc/xdg/autostart/"*.desktop; do
 done
 install -d -m 0755 /etc/udev/rules.d
 install -m 0644 "$asset_root/rootfs/etc/udev/rules.d/70-qol-guest-control.rules" /etc/udev/rules.d/70-qol-guest-control.rules
+install -d -m 0755 /etc/modules-load.d
+install -m 0644 "$asset_root/rootfs/etc/modules-load.d/qol-bluetooth-vhci.conf" /etc/modules-load.d/qol-bluetooth-vhci.conf
+install -d -m 0755 /etc/tmpfiles.d
+install -m 0644 "$asset_root/rootfs/etc/tmpfiles.d/qol-bluetooth-vhci.conf" /etc/tmpfiles.d/qol-bluetooth-vhci.conf
 install -d -m 0755 /etc/systemd/system
 install -m 0644 "$asset_root/rootfs/etc/systemd/system/$mount_unit_source" "/etc/systemd/system/$mount_unit"
 install -m 0644 "$asset_root/rootfs/etc/systemd/system/$automount_unit_source" "/etc/systemd/system/$automount_unit"
@@ -126,9 +130,12 @@ rm -f /var/lib/dbus/machine-id
 
 test -x /usr/local/libexec/qol-guest-runner
 test -x /usr/local/libexec/qol-sandbox-payload
+test -x /usr/bin/btvirt
 test -r /etc/qol-dev-image.json
 test -d /sys/firmware/qemu_fw_cfg/by_name
 grep -Fq -- '--run-id-path /run/qol-guest-run-id' /etc/xdg/autostart/qol-guest-runner.desktop
+grep -Fxq 'vhci_hcd' /etc/modules-load.d/qol-bluetooth-vhci.conf
+grep -Fxq 'z /dev/vhci 0660 root qol-guest - -' /etc/tmpfiles.d/qol-bluetooth-vhci.conf
 grep -Fxq 'Hidden=true' /etc/xdg/autostart/mintwelcome.desktop
 test -z "$(find "$home" -mindepth 1 -print -quit)"
 systemctl is-enabled --quiet lightdm.service

@@ -1,3 +1,4 @@
+bluez-test-tools
 cinnamon
 curl
 dbus-x11

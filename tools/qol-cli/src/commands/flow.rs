@@ -2828,6 +2828,12 @@ fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
             plugin_dir: "alt-tab",
             plugin_id: "plugin-alt-tab",
         }),
+        "bluetooth-storm" => Some(DesktopPayloadRecipe {
+            package: "plugin-bluetooth",
+            binary: "plugin-bluetooth",
+            plugin_dir: "bluetooth",
+            plugin_id: "plugin-bluetooth",
+        }),
         "launcher-storm" => Some(DesktopPayloadRecipe {
             package: "launcher",
             binary: "launcher",
@@ -4508,6 +4514,15 @@ mod tests {
                     binary: "alt-tab",
                     plugin_dir: "alt-tab",
                     plugin_id: "plugin-alt-tab",
+                },
+            ),
+            (
+                "bluetooth-storm",
+                DesktopPayloadRecipe {
+                    package: "plugin-bluetooth",
+                    binary: "plugin-bluetooth",
+                    plugin_dir: "bluetooth",
+                    plugin_id: "plugin-bluetooth",
                 },
             ),
             (
@@ -6396,12 +6411,14 @@ mod tests {
         let adapter = configured_flow_adapter(&definition.capabilities).unwrap();
         let serial = emu::workflow_definition("leaves-no-trace").unwrap();
         let alt_tab = emu::workflow_definition("alt-tab-storm").unwrap();
+        let bluetooth = emu::workflow_definition("bluetooth-storm").unwrap();
         let launcher = emu::workflow_definition("launcher-storm").unwrap();
         let desktop = emu::workflow_definition("qol-shot-capture").unwrap();
         let shot_storm = emu::workflow_definition("qol-shot-storm").unwrap();
         let window_actions = emu::workflow_definition("window-actions-storm").unwrap();
         assert!(emu::validate_workflow_adapter(serial, adapter).is_err());
         emu::validate_workflow_adapter(alt_tab, adapter).unwrap();
+        emu::validate_workflow_adapter(bluetooth, adapter).unwrap();
         emu::validate_workflow_adapter(launcher, adapter).unwrap();
         emu::validate_workflow_adapter(desktop, adapter).unwrap();
         emu::validate_workflow_adapter(shot_storm, adapter).unwrap();
