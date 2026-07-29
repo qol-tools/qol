@@ -88,6 +88,8 @@ pub(in crate::settings_surface) fn stop() {
 pub(in crate::settings_surface) fn run(plugin_id: String) -> anyhow::Result<()> {
     let result = run_host(plugin_id.clone());
     if let Err(error) = &result {
+        #[cfg(not(debug_assertions))]
+        let _ = error;
         qol_runtime::probe!(
             "SURFACE_ACTIVATION",
             "plugin={plugin_id} phase=host outcome=failed error={error}"
