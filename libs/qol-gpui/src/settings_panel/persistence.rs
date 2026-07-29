@@ -76,33 +76,60 @@ pub(super) fn save_values(plugin_id: &str, path: &Path, values: &serde_json::Val
         }
     };
     match tray_http("PUT", &tray_config_route(plugin_id), Some(&body)) {
-        Ok((200, _)) => return,
+        Ok((200, _)) => {
+            qol_runtime::probe!(
+                "SETTINGS_PERSIST",
+                "plugin={plugin_id} transport=tray outcome=saved"
+            );
+            return;
+        }
         Ok((status, payload)) => {
+            qol_runtime::probe!(
+                "SETTINGS_PERSIST",
+                "plugin={plugin_id} transport=tray outcome=rejected status={status}"
+            );
             eprintln!(
                 "[{plugin_id}] settings save rejected by tray ({status}): {}",
                 payload.trim()
             );
             return;
         }
-        Err(error) => eprintln!("[{plugin_id}] tray unreachable, saving locally: {error:#}"),
+        Err(error) => {
+            qol_runtime::probe!(
+                "SETTINGS_PERSIST",
+                "plugin={plugin_id} transport=tray outcome=unavailable"
+            );
+            eprintln!("[{plugin_id}] tray unreachable, saving locally: {error:#}");
+        }
     }
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Err(error) = std::fs::write(path, body) {
+        qol_runtime::probe!(
+            "SETTINGS_PERSIST",
+            "plugin={plugin_id} transport=file outcome=failed"
+        );
         eprintln!("[{plugin_id}] settings save failed: {error:#}");
+        return;
     }
+    qol_runtime::probe!(
+        "SETTINGS_PERSIST",
+        "plugin={plugin_id} transport=file outcome=saved"
+    );
 }
 
 fn tray_http(method: &str, route: &str, body: Option<&str>) -> anyhow::Result<(u16, String)> {
+    use anyhow::Context as _;
     use std::io::{Read, Write};
+
+    let token = std::env::var(qol_conventions::ENV_HTTP_TOKEN)
+        .context("tray HTTP authentication token is unavailable")?;
     let stream = std::net::TcpStream::connect((qol_conventions::LOCAL_HOST, DEFAULT_PORT))?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     let mut stream = stream;
     let body = body.unwrap_or("");
-    let token = std::env::var(qol_conventions::ENV_HTTP_TOKEN)
-        .map_err(|_| anyhow::anyhow!("tray HTTP auth token is unavailable"))?;
     let request = tray_http_request(method, route, body, &token);
     stream.write_all(request.as_bytes())?;
     let mut raw = String::new();

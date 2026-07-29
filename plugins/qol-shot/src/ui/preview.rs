@@ -100,7 +100,11 @@ fn preview_control_for_keystroke(
         return None;
     }
 
-    let accel = keystroke.key.chars().next()?;
+    let mut keys = keystroke.key.chars();
+    let accel = keys.next()?;
+    if keys.next().is_some() {
+        return None;
+    }
     preview_controls(default_copy_action)
         .into_iter()
         .find(|control| control.accel() == accel)
@@ -1296,6 +1300,25 @@ mod tests {
                     CopyCommand::CopyPath,
                 ),
                 Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn named_control_keys_never_trigger_preview_accelerators() {
+        let keys = [
+            "escape", "esc", "enter", "return", "space", "left", "right", "up", "down", "tab",
+        ];
+
+        for key in keys {
+            assert_eq!(
+                preview_control_for_keystroke(
+                    &keystroke(key, Modifiers::none()),
+                    PreviewControl::Edit,
+                    CopyCommand::CopyPath,
+                ),
+                None,
+                "key: {key}"
             );
         }
     }
