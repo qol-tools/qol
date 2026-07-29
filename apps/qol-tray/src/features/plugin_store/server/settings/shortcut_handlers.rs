@@ -125,6 +125,7 @@ fn map_mutation_error(
 ) -> Box<Response> {
     match error {
         store::MutationError::Load(_) => Box::new(load_failed()),
+        store::MutationError::Lock => Box::new(save_failed()),
         store::MutationError::Rejected(message) => Box::new(rejected(&message)),
         store::MutationError::Save(_) => Box::new(save_failed()),
     }

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::fmt;
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use super::model::{Shortcut, ShortcutsConfig};
 use super::plugin_manifest;
@@ -11,6 +12,12 @@ pub fn load() -> Result<ShortcutsConfig> {
     load_from(&path)
 }
 
+pub fn save(config: &ShortcutsConfig) -> Result<()> {
+    let path = crate::paths::shortcuts_path()?;
+    let _guard = mutation_guard()?;
+    save_to(&path, config)
+}
+
 fn load_from(path: &Path) -> Result<ShortcutsConfig> {
     if !path.exists() {
         log::debug!(
@@ -19,7 +26,7 @@ fn load_from(path: &Path) -> Result<ShortcutsConfig> {
         );
         return Ok(ShortcutsConfig::default());
     }
-    match crate::file_io::load_json_or_default::<ShortcutsConfig>(&path) {
+    match crate::file_io::load_json_or_default::<ShortcutsConfig>(path) {
         Ok(config) => {
             log::debug!(
                 "Shortcuts config loaded: count={} path={}",
@@ -37,11 +44,6 @@ fn load_from(path: &Path) -> Result<ShortcutsConfig> {
             Err(error)
         }
     }
-}
-
-pub fn save(config: &ShortcutsConfig) -> Result<()> {
-    let path = crate::paths::shortcuts_path()?;
-    save_to(&path, config)
 }
 
 fn save_to(path: &Path, config: &ShortcutsConfig) -> Result<()> {
@@ -68,6 +70,7 @@ fn save_to(path: &Path, config: &ShortcutsConfig) -> Result<()> {
 #[derive(Debug)]
 pub enum MutationError {
     Load(anyhow::Error),
+    Lock,
     Rejected(String),
     Save(anyhow::Error),
 }
@@ -76,6 +79,7 @@ impl fmt::Display for MutationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Load(error) => write!(formatter, "failed to load shortcuts: {error}"),
+            Self::Lock => formatter.write_str("shortcut mutation lock is poisoned"),
             Self::Rejected(error) => formatter.write_str(error),
             Self::Save(error) => write!(formatter, "failed to save shortcuts: {error}"),
         }
@@ -107,10 +111,18 @@ fn mutate_at(
     path: &Path,
     mutate: impl FnOnce(&mut ShortcutsConfig) -> Result<(), String>,
 ) -> Result<ShortcutsConfig, MutationError> {
+    let _guard = mutation_guard()?;
     let mut config = load_from(path).map_err(MutationError::Load)?;
     mutate(&mut config).map_err(MutationError::Rejected)?;
     save_to(path, &config).map_err(MutationError::Save)?;
     Ok(config)
+}
+
+fn mutation_guard() -> Result<MutexGuard<'static, ()>, MutationError> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| MutationError::Lock)
 }
 
 pub fn find_by_id(config: &ShortcutsConfig, id: &str) -> Option<Shortcut> {
@@ -160,10 +172,12 @@ pub fn remove(config: &mut ShortcutsConfig, id: &str) -> Result<(), String> {
 pub fn reconcile_plugin_shortcuts<'a>(
     plugins: impl IntoIterator<Item = &'a crate::plugins::Plugin>,
 ) -> Result<bool> {
-    let mut config = load()?;
+    let path = crate::paths::shortcuts_path()?;
+    let _guard = mutation_guard()?;
+    let mut config = load_from(&path)?;
     let changed = plugin_manifest::reconcile(&mut config, plugins);
     if changed {
-        save(&config)?;
+        save_to(&path, &config)?;
     }
     Ok(changed)
 }
