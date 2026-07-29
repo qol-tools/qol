@@ -51,6 +51,7 @@ impl RevealTarget {
 pub(crate) enum PreviewExit {
     Intentional,
     OpenFolder,
+    Edited,
     Pinned,
     LostFocus,
     Superseded,
@@ -237,6 +238,7 @@ mod tests {
             (PreviewExit::Intentional, true),
             (PreviewExit::Unavailable, false),
             (PreviewExit::OpenFolder, false),
+            (PreviewExit::Edited, false),
             (PreviewExit::Pinned, false),
             (PreviewExit::LostFocus, false),
             (PreviewExit::Superseded, false),

@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use gpui::*;
 
-pub(super) const DISC_SIZE: f32 = 200.0;
-pub(super) const POPUP_SIZE: f32 = DISC_SIZE + 2.0 * (WHEEL_PADDING + WHEEL_BORDER);
+const DISC_SIZE: f32 = 200.0;
+const POPUP_SIZE: f32 = DISC_SIZE + 2.0 * (WHEEL_PADDING + WHEEL_BORDER);
 const DISC_RADIUS: f64 = DISC_SIZE as f64 / 2.0 - 1.0;
 const THUMB_SIZE: f32 = 16.0;
 const NUDGE_STEP: f64 = 6.0;
@@ -15,21 +15,21 @@ const WHEEL_BORDER: f32 = 1.0;
 const WINDOW_MARGIN: f32 = 8.0;
 
 #[derive(Clone, Copy)]
-pub(super) struct WheelStyle {
-    pub(super) bg: u32,
-    pub(super) border: u32,
-    pub(super) thumb_border: u32,
+pub struct WheelStyle {
+    pub bg: u32,
+    pub border: u32,
+    pub thumb_border: u32,
 }
 
 type WheelCallback = Box<dyn FnMut(String, &mut App)>;
 
-pub(super) struct WheelCallbacks {
+pub struct WheelCallbacks {
     preview: WheelCallback,
     commit: WheelCallback,
 }
 
 impl WheelCallbacks {
-    pub(super) fn new(
+    pub fn new(
         preview: impl FnMut(String, &mut App) + 'static,
         commit: impl FnMut(String, &mut App) + 'static,
     ) -> Self {
@@ -40,7 +40,7 @@ impl WheelCallbacks {
     }
 }
 
-pub(super) struct ColorWheelPopup {
+pub struct ColorWheelPopup {
     wheel: ColorWheel,
     style: WheelStyle,
     on_preview: WheelCallback,
@@ -51,7 +51,7 @@ pub(super) struct ColorWheelPopup {
     finished: bool,
 }
 
-pub(super) struct ColorWheel {
+pub struct ColorWheel {
     hue: f64,
     sat: f64,
     image: Arc<RenderImage>,
@@ -60,7 +60,7 @@ pub(super) struct ColorWheel {
 }
 
 impl ColorWheelPopup {
-    pub(super) fn open(
+    pub fn open(
         wheel: ColorWheel,
         style: WheelStyle,
         anchor: Bounds<Pixels>,
@@ -88,7 +88,7 @@ impl ColorWheelPopup {
             display_id: display.map(|display| display.id()),
             window_background: WindowBackgroundAppearance::Transparent,
             window_decorations: Some(WindowDecorations::Client),
-            app_id: Some("qol-settings-color-wheel".into()),
+            app_id: Some("qol-color-wheel".into()),
             ..Default::default()
         };
         let parent_handle = parent_window.window_handle();
@@ -202,7 +202,7 @@ impl Focusable for ColorWheelPopup {
 impl Render for ColorWheelPopup {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .id("settings-color-wheel-popup")
+            .id("qol-color-wheel-popup")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key(
@@ -224,7 +224,7 @@ impl Render for ColorWheelPopup {
 }
 
 impl ColorWheel {
-    pub(super) fn open(current: &str) -> Self {
+    pub fn open(current: &str) -> Self {
         let (hue, sat) = hex_to_hue_sat(current);
         Self {
             hue,
@@ -235,18 +235,18 @@ impl ColorWheel {
         }
     }
 
-    pub(super) fn nudge(&mut self, dx: f64, dy: f64, fast: bool) {
+    fn nudge(&mut self, dx: f64, dy: f64, fast: bool) {
         let step = if fast { NUDGE_STEP_FAST } else { NUDGE_STEP };
         let (hue, sat) = nudged(self.hue, self.sat, dx * step, dy * step);
         self.hue = hue;
         self.sat = sat;
     }
 
-    pub(super) fn hex(&self) -> String {
+    pub fn hex(&self) -> String {
         format!("#{}", hue_sat_to_hex(self.hue, self.sat))
     }
 
-    pub(super) fn begin_drag(&mut self, position: Point<Pixels>) -> bool {
+    fn begin_drag(&mut self, position: Point<Pixels>) -> bool {
         let Some((x, y)) = self.local_pointer(position) else {
             return false;
         };
@@ -258,7 +258,7 @@ impl ColorWheel {
         true
     }
 
-    pub(super) fn drag_to(&mut self, position: Point<Pixels>) -> bool {
+    fn drag_to(&mut self, position: Point<Pixels>) -> bool {
         if !self.dragging {
             return false;
         }
@@ -269,7 +269,7 @@ impl ColorWheel {
         true
     }
 
-    pub(super) fn finish_drag(&mut self, position: Point<Pixels>) -> bool {
+    fn finish_drag(&mut self, position: Point<Pixels>) -> bool {
         if !self.drag_to(position) {
             return false;
         }
@@ -306,7 +306,7 @@ impl ColorWheel {
         )
     }
 
-    pub(super) fn render(
+    fn render(
         &self,
         style: WheelStyle,
         on_mouse_down: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
@@ -314,7 +314,7 @@ impl ColorWheel {
         let (tx, ty) = self.thumb_position();
         let disc_bounds = Rc::clone(&self.disc_bounds);
         div()
-            .id("settings-color-wheel")
+            .id("qol-color-wheel")
             .p(px(WHEEL_PADDING))
             .rounded_md()
             .border_1()
@@ -323,7 +323,7 @@ impl ColorWheel {
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(
                 div()
-                    .id("settings-color-wheel-disc")
+                    .id("qol-color-wheel-disc")
                     .relative()
                     .w(px(DISC_SIZE))
                     .h(px(DISC_SIZE))

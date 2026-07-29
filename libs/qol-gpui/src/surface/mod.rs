@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use gpui::*;
 
-use crate::monitor::MonitorTracker;
+use crate::monitor::{ActiveMonitor, MonitorTracker};
 use crate::placement::{Corner, MonitorPlacement, CORNER_MARGIN};
 
 mod platform;
@@ -177,6 +177,19 @@ impl Surface {
         })
     }
 
+    pub fn show_focused_on<V: Render + Focusable + 'static>(
+        self,
+        monitor: &ActiveMonitor,
+        cx: &mut App,
+        build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
+    ) -> Result<OpenedSurface<V>> {
+        self.open_on(monitor, cx, |dismisser, window, cx| {
+            let view = build(dismisser, window, cx);
+            window.focus(&view.focus_handle(cx));
+            view
+        })
+    }
+
     pub(crate) fn open<V: Render + 'static>(
         self,
         tracker: &MonitorTracker,
@@ -188,7 +201,16 @@ impl Surface {
             SurfaceKind::Panel => tracker.snapshot_monitor(),
         }
         .ok_or_else(|| anyhow!("no monitor state available for surface placement"))?;
-        let bounds = self.resolved_bounds(&monitor);
+        self.open_on(&monitor, cx, build)
+    }
+
+    fn open_on<V: Render + 'static>(
+        self,
+        monitor: &ActiveMonitor,
+        cx: &mut App,
+        build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
+    ) -> Result<OpenedSurface<V>> {
+        let bounds = self.resolved_bounds(monitor);
         let title = unique_surface_title(&self.title);
         let constrains_size = self.constrains_size();
         let reveal_after_move = matches!(self.kind, SurfaceKind::Panel);
@@ -198,7 +220,7 @@ impl Surface {
         let retain_on_dismiss = self.retain_on_dismiss && native_reveal_gate;
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            display_id: crate::window::display_id_for_monitor(Some(&monitor), cx),
+            display_id: crate::window::display_id_for_monitor(Some(monitor), cx),
             titlebar: None,
             window_decorations: Some(WindowDecorations::Client),
             kind: self.window_kind(),

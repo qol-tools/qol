@@ -6,8 +6,10 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 qol-apps.workspace = true
+qol-color.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
+qol-fs.workspace = true
 qol-headless.workspace = true
 qol-process.workspace = true
 qol-runtime.workspace = true

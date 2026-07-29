@@ -6,7 +6,6 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use qol_config::contract::ResolvedRowAction;
 
-use super::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use super::persistence::save_values;
 use super::rows::{
     apply_runtime_query, begin_list_item_action, list_item_actions, merged_config,
@@ -14,6 +13,7 @@ use super::rows::{
     RowControl, RowSection, SelectOption,
 };
 use super::{SettingsPanel, SettingsRuntime};
+use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use crate::dropdown::{Dropdown, DropdownEvent, DropdownItem, DropdownStyle};
 use crate::spinner::Spinner;
 use crate::status_indicator::{StatusIndicator, StatusTone};

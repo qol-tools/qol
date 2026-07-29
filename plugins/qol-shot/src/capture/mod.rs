@@ -1,4 +1,5 @@
 pub(crate) mod actions;
+pub(crate) mod annotation;
 pub(crate) mod completion;
 pub(crate) mod frozen_frame;
 pub(crate) mod gate;

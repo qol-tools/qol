@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use gpui::*;
 
 use qol_gpui::ghost::{ghost_window_title, show_ghost_window_topmost, sync_window_layout};
-use qol_gpui::monitor::MonitorTracker;
+use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
 use qol_gpui::theme::{shot_preview_runtime, ShotPreviewPalette};
@@ -43,6 +43,7 @@ pub(crate) fn current_palette() -> &'static ShotPreviewPalette {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PreviewControl {
     Action(ShotAction),
+    Edit,
     Pin,
 }
 
@@ -50,6 +51,7 @@ impl PreviewControl {
     fn glyph(self) -> &'static str {
         match self {
             Self::Action(action) => action.glyph(),
+            Self::Edit => "✎",
             Self::Pin => "◉",
         }
     }
@@ -57,6 +59,7 @@ impl PreviewControl {
     fn label(self) -> &'static str {
         match self {
             Self::Action(action) => action.label(),
+            Self::Edit => "Edit",
             Self::Pin => "Pin",
         }
     }
@@ -64,6 +67,7 @@ impl PreviewControl {
     fn accel(self) -> char {
         match self {
             Self::Action(action) => action.accel(),
+            Self::Edit => 'e',
             Self::Pin => 'i',
         }
     }
@@ -74,12 +78,12 @@ fn preview_controls() -> Vec<PreviewControl> {
         .iter()
         .copied()
         .map(PreviewControl::Action)
-        .chain([PreviewControl::Pin])
+        .chain([PreviewControl::Edit, PreviewControl::Pin])
         .collect()
 }
 
 fn control_count() -> usize {
-    ShotAction::ALL.len() + 1
+    ShotAction::ALL.len() + 2
 }
 
 type Completion = Arc<Mutex<Option<Result<()>>>>;
@@ -739,8 +743,87 @@ impl PreviewView {
     fn activate(&mut self, control: PreviewControl, window: &mut Window, cx: &mut Context<Self>) {
         match control {
             PreviewControl::Action(action) => self.choose(action, window, cx),
+            PreviewControl::Edit => self.edit(window, cx),
             PreviewControl::Pin => self.pin(window, cx),
         }
+    }
+
+    fn edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.action_pending {
+            return;
+        }
+        if self
+            .completion
+            .lock()
+            .expect("preview completion mutex poisoned")
+            .is_some()
+        {
+            return;
+        }
+        let Some(handle) = window.window_handle().downcast::<PreviewView>() else {
+            return;
+        };
+        self.action_pending = true;
+        self.file_start.start();
+        let file_ready = self.file_ready.clone();
+        let path = self.path.clone();
+        let seq = self.seq;
+        let quit_on_close = self.mode == DismissMode::Quit;
+        let tracker = MonitorTracker::start(cx);
+        let fallback_monitor = window
+            .display(cx)
+            .map(|display| ActiveMonitor::from_gpui_bounds(display.bounds()));
+        qol_runtime::probe!("SHOT_EDIT", "phase=request seq={seq}");
+        let task = cx.background_spawn(async move {
+            file_ready.wait()?;
+            crate::ui::editor::load(path, quit_on_close)
+        });
+        cx.spawn(async move |_view, cx| {
+            let result = task.await;
+            let _ = handle.update(cx, move |view, window, cx| {
+                if view.seq != seq {
+                    return;
+                }
+                view.action_pending = false;
+                let document = match result {
+                    Ok(document) => document,
+                    Err(error) => {
+                        qol_runtime::probe!("SHOT_EDIT", "phase=open result=load-error");
+                        eprintln!("[qol-shot] screenshot editor load failed: {error:#}");
+                        crate::platform::show_notification(
+                            "Could not open screenshot editor",
+                            &view.path.display().to_string(),
+                            1800,
+                        );
+                        cx.notify();
+                        return;
+                    }
+                };
+                if let Err(error) =
+                    crate::ui::editor::open(document, &tracker, fallback_monitor, cx)
+                {
+                    qol_runtime::probe!("SHOT_EDIT", "phase=open result=window-error");
+                    eprintln!("[qol-shot] screenshot editor open failed: {error:#}");
+                    crate::platform::show_notification(
+                        "Could not open screenshot editor",
+                        &view.path.display().to_string(),
+                        1800,
+                    );
+                    cx.notify();
+                    return;
+                }
+                view.handoff_to_editor(window);
+            });
+        })
+        .detach();
+    }
+
+    fn handoff_to_editor(&mut self, window: &mut Window) {
+        match self.mode {
+            DismissMode::Quit => window.remove_window(),
+            DismissMode::Ghost => self.hide_to_ghost(window),
+        }
+        self.finish_completion(crate::capture::completion::PreviewExit::Edited);
     }
 
     fn pin(&mut self, window: &mut Window, cx: &mut Context<Self>) {

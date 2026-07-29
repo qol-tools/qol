@@ -11,6 +11,15 @@ impl ActiveMonitor {
         Self { inner: b }
     }
 
+    pub fn from_gpui_bounds(bounds: Bounds<Pixels>) -> Self {
+        Self::from_bounds(MonitorBounds {
+            x: bounds.origin.x.to_f64() as f32,
+            y: bounds.origin.y.to_f64() as f32,
+            width: bounds.size.width.to_f64() as f32,
+            height: bounds.size.height.to_f64() as f32,
+        })
+    }
+
     pub fn from_event(event: &crate::protocol::RuntimeEvent) -> Option<Self> {
         use crate::protocol::RuntimeEvent;
         match event {
