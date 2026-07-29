@@ -299,12 +299,36 @@ fn parse_cached_snapshot(contents: &str) -> Option<ScreenSnapshot> {
     snapshot_covers_every_display(&snapshot).then_some(snapshot)
 }
 
-/// AppKit can report fewer screens than the window server while a display is
-/// waking or the daemon's cached screen list is stale. Such a snapshot maximizes
-/// onto a work area that belongs to no real display and makes monitor moves a
-/// silent no-op, so it must never be trusted or persisted.
+/// A stale AppKit screen list describes displays that no longer exist, which makes
+/// windows maximize onto a work area belonging to nothing and turns monitor moves
+/// into a silent no-op. Counting screens is not enough, because changing a display's
+/// scaling keeps the count and only changes the sizes, so pair each work area with a
+/// distinct display that actually contains it.
 fn snapshot_covers_every_display(snapshot: &ScreenSnapshot) -> bool {
-    !snapshot.layout.is_empty() && snapshot.visible.len() == snapshot.layout.len()
+    if snapshot.layout.is_empty() || snapshot.visible.len() != snapshot.layout.len() {
+        return false;
+    }
+    let mut claimed = vec![false; snapshot.layout.len()];
+    for work_area in &snapshot.visible {
+        let paired = snapshot
+            .layout
+            .iter()
+            .enumerate()
+            .find(|(index, display)| !claimed[*index] && display_contains(display, work_area));
+        let Some((index, _)) = paired else {
+            return false;
+        };
+        claimed[index] = true;
+    }
+    true
+}
+
+fn display_contains(display: &Rect, work_area: &Rect) -> bool {
+    const EDGE_TOLERANCE: f64 = 1.0;
+    work_area.x >= display.x - EDGE_TOLERANCE
+        && work_area.y >= display.y - EDGE_TOLERANCE
+        && work_area.x + work_area.w <= display.x + display.w + EDGE_TOLERANCE
+        && work_area.y + work_area.h <= display.y + display.h + EDGE_TOLERANCE
 }
 
 fn parse_cache_row(line: &str) -> Option<(&str, Rect)> {
@@ -399,6 +423,8 @@ mod tests {
             "layout,0,0,100,100,extra\nvisible,0,0,100,100\n",
             "preferences,42\nlayout,0,0,100,100\nlayout,100,0,100,100\nvisible,0,0,100,100\n",
             "preferences,42\nlayout,0,0,100,100\nvisible,0,0,100,100\nvisible,100,0,100,100\n",
+            "preferences,42\nlayout,0,0,100,100\nvisible,0,0,200,200\n",
+            "preferences,42\nlayout,0,0,100,100\nlayout,200,0,100,100\nvisible,0,0,50,50\nvisible,10,10,50,50\n",
         ];
         for contents in cases {
             assert!(parse_cached_snapshot(contents).is_none(), "{contents:?}");
