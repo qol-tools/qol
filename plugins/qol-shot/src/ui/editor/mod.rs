@@ -9,6 +9,7 @@ use qol_gpui::history::UndoHistory;
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::surface::{Surface, SurfaceDismisser, SurfaceKind};
 
+use crate::capture::actions::ShotAction;
 use crate::capture::annotation::{save_strokes, NormalizedPoint, PenStroke};
 use crate::ui::preview::current_palette;
 
@@ -42,11 +43,20 @@ enum EditorControl {
     Color,
     Undo,
     Redo,
+    Action(ShotAction),
     Save,
 }
 
 impl EditorControl {
-    const ALL: [Self; 5] = [Self::Pen, Self::Color, Self::Undo, Self::Redo, Self::Save];
+    const ALL: [Self; 7] = [
+        Self::Pen,
+        Self::Color,
+        Self::Undo,
+        Self::Redo,
+        Self::Action(ShotAction::Copy),
+        Self::Action(ShotAction::CopyPath),
+        Self::Save,
+    ];
 
     fn label(self) -> &'static str {
         match self {
@@ -54,6 +64,7 @@ impl EditorControl {
             Self::Color => "Color",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
+            Self::Action(action) => action.label(),
             Self::Save => "Save",
         }
     }
@@ -64,6 +75,7 @@ impl EditorControl {
             Self::Color => "",
             Self::Undo => "↶",
             Self::Redo => "↷",
+            Self::Action(action) => action.glyph(),
             Self::Save => "✓",
         }
     }
@@ -84,6 +96,86 @@ impl HistoryAction {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditorOutput {
+    Save,
+    Action(ShotAction),
+}
+
+impl EditorOutput {
+    fn trace_label(self) -> &'static str {
+        match self {
+            Self::Save => "save",
+            Self::Action(ShotAction::Copy) => "copy",
+            Self::Action(ShotAction::CopyPath) => "copy-path",
+            Self::Action(ShotAction::OpenFolder) => "open-folder",
+        }
+    }
+
+    fn pending_message(self) -> &'static str {
+        match self {
+            Self::Save => "Saving…",
+            Self::Action(ShotAction::Copy) => "Copying edited screenshot…",
+            Self::Action(ShotAction::CopyPath) => "Copying screenshot path…",
+            Self::Action(ShotAction::OpenFolder) => "Opening screenshot folder…",
+        }
+    }
+
+    fn error_message(self) -> &'static str {
+        match self {
+            Self::Save => "Could not save screenshot",
+            Self::Action(ShotAction::Copy) => "Could not copy edited screenshot",
+            Self::Action(ShotAction::CopyPath) => "Could not copy screenshot path",
+            Self::Action(ShotAction::OpenFolder) => "Could not open screenshot folder",
+        }
+    }
+
+    fn perform(self, path: &std::path::Path, strokes: &[PenStroke]) -> Result<()> {
+        match self {
+            Self::Save => {
+                if !strokes.is_empty() {
+                    save_strokes(path, strokes)?;
+                }
+                Ok(())
+            }
+            Self::Action(action) => perform_edit_action(path, strokes, |path| action.perform(path)),
+        }
+    }
+}
+
+fn perform_edit_action(
+    path: &std::path::Path,
+    strokes: &[PenStroke],
+    action: impl FnOnce(&std::path::Path) -> Result<()>,
+) -> Result<()> {
+    if strokes.is_empty() {
+        return action(path);
+    }
+    let original = std::fs::read(path).with_context(|| {
+        format!(
+            "failed to snapshot screenshot before edit: {}",
+            path.display()
+        )
+    })?;
+    save_strokes(path, strokes)?;
+    if let Err(error) = action(path) {
+        if let Err(rollback_error) = qol_fs::atomic_write(path, &original) {
+            return Err(anyhow::anyhow!(
+                "{error:#}; failed to restore screenshot after action failure: \
+                 {rollback_error:#}"
+            ));
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditorShortcut {
+    History(HistoryAction),
+    Output(EditorOutput),
+}
+
 struct ActiveWheel {
     generation: u64,
     popup: WindowHandle<ColorWheelPopup>,
@@ -96,8 +188,8 @@ struct EditorView {
     active_stroke: Option<PenStroke>,
     pen_color: u32,
     selected: usize,
-    save_pending: bool,
-    save_error: Option<String>,
+    output_pending: Option<EditorOutput>,
+    output_error: Option<String>,
     image_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     color_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     wheel_generation: u64,
@@ -161,8 +253,8 @@ impl EditorView {
             active_stroke: None,
             pen_color: current_palette().state_off,
             selected: 0,
-            save_pending: false,
-            save_error: None,
+            output_pending: None,
+            output_error: None,
             image_bounds: Rc::new(Cell::new(None)),
             color_bounds: Rc::new(Cell::new(None)),
             wheel_generation: 0,
@@ -178,7 +270,7 @@ impl EditorView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.save_pending {
+        if self.output_pending.is_some() {
             return;
         }
         let Some((point, width)) = self.pointer_stroke(event.position, false) else {
@@ -187,7 +279,7 @@ impl EditorView {
         if self.active_stroke.is_some() {
             return;
         }
-        self.save_error = None;
+        self.output_error = None;
         self.active_stroke = Some(PenStroke {
             color: self.pen_color,
             width,
@@ -287,23 +379,27 @@ impl EditorView {
             EditorControl::Color => self.open_color_wheel(window, cx),
             EditorControl::Undo => self.change_history(HistoryAction::Undo, cx),
             EditorControl::Redo => self.change_history(HistoryAction::Redo, cx),
-            EditorControl::Save => self.save(cx),
+            EditorControl::Action(action) => self.finish(EditorOutput::Action(action), cx),
+            EditorControl::Save => self.finish(EditorOutput::Save, cx),
         }
     }
 
     fn control_enabled(&self, control: EditorControl) -> bool {
-        if self.save_pending {
+        if self.output_pending.is_some() {
             return false;
         }
         match control {
-            EditorControl::Pen | EditorControl::Color | EditorControl::Save => true,
+            EditorControl::Pen
+            | EditorControl::Color
+            | EditorControl::Action(_)
+            | EditorControl::Save => true,
             EditorControl::Undo => self.active_stroke.is_some() || self.history.can_undo(),
             EditorControl::Redo => self.active_stroke.is_none() && self.history.can_redo(),
         }
     }
 
     fn change_history(&mut self, action: HistoryAction, cx: &mut Context<Self>) {
-        if self.save_pending {
+        if self.output_pending.is_some() {
             return;
         }
         self.commit_active_stroke(None);
@@ -318,7 +414,7 @@ impl EditorView {
             }
             HistoryAction::Undo | HistoryAction::Redo => false,
         };
-        self.save_error = None;
+        self.output_error = None;
         qol_runtime::probe!(
             "SHOT_EDIT",
             "phase=history action={} result={} strokes={} can_undo={} can_redo={}",
@@ -406,44 +502,55 @@ impl EditorView {
             .update(cx, |_, window, _| window.remove_window());
     }
 
-    fn save(&mut self, cx: &mut Context<Self>) {
-        if self.save_pending {
+    fn finish(&mut self, output: EditorOutput, cx: &mut Context<Self>) {
+        if self.output_pending.is_some() {
             return;
         }
         self.commit_active_stroke(None);
-        if self.history.is_empty() {
+        if output == EditorOutput::Save && self.history.is_empty() {
             self.close(cx);
             return;
         }
         let handle = cx.weak_entity();
-        self.save_pending = true;
-        self.save_error = None;
+        self.output_pending = Some(output);
+        self.output_error = None;
         let path = self.document.path.clone();
         let strokes = self.history.applied().to_vec();
         let stroke_count = strokes.len();
-        qol_runtime::probe!("SHOT_EDIT", "phase=save-request strokes={stroke_count}");
-        let task = cx.background_spawn(async move { save_strokes(&path, &strokes) });
+        let action = output.trace_label();
+        qol_runtime::probe!(
+            "SHOT_EDIT",
+            "phase=output-request action={action} strokes={stroke_count}"
+        );
+        let task = cx.background_spawn(async move { output.perform(&path, &strokes) });
         cx.spawn(async move |_view, cx| {
             let result = task.await;
             let _ = handle.update(cx, move |view, cx| {
-                view.save_pending = false;
+                view.output_pending = None;
                 match result {
                     Ok(()) => {
                         qol_runtime::probe!(
                             "SHOT_EDIT",
-                            "phase=saved result=ok strokes={stroke_count}"
+                            "phase=output action={action} result=ok strokes={stroke_count}"
                         );
+                        let title = match output {
+                            EditorOutput::Save => "Screenshot updated",
+                            EditorOutput::Action(action) => action.done_message(),
+                        };
                         crate::platform::show_notification(
-                            "Screenshot updated",
+                            title,
                             &view.document.path.display().to_string(),
                             1400,
                         );
                         view.close(cx);
                     }
                     Err(error) => {
-                        qol_runtime::probe!("SHOT_EDIT", "phase=saved result=error");
-                        eprintln!("[qol-shot] screenshot edit failed: {error:#}");
-                        view.save_error = Some("Could not save screenshot".to_string());
+                        qol_runtime::probe!(
+                            "SHOT_EDIT",
+                            "phase=output action={action} result=error"
+                        );
+                        eprintln!("[qol-shot] screenshot editor output failed: {error:#}");
+                        view.output_error = Some(output.error_message().to_string());
                         cx.notify();
                     }
                 }
@@ -453,7 +560,7 @@ impl EditorView {
     }
 
     fn close(&mut self, cx: &mut Context<Self>) {
-        if self.save_pending {
+        if self.output_pending.is_some() {
             return;
         }
         self.close_wheel_popup(cx);
@@ -465,16 +572,13 @@ impl EditorView {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(action) =
-            history_shortcut(event.keystroke.key.as_str(), event.keystroke.modifiers)
+        if let Some(shortcut) =
+            editor_shortcut(event.keystroke.key.as_str(), event.keystroke.modifiers)
         {
-            self.change_history(action, cx);
-            return;
-        }
-        if event.keystroke.key.eq_ignore_ascii_case("s")
-            && event.keystroke.modifiers == Modifiers::secondary_key()
-        {
-            self.save(cx);
+            match shortcut {
+                EditorShortcut::History(action) => self.change_history(action, cx),
+                EditorShortcut::Output(output) => self.finish(output, cx),
+            }
             return;
         }
         if event.keystroke.modifiers.modified() {
@@ -508,31 +612,45 @@ fn parse_rgb24(value: &str) -> Option<u32> {
     Some(qol_color::rgb24(red, green, blue))
 }
 
-fn history_shortcut(key: &str, modifiers: Modifiers) -> Option<HistoryAction> {
+fn editor_shortcut(key: &str, modifiers: Modifiers) -> Option<EditorShortcut> {
     let secondary = Modifiers::secondary_key();
     if key.eq_ignore_ascii_case("z") && modifiers == secondary {
-        return Some(HistoryAction::Undo);
+        return Some(EditorShortcut::History(HistoryAction::Undo));
     }
     let secondary_shift = Modifiers {
         shift: true,
         ..secondary
     };
     if key.eq_ignore_ascii_case("z") && modifiers == secondary_shift {
-        return Some(HistoryAction::Redo);
+        return Some(EditorShortcut::History(HistoryAction::Redo));
     }
     if key.eq_ignore_ascii_case("y") && modifiers == secondary {
-        return Some(HistoryAction::Redo);
+        return Some(EditorShortcut::History(HistoryAction::Redo));
+    }
+    if key.eq_ignore_ascii_case("c") && modifiers == secondary {
+        return Some(EditorShortcut::Output(EditorOutput::Action(
+            ShotAction::Copy,
+        )));
+    }
+    if key.eq_ignore_ascii_case("s") && modifiers == secondary {
+        return Some(EditorShortcut::Output(EditorOutput::Save));
     }
     None
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{history_shortcut, HistoryAction};
+    use super::{
+        editor_shortcut, perform_edit_action, EditorControl, EditorOutput, EditorShortcut,
+        HistoryAction,
+    };
+    use crate::capture::actions::ShotAction;
+    use crate::capture::annotation::{NormalizedPoint, PenStroke};
     use gpui::Modifiers;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn history_shortcuts_accept_standard_chords_only() {
+    fn editor_shortcuts_accept_standard_chords_only() {
         let secondary = Modifiers::secondary_key();
         let secondary_shift = Modifiers {
             shift: true,
@@ -543,20 +661,86 @@ mod tests {
             ..secondary
         };
         let cases = [
-            ("z", secondary, Some(HistoryAction::Undo)),
-            ("Z", secondary, Some(HistoryAction::Undo)),
-            ("z", secondary_shift, Some(HistoryAction::Redo)),
-            ("y", secondary, Some(HistoryAction::Redo)),
+            (
+                "z",
+                secondary,
+                Some(EditorShortcut::History(HistoryAction::Undo)),
+            ),
+            (
+                "Z",
+                secondary,
+                Some(EditorShortcut::History(HistoryAction::Undo)),
+            ),
+            (
+                "z",
+                secondary_shift,
+                Some(EditorShortcut::History(HistoryAction::Redo)),
+            ),
+            (
+                "y",
+                secondary,
+                Some(EditorShortcut::History(HistoryAction::Redo)),
+            ),
+            (
+                "c",
+                secondary,
+                Some(EditorShortcut::Output(EditorOutput::Action(
+                    ShotAction::Copy,
+                ))),
+            ),
+            (
+                "s",
+                secondary,
+                Some(EditorShortcut::Output(EditorOutput::Save)),
+            ),
             ("z", secondary_alt, None),
+            ("c", secondary_alt, None),
             ("z", Modifiers::none(), None),
             ("x", secondary, None),
         ];
         for (key, modifiers, expected) in cases {
             assert_eq!(
-                history_shortcut(key, modifiers),
+                editor_shortcut(key, modifiers),
                 expected,
                 "key={key} modifiers={modifiers:?}"
             );
         }
+    }
+
+    #[test]
+    fn editor_controls_reuse_screenshot_copy_actions() {
+        assert!(EditorControl::ALL.contains(&EditorControl::Action(ShotAction::Copy)));
+        assert!(EditorControl::ALL.contains(&EditorControl::Action(ShotAction::CopyPath)));
+    }
+
+    #[test]
+    fn failed_edit_action_restores_the_original_screenshot() {
+        let path = std::env::temp_dir().join(format!(
+            "qol-shot-editor-{}-{}.png",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let original = image::RgbaImage::from_pixel(20, 20, image::Rgba([1, 2, 3, 255]));
+        image::DynamicImage::ImageRgba8(original.clone())
+            .save(&path)
+            .unwrap();
+        let strokes = [PenStroke {
+            color: 0xff0000,
+            width: 0.1,
+            points: vec![NormalizedPoint { x: 0.5, y: 0.5 }],
+        }];
+
+        let result = perform_edit_action(&path, &strokes, |edited| {
+            let painted = image::open(edited).unwrap().to_rgba8();
+            assert_eq!(*painted.get_pixel(10, 10), image::Rgba([255, 0, 0, 255]));
+            anyhow::bail!("clipboard failed")
+        });
+
+        assert!(result.is_err());
+        assert_eq!(image::open(&path).unwrap().to_rgba8(), original);
+        std::fs::remove_file(path).unwrap();
     }
 }

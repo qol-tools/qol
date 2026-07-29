@@ -25,7 +25,8 @@ pub(crate) use session::{run_session, SessionEnd};
 pub(crate) use tray_handle::{spawn_forwarders, TrayHandle};
 
 use dash::{
-    Dash, RebuildState, Reload, ReloadOutcome, TraceRate, TraceRenderer, View, WorktreeSelection,
+    Dash, RebuildState, Reload, ReloadActivity, ReloadOutcome, TraceRate, TraceRenderer, View,
+    WorktreeSelection,
 };
 use draw::frame_accent;
 use emu_panel::emu_run_line;

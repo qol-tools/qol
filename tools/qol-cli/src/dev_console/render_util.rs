@@ -70,10 +70,34 @@ pub(super) fn render_bottom_panel(
     frame: &mut Frame,
     area: Rect,
     title: &str,
-    mut rows: Vec<Line<'static>>,
+    rows: Vec<Line<'static>>,
     accent: Color,
 ) {
     let width = panel_width(area);
+    render_bottom_panel_with_width(frame, area, title, rows, accent, width);
+}
+
+pub(super) fn render_compact_bottom_panel(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    rows: Vec<Line<'static>>,
+    accent: Color,
+) {
+    let content_width = rows.iter().map(Line::width).max().unwrap_or_default() as u16 + 2;
+    let title_width = title.len() as u16 + 4;
+    let width = content_width.max(title_width).min(area.width);
+    render_bottom_panel_with_width(frame, area, title, rows, accent, width);
+}
+
+fn render_bottom_panel_with_width(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    mut rows: Vec<Line<'static>>,
+    accent: Color,
+    width: u16,
+) {
     let height = (rows.len() as u16 + SignBox::CHROME_ROWS).min(area.height);
     if width == 0 || height == 0 {
         return;

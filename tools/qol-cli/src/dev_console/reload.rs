@@ -9,9 +9,9 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use super::{
-    spawn_forwarders, terminate_child, try_wait, Dash, RebuildState, Reload, ReloadOutcome,
-    TrayHandle, WorktreeSelection, CRASH_TAIL, HANDOFF_STOP_INTERVAL, PROMOTION_INTERVAL,
-    PROMOTION_TIMEOUT, SHADOW_READY_INTERVAL, SHADOW_READY_TIMEOUT, STOP_GRACE,
+    spawn_forwarders, terminate_child, try_wait, Dash, RebuildState, Reload, ReloadActivity,
+    ReloadOutcome, TrayHandle, WorktreeSelection, CRASH_TAIL, HANDOFF_STOP_INTERVAL,
+    PROMOTION_INTERVAL, PROMOTION_TIMEOUT, SHADOW_READY_INTERVAL, SHADOW_READY_TIMEOUT, STOP_GRACE,
 };
 use crate::dev_server::{
     health_ok, post_promote_generation, post_recompile_current, post_reload_plugins, post_shutdown,
@@ -61,7 +61,11 @@ pub(super) fn start_reload(dash: &mut Dash) {
     match spawn_reload(dash) {
         Ok((child, rx)) => {
             dash.push_log("[qol dev] reloading: prebuild dev artifacts");
-            dash.reload = Reload::Running { child, rx };
+            dash.reload = Reload::Running {
+                child,
+                rx,
+                activity: ReloadActivity::new(),
+            };
         }
         Err(error) => dash.push_log(format!("[qol dev] reload failed to start: {error:#}")),
     }
@@ -156,9 +160,15 @@ pub(super) fn poll_reload(dash: &mut Dash) -> ReloadOutcome {
     let mut drained = Vec::new();
     let status = match &mut dash.reload {
         Reload::Idle => return ReloadOutcome::Pending,
-        Reload::Running { child, rx, .. } => {
+        Reload::Running {
+            child,
+            rx,
+            activity,
+        } => {
             while let Ok(line) = rx.try_recv() {
-                drained.push(line);
+                if !activity.observe(&line) {
+                    drained.push(line);
+                }
             }
             match child.try_wait() {
                 Ok(Some(status)) => status,
@@ -524,6 +534,40 @@ fn retire_child_for_handoff(child: &mut TrayHandle) -> Result<()> {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+
+    #[test]
+    fn reload_activity_accepts_only_structured_worker_progress() {
+        let mut activity = ReloadActivity::new();
+        let cases = [
+            (
+                format!(
+                    "{}plugins\tdev-linked plugins",
+                    crate::commands::dev::DEV_RELOAD_PROGRESS_PREFIX
+                ),
+                true,
+                "plugins",
+                "dev-linked plugins",
+            ),
+            (
+                "[qol dev] ordinary worker output".to_string(),
+                false,
+                "plugins",
+                "dev-linked plugins",
+            ),
+            (
+                crate::commands::dev::DEV_RELOAD_PROGRESS_PREFIX.to_string(),
+                false,
+                "plugins",
+                "dev-linked plugins",
+            ),
+        ];
+
+        for (line, observed, phase, detail) in cases {
+            assert_eq!(activity.observe(&line), observed, "line={line:?}");
+            assert_eq!(activity.phase, phase);
+            assert_eq!(activity.detail, detail);
+        }
+    }
 
     #[test]
     fn armed_reload_follow_defers_to_the_persisted_marker() {

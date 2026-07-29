@@ -116,13 +116,13 @@ impl Render for EditorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = current_palette();
         let status: SharedString = self
-            .save_error
+            .output_error
             .clone()
             .unwrap_or_else(|| {
-                if self.save_pending {
-                    return "Saving…".to_string();
+                if let Some(output) = self.output_pending {
+                    return output.pending_message().to_string();
                 }
-                "Drag to draw · Ctrl+Z undo · Ctrl+S saves · Esc cancels".to_string()
+                "Drag to draw · Ctrl+Z undo · Ctrl+C copies & closes · Esc cancels".to_string()
             })
             .into();
         div()
@@ -177,7 +177,7 @@ impl Render for EditorView {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(rgb(if self.save_error.is_some() {
+                            .text_color(rgb(if self.output_error.is_some() {
                                 palette.state_off
                             } else {
                                 palette.label_text

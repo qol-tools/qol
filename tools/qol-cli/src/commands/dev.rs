@@ -28,6 +28,7 @@ const PLUGIN_RELOAD_INTERVAL: Duration = Duration::from_millis(500);
 const TRAY_DEV_BINS: [&str; 2] = ["qol-tray", "qol-tray-doctor"];
 pub(crate) const DEV_PREBUILD_COMMAND: &str = "__dev-prebuild";
 pub(crate) const DEV_PREBUILD_BASE_ARG: &str = "--base";
+pub(crate) const DEV_RELOAD_PROGRESS_PREFIX: &str = "[qol dev:reload-progress]\t";
 pub(crate) const QOL_CLI_BUILD_ARGS: [&str; 5] = ["build", "-p", "qol", "--bin", "qol"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -320,16 +321,26 @@ pub(crate) fn prebuild(args: &[OsString], verbose: bool, skip_plugins: bool) -> 
     let directive = tray_directive(optional_single_arg(args, &usage)?);
     let root = repo_root()?;
     let plan = resolve_directive(&root, directive, current_active_worktree_marker())?;
+    dev_reload_progress("setup", "workspace");
     crate::setup::run_setup(&root, verbose)?;
     if let Some(note) = &plan.note {
         eprintln!("{note}");
     }
+    dev_reload_progress("format", "rustfmt");
     fix_rustfmt(&root, verbose)?;
+    dev_reload_progress("plugins", "dev-linked plugins");
     reload_linked_plugins(verbose, skip_plugins, plan.target.branch.as_deref())?;
+    dev_reload_progress("build", "qol-tray dev");
     build_qol_tray_dev(&plan.target.root, verbose)?;
+    dev_reload_progress("build", "qol dev cli");
     build_qol_cli_debug(&root, verbose)?;
+    dev_reload_progress("handoff", "successor generation");
     dev_step_label("reload", StepKind::Success, "prebuilt", verbose);
     Ok(())
+}
+
+fn dev_reload_progress(phase: &str, detail: &str) {
+    eprintln!("{DEV_RELOAD_PROGRESS_PREFIX}{phase}\t{detail}");
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

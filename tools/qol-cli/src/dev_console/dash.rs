@@ -275,9 +275,45 @@ pub(super) enum RebuildState {
     Failed(String),
 }
 
+pub(super) struct ReloadActivity {
+    pub(super) started: Instant,
+    pub(super) phase: String,
+    pub(super) detail: String,
+}
+
+impl ReloadActivity {
+    pub(super) fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            phase: "prepare".to_string(),
+            detail: "dev artifacts".to_string(),
+        }
+    }
+
+    pub(super) fn observe(&mut self, line: &str) -> bool {
+        let Some(payload) = line.strip_prefix(crate::commands::dev::DEV_RELOAD_PROGRESS_PREFIX)
+        else {
+            return false;
+        };
+        let Some((phase, detail)) = payload.split_once('\t') else {
+            return false;
+        };
+        if phase.is_empty() || detail.is_empty() {
+            return false;
+        }
+        self.phase = phase.to_string();
+        self.detail = detail.to_string();
+        true
+    }
+}
+
 pub(super) enum Reload {
     Idle,
-    Running { child: Child, rx: Receiver<String> },
+    Running {
+        child: Child,
+        rx: Receiver<String>,
+        activity: ReloadActivity,
+    },
 }
 
 pub(super) enum ReloadOutcome {
@@ -426,6 +462,13 @@ impl Dash {
 
     pub(super) fn is_reloading(&self) -> bool {
         matches!(self.reload, Reload::Running { .. })
+    }
+
+    pub(super) fn reload_activity(&self) -> Option<&ReloadActivity> {
+        match &self.reload {
+            Reload::Running { activity, .. } => Some(activity),
+            Reload::Idle => None,
+        }
     }
 
     pub(super) fn quit_prompt_active(&self) -> bool {
