@@ -5,12 +5,13 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use super::objc::{
-    cls, msg_ptr, msg_ptr_usize, msg_rect, msg_usize, sel, CGDisplayBounds, CGGetActiveDisplayList,
-    CGRect,
+    cls, drain_run_loop, msg_ptr, msg_ptr_usize, msg_rect, msg_usize, sel, CGDisplayBounds,
+    CGGetActiveDisplayList, CGRect,
 };
 use super::trace::{timed_opt, trace_screen_snapshot};
 
 const MAX_DISPLAYS: usize = 16;
+const RUN_LOOP_DRAIN_SECONDS: f64 = 0.02;
 static SCREEN_CACHE: OnceLock<Mutex<Option<ScreenSnapshot>>> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -61,12 +62,12 @@ pub(super) fn screen_for_point(cx: f64, cy: f64) -> Option<Rect> {
     })
 }
 
-pub(super) fn all_screens_sorted() -> Vec<Rect> {
-    let mut result = screen_snapshot()
-        .map(|snapshot| snapshot.visible)
-        .unwrap_or_default();
+/// `None` means the display layout could not be read, which is not the same as
+/// a machine that genuinely has one screen. Callers must not treat it as such.
+pub(super) fn all_screens_sorted() -> Option<Vec<Rect>> {
+    let mut result = screen_snapshot()?.visible;
     result.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
-    result
+    Some(result)
 }
 
 fn screen_snapshot() -> Option<ScreenSnapshot> {
@@ -157,6 +158,7 @@ fn rect_order(a: &Rect, b: &Rect) -> std::cmp::Ordering {
 }
 
 fn system_screens() -> Vec<Rect> {
+    drain_run_loop(RUN_LOOP_DRAIN_SECONDS);
     unsafe {
         let primary_h = primary_screen_height();
         if primary_h == 0.0 {

@@ -26,6 +26,8 @@ pub(super) const AX_VALUE_TYPE_CG_POINT: u32 = 1;
 pub(super) const AX_VALUE_TYPE_CG_SIZE: u32 = 2;
 const UTF8: u32 = 0x08000100;
 
+const RUN_LOOP_SOURCE_HANDLED: i32 = 4;
+
 pub(super) const CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1;
 pub(super) const CG_WINDOW_LIST_EXCLUDE_DESKTOP: u32 = 1 << 4;
 pub(super) const CF_NUMBER_SINT32_TYPE: i32 = 3;
@@ -58,6 +60,13 @@ extern "C" {
 
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
+    fn CFRunLoopRunInMode(
+        mode: *const c_void,
+        seconds: f64,
+        return_after_source_handled: u8,
+    ) -> i32;
+    #[link_name = "kCFRunLoopDefaultMode"]
+    static CF_RUN_LOOP_DEFAULT_MODE: *const c_void;
     fn CFStringCreateWithCString(
         allocator: *const c_void,
         c_str: *const i8,
@@ -85,6 +94,15 @@ extern "C" {
     static CF_BOOLEAN_FALSE: *const c_void;
     #[link_name = "kCFBooleanTrue"]
     static CF_BOOLEAN_TRUE: *const c_void;
+}
+
+/// Lets the calling thread's run loop deliver everything already queued for it.
+/// AppKit only refreshes cached display state while its run loop turns, and a
+/// plugin daemon never turns one on its own.
+pub(super) fn drain_run_loop(seconds: f64) {
+    unsafe {
+        while CFRunLoopRunInMode(CF_RUN_LOOP_DEFAULT_MODE, seconds, 1) == RUN_LOOP_SOURCE_HANDLED {}
+    }
 }
 
 pub(super) fn cf_boolean_false() -> *const c_void {

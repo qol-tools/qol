@@ -112,7 +112,7 @@ fn move_monitor(delta: i32) -> Result<(), String> {
     let cx = win.x + win.w / 2.0;
     let cy = win.y + win.h / 2.0;
 
-    let screens = screen::all_screens_sorted();
+    let screens = screen::all_screens_sorted().ok_or("Cannot read display layout")?;
     if screens.len() < 2 {
         return Ok(());
     }
