@@ -2247,6 +2247,7 @@ mod tests {
             (ErrorKind::Failed, "br-connection-canceled", true),
             (ErrorKind::Failed, "br-connection-aborted-by-remote", true),
             (ErrorKind::Failed, "br-connection-timeout", true),
+            (ErrorKind::Failed, "br-connection-create-socket", true),
             (ErrorKind::InProgress, "br-connection-busy", true),
             (ErrorKind::Failed, "br-connection-page-timeout", false),
             (

@@ -18,6 +18,7 @@ use super::Verdict;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(20);
+const DEVICE_ACTION_SETTLE_TIMEOUT: Duration = Duration::from_secs(60);
 const PLUGIN_ID: &str = "plugin-bluetooth";
 const CYCLE_COUNT: usize = 20;
 const QUERY_FLOOD_COUNT: usize = 40;
@@ -56,6 +57,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     let peers = configure_peer_advertisements(&mut guest, &scanner)?;
     test_query_flood(&mut guest, &auth)?;
     test_discovery(&mut guest, &auth)?;
+    test_peer_connect_action(&mut guest, &auth, &peers[0], &daemon)?;
     test_power_search_races(&mut guest, &auth, &daemon)?;
     test_action_guards(&mut guest, &auth)?;
 
@@ -92,7 +94,8 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
         "storm",
         StepKind::Success,
         &format!(
-            "no-adapter recovery, 3 virtual controllers, {peers} peers, {CYCLE_COUNT} discovery cycles, duplicate/racing actions, concurrent queries, hotplug, settings, guards, and crash recovery passed"
+            "no-adapter recovery, 3 virtual controllers, {} peers, {CYCLE_COUNT} discovery cycles, bounded peer connection, duplicate/racing actions, concurrent queries, hotplug, settings, guards, and crash recovery passed",
+            peers.len()
         ),
     );
     Ok(Verdict {
@@ -215,7 +218,10 @@ fn default_adapter_address(guest: &mut GuestControlClient) -> Result<String> {
         .context("BlueZ returned a malformed hci0 adapter address")
 }
 
-fn configure_peer_advertisements(guest: &mut GuestControlClient, scanner: &str) -> Result<usize> {
+fn configure_peer_advertisements(
+    guest: &mut GuestControlClient,
+    scanner: &str,
+) -> Result<Vec<String>> {
     let controllers = wait_for_command(
         guest,
         command("/usr/bin/bluetoothctl", &["--timeout", "1", "list"]),
@@ -245,7 +251,7 @@ fn configure_peer_advertisements(guest: &mut GuestControlClient, scanner: &str) 
             &format!("peer {} advertisement registration", index + 1),
         )?;
     }
-    Ok(addresses.len())
+    Ok(addresses.into_iter().map(str::to_string).collect())
 }
 
 fn controller_addresses(output: &str) -> Vec<&str> {
@@ -362,6 +368,51 @@ fn test_discovery(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
         &format!(
             "real BlueZ discovery observed {count} peer(s); duplicate search and power-off reset passed"
         ),
+    );
+    Ok(())
+}
+
+fn test_peer_connect_action(
+    guest: &mut GuestControlClient,
+    auth: &str,
+    address: &str,
+    daemon: &str,
+) -> Result<()> {
+    let input = serde_json::json!({ "address": address }).to_string();
+    dispatch(guest, auth, "connect_device", &input)?;
+    let inventory = wait_for_query(
+        guest,
+        auth,
+        "devices",
+        DEVICE_ACTION_SETTLE_TIMEOUT,
+        |payload| {
+            payload["items"]
+                .as_array()
+                .and_then(|items| items.iter().find(|item| item["address"] == address))
+                .is_some_and(|item| {
+                    item["connected"].as_bool() == Some(true)
+                        || item["status"]
+                            .as_str()
+                            .is_some_and(|status| status.starts_with("Connect failed:"))
+                })
+        },
+    )?;
+    if daemon_pid(guest)? != daemon {
+        bail!("Bluetooth daemon restarted during a virtual peer connection action");
+    }
+    let connected = inventory["items"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["address"] == address))
+        .and_then(|item| item["connected"].as_bool())
+        .unwrap_or(false);
+    step_label(
+        "connect",
+        StepKind::Success,
+        if connected {
+            "virtual peer connected without wedging the daemon"
+        } else {
+            "virtual peer failure terminated without wedging the daemon"
+        },
     );
     Ok(())
 }
