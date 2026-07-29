@@ -157,6 +157,23 @@ fn ping_available() -> bool {
     call_plane_method(PING_METHOD, &()).is_ok()
 }
 
+pub(super) fn available() -> bool {
+    ping_available()
+}
+
+pub(super) fn wait_for_availability(expected: bool, timeout: Duration) -> bool {
+    let started = Instant::now();
+    loop {
+        if ping_available() == expected {
+            return true;
+        }
+        if started.elapsed() >= timeout {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 pub(crate) fn show_async(payload: PreviewPlanePayload) {
     let show_id = payload.show_id.clone();
     let item_count = payload.items.len();

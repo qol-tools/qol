@@ -45,6 +45,10 @@ pub(crate) fn show_async(payload: PreviewPlanePayload) {
     platform::show_async(payload);
 }
 
+pub(crate) fn prepare() {
+    platform::prepare();
+}
+
 pub(crate) fn hide_async(reason: &'static str) {
     platform::hide_async(reason);
 }

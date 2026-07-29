@@ -69,6 +69,7 @@ fn run_picker(initial_request: InitialRequest) -> CommandResult {
         return CommandResult::success("");
     }
 
+    crate::preview_plane::prepare();
     crate::picker::run::run_app(config, rx, initial_request.show_on_start());
     super::daemon::cleanup();
     CommandResult::success("")

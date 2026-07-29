@@ -1,5 +1,7 @@
 use crate::preview_plane::PreviewPlanePayload;
 
+pub(crate) fn prepare() {}
+
 pub(crate) fn show_async(payload: PreviewPlanePayload) {
     qol_runtime::probe!(
         "PREVIEW_PLANE_SHOW",

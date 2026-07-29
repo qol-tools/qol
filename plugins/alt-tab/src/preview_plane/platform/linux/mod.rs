@@ -1,6 +1,20 @@
 use crate::preview_plane::PreviewPlanePayload;
 
+mod cinnamon_extension;
 mod cinnamon_shell;
+
+pub(crate) fn prepare() {
+    if let Some(reason) = cinnamon_shell::disabled_reason() {
+        #[cfg(not(debug_assertions))]
+        let _ = reason;
+        qol_runtime::probe!(
+            "PREVIEW_PLANE_INTEGRATION",
+            "backend=cinnamon_shell outcome=skipped reason={reason}"
+        );
+        return;
+    }
+    cinnamon_extension::prepare();
+}
 
 pub(crate) fn show_async(payload: PreviewPlanePayload) {
     if let Some(reason) = cinnamon_shell::disabled_reason() {
