@@ -50,7 +50,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
             "/usr/bin/grep",
             &[
                 "-E",
-                "ACTIVATE_WIN|CMD_RECV|DISMISS|KEY_RECV|NAV_GRID|SHOW_(CYCLE_FAST|LIST|PAINTED|RECV)",
+                "ACTIVATE_WIN|CMD_RECV|DISMISS|FOCUS_REASSERT|KEY_RECV|NAV_GRID|SHOW_(CYCLE_FAST|LIST|PAINTED|RECV)",
                 TRACE_LOG_PATH,
             ],
         ),
@@ -399,7 +399,15 @@ fn test_crash_recovery(guest: &mut GuestControlClient, auth: &str) -> Result<()>
         .next()
         .map(str::trim)
         .context("Alt Tab daemon restart returned no PID")?;
+    let recovery_cursor = current_trace_cursor(guest)?;
     open_sticky(guest, auth)?;
+    wait_for_probe_line(
+        guest,
+        recovery_cursor,
+        "FOCUS_REASSERT",
+        "title=qol-alt-tab-picker@",
+        ACTION_TIMEOUT,
+    )?;
     dismiss_sticky(guest)?;
     step_label(
         "recovery",
