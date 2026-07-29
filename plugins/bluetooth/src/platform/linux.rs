@@ -1034,10 +1034,7 @@ fn dispatch_daemon_action(
         DaemonAction::RemoveDevice => {
             device_daemon_command(request, DaemonCommand::Remove, "Removing...")
         }
-        DaemonAction::StartSearch => match mark_search_starting() {
-            Ok(()) => ReadResult::Command(DaemonCommand::StartSearch),
-            Err(error) => ReadResult::Error(error.to_string()),
-        },
+        DaemonAction::StartSearch => ReadResult::Command(DaemonCommand::StartSearch),
         DaemonAction::StopSearch => match mark_search_stopped() {
             Ok(()) => ReadResult::Command(DaemonCommand::StopSearch),
             Err(error) => ReadResult::Error(error.to_string()),
@@ -1099,7 +1096,7 @@ async fn resilient_daemon_loop(
             Ok(Ok(adapter)) => adapter,
             Ok(Err(error)) => {
                 set_adapter_state(None);
-                mark_search_stopped()?;
+                reset_discovery_state("adapter_unavailable")?;
                 eprintln!("Bluetooth adapter unavailable; retrying: {error:#}");
                 qol_runtime::probe!("BLUETOOTH_ADAPTER", "available=false outcome=retrying");
                 if wait_without_adapter(&mut config, &mut commands).await? {
@@ -1109,7 +1106,7 @@ async fn resilient_daemon_loop(
             }
             Err(_) => {
                 set_adapter_state(None);
-                mark_search_stopped()?;
+                reset_discovery_state("adapter_lookup_timed_out")?;
                 eprintln!(
                     "Bluetooth adapter lookup timed out after {} seconds; retrying",
                     ADAPTER_CONNECT_TIMEOUT.as_secs()
@@ -1125,7 +1122,7 @@ async fn resilient_daemon_loop(
             Ok(()) => return Ok(()),
             Err(error) => {
                 set_adapter_state(None);
-                mark_search_stopped()?;
+                reset_discovery_state("adapter_session_ended")?;
                 eprintln!("Bluetooth adapter session ended; retrying: {error:#}");
                 qol_runtime::probe!("BLUETOOTH_ADAPTER", "available=false outcome=session_ended");
             }
@@ -1172,7 +1169,7 @@ async fn wait_without_adapter(
                         mark_search_stopped()?;
                     }
                     DaemonCommand::StartSearch => {
-                        mark_search_stopped()?;
+                        reset_discovery_state("adapter_unavailable")?;
                         qol_runtime::probe!(
                             "BLUETOOTH_SEARCH",
                             "outcome=failed stage=adapter_unavailable"
@@ -1460,9 +1457,10 @@ async fn daemon_loop(
                         if powered && config.auto_reconnect {
                             request_all(&mut retries, Instant::now());
                         }
-                        if !powered && discovery.is_some() {
-                            if let Err(error) = stop_search_session(&mut discovery, "adapter_powered_off") {
-                                eprintln!("failed to stop Bluetooth search after adapter power-off: {error:#}");
+                        if !powered {
+                            discovery.take();
+                            if let Err(error) = reset_discovery_state("adapter_powered_off") {
+                                eprintln!("failed to reset Bluetooth search after adapter power-off: {error:#}");
                             }
                         }
                         qol_runtime::probe!(
@@ -1671,6 +1669,7 @@ async fn start_search_session(
         .await
         .context("BlueZ failed to start Bluetooth discovery")?
         .boxed_local();
+    mark_search_starting()?;
     *discovery = Some(DiscoverySession {
         deadline: Instant::now() + SEARCH_TIMEOUT,
         events: stream,
@@ -1700,8 +1699,9 @@ async fn set_adapter_power(
             )
         })?;
     }
-    if !powered && discovery.is_some() {
-        stop_search_session(discovery, "adapter_powered_off")?;
+    if !powered {
+        discovery.take();
+        reset_discovery_state("adapter_powered_off")?;
     }
     Ok(())
 }
@@ -1743,6 +1743,22 @@ fn mark_search_stopped() -> Result<()> {
         .write()
         .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))?;
     state.stop();
+    Ok(())
+}
+
+fn reset_discovery_state(reason: &'static str) -> Result<()> {
+    let mut state = DISCOVERY_STATE
+        .write()
+        .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))?;
+    let searching = state.searching();
+    let devices = state.discovered_count();
+    state.reset();
+    if searching || devices > 0 {
+        qol_runtime::probe!(
+            "BLUETOOTH_SEARCH",
+            "outcome=reset reason={reason} devices={devices}"
+        );
+    }
     Ok(())
 }
 

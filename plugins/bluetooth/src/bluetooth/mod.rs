@@ -95,6 +95,12 @@ impl DiscoveryState {
         self.searching = false;
     }
 
+    pub fn reset(&mut self) {
+        self.searching = false;
+        self.addresses.clear();
+        self.devices.clear();
+    }
+
     pub fn record(&mut self, address: impl Into<String>) {
         self.addresses.insert(address.into());
     }
