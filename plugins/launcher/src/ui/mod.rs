@@ -3,6 +3,7 @@ mod controller;
 mod input;
 pub(crate) mod keepalive;
 mod layout;
+mod platform;
 mod render;
 pub mod run;
 mod state;
