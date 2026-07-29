@@ -546,17 +546,26 @@ type RenderThumb = ((f32, f32), Option<Arc<RenderImage>>);
 
 fn read_render_thumb(path: &Path) -> Result<RenderThumb> {
     let started = Instant::now();
-    let image = image::open(path)
-        .with_context(|| format!("failed to read preview image: {}", path.display()))?;
-    let rgba = image.to_rgba8();
-    let (width, height) = rgba.dimensions();
+    let (render_image, width, height) = read_render_image(path)?;
     qol_runtime::probe!(
         "SHOT_THUMB",
         "ms={} dims={width}x{height} path=decoded",
         started.elapsed().as_millis()
     );
-    let render_image = rgba_to_render_image(rgba.into_raw(), width, height);
-    Ok((thumbnail_size(width as f32, height as f32), render_image))
+    Ok((
+        thumbnail_size(width as f32, height as f32),
+        Some(render_image),
+    ))
+}
+
+pub(super) fn read_render_image(path: &Path) -> Result<(Arc<RenderImage>, u32, u32)> {
+    let image = image::open(path)
+        .with_context(|| format!("failed to read preview image: {}", path.display()))?;
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let render_image = rgba_to_render_image(rgba.into_raw(), width, height)
+        .with_context(|| format!("failed to prepare preview image: {}", path.display()))?;
+    Ok((render_image, width, height))
 }
 
 pub struct PreviewView {
@@ -829,6 +838,7 @@ impl PreviewView {
     fn pin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let started_at = Instant::now();
         qol_runtime::probe!("SHOT_PIN_ACTION", "seq={}", self.seq);
+        self.file_start.start();
         let content = crate::ui::pinned::PinnedContent {
             path: self.path.clone(),
             image: self.image.clone(),
@@ -1177,8 +1187,8 @@ fn circles_total_width(count: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        circles_total_width, combine_focus_truth, thumbnail_size, window_dims, GhostOpenMode,
-        MAX_THUMB_H, MAX_THUMB_W,
+        circles_total_width, combine_focus_truth, read_render_image, thumbnail_size, window_dims,
+        GhostOpenMode, MAX_THUMB_H, MAX_THUMB_W,
     };
 
     #[test]
@@ -1219,6 +1229,29 @@ mod tests {
     #[test]
     fn thumbnail_does_not_upscale_small_images() {
         assert_eq!(thumbnail_size(80.0, 60.0), (80.0, 60.0));
+    }
+
+    #[test]
+    fn full_resolution_loader_preserves_saved_pixel_dimensions() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "qol-shot-full-resolution-{}-{nonce}.png",
+            std::process::id()
+        ));
+        image::RgbaImage::from_pixel(720, 480, image::Rgba([10, 20, 30, 255]))
+            .save(&path)
+            .unwrap();
+
+        let (render_image, width, height) = read_render_image(&path).unwrap();
+        let first_pixel = render_image.as_bytes(0).unwrap()[..4].to_vec();
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!((width, height), (720, 480));
+        assert_eq!(render_image.as_bytes(0).unwrap().len(), 720 * 480 * 4);
+        assert_eq!(first_pixel, [30, 20, 10, 255]);
     }
 
     #[test]

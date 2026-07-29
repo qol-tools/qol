@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+use futures::channel::oneshot;
 use gpui::*;
 
 use crate::capture::actions::ShotAction;
@@ -64,6 +65,26 @@ struct PinnedWindowSpec {
 struct PinReveal {
     origin: (f64, f64),
     source_preview: Option<String>,
+}
+
+type FullResolutionImage = anyhow::Result<(Arc<RenderImage>, u32, u32)>;
+
+fn spawn_full_resolution_load(
+    file_ready: CaptureFileReady,
+    path: PathBuf,
+) -> anyhow::Result<oneshot::Receiver<FullResolutionImage>> {
+    let (sender, receiver) = oneshot::channel();
+    let worker = std::thread::Builder::new()
+        .name("qol-shot-pin-image".to_string())
+        .spawn(move || {
+            let result = file_ready
+                .wait()
+                .and_then(|()| crate::ui::preview::read_render_image(&path));
+            let _ = sender.send(result);
+        })
+        .map_err(|error| anyhow::anyhow!("failed to start pinned image worker: {error}"))?;
+    drop(worker);
+    Ok(receiver)
 }
 
 pub fn pre_create(cx: &mut App) {
@@ -189,7 +210,10 @@ fn open_window(
             view
         })
         .ok()?;
-    let _ = handle.update(cx, |view, _window, _cx| view.handle = Some(handle));
+    let _ = handle.update(cx, |view, _window, cx| {
+        view.handle = Some(handle);
+        view.start_full_resolution_upgrade(cx);
+    });
     Some(handle)
 }
 
@@ -215,6 +239,7 @@ mod cache {
             .update(cx, |view, window, cx| {
                 let title = view.title.clone();
                 reset(view, content, dismiss, border, copy_command, reveal, cx);
+                view.start_full_resolution_upgrade(cx);
                 qol_gpui::popup_window::sync_window_layout(
                     &title,
                     window,
@@ -354,6 +379,61 @@ impl PinnedView {
             handle: None,
             focus_handle: cx.focus_handle(),
         }
+    }
+
+    fn start_full_resolution_upgrade(&self, cx: &mut Context<Self>) {
+        if self.image.is_none() || self.path.as_os_str().is_empty() {
+            return;
+        }
+        let file_ready = self.file_ready.clone();
+        let path = self.path.clone();
+        let generation = self.reveal_generation;
+        let started = Instant::now();
+        let receiver = match spawn_full_resolution_load(file_ready, path) {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                eprintln!("[qol-shot] pinned image worker failed: {error:#}");
+                return;
+            }
+        };
+        qol_runtime::probe!("SHOT_PIN_IMAGE", "generation={generation} state=scheduled");
+        cx.spawn(async move |view, cx| {
+            let result = match receiver.await {
+                Ok(result) => result,
+                Err(error) => Err(anyhow::anyhow!("pinned image worker stopped: {error}")),
+            };
+            let _ = view.update(cx, move |view, cx| {
+                view.finish_full_resolution_upgrade(generation, started, result, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn finish_full_resolution_upgrade(
+        &mut self,
+        generation: u64,
+        started: Instant,
+        result: FullResolutionImage,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.active || self.reveal_generation != generation {
+            return;
+        }
+        let (image, width, height) = match result {
+            Ok(image) => image,
+            Err(error) => {
+                qol_runtime::probe!("SHOT_PIN_IMAGE", "generation={generation} state=failed");
+                eprintln!("[qol-shot] full-resolution pinned image failed: {error:#}");
+                return;
+            }
+        };
+        self.image = Some(image);
+        qol_runtime::probe!(
+            "SHOT_PIN_IMAGE",
+            "generation={generation} state=upgraded dims={width}x{height} ms={}",
+            started.elapsed().as_millis()
+        );
+        cx.notify();
     }
 
     fn schedule_reveal_after_present(&mut self, window: &mut Window, cx: &mut Context<Self>) {
