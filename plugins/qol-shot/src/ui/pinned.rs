@@ -12,7 +12,7 @@ use crate::capture::actions::ShotAction;
 use crate::capture::screenshot::CaptureFileReady;
 use crate::platform;
 use crate::ui::preview::{current_palette, PREVIEW_APP_ID};
-use crate::ui::shortcuts::{resolve_copy_command, shot_action_for_keystroke};
+use crate::ui::shortcuts::shot_action_for_keystroke;
 
 const MIN_DIM: f32 = 48.0;
 const MAX_DIM: f32 = 4096.0;
@@ -54,7 +54,6 @@ struct PinnedWindowSpec {
     bounds: Bounds<Pixels>,
     dismiss: PinnedDismiss,
     border: bool,
-    copy_command: ShotAction,
     reveal: Option<PinReveal>,
     active: bool,
     focus: bool,
@@ -111,7 +110,6 @@ pub fn pre_create(cx: &mut App) {
             bounds,
             dismiss: PinnedDismiss::Remove,
             border: false,
-            copy_command: ShotAction::Copy,
             reveal: None,
             active: false,
             focus: false,
@@ -155,13 +153,11 @@ pub fn open(
     };
     let config = crate::config::load();
     let border = config.capture.pin_border;
-    let copy_command = resolve_copy_command(config.shortcuts.copy_command);
     let spec = PinnedWindowSpec {
         title: title.clone(),
         bounds,
         dismiss,
         border,
-        copy_command,
         reveal: Some(reveal),
         active: true,
         focus: true,
@@ -233,12 +229,11 @@ mod cache {
         };
         let config = crate::config::load();
         let border = config.capture.pin_border;
-        let copy_command = resolve_copy_command(config.shortcuts.copy_command);
         let content_size = content.size;
         let title = handle
             .update(cx, |view, window, cx| {
                 let title = view.title.clone();
-                reset(view, content, dismiss, border, copy_command, reveal, cx);
+                reset(view, content, dismiss, border, reveal, cx);
                 view.start_full_resolution_upgrade(cx);
                 qol_gpui::popup_window::sync_window_layout(
                     &title,
@@ -268,7 +263,6 @@ mod cache {
         content: PinnedContent,
         dismiss: PinnedDismiss,
         border: bool,
-        copy_command: ShotAction,
         reveal: PinReveal,
         cx: &mut Context<PinnedView>,
     ) {
@@ -277,7 +271,6 @@ mod cache {
         view.file_ready = content.file_ready;
         view.dismiss = dismiss;
         view.border = border;
-        view.copy_command = copy_command;
         view.hovered = false;
         view.ratio = if content.size.1 > 0.0 {
             content.size.0 / content.size.1
@@ -325,7 +318,6 @@ pub struct PinnedView {
     title: String,
     dismiss: PinnedDismiss,
     border: bool,
-    copy_command: ShotAction,
     hovered: bool,
     ratio: f32,
     resize_drag: Option<ResizeDrag>,
@@ -360,7 +352,6 @@ impl PinnedView {
             title: spec.title,
             dismiss: spec.dismiss,
             border: spec.border,
-            copy_command: spec.copy_command,
             hovered: false,
             ratio,
             resize_drag: None,
@@ -782,7 +773,7 @@ impl PinnedView {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(action) = shot_action_for_keystroke(&event.keystroke, self.copy_command) {
+        if let Some(action) = shot_action_for_keystroke(&event.keystroke, ShotAction::Copy) {
             self.perform(action, window, cx);
             return;
         }

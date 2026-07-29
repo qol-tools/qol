@@ -142,15 +142,15 @@ notification = "System Notification"
 toast = "QoL Toast"
 
 [section.shortcuts]
-label = "Shortcuts"
-description = "Actions used by standard commands in screenshot previews."
+label = "Preview"
+description = "Action ordering in screenshot thumbnail previews."
 actions = ["preview"]
 
 [field.shortcuts_copy_command]
 type = "select"
 config_key = "shortcuts.copy_command"
-label = "Copy Command"
-description = "Choose whether the standard copy command copies the image or its file path."
+label = "Default Copy Action"
+description = "Choose whether Copy Image or Copy Path appears first and starts selected in screenshot thumbnails."
 section = "shortcuts"
 default = "copy_image"
 options = ["copy_image", "copy_path"]

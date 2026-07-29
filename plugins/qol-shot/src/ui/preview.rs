@@ -19,7 +19,8 @@ use qol_gpui::window::{
 };
 
 use crate::capture::screenshot::{CaptureFileReady, CaptureFileStart, PreviewCapture};
-use crate::ui::shortcuts::{resolve_copy_command, shot_action_for_keystroke};
+use crate::config::CopyCommand;
+use crate::ui::shortcuts::is_standard_copy_chord;
 use crate::{capture::actions::ShotAction, platform};
 
 const MAX_THUMB_W: f32 = 360.0;
@@ -40,7 +41,7 @@ pub(crate) fn current_palette() -> &'static ShotPreviewPalette {
     &CURRENT_PALETTE
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreviewControl {
     Action(ShotAction),
     Edit,
@@ -73,13 +74,36 @@ impl PreviewControl {
     }
 }
 
-fn preview_controls() -> Vec<PreviewControl> {
-    ShotAction::ALL
-        .iter()
-        .copied()
-        .map(PreviewControl::Action)
-        .chain([PreviewControl::Edit, PreviewControl::Pin])
-        .collect()
+fn preview_controls(default_copy_action: CopyCommand) -> [PreviewControl; 5] {
+    let copy_actions = match default_copy_action {
+        CopyCommand::CopyImage => [ShotAction::Copy, ShotAction::CopyPath],
+        CopyCommand::CopyPath => [ShotAction::CopyPath, ShotAction::Copy],
+    };
+    [
+        PreviewControl::Action(copy_actions[0]),
+        PreviewControl::Action(copy_actions[1]),
+        PreviewControl::Action(ShotAction::OpenFolder),
+        PreviewControl::Edit,
+        PreviewControl::Pin,
+    ]
+}
+
+fn preview_control_for_keystroke(
+    keystroke: &Keystroke,
+    selected: PreviewControl,
+    default_copy_action: CopyCommand,
+) -> Option<PreviewControl> {
+    if is_standard_copy_chord(keystroke) {
+        return Some(selected);
+    }
+    if keystroke.modifiers.modified() {
+        return None;
+    }
+
+    let accel = keystroke.key.chars().next()?;
+    preview_controls(default_copy_action)
+        .into_iter()
+        .find(|control| control.accel() == accel)
 }
 
 fn control_count() -> usize {
@@ -586,7 +610,7 @@ pub struct PreviewView {
     blur_guard_until: Instant,
     window_origin: Point<Pixels>,
     dismiss_sub: Option<DismissSub>,
-    copy_command: ShotAction,
+    default_copy_action: CopyCommand,
     saved_completion: Option<crate::capture::completion::PreviewCompletion>,
     action_pending: bool,
     scheduled_reveal_seq: Option<u64>,
@@ -668,7 +692,7 @@ impl PreviewView {
             blur_guard_until: Instant::now() + BLUR_GUARD,
             window_origin: origin,
             dismiss_sub: None,
-            copy_command: resolve_copy_command(crate::config::load().shortcuts.copy_command),
+            default_copy_action: crate::config::load().shortcuts.copy_command,
             saved_completion: content.saved_completion,
             action_pending: false,
             scheduled_reveal_seq: None,
@@ -696,7 +720,7 @@ impl PreviewView {
         self.first_paint = true;
         self.is_showing = true;
         self.blur_guard_until = Instant::now() + BLUR_GUARD;
-        self.copy_command = resolve_copy_command(crate::config::load().shortcuts.copy_command);
+        self.default_copy_action = crate::config::load().shortcuts.copy_command;
         self.saved_completion = content.saved_completion;
         self.action_pending = false;
         self.scheduled_reveal_seq = None;
@@ -981,8 +1005,12 @@ impl PreviewView {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(action) = shot_action_for_keystroke(&event.keystroke, self.copy_command) {
-            self.activate(PreviewControl::Action(action), window, cx);
+        let controls = preview_controls(self.default_copy_action);
+        let selected = controls.get(self.selected).copied();
+        if let Some(control) = selected.and_then(|selected| {
+            preview_control_for_keystroke(&event.keystroke, selected, self.default_copy_action)
+        }) {
+            self.activate(control, window, cx);
             return;
         }
 
@@ -995,21 +1023,11 @@ impl PreviewView {
             "left" | "up" => self.move_selection(-1, cx),
             "right" | "down" | "tab" => self.move_selection(1, cx),
             "enter" | "return" | "space" => {
-                let control = preview_controls()[self.selected];
-                self.activate(control, window, cx);
-            }
-            other => {
-                if event.keystroke.modifiers.modified() {
-                    return;
-                }
-                let accel = other.chars().next();
-                if let Some(control) = preview_controls()
-                    .into_iter()
-                    .find(|control| Some(control.accel()) == accel)
-                {
+                if let Some(control) = controls.get(self.selected).copied() {
                     self.activate(control, window, cx);
                 }
             }
+            _ => {}
         }
     }
 
@@ -1090,7 +1108,7 @@ impl Render for PreviewView {
             );
         }
 
-        let controls = preview_controls();
+        let controls = preview_controls(self.default_copy_action);
         let (thumb_w, thumb_h) = self.thumb;
         let (win_w, _) = window_dims(thumb_w, thumb_h, controls.len());
         let circles_width = circles_total_width(controls.len());
@@ -1193,10 +1211,94 @@ fn circles_total_width(count: usize) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use gpui::{Keystroke, Modifiers};
+
     use super::{
-        circles_total_width, combine_focus_truth, read_render_image, thumbnail_size, window_dims,
-        GhostOpenMode, MAX_THUMB_H, MAX_THUMB_W,
+        circles_total_width, combine_focus_truth, preview_control_for_keystroke, preview_controls,
+        read_render_image, thumbnail_size, window_dims, GhostOpenMode, PreviewControl, MAX_THUMB_H,
+        MAX_THUMB_W,
     };
+    use crate::capture::actions::ShotAction;
+    use crate::config::CopyCommand;
+
+    fn keystroke(key: &str, modifiers: Modifiers) -> Keystroke {
+        Keystroke {
+            modifiers,
+            key: key.to_string(),
+            key_char: None,
+        }
+    }
+
+    #[test]
+    fn default_copy_action_only_changes_preview_order() {
+        let cases = [
+            (
+                CopyCommand::CopyImage,
+                [
+                    PreviewControl::Action(ShotAction::Copy),
+                    PreviewControl::Action(ShotAction::CopyPath),
+                    PreviewControl::Action(ShotAction::OpenFolder),
+                    PreviewControl::Edit,
+                    PreviewControl::Pin,
+                ],
+            ),
+            (
+                CopyCommand::CopyPath,
+                [
+                    PreviewControl::Action(ShotAction::CopyPath),
+                    PreviewControl::Action(ShotAction::Copy),
+                    PreviewControl::Action(ShotAction::OpenFolder),
+                    PreviewControl::Edit,
+                    PreviewControl::Pin,
+                ],
+            ),
+        ];
+
+        for (copy_command, expected) in cases {
+            assert_eq!(preview_controls(copy_command), expected);
+        }
+    }
+
+    #[test]
+    fn standard_copy_chord_activates_the_selected_preview_control() {
+        let chord = keystroke("c", Modifiers::secondary_key());
+        let cases = [
+            PreviewControl::Action(ShotAction::Copy),
+            PreviewControl::Action(ShotAction::CopyPath),
+            PreviewControl::Action(ShotAction::OpenFolder),
+            PreviewControl::Edit,
+            PreviewControl::Pin,
+        ];
+
+        for selected in cases {
+            assert_eq!(
+                preview_control_for_keystroke(&chord, selected, CopyCommand::CopyImage),
+                Some(selected)
+            );
+        }
+    }
+
+    #[test]
+    fn plain_preview_accelerators_keep_their_direct_controls() {
+        let cases = [
+            ("c", PreviewControl::Action(ShotAction::Copy)),
+            ("p", PreviewControl::Action(ShotAction::CopyPath)),
+            ("o", PreviewControl::Action(ShotAction::OpenFolder)),
+            ("e", PreviewControl::Edit),
+            ("i", PreviewControl::Pin),
+        ];
+
+        for (key, expected) in cases {
+            assert_eq!(
+                preview_control_for_keystroke(
+                    &keystroke(key, Modifiers::none()),
+                    PreviewControl::Pin,
+                    CopyCommand::CopyPath,
+                ),
+                Some(expected)
+            );
+        }
+    }
 
     #[test]
     fn focus_truth_recovers_when_any_owned_window_holds_focus() {

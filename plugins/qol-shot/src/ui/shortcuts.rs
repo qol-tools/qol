@@ -1,22 +1,17 @@
 use gpui::{Keystroke, Modifiers};
 
 use crate::capture::actions::ShotAction;
-use crate::config::CopyCommand;
 
-pub(crate) fn resolve_copy_command(command: CopyCommand) -> ShotAction {
-    match command {
-        CopyCommand::CopyImage => ShotAction::Copy,
-        CopyCommand::CopyPath => ShotAction::CopyPath,
-    }
+pub(crate) fn is_standard_copy_chord(keystroke: &Keystroke) -> bool {
+    keystroke.key.eq_ignore_ascii_case("c") && keystroke.modifiers == Modifiers::secondary_key()
 }
 
 pub(crate) fn shot_action_for_keystroke(
     keystroke: &Keystroke,
-    copy_command: ShotAction,
+    standard_copy_action: ShotAction,
 ) -> Option<ShotAction> {
-    if keystroke.key.eq_ignore_ascii_case("c") && keystroke.modifiers == Modifiers::secondary_key()
-    {
-        return Some(copy_command);
+    if is_standard_copy_chord(keystroke) {
+        return Some(standard_copy_action);
     }
     if keystroke.modifiers.modified() {
         return None;
@@ -42,7 +37,7 @@ mod tests {
     }
 
     #[test]
-    fn standard_copy_chord_uses_configured_action() {
+    fn standard_copy_chord_uses_the_provided_action() {
         let chord = keystroke("c", Modifiers::secondary_key());
 
         assert_eq!(
