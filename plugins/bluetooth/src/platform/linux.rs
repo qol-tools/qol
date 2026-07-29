@@ -37,6 +37,7 @@ static DISCOVERY_STATE: LazyLock<RwLock<DiscoveryState>> =
     LazyLock::new(|| RwLock::new(DiscoveryState::default()));
 static DEVICE_ACTION_STATE: LazyLock<RwLock<Option<DeviceActionState>>> =
     LazyLock::new(|| RwLock::new(None));
+static ADAPTER_STATE: LazyLock<RwLock<Option<AdapterHealth>>> = LazyLock::new(|| RwLock::new(None));
 
 type DeviceStreams = SelectAll<LocalBoxStream<'static, (Address, bool)>>;
 type DiscoveryStream = LocalBoxStream<'static, AdapterEvent>;
@@ -48,6 +49,8 @@ const EXPLICIT_DEVICE_ACTION_TIMEOUT: Duration = Duration::from_secs(45);
 const BREDR_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(15);
 const AUDIO_SINK_PROFILE: u16 = 0x110b;
 const PIPEWIRE_SELF_HEAL_SETTLE: Duration = Duration::from_millis(750);
+const ADAPTER_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const ADAPTER_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 pub fn required_binaries_check() -> DoctorCheckResult {
     let pactl = executable_on_path("pactl");
@@ -327,7 +330,11 @@ pub fn stop_search() -> Result<()> {
 }
 
 pub fn devices_snapshot() -> Result<serde_json::Value> {
-    let devices = list_devices()?;
+    let devices = if adapter_available()? {
+        list_devices()?
+    } else {
+        Vec::new()
+    };
     let discovery = discovery_state()?;
     let action = DEVICE_ACTION_STATE
         .read()
@@ -355,13 +362,32 @@ pub fn search_status_snapshot() -> Result<serde_json::Value> {
 }
 
 fn adapter_status_snapshot() -> Result<serde_json::Value> {
-    Ok(adapter_status_payload(&adapter_health()?))
+    let adapter = ADAPTER_STATE
+        .read()
+        .map_err(|_| anyhow!("Bluetooth adapter state is unavailable"))?
+        .clone();
+    Ok(adapter_status_payload(adapter.as_ref()))
 }
 
-fn adapter_status_payload(adapter: &AdapterHealth) -> serde_json::Value {
+fn adapter_status_payload(adapter: Option<&AdapterHealth>) -> serde_json::Value {
     serde_json::json!({
-        "powered": adapter.powered,
+        "available": adapter.is_some(),
+        "powered": adapter.is_some_and(|adapter| adapter.powered),
     })
+}
+
+fn adapter_available() -> Result<bool> {
+    ADAPTER_STATE
+        .read()
+        .map(|adapter| adapter.is_some())
+        .map_err(|_| anyhow!("Bluetooth adapter state is unavailable"))
+}
+
+fn set_adapter_state(adapter: Option<AdapterHealth>) {
+    match ADAPTER_STATE.write() {
+        Ok(mut state) => *state = adapter,
+        Err(_) => eprintln!("Bluetooth adapter state is unavailable"),
+    }
 }
 
 fn discovery_state() -> Result<DiscoveryState> {
@@ -396,6 +422,9 @@ pub fn settings_action(action: &str, input: serde_json::Value) -> std::result::R
 }
 
 fn current_managed_device_options() -> Result<Vec<DeviceOption>> {
+    if !adapter_available()? {
+        return Ok(Vec::new());
+    }
     Ok(managed_device_options(&list_devices()?))
 }
 
@@ -417,7 +446,7 @@ pub fn run_daemon(config: ReconnectConfig) -> Result<()> {
         })
         .context("failed to start Bluetooth command bridge")?;
 
-    runtime()?.block_on(daemon_loop(config, command_rx))
+    runtime()?.block_on(resilient_daemon_loop(config, command_rx))
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime> {
@@ -504,9 +533,7 @@ async fn search_until_cancelled(adapter: &Adapter) -> Result<Vec<DeviceInfo>> {
             _ = &mut timeout => break "timed_out",
             event = events.next() => match event {
                 Some(AdapterEvent::DeviceAdded(address)) => {
-                    if device_is_present(adapter, address).await {
-                        discovery.record(address.to_string());
-                    }
+                    discovery.record(address.to_string());
                 }
                 Some(AdapterEvent::DeviceRemoved(address)) => discovery.remove(&address.to_string()),
                 Some(AdapterEvent::PropertyChanged(_)) => {}
@@ -532,13 +559,6 @@ async fn search_until_cancelled(adapter: &Adapter) -> Result<Vec<DeviceInfo>> {
         devices.len()
     );
     Ok(devices)
-}
-
-async fn device_is_present(adapter: &Adapter, address: Address) -> bool {
-    let Ok(device) = adapter.device(address) else {
-        return false;
-    };
-    matches!(device.rssi().await, Ok(Some(_)))
 }
 
 async fn connect_with(
@@ -1070,22 +1090,163 @@ fn device_daemon_command(
     }
 }
 
-async fn daemon_loop(
+async fn resilient_daemon_loop(
     mut config: ReconnectConfig,
     mut commands: tokio::sync::mpsc::UnboundedReceiver<DaemonCommand>,
 ) -> Result<()> {
-    let adapter = default_adapter().await?;
+    loop {
+        let adapter = match tokio::time::timeout(ADAPTER_CONNECT_TIMEOUT, default_adapter()).await {
+            Ok(Ok(adapter)) => adapter,
+            Ok(Err(error)) => {
+                set_adapter_state(None);
+                mark_search_stopped()?;
+                eprintln!("Bluetooth adapter unavailable; retrying: {error:#}");
+                qol_runtime::probe!("BLUETOOTH_ADAPTER", "available=false outcome=retrying");
+                if wait_without_adapter(&mut config, &mut commands).await? {
+                    return Ok(());
+                }
+                continue;
+            }
+            Err(_) => {
+                set_adapter_state(None);
+                mark_search_stopped()?;
+                eprintln!(
+                    "Bluetooth adapter lookup timed out after {} seconds; retrying",
+                    ADAPTER_CONNECT_TIMEOUT.as_secs()
+                );
+                qol_runtime::probe!("BLUETOOTH_ADAPTER", "available=false outcome=timed_out");
+                if wait_without_adapter(&mut config, &mut commands).await? {
+                    return Ok(());
+                }
+                continue;
+            }
+        };
+        match daemon_loop(&mut config, &mut commands, adapter).await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                set_adapter_state(None);
+                mark_search_stopped()?;
+                eprintln!("Bluetooth adapter session ended; retrying: {error:#}");
+                qol_runtime::probe!("BLUETOOTH_ADAPTER", "available=false outcome=session_ended");
+            }
+        }
+        if wait_without_adapter(&mut config, &mut commands).await? {
+            return Ok(());
+        }
+    }
+}
+
+async fn wait_without_adapter(
+    config: &mut ReconnectConfig,
+    commands: &mut tokio::sync::mpsc::UnboundedReceiver<DaemonCommand>,
+) -> Result<bool> {
+    let delay = tokio::time::sleep(ADAPTER_RETRY_DELAY);
+    tokio::pin!(delay);
+    loop {
+        tokio::select! {
+            _ = &mut delay => return Ok(false),
+            command = commands.recv() => {
+                let Some(command) = command else {
+                    return Ok(true);
+                };
+                match command {
+                    DaemonCommand::Kill => return Ok(true),
+                    DaemonCommand::Settings => {
+                        if let Err(error) = spawn_settings_panel() {
+                            eprintln!("failed to launch native Bluetooth settings: {error:#}");
+                            if let Err(error) = crate::settings::open_browser() {
+                                eprintln!("failed to open Bluetooth settings fallback: {error:#}");
+                            }
+                        }
+                    }
+                    DaemonCommand::Reload => {
+                        *config = crate::config::load();
+                        qol_runtime::probe!(
+                            "BLUETOOTH_RELOAD",
+                            "managed={} auto_reconnect={} adapter_available=false",
+                            config.managed_devices.len(),
+                            config.auto_reconnect
+                        );
+                    }
+                    DaemonCommand::StopSearch => {
+                        mark_search_stopped()?;
+                    }
+                    DaemonCommand::StartSearch => {
+                        mark_search_stopped()?;
+                        qol_runtime::probe!(
+                            "BLUETOOTH_SEARCH",
+                            "outcome=failed stage=adapter_unavailable"
+                        );
+                    }
+                    command => fail_command_without_adapter(command),
+                }
+            }
+        }
+    }
+}
+
+fn fail_command_without_adapter(command: DaemonCommand) {
+    let Some((address, label, action)) = unavailable_device_command(command) else {
+        match command {
+            DaemonCommand::SetAdapterPower(_)
+            | DaemonCommand::ReconnectManaged
+            | DaemonCommand::ReconnectTrusted => {
+                qol_runtime::probe!(
+                    "BLUETOOTH_ACTION",
+                    "outcome=failed reason=adapter_unavailable"
+                );
+            }
+            _ => {}
+        }
+        return;
+    };
+    let result: Result<()> = Err(anyhow!("Bluetooth adapter is unavailable"));
+    finish_device_action(address, label, &result);
+    qol_runtime::probe!(
+        "BLUETOOTH_DEVICE_ACTION",
+        "action={action} device={} outcome=failed reason=adapter_unavailable",
+        redacted(address)
+    );
+}
+
+fn unavailable_device_command(
+    command: DaemonCommand,
+) -> Option<(Address, &'static str, &'static str)> {
+    match command {
+        DaemonCommand::Pair(address) => Some((address, "Pair", "pair")),
+        DaemonCommand::Trust(address, true) => Some((address, "Trust", "trust")),
+        DaemonCommand::Trust(address, false) => Some((address, "Untrust", "untrust")),
+        DaemonCommand::Connect(address) => Some((address, "Connect", "connect")),
+        DaemonCommand::Disconnect(address) => Some((address, "Disconnect", "disconnect")),
+        DaemonCommand::Remove(address) => Some((address, "Remove", "remove")),
+        DaemonCommand::SetAdapterPower(_)
+        | DaemonCommand::ReconnectManaged
+        | DaemonCommand::ReconnectTrusted
+        | DaemonCommand::Kill
+        | DaemonCommand::StartSearch
+        | DaemonCommand::StopSearch
+        | DaemonCommand::Reload
+        | DaemonCommand::Settings => None,
+    }
+}
+
+async fn daemon_loop(
+    config: &mut ReconnectConfig,
+    commands: &mut tokio::sync::mpsc::UnboundedReceiver<DaemonCommand>,
+    adapter: Adapter,
+) -> Result<()> {
     if config.auto_reconnect {
         if let Err(error) = ensure_powered(&adapter, config.power_on_adapter).await {
             eprintln!("Bluetooth adapter unavailable at daemon start: {error:#}");
         }
     }
     let mut adapter_powered = adapter.is_powered().await?;
+    set_adapter_state(Some(adapter_health_with(&adapter).await?));
     let mut adapter_events = adapter.events().await?.fuse();
     let mut device_streams = DeviceStreams::new();
     let mut discovery: Option<DiscoverySession> = None;
     let mut subscribed = HashSet::new();
-    let mut retries = retry_map(&config);
+    let mut retries = retry_map(config);
     let known_addresses = adapter.device_addresses().await?;
     subscribe_addresses(
         &adapter,
@@ -1228,8 +1389,8 @@ async fn daemon_loop(
                     continue;
                 }
                 if matches!(command, DaemonCommand::Reload) {
-                    config = crate::config::load();
-                    retries = retry_map(&config);
+                    *config = crate::config::load();
+                    retries = retry_map(config);
                     subscribed.retain(|address| retries.contains_key(address));
                     let known_addresses = adapter.device_addresses().await?;
                     subscribe_addresses(
@@ -1262,14 +1423,14 @@ async fn daemon_loop(
                     continue;
                 }
                 adapter_powered = true;
-                let report = match reconnect_with(&adapter, &config, selection).await {
+                let report = match reconnect_with(&adapter, config, selection).await {
                     Ok(report) => report,
                     Err(error) => {
                         trace_manual_failure(&error, selection, "reconnect");
                         continue;
                     }
                 };
-                apply_report(&mut retries, &report, &config);
+                apply_report(&mut retries, &report, config);
                 trace_report(&report, selection);
             }
             event = adapter_events.next() => {
@@ -1291,6 +1452,11 @@ async fn daemon_loop(
                     }
                     Some(AdapterEvent::PropertyChanged(AdapterProperty::Powered(powered))) => {
                         adapter_powered = powered;
+                        set_adapter_state(Some(AdapterHealth {
+                            name: adapter.name().to_string(),
+                            address: adapter.address().await?.to_string(),
+                            powered,
+                        }));
                         if powered && config.auto_reconnect {
                             request_all(&mut retries, Instant::now());
                         }
@@ -1349,7 +1515,7 @@ async fn daemon_loop(
                 }
             }
             _ = wait_for_deadline(deadline) => {
-                attempt_due(&adapter, &config, &mut retries).await;
+                attempt_due(&adapter, config, &mut retries).await;
             }
         }
     }
@@ -1509,6 +1675,9 @@ async fn start_search_session(
         deadline: Instant::now() + SEARCH_TIMEOUT,
         events: stream,
     });
+    for address in adapter.device_addresses().await? {
+        track_discovered_device(adapter, address).await;
+    }
     qol_runtime::probe!(
         "BLUETOOTH_SEARCH",
         "outcome=started timeout_seconds={}",
@@ -1578,16 +1747,37 @@ fn mark_search_stopped() -> Result<()> {
 }
 
 async fn track_discovered_device(adapter: &Adapter, address: Address) {
-    if !device_is_present(adapter, address).await {
-        return;
+    {
+        let Ok(mut state) = DISCOVERY_STATE.write() else {
+            eprintln!("Bluetooth discovery state is unavailable");
+            return;
+        };
+        state.record(address.to_string());
     }
+
     let device = match adapter.device(address) {
         Ok(device) => device,
-        Err(_) => return,
+        Err(error) => {
+            eprintln!("failed to resolve discovered Bluetooth device {address}: {error:#}");
+            qol_runtime::probe!(
+                "BLUETOOTH_SEARCH_DEVICE",
+                "device={} outcome=partial stage=resolve",
+                redacted(address)
+            );
+            return;
+        }
     };
     let device = match device_info(&device).await {
         Ok(device) => device,
-        Err(_) => return,
+        Err(error) => {
+            eprintln!("failed to inspect discovered Bluetooth device {address}: {error:#}");
+            qol_runtime::probe!(
+                "BLUETOOTH_SEARCH_DEVICE",
+                "device={} outcome=partial stage=inspect",
+                redacted(address)
+            );
+            return;
+        }
     };
     let Ok(mut state) = DISCOVERY_STATE.write() else {
         eprintln!("Bluetooth discovery state is unavailable");
@@ -1596,7 +1786,7 @@ async fn track_discovered_device(adapter: &Adapter, address: Address) {
     state.record_device(device);
     qol_runtime::probe!(
         "BLUETOOTH_SEARCH_DEVICE",
-        "device={} total={}",
+        "device={} total={} outcome=complete",
         redacted(address),
         state.discovered_count()
     );
@@ -1927,16 +2117,41 @@ mod tests {
 
     #[test]
     fn adapter_status_payload_exposes_the_runtime_power_state() {
-        let payload = super::adapter_status_payload(&super::AdapterHealth {
+        let payload = super::adapter_status_payload(Some(&super::AdapterHealth {
             name: "hci0".into(),
             address: "AA:BB:CC:DD:EE:FF".into(),
             powered: true,
-        });
+        }));
         assert_eq!(
             payload,
             serde_json::json!({
+                "available": true,
                 "powered": true,
             })
+        );
+    }
+
+    #[test]
+    fn unavailable_adapter_status_is_immediate_and_explicit() {
+        assert_eq!(
+            super::adapter_status_payload(None),
+            serde_json::json!({
+                "available": false,
+                "powered": false,
+            })
+        );
+    }
+
+    #[test]
+    fn unavailable_adapter_maps_device_actions_to_stable_failures() {
+        let address = parse_address("AA:BB:CC:DD:EE:FF").unwrap();
+        assert_eq!(
+            super::unavailable_device_command(DaemonCommand::Connect(address)),
+            Some((address, "Connect", "connect"))
+        );
+        assert_eq!(
+            super::unavailable_device_command(DaemonCommand::SetAdapterPower(true)),
+            None
         );
     }
 
