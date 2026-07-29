@@ -719,17 +719,21 @@ async fn connect_all_profiles(device: &Device, address: Address) -> Result<()> {
     let mut attempt = 1;
     loop {
         let result = device.connect().await;
-        let outcome = match &result {
-            Ok(()) => "connected",
-            Err(error) if error.kind == ErrorKind::AlreadyConnected => "already_connected",
-            Err(error) if transient_connect_error(&error.kind, &error.message) => "transient",
-            Err(_) => "failed",
-        };
-        qol_runtime::probe!(
-            "BLUETOOTH_CONNECT",
-            "device={} attempt={attempt} outcome={outcome}",
-            redacted(address),
-        );
+        match &result {
+            Ok(()) => qol_runtime::probe!(
+                "BLUETOOTH_CONNECT",
+                "device={} attempt={attempt} outcome=connected",
+                redacted(address),
+            ),
+            Err(error) => qol_runtime::probe!(
+                "BLUETOOTH_CONNECT",
+                "device={} attempt={attempt} outcome={} kind={:?} reason={}",
+                redacted(address),
+                connect_error_outcome(&error.kind, &error.message),
+                error.kind,
+                error.message,
+            ),
+        }
         match result {
             Ok(()) => return Ok(()),
             Err(error) if error.kind == ErrorKind::AlreadyConnected => return Ok(()),
@@ -748,14 +752,25 @@ async fn connect_all_profiles(device: &Device, address: Address) -> Result<()> {
 }
 
 fn transient_connect_error(kind: &ErrorKind, message: &str) -> bool {
-    const TRANSIENT_LINK_ERRORS: [&str; 5] = [
+    const TRANSIENT_LINK_ERRORS: [&str; 6] = [
         "br-connection-unknown",
         "br-connection-busy",
         "br-connection-canceled",
         "br-connection-aborted-by-remote",
         "br-connection-timeout",
+        "br-connection-create-socket",
     ];
     *kind == ErrorKind::InProgress || TRANSIENT_LINK_ERRORS.contains(&message)
+}
+
+fn connect_error_outcome(kind: &ErrorKind, message: &str) -> &'static str {
+    if *kind == ErrorKind::AlreadyConnected {
+        return "already_connected";
+    }
+    if transient_connect_error(kind, message) {
+        return "transient";
+    }
+    "failed"
 }
 
 async fn connect_audio_profile(
