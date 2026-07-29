@@ -1,3 +1,5 @@
+//! Linux Mint desktop workflow and shared Linux guest-control primitives.
+
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -30,15 +32,15 @@ const PIN_DRAG_HOLD: Duration = Duration::from_millis(80);
 const STATUS_SETTLE: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct WindowGeometry {
-    pub(super) x: i32,
-    pub(super) y: i32,
-    pub(super) width: u32,
-    pub(super) height: u32,
+pub(in crate::commands::emu::workflow) struct WindowGeometry {
+    pub(in crate::commands::emu::workflow) x: i32,
+    pub(in crate::commands::emu::workflow) y: i32,
+    pub(in crate::commands::emu::workflow) width: u32,
+    pub(in crate::commands::emu::workflow) height: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) struct TraceCursor {
+pub(in crate::commands::emu::workflow) struct TraceCursor {
     bytes: u64,
 }
 
@@ -367,7 +369,9 @@ fn exercise_recording_cancellation(
     Ok([countdown, cancelled])
 }
 
-pub(super) fn connect_desktop_guest(vm: &BootedVm) -> Result<GuestControlClient> {
+pub(in crate::commands::emu::workflow) fn connect_desktop_guest(
+    vm: &BootedVm,
+) -> Result<GuestControlClient> {
     let expected_revision = vm
         .launch
         .guest_image_revision
@@ -405,7 +409,9 @@ pub(super) fn connect_desktop_guest(vm: &BootedVm) -> Result<GuestControlClient>
     Ok(guest)
 }
 
-pub(super) fn install_payload(guest: &mut GuestControlClient) -> Result<()> {
+pub(in crate::commands::emu::workflow) fn install_payload(
+    guest: &mut GuestControlClient,
+) -> Result<()> {
     step_label(
         "payload",
         StepKind::Pending,
@@ -427,7 +433,7 @@ pub(super) fn install_payload(guest: &mut GuestControlClient) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn start_tray_and_wait_plugin(
+pub(in crate::commands::emu::workflow) fn start_tray_and_wait_plugin(
     guest: &mut GuestControlClient,
     plugin_id: &str,
 ) -> Result<String> {
@@ -454,7 +460,7 @@ pub(super) fn start_tray_and_wait_plugin(
     Ok(auth_header)
 }
 
-pub(super) fn command(program: &str, args: &[&str]) -> CommandSpec {
+pub(in crate::commands::emu::workflow) fn command(program: &str, args: &[&str]) -> CommandSpec {
     CommandSpec {
         program: program.to_string(),
         args: args.iter().map(|value| (*value).to_string()).collect(),
@@ -463,14 +469,17 @@ pub(super) fn command(program: &str, args: &[&str]) -> CommandSpec {
     }
 }
 
-pub(super) fn spawn(guest: &mut GuestControlClient, command: CommandSpec) -> Result<u64> {
+pub(in crate::commands::emu::workflow) fn spawn(
+    guest: &mut GuestControlClient,
+    command: CommandSpec,
+) -> Result<u64> {
     match guest.request(RequestAction::Spawn { command }, GUEST_COMMAND_TIMEOUT)? {
         ResponseResult::Spawned { process_id, .. } => Ok(process_id),
         result => bail!("guest spawn returned an unexpected response: {result:?}"),
     }
 }
 
-pub(super) fn exec(
+pub(in crate::commands::emu::workflow) fn exec(
     guest: &mut GuestControlClient,
     command: CommandSpec,
     timeout: Duration,
@@ -488,7 +497,7 @@ pub(super) fn exec(
     }
 }
 
-pub(super) fn require_exec(
+pub(in crate::commands::emu::workflow) fn require_exec(
     guest: &mut GuestControlClient,
     command: CommandSpec,
     timeout: Duration,
@@ -506,7 +515,7 @@ pub(super) fn require_exec(
     )
 }
 
-pub(super) fn wait_for_command(
+pub(in crate::commands::emu::workflow) fn wait_for_command(
     guest: &mut GuestControlClient,
     command: CommandSpec,
     timeout: Duration,
@@ -536,7 +545,7 @@ pub(super) fn wait_for_command(
     }
 }
 
-pub(super) fn wait_for_probe_line(
+pub(in crate::commands::emu::workflow) fn wait_for_probe_line(
     guest: &mut GuestControlClient,
     cursor: TraceCursor,
     tag: &str,
@@ -546,7 +555,7 @@ pub(super) fn wait_for_probe_line(
     wait_for_probe_fields(guest, cursor, tag, &[required], timeout)
 }
 
-pub(super) fn wait_for_probe_fields(
+pub(in crate::commands::emu::workflow) fn wait_for_probe_fields(
     guest: &mut GuestControlClient,
     cursor: TraceCursor,
     tag: &str,
@@ -567,7 +576,9 @@ pub(super) fn wait_for_probe_fields(
     )
 }
 
-pub(super) fn current_trace_cursor(guest: &mut GuestControlClient) -> Result<TraceCursor> {
+pub(in crate::commands::emu::workflow) fn current_trace_cursor(
+    guest: &mut GuestControlClient,
+) -> Result<TraceCursor> {
     let outcome = require_exec(
         guest,
         command("/usr/bin/stat", &["--format=%s", TRACE_LOG_PATH]),
@@ -668,7 +679,7 @@ fn probe_timestamp_ms(line: &str) -> Result<u64> {
         .context("probe timestamp was not an unsigned integer")
 }
 
-pub(super) fn wait_for_window_id(
+pub(in crate::commands::emu::workflow) fn wait_for_window_id(
     guest: &mut GuestControlClient,
     title: &str,
     timeout: Duration,
@@ -766,7 +777,7 @@ fn parse_window_id(output: &str) -> Option<u64> {
         .find_map(|line| line.parse().ok())
 }
 
-pub(super) fn window_geometry(
+pub(in crate::commands::emu::workflow) fn window_geometry(
     guest: &mut GuestControlClient,
     window_id: &str,
 ) -> Result<WindowGeometry> {

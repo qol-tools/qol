@@ -1,3 +1,5 @@
+//! Linux Mint implementation of the Launcher adversarial workflow.
+
 use std::thread;
 use std::time::Duration;
 

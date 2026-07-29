@@ -1,3 +1,5 @@
+//! Linux Mint implementation of the Alt Tab adversarial workflow.
+
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};

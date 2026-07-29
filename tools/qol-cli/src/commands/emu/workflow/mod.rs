@@ -106,14 +106,39 @@ pub(crate) enum DesktopWorkflow {
     WindowActionsStorm,
 }
 
-pub(crate) fn run_desktop(vm: &BootedVm, workflow: DesktopWorkflow) -> Result<Verdict> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DesktopGuestPlatform {
+    Linux,
+    Macos,
+    Windows,
+}
+
+impl DesktopGuestPlatform {
+    fn from_adapter(adapter: super::GuestAdapter) -> Result<Self> {
+        match adapter {
+            super::GuestAdapter::MintCinnamon => Ok(Self::Linux),
+            super::GuestAdapter::MacosDesktop => Ok(Self::Macos),
+            super::GuestAdapter::WindowsDesktop => Ok(Self::Windows),
+            super::GuestAdapter::DebianNocloud => anyhow::bail!(
+                "guest adapter `debian-nocloud` does not implement the desktop workflow contract"
+            ),
+        }
+    }
+}
+
+pub(crate) fn run_desktop(
+    vm: &BootedVm,
+    workflow: DesktopWorkflow,
+    adapter: super::GuestAdapter,
+) -> Result<Verdict> {
+    let platform = DesktopGuestPlatform::from_adapter(adapter)?;
     match workflow {
-        DesktopWorkflow::AltTabStorm => alt_tab::run(vm),
-        DesktopWorkflow::BluetoothStorm => bluetooth::run(vm),
-        DesktopWorkflow::LauncherStorm => launcher::run(vm),
-        DesktopWorkflow::QolShotCapture => desktop::run(vm),
-        DesktopWorkflow::QolShotStorm => qol_shot::run(vm),
-        DesktopWorkflow::WindowActionsStorm => window_actions::run(vm),
+        DesktopWorkflow::AltTabStorm => alt_tab::run(vm, platform),
+        DesktopWorkflow::BluetoothStorm => bluetooth::run(vm, platform),
+        DesktopWorkflow::LauncherStorm => launcher::run(vm, platform),
+        DesktopWorkflow::QolShotCapture => desktop::run(vm, platform),
+        DesktopWorkflow::QolShotStorm => qol_shot::run(vm, platform),
+        DesktopWorkflow::WindowActionsStorm => window_actions::run(vm, platform),
     }
 }
 
@@ -217,5 +242,24 @@ mod tests {
         assert!(find("qol-shot-capture").unwrap().requires_payload());
         assert!(find("qol-shot-storm").unwrap().requires_payload());
         assert!(find("window-actions-storm").unwrap().requires_payload());
+    }
+
+    #[test]
+    fn desktop_guest_platform_resolution_is_runtime_guest_specific() {
+        assert_eq!(
+            DesktopGuestPlatform::from_adapter(super::super::GuestAdapter::MintCinnamon).unwrap(),
+            DesktopGuestPlatform::Linux
+        );
+        assert_eq!(
+            DesktopGuestPlatform::from_adapter(super::super::GuestAdapter::MacosDesktop).unwrap(),
+            DesktopGuestPlatform::Macos
+        );
+        assert_eq!(
+            DesktopGuestPlatform::from_adapter(super::super::GuestAdapter::WindowsDesktop).unwrap(),
+            DesktopGuestPlatform::Windows
+        );
+        assert!(
+            DesktopGuestPlatform::from_adapter(super::super::GuestAdapter::DebianNocloud).is_err()
+        );
     }
 }

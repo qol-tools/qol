@@ -75,6 +75,10 @@ pub(super) fn verify_guest(
         GuestAdapter::DebianNocloud => {
             bail!("guest adapter `debian-nocloud` has no verified image-import probe set")
         }
+        GuestAdapter::MacosDesktop | GuestAdapter::WindowsDesktop => bail!(
+            "guest adapter `{}` has no verified image-import probe set",
+            plan.guest_adapter.as_str()
+        ),
     };
     let mut probes = Vec::with_capacity(specs.len());
     for spec in specs {

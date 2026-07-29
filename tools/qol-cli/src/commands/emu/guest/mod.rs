@@ -10,14 +10,18 @@ static DEBIAN_NOCLOUD: debian::DebianNocloud = debian::DebianNocloud;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GuestAdapter {
     DebianNocloud,
+    MacosDesktop,
     MintCinnamon,
+    WindowsDesktop,
 }
 
 impl GuestAdapter {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "debian-nocloud" => Some(Self::DebianNocloud),
+            "macos-desktop" => Some(Self::MacosDesktop),
             "mint-cinnamon" => Some(Self::MintCinnamon),
+            "windows-desktop" => Some(Self::WindowsDesktop),
             _ => None,
         }
     }
@@ -25,16 +29,21 @@ impl GuestAdapter {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::DebianNocloud => "debian-nocloud",
+            Self::MacosDesktop => "macos-desktop",
             Self::MintCinnamon => "mint-cinnamon",
+            Self::WindowsDesktop => "windows-desktop",
         }
     }
 
     pub(crate) fn guest(self) -> Result<&'static dyn GuestOs> {
         match self {
             Self::DebianNocloud => Ok(&DEBIAN_NOCLOUD),
-            Self::MintCinnamon => bail!(
-                "guest adapter `mint-cinnamon` is prepared but not ready: serial login, removable-media discovery, reboot relogin, and trace locations are not verified"
-            ),
+            Self::MacosDesktop | Self::MintCinnamon | Self::WindowsDesktop => {
+                bail!(
+                    "guest adapter `{}` is a desktop workflow adapter and does not implement the serial GuestOs contract",
+                    self.as_str()
+                )
+            }
         }
     }
 }
@@ -54,7 +63,9 @@ mod tests {
     fn adapter_registry_distinguishes_ready_prepared_and_unknown_entries() {
         let cases = [
             ("debian-nocloud", Some(GuestAdapter::DebianNocloud)),
+            ("macos-desktop", Some(GuestAdapter::MacosDesktop)),
             ("mint-cinnamon", Some(GuestAdapter::MintCinnamon)),
+            ("windows-desktop", Some(GuestAdapter::WindowsDesktop)),
             ("mint", None),
             ("", None),
         ];
@@ -63,7 +74,13 @@ mod tests {
         }
 
         assert!(GuestAdapter::DebianNocloud.guest().is_ok());
-        let error = GuestAdapter::MintCinnamon.guest().err().unwrap();
-        assert!(error.to_string().contains("prepared but not ready"));
+        for adapter in [
+            GuestAdapter::MacosDesktop,
+            GuestAdapter::MintCinnamon,
+            GuestAdapter::WindowsDesktop,
+        ] {
+            let error = adapter.guest().err().unwrap();
+            assert!(error.to_string().contains("desktop workflow adapter"));
+        }
     }
 }

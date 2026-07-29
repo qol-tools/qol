@@ -59,13 +59,20 @@ pub(crate) fn validate_workflow_adapter(
 ) -> Result<()> {
     match (workflow, adapter) {
         (workflow::Definition::Serial { .. }, GuestAdapter::DebianNocloud)
-        | (workflow::Definition::Desktop { .. }, GuestAdapter::MintCinnamon) => Ok(()),
-        (workflow::Definition::Serial { .. }, GuestAdapter::MintCinnamon) => bail!(
-            "workflow `{}` requires the verified serial guest adapter, not `mint-cinnamon`",
-            workflow.id()
+        | (
+            workflow::Definition::Desktop { .. },
+            GuestAdapter::MacosDesktop | GuestAdapter::MintCinnamon | GuestAdapter::WindowsDesktop,
+        ) => Ok(()),
+        (
+            workflow::Definition::Serial { .. },
+            GuestAdapter::MacosDesktop | GuestAdapter::MintCinnamon | GuestAdapter::WindowsDesktop,
+        ) => bail!(
+            "workflow `{}` requires the verified serial guest adapter, not `{}`",
+            workflow.id(),
+            adapter.as_str()
         ),
         (workflow::Definition::Desktop { .. }, GuestAdapter::DebianNocloud) => bail!(
-            "workflow `{}` requires the isolated Cinnamon desktop adapter, not `debian-nocloud`",
+            "workflow `{}` requires a desktop guest adapter, not `debian-nocloud`",
             workflow.id()
         ),
     }
@@ -647,7 +654,7 @@ fn run_workflow(
         workflow::Definition::Serial { run, .. } => {
             drive_serial_workflow(&vm, run, guest_adapter.guest()?)
         }
-        workflow::Definition::Desktop { run, .. } => workflow::run_desktop(&vm, run),
+        workflow::Definition::Desktop { run, .. } => workflow::run_desktop(&vm, run, guest_adapter),
     };
     let workflow_report = match &outcome {
         Ok(verdict) => json!({
@@ -1905,7 +1912,7 @@ fn print_emu_help() {
 }
 
 fn emu_help_text() -> String {
-    format!("qol emu commands:\n  qol emu list\n  {ADD_SYNTAX}\n  qol emu open\n  qol emu doctor\n  qol emu desktop mintish <environment>\n  qol emu up <environment|image> [launch options]\n  qol emu run <workflow> <environment|image> [launch options]\n  qol emu check <environment|image> [launch options]\n  qol emu shot [--run-root PATH]... <run-id|environment>\n  qol emu key [--run-root PATH]... <run-id|environment> <qcode>...\n  qol emu insert [--run-root PATH]... <run-id|environment>\n  qol emu pull [--run-root PATH]... <run-id|environment>\n  qol emu snap [--run-root PATH]... <run-id|environment>\n  qol emu sh [--run-root PATH]... [--] <run-id|environment> <command>...\n  qol emu exec [--run-root PATH]... [--] <run-id|environment> <absolute-program> [args...]\n  qol emu drag [--run-root PATH]... <run-id|environment> <x1,y1> <x2,y2>\n  qol emu down [--run-root PATH]... <run-id|environment>\n\nLaunch options:\n  --windowed --headless --offline --memory-mb N --cpus N\n  --run-id ID --run-root PATH --environment-id ID\n  --image-kind qcow2|raw|img|iso\n  --guest-adapter debian-nocloud|mint-cinnamon\n  --acceleration hardware|allow-tcg --arch x86_64|aarch64\n  --firmware bios|uefi\n\nLaunches are headless unless --windowed is explicit. --offline disconnects the\nguest from host networking. Control verbs prefer an exact run ID. An\nenvironment ID works only when one matching run is live. Control --run-root is\nrepeatable, must precede the selector, and defaults to target/qol-emu. Sandbox\nlaunches require verified host process-tree containment; unsupported hosts stay\nvisible but cannot start a VM. For sh and exec,\nevery word after the selector is forwarded literally, including a leading --.\nexec and drag talk to prepared desktop guests: exec runs as the guest desktop\nuser over verified guest control, drag drives the QMP pointer scaled to the\nlive framebuffer.\nPlace -- before the selector to stop global option parsing without forwarding it.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nDrop a disk image or .iso into the emu dir (`qol emu open`) and it appears in\n`qol emu list`; `qol emu up <id>` boots it headlessly (an .iso boots as a\ndisposable live CD). Pass --windowed for an interactive VM window.\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n")
+    format!("qol emu commands:\n  qol emu list\n  {ADD_SYNTAX}\n  qol emu open\n  qol emu doctor\n  qol emu desktop mintish <environment>\n  qol emu up <environment|image> [launch options]\n  qol emu run <workflow> <environment|image> [launch options]\n  qol emu check <environment|image> [launch options]\n  qol emu shot [--run-root PATH]... <run-id|environment>\n  qol emu key [--run-root PATH]... <run-id|environment> <qcode>...\n  qol emu insert [--run-root PATH]... <run-id|environment>\n  qol emu pull [--run-root PATH]... <run-id|environment>\n  qol emu snap [--run-root PATH]... <run-id|environment>\n  qol emu sh [--run-root PATH]... [--] <run-id|environment> <command>...\n  qol emu exec [--run-root PATH]... [--] <run-id|environment> <absolute-program> [args...]\n  qol emu drag [--run-root PATH]... <run-id|environment> <x1,y1> <x2,y2>\n  qol emu down [--run-root PATH]... <run-id|environment>\n\nLaunch options:\n  --windowed --headless --offline --memory-mb N --cpus N\n  --run-id ID --run-root PATH --environment-id ID\n  --image-kind qcow2|raw|img|iso\n  --guest-adapter debian-nocloud|macos-desktop|mint-cinnamon|windows-desktop\n  --acceleration hardware|allow-tcg --arch x86_64|aarch64\n  --firmware bios|uefi\n\nLaunches are headless unless --windowed is explicit. --offline disconnects the\nguest from host networking. Control verbs prefer an exact run ID. An\nenvironment ID works only when one matching run is live. Control --run-root is\nrepeatable, must precede the selector, and defaults to target/qol-emu. Sandbox\nlaunches require verified host process-tree containment; unsupported hosts stay\nvisible but cannot start a VM. For sh and exec,\nevery word after the selector is forwarded literally, including a leading --.\nexec and drag talk to prepared desktop guests: exec runs as the guest desktop\nuser over verified guest control, drag drives the QMP pointer scaled to the\nlive framebuffer.\nPlace -- before the selector to stop global option parsing without forwarding it.\n\nEmus are discovered from libvirt/QEMU domains plus optional local config:\n  ~/.config/qol-tray/emu.toml\n\nDrop a disk image or .iso into the emu dir (`qol emu open`) and it appears in\n`qol emu list`; `qol emu up <id>` boots it headlessly (an .iso boots as a\ndisposable live CD). Pass --windowed for an interactive VM window.\n\nExample config:\n  [images]\n  my-windows = \"/path/to/windows.qcow2\"\n")
 }
 
 pub(crate) fn discover_all() -> Result<Discovered> {
@@ -2619,11 +2626,32 @@ mod tests {
         let help = emu_help_text();
         assert!(help.contains("[--] <run-id|environment> <command>..."));
         assert!(help.contains(
+            "--guest-adapter debian-nocloud|macos-desktop|mint-cinnamon|windows-desktop"
+        ));
+        assert!(help.contains(
             "every word after the selector is forwarded literally, including a leading --"
         ));
         assert!(help.contains(
             "launches require verified host process-tree containment; unsupported hosts stay"
         ));
+    }
+
+    #[test]
+    fn workflow_adapter_validation_separates_serial_and_desktop_contracts() {
+        let serial = workflow_definition("leaves-no-trace").unwrap();
+        let desktop = workflow_definition("bluetooth-storm").unwrap();
+
+        validate_workflow_adapter(serial, GuestAdapter::DebianNocloud).unwrap();
+        assert!(validate_workflow_adapter(desktop, GuestAdapter::DebianNocloud).is_err());
+
+        for adapter in [
+            GuestAdapter::MacosDesktop,
+            GuestAdapter::MintCinnamon,
+            GuestAdapter::WindowsDesktop,
+        ] {
+            assert!(validate_workflow_adapter(serial, adapter).is_err());
+            validate_workflow_adapter(desktop, adapter).unwrap();
+        }
     }
 
     #[cfg(unix)]

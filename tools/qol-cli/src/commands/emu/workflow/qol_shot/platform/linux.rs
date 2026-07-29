@@ -1,3 +1,5 @@
+//! Linux Mint implementation of the qol-shot adversarial workflow.
+
 use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};

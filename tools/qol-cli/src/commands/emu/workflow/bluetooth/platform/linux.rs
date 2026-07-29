@@ -1,3 +1,5 @@
+//! Linux Mint implementation of the Bluetooth adversarial workflow.
+
 use std::thread;
 use std::time::Duration;
 

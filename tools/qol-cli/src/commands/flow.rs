@@ -6367,7 +6367,12 @@ mod tests {
     fn manifest_adapter_selection_accepts_typed_prepared_adapters_and_rejects_unknowns() {
         let cases = [
             (Some("debian-nocloud"), Ok(emu::GuestAdapter::DebianNocloud)),
+            (Some("macos-desktop"), Ok(emu::GuestAdapter::MacosDesktop)),
             (Some("mint-cinnamon"), Ok(emu::GuestAdapter::MintCinnamon)),
+            (
+                Some("windows-desktop"),
+                Ok(emu::GuestAdapter::WindowsDesktop),
+            ),
             (Some("mint"), Err("unknown flow adapter")),
             (None, Err("no automated flow adapter")),
         ];
