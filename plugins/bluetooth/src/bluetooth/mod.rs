@@ -519,6 +519,26 @@ mod tests {
     }
 
     #[test]
+    fn discovery_reset_discards_results_from_an_invalid_adapter() {
+        let mut state = DiscoveryState::default();
+        state.start();
+        state.record_device(device(
+            "04",
+            "Vanished Controller",
+            false,
+            false,
+            false,
+            None,
+        ));
+
+        state.reset();
+
+        assert!(!state.searching());
+        assert_eq!(state.discovered_count(), 0);
+        assert_eq!(state.device("AA:BB:CC:DD:EE:04"), None);
+    }
+
+    #[test]
     fn audio_connection_requires_a_connected_a2dp_sink_profile() {
         let cases = [
             ("BLE-only speaker", audio_device(true, true, &[]), false),
