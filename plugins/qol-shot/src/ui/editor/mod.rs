@@ -5,6 +5,7 @@ use std::rc::Rc;
 use anyhow::{Context as _, Result};
 use gpui::*;
 use qol_gpui::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
+use qol_gpui::history::UndoHistory;
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::surface::{Surface, SurfaceDismisser, SurfaceKind};
 
@@ -39,16 +40,20 @@ struct EditorLayout {
 enum EditorControl {
     Pen,
     Color,
+    Undo,
+    Redo,
     Save,
 }
 
 impl EditorControl {
-    const ALL: [Self; 3] = [Self::Pen, Self::Color, Self::Save];
+    const ALL: [Self; 5] = [Self::Pen, Self::Color, Self::Undo, Self::Redo, Self::Save];
 
     fn label(self) -> &'static str {
         match self {
             Self::Pen => "Pen",
             Self::Color => "Color",
+            Self::Undo => "Undo",
+            Self::Redo => "Redo",
             Self::Save => "Save",
         }
     }
@@ -57,7 +62,24 @@ impl EditorControl {
         match self {
             Self::Pen => "✎",
             Self::Color => "",
+            Self::Undo => "↶",
+            Self::Redo => "↷",
             Self::Save => "✓",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HistoryAction {
+    Undo,
+    Redo,
+}
+
+impl HistoryAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Undo => "undo",
+            Self::Redo => "redo",
         }
     }
 }
@@ -70,9 +92,9 @@ struct ActiveWheel {
 struct EditorView {
     document: EditorDocument,
     layout: EditorLayout,
-    strokes: Vec<PenStroke>,
+    history: UndoHistory<PenStroke>,
+    active_stroke: Option<PenStroke>,
     pen_color: u32,
-    drawing: bool,
     selected: usize,
     save_pending: bool,
     save_error: Option<String>,
@@ -135,9 +157,9 @@ impl EditorView {
         Self {
             document,
             layout,
-            strokes: Vec::new(),
+            history: UndoHistory::new(),
+            active_stroke: None,
             pen_color: current_palette().state_off,
-            drawing: false,
             selected: 0,
             save_pending: false,
             save_error: None,
@@ -162,9 +184,11 @@ impl EditorView {
         let Some((point, width)) = self.pointer_stroke(event.position, false) else {
             return;
         };
-        self.drawing = true;
+        if self.active_stroke.is_some() {
+            return;
+        }
         self.save_error = None;
-        self.strokes.push(PenStroke {
+        self.active_stroke = Some(PenStroke {
             color: self.pen_color,
             width,
             points: vec![point],
@@ -179,13 +203,13 @@ impl EditorView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.drawing || !event.dragging() {
+        if !event.dragging() {
             return;
         }
         let Some((point, _)) = self.pointer_stroke(event.position, true) else {
             return;
         };
-        let Some(stroke) = self.strokes.last_mut() else {
+        let Some(stroke) = self.active_stroke.as_mut() else {
             return;
         };
         if stroke.points.last() == Some(&point) {
@@ -201,19 +225,27 @@ impl EditorView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.drawing {
+        if self.active_stroke.is_none() {
             return;
         }
-        self.drawing = false;
-        if let Some((point, _)) = self.pointer_stroke(event.position, true) {
-            if let Some(stroke) = self.strokes.last_mut() {
-                if stroke.points.last() != Some(&point) {
-                    stroke.points.push(point);
-                }
-            }
-        }
+        let final_point = self
+            .pointer_stroke(event.position, true)
+            .map(|(point, _)| point);
+        self.commit_active_stroke(final_point);
         cx.stop_propagation();
         cx.notify();
+    }
+
+    fn commit_active_stroke(&mut self, final_point: Option<NormalizedPoint>) {
+        let Some(mut stroke) = self.active_stroke.take() else {
+            return;
+        };
+        if let Some(point) = final_point {
+            if stroke.points.last() != Some(&point) {
+                stroke.points.push(point);
+            }
+        }
+        self.history.record(stroke);
     }
 
     fn pointer_stroke(
@@ -246,11 +278,57 @@ impl EditorView {
             .iter()
             .position(|candidate| *candidate == control)
             .unwrap_or(0);
+        if !self.control_enabled(control) {
+            cx.notify();
+            return;
+        }
         match control {
             EditorControl::Pen => cx.notify(),
             EditorControl::Color => self.open_color_wheel(window, cx),
+            EditorControl::Undo => self.change_history(HistoryAction::Undo, cx),
+            EditorControl::Redo => self.change_history(HistoryAction::Redo, cx),
             EditorControl::Save => self.save(cx),
         }
+    }
+
+    fn control_enabled(&self, control: EditorControl) -> bool {
+        if self.save_pending {
+            return false;
+        }
+        match control {
+            EditorControl::Pen | EditorControl::Color | EditorControl::Save => true,
+            EditorControl::Undo => self.active_stroke.is_some() || self.history.can_undo(),
+            EditorControl::Redo => self.active_stroke.is_none() && self.history.can_redo(),
+        }
+    }
+
+    fn change_history(&mut self, action: HistoryAction, cx: &mut Context<Self>) {
+        if self.save_pending {
+            return;
+        }
+        self.commit_active_stroke(None);
+        let applied = match action {
+            HistoryAction::Undo if self.history.can_undo() => {
+                self.history.undo();
+                true
+            }
+            HistoryAction::Redo if self.history.can_redo() => {
+                self.history.redo();
+                true
+            }
+            HistoryAction::Undo | HistoryAction::Redo => false,
+        };
+        self.save_error = None;
+        qol_runtime::probe!(
+            "SHOT_EDIT",
+            "phase=history action={} result={} strokes={} can_undo={} can_redo={}",
+            action.label(),
+            if applied { "applied" } else { "empty" },
+            self.history.len(),
+            self.history.can_undo(),
+            self.history.can_redo()
+        );
+        cx.notify();
     }
 
     fn open_color_wheel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -332,7 +410,8 @@ impl EditorView {
         if self.save_pending {
             return;
         }
-        if self.strokes.is_empty() {
+        self.commit_active_stroke(None);
+        if self.history.is_empty() {
             self.close(cx);
             return;
         }
@@ -340,7 +419,7 @@ impl EditorView {
         self.save_pending = true;
         self.save_error = None;
         let path = self.document.path.clone();
-        let strokes = self.strokes.clone();
+        let strokes = self.history.applied().to_vec();
         let stroke_count = strokes.len();
         qol_runtime::probe!("SHOT_EDIT", "phase=save-request strokes={stroke_count}");
         let task = cx.background_spawn(async move { save_strokes(&path, &strokes) });
@@ -386,10 +465,19 @@ impl EditorView {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(action) =
+            history_shortcut(event.keystroke.key.as_str(), event.keystroke.modifiers)
+        {
+            self.change_history(action, cx);
+            return;
+        }
         if event.keystroke.key.eq_ignore_ascii_case("s")
             && event.keystroke.modifiers == Modifiers::secondary_key()
         {
             self.save(cx);
+            return;
+        }
+        if event.keystroke.modifiers.modified() {
             return;
         }
         match event.keystroke.key.as_str() {
@@ -401,6 +489,8 @@ impl EditorView {
             }
             "p" => self.activate_control(EditorControl::Pen, window, cx),
             "c" => self.activate_control(EditorControl::Color, window, cx),
+            "u" => self.activate_control(EditorControl::Undo, window, cx),
+            "r" => self.activate_control(EditorControl::Redo, window, cx),
             "s" => self.activate_control(EditorControl::Save, window, cx),
             _ => {}
         }
@@ -416,4 +506,57 @@ impl Focusable for EditorView {
 fn parse_rgb24(value: &str) -> Option<u32> {
     let (red, green, blue) = qol_color::parse_hex_color(value)?;
     Some(qol_color::rgb24(red, green, blue))
+}
+
+fn history_shortcut(key: &str, modifiers: Modifiers) -> Option<HistoryAction> {
+    let secondary = Modifiers::secondary_key();
+    if key.eq_ignore_ascii_case("z") && modifiers == secondary {
+        return Some(HistoryAction::Undo);
+    }
+    let secondary_shift = Modifiers {
+        shift: true,
+        ..secondary
+    };
+    if key.eq_ignore_ascii_case("z") && modifiers == secondary_shift {
+        return Some(HistoryAction::Redo);
+    }
+    if key.eq_ignore_ascii_case("y") && modifiers == secondary {
+        return Some(HistoryAction::Redo);
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{history_shortcut, HistoryAction};
+    use gpui::Modifiers;
+
+    #[test]
+    fn history_shortcuts_accept_standard_chords_only() {
+        let secondary = Modifiers::secondary_key();
+        let secondary_shift = Modifiers {
+            shift: true,
+            ..secondary
+        };
+        let secondary_alt = Modifiers {
+            alt: true,
+            ..secondary
+        };
+        let cases = [
+            ("z", secondary, Some(HistoryAction::Undo)),
+            ("Z", secondary, Some(HistoryAction::Undo)),
+            ("z", secondary_shift, Some(HistoryAction::Redo)),
+            ("y", secondary, Some(HistoryAction::Redo)),
+            ("z", secondary_alt, None),
+            ("z", Modifiers::none(), None),
+            ("x", secondary, None),
+        ];
+        for (key, modifiers, expected) in cases {
+            assert_eq!(
+                history_shortcut(key, modifiers),
+                expected,
+                "key={key} modifiers={modifiers:?}"
+            );
+        }
+    }
 }

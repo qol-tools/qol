@@ -3,6 +3,7 @@ pub mod command_loop;
 pub mod dropdown;
 pub mod event_router;
 pub mod ghost;
+pub mod history;
 pub mod keepalive;
 pub mod monitor;
 pub mod placement;

@@ -3,7 +3,8 @@ use qol_gpui::surface::PanelDragArea;
 
 impl EditorView {
     fn render_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let strokes = self.strokes.clone();
+        let mut strokes = self.history.applied().to_vec();
+        strokes.extend(self.active_stroke.iter().cloned());
         let image_bounds = self.image_bounds.clone();
         div()
             .id("shot-editor-canvas")
@@ -43,6 +44,7 @@ impl EditorView {
     fn render_control(&self, index: usize, control: EditorControl, cx: &mut Context<Self>) -> Div {
         let palette = current_palette();
         let selected = self.selected == index;
+        let enabled = self.control_enabled(control);
         let color_bounds = self.color_bounds.clone();
         let mut button = div()
             .id(("shot-editor-control", index))
@@ -64,10 +66,14 @@ impl EditorView {
             } else {
                 rgb(palette.action_bg)
             })
-            .text_color(rgb(palette.action_glyph))
-            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.activate_control(control, window, cx)
-            }));
+            .text_color(rgb(palette.action_glyph));
+        if enabled {
+            button = button
+                .cursor(CursorStyle::PointingHand)
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.activate_control(control, window, cx)
+                }));
+        }
         if control == EditorControl::Color {
             button = button
                 .child(
@@ -95,6 +101,7 @@ impl EditorView {
             .flex_col()
             .items_center()
             .gap_1()
+            .opacity(if enabled { 1.0 } else { 0.4 })
             .child(button)
             .child(
                 div()
@@ -115,7 +122,7 @@ impl Render for EditorView {
                 if self.save_pending {
                     return "Saving…".to_string();
                 }
-                "Drag to draw · Ctrl+S saves · Esc cancels".to_string()
+                "Drag to draw · Ctrl+Z undo · Ctrl+S saves · Esc cancels".to_string()
             })
             .into();
         div()
