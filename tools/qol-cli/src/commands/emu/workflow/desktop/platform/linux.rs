@@ -437,6 +437,7 @@ pub(in crate::commands::emu::workflow) fn start_tray_and_wait_plugin(
     guest: &mut GuestControlClient,
     plugin_id: &str,
 ) -> Result<String> {
+    stop_preinstalled_runtime(guest)?;
     spawn(guest, command(TRAY_BINARY, &[]))?;
     let token = wait_for_command(
         guest,
@@ -460,6 +461,48 @@ pub(in crate::commands::emu::workflow) fn start_tray_and_wait_plugin(
     Ok(auth_header)
 }
 
+fn stop_preinstalled_runtime(guest: &mut GuestControlClient) -> Result<()> {
+    require_exec(
+        guest,
+        command(
+            "/usr/bin/bash",
+            &[
+                "-lc",
+                concat!(
+                    "/usr/bin/pkill --signal TERM --full ",
+                    "'^/home/qol/.config/qol-tray/plugins/' 2>/dev/null || true; ",
+                    "/usr/bin/pkill --signal TERM --exact qol-tray 2>/dev/null || true"
+                ),
+            ],
+        ),
+        GUEST_COMMAND_TIMEOUT,
+    )?;
+    wait_for_command(
+        guest,
+        command(
+            "/usr/bin/bash",
+            &[
+                "-lc",
+                concat!(
+                    "if /usr/bin/pgrep --exact qol-tray >/dev/null || ",
+                    "/usr/bin/pgrep --full ",
+                    "'^/home/qol/.config/qol-tray/plugins/' >/dev/null; ",
+                    "then exit 1; fi"
+                ),
+            ],
+        ),
+        GUEST_COMMAND_TIMEOUT,
+        |_| true,
+        "the preinstalled tray and plugin processes to exit",
+    )?;
+    step_label(
+        "runtime",
+        StepKind::Success,
+        "preinstalled tray runtime stopped before payload launch",
+    );
+    Ok(())
+}
+
 pub(in crate::commands::emu::workflow) fn command(program: &str, args: &[&str]) -> CommandSpec {
     CommandSpec {
         program: program.to_string(),
@@ -476,6 +519,19 @@ pub(in crate::commands::emu::workflow) fn spawn(
     match guest.request(RequestAction::Spawn { command }, GUEST_COMMAND_TIMEOUT)? {
         ResponseResult::Spawned { process_id, .. } => Ok(process_id),
         result => bail!("guest spawn returned an unexpected response: {result:?}"),
+    }
+}
+
+pub(in crate::commands::emu::workflow) fn terminate(
+    guest: &mut GuestControlClient,
+    process_id: u64,
+) -> Result<ProcessOutcome> {
+    match guest.request(
+        RequestAction::Terminate { process_id },
+        GUEST_COMMAND_TIMEOUT,
+    )? {
+        ResponseResult::Process { outcome } => Ok(outcome),
+        result => bail!("guest terminate returned an unexpected response: {result:?}"),
     }
 }
 
