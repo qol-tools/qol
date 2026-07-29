@@ -106,7 +106,17 @@ impl Dropdown {
             .cloned()
             .map(DropdownItem::plain)
             .collect::<Vec<_>>();
-        self.render_items_with_click(&items, style, Some((id.into(), Rc::new(on_click))))
+        self.render_items_clickable(id, &items, style, on_click)
+    }
+
+    pub fn render_items_clickable(
+        &self,
+        id: impl Into<SharedString>,
+        items: &[DropdownItem],
+        style: DropdownStyle,
+        on_click: impl Fn(usize, &ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        self.render_items_with_click(items, style, Some((id.into(), Rc::new(on_click))))
     }
 
     fn render_items_with_click(

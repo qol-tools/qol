@@ -499,7 +499,10 @@ impl SettingsPanelView {
         let Some(ActiveControl::Dropdown(dropdown)) = self.active_control.as_ref() else {
             return;
         };
-        let pick = dropdown.selected();
+        self.pick_dropdown_option(dropdown.selected());
+    }
+
+    fn pick_dropdown_option(&mut self, pick: usize) {
         let Some(row) = self.rows.get_mut(self.selected) else {
             return;
         };
@@ -1140,16 +1143,18 @@ impl SettingsPanelView {
             .absolute()
             .inset_0(),
         );
-        if matches!(
+        if !matches!(
             row.control,
-            RowControl::Color(_) | RowControl::Action { .. }
+            RowControl::Status { .. } | RowControl::List { .. }
         ) {
             line = line.cursor(CursorStyle::PointingHand).on_click(cx.listener(
                 move |this, event: &ClickEvent, window, cx| {
-                    if event.standard_click() {
-                        this.selected = index;
-                        this.activate(window, cx);
+                    if !event.standard_click() {
+                        return;
                     }
+                    this.selected = index;
+                    this.activate(window, cx);
+                    cx.notify();
                 },
             ));
         }
@@ -1159,15 +1164,12 @@ impl SettingsPanelView {
                 .border_1()
                 .border_color(rgb(self.palette.row_border_selected));
             if let Some(ActiveControl::Dropdown(dropdown)) = &self.active_control {
-                match &row.control {
-                    RowControl::Select { options, .. } => {
-                        let items = dropdown_items(options);
-                        line = line.child(dropdown.render_items(&items, self.dropdown_style()));
-                    }
+                let items = match &row.control {
+                    RowControl::Select { options, .. } => Some(dropdown_items(options)),
                     RowControl::MultiSelect {
                         options, selected, ..
-                    } => {
-                        let items = options
+                    } => Some(
+                        options
                             .iter()
                             .zip(selected)
                             .map(|(option, on)| DropdownItem {
@@ -1178,9 +1180,8 @@ impl SettingsPanelView {
                                 ),
                                 accent: option.accent,
                             })
-                            .collect::<Vec<_>>();
-                        line = line.child(dropdown.render_items(&items, self.dropdown_style()));
-                    }
+                            .collect::<Vec<_>>(),
+                    ),
                     RowControl::Toggle(_)
                     | RowControl::Number { .. }
                     | RowControl::Text(_)
@@ -1188,7 +1189,28 @@ impl SettingsPanelView {
                     | RowControl::Color(_)
                     | RowControl::Action { .. }
                     | RowControl::Status { .. }
-                    | RowControl::List { .. } => {}
+                    | RowControl::List { .. } => None,
+                };
+                if let Some(items) = items {
+                    let view = cx.weak_entity();
+                    line = line.child(dropdown.render_items_clickable(
+                        format!("settings-options-{index}"),
+                        &items,
+                        self.dropdown_style(),
+                        move |selected, event, _, cx| {
+                            if !event.standard_click() {
+                                return;
+                            }
+                            cx.stop_propagation();
+                            let view = view.clone();
+                            cx.defer(move |cx| {
+                                let _ = view.update(cx, |this, cx| {
+                                    this.pick_dropdown_option(selected);
+                                    cx.notify();
+                                });
+                            });
+                        },
+                    ));
                 }
             }
         }

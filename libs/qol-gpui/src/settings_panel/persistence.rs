@@ -139,7 +139,8 @@ fn tray_http(method: &str, route: &str, body: Option<&str>) -> anyhow::Result<(u
 
 fn tray_http_request(method: &str, route: &str, body: &str, token: &str) -> String {
     format!(
-        "{method} {route} HTTP/1.1\r\nHost: {}:{DEFAULT_PORT}\r\n{}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "{method} {route} HTTP/1.1\r\nHost: {}:{DEFAULT_PORT}\r\nOrigin: http://{}:{DEFAULT_PORT}\r\n{}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        qol_conventions::LOCAL_HOST,
         qol_conventions::LOCAL_HOST,
         qol_conventions::HTTP_AUTH_HEADER,
         body.len()
@@ -164,7 +165,7 @@ mod tests {
     use super::{action_result_data, parse_http_response, tray_http_request};
 
     #[test]
-    fn tray_request_carries_the_local_authority_and_authentication() {
+    fn tray_request_carries_the_local_authority_origin_and_authentication() {
         let cases = [
             ("GET", "/api/plugins/plugin-a/queries/status", ""),
             (
@@ -172,27 +173,40 @@ mod tests {
                 "/api/plugins/plugin-a/actions/start",
                 r#"{"enabled":true}"#,
             ),
+            (
+                "PUT",
+                "/api/plugins/plugin-a/config",
+                r#"{"enabled":false}"#,
+            ),
         ];
         for (method, route, body) in cases {
             let request = tray_http_request(method, route, body, "secret");
+            let (headers, actual_body) = request.split_once("\r\n\r\n").unwrap();
             let authority = format!(
                 "Host: {}:{}\r\n",
+                qol_conventions::LOCAL_HOST,
+                qol_conventions::DEFAULT_PORT
+            );
+            let origin = format!(
+                "Origin: http://{}:{}\r\n",
                 qol_conventions::LOCAL_HOST,
                 qol_conventions::DEFAULT_PORT
             );
             let authentication = format!("{}: secret\r\n", qol_conventions::HTTP_AUTH_HEADER);
 
             assert!(
-                request.starts_with(&format!("{method} {route} HTTP/1.1\r\n")),
+                headers.starts_with(&format!("{method} {route} HTTP/1.1\r\n")),
                 "request: {request}"
             );
-            assert!(request.contains(&authority), "request: {request}");
-            assert!(request.contains(&authentication), "request: {request}");
+            assert!(headers.contains(&authority), "request: {request}");
+            assert!(headers.contains(&origin), "request: {request}");
+            assert!(headers.contains(&authentication), "request: {request}");
             assert!(
-                request.contains(&format!("Content-Length: {}\r\n", body.len())),
+                headers.contains(&format!("Content-Length: {}\r\n", body.len())),
                 "request: {request}"
             );
-            assert!(request.ends_with(&format!("\r\n\r\n{body}")));
+            assert!(!actual_body.contains("secret"));
+            assert_eq!(actual_body, body);
         }
     }
 
