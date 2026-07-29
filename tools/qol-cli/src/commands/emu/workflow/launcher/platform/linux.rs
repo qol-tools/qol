@@ -119,8 +119,9 @@ fn type_text(guest: &mut GuestControlClient, value: &str) -> Result<()> {
 }
 
 fn wait_for_launcher(guest: &mut GuestControlClient) -> Result<()> {
-    wait_for_active_title(
+    wait_for_window_title(
         guest,
+        launcher_focus_args(),
         |title| title.starts_with("qol-launcher@"),
         "Launcher",
     )
@@ -131,9 +132,27 @@ fn wait_for_active_title(
     predicate: impl Fn(&str) -> bool,
     description: &str,
 ) -> Result<()> {
+    wait_for_window_title(
+        guest,
+        &["getactivewindow", "getwindowname"],
+        predicate,
+        description,
+    )
+}
+
+fn launcher_focus_args() -> &'static [&'static str] {
+    &["getactivewindow", "getwindowname"]
+}
+
+fn wait_for_window_title(
+    guest: &mut GuestControlClient,
+    xdotool_args: &[&str],
+    predicate: impl Fn(&str) -> bool,
+    description: &str,
+) -> Result<()> {
     wait_for_command(
         guest,
-        command("/usr/bin/xdotool", &["getactivewindow", "getwindowname"]),
+        command("/usr/bin/xdotool", xdotool_args),
         ACTION_TIMEOUT,
         |outcome| predicate(outcome.stdout.trim()),
         &format!("{description} to own guest focus"),
@@ -465,7 +484,7 @@ fn within_fd_budget(before: u64, after: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::within_fd_budget;
+    use super::{launcher_focus_args, within_fd_budget};
 
     #[test]
     fn fd_budget_allows_runtime_noise_but_rejects_cycle_growth() {
@@ -483,5 +502,10 @@ mod tests {
                 "before={before} after={after}"
             );
         }
+    }
+
+    #[test]
+    fn launcher_oracle_reads_direct_x_input_focus() {
+        assert_eq!(launcher_focus_args(), ["getwindowfocus", "getwindowname"]);
     }
 }
