@@ -134,7 +134,40 @@ fn parse_http_response(raw: &str) -> (u16, String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{action_result_data, parse_http_response};
+    use super::{action_result_data, parse_http_response, tray_http_request};
+
+    #[test]
+    fn tray_request_carries_the_local_authority_and_authentication() {
+        let cases = [
+            ("GET", "/api/plugins/plugin-a/queries/status", ""),
+            (
+                "POST",
+                "/api/plugins/plugin-a/actions/start",
+                r#"{"enabled":true}"#,
+            ),
+        ];
+        for (method, route, body) in cases {
+            let request = tray_http_request(method, route, body, "secret");
+            let authority = format!(
+                "Host: {}:{}\r\n",
+                qol_conventions::LOCAL_HOST,
+                qol_conventions::DEFAULT_PORT
+            );
+            let authentication = format!("{}: secret\r\n", qol_conventions::HTTP_AUTH_HEADER);
+
+            assert!(
+                request.starts_with(&format!("{method} {route} HTTP/1.1\r\n")),
+                "request: {request}"
+            );
+            assert!(request.contains(&authority), "request: {request}");
+            assert!(request.contains(&authentication), "request: {request}");
+            assert!(
+                request.contains(&format!("Content-Length: {}\r\n", body.len())),
+                "request: {request}"
+            );
+            assert!(request.ends_with(&format!("\r\n\r\n{body}")));
+        }
+    }
 
     #[test]
     fn http_response_parsing_extracts_status_and_body() {

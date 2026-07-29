@@ -82,7 +82,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
             "/usr/bin/grep",
             &[
                 "-E",
-                "BLUETOOTH_(ACTION|ADAPTER|ADAPTER_POWER|DEVICE|RELOAD|SEARCH|SNAPSHOT|START)",
+                "BLUETOOTH_(ACTION|ADAPTER|ADAPTER_POWER|DEVICE|RELOAD|SEARCH|SNAPSHOT|START)|SURFACE_ACTIVATION",
                 TRACE_LOG_PATH,
             ],
         ),
@@ -456,6 +456,18 @@ fn test_settings(
         |outcome| outcome.stdout.trim().starts_with("Bluetooth Settings"),
         "native Bluetooth Settings to own guest focus",
     )?;
+    for query in ["adapter_status", "search_status", "devices"] {
+        let evidence = format!(
+            "SURFACE_ACTIVATION plugin={PLUGIN_ID} phase=runtime-query query={query} status=200"
+        );
+        wait_for_command(
+            guest,
+            command("/usr/bin/grep", &["-F", &evidence, TRACE_LOG_PATH]),
+            ACTION_TIMEOUT,
+            |outcome| outcome.exit_code == Some(0),
+            &format!("native Bluetooth Settings query {query} to authenticate"),
+        )?;
+    }
     qmp.screendump(artifact)?;
     require_exec(
         guest,
