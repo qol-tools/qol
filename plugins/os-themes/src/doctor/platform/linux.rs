@@ -3,7 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use super::{CurrentThemeMetadata, GsettingsMetadata, PlatformMetadata, SessionMetadata};
-use crate::theme::desktop::{classify_desktop, DesktopEnvironment};
+use crate::theme::platform::{classify_desktop, DesktopEnvironment};
 
 pub(super) fn inspect() -> PlatformMetadata {
     let desktop = environment_value("XDG_CURRENT_DESKTOP");

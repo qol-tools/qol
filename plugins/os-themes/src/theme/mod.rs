@@ -1,4 +1,3 @@
-pub(crate) mod desktop;
 pub mod platform;
 
 use anyhow::Result;

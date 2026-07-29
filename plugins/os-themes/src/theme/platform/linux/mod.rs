@@ -1,13 +1,14 @@
 mod backends;
+mod desktop;
 mod gsettings;
 
 use anyhow::{bail, Result};
 
-use crate::theme::desktop::{classify_desktop, DesktopEnvironment};
 use crate::theme::ColorScheme;
 
 use super::ThemePlatform;
 use backends::DesktopBackend;
+pub(crate) use desktop::{classify_desktop, DesktopEnvironment};
 
 pub struct Platform;
 
