@@ -14,6 +14,7 @@ mod bluetooth;
 mod desktop;
 mod launcher;
 mod qol_shot;
+mod shortcuts;
 mod window_actions;
 
 pub(crate) struct Verdict {
@@ -103,6 +104,7 @@ pub(crate) enum DesktopWorkflow {
     LauncherStorm,
     QolShotCapture,
     QolShotStorm,
+    ShortcutStorm,
     WindowActionsStorm,
 }
 
@@ -138,6 +140,7 @@ pub(crate) fn run_desktop(
         DesktopWorkflow::LauncherStorm => launcher::run(vm, platform),
         DesktopWorkflow::QolShotCapture => desktop::run(vm, platform),
         DesktopWorkflow::QolShotStorm => qol_shot::run(vm, platform),
+        DesktopWorkflow::ShortcutStorm => shortcuts::run(vm, platform),
         DesktopWorkflow::WindowActionsStorm => window_actions::run(vm, platform),
     }
 }
@@ -166,6 +169,10 @@ const REGISTRY: &[Definition] = &[
     Definition::Desktop {
         id: "qol-shot-storm",
         run: DesktopWorkflow::QolShotStorm,
+    },
+    Definition::Desktop {
+        id: "shortcut-storm",
+        run: DesktopWorkflow::ShortcutStorm,
     },
     Definition::Desktop {
         id: "window-actions-storm",
@@ -209,6 +216,7 @@ mod tests {
             ("leaves-no-trace", true),
             ("launcher-storm", true),
             ("qol-shot-storm", true),
+            ("shortcut-storm", true),
             ("unknown", false),
             ("", false),
         ];
@@ -228,6 +236,7 @@ mod tests {
                 "launcher-storm",
                 "qol-shot-capture",
                 "qol-shot-storm",
+                "shortcut-storm",
                 "window-actions-storm"
             ]
         );
@@ -241,6 +250,7 @@ mod tests {
         assert!(find("launcher-storm").unwrap().requires_payload());
         assert!(find("qol-shot-capture").unwrap().requires_payload());
         assert!(find("qol-shot-storm").unwrap().requires_payload());
+        assert!(find("shortcut-storm").unwrap().requires_payload());
         assert!(find("window-actions-storm").unwrap().requires_payload());
     }
 

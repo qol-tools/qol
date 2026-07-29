@@ -143,6 +143,11 @@ struct FlowPayload {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DesktopPayloadRecipe {
+    companion: Option<DesktopCompanionRecipe>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DesktopCompanionRecipe {
     package: &'static str,
     binary: &'static str,
     plugin_dir: &'static str,
@@ -2591,14 +2596,7 @@ fn prepare_workflow_payload(
     let cargo = emu::find_on_path("cargo")
         .context("missing cargo on PATH")
         .map_err(|error| PayloadPreparationFailure::before_spawn(error, false))?;
-    step_label(
-        "build",
-        StepKind::Pending,
-        &format!(
-            "qol-tray + {} · optimized probe-enabled sandbox profile",
-            recipe.package
-        ),
-    );
+    step_label("build", StepKind::Pending, &payload_build_label(recipe));
     let mut build = Command::new(&cargo);
     build.current_dir(worktree).args([
         "build",
@@ -2608,11 +2606,10 @@ fn prepare_workflow_payload(
         "qol-tray",
         "--bin",
         "qol-tray",
-        "-p",
-        recipe.package,
-        "--bin",
-        recipe.binary,
     ]);
+    if let Some(companion) = recipe.companion {
+        build.args(["-p", companion.package, "--bin", companion.binary]);
+    }
     if !verbose {
         build.arg("--quiet");
     }
@@ -2667,32 +2664,33 @@ fn prepare_workflow_payload(
         None => worktree.join("target"),
     };
     let binary_dir = target_root.join("sandbox");
-    let installed_root = Path::new("plugins").join(recipe.plugin_id);
     let mut files = vec![qol_dev_env::payload::PayloadFileSpec {
         source: binary_dir.join(crate::workspace::exe_name("qol-tray")),
         relative_path: PathBuf::from("bin/qol-tray"),
         executable: true,
     }];
-    let plugin_files = desktop_plugin_payload_files(worktree, recipe).map_err(|error| {
-        PayloadPreparationFailure {
-            error: error.context("failed to collect desktop plugin payload files"),
-            cancelled: false,
-            preparation: Box::new(failed_preparation(preparation.clone(), false)),
-        }
-    })?;
-    files.extend(plugin_files);
-    files.extend([
-        qol_dev_env::payload::PayloadFileSpec {
-            source: binary_dir.join(crate::workspace::exe_name(recipe.binary)),
-            relative_path: installed_root.join(recipe.binary),
+    if let Some(companion) = recipe.companion {
+        let plugin_files = desktop_plugin_payload_files(worktree, companion).map_err(|error| {
+            PayloadPreparationFailure {
+                error: error.context("failed to collect desktop plugin payload files"),
+                cancelled: false,
+                preparation: Box::new(failed_preparation(preparation.clone(), false)),
+            }
+        })?;
+        files.extend(plugin_files);
+        files.push(qol_dev_env::payload::PayloadFileSpec {
+            source: binary_dir.join(crate::workspace::exe_name(companion.binary)),
+            relative_path: Path::new("plugins")
+                .join(companion.plugin_id)
+                .join(companion.binary),
             executable: true,
-        },
-        qol_dev_env::payload::PayloadFileSpec {
-            source: worktree.join("flows/envs/linux-mint-cinnamon/qol-sandbox-payload"),
-            relative_path: PathBuf::from("installer/qol-sandbox-payload"),
-            executable: true,
-        },
-    ]);
+        });
+    }
+    files.push(qol_dev_env::payload::PayloadFileSpec {
+        source: worktree.join("flows/envs/linux-mint-cinnamon/qol-sandbox-payload"),
+        relative_path: PathBuf::from("installer/qol-sandbox-payload"),
+        executable: true,
+    });
     let payload_dir = run_dir.join("payload");
     let prepared =
         qol_dev_env::payload::stage_payload(&payload_dir.join("root"), workflow.id(), &files)
@@ -2802,7 +2800,7 @@ fn prepare_workflow_payload(
 
 fn desktop_plugin_payload_files(
     worktree: &Path,
-    recipe: DesktopPayloadRecipe,
+    recipe: DesktopCompanionRecipe,
 ) -> Result<Vec<qol_dev_env::payload::PayloadFileSpec>> {
     let plugin_root = worktree.join("plugins").join(recipe.plugin_dir);
     let executable_name = crate::workspace::exe_name(recipe.binary);
@@ -2820,40 +2818,56 @@ fn desktop_plugin_payload_files(
         .collect())
 }
 
+fn payload_build_label(recipe: DesktopPayloadRecipe) -> String {
+    match recipe.companion {
+        Some(companion) => format!(
+            "qol-tray + {} · optimized probe-enabled sandbox profile",
+            companion.package
+        ),
+        None => "qol-tray · optimized probe-enabled sandbox profile".to_string(),
+    }
+}
+
 fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
-    match workflow_id {
-        "alt-tab-storm" => Some(DesktopPayloadRecipe {
+    let companion = match workflow_id {
+        "alt-tab-storm" => DesktopCompanionRecipe {
             package: "alt-tab",
             binary: "alt-tab",
             plugin_dir: "alt-tab",
             plugin_id: "plugin-alt-tab",
-        }),
-        "bluetooth-storm" => Some(DesktopPayloadRecipe {
+        },
+        "bluetooth-storm" => DesktopCompanionRecipe {
             package: "plugin-bluetooth",
             binary: "plugin-bluetooth",
             plugin_dir: "bluetooth",
             plugin_id: "plugin-bluetooth",
-        }),
-        "launcher-storm" => Some(DesktopPayloadRecipe {
+        },
+        "launcher-storm" => DesktopCompanionRecipe {
             package: "launcher",
             binary: "launcher",
             plugin_dir: "launcher",
             plugin_id: "plugin-launcher",
-        }),
-        "qol-shot-capture" | "qol-shot-storm" => Some(DesktopPayloadRecipe {
+        },
+        "qol-shot-capture" | "qol-shot-storm" => DesktopCompanionRecipe {
             package: "qol-shot",
             binary: "qol-shot",
             plugin_dir: "qol-shot",
             plugin_id: "qol-shot",
-        }),
-        "window-actions-storm" => Some(DesktopPayloadRecipe {
+        },
+        "shortcut-storm" => {
+            return Some(DesktopPayloadRecipe { companion: None });
+        }
+        "window-actions-storm" => DesktopCompanionRecipe {
             package: "window-actions",
             binary: "window-actions",
             plugin_dir: "window-actions",
             plugin_id: "plugin-window-actions",
-        }),
-        _ => None,
-    }
+        },
+        _ => return None,
+    };
+    Some(DesktopPayloadRecipe {
+        companion: Some(companion),
+    })
 }
 
 fn failed_preparation(mut preparation: FlowPreparation, cancelled: bool) -> FlowPreparation {
@@ -4510,55 +4524,68 @@ mod tests {
             (
                 "alt-tab-storm",
                 DesktopPayloadRecipe {
-                    package: "alt-tab",
-                    binary: "alt-tab",
-                    plugin_dir: "alt-tab",
-                    plugin_id: "plugin-alt-tab",
+                    companion: Some(DesktopCompanionRecipe {
+                        package: "alt-tab",
+                        binary: "alt-tab",
+                        plugin_dir: "alt-tab",
+                        plugin_id: "plugin-alt-tab",
+                    }),
                 },
             ),
             (
                 "bluetooth-storm",
                 DesktopPayloadRecipe {
-                    package: "plugin-bluetooth",
-                    binary: "plugin-bluetooth",
-                    plugin_dir: "bluetooth",
-                    plugin_id: "plugin-bluetooth",
+                    companion: Some(DesktopCompanionRecipe {
+                        package: "plugin-bluetooth",
+                        binary: "plugin-bluetooth",
+                        plugin_dir: "bluetooth",
+                        plugin_id: "plugin-bluetooth",
+                    }),
                 },
             ),
             (
                 "launcher-storm",
                 DesktopPayloadRecipe {
-                    package: "launcher",
-                    binary: "launcher",
-                    plugin_dir: "launcher",
-                    plugin_id: "plugin-launcher",
+                    companion: Some(DesktopCompanionRecipe {
+                        package: "launcher",
+                        binary: "launcher",
+                        plugin_dir: "launcher",
+                        plugin_id: "plugin-launcher",
+                    }),
                 },
             ),
             (
                 "qol-shot-capture",
                 DesktopPayloadRecipe {
-                    package: "qol-shot",
-                    binary: "qol-shot",
-                    plugin_dir: "qol-shot",
-                    plugin_id: "qol-shot",
+                    companion: Some(DesktopCompanionRecipe {
+                        package: "qol-shot",
+                        binary: "qol-shot",
+                        plugin_dir: "qol-shot",
+                        plugin_id: "qol-shot",
+                    }),
                 },
             ),
             (
                 "qol-shot-storm",
                 DesktopPayloadRecipe {
-                    package: "qol-shot",
-                    binary: "qol-shot",
-                    plugin_dir: "qol-shot",
-                    plugin_id: "qol-shot",
+                    companion: Some(DesktopCompanionRecipe {
+                        package: "qol-shot",
+                        binary: "qol-shot",
+                        plugin_dir: "qol-shot",
+                        plugin_id: "qol-shot",
+                    }),
                 },
             ),
+            ("shortcut-storm", DesktopPayloadRecipe { companion: None }),
             (
                 "window-actions-storm",
                 DesktopPayloadRecipe {
-                    package: "window-actions",
-                    binary: "window-actions",
-                    plugin_dir: "window-actions",
-                    plugin_id: "plugin-window-actions",
+                    companion: Some(DesktopCompanionRecipe {
+                        package: "window-actions",
+                        binary: "window-actions",
+                        plugin_dir: "window-actions",
+                        plugin_id: "plugin-window-actions",
+                    }),
                 },
             ),
         ];
@@ -4582,7 +4609,10 @@ mod tests {
         ] {
             fs::write(plugin.join(path), content).unwrap();
         }
-        let recipe = desktop_payload_recipe("qol-shot-storm").unwrap();
+        let recipe = desktop_payload_recipe("qol-shot-storm")
+            .unwrap()
+            .companion
+            .unwrap();
 
         let files = desktop_plugin_payload_files(root.path(), recipe).unwrap();
         let relative = files
@@ -6420,6 +6450,7 @@ mod tests {
         let launcher = emu::workflow_definition("launcher-storm").unwrap();
         let desktop = emu::workflow_definition("qol-shot-capture").unwrap();
         let shot_storm = emu::workflow_definition("qol-shot-storm").unwrap();
+        let shortcut_storm = emu::workflow_definition("shortcut-storm").unwrap();
         let window_actions = emu::workflow_definition("window-actions-storm").unwrap();
         assert!(emu::validate_workflow_adapter(serial, adapter).is_err());
         emu::validate_workflow_adapter(alt_tab, adapter).unwrap();
@@ -6427,6 +6458,7 @@ mod tests {
         emu::validate_workflow_adapter(launcher, adapter).unwrap();
         emu::validate_workflow_adapter(desktop, adapter).unwrap();
         emu::validate_workflow_adapter(shot_storm, adapter).unwrap();
+        emu::validate_workflow_adapter(shortcut_storm, adapter).unwrap();
         emu::validate_workflow_adapter(window_actions, adapter).unwrap();
     }
 }

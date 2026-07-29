@@ -455,6 +455,13 @@ pub(in crate::commands::emu::workflow) fn start_tray_and_wait_plugin(
     Ok(auth_header)
 }
 
+pub(in crate::commands::emu::workflow) fn start_tray_and_wait_api(
+    guest: &mut GuestControlClient,
+) -> Result<String> {
+    stop_preinstalled_runtime(guest)?;
+    launch_tray_and_wait_api(guest)
+}
+
 pub(in crate::commands::emu::workflow) fn start_tray_and_wait_plugin_with_setup<T>(
     guest: &mut GuestControlClient,
     plugin_id: &str,
@@ -462,6 +469,14 @@ pub(in crate::commands::emu::workflow) fn start_tray_and_wait_plugin_with_setup<
 ) -> Result<(String, T)> {
     stop_preinstalled_runtime(guest)?;
     let setup_result = setup(guest)?;
+    let auth_header = launch_tray_and_wait_api(guest)?;
+    wait_for_plugin(guest, plugin_id, &auth_header)?;
+    Ok((auth_header, setup_result))
+}
+
+pub(in crate::commands::emu::workflow) fn launch_tray_and_wait_api(
+    guest: &mut GuestControlClient,
+) -> Result<String> {
     spawn(guest, command(TRAY_BINARY, &[]))?;
     let token = wait_for_command(
         guest,
@@ -471,18 +486,37 @@ pub(in crate::commands::emu::workflow) fn start_tray_and_wait_plugin_with_setup<
         "the qol-tray HTTP token",
     )?;
     let auth_header = format!("X-Qol-Token: {}", token.stdout.trim());
+    let api = format!("{}/api/shortcuts", local_base_url());
+    wait_for_command(
+        guest,
+        command(
+            "/usr/bin/curl",
+            &["--fail", "--silent", "--header", &auth_header, &api],
+        ),
+        DESKTOP_READY_TIMEOUT,
+        |_| true,
+        "the qol-tray shortcuts API",
+    )?;
+    Ok(auth_header)
+}
+
+fn wait_for_plugin(
+    guest: &mut GuestControlClient,
+    plugin_id: &str,
+    auth_header: &str,
+) -> Result<()> {
     let plugin_api = format!("{}/api/installed", local_base_url());
     wait_for_command(
         guest,
         command(
             "/usr/bin/curl",
-            &["--fail", "--silent", "--header", &auth_header, &plugin_api],
+            &["--fail", "--silent", "--header", auth_header, &plugin_api],
         ),
         DESKTOP_READY_TIMEOUT,
         |outcome| outcome.stdout.contains(plugin_id),
         &format!("{plugin_id} to appear in the tray plugin API"),
     )?;
-    Ok((auth_header, setup_result))
+    Ok(())
 }
 
 fn stop_preinstalled_runtime(guest: &mut GuestControlClient) -> Result<()> {

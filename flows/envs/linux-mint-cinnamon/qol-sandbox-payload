@@ -162,7 +162,13 @@ def validate_prod_payload(files):
         "missing payload installer",
     )
     plugin_paths = [path for path in files if path.startswith("plugins/")]
-    require(plugin_paths, "production payload has no plugin files")
+    base_allowed = {
+        "bin/qol-tray",
+        "installer/qol-sandbox-payload",
+    }
+    if not plugin_paths:
+        require(set(files) <= base_allowed, "tray-only payload contains an unowned file")
+        return None
     plugin_ids = {path.split("/")[1] for path in plugin_paths}
     require(len(plugin_ids) == 1, "production payload must contain exactly one plugin")
     plugin_id = next(iter(plugin_ids))
@@ -180,8 +186,7 @@ def validate_prod_payload(files):
     ]
     require(len(commands) == 1, "production payload must contain one plugin command")
     allowed = {
-        "bin/qol-tray",
-        "installer/qol-sandbox-payload",
+        *base_allowed,
         f"{root}plugin.toml",
         f"{root}qol-config.toml",
         commands[0],
@@ -202,13 +207,17 @@ def publish(staged, stage, plugin_id):
     os.chmod(first_run, 0o644)
     destinations = [
         (staged / "bin/qol-tray", QOL_HOME / ".local/bin/qol-tray"),
-        (
-            staged / "plugins" / plugin_id,
-            QOL_HOME / ".config/qol-tray/plugins" / plugin_id,
-        ),
         (mode_file, QOL_HOME / ".config/qol-tray/mode.json"),
         (first_run, QOL_HOME / ".config/qol-tray/.first-run-done"),
     ]
+    if plugin_id is not None:
+        destinations.insert(
+            1,
+            (
+                staged / "plugins" / plugin_id,
+                QOL_HOME / ".config/qol-tray/plugins" / plugin_id,
+            ),
+        )
     for _, destination in destinations:
         ensure_directory(destination.parent)
     backup = stage / "backup"
