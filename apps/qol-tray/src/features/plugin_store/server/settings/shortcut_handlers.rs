@@ -64,9 +64,8 @@ fn list_inner() -> HttpResult<Response> {
 
 fn create_inner(state: &AppState, body: axum::body::Bytes) -> HttpResult<Response> {
     let shortcut = http_json::parse_json_body(body, MAX_CONFIG_SIZE)?;
-    let mut config = store::load().map_err(|_| Box::new(load_failed()))?;
-    store::add(&mut config, shortcut).map_err(|e| Box::new(bad_request(&e)))?;
-    store::save(&config).map_err(|_| Box::new(save_failed()))?;
+    let config = store::create_persisted(shortcut)
+        .map_err(|error| map_mutation_error(error, bad_request))?;
     state.daemon.config.config_changed(ConfigKind::Shortcuts);
     let json = http_json::encode_json(&config, "Failed to serialize shortcuts")?;
     Ok(http_json::json_response(json))
@@ -79,9 +78,8 @@ fn update_inner(state: &AppState, id: &str, body: axum::body::Bytes) -> HttpResu
     if shortcut.id != id {
         return Err(Box::new(bad_request("body id must match path id")));
     }
-    let mut config = store::load().map_err(|_| Box::new(load_failed()))?;
-    store::update(&mut config, shortcut).map_err(|e| Box::new(bad_request(&e)))?;
-    store::save(&config).map_err(|_| Box::new(save_failed()))?;
+    let config = store::update_persisted(shortcut)
+        .map_err(|error| map_mutation_error(error, bad_request))?;
     state.daemon.config.config_changed(ConfigKind::Shortcuts);
     let json = http_json::encode_json(&config, "Failed to serialize shortcuts")?;
     Ok(http_json::json_response(json))
@@ -89,9 +87,8 @@ fn update_inner(state: &AppState, id: &str, body: axum::body::Bytes) -> HttpResu
 
 fn delete_inner(state: &AppState, id: &str) -> HttpResult<Response> {
     validation::validate_id(id).map_err(|e| Box::new(bad_request(&e)))?;
-    let mut config = store::load().map_err(|_| Box::new(load_failed()))?;
-    store::remove(&mut config, id).map_err(|e| Box::new(not_found(&e)))?;
-    store::save(&config).map_err(|_| Box::new(save_failed()))?;
+    let config =
+        store::remove_persisted(id).map_err(|error| map_mutation_error(error, not_found))?;
     state.daemon.config.config_changed(ConfigKind::Shortcuts);
     let json = http_json::encode_json(&config, "Failed to serialize shortcuts")?;
     Ok(http_json::json_response(json))
@@ -120,6 +117,17 @@ fn save_failed() -> Response {
         "Failed to save shortcuts",
     )
         .into_response()
+}
+
+fn map_mutation_error(
+    error: store::MutationError,
+    rejected: fn(&str) -> Response,
+) -> Box<Response> {
+    match error {
+        store::MutationError::Load(_) => Box::new(load_failed()),
+        store::MutationError::Rejected(message) => Box::new(rejected(&message)),
+        store::MutationError::Save(_) => Box::new(save_failed()),
+    }
 }
 
 fn bad_request(msg: &str) -> Response {

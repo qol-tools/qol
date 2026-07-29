@@ -1,4 +1,6 @@
 use anyhow::Result;
+use std::fmt;
+use std::path::Path;
 
 use super::model::{Shortcut, ShortcutsConfig};
 use super::plugin_manifest;
@@ -6,6 +8,10 @@ use super::validation;
 
 pub fn load() -> Result<ShortcutsConfig> {
     let path = crate::paths::shortcuts_path()?;
+    load_from(&path)
+}
+
+fn load_from(path: &Path) -> Result<ShortcutsConfig> {
     if !path.exists() {
         log::debug!(
             "Shortcuts config missing; using default: {}",
@@ -35,7 +41,11 @@ pub fn load() -> Result<ShortcutsConfig> {
 
 pub fn save(config: &ShortcutsConfig) -> Result<()> {
     let path = crate::paths::shortcuts_path()?;
-    match crate::file_io::write_pretty_json(&path, config) {
+    save_to(&path, config)
+}
+
+fn save_to(path: &Path, config: &ShortcutsConfig) -> Result<()> {
+    match crate::file_io::write_pretty_json(path, config) {
         Ok(()) => {
             log::info!(
                 "Shortcuts config saved: count={} path={}",
@@ -53,6 +63,54 @@ pub fn save(config: &ShortcutsConfig) -> Result<()> {
             Err(error)
         }
     }
+}
+
+#[derive(Debug)]
+pub enum MutationError {
+    Load(anyhow::Error),
+    Rejected(String),
+    Save(anyhow::Error),
+}
+
+impl fmt::Display for MutationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Load(error) => write!(formatter, "failed to load shortcuts: {error}"),
+            Self::Rejected(error) => formatter.write_str(error),
+            Self::Save(error) => write!(formatter, "failed to save shortcuts: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for MutationError {}
+
+pub fn create_persisted(shortcut: Shortcut) -> Result<ShortcutsConfig, MutationError> {
+    let path = crate::paths::shortcuts_path().map_err(MutationError::Load)?;
+    create_at(&path, shortcut)
+}
+
+pub fn update_persisted(shortcut: Shortcut) -> Result<ShortcutsConfig, MutationError> {
+    let path = crate::paths::shortcuts_path().map_err(MutationError::Load)?;
+    mutate_at(&path, |config| update(config, shortcut))
+}
+
+pub fn remove_persisted(id: &str) -> Result<ShortcutsConfig, MutationError> {
+    let path = crate::paths::shortcuts_path().map_err(MutationError::Load)?;
+    mutate_at(&path, |config| remove(config, id))
+}
+
+fn create_at(path: &Path, shortcut: Shortcut) -> Result<ShortcutsConfig, MutationError> {
+    mutate_at(path, |config| add(config, shortcut))
+}
+
+fn mutate_at(
+    path: &Path,
+    mutate: impl FnOnce(&mut ShortcutsConfig) -> Result<(), String>,
+) -> Result<ShortcutsConfig, MutationError> {
+    let mut config = load_from(path).map_err(MutationError::Load)?;
+    mutate(&mut config).map_err(MutationError::Rejected)?;
+    save_to(path, &config).map_err(MutationError::Save)?;
+    Ok(config)
 }
 
 pub fn find_by_id(config: &ShortcutsConfig, id: &str) -> Option<Shortcut> {
@@ -114,6 +172,7 @@ pub fn reconcile_plugin_shortcuts<'a>(
 mod tests {
     use super::super::model::ShortcutAction;
     use super::*;
+    use std::sync::{Arc, Barrier};
 
     fn url_shortcut(id: &str, name: &str, url: &str) -> Shortcut {
         Shortcut {
@@ -218,5 +277,31 @@ mod tests {
             Some("docs".to_string())
         );
         assert!(find_by_id(&cfg, "missing").is_none());
+    }
+
+    #[test]
+    fn concurrent_creates_preserve_every_successful_write() {
+        const COUNT: usize = 40;
+        let dir = tempfile::tempdir().unwrap();
+        let path = Arc::new(dir.path().join("shortcuts.json"));
+        let barrier = Arc::new(Barrier::new(COUNT));
+        let handles = (0..COUNT)
+            .map(|index| {
+                let path = Arc::clone(&path);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let id = format!("race-{index}");
+                    create_at(&path, url_shortcut(&id, &id, "https://x.io"))
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+
+        let config = load_from(&path).unwrap();
+        assert_eq!(config.shortcuts.len(), COUNT);
     }
 }
