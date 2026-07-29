@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use qol_conventions::DEFAULT_PORT;
+use qol_runtime::local_http::{Client, Method};
 
 #[derive(serde::Deserialize)]
 struct ActionResult {
@@ -20,7 +21,7 @@ fn tray_config_route(plugin_id: &str) -> String {
 
 pub(super) fn query(plugin_id: &str, query: &str) -> Result<serde_json::Value, String> {
     let route = format!("/api/plugins/{plugin_id}/queries/{query}");
-    let (status, body) = tray_http("GET", &route, None).map_err(|error| error.to_string())?;
+    let (status, body) = tray_http(Method::Get, &route, None).map_err(|error| error.to_string())?;
     qol_runtime::probe!(
         "SURFACE_ACTIVATION",
         "plugin={plugin_id} phase=runtime-query query={query} status={status}"
@@ -40,7 +41,7 @@ pub(super) fn run_action(
     let route = format!("/api/plugins/{plugin_id}/actions/{action}");
     let body = serde_json::to_string(input).map_err(|error| error.to_string())?;
     let (status, response) =
-        tray_http("POST", &route, Some(&body)).map_err(|error| error.to_string())?;
+        tray_http(Method::Post, &route, Some(&body)).map_err(|error| error.to_string())?;
     if (200..300).contains(&status) {
         return action_result_data(&response);
     }
@@ -56,7 +57,7 @@ fn action_result_data(response: &str) -> Result<Option<serde_json::Value>, Strin
 }
 
 pub(super) fn load_values(plugin_id: &str, path: &Path) -> serde_json::Value {
-    if let Ok((200, body)) = tray_http("GET", &tray_config_route(plugin_id), None) {
+    if let Ok((200, body)) = tray_http(Method::Get, &tray_config_route(plugin_id), None) {
         if let Ok(values) = serde_json::from_str(&body) {
             return values;
         }
@@ -75,7 +76,7 @@ pub(super) fn save_values(plugin_id: &str, path: &Path, values: &serde_json::Val
             return;
         }
     };
-    match tray_http("PUT", &tray_config_route(plugin_id), Some(&body)) {
+    match tray_http(Method::Put, &tray_config_route(plugin_id), Some(&body)) {
         Ok((200, _)) => {
             qol_runtime::probe!(
                 "SETTINGS_PERSIST",
@@ -119,116 +120,20 @@ pub(super) fn save_values(plugin_id: &str, path: &Path, values: &serde_json::Val
     );
 }
 
-fn tray_http(method: &str, route: &str, body: Option<&str>) -> anyhow::Result<(u16, String)> {
+fn tray_http(method: Method, route: &str, body: Option<&str>) -> anyhow::Result<(u16, String)> {
     use anyhow::Context as _;
-    use std::io::{Read, Write};
 
     let token = std::env::var(qol_conventions::ENV_HTTP_TOKEN)
         .context("tray HTTP authentication token is unavailable")?;
-    let stream = std::net::TcpStream::connect((qol_conventions::LOCAL_HOST, DEFAULT_PORT))?;
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-    let mut stream = stream;
-    let body = body.unwrap_or("");
-    let request = tray_http_request(method, route, body, &token);
-    stream.write_all(request.as_bytes())?;
-    let mut raw = String::new();
-    stream.read_to_string(&mut raw)?;
-    Ok(parse_http_response(&raw))
-}
-
-fn tray_http_request(method: &str, route: &str, body: &str, token: &str) -> String {
-    format!(
-        "{method} {route} HTTP/1.1\r\nHost: {}:{DEFAULT_PORT}\r\nOrigin: http://{}:{DEFAULT_PORT}\r\n{}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        qol_conventions::LOCAL_HOST,
-        qol_conventions::LOCAL_HOST,
-        qol_conventions::HTTP_AUTH_HEADER,
-        body.len()
-    )
-}
-
-fn parse_http_response(raw: &str) -> (u16, String) {
-    let status = raw
-        .split_whitespace()
-        .nth(1)
-        .and_then(|code| code.parse().ok())
-        .unwrap_or(0);
-    let body = raw
-        .split_once("\r\n\r\n")
-        .map(|(_, body)| body.to_string())
-        .unwrap_or_default();
-    (status, body)
+    let response = Client::new(DEFAULT_PORT, token)
+        .with_io_timeout(Duration::from_secs(2))
+        .request(method, route, body)?;
+    Ok((response.status, response.body))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{action_result_data, parse_http_response, tray_http_request};
-
-    #[test]
-    fn tray_request_carries_the_local_authority_origin_and_authentication() {
-        let cases = [
-            ("GET", "/api/plugins/plugin-a/queries/status", ""),
-            (
-                "POST",
-                "/api/plugins/plugin-a/actions/start",
-                r#"{"enabled":true}"#,
-            ),
-            (
-                "PUT",
-                "/api/plugins/plugin-a/config",
-                r#"{"enabled":false}"#,
-            ),
-        ];
-        for (method, route, body) in cases {
-            let request = tray_http_request(method, route, body, "secret");
-            let (headers, actual_body) = request.split_once("\r\n\r\n").unwrap();
-            let authority = format!(
-                "Host: {}:{}\r\n",
-                qol_conventions::LOCAL_HOST,
-                qol_conventions::DEFAULT_PORT
-            );
-            let origin = format!(
-                "Origin: http://{}:{}\r\n",
-                qol_conventions::LOCAL_HOST,
-                qol_conventions::DEFAULT_PORT
-            );
-            let authentication = format!("{}: secret\r\n", qol_conventions::HTTP_AUTH_HEADER);
-
-            assert!(
-                headers.starts_with(&format!("{method} {route} HTTP/1.1\r\n")),
-                "request: {request}"
-            );
-            assert!(headers.contains(&authority), "request: {request}");
-            assert!(headers.contains(&origin), "request: {request}");
-            assert!(headers.contains(&authentication), "request: {request}");
-            assert!(
-                headers.contains(&format!("Content-Length: {}\r\n", body.len())),
-                "request: {request}"
-            );
-            assert!(!actual_body.contains("secret"));
-            assert_eq!(actual_body, body);
-        }
-    }
-
-    #[test]
-    fn http_response_parsing_extracts_status_and_body() {
-        let cases = [
-            ("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}", 200, "{}"),
-            (
-                "HTTP/1.1 422 Unprocessable\r\n\r\nbad value",
-                422,
-                "bad value",
-            ),
-            ("garbage", 0, ""),
-        ];
-        for (raw, status, body) in cases {
-            assert_eq!(
-                parse_http_response(raw),
-                (status, body.to_string()),
-                "raw: {raw}"
-            );
-        }
-    }
+    use super::action_result_data;
 
     #[test]
     fn action_result_extracts_optional_daemon_data() {

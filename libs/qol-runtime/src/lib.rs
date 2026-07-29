@@ -1,5 +1,6 @@
 pub mod display;
 pub mod keyremap_marker;
+pub mod local_http;
 pub mod pane_field;
 pub mod probe;
 pub mod protocol;
