@@ -251,3 +251,131 @@ fn integration_error(stage: &'static str, detail: impl Into<OsString>) -> Integr
         detail: detail.into().to_string_lossy().into_owned(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::symlink;
+
+    use super::{
+        parse_enabled_extensions, serialize_enabled_extensions, sync_extension_files,
+        ExtensionRootTransition, IntegrationError, EXTENSION_FILES,
+    };
+
+    fn success<T>(result: Result<T, IntegrationError>) -> T {
+        result.unwrap_or_else(|error| panic!("{}: {}", error.stage, error.detail))
+    }
+
+    #[test]
+    fn enabled_extension_parser_accepts_gsettings_string_arrays() {
+        let cases = [
+            ("@as []", Vec::<String>::new()),
+            ("[]", Vec::new()),
+            ("['alpha']", vec!["alpha".to_string()]),
+            (
+                "['alpha', 'beta@extensions']",
+                vec!["alpha".to_string(), "beta@extensions".to_string()],
+            ),
+            (
+                r#"["alpha", "beta@extensions"]"#,
+                vec!["alpha".to_string(), "beta@extensions".to_string()],
+            ),
+        ];
+
+        for (raw, expected) in cases {
+            assert_eq!(success(parse_enabled_extensions(raw)), expected, "{raw}");
+        }
+    }
+
+    #[test]
+    fn enabled_extension_parser_rejects_malformed_values() {
+        for raw in ["", "alpha", "['alpha'", "'alpha']"] {
+            assert!(parse_enabled_extensions(raw).is_err(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn enabled_extension_serializer_round_trips_realistic_uuids() {
+        let entries = vec![
+            "alpha@extensions".to_string(),
+            "qol-alt-tab-preview-plane@qol-tools".to_string(),
+        ];
+
+        let serialized = serialize_enabled_extensions(&entries);
+
+        assert_eq!(success(parse_enabled_extensions(&serialized)), entries);
+    }
+
+    #[test]
+    fn extension_sync_installs_idempotently_and_repairs_stale_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("extension");
+
+        let installed = success(sync_extension_files(&root));
+        assert_eq!(installed.root, ExtensionRootTransition::Created);
+        assert!(installed.files_changed);
+        for (name, expected) in EXTENSION_FILES {
+            assert_eq!(fs::read(root.join(name)).unwrap(), expected);
+        }
+        let unchanged = success(sync_extension_files(&root));
+        assert_eq!(unchanged.root, ExtensionRootTransition::Existing);
+        assert!(!unchanged.changed());
+
+        fs::write(root.join("extension.js"), b"stale").unwrap();
+
+        let repaired = success(sync_extension_files(&root));
+        assert_eq!(repaired.root, ExtensionRootTransition::Existing);
+        assert!(repaired.files_changed);
+        for (name, expected) in EXTENSION_FILES {
+            assert_eq!(fs::read(root.join(name)).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn extension_sync_refuses_non_directory_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let file_root = temp.path().join("file");
+        fs::write(&file_root, b"not a directory").unwrap();
+        assert_eq!(sync_extension_files(&file_root).unwrap_err().stage, "files");
+    }
+
+    #[test]
+    fn extension_sync_migrates_broken_legacy_symlink_to_owned_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("extensions").join("preview-plane");
+        fs::create_dir(root.parent().unwrap()).unwrap();
+        let legacy_target = temp
+            .path()
+            .join("plugins/plugin-alt-tab/shell/cinnamon/preview-plane");
+        symlink(&legacy_target, &root).unwrap();
+
+        let migrated = success(sync_extension_files(&root));
+        assert_eq!(migrated.root, ExtensionRootTransition::MigratedSymlink);
+        assert!(migrated.files_changed);
+        let metadata = fs::symlink_metadata(&root).unwrap();
+        assert!(metadata.file_type().is_dir());
+        assert!(!metadata.file_type().is_symlink());
+        assert!(!legacy_target.exists());
+        for (name, expected) in EXTENSION_FILES {
+            assert_eq!(fs::read(root.join(name)).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn extension_sync_never_mutates_a_legacy_symlink_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("extensions").join("preview-plane");
+        let legacy_target = temp.path().join("legacy-source");
+        fs::create_dir(root.parent().unwrap()).unwrap();
+        fs::create_dir(&legacy_target).unwrap();
+        let sentinel = legacy_target.join("developer-file");
+        fs::write(&sentinel, b"keep").unwrap();
+        symlink(&legacy_target, &root).unwrap();
+
+        let migrated = success(sync_extension_files(&root));
+
+        assert_eq!(migrated.root, ExtensionRootTransition::MigratedSymlink);
+        assert_eq!(fs::read(&sentinel).unwrap(), b"keep");
+        assert_eq!(fs::read_dir(&legacy_target).unwrap().count(), 1);
+    }
+}

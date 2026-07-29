@@ -11,8 +11,8 @@ use crate::progress::{step_label, StepKind};
 
 use super::desktop::{
     command, connect_desktop_guest, current_trace_cursor, install_payload, require_exec, spawn,
-    start_tray_and_wait_plugin, wait_for_command, wait_for_probe_fields, wait_for_probe_line,
-    wait_for_window_id, TraceCursor,
+    start_tray_and_wait_plugin_with_setup, wait_for_command, wait_for_probe_fields,
+    wait_for_probe_line, wait_for_window_id, TraceCursor,
 };
 use super::Verdict;
 
@@ -20,6 +20,16 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(20);
 const PLUGIN_ID: &str = "plugin-alt-tab";
 const PICKER_PREFIX: &str = "qol-alt-tab-picker@";
+const CINNAMON_EXTENSION_UUID: &str = "qol-alt-tab-preview-plane@qol-tools";
+const CINNAMON_EXTENSION_PARENT: &str = "/home/qol/.local/share/cinnamon/extensions";
+const CINNAMON_EXTENSION_ROOT: &str =
+    "/home/qol/.local/share/cinnamon/extensions/qol-alt-tab-preview-plane@qol-tools";
+const LEGACY_EXTENSION_TARGET: &str = concat!(
+    "/home/qol/qol-monorepo/plugins/plugin-alt-tab/shell/cinnamon/",
+    "qol-alt-tab-preview-plane@qol-tools"
+);
+const CINNAMON_EXTENSION_FILES: [&str; 3] =
+    ["extension.js", "generated-theme-tokens.js", "metadata.json"];
 const FIXTURE_COUNT: usize = 8;
 const RETAINED_CYCLES: usize = 50;
 const KEY_CYCLES: usize = 240;
@@ -27,14 +37,18 @@ const KEY_CYCLES: usize = 240;
 pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     let mut guest = connect_desktop_guest(vm)?;
     install_payload(&mut guest)?;
-    let auth = start_tray_and_wait_plugin(&mut guest, PLUGIN_ID)?;
+    let (auth, integration_cursor) = start_tray_and_wait_plugin_with_setup(
+        &mut guest,
+        PLUGIN_ID,
+        seed_legacy_extension_install,
+    )?;
     launch_fixtures(&mut guest)?;
     let artifacts_dir = vm.run_dir.join("artifacts");
     std::fs::create_dir_all(&artifacts_dir)
         .with_context(|| format!("failed to create {}", artifacts_dir.display()))?;
     let mut qmp = qmp::connect_verified(vm.qmp_port, COMMAND_TIMEOUT, &vm.run_id)?;
 
-    test_hold_mode(&mut guest, &auth)?;
+    test_hold_mode(&mut guest, &auth, integration_cursor)?;
     set_sticky_config(&mut guest, &auth)?;
     let picker = artifacts_dir.join("picker.ppm");
     test_sticky_input_storm(&mut guest, &auth, &mut qmp, &picker)?;
@@ -52,7 +66,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
             "/usr/bin/grep",
             &[
                 "-E",
-                "ACTIVATE_WIN|CMD_RECV|DISMISS|FOCUS_REASSERT|KEY_RECV|NAV_GRID|SHOW_(CYCLE_FAST|LIST|PAINTED|RECV)",
+                "ACTIVATE_WIN|CMD_RECV|DISMISS|FOCUS_REASSERT|KEY_RECV|NAV_GRID|PREVIEW_PLANE_(INTEGRATION|SHOW)|RENDERING_FLOW|SHOW_(CYCLE_FAST|LIST|PAINTED|RECV)",
                 TRACE_LOG_PATH,
             ],
         ),
@@ -61,13 +75,68 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     step_label(
         "storm",
         StepKind::Success,
-        "hold mode, 8-window churn, 240 keys, 50 retained cycles, settings, guards, and crash recovery passed",
+        "Cinnamon legacy-link migration, compositor previews, hold mode, 8-window churn, 240 keys, 50 retained cycles, settings, guards, and crash recovery passed",
     );
     Ok(Verdict {
         pass: true,
         traces: probes.stdout.lines().map(str::to_string).collect(),
         artifacts: vec![picker, settings, final_state],
     })
+}
+
+fn seed_legacy_extension_install(guest: &mut GuestControlClient) -> Result<TraceCursor> {
+    step_label(
+        "legacy-link",
+        StepKind::Pending,
+        "seeding the pre-rename Cinnamon source symlink",
+    );
+    require_exec(
+        guest,
+        command("/usr/bin/rm", &["-rf", "--", CINNAMON_EXTENSION_ROOT]),
+        COMMAND_TIMEOUT,
+    )?;
+    require_exec(
+        guest,
+        command("/usr/bin/mkdir", &["-p", CINNAMON_EXTENSION_PARENT]),
+        COMMAND_TIMEOUT,
+    )?;
+    require_exec(
+        guest,
+        command(
+            "/usr/bin/ln",
+            &[
+                "--symbolic",
+                LEGACY_EXTENSION_TARGET,
+                CINNAMON_EXTENSION_ROOT,
+            ],
+        ),
+        COMMAND_TIMEOUT,
+    )?;
+    require_exec(
+        guest,
+        command(
+            "/usr/bin/gsettings",
+            &[
+                "set",
+                "org.cinnamon",
+                "enabled-extensions",
+                &format!("['{CINNAMON_EXTENSION_UUID}']"),
+            ],
+        ),
+        COMMAND_TIMEOUT,
+    )?;
+    require_exec(
+        guest,
+        command("/usr/bin/touch", &[TRACE_LOG_PATH]),
+        COMMAND_TIMEOUT,
+    )?;
+    let cursor = current_trace_cursor(guest)?;
+    step_label(
+        "legacy-link",
+        StepKind::Success,
+        "broken source symlink enabled before the production daemon starts",
+    );
+    Ok(cursor)
 }
 
 fn launch_fixtures(guest: &mut GuestControlClient) -> Result<()> {
@@ -202,8 +271,38 @@ fn wait_for_active_title(
     bail!("{error:#}; final Alt Tab trace:\n{}", trace.stdout.trim());
 }
 
-fn test_hold_mode(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
+fn test_hold_mode(
+    guest: &mut GuestControlClient,
+    auth: &str,
+    integration_cursor: TraceCursor,
+) -> Result<()> {
     let cursor = dispatch(guest, auth, "open")?;
+    wait_for_probe_fields(
+        guest,
+        integration_cursor,
+        "PREVIEW_PLANE_INTEGRATION",
+        &["outcome=ready", "root=migrated_symlink", "reloaded=true"],
+        ACTION_TIMEOUT,
+    )?;
+    verify_owned_extension_install(guest)?;
+    wait_for_probe_fields(
+        guest,
+        cursor,
+        "RENDERING_FLOW",
+        &[
+            "preview_renderer=external_preview_plane",
+            "backend=cinnamon_shell",
+            "gpui_preview_images=false",
+        ],
+        ACTION_TIMEOUT,
+    )?;
+    wait_for_probe_fields(
+        guest,
+        cursor,
+        "PREVIEW_PLANE_SHOW",
+        &["backend=cinnamon_shell", "outcome=ok"],
+        ACTION_TIMEOUT,
+    )?;
     wait_for_probe_fields(
         guest,
         cursor,
@@ -221,8 +320,38 @@ fn test_hold_mode(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
     step_label(
         "hold-mode",
         StepKind::Success,
-        "default action painted, dismissed on modifier release, and activated a fixture",
+        "Cinnamon compositor rendered live previews before modifier release activated a fixture",
     );
+    Ok(())
+}
+
+fn verify_owned_extension_install(guest: &mut GuestControlClient) -> Result<()> {
+    let root = require_exec(
+        guest,
+        command(
+            "/usr/bin/find",
+            &[
+                CINNAMON_EXTENSION_ROOT,
+                "-maxdepth",
+                "0",
+                "-type",
+                "d",
+                "-print",
+            ],
+        ),
+        COMMAND_TIMEOUT,
+    )?;
+    if root.stdout.trim() != CINNAMON_EXTENSION_ROOT {
+        bail!("Cinnamon extension root remained a symlink after migration");
+    }
+    for name in CINNAMON_EXTENSION_FILES {
+        let path = format!("{CINNAMON_EXTENSION_ROOT}/{name}");
+        require_exec(
+            guest,
+            command("/usr/bin/test", &["-f", &path]),
+            COMMAND_TIMEOUT,
+        )?;
+    }
     Ok(())
 }
 

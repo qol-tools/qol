@@ -451,7 +451,17 @@ pub(in crate::commands::emu::workflow) fn start_tray_and_wait_plugin(
     guest: &mut GuestControlClient,
     plugin_id: &str,
 ) -> Result<String> {
+    let (auth_header, ()) = start_tray_and_wait_plugin_with_setup(guest, plugin_id, |_| Ok(()))?;
+    Ok(auth_header)
+}
+
+pub(in crate::commands::emu::workflow) fn start_tray_and_wait_plugin_with_setup<T>(
+    guest: &mut GuestControlClient,
+    plugin_id: &str,
+    setup: impl FnOnce(&mut GuestControlClient) -> Result<T>,
+) -> Result<(String, T)> {
     stop_preinstalled_runtime(guest)?;
+    let setup_result = setup(guest)?;
     spawn(guest, command(TRAY_BINARY, &[]))?;
     let token = wait_for_command(
         guest,
@@ -472,7 +482,7 @@ pub(in crate::commands::emu::workflow) fn start_tray_and_wait_plugin(
         |outcome| outcome.stdout.contains(plugin_id),
         &format!("{plugin_id} to appear in the tray plugin API"),
     )?;
-    Ok(auth_header)
+    Ok((auth_header, setup_result))
 }
 
 fn stop_preinstalled_runtime(guest: &mut GuestControlClient) -> Result<()> {
