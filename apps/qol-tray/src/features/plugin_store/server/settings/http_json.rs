@@ -6,6 +6,20 @@ use axum::{
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+pub(super) async fn blocking<F>(label: &'static str, work: F) -> Response
+where
+    F: FnOnce() -> Result<Response, Box<Response>> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(work).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(boxed)) => *boxed,
+        Err(error) => {
+            log::error!("{label} handler join error: {}", error);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Handler crashed").into_response()
+        }
+    }
+}
+
 pub(super) fn parse_json_body<T: DeserializeOwned>(
     body: Bytes,
     max_size: usize,

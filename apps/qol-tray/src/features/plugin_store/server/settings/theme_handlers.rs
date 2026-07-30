@@ -6,7 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::super::types::{AppState, MAX_CONFIG_SIZE};
-use super::http_json;
+use super::http_json::{self, blocking};
 
 type HttpResult<T> = Result<T, Box<Response>>;
 
@@ -35,36 +35,22 @@ struct ThemeResponse {
 }
 
 pub(in super::super) async fn get_theme_accent() -> impl IntoResponse {
-    blocking(get_theme_accent_inner).await
+    blocking("theme", get_theme_accent_inner).await
 }
 
 pub(in super::super) async fn set_theme_accent(
     State(state): State<AppState>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    blocking(move || set_theme_accent_inner(state, body)).await
+    blocking("theme", move || set_theme_accent_inner(state, body)).await
 }
 
 pub(in super::super) async fn get_theme() -> impl IntoResponse {
-    blocking(theme_response).await
+    blocking("theme", theme_response).await
 }
 
 pub(in super::super) async fn set_theme(body: axum::body::Bytes) -> impl IntoResponse {
-    blocking(move || set_theme_inner(body)).await
-}
-
-async fn blocking<F>(work: F) -> Response
-where
-    F: FnOnce() -> HttpResult<Response> + Send + 'static,
-{
-    match tokio::task::spawn_blocking(work).await {
-        Ok(Ok(response)) => response,
-        Ok(Err(boxed)) => *boxed,
-        Err(error) => {
-            log::error!("theme handler join error: {}", error);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Handler crashed").into_response()
-        }
-    }
+    blocking("theme", move || set_theme_inner(body)).await
 }
 
 fn get_theme_accent_inner() -> HttpResult<Response> {
