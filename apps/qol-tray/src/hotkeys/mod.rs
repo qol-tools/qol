@@ -23,6 +23,18 @@ use std::collections::HashSet;
 
 type ContinuousActions = HashSet<(crate::plugins::PluginUid, String)>;
 
+pub(crate) fn duplicate_enabled_chord(config: &HotkeyConfig) -> Option<String> {
+    let mut registered = HashSet::new();
+    config
+        .hotkeys
+        .iter()
+        .filter(|binding| binding.enabled)
+        .filter_map(|binding| parser::parse_hotkey(&binding.key).map(|hotkey| (binding, hotkey)))
+        .find_map(|(binding, hotkey)| {
+            (!registered.insert(hotkey.id())).then(|| binding.key.clone())
+        })
+}
+
 pub fn start_recording(session_id: u64, events: std::sync::Arc<crate::daemon::EventBus>) -> bool {
     capture::start_recording(session_id, events)
 }

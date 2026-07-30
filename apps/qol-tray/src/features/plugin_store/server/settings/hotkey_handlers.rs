@@ -113,7 +113,17 @@ fn hotkey_manager() -> HttpResult<HotkeyManager> {
 }
 
 fn parse_hotkeys(body: axum::body::Bytes) -> HttpResult<HotkeyConfig> {
-    http_json::parse_json_body(body, MAX_CONFIG_SIZE)
+    let config: HotkeyConfig = http_json::parse_json_body(body, MAX_CONFIG_SIZE)?;
+    if let Some(key) = crate::hotkeys::duplicate_enabled_chord(&config) {
+        return Err(Box::new(
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Duplicate enabled hotkey chord: {key}"),
+            )
+                .into_response(),
+        ));
+    }
+    Ok(config)
 }
 
 fn hotkeys_json_response(config: &HotkeyConfig) -> Response {
@@ -149,4 +159,35 @@ fn serialize_failed_response() -> Response {
         "Failed to serialize hotkeys",
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_enabled_chords_are_rejected_before_persistence() {
+        let body = axum::body::Bytes::from_static(
+            br#"{"hotkeys":[
+                {"id":"first","key":"F12","plugin_uid":"plugin-a","action":"open","enabled":true},
+                {"id":"second","key":"f12","plugin_uid":"plugin-a","action":"settings","enabled":true}
+            ]}"#,
+        );
+
+        let response = parse_hotkeys(body).expect_err("duplicate chord must be rejected");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn disabled_binding_may_share_an_enabled_chord() {
+        let body = axum::body::Bytes::from_static(
+            br#"{"hotkeys":[
+                {"id":"enabled","key":"F12","plugin_uid":"plugin-a","action":"open","enabled":true},
+                {"id":"disabled","key":"f12","plugin_uid":"plugin-a","action":"settings","enabled":false}
+            ]}"#,
+        );
+
+        let config = parse_hotkeys(body).expect("disabled binding does not compete for the chord");
+        assert_eq!(config.hotkeys.len(), 2);
+    }
 }
