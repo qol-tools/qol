@@ -1,5 +1,5 @@
 use crate::artifact::{
-    self, BuildIntent, CompilerFacts, SourceIdentity, ENV_BUILD_INTENT,
+    self, BuildFlavor, BuildIntent, CompilerFacts, SourceIdentity, ENV_BUILD_INTENT,
     ENV_COMPILER_OVERFLOW_CHECKS, ENV_SOURCE_COMMIT, ENV_SOURCE_HEAD_TREE, ENV_SOURCE_WORKING_TREE,
     SCHEMA_VERSION,
 };
@@ -14,6 +14,7 @@ struct BuildIdentityFields {
     version: String,
     target: String,
     intent: BuildIntent,
+    flavor: BuildFlavor,
     compiler: CompilerFacts,
     features: Vec<String>,
     source: SourceIdentity,
@@ -30,14 +31,19 @@ pub fn emit_build_identity() {
         println!("cargo:rerun-if-env-changed={variable}");
     }
 
+    let intent = build_intent();
+    let compiler = compiler_facts();
+    let features = enabled_features();
+    let flavor = build_flavor(intent, &compiler, &features);
     let fields = BuildIdentityFields {
         schema: SCHEMA_VERSION,
         package: required_env("CARGO_PKG_NAME"),
         version: required_env("CARGO_PKG_VERSION"),
         target: required_env("TARGET"),
-        intent: build_intent(),
-        compiler: compiler_facts(),
-        features: enabled_features(),
+        intent,
+        flavor,
+        compiler,
+        features,
         source: source_identity(),
     };
     let json = serde_json::to_string(&fields).expect("build identity fields serialize");
@@ -82,6 +88,11 @@ fn compiler_facts() -> CompilerFacts {
         overflow_checks: optional_bool_env(ENV_COMPILER_OVERFLOW_CHECKS),
         test: false,
     }
+}
+
+fn build_flavor(intent: BuildIntent, compiler: &CompilerFacts, features: &[String]) -> BuildFlavor {
+    BuildFlavor::derive(intent, compiler, features)
+        .unwrap_or_else(|error| panic!("cannot derive artifact flavor: {error}"))
 }
 
 fn required_bool_env(name: &str) -> bool {

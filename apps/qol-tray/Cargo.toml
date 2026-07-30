@@ -103,6 +103,7 @@ tempfile = "3.8"
 qol-runtime.workspace = true
 qol-apps.workspace = true
 qol-app-icon.workspace = true
+qol-artifact.workspace = true
 qol-hotkeys.workspace = true
 png = "0.17"
 qol-config.workspace = true
@@ -137,7 +138,6 @@ qol-conventions.workspace = true
 
 [dev-dependencies]
 proptest = "1.6"
-qol-artifact.workspace = true
 tower = { version = "0.5", features = ["util"] }
 
 [lints.rust]

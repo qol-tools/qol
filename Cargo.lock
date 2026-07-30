@@ -6117,6 +6117,7 @@ dependencies = [
  "dirs 6.0.0",
  "libc",
  "qol-apps",
+ "qol-artifact",
  "qol-config",
  "qol-conventions",
  "qol-dev-build",
@@ -6208,6 +6209,8 @@ version = "1.0.0"
 dependencies = [
  "log",
  "proptest",
+ "qol-artifact",
+ "qol-conventions",
  "qol-fs",
  "qol-plugin-api",
  "qol-workspace",

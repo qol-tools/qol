@@ -1,5 +1,4 @@
-use crate::host_facade;
-use crate::progress::{print_hint, print_title, run_step, step_label, StepKind};
+use crate::progress::{print_hint, print_title, run_cargo_step, run_step, step_label, StepKind};
 use crate::workspace::{repo_root, scan_buildable_plugins};
 use anyhow::Result;
 use std::process::Command;
@@ -27,21 +26,53 @@ pub(crate) fn run(verbose: bool) -> Result<()> {
     for plugin in &scan.buildable {
         build.arg("-p").arg(&plugin.package_name);
     }
-    run_step(
+    let build_identity =
+        qol_dev_build::build_identity::BuildIdentityEnvironment::production(&root)?;
+    build_identity.apply_to(&mut build);
+    let artifacts = run_cargo_step(
         "build",
         StepKind::Pending,
         "release binaries",
         &mut build,
         verbose,
     )?;
+    build_identity.verify_unchanged(&root)?;
 
-    let installer = root
-        .join("target")
-        .join("release")
-        .join(host_facade::exe_name("qol-tray-install"));
+    let installer = qol_dev_build::cargo_build::select_binary_executable(
+        &artifacts,
+        &root.join("apps/qol-tray/Cargo.toml"),
+        qol_conventions::artifact::TRAY_INSTALLER_BINARY_NAME,
+    )?;
+    let tray = qol_dev_build::cargo_build::select_binary_executable(
+        &artifacts,
+        &root.join("apps/qol-tray/Cargo.toml"),
+        qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
+    )?;
+    qol_artifact::verify_path(
+        &installer,
+        &qol_artifact::ArtifactExpectation::production(
+            qol_conventions::artifact::TRAY_INSTALLER_BINARY_NAME,
+            qol_conventions::artifact::TRAY_PACKAGE_NAME,
+            qol_conventions::artifact::BuildRole::Installer,
+        )
+        .with_exact_source(build_identity.source()),
+    )?;
+    qol_artifact::verify_path(
+        &tray,
+        &qol_artifact::ArtifactExpectation::production(
+            qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
+            qol_conventions::artifact::TRAY_PACKAGE_NAME,
+            qol_conventions::artifact::BuildRole::Host,
+        )
+        .with_exact_source(build_identity.source()),
+    )?;
     let installer_display = installer.display().to_string();
     let mut command = Command::new(installer);
-    command.arg("--workspace").arg(&root);
+    command
+        .arg("--source")
+        .arg(tray)
+        .arg("--workspace")
+        .arg(&root);
     run_step(
         "install",
         StepKind::Pending,

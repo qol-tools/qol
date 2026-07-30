@@ -94,6 +94,55 @@ pub(crate) fn run_step(
     run_status(command, verbose)
 }
 
+pub(crate) fn run_cargo_step(
+    verb: &str,
+    kind: StepKind,
+    target: &str,
+    command: &mut Command,
+    verbose: bool,
+) -> Result<Vec<qol_dev_build::cargo_build::CargoArtifact>> {
+    if !verbose {
+        step_label(verb, kind, target);
+    }
+    let cargo_progress = (!verbose).then(|| cargo_progress(command)).flatten();
+    configure_cargo_messages(command, !verbose);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().context("failed to spawn Cargo")?;
+    let stdout = child.stdout.take().map(|pipe| {
+        let cargo_progress = cargo_progress.clone();
+        thread::spawn(move || read_cargo_artifacts(pipe, cargo_progress))
+    });
+    let stderr = child
+        .stderr
+        .take()
+        .map(|pipe| thread::spawn(move || read_pipe(pipe)));
+    let spinner = (!verbose)
+        .then(|| start_progress(&cargo_progress))
+        .flatten();
+    let status = child.wait().context("failed waiting for Cargo")?;
+    drop(spinner);
+    let parsed = join_cargo_artifacts(stdout);
+    let stderr = join_pipe(stderr)?;
+    let parsed = match parsed {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            clear_progress(&cargo_progress);
+            replay_bytes(&stderr);
+            return Err(error);
+        }
+    };
+    if verbose || !status.success() {
+        replay_bytes(&parsed.replay);
+        replay_bytes(&stderr);
+    }
+    if !status.success() {
+        clear_progress(&cargo_progress);
+        return require_success(status).map(|()| parsed.artifacts);
+    }
+    finish_progress(&cargo_progress);
+    Ok(parsed.artifacts)
+}
+
 pub(crate) fn run_step_inline(
     verb: &str,
     kind: StepKind,
@@ -407,6 +456,44 @@ fn read_cargo_json<R: Read>(pipe: R, progress: CargoProgress) -> std::io::Result
     Ok(replay)
 }
 
+#[derive(Debug)]
+struct ParsedCargoArtifacts {
+    artifacts: Vec<qol_dev_build::cargo_build::CargoArtifact>,
+    replay: Vec<u8>,
+}
+
+fn read_cargo_artifacts<R: Read>(
+    pipe: R,
+    progress: Option<CargoProgress>,
+) -> std::io::Result<ParsedCargoArtifacts> {
+    let mut artifacts = Vec::new();
+    let mut replay = Vec::new();
+    let mut seen = HashSet::new();
+    for line in BufReader::new(pipe).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let message = qol_dev_build::cargo_build::parse_cargo_message(&line)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        match message {
+            qol_dev_build::cargo_build::CargoMessage::Artifact(artifact) => {
+                if let Some(progress) = &progress {
+                    if seen.insert(artifact.package_id.clone()) {
+                        render_cargo_progress(seen.len().min(progress.total), progress.total);
+                    }
+                }
+                artifacts.push(artifact);
+            }
+            qol_dev_build::cargo_build::CargoMessage::Diagnostic(rendered) => {
+                replay.extend_from_slice(rendered.as_bytes());
+            }
+            qol_dev_build::cargo_build::CargoMessage::Other => {}
+        }
+    }
+    Ok(ParsedCargoArtifacts { artifacts, replay })
+}
+
 fn read_cargo_json_line(
     line: &str,
     total: usize,
@@ -461,6 +548,21 @@ fn join_pipe(handle: Option<JoinHandle<std::io::Result<Vec<u8>>>>) -> Result<Vec
             .map_err(|_| anyhow!("failed to read command output"))?
             .context("failed to read command output"),
         None => Ok(Vec::new()),
+    }
+}
+
+fn join_cargo_artifacts(
+    handle: Option<JoinHandle<std::io::Result<ParsedCargoArtifacts>>>,
+) -> Result<ParsedCargoArtifacts> {
+    match handle {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| anyhow!("failed to read Cargo output"))?
+            .context("failed to parse Cargo output"),
+        None => Ok(ParsedCargoArtifacts {
+            artifacts: Vec::new(),
+            replay: Vec::new(),
+        }),
     }
 }
 
@@ -670,7 +772,11 @@ fn normalize_cargo_tree_line(line: &str) -> String {
 }
 
 fn configure_cargo_progress(command: &mut Command, _progress: &CargoProgress) {
-    if !command_has_arg(command, "--quiet") && !command_has_arg(command, "-q") {
+    configure_cargo_messages(command, true);
+}
+
+fn configure_cargo_messages(command: &mut Command, quiet: bool) {
+    if quiet && !command_has_arg(command, "--quiet") && !command_has_arg(command, "-q") {
         command.arg("--quiet");
     }
     if command_has_arg(command, "--message-format")
@@ -960,5 +1066,34 @@ mod tests {
                 OsString::from("x86_64-pc-windows-msvc"),
             ]
         );
+    }
+
+    #[test]
+    fn strict_cargo_reader_collects_exact_executables_and_diagnostics() {
+        let input = concat!(
+            "{\"reason\":\"compiler-artifact\",\"package_id\":\"path+file:///repo#fixture@1.0.0\",",
+            "\"target\":{\"name\":\"fixture\",\"kind\":[\"bin\"],\"crate_types\":[\"bin\"]},",
+            "\"manifest_path\":\"/repo/Cargo.toml\",",
+            "\"features\":[],\"filenames\":[\"/repo/target/debug/fixture\"],",
+            "\"executable\":\"/repo/target/debug/fixture\",\"fresh\":false}\n",
+            "{\"reason\":\"compiler-message\",\"message\":{\"rendered\":\"warning: fixture\\n\"}}\n",
+            "{\"reason\":\"build-finished\",\"success\":true}\n"
+        );
+
+        let parsed = read_cargo_artifacts(input.as_bytes(), None).unwrap();
+
+        assert_eq!(parsed.artifacts.len(), 1);
+        assert_eq!(
+            parsed.artifacts[0].executable.as_deref(),
+            Some(Path::new("/repo/target/debug/fixture"))
+        );
+        assert_eq!(parsed.replay, b"warning: fixture\n");
+    }
+
+    #[test]
+    fn strict_cargo_reader_rejects_malformed_artifacts() {
+        let input = b"{\"reason\":\"compiler-artifact\"}\n";
+        let error = read_cargo_artifacts(input.as_slice(), None).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 }

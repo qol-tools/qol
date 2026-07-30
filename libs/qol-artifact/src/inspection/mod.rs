@@ -362,9 +362,21 @@ fn same_logical_identity(left: &BuildIdentity, right: &BuildIdentity) -> bool {
         && left.package == right.package
         && left.version == right.version
         && left.intent == right.intent
+        && left.flavor == right.flavor
         && left.compiler == right.compiler
         && left.features == right.features
         && left.source == right.source
+        && same_target_platform(&left.target, &right.target)
+}
+
+fn same_target_platform(left: &str, right: &str) -> bool {
+    let (Ok(left), Ok(right)) = (left.parse::<Triple>(), right.parse::<Triple>()) else {
+        return false;
+    };
+    left.vendor == right.vendor
+        && left.operating_system == right.operating_system
+        && left.environment == right.environment
+        && left.binary_format == right.binary_format
 }
 
 fn inspect_sections(sections: &[&[u8]]) -> Result<BuildIdentity, InspectionError> {
@@ -392,8 +404,8 @@ mod tests {
         Architecture, BinaryFormat, Endianness, SectionKind, SymbolFlags, SymbolKind, SymbolScope,
     };
     use qol_conventions::artifact::{
-        BuildIdentity, BuildIntent, BuildRole, CompilerFacts, SourceIdentity, FRAME_MAGIC,
-        SCHEMA_VERSION,
+        BuildFlavor, BuildIdentity, BuildIntent, BuildProfile, BuildRole, CompilerFacts,
+        SourceIdentity, FRAME_MAGIC, SCHEMA_VERSION,
     };
 
     fn frame(target: &str) -> Vec<u8> {
@@ -405,6 +417,10 @@ mod tests {
             version: "1.0.0".to_string(),
             target: target.to_string(),
             intent: BuildIntent::Unspecified,
+            flavor: BuildFlavor {
+                profile: BuildProfile::Debug,
+                dev_features: false,
+            },
             compiler: CompilerFacts {
                 cargo_profile: "debug".to_string(),
                 opt_level: "0".to_string(),
@@ -601,5 +617,28 @@ mod tests {
             inspected.slices[1].architecture,
             super::ArtifactArchitecture::Aarch64
         );
+
+        let ios = object_with_identity(
+            BinaryFormat::MachO,
+            Architecture::Aarch64,
+            qol_conventions::artifact::MACHO_SECTION_NAME,
+            "aarch64-apple-ios",
+        );
+        let mixed_platforms = fat_macho(&[
+            (
+                Architecture::X86_64,
+                object_with_identity(
+                    BinaryFormat::MachO,
+                    Architecture::X86_64,
+                    qol_conventions::artifact::MACHO_SECTION_NAME,
+                    "x86_64-apple-darwin",
+                ),
+            ),
+            (Architecture::Aarch64, ios),
+        ]);
+        assert!(matches!(
+            inspect_bytes(&mixed_platforms),
+            Err(InspectionError::UniversalIdentityMismatch(1))
+        ));
     }
 }

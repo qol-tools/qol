@@ -10,7 +10,7 @@ use crate::BuildResult;
 
 static LAST_ARTIFACT_COUNT: AtomicU32 = AtomicU32::new(0);
 
-const QOL_TRAY_ID: &str = "qol-tray";
+const QOL_TRAY_ID: &str = qol_conventions::artifact::TRAY_PACKAGE_NAME;
 const WORKTREE_SCAN_MAX_DEPTH: u8 = 5;
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -57,22 +57,32 @@ where
     if let Err(error) = ensure_manifest(&manifest_path) {
         return failed_build(error);
     }
+    let identity =
+        match crate::build_identity::BuildIdentityEnvironment::development(&artifact_root(root)) {
+            Ok(identity) => identity,
+            Err(error) => {
+                return failed_build(format!("Failed to resolve build identity: {error}"));
+            }
+        };
     let CargoChild {
         mut child,
         stdout,
         stderr,
-    } = match start_build(root, &manifest_path, bins, &mut on_progress) {
+    } = match start_build(root, &manifest_path, bins, &identity, &mut on_progress) {
         Ok(c) => c,
         Err(result) => return result,
     };
     let readers = artifacts::spawn_readers(stdout, stderr);
-    readers.emit_progress(&mut on_progress);
+    let artifacts = readers.emit_progress(&mut on_progress);
     let (actual_done, combined) = readers.join();
+    let artifact_stream =
+        actual_done.and_then(|actual_done| artifacts.map(|artifacts| (actual_done, artifacts)));
     finish_build(
         root,
         bins,
+        &identity,
         &mut child,
-        actual_done,
+        artifact_stream,
         combined,
         &mut on_progress,
     )
@@ -244,7 +254,7 @@ fn manifest_is_qol_tray(dir: &Path) -> bool {
                 .trim_start_matches('=')
                 .trim()
                 .trim_matches(|c| c == '"' || c == '\'');
-            return name == "qol-tray";
+            return name == qol_conventions::artifact::TRAY_PACKAGE_NAME;
         }
     }
     false
@@ -254,6 +264,7 @@ fn start_build<F>(
     root: &Path,
     manifest_path: &Path,
     bins: &[&str],
+    identity: &crate::build_identity::BuildIdentityEnvironment,
     on_progress: &mut F,
 ) -> Result<CargoChild, BuildResult>
 where
@@ -261,11 +272,17 @@ where
 {
     log::info!("Building qol-tray from {}", root.display());
     on_progress(2, "Preparing build".to_string());
-    spawn_build(root, manifest_path, bins).map_err(failed_build)
+    spawn_build(root, manifest_path, bins, identity).map_err(failed_build)
 }
 
-fn spawn_build(root: &Path, manifest_path: &Path, bins: &[&str]) -> Result<CargoChild, String> {
+fn spawn_build(
+    root: &Path,
+    manifest_path: &Path,
+    bins: &[&str],
+    identity: &crate::build_identity::BuildIdentityEnvironment,
+) -> Result<CargoChild, String> {
     let mut command = tray_build_command(root, manifest_path, bins);
+    identity.apply_to(&mut command);
     spawn_piped(&mut command).map_err(|error| format!("Failed to run cargo build: {}", error))
 }
 
@@ -291,8 +308,9 @@ fn tray_build_command(root: &Path, manifest_path: &Path, bins: &[&str]) -> Comma
 fn finish_build<F>(
     root: &Path,
     bins: &[&str],
+    identity: &crate::build_identity::BuildIdentityEnvironment,
     child: &mut Child,
-    actual_done: u32,
+    artifact_stream: Result<(u32, Vec<crate::cargo_build::CargoArtifact>), String>,
     combined: String,
     on_progress: &mut F,
 ) -> BuildResult
@@ -304,42 +322,74 @@ where
         child,
         combined,
         on_progress,
-        |output, progress| successful_build(root, bins, actual_done, output, progress),
+        |output, progress| match artifact_stream {
+            Ok((actual_done, artifacts)) => successful_build(
+                root,
+                bins,
+                identity,
+                actual_done,
+                artifacts,
+                output,
+                progress,
+            ),
+            Err(error) => failed_build(error),
+        },
     )
 }
 
 fn successful_build<F>(
     root: &Path,
     bins: &[&str],
+    identity: &crate::build_identity::BuildIdentityEnvironment,
     actual_done: u32,
+    artifacts: Vec<crate::cargo_build::CargoArtifact>,
     combined: String,
     on_progress: &mut F,
 ) -> BuildResult
 where
     F: FnMut(u8, String),
 {
-    let missing = missing_debug_binaries(root, bins);
-    if !missing.is_empty() {
-        return failed_build(format!(
-            "Build finished but missing binaries: {}",
-            missing
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
+    if let Err(error) = identity.verify_unchanged(&artifact_root(root)) {
+        return failed_build(format!("Build source identity is unstable: {error}"));
+    }
+    for bin in bins {
+        let executable = match crate::cargo_build::select_binary_executable(
+            &artifacts,
+            &root.join("Cargo.toml"),
+            bin,
+        ) {
+            Ok(executable) => executable,
+            Err(error) => return failed_build(error.to_string()),
+        };
+        if !executable.is_file() {
+            return failed_build(format!(
+                "Cargo reported missing executable {}",
+                executable.display()
+            ));
+        }
+        let Some(role) = qol_conventions::artifact::tray_binary_role(bin) else {
+            return failed_build(format!("Unknown qol-tray binary role for {bin}"));
+        };
+        let expectation = qol_artifact::ArtifactExpectation::development_debug(
+            bin,
+            qol_conventions::artifact::TRAY_PACKAGE_NAME,
+            role,
+            true,
+        )
+        .with_exact_source(identity.source());
+        if let Err(error) = qol_artifact::verify_path(&executable, &expectation) {
+            return failed_build(format!(
+                "Cargo reported unverified executable {}: {error}",
+                executable.display()
+            ));
+        }
     }
     LAST_ARTIFACT_COUNT.store(actual_done, Ordering::Relaxed);
     on_progress(100, "Build complete".to_string());
     log::info!("qol-tray build succeeded ({} artifacts)", actual_done);
-    crate::cargo_build::finished_build(QOL_TRAY_ID, combined)
-}
-
-fn missing_debug_binaries(root: &Path, bins: &[&str]) -> Vec<PathBuf> {
-    bins.iter()
-        .map(|bin| debug_binary_path(root, bin))
-        .filter(|path| !path.is_file())
-        .collect()
+    let mut result = crate::cargo_build::finished_build(QOL_TRAY_ID, combined);
+    result.artifacts = artifacts;
+    result
 }
 
 fn ensure_manifest(manifest_path: &Path) -> Result<(), String> {
@@ -744,33 +794,6 @@ path = \"src/main.rs\"
                 .join("target")
                 .join("debug")
                 .join(Platform.executable_name("qol-tray"))
-        );
-    }
-
-    #[test]
-    fn missing_debug_binaries_checks_workspace_target_for_member_roots() {
-        let tmp = TempDir::new().unwrap();
-        let workspace = tmp.path().join("mono");
-        let tray_root = workspace.join("apps").join("qol-tray");
-        let artifact = workspace
-            .join("target")
-            .join("debug")
-            .join(Platform.executable_name("qol-tray"));
-        write_manifest(
-            &workspace,
-            "[workspace]\nmembers = [\"apps/qol-tray\"]\nresolver = \"2\"\n",
-        );
-        write_manifest(&tray_root, qol_tray_manifest());
-        std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
-        std::fs::write(&artifact, "").unwrap();
-
-        assert!(missing_debug_binaries(&tray_root, &["qol-tray"]).is_empty());
-        assert_eq!(
-            missing_debug_binaries(&tray_root, &["qol-tray-doctor"]),
-            vec![workspace
-                .join("target")
-                .join("debug")
-                .join(Platform.executable_name("qol-tray-doctor"))]
         );
     }
 }

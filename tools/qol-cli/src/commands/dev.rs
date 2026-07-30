@@ -66,9 +66,8 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         reload,
         target.branch.as_deref(),
     )?;
-    let binary = dev_binary_path(&target.root);
     let run_root = dev_run_root(&target.root);
-    build_qol_tray_dev(&target.root, verbose)?;
+    let binary = build_qol_tray_dev(&target.root, verbose)?;
     apply_marker_update(&plan.marker_update)?;
     let shutdown_method = crate::dev_shutdown::stop_existing_tray()?;
     let shutdown_detail = match shutdown_method {
@@ -467,7 +466,7 @@ pub(crate) fn dev_run_root(root: &Path) -> PathBuf {
     qol_dev_build::tray::artifact_root(root)
 }
 
-fn build_qol_tray_dev(root: &Path, verbose: bool) -> Result<()> {
+fn build_qol_tray_dev(root: &Path, verbose: bool) -> Result<PathBuf> {
     dev_step_label("build", StepKind::Pending, "qol-tray dev", verbose);
     let result = qol_dev_build::tray::build_tray(root, &TRAY_DEV_BINS, |percent, phase| {
         dev_step_label(
@@ -477,10 +476,15 @@ fn build_qol_tray_dev(root: &Path, verbose: bool) -> Result<()> {
             verbose,
         );
     });
-    if result.success {
-        return Ok(());
+    if !result.success {
+        bail!("{}", result.output);
     }
-    bail!("{}", result.output)
+    qol_dev_build::cargo_build::select_binary_executable(
+        &result.artifacts,
+        &root.join("Cargo.toml"),
+        qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
+    )
+    .map_err(anyhow::Error::from)
 }
 
 fn build_qol_cli_debug(root: &Path, verbose: bool) -> Result<()> {

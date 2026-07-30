@@ -19,6 +19,7 @@ where
             success: true,
             output: skip.output,
             skipped: true,
+            artifacts: Vec::new(),
         });
     }
 }

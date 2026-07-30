@@ -97,7 +97,30 @@ fn run_install(
     }
     println!("Installing QoL Tray...");
     let repo_root = env::current_dir().context("Failed to determine current directory")?;
-    let source_binary = source::resolve_source_binary(&repo_root, source_override, dev_mode)?;
+    let source = source::resolve_source_binary(&repo_root, source_override, dev_mode)?;
+    let mut expectation = if dev_mode {
+        qol_artifact::ArtifactExpectation::development_release(
+            qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
+            qol_conventions::artifact::TRAY_PACKAGE_NAME,
+            qol_conventions::artifact::BuildRole::Host,
+            true,
+        )
+    } else {
+        qol_artifact::ArtifactExpectation::production(
+            qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
+            qol_conventions::artifact::TRAY_PACKAGE_NAME,
+            qol_conventions::artifact::BuildRole::Host,
+        )
+    };
+    if let Some(exact_source) = &source.exact_source {
+        expectation = expectation.with_exact_source(exact_source);
+    }
+    qol_artifact::verify_path(&source.path, &expectation).with_context(|| {
+        format!(
+            "Refusing to install unverified binary {}",
+            source.path.display()
+        )
+    })?;
     let install_dir = platform::install_dir()?;
     fs::create_dir_all(&install_dir).with_context(|| {
         format!(
@@ -108,7 +131,7 @@ fn run_install(
     platform::remove_legacy_install();
     let installed_binary = install_dir.join(platform::binary_filename());
     platform::stop_running(&installed_binary)?;
-    install_binary_atomically(&source_binary, &installed_binary)?;
+    install_binary_atomically(&source.path, &installed_binary)?;
     platform::set_executable_permissions(&installed_binary)?;
     let install_id = register_install_id(&installed_binary)?;
     let plugins_dir = files::ensure_plugin_dir()?;

@@ -9,8 +9,8 @@ pub(super) struct ArtifactReaders {
 }
 
 struct ArtifactReader {
-    handle: JoinHandle<u32>,
-    rx: Receiver<(u32, String)>,
+    handle: JoinHandle<Result<u32, String>>,
+    rx: Receiver<Result<(u32, crate::cargo_build::CargoArtifact), String>>,
 }
 
 struct LineReader {
@@ -56,21 +56,33 @@ pub(super) fn spawn_readers(stdout: ChildStdout, stderr: ChildStderr) -> Artifac
 }
 
 impl ArtifactReaders {
-    pub(super) fn emit_progress<F>(&self, on_progress: &mut F)
+    pub(super) fn emit_progress<F>(
+        &self,
+        on_progress: &mut F,
+    ) -> Result<Vec<crate::cargo_build::CargoArtifact>, String>
     where
         F: FnMut(u8, String),
     {
         let mut progress = ArtifactProgress::new();
-        while let Ok((done, name)) = self.artifacts.rx.recv() {
+        let mut artifacts = Vec::new();
+        while let Ok(message) = self.artifacts.rx.recv() {
+            let (done, artifact) = message?;
             let Some(percent) = progress.update(done) else {
+                artifacts.push(artifact);
                 continue;
             };
-            on_progress(percent, format!("Compiling {}", name));
+            on_progress(percent, format!("Compiling {}", artifact.target_name));
+            artifacts.push(artifact);
         }
+        Ok(artifacts)
     }
 
-    pub(super) fn join(self) -> (u32, String) {
-        let actual_done = self.artifacts.handle.join().unwrap_or(0);
+    pub(super) fn join(self) -> (Result<u32, String>, String) {
+        let actual_done = self
+            .artifacts
+            .handle
+            .join()
+            .unwrap_or_else(|_| Err("Cargo artifact reader panicked".to_string()));
         let _ = self.stderr.handle.join();
         let combined = self.stderr.rx.into_iter().collect::<Vec<_>>().join("\n");
         (actual_done, combined)
@@ -89,29 +101,30 @@ fn spawn_stderr_reader(stderr: ChildStderr) -> LineReader {
     LineReader { handle, rx }
 }
 
-fn read_artifacts(stdout: ChildStdout, tx: Sender<(u32, String)>) -> u32 {
+fn read_artifacts(
+    stdout: ChildStdout,
+    tx: Sender<Result<(u32, crate::cargo_build::CargoArtifact), String>>,
+) -> Result<u32, String> {
     let mut done = 0;
-    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-        let Some(name) = artifact_name(&line) else {
-            continue;
-        };
-        done += 1;
-        let _ = tx.send((done, name));
+    for line in BufReader::new(stdout).lines() {
+        let line = line.map_err(|error| format!("Failed to read Cargo output: {error}"))?;
+        match crate::cargo_build::parse_cargo_message(&line) {
+            Ok(crate::cargo_build::CargoMessage::Artifact(artifact)) => {
+                done += 1;
+                let _ = tx.send(Ok((done, artifact)));
+            }
+            Ok(
+                crate::cargo_build::CargoMessage::Diagnostic(_)
+                | crate::cargo_build::CargoMessage::Other,
+            ) => {}
+            Err(error) => {
+                let message = format!("Failed to parse Cargo output: {error}");
+                let _ = tx.send(Err(message.clone()));
+                return Err(message);
+            }
+        }
     }
-    done
-}
-
-fn artifact_name(line: &str) -> Option<String> {
-    let message = serde_json::from_str::<serde_json::Value>(line).ok()?;
-    if message["reason"].as_str() != Some("compiler-artifact") {
-        return None;
-    }
-    Some(
-        message["target"]["name"]
-            .as_str()
-            .unwrap_or("crate")
-            .to_string(),
-    )
+    Ok(done)
 }
 
 fn forward_lines(stderr: ChildStderr, tx: Sender<String>) {

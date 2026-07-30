@@ -1,12 +1,107 @@
 mod codesign;
+mod messages;
 mod plugin_build;
 
 use std::path::Path;
-use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::adapters::CargoPluginBuilder;
 use crate::types::BuildResult;
+
+pub use messages::{
+    parse_cargo_message, select_binary_executable, CargoArtifact, CargoArtifactSelectionError,
+    CargoMessage, CargoMessageError,
+};
+
+pub struct CargoBuildOutput {
+    pub artifacts: Vec<CargoArtifact>,
+    pub diagnostics: String,
+}
+
+#[derive(Debug)]
+pub enum CargoBuildCommandError {
+    Spawn(std::io::Error),
+    InvalidUtf8(std::string::FromUtf8Error),
+    InvalidMessage {
+        line: usize,
+        source: CargoMessageError,
+    },
+    Failed {
+        status: ExitStatus,
+        output: String,
+    },
+}
+
+impl std::fmt::Display for CargoBuildCommandError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spawn(error) => write!(formatter, "failed to run Cargo: {error}"),
+            Self::InvalidUtf8(error) => write!(formatter, "Cargo returned invalid UTF-8: {error}"),
+            Self::InvalidMessage { line, source } => {
+                write!(formatter, "Cargo message {line} is invalid: {source}")
+            }
+            Self::Failed { status, output } => {
+                write!(formatter, "Cargo failed with {status}: {}", output.trim())
+            }
+        }
+    }
+}
+
+impl std::error::Error for CargoBuildCommandError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Spawn(error) => Some(error),
+            Self::InvalidUtf8(error) => Some(error),
+            Self::InvalidMessage { source, .. } => Some(source),
+            Self::Failed { .. } => None,
+        }
+    }
+}
+
+pub fn run_cargo_command(
+    command: &mut Command,
+) -> Result<CargoBuildOutput, CargoBuildCommandError> {
+    if !command
+        .get_args()
+        .any(|arg| arg.to_string_lossy().starts_with("--message-format"))
+    {
+        command
+            .arg("--message-format")
+            .arg("json-render-diagnostics");
+    }
+    let output = command.output().map_err(CargoBuildCommandError::Spawn)?;
+    let stdout = String::from_utf8(output.stdout).map_err(CargoBuildCommandError::InvalidUtf8)?;
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let mut artifacts = Vec::new();
+    let mut diagnostics = String::new();
+    for (index, line) in stdout.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match parse_cargo_message(line).map_err(|source| {
+            CargoBuildCommandError::InvalidMessage {
+                line: index + 1,
+                source,
+            }
+        })? {
+            CargoMessage::Artifact(artifact) => artifacts.push(artifact),
+            CargoMessage::Diagnostic(rendered) => diagnostics.push_str(&rendered),
+            CargoMessage::Other => {}
+        }
+    }
+    diagnostics.push_str(&stderr);
+    if !output.status.success() {
+        return Err(CargoBuildCommandError::Failed {
+            status: output.status,
+            output: diagnostics,
+        });
+    }
+    Ok(CargoBuildOutput {
+        artifacts,
+        diagnostics,
+    })
+}
 
 pub struct CargoChild {
     pub child: Child,
@@ -80,6 +175,7 @@ fn build_result(plugin_id: &str, success: bool, output: String) -> BuildResult {
         success,
         output,
         skipped: false,
+        artifacts: Vec::new(),
     }
 }
 

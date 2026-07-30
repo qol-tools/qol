@@ -10,6 +10,12 @@ pub const NATIVE_SECTION_NAME: &str = ".qolbi";
 pub const ELF_SECTION_NAME: &str = NATIVE_SECTION_NAME;
 pub const MACHO_SECTION_NAME: &str = "__qolbi";
 pub const PE_SECTION_NAME: &str = NATIVE_SECTION_NAME;
+pub const DEV_FEATURE_NAME: &str = "dev";
+pub const TRAY_PACKAGE_NAME: &str = "qol-tray";
+pub const TRAY_HOST_BINARY_NAME: &str = "qol-tray";
+pub const TRAY_INSTALLER_BINARY_NAME: &str = "qol-tray-install";
+pub const TRAY_DOCTOR_BINARY_NAME: &str = "qol-tray-doctor";
+pub const TRAY_MIGRATOR_BINARY_NAME: &str = "qol-tray-migrate";
 
 pub const ENV_BUILD_INTENT: &str = "QOL_BUILD_INTENT";
 pub const ENV_SOURCE_COMMIT: &str = "QOL_BUILD_SOURCE_COMMIT";
@@ -32,6 +38,32 @@ pub enum BuildIntent {
     Unspecified,
 }
 
+impl BuildIntent {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Production => "production",
+            Self::Development => "development",
+            Self::Sandbox => "sandbox",
+            Self::Unspecified => "unspecified",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildProfile {
+    Release,
+    Debug,
+    Sandbox,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BuildFlavor {
+    pub profile: BuildProfile,
+    pub dev_features: bool,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BuildRole {
@@ -44,6 +76,16 @@ pub enum BuildRole {
     GuestRunner,
 }
 
+pub fn tray_binary_role(binary: &str) -> Option<BuildRole> {
+    match binary {
+        TRAY_HOST_BINARY_NAME => Some(BuildRole::Host),
+        TRAY_INSTALLER_BINARY_NAME => Some(BuildRole::Installer),
+        TRAY_DOCTOR_BINARY_NAME => Some(BuildRole::Doctor),
+        TRAY_MIGRATOR_BINARY_NAME => Some(BuildRole::Migrator),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CompilerFacts {
@@ -53,6 +95,102 @@ pub struct CompilerFacts {
     pub debug_assertions: bool,
     pub overflow_checks: Option<bool>,
     pub test: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildFlavorError {
+    UnsupportedCargoProfile,
+    DevFeatureMismatch,
+    SandboxIntentMismatch,
+    ProductionRequiresRelease,
+    ProductionForbidsDevFeatures,
+    ReleaseCompilerMismatch,
+    DebugCompilerMismatch,
+}
+
+impl BuildFlavorError {
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::UnsupportedCargoProfile => "Cargo profile has no artifact flavor",
+            Self::DevFeatureMismatch => "flavor dev_features disagrees with Cargo features",
+            Self::SandboxIntentMismatch => "sandbox intent and profile disagree",
+            Self::ProductionRequiresRelease => "production intent requires release profile",
+            Self::ProductionForbidsDevFeatures => "production intent forbids dev features",
+            Self::ReleaseCompilerMismatch => "release flavor disagrees with compiler facts",
+            Self::DebugCompilerMismatch => "debug flavor disagrees with compiler facts",
+        }
+    }
+}
+
+impl fmt::Display for BuildFlavorError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.reason())
+    }
+}
+
+impl std::error::Error for BuildFlavorError {}
+
+impl BuildFlavor {
+    pub fn derive(
+        intent: BuildIntent,
+        compiler: &CompilerFacts,
+        features: &[String],
+    ) -> Result<Self, BuildFlavorError> {
+        let profile = if intent == BuildIntent::Sandbox {
+            BuildProfile::Sandbox
+        } else {
+            match compiler.cargo_profile.as_str() {
+                "release" => BuildProfile::Release,
+                "debug" => BuildProfile::Debug,
+                _ => return Err(BuildFlavorError::UnsupportedCargoProfile),
+            }
+        };
+        let flavor = Self {
+            profile,
+            dev_features: has_dev_feature(features),
+        };
+        flavor.validate(intent, compiler, features)?;
+        Ok(flavor)
+    }
+
+    pub fn validate(
+        self,
+        intent: BuildIntent,
+        compiler: &CompilerFacts,
+        features: &[String],
+    ) -> Result<(), BuildFlavorError> {
+        if self.dev_features != has_dev_feature(features) {
+            return Err(BuildFlavorError::DevFeatureMismatch);
+        }
+        match (intent, self.profile) {
+            (BuildIntent::Sandbox, BuildProfile::Sandbox) => {}
+            (BuildIntent::Sandbox, _) | (_, BuildProfile::Sandbox) => {
+                return Err(BuildFlavorError::SandboxIntentMismatch);
+            }
+            (BuildIntent::Production, BuildProfile::Debug) => {
+                return Err(BuildFlavorError::ProductionRequiresRelease);
+            }
+            _ => {}
+        }
+        if intent == BuildIntent::Production && self.dev_features {
+            return Err(BuildFlavorError::ProductionForbidsDevFeatures);
+        }
+        match self.profile {
+            BuildProfile::Release
+                if compiler.cargo_profile != "release"
+                    || compiler.debug_assertions
+                    || compiler.opt_level == "0" =>
+            {
+                Err(BuildFlavorError::ReleaseCompilerMismatch)
+            }
+            BuildProfile::Debug
+                if compiler.cargo_profile != "debug" || !compiler.debug_assertions =>
+            {
+                Err(BuildFlavorError::DebugCompilerMismatch)
+            }
+            BuildProfile::Release | BuildProfile::Debug | BuildProfile::Sandbox => Ok(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -76,6 +214,7 @@ pub struct BuildIdentity {
     pub version: String,
     pub target: String,
     pub intent: BuildIntent,
+    pub flavor: BuildFlavor,
     pub compiler: CompilerFacts,
     pub features: Vec<String>,
     pub source: SourceIdentity,
@@ -131,7 +270,7 @@ pub fn decode_frame(frame: &[u8]) -> Result<BuildIdentity, DecodeError> {
     Ok(identity)
 }
 
-fn validate_identity(identity: &BuildIdentity) -> Result<(), DecodeError> {
+pub fn validate_identity(identity: &BuildIdentity) -> Result<(), DecodeError> {
     let required = [
         ("binary is empty", identity.binary.as_str()),
         ("package is empty", identity.package.as_str()),
@@ -159,6 +298,10 @@ fn validate_identity(identity: &BuildIdentity) -> Result<(), DecodeError> {
             "features are not sorted and unique",
         ));
     }
+    identity
+        .flavor
+        .validate(identity.intent, &identity.compiler, &identity.features)
+        .map_err(|error| DecodeError::InvalidContract(error.reason()))?;
     if let SourceIdentity::Git {
         commit,
         head_tree,
@@ -170,6 +313,12 @@ fn validate_identity(identity: &BuildIdentity) -> Result<(), DecodeError> {
         }
     }
     Ok(())
+}
+
+fn has_dev_feature(features: &[String]) -> bool {
+    features
+        .binary_search_by(|feature| feature.as_str().cmp(DEV_FEATURE_NAME))
+        .is_ok()
 }
 
 fn valid_git_oid(value: &str) -> bool {
@@ -267,8 +416,8 @@ macro_rules! declare_build_identity {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_frame, BuildIdentity, BuildIntent, BuildRole, CompilerFacts, DecodeError,
-        SourceIdentity, FRAME_MAGIC, SCHEMA_VERSION,
+        decode_frame, BuildFlavor, BuildIdentity, BuildIntent, BuildProfile, BuildRole,
+        CompilerFacts, DecodeError, SourceIdentity, FRAME_MAGIC, SCHEMA_VERSION,
     };
     use proptest::prelude::*;
 
@@ -281,6 +430,10 @@ mod tests {
             version: "1.2.3".to_string(),
             target: "x86_64-unknown-linux-gnu".to_string(),
             intent: BuildIntent::Sandbox,
+            flavor: BuildFlavor {
+                profile: BuildProfile::Sandbox,
+                dev_features: true,
+            },
             compiler: CompilerFacts {
                 cargo_profile: "release".to_string(),
                 opt_level: "3".to_string(),
@@ -332,6 +485,10 @@ mod tests {
                 "version": "1.2.3",
                 "target": "x86_64-unknown-linux-gnu",
                 "intent": "sandbox",
+                "flavor": {
+                    "profile": "sandbox",
+                    "dev_features": true
+                },
                 "compiler": {
                     "cargo_profile": "release",
                     "opt_level": "3",
@@ -369,6 +526,29 @@ mod tests {
         assert!(matches!(
             decode_frame(&unknown),
             Err(DecodeError::InvalidJson(_))
+        ));
+    }
+
+    #[test]
+    fn frame_rejects_flavor_that_disagrees_with_build_facts() {
+        let mut feature_mismatch = identity();
+        feature_mismatch.flavor.dev_features = false;
+        assert!(matches!(
+            decode_frame(&frame(&feature_mismatch)),
+            Err(DecodeError::InvalidContract(
+                "flavor dev_features disagrees with Cargo features"
+            ))
+        ));
+
+        let mut production_debug = identity();
+        production_debug.intent = BuildIntent::Production;
+        production_debug.flavor.profile = BuildProfile::Debug;
+        production_debug.compiler.cargo_profile = "debug".to_string();
+        assert!(matches!(
+            decode_frame(&frame(&production_debug)),
+            Err(DecodeError::InvalidContract(
+                "production intent requires release profile"
+            ))
         ));
     }
 

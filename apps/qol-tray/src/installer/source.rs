@@ -5,8 +5,6 @@ use std::process::Command;
 
 use super::platform;
 
-const APP_NAME: &str = "qol-tray";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Mode {
     Install,
@@ -20,6 +18,12 @@ pub(super) struct ParsedArgs {
     pub(super) workspace: Option<PathBuf>,
     pub(super) skip_shell_hook: bool,
     pub(super) dev_mode: bool,
+}
+
+#[derive(Debug)]
+pub(super) struct ResolvedSource {
+    pub(super) path: PathBuf,
+    pub(super) exact_source: Option<qol_conventions::artifact::SourceIdentity>,
 }
 
 pub(super) fn parse_args<I: IntoIterator<Item = String>>(iter: I) -> Result<ParsedArgs> {
@@ -64,23 +68,32 @@ pub(super) fn resolve_source_binary(
     repo_root: &Path,
     source: Option<&Path>,
     dev_mode: bool,
-) -> Result<PathBuf> {
+) -> Result<ResolvedSource> {
     if dev_mode {
         return resolve_dev_source(repo_root, source);
     }
     if let Some(path) = source {
-        return ensure_existing_source(path.to_path_buf());
+        return ensure_existing_source(path.to_path_buf()).map(ResolvedSource::external);
     }
     if let Some(path) = source_binary_from_env() {
-        return ensure_existing_source(path);
+        return ensure_existing_source(path).map(ResolvedSource::external);
     }
     if let Some(path) = source_binary_from_platform_candidates()? {
-        return Ok(path);
+        return Ok(ResolvedSource::external(path));
     }
     release_binary(repo_root, false)
 }
 
-fn resolve_dev_source(repo_root: &Path, source: Option<&Path>) -> Result<PathBuf> {
+impl ResolvedSource {
+    fn external(path: PathBuf) -> Self {
+        Self {
+            path,
+            exact_source: None,
+        }
+    }
+}
+
+fn resolve_dev_source(repo_root: &Path, source: Option<&Path>) -> Result<ResolvedSource> {
     if source.is_some() {
         return Err(anyhow!(
             "--dev cannot be combined with --source: the installer cannot verify a custom binary was built with --features dev. Run from the qol-tray repo without --source so the installer can build the source itself."
@@ -100,21 +113,15 @@ fn resolve_dev_source(repo_root: &Path, source: Option<&Path>) -> Result<PathBuf
     release_binary(repo_root, true)
 }
 
-fn release_binary(repo_root: &Path, dev: bool) -> Result<PathBuf> {
-    let path = repo_root
-        .join("target")
-        .join("release")
-        .join(platform::binary_filename());
-    if !dev && path.is_file() {
-        return Ok(path);
-    }
+fn release_binary(repo_root: &Path, dev: bool) -> Result<ResolvedSource> {
     if repo_root.join("Cargo.toml").is_file() {
-        build_release_binary(repo_root, dev)?;
-        if path.is_file() {
-            return Ok(path);
-        }
+        return build_release_binary(repo_root, dev);
     }
-    Err(anyhow!("Built binary not found at {}", path.display()))
+    Err(anyhow!(
+        "Cannot build {} without a Cargo.toml at {}",
+        platform::binary_filename(),
+        repo_root.display()
+    ))
 }
 
 fn source_binary_from_env() -> Option<PathBuf> {
@@ -138,7 +145,7 @@ fn ensure_existing_source(path: PathBuf) -> Result<PathBuf> {
     Err(anyhow!("Source binary not found at {}", path.display()))
 }
 
-fn build_release_binary(repo_root: &Path, dev: bool) -> Result<()> {
+fn build_release_binary(repo_root: &Path, dev: bool) -> Result<ResolvedSource> {
     let manifest_path = repo_root.join("Cargo.toml");
     if !manifest_path.is_file() {
         return Err(anyhow!(
@@ -152,19 +159,30 @@ fn build_release_binary(repo_root: &Path, dev: bool) -> Result<()> {
         .arg("build")
         .arg("--release")
         .arg("--bin")
-        .arg(APP_NAME)
+        .arg(qol_conventions::artifact::TRAY_HOST_BINARY_NAME)
         .arg("--manifest-path")
         .arg(&manifest_path);
     if dev {
         command.arg("--features").arg("dev");
     }
-    let status = command.status().context("Failed to run cargo build")?;
-
-    if !status.success() {
-        return Err(anyhow!("cargo build failed with status {}", status));
-    }
-
-    Ok(())
+    let identity = if dev {
+        qol_dev_build::build_identity::BuildIdentityEnvironment::development(repo_root)?
+    } else {
+        qol_dev_build::build_identity::BuildIdentityEnvironment::production(repo_root)?
+    };
+    identity.apply_to(&mut command);
+    let output = qol_dev_build::cargo_build::run_cargo_command(&mut command)?;
+    identity.verify_unchanged(repo_root)?;
+    let path = qol_dev_build::cargo_build::select_binary_executable(
+        &output.artifacts,
+        &manifest_path,
+        qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
+    )
+    .map_err(anyhow::Error::from)?;
+    Ok(ResolvedSource {
+        path,
+        exact_source: Some(identity.source().clone()),
+    })
 }
 
 #[cfg(test)]
@@ -372,5 +390,22 @@ mod tests {
         assert!(err
             .to_string()
             .contains("--dev requires running from the qol-tray repo"));
+    }
+
+    #[test]
+    fn production_source_never_reuses_a_guessed_release_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let guessed = tmp
+            .path()
+            .join("target")
+            .join("release")
+            .join(platform::binary_filename());
+        std::fs::create_dir_all(guessed.parent().unwrap()).unwrap();
+        std::fs::write(&guessed, "stale").unwrap();
+
+        let error = release_binary(tmp.path(), false).unwrap_err();
+
+        assert!(error.to_string().contains("without a Cargo.toml"));
+        assert!(guessed.is_file());
     }
 }

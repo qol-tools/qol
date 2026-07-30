@@ -12,6 +12,8 @@ pub struct BuildResult {
     pub success: bool,
     pub output: String,
     pub skipped: bool,
+    #[serde(skip_serializing)]
+    pub artifacts: Vec<crate::cargo_build::CargoArtifact>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
