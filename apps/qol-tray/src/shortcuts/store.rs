@@ -131,6 +131,9 @@ pub fn find_by_id(config: &ShortcutsConfig, id: &str) -> Option<Shortcut> {
 
 pub fn add(config: &mut ShortcutsConfig, shortcut: Shortcut) -> Result<(), String> {
     validation::validate_shortcut(&shortcut)?;
+    if shortcut.source.is_some() {
+        return Err("source is owned by qol-tray and cannot be set on a new shortcut".to_string());
+    }
     if config.shortcuts.iter().any(|s| s.id == shortcut.id) {
         return Err(format!("shortcut with id '{}' already exists", shortcut.id));
     }
@@ -143,7 +146,7 @@ pub fn add(config: &mut ShortcutsConfig, shortcut: Shortcut) -> Result<(), Strin
     Ok(())
 }
 
-pub fn update(config: &mut ShortcutsConfig, shortcut: Shortcut) -> Result<(), String> {
+pub fn update(config: &mut ShortcutsConfig, mut shortcut: Shortcut) -> Result<(), String> {
     validation::validate_shortcut(&shortcut)?;
     let existing = match config.shortcuts.iter_mut().find(|s| s.id == shortcut.id) {
         Some(e) => e,
@@ -155,6 +158,7 @@ pub fn update(config: &mut ShortcutsConfig, shortcut: Shortcut) -> Result<(), St
         shortcut.action.kind(),
         shortcut.enabled
     );
+    shortcut.source = existing.source.clone();
     *existing = shortcut;
     Ok(())
 }
