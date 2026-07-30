@@ -2617,6 +2617,14 @@ fn prepare_workflow_payload(
     if !verbose {
         build.arg("--quiet");
     }
+    let identity =
+        qol_build_identity::BuildIdentityEnvironment::sandbox(worktree).map_err(|error| {
+            PayloadPreparationFailure::before_spawn(
+                anyhow!("failed to resolve sandbox build identity: {error}"),
+                false,
+            )
+        })?;
+    identity.apply_to(&mut build);
     dev_env::clear_host_session(&mut build);
     let status = run_owned_preparation_command(build, cancellation, &journals.build).map_err(
         |mut failure| {
