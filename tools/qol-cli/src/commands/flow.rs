@@ -144,6 +144,7 @@ struct FlowPayload {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DesktopPayloadRecipe {
     companion: Option<DesktopCompanionRecipe>,
+    tray_features: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2607,6 +2608,9 @@ fn prepare_workflow_payload(
         "--bin",
         "qol-tray",
     ]);
+    if let Some(features) = recipe.tray_features {
+        build.args(["--features", features]);
+    }
     if let Some(companion) = recipe.companion {
         build.args(["-p", companion.package, "--bin", companion.binary]);
     }
@@ -2829,6 +2833,17 @@ fn payload_build_label(recipe: DesktopPayloadRecipe) -> String {
 }
 
 fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
+    if workflow_id == "hotkey-storm" {
+        return Some(DesktopPayloadRecipe {
+            companion: Some(DesktopCompanionRecipe {
+                package: "launcher",
+                binary: "launcher",
+                plugin_dir: "launcher",
+                plugin_id: "plugin-launcher",
+            }),
+            tray_features: Some("linux_evdev"),
+        });
+    }
     let companion = match workflow_id {
         "alt-tab-storm" => DesktopCompanionRecipe {
             package: "alt-tab",
@@ -2855,7 +2870,10 @@ fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
             plugin_id: "qol-shot",
         },
         "shortcut-storm" => {
-            return Some(DesktopPayloadRecipe { companion: None });
+            return Some(DesktopPayloadRecipe {
+                companion: None,
+                tray_features: None,
+            });
         }
         "window-actions-storm" => DesktopCompanionRecipe {
             package: "window-actions",
@@ -2867,6 +2885,7 @@ fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
     };
     Some(DesktopPayloadRecipe {
         companion: Some(companion),
+        tray_features: None,
     })
 }
 
@@ -4530,6 +4549,7 @@ mod tests {
                         plugin_dir: "alt-tab",
                         plugin_id: "plugin-alt-tab",
                     }),
+                    tray_features: None,
                 },
             ),
             (
@@ -4541,6 +4561,19 @@ mod tests {
                         plugin_dir: "bluetooth",
                         plugin_id: "plugin-bluetooth",
                     }),
+                    tray_features: None,
+                },
+            ),
+            (
+                "hotkey-storm",
+                DesktopPayloadRecipe {
+                    companion: Some(DesktopCompanionRecipe {
+                        package: "launcher",
+                        binary: "launcher",
+                        plugin_dir: "launcher",
+                        plugin_id: "plugin-launcher",
+                    }),
+                    tray_features: Some("linux_evdev"),
                 },
             ),
             (
@@ -4552,6 +4585,7 @@ mod tests {
                         plugin_dir: "launcher",
                         plugin_id: "plugin-launcher",
                     }),
+                    tray_features: None,
                 },
             ),
             (
@@ -4563,6 +4597,7 @@ mod tests {
                         plugin_dir: "qol-shot",
                         plugin_id: "qol-shot",
                     }),
+                    tray_features: None,
                 },
             ),
             (
@@ -4574,9 +4609,16 @@ mod tests {
                         plugin_dir: "qol-shot",
                         plugin_id: "qol-shot",
                     }),
+                    tray_features: None,
                 },
             ),
-            ("shortcut-storm", DesktopPayloadRecipe { companion: None }),
+            (
+                "shortcut-storm",
+                DesktopPayloadRecipe {
+                    companion: None,
+                    tray_features: None,
+                },
+            ),
             (
                 "window-actions-storm",
                 DesktopPayloadRecipe {
@@ -4586,6 +4628,7 @@ mod tests {
                         plugin_dir: "window-actions",
                         plugin_id: "plugin-window-actions",
                     }),
+                    tray_features: None,
                 },
             ),
         ];
@@ -6447,6 +6490,7 @@ mod tests {
         let serial = emu::workflow_definition("leaves-no-trace").unwrap();
         let alt_tab = emu::workflow_definition("alt-tab-storm").unwrap();
         let bluetooth = emu::workflow_definition("bluetooth-storm").unwrap();
+        let hotkeys = emu::workflow_definition("hotkey-storm").unwrap();
         let launcher = emu::workflow_definition("launcher-storm").unwrap();
         let desktop = emu::workflow_definition("qol-shot-capture").unwrap();
         let shot_storm = emu::workflow_definition("qol-shot-storm").unwrap();
@@ -6455,6 +6499,7 @@ mod tests {
         assert!(emu::validate_workflow_adapter(serial, adapter).is_err());
         emu::validate_workflow_adapter(alt_tab, adapter).unwrap();
         emu::validate_workflow_adapter(bluetooth, adapter).unwrap();
+        emu::validate_workflow_adapter(hotkeys, adapter).unwrap();
         emu::validate_workflow_adapter(launcher, adapter).unwrap();
         emu::validate_workflow_adapter(desktop, adapter).unwrap();
         emu::validate_workflow_adapter(shot_storm, adapter).unwrap();

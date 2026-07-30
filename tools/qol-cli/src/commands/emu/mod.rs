@@ -2203,6 +2203,8 @@ fn qemu_args(input: QemuArgsInput<'_>) -> Vec<String> {
         "-device".to_string(),
         "virtio-rng-pci".to_string(),
         "-device".to_string(),
+        "usb-kbd,bus=xhci.0,id=qol-keyboard".to_string(),
+        "-device".to_string(),
         "usb-tablet,bus=xhci.0,id=qol-tablet".to_string(),
         "-qmp".to_string(),
         format!("tcp:127.0.0.1:{},server,nowait", ports.qmp),
@@ -3061,6 +3063,7 @@ mod tests {
             "-drive file=/a/b/overlay.qcow2,id=qoldisk,if=virtio,format=qcow2",
             "-device qemu-xhci,id=xhci",
             "-device virtio-rng-pci",
+            "-device usb-kbd,bus=xhci.0,id=qol-keyboard",
             "-device usb-tablet,bus=xhci.0,id=qol-tablet",
         ];
         for fragment in expected {

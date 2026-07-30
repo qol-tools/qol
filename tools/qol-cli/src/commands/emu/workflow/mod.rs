@@ -12,6 +12,7 @@ use super::BootedVm;
 mod alt_tab;
 mod bluetooth;
 mod desktop;
+mod hotkeys;
 mod launcher;
 mod qol_shot;
 mod shortcuts;
@@ -101,6 +102,7 @@ pub(crate) type SerialWorkflow = fn(&mut Run) -> Result<Verdict>;
 pub(crate) enum DesktopWorkflow {
     AltTabStorm,
     BluetoothStorm,
+    HotkeyStorm,
     LauncherStorm,
     QolShotCapture,
     QolShotStorm,
@@ -137,6 +139,7 @@ pub(crate) fn run_desktop(
     match workflow {
         DesktopWorkflow::AltTabStorm => alt_tab::run(vm, platform),
         DesktopWorkflow::BluetoothStorm => bluetooth::run(vm, platform),
+        DesktopWorkflow::HotkeyStorm => hotkeys::run(vm, platform),
         DesktopWorkflow::LauncherStorm => launcher::run(vm, platform),
         DesktopWorkflow::QolShotCapture => desktop::run(vm, platform),
         DesktopWorkflow::QolShotStorm => qol_shot::run(vm, platform),
@@ -157,6 +160,10 @@ const REGISTRY: &[Definition] = &[
     Definition::Desktop {
         id: "bluetooth-storm",
         run: DesktopWorkflow::BluetoothStorm,
+    },
+    Definition::Desktop {
+        id: "hotkey-storm",
+        run: DesktopWorkflow::HotkeyStorm,
     },
     Definition::Desktop {
         id: "launcher-storm",
@@ -213,6 +220,7 @@ mod tests {
         let cases = [
             ("alt-tab-storm", true),
             ("bluetooth-storm", true),
+            ("hotkey-storm", true),
             ("leaves-no-trace", true),
             ("launcher-storm", true),
             ("qol-shot-storm", true),
@@ -233,6 +241,7 @@ mod tests {
                 "leaves-no-trace",
                 "alt-tab-storm",
                 "bluetooth-storm",
+                "hotkey-storm",
                 "launcher-storm",
                 "qol-shot-capture",
                 "qol-shot-storm",
@@ -247,6 +256,7 @@ mod tests {
         assert!(!find("leaves-no-trace").unwrap().requires_payload());
         assert!(find("alt-tab-storm").unwrap().requires_payload());
         assert!(find("bluetooth-storm").unwrap().requires_payload());
+        assert!(find("hotkey-storm").unwrap().requires_payload());
         assert!(find("launcher-storm").unwrap().requires_payload());
         assert!(find("qol-shot-capture").unwrap().requires_payload());
         assert!(find("qol-shot-storm").unwrap().requires_payload());
