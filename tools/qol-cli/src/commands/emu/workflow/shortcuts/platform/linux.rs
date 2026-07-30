@@ -11,7 +11,7 @@ use crate::progress::{step_label, StepKind};
 use super::desktop::{
     command, connect_desktop_guest, current_trace_cursor, exec, install_payload,
     launch_tray_and_wait_api, require_exec, start_tray_and_wait_api, wait_for_command,
-    wait_for_probe_fields,
+    wait_for_probe_fields, TRAY_BINARY,
 };
 use super::Verdict;
 
@@ -19,6 +19,10 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(20);
 const RACE_COUNT: usize = 40;
 const RACE_PREFIX: &str = "shortcut-storm-race-";
+const APPS_DIR: &str = "/home/qol/.local/share/applications";
+const LAUNCHER_ID: &str = "shortcut-storm-launcher";
+const GATE_ID: &str = "shortcut-storm-gate";
+const FORGED_ID: &str = "shortcut-storm-forged";
 const PORT_CLOSED_SCRIPT: &str = r#"
 import socket
 import sys
@@ -84,6 +88,37 @@ print(json.dumps({
 }))
 "#;
 
+const OVERSIZE_URL_BYTES: usize = 1024 * 1024 + 1024;
+const LINUX_OVERSIZE_SCRIPT: &str = r#"
+import json
+import sys
+import urllib.error
+import urllib.request
+
+base = sys.argv[1]
+token = sys.argv[2]
+size = int(sys.argv[3])
+
+payload = json.dumps({
+    "id": "shortcut-storm-oversize",
+    "name": "Oversize",
+    "action": {"type": "open_url", "url": "https://x.io/" + "a" * size},
+}).encode()
+request = urllib.request.Request(
+    base + "/api/shortcuts",
+    data=payload,
+    headers={"Content-Type": "application/json", "X-Qol-Token": token},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(request, timeout=10) as response:
+        response.read()
+        print(response.status)
+except urllib.error.HTTPError as error:
+    error.read()
+    print(error.code)
+"#;
+
 struct HttpResponse {
     status: u16,
     body: String,
@@ -97,13 +132,16 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
 
     test_valid_lifecycle(&mut guest, &auth)?;
     test_invalid_requests(&mut guest, &auth)?;
+    test_rejections_leave_state_untouched(&mut guest, &auth)?;
     test_http_guards(&mut guest, &auth)?;
+    test_launcher_export(&mut guest, &auth)?;
     let fds_before = tray_fd_count(&mut guest)?;
     test_concurrent_creates(&mut guest, &auth)?;
     let fds_after = tray_fd_count(&mut guest)?;
     require_fd_budget(fds_before, fds_after)?;
     let auth = restart_and_require_persistence(&mut guest, &auth)?;
     remove_race_shortcuts(&mut guest, &auth)?;
+    test_client_supplied_source(&mut guest, &auth)?;
     require_shortcut_ids(&mut guest, &auth, &baseline)?;
 
     let artifacts_dir = vm.run_dir.join("artifacts");
@@ -121,7 +159,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     step_label(
         "storm",
         StepKind::Success,
-        "lifecycle, validation, guards, 40-way persistence race, restart, and cleanup passed",
+        "lifecycle, validation, guards, launcher export, 40-way persistence race, restart, and cleanup passed",
     );
     Ok(Verdict {
         pass: true,
@@ -294,10 +332,283 @@ fn test_http_guards(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
     require_status_output(&hostile, 403)
 }
 
+fn test_rejections_leave_state_untouched(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
+    let before = shortcut_ids(guest, auth)?;
+    let held = shortcut_payload("shortcut-storm-held", true);
+    require_status(
+        request(guest, auth, "POST", "/api/shortcuts", Some(&held))?,
+        200,
+    )?;
+    let rejected = [
+        (held.clone(), 400, "duplicate id"),
+        (
+            r#"{"id":"shortcut-storm-unknown","name":"X","action":{"type":"teleport"}}"#
+                .to_string(),
+            400,
+            "unknown action kind",
+        ),
+        (
+            r#"{"id":"shortcut-storm-broken","name":"X""#.to_string(),
+            400,
+            "truncated json",
+        ),
+        (
+            r#"{"name":"X","action":{"type":"launch_app","app":{"type":"name","name":"xed"}}}"#
+                .to_string(),
+            400,
+            "missing id",
+        ),
+    ];
+    for (payload, expected, label) in rejected {
+        let response = request(guest, auth, "POST", "/api/shortcuts", Some(&payload))?;
+        if response.status != expected {
+            bail!(
+                "{label}: expected HTTP {expected}, got {}: {}",
+                response.status,
+                response.body
+            );
+        }
+    }
+    require_oversize_body_rejected(guest, auth)?;
+    require_status(
+        request(
+            guest,
+            auth,
+            "DELETE",
+            "/api/shortcuts/shortcut-storm-held",
+            None,
+        )?,
+        200,
+    )?;
+    require_shortcut_ids(guest, auth, &before)
+}
+
+fn require_oversize_body_rejected(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
+    let token = auth_token(auth)?;
+    let outcome = require_exec(
+        guest,
+        command(
+            "/usr/bin/python3",
+            &[
+                "-c",
+                LINUX_OVERSIZE_SCRIPT,
+                &local_base_url(),
+                token,
+                &OVERSIZE_URL_BYTES.to_string(),
+            ],
+        ),
+        ACTION_TIMEOUT,
+    )?;
+    let status: u16 = outcome
+        .stdout
+        .trim()
+        .parse()
+        .context("oversize probe did not print an HTTP status")?;
+    if status != 413 {
+        bail!("oversize body: expected HTTP 413, got {status}");
+    }
+    Ok(())
+}
+
+fn test_launcher_export(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
+    let entry = desktop_entry_name(LAUNCHER_ID);
+    let path = format!("{APPS_DIR}/{entry}");
+    require_status(
+        request(
+            guest,
+            auth,
+            "POST",
+            "/api/shortcuts",
+            Some(&shortcut_payload(LAUNCHER_ID, true)),
+        )?,
+        200,
+    )?;
+    wait_for_desktop_entry(guest, &entry, true)?;
+    require_launcher_exec_line(guest, &path)?;
+    run_shortcut_through_launcher_entry(guest)?;
+    require_status(
+        request(
+            guest,
+            auth,
+            "PUT",
+            &format!("/api/shortcuts/{LAUNCHER_ID}"),
+            Some(&shortcut_payload(LAUNCHER_ID, false)),
+        )?,
+        200,
+    )?;
+    wait_for_desktop_entry(guest, &entry, false)?;
+    require_status(
+        request(
+            guest,
+            auth,
+            "PUT",
+            &format!("/api/shortcuts/{LAUNCHER_ID}"),
+            Some(&shortcut_payload(LAUNCHER_ID, true)),
+        )?,
+        200,
+    )?;
+    wait_for_desktop_entry(guest, &entry, true)?;
+    require_status(
+        request(
+            guest,
+            auth,
+            "DELETE",
+            &format!("/api/shortcuts/{LAUNCHER_ID}"),
+            None,
+        )?,
+        200,
+    )?;
+    wait_for_desktop_entry(guest, &entry, false)
+}
+
+fn run_shortcut_through_launcher_entry(guest: &mut GuestControlClient) -> Result<()> {
+    let cursor = current_trace_cursor(guest)?;
+    require_exec(
+        guest,
+        command(TRAY_BINARY, &["exec", "shortcut", LAUNCHER_ID]),
+        ACTION_TIMEOUT,
+    )?;
+    wait_for_probe_fields(
+        guest,
+        cursor,
+        "SHORTCUT_OK",
+        &[&format!("id={LAUNCHER_ID}"), "action=launch_app"],
+        ACTION_TIMEOUT,
+    )?;
+    wait_for_command(
+        guest,
+        command("/usr/bin/pgrep", &["--exact", "xed"]),
+        ACTION_TIMEOUT,
+        |outcome| !outcome.stdout.trim().is_empty(),
+        "Xed to launch from the exported launcher entry",
+    )?;
+    let _ = exec(
+        guest,
+        command("/usr/bin/pkill", &["--exact", "xed"]),
+        COMMAND_TIMEOUT,
+    )?;
+    let missing = exec(
+        guest,
+        command(TRAY_BINARY, &["exec", "shortcut", "shortcut-storm-missing"]),
+        COMMAND_TIMEOUT,
+    )?;
+    if missing.exit_code != Some(1) {
+        bail!(
+            "`qol-tray exec shortcut` on a missing id exited {:?}: {}",
+            missing.exit_code,
+            missing.stderr.trim()
+        );
+    }
+    Ok(())
+}
+
+fn require_launcher_exec_line(guest: &mut GuestControlClient, path: &str) -> Result<()> {
+    let outcome = require_exec(guest, command("/usr/bin/cat", &[path]), COMMAND_TIMEOUT)?;
+    let exec_line = outcome
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("Exec="))
+        .with_context(|| format!("{path} has no Exec line"))?
+        .to_string();
+    for fragment in [
+        TRAY_BINARY,
+        "\"exec\"",
+        "\"shortcut\"",
+        &format!("\"{LAUNCHER_ID}\""),
+    ] {
+        if !exec_line.contains(fragment) {
+            bail!("launcher entry Exec line is missing {fragment}: {exec_line}");
+        }
+    }
+    Ok(())
+}
+
+fn test_client_supplied_source(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
+    let response = request(
+        guest,
+        auth,
+        "POST",
+        "/api/shortcuts",
+        Some(&forged_source_payload()),
+    )?;
+    if response.status == 400 {
+        return Ok(());
+    }
+    require_status(response, 200)?;
+    require_launcher_sync_settled(guest, auth)?;
+    let ids = shortcut_ids(guest, auth)?;
+    if !ids.contains(FORGED_ID) {
+        bail!(
+            "POST /api/shortcuts answered 200 for `{FORGED_ID}`, then plugin reconciliation deleted it before the next read"
+        );
+    }
+    require_status(
+        request(
+            guest,
+            auth,
+            "DELETE",
+            &format!("/api/shortcuts/{FORGED_ID}"),
+            None,
+        )?,
+        200,
+    )?;
+    Ok(())
+}
+
+fn require_launcher_sync_settled(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
+    let entry = desktop_entry_name(GATE_ID);
+    require_status(
+        request(
+            guest,
+            auth,
+            "POST",
+            "/api/shortcuts",
+            Some(&shortcut_payload(GATE_ID, true)),
+        )?,
+        200,
+    )?;
+    wait_for_desktop_entry(guest, &entry, true)?;
+    require_status(
+        request(
+            guest,
+            auth,
+            "DELETE",
+            &format!("/api/shortcuts/{GATE_ID}"),
+            None,
+        )?,
+        200,
+    )?;
+    wait_for_desktop_entry(guest, &entry, false)
+}
+
+fn wait_for_desktop_entry(
+    guest: &mut GuestControlClient,
+    entry: &str,
+    expected: bool,
+) -> Result<()> {
+    let description = match expected {
+        true => format!("launcher entry {entry} to be written"),
+        false => format!("launcher entry {entry} to be removed"),
+    };
+    wait_for_command(
+        guest,
+        command(
+            "/usr/bin/find",
+            &[APPS_DIR, "-maxdepth", "1", "-name", entry],
+        ),
+        ACTION_TIMEOUT,
+        |outcome| !outcome.stdout.trim().is_empty() == expected,
+        &description,
+    )?;
+    Ok(())
+}
+
+fn desktop_entry_name(id: &str) -> String {
+    format!("qol-shortcut-{id}.desktop")
+}
+
 fn test_concurrent_creates(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
-    let token = auth
-        .strip_prefix("X-Qol-Token: ")
-        .context("tray auth header had an unexpected shape")?;
+    let token = auth_token(auth)?;
     let count = RACE_COUNT.to_string();
     let outcome = require_exec(
         guest,
@@ -401,6 +712,30 @@ fn shortcut_payload(id: &str, enabled: bool) -> String {
         }
     })
     .to_string()
+}
+
+fn forged_source_payload() -> String {
+    serde_json::json!({
+        "id": FORGED_ID,
+        "name": "Forged Source",
+        "enabled": true,
+        "export_to_launcher": false,
+        "source": {
+            "type": "plugin_manifest",
+            "plugin_id": "plugin-ghost",
+            "shortcut_id": "open"
+        },
+        "action": {
+            "type": "launch_app",
+            "app": {"type": "name", "name": "xed"}
+        }
+    })
+    .to_string()
+}
+
+fn auth_token(auth: &str) -> Result<&str> {
+    auth.strip_prefix("X-Qol-Token: ")
+        .context("tray auth header had an unexpected shape")
 }
 
 fn shortcut_ids(guest: &mut GuestControlClient, auth: &str) -> Result<BTreeSet<String>> {
