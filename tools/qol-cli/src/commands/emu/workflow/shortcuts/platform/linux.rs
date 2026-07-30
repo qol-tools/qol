@@ -23,6 +23,7 @@ const APPS_DIR: &str = "/home/qol/.local/share/applications";
 const LAUNCHER_ID: &str = "shortcut-storm-launcher";
 const GATE_ID: &str = "shortcut-storm-gate";
 const FORGED_ID: &str = "shortcut-storm-forged";
+const UPDATE_ID: &str = "shortcut-storm-forged-update";
 const PORT_CLOSED_SCRIPT: &str = r#"
 import socket
 import sys
@@ -524,12 +525,61 @@ fn require_launcher_exec_line(guest: &mut GuestControlClient, path: &str) -> Res
 }
 
 fn test_client_supplied_source(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
+    test_created_source_is_rejected_or_durable(guest, auth)?;
+    test_updated_source_never_orphans_a_shortcut(guest, auth)
+}
+
+fn test_updated_source_never_orphans_a_shortcut(
+    guest: &mut GuestControlClient,
+    auth: &str,
+) -> Result<()> {
+    let path = format!("/api/shortcuts/{UPDATE_ID}");
+    require_status(
+        request(
+            guest,
+            auth,
+            "POST",
+            "/api/shortcuts",
+            Some(&shortcut_payload(UPDATE_ID, true)),
+        )?,
+        200,
+    )?;
+    let response = request(
+        guest,
+        auth,
+        "PUT",
+        &path,
+        Some(&forged_source_payload(UPDATE_ID)),
+    )?;
+    if !matches!(response.status, 200 | 400) {
+        bail!(
+            "expected HTTP 200 or 400 for a forged source update, got {}: {}",
+            response.status,
+            response.body
+        );
+    }
+    require_launcher_sync_settled(guest, auth)?;
+    let ids = shortcut_ids(guest, auth)?;
+    if !ids.contains(UPDATE_ID) {
+        bail!(
+            "PUT {path} answered {}, then plugin reconciliation deleted `{UPDATE_ID}`",
+            response.status
+        );
+    }
+    require_status(request(guest, auth, "DELETE", &path, None)?, 200)?;
+    Ok(())
+}
+
+fn test_created_source_is_rejected_or_durable(
+    guest: &mut GuestControlClient,
+    auth: &str,
+) -> Result<()> {
     let response = request(
         guest,
         auth,
         "POST",
         "/api/shortcuts",
-        Some(&forged_source_payload()),
+        Some(&forged_source_payload(FORGED_ID)),
     )?;
     if response.status == 400 {
         return Ok(());
@@ -714,9 +764,9 @@ fn shortcut_payload(id: &str, enabled: bool) -> String {
     .to_string()
 }
 
-fn forged_source_payload() -> String {
+fn forged_source_payload(id: &str) -> String {
     serde_json::json!({
-        "id": FORGED_ID,
+        "id": id,
         "name": "Forged Source",
         "enabled": true,
         "export_to_launcher": false,
