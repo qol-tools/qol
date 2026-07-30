@@ -13,7 +13,8 @@ use super::desktop::{
     command, connect_desktop_guest, current_trace_cursor, dispatch_plugin_action, fd_count,
     install_payload, plugin_daemon_pid, require_exec, require_plugin_action_guards, spawn,
     start_tray_and_wait_plugin_with_setup, wait_for_command, wait_for_probe_fields,
-    wait_for_probe_line, wait_for_window_id, within_fd_budget, xdotool_key, TraceCursor,
+    wait_for_probe_line, wait_for_window_id, wait_for_window_title, within_fd_budget, xdotool_key,
+    TraceCursor,
 };
 use super::Verdict;
 
@@ -223,12 +224,12 @@ fn wait_for_active_title(
     predicate: impl Fn(&str) -> bool,
     description: &str,
 ) -> Result<()> {
-    let result = wait_for_command(
+    let result = wait_for_window_title(
         guest,
-        command("/usr/bin/xdotool", &["getactivewindow", "getwindowname"]),
+        &["getactivewindow", "getwindowname"],
+        predicate,
+        description,
         ACTION_TIMEOUT,
-        |outcome| predicate(outcome.stdout.trim()),
-        &format!("{description} to own guest focus"),
     );
     let Err(error) = result else {
         return Ok(());

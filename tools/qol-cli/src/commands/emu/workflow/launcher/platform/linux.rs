@@ -14,7 +14,7 @@ use super::desktop::{
     command, connect_desktop_guest, current_trace_cursor, dispatch_plugin_action, fd_count,
     install_payload, plugin_daemon_pid, require_exec, require_plugin_action_guards,
     start_tray_and_wait_plugin, wait_for_command, wait_for_probe_fields, wait_for_probe_line,
-    within_fd_budget, xdotool_key, TraceCursor,
+    wait_for_window_title, within_fd_budget, xdotool_key, TraceCursor,
 };
 use super::Verdict;
 
@@ -94,6 +94,7 @@ fn wait_for_launcher(guest: &mut GuestControlClient) -> Result<()> {
         launcher_focus_args(),
         |title| title.starts_with("qol-launcher@"),
         "Launcher",
+        ACTION_TIMEOUT,
     )
 }
 
@@ -107,27 +108,12 @@ fn wait_for_active_title(
         &["getactivewindow", "getwindowname"],
         predicate,
         description,
+        ACTION_TIMEOUT,
     )
 }
 
 fn launcher_focus_args() -> &'static [&'static str] {
     &["getwindowfocus", "getwindowname"]
-}
-
-fn wait_for_window_title(
-    guest: &mut GuestControlClient,
-    xdotool_args: &[&str],
-    predicate: impl Fn(&str) -> bool,
-    description: &str,
-) -> Result<()> {
-    wait_for_command(
-        guest,
-        command("/usr/bin/xdotool", xdotool_args),
-        ACTION_TIMEOUT,
-        |outcome| predicate(outcome.stdout.trim()),
-        &format!("{description} to own guest focus"),
-    )?;
-    Ok(())
 }
 
 fn open_launcher(guest: &mut GuestControlClient, auth: &str) -> Result<()> {

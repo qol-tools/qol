@@ -1086,6 +1086,23 @@ pub(in crate::commands::emu::workflow) fn xdotool_key(
     Ok(())
 }
 
+pub(in crate::commands::emu::workflow) fn wait_for_window_title(
+    guest: &mut GuestControlClient,
+    xdotool_args: &[&str],
+    predicate: impl Fn(&str) -> bool,
+    description: &str,
+    timeout: Duration,
+) -> Result<()> {
+    wait_for_command(
+        guest,
+        command("/usr/bin/xdotool", xdotool_args),
+        timeout,
+        |outcome| predicate(outcome.stdout.trim()),
+        &format!("{description} to own guest focus"),
+    )?;
+    Ok(())
+}
+
 pub(in crate::commands::emu::workflow) fn require_plugin_action_guards(
     guest: &mut GuestControlClient,
     auth: &str,

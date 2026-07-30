@@ -114,6 +114,17 @@ fn default_workspace_path(config_dir: &Path) -> PathBuf {
     config_dir.join(DEFAULT_WORKSPACE_FILE)
 }
 
+pub(crate) fn resolve_target_crates(root: &Path, target: Option<&str>) -> Result<Vec<PathBuf>> {
+    match target {
+        Some(name) => Ok(vec![resolve_crate_target(root, name)?]),
+        None => {
+            let mut all = vec![root.to_path_buf()];
+            all.extend(sibling_crates(root)?);
+            Ok(all)
+        }
+    }
+}
+
 pub(crate) fn resolve_crate_target(root: &Path, name: &str) -> Result<PathBuf> {
     let mut candidates = vec![(root.to_path_buf(), vec!["qol-tray".to_string()])];
     for sibling in sibling_crates(root)? {
