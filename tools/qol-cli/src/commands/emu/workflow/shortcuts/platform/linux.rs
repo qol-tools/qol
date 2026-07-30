@@ -9,7 +9,7 @@ use crate::commands::emu::BootedVm;
 use crate::progress::{step_label, StepKind};
 
 use super::desktop::{
-    command, connect_desktop_guest, current_trace_cursor, exec, install_payload,
+    command, connect_desktop_guest, current_trace_cursor, exec, fd_count, install_payload,
     launch_tray_and_wait_api, require_exec, start_tray_and_wait_api, wait_for_command,
     wait_for_probe_fields, TRAY_BINARY,
 };
@@ -856,21 +856,12 @@ fn tray_pid(guest: &mut GuestControlClient) -> Result<String> {
         .context("qol-tray was not running")
 }
 
-fn tray_fd_count(guest: &mut GuestControlClient) -> Result<usize> {
+fn tray_fd_count(guest: &mut GuestControlClient) -> Result<u64> {
     let pid = tray_pid(guest)?;
-    let path = format!("/proc/{pid}/fd");
-    let outcome = require_exec(
-        guest,
-        command(
-            "/usr/bin/find",
-            &[&path, "-mindepth", "1", "-maxdepth", "1"],
-        ),
-        COMMAND_TIMEOUT,
-    )?;
-    Ok(outcome.stdout.lines().count())
+    fd_count(guest, &pid)
 }
 
-fn require_fd_budget(before: usize, after: usize) -> Result<()> {
+fn require_fd_budget(before: u64, after: u64) -> Result<()> {
     if after > before.saturating_add(8) {
         bail!("qol-tray file descriptors grew from {before} to {after}");
     }

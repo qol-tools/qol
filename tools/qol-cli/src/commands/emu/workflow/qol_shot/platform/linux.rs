@@ -12,9 +12,10 @@ use crate::commands::emu::{qmp, BootedVm};
 use crate::progress::{step_label, StepKind};
 
 use super::desktop::{
-    command, connect_desktop_guest, current_trace_cursor, exec, install_payload, require_exec,
-    spawn, start_tray_and_wait_plugin, wait_for_command, wait_for_probe_fields,
-    wait_for_probe_line, wait_for_window_id, TraceCursor,
+    command, connect_desktop_guest, current_trace_cursor, desktop_resolution, exec, fd_count,
+    install_payload, plugin_daemon_pid, require_exec, require_plugin_action_guards, spawn,
+    start_tray_and_wait_plugin, wait_for_command, wait_for_probe_fields, wait_for_probe_line,
+    wait_for_window_id, within_fd_budget, TraceCursor,
 };
 use super::Verdict;
 
@@ -153,50 +154,8 @@ fn key(guest: &mut GuestControlClient, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn desktop_resolution(guest: &mut GuestControlClient) -> Result<(u32, u32)> {
-    let outcome = require_exec(
-        guest,
-        command("/usr/bin/xrandr", &["--current"]),
-        COMMAND_TIMEOUT,
-    )?;
-    parse_current_resolution(&outcome.stdout)
-        .context("xrandr did not report a valid current resolution")
-}
-
-fn parse_current_resolution(output: &str) -> Option<(u32, u32)> {
-    let line = output.lines().find(|line| line.starts_with("Screen 0:"))?;
-    let current = line.split_once(" current ")?.1;
-    let dimensions = current.split(',').next()?.trim();
-    let (width, height) = dimensions.split_once(" x ")?;
-    let dimensions = (width.parse().ok()?, height.parse().ok()?);
-    (dimensions.0 > 0 && dimensions.1 > 0).then_some(dimensions)
-}
-
 fn daemon_pid(guest: &mut GuestControlClient) -> Result<String> {
-    let outcome = require_exec(
-        guest,
-        command("/usr/bin/pgrep", &["-x", "qol-shot"]),
-        COMMAND_TIMEOUT,
-    )?;
-    outcome
-        .stdout
-        .lines()
-        .next()
-        .map(str::to_string)
-        .context("qol-shot daemon was not running")
-}
-
-fn daemon_fd_count(guest: &mut GuestControlClient, pid: &str) -> Result<u64> {
-    let path = format!("/proc/{pid}/fd");
-    let outcome = require_exec(
-        guest,
-        command(
-            "/usr/bin/find",
-            &[&path, "-maxdepth", "1", "-type", "l", "-printf", ".\n"],
-        ),
-        COMMAND_TIMEOUT,
-    )?;
-    Ok(outcome.stdout.lines().count() as u64)
+    plugin_daemon_pid(guest, &["-x", "qol-shot"], "qol-shot daemon")
 }
 
 fn visible_window_count(guest: &mut GuestControlClient, pattern: &str) -> Result<usize> {
@@ -306,7 +265,7 @@ fn cancel_selector(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
 fn test_selector_cancel_storm(guest: &mut GuestControlClient, auth: &str) -> Result<(u64, u64)> {
     cancel_selector(guest, auth)?;
     let pid_before = daemon_pid(guest)?;
-    let fds_before = daemon_fd_count(guest, &pid_before)?;
+    let fds_before = fd_count(guest, &pid_before)?;
     for _ in 0..CANCEL_CYCLES {
         cancel_selector(guest, auth)?;
     }
@@ -314,7 +273,7 @@ fn test_selector_cancel_storm(guest: &mut GuestControlClient, auth: &str) -> Res
     if pid_before != pid_after {
         bail!("qol-shot restarted during selector cancellation cycles");
     }
-    let fds_after = daemon_fd_count(guest, &pid_after)?;
+    let fds_after = fd_count(guest, &pid_after)?;
     if !within_fd_budget(fds_before, fds_after) {
         bail!("qol-shot file descriptors grew from {fds_before} to {fds_after}");
     }
@@ -324,10 +283,6 @@ fn test_selector_cancel_storm(guest: &mut GuestControlClient, auth: &str) -> Res
         &format!("{CANCEL_CYCLES} retained cancel cycles pid={pid_after} fds={fds_after}"),
     );
     Ok((fds_before, fds_after))
-}
-
-fn within_fd_budget(before: u64, after: u64) -> bool {
-    after <= before.saturating_add(2)
 }
 
 fn test_screenshot_burst(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
@@ -624,59 +579,7 @@ fn test_settings(
 }
 
 fn test_http_guards(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
-    let cases = [
-        (
-            format!(
-                "{}/api/plugins/{PLUGIN_ID}/actions/not-real",
-                local_base_url()
-            ),
-            Some(auth),
-            "400",
-        ),
-        (
-            format!(
-                "{}/api/plugins/not-a-plugin/actions/screenshot",
-                local_base_url()
-            ),
-            Some(auth),
-            "404",
-        ),
-        (
-            format!(
-                "{}/api/plugins/{PLUGIN_ID}/actions/screenshot",
-                local_base_url()
-            ),
-            None,
-            "401",
-        ),
-    ];
-    for (url, auth, expected) in cases {
-        let mut args = vec![
-            "--silent",
-            "--output",
-            "/dev/null",
-            "--write-out",
-            "%{http_code}",
-            "--request",
-            "POST",
-            "--header",
-            "Content-Type: application/json",
-            "--data",
-            "{}",
-        ];
-        if let Some(auth) = auth {
-            args.extend(["--header", auth]);
-        }
-        args.push(&url);
-        let outcome = require_exec(guest, command("/usr/bin/curl", &args), COMMAND_TIMEOUT)?;
-        if outcome.stdout.trim() != expected {
-            bail!(
-                "HTTP guard returned {}, expected {expected} for {url}",
-                outcome.stdout.trim()
-            );
-        }
-    }
-    Ok(())
+    require_plugin_action_guards(guest, auth, PLUGIN_ID, "screenshot")
 }
 
 fn test_crash_recovery(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
@@ -728,39 +631,4 @@ fn test_crash_recovery(guest: &mut GuestControlClient, auth: &str) -> Result<()>
         &format!("qol-shot recovered pid={before}->{after} without a stale selector"),
     );
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{parse_current_resolution, within_fd_budget};
-
-    #[test]
-    fn current_resolution_parser_rejects_missing_zero_and_malformed_values() {
-        let cases = [
-            (
-                "Screen 0: minimum 320 x 200, current 1280 x 800, maximum 16384 x 16384\n",
-                Some((1280, 800)),
-            ),
-            ("Screen 0: current 0 x 800, maximum 10 x 10\n", None),
-            ("Screen 0: current wide x 800, maximum 10 x 10\n", None),
-            ("not xrandr\n", None),
-        ];
-        for (output, expected) in cases {
-            assert_eq!(parse_current_resolution(output), expected, "{output}");
-        }
-    }
-
-    #[test]
-    fn fd_budget_allows_runtime_noise_without_hiding_growth() {
-        let cases = [
-            (30, 29, true),
-            (30, 30, true),
-            (30, 32, true),
-            (30, 33, false),
-            (u64::MAX, u64::MAX, true),
-        ];
-        for (before, after, expected) in cases {
-            assert_eq!(within_fd_budget(before, after), expected);
-        }
-    }
 }

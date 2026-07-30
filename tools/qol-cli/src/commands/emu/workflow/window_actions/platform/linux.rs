@@ -11,9 +11,9 @@ use crate::commands::emu::{qmp, BootedVm};
 use crate::progress::{step_label, StepKind};
 
 use super::desktop::{
-    command, connect_desktop_guest, current_trace_cursor, install_payload, require_exec, spawn,
-    start_tray_and_wait_plugin, wait_for_command, wait_for_probe_fields, wait_for_probe_line,
-    wait_for_window_id, window_geometry, TraceCursor, WindowGeometry,
+    command, connect_desktop_guest, current_trace_cursor, install_payload, plugin_daemon_pid,
+    require_exec, spawn, start_tray_and_wait_plugin, wait_for_command, wait_for_probe_fields,
+    wait_for_probe_line, wait_for_window_id, window_geometry, TraceCursor, WindowGeometry,
 };
 use super::Verdict;
 
@@ -402,17 +402,7 @@ fn test_crash_recovery(guest: &mut GuestControlClient, auth: &str, window_id: &s
 }
 
 fn daemon_pid(guest: &mut GuestControlClient) -> Result<String> {
-    let outcome = require_exec(
-        guest,
-        command("/usr/bin/pgrep", &["-x", "window-actions"]),
-        COMMAND_TIMEOUT,
-    )?;
-    outcome
-        .stdout
-        .lines()
-        .next()
-        .map(str::to_string)
-        .context("window-actions daemon was not running")
+    plugin_daemon_pid(guest, &["-x", "window-actions"], "window-actions daemon")
 }
 
 fn require_grab_released(guest: &mut GuestControlClient) -> Result<()> {

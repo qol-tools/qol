@@ -10,9 +10,10 @@ use crate::commands::emu::{qmp, BootedVm};
 use crate::progress::{step_label, StepKind};
 
 use super::desktop::{
-    command, connect_desktop_guest, current_trace_cursor, install_payload, require_exec, spawn,
+    command, connect_desktop_guest, current_trace_cursor, fd_count, install_payload,
+    plugin_daemon_pid, require_exec, require_plugin_action_guards, spawn,
     start_tray_and_wait_plugin_with_setup, wait_for_command, wait_for_probe_fields,
-    wait_for_probe_line, wait_for_window_id, TraceCursor,
+    wait_for_probe_line, wait_for_window_id, within_fd_budget, TraceCursor,
 };
 use super::Verdict;
 
@@ -453,53 +454,7 @@ fn test_settings(
 }
 
 fn test_http_guards(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
-    let cases = [
-        (
-            format!(
-                "{}/api/plugins/{PLUGIN_ID}/actions/not-real",
-                local_base_url()
-            ),
-            Some(auth),
-            "400",
-        ),
-        (
-            format!("{}/api/plugins/not-a-plugin/actions/open", local_base_url()),
-            Some(auth),
-            "404",
-        ),
-        (
-            format!("{}/api/plugins/{PLUGIN_ID}/actions/open", local_base_url()),
-            None,
-            "401",
-        ),
-    ];
-    for (url, auth, expected) in cases {
-        let mut args = vec![
-            "--silent",
-            "--output",
-            "/dev/null",
-            "--write-out",
-            "%{http_code}",
-            "--request",
-            "POST",
-            "--header",
-            "Content-Type: application/json",
-            "--data",
-            "{}",
-        ];
-        if let Some(auth) = auth {
-            args.extend(["--header", auth]);
-        }
-        args.push(&url);
-        let outcome = require_exec(guest, command("/usr/bin/curl", &args), COMMAND_TIMEOUT)?;
-        if outcome.stdout.trim() != expected {
-            bail!(
-                "HTTP guard returned {}, expected {expected} for {url}",
-                outcome.stdout.trim()
-            );
-        }
-    }
-    Ok(())
+    require_plugin_action_guards(guest, auth, PLUGIN_ID, "open")
 }
 
 fn test_crash_recovery(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
@@ -566,50 +521,5 @@ fn wait_for_visible_picker_count(guest: &mut GuestControlClient, expected: usize
 }
 
 fn daemon_pid(guest: &mut GuestControlClient) -> Result<String> {
-    let outcome = require_exec(
-        guest,
-        command("/usr/bin/pgrep", &["-x", "alt-tab"]),
-        COMMAND_TIMEOUT,
-    )?;
-    outcome
-        .stdout
-        .lines()
-        .next()
-        .map(str::to_string)
-        .context("Alt Tab daemon was not running")
-}
-
-fn fd_count(guest: &mut GuestControlClient, pid: &str) -> Result<u64> {
-    let path = format!("/proc/{pid}/fd");
-    let outcome = require_exec(
-        guest,
-        command(
-            "/usr/bin/find",
-            &[&path, "-maxdepth", "1", "-type", "l", "-printf", ".\n"],
-        ),
-        COMMAND_TIMEOUT,
-    )?;
-    Ok(outcome.stdout.lines().count() as u64)
-}
-
-fn within_fd_budget(before: u64, after: u64) -> bool {
-    after <= before.saturating_add(2)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::within_fd_budget;
-
-    #[test]
-    fn fd_budget_allows_runtime_noise_without_hiding_growth() {
-        for (before, after, expected) in [
-            (28, 27, true),
-            (28, 28, true),
-            (28, 30, true),
-            (28, 31, false),
-            (u64::MAX, u64::MAX, true),
-        ] {
-            assert_eq!(within_fd_budget(before, after), expected);
-        }
-    }
+    plugin_daemon_pid(guest, &["-x", "alt-tab"], "Alt Tab daemon")
 }

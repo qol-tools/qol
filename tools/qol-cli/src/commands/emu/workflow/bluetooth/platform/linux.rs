@@ -11,8 +11,8 @@ use crate::commands::emu::{qmp, BootedVm};
 use crate::progress::{step_label, StepKind};
 
 use super::desktop::{
-    command, connect_desktop_guest, install_payload, require_exec, spawn,
-    start_tray_and_wait_plugin, terminate, wait_for_command,
+    command, connect_desktop_guest, fd_count, install_payload, plugin_daemon_pid, require_exec,
+    spawn, start_tray_and_wait_plugin, terminate, wait_for_command,
 };
 use super::Verdict;
 
@@ -612,34 +612,11 @@ fn wait_for_daemon(guest: &mut GuestControlClient, not_pid: Option<&str>) -> Res
 }
 
 fn daemon_pid(guest: &mut GuestControlClient) -> Result<String> {
-    let outcome = require_exec(
+    plugin_daemon_pid(
         guest,
-        command(
-            "/usr/bin/pgrep",
-            &["-f", "/plugin-bluetooth/plugin-bluetooth$"],
-        ),
-        COMMAND_TIMEOUT,
-    )?;
-    outcome
-        .stdout
-        .lines()
-        .next()
-        .map(str::trim)
-        .map(str::to_string)
-        .context("Bluetooth daemon was not running")
-}
-
-fn fd_count(guest: &mut GuestControlClient, pid: &str) -> Result<u64> {
-    let path = format!("/proc/{pid}/fd");
-    let outcome = require_exec(
-        guest,
-        command(
-            "/usr/bin/find",
-            &[&path, "-maxdepth", "1", "-type", "l", "-printf", ".\n"],
-        ),
-        COMMAND_TIMEOUT,
-    )?;
-    Ok(outcome.stdout.lines().count() as u64)
+        &["-f", "/plugin-bluetooth/plugin-bluetooth$"],
+        "Bluetooth daemon",
+    )
 }
 
 fn dispatch(guest: &mut GuestControlClient, auth: &str, action: &str, input: &str) -> Result<()> {

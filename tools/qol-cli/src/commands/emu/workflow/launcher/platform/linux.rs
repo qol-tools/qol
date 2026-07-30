@@ -11,9 +11,9 @@ use crate::commands::emu::{qmp, BootedVm};
 use crate::progress::{step_label, StepKind};
 
 use super::desktop::{
-    command, connect_desktop_guest, current_trace_cursor, install_payload, require_exec,
-    start_tray_and_wait_plugin, wait_for_command, wait_for_probe_fields, wait_for_probe_line,
-    TraceCursor,
+    command, connect_desktop_guest, current_trace_cursor, fd_count, install_payload,
+    plugin_daemon_pid, require_exec, require_plugin_action_guards, start_tray_and_wait_plugin,
+    wait_for_command, wait_for_probe_fields, wait_for_probe_line, within_fd_budget, TraceCursor,
 };
 use super::Verdict;
 
@@ -192,7 +192,7 @@ fn test_cold_open(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
 
 fn test_repeated_activation(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
     let pid_before = launcher_pid(guest)?;
-    let fds_before = launcher_fd_count(guest, &pid_before)?;
+    let fds_before = fd_count(guest, &pid_before)?;
     for _ in 0..CYCLE_COUNT {
         open_launcher(guest, auth)?;
         dismiss_launcher(guest)?;
@@ -201,7 +201,7 @@ fn test_repeated_activation(guest: &mut GuestControlClient, auth: &str) -> Resul
     if pid_before != pid_after {
         bail!("Launcher restarted during retained activation cycles");
     }
-    let fds_after = launcher_fd_count(guest, &pid_after)?;
+    let fds_after = fd_count(guest, &pid_after)?;
     if !within_fd_budget(fds_before, fds_after) {
         bail!("Launcher file descriptors grew from {fds_before} to {fds_after}");
     }
@@ -366,53 +366,7 @@ fn test_settings(
 }
 
 fn test_http_guards(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
-    let cases = [
-        (
-            format!(
-                "{}/api/plugins/{PLUGIN_ID}/actions/not-real",
-                local_base_url()
-            ),
-            Some(auth),
-            "400",
-        ),
-        (
-            format!("{}/api/plugins/not-a-plugin/actions/open", local_base_url()),
-            Some(auth),
-            "404",
-        ),
-        (
-            format!("{}/api/plugins/{PLUGIN_ID}/actions/open", local_base_url()),
-            None,
-            "401",
-        ),
-    ];
-    for (url, auth, expected) in cases {
-        let mut args = vec![
-            "--silent",
-            "--output",
-            "/dev/null",
-            "--write-out",
-            "%{http_code}",
-            "--request",
-            "POST",
-            "--header",
-            "Content-Type: application/json",
-            "--data",
-            "{}",
-        ];
-        if let Some(auth) = auth {
-            args.extend(["--header", auth]);
-        }
-        args.push(&url);
-        let outcome = require_exec(guest, command("/usr/bin/curl", &args), COMMAND_TIMEOUT)?;
-        if outcome.stdout.trim() != expected {
-            bail!(
-                "HTTP guard returned {}, expected {expected} for {url}",
-                outcome.stdout.trim()
-            );
-        }
-    }
-    Ok(())
+    require_plugin_action_guards(guest, auth, PLUGIN_ID, "open")
 }
 
 fn test_crash_recovery(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
@@ -452,57 +406,12 @@ fn test_crash_recovery(guest: &mut GuestControlClient, auth: &str) -> Result<()>
 }
 
 fn launcher_pid(guest: &mut GuestControlClient) -> Result<String> {
-    let outcome = require_exec(
-        guest,
-        command("/usr/bin/pgrep", &["-x", "launcher"]),
-        COMMAND_TIMEOUT,
-    )?;
-    outcome
-        .stdout
-        .lines()
-        .next()
-        .map(str::to_string)
-        .context("Launcher daemon was not running")
-}
-
-fn launcher_fd_count(guest: &mut GuestControlClient, pid: &str) -> Result<u64> {
-    let path = format!("/proc/{pid}/fd");
-    let outcome = require_exec(
-        guest,
-        command(
-            "/usr/bin/find",
-            &[&path, "-maxdepth", "1", "-type", "l", "-printf", ".\n"],
-        ),
-        COMMAND_TIMEOUT,
-    )?;
-    Ok(outcome.stdout.lines().count() as u64)
-}
-
-fn within_fd_budget(before: u64, after: u64) -> bool {
-    after <= before.saturating_add(2)
+    plugin_daemon_pid(guest, &["-x", "launcher"], "Launcher daemon")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{launcher_focus_args, within_fd_budget};
-
-    #[test]
-    fn fd_budget_allows_runtime_noise_but_rejects_cycle_growth() {
-        let cases = [
-            (30, 29, true),
-            (30, 30, true),
-            (30, 32, true),
-            (30, 33, false),
-            (u64::MAX, u64::MAX, true),
-        ];
-        for (before, after, expected) in cases {
-            assert_eq!(
-                within_fd_budget(before, after),
-                expected,
-                "before={before} after={after}"
-            );
-        }
-    }
+    use super::launcher_focus_args;
 
     #[test]
     fn launcher_oracle_reads_direct_x_input_focus() {

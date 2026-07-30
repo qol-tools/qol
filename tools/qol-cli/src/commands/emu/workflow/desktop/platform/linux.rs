@@ -90,13 +90,7 @@ fn qol_shot_capture(vm: &BootedVm) -> Result<Verdict> {
         |outcome| !outcome.stdout.trim().is_empty(),
         "the deterministic guest fixture window",
     )?;
-    let resolution = require_exec(
-        &mut guest,
-        command("/usr/bin/xrandr", &["--current"]),
-        GUEST_COMMAND_TIMEOUT,
-    )?;
-    let (width, height) = parse_current_resolution(&resolution.stdout)
-        .context("guest xrandr output did not declare its current desktop size")?;
+    let (width, height) = desktop_resolution(&mut guest)?;
 
     let mut qmp = qmp::connect_verified(vm.qmp_port, Duration::from_secs(10), &vm.run_id)?;
     let pointer_x = 300_u32.min(width.saturating_sub(1));
@@ -986,16 +980,159 @@ fn parse_current_resolution(output: &str) -> Option<(u32, u32)> {
     (width > 0 && height > 0).then_some((width, height))
 }
 
+pub(in crate::commands::emu::workflow) fn desktop_resolution(
+    guest: &mut GuestControlClient,
+) -> Result<(u32, u32)> {
+    let outcome = require_exec(
+        guest,
+        command("/usr/bin/xrandr", &["--current"]),
+        GUEST_COMMAND_TIMEOUT,
+    )?;
+    parse_current_resolution(&outcome.stdout)
+        .context("xrandr did not report a valid current desktop resolution")
+}
+
+pub(in crate::commands::emu::workflow) fn plugin_daemon_pid(
+    guest: &mut GuestControlClient,
+    pgrep_args: &[&str],
+    description: &str,
+) -> Result<String> {
+    let outcome = require_exec(
+        guest,
+        command("/usr/bin/pgrep", pgrep_args),
+        GUEST_COMMAND_TIMEOUT,
+    )?;
+    outcome
+        .stdout
+        .lines()
+        .next()
+        .map(str::trim)
+        .map(str::to_string)
+        .with_context(|| format!("{description} was not running"))
+}
+
+pub(in crate::commands::emu::workflow) fn fd_count(
+    guest: &mut GuestControlClient,
+    pid: &str,
+) -> Result<u64> {
+    let path = format!("/proc/{pid}/fd");
+    let outcome = require_exec(
+        guest,
+        command(
+            "/usr/bin/find",
+            &[&path, "-maxdepth", "1", "-type", "l", "-printf", ".\n"],
+        ),
+        GUEST_COMMAND_TIMEOUT,
+    )?;
+    Ok(outcome.stdout.lines().count() as u64)
+}
+
+pub(in crate::commands::emu::workflow) fn within_fd_budget(before: u64, after: u64) -> bool {
+    after <= before.saturating_add(2)
+}
+
+pub(in crate::commands::emu::workflow) fn require_plugin_action_guards(
+    guest: &mut GuestControlClient,
+    auth: &str,
+    plugin_id: &str,
+    action: &str,
+) -> Result<()> {
+    let cases = [
+        (
+            format!(
+                "{}/api/plugins/{plugin_id}/actions/not-real",
+                local_base_url()
+            ),
+            Some(auth),
+            "400",
+        ),
+        (
+            format!(
+                "{}/api/plugins/not-a-plugin/actions/{action}",
+                local_base_url()
+            ),
+            Some(auth),
+            "404",
+        ),
+        (
+            format!(
+                "{}/api/plugins/{plugin_id}/actions/{action}",
+                local_base_url()
+            ),
+            None,
+            "401",
+        ),
+    ];
+    for (url, auth, expected) in cases {
+        let mut args = vec![
+            "--silent",
+            "--output",
+            "/dev/null",
+            "--write-out",
+            "%{http_code}",
+            "--request",
+            "POST",
+            "--header",
+            "Content-Type: application/json",
+            "--data",
+            "{}",
+        ];
+        if let Some(auth) = auth {
+            args.extend(["--header", auth]);
+        }
+        args.push(&url);
+        let outcome = require_exec(
+            guest,
+            command("/usr/bin/curl", &args),
+            GUEST_COMMAND_TIMEOUT,
+        )?;
+        if outcome.stdout.trim() != expected {
+            bail!(
+                "HTTP guard returned {}, expected {expected} for {url}",
+                outcome.stdout.trim()
+            );
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn parses_xrandr_current_desktop_size() {
-        let output = "Screen 0: minimum 320 x 200, current 1280 x 800, maximum 16384 x 16384\n";
-        assert_eq!(parse_current_resolution(output), Some((1280, 800)));
-        assert_eq!(parse_current_resolution("current 0 x 0"), None);
-        assert_eq!(parse_current_resolution("not xrandr"), None);
+        let cases = [
+            (
+                "Screen 0: minimum 320 x 200, current 1280 x 800, maximum 16384 x 16384\n",
+                Some((1280, 800)),
+            ),
+            ("current 0 x 0", None),
+            ("Screen 0: current 0 x 800, maximum 10 x 10\n", None),
+            ("Screen 0: current wide x 800, maximum 10 x 10\n", None),
+            ("not xrandr", None),
+        ];
+        for (output, expected) in cases {
+            assert_eq!(parse_current_resolution(output), expected, "{output}");
+        }
+    }
+
+    #[test]
+    fn fd_budget_allows_runtime_noise_without_hiding_growth() {
+        let cases = [
+            (30, 29, true),
+            (30, 30, true),
+            (30, 32, true),
+            (30, 33, false),
+            (u64::MAX, u64::MAX, true),
+        ];
+        for (before, after, expected) in cases {
+            assert_eq!(
+                within_fd_budget(before, after),
+                expected,
+                "before={before} after={after}"
+            );
+        }
     }
 
     #[test]
