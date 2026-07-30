@@ -28,6 +28,56 @@ fn expected_source() -> SourceIdentity {
     }
 }
 
+fn deployable_binaries() -> [(&'static str, &'static str, BuildRole); 4] {
+    [
+        (
+            env!("CARGO_BIN_EXE_qol-tray"),
+            qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
+            BuildRole::Host,
+        ),
+        (
+            env!("CARGO_BIN_EXE_qol-tray-install"),
+            qol_conventions::artifact::TRAY_INSTALLER_BINARY_NAME,
+            BuildRole::Installer,
+        ),
+        (
+            env!("CARGO_BIN_EXE_qol-tray-doctor"),
+            qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME,
+            BuildRole::Doctor,
+        ),
+        (
+            env!("CARGO_BIN_EXE_qol-tray-migrate"),
+            qol_conventions::artifact::TRAY_MIGRATOR_BINARY_NAME,
+            BuildRole::Migrator,
+        ),
+    ]
+}
+
+fn identity_frame_prefix() -> Vec<u8> {
+    let mut prefix = qol_conventions::artifact::FRAME_MAGIC.as_bytes().to_vec();
+    prefix.extend_from_slice(b"{\"binary\":\"");
+    prefix
+}
+
+fn count_frames(bytes: &[u8], prefix: &[u8]) -> usize {
+    let first = prefix[0];
+    bytes
+        .iter()
+        .enumerate()
+        .filter(|(index, byte)| **byte == first && bytes[*index..].starts_with(prefix))
+        .count()
+}
+
+#[test]
+fn every_deployable_binary_embeds_exactly_one_identity_frame() {
+    let prefix = identity_frame_prefix();
+    for (path, binary, _) in deployable_binaries() {
+        let bytes = std::fs::read(path).unwrap();
+        let frames = count_frames(&bytes, &prefix);
+        assert_eq!(frames, 1, "binary {binary} at {path}");
+    }
+}
+
 #[test]
 fn every_deployable_binary_embeds_its_typed_identity() {
     let expected_cargo_profile = if cfg!(debug_assertions) {
@@ -54,30 +104,8 @@ fn every_deployable_binary_embeds_its_typed_identity() {
         vec!["default".to_string()]
     };
     let expected_source = expected_source();
-    let cases = [
-        (
-            env!("CARGO_BIN_EXE_qol-tray"),
-            qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
-            BuildRole::Host,
-        ),
-        (
-            env!("CARGO_BIN_EXE_qol-tray-install"),
-            qol_conventions::artifact::TRAY_INSTALLER_BINARY_NAME,
-            BuildRole::Installer,
-        ),
-        (
-            env!("CARGO_BIN_EXE_qol-tray-doctor"),
-            qol_conventions::artifact::TRAY_DOCTOR_BINARY_NAME,
-            BuildRole::Doctor,
-        ),
-        (
-            env!("CARGO_BIN_EXE_qol-tray-migrate"),
-            qol_conventions::artifact::TRAY_MIGRATOR_BINARY_NAME,
-            BuildRole::Migrator,
-        ),
-    ];
 
-    for (path, binary, role) in cases {
+    for (path, binary, role) in deployable_binaries() {
         let inspected = qol_artifact::inspect_path(path).unwrap();
         assert_eq!(inspected.slices.len(), 1, "binary {binary} at {path}");
         let identity = &inspected.slices[0].identity;
