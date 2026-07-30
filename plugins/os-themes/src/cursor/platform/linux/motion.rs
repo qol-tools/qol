@@ -181,6 +181,15 @@ impl ShakeDetector {
         self.update(sample.at, shake)
     }
 
+    pub fn reset(&mut self) {
+        self.trail.reset();
+        self.animation = None;
+        self.current_scale = 1.0;
+        self.growing = false;
+        self.last_shake = None;
+        self.shrink_reversals = 0;
+    }
+
     fn detect(&mut self, sample: MotionSample) -> Option<f64> {
         if sample.dx == 0 && sample.dy == 0 {
             return None;
@@ -328,6 +337,7 @@ mod tests {
     fn config() -> Config {
         Config {
             enabled: true,
+            pause_in_games: true,
             shake_strictness: 6.5,
             regrow_strictness: 2.5,
             shake_min_extent_px: 150,

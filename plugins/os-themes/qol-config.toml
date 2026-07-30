@@ -13,6 +13,17 @@ label = "Enabled"
 section = "shake_to_grow"
 default = true
 
+[field.pause_in_games]
+type = "boolean"
+label = "Pause in Games"
+description = "Disable Shake to Grow while a Steam, Lutris, or GameMode game window is focused."
+section = "shake_to_grow"
+default = true
+
+[field.pause_in_games.show_when]
+field = "enabled"
+equals = true
+
 [field.shake_strictness]
 type = "number"
 label = "Shake Strictness"

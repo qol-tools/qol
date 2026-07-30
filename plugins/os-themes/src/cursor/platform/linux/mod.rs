@@ -1,4 +1,5 @@
 mod display;
+mod game_focus;
 mod motion;
 mod runtime;
 mod scale;

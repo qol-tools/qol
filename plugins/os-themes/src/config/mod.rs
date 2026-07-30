@@ -7,6 +7,7 @@ pub(crate) type ConfigInspection = qol_config::PluginConfigInspection<Config>;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub enabled: bool,
+    pub pause_in_games: bool,
     pub shake_strictness: f64,
     pub regrow_strictness: f64,
     pub shake_min_extent_px: u32,
@@ -39,8 +40,9 @@ fn contract_defaults() -> Config {
 
 fn log_config(config: &Config) {
     eprintln!(
-        "[shake-to-grow] config: enabled={} strictness={} regrow={} min_extent={}px regrow_extent={}px window_ms={} scale={} calm_ms={} grow_ms={} shrink_ms={}",
+        "[shake-to-grow] config: enabled={} pause_in_games={} strictness={} regrow={} min_extent={}px regrow_extent={}px window_ms={} scale={} calm_ms={} grow_ms={} shrink_ms={}",
         config.enabled,
+        config.pause_in_games,
         config.shake_strictness,
         config.regrow_strictness,
         config.shake_min_extent_px,
@@ -63,6 +65,10 @@ mod tests {
 
         let defaults = contract_defaults();
         assert!(defaults.enabled, "shake-to-grow defaults to enabled");
+        assert!(
+            defaults.pause_in_games,
+            "shake-to-grow defaults to pausing in games"
+        );
         assert_eq!(defaults.shake_strictness, 6.5);
         assert_eq!(defaults.regrow_strictness, 2.5);
         assert_eq!(defaults.shake_min_extent_px, 150);
