@@ -2865,7 +2865,7 @@ fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
             plugin_dir: "bluetooth",
             plugin_id: "plugin-bluetooth",
         },
-        "launcher-storm" => DesktopCompanionRecipe {
+        "launcher-storm" | "portable-session" => DesktopCompanionRecipe {
             package: "launcher",
             binary: "launcher",
             plugin_dir: "launcher",
@@ -4586,6 +4586,18 @@ mod tests {
             ),
             (
                 "launcher-storm",
+                DesktopPayloadRecipe {
+                    companion: Some(DesktopCompanionRecipe {
+                        package: "launcher",
+                        binary: "launcher",
+                        plugin_dir: "launcher",
+                        plugin_id: "plugin-launcher",
+                    }),
+                    tray_features: None,
+                },
+            ),
+            (
+                "portable-session",
                 DesktopPayloadRecipe {
                     companion: Some(DesktopCompanionRecipe {
                         package: "launcher",
@@ -6500,6 +6512,7 @@ mod tests {
         let bluetooth = emu::workflow_definition("bluetooth-storm").unwrap();
         let hotkeys = emu::workflow_definition("hotkey-storm").unwrap();
         let launcher = emu::workflow_definition("launcher-storm").unwrap();
+        let portable = emu::workflow_definition("portable-session").unwrap();
         let desktop = emu::workflow_definition("qol-shot-capture").unwrap();
         let shot_storm = emu::workflow_definition("qol-shot-storm").unwrap();
         let shortcut_storm = emu::workflow_definition("shortcut-storm").unwrap();
@@ -6509,6 +6522,7 @@ mod tests {
         emu::validate_workflow_adapter(bluetooth, adapter).unwrap();
         emu::validate_workflow_adapter(hotkeys, adapter).unwrap();
         emu::validate_workflow_adapter(launcher, adapter).unwrap();
+        emu::validate_workflow_adapter(portable, adapter).unwrap();
         emu::validate_workflow_adapter(desktop, adapter).unwrap();
         emu::validate_workflow_adapter(shot_storm, adapter).unwrap();
         emu::validate_workflow_adapter(shortcut_storm, adapter).unwrap();

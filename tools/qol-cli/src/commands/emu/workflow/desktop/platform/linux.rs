@@ -25,7 +25,8 @@ const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAYLOAD_ROOT: &str = "/run/qol-payload";
 const PAYLOAD_INSTALLER: &str = "/run/qol-payload/installer/qol-sandbox-payload";
 pub(in crate::commands::emu::workflow) const TRAY_BINARY: &str = "/home/qol/.local/bin/qol-tray";
-const HTTP_TOKEN_PATH: &str = "/home/qol/.config/qol-tray/.http-token";
+pub(in crate::commands::emu::workflow) const HTTP_TOKEN_PATH: &str =
+    "/home/qol/.config/qol-tray/.http-token";
 const QOL_SHOT_SOCKET_PATH: &str = "/home/qol/.local/share/qol-tray/runtime/sockets/qol-shot.sock";
 const CAPTURE_MARKER: &str = "/tmp/qol-workflow-capture-start";
 const PIN_DRAG_HOLD: Duration = Duration::from_millis(80);
@@ -513,7 +514,9 @@ fn wait_for_plugin(
     Ok(())
 }
 
-fn stop_preinstalled_runtime(guest: &mut GuestControlClient) -> Result<()> {
+pub(in crate::commands::emu::workflow) fn stop_preinstalled_runtime(
+    guest: &mut GuestControlClient,
+) -> Result<()> {
     require_exec(
         guest,
         command(

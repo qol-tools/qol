@@ -171,11 +171,16 @@ impl<S: Read + Write> QmpClient<S> {
     }
 
     pub(crate) fn attach_usb_stick(&mut self, image: &Path) -> Result<()> {
+        self.attach_usb_medium(image, false)
+    }
+
+    pub(crate) fn attach_usb_medium(&mut self, image: &Path, read_only: bool) -> Result<()> {
         self.execute(
             "blockdev-add",
             Some(serde_json::json!({
                 "driver": "raw",
                 "node-name": "qolusb",
+                "read-only": read_only,
                 "file": {"driver": "file", "filename": image.display().to_string()},
             })),
         )?;
@@ -198,6 +203,11 @@ impl<S: Read + Write> QmpClient<S> {
             "blockdev-del",
             Some(serde_json::json!({"node-name": "qolusb"})),
         )?;
+        Ok(())
+    }
+
+    pub(crate) fn system_reset(&mut self) -> Result<()> {
+        self.execute("system_reset", None)?;
         Ok(())
     }
 

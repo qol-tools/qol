@@ -14,6 +14,7 @@ mod bluetooth;
 mod desktop;
 mod hotkeys;
 mod launcher;
+mod portable_session;
 mod qol_shot;
 mod shortcuts;
 mod window_actions;
@@ -104,6 +105,7 @@ pub(crate) enum DesktopWorkflow {
     BluetoothStorm,
     HotkeyStorm,
     LauncherStorm,
+    PortableSession,
     QolShotCapture,
     QolShotStorm,
     ShortcutStorm,
@@ -141,6 +143,7 @@ pub(crate) fn run_desktop(
         DesktopWorkflow::BluetoothStorm => bluetooth::run(vm, platform),
         DesktopWorkflow::HotkeyStorm => hotkeys::run(vm, platform),
         DesktopWorkflow::LauncherStorm => launcher::run(vm, platform),
+        DesktopWorkflow::PortableSession => portable_session::run(vm, platform),
         DesktopWorkflow::QolShotCapture => desktop::run(vm, platform),
         DesktopWorkflow::QolShotStorm => qol_shot::run(vm, platform),
         DesktopWorkflow::ShortcutStorm => shortcuts::run(vm, platform),
@@ -168,6 +171,10 @@ const REGISTRY: &[Definition] = &[
     Definition::Desktop {
         id: "launcher-storm",
         run: DesktopWorkflow::LauncherStorm,
+    },
+    Definition::Desktop {
+        id: "portable-session",
+        run: DesktopWorkflow::PortableSession,
     },
     Definition::Desktop {
         id: "qol-shot-capture",
@@ -223,6 +230,7 @@ mod tests {
             ("hotkey-storm", true),
             ("leaves-no-trace", true),
             ("launcher-storm", true),
+            ("portable-session", true),
             ("qol-shot-storm", true),
             ("shortcut-storm", true),
             ("unknown", false),
@@ -243,6 +251,7 @@ mod tests {
                 "bluetooth-storm",
                 "hotkey-storm",
                 "launcher-storm",
+                "portable-session",
                 "qol-shot-capture",
                 "qol-shot-storm",
                 "shortcut-storm",
@@ -258,6 +267,7 @@ mod tests {
         assert!(find("bluetooth-storm").unwrap().requires_payload());
         assert!(find("hotkey-storm").unwrap().requires_payload());
         assert!(find("launcher-storm").unwrap().requires_payload());
+        assert!(find("portable-session").unwrap().requires_payload());
         assert!(find("qol-shot-capture").unwrap().requires_payload());
         assert!(find("qol-shot-storm").unwrap().requires_payload());
         assert!(find("shortcut-storm").unwrap().requires_payload());
