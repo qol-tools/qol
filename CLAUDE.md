@@ -37,6 +37,12 @@ Reproducing or verifying qol runtime desktop behavior (plugin windows, hotkeys, 
 - **Parse, don't validate** - parse into validated types at boundaries, use those types internally
 - **Exhaustive matching** - match all enum variants explicitly (no `_ =>`), so the compiler catches new variants
 
+## Artifact Identity
+
+- **Identity is a verified contract** - deployable native binaries must carry the identity contract owned by `qol-conventions`, and every build, install, update, staging, and execution handoff must verify it
+- **Paths are not identity** - consumers must use the exact executable reported by the build and preserve its verified artifact reference; never rediscover an artifact from a profile directory or filename
+- **Opaque payloads use detached integrity** - scripts, assets, and non-Rust helpers must remain covered by their owning manifest and content digest instead of duplicating the native binary contract
+
 ## Complexity Thresholds (Deep Modules)
 
 - **Deep modules over shallow** - hide complexity behind simple APIs; a function does meaningful work, not just delegate
