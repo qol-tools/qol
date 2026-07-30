@@ -1,0 +1,15 @@
+[package]
+name = "qol-artifact"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Inspection and verification of deployable QoL artifact identity"
+
+[dependencies]
+object.workspace = true
+qol-conventions.workspace = true
+target-lexicon.workspace = true
+
+[dev-dependencies]
+object = { workspace = true, features = ["write"] }
+serde_json.workspace = true

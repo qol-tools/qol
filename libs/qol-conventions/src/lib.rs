@@ -39,6 +39,8 @@ pub const SHUTDOWN_ROUTE: &str = "/shutdown";
 pub const DEV_RESTART_PREBUILT_ROUTE: &str = dev_routes::RESTART_PREBUILT;
 pub const DEV_PROMOTE_GENERATION_ROUTE: &str = dev_routes::PROMOTE_GENERATION;
 
+pub mod artifact;
+
 pub mod dev_routes {
     pub const ENABLED: &str = "/dev/enabled";
     pub const RELOAD: &str = "/dev/reload";

@@ -8,6 +8,8 @@ use qol_headless::{Command, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTe
 const APP_ID: &str = "qol-tray-migrate";
 const BINARY_NAME: &str = "qol-tray-migrate";
 
+qol_conventions::declare_build_identity!(Migrator);
+
 trait MigrationOperations: Clone + Send + Sync + 'static {
     fn apply(&self, args: Vec<String>) -> Result<()>;
     fn inspect_config_dir(&self) -> Result<DoctorCheckResult>;
@@ -29,6 +31,7 @@ impl MigrationOperations for ProductionOperations {
 }
 
 fn main() -> ExitCode {
+    register_build_identity();
     app().run(normalize_legacy_argv(std::env::args().skip(1)))
 }
 

@@ -1,9 +1,3 @@
-//! Build-script helpers that make `plugin.toml` the sole source of a plugin's
-//! id and daemon port. A plugin's `build.rs` calls [`emit_plugin_id`] and, when
-//! it opens a TCP port, [`emit_daemon_port`]; the plugin then reads the values
-//! with `env!("QOL_PLUGIN_ID")` / `env!("QOL_DAEMON_PORT")`, so neither can be
-//! hand-typed (and thus drift) anywhere in Rust or Python.
-
 use std::path::{Path, PathBuf};
 
 pub fn emit_plugin_id() {
@@ -37,7 +31,7 @@ fn read_plugin_toml() -> (String, PathBuf) {
     println!("cargo:rerun-if-changed={}", toml_path.display());
 
     let contents = std::fs::read_to_string(&toml_path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", toml_path.display()));
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", toml_path.display()));
     (contents, toml_path)
 }
 
@@ -72,7 +66,7 @@ fn port_value(line: &str) -> Option<u16> {
     let digits: String = rest
         .trim_start()
         .chars()
-        .take_while(|c| c.is_ascii_digit())
+        .take_while(|character| character.is_ascii_digit())
         .collect();
     digits.parse().ok()
 }

@@ -1,4 +1,7 @@
+qol_conventions::declare_build_identity!(Doctor);
+
 fn main() -> anyhow::Result<()> {
+    register_build_identity();
     if qol_process::process_tree_guardian_requested() {
         qol_process::run_process_tree_guardian_entry()?;
         return Ok(());

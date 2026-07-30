@@ -132,8 +132,12 @@ libc = "0.2"
 signal-hook = "0.3"
 qol-plugin-daemon.workspace = true
 
+[build-dependencies]
+qol-conventions.workspace = true
+
 [dev-dependencies]
 proptest = "1.6"
+qol-artifact.workspace = true
 tower = { version = "0.5", features = ["util"] }
 
 [lints.rust]

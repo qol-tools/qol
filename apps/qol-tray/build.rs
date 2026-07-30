@@ -1,6 +1,7 @@
 use std::process::Command;
 
 fn main() {
+    qol_conventions::build::emit_build_identity();
     println!("cargo:rerun-if-changed=../../libs/qol-config/js");
     let profile = std::env::var("PROFILE").unwrap_or_default();
     let hash = if profile == "release" {
