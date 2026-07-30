@@ -166,9 +166,9 @@ fn build_release_binary(repo_root: &Path, dev: bool) -> Result<ResolvedSource> {
         command.arg("--features").arg("dev");
     }
     let identity = if dev {
-        qol_dev_build::build_identity::BuildIdentityEnvironment::development(repo_root)?
+        qol_build_identity::BuildIdentityEnvironment::development(repo_root)?
     } else {
-        qol_dev_build::build_identity::BuildIdentityEnvironment::production(repo_root)?
+        qol_build_identity::BuildIdentityEnvironment::production(repo_root)?
     };
     identity.apply_to(&mut command);
     let output = qol_dev_build::cargo_build::run_cargo_command(&mut command)?;

@@ -17,6 +17,7 @@ dirs = "6.0"
 qol-config.workspace = true
 qol-apps.workspace = true
 qol-artifact.workspace = true
+qol-build-identity.workspace = true
 qol-conventions.workspace = true
 qol-dev-build.workspace = true
 qol-dev-env.workspace = true

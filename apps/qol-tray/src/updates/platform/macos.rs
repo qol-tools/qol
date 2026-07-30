@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::daemon::{DaemonEvent, EventBus};
 use crate::features::plugin_store::release_integrity;
 
-use super::super::{latest_version, GITHUB_REPO};
+use super::super::{latest_version, verify_host_update, UpdateTargetMatch, GITHUB_REPO};
 use super::unix;
 use super::InstallKind;
 
@@ -204,17 +204,20 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
         .prefix("qol-tray-update-")
         .tempdir()?;
     let dest = work_dir.path().join("update.tar.gz");
-    let verified_asset = if dev_override {
+    let expected_version = if dev_override {
         None
     } else {
-        let version =
-            latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?;
+        Some(latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?)
+    };
+    let verified_asset = if let Some(version) = expected_version {
         let release =
             release_integrity::fetch_release(GITHUB_REPO, &format!("qol-tray-v{version}")).await?;
         Some(release_integrity::verified_asset(
             &release,
             MACOS_RELEASE_ASSET,
         )?)
+    } else {
+        None
     };
     let url = dev_url
         .or_else(|| {
@@ -233,8 +236,14 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     let current_exe = std::env::current_exe()?;
     let current_bundle =
         find_app_bundle(&current_exe).context("Current executable is not inside an app bundle")?;
-    let install_result = extract_tar_gz_dir(&dest, APP_BUNDLE_NAME)
-        .and_then(|bundle| replace_app_bundle(&bundle, &current_bundle));
+    let install_result = extract_tar_gz_dir(&dest, APP_BUNDLE_NAME).and_then(|bundle| {
+        let binary = bundle
+            .join("Contents")
+            .join("MacOS")
+            .join(qol_conventions::artifact::TRAY_HOST_BINARY_NAME);
+        verify_host_update(&binary, expected_version, UpdateTargetMatch::Compatible)?;
+        replace_app_bundle(&bundle, &current_bundle)
+    });
     install_result?;
 
     if dev_override {

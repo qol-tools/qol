@@ -11,6 +11,7 @@ license = "PolyForm-Noncommercial-1.0.0"
 [workspace.dependencies]
 # internal crates - the single source of truth for every cross-crate path
 qol-artifact = { path = "libs/qol-artifact" }
+qol-build-identity = { path = "libs/qol-build-identity" }
 qol-color = { path = "libs/qol-color" }
 qol-config = { path = "libs/qol-config" }
 qol-conventions = { path = "libs/qol-conventions" }

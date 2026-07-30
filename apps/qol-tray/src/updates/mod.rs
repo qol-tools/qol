@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::Deserialize;
+use std::path::Path;
 use std::sync::OnceLock;
 
 pub(crate) mod platform;
@@ -64,14 +65,111 @@ pub async fn download_and_install(events: std::sync::Arc<crate::daemon::EventBus
     platform::download_and_install(events).await
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) enum UpdateTargetMatch {
+    Exact,
+    #[cfg(target_os = "macos")]
+    Compatible,
+}
+
+pub(super) fn verify_host_update(
+    path: &Path,
+    expected_version: Option<&str>,
+    target_match: UpdateTargetMatch,
+) -> Result<()> {
+    let running = qol_conventions::artifact::current()
+        .ok_or_else(|| anyhow::anyhow!("running build identity is unavailable"))?;
+    let expectation = host_update_expectation(&running.target, expected_version, target_match);
+    let inspected = qol_artifact::verify_path(path, &expectation)?;
+    log::info!(
+        "[artifact-identity] verified self-update binary path={} version={} slices={}",
+        path.display(),
+        expected_version.unwrap_or("<dev-override>"),
+        inspected.slices.len()
+    );
+    Ok(())
+}
+
+fn host_update_expectation(
+    running_target: &str,
+    expected_version: Option<&str>,
+    target_match: UpdateTargetMatch,
+) -> qol_artifact::ArtifactExpectation {
+    let mut expectation = qol_artifact::ArtifactExpectation::production(
+        qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
+        qol_conventions::artifact::TRAY_PACKAGE_NAME,
+        qol_conventions::artifact::BuildRole::Host,
+    );
+    expectation = match target_match {
+        UpdateTargetMatch::Exact => expectation.with_exact_target(running_target),
+        #[cfg(target_os = "macos")]
+        UpdateTargetMatch::Compatible => expectation.with_compatible_target(running_target),
+    };
+    if let Some(version) = expected_version {
+        expectation = expectation.with_version(version);
+    }
+    expectation
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_conventions::artifact::{
+        BuildFlavor, BuildIdentity, BuildIntent, BuildProfile, BuildRole, CompilerFacts,
+        SourceIdentity, SCHEMA_VERSION,
+    };
 
     fn rel(tag: &str) -> GitHubRelease {
         GitHubRelease {
             tag_name: tag.to_string(),
         }
+    }
+
+    fn update_identity(version: &str, target: &str) -> BuildIdentity {
+        BuildIdentity {
+            schema: SCHEMA_VERSION,
+            binary: qol_conventions::artifact::TRAY_HOST_BINARY_NAME.to_string(),
+            role: BuildRole::Host,
+            package: qol_conventions::artifact::TRAY_PACKAGE_NAME.to_string(),
+            version: version.to_string(),
+            target: target.to_string(),
+            intent: BuildIntent::Production,
+            flavor: BuildFlavor {
+                profile: BuildProfile::Release,
+                dev_features: false,
+            },
+            compiler: CompilerFacts {
+                cargo_profile: "release".to_string(),
+                opt_level: "3".to_string(),
+                debuginfo: false,
+                debug_assertions: false,
+                overflow_checks: None,
+                test: false,
+            },
+            features: vec!["default".to_string()],
+            source: SourceIdentity::Git {
+                commit: "a".repeat(40),
+                head_tree: "b".repeat(40),
+                working_tree: "b".repeat(40),
+            },
+        }
+    }
+
+    #[test]
+    fn self_update_policy_rejects_wrong_version_target_and_intent() {
+        let target = "x86_64-unknown-linux-gnu";
+        let expectation = host_update_expectation(target, Some("3.41.0"), UpdateTargetMatch::Exact);
+        qol_artifact::verify_identity(&update_identity("3.41.0", target), &expectation).unwrap();
+
+        let wrong_version = update_identity("3.40.6", target);
+        assert!(qol_artifact::verify_identity(&wrong_version, &expectation).is_err());
+
+        let wrong_target = update_identity("3.41.0", "x86_64-pc-windows-msvc");
+        assert!(qol_artifact::verify_identity(&wrong_target, &expectation).is_err());
+
+        let mut development = update_identity("3.41.0", target);
+        development.intent = BuildIntent::Development;
+        assert!(qol_artifact::verify_identity(&development, &expectation).is_err());
     }
 
     #[test]

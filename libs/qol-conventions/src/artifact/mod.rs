@@ -2,6 +2,7 @@ mod platform;
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 pub const SCHEMA_VERSION: u16 = 1;
@@ -23,9 +24,12 @@ pub const ENV_SOURCE_HEAD_TREE: &str = "QOL_BUILD_SOURCE_HEAD_TREE";
 pub const ENV_SOURCE_WORKING_TREE: &str = "QOL_BUILD_SOURCE_WORKING_TREE";
 pub const ENV_COMPILER_OVERFLOW_CHECKS: &str = "QOL_BUILD_COMPILER_OVERFLOW_CHECKS";
 
-pub(crate) const ENV_FRAME_FIELDS: &str = "QOL_BUILD_INFO_FIELDS";
-pub(crate) const ENV_FRAME_PREFIX: &str = "QOL_BUILD_INFO_PREFIX";
-pub(crate) const ENV_LINK_SECTION: &str = "QOL_BUILD_INFO_LINK_SECTION";
+#[doc(hidden)]
+pub const ENV_FRAME_FIELDS: &str = "QOL_BUILD_INFO_FIELDS";
+#[doc(hidden)]
+pub const ENV_FRAME_PREFIX: &str = "QOL_BUILD_INFO_PREFIX";
+#[doc(hidden)]
+pub const ENV_LINK_SECTION: &str = "QOL_BUILD_INFO_LINK_SECTION";
 
 static CURRENT_IDENTITY: OnceLock<BuildIdentity> = OnceLock::new();
 
@@ -220,6 +224,13 @@ pub struct BuildIdentity {
     pub source: SourceIdentity,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunningBuildInfo {
+    pub identity: BuildIdentity,
+    pub executable: PathBuf,
+}
+
 #[derive(Debug)]
 pub enum DecodeError {
     MissingMagic,
@@ -361,7 +372,8 @@ pub const fn frame_bytes<const LENGTH: usize>(frame: &str) -> [u8; LENGTH] {
     result
 }
 
-pub(crate) fn link_section_for_target(target_os: &str) -> String {
+#[doc(hidden)]
+pub fn link_section_for_target(target_os: &str) -> String {
     platform::link_section(target_os)
 }
 

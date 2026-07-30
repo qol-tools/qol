@@ -1,24 +1,10 @@
-use crate::artifact::{
-    self, BuildFlavor, BuildIntent, CompilerFacts, SourceIdentity, ENV_BUILD_INTENT,
-    ENV_COMPILER_OVERFLOW_CHECKS, ENV_SOURCE_COMMIT, ENV_SOURCE_HEAD_TREE, ENV_SOURCE_WORKING_TREE,
-    SCHEMA_VERSION,
+use qol_conventions::artifact::{
+    self, BuildFlavor, BuildIdentity, BuildIntent, BuildRole, CompilerFacts, SourceIdentity,
+    ENV_BUILD_INTENT, ENV_COMPILER_OVERFLOW_CHECKS, ENV_SOURCE_COMMIT, ENV_SOURCE_HEAD_TREE,
+    ENV_SOURCE_WORKING_TREE, SCHEMA_VERSION,
 };
-use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-
-#[derive(Serialize)]
-struct BuildIdentityFields {
-    schema: u16,
-    package: String,
-    version: String,
-    target: String,
-    intent: BuildIntent,
-    flavor: BuildFlavor,
-    compiler: CompilerFacts,
-    features: Vec<String>,
-    source: SourceIdentity,
-}
 
 pub fn emit_build_identity() {
     for variable in [
@@ -35,8 +21,13 @@ pub fn emit_build_identity() {
     let compiler = compiler_facts();
     let features = enabled_features();
     let flavor = build_flavor(intent, &compiler, &features);
-    let fields = BuildIdentityFields {
+    // Serialize the canonical type so additions to the identity schema cannot
+    // leave a private build-script mirror behind. The binary macro supplies
+    // only the two executable-specific fields after this build script runs.
+    let identity = BuildIdentity {
         schema: SCHEMA_VERSION,
+        binary: String::new(),
+        role: BuildRole::Host,
         package: required_env("CARGO_PKG_NAME"),
         version: required_env("CARGO_PKG_VERSION"),
         target: required_env("TARGET"),
@@ -46,7 +37,14 @@ pub fn emit_build_identity() {
         features,
         source: source_identity(),
     };
-    let json = serde_json::to_string(&fields).expect("build identity fields serialize");
+    let mut fields =
+        serde_json::to_value(identity).expect("canonical build identity fields serialize");
+    let fields = fields
+        .as_object_mut()
+        .expect("canonical build identity serializes as an object");
+    assert!(fields.remove("binary").is_some());
+    assert!(fields.remove("role").is_some());
+    let json = serde_json::to_string(fields).expect("canonical build identity fields serialize");
     let fields = json
         .strip_prefix('{')
         .and_then(|value| value.strip_suffix('}'))
@@ -73,7 +71,8 @@ fn required_env(name: &str) -> String {
 fn build_intent() -> BuildIntent {
     let value = match std::env::var(ENV_BUILD_INTENT) {
         Ok(value) => value,
-        Err(_) => return BuildIntent::Unspecified,
+        Err(std::env::VarError::NotPresent) => return BuildIntent::Unspecified,
+        Err(error) => panic!("{ENV_BUILD_INTENT} is invalid: {error}"),
     };
     serde_json::from_value(serde_json::Value::String(value.clone()))
         .unwrap_or_else(|_| panic!("{ENV_BUILD_INTENT} has unsupported value {value:?}"))
@@ -109,14 +108,15 @@ fn optional_bool_env(name: &str) -> Option<bool> {
         Ok("true") => Some(true),
         Ok("false") => Some(false),
         Ok(value) => panic!("{name} must be true or false, got {value:?}"),
-        Err(_) => None,
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => panic!("{name} is invalid: {error}"),
     }
 }
 
 fn source_identity() -> SourceIdentity {
-    let commit = std::env::var(ENV_SOURCE_COMMIT).ok();
-    let head_tree = std::env::var(ENV_SOURCE_HEAD_TREE).ok();
-    let working_tree = std::env::var(ENV_SOURCE_WORKING_TREE).ok();
+    let commit = optional_env(ENV_SOURCE_COMMIT);
+    let head_tree = optional_env(ENV_SOURCE_HEAD_TREE);
+    let working_tree = optional_env(ENV_SOURCE_WORKING_TREE);
     match (commit, head_tree, working_tree) {
         (None, None, None) => SourceIdentity::Unspecified,
         (Some(commit), Some(head_tree), Some(working_tree)) => SourceIdentity::Git {
@@ -127,6 +127,14 @@ fn source_identity() -> SourceIdentity {
         _ => panic!(
             "{ENV_SOURCE_COMMIT}, {ENV_SOURCE_HEAD_TREE}, and {ENV_SOURCE_WORKING_TREE} must be set together"
         ),
+    }
+}
+
+fn optional_env(name: &str) -> Option<String> {
+    match std::env::var(name) {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => panic!("{name} is invalid: {error}"),
     }
 }
 

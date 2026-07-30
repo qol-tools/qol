@@ -26,8 +26,7 @@ pub(crate) fn run(verbose: bool) -> Result<()> {
     for plugin in &scan.buildable {
         build.arg("-p").arg(&plugin.package_name);
     }
-    let build_identity =
-        qol_dev_build::build_identity::BuildIdentityEnvironment::production(&root)?;
+    let build_identity = qol_build_identity::BuildIdentityEnvironment::production(&root)?;
     build_identity.apply_to(&mut build);
     let artifacts = run_cargo_step(
         "build",

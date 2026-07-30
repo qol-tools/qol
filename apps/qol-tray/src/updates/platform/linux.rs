@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::daemon::{DaemonEvent, EventBus};
 use crate::features::plugin_store::release_integrity;
 
-use super::super::{latest_version, GITHUB_REPO};
+use super::super::{latest_version, verify_host_update, UpdateTargetMatch, GITHUB_REPO};
 use super::unix;
 use super::InstallKind;
 
@@ -89,14 +89,17 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
         .prefix("qol-tray-update-")
         .tempdir()?;
     let dest = work_dir.path().join("update.tar.gz");
-    let verified_asset = if dev_override {
+    let expected_version = if dev_override {
         None
     } else {
-        let version =
-            latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?;
+        Some(latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?)
+    };
+    let verified_asset = if let Some(version) = expected_version {
         let release =
             release_integrity::fetch_release(GITHUB_REPO, &format!("qol-tray-v{version}")).await?;
         Some(release_integrity::verified_asset(&release, &asset_name())?)
+    } else {
+        None
     };
     let url = dev_url
         .or_else(|| {
@@ -113,8 +116,10 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     }
 
     let current_exe = std::env::current_exe()?;
-    let install_result = unix::extract_tar_gz_entry(&dest, "qol-tray", false)
-        .and_then(|binary| atomic_replace(&binary, &current_exe));
+    let install_result = unix::extract_tar_gz_entry(&dest, "qol-tray", false).and_then(|binary| {
+        verify_host_update(&binary, expected_version, UpdateTargetMatch::Exact)?;
+        atomic_replace(&binary, &current_exe)
+    });
     install_result?;
 
     events.send(DaemonEvent::UpdateComplete);

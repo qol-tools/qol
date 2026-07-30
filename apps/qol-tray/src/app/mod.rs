@@ -41,6 +41,8 @@ pub(crate) fn run() -> Result<()> {
     #[cfg(not(feature = "dev"))]
     qol_tray::logging::init_logger();
 
+    qol_tray::logging::log_build_identity();
+
     qol_tray::lifeline_handoff::adopt_handed_off_fds();
 
     let generation = qol_tray::dev_generation::current();

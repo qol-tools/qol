@@ -1,0 +1,12 @@
+[package]
+name = "qol-build-identity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Canonical QoL native artifact identity emission and source provenance"
+
+[dependencies]
+qol-conventions.workspace = true
+serde_json.workspace = true
+tempfile = "3.8"
+toml.workspace = true

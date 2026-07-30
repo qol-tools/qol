@@ -13,10 +13,17 @@ pub struct ArtifactExpectation {
     intent: BuildIntent,
     flavor: BuildFlavor,
     version: Option<String>,
+    target: Option<TargetExpectation>,
     exact_source: Option<SourceIdentity>,
     require_clean_source: bool,
     required_features: Vec<String>,
     forbidden_features: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TargetExpectation {
+    Exact(String),
+    Compatible(String),
 }
 
 impl ArtifactExpectation {
@@ -31,6 +38,7 @@ impl ArtifactExpectation {
                 dev_features: false,
             },
             version: None,
+            target: None,
             exact_source: None,
             require_clean_source: true,
             required_features: Vec::new(),
@@ -54,6 +62,7 @@ impl ArtifactExpectation {
                 dev_features,
             },
             version: None,
+            target: None,
             exact_source: None,
             require_clean_source: false,
             required_features: Vec::new(),
@@ -77,6 +86,7 @@ impl ArtifactExpectation {
                 dev_features,
             },
             version: None,
+            target: None,
             exact_source: None,
             require_clean_source: false,
             required_features: Vec::new(),
@@ -95,6 +105,7 @@ impl ArtifactExpectation {
                 dev_features,
             },
             version: None,
+            target: None,
             exact_source: None,
             require_clean_source: false,
             required_features: Vec::new(),
@@ -104,6 +115,16 @@ impl ArtifactExpectation {
 
     pub fn with_version(mut self, version: &str) -> Self {
         self.version = Some(version.to_string());
+        self
+    }
+
+    pub fn with_exact_target(mut self, target: &str) -> Self {
+        self.target = Some(TargetExpectation::Exact(target.to_string()));
+        self
+    }
+
+    pub fn with_compatible_target(mut self, target: &str) -> Self {
+        self.target = Some(TargetExpectation::Compatible(target.to_string()));
         self
     }
 
@@ -135,6 +156,11 @@ pub enum VerificationError {
     SourceUnspecified,
     SourceDirty,
     SourceMismatch,
+    InvalidTargetPlatform(String),
+    TargetPlatformMismatch {
+        expected: String,
+        actual: String,
+    },
     MissingFeature(String),
     ForbiddenFeature(String),
 }
@@ -161,6 +187,13 @@ impl fmt::Display for VerificationError {
             Self::SourceMismatch => {
                 formatter.write_str("artifact source identity does not match the build")
             }
+            Self::InvalidTargetPlatform(error) => {
+                write!(formatter, "artifact target platform is invalid: {error}")
+            }
+            Self::TargetPlatformMismatch { expected, actual } => write!(
+                formatter,
+                "artifact target platform mismatch: expected compatibility with {expected:?}, got {actual:?}"
+            ),
             Self::MissingFeature(feature) => {
                 write!(
                     formatter,
@@ -183,6 +216,8 @@ impl std::error::Error for VerificationError {
             | Self::SourceUnspecified
             | Self::SourceDirty
             | Self::SourceMismatch
+            | Self::InvalidTargetPlatform(_)
+            | Self::TargetPlatformMismatch { .. }
             | Self::MissingFeature(_)
             | Self::ForbiddenFeature(_) => None,
         }
@@ -231,6 +266,23 @@ pub fn verify_identity(
     )?;
     if let Some(version) = &expectation.version {
         require_field("version", version, &identity.version)?;
+    }
+    if let Some(target) = &expectation.target {
+        match target {
+            TargetExpectation::Exact(expected) => {
+                require_field("target", expected, &identity.target)?;
+            }
+            TargetExpectation::Compatible(expected) => {
+                let compatible = crate::target::same_platform(expected, &identity.target)
+                    .map_err(VerificationError::InvalidTargetPlatform)?;
+                if !compatible {
+                    return Err(VerificationError::TargetPlatformMismatch {
+                        expected: expected.clone(),
+                        actual: identity.target.clone(),
+                    });
+                }
+            }
+        }
     }
     require_field(
         "compiler test mode",
@@ -439,5 +491,18 @@ mod tests {
         development.features.sort();
 
         verify_identity(&development, &expectation).unwrap();
+    }
+
+    #[test]
+    fn compatible_target_allows_architecture_changes_but_not_platform_changes() {
+        let expectation = expectation().with_compatible_target("aarch64-unknown-linux-gnu");
+        verify_identity(&identity(), &expectation).unwrap();
+
+        let mut windows = identity();
+        windows.target = "x86_64-pc-windows-msvc".to_string();
+        assert!(matches!(
+            verify_identity(&windows, &expectation),
+            Err(VerificationError::TargetPlatformMismatch { .. })
+        ));
     }
 }

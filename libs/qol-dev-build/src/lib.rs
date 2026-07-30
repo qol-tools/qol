@@ -1,5 +1,4 @@
 pub mod adapters;
-pub mod build_identity;
 pub mod cargo_build;
 pub mod core;
 mod fingerprint;

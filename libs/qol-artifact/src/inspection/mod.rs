@@ -366,17 +366,7 @@ fn same_logical_identity(left: &BuildIdentity, right: &BuildIdentity) -> bool {
         && left.compiler == right.compiler
         && left.features == right.features
         && left.source == right.source
-        && same_target_platform(&left.target, &right.target)
-}
-
-fn same_target_platform(left: &str, right: &str) -> bool {
-    let (Ok(left), Ok(right)) = (left.parse::<Triple>(), right.parse::<Triple>()) else {
-        return false;
-    };
-    left.vendor == right.vendor
-        && left.operating_system == right.operating_system
-        && left.environment == right.environment
-        && left.binary_format == right.binary_format
+        && crate::target::same_platform(&left.target, &right.target).unwrap_or(false)
 }
 
 fn inspect_sections(sections: &[&[u8]]) -> Result<BuildIdentity, InspectionError> {

@@ -6118,6 +6118,7 @@ dependencies = [
  "libc",
  "qol-apps",
  "qol-artifact",
+ "qol-build-identity",
  "qol-config",
  "qol-conventions",
  "qol-dev-build",
@@ -6174,6 +6175,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-build-identity"
+version = "1.0.0"
+dependencies = [
+ "qol-conventions",
+ "serde_json",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
 name = "qol-color"
 version = "0.2.0"
 
@@ -6210,6 +6221,7 @@ dependencies = [
  "log",
  "proptest",
  "qol-artifact",
+ "qol-build-identity",
  "qol-conventions",
  "qol-fs",
  "qol-plugin-api",
@@ -6490,6 +6502,7 @@ dependencies = [
  "qol-app-icon",
  "qol-apps",
  "qol-artifact",
+ "qol-build-identity",
  "qol-config",
  "qol-conventions",
  "qol-dev-build",

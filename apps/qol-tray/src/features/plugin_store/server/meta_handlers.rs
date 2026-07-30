@@ -10,9 +10,12 @@ use serde::Deserialize;
 use super::types::AppState;
 use crate::daemon::DaemonEvent;
 
+type BuildInfoErrorResponse = (StatusCode, Json<serde_json::Value>);
+
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route(qol_conventions::dev_routes::ENABLED, get(dev_enabled))
+        .route("/build-info", get(get_build_info))
         .route("/version", get(get_version))
         .route("/check-update", get(check_update))
         .route("/self-update", post(self_update))
@@ -73,6 +76,26 @@ pub(super) async fn get_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+pub(super) async fn get_build_info(
+) -> Result<Json<qol_conventions::artifact::RunningBuildInfo>, BuildInfoErrorResponse> {
+    let identity = qol_conventions::artifact::current()
+        .cloned()
+        .ok_or_else(|| build_info_error("running build identity is unavailable"))?;
+    let executable = std::env::current_exe()
+        .map_err(|error| build_info_error(&format!("cannot resolve executable: {error}")))?;
+    Ok(Json(qol_conventions::artifact::RunningBuildInfo {
+        identity,
+        executable,
+    }))
+}
+
+fn build_info_error(message: &str) -> BuildInfoErrorResponse {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({ "error": message })),
+    )
+}
+
 pub(super) async fn check_update() -> Json<serde_json::Value> {
     let available = crate::updates::check_for_updates().await.unwrap_or(false);
     let latest = crate::updates::latest_version().map(String::from);
@@ -122,6 +145,13 @@ mod tests {
         assert!(!route_is_valid("   "));
         assert!(route_is_valid("shortcuts"));
         assert!(route_is_valid("shortcuts/add?type=url"));
+    }
+
+    #[tokio::test]
+    async fn build_info_fails_closed_when_the_binary_did_not_register_identity() {
+        let (status, Json(body)) = get_build_info().await.unwrap_err();
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"], "running build identity is unavailable");
     }
 
     #[tokio::test]

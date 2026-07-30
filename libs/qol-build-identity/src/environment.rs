@@ -6,6 +6,16 @@ use std::fmt;
 use std::path::Path;
 use std::process::{Command, Output};
 
+const GIT_ROUTING_ENVIRONMENT: [&str; 7] = [
+    "GIT_INDEX_FILE",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_PREFIX",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildIdentityEnvironment {
     intent: BuildIntent,
@@ -16,7 +26,15 @@ pub struct BuildIdentityEnvironment {
 pub enum BuildIdentityEnvironmentError {
     GitUnavailable(std::io::Error),
     TemporaryIndex(std::io::Error),
-    GitCommand { args: Vec<String>, stderr: String },
+    GitCommand {
+        args: Vec<String>,
+        stderr: String,
+    },
+    EnvironmentVariable {
+        name: &'static str,
+        source: std::env::VarError,
+    },
+    EnvironmentMismatch(&'static str),
     DirtyProductionTree,
     DirtySubmodule,
     SourceChanged,
@@ -37,6 +55,15 @@ impl fmt::Display for BuildIdentityEnvironmentError {
                 args.join(" "),
                 stderr.trim()
             ),
+            Self::EnvironmentVariable { name, source } => {
+                write!(formatter, "cannot read inherited {name}: {source}")
+            }
+            Self::EnvironmentMismatch(name) => {
+                write!(
+                    formatter,
+                    "inherited {name} does not match the current source"
+                )
+            }
             Self::DirtyProductionTree => {
                 formatter.write_str("production builds require a clean Git working tree")
             }
@@ -55,8 +82,10 @@ impl std::error::Error for BuildIdentityEnvironmentError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::GitUnavailable(error) | Self::TemporaryIndex(error) => Some(error),
+            Self::EnvironmentVariable { source, .. } => Some(source),
             Self::InvalidUtf8(error) => Some(error),
             Self::GitCommand { .. }
+            | Self::EnvironmentMismatch(_)
             | Self::DirtyProductionTree
             | Self::DirtySubmodule
             | Self::SourceChanged
@@ -86,8 +115,7 @@ impl BuildIdentityEnvironment {
         &self.source
     }
 
-    pub fn apply_to(&self, command: &mut Command) {
-        command.env(ENV_BUILD_INTENT, self.intent.as_str());
+    pub fn variables(&self) -> [(&'static str, String); 4] {
         let SourceIdentity::Git {
             commit,
             head_tree,
@@ -96,10 +124,28 @@ impl BuildIdentityEnvironment {
         else {
             unreachable!("resolved build identity source is Git")
         };
-        command
-            .env(ENV_SOURCE_COMMIT, commit)
-            .env(ENV_SOURCE_HEAD_TREE, head_tree)
-            .env(ENV_SOURCE_WORKING_TREE, working_tree);
+        [
+            (ENV_BUILD_INTENT, self.intent.as_str().to_string()),
+            (ENV_SOURCE_COMMIT, commit.clone()),
+            (ENV_SOURCE_HEAD_TREE, head_tree.clone()),
+            (ENV_SOURCE_WORKING_TREE, working_tree.clone()),
+        ]
+    }
+
+    pub fn apply_to(&self, command: &mut Command) {
+        command.envs(self.variables());
+    }
+
+    pub fn verify_inherited_environment(&self) -> Result<(), BuildIdentityEnvironmentError> {
+        for (name, expected) in self.variables() {
+            let actual = std::env::var(name).map_err(|source| {
+                BuildIdentityEnvironmentError::EnvironmentVariable { name, source }
+            })?;
+            if actual != expected {
+                return Err(BuildIdentityEnvironmentError::EnvironmentMismatch(name));
+            }
+        }
+        Ok(())
     }
 
     pub fn verify_unchanged(&self, repo: &Path) -> Result<(), BuildIdentityEnvironmentError> {
@@ -227,11 +273,7 @@ fn run_git(
     args: &[&str],
     index: Option<&Path>,
 ) -> Result<Output, BuildIdentityEnvironmentError> {
-    let mut command = Command::new("git");
-    command.args(args).current_dir(repo);
-    if let Some(index) = index {
-        command.env("GIT_INDEX_FILE", index);
-    }
+    let mut command = git_command(repo, args, index);
     let output = command
         .output()
         .map_err(BuildIdentityEnvironmentError::GitUnavailable)?;
@@ -244,9 +286,24 @@ fn run_git(
     })
 }
 
+fn git_command(repo: &Path, args: &[&str], index: Option<&Path>) -> Command {
+    let mut command = Command::new("git");
+    command.args(args).current_dir(repo);
+    for variable in GIT_ROUTING_ENVIRONMENT {
+        command.env_remove(variable);
+    }
+    if let Some(index) = index {
+        command.env("GIT_INDEX_FILE", index);
+    }
+    command
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{BuildIdentityEnvironment, BuildIdentityEnvironmentError};
+    use super::{
+        git_command, BuildIdentityEnvironment, BuildIdentityEnvironmentError,
+        GIT_ROUTING_ENVIRONMENT,
+    };
     use qol_conventions::artifact::{BuildIntent, SourceIdentity};
     use std::ffi::OsStr;
     use std::path::Path;
@@ -356,6 +413,7 @@ mod tests {
         ] {
             assert!(environment.contains_key(OsStr::new(key)), "{key}");
         }
+        assert_eq!(environment.len(), 4);
     }
 
     #[test]
@@ -370,5 +428,26 @@ mod tests {
             identity.verify_unchanged(repo.path()),
             Err(BuildIdentityEnvironmentError::SourceChanged)
         ));
+    }
+
+    #[test]
+    fn git_identity_ignores_inherited_repository_routing() {
+        let command = git_command(Path::new("/repository"), &["status"], None);
+        let environment = command
+            .get_envs()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for variable in GIT_ROUTING_ENVIRONMENT {
+            assert_eq!(environment.get(OsStr::new(variable)), Some(&None));
+        }
+
+        let index = Path::new("/temporary/index");
+        let command = git_command(Path::new("/repository"), &["status"], Some(index));
+        let environment = command
+            .get_envs()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            environment.get(OsStr::new("GIT_INDEX_FILE")),
+            Some(&Some(index.as_os_str()))
+        );
     }
 }

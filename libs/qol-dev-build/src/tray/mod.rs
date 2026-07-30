@@ -58,7 +58,7 @@ where
         return failed_build(error);
     }
     let identity =
-        match crate::build_identity::BuildIdentityEnvironment::development(&artifact_root(root)) {
+        match qol_build_identity::BuildIdentityEnvironment::development(&artifact_root(root)) {
             Ok(identity) => identity,
             Err(error) => {
                 return failed_build(format!("Failed to resolve build identity: {error}"));
@@ -264,7 +264,7 @@ fn start_build<F>(
     root: &Path,
     manifest_path: &Path,
     bins: &[&str],
-    identity: &crate::build_identity::BuildIdentityEnvironment,
+    identity: &qol_build_identity::BuildIdentityEnvironment,
     on_progress: &mut F,
 ) -> Result<CargoChild, BuildResult>
 where
@@ -279,7 +279,7 @@ fn spawn_build(
     root: &Path,
     manifest_path: &Path,
     bins: &[&str],
-    identity: &crate::build_identity::BuildIdentityEnvironment,
+    identity: &qol_build_identity::BuildIdentityEnvironment,
 ) -> Result<CargoChild, String> {
     let mut command = tray_build_command(root, manifest_path, bins);
     identity.apply_to(&mut command);
@@ -308,7 +308,7 @@ fn tray_build_command(root: &Path, manifest_path: &Path, bins: &[&str]) -> Comma
 fn finish_build<F>(
     root: &Path,
     bins: &[&str],
-    identity: &crate::build_identity::BuildIdentityEnvironment,
+    identity: &qol_build_identity::BuildIdentityEnvironment,
     child: &mut Child,
     artifact_stream: Result<(u32, Vec<crate::cargo_build::CargoArtifact>), String>,
     combined: String,
@@ -340,7 +340,7 @@ where
 fn successful_build<F>(
     root: &Path,
     bins: &[&str],
-    identity: &crate::build_identity::BuildIdentityEnvironment,
+    identity: &qol_build_identity::BuildIdentityEnvironment,
     actual_done: u32,
     artifacts: Vec<crate::cargo_build::CargoArtifact>,
     combined: String,

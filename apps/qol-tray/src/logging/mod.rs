@@ -24,6 +24,17 @@ pub use control::upsert_core_control;
 #[cfg(feature = "dev")]
 pub use filter::{is_valid_core_section, CoreControlsHandle, CORE_LOG_SECTION_IDS};
 
+pub fn log_build_identity() {
+    let Some(identity) = qol_conventions::artifact::current() else {
+        log::error!("[artifact-identity] running build identity is unavailable");
+        return;
+    };
+    match serde_json::to_string(identity) {
+        Ok(identity) => log::info!("[artifact-identity] {identity}"),
+        Err(error) => log::error!("[artifact-identity] serialization failed: {error}"),
+    }
+}
+
 fn rust_log_targets() -> tracing_subscriber::filter::Targets {
     use tracing_subscriber::filter::{LevelFilter, Targets};
     std::env::var("RUST_LOG")

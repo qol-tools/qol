@@ -33,6 +33,7 @@ dev = []
 linux_evdev = ["dep:evdev"]
 
 [dependencies]
+qol-build-identity.workspace = true
 qol-conventions.workspace = true
 qol-dev-build.workspace = true
 qol-fs.workspace = true
@@ -134,7 +135,7 @@ signal-hook = "0.3"
 qol-plugin-daemon.workspace = true
 
 [build-dependencies]
-qol-conventions.workspace = true
+qol-build-identity.workspace = true
 
 [dev-dependencies]
 proptest = "1.6"

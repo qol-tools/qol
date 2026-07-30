@@ -40,6 +40,7 @@ Reproducing or verifying qol runtime desktop behavior (plugin windows, hotkeys, 
 ## Artifact Identity
 
 - **Identity is a verified contract** - deployable native binaries must carry the identity contract owned by `qol-conventions`, and every build, install, update, staging, and execution handoff must verify it
+- **One owner per identity layer** - `qol-conventions` owns the schema and registration contract, `qol-build-identity` owns source resolution and build-script emission, and `qol-artifact` owns native inspection and intent policy; consumers must not mirror any of them
 - **Paths are not identity** - consumers must use the exact executable reported by the build and preserve its verified artifact reference; never rediscover an artifact from a profile directory or filename
 - **Opaque payloads use detached integrity** - scripts, assets, and non-Rust helpers must remain covered by their owning manifest and content digest instead of duplicating the native binary contract
 

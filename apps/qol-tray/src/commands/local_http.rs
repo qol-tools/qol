@@ -2,6 +2,14 @@ use std::time::Duration;
 
 use qol_runtime::local_http::{Client, Method};
 
+pub fn get_from_daemon(path: &str) -> std::io::Result<(u16, String)> {
+    let token = read_token()?;
+    let response = Client::new(crate::features::plugin_store::DEFAULT_SERVER_PORT, token)
+        .with_io_timeout(Duration::from_secs(5))
+        .request(Method::Get, path, None)?;
+    Ok((response.status, response.body))
+}
+
 pub fn post_to_daemon(path: &str, body: &str) -> std::io::Result<(u16, String)> {
     let token = read_token()?;
     let body = if body.is_empty() { "{}" } else { body };
