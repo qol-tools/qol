@@ -1,5 +1,7 @@
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
-use qol_conventions::artifact::{BuildIdentity, BuildRole, RunningBuildInfo};
+use qol_conventions::artifact::{
+    normalized_executable, BuildIdentity, BuildRole, RunningBuildInfo,
+};
 
 const ID: &str = "artifact_identity";
 
@@ -51,7 +53,7 @@ fn running_build_info() -> Result<RunningBuildInfo, String> {
         std::env::current_exe().map_err(|error| format!("cannot resolve executable: {error}"))?;
     Ok(RunningBuildInfo {
         identity: current,
-        executable,
+        executable: normalized_executable(executable),
     })
 }
 
@@ -80,9 +82,14 @@ fn parse_running_host_response(
             "running host /api/build-info failed with HTTP {status}"
         )));
     }
-    serde_json::from_str(body).map_err(|error| {
-        RunningHostQueryError::Invalid(format!("invalid /api/build-info: {error}"))
-    })
+    serde_json::from_str::<RunningBuildInfo>(body)
+        .map(|running| RunningBuildInfo {
+            executable: normalized_executable(running.executable),
+            identity: running.identity,
+        })
+        .map_err(|error| {
+            RunningHostQueryError::Invalid(format!("invalid /api/build-info: {error}"))
+        })
 }
 
 fn diagnose<'a>(
@@ -163,6 +170,17 @@ mod tests {
             .issues
             .is_empty());
         assert_eq!(diagnose(&running, [&stale].into_iter()).issues.len(), 1);
+    }
+
+    #[test]
+    fn daemon_reported_replaced_executable_is_normalized() {
+        let running = RunningBuildInfo {
+            identity: identity("1.0.0"),
+            executable: PathBuf::from("/opt/qol-tray (deleted)"),
+        };
+        let body = serde_json::to_string(&running).unwrap();
+        let parsed = parse_running_host_response(200, &body).unwrap();
+        assert_eq!(parsed.executable, PathBuf::from("/opt/qol-tray"));
     }
 
     #[test]

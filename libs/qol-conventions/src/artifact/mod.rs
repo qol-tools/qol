@@ -360,6 +360,17 @@ pub fn current() -> Option<&'static BuildIdentity> {
     CURRENT_IDENTITY.get()
 }
 
+pub fn normalized_executable(path: PathBuf) -> PathBuf {
+    const DELETED_SUFFIX: &str = " (deleted)";
+    match path
+        .to_str()
+        .and_then(|value| value.strip_suffix(DELETED_SUFFIX))
+    {
+        Some(stripped) => PathBuf::from(stripped),
+        None => path,
+    }
+}
+
 #[doc(hidden)]
 pub const fn frame_bytes<const LENGTH: usize>(frame: &str) -> [u8; LENGTH] {
     let source = frame.as_bytes();
@@ -429,10 +440,27 @@ macro_rules! declare_build_identity {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_frame, BuildFlavor, BuildIdentity, BuildIntent, BuildProfile, BuildRole,
-        CompilerFacts, DecodeError, SourceIdentity, FRAME_MAGIC, SCHEMA_VERSION,
+        decode_frame, normalized_executable, BuildFlavor, BuildIdentity, BuildIntent, BuildProfile,
+        BuildRole, CompilerFacts, DecodeError, SourceIdentity, FRAME_MAGIC, SCHEMA_VERSION,
     };
     use proptest::prelude::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn normalized_executable_strips_only_the_trailing_deleted_marker() {
+        let cases = [
+            ("/a/b/qol-tray (deleted)", "/a/b/qol-tray"),
+            ("/a/b/qol-tray", "/a/b/qol-tray"),
+            ("/a/b (deleted)/qol-tray", "/a/b (deleted)/qol-tray"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                normalized_executable(PathBuf::from(input)),
+                PathBuf::from(expected),
+                "input: {input}"
+            );
+        }
+    }
 
     fn identity() -> BuildIdentity {
         BuildIdentity {

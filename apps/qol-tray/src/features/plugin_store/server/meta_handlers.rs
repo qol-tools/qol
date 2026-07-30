@@ -85,7 +85,7 @@ pub(super) async fn get_build_info(
         .map_err(|error| build_info_error(&format!("cannot resolve executable: {error}")))?;
     Ok(Json(qol_conventions::artifact::RunningBuildInfo {
         identity,
-        executable,
+        executable: qol_conventions::artifact::normalized_executable(executable),
     }))
 }
 
