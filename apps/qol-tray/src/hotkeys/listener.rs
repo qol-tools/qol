@@ -271,6 +271,13 @@ impl<'a> HotkeyListenerLoop<'a> {
                     action.plugin_uid.as_str(),
                     action.action
                 );
+                qol_runtime::probe!(
+                    "HOTKEY_DISPATCH",
+                    "source={} kind=one-shot uid={} action={}",
+                    source.as_str(),
+                    qol_runtime::probe::token(action.plugin_uid.as_str()),
+                    qol_runtime::probe::token(&action.action)
+                );
                 crate::plugins::action_executor::execute_action(
                     &self.plugin_manager,
                     &plugin_id,

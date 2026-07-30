@@ -178,6 +178,14 @@ fn register_via(
     if let Err(error) = manager.register(hotkey) {
         let msg = error.to_string();
         log::error!("Failed to register hotkey {}: {}", binding_key, msg);
+        qol_runtime::probe!(
+            "HOTKEY_REGISTRATION",
+            "result=failed key={} uid={} action={} error={}",
+            qol_runtime::probe::token(&binding_key),
+            qol_runtime::probe::token(action.plugin_uid.as_str()),
+            qol_runtime::probe::token(&action.action),
+            qol_runtime::probe::token(&msg)
+        );
         if let Err(write_err) = crate::doctor::trigger::mark_needed(
             "hotkey_shadows",
             &format!("{} failed to grab: {}", binding_key, msg),
@@ -208,8 +216,20 @@ fn log_registered_hotkey(binding_key: &str, action: &HotkeyAction) {
         action.plugin_uid.as_str(),
         action.action
     );
+    qol_runtime::probe!(
+        "HOTKEY_REGISTRATION",
+        "result=registered key={} uid={} action={}",
+        qol_runtime::probe::token(binding_key),
+        qol_runtime::probe::token(action.plugin_uid.as_str()),
+        qol_runtime::probe::token(&action.action)
+    );
 }
 
 fn log_unregistered_hotkey(binding_key: &str) {
     log::info!("Unregistered hotkey: {}", binding_key);
+    qol_runtime::probe!(
+        "HOTKEY_REGISTRATION",
+        "result=unregistered key={}",
+        qol_runtime::probe::token(binding_key)
+    );
 }
