@@ -15,7 +15,7 @@ use super::desktop::{
     command, connect_desktop_guest, current_trace_cursor, desktop_resolution, exec, fd_count,
     install_payload, plugin_daemon_pid, require_exec, require_plugin_action_guards, spawn,
     start_tray_and_wait_plugin, wait_for_command, wait_for_probe_fields, wait_for_probe_line,
-    wait_for_window_id, within_fd_budget, TraceCursor,
+    wait_for_window_id, within_fd_budget, xdotool_key, TraceCursor,
 };
 use super::Verdict;
 
@@ -146,12 +146,7 @@ fn dispatch(guest: &mut GuestControlClient, auth: &str, action: &str) -> Result<
 }
 
 fn key(guest: &mut GuestControlClient, value: &str) -> Result<()> {
-    require_exec(
-        guest,
-        command("/usr/bin/xdotool", &["key", value]),
-        COMMAND_TIMEOUT,
-    )?;
-    Ok(())
+    xdotool_key(guest, value, false)
 }
 
 fn daemon_pid(guest: &mut GuestControlClient) -> Result<String> {

@@ -4,14 +4,14 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use qol_conventions::{local_base_url, TRACE_LOG_PATH};
+use qol_conventions::TRACE_LOG_PATH;
 use qol_dev_guest::GuestControlClient;
 
 use crate::commands::emu::{qmp, BootedVm};
 use crate::progress::{step_label, StepKind};
 
 use super::desktop::{
-    command, connect_desktop_guest, current_trace_cursor, install_payload, plugin_daemon_pid,
+    command, connect_desktop_guest, dispatch_plugin_action, install_payload, plugin_daemon_pid,
     require_exec, spawn, start_tray_and_wait_plugin, wait_for_command, wait_for_probe_fields,
     wait_for_probe_line, wait_for_window_id, window_geometry, TraceCursor, WindowGeometry,
 };
@@ -114,33 +114,7 @@ fn dispatch(
     action: &str,
     body: &str,
 ) -> Result<TraceCursor> {
-    let cursor = current_trace_cursor(guest)?;
-    let url = format!(
-        "{}/api/plugins/{PLUGIN_ID}/actions/{action}",
-        local_base_url()
-    );
-    require_exec(
-        guest,
-        command(
-            "/usr/bin/curl",
-            &[
-                "--fail",
-                "--silent",
-                "--show-error",
-                "--header",
-                auth,
-                "--header",
-                "Content-Type: application/json",
-                "--request",
-                "POST",
-                "--data",
-                body,
-                &url,
-            ],
-        ),
-        COMMAND_TIMEOUT,
-    )?;
-    Ok(cursor)
+    dispatch_plugin_action(guest, auth, PLUGIN_ID, action, body, COMMAND_TIMEOUT)
 }
 
 fn regular_action(

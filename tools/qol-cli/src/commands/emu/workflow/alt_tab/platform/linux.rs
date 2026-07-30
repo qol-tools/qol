@@ -10,10 +10,10 @@ use crate::commands::emu::{qmp, BootedVm};
 use crate::progress::{step_label, StepKind};
 
 use super::desktop::{
-    command, connect_desktop_guest, current_trace_cursor, fd_count, install_payload,
-    plugin_daemon_pid, require_exec, require_plugin_action_guards, spawn,
+    command, connect_desktop_guest, current_trace_cursor, dispatch_plugin_action, fd_count,
+    install_payload, plugin_daemon_pid, require_exec, require_plugin_action_guards, spawn,
     start_tray_and_wait_plugin_with_setup, wait_for_command, wait_for_probe_fields,
-    wait_for_probe_line, wait_for_window_id, within_fd_budget, TraceCursor,
+    wait_for_probe_line, wait_for_window_id, within_fd_budget, xdotool_key, TraceCursor,
 };
 use super::Verdict;
 
@@ -158,33 +158,7 @@ fn launch_fixtures(guest: &mut GuestControlClient) -> Result<()> {
 }
 
 fn dispatch(guest: &mut GuestControlClient, auth: &str, action: &str) -> Result<TraceCursor> {
-    let cursor = current_trace_cursor(guest)?;
-    let url = format!(
-        "{}/api/plugins/{PLUGIN_ID}/actions/{action}",
-        local_base_url()
-    );
-    require_exec(
-        guest,
-        command(
-            "/usr/bin/curl",
-            &[
-                "--fail",
-                "--silent",
-                "--show-error",
-                "--header",
-                auth,
-                "--header",
-                "Content-Type: application/json",
-                "--request",
-                "POST",
-                "--data",
-                "{}",
-                &url,
-            ],
-        ),
-        ACTION_TIMEOUT,
-    )?;
-    Ok(cursor)
+    dispatch_plugin_action(guest, auth, PLUGIN_ID, action, "{}", ACTION_TIMEOUT)
 }
 
 fn set_sticky_config(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
@@ -218,12 +192,7 @@ fn set_sticky_config(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
 }
 
 fn key(guest: &mut GuestControlClient, value: &str) -> Result<()> {
-    require_exec(
-        guest,
-        command("/usr/bin/xdotool", &["key", "--clearmodifiers", value]),
-        COMMAND_TIMEOUT,
-    )?;
-    Ok(())
+    xdotool_key(guest, value, true)
 }
 
 fn open_sticky(guest: &mut GuestControlClient, auth: &str) -> Result<()> {

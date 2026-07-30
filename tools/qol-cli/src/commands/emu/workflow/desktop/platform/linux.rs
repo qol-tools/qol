@@ -1031,6 +1031,61 @@ pub(in crate::commands::emu::workflow) fn within_fd_budget(before: u64, after: u
     after <= before.saturating_add(2)
 }
 
+pub(in crate::commands::emu::workflow) fn dispatch_plugin_action(
+    guest: &mut GuestControlClient,
+    auth: &str,
+    plugin_id: &str,
+    action: &str,
+    body: &str,
+    timeout: Duration,
+) -> Result<TraceCursor> {
+    let cursor = current_trace_cursor(guest)?;
+    let url = format!(
+        "{}/api/plugins/{plugin_id}/actions/{action}",
+        local_base_url()
+    );
+    require_exec(
+        guest,
+        command(
+            "/usr/bin/curl",
+            &[
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--header",
+                auth,
+                "--header",
+                "Content-Type: application/json",
+                "--request",
+                "POST",
+                "--data",
+                body,
+                &url,
+            ],
+        ),
+        timeout,
+    )?;
+    Ok(cursor)
+}
+
+pub(in crate::commands::emu::workflow) fn xdotool_key(
+    guest: &mut GuestControlClient,
+    value: &str,
+    clear_modifiers: bool,
+) -> Result<()> {
+    let args: &[&str] = if clear_modifiers {
+        &["key", "--clearmodifiers", value]
+    } else {
+        &["key", value]
+    };
+    require_exec(
+        guest,
+        command("/usr/bin/xdotool", args),
+        GUEST_COMMAND_TIMEOUT,
+    )?;
+    Ok(())
+}
+
 pub(in crate::commands::emu::workflow) fn require_plugin_action_guards(
     guest: &mut GuestControlClient,
     auth: &str,
