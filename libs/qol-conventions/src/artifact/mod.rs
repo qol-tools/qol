@@ -340,8 +340,8 @@ fn valid_git_oid(value: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-pub fn register_current(frame: &'static str) -> &'static BuildIdentity {
-    let identity = decode_frame(frame.as_bytes())
+pub fn register_current(frame: &[u8]) -> &'static BuildIdentity {
+    let identity = decode_frame(frame)
         .unwrap_or_else(|error| panic!("generated artifact identity is invalid: {error}"));
     if let Some(current) = CURRENT_IDENTITY.get() {
         assert_eq!(
@@ -419,8 +419,9 @@ macro_rules! declare_build_identity {
             );
 
         fn register_build_identity() -> &'static $crate::artifact::BuildIdentity {
-            let _ = std::hint::black_box(&QOL_BUILD_IDENTITY_SECTION);
-            $crate::artifact::register_current(QOL_BUILD_IDENTITY_FRAME)
+            $crate::artifact::register_current(std::hint::black_box(
+                &QOL_BUILD_IDENTITY_SECTION,
+            ))
         }
     };
 }
