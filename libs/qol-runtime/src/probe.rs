@@ -89,6 +89,12 @@ macro_rules! probe {
         {
             $crate::probe::probe($tag, &::std::format!($($arg)+));
         }
+        #[cfg(not(debug_assertions))]
+        {
+            if false {
+                $crate::probe::probe($tag, &::std::format!($($arg)+));
+            }
+        }
     }};
 }
 

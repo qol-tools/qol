@@ -271,6 +271,12 @@ fn discover_live_windows(include_minimized: bool) -> Vec<WindowInfo> {
     );
     #[cfg(debug_assertions)]
     let off_ms = t_off.elapsed().as_millis();
+    #[cfg(not(debug_assertions))]
+    let (cg_ms, sls_ms, ax_ms, on_ms, off_ms) = (0_u128, 0_u128, 0_u128, 0_u128, 0_u128);
+    #[cfg(not(debug_assertions))]
+    let on_ids = "";
+    #[cfg(not(debug_assertions))]
+    let on_section = 0_usize;
     tracker.persist();
     qol_runtime::probe!(
         "DISCOVERY",

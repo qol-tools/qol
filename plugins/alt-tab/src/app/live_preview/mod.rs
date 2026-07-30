@@ -254,11 +254,10 @@ async fn preview_loop(
         }
         let rendering = crate::rendering::RenderingFlow::current();
         if !rendering.captures_live_selection() {
-            #[cfg(debug_assertions)]
-            let backend = rendering.preview_plane_backend().unwrap_or("none");
             qol_runtime::probe!(
                 "PREVIEW_LIVE",
-                "outcome=stopped reason=preview_plane backend={backend}"
+                "outcome=stopped reason=preview_plane backend={}",
+                rendering.preview_plane_backend().unwrap_or("none")
             );
             break;
         }

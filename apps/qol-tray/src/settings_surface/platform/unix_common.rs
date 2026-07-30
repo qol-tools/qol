@@ -7,7 +7,6 @@ use anyhow::{bail, Context};
 use gpui::{App, AppContext, Application};
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
-#[cfg(debug_assertions)]
 use qol_gpui::settings_panel::SettingsActivation;
 use qol_gpui::settings_panel::{SettingsPanel, SettingsRuntime, SettingsWindowHost};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
@@ -316,7 +315,6 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
     }
 }
 
-#[cfg(debug_assertions)]
 fn activation_name(activation: SettingsActivation) -> &'static str {
     match activation {
         SettingsActivation::Focused => "focused",

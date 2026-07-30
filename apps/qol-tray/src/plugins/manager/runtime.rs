@@ -62,11 +62,15 @@ pub(super) fn reload_plugin(manager: &mut PluginManager, plugin_id: &str) -> Res
     let loaded = loading::load_plugin(plugin_id)?;
     #[cfg(debug_assertions)]
     let old_pid = manager.plugins.get(plugin_id).and_then(Plugin::daemon_pid);
+    #[cfg(not(debug_assertions))]
+    let old_pid = None::<u32>;
     kill_plugin_processes(plugin_id);
     drop(manager.plugins.remove(plugin_id));
 
     #[cfg(debug_assertions)]
     let loaded_plugin = loaded.plugin.is_some();
+    #[cfg(not(debug_assertions))]
+    let loaded_plugin = false;
     if let Some(plugin) = loaded.plugin {
         if !crate::dev_generation::is_shadow() && !crate::dev_generation::is_rolling_restart() {
             super::super::daemon_tracker::clean_stale_sockets(std::slice::from_ref(&plugin));
@@ -83,6 +87,8 @@ pub(super) fn reload_plugin(manager: &mut PluginManager, plugin_id: &str) -> Res
     sync_ignore_pids(manager);
     #[cfg(debug_assertions)]
     let new_pid = manager.plugins.get(plugin_id).and_then(Plugin::daemon_pid);
+    #[cfg(not(debug_assertions))]
+    let new_pid = None::<u32>;
     qol_runtime::probe!(
         "PLUGIN_RELOAD",
         "plugin={plugin_id} stage=done scope=single loaded={loaded_plugin} old_pid={old_pid:?} new_pid={new_pid:?}"

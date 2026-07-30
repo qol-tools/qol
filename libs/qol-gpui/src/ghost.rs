@@ -136,6 +136,8 @@ pub fn rebuild_on_topology<T: Render + 'static>(
     let mut stale = std::mem::take(&mut *active.borrow_mut());
     #[cfg(debug_assertions)]
     let n_stale = stale.len();
+    #[cfg(not(debug_assertions))]
+    let n_stale = 0;
     stale.destroy_all(cx);
     pre_create(cx);
     qol_runtime::probe!("GHOST_TOPOLOGY", "rebuilt: destroyed={n_stale}");

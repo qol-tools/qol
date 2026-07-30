@@ -48,7 +48,6 @@ fn policy_is_switchable(policy: objc2_app_kit::NSApplicationActivationPolicy) ->
     policy == Policy::Regular || policy == Policy::Accessory
 }
 
-#[cfg(debug_assertions)]
 pub(super) fn app_policy_debug(pid: i32) -> String {
     use objc2_app_kit::NSRunningApplication;
 

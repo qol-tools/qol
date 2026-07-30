@@ -70,7 +70,6 @@ impl RenderingFlow {
         }
     }
 
-    #[cfg(debug_assertions)]
     pub(crate) fn preview_renderer_name(self) -> &'static str {
         match self.preview_renderer {
             PreviewRenderer::GpuiSnapshots => "gpui_snapshots",
@@ -78,7 +77,6 @@ impl RenderingFlow {
         }
     }
 
-    #[cfg(debug_assertions)]
     pub(crate) fn backend_name(self) -> &'static str {
         self.preview_plane_backend().unwrap_or("none")
     }

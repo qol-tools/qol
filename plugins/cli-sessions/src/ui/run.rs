@@ -14,7 +14,9 @@ use qol_terminal_sessions::cli::CliSessionInterpreter;
 use crate::config;
 use crate::daemon::actions::{self, Command};
 use crate::daemon::reconcile;
-use crate::diagnostics::{anomaly, snapshot};
+#[cfg(debug_assertions)]
+use crate::diagnostics::anomaly;
+use crate::diagnostics::snapshot;
 use crate::host::kitty::Kitty;
 use crate::host::TerminalHost;
 use crate::session::registry::Registry;

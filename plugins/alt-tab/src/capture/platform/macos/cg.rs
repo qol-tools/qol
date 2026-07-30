@@ -37,11 +37,14 @@ pub(super) fn capture(
             .collect();
         handles.into_iter().filter_map(|h| h.join().ok()).collect()
     });
+    #[cfg(debug_assertions)]
+    let total_ms = t_all.elapsed().as_millis();
+    #[cfg(not(debug_assertions))]
+    let total_ms = 0_u128;
     qol_runtime::probe!(
         "CAPTURE",
-        "backend=cg targets={} total={}ms",
+        "backend=cg targets={} total={total_ms}ms",
         targets.len(),
-        t_all.elapsed().as_millis()
     );
     results
 }

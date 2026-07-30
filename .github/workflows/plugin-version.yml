@@ -1,5 +1,5 @@
 name: Version and Release Plugins
-run-name: ${{ inputs.plugin_id && format('Version plugin {0}', inputs.plugin_id) || 'Version changed plugins' }}
+run-name: ${{ inputs.plugin_id && format('Version plugin {0}', inputs.plugin_id) || 'Version changed release units' }}
 
 on:
   workflow_dispatch:
@@ -8,24 +8,47 @@ on:
         description: Optional plugin id, for example alt-tab
         required: false
         type: string
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
 
 permissions:
   contents: write
   actions: write
+  statuses: write
 
 concurrency:
-  group: plugin-version-${{ github.ref }}
+  group: plugin-version-main
   cancel-in-progress: false
 
 jobs:
-  version:
+  prepare:
+    name: Prepare exact release candidate
+    if: >-
+      ${{
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'workflow_run' &&
+         github.event.workflow_run.event == 'push' &&
+         github.event.workflow_run.head_branch == 'main' &&
+         github.event.workflow_run.conclusion == 'success')
+      }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    outputs:
+      should_release: ${{ steps.version.outputs.should_release }}
+      candidate_sha: ${{ steps.candidate.outputs.sha }}
+      tags: ${{ steps.version.outputs.tags }}
+      plugin_matrix: ${{ steps.plan.outputs.plugin_matrix }}
+      has_plugins: ${{ steps.plan.outputs.has_plugins }}
+      has_qol_tray: ${{ steps.plan.outputs.has_qol_tray }}
+      qol_tray_tag: ${{ steps.plan.outputs.qol_tray_tag }}
     steps:
-      - name: Checkout
+      - name: Checkout successful source commit
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 0
 
       - name: Setup Python
@@ -36,20 +59,30 @@ jobs:
       - name: Fetch tags
         run: git fetch --tags --force
 
-      - name: Compute plugin versions
+      - name: Verify successful source CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python .github/scripts/release_candidate.py verify-source-ci \
+            --repo "${GITHUB_REPOSITORY}" \
+            --sha "${SOURCE_SHA}" \
+            --root . \
+            --report "${RUNNER_TEMP}/source-ci-report.json"
+
+      - name: Compute release versions
         id: version
         shell: bash
         env:
-          PLUGIN_ID: ${{ github.event.inputs.plugin_id }}
+          PLUGIN_ID: ${{ inputs.plugin_id }}
         run: |
           set -euo pipefail
           args=()
           if [[ -n "${PLUGIN_ID}" ]]; then
             args+=(--plugin-id "${PLUGIN_ID}")
           fi
-          python3 .github/scripts/plugin_version.py \
+          python .github/scripts/plugin_version.py \
             --apply \
-            --tag-file "${RUNNER_TEMP}/plugin-release-tags.txt" \
+            --tag-file "${RUNNER_TEMP}/release-tags.txt" \
             "${args[@]}"
 
       - name: Summarize release plan
@@ -60,50 +93,283 @@ jobs:
           RELEASE_TAGS: ${{ steps.version.outputs.tags }}
         run: |
           {
-            echo "### Plugin version plan"
+            echo "### Release plan"
             echo
             if [[ "${SHOULD_RELEASE}" == "true" ]]; then
               echo "${RELEASE_SUMMARY}" | tr ',' '\n' | sed 's/^/- /'
               echo
               echo "**Tags:** \`${RELEASE_TAGS}\`"
-            else
-              echo "No plugin releases required."
+              exit 0
             fi
+            echo "No releases required."
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Commit and tag plugin versions
+      - name: Commit version candidate
+        id: candidate
         if: steps.version.outputs.should_release == 'true'
         shell: bash
         run: |
           set -euo pipefail
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           git add Cargo.lock plugins/*/Cargo.toml plugins/*/plugin.toml apps/qol-tray/Cargo.toml
           if ! git diff --cached --quiet; then
             git commit -m "chore(plugins): bump plugin versions"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
+            git push origin "HEAD:main"
           fi
+          echo "sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
 
-          mapfile -t tags < "${RUNNER_TEMP}/plugin-release-tags.txt"
-          for tag in "${tags[@]}"; do
-            [[ -n "${tag}" ]] || continue
-            git tag "${tag}"
-          done
-          git push origin "${tags[@]}"
-
-      - name: Dispatch plugin releases
+      - name: Plan candidate builds
+        id: plan
         if: steps.version.outputs.should_release == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAGS: ${{ steps.version.outputs.tags }}
+        run: |
+          python .github/scripts/release_candidate.py plan \
+            --tags "${RELEASE_TAGS}" \
+            --report "${RUNNER_TEMP}/release-candidate-report.json"
+
+      - name: Upload candidate plan
+        if: steps.version.outputs.should_release == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-candidate-plan-${{ steps.candidate.outputs.sha }}
+          path: |
+            ${{ runner.temp }}/source-ci-report.json
+            ${{ runner.temp }}/release-candidate-report.json
+          if-no-files-found: error
+
+  plugin_candidate:
+    name: Candidate ${{ matrix.tag }} (${{ matrix.target }})
+    needs: prepare
+    if: needs.prepare.outputs.has_plugins == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.plugin_matrix) }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.candidate_sha }}
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: release-candidate-${{ matrix.target }}
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxi-dev libxtst-dev libxcb1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libxdo-dev libvulkan-dev \
+            libwayland-dev libglib2.0-dev libgtk-3-dev libayatana-appindicator3-dev
+
+      - name: Build exact plugin candidate
+        run: >
+          python .github/scripts/release_candidate.py build
+          --kind plugin
+          --package "${{ matrix.package }}"
+          --target "${{ matrix.target }}"
+          --report "${{ runner.temp }}/release-build-report.json"
+
+      - name: Upload build report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: candidate-${{ matrix.tag }}-${{ matrix.target }}
+          path: ${{ runner.temp }}/release-build-report.json
+          if-no-files-found: error
+
+  qol_tray_linux_candidate:
+    name: Candidate qol-tray (linux)
+    needs: prepare
+    if: needs.prepare.outputs.has_qol_tray == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.candidate_sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: qol-tray-candidate-linux
+
+      - name: Export production artifact identity
+        run: cargo run --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
+
+      - name: Install cargo-deb
+        uses: taiki-e/install-action@15449e3094499af05d8d964a1c884208e4b8b595 # v2
+        with:
+          tool: cargo-deb
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxi-dev libxtst-dev libxcb1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libxdo-dev libvulkan-dev \
+            libwayland-dev libglib2.0-dev libgtk-3-dev libayatana-appindicator3-dev
+
+      - name: Build exact qol-tray candidate
+        run: >
+          python .github/scripts/release_candidate.py build
+          --kind qol-tray-linux
+          --report "${RUNNER_TEMP}/release-build-report.json"
+
+      - name: Upload build report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: candidate-${{ needs.prepare.outputs.qol_tray_tag }}-linux
+          path: ${{ runner.temp }}/release-build-report.json
+          if-no-files-found: error
+
+  qol_tray_macos_candidate:
+    name: Candidate qol-tray (macos)
+    needs: prepare
+    if: needs.prepare.outputs.has_qol_tray == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.candidate_sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: qol-tray-candidate-macos
+
+      - name: Export production artifact identity
+        run: cargo run --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
+
+      - name: Build exact qol-tray candidate
+        run: >
+          python .github/scripts/release_candidate.py build
+          --kind qol-tray-macos
+          --report "${RUNNER_TEMP}/release-build-report.json"
+
+      - name: Upload build report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: candidate-${{ needs.prepare.outputs.qol_tray_tag }}-macos
+          path: ${{ runner.temp }}/release-build-report.json
+          if-no-files-found: error
+
+  tag_and_dispatch:
+    name: Attest, tag, and dispatch
+    needs:
+      - prepare
+      - plugin_candidate
+      - qol_tray_linux_candidate
+      - qol_tray_macos_candidate
+    if: >-
+      ${{
+        always() &&
+        needs.prepare.result == 'success' &&
+        needs.prepare.outputs.should_release == 'true' &&
+        (needs.plugin_candidate.result == 'success' ||
+         needs.plugin_candidate.result == 'skipped') &&
+        (needs.qol_tray_linux_candidate.result == 'success' ||
+         needs.qol_tray_linux_candidate.result == 'skipped') &&
+        (needs.qol_tray_macos_candidate.result == 'success' ||
+         needs.qol_tray_macos_candidate.result == 'skipped')
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CANDIDATE_SHA: ${{ needs.prepare.outputs.candidate_sha }}
+      RELEASE_TAGS: ${{ needs.prepare.outputs.tags }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Attest exact release candidate
+        run: |
+          python .github/scripts/release_candidate.py attest \
+            --repo "${GITHUB_REPOSITORY}" \
+            --sha "${CANDIDATE_SHA}" \
+            --tags "${RELEASE_TAGS}" \
+            --target-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --report "${RUNNER_TEMP}/release-attestation-report.json"
+
+      - name: Create immutable tags
+        shell: bash
         run: |
           set -euo pipefail
-          while IFS= read -r tag; do
-            [[ -n "${tag}" ]] || continue
+          git fetch --tags --force
+          read -r -a tags <<< "${RELEASE_TAGS}"
+          new_tags=()
+          for tag in "${tags[@]}"; do
+            existing=$(git rev-parse -q --verify "refs/tags/${tag}^{commit}" || true)
+            if [[ -n "${existing}" ]]; then
+              [[ "${existing}" == "${CANDIDATE_SHA}" ]] || {
+                echo "::error::tag ${tag} already points to ${existing}"
+                exit 1
+              }
+              continue
+            fi
+            git tag "${tag}" "${CANDIDATE_SHA}"
+            new_tags+=("${tag}")
+          done
+          ((${#new_tags[@]})) || exit 0
+          git push --atomic origin "${new_tags[@]}"
+
+      - name: Dispatch releases
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r -a tags <<< "${RELEASE_TAGS}"
+          for tag in "${tags[@]}"; do
             if [[ "${tag}" == qol-tray-v* ]]; then
               gh workflow run qol-tray-release.yml --ref main -f tag="${tag}"
-            else
-              gh workflow run release.yml --ref main -f tag="${tag}"
+              continue
             fi
-          done < "${RUNNER_TEMP}/plugin-release-tags.txt"
+            gh workflow run release.yml --ref main -f tag="${tag}"
+          done
+
+      - name: Upload attestation report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-attestation-${{ needs.prepare.outputs.candidate_sha }}
+          path: ${{ runner.temp }}/release-attestation-report.json
+          if-no-files-found: error

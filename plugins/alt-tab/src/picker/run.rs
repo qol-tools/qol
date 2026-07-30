@@ -248,11 +248,15 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     });
     #[cfg(debug_assertions)]
     let update_ms = t_update.elapsed().as_millis();
+    #[cfg(debug_assertions)]
+    let total_ms = t_total.elapsed().as_millis();
+    #[cfg(not(debug_assertions))]
+    let (config_ms, query_ms, window_count, update_ms, total_ms) =
+        (0_u128, 0_u128, 0_usize, 0_u128, 0_u128);
 
     qol_runtime::probe!(
         "SHOW_TIMING",
-        "total={}ms config={config_ms}ms query={query_ms}ms({window_count} windows) update={update_ms}ms",
-        t_total.elapsed().as_millis()
+        "total={total_ms}ms config={config_ms}ms query={query_ms}ms({window_count} windows) update={update_ms}ms"
     );
 }
 

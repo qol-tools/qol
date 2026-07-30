@@ -72,8 +72,10 @@ class LocalPlannerContract(unittest.TestCase):
                 ac.emit(
                     {
                         "full": False,
+                        "ubuntu_build": "",
                         "ubuntu_skip": True,
                         "ubuntu_test": "",
+                        "macos_build": "",
                         "windows_process": True,
                         "windows_qol": False,
                     }
@@ -83,6 +85,8 @@ class LocalPlannerContract(unittest.TestCase):
                 json.loads(output.read_text()),
                 {
                     "full": False,
+                    "macos_build": "",
+                    "ubuntu_build": "",
                     "ubuntu_skip": True,
                     "ubuntu_test": "",
                     "windows_process": True,
@@ -91,7 +95,8 @@ class LocalPlannerContract(unittest.TestCase):
             )
             self.assertEqual(
                 github_output.read_text(),
-                "full=false\nubuntu_skip=true\nubuntu_test=\n"
+                "full=false\nubuntu_build=\nubuntu_skip=true\nubuntu_test=\n"
+                "macos_build=\n"
                 "windows_process=true\nwindows_qol=false\n",
             )
 
@@ -112,6 +117,8 @@ class LocalPlannerContract(unittest.TestCase):
                     self.assertIs(
                         emit.call_args.args[0]["ubuntu_skip"], not expected
                     )
+                    build_args = emit.call_args.args[0]["ubuntu_build"]
+                    self.assertEqual(bool(build_args), expected)
                     self.assertIs(
                         emit.call_args.args[0]["macos_skip"], not expected
                     )

@@ -20,6 +20,7 @@ Reproducing or verifying qol runtime desktop behavior (plugin windows, hotkeys, 
 - **Atomic commits** - one logical change per commit; each commit compiles and represents a working state
 - **Amend mistakes** - fix a flaw in a previous unpushed commit by amending, not a "fix the fix" commit
 - **No dead code warnings** - remove unused code or gate it behind a feature flag
+- **Debug probes type-check in release** - probe arguments must compile without evaluating in release; give probe-only symbols inert release representations
 - **Always build and test** - build, test, fmt, and clippy with real command output before reporting done or committing; never assume
 - **No pushing unless asked** - commit locally; push only when explicitly told
 

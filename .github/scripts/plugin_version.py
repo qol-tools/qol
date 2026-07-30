@@ -31,6 +31,25 @@ GLOBAL_FILES_AFFECT_ALL = {
     "rust-toolchain.toml",
 }
 GLOBAL_PREFIXES_AFFECT_ALL = (".cargo/",)
+VERSION_BUMP_SUBJECT = "chore(plugins): bump plugin versions"
+VERSION_BUMP_BOT_NAME = "github-actions[bot]"
+VERSION_BUMP_BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
+VERSION_BUMP_IDENTITY = (
+    VERSION_BUMP_BOT_NAME,
+    VERSION_BUMP_BOT_EMAIL,
+    VERSION_BUMP_BOT_NAME,
+    VERSION_BUMP_BOT_EMAIL,
+    VERSION_BUMP_SUBJECT,
+)
+VERSION_BUMP_FORMAT = "%P%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1f%s"
+VERSION_CARGO_MANIFEST_RE = re.compile(
+    r"^(?:apps/qol-tray|plugins/[A-Za-z0-9_.-]+)/Cargo\.toml$"
+)
+VERSION_PLUGIN_MANIFEST_RE = re.compile(
+    r"^plugins/[A-Za-z0-9_.-]+/plugin\.toml$"
+)
+
+
 def _reserved_plugin_ids() -> set[str]:
     lib = Path(__file__).resolve().parents[2] / "libs/qol-conventions/src/lib.rs"
     match = re.search(
@@ -354,6 +373,168 @@ def toml_from_git(root: Path, sha: str, path: str) -> dict | None:
     if text is None:
         return None
     return tomllib.loads(text)
+
+
+def version_bump_commit(root: Path, sha: str) -> tuple[str, set[str]]:
+    metadata = run_git(
+        ["show", "-s", f"--format={VERSION_BUMP_FORMAT}", sha],
+        root,
+    ).strip()
+    values = metadata.split("\x1f")
+    if len(values) != 6:
+        raise RuntimeError(f"invalid version bump metadata for {sha}")
+    (
+        parents,
+        author_name,
+        author_email,
+        committer_name,
+        committer_email,
+        subject,
+    ) = values
+    parent_shas = parents.split()
+    if len(parent_shas) != 1:
+        raise RuntimeError("version bump must have exactly one parent")
+    identity = (
+        author_name,
+        author_email,
+        committer_name,
+        committer_email,
+        subject,
+    )
+    if identity != VERSION_BUMP_IDENTITY:
+        raise RuntimeError("source commit is not an exact GitHub Actions version bump")
+    changed = run_git(
+        ["diff-tree", "--no-commit-id", "--name-status", "-r", sha],
+        root,
+    )
+    paths = set()
+    for line in changed.splitlines():
+        fields = line.split("\t")
+        if len(fields) != 2 or fields[0] != "M":
+            raise RuntimeError("version bump may only modify existing files")
+        paths.add(fields[1])
+    allowed = {
+        path
+        for path in paths
+        if path == ROOT_LOCKFILE
+        or VERSION_CARGO_MANIFEST_RE.fullmatch(path)
+        or VERSION_PLUGIN_MANIFEST_RE.fullmatch(path)
+    }
+    if paths != allowed or ROOT_LOCKFILE not in paths:
+        raise RuntimeError("version bump changed files outside the version contract")
+    return parent_shas[0], paths
+
+
+def manifest_version_transition(
+    root: Path,
+    parent: str,
+    sha: str,
+    path: str,
+    table: str,
+) -> tuple[str, str]:
+    before_text = file_at_commit(root, parent, path)
+    after_text = file_at_commit(root, sha, path)
+    if before_text is None or after_text is None:
+        raise RuntimeError(f"version bump cannot read {path}")
+    before = tomllib.loads(before_text)
+    after = tomllib.loads(after_text)
+    try:
+        old = str(before[table]["version"])
+        new = str(after[table]["version"])
+        before[table]["version"] = new
+    except (KeyError, TypeError) as error:
+        raise RuntimeError(
+            f"version bump cannot resolve {table}.version in {path}"
+        ) from error
+    parse_semver(old)
+    parse_semver(new)
+    if before != after or not version_greater(new, old):
+        raise RuntimeError(
+            f"version bump changed more than {table}.version in {path}"
+        )
+    return old, new
+
+
+def lock_version_transitions(
+    root: Path,
+    parent: str,
+    sha: str,
+) -> dict[str, tuple[str, str]]:
+    before_text = file_at_commit(root, parent, ROOT_LOCKFILE)
+    after_text = file_at_commit(root, sha, ROOT_LOCKFILE)
+    if before_text is None or after_text is None:
+        raise RuntimeError("version bump cannot read Cargo.lock")
+    before = tomllib.loads(before_text)
+    after = tomllib.loads(after_text)
+    before_packages = before.pop("package", [])
+    after_packages = after.pop("package", [])
+    if before != after or len(before_packages) != len(after_packages):
+        raise RuntimeError("version bump changed Cargo.lock structure")
+    transitions = {}
+    for before_package, after_package in zip(
+        before_packages,
+        after_packages,
+        strict=True,
+    ):
+        if before_package == after_package:
+            continue
+        normalized = dict(before_package)
+        normalized["version"] = after_package.get("version")
+        if normalized != after_package:
+            raise RuntimeError(
+                "version bump changed Cargo.lock beyond package versions"
+            )
+        name = str(after_package.get("name", ""))
+        old = str(before_package.get("version", ""))
+        new = str(after_package.get("version", ""))
+        if not name or name in transitions:
+            raise RuntimeError("version bump has ambiguous Cargo.lock package changes")
+        transitions[name] = (old, new)
+    return transitions
+
+
+def verified_version_bump_parent(root: Path, sha: str) -> str:
+    parent, paths = version_bump_commit(root, sha)
+    cargo_paths = sorted(
+        path for path in paths if VERSION_CARGO_MANIFEST_RE.fullmatch(path)
+    )
+    plugin_paths = sorted(
+        path for path in paths if VERSION_PLUGIN_MANIFEST_RE.fullmatch(path)
+    )
+    if not cargo_paths:
+        raise RuntimeError("version bump has no release-unit manifests")
+    cargo_by_directory = {}
+    cargo_by_package = {}
+    for path in cargo_paths:
+        transition = manifest_version_transition(
+            root,
+            parent,
+            sha,
+            path,
+            "package",
+        )
+        data = toml_from_git(root, sha, path)
+        package = str(data["package"]["name"]) if data else ""
+        if not package or package in cargo_by_package:
+            raise RuntimeError("version bump has ambiguous release-unit packages")
+        cargo_by_directory[str(Path(path).parent)] = transition
+        cargo_by_package[package] = transition
+    expected_plugin_dirs = {
+        directory
+        for directory in cargo_by_directory
+        if directory.startswith("plugins/")
+    }
+    actual_plugin_dirs = {str(Path(path).parent) for path in plugin_paths}
+    if expected_plugin_dirs != actual_plugin_dirs:
+        raise RuntimeError("version bump Cargo and plugin manifests do not match")
+    for path in plugin_paths:
+        directory = str(Path(path).parent)
+        transition = manifest_version_transition(root, parent, sha, path, "plugin")
+        if transition != cargo_by_directory[directory]:
+            raise RuntimeError(f"version bump manifest versions differ in {directory}")
+    if lock_version_transitions(root, parent, sha) != cargo_by_package:
+        raise RuntimeError("version bump Cargo.lock versions do not match manifests")
+    return parent
 
 
 def changed_workspace_dependencies(before: dict, after: dict) -> frozenset[str]:

@@ -55,12 +55,13 @@ mod tests {
     #[test]
     fn bounded_line_does_not_wait_for_newline_after_limit() {
         let (mut writer, reader) = LocalStream::pair().unwrap();
-        writer
-            .write_all(&vec![b'a'; crate::local_ipc::MAX_MESSAGE_BYTES + 1])
-            .unwrap();
+        let writer = std::thread::spawn(move || {
+            writer.write_all(&vec![b'a'; crate::local_ipc::MAX_MESSAGE_BYTES + 1])
+        });
         let mut reader = BufReader::new(reader);
 
         let result = crate::local_ipc::read_line(&mut reader);
+        writer.join().unwrap().unwrap();
 
         assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidData);
     }

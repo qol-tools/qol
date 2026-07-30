@@ -21,11 +21,14 @@ jobs:
     name: Plan affected crates
     if: "${{ !startsWith(github.event.head_commit.message, 'chore(plugins): bump plugin versions') }}"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     outputs:
       ubuntu_clippy: ${{ steps.affected.outputs.ubuntu_clippy }}
+      ubuntu_build: ${{ steps.affected.outputs.ubuntu_build }}
       ubuntu_test: ${{ steps.affected.outputs.ubuntu_test }}
       ubuntu_skip: ${{ steps.affected.outputs.ubuntu_skip }}
       macos_clippy: ${{ steps.affected.outputs.macos_clippy }}
+      macos_build: ${{ steps.affected.outputs.macos_build }}
       macos_test: ${{ steps.affected.outputs.macos_test }}
       macos_skip: ${{ steps.affected.outputs.macos_skip }}
       windows_process: ${{ steps.affected.outputs.windows_process }}
@@ -58,16 +61,19 @@ jobs:
   check:
     name: lint + test (${{ matrix.os }})
     needs: plan
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             clippy_args: ${{ needs.plan.outputs.ubuntu_clippy }}
+            build_args: ${{ needs.plan.outputs.ubuntu_build }}
             test_args: ${{ needs.plan.outputs.ubuntu_test }}
             skip: ${{ needs.plan.outputs.ubuntu_skip }}
           - os: macos-latest
             clippy_args: ${{ needs.plan.outputs.macos_clippy }}
+            build_args: ${{ needs.plan.outputs.macos_build }}
             test_args: ${{ needs.plan.outputs.macos_test }}
             skip: ${{ needs.plan.outputs.macos_skip }}
     runs-on: ${{ matrix.os }}
@@ -111,6 +117,13 @@ jobs:
         env:
           CLIPPY_ARGS: ${{ matrix.clippy_args }}
         run: cargo clippy $CLIPPY_ARGS -- -D warnings
+
+      - name: Release profile build
+        if: matrix.skip != 'true'
+        env:
+          BUILD_ARGS: ${{ matrix.build_args }}
+          RUSTFLAGS: -D warnings
+        run: cargo build --release $BUILD_ARGS
 
       - name: Test
         if: runner.os == 'Linux' && matrix.skip != 'true'

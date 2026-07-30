@@ -79,14 +79,22 @@ impl AltTabApp {
         let show_id = _show_id
             .map(|id| id.to_string())
             .unwrap_or_else(|| "none".to_string());
+        #[cfg(not(debug_assertions))]
+        let show_id = "none";
         #[cfg(debug_assertions)]
         let before = self.focus_handle.is_focused(window);
+        #[cfg(not(debug_assertions))]
+        let before = false;
         window.focus(&self.focus_handle);
         window.activate_window();
         #[cfg(debug_assertions)]
         let after = self.focus_handle.is_focused(window);
+        #[cfg(not(debug_assertions))]
+        let after = false;
         #[cfg(debug_assertions)]
         let visible = PICKER_VISIBLE.load(Ordering::Relaxed);
+        #[cfg(not(debug_assertions))]
+        let visible = false;
         qol_runtime::probe!(
             "KEY_FOCUS",
             "phase={_phase} show_id={show_id} before={before} after={after} visible={visible} title={}",
@@ -407,11 +415,10 @@ impl AltTabApp {
 
     pub(crate) fn ensure_live_preview(&mut self, cx: &mut Context<Self>) {
         if !self.rendering.captures_live_selection() {
-            #[cfg(debug_assertions)]
-            let backend = self.rendering.preview_plane_backend().unwrap_or("none");
             qol_runtime::probe!(
                 "PREVIEW_LIVE",
-                "outcome=skipped reason=preview_plane backend={backend}"
+                "outcome=skipped reason=preview_plane backend={}",
+                self.rendering.preview_plane_backend().unwrap_or("none")
             );
             return;
         }

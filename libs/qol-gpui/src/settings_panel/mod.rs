@@ -310,8 +310,12 @@ pub async fn prepare_from_async(
 ) -> anyhow::Result<PreparedSettingsPanel> {
     #[cfg(debug_assertions)]
     let plugin_id = panel.plugin_id.clone();
+    #[cfg(not(debug_assertions))]
+    let plugin_id = String::new();
     #[cfg(debug_assertions)]
-    let started = std::time::Instant::now();
+    let started = Some(std::time::Instant::now());
+    #[cfg(not(debug_assertions))]
+    let started = None::<std::time::Instant>;
     let prepared = cx
         .background_spawn(async move { prepare_panel(panel, runtime) })
         .await;
@@ -319,7 +323,9 @@ pub async fn prepare_from_async(
         "SURFACE_ACTIVATION",
         "plugin={plugin_id} phase=prepared outcome={} elapsed_ms={}",
         if prepared.is_ok() { "ready" } else { "failed" },
-        started.elapsed().as_millis()
+        started
+            .map(|started| started.elapsed().as_millis())
+            .unwrap_or(0)
     );
     prepared
 }

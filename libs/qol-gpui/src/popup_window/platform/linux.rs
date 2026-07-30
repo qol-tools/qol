@@ -257,6 +257,8 @@ pub fn park_window_by_title(title: &str) -> bool {
 pub fn prepare_window_reveal_by_title(title: &str) -> bool {
     #[cfg(debug_assertions)]
     let reason = crate::popup_window::change_reason();
+    #[cfg(not(debug_assertions))]
+    let reason = "";
     let Some((conn, screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
         return false;
@@ -370,6 +372,8 @@ pub fn hide_for_capture(title: &str, _window: &mut gpui::Window) -> bool {
 fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
     #[cfg(debug_assertions)]
     let reason = crate::popup_window::change_reason();
+    #[cfg(not(debug_assertions))]
+    let reason = "";
     let target = opacity_to_cardinal(opacity);
     let Some((conn, screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
@@ -430,6 +434,8 @@ fn show_window_by_title_with_focus(
 ) -> bool {
     #[cfg(debug_assertions)]
     let reason = crate::popup_window::change_reason();
+    #[cfg(not(debug_assertions))]
+    let reason = "";
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
         return false;

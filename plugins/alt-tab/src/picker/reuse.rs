@@ -33,7 +33,9 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
     let reason = format!("show#{}", req.show_id);
     let _reason = qol_gpui::popup_window::reason_scope(reason);
     #[cfg(debug_assertions)]
-    let t_show = std::time::Instant::now();
+    let t_show = Some(std::time::Instant::now());
+    #[cfg(not(debug_assertions))]
+    let t_show = None::<std::time::Instant>;
     req.handle
         .update(cx, |view, window: &mut Window, cx| {
             let was_visible = PICKER_VISIBLE.swap(true, Ordering::Relaxed);
@@ -89,12 +91,17 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
             let painted_for_frame = painted.clone();
             #[cfg(debug_assertions)]
             let show_id = req.show_id;
+            #[cfg(not(debug_assertions))]
+            let show_id = 0;
             window.on_next_frame(move |_, _| {
                 painted_for_frame.store(true, Ordering::Release);
                 qol_runtime::probe!(
                     "SHOW_PAINTED",
                     "show_id={show_id} frame={}ms",
-                    t_show.elapsed().as_millis()
+                    t_show
+                        .as_ref()
+                        .map(|started| started.elapsed().as_millis())
+                        .unwrap_or(0)
                 );
             });
             cx.spawn(move |_, cx: &mut AsyncApp| {

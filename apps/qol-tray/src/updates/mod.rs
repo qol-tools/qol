@@ -65,21 +65,18 @@ pub async fn download_and_install(events: std::sync::Arc<crate::daemon::EventBus
     platform::download_and_install(events).await
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(super) enum UpdateTargetMatch {
-    Exact,
-    #[cfg(target_os = "macos")]
-    Compatible,
-}
-
 pub(super) fn verify_host_update(
     path: &Path,
     expected_version: Option<&str>,
-    target_match: UpdateTargetMatch,
+    target_expectation: fn(
+        qol_artifact::ArtifactExpectation,
+        &str,
+    ) -> qol_artifact::ArtifactExpectation,
 ) -> Result<()> {
     let running = qol_conventions::artifact::current()
         .ok_or_else(|| anyhow::anyhow!("running build identity is unavailable"))?;
-    let expectation = host_update_expectation(&running.target, expected_version, target_match);
+    let expectation =
+        host_update_expectation(&running.target, expected_version, target_expectation);
     let inspected = qol_artifact::verify_path(path, &expectation)?;
     log::info!(
         "[artifact-identity] verified self-update binary path={} version={} slices={}",
@@ -93,18 +90,17 @@ pub(super) fn verify_host_update(
 fn host_update_expectation(
     running_target: &str,
     expected_version: Option<&str>,
-    target_match: UpdateTargetMatch,
+    target_expectation: fn(
+        qol_artifact::ArtifactExpectation,
+        &str,
+    ) -> qol_artifact::ArtifactExpectation,
 ) -> qol_artifact::ArtifactExpectation {
     let mut expectation = qol_artifact::ArtifactExpectation::production(
         qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
         qol_conventions::artifact::TRAY_PACKAGE_NAME,
         qol_conventions::artifact::BuildRole::Host,
     );
-    expectation = match target_match {
-        UpdateTargetMatch::Exact => expectation.with_exact_target(running_target),
-        #[cfg(target_os = "macos")]
-        UpdateTargetMatch::Compatible => expectation.with_compatible_target(running_target),
-    };
+    expectation = target_expectation(expectation, running_target);
     if let Some(version) = expected_version {
         expectation = expectation.with_version(version);
     }
@@ -158,7 +154,11 @@ mod tests {
     #[test]
     fn self_update_policy_rejects_wrong_version_target_and_intent() {
         let target = "x86_64-unknown-linux-gnu";
-        let expectation = host_update_expectation(target, Some("3.41.0"), UpdateTargetMatch::Exact);
+        let expectation = host_update_expectation(
+            target,
+            Some("3.41.0"),
+            qol_artifact::ArtifactExpectation::with_exact_target,
+        );
         qol_artifact::verify_identity(&update_identity("3.41.0", target), &expectation).unwrap();
 
         let wrong_version = update_identity("3.40.6", target);

@@ -61,8 +61,6 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     crate::actions::cancel_pending_activation();
     let is_visible = PICKER_VISIBLE.load(Ordering::Relaxed);
     let placement = resolve_placement(req.tracker, req.current, is_visible);
-    #[cfg(debug_assertions)]
-    let target = placement.target();
     let rendering = RenderingFlow::current();
     qol_runtime::probe!(
         "OPEN_PICKER",
@@ -70,10 +68,10 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
         req.show_id,
         req.reverse,
         is_visible,
-        target.x,
-        target.y,
-        target.width,
-        target.height,
+        placement.target().x,
+        placement.target().y,
+        placement.target().width,
+        placement.target().height,
     );
     rendering.trace_show(req.show_id);
 
@@ -110,12 +108,11 @@ fn seed_frontmost_preview(
     cx: &mut App,
 ) {
     if !rendering.captures_on_open() {
-        #[cfg(debug_assertions)]
-        let backend = rendering.preview_plane_backend().unwrap_or("none");
         qol_runtime::probe!(
             "PREVIEW_CAPTURE",
-            "show_id={} source=on_open outcome=skipped reason=preview_plane backend={backend}",
-            req.show_id
+            "show_id={} source=on_open outcome=skipped reason=preview_plane backend={}",
+            req.show_id,
+            rendering.preview_plane_backend().unwrap_or("none")
         );
         return;
     }

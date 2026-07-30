@@ -1,5 +1,8 @@
 import importlib.util
+import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -36,6 +39,17 @@ def package_map(*names: str) -> dict:
         )
         for name in names
     }
+
+
+def git(root: Path, *args: str, env: dict[str, str] | None = None) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    return result.stdout.strip()
 
 
 class DiscoverPluginsTests(unittest.TestCase):
@@ -191,6 +205,106 @@ class ApplyHostPlanTests(unittest.TestCase):
         self.assertEqual(pv.package_version(crate / "Cargo.toml"), "3.17.0")
         self.assertIn('version = "3.17.0"', (self.root / "Cargo.lock").read_text())
         self.assertFalse((crate / "plugin.toml").exists(), "host release must not create a plugin.toml")
+
+
+class VersionBumpCommitTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        git(self.root, "init", "--quiet")
+        git(self.root, "config", "user.name", "Fixture")
+        git(self.root, "config", "user.email", "fixture@example.invalid")
+        write_host(self.root, "apps/qol-tray", "qol-tray", "3.40.5")
+        write_plugin(
+            self.root / "plugins",
+            "fixture",
+            "plugin-fixture",
+            "1.2.3",
+            "fixture-package",
+        )
+        (self.root / "Cargo.lock").write_text(
+            'version = 4\n\n'
+            '[[package]]\nname = "fixture-package"\nversion = "1.2.3"\n\n'
+            '[[package]]\nname = "qol-tray"\nversion = "3.40.5"\n'
+        )
+        git(self.root, "add", ".")
+        git(self.root, "commit", "--quiet", "-m", "feat: baseline")
+        self.parent = git(self.root, "rev-parse", "HEAD")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def replace(self, path: str, old: str, new: str) -> None:
+        target = self.root / path
+        target.write_text(target.read_text().replace(old, new))
+
+    def commit(self, bot: bool = True) -> str:
+        git(self.root, "add", ".")
+        if not bot:
+            git(self.root, "commit", "--quiet", "-m", pv.VERSION_BUMP_SUBJECT)
+            return git(self.root, "rev-parse", "HEAD")
+        env = dict(os.environ)
+        env.update(
+            {
+                "GIT_AUTHOR_NAME": pv.VERSION_BUMP_BOT_NAME,
+                "GIT_AUTHOR_EMAIL": pv.VERSION_BUMP_BOT_EMAIL,
+                "GIT_COMMITTER_NAME": pv.VERSION_BUMP_BOT_NAME,
+                "GIT_COMMITTER_EMAIL": pv.VERSION_BUMP_BOT_EMAIL,
+            }
+        )
+        git(
+            self.root,
+            "commit",
+            "--quiet",
+            "-m",
+            pv.VERSION_BUMP_SUBJECT,
+            env=env,
+        )
+        return git(self.root, "rev-parse", "HEAD")
+
+    def test_accepts_matching_release_unit_and_lock_versions(self):
+        changes = [
+            ("apps/qol-tray/Cargo.toml", "3.40.5", "3.40.6"),
+            ("plugins/fixture/Cargo.toml", "1.2.3", "1.3.0"),
+            ("plugins/fixture/plugin.toml", "1.2.3", "1.3.0"),
+            ("Cargo.lock", "3.40.5", "3.40.6"),
+            ("Cargo.lock", "1.2.3", "1.3.0"),
+        ]
+        for path, old, new in changes:
+            self.replace(path, old, new)
+        sha = self.commit()
+
+        self.assertEqual(
+            pv.verified_version_bump_parent(self.root, sha),
+            self.parent,
+        )
+
+    def test_rejects_manifest_changes_beyond_versions(self):
+        self.replace("apps/qol-tray/Cargo.toml", "3.40.5", "3.40.6")
+        self.replace("Cargo.lock", "3.40.5", "3.40.6")
+        with (self.root / "apps/qol-tray/Cargo.toml").open("a") as handle:
+            handle.write('description = "changed"\n')
+        sha = self.commit()
+
+        with self.assertRaisesRegex(RuntimeError, "changed more than"):
+            pv.verified_version_bump_parent(self.root, sha)
+
+    def test_rejects_mismatched_plugin_versions(self):
+        self.replace("plugins/fixture/Cargo.toml", "1.2.3", "1.2.4")
+        self.replace("plugins/fixture/plugin.toml", "1.2.3", "1.3.0")
+        self.replace("Cargo.lock", "1.2.3", "1.2.4")
+        sha = self.commit()
+
+        with self.assertRaisesRegex(RuntimeError, "versions differ"):
+            pv.verified_version_bump_parent(self.root, sha)
+
+    def test_rejects_non_bot_commits(self):
+        self.replace("apps/qol-tray/Cargo.toml", "3.40.5", "3.40.6")
+        self.replace("Cargo.lock", "3.40.5", "3.40.6")
+        sha = self.commit(bot=False)
+
+        with self.assertRaisesRegex(RuntimeError, "not an exact"):
+            pv.verified_version_bump_parent(self.root, sha)
 
 
 class HighestVersionTagTests(unittest.TestCase):

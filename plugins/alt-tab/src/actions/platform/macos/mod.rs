@@ -33,6 +33,17 @@ extern "C" {
 
 static ACTIVATE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+#[cfg(not(debug_assertions))]
+#[derive(Clone, Copy)]
+struct ProbeInstant;
+
+#[cfg(not(debug_assertions))]
+impl ProbeInstant {
+    fn elapsed(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+}
+
 pub fn cancel_pending_activation() {
     ACTIVATE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
@@ -41,11 +52,15 @@ pub fn activate_window(window_id: u32) {
     let commit_gen = ACTIVATE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     #[cfg(debug_assertions)]
     let started = std::time::Instant::now();
+    #[cfg(not(debug_assertions))]
+    let started = ProbeInstant;
     let Some((pid, title)) = cg_window_pid_and_title(window_id) else {
         return;
     };
     #[cfg(debug_assertions)]
     let lookup_ms = started.elapsed().as_millis();
+    #[cfg(not(debug_assertions))]
+    let lookup_ms = 0_u128;
     qol_runtime::probe!("ACTIVATE_WIN", "wid={window_id} title=\"{title}\"");
     qol_runtime::probe!(
         "ACTIVATE_STACK",
@@ -67,6 +82,8 @@ pub fn activate_window(window_id: u32) {
     }
     #[cfg(debug_assertions)]
     let ax_ms = started.elapsed().as_millis() - lookup_ms;
+    #[cfg(not(debug_assertions))]
+    let ax_ms = 0_u128;
     let forced = force_front(pid, window_id);
     if !forced {
         ns_activate_app(pid);
@@ -179,7 +196,6 @@ pub fn activate_window(window_id: u32) {
     );
 }
 
-#[cfg(debug_assertions)]
 fn stack_snapshot() -> String {
     let list = copy_window_list_timed(
         K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,

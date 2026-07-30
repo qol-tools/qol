@@ -251,13 +251,11 @@ pub(super) fn spawn_preview_fill(req: PreviewFillRequest, cx: &mut App) {
     }
     let rendering = crate::rendering::RenderingFlow::current();
     if !rendering.captures_preview_fill() {
-        #[cfg(debug_assertions)]
-        let backend = rendering.preview_plane_backend().unwrap_or("none");
-        #[cfg(debug_assertions)]
-        let visible = crate::app::PICKER_VISIBLE.load(Ordering::Relaxed);
         qol_runtime::probe!(
             "PREVIEW_CAPTURE",
-            "source=fill outcome=skipped reason=preview_plane backend={backend} visible={visible} refresh_frontmost={} refresh_previous_frontmost={}",
+            "source=fill outcome=skipped reason=preview_plane backend={} visible={} refresh_frontmost={} refresh_previous_frontmost={}",
+            rendering.preview_plane_backend().unwrap_or("none"),
+            crate::app::PICKER_VISIBLE.load(Ordering::Relaxed),
             req.refresh_frontmost,
             req.refresh_previous_frontmost
         );
