@@ -184,7 +184,7 @@ pub fn reconcile_plugin_shortcuts<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::model::ShortcutAction;
+    use super::super::model::{ShortcutAction, ShortcutSource};
     use super::*;
     use std::sync::{Arc, Barrier};
 
@@ -199,6 +199,22 @@ mod tests {
                 url: url.to_string(),
                 browser_override: None,
             },
+        }
+    }
+
+    fn plugin_source(plugin_id: &str, shortcut_id: &str) -> ShortcutSource {
+        ShortcutSource::PluginManifest {
+            plugin_id: plugin_id.to_string(),
+            shortcut_id: shortcut_id.to_string(),
+        }
+    }
+
+    fn source_key(shortcut: &Shortcut) -> Option<(String, String)> {
+        match shortcut.source.as_ref()? {
+            ShortcutSource::PluginManifest {
+                plugin_id,
+                shortcut_id,
+            } => Some((plugin_id.clone(), shortcut_id.clone())),
         }
     }
 
@@ -228,6 +244,46 @@ mod tests {
             cfg.shortcuts.is_empty(),
             "invalid add must not mutate state"
         );
+    }
+
+    #[test]
+    fn add_rejects_a_caller_supplied_plugin_source() {
+        let mut cfg = ShortcutsConfig::default();
+        let mut forged = url_shortcut("forged", "Forged", "https://x.io");
+        forged.source = Some(plugin_source("plugin-ghost", "open"));
+
+        let err = add(&mut cfg, forged).unwrap_err();
+
+        assert!(err.contains("source"), "err: {err}");
+        assert!(
+            cfg.shortcuts.is_empty(),
+            "a shortcut qol-tray would later reconcile away must never be stored"
+        );
+    }
+
+    #[test]
+    fn update_keeps_the_stored_source_whatever_the_request_claims() {
+        let mut managed = url_shortcut("plugin-lights-open", "Lights", "https://x.io");
+        managed.source = Some(plugin_source("plugin-lights", "open"));
+        let mut cfg = ShortcutsConfig {
+            shortcuts: vec![managed, url_shortcut("user", "User", "https://x.io")],
+        };
+        let mut forged = url_shortcut("user", "User", "https://x.io");
+        forged.source = Some(plugin_source("plugin-ghost", "open"));
+        let cases = [
+            (
+                url_shortcut("plugin-lights-open", "Renamed", "https://x.io"),
+                Some(("plugin-lights".to_string(), "open".to_string())),
+            ),
+            (forged, None),
+        ];
+
+        for (request, expected) in cases {
+            let id = request.id.clone();
+            update(&mut cfg, request).unwrap();
+            let stored = find_by_id(&cfg, &id).unwrap();
+            assert_eq!(source_key(&stored), expected, "id: {id}");
+        }
     }
 
     #[test]
