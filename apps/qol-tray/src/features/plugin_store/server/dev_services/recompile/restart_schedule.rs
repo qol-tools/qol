@@ -31,11 +31,23 @@ pub(super) fn schedule_self_restart_after_idle(
             });
             return;
         };
+        let staged = match restart.stage_restart_binary(&repo_root, &restart_binary) {
+            Ok(staged) => staged,
+            Err(message) => {
+                events.send(crate::daemon::DaemonEvent::SelfRecompileFailed {
+                    message: message.clone(),
+                });
+                log::error!("Self recompile runtime staging failed: {message}");
+                runtime.clear_restart_pending();
+                return;
+            }
+        };
         exec_restart_after_cleanup(
             plugin_manager,
             runtime.as_ref(),
             restart.as_ref(),
-            &restart_binary,
+            &repo_root,
+            &staged,
             worktree_branch.as_deref(),
             events.as_ref(),
         );
@@ -88,7 +100,8 @@ fn exec_restart_after_cleanup(
     plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>,
     runtime: &DevRuntimeService,
     restart: &dyn RestartPort,
-    restart_binary: &Path,
+    repo_root: &Path,
+    staged: &qol_dev_build::tray::StagedRuntimeGeneration,
     worktree_branch: Option<&str>,
     events: &crate::daemon::EventBus,
 ) {
@@ -117,10 +130,20 @@ fn exec_restart_after_cleanup(
         || std::env::remove_var("QOL_DEV_WORKTREE_BRANCH"),
         |branch| std::env::set_var("QOL_DEV_WORKTREE_BRANCH", branch),
     );
-    if let Err(error) = restart.exec_restart(restart_binary) {
+    let current = std::env::current_exe()
+        .ok()
+        .map(qol_conventions::artifact::normalized_executable);
+    let mut protected = vec![staged.executable()];
+    if let Some(current) = current.as_deref() {
+        protected.push(current);
+    }
+    if let Err(error) = qol_dev_build::tray::prune_runtime_generations(repo_root, &protected) {
+        log::warn!("Self recompile runtime prune failed: {error}");
+    }
+    if let Err(error) = restart.exec_restart(staged.executable()) {
         log::error!(
             "Self recompile exec restart failed for {}: {}",
-            restart_binary.display(),
+            staged.executable().display(),
             error
         );
         runtime.clear_restart_pending();

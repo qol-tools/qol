@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Receiver;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -238,9 +238,11 @@ fn hand_off_to_prebuilt(
     if let Some(note) = note {
         dash.push_log(note);
     }
-    let binary = crate::commands::dev::dev_binary_path(&target.root);
+    let built_binary = crate::commands::dev::dev_binary_path(&target.root);
+    let runtime = qol_dev_build::tray::stage_runtime_generation(&target.root, &built_binary)
+        .map_err(anyhow::Error::msg)?;
     let run_root = crate::commands::dev::dev_run_root(&target.root);
-    let (next, next_lines, ready) = start_shadow_generation(&run_root, &binary, dash)?;
+    let (next, next_lines, ready) = start_shadow_generation(&run_root, &runtime, dash)?;
     let mut next = TrayHandle::Owned(next);
     if let Err(error) = retire_child_for_handoff(child) {
         terminate_child(&mut next);
@@ -259,6 +261,11 @@ fn hand_off_to_prebuilt(
     dash.adopt_running_worktree(run_root);
     *child = next;
     *lines = next_lines;
+    if let Err(error) =
+        qol_dev_build::tray::prune_runtime_generations(&target.root, &[runtime.executable()])
+    {
+        dash.push_log(format!("[qol dev] runtime prune failed: {error}"));
+    }
     repair_autostart_after_promotion(dash, &root);
     dash.pokes.doctor = true;
     dash.pokes.links = true;
@@ -302,18 +309,24 @@ fn autostart_repair_command(root: &Path, binary: &Path) -> Command {
 
 fn start_shadow_generation(
     root: &Path,
-    binary: &Path,
+    runtime: &qol_dev_build::tray::StagedRuntimeGeneration,
     dash: &mut Dash,
 ) -> Result<(Child, Receiver<String>, ShadowGenerationReady)> {
-    let generation_id = shadow_generation_id();
-    let ready_file = shadow_ready_file(root, &generation_id);
+    let ready_file = shadow_ready_file(root, runtime.id());
     let _ = fs::remove_file(&ready_file);
     dash.push_log(format!(
-        "[qol dev] booting successor generation {generation_id}"
+        "[qol dev] booting successor generation {}",
+        runtime.id()
     ));
-    let mut child = shadow_generation_command(root, binary, &generation_id, &ready_file)
-        .spawn()
-        .with_context(|| format!("failed to start successor {}", binary.display()))?;
+    let mut child =
+        shadow_generation_command(root, runtime.executable(), runtime.id(), &ready_file)
+            .spawn()
+            .with_context(|| {
+                format!(
+                    "failed to start successor {}",
+                    runtime.executable().display()
+                )
+            })?;
     let rx = spawn_forwarders(&mut child);
     let ready = match wait_for_shadow_ready(&ready_file, &mut child, &rx, dash) {
         Ok(ready) => ready,
@@ -364,14 +377,6 @@ fn promote_shadow_generation(
         Some(error) => bail!("stable dev API did not promote: {error}"),
         None => bail!("stable dev API did not become healthy after promotion"),
     }
-}
-
-fn shadow_generation_id() -> String {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default();
-    format!("{}-{millis}", std::process::id())
 }
 
 fn shadow_ready_file(root: &Path, generation_id: &str) -> PathBuf {

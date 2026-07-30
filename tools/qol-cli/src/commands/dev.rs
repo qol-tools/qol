@@ -67,7 +67,9 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         target.branch.as_deref(),
     )?;
     let run_root = dev_run_root(&target.root);
-    let binary = build_qol_tray_dev(&target.root, verbose)?;
+    let built_binary = build_qol_tray_dev(&target.root, verbose)?;
+    let runtime = qol_dev_build::tray::stage_runtime_generation(&target.root, &built_binary)
+        .map_err(anyhow::Error::msg)?;
     apply_marker_update(&plan.marker_update)?;
     let shutdown_method = crate::dev_shutdown::stop_existing_tray()?;
     let shutdown_detail = match shutdown_method {
@@ -75,15 +77,18 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         ShutdownMethod::Forced => "previous tray required fallback cleanup",
     };
     dev_step_label("stop", StepKind::Info, shutdown_detail, verbose);
+    if let Err(error) =
+        qol_dev_build::tray::prune_runtime_generations(&target.root, &[runtime.executable()])
+    {
+        dev_step_label("prune", StepKind::Info, &error, verbose);
+    }
     dev_step_label(
         "run",
         StepKind::Pending,
-        &binary.display().to_string(),
+        &runtime.executable().display().to_string(),
         verbose,
     );
-    let mut child = Command::new(&binary)
-        .current_dir(&run_root)
-        .arg("--write-mode=dev")
+    let mut child = dev_runtime_command(&run_root, &runtime)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -202,6 +207,15 @@ fn handle_session_end(end: dev_console::SessionEnd) -> Result<()> {
             crate::self_exec::replace_with(&binary, tray_pid)
         }
     }
+}
+
+fn dev_runtime_command(
+    run_root: &Path,
+    runtime: &qol_dev_build::tray::StagedRuntimeGeneration,
+) -> Command {
+    let mut command = Command::new(runtime.executable());
+    command.current_dir(run_root).arg("--write-mode=dev");
+    command
 }
 
 fn finish_boot(

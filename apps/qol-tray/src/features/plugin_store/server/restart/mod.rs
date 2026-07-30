@@ -10,6 +10,13 @@ pub(super) trait RestartPort: Send + Sync {
     fn binary_at(&self, dir: &Path) -> PathBuf {
         qol_dev_build::tray::debug_binary_path(dir, platform::binary_name())
     }
+    fn stage_restart_binary(
+        &self,
+        root: &Path,
+        binary: &Path,
+    ) -> Result<qol_dev_build::tray::StagedRuntimeGeneration, String> {
+        qol_dev_build::tray::stage_runtime_generation(root, binary)
+    }
     fn exec_restart(&self, binary: &Path) -> Result<(), String>;
 }
 
@@ -27,8 +34,9 @@ impl RestartPort for PlatformRestartPort {
 
         if let Ok(current) = std::env::current_exe() {
             candidates.push(current.clone());
-            if let Some(stripped) = strip_deleted_suffix(&current) {
-                candidates.push(stripped);
+            let normalized = qol_conventions::artifact::normalized_executable(current.clone());
+            if normalized != current {
+                candidates.push(normalized);
             }
         }
 
@@ -42,15 +50,6 @@ impl RestartPort for PlatformRestartPort {
 
 pub(super) fn default_restart_port() -> Arc<dyn RestartPort> {
     Arc::new(PlatformRestartPort)
-}
-
-fn strip_deleted_suffix(path: &Path) -> Option<PathBuf> {
-    let raw = path.to_string_lossy();
-    let stripped = raw.strip_suffix(" (deleted)")?;
-    if stripped.is_empty() {
-        return None;
-    }
-    Some(PathBuf::from(stripped))
 }
 
 #[cfg(test)]

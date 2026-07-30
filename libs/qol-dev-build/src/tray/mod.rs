@@ -1,4 +1,7 @@
 mod artifacts;
+mod runtime;
+
+pub use runtime::{prune_runtime_generations, stage_runtime_generation, StagedRuntimeGeneration};
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
