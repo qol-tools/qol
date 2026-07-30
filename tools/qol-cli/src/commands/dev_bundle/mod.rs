@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use qol_dev_env::payload::{PayloadFileSpec, PayloadImage, PreparedPayload};
@@ -80,7 +81,9 @@ pub(crate) fn prepare(worktree: &Path, run_dir: &Path) -> Result<PreparedDevBund
         .with_context(|| format!("failed to resolve worktree {}", worktree.display()))?;
     let payload_dir = run_dir.join("payload");
     let descriptor_path = payload_dir.join("bundle.json");
-    let (descriptor, mut files) = collect_bundle_files(&worktree)?;
+    let buildable = scan_buildable_plugins(&worktree)?.buildable;
+    build_bundle_artifacts(&worktree, &buildable)?;
+    let (descriptor, mut files) = collect_bundle_files(&worktree, &buildable)?;
     let encoded = serde_json::to_vec_pretty(&descriptor)
         .context("failed to encode development bundle descriptor")?;
     qol_fs::atomic_write(&descriptor_path, &encoded).with_context(|| {
@@ -115,10 +118,11 @@ pub(crate) fn prepare(worktree: &Path, run_dir: &Path) -> Result<PreparedDevBund
     })
 }
 
-fn collect_bundle_files(worktree: &Path) -> Result<(DevBundleDescriptor, Vec<PayloadFileSpec>)> {
-    let target = qol_dev_build::tray::artifact_root(worktree)
-        .join("target")
-        .join("debug");
+fn collect_bundle_files(
+    worktree: &Path,
+    buildable: &[BuildablePlugin],
+) -> Result<(DevBundleDescriptor, Vec<PayloadFileSpec>)> {
+    let target = bundle_artifact_dir(worktree);
     let mut files = vec![
         executable(&target, "qol", "bin/qol"),
         executable(&target, "qol-tray", "bin/qol-tray"),
@@ -129,8 +133,8 @@ fn collect_bundle_files(worktree: &Path) -> Result<(DevBundleDescriptor, Vec<Pay
         },
     ];
     let mut plugins = Vec::new();
-    for plugin in scan_buildable_plugins(worktree)?.buildable {
-        let parsed = parse_plugin(&plugin)?;
+    for plugin in buildable {
+        let parsed = parse_plugin(plugin)?;
         collect_plugin_files(&plugin.dir, &parsed.id, &parsed.command, &mut files)?;
         files.push(PayloadFileSpec {
             source: target.join(crate::workspace::exe_name(&parsed.command)),
@@ -141,6 +145,66 @@ fn collect_bundle_files(worktree: &Path) -> Result<(DevBundleDescriptor, Vec<Pay
     }
     plugins.sort_by(|left, right| left.id.cmp(&right.id));
     Ok((DevBundleDescriptor { schema: 1, plugins }, files))
+}
+
+fn build_bundle_artifacts(worktree: &Path, buildable: &[BuildablePlugin]) -> Result<()> {
+    if cfg!(not(target_os = "linux")) {
+        bail!("Mint Cinnamon development bundles can currently only be built on Linux hosts");
+    }
+    for mut command in bundle_build_commands(worktree, buildable) {
+        let output = command
+            .output()
+            .context("failed to start development bundle build")?;
+        if output.status.success() {
+            continue;
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        bail!(
+            "development bundle build failed with {}\n{}{}",
+            output.status,
+            stdout,
+            stderr
+        )
+    }
+    Ok(())
+}
+
+fn bundle_build_commands(worktree: &Path, buildable: &[BuildablePlugin]) -> Vec<Command> {
+    let target_dir = bundle_target_dir(worktree);
+    let mut core = Command::new("cargo");
+    core.current_dir(worktree)
+        .arg("build")
+        .arg("--target-dir")
+        .arg(&target_dir)
+        .args(["-p", "qol", "--bin", "qol"])
+        .args(["-p", "qol-tray", "--bin", "qol-tray"])
+        .args(["--features", "qol-tray/dev,qol-tray/linux_evdev"]);
+    let mut commands = vec![core];
+    if buildable.is_empty() {
+        return commands;
+    }
+    let mut plugins = Command::new("cargo");
+    plugins
+        .current_dir(worktree)
+        .arg("build")
+        .arg("--target-dir")
+        .arg(target_dir);
+    for plugin in buildable {
+        plugins.arg("-p").arg(&plugin.package_name);
+    }
+    commands.push(plugins);
+    commands
+}
+
+fn bundle_target_dir(worktree: &Path) -> PathBuf {
+    qol_dev_build::tray::artifact_root(worktree)
+        .join("target")
+        .join("qol-dev-bundle")
+}
+
+fn bundle_artifact_dir(worktree: &Path) -> PathBuf {
+    bundle_target_dir(worktree).join("debug")
 }
 
 fn executable(target: &Path, name: &str, relative: &str) -> PayloadFileSpec {
@@ -279,6 +343,53 @@ mod tests {
                 id: "plugin-a".to_string(),
                 command: "runtime-a".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn bundle_artifacts_are_isolated_from_ordinary_workspace_builds() {
+        let root = Path::new("/worktrees/qol");
+        assert_eq!(
+            bundle_artifact_dir(root),
+            root.join("target/qol-dev-bundle/debug")
+        );
+    }
+
+    #[test]
+    fn bundle_build_requests_dev_tray_cli_and_plugin_artifacts() {
+        let root = Path::new("/worktrees/qol");
+        let plugins = [BuildablePlugin {
+            dir: root.join("plugins/launcher"),
+            package_name: "launcher".to_string(),
+        }];
+        let commands = bundle_build_commands(root, &plugins);
+        assert_eq!(commands.len(), 2);
+        let core_args = commands[0]
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let plugin_args = commands[1]
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(commands[0].get_current_dir(), Some(root));
+        assert!(core_args
+            .windows(2)
+            .any(|pair| pair == ["--target-dir", "/worktrees/qol/target/qol-dev-bundle"]));
+        assert!(core_args
+            .windows(4)
+            .any(|pair| pair == ["-p", "qol-tray", "--bin", "qol-tray"]));
+        assert!(core_args
+            .windows(2)
+            .any(|pair| pair == ["--features", "qol-tray/dev,qol-tray/linux_evdev"]));
+        assert!(core_args.windows(2).any(|pair| pair == ["-p", "qol"]));
+        assert!(plugin_args
+            .windows(2)
+            .any(|pair| pair == ["-p", "launcher"]));
+        assert!(
+            !plugin_args.iter().any(|arg| arg == "--bin"),
+            "core bin selectors must not suppress plugin binaries"
         );
     }
 }
