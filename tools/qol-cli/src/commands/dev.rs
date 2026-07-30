@@ -495,7 +495,7 @@ fn build_qol_tray_dev(root: &Path, verbose: bool) -> Result<PathBuf> {
     }
     qol_dev_build::cargo_build::select_binary_executable(
         &result.artifacts,
-        &root.join("Cargo.toml"),
+        &qol_dev_build::tray::tray_manifest_path(root),
         qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
     )
     .map_err(anyhow::Error::from)

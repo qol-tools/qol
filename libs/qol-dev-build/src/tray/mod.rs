@@ -56,7 +56,7 @@ where
     if bins.is_empty() {
         return failed_build("no tray binaries requested".to_string());
     }
-    let manifest_path = root.join("Cargo.toml");
+    let manifest_path = tray_manifest_path(root);
     if let Err(error) = ensure_manifest(&manifest_path) {
         return failed_build(error);
     }
@@ -96,6 +96,10 @@ pub fn debug_binary_path(root: &Path, bin: &str) -> PathBuf {
         .join("target")
         .join("debug")
         .join(Platform.executable_name(bin))
+}
+
+pub fn tray_manifest_path(root: &Path) -> PathBuf {
+    resolve_tray_root(Some(root), root).join("Cargo.toml")
 }
 
 pub fn artifact_root(root: &Path) -> PathBuf {
@@ -358,7 +362,7 @@ where
     for bin in bins {
         let executable = match crate::cargo_build::select_binary_executable(
             &artifacts,
-            &root.join("Cargo.toml"),
+            &tray_manifest_path(root),
             bin,
         ) {
             Ok(executable) => executable,
@@ -798,5 +802,20 @@ path = \"src/main.rs\"
                 .join("debug")
                 .join(Platform.executable_name("qol-tray"))
         );
+    }
+
+    #[test]
+    fn tray_manifest_path_resolves_the_package_from_a_monorepo_root() {
+        let tmp = TempDir::new().unwrap();
+        let workspace = tmp.path().join("mono");
+        let tray_root = workspace.join("apps").join("qol-tray");
+        write_manifest(
+            &workspace,
+            "[workspace]\nmembers = [\"apps/qol-tray\"]\nresolver = \"2\"\n",
+        );
+        write_manifest(&tray_root, qol_tray_manifest());
+
+        assert_eq!(tray_manifest_path(&workspace), tray_root.join("Cargo.toml"));
+        assert_eq!(tray_manifest_path(&tray_root), tray_root.join("Cargo.toml"));
     }
 }
