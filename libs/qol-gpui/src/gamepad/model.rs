@@ -9,7 +9,6 @@ pub struct GamepadMonitor {
     pub source: Option<String>,
     pub controllers: Vec<ControllerSnapshot>,
     pub selected: usize,
-    motion_sequence: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -43,9 +42,7 @@ pub struct GamepadButton {
 pub struct GamepadAxis {
     pub index: usize,
     pub name: String,
-    pub previous_value: f32,
     pub value: f32,
-    pub animation_id: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -181,37 +178,11 @@ impl GamepadMonitor {
             return;
         };
         self.source = payload.source;
-        let mut controllers = payload
+        self.controllers = payload
             .items
             .into_iter()
             .filter_map(ControllerSnapshot::from_query)
-            .collect::<Vec<_>>();
-        for controller in &mut controllers {
-            let Some(previous) = self.controllers.iter().find(|previous| {
-                previous.vendor == controller.vendor
-                    && previous.product == controller.product
-                    && previous.name == controller.name
-            }) else {
-                continue;
-            };
-            for axis in &mut controller.axes {
-                let Some(previous_axis) = previous
-                    .axes
-                    .iter()
-                    .find(|previous_axis| previous_axis.index == axis.index)
-                else {
-                    continue;
-                };
-                axis.previous_value = previous_axis.value;
-                if (axis.value - previous_axis.value).abs() > f32::EPSILON {
-                    self.motion_sequence = self.motion_sequence.wrapping_add(1).max(1);
-                    axis.animation_id = self.motion_sequence;
-                } else {
-                    axis.animation_id = previous_axis.animation_id;
-                }
-            }
-        }
-        self.controllers = controllers;
+            .collect();
         self.selected = self.selected.min(self.controllers.len().saturating_sub(1));
         if !payload.available {
             self.status = MonitorStatus::Unavailable;
@@ -267,9 +238,7 @@ impl ControllerSnapshot {
                 .map(|axis| GamepadAxis {
                     index: axis.index,
                     name: axis.name,
-                    previous_value: axis.value.clamp(-1.0, 1.0),
                     value: axis.value.clamp(-1.0, 1.0),
-                    animation_id: 0,
                 })
                 .collect(),
             connection: value.connection.map(GamepadConnection::from_query),
@@ -334,9 +303,7 @@ impl ControllerSnapshot {
             .unwrap_or(GamepadAxis {
                 index,
                 name: String::new(),
-                previous_value: 0.0,
                 value: 0.0,
-                animation_id: 0,
             })
     }
 
@@ -616,20 +583,16 @@ mod tests {
     }
 
     #[test]
-    fn repeated_axis_queries_preserve_motion_start_and_refresh_animation_id() {
+    fn repeated_queries_track_the_freshest_axis_sample() {
         let mut monitor = GamepadMonitor::default();
         monitor.apply_query(Ok(payload(
             "Xbox Wireless Controller",
             serde_json::Value::Null,
         )));
-        let first_id = monitor.selected().expect("controller").axes[0].animation_id;
         let mut next = payload("Xbox Wireless Controller", serde_json::Value::Null);
         next["items"][0]["state"]["axes"][0]["value"] = serde_json::json!(0.25);
         monitor.apply_query(Ok(next));
 
-        let axis = &monitor.selected().expect("controller").axes[0];
-        assert_eq!(axis.previous_value, -1.0);
-        assert_eq!(axis.value, 0.25);
-        assert_ne!(axis.animation_id, first_id);
+        assert_eq!(monitor.selected().expect("controller").axes[0].value, 0.25);
     }
 }

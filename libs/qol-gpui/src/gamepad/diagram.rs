@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
@@ -9,7 +7,6 @@ const SOURCE_WIDTH: f32 = 800.0;
 const SCALE: f32 = 0.77;
 const WIDTH: f32 = SOURCE_WIDTH * SCALE;
 const HEIGHT: f32 = 500.0 * SCALE;
-const STICK_MOTION_DURATION: Duration = Duration::from_millis(54);
 
 struct ControlLayout {
     left_stick: (f32, f32),
@@ -38,7 +35,6 @@ pub fn controller_diagram(controller: &ControllerSnapshot, palette: GamepadPalet
             controller.axis_state(0),
             controller.axis_state(1),
             controller.button_pressed(10),
-            0,
             palette,
         ))
         .child(stick(
@@ -47,7 +43,6 @@ pub fn controller_diagram(controller: &ControllerSnapshot, palette: GamepadPalet
             controller.axis_state(2),
             controller.axis_state(3),
             controller.button_pressed(11),
-            1,
             palette,
         ))
         .child(dpad_control(controller, layout.dpad, palette))
@@ -455,16 +450,16 @@ fn stick(
     axis_x: GamepadAxis,
     axis_y: GamepadAxis,
     pressed: bool,
-    slot: u64,
     palette: GamepadPalette,
 ) -> Div {
     let active = pressed || axis_x.value.abs() > 0.08 || axis_y.value.abs() > 0.08;
     let gate = 114.0;
     let knob = 62.0;
     let knob_origin = (gate - knob) / 2.0;
-    let animation_id = axis_x.animation_id.max(axis_y.animation_id) * 2 + slot;
     let knob_element = div()
         .absolute()
+        .left(scaled(knob_origin + axis_x.value * 18.0))
+        .top(scaled(knob_origin + axis_y.value * 18.0))
         .w(scaled(knob))
         .h(scaled(knob))
         .rounded_full()
@@ -498,16 +493,6 @@ fn stick(
                 .font_weight(FontWeight::BOLD)
                 .text_color(rgb(palette.text))
                 .child(label),
-        )
-        .with_animation(
-            ("gamepad-stick-motion", animation_id),
-            Animation::new(STICK_MOTION_DURATION).with_easing(ease_out_quint()),
-            move |knob, progress| {
-                let x = interpolate(axis_x.previous_value, axis_x.value, progress);
-                let y = interpolate(axis_y.previous_value, axis_y.value, progress);
-                knob.left(scaled(knob_origin + x * 18.0))
-                    .top(scaled(knob_origin + y * 18.0))
-            },
         );
     div()
         .absolute()
@@ -789,10 +774,6 @@ fn round_control(
         )
 }
 
-fn interpolate(from: f32, to: f32, progress: f32) -> f32 {
-    from + (to - from) * progress
-}
-
 fn at(bounds: Bounds<Pixels>, x: f32, y: f32) -> Point<Pixels> {
     bounds.origin + point(scaled(x), scaled(y))
 }
@@ -816,7 +797,7 @@ fn alpha(color: u32, opacity: u8) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{control_layout, interpolate, ControllerProfile};
+    use super::{control_layout, ControllerProfile};
 
     #[test]
     fn native_layouts_match_the_web_controller_geometry() {
@@ -827,12 +808,5 @@ mod tests {
         assert_eq!(nintendo.dpad, (305.0, 287.0));
         assert_eq!(playstation.left_stick, (300.0, 315.0));
         assert_eq!(playstation.dpad, (190.0, 198.0));
-    }
-
-    #[test]
-    fn stick_motion_interpolates_between_native_samples() {
-        assert_eq!(interpolate(-1.0, 1.0, 0.0), -1.0);
-        assert_eq!(interpolate(-1.0, 1.0, 0.5), 0.0);
-        assert_eq!(interpolate(-1.0, 1.0, 1.0), 1.0);
     }
 }

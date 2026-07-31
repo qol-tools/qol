@@ -1,13 +1,9 @@
-use std::time::Duration;
-
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use super::diagram::controller_diagram;
 use super::model::{ConnectionBadge, GamepadButton, MonitorStatus, SignalTone};
 use super::{ControllerSnapshot, GamepadMonitor, GamepadPalette};
-
-const AXIS_MOTION_DURATION: Duration = Duration::from_millis(54);
 
 pub fn gamepad_panel(
     monitor: &GamepadMonitor,
@@ -259,9 +255,7 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
         .flex_wrap()
         .gap_1()
         .children(controller.axes.iter().map(|axis| {
-            let previous_position = (axis.previous_value + 1.0) / 2.0;
             let position = (axis.value + 1.0) / 2.0;
-            let animation_id = axis.animation_id * 256 + axis.index as u64;
             div()
                 .flex()
                 .w(relative(0.495))
@@ -288,6 +282,7 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
                                 .absolute()
                                 .top(px(-2.0))
                                 .ml(px(-4.0))
+                                .left(relative(position))
                                 .w(px(8.0))
                                 .h(px(9.0))
                                 .rounded_full()
@@ -295,19 +290,7 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
                                     palette.accent
                                 } else {
                                     palette.text_muted
-                                }))
-                                .with_animation(
-                                    ("gamepad-axis-motion", animation_id),
-                                    Animation::new(AXIS_MOTION_DURATION)
-                                        .with_easing(ease_out_quint()),
-                                    move |marker, progress| {
-                                        marker.left(relative(interpolate(
-                                            previous_position,
-                                            position,
-                                            progress,
-                                        )))
-                                    },
-                                ),
+                                })),
                         ),
                 )
                 .child(
@@ -472,10 +455,6 @@ fn tone_color(tone: SignalTone, palette: GamepadPalette) -> u32 {
         SignalTone::Danger => palette.danger,
         SignalTone::Muted => palette.text_muted,
     }
-}
-
-fn interpolate(from: f32, to: f32, progress: f32) -> f32 {
-    from + (to - from) * progress
 }
 
 fn glow(color: u32) -> Vec<BoxShadow> {

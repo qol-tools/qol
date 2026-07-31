@@ -9,4 +9,4 @@ poll_interval_ms = 3000
 
 [query.controller_input]
 description = "Native button overrides and connection metadata omitted by the browser gamepad mapping"
-poll_interval_ms = 32
+poll_interval_ms = 8
