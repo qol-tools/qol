@@ -76,7 +76,7 @@ jobs:
         run: cargo run --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
 
       - name: Install cargo-deb
-        uses: taiki-e/install-action@15449e3094499af05d8d964a1c884208e4b8b595 # v2
+        uses: taiki-e/install-action@18b1216eba7f8039b0f8d131d5473787f0edce68 # v2
         with:
           tool: cargo-deb
 
