@@ -16,7 +16,8 @@ use crate::poller::Poller;
 
 use super::activity::Activity;
 use super::render_util::{
-    accent, list_window_head, now_unix_ms, relative_age, view_content, NavigationOverflow,
+    accent, caret, cursor_window_start, list_capacity, now_unix_ms, relative_age, view_content,
+    NavigationOverflow,
 };
 use super::{Dash, View, DOCTOR_BASE_INTERVAL, DOCTOR_CAP_INTERVAL};
 
@@ -81,6 +82,7 @@ pub(super) fn apply_doctor_outcome(dash: &mut Dash, outcome: Result<DoctorRun, S
 pub(super) fn open_doctor(dash: &mut Dash) {
     dash.view = View::Doctor;
     dash.scroll_offset = 0;
+    dash.doctor_cursor = 0;
     dash.pokes.doctor = true;
 }
 
@@ -147,7 +149,13 @@ pub(super) fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Nav
         return NavigationOverflow::default();
     }
     let total = lines.len();
-    let (start, height) = list_window_head(dash, area, total);
+    let height = list_capacity(area.height);
+    dash.log_height = height;
+    if dash.doctor_cursor >= total {
+        dash.doctor_cursor = total - 1;
+    }
+    let cursor = dash.doctor_cursor;
+    let start = cursor_window_start(total, height, cursor);
     let render = if dash.armed {
         styled_doctor_line
     } else {
@@ -155,9 +163,10 @@ pub(super) fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Nav
     };
     let visible: Vec<Line> = lines
         .iter()
+        .enumerate()
         .skip(start)
         .take(height)
-        .map(|line| render(line))
+        .map(|(index, line)| render(line, index == cursor))
         .collect();
     view_content(frame, area, visible);
     NavigationOverflow::from_window(start, height, total)
@@ -195,9 +204,9 @@ fn doctor_line_style(raw: &str) -> Option<(&'static str, Color)> {
     None
 }
 
-fn styled_doctor_line(raw: &str) -> Line<'static> {
+fn styled_doctor_line(raw: &str, selected: bool) -> Line<'static> {
     let Some((symbol, color)) = doctor_line_style(raw) else {
-        return Line::from(format!("  {}", raw.trim_start()));
+        return Line::from(vec![caret(selected), raw.trim_start().to_string().into()]);
     };
     let rest = raw
         .trim_start()
@@ -206,14 +215,15 @@ fn styled_doctor_line(raw: &str) -> Line<'static> {
         .unwrap_or("")
         .trim_start();
     Line::from(vec![
-        format!("  {symbol} ").fg(color).bold(),
+        caret(selected),
+        format!("{symbol} ").fg(color).bold(),
         rest.to_string().into(),
     ])
 }
 
-fn friendly_doctor_line(raw: &str) -> Line<'static> {
+fn friendly_doctor_line(raw: &str, selected: bool) -> Line<'static> {
     let Some((symbol, color)) = doctor_line_style(raw) else {
-        return Line::from(format!("  {}", raw.trim_start()));
+        return Line::from(vec![caret(selected), raw.trim_start().to_string().into()]);
     };
     let rest = raw
         .trim_start()
@@ -222,19 +232,21 @@ fn friendly_doctor_line(raw: &str) -> Line<'static> {
         .unwrap_or("");
     let Some((id, message)) = rest.split_once(": ") else {
         return Line::from(vec![
-            format!("  {symbol} ").fg(color).bold(),
+            caret(selected),
+            format!("{symbol} ").fg(color).bold(),
             rest.to_string().into(),
         ]);
     };
-    let head = format!("  {symbol} {}", humanize_check_id(id));
+    let head = format!("{symbol} {}", humanize_check_id(id));
     if symbol == "✓" {
-        return Line::from(head.fg(color).bold());
+        return Line::from(vec![caret(selected), head.fg(color).bold()]);
     }
     let detail = message
         .split_once('\u{2014}')
         .map_or(message, |(_, tail)| tail)
         .trim();
     Line::from(vec![
+        caret(selected),
         format!("{head} - ").fg(color).bold(),
         detail.to_string().into(),
     ])
@@ -501,6 +513,7 @@ fn outcome_status_label(status: OutcomeStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dev_console::key_bindings::Action;
 
     fn span_text(spans: &[Span<'static>]) -> String {
         spans.iter().map(|span| span.content.as_ref()).collect()
@@ -740,7 +753,10 @@ mod tests {
 
     #[test]
     fn friendly_doctor_line_hides_detail_for_ok_and_keeps_it_for_warn() {
-        let ok = friendly_doctor_line("[OK] install_identity: marker and id are aligned (x)");
+        let ok = friendly_doctor_line(
+            "[OK] install_identity: marker and id are aligned (x)",
+            false,
+        );
         assert_eq!(
             ok.to_string(),
             "  ✓ Install identity",
@@ -749,12 +765,59 @@ mod tests {
 
         let warn = friendly_doctor_line(
             "[WARN] plugin_staleness: plugin staleness detected \u{2014} rebuild required: a, b",
+            false,
         );
         assert_eq!(
             warn.to_string(),
             "  ▲ Plugin staleness - rebuild required: a, b",
             "warn humanizes the name and keeps the post-dash detail",
         );
+    }
+
+    #[test]
+    fn doctor_cursor_moves_and_clamps_without_scrolling() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Doctor;
+        dash.doctor.last = Some(DoctorRun {
+            report: make_report(3, 0, 0, 0),
+            lines: vec![
+                "[OK] a: x".to_string(),
+                "[OK] b: y".to_string(),
+                "[OK] c: z".to_string(),
+            ],
+            scope: DoctorScope::Full,
+        });
+        let moves = [
+            (Action::ScrollDown, 1),
+            (Action::ScrollDown, 2),
+            (Action::ScrollDown, 2),
+            (Action::ScrollUp, 1),
+            (Action::ScrollUp, 0),
+            (Action::ScrollUp, 0),
+        ];
+        for (action, expected) in moves {
+            super::super::session::apply_action(&mut dash, action, false);
+            assert_eq!(dash.doctor_cursor, expected, "after {action:?}");
+            assert_eq!(dash.scroll_offset, 0, "after {action:?}");
+        }
+    }
+
+    #[test]
+    fn doctor_lines_carry_the_shared_selection_caret() {
+        let cases = [
+            (
+                friendly_doctor_line("[OK] install_identity: aligned", true),
+                "▸ ✓ Install identity",
+            ),
+            (
+                styled_doctor_line("[WARN] plugin_staleness: stale", true),
+                "▸ ▲ plugin_staleness: stale",
+            ),
+            (styled_doctor_line("Summary: ok=1", true), "▸ Summary: ok=1"),
+        ];
+        for (line, expected) in cases {
+            assert_eq!(line.to_string(), expected);
+        }
     }
 
     #[test]

@@ -37,6 +37,13 @@ The `qol` CLI: dev console (`qol dev`), emu workflows (`qol emu`), doctor, trace
   full inner rect via `list_capacity(area.height)` (which divides by the item
   gap); the run.log pane windows against `SignBox::capacity` for its own
   chrome. Never `area.height - N` arithmetic.
+- **One selection caret, one cursor model.** Every browsable list page marks
+  its selection with `render_util::caret(selected)` - never a hand-rolled
+  `"▸ "` span - and windows with `cursor_window_start` against a per-view
+  cursor (`cursor`, `plugin_cursor`, `emu_cursor`, `doctor_cursor`), so ↑/↓
+  move a pointer and read `move`/`select` in the keys HUD. `scroll_offset` is
+  for stream pages (logs, trace, endpoints, run.log) that have no selection;
+  a page picks one model, never both.
 - **One line per list item.** Detail lines below an item are reserved for
   failure states; healthy items earn exactly one line. Static facts that never
   change between renders (paths, versions) belong in `qol emu doctor` or the

@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style, Stylize};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::Frame;
 
@@ -20,6 +20,14 @@ pub(super) fn set_frame_accent(color: Color) {
 
 pub(super) fn accent() -> Color {
     ACCENT.with(Cell::get)
+}
+
+pub(super) fn caret(selected: bool) -> Span<'static> {
+    if selected {
+        "▸ ".fg(accent()).bold()
+    } else {
+        "  ".into()
+    }
 }
 
 pub(super) struct SignBox<'a> {
@@ -294,13 +302,6 @@ pub(super) fn list_window(dash: &mut Dash, area: Rect, total: usize) -> (usize, 
         super::window_start(total, height, dash.scroll_offset),
         height,
     )
-}
-
-pub(super) fn list_window_head(dash: &mut Dash, area: Rect, total: usize) -> (usize, usize) {
-    let height = list_capacity(area.height);
-    dash.log_height = height;
-    dash.scroll_offset = super::clamp_offset(total, height, dash.scroll_offset);
-    (dash.scroll_offset, height)
 }
 
 pub(super) fn list_status(total: usize, scroll_offset: usize) -> String {

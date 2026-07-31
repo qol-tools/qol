@@ -20,7 +20,7 @@ use qol_dev_env::{
 use qol_dev_orchestrator::{FlowStart, ImageImportStart, RunHandle, WaitState};
 
 use super::render_util::{
-    accent, cursor_window_start, list_capacity, list_window, now_unix_ms, relative_age,
+    accent, caret, cursor_window_start, list_capacity, list_window, now_unix_ms, relative_age,
     spaced_height, view_content, NavigationOverflow,
 };
 use super::{
@@ -1653,11 +1653,7 @@ pub(super) fn candidate_line(
     selected: bool,
     live_verb: Option<String>,
 ) -> Line<'static> {
-    let caret: Span<'static> = if selected {
-        "▸ ".fg(accent()).bold()
-    } else {
-        "  ".into()
-    };
+    let caret = caret(selected);
     let id_span = if selected {
         candidate.id.clone().fg(Color::White).bold()
     } else {
@@ -1687,11 +1683,7 @@ fn environment_line(
 ) -> Line<'static> {
     let environment = &snapshot.resolved;
     let color = state_color(environment.state);
-    let caret: Span<'static> = if selected {
-        "▸ ".fg(accent()).bold()
-    } else {
-        "  ".into()
-    };
+    let caret = caret(selected);
     let id_span = if selected {
         environment.definition.id.clone().fg(Color::White).bold()
     } else {

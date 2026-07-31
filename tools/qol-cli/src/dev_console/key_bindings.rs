@@ -263,7 +263,7 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
         ],
         View::Logs => stream_view_bindings(false, true, false),
         View::Trace => stream_view_bindings(true, true, dash.trace_rate.is_realtime()),
-        View::EmuDetail if emu_detail_shows_warnings(dash) => scrolling_view_bindings(),
+        View::EmuDetail if emu_detail_shows_warnings(dash) => arrow_view_bindings("scroll"),
         View::EmuDetail => stream_view_bindings(false, false, false),
         View::Doctor => {
             let mut bindings = vec![
@@ -275,7 +275,7 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
                     vec![KeyStroke::plain(KeyCode::Char(' '))],
                 ),
             ];
-            bindings.extend(scrolling_view_bindings());
+            bindings.extend(arrow_view_bindings("move"));
             bindings
         }
         View::Plugins => vec![
@@ -307,21 +307,21 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
                 ],
             ),
         ],
-        View::Endpoints => scrolling_view_bindings(),
+        View::Endpoints => arrow_view_bindings("scroll"),
     }
 }
 
-fn scrolling_view_bindings() -> Vec<KeyBinding> {
+fn arrow_view_bindings(vertical: &'static str) -> Vec<KeyBinding> {
     vec![
         binding(
             "↑/↓",
-            "scroll",
+            vertical,
             Action::ScrollUp,
             vec![KeyStroke::plain(KeyCode::Up)],
         ),
         binding(
             "↑/↓",
-            "scroll",
+            vertical,
             Action::ScrollDown,
             vec![KeyStroke::plain(KeyCode::Down)],
         ),

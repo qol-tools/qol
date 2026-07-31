@@ -15,7 +15,7 @@ use super::filters::{draw_filter_panel, filter_scope, FilterState};
 use super::key_bindings::{context_action_bindings, global_action_bindings, unique_hints, KeyHint};
 use super::render_util;
 use super::render_util::{
-    accent, cursor_window_start, format_duration, list_capacity, now_unix_ms, view_content,
+    accent, caret, cursor_window_start, format_duration, list_capacity, now_unix_ms, view_content,
     NavigationOverflow, Sign, SignBox,
 };
 use super::stream_view::{draw_endpoints, draw_logs, draw_trace, trace_value};
@@ -472,11 +472,7 @@ pub(super) fn dash_row(
     value: Vec<Span<'static>>,
 ) -> Line<'static> {
     let label = row.label();
-    let caret: Span<'static> = if selected {
-        "▸ ".fg(accent()).bold()
-    } else {
-        "  ".into()
-    };
+    let caret = caret(selected);
     let label_span = if selected {
         format!(" {label:<DASH_LABEL_WIDTH$} ")
             .fg(Color::White)
@@ -616,11 +612,7 @@ pub(super) fn plugin_row_line(
     daemon_status: Option<&PluginDaemonStatus>,
     selected: bool,
 ) -> Line<'static> {
-    let caret: Span<'static> = if selected {
-        "▸ ".fg(accent()).bold()
-    } else {
-        "  ".into()
-    };
+    let caret = caret(selected);
     let (dot, status) = if !row.linked {
         (
             "○".fg(Color::DarkGray).bold(),

@@ -353,6 +353,7 @@ pub(super) struct Dash {
     pub(super) log_height: usize,
     pub(super) cursor: usize,
     pub(super) plugin_cursor: usize,
+    pub(super) doctor_cursor: usize,
     pub(super) doctor: DoctorPanel,
     pub(super) trace: LogPane,
     pub(super) trace_unavailable: bool,
@@ -416,6 +417,7 @@ impl Dash {
             log_height: 0,
             cursor: 0,
             plugin_cursor: 0,
+            doctor_cursor: 0,
             doctor: DoctorPanel {
                 last: None,
                 last_at_ms: None,
