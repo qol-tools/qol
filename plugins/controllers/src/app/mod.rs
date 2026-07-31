@@ -154,6 +154,7 @@ fn is_supported_action(action: &str) -> bool {
 
 fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
     match action {
+        "ping" => ReadResult::Handled,
         "apply_fixes" => match apply_pending() {
             Ok(message) => {
                 runtime.snapshots.invalidate();
@@ -363,6 +364,15 @@ mod tests {
         for (action, known) in cases {
             assert_eq!(is_supported_action(action), known, "action: {action}");
         }
+    }
+
+    #[test]
+    fn daemon_answers_the_readiness_ping() {
+        let mut runtime = DaemonRuntime::default();
+        assert!(
+            matches!(handle_action(&mut runtime, "ping"), ReadResult::Handled),
+            "the tray gates every action on a ping response"
+        );
     }
 
     #[test]
