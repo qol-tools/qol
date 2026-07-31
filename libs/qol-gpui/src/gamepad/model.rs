@@ -73,6 +73,7 @@ pub enum ControllerProfile {
     Xbox,
     PlayStation,
     Nintendo,
+    GuliKit,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -276,17 +277,27 @@ impl ControllerSnapshot {
     }
 
     pub fn profile(&self) -> ControllerProfile {
-        let identity = self.name.to_ascii_lowercase();
-        if ["dualsense", "dualshock", "playstation", "sony"]
+        let identity = format!(
+            "{} {:04x} {:04x}",
+            self.name.to_ascii_lowercase(),
+            self.vendor,
+            self.product
+        );
+        if ["gulikit controller xw", "gulikit kingkong 2"]
+            .iter()
+            .any(|needle| identity.contains(needle))
+        {
+            return ControllerProfile::GuliKit;
+        }
+        if ["dualsense", "dualshock", "playstation", "sony", "054c"]
             .iter()
             .any(|needle| identity.contains(needle))
         {
             return ControllerProfile::PlayStation;
         }
-        if (self.vendor == 0x057e && self.product == 0x2009)
-            || ["nintendo", "switch", "joy-con", "pro controller"]
-                .iter()
-                .any(|needle| identity.contains(needle))
+        if ["057e", "nintendo", "switch", "joy-con", "pro controller"]
+            .iter()
+            .any(|needle| identity.contains(needle))
         {
             return ControllerProfile::Nintendo;
         }
@@ -421,12 +432,13 @@ impl ControllerProfile {
             Self::Xbox => "Xbox layout",
             Self::PlayStation => "PlayStation layout",
             Self::Nintendo => "Nintendo layout",
+            Self::GuliKit => "GuliKit KingKong 2 Pro",
         }
     }
 
     pub fn face_labels(self) -> [&'static str; 4] {
         match self {
-            Self::Xbox => ["A", "B", "X", "Y"],
+            Self::Xbox | Self::GuliKit => ["A", "B", "X", "Y"],
             Self::PlayStation => ["×", "○", "□", "△"],
             Self::Nintendo => ["B", "A", "Y", "X"],
         }
@@ -436,7 +448,7 @@ impl ControllerProfile {
         match self {
             Self::Xbox => ["LT", "RT"],
             Self::PlayStation => ["L2", "R2"],
-            Self::Nintendo => ["ZL", "ZR"],
+            Self::Nintendo | Self::GuliKit => ["ZL", "ZR"],
         }
     }
 
@@ -444,12 +456,22 @@ impl ControllerProfile {
         match self {
             Self::Xbox => ["LB", "RB"],
             Self::PlayStation => ["L1", "R1"],
-            Self::Nintendo => ["L", "R"],
+            Self::Nintendo | Self::GuliKit => ["L", "R"],
         }
     }
 
     pub fn symmetric_sticks(self) -> bool {
         self == Self::PlayStation
+    }
+
+    pub fn device_note(self) -> Option<&'static str> {
+        match self {
+            Self::Xbox | Self::PlayStation | Self::Nintendo => None,
+            Self::GuliKit => Some(
+                "APG, Setting, and Screenshot are controller-side functions in PC XInput mode \
+                 and emit no testable button event. Screenshot is exposed in Switch mode.",
+            ),
+        }
     }
 }
 
@@ -531,13 +553,52 @@ mod tests {
                 "Nintendo Switch Pro Controller",
                 ControllerProfile::Nintendo,
             ),
-            ("GuliKit Controller XW", ControllerProfile::Xbox),
+            ("GuliKit Controller XW", ControllerProfile::GuliKit),
+            ("GuliKit KingKong 2 Pro", ControllerProfile::GuliKit),
+            ("Xbox Wireless Controller", ControllerProfile::Xbox),
         ];
         for (name, expected) in cases {
             let mut monitor = GamepadMonitor::default();
             monitor.apply_query(Ok(payload(name, serde_json::Value::Null)));
-            assert_eq!(monitor.selected().expect("controller").profile(), expected);
+            assert_eq!(
+                monitor.selected().expect("controller").profile(),
+                expected,
+                "name: {name}"
+            );
         }
+    }
+
+    #[test]
+    fn controller_profiles_match_vendor_hex_like_the_web_identity() {
+        let cases = [
+            (0x054c_u16, ControllerProfile::PlayStation),
+            (0x057e_u16, ControllerProfile::Nintendo),
+        ];
+        for (vendor, expected) in cases {
+            let mut value = payload("Wireless Controller", serde_json::Value::Null);
+            value["items"][0]["vendor"] = serde_json::json!(vendor);
+            let mut monitor = GamepadMonitor::default();
+            monitor.apply_query(Ok(value));
+            assert_eq!(
+                monitor.selected().expect("controller").profile(),
+                expected,
+                "vendor: {vendor:04x}"
+            );
+        }
+    }
+
+    #[test]
+    fn gulikit_profile_carries_web_parity_presentation() {
+        let profile = ControllerProfile::GuliKit;
+        assert_eq!(profile.label(), "GuliKit KingKong 2 Pro");
+        assert_eq!(profile.face_labels(), ["A", "B", "X", "Y"]);
+        assert_eq!(profile.shoulder_labels(), ["L", "R"]);
+        assert_eq!(profile.trigger_labels(), ["ZL", "ZR"]);
+        assert!(!profile.symmetric_sticks());
+        assert!(profile
+            .device_note()
+            .is_some_and(|note| note.contains("no testable button event")));
+        assert_eq!(ControllerProfile::Xbox.device_note(), None);
     }
 
     #[test]

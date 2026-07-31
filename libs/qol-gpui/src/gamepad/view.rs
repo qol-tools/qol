@@ -84,6 +84,13 @@ fn controller_content(
                 .overflow_hidden()
                 .child(controller_diagram(controller, palette)),
         )
+        .children(controller.profile().device_note().map(|note| {
+            div()
+                .px_2()
+                .text_size(px(10.0))
+                .text_color(rgb(palette.text_muted))
+                .child(note)
+        }))
         .child(active_inputs(controller, palette))
         .child(axis_readout(controller, palette))
         .child(button_readout(controller, palette))

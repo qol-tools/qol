@@ -689,27 +689,43 @@ fn center_controls(
     profile: ControllerProfile,
     palette: GamepadPalette,
 ) -> Div {
-    let controls = match profile {
-        ControllerProfile::Nintendo => [
+    let controls: &[(usize, &'static str, f32, f32, f32)] = match profile {
+        ControllerProfile::Nintendo => &[
             (8, "−", 350.0, 181.0, 16.0),
             (9, "+", 450.0, 181.0, 16.0),
             (16, "⌂", 400.0, 236.0, 23.0),
         ],
-        ControllerProfile::PlayStation => [
+        ControllerProfile::PlayStation => &[
             (8, "SHARE", 340.0, 178.0, 20.0),
             (9, "OPTIONS", 460.0, 178.0, 20.0),
             (16, "PS", 400.0, 248.0, 23.0),
         ],
-        ControllerProfile::Xbox => [
+        ControllerProfile::Xbox => &[
             (8, "VIEW", 354.0, 215.0, 18.0),
             (9, "MENU", 446.0, 215.0, 18.0),
             (16, "Q", 400.0, 164.0, 23.0),
+        ],
+        ControllerProfile::GuliKit => &[
+            (8, "−", 338.0, 164.0, 16.0),
+            (16, "G", 400.0, 164.0, 23.0),
+            (9, "+", 462.0, 164.0, 16.0),
+        ],
+    };
+    let device_markers: &[(&'static str, f32, f32)] = match profile {
+        ControllerProfile::Nintendo | ControllerProfile::PlayStation | ControllerProfile::Xbox => {
+            &[]
+        }
+        ControllerProfile::GuliKit => &[
+            ("CAP", 350.0, 214.0),
+            ("SET", 400.0, 214.0),
+            ("APG", 450.0, 214.0),
+            ("M", 400.0, 254.0),
         ],
     };
     div()
         .absolute()
         .inset_0()
-        .children(controls.into_iter().map(|(index, label, x, y, radius)| {
+        .children(controls.iter().map(|&(index, label, x, y, radius)| {
             round_control(
                 x,
                 y,
@@ -719,6 +735,9 @@ fn center_controls(
                 palette.accent,
                 palette,
             )
+        }))
+        .children(device_markers.iter().map(|&(label, x, y)| {
+            round_control(x, y, 15.0, label, false, palette.text_muted, palette)
         }))
 }
 
