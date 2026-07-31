@@ -131,6 +131,19 @@ impl GhostOpenMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreviewWindowReuse {
+    ReplacePlaceholder,
+    Reuse,
+}
+
+fn preview_window_reuse(ready: bool) -> PreviewWindowReuse {
+    if ready {
+        return PreviewWindowReuse::Reuse;
+    }
+    PreviewWindowReuse::ReplacePlaceholder
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum DismissMode {
     Quit,
@@ -389,18 +402,30 @@ fn reuse_existing(
         title: title.clone(),
         all_titles,
     };
-    let ok = handle
+    let updated = handle
         .update(cx, |view, window, cx| {
+            if preview_window_reuse(view.ready) == PreviewWindowReuse::ReplacePlaceholder {
+                window.remove_window();
+                return PreviewWindowReuse::ReplacePlaceholder;
+            }
             view.window_origin = bounds.origin;
             view.reset_for_show(content, seq, reveal);
             sync_window_layout(&title, window, bounds.origin, bounds.size);
             window.activate_window();
             window.focus(&view.focus_handle(cx));
             cx.notify();
+            PreviewWindowReuse::Reuse
         })
-        .is_ok();
-    if !ok {
+        .ok();
+    if updated != Some(PreviewWindowReuse::Reuse) {
         windows.borrow_mut().remove(target);
+        if updated == Some(PreviewWindowReuse::ReplacePlaceholder) {
+            qol_runtime::probe!(
+                "SHOT_WINDOW_OPEN",
+                "ms={} seq={seq} path=replace-placeholder",
+                opened_at.elapsed().as_millis()
+            );
+        }
         return false;
     }
     qol_runtime::probe!(
@@ -1240,8 +1265,8 @@ mod tests {
 
     use super::{
         circles_total_width, combine_focus_truth, preview_control_for_keystroke, preview_controls,
-        read_render_image, thumbnail_size, window_dims, GhostOpenMode, PreviewControl, MAX_THUMB_H,
-        MAX_THUMB_W,
+        preview_window_reuse, read_render_image, thumbnail_size, window_dims, GhostOpenMode,
+        PreviewControl, PreviewWindowReuse, MAX_THUMB_H, MAX_THUMB_W,
     };
     use crate::capture::actions::ShotAction;
     use crate::config::CopyCommand;
@@ -1369,6 +1394,15 @@ mod tests {
     fn ghost_open_mode_keeps_hidden_windows_inert() {
         assert!(!GhostOpenMode::Hidden.requests_focus());
         assert!(GhostOpenMode::Interactive.requests_focus());
+    }
+
+    #[test]
+    fn first_capture_replaces_the_empty_warmup_window() {
+        assert_eq!(
+            preview_window_reuse(false),
+            PreviewWindowReuse::ReplacePlaceholder
+        );
+        assert_eq!(preview_window_reuse(true), PreviewWindowReuse::Reuse);
     }
 
     #[test]
