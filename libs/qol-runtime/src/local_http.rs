@@ -48,10 +48,8 @@ impl Client {
     }
 
     pub fn request(&self, method: Method, path: &str, body: Option<&str>) -> io::Result<Response> {
-        let request = self.build_request(method, path, body.unwrap_or(""))?;
-        let mut stream = TcpStream::connect_timeout(&self.socket_addr()?, self.connect_timeout)?;
-        stream.set_read_timeout(Some(self.io_timeout))?;
-        stream.set_write_timeout(Some(self.io_timeout))?;
+        let request = self.build_request(method, path, body.unwrap_or(""), "close")?;
+        let mut stream = self.connect()?;
         stream.write_all(request.as_bytes())?;
 
         let mut raw = Vec::new();
@@ -61,6 +59,14 @@ impl Client {
         parse_response(&raw)
     }
 
+    fn connect(&self) -> io::Result<TcpStream> {
+        let stream = TcpStream::connect_timeout(&self.socket_addr()?, self.connect_timeout)?;
+        stream.set_read_timeout(Some(self.io_timeout))?;
+        stream.set_write_timeout(Some(self.io_timeout))?;
+        stream.set_nodelay(true)?;
+        Ok(stream)
+    }
+
     fn socket_addr(&self) -> io::Result<SocketAddr> {
         let ip = qol_conventions::LOCAL_HOST
             .parse::<IpAddr>()
@@ -68,7 +74,13 @@ impl Client {
         Ok(SocketAddr::new(ip, self.port))
     }
 
-    fn build_request(&self, method: Method, path: &str, body: &str) -> io::Result<String> {
+    fn build_request(
+        &self,
+        method: Method,
+        path: &str,
+        body: &str,
+        connection: &str,
+    ) -> io::Result<String> {
         if !path.starts_with('/') || path.contains(['\r', '\n']) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -82,7 +94,7 @@ impl Client {
             ));
         }
         Ok(format!(
-            "{} {path} HTTP/1.1\r\nHost: {}:{}\r\nOrigin: http://{}:{}\r\n{}: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "{} {path} HTTP/1.1\r\nHost: {}:{}\r\nOrigin: http://{}:{}\r\n{}: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: {connection}\r\n\r\n{body}",
             method.as_str(),
             qol_conventions::LOCAL_HOST,
             self.port,
@@ -93,6 +105,108 @@ impl Client {
             body.len()
         ))
     }
+}
+
+pub struct Session {
+    client: Client,
+    stream: Option<TcpStream>,
+}
+
+impl Session {
+    pub fn new(client: Client) -> Self {
+        Self {
+            client,
+            stream: None,
+        }
+    }
+
+    pub fn request(
+        &mut self,
+        method: Method,
+        path: &str,
+        body: Option<&str>,
+    ) -> io::Result<Response> {
+        match self.request_on_open_connection(method, path, body) {
+            Ok(response) => Ok(response),
+            Err(_) => {
+                self.stream = None;
+                self.request_on_open_connection(method, path, body)
+            }
+        }
+    }
+
+    fn request_on_open_connection(
+        &mut self,
+        method: Method,
+        path: &str,
+        body: Option<&str>,
+    ) -> io::Result<Response> {
+        let request = self
+            .client
+            .build_request(method, path, body.unwrap_or(""), "keep-alive")?;
+        let stream = match &mut self.stream {
+            Some(stream) => stream,
+            none => none.insert(self.client.connect()?),
+        };
+        stream.write_all(request.as_bytes())?;
+        let response = read_kept_alive_response(stream);
+        if response.is_err() {
+            self.stream = None;
+        }
+        response
+    }
+}
+
+fn read_kept_alive_response(stream: &mut TcpStream) -> io::Result<Response> {
+    let mut raw = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let header_end = loop {
+        if let Some(end) = find_header_end(&raw) {
+            break end;
+        }
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "local HTTP connection closed before the response headers",
+            ));
+        }
+        raw.extend_from_slice(&chunk[..read]);
+    };
+    let headers = String::from_utf8(raw[..header_end].to_vec())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let length = content_length(&headers).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "local HTTP response has no content-length",
+        )
+    })?;
+    let body_start = header_end + 4;
+    while raw.len() < body_start + length {
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "local HTTP connection closed inside the response body",
+            ));
+        }
+        raw.extend_from_slice(&chunk[..read]);
+    }
+    let raw = String::from_utf8(raw[..body_start + length].to_vec())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    parse_response(&raw)
+}
+
+fn find_header_end(raw: &[u8]) -> Option<usize> {
+    raw.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn content_length(headers: &str) -> Option<usize> {
+    headers
+        .lines()
+        .find(|line| line.to_ascii_lowercase().starts_with("content-length:"))
+        .and_then(|line| line.split_once(':'))
+        .and_then(|(_, value)| value.trim().parse().ok())
 }
 
 fn parse_response(raw: &str) -> io::Result<Response> {
@@ -124,7 +238,7 @@ mod tests {
         ];
 
         for (method, path, body, verb) in cases {
-            let request = client.build_request(method, path, body).unwrap();
+            let request = client.build_request(method, path, body, "close").unwrap();
             let (headers, actual_body) = request.split_once("\r\n\r\n").unwrap();
 
             assert!(headers.starts_with(&format!("{verb} {path} HTTP/1.1\r\n")));
@@ -153,10 +267,35 @@ mod tests {
 
         for (path, token) in cases {
             let error = Client::new(qol_conventions::DEFAULT_PORT, token)
-                .build_request(Method::Get, path, "")
+                .build_request(Method::Get, path, "", "close")
                 .unwrap_err();
 
             assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        }
+    }
+
+    #[test]
+    fn kept_alive_responses_are_delimited_by_content_length() {
+        let cases = [
+            ("content-length: 17\r\ncontent-type: a", Some(17)),
+            ("Content-Length:  42 \r\n", Some(42)),
+            ("content-type: application/json", None),
+            ("content-length: notanumber", None),
+        ];
+        for (headers, expected) in cases {
+            assert_eq!(
+                super::content_length(headers),
+                expected,
+                "headers: {headers}"
+            );
+        }
+
+        let cases = [
+            (b"HTTP/1.1 200 OK\r\n\r\nbody".as_slice(), Some(15)),
+            (b"HTTP/1.1 200 OK\r\npartial".as_slice(), None),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(super::find_header_end(raw), expected);
         }
     }
 
