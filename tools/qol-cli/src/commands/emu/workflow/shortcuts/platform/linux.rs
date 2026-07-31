@@ -647,7 +647,7 @@ fn wait_for_desktop_entry(
             &[APPS_DIR, "-maxdepth", "1", "-name", entry],
         ),
         ACTION_TIMEOUT,
-        |outcome| !outcome.stdout.trim().is_empty() == expected,
+        |outcome| outcome.stdout.trim().is_empty() != expected,
         &description,
     )?;
     Ok(())
