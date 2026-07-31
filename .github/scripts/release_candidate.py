@@ -23,6 +23,7 @@ REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 PACKAGE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+PLUGIN_RELEASE_FEATURES = {"qol-voice": "local-stt"}
 ATTESTATION_PREFIX = "qol/release-candidate"
 HOST_ID = "qol-tray"
 REQUIRED_CI_JOBS = {
@@ -221,17 +222,19 @@ def build_commands(
         raise ValueError(f"invalid package: {package!r}")
     if target is None or not TARGET_RE.fullmatch(target):
         raise ValueError(f"invalid target: {target!r}")
-    return [
-        [
-            "cargo",
-            "build",
-            "--release",
-            "-p",
-            package,
-            "--target",
-            target,
-        ]
+    command = [
+        "cargo",
+        "build",
+        "--release",
+        "-p",
+        package,
+        "--target",
+        target,
     ]
+    features = PLUGIN_RELEASE_FEATURES.get(package)
+    if features:
+        command.extend(["--features", features])
+    return [command]
 
 
 def write_json(path: str | None, value: dict) -> None:

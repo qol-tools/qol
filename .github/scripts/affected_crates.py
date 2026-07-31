@@ -48,10 +48,23 @@ def platform_excludes():
 
 
 UBUNTU_EXCLUDE, MACOS_EXCLUDE = platform_excludes()
+PACKAGE_FEATURES = {"qol-voice": "qol-voice/local-stt"}
 
 
 def exclude_flags(names):
     return "".join(f" --exclude {name}" for name in sorted(names))
+
+
+def feature_flags(packages):
+    return "".join(
+        f" --features {feature}"
+        for package, feature in sorted(PACKAGE_FEATURES.items())
+        if package in packages
+    )
+
+
+def workspace_feature_flags(excluded):
+    return feature_flags(set(PACKAGE_FEATURES) - set(excluded))
 
 
 def run(cmd):
@@ -80,13 +93,13 @@ def full_workspace(reason):
             "full": True,
             "windows_process": True,
             "windows_qol": True,
-            "ubuntu_clippy": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)} --all-targets",
-            "ubuntu_build": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}",
-            "ubuntu_test": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}",
+            "ubuntu_clippy": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)} --all-targets{workspace_feature_flags(UBUNTU_EXCLUDE)}",
+            "ubuntu_build": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}{workspace_feature_flags(UBUNTU_EXCLUDE)}",
+            "ubuntu_test": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}{workspace_feature_flags(UBUNTU_EXCLUDE)}",
             "ubuntu_skip": False,
-            "macos_clippy": f"--workspace{exclude_flags(MACOS_EXCLUDE)} --all-targets",
-            "macos_build": f"--workspace{exclude_flags(MACOS_EXCLUDE)}",
-            "macos_test": f"--workspace{exclude_flags(MACOS_EXCLUDE)}",
+            "macos_clippy": f"--workspace{exclude_flags(MACOS_EXCLUDE)} --all-targets{workspace_feature_flags(MACOS_EXCLUDE)}",
+            "macos_build": f"--workspace{exclude_flags(MACOS_EXCLUDE)}{workspace_feature_flags(MACOS_EXCLUDE)}",
+            "macos_test": f"--workspace{exclude_flags(MACOS_EXCLUDE)}{workspace_feature_flags(MACOS_EXCLUDE)}",
             "macos_skip": False,
         }
     )
@@ -189,7 +202,9 @@ def dependents_closure(seeds, pkgs):
 
 def args(packages, all_targets):
     flags = " ".join(f"-p {pkg}" for pkg in packages)
-    return f"{flags} --all-targets" if all_targets else flags
+    if all_targets:
+        flags = f"{flags} --all-targets"
+    return f"{flags}{feature_flags(packages)}"
 
 
 def main():
