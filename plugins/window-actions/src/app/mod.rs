@@ -211,8 +211,7 @@ fn trace_glide(
     elapsed: std::time::Duration,
     outcome: &Result<String, String>,
 ) {
-    #[cfg(debug_assertions)]
-    if should_trace_glide(phase, outcome) {
+    if cfg!(debug_assertions) && should_trace_glide(phase, outcome) {
         qol_runtime::probe!(
             "WINACT_GLIDE",
             "session={} seq={} source={} phase={} direction={} elapsed_us={} outcome={} compositor={:?} detail={:?}",
@@ -227,11 +226,8 @@ fn trace_glide(
             outcome.as_ref().err().map(String::as_str).unwrap_or("")
         );
     }
-    #[cfg(not(debug_assertions))]
-    let _ = (direction, phase, trace, elapsed, outcome);
 }
 
-#[cfg(debug_assertions)]
 fn should_trace_glide(phase: Phase, outcome: &Result<String, String>) -> bool {
     phase != Phase::Heartbeat
         || outcome.is_err()

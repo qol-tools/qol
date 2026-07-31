@@ -341,8 +341,9 @@ fn handle_key_event(
 
     let action = remap::process_key_event(config, mods, keycode, event_char.as_deref(), bundle_id);
 
-    #[cfg(debug_assertions)]
-    if !matches!(action, KeyAction::Passthrough) || config.excluded_apps.contains(bundle_id) {
+    if cfg!(debug_assertions)
+        && (!matches!(action, KeyAction::Passthrough) || config.excluded_apps.contains(bundle_id))
+    {
         eprintln!(
             "[keyremap:dbg] target_pid={} app={} key=0x{:02X}({}) mods={:?} -> {:?}",
             target_pid,
