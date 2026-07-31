@@ -85,7 +85,6 @@ pub(super) enum RowControl {
         active_query: Option<String>,
         active_value_from: Option<String>,
         state_labels: std::collections::BTreeMap<String, String>,
-        variant: Option<String>,
         active: bool,
         pending: bool,
         error: Option<String>,
@@ -120,6 +119,9 @@ pub(super) struct Row {
     pub(super) section_id: Option<String>,
     pub(super) section_label: Option<String>,
     pub(super) label: String,
+    pub(super) description: Option<String>,
+    pub(super) placeholder: Option<String>,
+    pub(super) variant: Option<String>,
     pub(super) config_key: String,
     pub(super) visibility: Option<RowVisibility>,
     pub(super) control: RowControl,
@@ -240,6 +242,9 @@ fn push_row(
         section_id,
         section_label,
         label: field.label.clone(),
+        description: field.description.clone(),
+        placeholder: field.placeholder.clone(),
+        variant: field.variant.clone(),
         config_key: field.config_key.clone(),
         visibility,
         control,
@@ -346,7 +351,6 @@ fn control_for(field: &ResolvedField) -> Option<RowControl> {
                 .unwrap_or_default()
                 .into_iter()
                 .collect(),
-            variant: field.variant.clone(),
             active: false,
             pending: false,
             error: None,
@@ -872,6 +876,7 @@ label = "Capture"
 type = "boolean"
 config_key = "capture.pin_border"
 label = "Pinned Preview Border"
+description = "Keep previews distinct from the desktop."
 section = "capture"
 default = true
 
@@ -892,11 +897,13 @@ default = 18
 min = 0
 max = 51
 step = 1
+variant = "slider"
 
 [field.mic]
 type = "string"
 config_key = "audio.mic_device"
 label = "Mic Device"
+placeholder = "System default"
 section = "capture"
 default = "default"
 
@@ -944,6 +951,12 @@ default = "202322"
         assert_eq!(rows.len(), 7);
         assert_eq!(rows[0].section_label.as_deref(), Some("Capture"));
         assert!(rows[1..].iter().all(|r| r.section_label.is_none()));
+        assert_eq!(
+            rows[0].description.as_deref(),
+            Some("Keep previews distinct from the desktop.")
+        );
+        assert_eq!(rows[2].variant.as_deref(), Some("slider"));
+        assert_eq!(rows[3].placeholder.as_deref(), Some("System default"));
         assert!(matches!(rows[0].control, RowControl::Toggle(false)));
         match &rows[1].control {
             RowControl::Select { index, options, .. } => {
@@ -1335,6 +1348,9 @@ query = "managed_device_options"
                 section_id: None,
                 section_label: None,
                 label: "Action Mode".into(),
+                description: None,
+                placeholder: None,
+                variant: None,
                 config_key: "action_mode".into(),
                 visibility: None,
                 control: RowControl::Select {
@@ -1348,6 +1364,9 @@ query = "managed_device_options"
                 section_id: None,
                 section_label: None,
                 label: "Max Columns".into(),
+                description: None,
+                placeholder: None,
+                variant: None,
                 config_key: "display.max_columns".into(),
                 visibility: None,
                 control: RowControl::Number {
@@ -1630,6 +1649,9 @@ tone_map = { light = "muted", dark = "accent" }
             section_id: None,
             section_label: None,
             label: "Start search".into(),
+            description: None,
+            placeholder: None,
+            variant: None,
             config_key: "search".into(),
             visibility: None,
             control: RowControl::Action {
@@ -1639,7 +1661,6 @@ tone_map = { light = "muted", dark = "accent" }
                 active_query: None,
                 active_value_from: None,
                 state_labels: std::collections::BTreeMap::new(),
-                variant: None,
                 active: false,
                 pending: false,
                 error: None,

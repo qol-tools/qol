@@ -949,10 +949,15 @@ impl SettingsPanelView {
                 }
             }
             RowControl::Number { value, .. } => format_number(*value),
-            RowControl::Text(value) => value.clone(),
-            RowControl::TextList(values) => values.join(", "),
+            RowControl::Text(value) => {
+                text_or_placeholder(value, self.rows[index].placeholder.as_deref())
+            }
+            RowControl::TextList(values) => {
+                text_or_placeholder(&values.join(", "), self.rows[index].placeholder.as_deref())
+            }
             RowControl::Color(value) => value.clone(),
             RowControl::Action {
+                active_action,
                 active_query,
                 state_labels,
                 active,
@@ -964,6 +969,7 @@ impl SettingsPanelView {
                 *pending,
                 error.is_some(),
                 active_query.is_some(),
+                active_action.is_some(),
                 state_labels,
             ),
             RowControl::Status { label, error, .. } => {
@@ -992,9 +998,10 @@ impl SettingsPanelView {
             RowControl::Select { .. }
             | RowControl::MultiSelect { .. }
             | RowControl::Number { .. }
-            | RowControl::Text(_)
-            | RowControl::TextList(_)
             | RowControl::Color(_) => self.palette.label_text,
+            RowControl::Text(value) if value.is_empty() => self.palette.status_muted,
+            RowControl::TextList(values) if values.is_empty() => self.palette.status_muted,
+            RowControl::Text(_) | RowControl::TextList(_) => self.palette.label_text,
             RowControl::Action { error: Some(_), .. }
             | RowControl::Status { error: Some(_), .. }
             | RowControl::List { error: Some(_), .. } => self.palette.state_off,
@@ -1029,6 +1036,26 @@ impl SettingsPanelView {
     }
 
     fn render_value_cell(&self, index: usize) -> Div {
+        match &self.rows[index].control {
+            RowControl::Toggle(active) => return self.render_toggle_value(*active),
+            RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
+                return self.render_select_value(index);
+            }
+            RowControl::Number {
+                value, min, max, ..
+            } => return self.render_number_value(index, *value, *min, *max),
+            RowControl::Action { active, .. }
+                if self.rows[index].variant.as_deref() == Some("toggle") =>
+            {
+                return self.render_toggle_value(*active);
+            }
+            RowControl::Action { .. } => return self.render_action_value(index),
+            RowControl::Text(_)
+            | RowControl::TextList(_)
+            | RowControl::Color(_)
+            | RowControl::Status { .. }
+            | RowControl::List { .. } => {}
+        }
         let mut cell = div().flex().flex_row().items_center().gap_2();
         if let RowControl::Status { tone, .. } = self.rows[index].control {
             return cell.child(StatusIndicator::new(
@@ -1065,8 +1092,181 @@ impl SettingsPanelView {
         )
     }
 
+    fn render_toggle_value(&self, active: bool) -> Div {
+        let label_color = if active {
+            self.palette.state_on
+        } else {
+            self.palette.label_text
+        };
+        let track_color = if active {
+            self.palette.state_on
+        } else {
+            self.palette.dropdown_bg
+        };
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(label_color))
+                    .child(if active { "On" } else { "Off" }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .when(active, |track| track.justify_end())
+                    .when(!active, |track| track.justify_start())
+                    .w(px(30.))
+                    .h(px(16.))
+                    .p(px(2.))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(rgb(if active {
+                        self.palette.state_on
+                    } else {
+                        self.palette.panel_border
+                    }))
+                    .bg(rgb(track_color))
+                    .child(
+                        div()
+                            .w(px(10.))
+                            .h(px(10.))
+                            .rounded_full()
+                            .bg(rgb(if active {
+                                self.palette.window_bg
+                            } else {
+                                self.palette.label_text
+                            })),
+                    ),
+            )
+    }
+
+    fn render_select_value(&self, index: usize) -> Div {
+        let mut value = div().flex().flex_row().items_center().gap_2();
+        if let Some(accent) = self.option_accent(index) {
+            value = value.child(div().w_2().h_2().rounded_full().bg(rgb(accent)));
+        }
+        value
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(self.palette.panel_border))
+            .bg(rgb(self.palette.dropdown_bg))
+            .text_sm()
+            .text_color(rgb(self.palette.label_text))
+            .child(self.display_value(index))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(self.palette.status_muted))
+                    .child("▾"),
+            )
+    }
+
+    fn render_number_value(
+        &self,
+        index: usize,
+        value: f64,
+        min: Option<f64>,
+        max: Option<f64>,
+    ) -> Div {
+        let mut cell = div().flex().flex_row().items_center().gap_2();
+        if self.rows[index].variant.as_deref() == Some("slider") {
+            let fill = slider_fraction(value, min, max) * 72.0;
+            cell = cell.child(
+                div()
+                    .relative()
+                    .w(px(72.))
+                    .h(px(4.))
+                    .rounded_full()
+                    .overflow_hidden()
+                    .bg(rgb(self.palette.panel_border))
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .h_full()
+                            .w(px(fill))
+                            .rounded_full()
+                            .bg(rgb(self.palette.row_border_selected)),
+                    ),
+            );
+        }
+        cell.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(self.palette.panel_border))
+                .bg(rgb(self.palette.dropdown_bg))
+                .text_sm()
+                .text_color(rgb(self.palette.label_text))
+                .child(self.display_value(index))
+                .children(number_unit(&self.rows[index].id).map(|unit| {
+                    div()
+                        .text_xs()
+                        .text_color(rgb(self.palette.status_muted))
+                        .child(unit)
+                })),
+        )
+    }
+
+    fn render_action_value(&self, index: usize) -> Div {
+        let variant = self.rows[index].variant.as_deref();
+        let (background, border, text) = match variant {
+            Some("ghost") => (
+                rgba(self.palette.transparent_rgba),
+                rgb(self.palette.panel_border),
+                self.palette.label_text,
+            ),
+            Some("danger") => (
+                rgba(self.palette.transparent_rgba),
+                rgb(self.palette.state_off),
+                self.palette.state_off,
+            ),
+            Some("primary") | None | Some(_) => (
+                rgb(self.palette.row_bg_selected),
+                rgb(self.palette.row_border_selected),
+                self.palette.section_text,
+            ),
+        };
+        let mut control = div().flex().flex_row().items_center().gap_1();
+        if self.action_is_busy(index) {
+            control = control.child(
+                Spinner::new(
+                    ("settings-action-spinner", index),
+                    rgb(self.palette.state_on),
+                )
+                .size(px(12.)),
+            );
+        }
+        control
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(border)
+            .bg(background)
+            .text_xs()
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(rgb(text))
+            .child(self.display_value(index))
+    }
+
     fn action_is_busy(&self, index: usize) -> bool {
-        action_shows_spinner(&self.rows[index].control)
+        action_shows_spinner(&self.rows[index])
     }
 
     fn swatch_color(&self, index: usize) -> Option<u32> {
@@ -1119,20 +1319,52 @@ impl SettingsPanelView {
             } => label.clone(),
             _ => row.label.clone(),
         };
+        let label_group = div()
+            .flex()
+            .min_w_0()
+            .flex_1()
+            .flex_col()
+            .child(
+                div()
+                    .truncate()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(self.palette.section_text))
+                    .child(label),
+            )
+            .when_some(row.description.clone(), |group, description| {
+                group.child(
+                    div()
+                        .truncate()
+                        .text_xs()
+                        .text_color(rgb(self.palette.label_text))
+                        .child(description),
+                )
+            });
+        let selected = index == self.selected;
         let mut line = div()
             .id(("settings-row", index))
             .flex()
             .flex_row()
+            .items_center()
             .justify_between()
+            .gap_3()
+            .h(px(row_body_height(row)))
             .px_2()
             .py_1()
             .rounded_md()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(rgb(self.palette.label_text))
-                    .child(label),
-            )
+            .border_1()
+            .border_color(if selected {
+                rgb(self.palette.row_border_selected)
+            } else {
+                rgba(self.palette.transparent_rgba)
+            })
+            .bg(if selected {
+                rgb(self.palette.row_bg_selected)
+            } else {
+                rgba(self.palette.transparent_rgba)
+            })
+            .child(label_group)
             .child(self.render_value_cell(index));
         let row_bounds = Rc::clone(&self.row_bounds[index]);
         line = line.relative().child(
@@ -1158,11 +1390,7 @@ impl SettingsPanelView {
                 },
             ));
         }
-        if index == self.selected {
-            line = line
-                .bg(rgb(self.palette.row_bg_selected))
-                .border_1()
-                .border_color(rgb(self.palette.row_border_selected));
+        if selected {
             if let Some(ActiveControl::Dropdown(dropdown)) = &self.active_control {
                 let items = match &row.control {
                     RowControl::Select { options, .. } => Some(dropdown_items(options)),
@@ -1309,6 +1537,12 @@ impl SettingsPanelView {
             .map(|section| format!("‹ {}", section.label))
     }
 
+    fn detail_description(&self) -> Option<String> {
+        self.active_section
+            .and_then(|index| self.sections.get(index))
+            .and_then(|section| section.description.clone())
+    }
+
     fn render_list(&self, index: usize, cx: &mut Context<Self>) -> Div {
         let row = &self.rows[index];
         let RowControl::List {
@@ -1349,7 +1583,7 @@ impl SettingsPanelView {
             .flex_col()
             .flex_none()
             .gap_1()
-            .h(px(super::PANEL_LIST_HEIGHT))
+            .h(px(row_body_height(row)))
             .overflow_hidden()
             .px_2()
             .py_1()
@@ -1365,13 +1599,33 @@ impl SettingsPanelView {
                 .flex()
                 .flex_none()
                 .flex_row()
-                .h(px(super::PANEL_LIST_HEADER_HEIGHT))
+                .items_center()
+                .h(px(list_header_height(row)))
                 .justify_between()
+                .gap_3()
                 .text_sm()
                 .child(
                     div()
-                        .text_color(rgb(self.palette.label_text))
-                        .child(row.label.clone()),
+                        .flex()
+                        .min_w_0()
+                        .flex_1()
+                        .flex_col()
+                        .child(
+                            div()
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(self.palette.section_text))
+                                .child(row.label.clone()),
+                        )
+                        .when_some(row.description.clone(), |group, description| {
+                            group.child(
+                                div()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(rgb(self.palette.label_text))
+                                    .child(description),
+                            )
+                        }),
                 )
                 .child(header_status),
         );
@@ -1548,6 +1802,14 @@ impl SettingsPanelView {
                 "settings-list-action",
                 ((index as u64) << 32) | item_index as u64,
             ))
+            .px_1()
+            .rounded_sm()
+            .border_1()
+            .border_color(if selected {
+                rgb(self.palette.row_border_selected)
+            } else {
+                rgb(self.palette.panel_border)
+            })
             .text_xs()
             .text_color(rgb(if selected {
                 self.palette.state_on
@@ -1627,6 +1889,7 @@ impl Render for SettingsPanelView {
             .collect()
         };
         let detail_heading = self.detail_heading();
+        let detail_description = self.detail_description();
         div()
             .id("settings-panel")
             .track_focus(&self.focus_handle)
@@ -1640,29 +1903,36 @@ impl Render for SettingsPanelView {
             .border_color(rgb(self.palette.panel_border))
             .bg(rgb(self.palette.window_bg))
             .child(
-                div()
-                    .w_full()
-                    .pt_4()
-                    .px_4()
-                    .pb_1()
-                    .text_sm()
-                    .text_color(rgb(self.palette.label_text))
-                    .panel_drag_area()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(self.panel.heading.clone())
-                            .when_some(detail_heading, |header, detail| {
-                                header.child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(self.palette.section_text))
-                                        .child(detail),
-                                )
-                            }),
-                    ),
+                div().w_full().pt_4().px_4().pb_1().panel_drag_area().child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .text_size(px(16.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(self.palette.section_text))
+                                .child(self.panel.heading.clone()),
+                        )
+                        .when_some(detail_heading, |header, detail| {
+                            header.child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(self.palette.row_border_selected))
+                                    .child(detail),
+                            )
+                        })
+                        .when_some(detail_description, |header, description| {
+                            header.child(
+                                div()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(rgb(self.palette.label_text))
+                                    .child(description),
+                            )
+                        }),
+                ),
             )
             .child(
                 div()
@@ -1721,11 +1991,47 @@ fn format_number(value: f64) -> String {
     }
 }
 
+fn text_or_placeholder(value: &str, placeholder: Option<&str>) -> String {
+    if !value.is_empty() {
+        return value.to_string();
+    }
+    placeholder.unwrap_or("Empty").to_string()
+}
+
+fn number_unit(field_id: &str) -> Option<&'static str> {
+    if field_id.ends_with("_percent") {
+        return Some("%");
+    }
+    if field_id.ends_with("_px") || field_id.ends_with("_pixels") {
+        return Some("px");
+    }
+    if field_id.ends_with("_ms") {
+        return Some("ms");
+    }
+    if field_id.ends_with("_seconds") {
+        return Some("s");
+    }
+    None
+}
+
+fn slider_fraction(value: f64, min: Option<f64>, max: Option<f64>) -> f32 {
+    let Some(min) = min else {
+        return 0.0;
+    };
+    let Some(max) = max else {
+        return 0.0;
+    };
+    if max <= min {
+        return 0.0;
+    }
+    ((value - min) / (max - min)).clamp(0.0, 1.0) as f32
+}
+
 fn binary_state_label(active: bool) -> &'static str {
     if active {
-        "[on]"
+        "On"
     } else {
-        "[off]"
+        "Off"
     }
 }
 
@@ -1734,6 +2040,7 @@ fn action_value_label(
     pending: bool,
     failed: bool,
     has_runtime_state: bool,
+    has_active_action: bool,
     state_labels: &std::collections::BTreeMap<String, String>,
 ) -> String {
     if pending {
@@ -1743,12 +2050,18 @@ fn action_value_label(
         return "failed".into();
     }
     if !has_runtime_state {
-        return "[run]".into();
+        return "Run".into();
     }
-    state_labels
-        .get(if active { "true" } else { "false" })
-        .cloned()
-        .unwrap_or_else(|| binary_state_label(active).into())
+    if let Some(label) = state_labels.get(if active { "true" } else { "false" }) {
+        return label.clone();
+    }
+    if active && has_active_action {
+        return "Stop".into();
+    }
+    if active {
+        return "Active".into();
+    }
+    "Run".into()
 }
 
 fn binary_state_color(palette: SettingsPanelPalette, active: bool) -> u32 {
@@ -1771,9 +2084,9 @@ fn status_tone_color(palette: SettingsPanelPalette, tone: StatusTone) -> u32 {
 
 fn list_action_affordance(primary: &str, action_count: usize) -> String {
     if action_count > 1 {
-        return format!("[{primary} +{}]", action_count - 1);
+        return format!("{primary} +{}", action_count - 1);
     }
-    format!("[{primary}]")
+    primary.to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1823,8 +2136,8 @@ fn action_refresh_payload(
         .cloned()
 }
 
-fn action_shows_spinner(control: &RowControl) -> bool {
-    match control {
+fn action_shows_spinner(row: &Row) -> bool {
+    match &row.control {
         RowControl::Action {
             pending: true,
             error: None,
@@ -1833,9 +2146,8 @@ fn action_shows_spinner(control: &RowControl) -> bool {
         RowControl::Action {
             active: true,
             error: None,
-            variant,
             ..
-        } => variant.as_deref() != Some("toggle"),
+        } => row.variant.as_deref() != Some("toggle"),
         _ => false,
     }
 }
@@ -1875,12 +2187,7 @@ pub(super) fn row_height(row: &Row) -> f32 {
     } else {
         0.0
     };
-    let body = if matches!(row.control, RowControl::List { .. }) {
-        super::PANEL_LIST_HEIGHT
-    } else {
-        super::PANEL_ROW_HEIGHT
-    };
-    body + header
+    row_body_height(row) + header
 }
 
 fn visible_row_height(rows: &[Row], index: usize, show_section_headers: bool) -> f32 {
@@ -1889,12 +2196,31 @@ fn visible_row_height(rows: &[Row], index: usize, show_section_headers: bool) ->
     } else {
         0.0
     };
-    let body = if matches!(rows[index].control, RowControl::List { .. }) {
-        super::PANEL_LIST_HEIGHT
-    } else {
-        super::PANEL_ROW_HEIGHT
-    };
-    body + header
+    row_body_height(&rows[index]) + header
+}
+
+pub(super) fn row_body_height(row: &Row) -> f32 {
+    if matches!(row.control, RowControl::List { .. }) {
+        return super::PANEL_LIST_HEIGHT
+            + if row.description.is_some() {
+                super::PANEL_LIST_DESCRIPTION_HEIGHT
+            } else {
+                0.0
+            };
+    }
+    if row.description.is_some() {
+        return super::PANEL_DESCRIBED_ROW_HEIGHT;
+    }
+    super::PANEL_ROW_HEIGHT
+}
+
+fn list_header_height(row: &Row) -> f32 {
+    super::PANEL_LIST_HEADER_HEIGHT
+        + if row.description.is_some() {
+            super::PANEL_LIST_DESCRIPTION_HEIGHT
+        } else {
+            0.0
+        }
 }
 
 fn visible_row_window(
@@ -1976,7 +2302,8 @@ mod tests {
     use super::{
         action_refresh_payload, action_shows_spinner, action_value_label, adjacent_visible_row,
         binary_state_label, initial_active_section, intent, is_number_seed, left_navigates_back,
-        list_action_affordance, list_intent, parsed_color, parsed_number, scroll_offset_for,
+        list_action_affordance, list_intent, number_unit, parsed_color, parsed_number,
+        row_body_height, scroll_offset_for, slider_fraction, text_or_placeholder,
         visible_row_window, Intent, ListIntent, Row, RowControl,
     };
     use crate::scroll_list::ScrollList;
@@ -1990,6 +2317,9 @@ mod tests {
                 section_id: header.then(|| "section".to_string()),
                 section_label: header.then(|| "Section".to_string()),
                 label: "Label".into(),
+                description: None,
+                placeholder: None,
+                variant: None,
                 config_key: "key".into(),
                 visibility: None,
                 control: RowControl::Toggle(false),
@@ -2003,6 +2333,9 @@ mod tests {
             section_id: None,
             section_label: None,
             label: "Items".into(),
+            description: None,
+            placeholder: None,
+            variant: None,
             config_key: "items".into(),
             visibility: None,
             control: RowControl::List {
@@ -2075,6 +2408,28 @@ mod tests {
     }
 
     #[test]
+    fn descriptions_expand_only_the_rows_that_render_them() {
+        let mut plain = rows(&[false]).remove(0);
+        let plain_height = row_body_height(&plain);
+        plain.description = Some("Helpful context".into());
+
+        assert_eq!(plain_height, super::super::PANEL_ROW_HEIGHT);
+        assert_eq!(
+            row_body_height(&plain),
+            super::super::PANEL_DESCRIBED_ROW_HEIGHT
+        );
+
+        let mut list = list_row();
+        let plain_list_height = row_body_height(&list);
+        list.description = Some("Live devices".into());
+        assert_eq!(plain_list_height, super::super::PANEL_LIST_HEIGHT);
+        assert_eq!(
+            row_body_height(&list),
+            super::super::PANEL_LIST_HEIGHT + super::super::PANEL_LIST_DESCRIPTION_HEIGHT
+        );
+    }
+
+    #[test]
     fn keyboard_navigation_skips_conditional_rows() {
         const SPEC: &str = r#"
 schema_version = 1
@@ -2140,29 +2495,40 @@ default = "visible"
 
     #[test]
     fn binary_runtime_and_config_states_share_on_off_labels() {
-        assert_eq!(binary_state_label(true), "[on]");
-        assert_eq!(binary_state_label(false), "[off]");
+        assert_eq!(binary_state_label(true), "On");
+        assert_eq!(binary_state_label(false), "Off");
     }
 
     #[test]
     fn action_values_distinguish_commands_from_semantic_runtime_state() {
+        let no_labels = std::collections::BTreeMap::new();
+        let cases = [
+            (false, false, false, false, false, "Run"),
+            (false, true, false, false, false, "working..."),
+            (false, false, true, false, false, "failed"),
+            (false, false, false, true, true, "Run"),
+            (true, false, false, true, true, "Stop"),
+            (true, false, false, true, false, "Active"),
+        ];
+        for (active, pending, failed, runtime, reversible, expected) in cases {
+            assert_eq!(
+                action_value_label(active, pending, failed, runtime, reversible, &no_labels),
+                expected
+            );
+        }
+
         let labels = std::collections::BTreeMap::from([
             ("false".into(), "Light".into()),
             ("true".into(), "Dark".into()),
         ]);
-        let cases = [
-            (false, false, false, false, "[run]"),
-            (false, true, false, false, "working..."),
-            (false, false, true, false, "failed"),
-            (false, false, false, true, "Light"),
-            (true, false, false, true, "Dark"),
-        ];
-        for (active, pending, failed, runtime, expected) in cases {
-            assert_eq!(
-                action_value_label(active, pending, failed, runtime, &labels),
-                expected
-            );
-        }
+        assert_eq!(
+            action_value_label(false, false, false, true, false, &labels),
+            "Light"
+        );
+        assert_eq!(
+            action_value_label(true, false, false, true, false, &labels),
+            "Dark"
+        );
     }
 
     #[test]
@@ -2243,33 +2609,34 @@ default = "visible"
 
     #[test]
     fn toggle_actions_show_state_without_a_permanent_spinner() {
-        let mut control = RowControl::Action {
+        let mut row = rows(&[false]).remove(0);
+        row.variant = Some("toggle".into());
+        row.control = RowControl::Action {
             action: "enable_adapter".into(),
             active_action: Some("disable_adapter".into()),
             active_label: Some("Bluetooth".into()),
             active_query: Some("adapter_status".into()),
             active_value_from: Some("powered".into()),
             state_labels: std::collections::BTreeMap::new(),
-            variant: Some("toggle".into()),
             active: true,
             pending: false,
             error: None,
         };
-        assert!(!action_shows_spinner(&control));
+        assert!(!action_shows_spinner(&row));
 
-        let RowControl::Action { pending, .. } = &mut control else {
+        let RowControl::Action { pending, .. } = &mut row.control else {
             unreachable!();
         };
         *pending = true;
-        assert!(action_shows_spinner(&control));
+        assert!(action_shows_spinner(&row));
     }
 
     #[test]
     fn list_action_affordance_exposes_additional_action_count() {
         let cases = [
-            ("Connect", 1, "[Connect]"),
-            ("Disconnect", 2, "[Disconnect +1]"),
-            ("Pair", 6, "[Pair +5]"),
+            ("Connect", 1, "Connect"),
+            ("Disconnect", 2, "Disconnect +1"),
+            ("Pair", 6, "Pair +5"),
         ];
         for (primary, count, expected) in cases {
             assert_eq!(list_action_affordance(primary, count), expected);
@@ -2289,6 +2656,48 @@ default = "visible"
         ];
         for (edit, min, max, expected) in cases {
             assert_eq!(parsed_number(edit, min, max), expected, "edit: {edit:?}");
+        }
+    }
+
+    #[test]
+    fn slider_fraction_clamps_and_requires_a_valid_range() {
+        let cases = [
+            (50.0, Some(0.0), Some(100.0), 0.5),
+            (-1.0, Some(0.0), Some(100.0), 0.0),
+            (120.0, Some(0.0), Some(100.0), 1.0),
+            (4.0, None, Some(8.0), 0.0),
+            (4.0, Some(8.0), Some(8.0), 0.0),
+        ];
+        for (value, min, max, expected) in cases {
+            assert_eq!(
+                slider_fraction(value, min, max),
+                expected,
+                "value={value} min={min:?} max={max:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn compact_values_reuse_contract_placeholders_and_field_units() {
+        let placeholder_cases = [
+            ("value", Some("hint"), "value"),
+            ("", Some("hint"), "hint"),
+            ("", None, "Empty"),
+        ];
+        for (value, placeholder, expected) in placeholder_cases {
+            assert_eq!(text_or_placeholder(value, placeholder), expected);
+        }
+
+        let unit_cases = [
+            ("width_percent", Some("%")),
+            ("padding_px", Some("px")),
+            ("preview_pixels", Some("px")),
+            ("onset_ms", Some("ms")),
+            ("retry_seconds", Some("s")),
+            ("count", None),
+        ];
+        for (field, expected) in unit_cases {
+            assert_eq!(number_unit(field), expected, "field: {field}");
         }
     }
 

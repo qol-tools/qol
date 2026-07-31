@@ -15,8 +15,10 @@ use rows::{rows_from_resolved, sections_from_resolved, Row, RowSection};
 use view::{SettingsPanelState, SettingsPanelView};
 
 const PANEL_WIDTH: f32 = 520.0;
-const PANEL_ROW_HEIGHT: f32 = 36.0;
+const PANEL_ROW_HEIGHT: f32 = 40.0;
+const PANEL_DESCRIBED_ROW_HEIGHT: f32 = 56.0;
 const PANEL_LIST_HEADER_HEIGHT: f32 = 24.0;
+const PANEL_LIST_DESCRIPTION_HEIGHT: f32 = 16.0;
 const PANEL_LIST_ITEM_HEIGHT: f32 = 48.0;
 const PANEL_LIST_GAP: f32 = 4.0;
 const PANEL_LIST_PADDING_Y: f32 = 8.0;
@@ -24,7 +26,8 @@ const PANEL_LIST_HEIGHT: f32 = PANEL_LIST_PADDING_Y
     + PANEL_LIST_HEADER_HEIGHT
     + rows::LIST_MAX_VISIBLE as f32 * (PANEL_LIST_ITEM_HEIGHT + PANEL_LIST_GAP);
 const PANEL_SECTION_HEADER_HEIGHT: f32 = 26.0;
-const PANEL_CHROME_HEIGHT: f32 = 72.0;
+const PANEL_SECTION_MENU_ITEM_HEIGHT: f32 = 64.0;
+const PANEL_CHROME_HEIGHT: f32 = 88.0;
 
 #[derive(Clone)]
 pub struct SettingsPanel {
@@ -395,7 +398,7 @@ fn size_prepared_panel(
         .ok_or_else(|| anyhow::anyhow!("no monitor state available for the settings panel"))?;
     let available =
         monitor.bounds().size.height.to_f64() as f32 - 2.0 * crate::placement::CORNER_MARGIN;
-    let height = panel_height(&prepared.rows).min(available);
+    let height = panel_height(&prepared.rows, &prepared.sections).min(available);
     let body_max = height - PANEL_CHROME_HEIGHT;
     Ok(PreparedPanel {
         panel: prepared.panel,
@@ -439,15 +442,36 @@ fn activation_decision(active: Option<&str>, requested: &str) -> ActivationDecis
     }
 }
 
-fn panel_height(rows: &[Row]) -> f32 {
-    PANEL_CHROME_HEIGHT + rows.iter().map(view::row_height).sum::<f32>()
+fn panel_height(rows: &[Row], sections: &[RowSection]) -> f32 {
+    let section_menu = if sections.len() > 1 {
+        sections.len() as f32 * PANEL_SECTION_MENU_ITEM_HEIGHT
+    } else {
+        0.0
+    };
+    let section_content = sections
+        .iter()
+        .map(|section| {
+            section
+                .rows
+                .iter()
+                .map(|index| {
+                    if sections.len() == 1 {
+                        view::row_height(&rows[*index])
+                    } else {
+                        view::row_body_height(&rows[*index])
+                    }
+                })
+                .sum::<f32>()
+        })
+        .fold(0.0, f32::max);
+    PANEL_CHROME_HEIGHT + section_menu.max(section_content)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        activation_decision, panel_height, ActivationDecision, Row, PANEL_CHROME_HEIGHT,
-        PANEL_ROW_HEIGHT,
+        activation_decision, panel_height, ActivationDecision, Row, RowSection,
+        PANEL_CHROME_HEIGHT, PANEL_ROW_HEIGHT, PANEL_SECTION_MENU_ITEM_HEIGHT,
     };
     use crate::settings_panel::rows::RowControl;
 
@@ -457,6 +481,9 @@ mod tests {
             section_id: None,
             section_label: None,
             label: "Label".into(),
+            description: None,
+            placeholder: None,
+            variant: None,
             config_key: "key".into(),
             visibility: None,
             control,
@@ -469,8 +496,41 @@ mod tests {
         let color = vec![row(RowControl::Color("#ffffff".into()))];
         let expected = PANEL_CHROME_HEIGHT + PANEL_ROW_HEIGHT;
 
-        assert_eq!(panel_height(&toggle), expected);
-        assert_eq!(panel_height(&color), expected);
+        let sections = vec![RowSection {
+            label: "General".into(),
+            description: None,
+            rows: vec![0],
+        }];
+        assert_eq!(panel_height(&toggle, &sections), expected);
+        assert_eq!(panel_height(&color, &sections), expected);
+    }
+
+    #[test]
+    fn sectioned_panels_size_for_the_largest_visible_surface() {
+        let rows = vec![
+            row(RowControl::Toggle(false)),
+            row(RowControl::Toggle(false)),
+            row(RowControl::Toggle(false)),
+        ];
+        let sections = vec![
+            RowSection {
+                label: "One".into(),
+                description: None,
+                rows: vec![0],
+            },
+            RowSection {
+                label: "Two".into(),
+                description: None,
+                rows: vec![1, 2],
+            },
+        ];
+        let menu_height = 2.0 * PANEL_SECTION_MENU_ITEM_HEIGHT;
+        let largest_section = 2.0 * PANEL_ROW_HEIGHT;
+
+        assert_eq!(
+            panel_height(&rows, &sections),
+            PANEL_CHROME_HEIGHT + menu_height.max(largest_section)
+        );
     }
 
     #[test]
