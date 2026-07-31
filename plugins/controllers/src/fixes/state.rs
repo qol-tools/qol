@@ -2,12 +2,7 @@ use std::path::PathBuf;
 
 use super::FixTarget;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FixState {
-    Pending,
-    LiveOnly,
-    Applied,
-}
+pub use qol_host_fixes::FixState;
 
 pub struct SystemPaths {
     pub modprobe_dir: Option<PathBuf>,

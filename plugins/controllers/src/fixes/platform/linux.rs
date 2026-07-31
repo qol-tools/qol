@@ -1,8 +1,7 @@
 use super::super::state::SystemPaths;
 use super::FixPlatform;
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
 pub(super) struct Platform;
 
@@ -19,13 +18,7 @@ impl FixPlatform for Platform {
     }
 
     fn authorization_available() -> bool {
-        Command::new("pkexec")
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
+        qol_host_fixes::elevation::available()
     }
 
     fn apply(conf: &str, writes: &[(String, String)]) -> Result<()> {
@@ -36,15 +29,11 @@ while [ "$#" -ge 2 ]; do
   if [ -e "$1" ]; then printf '%s' "$2" > "$1"; fi
   shift 2
 done"#;
-        let mut command = Command::new("pkexec");
-        command.args(["sh", "-c", script, "qol-controllers", conf]);
+        let mut args = vec![conf.to_string()];
         for (path, value) in writes {
-            command.arg(path).arg(value);
+            args.push(path.clone());
+            args.push(value.clone());
         }
-        let status = command.status().context("failed to launch pkexec")?;
-        if !status.success() {
-            bail!("pkexec exited with {status}");
-        }
-        Ok(())
+        qol_host_fixes::elevation::run_privileged("qol-controllers", script, &args)
     }
 }
