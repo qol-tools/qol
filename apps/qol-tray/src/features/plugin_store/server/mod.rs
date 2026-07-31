@@ -138,6 +138,7 @@ async fn promote_shadow_to_stable(app_state: AppState) -> Result<u16> {
         }
     });
     crate::dev_generation::promote_to_stable();
+    crate::settings_surface::prewarm();
     complete_promotion_in_background(app_state);
     Ok(port)
 }

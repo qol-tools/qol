@@ -267,6 +267,8 @@ items = []
     #[cfg(unix)]
     #[test]
     fn running_gpui_daemon_ids_skips_headless_and_stopped_plugins() {
+        let root = tempfile::tempdir().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
         let mut manager = PluginManager::new();
         manager.plugins.insert(
             PluginId::new("plugin-gpui-running"),
