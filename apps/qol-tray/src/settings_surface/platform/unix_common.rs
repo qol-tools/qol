@@ -12,6 +12,8 @@ use qol_gpui::settings_panel::{SettingsPanel, SettingsRuntime, SettingsWindowHos
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
+use super::super::HostBoot;
+
 #[derive(Debug)]
 enum Command {
     Open(String),
@@ -40,11 +42,54 @@ pub(in crate::settings_surface) fn request(plugin_id: &str) -> anyhow::Result<bo
         );
         return Ok(true);
     }
+    spawn_host(Some(plugin_id)).context("failed to launch the native settings surface host")?;
+    qol_runtime::probe!(
+        "SURFACE_ACTIVATION",
+        "plugin={plugin_id} phase=dispatch outcome=spawned"
+    );
+    Ok(true)
+}
+
+const PREWARM_WATCH_WINDOW: Duration = Duration::from_secs(30);
+const PREWARM_WATCH_INTERVAL: Duration = Duration::from_secs(1);
+
+pub(in crate::settings_surface) fn prewarm() {
+    if crate::dev_generation::is_shadow() {
+        return;
+    }
+    std::thread::spawn(|| {
+        stop();
+        let deadline = std::time::Instant::now() + PREWARM_WATCH_WINDOW;
+        loop {
+            if !core_daemon::send_ping(&config()) {
+                let outcome = if spawn_host(None).is_ok() {
+                    "spawned"
+                } else {
+                    "spawn_failed"
+                };
+                #[cfg(not(debug_assertions))]
+                let _ = &outcome;
+                qol_runtime::probe!(
+                    "SURFACE_ACTIVATION",
+                    "plugin=none phase=prewarm outcome={outcome}"
+                );
+            }
+            if std::time::Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(PREWARM_WATCH_INTERVAL);
+        }
+    });
+}
+
+fn spawn_host(plugin_id: Option<&str>) -> anyhow::Result<()> {
     let executable = std::env::current_exe().context("failed to locate qol-tray executable")?;
     let mut command = std::process::Command::new(executable);
+    command.arg(super::super::HOST_ARGUMENT);
+    if let Some(plugin_id) = plugin_id {
+        command.arg(plugin_id);
+    }
     command
-        .arg(super::super::HOST_ARGUMENT)
-        .arg(plugin_id)
         .env(qol_conventions::ENV_PLUGIN_ID, "qol-settings-surface")
         .env(
             qol_conventions::ENV_STATE_SOCKET,
@@ -53,13 +98,8 @@ pub(in crate::settings_surface) fn request(plugin_id: &str) -> anyhow::Result<bo
         .env_remove(qol_conventions::ENV_DAEMON_SOCKET);
     crate::features::theme::apply_accent_env(&mut command);
     crate::features::theme::apply_theme_name_env(&mut command);
-    qol_process::spawn_detached(&mut command)
-        .context("failed to launch the native settings surface host")?;
-    qol_runtime::probe!(
-        "SURFACE_ACTIVATION",
-        "plugin={plugin_id} phase=dispatch outcome=spawned"
-    );
-    Ok(true)
+    qol_process::spawn_detached(&mut command)?;
+    Ok(())
 }
 
 pub(in crate::settings_surface) fn stop() {
@@ -84,30 +124,37 @@ pub(in crate::settings_surface) fn stop() {
     );
 }
 
-pub(in crate::settings_surface) fn run(plugin_id: String) -> anyhow::Result<()> {
-    let result = run_host(plugin_id.clone());
-    if let Err(error) = &result {
-        #[cfg(not(debug_assertions))]
-        let _ = error;
-        qol_runtime::probe!(
-            "SURFACE_ACTIVATION",
-            "plugin={plugin_id} phase=host outcome=failed error={error}"
-        );
-        open_browser_fallback(&plugin_id, "host_failed");
+pub(in crate::settings_surface) fn run(boot: HostBoot) -> anyhow::Result<()> {
+    match boot {
+        HostBoot::Warm => run_host(None),
+        HostBoot::Open(plugin_id) => {
+            let result = run_host(Some(plugin_id.clone()));
+            if let Err(error) = &result {
+                #[cfg(not(debug_assertions))]
+                let _ = error;
+                qol_runtime::probe!(
+                    "SURFACE_ACTIVATION",
+                    "plugin={plugin_id} phase=host outcome=failed error={error}"
+                );
+                open_browser_fallback(&plugin_id, "host_failed");
+            }
+            result
+        }
     }
-    result
 }
 
-fn run_host(plugin_id: String) -> anyhow::Result<()> {
-    if !crate::paths::is_safe_path_component(&plugin_id) {
-        bail!("invalid plugin ID for native settings: {plugin_id}");
-    }
-    if forward_open(&plugin_id) {
-        qol_runtime::probe!(
-            "SURFACE_ACTIVATION",
-            "plugin={plugin_id} phase=courier outcome=forwarded"
-        );
-        return Ok(());
+fn run_host(initial: Option<String>) -> anyhow::Result<()> {
+    if let Some(plugin_id) = &initial {
+        if !crate::paths::is_safe_path_component(plugin_id) {
+            bail!("invalid plugin ID for native settings: {plugin_id}");
+        }
+        if forward_open(plugin_id) {
+            qol_runtime::probe!(
+                "SURFACE_ACTIVATION",
+                "plugin={plugin_id} phase=courier outcome=forwarded"
+            );
+            return Ok(());
+        }
     }
 
     let config = config();
@@ -120,31 +167,47 @@ fn run_host(plugin_id: String) -> anyhow::Result<()> {
         .context("failed to create the native settings socket directory")?;
     let (command_tx, command_rx) = mpsc::channel();
     if !core_daemon::start_request_listener(&config, command_tx, parse_request) {
-        if forward_open(&plugin_id) {
-            qol_runtime::probe!(
-                "SURFACE_ACTIVATION",
-                "plugin={plugin_id} phase=courier outcome=forwarded_after_race"
-            );
-            return Ok(());
-        }
-        bail!("native settings surface singleton could not start or accept a request");
+        return match &initial {
+            Some(plugin_id) => {
+                if forward_open(plugin_id) {
+                    qol_runtime::probe!(
+                        "SURFACE_ACTIVATION",
+                        "plugin={plugin_id} phase=courier outcome=forwarded_after_race"
+                    );
+                    return Ok(());
+                }
+                bail!("native settings surface singleton could not start or accept a request")
+            }
+            None => {
+                qol_runtime::probe!(
+                    "SURFACE_ACTIVATION",
+                    "plugin=none phase=prewarm outcome=already_running"
+                );
+                Ok(())
+            }
+        };
     }
 
+    let boot_label = initial.as_deref().unwrap_or("none");
+    #[cfg(not(debug_assertions))]
+    let _ = &boot_label;
     qol_runtime::probe!(
         "SURFACE_ACTIVATION",
-        "plugin={plugin_id} phase=host outcome=started"
+        "plugin={boot_label} phase=host outcome=started"
     );
     Application::new().run(move |cx: &mut App| {
         qol_gpui::platform::set_accessory_policy();
         qol_gpui::keepalive::open_keepalive(cx, Some("qol-settings-surface"));
         let tracker = MonitorTracker::start(cx);
         let host = Rc::new(RefCell::new(SettingsWindowHost::default()));
-        let activation_host = host.clone();
-        let activation_tracker = tracker.clone();
-        cx.spawn(async move |cx| {
-            activate(activation_host, activation_tracker, plugin_id, cx).await;
-        })
-        .detach();
+        if let Some(plugin_id) = initial {
+            let activation_host = host.clone();
+            let activation_tracker = tracker.clone();
+            cx.spawn(async move |cx| {
+                activate(activation_host, activation_tracker, plugin_id, cx).await;
+            })
+            .detach();
+        }
         spawn_command_loop(command_rx, host, tracker, cx);
     });
     core_daemon::cleanup(&config);
