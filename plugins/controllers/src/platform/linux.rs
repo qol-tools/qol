@@ -43,9 +43,44 @@ struct TrackedInput {
     product: u16,
     transport: &'static str,
     bluetooth: Option<BluetoothTarget>,
-    left_stick: KeyCode,
-    right_stick: KeyCode,
+    layout: ButtonLayout,
     device: Device,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ButtonLayout {
+    Standard,
+    GuliKit,
+}
+
+impl ButtonLayout {
+    fn face_west(self) -> KeyCode {
+        match self {
+            Self::Standard => KeyCode::BTN_WEST,
+            Self::GuliKit => KeyCode::BTN_C,
+        }
+    }
+
+    fn shoulders(self) -> (KeyCode, KeyCode) {
+        match self {
+            Self::Standard => (KeyCode::BTN_TL, KeyCode::BTN_TR),
+            Self::GuliKit => (KeyCode::BTN_WEST, KeyCode::BTN_Z),
+        }
+    }
+
+    fn select_start(self) -> (KeyCode, KeyCode) {
+        match self {
+            Self::Standard => (KeyCode::BTN_SELECT, KeyCode::BTN_START),
+            Self::GuliKit => (KeyCode::BTN_TL, KeyCode::BTN_TR),
+        }
+    }
+
+    fn stick_clicks(self) -> (KeyCode, KeyCode) {
+        match self {
+            Self::Standard => (KeyCode::BTN_THUMBL, KeyCode::BTN_THUMBR),
+            Self::GuliKit => (KeyCode::BTN_TL2, KeyCode::BTN_TR2),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -149,7 +184,7 @@ impl TrackedInput {
         }
         let handler = detected.event_handler.as_deref()?;
         let device = Device::open(Path::new(INPUT_DEVICE_ROOT).join(handler)).ok()?;
-        let (left_stick, right_stick) = stick_click_codes(detected);
+        let layout = button_layout(detected);
         let bluetooth = bluetooth_target(detected);
         Some(Self {
             name: detected.name.clone(),
@@ -157,8 +192,7 @@ impl TrackedInput {
             product: detected.product,
             transport: transport_key(detected.bus),
             bluetooth,
-            left_stick,
-            right_stick,
+            layout,
             device,
         })
     }
@@ -184,6 +218,7 @@ impl TrackedInput {
             .and_then(|target| target.adapter.as_ref())
             .and_then(|name| adapters.get(name))
             .cloned();
+        let (left_stick, right_stick) = self.layout.stick_clicks();
         Some(NativeControllerInput {
             name: self.name.clone(),
             vendor: self.vendor,
@@ -196,14 +231,14 @@ impl TrackedInput {
             buttons: vec![
                 NativeButtonInput {
                     index: LEFT_STICK_BUTTON,
-                    pressed: keys.contains(self.left_stick),
+                    pressed: keys.contains(left_stick),
                 },
                 NativeButtonInput {
                     index: RIGHT_STICK_BUTTON,
-                    pressed: keys.contains(self.right_stick),
+                    pressed: keys.contains(right_stick),
                 },
             ],
-            state: gamepad_state(&keys, &axes, self.left_stick, self.right_stick),
+            state: gamepad_state(&keys, &axes, self.layout),
         })
     }
 }
@@ -211,9 +246,11 @@ impl TrackedInput {
 fn gamepad_state(
     keys: &evdev::AttributeSet<KeyCode>,
     axes: &HashMap<AbsoluteAxisCode, AbsInfo>,
-    left_stick: KeyCode,
-    right_stick: KeyCode,
+    layout: ButtonLayout,
 ) -> NativeGamepadState {
+    let (left_stick, right_stick) = layout.stick_clicks();
+    let (left_shoulder, right_shoulder) = layout.shoulders();
+    let (select, start) = layout.select_start();
     let left_trigger = unipolar_axis(axes.get(&AbsoluteAxisCode::ABS_Z));
     let right_trigger = unipolar_axis(axes.get(&AbsoluteAxisCode::ABS_RZ));
     let hat_x = bipolar_axis(axes.get(&AbsoluteAxisCode::ABS_HAT0X));
@@ -221,10 +258,10 @@ fn gamepad_state(
     let specs = [
         (0, "South", key_value(keys, KeyCode::BTN_SOUTH)),
         (1, "East", key_value(keys, KeyCode::BTN_EAST)),
-        (2, "West", key_value(keys, KeyCode::BTN_WEST)),
+        (2, "West", key_value(keys, layout.face_west())),
         (3, "North", key_value(keys, KeyCode::BTN_NORTH)),
-        (4, "Left shoulder", key_value(keys, KeyCode::BTN_TL)),
-        (5, "Right shoulder", key_value(keys, KeyCode::BTN_TR)),
+        (4, "Left shoulder", key_value(keys, left_shoulder)),
+        (5, "Right shoulder", key_value(keys, right_shoulder)),
         (
             6,
             "Left trigger",
@@ -235,8 +272,8 @@ fn gamepad_state(
             "Right trigger",
             right_trigger.max(digital_trigger_value(keys, KeyCode::BTN_TR2, right_stick)),
         ),
-        (8, "Select", key_value(keys, KeyCode::BTN_SELECT)),
-        (9, "Start", key_value(keys, KeyCode::BTN_START)),
+        (8, "Select", key_value(keys, select)),
+        (9, "Start", key_value(keys, start)),
         (10, "Left stick", key_value(keys, left_stick)),
         (11, "Right stick", key_value(keys, right_stick)),
         (
@@ -565,7 +602,7 @@ fn parse_hcitool_rssi(output: &str) -> Option<i16> {
         .ok()
 }
 
-fn stick_click_codes(device: &DetectedDevice) -> (KeyCode, KeyCode) {
+fn button_layout(device: &DetectedDevice) -> ButtonLayout {
     if device.vendor == 0x045e
         && device.product == 0x02e0
         && device.name == "GuliKit Controller XW"
@@ -574,9 +611,9 @@ fn stick_click_codes(device: &DetectedDevice) -> (KeyCode, KeyCode) {
             .as_deref()
             .is_some_and(|driver| matches!(driver, "hid-generic" | "hid_generic"))
     {
-        return (KeyCode::BTN_TL2, KeyCode::BTN_TR2);
+        return ButtonLayout::GuliKit;
     }
-    (KeyCode::BTN_THUMBL, KeyCode::BTN_THUMBR)
+    ButtonLayout::Standard
 }
 
 pub fn read_devices() -> Vec<DetectedDevice> {
@@ -639,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn stick_click_codes_apply_only_the_gulikit_bluetooth_quirk() {
+    fn button_layout_applies_only_the_gulikit_hid_generic_quirk() {
         let mut devices = detection::parse_devices(
             "I: Bus=0005 Vendor=045e Product=02e0 Version=0903\n\
              N: Name=\"GuliKit Controller XW\"\n\
@@ -654,13 +691,40 @@ mod tests {
         devices[0].driver = Some("hid-generic".into());
         devices[1].driver = Some("xpadneo".into());
 
-        let gulikit = stick_click_codes(&devices.remove(0));
-        let xpadneo = stick_click_codes(&devices.remove(0));
-        let standard = stick_click_codes(&devices.remove(0));
+        let gulikit = button_layout(&devices.remove(0));
+        let xpadneo = button_layout(&devices.remove(0));
+        let standard = button_layout(&devices.remove(0));
 
-        assert_eq!(gulikit, (KeyCode::BTN_TL2, KeyCode::BTN_TR2));
-        assert_eq!(xpadneo, (KeyCode::BTN_THUMBL, KeyCode::BTN_THUMBR));
-        assert_eq!(standard, (KeyCode::BTN_THUMBL, KeyCode::BTN_THUMBR));
+        assert_eq!(gulikit, ButtonLayout::GuliKit);
+        assert_eq!(xpadneo, ButtonLayout::Standard);
+        assert_eq!(standard, ButtonLayout::Standard);
+    }
+
+    #[test]
+    fn gulikit_layout_remaps_shifted_hid_generic_button_codes() {
+        let cases = [
+            (KeyCode::BTN_SOUTH, 0),
+            (KeyCode::BTN_EAST, 1),
+            (KeyCode::BTN_C, 2),
+            (KeyCode::BTN_NORTH, 3),
+            (KeyCode::BTN_WEST, 4),
+            (KeyCode::BTN_Z, 5),
+            (KeyCode::BTN_TL, 8),
+            (KeyCode::BTN_TR, 9),
+            (KeyCode::BTN_TL2, 10),
+            (KeyCode::BTN_TR2, 11),
+        ];
+        for (code, expected_index) in cases {
+            let keys = evdev::AttributeSet::from_iter([code]);
+            let state = gamepad_state(&keys, &HashMap::new(), ButtonLayout::GuliKit);
+            let pressed = state
+                .buttons
+                .iter()
+                .filter(|button| button.pressed)
+                .map(|button| button.index)
+                .collect::<Vec<_>>();
+            assert_eq!(pressed, [expected_index], "code: {code:?}");
+        }
     }
 
     #[test]
