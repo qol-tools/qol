@@ -1560,7 +1560,7 @@ async fn daemon_loop(
                             track_discovered_device(&adapter, address).await;
                         }
                         if config.auto_reconnect && retries.contains_key(&address) {
-                            retries.entry(address).or_default().request_now(Instant::now());
+                            retries.entry(address).or_default().request_when_idle(Instant::now());
                         }
                         spawn_audio_profile_ensure(address, AudioAdoption::Adopt);
                         qol_runtime::probe!(
@@ -1573,7 +1573,7 @@ async fn daemon_loop(
                     Some(AdapterEvent::DeviceRemoved(address)) => {
                         subscribed.remove(&address);
                         if config.auto_reconnect && retries.contains_key(&address) {
-                            retries.entry(address).or_default().request_now(Instant::now());
+                            retries.entry(address).or_default().request_when_idle(Instant::now());
                         }
                         qol_runtime::probe!("BLUETOOTH_DEVICE_REMOVED", "device={}", redacted(address));
                     }
@@ -1612,7 +1612,7 @@ async fn daemon_loop(
                         state.connected();
                     }
                     if !connected && config.auto_reconnect {
-                        state.request_now(Instant::now());
+                        state.request_when_idle(Instant::now());
                     }
                 }
                 qol_runtime::probe!(

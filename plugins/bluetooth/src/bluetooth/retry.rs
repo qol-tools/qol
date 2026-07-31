@@ -32,6 +32,12 @@ impl RetryState {
         self.due = Some(now);
     }
 
+    pub fn request_when_idle(&mut self, now: Instant) {
+        if self.due.is_none() {
+            self.due = Some(now);
+        }
+    }
+
     pub fn connected(&mut self) {
         self.failures = 0;
         self.due = None;
@@ -72,6 +78,19 @@ mod tests {
                 "failures={failures}"
             );
         }
+    }
+
+    #[test]
+    fn device_events_wake_an_idle_retry_without_shortening_a_backoff() {
+        let now = Instant::now();
+        let policy = RetryPolicy::from_seconds(1.0, 60.0);
+        let mut state = RetryState::default();
+        let delay = state.failed(now, policy);
+        state.request_when_idle(now);
+        assert_eq!(state.due(), Some(now + delay), "backoff must survive");
+        state.connected();
+        state.request_when_idle(now);
+        assert_eq!(state.due(), Some(now), "idle retry must wake");
     }
 
     #[test]
