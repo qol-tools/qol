@@ -496,7 +496,7 @@ pub(super) fn frame_accent(dash: &Dash) -> Color {
         Color::Red
     } else if dash.worktree_diverged() {
         ORANGE
-    } else if dash.armed {
+    } else if dash.armed || dash.is_busy() {
         Color::Yellow
     } else {
         BASE_ACCENT

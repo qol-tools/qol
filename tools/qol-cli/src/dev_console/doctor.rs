@@ -680,6 +680,22 @@ mod tests {
     }
 
     #[test]
+    fn running_fixes_hold_the_frame_yellow_after_the_arm_is_consumed() {
+        let mut dash = Dash::new(Vec::new());
+        dash.armed = false;
+        dash.doctor.manual = Some(manual_doctor(DoctorMode::Fix, "", now_unix_ms()));
+        assert!(dash.is_busy());
+        assert_eq!(
+            super::super::draw::frame_accent(&dash),
+            Color::Yellow,
+            "the frame must not fall back to green while fixes run"
+        );
+
+        dash.doctor.manual = None;
+        assert_eq!(super::super::draw::frame_accent(&dash), Color::Green);
+    }
+
+    #[test]
     fn running_fixes_show_in_the_activity_sign_instead_of_the_page_body() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Doctor;

@@ -475,6 +475,10 @@ impl Dash {
         matches!(self.reload, Reload::Running { .. })
     }
 
+    pub(super) fn is_busy(&self) -> bool {
+        self.activity().is_some()
+    }
+
     pub(super) fn activity(&self) -> Option<Activity> {
         match &self.reload {
             Reload::Running { activity, .. } => Some(activity.activity()),

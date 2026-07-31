@@ -42,8 +42,11 @@ The `qol` CLI: dev console (`qol dev`), emu workflows (`qol emu`), doctor, trace
   change between renders (paths, versions) belong in `qol emu doctor` or the
   empty state, not on every frame.
 - **One accent source.** `draw()` derives the frame accent once
-  (`frame_accent`: red RELOADING > orange WORKTREE > yellow ARMED >
+  (`frame_accent`: red RELOADING > orange WORKTREE > yellow ARMED-or-BUSY >
   `BASE_ACCENT` green) and publishes it via `render_util::set_frame_accent`;
+  green means idle, so the frame must never fall back to it while an activity
+  runs - `Dash::is_busy` (any live `Activity`) holds it yellow even though
+  starting the job consumed the arm;
   every "healthy/brand green" in any view reads `render_util::accent()`.
   Never write `Color::Green` in render code - hardcoding it splits the color
   source and that element stops following the frame state. Red/yellow error
