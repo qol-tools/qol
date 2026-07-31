@@ -280,12 +280,13 @@ impl SettingsPanelView {
         }
         let editing = matches!(self.active_control, Some(ActiveControl::Edit(_)));
         if editing && matches!(key, "up" | "down") {
+            if self.step_number_edit(if key == "up" { 1.0 } else { -1.0 }) {
+                cx.notify();
+                return;
+            }
             self.commit_edit();
         }
         let Some(intent) = intent(key, key_char, editing) else {
-            if self.begin_number_entry(key_char) {
-                cx.notify();
-            }
             return;
         };
         match intent {
@@ -299,20 +300,12 @@ impl SettingsPanelView {
                     adjacent_visible_row(&self.current_visible_rows(), self.selected, 1);
                 self.sync_scroll();
             }
-            Intent::Toggle => self.toggle(),
             Intent::Left => {
-                let navigates_back = self
-                    .rows
-                    .get(self.selected)
-                    .is_some_and(|row| left_navigates_back(&row.control, self.sections.len() > 1));
-                if navigates_back {
+                if self.sections.len() > 1 {
                     self.open_section_menu();
                     cx.notify();
-                    return;
                 }
-                self.adjust(-1.0);
             }
-            Intent::Right => self.adjust(1.0),
             Intent::Activate => self.activate(window, cx),
             Intent::CommitEdit => self.commit_edit(),
             Intent::Backspace => {
@@ -539,45 +532,6 @@ impl SettingsPanelView {
             *value = !*value;
             self.persist();
         }
-    }
-
-    fn adjust(&mut self, direction: f64) {
-        let Some(row) = self.rows.get_mut(self.selected) else {
-            return;
-        };
-        match &mut row.control {
-            RowControl::Select { options, index, .. } => {
-                let len = options.len();
-                if len == 0 {
-                    return;
-                }
-                *index = (*index + if direction > 0.0 { 1 } else { len - 1 }) % len;
-            }
-            RowControl::Number {
-                value,
-                min,
-                max,
-                step,
-            } => {
-                let mut next = *value + direction * *step;
-                if let Some(min) = min {
-                    next = next.max(*min);
-                }
-                if let Some(max) = max {
-                    next = next.min(*max);
-                }
-                *value = next;
-            }
-            RowControl::Toggle(_)
-            | RowControl::MultiSelect { .. }
-            | RowControl::Text(_)
-            | RowControl::TextList(_)
-            | RowControl::Color(_)
-            | RowControl::Action { .. }
-            | RowControl::Status { .. }
-            | RowControl::List { .. } => return,
-        }
-        self.persist();
     }
 
     fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -832,20 +786,6 @@ impl SettingsPanelView {
         item.error = Some(error);
     }
 
-    fn begin_number_entry(&mut self, key_char: Option<&str>) -> bool {
-        let Some(seed) = key_char.filter(|ch| is_number_seed(ch)) else {
-            return false;
-        };
-        let Some(row) = self.rows.get(self.selected) else {
-            return false;
-        };
-        if !matches!(row.control, RowControl::Number { .. }) {
-            return false;
-        }
-        self.active_control = Some(ActiveControl::Edit(seed.to_string()));
-        true
-    }
-
     fn begin_edit(&mut self) {
         let Some(row) = self.rows.get(self.selected) else {
             return;
@@ -863,6 +803,23 @@ impl SettingsPanelView {
             | RowControl::List { .. } => return,
         };
         self.active_control = Some(ActiveControl::Edit(edit));
+    }
+
+    fn step_number_edit(&mut self, direction: f64) -> bool {
+        let Some(ActiveControl::Edit(edit)) = self.active_control.as_mut() else {
+            return false;
+        };
+        let Some(RowControl::Number {
+            value,
+            min,
+            max,
+            step,
+        }) = self.rows.get(self.selected).map(|row| &row.control)
+        else {
+            return false;
+        };
+        *edit = stepped_number(edit, *value, *min, *max, *step, direction);
+        true
     }
 
     fn commit_edit(&mut self) {
@@ -1946,13 +1903,6 @@ impl Render for SettingsPanelView {
     }
 }
 
-fn is_number_seed(ch: &str) -> bool {
-    !ch.is_empty()
-        && ch
-            .chars()
-            .all(|c| c.is_ascii_digit() || c == '-' || c == '.')
-}
-
 fn dropdown_items(options: &[SelectOption]) -> Vec<DropdownItem> {
     options
         .iter()
@@ -1972,6 +1922,20 @@ fn parsed_number(edit: &str, min: Option<f64>, max: Option<f64>) -> Option<f64> 
         value = value.min(max);
     }
     Some(value)
+}
+
+fn stepped_number(
+    edit: &str,
+    fallback: f64,
+    min: Option<f64>,
+    max: Option<f64>,
+    step: f64,
+    direction: f64,
+) -> String {
+    let current = parsed_number(edit, min, max).unwrap_or(fallback);
+    let next =
+        parsed_number(&(current + direction * step).to_string(), min, max).unwrap_or(current);
+    format_number(next)
 }
 
 fn parsed_color(text: &str) -> Option<u32> {
@@ -2093,9 +2057,7 @@ fn list_action_affordance(primary: &str, action_count: usize) -> String {
 enum Intent {
     Up,
     Down,
-    Toggle,
     Left,
-    Right,
     Activate,
     CommitEdit,
     Backspace,
@@ -2152,14 +2114,6 @@ fn action_shows_spinner(row: &Row) -> bool {
     }
 }
 
-fn left_navigates_back(control: &RowControl, has_section_menu: bool) -> bool {
-    has_section_menu
-        && !matches!(
-            control,
-            RowControl::Number { .. } | RowControl::Select { .. }
-        )
-}
-
 fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option<Intent> {
     if editing {
         return match key {
@@ -2172,9 +2126,7 @@ fn intent(key: &str, key_char: Option<&str>, editing: bool) -> Option<Intent> {
     match key {
         "up" => Some(Intent::Up),
         "down" => Some(Intent::Down),
-        "space" => Some(Intent::Toggle),
         "left" => Some(Intent::Left),
-        "right" => Some(Intent::Right),
         "enter" | "return" => Some(Intent::Activate),
         "escape" => Some(Intent::Close),
         _ => None,
@@ -2301,13 +2253,13 @@ fn initial_active_section(section_count: usize) -> Option<usize> {
 mod tests {
     use super::{
         action_refresh_payload, action_shows_spinner, action_value_label, adjacent_visible_row,
-        binary_state_label, initial_active_section, intent, is_number_seed, left_navigates_back,
-        list_action_affordance, list_intent, number_unit, parsed_color, parsed_number,
-        row_body_height, scroll_offset_for, slider_fraction, text_or_placeholder,
-        visible_row_window, Intent, ListIntent, Row, RowControl,
+        binary_state_label, initial_active_section, intent, list_action_affordance, list_intent,
+        number_unit, parsed_color, parsed_number, row_body_height, scroll_offset_for,
+        slider_fraction, stepped_number, text_or_placeholder, visible_row_window, Intent,
+        ListIntent, Row, RowControl,
     };
     use crate::scroll_list::ScrollList;
-    use crate::settings_panel::rows::{rows_from_resolved, visible_row_indices, SelectOption};
+    use crate::settings_panel::rows::{rows_from_resolved, visible_row_indices};
 
     fn rows(headers: &[bool]) -> Vec<Row> {
         headers
@@ -2461,21 +2413,6 @@ default = "visible"
     }
 
     #[test]
-    fn is_number_seed_accepts_numeric_starters_only() {
-        let cases = [
-            ("5", true),
-            ("-", true),
-            (".", true),
-            ("a", false),
-            (" ", false),
-            ("", false),
-        ];
-        for (ch, expected) in cases {
-            assert_eq!(is_number_seed(ch), expected, "char: {ch:?}");
-        }
-    }
-
-    #[test]
     fn list_intent_activates_enter_instead_of_closing_navigation() {
         let cases = [
             ("up", Some(ListIntent::Up)),
@@ -2576,38 +2513,6 @@ default = "visible"
     }
 
     #[test]
-    fn left_returns_to_sections_unless_the_row_adjusts_horizontally() {
-        let toggle = RowControl::Toggle(false);
-        let number = RowControl::Number {
-            value: 4.0,
-            min: Some(1.0),
-            max: Some(8.0),
-            step: 1.0,
-        };
-        let select = RowControl::Select {
-            options: vec![
-                SelectOption::plain("one", "One"),
-                SelectOption::plain("two", "Two"),
-            ],
-            index: 0,
-            dynamic: None,
-        };
-        let cases = [
-            (&toggle, false, false),
-            (&toggle, true, true),
-            (&number, true, false),
-            (&select, true, false),
-        ];
-        for (control, has_sections, expected) in cases {
-            assert_eq!(
-                left_navigates_back(control, has_sections),
-                expected,
-                "control: {control:?}, sections: {has_sections}"
-            );
-        }
-    }
-
-    #[test]
     fn toggle_actions_show_state_without_a_permanent_spinner() {
         let mut row = rows(&[false]).remove(0);
         row.variant = Some("toggle".into());
@@ -2656,6 +2561,23 @@ default = "visible"
         ];
         for (edit, min, max, expected) in cases {
             assert_eq!(parsed_number(edit, min, max), expected, "edit: {edit:?}");
+        }
+    }
+
+    #[test]
+    fn activated_numbers_step_and_clamp_without_persisting_partial_text() {
+        let cases = [
+            ("4", 4.0, Some(0.0), Some(10.0), 2.0, 1.0, "6"),
+            ("4", 4.0, Some(0.0), Some(10.0), 2.0, -1.0, "2"),
+            ("10", 10.0, Some(0.0), Some(10.0), 2.0, 1.0, "10"),
+            ("invalid", 4.0, None, None, 0.5, 1.0, "4.5"),
+        ];
+        for (edit, fallback, min, max, step, direction, expected) in cases {
+            assert_eq!(
+                stepped_number(edit, fallback, min, max, step, direction),
+                expected,
+                "edit: {edit:?} direction: {direction}"
+            );
         }
     }
 
@@ -2719,13 +2641,17 @@ default = "visible"
     }
 
     #[test]
-    fn intent_maps_navigation_editing_and_close() {
+    fn inactive_inputs_require_enter_before_control_keys_take_effect() {
         let cases = [
             ("up", None, false, Some(Intent::Up)),
             ("down", None, false, Some(Intent::Down)),
-            ("space", None, false, Some(Intent::Toggle)),
             ("left", None, false, Some(Intent::Left)),
-            ("right", None, false, Some(Intent::Right)),
+            ("right", None, false, None),
+            ("space", None, false, None),
+            ("5", Some("5"), false, None),
+            ("-", Some("-"), false, None),
+            (".", Some("."), false, None),
+            ("a", Some("a"), false, None),
             ("enter", None, false, Some(Intent::Activate)),
             ("return", None, false, Some(Intent::Activate)),
             ("escape", None, false, Some(Intent::Close)),
@@ -2734,7 +2660,6 @@ default = "visible"
             ("escape", None, true, Some(Intent::CancelEdit)),
             ("backspace", None, true, Some(Intent::Backspace)),
             ("a", Some("a"), true, Some(Intent::Insert("a".into()))),
-            ("a", Some("a"), false, None),
         ];
         for (key, ch, editing, expected) in cases {
             assert_eq!(
