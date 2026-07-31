@@ -89,6 +89,30 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
+[profile.dev.package.gpui]
+opt-level = 2
+
+[profile.dev.package.gpui_util]
+opt-level = 2
+
+[profile.dev.package.taffy]
+opt-level = 2
+
+[profile.dev.package.blade-graphics]
+opt-level = 2
+
+[profile.dev.package.cosmic-text]
+opt-level = 2
+
+[profile.dev.package.rustybuzz]
+opt-level = 2
+
+[profile.dev.package.swash]
+opt-level = 2
+
+[profile.dev.package.zeno]
+opt-level = 2
+
 [profile.dev.package.candle-core]
 opt-level = 2
 
