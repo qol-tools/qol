@@ -1,10 +1,10 @@
 schema_version = 1
 title = "Bluetooth"
-description = "Choose devices that qol should keep connected through BlueZ."
+description = "Choose the Bluetooth devices qol should keep connected."
 
 [section.devices]
 label = "Devices"
-description = "Search for nearby devices and inspect the devices currently paired with BlueZ."
+description = "Search for nearby devices and inspect the devices this computer is already paired with."
 
 [field.adapter_power]
 type = "action"
