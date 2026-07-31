@@ -460,6 +460,78 @@ mod tests {
         object.write().unwrap()
     }
 
+    fn executable_macho_with_sectionless_segment(target: &str) -> Vec<u8> {
+        const SEGMENT_COMMAND_SIZE: usize = 72;
+        const SECTION_SIZE: usize = 80;
+
+        fn fixed_name(name: &str) -> [u8; 16] {
+            let mut buffer = [0_u8; 16];
+            buffer[..name.len()].copy_from_slice(name.as_bytes());
+            buffer
+        }
+
+        let frame = frame(target);
+        let size_of_commands = SEGMENT_COMMAND_SIZE * 2 + SECTION_SIZE;
+        let frame_offset = 32 + size_of_commands;
+
+        let mut output = Vec::new();
+        output.extend(0xfeedfacf_u32.to_le_bytes());
+        output.extend(0x0100000c_u32.to_le_bytes());
+        output.extend(0_u32.to_le_bytes());
+        output.extend(2_u32.to_le_bytes());
+        output.extend(2_u32.to_le_bytes());
+        output.extend((size_of_commands as u32).to_le_bytes());
+        output.extend(0_u32.to_le_bytes());
+        output.extend(0_u32.to_le_bytes());
+
+        output.extend(0x19_u32.to_le_bytes());
+        output.extend((SEGMENT_COMMAND_SIZE as u32).to_le_bytes());
+        output.extend(fixed_name("__PAGEZERO"));
+        output.extend(0_u64.to_le_bytes());
+        output.extend(0x1_0000_0000_u64.to_le_bytes());
+        output.extend(0_u64.to_le_bytes());
+        output.extend(0_u64.to_le_bytes());
+        output.extend(0_u32.to_le_bytes());
+        output.extend(0_u32.to_le_bytes());
+        output.extend(0_u32.to_le_bytes());
+        output.extend(0_u32.to_le_bytes());
+
+        output.extend(0x19_u32.to_le_bytes());
+        output.extend(((SEGMENT_COMMAND_SIZE + SECTION_SIZE) as u32).to_le_bytes());
+        output.extend(fixed_name("__DATA"));
+        output.extend(0x1_0000_0000_u64.to_le_bytes());
+        output.extend(0x1000_u64.to_le_bytes());
+        output.extend((frame_offset as u64).to_le_bytes());
+        output.extend((frame.len() as u64).to_le_bytes());
+        output.extend(3_u32.to_le_bytes());
+        output.extend(3_u32.to_le_bytes());
+        output.extend(1_u32.to_le_bytes());
+        output.extend(0_u32.to_le_bytes());
+
+        output.extend(fixed_name(qol_conventions::artifact::MACHO_SECTION_NAME));
+        output.extend(fixed_name("__DATA"));
+        output.extend(0x1_0000_0000_u64.to_le_bytes());
+        output.extend((frame.len() as u64).to_le_bytes());
+        output.extend((frame_offset as u32).to_le_bytes());
+        for _ in 0..7 {
+            output.extend(0_u32.to_le_bytes());
+        }
+
+        output.extend(frame);
+        output
+    }
+
+    #[test]
+    fn executable_macho_sections_survive_sectionless_segments() {
+        let bytes = executable_macho_with_sectionless_segment("aarch64-apple-darwin");
+
+        let inspected = inspect_bytes(&bytes).unwrap();
+
+        assert_eq!(inspected.format, ArtifactFormat::MachO);
+        assert_eq!(inspected.slices.len(), 1);
+        assert_eq!(inspected.slices[0].identity.binary, "foo");
+    }
+
     fn fat_macho(slices: &[(Architecture, Vec<u8>)]) -> Vec<u8> {
         let header_length = 8 + slices.len() * 20;
         let mut offset = header_length;
