@@ -385,6 +385,24 @@ class BuildNodeTests(unittest.TestCase):
                 ],
             ),
             (
+                "plugin",
+                "qol-voice",
+                "x86_64-unknown-linux-gnu",
+                [
+                    [
+                        "cargo",
+                        "build",
+                        "--release",
+                        "-p",
+                        "qol-voice",
+                        "--target",
+                        "x86_64-unknown-linux-gnu",
+                        "--features",
+                        "local-stt",
+                    ]
+                ],
+            ),
+            (
                 "qol-tray-linux",
                 None,
                 None,

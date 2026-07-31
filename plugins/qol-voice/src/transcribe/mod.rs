@@ -208,7 +208,7 @@ mod tests {
         assert!(ids.contains(&"websocket"));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(feature = "local-stt")]
     #[test]
     fn automatic_selection_uses_a_registered_provider_without_loading_it() {
         let selected = create_transcriber(&TranscriberRequest::automatic()).unwrap();
