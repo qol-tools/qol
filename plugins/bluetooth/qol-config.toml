@@ -125,3 +125,14 @@ default = 60
 min = 5
 max = 600
 step = 5
+
+[section.audio]
+label = "Audio"
+description = "Where system audio goes when a Bluetooth audio device connects."
+
+[field.set_default_output]
+type = "boolean"
+label = "Set as default output on connect"
+description = "Make a connected audio device the system output. The mic stays on your current input because qol pins the high-quality A2DP profile, which carries no microphone."
+section = "audio"
+default = true

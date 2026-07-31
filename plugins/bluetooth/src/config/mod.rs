@@ -11,6 +11,7 @@ pub struct ReconnectConfig {
     pub managed_devices: Vec<String>,
     pub auto_reconnect: bool,
     pub power_on_adapter: bool,
+    pub set_default_output: bool,
     pub retry_initial_seconds: f64,
     pub retry_max_seconds: f64,
 }
@@ -39,6 +40,7 @@ mod tests {
         assert!(config.managed_devices.is_empty());
         assert!(config.auto_reconnect);
         assert!(config.power_on_adapter);
+        assert!(config.set_default_output);
         assert_eq!(config.retry_initial_seconds, 1.0);
         assert_eq!(config.retry_max_seconds, 60.0);
     }
