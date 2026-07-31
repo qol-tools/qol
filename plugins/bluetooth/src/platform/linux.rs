@@ -38,6 +38,8 @@ static DISCOVERY_STATE: LazyLock<RwLock<DiscoveryState>> =
 static DEVICE_ACTION_STATE: LazyLock<RwLock<Option<DeviceActionState>>> =
     LazyLock::new(|| RwLock::new(None));
 static ADAPTER_STATE: LazyLock<RwLock<Option<AdapterHealth>>> = LazyLock::new(|| RwLock::new(None));
+static AUDIO_REPAIRS: LazyLock<RwLock<HashSet<Address>>> =
+    LazyLock::new(|| RwLock::new(HashSet::new()));
 
 type DeviceStreams = SelectAll<LocalBoxStream<'static, (Address, bool)>>;
 type DiscoveryStream = LocalBoxStream<'static, AdapterEvent>;
@@ -98,6 +100,23 @@ struct DiscoverySession {
 enum AudioAdoption {
     Adopt,
     Keep,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PipewireActivation {
+    Active,
+    Stale,
+    ServerUnavailable,
+}
+
+impl PipewireActivation {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Stale => "stale",
+            Self::ServerUnavailable => "server_unavailable",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -824,16 +843,21 @@ async fn ensure_audio_playback_profile(
     mode: ConnectionMode,
 ) -> Result<()> {
     connect_audio_profile(device, address, mode).await?;
-    if activate_pipewire_a2dp(address, mode).await.is_ok() {
-        return Ok(());
+    match activate_pipewire_a2dp(address, mode).await? {
+        PipewireActivation::Active => return Ok(()),
+        PipewireActivation::ServerUnavailable => {
+            bail!("the audio server is unreachable, so the Bluetooth link for {address} was left connected without routing")
+        }
+        PipewireActivation::Stale => {}
     }
     heal_stale_pipewire_transport(device, address, mode).await?;
     let _ = connect_audio_profile(device, address, mode).await;
-    activate_pipewire_a2dp(address, mode)
-        .await
-        .with_context(|| {
-            format!("PipeWire A2DP activation for {address} still failed after a self-heal retry")
-        })
+    match activate_pipewire_a2dp(address, mode).await? {
+        PipewireActivation::Active => Ok(()),
+        PipewireActivation::Stale | PipewireActivation::ServerUnavailable => {
+            bail!("PipeWire A2DP activation for {address} still failed after a self-heal retry")
+        }
+    }
 }
 
 async fn heal_stale_pipewire_transport(
@@ -855,42 +879,61 @@ async fn heal_stale_pipewire_transport(
     Ok(())
 }
 
-async fn activate_pipewire_a2dp(address: Address, mode: ConnectionMode) -> Result<()> {
+async fn activate_pipewire_a2dp(
+    address: Address,
+    mode: ConnectionMode,
+) -> Result<PipewireActivation> {
     let card = format!("bluez_card.{}", pactl_device_id(address));
     let deadline = Instant::now() + PROFILE_CONNECT_TIMEOUT;
     loop {
-        let cards = tokio::process::Command::new("pactl")
-            .args(["list", "short", "cards"])
-            .output()
-            .await
-            .context("failed to inspect PipeWire Bluetooth cards through pactl")?;
-        if cards.status.success() && pactl_has_card(&cards.stdout, &card) {
-            let status = tokio::process::Command::new("pactl")
-                .args(["set-card-profile", &card, "a2dp-sink"])
-                .status()
-                .await
-                .context("failed to select the PipeWire A2DP profile through pactl")?;
-            if status.success() {
-                qol_runtime::probe!(
-                    "BLUETOOTH_PROFILE_REPAIR",
-                    "device={} stage=activate_pipewire_a2dp mode={} outcome=active",
-                    redacted(address),
-                    mode.label(),
-                );
-                return Ok(());
-            }
-        }
-        if Instant::now() >= deadline {
+        let cards = pactl_cards().await;
+        let card_present = cards
+            .as_deref()
+            .is_some_and(|listing| pactl_has_card(listing, &card));
+        if card_present && select_a2dp_sink(&card).await? {
             qol_runtime::probe!(
                 "BLUETOOTH_PROFILE_REPAIR",
-                "device={} stage=activate_pipewire_a2dp mode={} outcome=failed",
+                "device={} stage=activate_pipewire_a2dp mode={} outcome=active",
                 redacted(address),
                 mode.label(),
             );
-            bail!("{address} connected without exposing an activatable PipeWire A2DP profile");
+            return Ok(PipewireActivation::Active);
+        }
+        if Instant::now() >= deadline {
+            let outcome = if cards.is_some() {
+                PipewireActivation::Stale
+            } else {
+                PipewireActivation::ServerUnavailable
+            };
+            qol_runtime::probe!(
+                "BLUETOOTH_PROFILE_REPAIR",
+                "device={} stage=activate_pipewire_a2dp mode={} outcome={}",
+                redacted(address),
+                mode.label(),
+                outcome.label(),
+            );
+            return Ok(outcome);
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+}
+
+async fn pactl_cards() -> Option<Vec<u8>> {
+    let output = tokio::process::Command::new("pactl")
+        .args(["list", "short", "cards"])
+        .output()
+        .await
+        .ok()?;
+    output.status.success().then_some(output.stdout)
+}
+
+async fn select_a2dp_sink(card: &str) -> Result<bool> {
+    let status = tokio::process::Command::new("pactl")
+        .args(["set-card-profile", card, "a2dp-sink"])
+        .status()
+        .await
+        .context("failed to select the PipeWire A2DP profile through pactl")?;
+    Ok(status.success())
 }
 
 fn pactl_has_card(output: &[u8], expected: &str) -> bool {
@@ -1312,7 +1355,7 @@ async fn daemon_loop(
     commands: &mut tokio::sync::mpsc::UnboundedReceiver<DaemonCommand>,
     adapter: Adapter,
 ) -> Result<()> {
-    if config.auto_reconnect {
+    if config.auto_reconnect && !config.managed_devices.is_empty() {
         if let Err(error) = ensure_powered(&adapter, config.power_on_adapter).await {
             eprintln!("Bluetooth adapter unavailable at daemon start: {error:#}");
         }
@@ -1468,7 +1511,6 @@ async fn daemon_loop(
                 if matches!(command, DaemonCommand::Reload) {
                     *config = crate::config::load();
                     retries = retry_map(config);
-                    subscribed.retain(|address| retries.contains_key(address));
                     let known_addresses = adapter.device_addresses().await?;
                     subscribe_addresses(
                         &adapter,
@@ -1944,8 +1986,36 @@ async fn subscribe_addresses<'a>(
     }
 }
 
+struct AudioRepairGuard(Address);
+
+impl AudioRepairGuard {
+    fn acquire(address: Address) -> Option<Self> {
+        let claimed = {
+            let mut active = AUDIO_REPAIRS.write().ok()?;
+            active.insert(address)
+        };
+        claimed.then(|| Self(address))
+    }
+}
+
+impl Drop for AudioRepairGuard {
+    fn drop(&mut self) {
+        if let Ok(mut active) = AUDIO_REPAIRS.write() {
+            active.remove(&self.0);
+        }
+    }
+}
+
 fn spawn_audio_profile_ensure(address: Address, adoption: AudioAdoption) {
     std::mem::drop(tokio::spawn(async move {
+        let Some(_guard) = AudioRepairGuard::acquire(address) else {
+            qol_runtime::probe!(
+                "BLUETOOTH_PROFILE_REPAIR",
+                "device={} stage=ensure_a2dp outcome=already_in_flight",
+                redacted(address)
+            );
+            return;
+        };
         match ensure_reconnected_audio_profile(address).await {
             Ok(AudioProfile::Active) => adopt_reconnected_output(address, adoption).await,
             Ok(AudioProfile::Absent) => {}
@@ -2177,9 +2247,9 @@ mod tests {
     use super::{
         begin_device_action, complete_device_action_within, finish_device_action, pactl_has_card,
         pactl_sink_matching, parse_address, parse_daemon_request, runtime, set_device_action_state,
-        tolerated_profile_connect, transient_connect_error, DaemonAction, DaemonCommand,
-        DeviceActionTimeout, Duration, ErrorKind, Instant, ReadResult, Result, RetryState,
-        DEVICE_ACTION_STATE,
+        tolerated_profile_connect, transient_connect_error, AudioRepairGuard, DaemonAction,
+        DaemonCommand, DeviceActionTimeout, Duration, ErrorKind, Instant, ReadResult, Result,
+        RetryState, DEVICE_ACTION_STATE,
     };
     use qol_runtime::protocol::DaemonRequest;
     use std::collections::HashMap;
@@ -2366,6 +2436,26 @@ mod tests {
             b"43\talsa_card.pci\talsa\n555\tbluez_card.74_68_59_7F_5F_E9\tmodule-bluez5-device.c\n";
         assert!(pactl_has_card(output, "bluez_card.74_68_59_7F_5F_E9"));
         assert!(!pactl_has_card(output, "bluez_card.88_0E_85_16_CA_67"));
+    }
+
+    #[test]
+    fn audio_repairs_run_one_at_a_time_per_device() {
+        let first = parse_address("AA:BB:CC:DD:EE:FF").unwrap();
+        let second = parse_address("11:22:33:44:55:66").unwrap();
+        let held = AudioRepairGuard::acquire(first).expect("first repair should acquire");
+        assert!(
+            AudioRepairGuard::acquire(first).is_none(),
+            "a second repair for the same device must be refused"
+        );
+        assert!(
+            AudioRepairGuard::acquire(second).is_some(),
+            "a repair for another device must proceed"
+        );
+        std::mem::drop(held);
+        assert!(
+            AudioRepairGuard::acquire(first).is_some(),
+            "the device must be repairable again once the guard drops"
+        );
     }
 
     #[test]
