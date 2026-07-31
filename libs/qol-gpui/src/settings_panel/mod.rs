@@ -447,28 +447,20 @@ fn activation_decision(active: Option<&str>, requested: &str) -> ActivationDecis
 }
 
 fn panel_height(rows: &[Row], sections: &[RowSection]) -> f32 {
-    let section_menu = if sections.len() > 1 {
-        sections.len() as f32 * PANEL_SECTION_MENU_ITEM_HEIGHT
-    } else {
-        0.0
-    };
+    if sections.len() > 1 {
+        return PANEL_CHROME_HEIGHT + sections.len() as f32 * PANEL_SECTION_MENU_ITEM_HEIGHT;
+    }
     let section_content = sections
         .iter()
         .map(|section| {
             section
                 .rows
                 .iter()
-                .map(|index| {
-                    if sections.len() == 1 {
-                        view::row_height(&rows[*index])
-                    } else {
-                        view::row_body_height(&rows[*index])
-                    }
-                })
+                .map(|index| view::row_height(&rows[*index]))
                 .sum::<f32>()
         })
         .fold(0.0, f32::max);
-    PANEL_CHROME_HEIGHT + section_menu.max(section_content)
+    PANEL_CHROME_HEIGHT + section_content
 }
 
 fn panel_width(rows: &[Row]) -> f32 {
@@ -533,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn sectioned_panels_size_for_the_largest_visible_surface() {
+    fn sectioned_panels_size_for_the_section_menu() {
         let rows = vec![
             row(RowControl::Toggle(false)),
             row(RowControl::Toggle(false)),
@@ -552,11 +544,10 @@ mod tests {
             },
         ];
         let menu_height = 2.0 * PANEL_SECTION_MENU_ITEM_HEIGHT;
-        let largest_section = 2.0 * PANEL_ROW_HEIGHT;
 
         assert_eq!(
             panel_height(&rows, &sections),
-            PANEL_CHROME_HEIGHT + menu_height.max(largest_section)
+            PANEL_CHROME_HEIGHT + menu_height
         );
     }
 
