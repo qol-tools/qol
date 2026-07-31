@@ -21,8 +21,8 @@ use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, S
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 use crate::bluetooth::{
-    connection_ready, devices_payload, has_audio_class, is_audio_device, managed_device_options,
-    normalize_address,
+    audio_profile_repairable, connection_ready, devices_payload, has_audio_class, is_audio_device,
+    managed_device_options, normalize_address,
     retry::{RetryPolicy, RetryState},
     search_status_payload, supports_audio_sink, AdapterHealth, DeviceActionState, DeviceInfo,
     DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport, ReconnectSelection,
@@ -1978,12 +1978,12 @@ async fn ensure_reconnected_audio_profile(address: Address) -> Result<AudioProfi
         if !info.connected || !info.paired || !info.trusted || !is_audio_device(&info) {
             return Ok(AudioProfile::Absent);
         }
-        if supports_audio_sink(&info) {
+        if audio_profile_repairable(&info) {
             ensure_audio_playback_profile(&device, address, ConnectionMode::Reconnect).await?;
             return Ok(AudioProfile::Active);
         }
         if Instant::now() >= deadline {
-            bail!("{address} reconnected without advertising its A2DP sink profile");
+            bail!("{address} reconnected without resolving its A2DP sink profile");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

@@ -67,6 +67,10 @@ pub fn supports_audio_sink(device: &DeviceInfo) -> bool {
     device.uuids.iter().any(|uuid| uuid == AUDIO_SINK_UUID)
 }
 
+pub fn audio_profile_repairable(device: &DeviceInfo) -> bool {
+    device.services_resolved && supports_audio_sink(device)
+}
+
 pub fn connection_ready(device: &DeviceInfo) -> bool {
     if !device.connected {
         return false;
@@ -565,6 +569,30 @@ mod tests {
         ];
         for (label, device, expected) in cases {
             assert_eq!(connection_ready(&device), expected, "case: {label}");
+        }
+    }
+
+    #[test]
+    fn a2dp_repair_waits_for_resolved_services() {
+        let cases = [
+            (
+                "resolved A2DP speaker",
+                audio_device(true, true, &[AUDIO_SINK_UUID]),
+                true,
+            ),
+            (
+                "unresolved A2DP speaker",
+                audio_device(true, false, &[AUDIO_SINK_UUID]),
+                false,
+            ),
+            (
+                "resolved BLE-only speaker",
+                audio_device(true, true, &[]),
+                false,
+            ),
+        ];
+        for (label, device, expected) in cases {
+            assert_eq!(audio_profile_repairable(&device), expected, "case: {label}");
         }
     }
 
