@@ -95,18 +95,18 @@ fn open_region_selector_with_sender(
     cx: &mut gpui::App,
 ) {
     let selectors = selector_windows(cursor.as_ref(), monitors, frozen_frame.as_ref(), cx);
-    let titles = selectors
+    let overlays = selectors
         .iter()
-        .map(|selector| selector.title().to_string())
+        .map(|selector| (selector.title().to_string(), selector.bounds.origin))
         .collect::<Vec<_>>();
     qol_runtime::probe!(
         "SHOT_SELECT_PLATFORM",
         "mode=open selectors={} quit_on_finish={quit_on_finish}",
-        titles.len()
+        overlays.len()
     );
     if crate::ui::region_selector::open_all(tx, quit_on_finish, selectors, kind, cx) {
-        for title in titles {
-            configure_selector_window(title, cx);
+        for (title, origin) in overlays {
+            configure_selector_window(title, origin, cx);
         }
         cx.activate(true);
     }
@@ -284,23 +284,35 @@ pub(super) fn map_selector_rect_to_capture(rect: Rect, displays: &[Monitor]) -> 
     None
 }
 
-fn configure_selector_window(title: String, cx: &mut gpui::App) {
-    cx.defer(move |_| configure_selector_window_now(&title));
+fn configure_selector_window(title: String, origin: gpui::Point<Pixels>, cx: &mut gpui::App) {
+    cx.defer(move |_| configure_selector_window_now(&title, origin));
 }
 
-fn configure_selector_window_now(title: &str) {
+fn configure_selector_window_now(title: &str, origin: gpui::Point<Pixels>) {
     let started = Instant::now();
-    if qol_gpui::popup_window::configure_overlay_window(title) {
+    let mapped = qol_gpui::popup_window::configure_overlay_window(title);
+    let positioned = mapped
+        && qol_gpui::popup_window::reposition_window_by_title(
+            title,
+            origin.x.to_f64(),
+            origin.y.to_f64(),
+        );
+    if mapped && positioned {
         qol_runtime::probe!(
             "SHOT_SELECT_OVERLAY",
-            "ms={} result=mapped",
-            started.elapsed().as_millis()
+            "ms={} result=mapped x={} y={}",
+            started.elapsed().as_millis(),
+            origin.x.to_f64(),
+            origin.y.to_f64()
         );
         return;
     }
     qol_runtime::probe!(
         "SHOT_SELECT_OVERLAY",
-        "ms={} result=missing",
-        started.elapsed().as_millis()
+        "ms={} result={} x={} y={}",
+        started.elapsed().as_millis(),
+        if mapped { "position-failed" } else { "missing" },
+        origin.x.to_f64(),
+        origin.y.to_f64()
     );
 }
