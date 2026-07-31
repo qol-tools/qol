@@ -458,8 +458,8 @@ fn stick(
     let knob_origin = (gate - knob) / 2.0;
     let knob_element = div()
         .absolute()
-        .left(scaled(knob_origin + axis_x.value * 18.0))
-        .top(scaled(knob_origin + axis_y.value * 18.0))
+        .left(scaled(knob_origin + axis_x.display * 18.0))
+        .top(scaled(knob_origin + axis_y.display * 18.0))
         .w(scaled(knob))
         .h(scaled(knob))
         .rounded_full()

@@ -255,7 +255,7 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
         .flex_wrap()
         .gap_1()
         .children(controller.axes.iter().map(|axis| {
-            let position = (axis.value + 1.0) / 2.0;
+            let position = (axis.display + 1.0) / 2.0;
             div()
                 .flex()
                 .w(relative(0.495))

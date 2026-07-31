@@ -1,6 +1,8 @@
 use serde::Deserialize;
 
 const INPUT_DEADZONE: f32 = 0.08;
+const MOTION_SMOOTHING_TAU_SECONDS: f32 = 0.02;
+const MOTION_SETTLED_EPSILON: f32 = 0.002;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GamepadMonitor {
@@ -43,6 +45,7 @@ pub struct GamepadAxis {
     pub index: usize,
     pub name: String,
     pub value: f32,
+    pub display: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -178,11 +181,15 @@ impl GamepadMonitor {
             return;
         };
         self.source = payload.source;
+        let previous = std::mem::take(&mut self.controllers);
         self.controllers = payload
             .items
             .into_iter()
             .filter_map(ControllerSnapshot::from_query)
             .collect();
+        for controller in &mut self.controllers {
+            controller.carry_motion_from(&previous);
+        }
         self.selected = self.selected.min(self.controllers.len().saturating_sub(1));
         if !payload.available {
             self.status = MonitorStatus::Unavailable;
@@ -207,6 +214,23 @@ impl GamepadMonitor {
             return;
         }
         self.selected = (self.selected + 1) % self.controllers.len();
+    }
+
+    pub fn step_motion(&mut self, dt_seconds: f32) -> bool {
+        let alpha = 1.0 - (-dt_seconds / MOTION_SMOOTHING_TAU_SECONDS).exp();
+        let mut animating = false;
+        for controller in &mut self.controllers {
+            for axis in &mut controller.axes {
+                let delta = axis.value - axis.display;
+                if delta.abs() <= MOTION_SETTLED_EPSILON {
+                    axis.display = axis.value;
+                    continue;
+                }
+                axis.display += delta * alpha;
+                animating = true;
+            }
+        }
+        animating
     }
 }
 
@@ -235,10 +259,14 @@ impl ControllerSnapshot {
             axes: state
                 .axes
                 .into_iter()
-                .map(|axis| GamepadAxis {
-                    index: axis.index,
-                    name: axis.name,
-                    value: axis.value.clamp(-1.0, 1.0),
+                .map(|axis| {
+                    let value = axis.value.clamp(-1.0, 1.0);
+                    GamepadAxis {
+                        index: axis.index,
+                        name: axis.name,
+                        value,
+                        display: value,
+                    }
                 })
                 .collect(),
             connection: value.connection.map(GamepadConnection::from_query),
@@ -304,7 +332,23 @@ impl ControllerSnapshot {
                 index,
                 name: String::new(),
                 value: 0.0,
+                display: 0.0,
             })
+    }
+
+    fn carry_motion_from(&mut self, previous: &[ControllerSnapshot]) {
+        let Some(previous) = previous.iter().find(|controller| {
+            controller.vendor == self.vendor
+                && controller.product == self.product
+                && controller.name == self.name
+        }) else {
+            return;
+        };
+        for axis in &mut self.axes {
+            if let Some(previous) = previous.axes.iter().find(|prior| prior.index == axis.index) {
+                axis.display = previous.display;
+            }
+        }
     }
 
     pub fn active_inputs(&self) -> Vec<String> {
@@ -594,5 +638,41 @@ mod tests {
         monitor.apply_query(Ok(next));
 
         assert_eq!(monitor.selected().expect("controller").axes[0].value, 0.25);
+    }
+
+    #[test]
+    fn axis_display_carries_across_samples_and_eases_toward_the_target() {
+        let mut monitor = GamepadMonitor::default();
+        monitor.apply_query(Ok(payload(
+            "Xbox Wireless Controller",
+            serde_json::Value::Null,
+        )));
+        let mut next = payload("Xbox Wireless Controller", serde_json::Value::Null);
+        next["items"][0]["state"]["axes"][0]["value"] = serde_json::json!(0.25);
+        monitor.apply_query(Ok(next));
+
+        let axis = &monitor.selected().expect("controller").axes[0];
+        assert_eq!(axis.display, -1.0, "display carries the prior position");
+
+        let mut previous_gap = (axis.value - axis.display).abs();
+        for step in 0..40 {
+            let animating = monitor.step_motion(1.0 / 144.0);
+            let axis = &monitor.selected().expect("controller").axes[0];
+            let gap = (axis.value - axis.display).abs();
+            assert!(gap < previous_gap || gap == 0.0, "step: {step}, gap: {gap}");
+            previous_gap = gap;
+            if !animating {
+                break;
+            }
+        }
+        assert_eq!(
+            monitor.selected().expect("controller").axes[0].display,
+            0.25,
+            "display settles exactly on the target"
+        );
+        assert!(
+            !monitor.step_motion(1.0 / 144.0),
+            "settled axes stop animating"
+        );
     }
 }

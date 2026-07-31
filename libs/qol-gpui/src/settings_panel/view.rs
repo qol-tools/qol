@@ -87,6 +87,7 @@ pub(super) struct SettingsPanelView {
     frame_paced_samples: Option<SampledQueryResults>,
     applied_query_payloads: std::collections::HashMap<String, Result<serde_json::Value, String>>,
     frame_pump_armed: bool,
+    motion_tick: Option<std::time::Instant>,
     sample_signal: Option<std::sync::Arc<SampleSignal>>,
     sampler_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     dismisser: SurfaceDismisser,
@@ -160,6 +161,7 @@ impl SettingsPanelView {
             frame_paced_samples: None,
             applied_query_payloads: std::collections::HashMap::new(),
             frame_pump_armed: false,
+            motion_tick: None,
             sample_signal: None,
             sampler_stop: None,
             dismisser,
@@ -331,12 +333,29 @@ impl SettingsPanelView {
         let entity = cx.entity().downgrade();
         window.on_next_frame(move |window, cx| {
             let _ = entity.update(cx, |this, cx| {
-                if this.apply_frame_paced_samples() {
+                let changed = this.apply_frame_paced_samples();
+                if this.step_gamepad_motion() || changed {
                     cx.notify();
                 }
                 this.pump_frame_paced_samples(window, cx);
             });
         });
+    }
+
+    fn step_gamepad_motion(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        let dt = self
+            .motion_tick
+            .map(|tick| now.duration_since(tick).as_secs_f32())
+            .unwrap_or_default();
+        self.motion_tick = Some(now);
+        let mut animating = false;
+        for row in &mut self.rows {
+            if let RowControl::Gamepad { monitor, .. } = &mut row.control {
+                animating |= monitor.step_motion(dt);
+            }
+        }
+        animating
     }
 
     fn apply_frame_paced_samples(&mut self) -> bool {
