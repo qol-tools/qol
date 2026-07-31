@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use evdev::{AbsInfo, AbsoluteAxisCode, Device, KeyCode};
@@ -17,6 +18,7 @@ const SYSFS_ROOT: &str = "/sys";
 const INPUT_DEVICE_ROOT: &str = "/dev/input";
 const DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const SIGNAL_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+const SIGNAL_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 const LEFT_STICK_BUTTON: usize = 10;
 const RIGHT_STICK_BUTTON: usize = 11;
 
@@ -31,14 +33,25 @@ pub(crate) fn platform_support() -> PlatformSupport {
 pub struct InputMonitor {
     devices: Vec<TrackedInput>,
     refreshed_at: Option<Instant>,
-    signal_refreshed_at: Option<Instant>,
-    signals: HashMap<Mac, Option<NativeSignal>>,
+    signals: Option<SignalWorker>,
     adapters: HashMap<String, NativeAdapter>,
     device_adapters: HashMap<Mac, String>,
 }
 
+struct SignalWorker {
+    state: Arc<Mutex<SignalState>>,
+}
+
+#[derive(Default)]
+struct SignalState {
+    targets: Vec<BluetoothTarget>,
+    signals: HashMap<Mac, Option<NativeSignal>>,
+    requested_at: Option<Instant>,
+}
+
 struct TrackedInput {
     name: String,
+    handler: String,
     vendor: u16,
     product: u16,
     transport: &'static str,
@@ -94,13 +107,11 @@ impl InputMonitor {
         if self.should_refresh() {
             self.refresh();
         }
-        if self.should_refresh_signal() {
-            self.refresh_signals();
-        }
+        let signals = self.request_signals();
         let items = self
             .devices
             .iter()
-            .filter_map(|device| device.snapshot(&self.signals, &self.adapters))
+            .filter_map(|device| device.snapshot(&signals, &self.adapters))
             .collect();
         NativeInputSnapshot {
             available: true,
@@ -114,11 +125,24 @@ impl InputMonitor {
             .is_none_or(|time| time.elapsed() >= DEVICE_REFRESH_INTERVAL)
     }
 
-    fn refresh(&mut self) {
-        self.devices = read_devices()
+    fn request_signals(&mut self) -> HashMap<Mac, Option<NativeSignal>> {
+        let targets = self
+            .devices
             .iter()
-            .filter_map(TrackedInput::open)
-            .collect();
+            .filter_map(|device| device.bluetooth.clone())
+            .collect::<Vec<_>>();
+        match &self.signals {
+            Some(worker) => worker.request(targets),
+            None => {
+                let signals = collect_signals(&targets);
+                self.signals = Some(SignalWorker::start(targets, signals.clone()));
+                signals
+            }
+        }
+    }
+
+    fn refresh(&mut self) {
+        self.devices = reconcile_devices(std::mem::take(&mut self.devices), &read_devices());
         let active_addresses = self
             .devices
             .iter()
@@ -153,31 +177,75 @@ impl InputMonitor {
         }
         self.refreshed_at = Some(Instant::now());
     }
+}
 
-    fn should_refresh_signal(&self) -> bool {
-        self.signal_refreshed_at
-            .is_none_or(|time| time.elapsed() >= SIGNAL_REFRESH_INTERVAL)
+fn reconcile_devices(open: Vec<TrackedInput>, detected: &[DetectedDevice]) -> Vec<TrackedInput> {
+    let mut open = open;
+    let mut tracked = Vec::new();
+    for device in detected {
+        let Some(handler) = device.event_handler.as_deref() else {
+            continue;
+        };
+        let matching = open.iter().position(|input| input.tracks(handler, device));
+        match matching {
+            Some(index) => tracked.push(open.swap_remove(index)),
+            None => tracked.extend(TrackedInput::open(device)),
+        }
+    }
+    tracked
+}
+
+fn collect_signals(targets: &[BluetoothTarget]) -> HashMap<Mac, Option<NativeSignal>> {
+    targets
+        .iter()
+        .map(|target| (target.address, bluetooth_rssi(target)))
+        .collect()
+}
+
+impl SignalWorker {
+    fn start(targets: Vec<BluetoothTarget>, signals: HashMap<Mac, Option<NativeSignal>>) -> Self {
+        let state = Arc::new(Mutex::new(SignalState {
+            targets,
+            signals,
+            requested_at: Some(Instant::now()),
+        }));
+        let worker = state.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(SIGNAL_REFRESH_INTERVAL);
+            let targets = {
+                let state = worker.lock().unwrap_or_else(PoisonError::into_inner);
+                match state.requested_at {
+                    Some(requested_at) if requested_at.elapsed() < SIGNAL_IDLE_TIMEOUT => {
+                        state.targets.clone()
+                    }
+                    _ => continue,
+                }
+            };
+            let signals = collect_signals(&targets);
+            worker
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .signals = signals;
+        });
+        Self { state }
     }
 
-    fn refresh_signals(&mut self) {
-        let active = self
-            .devices
-            .iter()
-            .filter_map(|device| device.bluetooth.as_ref().map(|target| target.address))
-            .collect::<HashSet<_>>();
-        self.signals.retain(|address, _| active.contains(address));
-        for target in self
-            .devices
-            .iter()
-            .filter_map(|device| device.bluetooth.as_ref())
-        {
-            self.signals.insert(target.address, bluetooth_rssi(target));
-        }
-        self.signal_refreshed_at = Some(Instant::now());
+    fn request(&self, targets: Vec<BluetoothTarget>) -> HashMap<Mac, Option<NativeSignal>> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.targets = targets;
+        state.requested_at = Some(Instant::now());
+        state.signals.clone()
     }
 }
 
 impl TrackedInput {
+    fn tracks(&self, handler: &str, detected: &DetectedDevice) -> bool {
+        self.handler == handler
+            && self.vendor == detected.vendor
+            && self.product == detected.product
+            && self.name == detected.name
+    }
+
     fn open(detected: &DetectedDevice) -> Option<Self> {
         if !detected.is_gamepad || detected.is_virtual() {
             return None;
@@ -187,6 +255,7 @@ impl TrackedInput {
         let layout = button_layout(detected);
         let bluetooth = bluetooth_target(detected);
         Some(Self {
+            handler: handler.to_string(),
             name: detected.name.clone(),
             vendor: detected.vendor,
             product: detected.product,
