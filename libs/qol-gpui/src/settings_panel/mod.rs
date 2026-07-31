@@ -11,10 +11,11 @@ use gpui::*;
 
 use crate::monitor::MonitorTracker;
 use crate::surface::{OpenedSurface, Surface, SurfaceKind};
-use rows::{rows_from_resolved, sections_from_resolved, Row, RowSection};
+use rows::{rows_from_resolved, sections_from_resolved, Row, RowControl, RowSection};
 use view::{SettingsPanelState, SettingsPanelView};
 
 const PANEL_WIDTH: f32 = 520.0;
+const PANEL_GAMEPAD_WIDTH: f32 = 820.0;
 const PANEL_ROW_HEIGHT: f32 = 40.0;
 const PANEL_DESCRIBED_ROW_HEIGHT: f32 = 56.0;
 const PANEL_LIST_HEADER_HEIGHT: f32 = 24.0;
@@ -28,6 +29,7 @@ const PANEL_LIST_HEIGHT: f32 = PANEL_LIST_PADDING_Y
 const PANEL_SECTION_HEADER_HEIGHT: f32 = 26.0;
 const PANEL_SECTION_MENU_ITEM_HEIGHT: f32 = 64.0;
 const PANEL_CHROME_HEIGHT: f32 = 88.0;
+const PANEL_GAMEPAD_HEIGHT: f32 = 600.0;
 
 #[derive(Clone)]
 pub struct SettingsPanel {
@@ -399,6 +401,7 @@ fn size_prepared_panel(
     let available =
         monitor.bounds().size.height.to_f64() as f32 - 2.0 * crate::placement::CORNER_MARGIN;
     let height = panel_height(&prepared.rows, &prepared.sections).min(available);
+    let width = panel_width(&prepared.rows);
     let body_max = height - PANEL_CHROME_HEIGHT;
     Ok(PreparedPanel {
         panel: prepared.panel,
@@ -410,7 +413,7 @@ fn size_prepared_panel(
             body_max,
             runtime: prepared.runtime,
         },
-        size: size(px(PANEL_WIDTH), px(height)),
+        size: size(px(width), px(height)),
     })
 }
 
@@ -467,12 +470,23 @@ fn panel_height(rows: &[Row], sections: &[RowSection]) -> f32 {
     PANEL_CHROME_HEIGHT + section_menu.max(section_content)
 }
 
+fn panel_width(rows: &[Row]) -> f32 {
+    if rows
+        .iter()
+        .any(|row| matches!(row.control, RowControl::Gamepad { .. }))
+    {
+        return PANEL_GAMEPAD_WIDTH;
+    }
+    PANEL_WIDTH
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        activation_decision, panel_height, ActivationDecision, Row, RowSection,
-        PANEL_CHROME_HEIGHT, PANEL_ROW_HEIGHT, PANEL_SECTION_MENU_ITEM_HEIGHT,
+        activation_decision, panel_height, panel_width, ActivationDecision, Row, RowSection,
+        PANEL_CHROME_HEIGHT, PANEL_GAMEPAD_WIDTH, PANEL_ROW_HEIGHT, PANEL_SECTION_MENU_ITEM_HEIGHT,
     };
+    use crate::gamepad::GamepadMonitor;
     use crate::settings_panel::rows::RowControl;
 
     fn row(control: RowControl) -> Row {
@@ -503,6 +517,18 @@ mod tests {
         }];
         assert_eq!(panel_height(&toggle, &sections), expected);
         assert_eq!(panel_height(&color, &sections), expected);
+    }
+
+    #[test]
+    fn gamepad_fields_expand_only_their_shared_settings_surface() {
+        let regular = vec![row(RowControl::Toggle(false))];
+        let gamepad = vec![row(RowControl::Gamepad {
+            query: "controller_input".into(),
+            monitor: GamepadMonitor::default(),
+        })];
+
+        assert_eq!(panel_width(&regular), super::PANEL_WIDTH);
+        assert_eq!(panel_width(&gamepad), PANEL_GAMEPAD_WIDTH);
     }
 
     #[test]

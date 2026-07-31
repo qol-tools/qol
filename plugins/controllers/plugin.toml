@@ -27,6 +27,7 @@ port = 42730
 
 [capabilities]
 doctor = true
+gpui = true
 
 [menu]
 label = "Controllers"

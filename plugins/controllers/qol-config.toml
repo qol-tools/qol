@@ -7,7 +7,7 @@ label = "Controllers"
 
 [section.input_test]
 label = "Input Test"
-description = "Live browser-level input from the controller you are testing."
+description = "Live input from the controller you are testing."
 
 [field.fixes_status]
 type = "status"

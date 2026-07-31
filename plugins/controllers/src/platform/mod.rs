@@ -38,6 +38,27 @@ pub struct NativeControllerInput {
     pub product: u16,
     pub connection: NativeConnection,
     pub buttons: Vec<NativeButtonInput>,
+    pub state: NativeGamepadState,
+}
+
+#[derive(Default)]
+pub struct NativeGamepadState {
+    pub mapping: &'static str,
+    pub buttons: Vec<NativeGamepadButton>,
+    pub axes: Vec<NativeGamepadAxis>,
+}
+
+pub struct NativeGamepadButton {
+    pub index: usize,
+    pub name: &'static str,
+    pub pressed: bool,
+    pub value: f32,
+}
+
+pub struct NativeGamepadAxis {
+    pub index: usize,
+    pub name: &'static str,
+    pub value: f32,
 }
 
 pub struct NativeConnection {

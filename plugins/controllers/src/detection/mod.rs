@@ -1,5 +1,8 @@
 use crate::fixes::DetectedDevice;
 
+const BTN_JOYSTICK: usize = 0x120;
+const BTN_GAMEPAD: usize = 0x130;
+
 pub fn parse_devices(text: &str) -> Vec<DetectedDevice> {
     text.split("\n\n").filter_map(parse_block).collect()
 }
@@ -32,6 +35,8 @@ fn parse_block(block: &str) -> Option<DetectedDevice> {
                     event_handler = Some(handler.to_string());
                 }
             }
+        } else if let Some(rest) = line.strip_prefix("B: KEY=") {
+            is_gamepad |= bitmap_has_code(rest, BTN_JOYSTICK) || bitmap_has_code(rest, BTN_GAMEPAD);
         } else if let Some(rest) = line.strip_prefix("B: FF=") {
             has_force_feedback = bitmap_has_bits(rest);
         }
@@ -82,6 +87,17 @@ fn bitmap_has_bits(bitmap: &str) -> bool {
         .split_whitespace()
         .filter_map(|word| u128::from_str_radix(word, 16).ok())
         .any(|word| word != 0)
+}
+
+fn bitmap_has_code(bitmap: &str, code: usize) -> bool {
+    let word_index = code / usize::BITS as usize;
+    let bit_index = code % usize::BITS as usize;
+    bitmap
+        .split_whitespace()
+        .rev()
+        .nth(word_index)
+        .and_then(|word| usize::from_str_radix(word, 16).ok())
+        .is_some_and(|word| word & (1usize << bit_index) != 0)
 }
 
 #[cfg(test)]
@@ -155,5 +171,19 @@ H: Handlers=event28
         for (label, text, expected) in cases {
             assert_eq!(parse_devices(text).len(), expected, "case: {label}");
         }
+    }
+
+    #[test]
+    fn parser_recognizes_evdev_gamepad_without_joydev_handler() {
+        let devices = parse_devices(
+            "I: Bus=0005 Vendor=057e Product=2009 Version=8001\n\
+             N: Name=\"Pro Controller\"\n\
+             H: Handlers=event30\n\
+             B: KEY=7ffb000000000000 0 0 0 0\n",
+        );
+
+        assert_eq!(devices.len(), 1);
+        assert!(devices[0].is_gamepad);
+        assert_eq!(devices[0].event_handler.as_deref(), Some("event30"));
     }
 }

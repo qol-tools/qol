@@ -15,6 +15,7 @@ use super::rows::{
 use super::{SettingsPanel, SettingsRuntime};
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use crate::dropdown::{Dropdown, DropdownEvent, DropdownItem, DropdownStyle};
+use crate::gamepad::{gamepad_panel, GamepadPalette};
 use crate::spinner::Spinner;
 use crate::status_indicator::{StatusIndicator, StatusTone};
 use crate::surface::{PanelDragArea, SurfaceDismisser};
@@ -524,7 +525,8 @@ impl SettingsPanelView {
             | RowControl::Color(_)
             | RowControl::Action { .. }
             | RowControl::Status { .. }
-            | RowControl::List { .. } => self.active_control = None,
+            | RowControl::List { .. }
+            | RowControl::Gamepad { .. } => self.active_control = None,
         }
     }
 
@@ -561,10 +563,20 @@ impl SettingsPanelView {
                 self.active_control = Some(ActiveControl::List)
             }
             RowControl::List { .. } => {}
+            RowControl::Gamepad { .. } => self.select_next_gamepad(),
             RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
                 self.begin_edit()
             }
         }
+    }
+
+    fn select_next_gamepad(&mut self) {
+        let Some(RowControl::Gamepad { monitor, .. }) =
+            self.rows.get_mut(self.selected).map(|row| &mut row.control)
+        else {
+            return;
+        };
+        monitor.select_next();
     }
 
     fn dispatch_action(&mut self, cx: &mut Context<Self>) {
@@ -804,7 +816,8 @@ impl SettingsPanelView {
             | RowControl::Color(_)
             | RowControl::Action { .. }
             | RowControl::Status { .. }
-            | RowControl::List { .. } => return,
+            | RowControl::List { .. }
+            | RowControl::Gamepad { .. } => return,
         };
         self.active_control = Some(ActiveControl::Edit(edit));
     }
@@ -856,7 +869,8 @@ impl SettingsPanelView {
             | RowControl::Color(_)
             | RowControl::Action { .. }
             | RowControl::Status { .. }
-            | RowControl::List { .. } => return,
+            | RowControl::List { .. }
+            | RowControl::Gamepad { .. } => return,
         }
         self.persist();
     }
@@ -947,6 +961,10 @@ impl SettingsPanelView {
                     format!("{} found", items.len())
                 }
             }
+            RowControl::Gamepad { monitor, .. } => monitor
+                .selected()
+                .map(|controller| controller.name.clone())
+                .unwrap_or_else(|| "Waiting".into()),
         }
     }
 
@@ -974,7 +992,7 @@ impl SettingsPanelView {
             } => self.palette.state_on,
             RowControl::Action { active, .. } => binary_state_color(self.palette, *active),
             RowControl::Status { tone, .. } => status_tone_color(self.palette, *tone),
-            RowControl::List { .. } => self.palette.label_text,
+            RowControl::List { .. } | RowControl::Gamepad { .. } => self.palette.label_text,
         }
     }
 
@@ -1015,7 +1033,8 @@ impl SettingsPanelView {
             | RowControl::TextList(_)
             | RowControl::Color(_)
             | RowControl::Status { .. }
-            | RowControl::List { .. } => {}
+            | RowControl::List { .. }
+            | RowControl::Gamepad { .. } => {}
         }
         let mut cell = div().flex().flex_row().items_center().gap_2();
         if let RowControl::Status { tone, .. } = self.rows[index].control {
@@ -1280,6 +1299,9 @@ impl SettingsPanelView {
         if matches!(row.control, RowControl::List { .. }) {
             return container.child(self.render_list(index, cx));
         }
+        if matches!(row.control, RowControl::Gamepad { .. }) {
+            return container.child(self.render_gamepad(index, cx));
+        }
         let label = match &row.control {
             RowControl::Action {
                 active: true,
@@ -1386,7 +1408,8 @@ impl SettingsPanelView {
                     | RowControl::Color(_)
                     | RowControl::Action { .. }
                     | RowControl::Status { .. }
-                    | RowControl::List { .. } => None,
+                    | RowControl::List { .. }
+                    | RowControl::Gamepad { .. } => None,
                 };
                 if let Some(items) = items {
                     let view = cx.weak_entity();
@@ -1431,6 +1454,53 @@ impl SettingsPanelView {
             );
         }
         container
+    }
+
+    fn render_gamepad(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
+        let row = &self.rows[index];
+        let RowControl::Gamepad { monitor, .. } = &row.control else {
+            return div().id(("settings-gamepad-empty", index));
+        };
+        let selected = index == self.selected;
+        let palette = GamepadPalette {
+            surface: self.palette.window_bg,
+            raised: self.palette.dropdown_bg,
+            border: self.palette.panel_border,
+            text: self.palette.section_text,
+            text_muted: self.palette.label_text,
+            accent: self.palette.row_border_selected,
+            success: self.palette.status_success,
+            warning: self.palette.status_warning,
+            danger: self.palette.status_danger,
+        };
+        div()
+            .id(("settings-gamepad", index))
+            .h(px(super::PANEL_GAMEPAD_HEIGHT))
+            .rounded_lg()
+            .border_1()
+            .border_color(if selected {
+                rgb(self.palette.row_border_selected)
+            } else {
+                rgba(self.palette.transparent_rgba)
+            })
+            .cursor(CursorStyle::PointingHand)
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                let already_selected = this.selected == index;
+                this.selected = index;
+                if already_selected {
+                    this.select_next_gamepad();
+                }
+                cx.notify();
+            }))
+            .child(gamepad_panel(
+                monitor,
+                &row.label,
+                row.description.as_deref(),
+                palette,
+            ))
     }
 
     fn render_section_menu_item(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2177,6 +2247,9 @@ fn visible_row_height(rows: &[Row], index: usize, show_section_headers: bool) ->
 }
 
 pub(super) fn row_body_height(row: &Row) -> f32 {
+    if matches!(row.control, RowControl::Gamepad { .. }) {
+        return super::PANEL_GAMEPAD_HEIGHT;
+    }
     if matches!(row.control, RowControl::List { .. }) {
         return super::PANEL_LIST_HEIGHT
             + if row.description.is_some() {

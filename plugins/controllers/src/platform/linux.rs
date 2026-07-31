@@ -3,13 +3,13 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use evdev::{Device, KeyCode};
+use evdev::{AbsInfo, AbsoluteAxisCode, Device, KeyCode};
 
 use crate::detection;
 use crate::fixes::{DetectedDevice, Mac};
 use crate::platform::{
-    NativeAdapter, NativeButtonInput, NativeConnection, NativeControllerInput, NativeInputSnapshot,
-    NativeSignal, PlatformSupport,
+    NativeAdapter, NativeButtonInput, NativeConnection, NativeControllerInput, NativeGamepadAxis,
+    NativeGamepadButton, NativeGamepadState, NativeInputSnapshot, NativeSignal, PlatformSupport,
 };
 
 const INPUT_DEVICES_PATH: &str = "/proc/bus/input/devices";
@@ -169,6 +169,11 @@ impl TrackedInput {
         adapters: &HashMap<String, NativeAdapter>,
     ) -> Option<NativeControllerInput> {
         let keys = self.device.get_key_state().ok()?;
+        let axes = self
+            .device
+            .get_absinfo()
+            .map(|axes| axes.collect::<HashMap<_, _>>())
+            .unwrap_or_default();
         let signal = self
             .bluetooth
             .as_ref()
@@ -198,8 +203,130 @@ impl TrackedInput {
                     pressed: keys.contains(self.right_stick),
                 },
             ],
+            state: gamepad_state(&keys, &axes, self.left_stick, self.right_stick),
         })
     }
+}
+
+fn gamepad_state(
+    keys: &evdev::AttributeSet<KeyCode>,
+    axes: &HashMap<AbsoluteAxisCode, AbsInfo>,
+    left_stick: KeyCode,
+    right_stick: KeyCode,
+) -> NativeGamepadState {
+    let left_trigger = unipolar_axis(axes.get(&AbsoluteAxisCode::ABS_Z));
+    let right_trigger = unipolar_axis(axes.get(&AbsoluteAxisCode::ABS_RZ));
+    let hat_x = bipolar_axis(axes.get(&AbsoluteAxisCode::ABS_HAT0X));
+    let hat_y = bipolar_axis(axes.get(&AbsoluteAxisCode::ABS_HAT0Y));
+    let specs = [
+        (0, "South", key_value(keys, KeyCode::BTN_SOUTH)),
+        (1, "East", key_value(keys, KeyCode::BTN_EAST)),
+        (2, "West", key_value(keys, KeyCode::BTN_WEST)),
+        (3, "North", key_value(keys, KeyCode::BTN_NORTH)),
+        (4, "Left shoulder", key_value(keys, KeyCode::BTN_TL)),
+        (5, "Right shoulder", key_value(keys, KeyCode::BTN_TR)),
+        (
+            6,
+            "Left trigger",
+            left_trigger.max(digital_trigger_value(keys, KeyCode::BTN_TL2, left_stick)),
+        ),
+        (
+            7,
+            "Right trigger",
+            right_trigger.max(digital_trigger_value(keys, KeyCode::BTN_TR2, right_stick)),
+        ),
+        (8, "Select", key_value(keys, KeyCode::BTN_SELECT)),
+        (9, "Start", key_value(keys, KeyCode::BTN_START)),
+        (10, "Left stick", key_value(keys, left_stick)),
+        (11, "Right stick", key_value(keys, right_stick)),
+        (
+            12,
+            "D-pad up",
+            key_value(keys, KeyCode::BTN_DPAD_UP).max((-hat_y).max(0.0)),
+        ),
+        (
+            13,
+            "D-pad down",
+            key_value(keys, KeyCode::BTN_DPAD_DOWN).max(hat_y.max(0.0)),
+        ),
+        (
+            14,
+            "D-pad left",
+            key_value(keys, KeyCode::BTN_DPAD_LEFT).max((-hat_x).max(0.0)),
+        ),
+        (
+            15,
+            "D-pad right",
+            key_value(keys, KeyCode::BTN_DPAD_RIGHT).max(hat_x.max(0.0)),
+        ),
+        (16, "Home", key_value(keys, KeyCode::BTN_MODE)),
+    ];
+    let buttons = specs
+        .into_iter()
+        .map(|(index, name, value)| NativeGamepadButton {
+            index,
+            name,
+            pressed: value > 0.05,
+            value,
+        })
+        .collect();
+    let axes = [
+        (0, "Left X", AbsoluteAxisCode::ABS_X),
+        (1, "Left Y", AbsoluteAxisCode::ABS_Y),
+        (2, "Right X", AbsoluteAxisCode::ABS_RX),
+        (3, "Right Y", AbsoluteAxisCode::ABS_RY),
+    ]
+    .into_iter()
+    .map(|(index, name, code)| NativeGamepadAxis {
+        index,
+        name,
+        value: bipolar_axis(axes.get(&code)),
+    })
+    .collect();
+    NativeGamepadState {
+        mapping: "standard",
+        buttons,
+        axes,
+    }
+}
+
+fn key_value(keys: &evdev::AttributeSet<KeyCode>, key: KeyCode) -> f32 {
+    if keys.contains(key) {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+fn digital_trigger_value(
+    keys: &evdev::AttributeSet<KeyCode>,
+    trigger: KeyCode,
+    remapped_stick: KeyCode,
+) -> f32 {
+    if trigger == remapped_stick {
+        return 0.0;
+    }
+    key_value(keys, trigger)
+}
+
+fn bipolar_axis(info: Option<&AbsInfo>) -> f32 {
+    normalize_axis(info, -1.0, 1.0)
+}
+
+fn unipolar_axis(info: Option<&AbsInfo>) -> f32 {
+    normalize_axis(info, 0.0, 1.0)
+}
+
+fn normalize_axis(info: Option<&AbsInfo>, low: f32, high: f32) -> f32 {
+    let Some(info) = info else {
+        return 0.0;
+    };
+    let span = info.maximum() - info.minimum();
+    if span <= 0 {
+        return 0.0;
+    }
+    let unit = (info.value() - info.minimum()) as f32 / span as f32;
+    (low + unit * (high - low)).clamp(low, high)
 }
 
 fn transport_key(bus: u16) -> &'static str {
@@ -534,6 +661,31 @@ mod tests {
         assert_eq!(gulikit, (KeyCode::BTN_TL2, KeyCode::BTN_TR2));
         assert_eq!(xpadneo, (KeyCode::BTN_THUMBL, KeyCode::BTN_THUMBR));
         assert_eq!(standard, (KeyCode::BTN_THUMBL, KeyCode::BTN_THUMBR));
+    }
+
+    #[test]
+    fn axis_normalization_maps_kernel_ranges_to_gamepad_ranges() {
+        let cases = [
+            (AbsInfo::new(0, 0, 255, 0, 0, 0), 0.0, 1.0, 0.0),
+            (AbsInfo::new(255, 0, 255, 0, 0, 0), 0.0, 1.0, 1.0),
+            (AbsInfo::new(128, 0, 256, 0, 0, 0), -1.0, 1.0, 0.0),
+            (
+                AbsInfo::new(-32768, -32768, 32767, 0, 0, 0),
+                -1.0,
+                1.0,
+                -1.0,
+            ),
+            (AbsInfo::new(32767, -32768, 32767, 0, 0, 0), -1.0, 1.0, 1.0),
+        ];
+        for (info, low, high, expected) in cases {
+            let actual = normalize_axis(Some(&info), low, high);
+            assert!((actual - expected).abs() < 0.0001, "info: {info:?}");
+        }
+        assert_eq!(normalize_axis(None, -1.0, 1.0), 0.0);
+        assert_eq!(
+            normalize_axis(Some(&AbsInfo::new(3, 3, 3, 0, 0, 0)), -1.0, 1.0),
+            0.0
+        );
     }
 
     #[test]

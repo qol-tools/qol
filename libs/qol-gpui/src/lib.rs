@@ -2,6 +2,7 @@ pub mod color_wheel;
 pub mod command_loop;
 pub mod dropdown;
 pub mod event_router;
+pub mod gamepad;
 pub mod ghost;
 pub mod history;
 pub mod keepalive;

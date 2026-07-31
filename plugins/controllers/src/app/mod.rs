@@ -235,12 +235,42 @@ fn native_input_payload(snapshot: platform::NativeInputSnapshot) -> serde_json::
                     })
                 })
                 .collect::<Vec<_>>();
+            let state_buttons = item
+                .state
+                .buttons
+                .into_iter()
+                .map(|button| {
+                    serde_json::json!({
+                        "index": button.index,
+                        "name": button.name,
+                        "pressed": button.pressed,
+                        "value": button.value,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let state_axes = item
+                .state
+                .axes
+                .into_iter()
+                .map(|axis| {
+                    serde_json::json!({
+                        "index": axis.index,
+                        "name": axis.name,
+                        "value": axis.value,
+                    })
+                })
+                .collect::<Vec<_>>();
             serde_json::json!({
                 "name": item.name,
                 "vendor": item.vendor,
                 "product": item.product,
                 "connection": native_connection_payload(item.connection),
                 "buttons": buttons,
+                "state": {
+                    "mapping": item.state.mapping,
+                    "buttons": state_buttons,
+                    "axes": state_axes,
+                },
             })
         })
         .collect::<Vec<_>>();
@@ -446,6 +476,20 @@ mod tests {
                     index: 10,
                     pressed: true,
                 }],
+                state: platform::NativeGamepadState {
+                    mapping: "standard",
+                    buttons: vec![platform::NativeGamepadButton {
+                        index: 0,
+                        name: "South",
+                        pressed: true,
+                        value: 1.0,
+                    }],
+                    axes: vec![platform::NativeGamepadAxis {
+                        index: 0,
+                        name: "Left X",
+                        value: -0.5,
+                    }],
+                },
             }],
         });
 
@@ -475,6 +519,20 @@ mod tests {
                         },
                     },
                     "buttons": [{"index": 10, "pressed": true}],
+                    "state": {
+                        "mapping": "standard",
+                        "buttons": [{
+                            "index": 0,
+                            "name": "South",
+                            "pressed": true,
+                            "value": 1.0,
+                        }],
+                        "axes": [{
+                            "index": 0,
+                            "name": "Left X",
+                            "value": -0.5,
+                        }],
+                    },
                 }],
             })
         );

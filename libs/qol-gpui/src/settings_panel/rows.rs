@@ -3,6 +3,7 @@ use qol_config::contract::{
 };
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection, ResolvedShowWhen};
 
+use crate::gamepad::GamepadMonitor;
 use crate::scroll_list::ScrollList;
 use crate::status_indicator::StatusTone;
 
@@ -111,6 +112,10 @@ pub(super) enum RowControl {
         items: Vec<ListItem>,
         list: ScrollList,
         error: Option<String>,
+    },
+    Gamepad {
+        query: String,
+        monitor: GamepadMonitor,
     },
 }
 
@@ -394,9 +399,11 @@ fn control_for(field: &ResolvedField) -> Option<RowControl> {
             list: ScrollList::new(LIST_MAX_VISIBLE),
             error: None,
         }),
-        FieldKind::ObjectArray | FieldKind::ObjectMap | FieldKind::QrCode | FieldKind::Gamepad => {
-            None
-        }
+        FieldKind::Gamepad => field.query.clone().map(|query| RowControl::Gamepad {
+            query,
+            monitor: GamepadMonitor::default(),
+        }),
+        FieldKind::ObjectArray | FieldKind::ObjectMap | FieldKind::QrCode => None,
     }
 }
 
@@ -493,8 +500,10 @@ fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
         RowControl::Text(value) => Some(serde_json::json!(value)),
         RowControl::TextList(values) => Some(serde_json::json!(values)),
         RowControl::Color(value) => Some(serde_json::json!(value)),
-        RowControl::Action { .. } | RowControl::List { .. } => None,
-        RowControl::Status { .. } => None,
+        RowControl::Action { .. }
+        | RowControl::List { .. }
+        | RowControl::Status { .. }
+        | RowControl::Gamepad { .. } => None,
     }
 }
 
@@ -520,7 +529,10 @@ fn row_value(control: &RowControl) -> Option<FieldDefault> {
             Some(FieldDefault::String(value.clone()))
         }
         RowControl::TextList(values) => Some(FieldDefault::StringArray(values.clone())),
-        RowControl::Action { .. } | RowControl::Status { .. } | RowControl::List { .. } => None,
+        RowControl::Action { .. }
+        | RowControl::Status { .. }
+        | RowControl::List { .. }
+        | RowControl::Gamepad { .. } => None,
     }
 }
 
@@ -554,6 +566,9 @@ pub(super) fn runtime_query_names(rows: &[Row]) -> Vec<String> {
             } => {
                 names.insert(query.clone());
                 names.extend(active_query.iter().cloned());
+            }
+            RowControl::Gamepad { query, .. } => {
+                names.insert(query.clone());
             }
             _ => {}
         }
@@ -673,6 +688,10 @@ pub(super) fn apply_runtime_query(
                         .is_ok_and(|value| query_flag(value, active_value_from.as_deref()));
                 }
             }
+            RowControl::Gamepad {
+                query: row_query,
+                monitor,
+            } if row_query == query => monitor.apply_query(result.clone()),
             _ => {}
         }
     }
@@ -990,6 +1009,47 @@ default = "202322"
             matches!(&rows[5].control, RowControl::TextList(v) if v == &vec!["foo".to_string()])
         );
         assert!(matches!(&rows[6].control, RowControl::Color(v) if v == "202322"));
+    }
+
+    #[test]
+    fn gamepad_fields_share_runtime_query_and_native_monitor_state() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.input]
+type = "gamepad"
+label = "Controller Input"
+query = "controller_input"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let mut rows = rows_from_resolved(&resolved);
+
+        assert_eq!(runtime_query_names(&rows), ["controller_input"]);
+        apply_runtime_query(
+            &mut rows,
+            "controller_input",
+            Ok(serde_json::json!({
+                "available": true,
+                "items": [{
+                    "name": "foo pad",
+                    "state": {"mapping": "standard", "buttons": [], "axes": []},
+                }],
+            })),
+        );
+
+        let RowControl::Gamepad { monitor, .. } = &rows[0].control else {
+            panic!("expected gamepad monitor");
+        };
+        assert_eq!(
+            monitor
+                .selected()
+                .map(|controller| controller.name.as_str()),
+            Some("foo pad")
+        );
     }
 
     #[test]
