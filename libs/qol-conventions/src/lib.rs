@@ -81,6 +81,10 @@ pub mod dev_routes {
         format!("/dev/links/{id}")
     }
 
+    pub fn reload_plugin(id: &str) -> String {
+        format!("/dev/reload/{id}")
+    }
+
     pub fn api_path(route: &str) -> String {
         format!("/api{route}")
     }

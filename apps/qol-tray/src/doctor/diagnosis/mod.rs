@@ -214,7 +214,9 @@ fn reload_stale_dev_daemons() {
 
 #[cfg(feature = "dev")]
 fn request_daemon_reload(plugin_id: &str) -> Result<()> {
-    let path = format!("/api/dev/reload/{plugin_id}");
+    let path = qol_conventions::dev_routes::api_path(&qol_conventions::dev_routes::reload_plugin(
+        plugin_id,
+    ));
     let (status, _) = crate::local_http::post_to_daemon(&path, "")?;
     if status == 200 || status == 202 {
         Ok(())
