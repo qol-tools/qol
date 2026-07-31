@@ -402,7 +402,7 @@ fn size_prepared_panel(
         monitor.bounds().size.height.to_f64() as f32 - 2.0 * crate::placement::CORNER_MARGIN;
     let height = panel_height(&prepared.rows, &prepared.sections).min(available);
     let width = panel_width(&prepared.rows);
-    let body_max = height - PANEL_CHROME_HEIGHT;
+    let body_max = available - PANEL_CHROME_HEIGHT;
     Ok(PreparedPanel {
         panel: prepared.panel,
         state: SettingsPanelState {
@@ -411,6 +411,7 @@ fn size_prepared_panel(
             values: prepared.values,
             path: prepared.path,
             body_max,
+            height_cap: available,
             runtime: prepared.runtime,
         },
         size: size(px(width), px(height)),

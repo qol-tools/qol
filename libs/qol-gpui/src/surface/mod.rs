@@ -51,7 +51,6 @@ pub struct OpenedSurface<V> {
     pub(crate) handle: WindowHandle<SurfaceRoot<V>>,
     pub(crate) dismisser: SurfaceDismisser,
     placement: MonitorPlacement,
-    size: Size<Pixels>,
     constrains_size: bool,
     visible: Rc<Cell<bool>>,
     reveal_pending: Rc<Cell<bool>>,
@@ -64,6 +63,10 @@ struct DismissState {
     generation: Cell<u64>,
     reusable: bool,
     title: RefCell<String>,
+    size: Cell<Size<Pixels>>,
+    constrains_size: bool,
+    visible: Rc<Cell<bool>>,
+    reveal_pending: Rc<Cell<bool>>,
 }
 
 #[derive(Clone)]
@@ -72,15 +75,43 @@ pub struct SurfaceDismisser {
 }
 
 impl SurfaceDismisser {
-    fn new(reusable: bool, title: String) -> Self {
+    fn new(
+        reusable: bool,
+        title: String,
+        size: Size<Pixels>,
+        constrains_size: bool,
+        visible: Rc<Cell<bool>>,
+        reveal_pending: Rc<Cell<bool>>,
+    ) -> Self {
         Self {
             state: Rc::new(DismissState {
                 close: RefCell::new(None),
                 generation: Cell::new(0),
                 reusable,
                 title: RefCell::new(title),
+                size: Cell::new(size),
+                constrains_size,
+                visible,
+                reveal_pending,
             }),
         }
+    }
+
+    pub fn window_size(&self) -> Size<Pixels> {
+        self.state.size.get()
+    }
+
+    pub fn resize_window(&self, size: Size<Pixels>, window: &mut Window) -> bool {
+        if !self.state.visible.get() || self.state.reveal_pending.get() {
+            return false;
+        }
+        let title = self.current_title();
+        if self.state.constrains_size && !constrain_native_size(&title, size) {
+            return false;
+        }
+        window.resize(size);
+        self.state.size.set(size);
+        true
     }
 
     pub(crate) fn current_title(&self) -> String {
@@ -232,11 +263,18 @@ impl Surface {
             app_id: Some(title.clone()),
             ..Default::default()
         };
-        let dismisser = SurfaceDismisser::new(retain_on_dismiss, title.clone());
-        let build_dismisser = dismisser.clone();
-        let window_title = title.clone();
         let visible = Rc::new(Cell::new(!native_reveal_gate && !passive_reveal_gate));
         let reveal_pending = Rc::new(Cell::new(native_reveal_gate));
+        let dismisser = SurfaceDismisser::new(
+            retain_on_dismiss,
+            title.clone(),
+            self.size,
+            constrains_size,
+            visible.clone(),
+            reveal_pending.clone(),
+        );
+        let build_dismisser = dismisser.clone();
+        let window_title = title.clone();
         if self.takes_focus() {
             crate::popup_window::capture_focus_return();
         }
@@ -344,7 +382,6 @@ impl Surface {
             handle,
             dismisser,
             placement: self.placement,
-            size: self.size,
             constrains_size,
             visible,
             reveal_pending,
@@ -704,6 +741,10 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
         self.visible.get()
     }
 
+    fn size(&self) -> Size<Pixels> {
+        self.dismisser.window_size()
+    }
+
     pub fn present(&mut self, tracker: &MonitorTracker, cx: &mut App) -> bool {
         if self.handle.update(cx, |_, _, _| ()).is_err() {
             return false;
@@ -715,7 +756,7 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
             let Some(monitor) = tracker.snapshot_monitor() else {
                 return false;
             };
-            let bounds = self.placement.bounds(monitor.bounds(), self.size);
+            let bounds = self.placement.bounds(monitor.bounds(), self.size());
             crate::popup_window::capture_focus_return();
             let title = self.dismisser.current_title();
             if self.constrains_size && !constrain_native_size(&title, bounds.size) {
@@ -723,7 +764,7 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
             }
             let resized = self
                 .handle
-                .update(cx, |_, window, _| window.resize(self.size))
+                .update(cx, |_, window, _| window.resize(bounds.size))
                 .is_ok();
             if !resized {
                 return false;
@@ -778,7 +819,7 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
             ));
         }
         self.handle.update(cx, |_, window, _| window.resize(size))?;
-        self.size = size;
+        self.dismisser.state.size.set(size);
         Ok(())
     }
 }

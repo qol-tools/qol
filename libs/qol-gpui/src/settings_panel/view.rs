@@ -34,6 +34,7 @@ pub(super) struct SettingsPanelView {
     selected: usize,
     scroll_offset: usize,
     body_max: f32,
+    height_cap: f32,
     active_control: Option<ActiveControl>,
     row_bounds: Vec<Rc<Cell<Option<Bounds<Pixels>>>>>,
     wheel_generation: u64,
@@ -49,6 +50,7 @@ pub(super) struct SettingsPanelState {
     pub(super) values: serde_json::Value,
     pub(super) path: PathBuf,
     pub(super) body_max: f32,
+    pub(super) height_cap: f32,
     pub(super) runtime: SettingsRuntime,
 }
 
@@ -100,6 +102,7 @@ impl SettingsPanelView {
             selected: 0,
             scroll_offset: 0,
             body_max: state.body_max,
+            height_cap: state.height_cap,
             active_control: None,
             row_bounds,
             wheel_generation: 0,
@@ -1975,13 +1978,43 @@ impl Render for SettingsPanelView {
             )
             .child(
                 div()
+                    .flex_none()
+                    .relative()
                     .flex()
                     .flex_col()
                     .gap_1()
                     .px_4()
                     .pb_4()
-                    .children(items),
+                    .children(items)
+                    .child(self.measure_canvas()),
             )
+    }
+}
+
+impl SettingsPanelView {
+    fn measure_canvas(&self) -> impl IntoElement {
+        let dismisser = self.dismisser.clone();
+        let floor = super::PANEL_CHROME_HEIGHT + super::PANEL_ROW_HEIGHT;
+        let cap = self.height_cap;
+        canvas(
+            |_, _, _| (),
+            move |bounds, _, window, cx| {
+                let target = (bounds.bottom().to_f64() as f32).clamp(floor, cap);
+                let current = window.viewport_size().height.to_f64() as f32;
+                if (target - current).abs() <= 1.0 {
+                    return;
+                }
+                let next = size(dismisser.window_size().width, px(target));
+                let handle = window.window_handle();
+                cx.defer(move |cx| {
+                    let _ = handle.update(cx, |_, window, _| {
+                        dismisser.resize_window(next, window);
+                    });
+                });
+            },
+        )
+        .absolute()
+        .inset_0()
     }
 }
 
