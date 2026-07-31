@@ -1,8 +1,13 @@
+use std::time::Duration;
+
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use super::diagram::controller_diagram;
 use super::model::{ConnectionBadge, GamepadButton, MonitorStatus, SignalTone};
 use super::{ControllerSnapshot, GamepadMonitor, GamepadPalette};
+
+const AXIS_MOTION_DURATION: Duration = Duration::from_millis(54);
 
 pub fn gamepad_panel(
     monitor: &GamepadMonitor,
@@ -80,14 +85,8 @@ fn controller_content(
                 .child(controller_diagram(controller, palette)),
         )
         .child(active_inputs(controller, palette))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .gap_2()
-                .child(axis_readout(controller, palette))
-                .child(button_readout(controller, palette)),
-        )
+        .child(axis_readout(controller, palette))
+        .child(button_readout(controller, palette))
 }
 
 fn device_header(
@@ -248,14 +247,17 @@ fn active_inputs(controller: &ControllerSnapshot, palette: GamepadPalette) -> Di
 fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div {
     div()
         .flex()
-        .min_w_0()
-        .flex_1()
-        .flex_col()
+        .w_full()
+        .flex_row()
+        .flex_wrap()
         .gap_1()
         .children(controller.axes.iter().map(|axis| {
+            let previous_position = (axis.previous_value + 1.0) / 2.0;
             let position = (axis.value + 1.0) / 2.0;
+            let animation_id = axis.animation_id * 256 + axis.index as u64;
             div()
                 .flex()
+                .w(relative(0.495))
                 .flex_row()
                 .items_center()
                 .gap_2()
@@ -277,7 +279,6 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
                         .child(
                             div()
                                 .absolute()
-                                .left(relative(position))
                                 .top(px(-2.0))
                                 .ml(px(-4.0))
                                 .w(px(8.0))
@@ -287,7 +288,19 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
                                     palette.accent
                                 } else {
                                     palette.text_muted
-                                })),
+                                }))
+                                .with_animation(
+                                    ("gamepad-axis-motion", animation_id),
+                                    Animation::new(AXIS_MOTION_DURATION)
+                                        .with_easing(ease_out_quint()),
+                                    move |marker, progress| {
+                                        marker.left(relative(interpolate(
+                                            previous_position,
+                                            position,
+                                            progress,
+                                        )))
+                                    },
+                                ),
                         ),
                 )
                 .child(
@@ -304,7 +317,7 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
 fn button_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div {
     div()
         .flex()
-        .w(px(360.0))
+        .w_full()
         .flex_wrap()
         .content_start()
         .gap_1()
@@ -320,7 +333,7 @@ fn button_chip(button: &GamepadButton, palette: GamepadPalette) -> Div {
     let active = button.pressed || button.value > 0.05;
     div()
         .flex()
-        .w(px(68.0))
+        .w(px(89.0))
         .h(px(22.0))
         .items_center()
         .justify_between()
@@ -337,6 +350,7 @@ fn button_chip(button: &GamepadButton, palette: GamepadPalette) -> Div {
         } else {
             rgba(alpha(palette.raised, 0x9a))
         })
+        .when(active, |chip| chip.shadow(glow(palette.accent)))
         .child(
             div()
                 .truncate()
@@ -451,6 +465,19 @@ fn tone_color(tone: SignalTone, palette: GamepadPalette) -> u32 {
         SignalTone::Danger => palette.danger,
         SignalTone::Muted => palette.text_muted,
     }
+}
+
+fn interpolate(from: f32, to: f32, progress: f32) -> f32 {
+    from + (to - from) * progress
+}
+
+fn glow(color: u32) -> Vec<BoxShadow> {
+    vec![BoxShadow {
+        color: rgba(alpha(color, 0x58)).into(),
+        offset: point(px(0.0), px(0.0)),
+        blur_radius: px(9.0),
+        spread_radius: px(0.0),
+    }]
 }
 
 fn alpha(color: u32, opacity: u8) -> u32 {

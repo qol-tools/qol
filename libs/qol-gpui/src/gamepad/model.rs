@@ -9,6 +9,7 @@ pub struct GamepadMonitor {
     pub source: Option<String>,
     pub controllers: Vec<ControllerSnapshot>,
     pub selected: usize,
+    motion_sequence: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -42,7 +43,9 @@ pub struct GamepadButton {
 pub struct GamepadAxis {
     pub index: usize,
     pub name: String,
+    pub previous_value: f32,
     pub value: f32,
+    pub animation_id: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -177,11 +180,37 @@ impl GamepadMonitor {
             return;
         };
         self.source = payload.source;
-        self.controllers = payload
+        let mut controllers = payload
             .items
             .into_iter()
             .filter_map(ControllerSnapshot::from_query)
-            .collect();
+            .collect::<Vec<_>>();
+        for controller in &mut controllers {
+            let Some(previous) = self.controllers.iter().find(|previous| {
+                previous.vendor == controller.vendor
+                    && previous.product == controller.product
+                    && previous.name == controller.name
+            }) else {
+                continue;
+            };
+            for axis in &mut controller.axes {
+                let Some(previous_axis) = previous
+                    .axes
+                    .iter()
+                    .find(|previous_axis| previous_axis.index == axis.index)
+                else {
+                    continue;
+                };
+                axis.previous_value = previous_axis.value;
+                if (axis.value - previous_axis.value).abs() > f32::EPSILON {
+                    self.motion_sequence = self.motion_sequence.wrapping_add(1).max(1);
+                    axis.animation_id = self.motion_sequence;
+                } else {
+                    axis.animation_id = previous_axis.animation_id;
+                }
+            }
+        }
+        self.controllers = controllers;
         self.selected = self.selected.min(self.controllers.len().saturating_sub(1));
         if !payload.available {
             self.status = MonitorStatus::Unavailable;
@@ -237,7 +266,9 @@ impl ControllerSnapshot {
                 .map(|axis| GamepadAxis {
                     index: axis.index,
                     name: axis.name,
+                    previous_value: axis.value.clamp(-1.0, 1.0),
                     value: axis.value.clamp(-1.0, 1.0),
+                    animation_id: 0,
                 })
                 .collect(),
             connection: value.connection.map(GamepadConnection::from_query),
@@ -252,9 +283,10 @@ impl ControllerSnapshot {
         {
             return ControllerProfile::PlayStation;
         }
-        if ["nintendo", "switch", "joy-con"]
-            .iter()
-            .any(|needle| identity.contains(needle))
+        if (self.vendor == 0x057e && self.product == 0x2009)
+            || ["nintendo", "switch", "joy-con", "pro controller"]
+                .iter()
+                .any(|needle| identity.contains(needle))
         {
             return ControllerProfile::Nintendo;
         }
@@ -281,6 +313,20 @@ impl ControllerSnapshot {
             .find(|axis| axis.index == index)
             .map(|axis| axis.value)
             .unwrap_or_default()
+    }
+
+    pub fn axis_state(&self, index: usize) -> GamepadAxis {
+        self.axes
+            .iter()
+            .find(|axis| axis.index == index)
+            .cloned()
+            .unwrap_or(GamepadAxis {
+                index,
+                name: String::new(),
+                previous_value: 0.0,
+                value: 0.0,
+                animation_id: 0,
+            })
     }
 
     pub fn active_inputs(&self) -> Vec<String> {
@@ -386,6 +432,22 @@ impl ControllerProfile {
         }
     }
 
+    pub fn trigger_labels(self) -> [&'static str; 2] {
+        match self {
+            Self::Xbox => ["LT", "RT"],
+            Self::PlayStation => ["L2", "R2"],
+            Self::Nintendo => ["ZL", "ZR"],
+        }
+    }
+
+    pub fn shoulder_labels(self) -> [&'static str; 2] {
+        match self {
+            Self::Xbox => ["LB", "RB"],
+            Self::PlayStation => ["L1", "R1"],
+            Self::Nintendo => ["L", "R"],
+        }
+    }
+
     pub fn symmetric_sticks(self) -> bool {
         self == Self::PlayStation
     }
@@ -476,5 +538,37 @@ mod tests {
             monitor.apply_query(Ok(payload(name, serde_json::Value::Null)));
             assert_eq!(monitor.selected().expect("controller").profile(), expected);
         }
+    }
+
+    #[test]
+    fn generic_pro_controller_uses_nintendo_hardware_identity() {
+        let mut value = payload("Pro Controller", serde_json::Value::Null);
+        value["items"][0]["vendor"] = serde_json::json!(0x057e);
+        value["items"][0]["product"] = serde_json::json!(0x2009);
+        let mut monitor = GamepadMonitor::default();
+        monitor.apply_query(Ok(value));
+
+        let controller = monitor.selected().expect("controller");
+        assert_eq!(controller.profile(), ControllerProfile::Nintendo);
+        assert_eq!(controller.profile().trigger_labels(), ["ZL", "ZR"]);
+        assert_eq!(controller.profile().shoulder_labels(), ["L", "R"]);
+    }
+
+    #[test]
+    fn repeated_axis_queries_preserve_motion_start_and_refresh_animation_id() {
+        let mut monitor = GamepadMonitor::default();
+        monitor.apply_query(Ok(payload(
+            "Xbox Wireless Controller",
+            serde_json::Value::Null,
+        )));
+        let first_id = monitor.selected().expect("controller").axes[0].animation_id;
+        let mut next = payload("Xbox Wireless Controller", serde_json::Value::Null);
+        next["items"][0]["state"]["axes"][0]["value"] = serde_json::json!(0.25);
+        monitor.apply_query(Ok(next));
+
+        let axis = &monitor.selected().expect("controller").axes[0];
+        assert_eq!(axis.previous_value, -1.0);
+        assert_eq!(axis.value, 0.25);
+        assert_ne!(axis.animation_id, first_id);
     }
 }
