@@ -18,6 +18,14 @@ active_query = "adapter_status"
 active_value_from = "powered"
 variant = "toggle"
 
+[field.adapter]
+type = "select"
+label = "Adapter"
+description = "Which Bluetooth adapter qol uses. Automatic follows the BlueZ default."
+section = "devices"
+default = ""
+query = "adapter_options"
+
 [field.search]
 type = "action"
 label = "Start search"

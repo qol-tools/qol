@@ -8,6 +8,7 @@ pub fn contract() -> &'static str {
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct ReconnectConfig {
+    pub adapter: String,
     pub managed_devices: Vec<String>,
     pub auto_reconnect: bool,
     pub power_on_adapter: bool,
@@ -37,6 +38,7 @@ mod tests {
             .unwrap();
         let config: ReconnectConfig =
             qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).unwrap();
+        assert!(config.adapter.is_empty());
         assert!(config.managed_devices.is_empty());
         assert!(config.auto_reconnect);
         assert!(config.power_on_adapter);

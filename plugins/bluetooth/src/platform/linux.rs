@@ -23,11 +23,12 @@ use qol_plugin_daemon::notification::send_notification;
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 use crate::bluetooth::{
-    audio_profile_repairable, connection_ready, devices_payload, has_audio_class, is_audio_device,
-    managed_device_options, normalize_address,
+    adapter_options, audio_profile_repairable, connection_ready, devices_payload, has_audio_class,
+    is_audio_device, managed_device_options, normalize_address,
     retry::{RetryPolicy, RetryState},
-    search_status_payload, supports_audio_sink, AdapterHealth, DeviceActionState, DeviceInfo,
-    DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport, ReconnectSelection,
+    search_status_payload, supports_audio_sink, AdapterHealth, AdapterInfo, DeviceActionState,
+    DeviceInfo, DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport,
+    ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
 use crate::hostfix::BluetoothHostFixes;
@@ -217,6 +218,7 @@ enum DaemonAction {
     StopSearch,
     Devices,
     ManagedDeviceOptions,
+    AdapterOptions,
     SearchStatus,
     AdapterStatus,
     Reconnect,
@@ -246,6 +248,7 @@ impl TryFrom<&str> for DaemonAction {
             "stop_search" => Ok(Self::StopSearch),
             "devices" => Ok(Self::Devices),
             "managed_device_options" => Ok(Self::ManagedDeviceOptions),
+            "adapter_options" => Ok(Self::AdapterOptions),
             "search_status" => Ok(Self::SearchStatus),
             "adapter_status" => Ok(Self::AdapterStatus),
             "reconnect" => Ok(Self::Reconnect),
@@ -466,6 +469,10 @@ fn current_managed_device_options() -> Result<Vec<DeviceOption>> {
     Ok(managed_device_options(&list_devices()?))
 }
 
+fn current_adapter_options() -> Result<Vec<DeviceOption>> {
+    Ok(adapter_options(&runtime()?.block_on(adapter_inventory())?))
+}
+
 pub fn run_daemon(config: ReconnectConfig) -> Result<()> {
     crate::hostfix::restore_claimed_managers();
     let (listener_tx, listener_rx) = mpsc::channel();
@@ -501,10 +508,56 @@ async fn default_adapter() -> Result<Adapter> {
     let session = Session::new()
         .await
         .context("failed to connect to the BlueZ system service")?;
-    session
-        .default_adapter()
+    let configured = crate::config::load().adapter;
+    if configured.is_empty() {
+        return session
+            .default_adapter()
+            .await
+            .context("BlueZ has no default Bluetooth adapter");
+    }
+    let target = normalize_address(&configured)?;
+    for name in session.adapter_names().await? {
+        let Ok(adapter) = session.adapter(&name) else {
+            continue;
+        };
+        let Ok(address) = adapter.address().await else {
+            continue;
+        };
+        if address.to_string().to_ascii_uppercase() == target {
+            return Ok(adapter);
+        }
+    }
+    bail!("configured Bluetooth adapter {target} was not found; set the adapter back to Automatic or reconnect it")
+}
+
+async fn adapter_inventory() -> Result<Vec<AdapterInfo>> {
+    let session = Session::new()
         .await
-        .context("BlueZ has no default Bluetooth adapter")
+        .context("failed to connect to the BlueZ system service")?;
+    let mut adapters = Vec::new();
+    for name in session.adapter_names().await? {
+        let Ok(adapter) = session.adapter(&name) else {
+            continue;
+        };
+        let Ok(address) = adapter.address().await else {
+            continue;
+        };
+        let mut paired_count = 0;
+        for device_address in adapter.device_addresses().await.unwrap_or_default() {
+            let Ok(device) = adapter.device(device_address) else {
+                continue;
+            };
+            if device.is_paired().await.unwrap_or(false) {
+                paired_count += 1;
+            }
+        }
+        adapters.push(AdapterInfo {
+            name: name.clone(),
+            address: address.to_string().to_ascii_uppercase(),
+            paired_count,
+        });
+    }
+    Ok(adapters)
 }
 
 async fn ensure_powered(adapter: &Adapter, power_on_adapter: bool) -> Result<()> {
@@ -1179,6 +1232,14 @@ fn dispatch_daemon_action(
         DaemonAction::ManagedDeviceOptions => {
             match current_managed_device_options().and_then(|options| {
                 serde_json::to_value(options).context("failed to encode Bluetooth device options")
+            }) {
+                Ok(payload) => ReadResult::HandledWithData(payload),
+                Err(error) => ReadResult::Error(format!("{error:#}")),
+            }
+        }
+        DaemonAction::AdapterOptions => {
+            match current_adapter_options().and_then(|options| {
+                serde_json::to_value(options).context("failed to encode Bluetooth adapter options")
             }) {
                 Ok(payload) => ReadResult::HandledWithData(payload),
                 Err(error) => ReadResult::Error(format!("{error:#}")),
@@ -2336,6 +2397,7 @@ mod tests {
             ("stop_search", DaemonAction::StopSearch),
             ("devices", DaemonAction::Devices),
             ("managed_device_options", DaemonAction::ManagedDeviceOptions),
+            ("adapter_options", DaemonAction::AdapterOptions),
             ("search_status", DaemonAction::SearchStatus),
             ("adapter_status", DaemonAction::AdapterStatus),
             ("reconnect", DaemonAction::Reconnect),

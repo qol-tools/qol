@@ -59,3 +59,7 @@ poll_interval_ms = 1000
 [query.managed_device_options]
 description = "Paired Bluetooth devices available for automatic reconnection"
 poll_interval_ms = 5000
+
+[query.adapter_options]
+description = "Bluetooth adapters available on this computer"
+poll_interval_ms = 5000

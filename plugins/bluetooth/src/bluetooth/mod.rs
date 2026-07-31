@@ -39,6 +39,13 @@ pub struct DeviceOption {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdapterInfo {
+    pub name: String,
+    pub address: String,
+    pub paired_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceActionState {
     pub address: String,
     pub status: String,
@@ -305,6 +312,27 @@ pub fn managed_device_options(devices: &[DeviceInfo]) -> Vec<DeviceOption> {
         .collect()
 }
 
+pub fn adapter_options(adapters: &[AdapterInfo]) -> Vec<DeviceOption> {
+    let mut sorted = adapters.iter().collect::<Vec<_>>();
+    sorted.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.address.cmp(&right.address))
+    });
+    let mut options = vec![DeviceOption {
+        value: String::new(),
+        label: "Automatic · BlueZ default".to_string(),
+    }];
+    options.extend(sorted.into_iter().map(|adapter| DeviceOption {
+        value: adapter.address.clone(),
+        label: format!(
+            "{} · {} · {} paired",
+            adapter.name, adapter.address, adapter.paired_count
+        ),
+    }));
+    options
+}
+
 pub fn search_status_payload(discovery: &DiscoveryState) -> serde_json::Value {
     serde_json::json!({
         "discovered_count": discovery.discovered_count(),
@@ -464,6 +492,40 @@ mod tests {
                 DeviceOption {
                     value: "AA:BB:CC:DD:EE:02".into(),
                     label: "Luna 2 · AA:BB:CC:DD:EE:02".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn adapter_options_lead_with_automatic_and_sort_by_name() {
+        let adapters = [
+            AdapterInfo {
+                name: "hci1".into(),
+                address: "AA:BB:CC:DD:EE:02".into(),
+                paired_count: 3,
+            },
+            AdapterInfo {
+                name: "hci0".into(),
+                address: "AA:BB:CC:DD:EE:01".into(),
+                paired_count: 0,
+            },
+        ];
+
+        assert_eq!(
+            adapter_options(&adapters),
+            vec![
+                DeviceOption {
+                    value: "".into(),
+                    label: "Automatic · BlueZ default".into(),
+                },
+                DeviceOption {
+                    value: "AA:BB:CC:DD:EE:01".into(),
+                    label: "hci0 · AA:BB:CC:DD:EE:01 · 0 paired".into(),
+                },
+                DeviceOption {
+                    value: "AA:BB:CC:DD:EE:02".into(),
+                    label: "hci1 · AA:BB:CC:DD:EE:02 · 3 paired".into(),
                 },
             ]
         );
