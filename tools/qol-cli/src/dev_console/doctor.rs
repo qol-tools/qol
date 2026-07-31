@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use qol_conventions::doctor_wire::{
     FixReport as DoctorFixReport, Outcome, OutcomeStatus, Report as DoctorReport,
@@ -13,6 +14,7 @@ use ratatui::Frame;
 
 use crate::poller::Poller;
 
+use super::activity::Activity;
 use super::render_util::{
     accent, list_window_head, now_unix_ms, relative_age, view_content, NavigationOverflow,
 };
@@ -47,6 +49,15 @@ impl ManualDoctor {
             .map(|step| step.clone())
             .unwrap_or_default()
     }
+
+    pub(super) fn activity(&self, now_ms: u64) -> Activity {
+        Activity {
+            title: "doctor",
+            phase: self.mode.gerund().to_string(),
+            detail: self.progress_step(),
+            elapsed: Duration::from_millis(now_ms.saturating_sub(self.started_at_ms)),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -75,15 +86,7 @@ pub(super) fn open_doctor(dash: &mut Dash) {
 
 pub(super) fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Span<'static>>) {
     if let Some(manual) = &panel.manual {
-        let mut value = vec![manual.mode.gerund().fg(Color::Yellow)];
-        let step = manual.progress_step();
-        if !step.is_empty() {
-            value.push(format!(" · {step}").fg(Color::DarkGray));
-        }
-        value.push(
-            format!(" · {}", elapsed_label(now_ms, manual.started_at_ms)).fg(Color::DarkGray),
-        );
-        return (Color::Yellow, value);
+        return (Color::Yellow, vec![manual.mode.gerund().fg(Color::Yellow)]);
     }
     let Some(run) = &panel.last else {
         let detail = panel
@@ -134,18 +137,13 @@ pub(super) fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Spa
 pub(super) fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
     let lines = doctor_view_lines(&dash.doctor);
     if lines.is_empty() {
-        let message = match &dash.doctor.manual {
-            Some(manual) => {
-                let step = manual.progress_step();
-                if step.is_empty() {
-                    manual.mode.progress_message().to_string()
-                } else {
-                    format!("{} · {step}", manual.mode.progress_message())
-                }
-            }
-            None => "  no checks reported · press d to run".to_string(),
-        };
-        view_content(frame, area, vec![Line::from(message)]);
+        if dash.doctor.manual.is_none() {
+            view_content(
+                frame,
+                area,
+                vec![Line::from("  no checks reported · press d to run")],
+            );
+        }
         return NavigationOverflow::default();
     }
     let total = lines.len();
@@ -242,14 +240,6 @@ fn friendly_doctor_line(raw: &str) -> Line<'static> {
     ])
 }
 
-fn elapsed_label(now_ms: u64, started_ms: u64) -> String {
-    let seconds = now_ms.saturating_sub(started_ms) / 1000;
-    if seconds < 60 {
-        return format!("{seconds}s");
-    }
-    format!("{}m{:02}s", seconds / 60, seconds % 60)
-}
-
 fn humanize_check_id(id: &str) -> String {
     let spaced = id.replace('_', " ");
     let mut chars = spaced.chars();
@@ -295,13 +285,6 @@ impl DoctorMode {
         match self {
             DoctorMode::Check => "checking",
             DoctorMode::Fix => "fixing",
-        }
-    }
-
-    pub(super) fn progress_message(self) -> &'static str {
-        match self {
-            DoctorMode::Check => "  running checks",
-            DoctorMode::Fix => "  applying fixes",
         }
     }
 }
@@ -669,38 +652,73 @@ mod tests {
         );
     }
 
+    fn manual_doctor(mode: DoctorMode, step: &str, started_at_ms: u64) -> ManualDoctor {
+        let (_, rx) = channel();
+        ManualDoctor {
+            mode,
+            rx,
+            progress: Arc::new(Mutex::new(step.to_string())),
+            started_at_ms,
+        }
+    }
+
     #[test]
-    fn doctor_status_shows_manual_step_and_elapsed() {
-        let (_tx, rx) = channel();
+    fn doctor_status_leaves_the_running_step_to_the_activity_sign() {
         let panel = DoctorPanel {
             last: None,
             last_at_ms: None,
-            manual: Some(ManualDoctor {
-                mode: DoctorMode::Fix,
-                rx,
-                progress: Arc::new(Mutex::new("check rust_clippy".to_string())),
-                started_at_ms: 1_000_000_000 - 83_000,
-            }),
+            manual: Some(manual_doctor(
+                DoctorMode::Fix,
+                "check rust_clippy",
+                1_000_000_000 - 83_000,
+            )),
             error: None,
         };
         let (color, spans) = doctor_status(&panel, 1_000_000_000);
         assert_eq!(color, Color::Yellow);
-        assert_eq!(span_text(&spans), "fixing · check rust_clippy · 1m23s");
+        assert_eq!(span_text(&spans), "fixing");
     }
 
     #[test]
-    fn elapsed_label_formats_seconds_and_minutes() {
+    fn running_fixes_show_in_the_activity_sign_instead_of_the_page_body() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Doctor;
+        dash.doctor.manual = Some(manual_doctor(
+            DoctorMode::Fix,
+            "check rust_clippy",
+            now_unix_ms(),
+        ));
+
+        let rows = super::super::testkit::render_rows_at(&mut dash, 110, 28);
+
+        assert!(
+            rows.iter().any(|row| row.contains("┤ doctor ├")),
+            "doctor activity sign title missing"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("fixing · check rust_clippy")),
+            "doctor activity step missing from the sign"
+        );
+        assert!(
+            rows.iter().all(|row| !row.contains("no checks reported")),
+            "the idle empty state must not claim idleness while fixes run"
+        );
+    }
+
+    #[test]
+    fn manual_doctor_reports_mode_step_and_elapsed_as_an_activity() {
         let cases = [
-            (5_000, "5s"),
-            (59_999, "59s"),
-            (60_000, "1m00s"),
-            (683_000, "11m23s"),
+            (DoctorMode::Fix, "check rust_clippy", "fixing"),
+            (DoctorMode::Check, "", "checking"),
         ];
-        for (delta_ms, expected) in cases {
-            assert_eq!(
-                elapsed_label(1_000_000_000, 1_000_000_000 - delta_ms),
-                expected
-            );
+        for (mode, step, expected_phase) in cases {
+            let manual = manual_doctor(mode, step, 1_000_000_000 - 83_000);
+            let activity = manual.activity(1_000_000_000);
+            assert_eq!(activity.title, "doctor");
+            assert_eq!(activity.phase, expected_phase);
+            assert_eq!(activity.detail, step);
+            assert_eq!(activity.elapsed, Duration::from_secs(83));
         }
     }
 

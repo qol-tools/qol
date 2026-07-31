@@ -19,6 +19,15 @@ The `qol` CLI: dev console (`qol dev`), emu workflows (`qol emu`), doctor, trace
   the view draws into. Pages without a description (dashboard, emu-detail) get
   the rect unchanged. Keep blurbs short so the title sign never has to carry
   them.
+- **Ongoing activity lives in the bottom activity sign, never inline.** Any
+  long-running job the console started (reload prebuild, doctor check/fix, and
+  every future one) reports progress through `activity::Activity` -
+  `{title, phase, detail, elapsed}` - rendered as the centered compact
+  `SignBox` above the branch sign by `draw_activity`. A source owns its own
+  progress state and produces an `Activity` snapshot; `Dash::activity` picks
+  the one to show. Never add a second progress surface for the same job: the
+  page body keeps showing the last result, and a dashboard row shows at most
+  the one-word state (`fixing`), with step and elapsed left to the sign.
 - **`SignBox` is for genuine sub-panes only.** The bordered+titled `SignBox`
   is reserved for a real nested pane inside a page (the run.log pane in
   `draw_emu_detail`) and the floating keys badge - never to wrap a whole page.

@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use ratatui::style::Color;
 
+mod activity;
 mod console_state;
 mod dash;
 mod doctor;
@@ -25,7 +26,7 @@ pub(crate) use session::{run_session, SessionEnd};
 pub(crate) use tray_handle::{spawn_forwarders, TrayHandle};
 
 use dash::{
-    Dash, RebuildState, Reload, ReloadActivity, ReloadOutcome, TraceRate, TraceRenderer, View,
+    Dash, RebuildState, Reload, ReloadOutcome, ReloadProgress, TraceRate, TraceRenderer, View,
     WorktreeSelection,
 };
 use draw::frame_accent;

@@ -6,6 +6,7 @@ use ratatui::Frame;
 
 use crate::dev_server::{PluginDaemonStatus, WorkspacePlugin};
 
+use super::activity::draw_activity;
 use super::dash::{Dash, Health, LinksState, RebuildState, Row, View};
 use super::doctor::{doctor_status, draw_doctor};
 use super::emu_panel::{draw_emu, draw_emu_detail, emu_detail_shows_warnings, emu_status};
@@ -40,7 +41,7 @@ pub(super) fn draw(frame: &mut Frame, dash: &mut Dash) {
     draw_filter_panel(frame, dash, inner, accent);
     draw_feature_flags_panel(frame, dash, inner, accent);
     draw_worktrees_panel(frame, dash, inner, accent);
-    draw_reload_activity(frame, dash, inner, accent);
+    draw_activity(frame, dash, inner, accent);
     draw_quit_prompt(frame, dash, inner, accent);
     Sign {
         content: breadcrumb(dash, accent),
@@ -228,31 +229,6 @@ pub(super) fn draw_quit_prompt(frame: &mut Frame, dash: &Dash, area: Rect, accen
         return;
     }
     render_util::render_bottom_panel(frame, area, "quit", quit_prompt_rows(), accent);
-}
-
-pub(super) fn reload_activity_rows(dash: &Dash) -> Vec<Line<'static>> {
-    let Some(activity) = dash.reload_activity() else {
-        return Vec::new();
-    };
-    vec![Line::from(vec![
-        " ● ".fg(accent()).bold(),
-        activity.phase.clone().fg(Color::White).bold(),
-        " · ".fg(Color::DarkGray),
-        activity.detail.clone().fg(Color::Gray),
-        format!(" · {}", format_duration(activity.started.elapsed())).fg(Color::DarkGray),
-        " ".into(),
-    ])]
-}
-
-pub(super) fn draw_reload_activity(frame: &mut Frame, dash: &Dash, area: Rect, accent: Color) {
-    if dash.quit_prompt_active() {
-        return;
-    }
-    let rows = reload_activity_rows(dash);
-    if rows.is_empty() {
-        return;
-    }
-    render_util::render_compact_bottom_panel(frame, area, "reload", rows, accent);
 }
 
 pub(super) fn context_keys(dash: &Dash) -> Vec<KeyHint> {
@@ -1196,7 +1172,7 @@ mod tests {
         dash.reload = Reload::Running {
             child,
             rx,
-            activity: ReloadActivity::new(),
+            activity: ReloadProgress::new(),
         };
         assert!(dash.is_reloading());
         assert_eq!(frame_accent(&dash), Color::Red);
@@ -1210,7 +1186,7 @@ mod tests {
         let mut dash = Dash::new(Vec::new());
         let child = Command::new("true").spawn().unwrap();
         let (_tx, rx) = channel();
-        let mut activity = ReloadActivity::new();
+        let mut activity = ReloadProgress::new();
         assert!(activity.observe(&format!(
             "{}build\tqol-tray dev",
             crate::commands::dev::DEV_RELOAD_PROGRESS_PREFIX
@@ -1464,7 +1440,7 @@ mod tests {
         dash.reload = Reload::Running {
             child,
             rx,
-            activity: ReloadActivity::new(),
+            activity: ReloadProgress::new(),
         };
         assert_eq!(frame_accent(&dash), Color::Red);
         let crumb = span_text(&breadcrumb(&dash, Color::Green).spans);

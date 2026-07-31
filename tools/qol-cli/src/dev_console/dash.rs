@@ -15,6 +15,7 @@ use crate::dev_server::{
 };
 use crate::poller::Poller;
 
+use super::activity::Activity;
 use super::console_state::ConsoleState;
 use super::doctor::{spawn_doctor, spawn_doctor_probe, DoctorMode, DoctorPanel, DoctorRun};
 use super::emu_panel::{ActiveSandboxRun, EmuDetail, EmuState};
@@ -24,6 +25,7 @@ use super::feature_flags::{
 use super::filters::{filter_brick_layout, FilterState, FilterStrategy, LogFilter, ViewFilters};
 use super::log_pane::{DevLogFile, LogPane};
 use super::picker::{default_filter_layout_width, move_picker_selection, PickerMove};
+use super::render_util::now_unix_ms;
 use super::stream_view::EndpointsState;
 use super::worktrees_panel::{
     arm_selected_worktree, move_worktree_selection, open_worktrees_panel, target_label,
@@ -275,18 +277,27 @@ pub(super) enum RebuildState {
     Failed(String),
 }
 
-pub(super) struct ReloadActivity {
+pub(super) struct ReloadProgress {
     pub(super) started: Instant,
     pub(super) phase: String,
     pub(super) detail: String,
 }
 
-impl ReloadActivity {
+impl ReloadProgress {
     pub(super) fn new() -> Self {
         Self {
             started: Instant::now(),
             phase: "prepare".to_string(),
             detail: "dev artifacts".to_string(),
+        }
+    }
+
+    pub(super) fn activity(&self) -> Activity {
+        Activity {
+            title: "reload",
+            phase: self.phase.clone(),
+            detail: self.detail.clone(),
+            elapsed: self.started.elapsed(),
         }
     }
 
@@ -312,7 +323,7 @@ pub(super) enum Reload {
     Running {
         child: Child,
         rx: Receiver<String>,
-        activity: ReloadActivity,
+        activity: ReloadProgress,
     },
 }
 
@@ -464,10 +475,14 @@ impl Dash {
         matches!(self.reload, Reload::Running { .. })
     }
 
-    pub(super) fn reload_activity(&self) -> Option<&ReloadActivity> {
+    pub(super) fn activity(&self) -> Option<Activity> {
         match &self.reload {
-            Reload::Running { activity, .. } => Some(activity),
-            Reload::Idle => None,
+            Reload::Running { activity, .. } => Some(activity.activity()),
+            Reload::Idle => self
+                .doctor
+                .manual
+                .as_ref()
+                .map(|manual| manual.activity(now_unix_ms())),
         }
     }
 

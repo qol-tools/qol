@@ -9,8 +9,8 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use super::{
-    spawn_forwarders, terminate_child, try_wait, Dash, RebuildState, Reload, ReloadActivity,
-    ReloadOutcome, TrayHandle, WorktreeSelection, CRASH_TAIL, HANDOFF_STOP_INTERVAL,
+    spawn_forwarders, terminate_child, try_wait, Dash, RebuildState, Reload, ReloadOutcome,
+    ReloadProgress, TrayHandle, WorktreeSelection, CRASH_TAIL, HANDOFF_STOP_INTERVAL,
     PROMOTION_INTERVAL, PROMOTION_TIMEOUT, SHADOW_READY_INTERVAL, SHADOW_READY_TIMEOUT, STOP_GRACE,
 };
 use crate::dev_server::{
@@ -64,7 +64,7 @@ pub(super) fn start_reload(dash: &mut Dash) {
             dash.reload = Reload::Running {
                 child,
                 rx,
-                activity: ReloadActivity::new(),
+                activity: ReloadProgress::new(),
             };
         }
         Err(error) => dash.push_log(format!("[qol dev] reload failed to start: {error:#}")),
@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn reload_activity_accepts_only_structured_worker_progress() {
-        let mut activity = ReloadActivity::new();
+        let mut activity = ReloadProgress::new();
         let cases = [
             (
                 format!(
