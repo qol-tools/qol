@@ -175,7 +175,7 @@ pub fn devices_payload(
         .collect::<HashSet<_>>();
     let mut visible = devices
         .iter()
-        .filter(|device| device.paired || discovery.contains(&device.address))
+        .filter(|device| device.paired || device.trusted || discovery.contains(&device.address))
         .collect::<Vec<_>>();
     let current_addresses = devices
         .iter()
@@ -254,12 +254,12 @@ pub fn devices_payload(
                 "audio": audio,
                 "badge": badge,
                 "badge_tone": accent,
-                "can_connect": !device.connected,
+                "can_connect": device.paired && !device.connected,
                 "can_disconnect": device.connected,
                 "can_pair": !device.paired,
-                "can_remove": device.paired,
+                "can_remove": device.paired || device.trusted,
                 "can_trust": device.paired && !device.trusted,
-                "can_untrust": device.paired && device.trusted,
+                "can_untrust": device.trusted,
                 "connected": device.connected,
                 "detail": detail,
                 "managed": managed.contains(&device.address),
@@ -419,7 +419,7 @@ mod tests {
                         "audio": false,
                         "badge": "Available",
                         "badge_tone": "muted",
-                        "can_connect": true,
+                        "can_connect": false,
                         "can_disconnect": false,
                         "can_pair": true,
                         "can_remove": false,
@@ -483,9 +483,24 @@ mod tests {
         let item = &payload["items"][0];
         assert_eq!(item["status"], "Connecting...");
         assert_eq!(item["action_pending"], true);
-        assert_eq!(item["can_connect"], true);
+        assert_eq!(item["can_connect"], false);
         assert_eq!(item["can_pair"], true);
         assert_eq!(item["can_remove"], false);
+    }
+
+    #[test]
+    fn devices_payload_allows_cleanup_of_a_trusted_unpaired_device() {
+        let payload = devices_payload(
+            &[device("03", "Old Controller", false, true, false, None)],
+            &[],
+            &DiscoveryState::default(),
+            None,
+        );
+        let item = &payload["items"][0];
+        assert_eq!(item["can_connect"], false);
+        assert_eq!(item["can_pair"], true);
+        assert_eq!(item["can_remove"], true);
+        assert_eq!(item["can_untrust"], true);
     }
 
     #[test]

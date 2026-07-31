@@ -1671,7 +1671,9 @@ async fn daemon_loop(
                     Some(AdapterEvent::DeviceAdded(address)) => {
                         track_discovered_device(&adapter, address).await;
                     }
-                    Some(AdapterEvent::DeviceRemoved(_)) => {}
+                    Some(AdapterEvent::DeviceRemoved(address)) => {
+                        remove_discovered_device(address);
+                    }
                     Some(AdapterEvent::PropertyChanged(_)) => {}
                     None => {
                         discovery = None;

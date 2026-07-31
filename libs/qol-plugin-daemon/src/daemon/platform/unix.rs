@@ -14,6 +14,8 @@ use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 const ACK_TIMEOUT_MS: u64 = 80;
 const HOST_DEATH_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+const REPLACE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+const REPLACE_POLL: std::time::Duration = std::time::Duration::from_millis(20);
 
 pub struct DaemonConfig {
     pub socket: SocketSource,
@@ -350,6 +352,11 @@ fn bind_listener(config: &DaemonConfig) -> io::Result<(UnixListener, Option<Path
     let listener = match local_ipc::bind_listener(&socket_path) {
         Ok(listener) => listener,
         Err(error) if error.kind() == ErrorKind::AddrInUse => {
+            if replace_existing(config)? {
+                remove_socket_file(&socket_path);
+                return local_ipc::bind_listener(&socket_path)
+                    .map(|listener| (listener, Some(socket_path)));
+            }
             if send_ping(config) {
                 #[cfg(debug_assertions)]
                 eprintln!("[daemon] existing instance alive, exiting");
@@ -365,6 +372,30 @@ fn bind_listener(config: &DaemonConfig) -> io::Result<(UnixListener, Option<Path
     };
 
     Ok((listener, Some(socket_path)))
+}
+
+fn replace_existing(config: &DaemonConfig) -> io::Result<bool> {
+    if !config.support_replace_existing
+        || std::env::var_os(qol_conventions::ENV_DAEMON_REPLACE_EXISTING).is_none()
+    {
+        return Ok(false);
+    }
+    if !send_kill(config) {
+        return Ok(false);
+    }
+
+    let deadline = std::time::Instant::now() + REPLACE_WAIT;
+    while std::time::Instant::now() < deadline {
+        if !send_ping(config) {
+            return Ok(true);
+        }
+        std::thread::sleep(REPLACE_POLL);
+    }
+
+    Err(io::Error::new(
+        ErrorKind::AddrInUse,
+        "existing daemon did not exit after replacement request",
+    ))
 }
 
 fn inherited_listener() -> io::Result<Option<UnixListener>> {
@@ -814,6 +845,40 @@ mod tests {
         let config = fallback_config(socket_name);
         let (_listener, bound_path) = bind_listener(&config).unwrap();
 
+        assert_eq!(bound_path, Some(path.clone()));
+        remove_socket_file(path);
+    }
+
+    #[test]
+    fn bind_listener_replaces_a_running_daemon_when_requested() {
+        let _lock = daemon_listener_fd_env_lock();
+        let socket_name = temp_socket_name("replace-running");
+        let path = std::env::temp_dir().join(socket_name);
+        let _ = fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).unwrap();
+        let server_path = path.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let result = read_request_and_parse(&mut stream, |request| {
+                assert_eq!(request.action, "kill");
+                ReadResult::<()>::Handled
+            });
+            handle_read_result(&mut stream, result, |_| unreachable!());
+            drop(stream);
+            drop(listener);
+            remove_socket_file(server_path);
+        });
+        let config = DaemonConfig {
+            socket: SocketSource::Path(path.clone()),
+            support_replace_existing: true,
+        };
+        std::env::set_var(qol_conventions::ENV_DAEMON_REPLACE_EXISTING, "1");
+
+        let result = bind_listener(&config);
+
+        std::env::remove_var(qol_conventions::ENV_DAEMON_REPLACE_EXISTING);
+        server.join().unwrap();
+        let (_listener, bound_path) = result.unwrap();
         assert_eq!(bound_path, Some(path.clone()));
         remove_socket_file(path);
     }
