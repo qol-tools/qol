@@ -64,6 +64,7 @@ struct DismissState {
     reusable: bool,
     title: RefCell<String>,
     size: Cell<Size<Pixels>>,
+    expected_viewport: Rc<Cell<Size<Pixels>>>,
     constrains_size: bool,
     visible: Rc<Cell<bool>>,
     reveal_pending: Rc<Cell<bool>>,
@@ -90,6 +91,7 @@ impl SurfaceDismisser {
                 reusable,
                 title: RefCell::new(title),
                 size: Cell::new(size),
+                expected_viewport: Rc::new(Cell::new(size)),
                 constrains_size,
                 visible,
                 reveal_pending,
@@ -102,7 +104,7 @@ impl SurfaceDismisser {
     }
 
     pub fn resize_window(&self, size: Size<Pixels>, window: &mut Window) -> bool {
-        if !self.state.visible.get() || self.state.reveal_pending.get() {
+        if !self.state.visible.get() && !self.state.reveal_pending.get() {
             return false;
         }
         let title = self.current_title();
@@ -111,6 +113,7 @@ impl SurfaceDismisser {
         }
         window.resize(size);
         self.state.size.set(size);
+        self.state.expected_viewport.set(size);
         true
     }
 
@@ -345,7 +348,9 @@ impl Surface {
             let hidden = crate::popup_window::prepare_window_reveal_by_title(&title);
             let size_constrained = !constrains_size || constrain_native_size(&title, bounds.size);
             let fresh_frame = (hidden && size_constrained)
-                .then(|| schedule_fresh_frame(handle, bounds.size, cx))
+                .then(|| {
+                    schedule_fresh_frame(handle, dismisser.state.expected_viewport.clone(), cx)
+                })
                 .flatten();
             let frame_scheduled = fresh_frame.is_some();
             qol_runtime::probe!(
@@ -499,8 +504,8 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             fresh_frame.render_epoch.get(),
             fresh_frame.required_render_epoch,
             fresh_frame.presented_render_epoch.get(),
-            fresh_frame.expected_viewport.width.to_f64(),
-            fresh_frame.expected_viewport.height.to_f64(),
+            fresh_frame.expected_viewport.get().width.to_f64(),
+            fresh_frame.expected_viewport.get().height.to_f64(),
             fresh_frame.observed_viewport.get().width.to_f64(),
             fresh_frame.observed_viewport.get().height.to_f64(),
             fresh_frame.rendered_viewport.get().width.to_f64(),
@@ -591,7 +596,7 @@ struct FreshFrame {
     rendered_layout_epoch: Rc<Cell<u64>>,
     observed_viewport: Rc<Cell<Size<Pixels>>>,
     rendered_viewport: Rc<Cell<Size<Pixels>>>,
-    expected_viewport: Size<Pixels>,
+    expected_viewport: Rc<Cell<Size<Pixels>>>,
     presented_render_epoch: Rc<Cell<u64>>,
     presented_layout_epoch: Rc<Cell<u64>>,
 }
@@ -602,13 +607,13 @@ impl FreshFrame {
             self.layout_epoch.get(),
             self.required_layout_epoch,
             self.observed_viewport.get(),
-            self.expected_viewport,
+            self.expected_viewport.get(),
             VIEWPORT_TOLERANCE,
         )
     }
 
     fn viewport_ready(&self) -> bool {
-        viewport_matches(self.rendered_viewport.get(), self.expected_viewport)
+        viewport_matches(self.rendered_viewport.get(), self.expected_viewport.get())
     }
 
     fn presented(&self) -> bool {
@@ -644,7 +649,7 @@ impl FreshFrame {
 
 fn schedule_fresh_frame<V: Render + 'static>(
     handle: WindowHandle<SurfaceRoot<V>>,
-    expected_viewport: Size<Pixels>,
+    expected_viewport: Rc<Cell<Size<Pixels>>>,
     cx: &mut App,
 ) -> Option<FreshFrame> {
     let mut request = None;
@@ -776,7 +781,9 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
             if !prepared {
                 return false;
             }
-            let Some(fresh_frame) = schedule_fresh_frame(self.handle, bounds.size, cx) else {
+            self.dismisser.state.expected_viewport.set(bounds.size);
+            let expected = self.dismisser.state.expected_viewport.clone();
+            let Some(fresh_frame) = schedule_fresh_frame(self.handle, expected, cx) else {
                 let _ = crate::popup_window::hide_invisible(&title);
                 return false;
             };
@@ -820,6 +827,7 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
         }
         self.handle.update(cx, |_, window, _| window.resize(size))?;
         self.dismisser.state.size.set(size);
+        self.dismisser.state.expected_viewport.set(size);
         Ok(())
     }
 }
@@ -865,8 +873,8 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
             fresh_frame.render_epoch.get(),
             fresh_frame.required_render_epoch,
             fresh_frame.presented_render_epoch.get(),
-            fresh_frame.expected_viewport.width.to_f64(),
-            fresh_frame.expected_viewport.height.to_f64(),
+            fresh_frame.expected_viewport.get().width.to_f64(),
+            fresh_frame.expected_viewport.get().height.to_f64(),
             fresh_frame.observed_viewport.get().width.to_f64(),
             fresh_frame.observed_viewport.get().height.to_f64(),
             fresh_frame.rendered_viewport.get().width.to_f64(),
