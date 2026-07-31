@@ -126,6 +126,34 @@ min = 5
 max = 600
 step = 5
 
+[section.host]
+label = "Host"
+description = "How this computer's own Bluetooth stack is behaving."
+
+[field.host_status]
+type = "status"
+label = "Host stack"
+section = "host"
+query = "host_fixes"
+value_from = "state"
+label_map = { none = "Nothing detected", ok = "Host stack healthy", attention = "Host stack needs attention" }
+tone_map = { ok = "success", attention = "warning" }
+
+[field.host_findings]
+type = "list"
+label = "Findings"
+section = "host"
+query = "host_fixes"
+row_label = "{title}"
+row_subtitle = "{detail}"
+empty_message = "Nothing to report about this computer's Bluetooth stack."
+
+[field.host_findings.row_action]
+action = "apply_host_fix"
+label = "Fix"
+when = "actionable"
+input = { id = "{id}" }
+
 [section.audio]
 label = "Audio"
 description = "Where system audio goes when a Bluetooth audio device connects."

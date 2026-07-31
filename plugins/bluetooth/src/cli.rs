@@ -2,10 +2,12 @@ use std::process::ExitCode;
 
 use anyhow::{bail, Result};
 use qol_headless::{Command, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTextOutput};
+use qol_host_fixes::HostFixes;
 
 use crate::bluetooth::{
     normalize_address, AdapterHealth, DeviceInfo, ReconnectReport, ReconnectSelection,
 };
+use crate::hostfix::BluetoothHostFixes;
 use crate::{config, platform, PLUGIN_ID};
 
 const BINARY_NAME: &str = "plugin-bluetooth";
@@ -31,6 +33,8 @@ fn app() -> HeadlessApp {
         .command(remove_command())
         .command(reconnect_command())
         .command(reconnect_trusted_command())
+        .command(host_fixes_command())
+        .command(apply_host_fix_command())
         .command(settings_command())
         .doctor_checks(doctor_checks())
 }
@@ -367,6 +371,52 @@ fn managed_devices_check() -> Result<DoctorCheckResult> {
             config.managed_devices.len()
         ),
     ))
+}
+
+fn host_fixes_command() -> Command {
+    Command::new("host_fixes")
+        .about("Report contextual findings about this computer's Bluetooth stack.")
+        .usage(format!("{BINARY_NAME} host_fixes"))
+        .output("One line per finding, or the full payload with --json.")
+        .exit_behavior("Exits non-zero only when the findings cannot be encoded.")
+        .run_plain_text(|context| {
+            reject_args(context.args())?;
+            Ok(PlainTextOutput::text(finding_lines()))
+        })
+        .run_json(|context| {
+            reject_args(context.args())?;
+            Ok(qol_host_fixes::findings_payload(
+                &BluetoothHostFixes.detect(),
+            ))
+        })
+}
+
+fn apply_host_fix_command() -> Command {
+    Command::new("apply_host_fix")
+        .about("Apply one contextual fix to this computer's Bluetooth stack.")
+        .usage(format!("{BINARY_NAME} apply_host_fix <fix-id>"))
+        .output("The applied fix summary.")
+        .exit_behavior("Exits non-zero when the fix id is unknown or the fix fails.")
+        .run_plain_text(|context| {
+            let id = one_fix_id(context.args())?;
+            Ok(PlainTextOutput::text(BluetoothHostFixes.apply(&id)?))
+        })
+}
+
+fn one_fix_id(args: &[String]) -> Result<String> {
+    if args.len() != 1 {
+        bail!("apply_host_fix requires exactly one fix id")
+    }
+    Ok(args[0].clone())
+}
+
+fn finding_lines() -> String {
+    BluetoothHostFixes
+        .detect()
+        .iter()
+        .map(|finding| format!("{}  {}  {}", finding.id, finding.title, finding.detail))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn reject_args(args: &[String]) -> Result<()> {

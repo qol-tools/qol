@@ -17,7 +17,9 @@ use futures::future::pending;
 use futures::stream::{LocalBoxStream, SelectAll};
 use futures::{Stream, StreamExt};
 use qol_headless::DoctorCheckResult;
+use qol_host_fixes::{findings_payload, HostFixes};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
+use qol_plugin_daemon::notification::send_notification;
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 use crate::bluetooth::{
@@ -28,6 +30,7 @@ use crate::bluetooth::{
     DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport, ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
+use crate::hostfix::BluetoothHostFixes;
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -220,6 +223,8 @@ enum DaemonAction {
     ReconnectTrusted,
     Reload,
     Settings,
+    HostFixes,
+    ApplyHostFix,
 }
 
 impl TryFrom<&str> for DaemonAction {
@@ -247,6 +252,8 @@ impl TryFrom<&str> for DaemonAction {
             "reconnect_trusted" => Ok(Self::ReconnectTrusted),
             "reload" => Ok(Self::Reload),
             "settings" => Ok(Self::Settings),
+            "host_fixes" => Ok(Self::HostFixes),
+            "apply_host_fix" => Ok(Self::ApplyHostFix),
             unknown => Err(format!("unknown Bluetooth action: {unknown}")),
         }
     }
@@ -460,6 +467,7 @@ fn current_managed_device_options() -> Result<Vec<DeviceOption>> {
 }
 
 pub fn run_daemon(config: ReconnectConfig) -> Result<()> {
+    crate::hostfix::restore_claimed_managers();
     let (listener_tx, listener_rx) = mpsc::channel();
     if !core_daemon::start_request_listener(&DAEMON_CONFIG, listener_tx, parse_daemon_request) {
         bail!("plugin-bluetooth daemon listener failed to start");
@@ -477,7 +485,9 @@ pub fn run_daemon(config: ReconnectConfig) -> Result<()> {
         })
         .context("failed to start Bluetooth command bridge")?;
 
-    runtime()?.block_on(resilient_daemon_loop(config, command_rx))
+    let outcome = runtime()?.block_on(resilient_daemon_loop(config, command_rx));
+    crate::hostfix::restore_claimed_managers();
+    outcome
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime> {
@@ -1186,7 +1196,42 @@ fn dispatch_daemon_action(
         DaemonAction::ReconnectTrusted => ReadResult::Command(DaemonCommand::ReconnectTrusted),
         DaemonAction::Reload => ReadResult::Command(DaemonCommand::Reload),
         DaemonAction::Settings => ReadResult::Command(DaemonCommand::Settings),
+        DaemonAction::HostFixes => {
+            ReadResult::HandledWithData(findings_payload(&BluetoothHostFixes.detect()))
+        }
+        DaemonAction::ApplyHostFix => match host_fix_id(request) {
+            Ok(id) => {
+                spawn_host_fix(id);
+                ReadResult::Handled
+            }
+            Err(message) => ReadResult::Error(message),
+        },
     }
+}
+
+fn host_fix_id(request: &DaemonRequest) -> std::result::Result<String, String> {
+    request
+        .input
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| "apply_host_fix requires an id".to_string())
+}
+
+fn spawn_host_fix(id: String) {
+    std::mem::drop(std::thread::spawn(move || {
+        match BluetoothHostFixes.apply(&id) {
+            Ok(message) => {
+                qol_runtime::probe!("BLUETOOTH_HOST_FIX", "stage=apply fix={id} outcome=ok");
+                send_notification("Bluetooth", &message);
+            }
+            Err(error) => {
+                qol_runtime::probe!("BLUETOOTH_HOST_FIX", "stage=apply fix={id} outcome=failed");
+                eprintln!("Bluetooth host fix {id} failed: {error:#}");
+                send_notification("Bluetooth", &format!("{error:#}"));
+            }
+        }
+    }));
 }
 
 fn device_daemon_command(

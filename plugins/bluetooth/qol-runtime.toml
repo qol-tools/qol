@@ -36,6 +36,14 @@ input = { address = "string" }
 description = "Remove a Bluetooth device and its pairing information"
 input = { address = "string" }
 
+[action.apply_host_fix]
+description = "Apply one contextual fix to this computer's Bluetooth stack"
+input = { id = "string" }
+
+[query.host_fixes]
+description = "Contextual findings about the host Bluetooth stack and audio server"
+poll_interval_ms = 5000
+
 [query.search_status]
 description = "Whether Bluetooth discovery is currently active"
 poll_interval_ms = 500

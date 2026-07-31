@@ -5689,6 +5689,7 @@ dependencies = [
  "qol-conventions",
  "qol-gpui",
  "qol-headless",
+ "qol-host-fixes",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-process",

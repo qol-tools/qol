@@ -1,6 +1,7 @@
 pub mod bluetooth;
 pub mod cli;
 pub mod config;
+pub mod hostfix;
 pub mod platform;
 mod settings;
 

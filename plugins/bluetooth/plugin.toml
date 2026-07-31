@@ -58,6 +58,10 @@ args = ["disconnect"]
 label = "Remove Bluetooth Device"
 args = ["remove"]
 
+[action.apply_host_fix]
+label = "Apply Bluetooth Host Fix"
+args = ["apply_host_fix"]
+
 [action.settings]
 label = "Settings"
 kind = "settings"
