@@ -279,12 +279,16 @@ impl SettingsPanelView {
             return;
         }
         let editing = matches!(self.active_control, Some(ActiveControl::Edit(_)));
-        if editing && matches!(key, "up" | "down") {
-            if self.step_number_edit(if key == "up" { 1.0 } else { -1.0 }) {
+        if editing {
+            if horizontal_step_direction(key)
+                .is_some_and(|direction| self.step_number_edit(direction))
+            {
                 cx.notify();
                 return;
             }
-            self.commit_edit();
+            if matches!(key, "up" | "down") {
+                self.commit_edit();
+            }
         }
         let Some(intent) = intent(key, key_char, editing) else {
             return;
@@ -1135,7 +1139,15 @@ impl SettingsPanelView {
     ) -> Div {
         let mut cell = div().flex().flex_row().items_center().gap_2();
         if self.rows[index].variant.as_deref() == Some("slider") {
-            let fill = slider_fraction(value, min, max) * 72.0;
+            let edit = if index == self.selected {
+                match &self.active_control {
+                    Some(ActiveControl::Edit(edit)) => Some(edit.as_str()),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let fill = slider_fraction(number_preview(edit, value, min, max), min, max) * 72.0;
             cell = cell.child(
                 div()
                     .relative()
@@ -1938,6 +1950,19 @@ fn stepped_number(
     format_number(next)
 }
 
+fn number_preview(edit: Option<&str>, fallback: f64, min: Option<f64>, max: Option<f64>) -> f64 {
+    edit.and_then(|value| parsed_number(value, min, max))
+        .unwrap_or(fallback)
+}
+
+fn horizontal_step_direction(key: &str) -> Option<f64> {
+    match key {
+        "left" => Some(-1.0),
+        "right" => Some(1.0),
+        _ => None,
+    }
+}
+
 fn parsed_color(text: &str) -> Option<u32> {
     let hex = text.trim();
     let hex = hex.strip_prefix('#').unwrap_or(hex);
@@ -2253,10 +2278,10 @@ fn initial_active_section(section_count: usize) -> Option<usize> {
 mod tests {
     use super::{
         action_refresh_payload, action_shows_spinner, action_value_label, adjacent_visible_row,
-        binary_state_label, initial_active_section, intent, list_action_affordance, list_intent,
-        number_unit, parsed_color, parsed_number, row_body_height, scroll_offset_for,
-        slider_fraction, stepped_number, text_or_placeholder, visible_row_window, Intent,
-        ListIntent, Row, RowControl,
+        binary_state_label, horizontal_step_direction, initial_active_section, intent,
+        list_action_affordance, list_intent, number_preview, number_unit, parsed_color,
+        parsed_number, row_body_height, scroll_offset_for, slider_fraction, stepped_number,
+        text_or_placeholder, visible_row_window, Intent, ListIntent, Row, RowControl,
     };
     use crate::scroll_list::ScrollList;
     use crate::settings_panel::rows::{rows_from_resolved, visible_row_indices};
@@ -2577,6 +2602,37 @@ default = "visible"
                 stepped_number(edit, fallback, min, max, step, direction),
                 expected,
                 "edit: {edit:?} direction: {direction}"
+            );
+        }
+    }
+
+    #[test]
+    fn activated_numbers_use_horizontal_arrows_for_nudging() {
+        let cases = [
+            ("left", Some(-1.0)),
+            ("right", Some(1.0)),
+            ("up", None),
+            ("down", None),
+            ("enter", None),
+        ];
+        for (key, expected) in cases {
+            assert_eq!(horizontal_step_direction(key), expected, "key: {key}");
+        }
+    }
+
+    #[test]
+    fn active_number_edits_drive_the_slider_preview() {
+        let cases = [
+            (Some("6"), 4.0, Some(0.0), Some(10.0), 6.0),
+            (Some("20"), 4.0, Some(0.0), Some(10.0), 10.0),
+            (Some("invalid"), 4.0, Some(0.0), Some(10.0), 4.0),
+            (None, 4.0, Some(0.0), Some(10.0), 4.0),
+        ];
+        for (edit, fallback, min, max, expected) in cases {
+            assert_eq!(
+                number_preview(edit, fallback, min, max),
+                expected,
+                "edit: {edit:?}"
             );
         }
     }
