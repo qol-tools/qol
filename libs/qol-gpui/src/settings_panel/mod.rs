@@ -47,6 +47,7 @@ pub struct SettingsRuntime {
     query: Arc<QueryHandler>,
     action: Arc<ActionHandler>,
     poll_interval: Duration,
+    query_intervals: std::collections::HashMap<String, Duration>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -203,6 +204,7 @@ impl SettingsRuntime {
             query: Arc::new(query),
             action: Arc::new(|action, _| Err(format!("action `{action}` is unavailable"))),
             poll_interval: Duration::from_secs(2),
+            query_intervals: std::collections::HashMap::new(),
         }
     }
 
@@ -249,6 +251,18 @@ impl SettingsRuntime {
     pub fn poll_every(mut self, interval: Duration) -> Self {
         self.poll_interval = interval;
         self
+    }
+
+    pub fn poll_query_every(mut self, name: impl Into<String>, interval: Duration) -> Self {
+        self.query_intervals.insert(name.into(), interval);
+        self
+    }
+
+    fn query_interval(&self, name: &str) -> Duration {
+        self.query_intervals
+            .get(name)
+            .copied()
+            .unwrap_or(self.poll_interval)
     }
 
     fn query(&self, name: &str) -> Result<serde_json::Value, String> {
@@ -548,6 +562,22 @@ mod tests {
         assert_eq!(
             panel_height(&rows, &sections),
             PANEL_CHROME_HEIGHT + menu_height
+        );
+    }
+
+    #[test]
+    fn query_intervals_override_only_their_declared_query() {
+        let runtime = super::SettingsRuntime::empty()
+            .poll_every(std::time::Duration::from_secs(3))
+            .poll_query_every("controller_input", std::time::Duration::from_millis(16));
+
+        assert_eq!(
+            runtime.query_interval("controller_input"),
+            std::time::Duration::from_millis(16)
+        );
+        assert_eq!(
+            runtime.query_interval("controllers_snapshot"),
+            std::time::Duration::from_secs(3)
         );
     }
 

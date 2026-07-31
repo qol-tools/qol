@@ -267,23 +267,17 @@ fn load_panel(plugin_id: &str) -> anyhow::Result<(SettingsPanel, SettingsRuntime
     let contract =
         std::fs::read_to_string(crate::plugins::paths::config_contract_path(&plugin_root))
             .context("failed to read the plugin settings contract")?;
-    let poll_interval = runtime_contract
-        .as_ref()
-        .and_then(|runtime| {
-            runtime
-                .queries
-                .values()
-                .map(|query| query.poll_interval_ms)
-                .min()
-        })
-        .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_secs(2));
     let panel = SettingsPanel {
         plugin_id: plugin_id.to_string(),
         contract,
         heading: format!("{} Settings", manifest.plugin.name),
     };
-    let runtime = SettingsRuntime::tray(plugin_id).poll_every(poll_interval);
+    let mut runtime = SettingsRuntime::tray(plugin_id);
+    if let Some(runtime_contract) = runtime_contract.as_ref() {
+        for (name, query) in &runtime_contract.queries {
+            runtime = runtime.poll_query_every(name, Duration::from_millis(query.poll_interval_ms));
+        }
+    }
     Ok((panel, runtime))
 }
 

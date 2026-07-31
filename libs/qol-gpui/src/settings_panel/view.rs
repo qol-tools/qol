@@ -21,6 +21,51 @@ use crate::status_indicator::{StatusIndicator, StatusTone};
 use crate::surface::{PanelDragArea, SurfaceDismisser};
 use crate::theme::{settings_panel_runtime, SettingsPanelPalette};
 
+type SampledQueryResults =
+    std::sync::Arc<std::sync::Mutex<Vec<(String, Result<serde_json::Value, String>)>>>;
+
+const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+use std::sync::PoisonError;
+
+#[derive(Default)]
+struct SampleSignal {
+    state: std::sync::Mutex<SampleSignalState>,
+    requested: std::sync::Condvar,
+}
+
+#[derive(Default)]
+struct SampleSignalState {
+    requested: bool,
+    stopped: bool,
+}
+
+impl SampleSignal {
+    fn request(&self) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.requested = true;
+        self.requested.notify_one();
+    }
+
+    fn stop(&self) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.stopped = true;
+        self.requested.notify_one();
+    }
+
+    fn wait_for_request(&self) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        while !state.requested && !state.stopped {
+            state = self
+                .requested
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        state.requested = false;
+        !state.stopped
+    }
+}
+
 pub(super) struct SettingsPanelView {
     panel: SettingsPanel,
     runtime: SettingsRuntime,
@@ -39,6 +84,11 @@ pub(super) struct SettingsPanelView {
     row_bounds: Vec<Rc<Cell<Option<Bounds<Pixels>>>>>,
     wheel_generation: u64,
     runtime_poll_generation: u64,
+    frame_paced_samples: Option<SampledQueryResults>,
+    applied_query_payloads: std::collections::HashMap<String, Result<serde_json::Value, String>>,
+    frame_pump_armed: bool,
+    sample_signal: Option<std::sync::Arc<SampleSignal>>,
+    sampler_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     dismisser: SurfaceDismisser,
     palette: SettingsPanelPalette,
     focus_handle: FocusHandle,
@@ -107,6 +157,11 @@ impl SettingsPanelView {
             row_bounds,
             wheel_generation: 0,
             runtime_poll_generation: 0,
+            frame_paced_samples: None,
+            applied_query_payloads: std::collections::HashMap::new(),
+            frame_pump_armed: false,
+            sample_signal: None,
+            sampler_stop: None,
             dismisser,
             palette: settings_panel_runtime(),
             focus_handle: cx.focus_handle(),
@@ -197,63 +252,189 @@ impl SettingsPanelView {
         if self.runtime_queries.is_empty() {
             return;
         }
-        self.runtime_poll_generation = self.runtime_poll_generation.wrapping_add(1);
+        self.pause_runtime_poll();
         let generation = self.runtime_poll_generation;
         let runtime = self.runtime.clone();
         let queries = self.runtime_queries.clone();
-        let interval = runtime.poll_interval;
+        let apply_tick = queries
+            .iter()
+            .map(|query| runtime.query_interval(query))
+            .min()
+            .unwrap_or(runtime.poll_interval);
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let samples = SampledQueryResults::default();
+        self.sampler_stop = Some(stop.clone());
+        self.frame_paced_samples =
+            (apply_tick <= FRAME_PACED_QUERY_INTERVAL).then(|| samples.clone());
+        let frame_paced = self.frame_paced_samples.is_some();
+        if frame_paced {
+            let signal = std::sync::Arc::new(SampleSignal::default());
+            self.sample_signal = Some(signal.clone());
+            let runtime = runtime.clone();
+            let queries = queries.clone();
+            let samples = samples.clone();
+            std::thread::spawn(move || {
+                Self::sample_queries_on_demand(runtime, queries, signal, samples)
+            });
+        }
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
                 if let Some(initial_delay) = initial_delay {
                     async_cx.background_executor().timer(initial_delay).await;
                 }
+                if stop.load(std::sync::atomic::Ordering::Relaxed) || frame_paced {
+                    return;
+                }
+                async_cx
+                    .background_spawn(Self::sample_queries_at_contract_cadence(
+                        runtime,
+                        queries,
+                        stop.clone(),
+                        samples.clone(),
+                        async_cx.background_executor().clone(),
+                    ))
+                    .detach();
                 loop {
-                    let active = this
-                        .update(&mut async_cx, |this, _| {
-                            this.runtime_poll_generation == generation
-                        })
-                        .unwrap_or(false);
-                    if !active {
-                        break;
-                    }
-                    let query_runtime = runtime.clone();
-                    let query_names = queries.clone();
-                    let results = async_cx
-                        .background_spawn(async move {
-                            query_names
-                                .into_iter()
-                                .map(|query| {
-                                    let result = query_runtime.query(&query);
-                                    (query, result)
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .await;
+                    async_cx.background_executor().timer(apply_tick).await;
+                    let batch = std::mem::take(&mut *samples.lock().unwrap());
                     let applied = this
                         .update(&mut async_cx, |this, cx| {
                             if this.runtime_poll_generation != generation {
                                 return false;
                             }
-                            for (query, result) in results {
-                                apply_runtime_query(&mut this.rows, &query, result);
+                            if !batch.is_empty() {
+                                for (query, result) in batch {
+                                    apply_runtime_query(&mut this.rows, &query, result);
+                                }
+                                cx.notify();
                             }
-                            cx.notify();
                             true
                         })
                         .unwrap_or(false);
                     if !applied {
                         break;
                     }
-                    async_cx.background_executor().timer(interval).await;
                 }
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
             }
         })
         .detach();
     }
 
+    fn pump_frame_paced_samples(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.frame_paced_samples.is_none() {
+            self.frame_pump_armed = false;
+            return;
+        }
+        self.frame_pump_armed = true;
+        let entity = cx.entity().downgrade();
+        window.on_next_frame(move |window, cx| {
+            let _ = entity.update(cx, |this, cx| {
+                if this.apply_frame_paced_samples() {
+                    cx.notify();
+                }
+                this.pump_frame_paced_samples(window, cx);
+            });
+        });
+    }
+
+    fn apply_frame_paced_samples(&mut self) -> bool {
+        let Some(samples) = self.frame_paced_samples.clone() else {
+            return false;
+        };
+        let batch = std::mem::take(&mut *samples.lock().unwrap_or_else(PoisonError::into_inner));
+        if let Some(signal) = &self.sample_signal {
+            signal.request();
+        }
+        let mut changed = false;
+        for (query, result) in batch {
+            if self.applied_query_payloads.get(&query) == Some(&result) {
+                continue;
+            }
+            self.applied_query_payloads
+                .insert(query.clone(), result.clone());
+            apply_runtime_query(&mut self.rows, &query, result);
+            changed = true;
+        }
+        changed
+    }
+
     fn pause_runtime_poll(&mut self) {
         self.runtime_poll_generation = self.runtime_poll_generation.wrapping_add(1);
+        if let Some(stop) = self.sampler_stop.take() {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        if let Some(signal) = self.sample_signal.take() {
+            signal.stop();
+        }
+        self.frame_paced_samples = None;
+    }
+
+    fn sample_queries_on_demand(
+        runtime: SettingsRuntime,
+        queries: Vec<String>,
+        signal: std::sync::Arc<SampleSignal>,
+        latest: SampledQueryResults,
+    ) {
+        let intervals = queries
+            .iter()
+            .map(|query| runtime.query_interval(query))
+            .collect::<Vec<_>>();
+        let mut due = vec![None::<std::time::Instant>; queries.len()];
+        while signal.wait_for_request() {
+            let started = std::time::Instant::now();
+            let mut fresh = Vec::new();
+            for (index, query) in queries.iter().enumerate() {
+                let frame_paced = intervals[index] <= FRAME_PACED_QUERY_INTERVAL;
+                if !frame_paced && due[index].is_some_and(|due| due > started) {
+                    continue;
+                }
+                fresh.push((query.clone(), runtime.query(query)));
+                due[index] = Some(started + intervals[index]);
+            }
+            let mut latest = latest.lock().unwrap_or_else(PoisonError::into_inner);
+            for (query, result) in fresh {
+                latest.retain(|(name, _)| name != &query);
+                latest.push((query, result));
+            }
+        }
+    }
+
+    async fn sample_queries_at_contract_cadence(
+        runtime: SettingsRuntime,
+        queries: Vec<String>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        latest: SampledQueryResults,
+        executor: BackgroundExecutor,
+    ) {
+        let intervals = queries
+            .iter()
+            .map(|query| runtime.query_interval(query))
+            .collect::<Vec<_>>();
+        let mut due = vec![std::time::Instant::now(); queries.len()];
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            let started = std::time::Instant::now();
+            let mut fresh = Vec::new();
+            for (index, query) in queries.iter().enumerate() {
+                if due[index] <= started {
+                    fresh.push((query.clone(), runtime.query(query)));
+                    due[index] = started + intervals[index];
+                }
+            }
+            {
+                let mut latest = latest.lock().unwrap();
+                for (query, result) in fresh {
+                    latest.retain(|(name, _)| name != &query);
+                    latest.push((query, result));
+                }
+            }
+            let next_due = due.iter().min().copied().unwrap_or(started);
+            let wait = next_due.saturating_duration_since(std::time::Instant::now());
+            if !wait.is_zero() {
+                executor.timer(wait).await;
+            }
+        }
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -1913,7 +2094,10 @@ impl Focusable for SettingsPanelView {
 }
 
 impl Render for SettingsPanelView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.frame_pump_armed {
+            self.pump_frame_paced_samples(window, cx);
+        }
         let items: Vec<AnyElement> = if self.section_menu_is_open() {
             (0..self.sections.len())
                 .map(|index| self.render_section_menu_item(index, cx).into_any_element())

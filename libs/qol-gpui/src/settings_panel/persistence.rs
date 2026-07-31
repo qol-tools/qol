@@ -1,8 +1,9 @@
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use qol_conventions::DEFAULT_PORT;
-use qol_runtime::local_http::{Client, Method};
+use qol_runtime::local_http::{Client, Method, Session};
 
 #[derive(serde::Deserialize)]
 struct ActionResult {
@@ -21,7 +22,7 @@ fn tray_config_route(plugin_id: &str) -> String {
 
 pub(super) fn query(plugin_id: &str, query: &str) -> Result<serde_json::Value, String> {
     let route = format!("/api/plugins/{plugin_id}/queries/{query}");
-    let (status, body) = tray_http(Method::Get, &route, None).map_err(|error| error.to_string())?;
+    let (status, body) = tray_http_session(&route).map_err(|error| error.to_string())?;
     qol_runtime::probe!(
         "SURFACE_ACTIVATION",
         "plugin={plugin_id} phase=runtime-query query={query} status={status}"
@@ -121,14 +122,32 @@ pub(super) fn save_values(plugin_id: &str, path: &Path, values: &serde_json::Val
 }
 
 fn tray_http(method: Method, route: &str, body: Option<&str>) -> anyhow::Result<(u16, String)> {
+    let response = tray_client()?.request(method, route, body)?;
+    Ok((response.status, response.body))
+}
+
+fn tray_client() -> anyhow::Result<Client> {
     use anyhow::Context as _;
 
     let token = std::env::var(qol_conventions::ENV_HTTP_TOKEN)
         .context("tray HTTP authentication token is unavailable")?;
-    let response = Client::new(DEFAULT_PORT, token)
-        .with_io_timeout(Duration::from_secs(2))
-        .request(method, route, body)?;
-    Ok((response.status, response.body))
+    Ok(Client::new(DEFAULT_PORT, token).with_io_timeout(Duration::from_secs(2)))
+}
+
+thread_local! {
+    static QUERY_SESSION: RefCell<Option<Session>> = const { RefCell::new(None) };
+}
+
+fn tray_http_session(route: &str) -> anyhow::Result<(u16, String)> {
+    QUERY_SESSION.with(|session| {
+        let mut session = session.borrow_mut();
+        let session = match &mut *session {
+            Some(session) => session,
+            none => none.insert(Session::new(tray_client()?)),
+        };
+        let response = session.request(Method::Get, route, None)?;
+        Ok((response.status, response.body))
+    })
 }
 
 #[cfg(test)]
