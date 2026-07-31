@@ -6344,6 +6344,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-host-fixes"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "qol-config",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "qol-hotkeys"
 version = "1.0.0"
 

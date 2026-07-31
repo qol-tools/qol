@@ -32,6 +32,7 @@ qol-app-icon = { path = "libs/qol-app-icon" }
 qol-gpui = { path = "libs/qol-gpui" }
 qol-theme = { path = "libs/qol-theme" }
 qol-headless = { path = "libs/qol-headless" }
+qol-host-fixes = { path = "libs/qol-host-fixes" }
 qol-hotkeys = { path = "libs/qol-hotkeys" }
 qol-terminal-sessions = { path = "libs/qol-terminal-sessions" }
 qol-plugin-api = { path = "libs/qol-plugin-api" }
