@@ -10,10 +10,10 @@ mod unix_common;
 mod windows;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-pub(super) use fallback::{request, run, stop};
+pub(super) use fallback::{prewarm, request, run, stop};
 #[cfg(target_os = "linux")]
-pub(super) use linux::{request, run, stop};
+pub(super) use linux::{prewarm, request, run, stop};
 #[cfg(target_os = "macos")]
-pub(super) use macos::{request, run, stop};
+pub(super) use macos::{prewarm, request, run, stop};
 #[cfg(target_os = "windows")]
-pub(super) use windows::{request, run, stop};
+pub(super) use windows::{prewarm, request, run, stop};

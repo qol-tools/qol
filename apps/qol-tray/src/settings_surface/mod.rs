@@ -2,6 +2,12 @@ mod platform;
 
 const HOST_ARGUMENT: &str = "__qol-settings-surface-host";
 
+#[derive(Debug, PartialEq)]
+enum HostBoot {
+    Warm,
+    Open(String),
+}
+
 pub fn request(plugin_id: &str) -> anyhow::Result<bool> {
     let handled = platform::request(plugin_id)?;
     finish_request(plugin_id, handled, crate::paths::open_url)
@@ -27,33 +33,44 @@ pub fn stop() {
     platform::stop();
 }
 
-pub fn run_from_current_args() -> Option<anyhow::Result<()>> {
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
-    requested_plugin_id(&args).map(platform::run)
+pub fn prewarm() {
+    platform::prewarm();
 }
 
-fn requested_plugin_id(args: &[String]) -> Option<String> {
+pub fn run_from_current_args() -> Option<anyhow::Result<()>> {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    requested_boot(&args).map(platform::run)
+}
+
+fn requested_boot(args: &[String]) -> Option<HostBoot> {
     match args {
-        [argument, plugin_id] if argument == HOST_ARGUMENT => Some(plugin_id.clone()),
+        [argument] if argument == HOST_ARGUMENT => Some(HostBoot::Warm),
+        [argument, plugin_id] if argument == HOST_ARGUMENT => {
+            Some(HostBoot::Open(plugin_id.clone()))
+        }
         _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{finish_request, requested_plugin_id, HOST_ARGUMENT};
+    use super::{finish_request, requested_boot, HostBoot, HOST_ARGUMENT};
 
     #[test]
-    fn hidden_host_arguments_require_exactly_one_plugin_id() {
+    fn hidden_host_arguments_select_warm_or_single_plugin_boot() {
         let cases = [
             (vec![], None),
             (vec!["settings"], None),
-            (vec![HOST_ARGUMENT, "plugin-a"], Some("plugin-a")),
+            (vec![HOST_ARGUMENT], Some(HostBoot::Warm)),
+            (
+                vec![HOST_ARGUMENT, "plugin-a"],
+                Some(HostBoot::Open("plugin-a".into())),
+            ),
             (vec![HOST_ARGUMENT, "plugin-a", "extra"], None),
         ];
         for (args, expected) in cases {
-            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
-            assert_eq!(requested_plugin_id(&args).as_deref(), expected);
+            let args = args.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            assert_eq!(requested_boot(&args), expected, "args: {args:?}");
         }
     }
 

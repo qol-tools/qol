@@ -106,6 +106,7 @@ fn bad_request(message: &str) -> Response {
 
 fn restart_running_gpui_daemons(state: &AppState) {
     crate::settings_surface::stop();
+    crate::settings_surface::prewarm();
     let Ok(mut manager) = state.plugin_manager.lock() else {
         log::error!("Failed to lock plugin manager after theme accent change");
         return;

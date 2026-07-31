@@ -414,6 +414,7 @@ async fn async_init_inner(
     };
     let (shutdown_tx, shutdown_rx) = broadcast::channel::<()>(1);
     let _state_server = qol_tray::runtime::RuntimeServer::start();
+    qol_tray::settings_surface::prewarm();
     qol_tray::doctor::spawn_gpu_driver_sync_watch();
     let plugins_dir = qol_tray::plugins::PluginLoader::ensure_plugin_dir()?;
     let sync_service = Arc::new(qol_tray::sync::SyncService::new(plugins_dir)?);
