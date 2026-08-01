@@ -260,15 +260,17 @@ fn log_fix_failures(report: &FixReport) {
 fn log_applied(action: &FixAction) {
     match action {
         FixAction::UnshadowDeBinding {
-            schema,
+            dir,
             key,
             qol_combo,
+            orphaned,
         } => {
             log::info!(
-                "doctor: removed {} from {}.{} (qol-tray's hotkey takes priority)",
+                "doctor: took {} back from {}{} (orphaned={}, restored when qol-tray exits)",
                 qol_combo,
-                schema,
-                key
+                dir,
+                key,
+                orphaned
             );
         }
         FixAction::DisableSymbolicHotkey {
@@ -406,9 +408,10 @@ mod tests {
                     "test shadow".to_string(),
                     "hotkey_shadows",
                     vec![FixAction::UnshadowDeBinding {
-                        schema: "org.cinnamon.desktop.keybindings.wm".into(),
+                        dir: "org.cinnamon.desktop.keybindings.wm".into(),
                         key: "switch-input-source".into(),
                         qol_combo: "Super+Space".into(),
+                        orphaned: false,
                     }],
                 )
             }
@@ -534,18 +537,20 @@ mod tests {
             ),
             (
                 FixAction::UnshadowDeBinding {
-                    schema: "x".into(),
+                    dir: "x".into(),
                     key: "y".into(),
                     qol_combo: "Super+Space".into(),
+                    orphaned: false,
                 },
                 FixPolicy::safe(),
                 false,
             ),
             (
                 FixAction::UnshadowDeBinding {
-                    schema: "x".into(),
+                    dir: "x".into(),
                     key: "y".into(),
                     qol_combo: "Super+Space".into(),
+                    orphaned: false,
                 },
                 FixPolicy::startup(),
                 true,

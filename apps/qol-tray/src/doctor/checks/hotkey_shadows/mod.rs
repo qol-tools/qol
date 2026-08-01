@@ -1,6 +1,8 @@
 use super::super::de_bindings::normalize_combo;
 use super::super::diagnosis::FixAction;
-use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
+use super::super::framework::{
+    CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext, DoctorIssue, Severity,
+};
 use crate::hotkeys::{HotkeyBinding, HotkeyManager};
 use std::collections::BTreeMap;
 
@@ -28,8 +30,27 @@ impl DoctorCheck for HotkeyShadowsCheck {
 
         let qol_index = build_qol_index(&bindings);
         let shadows = platform::collect_shadows(&qol_index);
-        diagnose(shadows)
+        let report = diagnose(shadows);
+        match crate::hotkeys::takeover::restart_advice() {
+            None => report,
+            Some(advice) => with_restart_advice(report, advice),
+        }
     }
+}
+
+fn with_restart_advice(mut report: CheckReport, advice: String) -> CheckReport {
+    report.summary = if report.summary.is_empty() {
+        advice.clone()
+    } else {
+        format!("{} | {advice}", report.summary)
+    };
+    report.issues.push(DoctorIssue::new(
+        ID,
+        Severity::Warn,
+        format!("stale desktop key grab: {advice}"),
+    ));
+    report.advice.push(advice);
+    report
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -150,9 +171,10 @@ mod tests {
             qol_combo: "Super+Space".into(),
             source_label: "schema.key".into(),
             kind: ShadowKind::Fixable(FixAction::UnshadowDeBinding {
-                schema: "schema".into(),
+                dir: "schema".into(),
                 key: "key".into(),
                 qol_combo: "Super+Space".into(),
+                orphaned: false,
             }),
         }];
         let report = diagnose(shadows);
@@ -185,9 +207,10 @@ mod tests {
                 qol_combo: "Super+Space".into(),
                 source_label: "schema.key".into(),
                 kind: ShadowKind::Fixable(FixAction::UnshadowDeBinding {
-                    schema: "schema".into(),
+                    dir: "schema".into(),
                     key: "key".into(),
                     qol_combo: "Super+Space".into(),
+                    orphaned: false,
                 }),
             },
             DetectedShadow {

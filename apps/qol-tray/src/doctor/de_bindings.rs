@@ -1,29 +1,5 @@
 use std::collections::BTreeSet;
 
-pub(super) fn parse_gsettings_list(raw: &str) -> Vec<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed == "@as []" || trimmed == "[]" {
-        return Vec::new();
-    }
-    let inner = trimmed.trim_start_matches('[').trim_end_matches(']');
-    inner
-        .split(',')
-        .map(|tok| tok.trim().trim_matches('\'').trim_matches('"').to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
-pub(super) fn serialize_gsettings_list(entries: &[String]) -> String {
-    if entries.is_empty() {
-        return "[]".to_string();
-    }
-    let quoted: Vec<String> = entries
-        .iter()
-        .map(|entry| format!("'{}'", entry.replace('\'', "\\'")))
-        .collect();
-    format!("[{}]", quoted.join(","))
-}
-
 pub(super) fn filter_unshadow(entries: &[String], qol_combo: &str) -> Option<Vec<String>> {
     let target = normalize_combo(qol_combo)?;
     Some(
@@ -168,54 +144,6 @@ mod tests {
             Some("xf86keyboard")
         );
         assert!(normalize_combo("XF86Keyboard") != normalize_combo("Super+Space"));
-    }
-
-    #[test]
-    fn parse_gsettings_list_handles_common_shapes() {
-        let cases = [
-            (
-                "['<Super>space', 'XF86Keyboard']",
-                vec!["<Super>space", "XF86Keyboard"],
-            ),
-            ("['<Super>space']", vec!["<Super>space"]),
-            ("@as []", Vec::<&str>::new()),
-            ("[]", Vec::<&str>::new()),
-            ("", Vec::<&str>::new()),
-        ];
-        for (raw, want) in cases {
-            let got: Vec<String> = parse_gsettings_list(raw);
-            let want_owned: Vec<String> = want.into_iter().map(String::from).collect();
-            assert_eq!(got, want_owned, "raw: {raw}");
-        }
-    }
-
-    #[test]
-    fn serialize_gsettings_list_matches_get_format() {
-        let cases: [(&[&str], &str); 4] = [
-            (
-                &["<Super>space", "XF86Keyboard"],
-                "['<Super>space','XF86Keyboard']",
-            ),
-            (&["<Super>space"], "['<Super>space']"),
-            (&[], "[]"),
-            (&["<Mod4>F1"], "['<Mod4>F1']"),
-        ];
-        for (entries, want) in cases {
-            let owned: Vec<String> = entries.iter().map(|s| (*s).to_string()).collect();
-            assert_eq!(
-                serialize_gsettings_list(&owned),
-                want,
-                "entries: {entries:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn serialize_round_trips_with_parse() {
-        let raw = "['<Super>space', 'XF86Keyboard', '<Mod4>F1']";
-        let parsed = parse_gsettings_list(raw);
-        let serialized = serialize_gsettings_list(&parsed);
-        assert_eq!(parse_gsettings_list(&serialized), parsed);
     }
 
     #[test]

@@ -7,6 +7,7 @@ mod planning;
 mod platform;
 mod reload;
 mod store;
+pub(crate) mod takeover;
 #[cfg(test)]
 mod tests;
 mod types;
@@ -17,6 +18,7 @@ pub use listener::start_hotkey_listener;
 pub use manager::HotkeyManager;
 pub use registration_status::{get_registration_errors, RegistrationError};
 pub use reload::trigger_reload;
+pub use takeover::{restore_all as restore_desktop_bindings, RestoreSummary};
 pub use types::{HotkeyAction, HotkeyBinding, HotkeyConfig};
 
 use std::collections::HashSet;

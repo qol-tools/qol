@@ -1,7 +1,8 @@
 mod platform;
 
-use super::de_bindings::{filter_unshadow, parse_gsettings_list, serialize_gsettings_list};
+use super::de_bindings::filter_unshadow;
 use super::install_id::write_install_id_file;
+use crate::hotkeys::takeover::{self, BindingMutation, BindingReach};
 use crate::plugins::daemon_tracker::ManagedProcess;
 use anyhow::{anyhow, Context, Result};
 use std::fs;
@@ -26,9 +27,10 @@ pub(super) enum FixAction {
     DrainOrphanPluginConfigs,
     InstallShellHook,
     UnshadowDeBinding {
-        schema: String,
+        dir: String,
         key: String,
         qol_combo: String,
+        orphaned: bool,
     },
     DisableSymbolicHotkey {
         hotkey_id: u32,
@@ -154,10 +156,19 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         }
         FixAction::InstallShellHook => crate::installer::install_shell_hook(),
         FixAction::UnshadowDeBinding {
-            schema,
+            dir,
             key,
             qol_combo,
-        } => apply_unshadow(schema, key, qol_combo, &mut platform::Platform),
+            orphaned,
+        } => apply_unshadow(
+            &UnshadowRequest {
+                dir,
+                key,
+                qol_combo,
+                orphaned: *orphaned,
+            },
+            &mut DconfTakeover,
+        ),
         FixAction::DisableSymbolicHotkey {
             hotkey_id,
             qol_combo,
@@ -393,23 +404,57 @@ pub(super) fn apply_clear_windows_app_key(
     backend.clear(app_key)
 }
 
-pub(super) trait GsettingsBackend {
-    fn read(&mut self, schema: &str, key: &str) -> Result<String>;
-    fn write(&mut self, schema: &str, key: &str, value: &str) -> Result<()>;
+pub(super) struct UnshadowRequest<'a> {
+    pub dir: &'a str,
+    pub key: &'a str,
+    pub qol_combo: &'a str,
+    pub orphaned: bool,
+}
+
+pub(super) trait DeBindingStore {
+    fn read(&mut self, dir: &str, key: &str) -> Result<String>;
+    fn take_over(&mut self, mutation: &BindingMutation) -> Result<()>;
+}
+
+struct DconfTakeover;
+
+impl DeBindingStore for DconfTakeover {
+    fn read(&mut self, dir: &str, key: &str) -> Result<String> {
+        takeover::read_binding(dir, key).map_err(Into::into)
+    }
+
+    fn take_over(&mut self, mutation: &BindingMutation) -> Result<()> {
+        takeover::take_over(mutation).map_err(Into::into)
+    }
 }
 
 pub(super) fn apply_unshadow(
-    schema: &str,
-    key: &str,
-    qol_combo: &str,
-    backend: &mut dyn GsettingsBackend,
+    request: &UnshadowRequest<'_>,
+    store: &mut dyn DeBindingStore,
 ) -> Result<()> {
-    let raw = backend.read(schema, key)?;
-    let entries = parse_gsettings_list(&raw);
-    let filtered = filter_unshadow(&entries, qol_combo)
-        .ok_or_else(|| anyhow!("failed to normalize qol combo: {qol_combo}"))?;
-    let serialized = serialize_gsettings_list(&filtered);
-    backend.write(schema, key, &serialized)
+    let raw = store.read(request.dir, request.key)?;
+    let entries = takeover::dconf::parse_string_array(&raw)
+        .ok_or_else(|| anyhow!("{}{} is not a keybinding list", request.dir, request.key))?;
+    let filtered = filter_unshadow(&entries, request.qol_combo)
+        .ok_or_else(|| anyhow!("failed to normalize qol combo: {}", request.qol_combo))?;
+    if filtered.len() == entries.len() {
+        return Ok(());
+    }
+    store.take_over(&BindingMutation {
+        dir: request.dir.to_string(),
+        key: request.key.to_string(),
+        next: takeover::dconf::serialize_string_array(&filtered),
+        qol_combo: request.qol_combo.to_string(),
+        reach: reach_of(request.orphaned),
+    })
+}
+
+fn reach_of(orphaned: bool) -> BindingReach {
+    if orphaned {
+        BindingReach::LegacyOrphan
+    } else {
+        BindingReach::Managed
+    }
 }
 
 #[cfg(test)]
@@ -418,60 +463,69 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::BTreeMap;
 
-    struct StubBackend {
-        store: RefCell<BTreeMap<(String, String), String>>,
-        read_failure: Option<(String, String)>,
-        write_failure: Option<(String, String)>,
+    #[derive(Default)]
+    struct StubStore {
+        values: BTreeMap<String, String>,
+        mutations: RefCell<Vec<BindingMutation>>,
+        read_failure: bool,
+        write_failure: bool,
     }
 
-    impl StubBackend {
-        fn with_value(schema: &str, key: &str, value: &str) -> Self {
-            let mut store = BTreeMap::new();
-            store.insert((schema.to_string(), key.to_string()), value.to_string());
+    impl StubStore {
+        fn with_value(dir: &str, key: &str, value: &str) -> Self {
+            let mut values = BTreeMap::new();
+            values.insert(format!("{dir}{key}"), value.to_string());
             Self {
-                store: RefCell::new(store),
-                read_failure: None,
-                write_failure: None,
+                values,
+                ..Self::default()
             }
         }
 
-        fn fail_write(mut self, schema: &str, key: &str) -> Self {
-            self.write_failure = Some((schema.to_string(), key.to_string()));
+        fn fail_read(mut self) -> Self {
+            self.read_failure = true;
             self
         }
 
-        fn snapshot(&self, schema: &str, key: &str) -> Option<String> {
-            self.store
+        fn fail_write(mut self) -> Self {
+            self.write_failure = true;
+            self
+        }
+
+        fn applied(&self) -> Vec<String> {
+            self.mutations
                 .borrow()
-                .get(&(schema.to_string(), key.to_string()))
-                .cloned()
+                .iter()
+                .map(|mutation| mutation.next.clone())
+                .collect()
         }
     }
 
-    impl GsettingsBackend for StubBackend {
-        fn read(&mut self, schema: &str, key: &str) -> Result<String> {
-            if let Some((s, k)) = &self.read_failure {
-                if s == schema && k == key {
-                    return Err(anyhow!("read failed"));
-                }
+    impl DeBindingStore for StubStore {
+        fn read(&mut self, dir: &str, key: &str) -> Result<String> {
+            if self.read_failure {
+                return Err(anyhow!("read failed"));
             }
-            self.store
-                .borrow()
-                .get(&(schema.to_string(), key.to_string()))
+            self.values
+                .get(&format!("{dir}{key}"))
                 .cloned()
                 .ok_or_else(|| anyhow!("missing entry"))
         }
 
-        fn write(&mut self, schema: &str, key: &str, value: &str) -> Result<()> {
-            if let Some((s, k)) = &self.write_failure {
-                if s == schema && k == key {
-                    return Err(anyhow!("write failed"));
-                }
+        fn take_over(&mut self, mutation: &BindingMutation) -> Result<()> {
+            if self.write_failure {
+                return Err(anyhow!("write failed"));
             }
-            self.store
-                .borrow_mut()
-                .insert((schema.to_string(), key.to_string()), value.to_string());
+            self.mutations.borrow_mut().push(mutation.clone());
             Ok(())
+        }
+    }
+
+    fn request<'a>(dir: &'a str, key: &'a str, combo: &'a str) -> UnshadowRequest<'a> {
+        UnshadowRequest {
+            dir,
+            key,
+            qol_combo: combo,
+            orphaned: false,
         }
     }
 
@@ -590,9 +644,10 @@ mod tests {
             ),
             (
                 FixAction::UnshadowDeBinding {
-                    schema: "org.cinnamon.desktop.keybindings.wm".into(),
+                    dir: "org.cinnamon.desktop.keybindings.wm".into(),
                     key: "switch-input-source".into(),
                     qol_combo: "Super+Space".into(),
+                    orphaned: false,
                 },
                 FixApplicability::ReversibleHostMutation,
             ),
@@ -739,66 +794,113 @@ mod tests {
     }
 
     #[test]
-    fn apply_unshadow_removes_only_conflicting_entry() {
-        let schema = "org.cinnamon.desktop.keybindings.wm";
+    fn apply_unshadow_removes_only_the_conflicting_entry() {
+        let dir = "/org/cinnamon/desktop/keybindings/wm/";
         let key = "switch-input-source";
-        let mut backend = StubBackend::with_value(schema, key, "['<Super>space', 'XF86Keyboard']");
-        apply_unshadow(schema, key, "Super+Space", &mut backend).expect("apply ok");
-        assert_eq!(
-            backend.snapshot(schema, key).as_deref(),
-            Some("['XF86Keyboard']")
-        );
+        let mut store = StubStore::with_value(dir, key, "['<Super>space', 'XF86Keyboard']");
+        apply_unshadow(&request(dir, key, "Super+Space"), &mut store).expect("apply ok");
+        assert_eq!(store.applied(), vec!["['XF86Keyboard']".to_string()]);
     }
 
     #[test]
-    fn apply_unshadow_writes_empty_array_when_only_conflict_present() {
-        let schema = "org.freedesktop.ibus.general.hotkey";
+    fn apply_unshadow_writes_a_typed_empty_array_when_only_the_conflict_is_present() {
+        let dir = "/desktop/ibus/general/hotkey/";
         let key = "triggers";
-        let mut backend = StubBackend::with_value(schema, key, "['<Super>space']");
-        apply_unshadow(schema, key, "Super+Space", &mut backend).expect("apply ok");
-        assert_eq!(backend.snapshot(schema, key).as_deref(), Some("[]"));
+        let mut store = StubStore::with_value(dir, key, "['<Super>space']");
+        apply_unshadow(&request(dir, key, "Super+Space"), &mut store).expect("apply ok");
+        assert_eq!(
+            store.applied(),
+            vec!["@as []".to_string()],
+            "dconf write rejects the untyped [] literal"
+        );
     }
 
     #[test]
-    fn apply_unshadow_keeps_non_matching_entries_untouched() {
-        let schema = "org.cinnamon.desktop.keybindings.wm";
+    fn apply_unshadow_is_a_no_op_when_nothing_overlaps() {
+        let dir = "/org/cinnamon/desktop/keybindings/wm/";
         let key = "panel-main-menu";
-        let mut backend =
-            StubBackend::with_value(schema, key, "['<Super>r','<Alt>F2','XF86Keyboard']");
-        apply_unshadow(schema, key, "Super+Space", &mut backend).expect("apply ok");
-        assert_eq!(
-            backend.snapshot(schema, key).as_deref(),
-            Some("['<Super>r','<Alt>F2','XF86Keyboard']")
+        let mut store = StubStore::with_value(dir, key, "['<Super>r','<Alt>F2','XF86Keyboard']");
+        apply_unshadow(&request(dir, key, "Super+Space"), &mut store).expect("apply ok");
+        assert!(
+            store.applied().is_empty(),
+            "a no-op must not record a takeover claim the host would later restore"
         );
+    }
+
+    #[test]
+    fn apply_unshadow_carries_the_orphan_flag_into_the_recorded_mutation() {
+        let dir = "/org/cinnamon/desktop/keybindings/custom2/";
+        let key = "binding";
+        let cases = [
+            (true, BindingReach::LegacyOrphan),
+            (false, BindingReach::Managed),
+        ];
+        for (orphaned, expected) in cases {
+            let mut store = StubStore::with_value(dir, key, "['<Shift><Super>s']");
+            apply_unshadow(
+                &UnshadowRequest {
+                    dir,
+                    key,
+                    qol_combo: "Shift+Super+S",
+                    orphaned,
+                },
+                &mut store,
+            )
+            .expect("apply ok");
+            let mutations = store.mutations.borrow();
+            assert_eq!(mutations.len(), 1, "orphaned: {orphaned}");
+            assert_eq!(mutations[0].reach, expected, "orphaned: {orphaned}");
+            assert_eq!(mutations[0].qol_combo, "Shift+Super+S");
+        }
+    }
+
+    #[test]
+    fn apply_unshadow_rejects_values_that_are_not_keybinding_lists() {
+        let dir = "/org/cinnamon/desktop/keybindings/custom2/";
+        let key = "command";
+        let mut store = StubStore::with_value(dir, key, "'flameshot gui'");
+        let err = apply_unshadow(&request(dir, key, "Super+Space"), &mut store)
+            .expect_err("a string value must not be rewritten as a list");
+        assert!(
+            err.to_string().contains("is not a keybinding list"),
+            "{err}"
+        );
+        assert!(store.applied().is_empty());
     }
 
     #[test]
     fn apply_unshadow_returns_err_for_unparseable_qol_combo() {
-        let schema = "org.cinnamon.desktop.keybindings.wm";
+        let dir = "/org/cinnamon/desktop/keybindings/wm/";
         let key = "switch-input-source";
-        let original = "['<Super>space']";
-        let mut backend = StubBackend::with_value(schema, key, original);
-        let err = apply_unshadow(schema, key, "<Super>", &mut backend)
+        let mut store = StubStore::with_value(dir, key, "['<Super>space']");
+        let err = apply_unshadow(&request(dir, key, "<Super>"), &mut store)
             .expect_err("should reject unnormalizable combo");
         assert!(
             err.to_string().contains("failed to normalize qol combo"),
             "actual: {err}"
         );
-        assert_eq!(backend.snapshot(schema, key).as_deref(), Some(original));
+        assert!(store.applied().is_empty());
     }
 
     #[test]
-    fn apply_unshadow_does_not_mutate_when_write_fails() {
-        let schema = "org.cinnamon.desktop.keybindings.wm";
+    fn apply_unshadow_propagates_read_and_write_failures_without_recording_a_claim() {
+        let dir = "/org/cinnamon/desktop/keybindings/wm/";
         let key = "switch-input-source";
-        let mut backend =
-            StubBackend::with_value(schema, key, "['<Super>space']").fail_write(schema, key);
-        let err = apply_unshadow(schema, key, "Super+Space", &mut backend)
-            .expect_err("write should fail");
-        assert_eq!(err.to_string(), "write failed");
-        assert_eq!(
-            backend.snapshot(schema, key).as_deref(),
-            Some("['<Super>space']")
-        );
+        let cases = [
+            (
+                StubStore::with_value(dir, key, "['<Super>space']").fail_read(),
+                "read failed",
+            ),
+            (
+                StubStore::with_value(dir, key, "['<Super>space']").fail_write(),
+                "write failed",
+            ),
+        ];
+        for (mut store, expected) in cases {
+            let err = apply_unshadow(&request(dir, key, "Super+Space"), &mut store)
+                .expect_err("failure must propagate");
+            assert_eq!(err.to_string(), expected);
+            assert!(store.applied().is_empty());
+        }
     }
 }

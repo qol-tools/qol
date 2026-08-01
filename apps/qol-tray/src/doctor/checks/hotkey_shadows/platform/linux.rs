@@ -1,99 +1,57 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use super::super::{DetectedShadow, ShadowKind};
-use crate::doctor::de_bindings::{normalize_combo, parse_gsettings_list};
+use crate::doctor::de_bindings::normalize_combo;
 use crate::doctor::diagnosis::FixAction;
+use crate::hotkeys::takeover::{self, BindingEntry, BindingReach};
 use std::collections::BTreeMap;
-use std::process::Command;
-
-const GSETTINGS_PROBES: &[(&str, &str)] = &[
-    ("org.cinnamon.desktop.keybindings.wm", "switch-input-source"),
-    (
-        "org.cinnamon.desktop.keybindings.wm",
-        "switch-input-source-backward",
-    ),
-    (
-        "org.cinnamon.desktop.keybindings.wm",
-        "activate-window-menu",
-    ),
-    ("org.cinnamon.desktop.keybindings.wm", "panel-main-menu"),
-    ("org.gnome.desktop.wm.keybindings", "switch-input-source"),
-    (
-        "org.gnome.desktop.wm.keybindings",
-        "switch-input-source-backward",
-    ),
-    ("org.gnome.desktop.wm.keybindings", "panel-main-menu"),
-    ("org.freedesktop.ibus.general.hotkey", "triggers"),
-];
 
 pub(in crate::doctor::checks::hotkey_shadows) fn collect_shadows(
     qol_index: &BTreeMap<String, String>,
 ) -> Vec<DetectedShadow> {
-    collect_shadows_with_reader(qol_index, &mut GSettingsLookup)
-}
-
-pub(crate) trait GSettingsReader {
-    fn read(&mut self, schema: &str, key: &str) -> Option<String>;
-}
-
-struct GSettingsLookup;
-
-impl GSettingsReader for GSettingsLookup {
-    fn read(&mut self, schema: &str, key: &str) -> Option<String> {
-        let output = Command::new("gsettings")
-            .args(["get", schema, key])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let scan = takeover::scan();
+    if !scan.available {
+        return Vec::new();
     }
+    shadows_from_entries(qol_index, &scan.entries)
 }
 
-pub(crate) fn collect_shadows_with_reader(
+pub(crate) fn shadows_from_entries(
     qol_index: &BTreeMap<String, String>,
-    reader: &mut dyn GSettingsReader,
+    entries: &[BindingEntry],
 ) -> Vec<DetectedShadow> {
-    let mut shadows = Vec::new();
-    for (schema, key) in GSETTINGS_PROBES {
-        let Some(raw) = reader.read(schema, key) else {
-            continue;
-        };
-        for value in parse_gsettings_list(&raw) {
-            let Some(norm) = normalize_combo(&value) else {
-                continue;
-            };
-            if let Some(qol_combo) = qol_index.get(&norm) {
-                shadows.push(DetectedShadow {
-                    qol_combo: qol_combo.clone(),
-                    source_label: format!("{schema}.{key}"),
-                    kind: ShadowKind::Fixable(FixAction::UnshadowDeBinding {
-                        schema: (*schema).into(),
-                        key: (*key).into(),
-                        qol_combo: qol_combo.clone(),
-                    }),
-                });
-            }
-        }
+    entries
+        .iter()
+        .flat_map(|entry| {
+            entry
+                .values
+                .iter()
+                .filter_map(|value| normalize_combo(value))
+                .filter_map(|norm| qol_index.get(&norm))
+                .map(|qol_combo| shadow(entry, qol_combo))
+        })
+        .collect()
+}
+
+fn shadow(entry: &BindingEntry, qol_combo: &str) -> DetectedShadow {
+    DetectedShadow {
+        qol_combo: qol_combo.to_string(),
+        source_label: format!("{}{} ({})", entry.dir, entry.key, entry.reach.label()),
+        kind: ShadowKind::Fixable(FixAction::UnshadowDeBinding {
+            dir: entry.dir.clone(),
+            key: entry.key.clone(),
+            qol_combo: qol_combo.to_string(),
+            orphaned: entry.reach == BindingReach::LegacyOrphan,
+        }),
     }
-    shadows
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hotkeys::takeover::dconf;
 
-    struct StubReader<'a>(&'a [(&'a str, &'a str, &'a str)]);
-
-    impl GSettingsReader for StubReader<'_> {
-        fn read(&mut self, schema: &str, key: &str) -> Option<String> {
-            self.0
-                .iter()
-                .find(|(s, k, _)| *s == schema && *k == key)
-                .map(|(_, _, v)| (*v).to_string())
-        }
-    }
+    const CINNAMON: &str = "/org/cinnamon/desktop/keybindings/";
 
     fn index(combos: &[&str]) -> BTreeMap<String, String> {
         combos
@@ -102,72 +60,115 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn collect_finds_overlap_in_cinnamon_schema() {
-        let qol = index(&["Super+Space", "Alt+Tab"]);
-        let stub = [(
-            "org.cinnamon.desktop.keybindings.wm",
-            "switch-input-source",
-            "['<Super>space', 'XF86Keyboard']",
-        )];
-        let shadows = collect_shadows_with_reader(&qol, &mut StubReader(&stub));
-        assert_eq!(shadows.len(), 1);
-        assert_eq!(shadows[0].qol_combo, "Super+Space");
-        assert_eq!(
-            shadows[0].source_label,
-            "org.cinnamon.desktop.keybindings.wm.switch-input-source"
-        );
-        assert!(matches!(
-            &shadows[0].kind,
-            ShadowKind::Fixable(FixAction::UnshadowDeBinding { schema, key, qol_combo })
-                if schema == "org.cinnamon.desktop.keybindings.wm"
-                    && key == "switch-input-source"
-                    && qol_combo == "Super+Space"
-        ));
+    fn detect(qol: &[&str], root: &str, dump: &str) -> Vec<DetectedShadow> {
+        shadows_from_entries(&index(qol), &dconf::parse_dump(root, dump))
     }
 
     #[test]
-    fn collect_finds_ibus_overlap() {
-        let qol = index(&["Super+Space"]);
-        let stub = [(
-            "org.freedesktop.ibus.general.hotkey",
-            "triggers",
-            "['<Super>space']",
-        )];
-        let shadows = collect_shadows_with_reader(&qol, &mut StubReader(&stub));
+    fn an_orphaned_root_level_custom_entry_is_detected_and_flagged_as_orphaned() {
+        let dump =
+            "[custom2]\nbinding=['<Shift><Super>s']\ncommand='flameshot gui'\nname='Screenshot'\n";
+        let shadows = detect(&["Shift+Super+S"], CINNAMON, dump);
+        assert_eq!(shadows.len(), 1, "got: {shadows:?}");
+        assert_eq!(shadows[0].qol_combo, "Shift+Super+S");
+        assert_eq!(
+            shadows[0].source_label,
+            "/org/cinnamon/desktop/keybindings/custom2/binding (orphaned legacy shortcut)"
+        );
+        assert!(
+            matches!(
+                &shadows[0].kind,
+                ShadowKind::Fixable(FixAction::UnshadowDeBinding { dir, key, orphaned, .. })
+                    if dir == "/org/cinnamon/desktop/keybindings/custom2/"
+                        && key == "binding"
+                        && *orphaned
+            ),
+            "orphaned entries must carry the flag that drives the restart advice: {:?}",
+            shadows[0].kind
+        );
+    }
+
+    #[test]
+    fn a_custom_entry_missing_from_custom_list_is_still_detected() {
+        let dump = "[/]\ncustom-list=['custom1']\n\n[custom0]\nbinding=['<Super>space']\ncommand='ulauncher'\n\n[custom-keybindings/custom1]\nbinding=['<Super>t']\n";
+        let shadows = detect(&["Super+Space"], CINNAMON, dump);
+        assert_eq!(
+            shadows.len(),
+            1,
+            "custom-list membership must not gate detection: {shadows:?}"
+        );
+        assert!(shadows[0].source_label.contains("custom0/binding"));
+    }
+
+    #[test]
+    fn managed_wm_and_media_key_bindings_are_detected_without_the_orphan_flag() {
+        let cases = [
+            ("[wm]\nclose=['<Super>w']\n", "Super+W", "wm/close"),
+            (
+                "[media-keys]\nscreensaver=['<Super>l']\n",
+                "Super+L",
+                "media-keys/screensaver",
+            ),
+        ];
+        for (dump, combo, label) in cases {
+            let shadows = detect(&[combo], CINNAMON, dump);
+            assert_eq!(shadows.len(), 1, "combo {combo}: {shadows:?}");
+            assert!(
+                shadows[0].source_label.contains(label),
+                "combo {combo} label: {}",
+                shadows[0].source_label
+            );
+            assert!(
+                matches!(
+                    &shadows[0].kind,
+                    ShadowKind::Fixable(FixAction::UnshadowDeBinding { orphaned, .. })
+                        if !*orphaned
+                ),
+                "schema-backed bindings are re-read live and must not ask for a restart"
+            );
+        }
+    }
+
+    #[test]
+    fn ibus_triggers_are_detected_under_the_ibus_root() {
+        let shadows = detect(
+            &["Super+Space"],
+            "/desktop/ibus/general/hotkey/",
+            "[/]\ntriggers=['<Super>space']\n",
+        );
         assert_eq!(shadows.len(), 1);
         assert!(shadows[0]
             .source_label
-            .starts_with("org.freedesktop.ibus.general.hotkey"));
+            .starts_with("/desktop/ibus/general/hotkey/triggers"));
     }
 
     #[test]
-    fn collect_groups_multiple_sources_per_combo() {
-        let qol = index(&["Super+Space"]);
-        let stub = [
-            (
-                "org.cinnamon.desktop.keybindings.wm",
-                "switch-input-source",
-                "['<Super>space']",
-            ),
-            (
-                "org.freedesktop.ibus.general.hotkey",
-                "triggers",
-                "['<Super>space']",
-            ),
+    fn one_combo_bound_in_several_places_yields_one_shadow_per_binding() {
+        let dump =
+            "[custom0]\nbinding=['<Super>space']\n\n[wm]\npanel-main-menu=['<Super>space']\n";
+        let shadows = detect(&["Super+Space"], CINNAMON, dump);
+        assert_eq!(shadows.len(), 2, "got: {shadows:?}");
+    }
+
+    #[test]
+    fn non_binding_values_never_produce_a_shadow() {
+        let cases = [
+            "[/]\ncustom-list=['custom1']\n",
+            "[custom0]\ncommand='Super+Space'\nname='Super+Space'\n",
+            "[wm]\nclose=@as []\n",
+            "",
         ];
-        let shadows = collect_shadows_with_reader(&qol, &mut StubReader(&stub));
-        assert_eq!(shadows.len(), 2);
+        for dump in cases {
+            assert!(
+                detect(&["Super+Space", "custom1"], CINNAMON, dump).is_empty(),
+                "dump must not produce shadows: {dump}"
+            );
+        }
     }
 
     #[test]
-    fn collect_returns_empty_when_no_overlap() {
-        let qol = index(&["Ctrl+Alt+Shift+F12"]);
-        let stub = [(
-            "org.cinnamon.desktop.keybindings.wm",
-            "switch-input-source",
-            "['<Super>space']",
-        )];
-        assert!(collect_shadows_with_reader(&qol, &mut StubReader(&stub)).is_empty());
+    fn bindings_that_do_not_overlap_are_left_alone() {
+        let dump = "[wm]\nclose=['<Super>w']\nshow-desktop=['<Super>d']\n";
+        assert!(detect(&["Ctrl+Alt+Shift+F12"], CINNAMON, dump).is_empty());
     }
 }

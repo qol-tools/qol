@@ -119,6 +119,8 @@ pub(crate) fn run() -> Result<()> {
             }
         }
 
+        log_binding_restore("startup", hotkeys::restore_desktop_bindings());
+
         let startup_doctor = qol_tray::doctor::auto_fix_startup();
         println!(
             "[doctor] startup summary: attempted={}, applied={}, failures={}, ok={}, warn={}, error={}",
@@ -134,10 +136,27 @@ pub(crate) fn run() -> Result<()> {
     log::info!("Starting QoL Tray daemon...");
 
     #[cfg(feature = "dev")]
-    return tray::platform::run_app(move || app_init(core_log_controls));
+    let outcome = tray::platform::run_app(move || app_init(core_log_controls));
 
     #[cfg(not(feature = "dev"))]
-    tray::platform::run_app(app_init)
+    let outcome = tray::platform::run_app(app_init);
+
+    log_binding_restore("shutdown", hotkeys::restore_desktop_bindings());
+    outcome
+}
+
+fn log_binding_restore(phase: &str, summary: hotkeys::RestoreSummary) {
+    for failure in &summary.failures {
+        log::warn!("[hotkey-takeover] {phase} restore failed: {failure}");
+    }
+    if summary.restored == 0 && summary.abandoned == 0 {
+        return;
+    }
+    log::info!(
+        "[hotkey-takeover] {phase} restore: {} desktop shortcut(s) put back, {} left to the user",
+        summary.restored,
+        summary.abandoned
+    );
 }
 
 fn dispatch_host_cli(invocation: host_cli::Invocation) -> Option<i32> {

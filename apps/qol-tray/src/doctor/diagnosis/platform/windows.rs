@@ -1,4 +1,4 @@
-use super::super::{AppKeyWriter, GsettingsBackend, SymbolicHotkeyWriter};
+use super::super::{AppKeyWriter, SymbolicHotkeyWriter};
 use anyhow::{anyhow, Context, Result};
 use std::process::Command;
 
@@ -40,14 +40,4 @@ fn is_safe_app_key(app_key: &str) -> bool {
         && app_key
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || character == '_')
-}
-
-impl GsettingsBackend for Platform {
-    fn read(&mut self, _schema: &str, _key: &str) -> Result<String> {
-        Err(anyhow!("gsettings mutation is only supported on Linux"))
-    }
-
-    fn write(&mut self, _schema: &str, _key: &str, _value: &str) -> Result<()> {
-        Err(anyhow!("gsettings mutation is only supported on Linux"))
-    }
 }

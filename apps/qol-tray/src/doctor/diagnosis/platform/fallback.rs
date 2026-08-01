@@ -1,4 +1,4 @@
-use super::super::{AppKeyWriter, GsettingsBackend, SymbolicHotkeyWriter};
+use super::super::{AppKeyWriter, SymbolicHotkeyWriter};
 use anyhow::{anyhow, Result};
 
 pub(crate) struct Platform;
@@ -16,15 +16,5 @@ impl AppKeyWriter for Platform {
         Err(anyhow!(
             "Windows AppKey mutation is only supported on Windows"
         ))
-    }
-}
-
-impl GsettingsBackend for Platform {
-    fn read(&mut self, _schema: &str, _key: &str) -> Result<String> {
-        Err(anyhow!("gsettings mutation is only supported on Linux"))
-    }
-
-    fn write(&mut self, _schema: &str, _key: &str, _value: &str) -> Result<()> {
-        Err(anyhow!("gsettings mutation is only supported on Linux"))
     }
 }
