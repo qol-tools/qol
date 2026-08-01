@@ -10,10 +10,6 @@ fn unsupported(command: &str) -> HostFailure {
     }
 }
 
-pub(crate) fn available() -> bool {
-    false
-}
-
 pub(crate) fn dump(_root: &str) -> Result<String, HostFailure> {
     Err(unsupported("dconf"))
 }

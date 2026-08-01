@@ -17,13 +17,6 @@ const KNOWN_COMPOSITORS: &[&str] = &[
     "mutter",
 ];
 
-pub(crate) fn available() -> bool {
-    Command::new("dconf")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
 pub(crate) fn dump(root: &str) -> Result<String, HostFailure> {
     run(&["dump", root])
 }

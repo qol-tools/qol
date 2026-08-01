@@ -108,28 +108,32 @@ pub struct RestoreSummary {
 }
 
 pub(crate) fn scan() -> Scan {
-    if !platform::available() {
-        return Scan::default();
-    }
-    let entries = BINDING_ROOTS
-        .iter()
-        .filter_map(|root| match platform::dump(root) {
-            Ok(dump) => Some(dconf::parse_dump(root, &dump)),
+    assemble_scan(
+        BINDING_ROOTS
+            .iter()
+            .map(|root| (*root, platform::dump(root))),
+    )
+}
+
+fn assemble_scan<'a>(dumps: impl Iterator<Item = (&'a str, Result<String, HostFailure>)>) -> Scan {
+    let mut scan = Scan::default();
+    for (root, result) in dumps {
+        match result {
+            Ok(dump) => {
+                scan.available = true;
+                scan.entries.extend(dconf::parse_dump(root, &dump));
+            }
             Err(failure) => {
+                scan.available |= !failure.tool_missing;
                 log::debug!(
                     "hotkey takeover: {} skipped: {}",
                     failure.command,
                     failure.detail
                 );
-                None
             }
-        })
-        .flatten()
-        .collect();
-    Scan {
-        available: true,
-        entries,
+        }
     }
+    scan
 }
 
 pub(crate) trait BindingStore {
@@ -172,6 +176,12 @@ fn take_over_in(
 ) -> Result<(), TakeoverError> {
     let full_key = dconf::full_key(&mutation.dir, &mutation.key);
     let current = store.read(&full_key)?;
+    if current.trim().is_empty() {
+        return Err(TakeoverError::HostRejected {
+            command: format!("dconf read {full_key}"),
+            detail: "key is unset, so there is nothing to take back".into(),
+        });
+    }
     let previous = ledger::outstanding(root)
         .into_iter()
         .find(|claim| claim.dir == mutation.dir && claim.key == mutation.key)
@@ -219,6 +229,9 @@ fn restore_all_in(root: &std::path::Path, store: &mut dyn BindingStore) -> Resto
 pub(crate) fn restart_advice() -> Option<String> {
     let root = ledger::claims_dir()?;
     let claims = ledger::outstanding(&root);
+    if ledger::restart_pending(&claims, None).is_empty() {
+        return None;
+    }
     let compositor = platform::compositor();
     let pending = ledger::restart_pending(&claims, compositor.as_ref().map(|c| c.started_at));
     if pending.is_empty() {
@@ -392,6 +405,77 @@ mod tests {
             store.get(&full_key()),
             Some("['<Super>F9']"),
             "qol must never clobber a choice the user made after the takeover"
+        );
+    }
+
+    #[test]
+    fn a_scan_is_unavailable_only_when_every_root_reports_a_missing_tool() {
+        type Dump = (&'static str, Result<String, HostFailure>);
+        let missing = |root: &'static str| {
+            (
+                root,
+                Err(HostFailure {
+                    command: format!("dconf dump {root}"),
+                    detail: "not found".into(),
+                    tool_missing: true,
+                }),
+            )
+        };
+        let refused = |root: &'static str| {
+            (
+                root,
+                Err(HostFailure {
+                    command: format!("dconf dump {root}"),
+                    detail: "denied".into(),
+                    tool_missing: false,
+                }),
+            )
+        };
+        let dumped = |root: &'static str| (root, Ok("[wm]\nclose=['<Super>w']\n".to_string()));
+
+        type Case = (&'static str, Vec<Dump>, bool, usize);
+        let cases: [Case; 4] = [
+            (
+                "no dconf at all",
+                vec![missing("/a/"), missing("/b/")],
+                false,
+                0,
+            ),
+            (
+                "one root dumped",
+                vec![missing("/a/"), dumped("/b/")],
+                true,
+                1,
+            ),
+            ("read refused", vec![refused("/a/")], true, 0),
+            (
+                "every root dumped",
+                vec![dumped("/a/"), dumped("/b/")],
+                true,
+                2,
+            ),
+        ];
+        for (label, dumps, available, entries) in cases {
+            let scan = assemble_scan(dumps.into_iter());
+            assert_eq!(scan.available, available, "case: {label}");
+            assert_eq!(scan.entries.len(), entries, "case: {label}");
+        }
+    }
+
+    #[test]
+    fn an_unset_key_is_never_claimed_so_restore_cannot_write_an_empty_gvariant() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut store = FakeStore::with(&full_key(), "");
+
+        let error = take_over_in(root.path(), &mut store, &orphan_mutation())
+            .expect_err("an unset key has nothing to take back");
+        assert!(
+            error.to_string().contains("nothing to take back"),
+            "{error}"
+        );
+        assert_eq!(
+            restore_all_in(root.path(), &mut store),
+            RestoreSummary::default()
         );
     }
 

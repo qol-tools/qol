@@ -47,6 +47,7 @@ pub(crate) fn run() -> Result<()> {
 
     let generation = qol_tray::dev_generation::current();
     let rolling_restart = qol_tray::dev_generation::is_rolling_restart();
+    let mut owns_host_surface = false;
     if generation.is_shadow() {
         log::info!("Starting shadow dev generation");
     } else if rolling_restart {
@@ -119,6 +120,7 @@ pub(crate) fn run() -> Result<()> {
             }
         }
 
+        owns_host_surface = true;
         log_binding_restore("startup", hotkeys::restore_desktop_bindings());
 
         let startup_doctor = qol_tray::doctor::auto_fix_startup();
@@ -141,7 +143,9 @@ pub(crate) fn run() -> Result<()> {
     #[cfg(not(feature = "dev"))]
     let outcome = tray::platform::run_app(app_init);
 
-    log_binding_restore("shutdown", hotkeys::restore_desktop_bindings());
+    if owns_host_surface {
+        log_binding_restore("shutdown", hotkeys::restore_desktop_bindings());
+    }
     outcome
 }
 
