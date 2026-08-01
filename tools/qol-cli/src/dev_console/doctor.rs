@@ -16,8 +16,8 @@ use crate::poller::Poller;
 
 use super::activity::Activity;
 use super::render_util::{
-    accent, caret, cursor_window_start, list_capacity, now_unix_ms, relative_age, view_content,
-    NavigationOverflow,
+    accent, caret, cursor_window_start, ellipsize_line, list_capacity, now_unix_ms, panel_width,
+    relative_age, render_bottom_panel, view_content, wrapped_rows, NavigationOverflow,
 };
 use super::{Dash, View, DOCTOR_BASE_INTERVAL, DOCTOR_CAP_INTERVAL};
 
@@ -65,6 +65,7 @@ impl ManualDoctor {
 pub(super) struct DoctorRun {
     report: DoctorReport,
     lines: Vec<String>,
+    details: Vec<String>,
     scope: DoctorScope,
 }
 
@@ -83,7 +84,25 @@ pub(super) fn open_doctor(dash: &mut Dash) {
     dash.view = View::Doctor;
     dash.scroll_offset = 0;
     dash.doctor_cursor = 0;
+    dash.doctor_detail_open = false;
     dash.pokes.doctor = true;
+}
+
+pub(super) fn toggle_doctor_detail(dash: &mut Dash) {
+    if dash.doctor_detail_open {
+        dash.doctor_detail_open = false;
+        return;
+    }
+    dash.doctor_detail_open = doctor_detail_text(&dash.doctor, dash.doctor_cursor).is_some();
+}
+
+pub(super) fn doctor_detail_text(panel: &DoctorPanel, cursor: usize) -> Option<String> {
+    let error_rows = usize::from(panel.error.is_some());
+    if cursor < error_rows {
+        return panel.error.clone();
+    }
+    let run = panel.last.as_ref()?;
+    run.details.get(cursor - error_rows).cloned()
 }
 
 pub(super) fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Span<'static>>) {
@@ -166,9 +185,21 @@ pub(super) fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Nav
         .enumerate()
         .skip(start)
         .take(height)
-        .map(|(index, line)| render(line, index == cursor))
+        .map(|(index, line)| ellipsize_line(render(line, index == cursor), area.width as usize))
         .collect();
     view_content(frame, area, visible);
+    if dash.doctor_detail_open {
+        if let Some(detail) = doctor_detail_text(&dash.doctor, cursor) {
+            let width = panel_width(area).saturating_sub(2) as usize;
+            render_bottom_panel(
+                frame,
+                area,
+                "details",
+                wrapped_rows(&detail, width),
+                accent(),
+            );
+        }
+    }
     NavigationOverflow::from_window(start, height, total)
 }
 
@@ -415,7 +446,7 @@ fn parse_doctor_run(
     mode: DoctorMode,
     scope: DoctorScope,
 ) -> Result<DoctorRun, String> {
-    let (report, lines) = parse_doctor_output(stdout, mode).map_err(|error| {
+    let (report, lines, details) = parse_doctor_output(stdout, mode).map_err(|error| {
         let detail = stderr.trim();
         if detail.is_empty() {
             format!("could not read doctor report: {error}")
@@ -426,6 +457,7 @@ fn parse_doctor_run(
     Ok(DoctorRun {
         report,
         lines,
+        details,
         scope,
     })
 }
@@ -445,15 +477,17 @@ fn build_doctor(root: &std::path::Path) -> Result<(), String> {
     Err(format!("doctor build failed ({}): {detail}", output.status))
 }
 
+type ParsedDoctorOutput = (DoctorReport, Vec<String>, Vec<String>);
+
 fn parse_doctor_output(
     bytes: &[u8],
     mode: DoctorMode,
-) -> Result<(DoctorReport, Vec<String>), serde_json::Error> {
+) -> Result<ParsedDoctorOutput, serde_json::Error> {
     match mode {
         DoctorMode::Check => {
             let report: DoctorReport = serde_json::from_slice(bytes)?;
-            let lines = report_lines(&report);
-            Ok((report, lines))
+            let (lines, details) = report_entries(&report);
+            Ok((report, lines, details))
         }
         DoctorMode::Fix => {
             let fix_report: DoctorFixReport = serde_json::from_slice(bytes)?;
@@ -462,16 +496,22 @@ fn parse_doctor_output(
                 .iter()
                 .map(|failure| format!("[ERR] {}", first_line(failure)))
                 .collect::<Vec<_>>();
-            lines.extend(report_lines(&fix_report.after));
-            Ok((fix_report.after, lines))
+            let mut details = fix_report.failures.clone();
+            let (after_lines, after_details) = report_entries(&fix_report.after);
+            lines.extend(after_lines);
+            details.extend(after_details);
+            Ok((fix_report.after, lines, details))
         }
     }
 }
 
-fn report_lines(report: &DoctorReport) -> Vec<String> {
+fn report_entries(report: &DoctorReport) -> (Vec<String>, Vec<String>) {
     let mut outcomes: Vec<&Outcome> = report.outcomes.iter().collect();
     outcomes.sort_by_key(|outcome| status_rank(outcome.status));
-    outcomes.into_iter().map(outcome_line).collect()
+    outcomes
+        .into_iter()
+        .map(|outcome| (outcome_line(outcome), outcome.message.clone()))
+        .unzip()
 }
 
 fn status_rank(status: OutcomeStatus) -> u8 {
@@ -552,22 +592,26 @@ mod tests {
         let run = DoctorRun {
             report: report.clone(),
             lines: Vec::new(),
+            details: Vec::new(),
             scope: DoctorScope::Full,
         };
         let quick_run = DoctorRun {
             report,
             lines: Vec::new(),
+            details: Vec::new(),
             scope: DoctorScope::Quick,
         };
         let warn_report = make_report(9, 2, 0, 0);
         let warn_run = DoctorRun {
             report: warn_report.clone(),
             lines: Vec::new(),
+            details: Vec::new(),
             scope: DoctorScope::Full,
         };
         let quick_warn_run = DoctorRun {
             report: warn_report,
             lines: Vec::new(),
+            details: Vec::new(),
             scope: DoctorScope::Quick,
         };
         let now = 1_000_000_000;
@@ -658,10 +702,16 @@ mod tests {
             outcome("c", OutcomeStatus::Crash, "z", false),
             outcome("d", OutcomeStatus::Error, "w", false),
         ]);
+        let (lines, details) = report_entries(&report);
         assert_eq!(
-            report_lines(&report),
+            lines,
             vec!["[CRASH] c: z", "[ERR] d: w", "[WARN] b: y", "[OK] a: x"],
             "divergences must never hide below the ok lines"
+        );
+        assert_eq!(
+            details,
+            vec!["z", "w", "y", "x"],
+            "details must stay aligned with their sorted rows"
         );
     }
 
@@ -785,6 +835,7 @@ mod tests {
                 "[OK] b: y".to_string(),
                 "[OK] c: z".to_string(),
             ],
+            details: vec!["x".to_string(), "y".to_string(), "z".to_string()],
             scope: DoctorScope::Full,
         });
         let moves = [
@@ -800,6 +851,78 @@ mod tests {
             assert_eq!(dash.doctor_cursor, expected, "after {action:?}");
             assert_eq!(dash.scroll_offset, 0, "after {action:?}");
         }
+    }
+
+    fn panel_with_details(details: Vec<&str>, error: Option<&str>) -> DoctorPanel {
+        DoctorPanel {
+            last: Some(DoctorRun {
+                report: make_report(details.len(), 0, 0, 0),
+                lines: details.iter().map(|d| format!("[OK] a: {d}")).collect(),
+                details: details.iter().map(|d| d.to_string()).collect(),
+                scope: DoctorScope::Full,
+            }),
+            last_at_ms: None,
+            manual: None,
+            error: error.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn doctor_detail_text_offsets_past_the_error_row() {
+        let cases = [
+            (panel_with_details(vec!["x", "y"], None), 0, Some("x")),
+            (panel_with_details(vec!["x", "y"], None), 1, Some("y")),
+            (panel_with_details(vec!["x", "y"], None), 2, None),
+            (panel_with_details(vec!["x"], Some("boom")), 0, Some("boom")),
+            (panel_with_details(vec!["x"], Some("boom")), 1, Some("x")),
+        ];
+        for (index, (panel, cursor, expected)) in cases.into_iter().enumerate() {
+            assert_eq!(
+                doctor_detail_text(&panel, cursor).as_deref(),
+                expected,
+                "case: {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn enter_toggles_the_detail_panel_and_back_closes_it_before_leaving() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Doctor;
+        dash.doctor = panel_with_details(vec!["full message"], None);
+
+        super::super::session::apply_action(&mut dash, Action::Activate, false);
+        assert!(dash.doctor_detail_open, "enter opens the detail panel");
+
+        super::super::session::apply_action(&mut dash, Action::Back, false);
+        assert!(!dash.doctor_detail_open, "back closes the panel first");
+        assert_eq!(dash.view, View::Doctor, "back keeps the doctor page open");
+
+        super::super::session::apply_action(&mut dash, Action::Back, false);
+        assert_eq!(dash.view, View::Dashboard, "second back leaves the page");
+    }
+
+    #[test]
+    fn detail_panel_shows_the_full_message() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Doctor;
+        dash.doctor = panel_with_details(
+            vec!["first line\nsecond line that only the detail panel shows"],
+            None,
+        );
+        dash.doctor_detail_open = true;
+
+        let rows = super::super::testkit::render_rows_at(&mut dash, 110, 28);
+
+        assert!(
+            rows.iter().any(|row| row.contains("┤ details ├")),
+            "detail panel title missing"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("second line that only the detail panel shows")),
+            "full message missing from the detail panel"
+        );
     }
 
     #[test]
@@ -828,7 +951,7 @@ mod tests {
         ]);
         let json = serde_json::to_vec(&expected).unwrap();
 
-        let (actual, lines) = parse_doctor_output(&json, DoctorMode::Check).unwrap();
+        let (actual, lines, details) = parse_doctor_output(&json, DoctorMode::Check).unwrap();
 
         assert_eq!(actual, expected);
         assert_eq!(
@@ -837,6 +960,11 @@ mod tests {
                 "[WARN] a: x (fix available)".to_string(),
                 "[OK] b: y".to_string(),
             ]
+        );
+        assert_eq!(
+            details,
+            vec!["x".to_string(), "y\ndetail".to_string()],
+            "details must keep the full multiline message"
         );
     }
 
@@ -854,7 +982,7 @@ mod tests {
         };
         let json = serde_json::to_vec(&fix_report).unwrap();
 
-        let (actual, lines) = parse_doctor_output(&json, DoctorMode::Fix).unwrap();
+        let (actual, lines, details) = parse_doctor_output(&json, DoctorMode::Fix).unwrap();
 
         assert_eq!(actual, after);
         assert_eq!(
@@ -864,6 +992,11 @@ mod tests {
                 "[WARN] a: x".to_string(),
             ],
             "fix failures must stay visible alongside the after block"
+        );
+        assert_eq!(
+            details,
+            vec!["a: rebuild failed\nnoise".to_string(), "x".to_string()],
+            "failure details must keep the full text"
         );
     }
 
@@ -908,7 +1041,7 @@ mod tests {
     fn typed_report_counts_and_invalid_output_are_handled() {
         let expected = make_report(9, 2, 1, 0);
         let json = serde_json::to_vec(&expected).unwrap();
-        let (actual, _) = parse_doctor_output(&json, DoctorMode::Check).unwrap();
+        let (actual, _, _) = parse_doctor_output(&json, DoctorMode::Check).unwrap();
         assert_eq!(
             (
                 actual.count_ok(),

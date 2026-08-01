@@ -313,6 +313,92 @@ pub(super) fn list_status(total: usize, scroll_offset: usize) -> String {
     format!("{total} lines · {mode}")
 }
 
+fn display_width(text: &str) -> usize {
+    Span::raw(text).width()
+}
+
+pub(super) fn ellipsize_line(line: Line<'static>, width: usize) -> Line<'static> {
+    if width == 0 || line.width() <= width {
+        return line;
+    }
+    let budget = width - 1;
+    let mut used = 0;
+    let mut spans = Vec::new();
+    for span in line.spans {
+        let span_width = span.width();
+        if used + span_width <= budget {
+            used += span_width;
+            spans.push(span);
+            continue;
+        }
+        let mut kept = String::new();
+        for ch in span.content.chars() {
+            let ch_width = display_width(&ch.to_string());
+            if used + ch_width > budget {
+                break;
+            }
+            used += ch_width;
+            kept.push(ch);
+        }
+        spans.push(Span::styled(kept, span.style));
+        break;
+    }
+    spans.push(Span::raw("…"));
+    Line::from(spans)
+}
+
+pub(super) fn wrapped_rows(text: &str, width: usize) -> Vec<Line<'static>> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let mut rows = Vec::new();
+    for source in text.lines() {
+        if source.trim().is_empty() {
+            rows.push(Line::from(""));
+            continue;
+        }
+        let mut current = String::new();
+        let mut used = 0;
+        for word in source.split_whitespace() {
+            let word_width = display_width(word);
+            let gap = usize::from(!current.is_empty());
+            if used + gap + word_width <= width {
+                if gap == 1 {
+                    current.push(' ');
+                }
+                current.push_str(word);
+                used += gap + word_width;
+                continue;
+            }
+            if !current.is_empty() {
+                rows.push(Line::from(std::mem::take(&mut current)));
+                used = 0;
+            }
+            if word_width <= width {
+                current.push_str(word);
+                used = word_width;
+                continue;
+            }
+            for ch in word.chars() {
+                let ch_width = display_width(&ch.to_string());
+                if used + ch_width > width {
+                    rows.push(Line::from(std::mem::take(&mut current)));
+                    used = 0;
+                }
+                current.push(ch);
+                used += ch_width;
+            }
+        }
+        if !current.is_empty() {
+            rows.push(Line::from(current));
+        }
+    }
+    if rows.is_empty() {
+        rows.push(Line::from(""));
+    }
+    rows
+}
+
 pub(super) fn styled_line(raw: &str) -> Line<'_> {
     use ansi_to_tui::IntoText;
     let Ok(text) = raw.into_text() else {
@@ -370,6 +456,49 @@ mod tests {
                 expected,
                 "total={total} height={height} cursor={cursor}"
             );
+        }
+    }
+
+    #[test]
+    fn ellipsize_line_truncates_by_display_cell() {
+        let cases = [
+            ("short", 10, "short"),
+            ("exactly ten", 11, "exactly ten"),
+            ("a longer message", 10, "a longer …"),
+            ("日本語テスト", 5, "日本…"),
+        ];
+        for (input, width, expected) in cases {
+            assert_eq!(
+                ellipsize_line(Line::from(input.to_string()), width).to_string(),
+                expected,
+                "input: {input} width: {width}"
+            );
+        }
+    }
+
+    #[test]
+    fn ellipsize_line_keeps_span_styles_on_the_kept_prefix() {
+        let line = Line::from(vec!["head ".fg(Color::Yellow), "tail overflowing".into()]);
+        let truncated = ellipsize_line(line, 10);
+        assert_eq!(truncated.to_string(), "head tail…");
+        assert_eq!(truncated.spans[0].style.fg, Some(Color::Yellow));
+    }
+
+    #[test]
+    fn wrapped_rows_wrap_by_word_and_hard_break_long_words() {
+        let cases = [
+            ("one two three", 8, vec!["one two", "three"]),
+            ("word", 10, vec!["word"]),
+            ("abcdefghij", 4, vec!["abcd", "efgh", "ij"]),
+            ("line1\n\nline2", 10, vec!["line1", "", "line2"]),
+            ("", 10, vec![""]),
+        ];
+        for (input, width, expected) in cases {
+            let rows: Vec<String> = wrapped_rows(input, width)
+                .iter()
+                .map(Line::to_string)
+                .collect();
+            assert_eq!(rows, expected, "input: {input:?} width: {width}");
         }
     }
 

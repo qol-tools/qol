@@ -18,7 +18,8 @@ use super::dash::{
 };
 use super::disk::{apply_disk_outcome, open_disk, start_disk_scan};
 use super::doctor::{
-    apply_doctor_outcome, doctor_scroll_len, open_doctor, spawn_doctor_probe, DoctorMode,
+    apply_doctor_outcome, doctor_scroll_len, open_doctor, spawn_doctor_probe, toggle_doctor_detail,
+    DoctorMode,
 };
 use super::draw::{accent_state_line, draw, filterable_view, plugin_row_count, resolve_base_label};
 use super::emu_panel::{
@@ -510,7 +511,8 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             View::Emu => act_emu(dash, modified),
             View::Plugins => act_plugin(dash),
             View::Disk => start_disk_scan(dash),
-            View::Logs | View::Doctor | View::Trace | View::Endpoints | View::EmuDetail => {}
+            View::Doctor => toggle_doctor_detail(dash),
+            View::Logs | View::Trace | View::Endpoints | View::EmuDetail => {}
         },
         Action::Dive => match dash.view {
             View::Dashboard => dive_row(dash),
@@ -524,6 +526,10 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             | View::EmuDetail => {}
         },
         Action::Back => {
+            if dash.view == View::Doctor && dash.doctor_detail_open {
+                dash.doctor_detail_open = false;
+                return;
+            }
             dash.view = if dash.view == View::EmuDetail {
                 View::Emu
             } else {

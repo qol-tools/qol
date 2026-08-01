@@ -269,6 +269,12 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
             let mut bindings = vec![
                 char_binding("d", "refresh checks", Action::Doctor, 'd'),
                 binding(
+                    "enter",
+                    "details",
+                    Action::Activate,
+                    vec![KeyStroke::plain(KeyCode::Enter)],
+                ),
+                binding(
                     "space",
                     "raw output",
                     Action::ToggleArm,
