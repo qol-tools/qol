@@ -10,7 +10,6 @@ const RAW_INTERACTIVE = /<(button|select|textarea|input)\b/;
 
 const SANCTIONED_RAW_INTERNALS = new Set([
     'app/views.js',
-    'components/domain-rows/PluginRow.js',
     'components/domain-rows/StoreCard.js',
     'components/shell/PeripheralPreview.js',
     'views/profile/view.js',

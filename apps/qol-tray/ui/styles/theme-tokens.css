@@ -35,8 +35,6 @@
     --warning-rgb: var(--qol-system-warning-rgb);
     --ink-rgb: var(--qol-system-ink-rgb);
     --paper-rgb: var(--qol-system-paper-rgb);
-    --overlay-surface-rgb: var(--qol-system-overlay-surface-rgb);
-    --overlay-deep-rgb: var(--qol-system-overlay-deep-rgb);
     --overlay-ink-rgb: var(--qol-system-overlay-ink-rgb);
     --scrim-rgb: var(--qol-system-scrim-rgb);
 
@@ -137,8 +135,6 @@
     --focus-ring-width: 2px;
     --focus-ring-offset: -2px;
 
-    --elevation-1: 0 1px 2px var(--layer-ink-20), 0 6px 16px rgba(var(--ink-rgb), 0.14);
-    --elevation-2: 0 3px 8px var(--layer-ink-24), 0 10px 26px rgba(var(--ink-rgb), 0.2);
     --elevation-3: 0 8px 20px var(--layer-ink-28), 0 18px 44px rgba(var(--ink-rgb), 0.3);
 
     --progress-track-bg: rgba(var(--ink-rgb, 0, 0, 0), 0.46);
@@ -206,7 +202,6 @@
     --pad-dev-content-mobile: var(--space-4) var(--space-4) var(--space-2);
     --pad-dev-frame-mobile: 0.9rem 0.9rem 0.18rem;
 
-    --size-sidebar: 200px;
     --size-page-header: 48px;
     --size-content-max: 1200px;
     --size-grid-card-min: 280px;

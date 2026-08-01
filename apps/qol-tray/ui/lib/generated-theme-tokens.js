@@ -8,7 +8,6 @@ export const QOL_ACCENT_PRESETS = [
     { key: "violet", label: "Violet", rgb: "138, 147, 247", hover: "#a5afff" },
 ];
 export const QOL_DEFAULT_ACCENT = "amber";
-export const QOL_DEV_ACCENT = "green";
 export const QOL_DEFAULT_ACCENT_RGB = "255, 180, 84";
 export const QOL_TRAY_INTERNAL_COLORS = {
     dissolveTargetColor: "#4a9eff",
