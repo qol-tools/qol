@@ -26,7 +26,7 @@ const GTK_COMBO: &str = "['<Primary><Alt>F9']";
 const KEYBINDINGS: &str = "/org/cinnamon/desktop/keybindings";
 const MANAGED_KEY: &str = "/org/cinnamon/desktop/keybindings/custom-keybindings/custom9/binding";
 const ORPHAN_KEY: &str = "/org/cinnamon/desktop/keybindings/custom8/binding";
-const CLAIMS_DIR: &str = "/root/.local/share/qol-tray/host-takeover/qol-tray-hotkeys";
+const CLAIMS_GLOB: &str = "*/host-takeover/qol-tray-hotkeys/takeover-*";
 const CLEARED: &str = "@as []";
 const PORT_CLOSED_SCRIPT: &str = r#"
 import socket
@@ -192,7 +192,7 @@ fn claim_markers(guest: &mut GuestControlClient) -> Result<Vec<String>> {
             "/bin/sh",
             &[
                 "-c",
-                &format!("find {CLAIMS_DIR} -type f -name 'takeover-*' 2>/dev/null || true"),
+                &format!("find /root /home -type f -path '{CLAIMS_GLOB}' 2>/dev/null || true"),
             ],
         ),
         COMMAND_TIMEOUT,
