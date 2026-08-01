@@ -398,12 +398,10 @@ mod linux {
 
         fn detach_and_grant(&mut self, uid: u32) -> std::result::Result<(), SetupFailure> {
             for interface in &self.interfaces {
-                write_sysfs(&interface.driver.join("unbind"), &interface.name)
-                    .with_context(|| format!("failed to unbind {}", interface.name))
-                    .map_err(|error| SetupFailure {
-                        step: "unbind",
-                        error,
-                    })?;
+                interface.detach().map_err(|error| SetupFailure {
+                    step: "unbind",
+                    error,
+                })?;
             }
             self.reset_and_verify().map_err(|error| SetupFailure {
                 step: "reset",
@@ -485,6 +483,27 @@ mod linux {
     impl BoundInterface {
         fn sysfs_path(&self) -> &Path {
             &self.sysfs
+        }
+
+        fn detach(&self) -> Result<()> {
+            if !self.is_bound() {
+                return Ok(());
+            }
+            let write = write_sysfs(&self.driver.join("unbind"), &self.name);
+            unbind_outcome(write, self.is_bound())
+                .with_context(|| format!("failed to unbind {}", self.name))
+        }
+
+        fn is_bound(&self) -> bool {
+            self.sysfs.join("driver").exists()
+        }
+    }
+
+    fn unbind_outcome(write: Result<()>, still_bound: bool) -> Result<()> {
+        match write {
+            Ok(()) => Ok(()),
+            Err(_) if !still_bound => Ok(()),
+            Err(error) => Err(error),
         }
     }
 
@@ -783,6 +802,32 @@ mod linux {
             let cases = ["ready\t/sys/x\trun-1", "failed", "failed\tunbind", ""];
             for line in cases {
                 assert!(parse_setup_failure(line).is_none(), "line: {line:?}");
+            }
+        }
+
+        #[test]
+        fn unbind_outcome_tolerates_a_cascaded_detach() {
+            let cases = [
+                ("clean unbind", Ok(()), true, true),
+                (
+                    "cascaded detach",
+                    Err(anyhow!("No such device")),
+                    false,
+                    true,
+                ),
+                (
+                    "real failure",
+                    Err(anyhow!("Permission denied")),
+                    true,
+                    false,
+                ),
+            ];
+            for (case, write, still_bound, expect_ok) in cases {
+                assert_eq!(
+                    unbind_outcome(write, still_bound).is_ok(),
+                    expect_ok,
+                    "case: {case}"
+                );
             }
         }
 
