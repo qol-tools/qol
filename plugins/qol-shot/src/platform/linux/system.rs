@@ -89,7 +89,7 @@ pub fn open_url(url: &str) -> Result<()> {
 pub fn platform_supported_check() -> DoctorCheckResult {
     DoctorCheckResult::ok(
         "platform_supported",
-        "Linux capture is supported through ffmpeg/x11grab.",
+        "Linux capture uses Cinnamon's synchronized recorder when available and ffmpeg/x11grab elsewhere.",
     )
 }
 

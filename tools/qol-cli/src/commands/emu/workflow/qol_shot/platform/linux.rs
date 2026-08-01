@@ -28,6 +28,7 @@ const PREVIEW_PREFIX: &str = "^qol-shot-preview";
 const CANCEL_CYCLES: usize = 24;
 const SCREENSHOT_BURST: usize = 16;
 const COUNTDOWN_CYCLES: usize = 4;
+const TOP_BAND_MAX_ADJACENT_YAVG_DELTA: f64 = 2.0;
 
 pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     let mut guest = connect_desktop_guest(vm)?;
@@ -474,8 +475,8 @@ fn test_recording(
 ) -> Result<()> {
     set_recording_config(guest, auth)?;
     qmp.move_pointer_absolute(
-        300_u32.min(width.saturating_sub(1)),
-        220_u32.min(height.saturating_sub(1)),
+        width.saturating_sub(100),
+        height.saturating_sub(100),
         width,
         height,
     )?;
@@ -502,6 +503,29 @@ fn test_recording(
         &["segments=0"],
         ACTION_TIMEOUT,
     )?;
+    wait_for_probe_fields(
+        guest,
+        cursor,
+        "SHOT_RECORD_START_BACKEND",
+        &["backend=cinnamon_after_paint", "outcome=ready"],
+        ACTION_TIMEOUT,
+    )?;
+    let fixture = wait_for_window_id(guest, FIXTURE_TITLE, ACTION_TIMEOUT)?;
+    for (x, y) in [(200, 200), (500, 300)].into_iter().cycle().take(12) {
+        require_exec(
+            guest,
+            command(
+                "/usr/bin/xdotool",
+                &[
+                    "windowmove",
+                    fixture.as_str(),
+                    &x.to_string(),
+                    &y.to_string(),
+                ],
+            ),
+            COMMAND_TIMEOUT,
+        )?;
+    }
     thread::sleep(Duration::from_millis(900));
     qmp.screendump(artifact)?;
 
@@ -520,7 +544,18 @@ fn test_recording(
         &["context=recording", "stage=saved"],
         ACTION_TIMEOUT,
     )?;
-    wait_for_command(
+    wait_for_probe_fields(
+        guest,
+        stop_cursor,
+        "SHOT_RECORD_FINALIZE",
+        &[
+            "stage=converted",
+            "backend=cinnamon_after_paint",
+            "format=mkv",
+        ],
+        ACTION_TIMEOUT,
+    )?;
+    let recording = wait_for_command(
         guest,
         command(
             "/usr/bin/find",
@@ -540,7 +575,102 @@ fn test_recording(
         |outcome| !outcome.stdout.trim().is_empty(),
         "a non-empty recording output",
     )?;
+    let recording = recording
+        .stdout
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .context("recording output discovery returned no path")?;
+    let stream = require_exec(
+        guest,
+        command(
+            "/usr/bin/ffprobe",
+            &[
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name,width,height",
+                "-of",
+                "default=nw=1",
+                recording,
+            ],
+        ),
+        ACTION_TIMEOUT,
+    )?;
+    for expected in ["codec_name=h264", "width=1280", "height=800"] {
+        if !stream.stdout.lines().any(|line| line.trim() == expected) {
+            bail!(
+                "recording stream did not contain {expected}: {}",
+                stream.stdout.trim()
+            );
+        }
+    }
+    let band = require_exec(
+        guest,
+        command(
+            "/usr/bin/ffmpeg",
+            &[
+                "-v",
+                "error",
+                "-i",
+                recording,
+                "-vf",
+                "crop=iw:80:0:0,signalstats,metadata=print:file=-",
+                "-f",
+                "null",
+                "-",
+            ],
+        ),
+        ACTION_TIMEOUT,
+    )?;
+    let (frames, max_delta) = top_band_yavg_stats(&band.stdout)?;
+    if frames < 10 {
+        bail!("recording exposed only {frames} top-band frame samples");
+    }
+    if max_delta > TOP_BAND_MAX_ADJACENT_YAVG_DELTA {
+        bail!(
+            "recording top band flickered: max adjacent YAVG delta {max_delta:.6} exceeded {TOP_BAND_MAX_ADJACENT_YAVG_DELTA:.6}"
+        );
+    }
+    step_label(
+        "recording",
+        StepKind::Success,
+        &format!(
+            "Cinnamon after-paint capture encoded {frames} frames with top-band max delta {max_delta:.6}"
+        ),
+    );
+    require_exec(
+        guest,
+        command(
+            "/usr/bin/xdotool",
+            &["windowmove", fixture.as_str(), "100", "100"],
+        ),
+        COMMAND_TIMEOUT,
+    )?;
     require_no_capture_process(guest)
+}
+
+fn top_band_yavg_stats(output: &str) -> Result<(usize, f64)> {
+    let values = output
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("lavfi.signalstats.YAVG="))
+        .map(|value| {
+            value
+                .parse::<f64>()
+                .with_context(|| format!("invalid top-band YAVG value {value:?}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if values.is_empty() {
+        bail!("ffmpeg returned no top-band YAVG samples");
+    }
+    let max_delta = values
+        .windows(2)
+        .map(|pair| (pair[1] - pair[0]).abs())
+        .fold(0.0_f64, f64::max);
+    Ok((values.len(), max_delta))
 }
 
 fn test_settings(
@@ -626,4 +756,25 @@ fn test_crash_recovery(guest: &mut GuestControlClient, auth: &str) -> Result<()>
         &format!("qol-shot recovered pid={before}->{after} without a stale selector"),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::top_band_yavg_stats;
+
+    #[test]
+    fn top_band_stats_report_largest_adjacent_frame_change() {
+        let output = "frame:0\nlavfi.signalstats.YAVG=51.3265\nframe:1\nlavfi.signalstats.YAVG=51.3394\nframe:2\nlavfi.signalstats.YAVG=65.0\n";
+
+        let (frames, max_delta) = top_band_yavg_stats(output).unwrap();
+
+        assert_eq!(frames, 3);
+        assert!((max_delta - 13.6606).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn top_band_stats_reject_missing_and_malformed_samples() {
+        assert!(top_band_yavg_stats("frame:0").is_err());
+        assert!(top_band_yavg_stats("lavfi.signalstats.YAVG=bright").is_err());
+    }
 }
