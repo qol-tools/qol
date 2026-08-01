@@ -1,6 +1,7 @@
 use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
-use super::cargo_target::{dir_size, format_bytes, workspace_root};
+use super::cargo_target::workspace_root;
+use qol_dev_build::target_cache::{dir_size, format_bytes};
 use std::path::{Path, PathBuf};
 
 const ID: &str = "cargo_target_cache";

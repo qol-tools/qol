@@ -184,7 +184,10 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         #[cfg(feature = "dev")]
         FixAction::PruneCargoIncrementalCache { path } => prune_cargo_incremental_cache(path),
         #[cfg(feature = "dev")]
-        FixAction::PruneCargoTargetDir { target } => prune_cargo_target_dir(target),
+        FixAction::PruneCargoTargetDir { target } => {
+            qol_dev_build::target_cache::prune_cargo_target_dir(target)
+                .map_err(|error| anyhow!(error))
+        }
         #[cfg(feature = "dev")]
         FixAction::HealDevLinkedPlugins { rebuild_ids } => heal_dev_linked_plugins(rebuild_ids),
     }
@@ -196,145 +199,6 @@ fn prune_cargo_incremental_cache(path: &std::path::Path) -> Result<()> {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
-    }
-}
-
-#[cfg(feature = "dev")]
-const PROTECTED_TARGET_ROOTS: [&str; 3] = ["debug", "qol-dev", "qol-env"];
-#[cfg(feature = "dev")]
-const REMOVED_DEBUG_DIRS: [&str; 2] = ["incremental", "examples"];
-#[cfg(feature = "dev")]
-const SWEPT_DEBUG_DIRS: [&str; 3] = ["deps", "build", ".fingerprint"];
-#[cfg(feature = "dev")]
-const SWEEP_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(14 * 24 * 60 * 60);
-
-#[cfg(feature = "dev")]
-fn prune_cargo_target_dir(target: &std::path::Path) -> Result<()> {
-    let entries = fs::read_dir(target)
-        .with_context(|| format!("failed to read target directory {}", target.display()))?;
-    let mut failures = Vec::new();
-    for entry in entries.flatten() {
-        if is_protected_target_root(&entry.file_name().to_string_lossy()) {
-            continue;
-        }
-        try_remove_target_path(&entry.path(), &mut failures);
-    }
-    let debug = target.join("debug");
-    for name in REMOVED_DEBUG_DIRS {
-        try_remove_target_path(&debug.join(name), &mut failures);
-    }
-    let cutoff = std::time::SystemTime::now() - SWEEP_MAX_AGE;
-    for name in SWEPT_DEBUG_DIRS {
-        sweep_stale_files(&debug.join(name), cutoff, &mut failures);
-    }
-    if failures.is_empty() {
-        return Ok(());
-    }
-    Err(anyhow!("could not remove: {}", failures.join(", ")))
-}
-
-#[cfg(feature = "dev")]
-fn is_protected_target_root(name: &str) -> bool {
-    name.starts_with('.') || name == "CACHEDIR.TAG" || PROTECTED_TARGET_ROOTS.contains(&name)
-}
-
-#[cfg(feature = "dev")]
-pub(super) fn prunable_target_bytes(target: &std::path::Path) -> u64 {
-    let mut bytes = 0;
-    if let Ok(entries) = fs::read_dir(target) {
-        for entry in entries.flatten() {
-            if is_protected_target_root(&entry.file_name().to_string_lossy()) {
-                continue;
-            }
-            bytes += path_bytes(&entry.path());
-        }
-    }
-    let debug = target.join("debug");
-    for name in REMOVED_DEBUG_DIRS {
-        bytes += path_bytes(&debug.join(name));
-    }
-    let cutoff = std::time::SystemTime::now() - SWEEP_MAX_AGE;
-    for name in SWEPT_DEBUG_DIRS {
-        bytes += stale_file_bytes(&debug.join(name), cutoff);
-    }
-    bytes
-}
-
-#[cfg(feature = "dev")]
-fn path_bytes(path: &std::path::Path) -> u64 {
-    let Ok(metadata) = path.symlink_metadata() else {
-        return 0;
-    };
-    if !metadata.is_dir() {
-        return metadata.len();
-    }
-    let Ok(entries) = fs::read_dir(path) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .map(|entry| path_bytes(&entry.path()))
-        .sum()
-}
-
-#[cfg(feature = "dev")]
-fn stale_file_bytes(dir: &std::path::Path, cutoff: std::time::SystemTime) -> u64 {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return 0;
-    };
-    let mut bytes = 0;
-    for entry in entries.flatten() {
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if metadata.is_dir() {
-            bytes += stale_file_bytes(&entry.path(), cutoff);
-        } else if metadata.modified().is_ok_and(|modified| modified < cutoff) {
-            bytes += metadata.len();
-        }
-    }
-    bytes
-}
-
-#[cfg(feature = "dev")]
-fn try_remove_target_path(path: &std::path::Path, failures: &mut Vec<String>) {
-    let result = match path.symlink_metadata() {
-        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path),
-        Ok(_) => fs::remove_file(path),
-        Err(error) => Err(error),
-    };
-    match result {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => failures.push(format!("{} ({error})", path.display())),
-    }
-}
-
-#[cfg(feature = "dev")]
-fn sweep_stale_files(
-    dir: &std::path::Path,
-    cutoff: std::time::SystemTime,
-    failures: &mut Vec<String>,
-) {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(error) => {
-            failures.push(format!("{} ({error})", dir.display()));
-            return;
-        }
-    };
-    for entry in entries.flatten() {
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if metadata.is_dir() {
-            sweep_stale_files(&entry.path(), cutoff, failures);
-            continue;
-        }
-        if metadata.modified().is_ok_and(|modified| modified < cutoff) {
-            try_remove_target_path(&entry.path(), failures);
-        }
     }
 }
 
@@ -685,86 +549,6 @@ mod tests {
         .expect("prune cache");
 
         assert!(!cache.exists());
-    }
-
-    #[cfg(feature = "dev")]
-    #[test]
-    fn target_prune_removes_stale_caches_and_protects_live_dev_paths() {
-        let root = tempfile::tempdir().expect("tempdir");
-        let target = root.path();
-        let stale_mtime =
-            std::time::SystemTime::now() - (SWEEP_MAX_AGE + std::time::Duration::from_secs(60));
-        let cases = [
-            ("qol-env/lane/qol-tray", true, true),
-            ("release/libfoo.rlib", false, false),
-            ("cargo-timings/timing.html", false, false),
-            ("debug/incremental/foo/dep-graph.bin", false, false),
-            ("debug/examples/demo", false, false),
-            ("debug/deps/libold.rlib", true, false),
-            ("debug/build/foo/output", true, false),
-            ("debug/.fingerprint/old/lib.json", true, false),
-            ("debug/deps/libfresh.rlib", false, true),
-            ("debug/qol-tray", true, true),
-            ("qol-dev/runtime/gen/qol-tray", true, true),
-            ("CACHEDIR.TAG", true, true),
-            (".rustc_info.json", true, true),
-        ];
-        for (rel, stale, _) in cases {
-            let path = target.join(rel);
-            std::fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
-            std::fs::write(&path, b"x").expect("file");
-            if stale {
-                std::fs::File::options()
-                    .write(true)
-                    .open(&path)
-                    .expect("open")
-                    .set_modified(stale_mtime)
-                    .expect("mtime");
-            }
-        }
-
-        let doomed_bytes = cases.iter().filter(|(_, _, kept)| !kept).count() as u64;
-        assert_eq!(prunable_target_bytes(target), doomed_bytes);
-
-        apply_fix(&FixAction::PruneCargoTargetDir {
-            target: target.to_path_buf(),
-        })
-        .expect("prune target");
-
-        for (rel, _, kept) in cases {
-            assert_eq!(target.join(rel).exists(), kept, "path: {rel}");
-        }
-        assert_eq!(prunable_target_bytes(target), 0);
-    }
-
-    #[cfg(all(feature = "dev", unix))]
-    #[test]
-    fn target_prune_continues_past_unremovable_entries() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let root = tempfile::tempdir().expect("tempdir");
-        let target = root.path();
-        let locked = target.join("release");
-        std::fs::create_dir_all(&locked).expect("locked dir");
-        std::fs::write(locked.join("held.rlib"), b"x").expect("held file");
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555))
-            .expect("lock perms");
-        let removable = target.join("sandbox");
-        std::fs::create_dir_all(&removable).expect("removable dir");
-        std::fs::write(removable.join("f"), b"x").expect("removable file");
-
-        let error = apply_fix(&FixAction::PruneCargoTargetDir {
-            target: target.to_path_buf(),
-        })
-        .expect_err("locked entry must surface as an error");
-
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
-            .expect("unlock perms");
-        assert!(error.to_string().contains("release"), "error: {error:#}");
-        assert!(
-            !removable.exists(),
-            "one unremovable entry must not stop the rest of the prune"
-        );
     }
 
     #[test]

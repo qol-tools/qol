@@ -1,6 +1,7 @@
 use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
-use super::cargo_target::{dir_size, format_bytes, workspace_root};
+use super::cargo_target::workspace_root;
+use qol_dev_build::target_cache::{dir_size, format_bytes, prunable_target_bytes};
 use std::path::{Path, PathBuf};
 
 const ID: &str = "cargo_target_total";
@@ -20,7 +21,7 @@ impl DoctorCheck for CargoTargetTotalCheck {
             return CheckReport::ok("workspace root not found; skipping cargo target directory");
         };
         let path = root.join("target");
-        let prunable = super::super::diagnosis::prunable_target_bytes(&path);
+        let prunable = prunable_target_bytes(&path);
         report_for(target_size(&path), prunable, path)
     }
 }

@@ -7,6 +7,7 @@ pub mod planning;
 mod platform;
 pub mod registry;
 mod service;
+pub mod target_cache;
 pub mod tray;
 mod types;
 
