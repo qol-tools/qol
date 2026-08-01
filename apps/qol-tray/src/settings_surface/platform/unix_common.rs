@@ -61,7 +61,9 @@ pub(in crate::settings_surface) fn prewarm() {
         stop();
         let deadline = std::time::Instant::now() + PREWARM_WATCH_WINDOW;
         loop {
-            if !core_daemon::send_ping(&config()) {
+            let token_ready =
+                crate::features::plugin_store::server::security::current_token().is_some();
+            if token_ready && !core_daemon::send_ping(&config()) {
                 let outcome = if spawn_host(None).is_ok() {
                     "spawned"
                 } else {
@@ -96,6 +98,9 @@ fn spawn_host(plugin_id: Option<&str>) -> anyhow::Result<()> {
             crate::dev_generation::state_socket_path(),
         )
         .env_remove(qol_conventions::ENV_DAEMON_SOCKET);
+    if let Some(token) = crate::features::plugin_store::server::security::current_token() {
+        command.env(qol_conventions::ENV_HTTP_TOKEN, token);
+    }
     crate::features::theme::apply_accent_env(&mut command);
     crate::features::theme::apply_theme_name_env(&mut command);
     qol_process::spawn_detached(&mut command)?;
