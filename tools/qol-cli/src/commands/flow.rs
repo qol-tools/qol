@@ -2842,7 +2842,7 @@ fn payload_build_label(recipe: DesktopPayloadRecipe) -> String {
 }
 
 fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
-    if workflow_id == "hotkey-storm" {
+    if matches!(workflow_id, "hotkey-shadow" | "hotkey-storm") {
         return Some(DesktopPayloadRecipe {
             companion: Some(DesktopCompanionRecipe {
                 package: "launcher",
@@ -4616,6 +4616,18 @@ mod tests {
                 },
             ),
             (
+                "hotkey-shadow",
+                DesktopPayloadRecipe {
+                    companion: Some(DesktopCompanionRecipe {
+                        package: "launcher",
+                        binary: "launcher",
+                        plugin_dir: "launcher",
+                        plugin_id: "plugin-launcher",
+                    }),
+                    tray_features: Some("linux_evdev"),
+                },
+            ),
+            (
                 "hotkey-storm",
                 DesktopPayloadRecipe {
                     companion: Some(DesktopCompanionRecipe {
@@ -4699,6 +4711,18 @@ mod tests {
             assert_eq!(desktop_payload_recipe(workflow), Some(recipe));
         }
         assert_eq!(desktop_payload_recipe("leaves-no-trace"), None);
+
+        let uncovered: Vec<&str> = emu::workflow_ids()
+            .into_iter()
+            .filter(|id| {
+                emu::workflow_definition(id).is_ok_and(|definition| definition.requires_payload())
+            })
+            .filter(|id| desktop_payload_recipe(id).is_none())
+            .collect();
+        assert!(
+            uncovered.is_empty(),
+            "every payload workflow needs a recipe or `qol flow run` bails at prepare time: {uncovered:?}"
+        );
     }
 
     #[test]

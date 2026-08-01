@@ -12,6 +12,7 @@ use super::BootedVm;
 mod alt_tab;
 mod bluetooth;
 mod desktop;
+mod hotkey_shadow;
 mod hotkeys;
 mod launcher;
 mod portable_session;
@@ -104,6 +105,7 @@ pub(crate) enum DesktopWorkflow {
     AltTabPerformance,
     AltTabStorm,
     BluetoothStorm,
+    HotkeyShadow,
     HotkeyStorm,
     LauncherStorm,
     PortableSession,
@@ -143,6 +145,7 @@ pub(crate) fn run_desktop(
         DesktopWorkflow::AltTabPerformance => alt_tab::run_performance(vm, platform),
         DesktopWorkflow::AltTabStorm => alt_tab::run(vm, platform),
         DesktopWorkflow::BluetoothStorm => bluetooth::run(vm, platform),
+        DesktopWorkflow::HotkeyShadow => hotkey_shadow::run(vm, platform),
         DesktopWorkflow::HotkeyStorm => hotkeys::run(vm, platform),
         DesktopWorkflow::LauncherStorm => launcher::run(vm, platform),
         DesktopWorkflow::PortableSession => portable_session::run(vm, platform),
@@ -169,6 +172,10 @@ const REGISTRY: &[Definition] = &[
     Definition::Desktop {
         id: "bluetooth-storm",
         run: DesktopWorkflow::BluetoothStorm,
+    },
+    Definition::Desktop {
+        id: "hotkey-shadow",
+        run: DesktopWorkflow::HotkeyShadow,
     },
     Definition::Desktop {
         id: "hotkey-storm",
@@ -234,6 +241,7 @@ mod tests {
             ("alt-tab-performance", true),
             ("alt-tab-storm", true),
             ("bluetooth-storm", true),
+            ("hotkey-shadow", true),
             ("hotkey-storm", true),
             ("leaves-no-trace", true),
             ("launcher-storm", true),
@@ -257,6 +265,7 @@ mod tests {
                 "alt-tab-performance",
                 "alt-tab-storm",
                 "bluetooth-storm",
+                "hotkey-shadow",
                 "hotkey-storm",
                 "launcher-storm",
                 "portable-session",
@@ -274,6 +283,7 @@ mod tests {
         assert!(find("alt-tab-performance").unwrap().requires_payload());
         assert!(find("alt-tab-storm").unwrap().requires_payload());
         assert!(find("bluetooth-storm").unwrap().requires_payload());
+        assert!(find("hotkey-shadow").unwrap().requires_payload());
         assert!(find("hotkey-storm").unwrap().requires_payload());
         assert!(find("launcher-storm").unwrap().requires_payload());
         assert!(find("portable-session").unwrap().requires_payload());

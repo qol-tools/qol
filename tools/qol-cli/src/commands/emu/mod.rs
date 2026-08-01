@@ -54,6 +54,11 @@ pub(crate) fn workflow_definition(id: &str) -> Result<WorkflowDefinition> {
     })
 }
 
+#[cfg(test)]
+pub(crate) fn workflow_ids() -> Vec<&'static str> {
+    workflow::ids()
+}
+
 pub(crate) fn validate_workflow_adapter(
     workflow: WorkflowDefinition,
     adapter: GuestAdapter,
