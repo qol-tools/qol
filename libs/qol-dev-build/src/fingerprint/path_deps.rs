@@ -1,22 +1,45 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::inputs::{fingerprint_inputs, FingerprintInput};
+use super::hash::{read_inputs, FingerprintContent};
+use super::inputs::fingerprint_inputs;
+use super::FingerprintCache;
 
-pub(super) fn collect_path_dep_inputs(plugin_path: &Path) -> Vec<Vec<FingerprintInput>> {
+pub(super) fn collect_path_dep_contents(
+    plugin_path: &Path,
+    cache: &mut FingerprintCache,
+) -> Vec<Vec<FingerprintContent>> {
     resolve_path_deps(plugin_path)
         .into_iter()
-        .filter_map(|(name, dep_path)| prefixed_inputs(&name, &dep_path))
+        .filter_map(|(name, dep_path)| prefixed_contents(&name, &dep_path, cache))
         .collect()
 }
 
-fn prefixed_inputs(dep_name: &str, dep_path: &Path) -> Option<Vec<FingerprintInput>> {
-    let inputs = fingerprint_inputs(dep_path).ok()?;
+fn prefixed_contents(
+    dep_name: &str,
+    dep_path: &Path,
+    cache: &mut FingerprintCache,
+) -> Option<Vec<FingerprintContent>> {
+    let inputs = match cache.dependency_contents.get(dep_path) {
+        Some(inputs) => inputs.clone(),
+        None => {
+            let inputs = fingerprint_inputs(dep_path).ok()?;
+            let contents = read_inputs(inputs).ok()?;
+            cache
+                .dependency_contents
+                .insert(dep_path.to_path_buf(), contents.clone());
+            #[cfg(test)]
+            {
+                cache.dependency_reads += 1;
+            }
+            contents
+        }
+    };
     let prefix = PathBuf::from(format!("__dep__/{}", dep_name));
     Some(
         inputs
             .into_iter()
-            .map(|(rel, abs)| (prefix.join(rel), abs))
+            .map(|(rel, contents)| (prefix.join(rel), contents))
             .collect(),
     )
 }

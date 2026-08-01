@@ -2,8 +2,8 @@ use crate::cli::optional_single_arg;
 use crate::commands::dev_bundle::{self, ARTIFACT_ROOT_ENV};
 use crate::dev_console;
 use crate::dev_server::{
-    fetch_dev_links, post_dev_link, post_reload_plugins, wait_for_health_or_exit, DevLink,
-    DevLinkOutcome,
+    fetch_build_state, fetch_dev_links, post_dev_link, post_reload_plugins,
+    wait_for_health_or_exit, BuildResultSnapshot, DevLink, DevLinkOutcome,
 };
 use crate::dev_shutdown::ShutdownMethod;
 use crate::host_facade;
@@ -589,6 +589,63 @@ fn request_plugin_reload(verbose: bool, branch: Option<&str>) -> Result<()> {
 
 fn wait_for_dev_links_fresh() -> Result<()> {
     let started = Instant::now();
+    if !wait_for_build_to_finish(started)? {
+        return wait_for_dev_links_fresh_legacy(started);
+    }
+    ensure_dev_links_fresh()
+}
+
+fn wait_for_build_to_finish(started: Instant) -> Result<bool> {
+    let mut last_state;
+    loop {
+        match fetch_build_state() {
+            Ok(state) if !state.building => {
+                ensure_build_results_succeeded(state.results.as_deref())?;
+                return Ok(true);
+            }
+            Ok(_) => last_state = "plugin build in progress".to_string(),
+            Err(_) => return Ok(false),
+        }
+        if started.elapsed() >= PLUGIN_RELOAD_TIMEOUT {
+            bail!("{last_state}");
+        }
+        std::thread::sleep(PLUGIN_RELOAD_INTERVAL);
+    }
+}
+
+fn ensure_build_results_succeeded(results: Option<&[BuildResultSnapshot]>) -> Result<()> {
+    let Some(results) = results else {
+        return Ok(());
+    };
+    let failures: Vec<String> = results
+        .iter()
+        .filter(|result| !result.success && !result.skipped)
+        .map(format_build_failure)
+        .collect();
+    if failures.is_empty() {
+        return Ok(());
+    }
+    bail!("plugin build failed:\n{}", failures.join("\n"));
+}
+
+fn format_build_failure(result: &BuildResultSnapshot) -> String {
+    let output = result.output.trim();
+    if output.is_empty() {
+        return result.plugin_id.clone();
+    }
+    format!("{}:\n{}", result.plugin_id, output)
+}
+
+fn ensure_dev_links_fresh() -> Result<()> {
+    let links = fetch_dev_links().context("failed to verify dev links after reload")?;
+    let stale = stale_dev_link_labels(&links);
+    if stale.is_empty() {
+        return Ok(());
+    }
+    bail!("stale dev links: {}", stale.join(", "));
+}
+
+fn wait_for_dev_links_fresh_legacy(started: Instant) -> Result<()> {
     let mut last_state;
     loop {
         match fetch_dev_links() {
@@ -738,6 +795,59 @@ mod tests {
             stale_dev_link_labels(&links),
             vec!["qol-shot (Source changed)".to_string()]
         );
+    }
+
+    #[test]
+    fn build_failure_reports_plugin_ids_and_compiler_output() {
+        let results = [
+            BuildResultSnapshot {
+                plugin_id: "plugin-a".to_string(),
+                success: false,
+                output: "error: failed to compile\n".to_string(),
+                skipped: false,
+            },
+            BuildResultSnapshot {
+                plugin_id: "plugin-b".to_string(),
+                success: false,
+                output: String::new(),
+                skipped: false,
+            },
+            BuildResultSnapshot {
+                plugin_id: "plugin-skipped".to_string(),
+                success: false,
+                output: "not built".to_string(),
+                skipped: true,
+            },
+        ];
+
+        let error = ensure_build_results_succeeded(Some(&results))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "plugin build failed:\nplugin-a:\nerror: failed to compile\nplugin-b"
+        );
+    }
+
+    #[test]
+    fn build_result_check_allows_successful_or_missing_results() {
+        assert!(ensure_build_results_succeeded(None).is_ok());
+        assert!(ensure_build_results_succeeded(Some(&[])).is_ok());
+        assert!(ensure_build_results_succeeded(Some(&[
+            BuildResultSnapshot {
+                plugin_id: "plugin-a".to_string(),
+                success: true,
+                output: String::new(),
+                skipped: false,
+            },
+            BuildResultSnapshot {
+                plugin_id: "plugin-b".to_string(),
+                success: false,
+                output: "not built".to_string(),
+                skipped: true,
+            },
+        ]))
+        .is_ok());
     }
 
     #[test]

@@ -54,12 +54,16 @@ struct PollRuntime {
     commit_threshold: Duration,
     last_monitor_poll: Instant,
     monitor_interval: Duration,
+    last_focus_poll: Instant,
+    focus_interval: Duration,
     event_tracker: EventTracker,
 }
 
 impl PollRuntime {
     fn new(shared: Arc<SharedState>, channels: RuntimeChannels) -> Self {
         let monitor_interval = channels.monitors.min_interval();
+        let focus_interval = channels.focus.min_interval();
+        let now = Instant::now();
 
         Self {
             shared,
@@ -72,8 +76,10 @@ impl PollRuntime {
                 Box::new(BasicStrategy),
             ),
             commit_threshold: Duration::from_millis(COMMIT_THRESHOLD_MS),
-            last_monitor_poll: Instant::now(),
+            last_monitor_poll: now,
             monitor_interval,
+            last_focus_poll: now - focus_interval,
+            focus_interval,
             event_tracker: EventTracker::new(),
         }
     }
@@ -99,7 +105,8 @@ impl PollRuntime {
     }
 
     fn poll_inputs(&mut self, mon_list: &[MonitorBounds]) -> (bool, bool) {
-        let sample = self.sample_inputs(mon_list);
+        let poll_focus = self.last_focus_poll.elapsed() >= self.focus_interval;
+        let sample = self.sample_inputs_with_focus(mon_list, poll_focus);
         let cursor_moved = sample.cursor_moved;
         let changed = self
             .shared
@@ -142,14 +149,26 @@ impl PollRuntime {
         }
     }
 
+    #[cfg(test)]
     fn sample_inputs(&mut self, mon_list: &[MonitorBounds]) -> TickSample {
+        self.sample_inputs_with_focus(mon_list, true)
+    }
+
+    fn sample_inputs_with_focus(
+        &mut self,
+        mon_list: &[MonitorBounds],
+        poll_focus: bool,
+    ) -> TickSample {
         let now = Instant::now();
         let cursor_moved = self.cursor.poll();
         let cursor_pos = self.cursor.position();
         self.shared.set_cursor_pos(cursor_pos);
         let cursor_monitor = cursor_pos.and_then(|(x, y)| state::monitor_for_point(mon_list, x, y));
 
-        self.focus.poll();
+        if poll_focus {
+            self.focus.poll();
+            self.last_focus_poll = Instant::now();
+        }
         let focus_bounds = self.focus.bounds();
         self.shared.store_focused_window(focus_bounds);
         let focus_monitor =
@@ -402,6 +421,7 @@ mod tests {
             Duration::from_millis(COMMIT_THRESHOLD_MS),
         );
         assert_eq!(runtime.monitor_interval, Duration::from_secs(5));
+        assert_eq!(runtime.focus_interval, Duration::from_millis(100));
     }
 
     #[test]
@@ -802,6 +822,39 @@ mod tests {
     }
 
     #[test]
+    fn sample_inputs_respects_focus_channel_interval() {
+        let monitors = vec![mon(0.0)];
+        let focus_bounds = MonitorBounds {
+            x: 10.0,
+            y: 10.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let (shared, mut runtime, platform) = build_runtime_with_platform(
+            vec![Some((50.0, 50.0)), Some((50.0, 50.0)), Some((50.0, 50.0))],
+            vec![Some(focus_bounds), Some(focus_bounds), Some(focus_bounds)],
+            vec![monitors.clone()],
+            monitors.clone(),
+        );
+
+        let before = platform.call_counts();
+        runtime.poll_inputs(&monitors);
+        let first = platform.call_counts();
+        assert_eq!(first.focus, before.focus + 1);
+
+        runtime.last_focus_poll = Instant::now();
+        runtime.poll_inputs(&monitors);
+        let deferred = platform.call_counts();
+        assert_eq!(deferred.focus, first.focus);
+        assert_eq!(shared.focused_window(), Some(focus_bounds));
+
+        runtime.last_focus_poll = Instant::now() - runtime.focus_interval;
+        runtime.poll_inputs(&monitors);
+        let due = platform.call_counts();
+        assert_eq!(due.focus, deferred.focus + 1);
+    }
+
+    #[test]
     fn tick_polls_on_next_tick_after_poll_subscriber_arrives_at_max_backoff() {
         let monitors = vec![mon(0.0)];
         let (shared, mut runtime, platform) = build_runtime_with_platform(
@@ -1145,6 +1198,7 @@ mod tests {
         let rx = subscribe_all(&shared);
 
         let _ = runtime.tick();
+        runtime.last_focus_poll = Instant::now() - runtime.focus_interval;
         let _ = runtime.tick();
 
         let events = drain(&rx);

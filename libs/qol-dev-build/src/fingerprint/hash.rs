@@ -1,16 +1,32 @@
 use std::hash::Hasher;
-use std::io::Read;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::inputs::FingerprintInput;
 
-pub(super) fn hash_inputs(mut inputs: Vec<FingerprintInput>) -> Result<String, String> {
+pub(super) type FingerprintContent = (PathBuf, Arc<[u8]>);
+
+pub(super) fn read_inputs(
+    inputs: Vec<FingerprintInput>,
+) -> Result<Vec<FingerprintContent>, String> {
+    inputs
+        .into_iter()
+        .map(|(relative_path, absolute_path)| {
+            let contents = std::fs::read(&absolute_path).map_err(|error| {
+                format!("Failed to read {}: {}", absolute_path.display(), error)
+            })?;
+            Ok((relative_path, Arc::<[u8]>::from(contents)))
+        })
+        .collect()
+}
+
+pub(super) fn hash_contents(mut inputs: Vec<FingerprintContent>) -> Result<String, String> {
     inputs.sort_by(|(left, _), (right, _)| left.cmp(right));
 
     let mut hasher = Fnv1a64::default();
-    for (relative_path, absolute_path) in inputs {
+    for (relative_path, contents) in inputs {
         hash_path(&mut hasher, &relative_path);
-        hash_file(&mut hasher, &absolute_path)?;
+        hasher.write(&contents);
         hasher.write_u8(0xff);
     }
 
@@ -20,22 +36,6 @@ pub(super) fn hash_inputs(mut inputs: Vec<FingerprintInput>) -> Result<String, S
 fn hash_path(hasher: &mut Fnv1a64, relative_path: &std::path::Path) {
     hasher.write(relative_path.to_string_lossy().as_bytes());
     hasher.write_u8(0);
-}
-
-fn hash_file(hasher: &mut Fnv1a64, absolute_path: &PathBuf) -> Result<(), String> {
-    let mut file = std::fs::File::open(absolute_path)
-        .map_err(|error| format!("Failed to open {}: {}", absolute_path.display(), error))?;
-    let mut buf = [0u8; 8192];
-
-    loop {
-        let read = file
-            .read(&mut buf)
-            .map_err(|error| format!("Failed to read {}: {}", absolute_path.display(), error))?;
-        if read == 0 {
-            return Ok(());
-        }
-        hasher.write(&buf[..read]);
-    }
 }
 
 #[derive(Default)]

@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
-use super::super::fingerprint::fingerprint_plugin;
+use super::super::fingerprint::{fingerprint_plugin_with_cache, FingerprintCache};
 use super::super::types::PluginBuildPlan;
 use super::selection::SelectedPlugin;
 
 pub(super) fn plan_selection(
     selection: SelectedPlugin,
     known_fingerprints: &HashMap<String, String>,
+    fingerprint_cache: &mut FingerprintCache,
 ) -> PluginBuildPlan {
     let basis = PlanBasis::new(selection, known_fingerprints);
     if !basis.selection.has_cargo {
@@ -15,7 +16,7 @@ pub(super) fn plan_selection(
     if !basis.selection.supports_platform {
         return basis.unsupported_platform();
     }
-    match fingerprint_plugin(&basis.selection.path) {
+    match fingerprint_plugin_with_cache(&basis.selection.path, fingerprint_cache) {
         Ok(current_fingerprint) => basis.fingerprinted(current_fingerprint),
         Err(error) => basis.fingerprint_unavailable(error),
     }

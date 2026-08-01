@@ -92,6 +92,23 @@ pub(crate) struct DiscoveredPlugin {
     pub(crate) path: String,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct BuildResultSnapshot {
+    pub(crate) plugin_id: String,
+    pub(crate) success: bool,
+    #[serde(default)]
+    pub(crate) output: String,
+    #[serde(default)]
+    pub(crate) skipped: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct BuildStateSnapshot {
+    pub(crate) building: bool,
+    #[serde(default)]
+    pub(crate) results: Option<Vec<BuildResultSnapshot>>,
+}
+
 #[derive(serde::Deserialize)]
 struct DiscoveryStatePayload {
     #[serde(default)]
@@ -143,6 +160,15 @@ pub(crate) fn fetch_dev_links() -> Result<Vec<DevLink>> {
         bail!("GET {url} returned {status}");
     }
     serde_json::from_str(&body).context("invalid dev links payload")
+}
+
+pub(crate) fn fetch_build_state() -> Result<BuildStateSnapshot> {
+    let url = api_dev_url(qol_conventions::dev_routes::BUILD_STATE);
+    let (status, body) = http_exchange("GET", &url, None)?;
+    if status != 200 {
+        bail!("GET {url} returned {status}");
+    }
+    serde_json::from_str(&body).context("invalid build state payload")
 }
 
 pub(crate) fn fetch_discovered_plugins() -> Result<Vec<DiscoveredPlugin>> {
@@ -606,6 +632,18 @@ mod tests {
         assert_eq!(links[0].name, "foo");
         assert!(links[0].needs_rebuild, "needs_rebuild carried through");
         assert_eq!(links[0].rebuild_reason, "Source changed");
+    }
+
+    #[test]
+    fn parses_build_state_payload_with_results() {
+        let payload = r#"{"building":false,"progress":{"plugin-a":{"status":"building","percent":50,"phase":"cargo"}},"results":[{"plugin_id":"plugin-a","success":false,"output":"error: failed to compile","skipped":false}]}"#;
+        let state: BuildStateSnapshot = serde_json::from_str(payload).unwrap();
+        assert!(!state.building);
+        let result = &state.results.unwrap()[0];
+        assert_eq!(result.plugin_id, "plugin-a");
+        assert!(!result.success);
+        assert_eq!(result.output, "error: failed to compile");
+        assert!(!result.skipped);
     }
 
     fn discovered(id: &str, name: &str, path: &str) -> DiscoveredPlugin {

@@ -1,4 +1,4 @@
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 
 #[derive(Default)]
@@ -8,7 +8,7 @@ struct ReloadHub {
 
 impl ReloadHub {
     fn subscribe(&self) -> Receiver<()> {
-        let (tx, rx) = crossbeam_channel::unbounded::<()>();
+        let (tx, rx) = bounded::<()>(1);
         self.lock().push(tx);
         rx
     }
@@ -19,7 +19,10 @@ impl ReloadHub {
             log::debug!("hotkey reload requested before any backend subscribed; ignoring");
             return;
         }
-        senders.retain(|tx| tx.send(()).is_ok());
+        senders.retain(|tx| match tx.try_send(()) {
+            Ok(()) | Err(TrySendError::Full(())) => true,
+            Err(TrySendError::Disconnected(())) => false,
+        });
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Sender<()>>> {
@@ -60,7 +63,7 @@ mod tests {
     }
 
     #[test]
-    fn trigger_before_subscribe_is_silent_noop_then_subscribe_then_delivers() {
+    fn trigger_before_subscribe_is_silent_noop_then_subscribe_then_coalesces() {
         let hub = ReloadHub::default();
         hub.trigger();
         hub.trigger();
@@ -76,10 +79,17 @@ mod tests {
         while rx.try_recv().is_ok() {
             count += 1;
         }
-        assert_eq!(
-            count, 3,
-            "every trigger after subscribe must enqueue exactly one signal"
-        );
+        assert_eq!(count, 2, "pending reload signals must coalesce");
+    }
+
+    #[test]
+    fn repeated_triggers_keep_one_pending_signal() {
+        let hub = ReloadHub::default();
+        let rx = hub.subscribe();
+        for _ in 0..10 {
+            hub.trigger();
+        }
+        assert_eq!(rx.try_iter().count(), 1);
     }
 
     #[test]

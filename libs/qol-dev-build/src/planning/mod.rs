@@ -9,6 +9,7 @@ mod planning_tests;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use super::fingerprint::FingerprintCache;
 use super::types::PluginBuildPlan;
 
 pub fn plan_linked_plugin_builds(
@@ -17,8 +18,11 @@ pub fn plan_linked_plugin_builds(
     worktree_branch: Option<&str>,
 ) -> Vec<PluginBuildPlan> {
     let effective_links = worktree::resolve_worktree_paths(dev_links, worktree_branch);
+    let mut fingerprint_cache = FingerprintCache::default();
     selection::select_linked_plugins(&effective_links)
         .into_iter()
-        .map(|selection| rebuild_reason::plan_selection(selection, known_fingerprints))
+        .map(|selection| {
+            rebuild_reason::plan_selection(selection, known_fingerprints, &mut fingerprint_cache)
+        })
         .collect()
 }

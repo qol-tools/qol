@@ -57,7 +57,8 @@ impl PluginManager {
         if self.last_state_hash.as_ref() == Some(&current) {
             return Ok(false);
         }
-        self.reload_plugins()?;
+        runtime::reload_plugins(self)?;
+        self.last_state_hash = Some(current);
         Ok(true)
     }
 
