@@ -1,6 +1,9 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    if let Some(exit_code) = qol_shot::run_internal_mode() {
+        return exit_code;
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if should_run_daemon(&args) {

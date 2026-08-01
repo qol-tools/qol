@@ -1,22 +1,19 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::Result;
 use gpui::{Bounds, Pixels, Point, WindowDecorations, WindowKind};
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
-use std::fs::File;
-use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
 
 use crate::capture::frozen_frame::FrozenFrame;
 use crate::capture::space::CaptureKind;
-use crate::platform::{CaptureProcess, CaptureSession};
 use crate::ui::region_selector::{DetectedTarget, DetectedTargetRole};
-use crate::{Config, Monitor, Rect};
+use crate::{Monitor, Rect};
 
 mod clipboard;
 mod display;
 mod preview;
+mod recording;
 mod selector_cache;
 mod system;
 mod window;
@@ -24,6 +21,10 @@ mod window;
 pub use clipboard::{copy_image_to_clipboard, copy_path_to_clipboard};
 pub use display::{full_screen_bounds, get_monitors};
 pub use preview::{capture_frozen_frame, configure_preview_window, grab_preview_rgba};
+pub use recording::{
+    capture_screenshot, recording_format, recording_started, recording_stopped,
+    run_internal_capture_helper, start_capture, stop_capture,
+};
 use system::resolve_command;
 pub use system::{
     external_services_check, list_audio_sinks, list_audio_sources, open_url, permissions_check,
@@ -647,206 +648,6 @@ fn selector_bounds(frozen_frame: Option<&FrozenFrame>) -> Bounds<Pixels> {
     full_screen_bounds()
         .map(crate::ui::region_selector::bounds_from_monitor)
         .unwrap_or_else(|_| crate::ui::region_selector::fallback_bounds())
-}
-
-pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
-    let mut args = vec![
-        "-thread_queue_size".to_string(),
-        "512".to_string(),
-        "-f".to_string(),
-        "x11grab".to_string(),
-        "-video_size".to_string(),
-        format!("{}x{}", rect.w, rect.h),
-        "-framerate".to_string(),
-        config.video.framerate.to_string(),
-        "-i".to_string(),
-        format!(":0.0+{},{}", rect.x, rect.y),
-    ];
-
-    if config.audio.enabled {
-        let has_mic = config.audio.inputs.iter().any(|input| input == "mic");
-        let has_system = config.audio.inputs.iter().any(|input| input == "system");
-
-        let mut audio_inputs = Vec::new();
-        if has_mic {
-            audio_inputs.push(config.audio.mic_device.clone());
-        }
-        if has_system {
-            audio_inputs.push(format!("{}.monitor", config.audio.system_device));
-        }
-
-        for input in &audio_inputs {
-            args.extend(["-thread_queue_size", "128", "-f", "pulse", "-i"].map(str::to_string));
-            args.push(input.clone());
-        }
-        if audio_inputs.len() == 2 {
-            args.extend(
-                [
-                    "-filter_complex",
-                    "[1:a][2:a]amerge=inputs=2[aout]",
-                    "-map",
-                    "0:v",
-                    "-map",
-                    "[aout]",
-                ]
-                .map(str::to_string),
-            );
-        }
-        if !audio_inputs.is_empty() {
-            args.extend(["-c:a", "aac", "-b:a", "192k"].map(str::to_string));
-        }
-    }
-
-    args.extend_from_slice(&[
-        "-c:v".to_string(),
-        "libx264".to_string(),
-        "-r".to_string(),
-        config.video.framerate.to_string(),
-        "-crf".to_string(),
-        config.video.crf.to_string(),
-        "-preset".to_string(),
-        config.video.preset.clone(),
-        "-pix_fmt".to_string(),
-        "yuv420p".to_string(),
-        output_file.to_string_lossy().to_string(),
-    ]);
-
-    let log_file =
-        File::create(super::CAPTURE_LOG).context("failed to create recording log file")?;
-    let stdout_log = log_file
-        .try_clone()
-        .context("failed to clone recording log file")?;
-
-    let child = Command::new("ffmpeg")
-        .args(&args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout_log))
-        .stderr(Stdio::from(log_file))
-        .spawn()
-        .context("failed to start ffmpeg")?;
-
-    Ok(CaptureSession {
-        output_file: Some(output_file.to_path_buf()),
-        capture_file: Some(output_file.to_path_buf()),
-        canvas: Some(*rect),
-        processes: vec![CaptureProcess { pid: child.id() }],
-        segments: Vec::new(),
-    })
-}
-
-pub fn capture_screenshot(rect: &Rect, output_file: &Path) -> Result<()> {
-    let log_file = File::create(super::CAPTURE_LOG).context("failed to create capture log file")?;
-    let stdout_log = log_file
-        .try_clone()
-        .context("failed to clone capture log file")?;
-    let video_size = format!("{}x{}", rect.w, rect.h);
-    let input = format!(":0.0+{},{}", rect.x, rect.y);
-    let status = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-f",
-            "x11grab",
-            "-video_size",
-            video_size.as_str(),
-            "-i",
-            input.as_str(),
-            "-frames:v",
-            "1",
-        ])
-        .arg(output_file)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout_log))
-        .stderr(Stdio::from(log_file))
-        .status()
-        .context("failed to run ffmpeg screenshot capture")?;
-
-    if status.success() {
-        return Ok(());
-    }
-
-    Err(anyhow!("ffmpeg screenshot capture exited with {status}"))
-}
-
-pub fn recording_format(format: &str) -> String {
-    format.to_string()
-}
-
-pub fn recording_started(_session: &CaptureSession, countdown_completed: bool) {
-    if countdown_completed {
-        qol_runtime::probe!(
-            "SHOT_RECORD_FEEDBACK",
-            "stage=started surface=none reason=countdown-complete"
-        );
-        return;
-    }
-    show_notification("Recording started", "Press your hotkey to stop", 1200);
-}
-
-pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<PathBuf> {
-    show_notification("Recording stopped", "Saving recording...", 1800);
-    let output_file = session.output_file.as_deref()?;
-    if let Err(error) = wait_for_recording_file(session, output_file) {
-        eprintln!("[qol-shot] recording finalization failed: {error:#}");
-        show_notification(
-            "Recording save delayed",
-            "The recorder is still finalizing the file",
-            3000,
-        );
-        return None;
-    }
-    let message = output_file
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("Saved in Videos");
-    crate::capture::completion::background_saved(
-        "Recording saved",
-        message,
-        output_file,
-        config.capture.open_folder_after_save,
-    );
-    Some(output_file.to_path_buf())
-}
-
-fn wait_for_recording_file(session: &CaptureSession, output_file: &Path) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(12);
-    let mut previous_len = None;
-    let mut stable_samples = 0;
-    while Instant::now() < deadline {
-        let recording = session
-            .processes
-            .iter()
-            .any(|process| process_alive(process.pid));
-        let len = output_file.metadata().ok().map(|metadata| metadata.len());
-        if !recording && len.is_some_and(|len| len > 0) {
-            if len == previous_len {
-                stable_samples += 1;
-                if stable_samples >= 2 {
-                    qol_runtime::probe!(
-                        "SHOT_RECORD_FINALIZE",
-                        "stage=file-ready len={}",
-                        len.unwrap_or_default()
-                    );
-                    return Ok(());
-                }
-            } else {
-                previous_len = len;
-                stable_samples = 0;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Err(anyhow!(
-        "recording file did not finish writing: {}",
-        output_file.display()
-    ))
-}
-
-pub fn stop_capture(session: &CaptureSession) -> Result<()> {
-    for process in &session.processes {
-        super::unix::signal_process(process.pid, libc::SIGINT)
-            .context("failed to send SIGINT to ffmpeg")?;
-    }
-    Ok(())
 }
 
 pub fn process_alive(pid: u32) -> bool {

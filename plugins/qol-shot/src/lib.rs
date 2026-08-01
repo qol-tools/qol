@@ -13,3 +13,13 @@ pub use config::{
 };
 
 pub const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+
+#[cfg(target_os = "linux")]
+pub fn run_internal_mode() -> Option<std::process::ExitCode> {
+    platform::run_internal_capture_helper()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn run_internal_mode() -> Option<std::process::ExitCode> {
+    None
+}
