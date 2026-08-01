@@ -53,10 +53,6 @@ impl SessionsView {
         self.is_showing = showing;
     }
 
-    pub fn dismiss(&mut self) -> bool {
-        self.dismiss_with_reason("dismiss")
-    }
-
     pub fn dismiss_with_reason(&mut self, reason: &'static str) -> bool {
         let _scope = qol_gpui::popup_window::reason_scope(reason);
         let hidden = qol_gpui::popup_window::hide_window_by_title(WINDOW_TITLE);

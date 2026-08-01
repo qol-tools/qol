@@ -9,7 +9,7 @@ const WINDOW_STATE_TIMEOUT: Duration = Duration::from_secs(2);
 const WINDOW_STATE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Copy, Default)]
-pub struct X11WindowSystem;
+pub(crate) struct X11WindowSystem;
 
 impl WindowSystem for X11WindowSystem {
     fn active_window_id(&self) -> Result<Option<String>, String> {
@@ -159,7 +159,7 @@ fn wait_for_window_activation(system: &X11WindowSystem, window_id: &str) -> Resu
     }
 }
 
-pub fn run_cinnamon_eval(script: &str) -> Result<String, String> {
+pub(crate) fn run_cinnamon_eval(script: &str) -> Result<String, String> {
     let result = qol_platform::cinnamon::Session::connect()?.eval(script);
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
@@ -171,7 +171,7 @@ pub fn run_cinnamon_eval(script: &str) -> Result<String, String> {
     result
 }
 
-pub fn run_status(command: &str, args: &[&str]) -> Result<(), String> {
+pub(crate) fn run_status(command: &str, args: &[&str]) -> Result<(), String> {
     let status = Command::new(command)
         .args(args)
         .status()

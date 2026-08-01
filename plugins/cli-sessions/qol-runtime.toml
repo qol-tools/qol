@@ -2,6 +2,3 @@ schema_version = 1
 
 [action.open]
 description = "Show or focus the Claude sessions overview panel"
-
-[action.cleanup]
-description = "Remove the managed Claude Code hook block from ~/.claude/settings.json"

@@ -41,7 +41,8 @@ impl Platform {
         Self::default()
     }
 
-    pub fn with_roots(home: PathBuf, app_dirs: Vec<PathBuf>) -> Self {
+    #[cfg(test)]
+    fn with_roots(home: PathBuf, app_dirs: Vec<PathBuf>) -> Self {
         Self {
             home,
             app_dirs,

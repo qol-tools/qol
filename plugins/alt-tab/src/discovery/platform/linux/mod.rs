@@ -380,7 +380,6 @@ fn build_window_info(
             id,
             title,
             app_name,
-            preview_path: None,
             icon: None,
             width: props.geom[idx].as_ref().map_or(0.0, |r| r.width),
             height: props.geom[idx].as_ref().map_or(0.0, |r| r.height),

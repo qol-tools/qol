@@ -10,9 +10,6 @@ pub(super) fn make_cursor_at_scale(
         return None;
     }
     let factor = scale;
-    if factor <= 0.0 {
-        return None;
-    }
     let requested_width = scaled_dimension(base.width, factor)?;
     let requested_height = scaled_dimension(base.height, factor)?;
     let (max_width, max_height) =

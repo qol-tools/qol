@@ -6,7 +6,7 @@ pub(crate) struct ActionTimer {
 }
 
 impl ActionTimer {
-    pub fn start(action: &str) -> Self {
+    pub(crate) fn start(action: &str) -> Self {
         #[cfg(not(debug_assertions))]
         let _ = action;
         Self {
@@ -17,7 +17,7 @@ impl ActionTimer {
         }
     }
 
-    pub fn finish(self, outcome: &Result<(), String>) {
+    pub(crate) fn finish(self, outcome: &Result<(), String>) {
         #[cfg(debug_assertions)]
         {
             let (status, detail) = match outcome {

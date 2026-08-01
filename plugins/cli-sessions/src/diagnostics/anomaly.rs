@@ -80,10 +80,6 @@ impl AnomalyRecorder {
             (false, None) => None,
         }
     }
-
-    pub fn forget(&mut self, window_id: u64) {
-        self.windows.remove(&window_id);
-    }
 }
 
 pub fn dump(dir: &Path, anomaly: &Anomaly) -> std::io::Result<PathBuf> {

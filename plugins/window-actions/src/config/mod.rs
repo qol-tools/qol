@@ -13,7 +13,7 @@ pub enum CenterMode {
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
-pub struct WindowActionsConfig {
+pub(crate) struct WindowActionsConfig {
     pub center_mode: CenterMode,
     pub center_width_px: f64,
     pub center_height_px: f64,
@@ -24,7 +24,7 @@ pub struct WindowActionsConfig {
     pub glide_speed_px_per_second: f64,
 }
 
-pub fn load_config() -> WindowActionsConfig {
+pub(crate) fn load_config() -> WindowActionsConfig {
     qol_config::load_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT)
 }
 

@@ -172,22 +172,6 @@ impl CaptureFileStart {
     }
 }
 
-pub fn capture_for_preview() -> Result<Option<PreviewCapture>> {
-    let Some(_capture) = crate::capture::gate::try_acquire("cli-preview-capture") else {
-        qol_runtime::probe!("SHOT_SKIP", "action=preview-capture reason=busy");
-        return Ok(None);
-    };
-    let frozen_frame = freeze_frame();
-    let Some(selected) = platform::select_region(
-        crate::capture::space::CaptureKind::Screenshot,
-        frozen_frame.clone(),
-    )?
-    else {
-        return Ok(None);
-    };
-    capture_selected_for_preview(selected, frozen_frame.as_ref()).map(Some)
-}
-
 pub(crate) fn capture_selected_for_preview(
     selected: Rect,
     frozen_frame: Option<&FrozenFrame>,

@@ -159,10 +159,6 @@ pub fn guards_with(app: &InstalledApp, index: &PackageIndex) -> Guards {
     }
 }
 
-pub fn quit_app(app: &InstalledApp) -> Result<()> {
-    platform().quit(app)
-}
-
 pub fn quit_and_wait(app: &InstalledApp) -> Result<()> {
     let plat = platform();
     quit_and_wait_with(&plat, app, 25, Duration::from_millis(100))
@@ -202,10 +198,6 @@ fn uninstall_package_with(
 ) -> Result<()> {
     validate_plan_with(platform, plan)?;
     platform.uninstall_package(&plan.app, package)
-}
-
-pub fn search(query: &str) -> Result<Vec<InstalledApp>> {
-    Ok(filter(&installed_apps()?, query))
 }
 
 pub fn resolve_unique(inventory: &[InstalledApp], query: &str) -> Result<InstalledApp> {

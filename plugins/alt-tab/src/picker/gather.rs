@@ -922,7 +922,6 @@ mod capture_lane_tests {
             id,
             title: String::new(),
             app_name: String::new(),
-            preview_path: None,
             icon: None,
             width: 0.0,
             height: 0.0,

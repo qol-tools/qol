@@ -432,7 +432,6 @@ fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, selected: b
             preview_tile(
                 context.live_frames.get(&win.id),
                 context.previews.get(&win.id),
-                &win.preview_path,
                 minimized_icon,
                 metrics,
                 palette,
@@ -589,7 +588,6 @@ fn truncate_label(
 fn preview_tile(
     live_frame: Option<&LiveFrame>,
     live_image: Option<&Arc<RenderImage>>,
-    preview_path: &Option<String>,
     minimized_icon: Option<&Arc<RenderImage>>,
     metrics: &CardMetrics,
     palette: &PickerSurfacePalette,
@@ -606,14 +604,6 @@ fn preview_tile(
     }
     if let Some(render_image) = live_image {
         return img(render_image.clone())
-            .w(px(metrics.preview_width))
-            .h(px(metrics.preview_height))
-            .object_fit(ObjectFit::Fill)
-            .rounded_md()
-            .into_any_element();
-    }
-    if let Some(path) = preview_path {
-        return img(std::path::PathBuf::from(path))
             .w(px(metrics.preview_width))
             .h(px(metrics.preview_height))
             .object_fit(ObjectFit::Fill)

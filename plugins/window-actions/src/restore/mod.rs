@@ -2,10 +2,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) mod state_store;
 
-pub const LAST_MINIMIZED_MAX_AGE_SECS: u64 = 60 * 60 * 8;
+pub(crate) const LAST_MINIMIZED_MAX_AGE_SECS: u64 = 60 * 60 * 8;
 
 #[derive(Clone)]
-pub struct MinimizedWindowRecord {
+pub(crate) struct MinimizedWindowRecord {
     pub window_id: String,
     pub pid: u32,
     pub process_start_ticks: u64,
@@ -14,7 +14,7 @@ pub struct MinimizedWindowRecord {
 }
 
 /// Stack of minimized window records. Minimize pushes, restore pops.
-pub trait MinimizedStateStore {
+pub(crate) trait MinimizedStateStore {
     /// Read the most recently minimized window without removing it.
     fn peek(&self) -> Result<Option<MinimizedWindowRecord>, String>;
     /// Push a newly minimized window onto the stack.
@@ -23,7 +23,7 @@ pub trait MinimizedStateStore {
     fn pop(&self) -> Result<Option<MinimizedWindowRecord>, String>;
 }
 
-pub trait WindowSystem {
+pub(crate) trait WindowSystem {
     fn active_window_id(&self) -> Result<Option<String>, String>;
     fn minimize_window(&self, window_id: &str) -> Result<bool, String>;
     fn window_rect(&self, window_id: &str) -> Option<[f64; 4]>;
@@ -39,7 +39,7 @@ pub trait WindowSystem {
     fn process_start_ticks(&self, pid: u32) -> Option<u64>;
 }
 
-pub fn minimize_window<S: WindowSystem, T: MinimizedStateStore>(
+pub(crate) fn minimize_window<S: WindowSystem, T: MinimizedStateStore>(
     system: &S,
     store: &T,
 ) -> Result<(), String> {
@@ -68,7 +68,7 @@ pub fn minimize_window<S: WindowSystem, T: MinimizedStateStore>(
     Ok(())
 }
 
-pub fn restore_window<S: WindowSystem, T: MinimizedStateStore>(
+pub(crate) fn restore_window<S: WindowSystem, T: MinimizedStateStore>(
     system: &S,
     store: &T,
 ) -> Result<(), String> {

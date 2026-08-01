@@ -81,7 +81,7 @@ pub(crate) fn state_file_path() -> PathBuf {
     std::env::temp_dir().join(LAST_MINIMIZED_WINDOW_FILE_NAME)
 }
 
-pub struct MacWindowSystem;
+pub(crate) struct MacWindowSystem;
 
 impl WindowSystem for MacWindowSystem {
     fn active_window_id(&self) -> Result<Option<String>, String> {

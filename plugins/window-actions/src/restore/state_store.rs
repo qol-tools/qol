@@ -6,12 +6,12 @@ use super::{MinimizedStateStore, MinimizedWindowRecord};
 
 pub(crate) const LAST_MINIMIZED_WINDOW_FILE_NAME: &str = "qol-window-actions-last-minimized";
 
-pub struct FileMinimizedStateStore {
+pub(crate) struct FileMinimizedStateStore {
     path: PathBuf,
 }
 
 impl FileMinimizedStateStore {
-    pub fn new(path: PathBuf) -> Self {
+    pub(crate) fn new(path: PathBuf) -> Self {
         Self { path }
     }
 }
