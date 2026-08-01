@@ -1,11 +1,13 @@
 use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use super::cargo_target::workspace_root;
-use qol_dev_build::target_cache::{dir_size, format_bytes, prunable_target_bytes};
+use qol_dev_build::target_cache::{
+    dir_size, format_bytes, prunable_target_bytes, SWEPT_CACHE_CEILING,
+};
 use std::path::{Path, PathBuf};
 
 const ID: &str = "cargo_target_total";
-const WARN_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+const WARN_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 pub(super) struct CargoTargetTotalCheck;
 
@@ -51,10 +53,10 @@ fn report_for(size: TargetSize, prunable: u64, path: PathBuf) -> CheckReport {
         )),
         TargetSize::Bytes(bytes) => CheckReport::warn(
             format!(
-                "cargo target directory is {} with {} of stale caches over the {} limit; pruning secondary target roots, incremental, and artifacts idle for 14+ days",
+                "cargo target directory is {} with {} prunable; removing secondary target roots, incremental caches, and the oldest debug artifacts over the {} ceiling",
                 format_bytes(bytes),
                 format_bytes(prunable),
-                format_bytes(WARN_BYTES)
+                format_bytes(SWEPT_CACHE_CEILING)
             ),
             ID,
             vec![FixAction::PruneCargoTargetDir { target: path }],
@@ -85,7 +87,7 @@ mod tests {
         );
         assert!(report.issues.is_empty());
         assert!(report.fixes.is_empty());
-        assert!(report.summary.contains("10.0 GiB prunable"));
+        assert!(report.summary.contains("2.0 GiB prunable"));
     }
 
     #[test]
@@ -104,6 +106,6 @@ mod tests {
         );
         assert!(report
             .summary
-            .contains("stale caches over the 10.0 GiB limit"));
+            .contains("oldest debug artifacts over the 48.0 GiB ceiling"));
     }
 }

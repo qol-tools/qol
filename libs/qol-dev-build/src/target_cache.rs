@@ -1,11 +1,11 @@
 use std::fs;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 const PROTECTED_TARGET_ROOTS: [&str; 3] = ["debug", "qol-dev", "qol-env"];
 const REMOVED_DEBUG_DIRS: [&str; 2] = ["incremental", "examples"];
 const SWEPT_DEBUG_DIRS: [&str; 3] = ["deps", "build", ".fingerprint"];
-const SWEEP_MAX_AGE: Duration = Duration::from_secs(14 * 24 * 60 * 60);
+pub const SWEPT_CACHE_CEILING: u64 = 48 * 1024 * 1024 * 1024;
 
 pub fn dir_size(path: &Path) -> Result<Option<u64>, String> {
     let meta = match fs::symlink_metadata(path) {
@@ -60,6 +60,14 @@ pub fn is_protected_target_root(name: &str) -> bool {
 }
 
 pub fn prune_cargo_target_dir(target: &Path) -> Result<(), String> {
+    prune_with_ceiling(target, SWEPT_CACHE_CEILING)
+}
+
+pub fn prunable_target_bytes(target: &Path) -> u64 {
+    prunable_with_ceiling(target, SWEPT_CACHE_CEILING)
+}
+
+fn prune_with_ceiling(target: &Path, ceiling: u64) -> Result<(), String> {
     let entries = fs::read_dir(target).map_err(|error| {
         format!(
             "failed to read target directory {}: {error}",
@@ -77,17 +85,14 @@ pub fn prune_cargo_target_dir(target: &Path) -> Result<(), String> {
     for name in REMOVED_DEBUG_DIRS {
         try_remove_target_path(&debug.join(name), &mut failures);
     }
-    let cutoff = SystemTime::now() - SWEEP_MAX_AGE;
-    for name in SWEPT_DEBUG_DIRS {
-        sweep_stale_files(&debug.join(name), cutoff, &mut failures);
-    }
+    evict_oldest_swept_files(&debug, ceiling, &mut failures);
     if failures.is_empty() {
         return Ok(());
     }
     Err(format!("could not remove: {}", failures.join(", ")))
 }
 
-pub fn prunable_target_bytes(target: &Path) -> u64 {
+fn prunable_with_ceiling(target: &Path, ceiling: u64) -> u64 {
     let mut bytes = 0;
     if let Ok(entries) = fs::read_dir(target) {
         for entry in entries.flatten() {
@@ -101,29 +106,61 @@ pub fn prunable_target_bytes(target: &Path) -> u64 {
     for name in REMOVED_DEBUG_DIRS {
         bytes += path_bytes(&debug.join(name));
     }
-    let cutoff = SystemTime::now() - SWEEP_MAX_AGE;
-    for name in SWEPT_DEBUG_DIRS {
-        bytes += stale_file_bytes(&debug.join(name), cutoff);
-    }
-    bytes
+    let swept_total: u64 = swept_files(&debug).iter().map(|file| file.bytes).sum();
+    bytes + swept_total.saturating_sub(ceiling)
 }
 
-fn stale_file_bytes(dir: &Path, cutoff: SystemTime) -> u64 {
+struct SweptFile {
+    path: std::path::PathBuf,
+    modified: SystemTime,
+    bytes: u64,
+}
+
+fn swept_files(debug: &Path) -> Vec<SweptFile> {
+    let mut files = Vec::new();
+    for name in SWEPT_DEBUG_DIRS {
+        collect_files(&debug.join(name), &mut files);
+    }
+    files
+}
+
+fn collect_files(dir: &Path, files: &mut Vec<SweptFile>) {
     let Ok(entries) = fs::read_dir(dir) else {
-        return 0;
+        return;
     };
-    let mut bytes = 0;
     for entry in entries.flatten() {
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
         if metadata.is_dir() {
-            bytes += stale_file_bytes(&entry.path(), cutoff);
-        } else if metadata.modified().is_ok_and(|modified| modified < cutoff) {
-            bytes += metadata.len();
+            collect_files(&entry.path(), files);
+            continue;
+        }
+        files.push(SweptFile {
+            path: entry.path(),
+            modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+            bytes: metadata.len(),
+        });
+    }
+}
+
+fn evict_oldest_swept_files(debug: &Path, ceiling: u64, failures: &mut Vec<String>) {
+    let mut files = swept_files(debug);
+    let mut remaining: u64 = files.iter().map(|file| file.bytes).sum();
+    if remaining <= ceiling {
+        return;
+    }
+    files.sort_by_key(|file| file.modified);
+    for file in files {
+        if remaining <= ceiling {
+            return;
+        }
+        let before = failures.len();
+        try_remove_target_path(&file.path, failures);
+        if failures.len() == before {
+            remaining -= file.bytes;
         }
     }
-    bytes
 }
 
 fn try_remove_target_path(path: &Path, failures: &mut Vec<String>) {
@@ -139,32 +176,10 @@ fn try_remove_target_path(path: &Path, failures: &mut Vec<String>) {
     }
 }
 
-fn sweep_stale_files(dir: &Path, cutoff: SystemTime, failures: &mut Vec<String>) {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(error) => {
-            failures.push(format!("{} ({error})", dir.display()));
-            return;
-        }
-    };
-    for entry in entries.flatten() {
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if metadata.is_dir() {
-            sweep_stale_files(&entry.path(), cutoff, failures);
-            continue;
-        }
-        if metadata.modified().is_ok_and(|modified| modified < cutoff) {
-            try_remove_target_path(&entry.path(), failures);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn dir_size_sums_nested_files() {
@@ -187,48 +202,53 @@ mod tests {
     }
 
     #[test]
-    fn target_prune_removes_stale_caches_and_protects_live_dev_paths() {
+    fn target_prune_evicts_oldest_caches_to_the_ceiling_and_protects_live_dev_paths() {
         let root = tempfile::tempdir().expect("tempdir");
         let target = root.path();
-        let stale_mtime = SystemTime::now() - (SWEEP_MAX_AGE + Duration::from_secs(60));
+        let mtime_of = |age_rank: u64| SystemTime::UNIX_EPOCH + Duration::from_secs(age_rank);
         let cases = [
-            ("qol-env/lane/qol-tray", true, true),
-            ("release/libfoo.rlib", false, false),
-            ("cargo-timings/timing.html", false, false),
-            ("debug/incremental/foo/dep-graph.bin", false, false),
-            ("debug/examples/demo", false, false),
-            ("debug/deps/libold.rlib", true, false),
-            ("debug/build/foo/output", true, false),
-            ("debug/.fingerprint/old/lib.json", true, false),
-            ("debug/deps/libfresh.rlib", false, true),
-            ("debug/qol-tray", true, true),
-            ("qol-dev/runtime/gen/qol-tray", true, true),
-            ("CACHEDIR.TAG", true, true),
-            (".rustc_info.json", true, true),
+            ("qol-env/lane/qol-tray", None, true),
+            ("release/libfoo.rlib", None, false),
+            ("cargo-timings/timing.html", None, false),
+            ("debug/incremental/foo/dep-graph.bin", None, false),
+            ("debug/examples/demo", None, false),
+            ("debug/deps/libold.rlib", Some(1), false),
+            ("debug/build/foo/output", Some(2), true),
+            ("debug/.fingerprint/new/lib.json", Some(3), true),
+            ("debug/qol-tray", None, true),
+            ("qol-dev/runtime/gen/qol-tray", None, true),
+            ("CACHEDIR.TAG", None, true),
+            (".rustc_info.json", None, true),
         ];
-        for (rel, stale, _) in cases {
+        for (rel, age_rank, _) in cases {
             let path = target.join(rel);
             fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
-            fs::write(&path, b"x").expect("file");
-            if stale {
+            fs::write(&path, b"xxxx").expect("file");
+            if let Some(age_rank) = age_rank {
                 fs::File::options()
                     .write(true)
                     .open(&path)
                     .expect("open")
-                    .set_modified(stale_mtime)
+                    .set_modified(mtime_of(age_rank))
                     .expect("mtime");
             }
         }
+        let ceiling = 8;
 
-        let doomed_bytes = cases.iter().filter(|(_, _, kept)| !kept).count() as u64;
-        assert_eq!(prunable_target_bytes(target), doomed_bytes);
+        let removed_roots = 4 * 4;
+        let swept_excess = 3 * 4 - ceiling;
+        assert_eq!(
+            prunable_with_ceiling(target, ceiling),
+            removed_roots + swept_excess,
+            "prunable must count removed roots plus the LRU excess over the ceiling"
+        );
 
-        prune_cargo_target_dir(target).expect("prune target");
+        prune_with_ceiling(target, ceiling).expect("prune target");
 
         for (rel, _, kept) in cases {
             assert_eq!(target.join(rel).exists(), kept, "path: {rel}");
         }
-        assert_eq!(prunable_target_bytes(target), 0);
+        assert_eq!(prunable_with_ceiling(target, ceiling), 0);
     }
 
     #[cfg(unix)]
