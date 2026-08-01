@@ -16,6 +16,7 @@ use super::console_state::{load_console_state, save_console_state};
 use super::dash::{
     flush_pokes, Dash, Health, HealthSnapshot, LinksState, Probes, ReloadOutcome, Row, View, ROWS,
 };
+use super::disk::{apply_disk_outcome, open_disk, start_disk_scan};
 use super::doctor::{
     apply_doctor_outcome, doctor_scroll_len, open_doctor, spawn_doctor_probe, DoctorMode,
 };
@@ -256,6 +257,15 @@ pub(super) fn tui_session(
         } else {
             let _ = probes.doctor.latest();
         }
+        let disk_outcome = dash
+            .disk
+            .scan
+            .as_ref()
+            .and_then(|scan| scan.rx.try_recv().ok());
+        if let Some(outcome) = disk_outcome {
+            dash.disk.scan = None;
+            apply_disk_outcome(dash, outcome);
+        }
         dash.trace.drain_rated(
             |_| true,
             dash.trace_rate.is_realtime(),
@@ -419,6 +429,7 @@ pub(super) fn newest_lines(dash: &Dash, count: usize) -> String {
         View::Dashboard
         | View::Logs
         | View::Doctor
+        | View::Disk
         | View::Plugins
         | View::Emu
         | View::Endpoints => Some(&dash.logs.ring),
@@ -497,6 +508,7 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             View::Dashboard => act_row(dash, modified),
             View::Emu => act_emu(dash, modified),
             View::Plugins => act_plugin(dash),
+            View::Disk => start_disk_scan(dash),
             View::Logs | View::Doctor | View::Trace | View::Endpoints | View::EmuDetail => {}
         },
         Action::Dive => match dash.view {
@@ -504,6 +516,7 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             View::Emu => open_emu_detail(dash),
             View::Logs
             | View::Doctor
+            | View::Disk
             | View::Plugins
             | View::Trace
             | View::Endpoints
@@ -524,7 +537,7 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             View::Emu => dash.emu_cursor = dash.emu_cursor.saturating_sub(1),
             View::Plugins => dash.plugin_cursor = dash.plugin_cursor.saturating_sub(1),
             View::Doctor => dash.doctor_cursor = dash.doctor_cursor.saturating_sub(1),
-            View::Logs | View::Trace | View::Endpoints | View::EmuDetail => {
+            View::Logs | View::Trace | View::Endpoints | View::EmuDetail | View::Disk => {
                 dash.scroll_offset = dash.scroll_offset.saturating_add(1)
             }
         },
@@ -542,7 +555,7 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
                 let total = doctor_scroll_len(&dash.doctor);
                 dash.doctor_cursor = (dash.doctor_cursor + 1).min(total.saturating_sub(1));
             }
-            View::Logs | View::Trace | View::Endpoints | View::EmuDetail => {
+            View::Logs | View::Trace | View::Endpoints | View::EmuDetail | View::Disk => {
                 dash.scroll_offset = dash.scroll_offset.saturating_sub(1)
             }
         },
@@ -630,6 +643,7 @@ pub(super) fn act_row(dash: &mut Dash, modified: bool) {
                 dash.start_doctor(DoctorMode::Check);
             }
         }
+        Row::Disk => start_disk_scan(dash),
         Row::Logs | Row::Trace => {}
     }
 }
@@ -646,6 +660,7 @@ pub(super) fn dive_row(dash: &mut Dash) {
         }
         Row::Emu => open_emu(dash),
         Row::Doctor => open_doctor(dash),
+        Row::Disk => open_disk(dash),
         Row::Logs => {
             dash.view = View::Logs;
             dash.scroll_offset = 0;

@@ -8,6 +8,7 @@ use crate::dev_server::{PluginDaemonStatus, WorkspacePlugin};
 
 use super::activity::draw_activity;
 use super::dash::{Dash, Health, LinksState, RebuildState, Row, View};
+use super::disk::{disk_status, draw_disk};
 use super::doctor::{doctor_status, draw_doctor};
 use super::emu_panel::{draw_emu, draw_emu_detail, emu_detail_shows_warnings, emu_status};
 use super::feature_flags::draw_feature_flags_panel;
@@ -64,6 +65,7 @@ fn draw_view(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverfl
         View::Dashboard => draw_dashboard(frame, dash, area),
         View::Logs => draw_logs(frame, dash, area),
         View::Doctor => draw_doctor(frame, dash, area),
+        View::Disk => draw_disk(frame, dash, area),
         View::Plugins => draw_plugins(frame, dash, area),
         View::Emu => draw_emu(frame, dash, area),
         View::EmuDetail => draw_emu_detail(frame, dash, area),
@@ -100,6 +102,7 @@ pub(super) fn page_description(view: View) -> Option<&'static str> {
         View::Logs => Some("live daemon logs"),
         View::Trace => Some("runtime trace events"),
         View::Doctor => Some("install health checks"),
+        View::Disk => Some("dev disk usage · enter to rescan"),
         View::Plugins => Some("workspace plugins · enter to link/unlink"),
         View::Emu => Some("isolated guest development · enter runs qol dev"),
         View::Endpoints => Some("local service endpoints"),
@@ -123,6 +126,7 @@ pub(super) fn breadcrumb(dash: &Dash, accent: Color) -> Line<'static> {
         View::Logs => vec!["logs".to_string()],
         View::Trace => vec!["trace".to_string()],
         View::Doctor => vec!["doctor".to_string()],
+        View::Disk => vec!["disk".to_string()],
         View::Plugins => vec!["plugins".to_string()],
         View::Emu => vec!["sandboxes".to_string()],
         View::Endpoints => vec!["endpoints".to_string()],
@@ -395,6 +399,7 @@ pub(super) fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) -> Navi
         plugins_status(&dash.plugin_reload, dash.plugin_names.len(), &dash.links);
     let (emu_color, emu_value) = emu_status(&dash.emu);
     let (doctor_color, doctor_value) = doctor_status(&dash.doctor, now_unix_ms());
+    let (disk_color, disk_value) = disk_status(&dash.disk, now_unix_ms());
 
     let rows = vec![
         dash_row(dash.cursor == 0, tray_color, Row::Tray, tray_value),
@@ -402,14 +407,15 @@ pub(super) fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) -> Navi
         dash_row(dash.cursor == 2, plugins_color, Row::Plugins, plugins_value),
         dash_row(dash.cursor == 3, emu_color, Row::Emu, emu_value),
         dash_row(dash.cursor == 4, doctor_color, Row::Doctor, doctor_value),
+        dash_row(dash.cursor == 5, disk_color, Row::Disk, disk_value),
         dash_row(
-            dash.cursor == 5,
+            dash.cursor == 6,
             Color::DarkGray,
             Row::Logs,
             vec![format!("{} buffered", dash.logs.len()).fg(Color::DarkGray)],
         ),
         dash_row(
-            dash.cursor == 6,
+            dash.cursor == 7,
             Color::DarkGray,
             Row::Trace,
             trace_value(dash),
@@ -1304,7 +1310,7 @@ mod tests {
             "up cue must be a square-cornered box containing ^"
         );
         assert!(up > sign, "up cue must sit right of the worktree sign");
-        for label in ["sandboxes", "doctor", "logs", "trace"] {
+        for label in ["doctor", "disk", "logs", "trace"] {
             assert!(
                 rows.iter().any(|row| row.contains(label)),
                 "up cue pushed {label} out of the viewport"

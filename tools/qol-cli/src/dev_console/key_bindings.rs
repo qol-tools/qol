@@ -278,6 +278,16 @@ pub(super) fn context_action_bindings(dash: &Dash) -> Vec<KeyBinding> {
             bindings.extend(arrow_view_bindings("move"));
             bindings
         }
+        View::Disk => {
+            let mut bindings = vec![binding(
+                "enter",
+                "rescan",
+                Action::Activate,
+                vec![KeyStroke::plain(KeyCode::Enter)],
+            )];
+            bindings.extend(arrow_view_bindings("scroll"));
+            bindings
+        }
         View::Plugins => vec![
             binding(
                 "↑/↓",

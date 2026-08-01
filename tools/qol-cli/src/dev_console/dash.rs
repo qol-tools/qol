@@ -17,6 +17,7 @@ use crate::poller::Poller;
 
 use super::activity::Activity;
 use super::console_state::ConsoleState;
+use super::disk::DiskPanel;
 use super::doctor::{spawn_doctor, spawn_doctor_probe, DoctorMode, DoctorPanel, DoctorRun};
 use super::emu_panel::{ActiveSandboxRun, EmuDetail, EmuState};
 use super::feature_flags::{
@@ -87,6 +88,7 @@ pub(super) enum View {
     Dashboard,
     Logs,
     Doctor,
+    Disk,
     Plugins,
     Emu,
     EmuDetail,
@@ -101,6 +103,7 @@ pub(super) enum Row {
     Plugins,
     Emu,
     Doctor,
+    Disk,
     Logs,
     Trace,
 }
@@ -113,18 +116,20 @@ impl Row {
             Self::Plugins => "plugins",
             Self::Emu => "sandboxes",
             Self::Doctor => "doctor",
+            Self::Disk => "disk",
             Self::Logs => "logs",
             Self::Trace => "trace",
         }
     }
 }
 
-pub(super) const ROWS: [Row; 7] = [
+pub(super) const ROWS: [Row; 8] = [
     Row::Tray,
     Row::Web,
     Row::Plugins,
     Row::Emu,
     Row::Doctor,
+    Row::Disk,
     Row::Logs,
     Row::Trace,
 ];
@@ -355,6 +360,7 @@ pub(super) struct Dash {
     pub(super) plugin_cursor: usize,
     pub(super) doctor_cursor: usize,
     pub(super) doctor: DoctorPanel,
+    pub(super) disk: DiskPanel,
     pub(super) trace: LogPane,
     pub(super) trace_unavailable: bool,
     pub(super) trace_details: bool,
@@ -424,6 +430,7 @@ impl Dash {
                 manual: None,
                 error: None,
             },
+            disk: DiskPanel::new(),
             trace: LogPane::collapsing(),
             trace_unavailable: false,
             trace_details: false,
@@ -488,7 +495,13 @@ impl Dash {
                 .doctor
                 .manual
                 .as_ref()
-                .map(|manual| manual.activity(now_unix_ms())),
+                .map(|manual| manual.activity(now_unix_ms()))
+                .or_else(|| {
+                    self.disk
+                        .scan
+                        .as_ref()
+                        .map(|scan| scan.activity(now_unix_ms()))
+                }),
         }
     }
 

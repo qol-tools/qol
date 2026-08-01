@@ -58,7 +58,12 @@ pub(super) fn filter_scope(view: View) -> Option<FilterScope> {
         View::Logs => Some(FilterScope::Logs),
         View::Trace => Some(FilterScope::Trace),
         View::EmuDetail => Some(FilterScope::Emu),
-        View::Dashboard | View::Doctor | View::Plugins | View::Emu | View::Endpoints => None,
+        View::Dashboard
+        | View::Doctor
+        | View::Disk
+        | View::Plugins
+        | View::Emu
+        | View::Endpoints => None,
     }
 }
 

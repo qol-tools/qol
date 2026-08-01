@@ -1,0 +1,452 @@
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Receiver};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use qol_dev_build::target_cache::{format_bytes, path_bytes, prunable_target_bytes};
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Stylize};
+use ratatui::text::{Line, Span};
+use ratatui::Frame;
+
+use super::activity::Activity;
+use super::render_util::{now_unix_ms, relative_age, view_content, NavigationOverflow};
+use super::{Dash, View};
+
+pub(super) struct DiskPanel {
+    pub(super) last: Option<DiskReport>,
+    pub(super) last_at_ms: Option<u64>,
+    pub(super) scan: Option<DiskScan>,
+    pub(super) error: Option<String>,
+}
+
+impl DiskPanel {
+    pub(super) fn new() -> Self {
+        Self {
+            last: None,
+            last_at_ms: None,
+            scan: None,
+            error: None,
+        }
+    }
+}
+
+pub(super) struct DiskScan {
+    pub(super) rx: Receiver<Result<DiskReport, String>>,
+    progress: Arc<Mutex<String>>,
+    started_at_ms: u64,
+}
+
+impl DiskScan {
+    fn progress_step(&self) -> String {
+        self.progress
+            .lock()
+            .map(|step| step.clone())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn activity(&self, now_ms: u64) -> Activity {
+        Activity {
+            title: "disk",
+            phase: "scanning".to_string(),
+            detail: self.progress_step(),
+            elapsed: Duration::from_millis(now_ms.saturating_sub(self.started_at_ms)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DiskReport {
+    pub(super) rows: Vec<DiskRow>,
+}
+
+impl DiskReport {
+    pub(super) fn target_total(&self) -> Option<u64> {
+        self.rows
+            .iter()
+            .find(|row| row.label == TARGET_TOTAL_LABEL)
+            .and_then(|row| row.bytes)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DiskRow {
+    pub(super) label: String,
+    pub(super) detail: String,
+    pub(super) bytes: Option<u64>,
+}
+
+const TARGET_TOTAL_LABEL: &str = "target";
+
+pub(super) fn open_disk(dash: &mut Dash) {
+    dash.view = View::Disk;
+    dash.scroll_offset = 0;
+    if dash.disk.last.is_none() {
+        start_disk_scan(dash);
+    }
+}
+
+pub(super) fn start_disk_scan(dash: &mut Dash) {
+    if dash.disk.scan.is_some() {
+        return;
+    }
+    dash.disk.scan = Some(spawn_disk_scan());
+}
+
+fn spawn_disk_scan() -> DiskScan {
+    let (tx, rx) = channel();
+    let progress = Arc::new(Mutex::new(String::new()));
+    let worker_progress = Arc::clone(&progress);
+    std::thread::spawn(move || {
+        let _ = tx.send(scan_disk_usage(&worker_progress));
+    });
+    DiskScan {
+        rx,
+        progress,
+        started_at_ms: now_unix_ms(),
+    }
+}
+
+pub(super) fn apply_disk_outcome(dash: &mut Dash, outcome: Result<DiskReport, String>) {
+    match outcome {
+        Ok(report) => {
+            dash.disk.last = Some(report);
+            dash.disk.last_at_ms = Some(now_unix_ms());
+            dash.disk.error = None;
+        }
+        Err(error) => dash.disk.error = Some(error),
+    }
+}
+
+fn set_progress(progress: &Arc<Mutex<String>>, step: &str) {
+    if let Ok(mut current) = progress.lock() {
+        *current = step.to_string();
+    }
+}
+
+fn scan_disk_usage(progress: &Arc<Mutex<String>>) -> Result<DiskReport, String> {
+    let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
+    let target = root.join("target");
+    let mut rows = Vec::new();
+    set_progress(progress, "target roots");
+    rows.extend(target_root_rows(&target));
+    set_progress(progress, "stale caches");
+    rows.push(DiskRow {
+        label: "target · prunable".to_string(),
+        detail: "stale caches the doctor auto-prunes over 10 GiB".to_string(),
+        bytes: Some(prunable_target_bytes(&target)),
+    });
+    for worktree in qol_dev_build::tray::list_worktrees(&root) {
+        set_progress(progress, &format!("worktree {}", worktree.branch));
+        rows.push(measured_row(
+            format!("worktree · {}", worktree.branch),
+            &worktree.path.join("target"),
+        ));
+    }
+    set_progress(progress, "sccache");
+    rows.push(optional_dir_row("sccache", sccache_dir()));
+    set_progress(progress, "cargo home");
+    rows.push(optional_dir_row("cargo home", cargo_home()));
+    Ok(DiskReport { rows })
+}
+
+pub(super) fn target_root_rows(target: &Path) -> Vec<DiskRow> {
+    let buckets = [
+        ("debug", "live build cache"),
+        ("qol-dev", "staged runtime generations"),
+        ("qol-env", "sandbox guest payloads"),
+    ];
+    if !target.exists() {
+        let mut rows = vec![DiskRow {
+            label: TARGET_TOTAL_LABEL.to_string(),
+            detail: target.display().to_string(),
+            bytes: None,
+        }];
+        rows.extend(buckets.iter().map(|(name, detail)| DiskRow {
+            label: format!("target · {name}"),
+            detail: detail.to_string(),
+            bytes: None,
+        }));
+        return rows;
+    }
+    let mut other = 0;
+    if let Ok(entries) = std::fs::read_dir(target) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if buckets
+                .iter()
+                .any(|(bucket, _)| name.to_string_lossy() == *bucket)
+            {
+                continue;
+            }
+            other += path_bytes(&entry.path());
+        }
+    }
+    let mut total = other;
+    let mut rows: Vec<DiskRow> = buckets
+        .iter()
+        .map(|(name, detail)| {
+            let bytes = path_bytes(&target.join(name));
+            total += bytes;
+            DiskRow {
+                label: format!("target · {name}"),
+                detail: detail.to_string(),
+                bytes: Some(bytes),
+            }
+        })
+        .collect();
+    rows.push(DiskRow {
+        label: "target · other".to_string(),
+        detail: "secondary build roots".to_string(),
+        bytes: Some(other),
+    });
+    rows.insert(
+        0,
+        DiskRow {
+            label: TARGET_TOTAL_LABEL.to_string(),
+            detail: target.display().to_string(),
+            bytes: Some(total),
+        },
+    );
+    rows
+}
+
+fn measured_row(label: String, path: &Path) -> DiskRow {
+    let bytes = path.exists().then(|| path_bytes(path));
+    DiskRow {
+        label,
+        detail: path.display().to_string(),
+        bytes,
+    }
+}
+
+fn optional_dir_row(label: &str, path: Option<PathBuf>) -> DiskRow {
+    let Some(path) = path else {
+        return DiskRow {
+            label: label.to_string(),
+            detail: "location unknown".to_string(),
+            bytes: None,
+        };
+    };
+    measured_row(label.to_string(), &path)
+}
+
+fn sccache_dir() -> Option<PathBuf> {
+    std::env::var_os("SCCACHE_DIR")
+        .map(PathBuf::from)
+        .or_else(|| dirs::cache_dir().map(|cache| cache.join("sccache")))
+}
+
+fn cargo_home() -> Option<PathBuf> {
+    std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".cargo")))
+}
+
+pub(super) fn disk_status(panel: &DiskPanel, now_ms: u64) -> (Color, Vec<Span<'static>>) {
+    if panel.scan.is_some() {
+        return (Color::Yellow, vec!["scanning".fg(Color::Yellow)]);
+    }
+    if let Some(error) = &panel.error {
+        return (
+            Color::Red,
+            vec![
+                "scan failed".fg(Color::Red).bold(),
+                format!(" · {error}").fg(Color::DarkGray),
+            ],
+        );
+    }
+    let Some(report) = &panel.last else {
+        return (Color::DarkGray, vec!["enter to scan".fg(Color::DarkGray)]);
+    };
+    let total = report
+        .target_total()
+        .map(format_bytes)
+        .unwrap_or_else(|| "no target dir".to_string());
+    let mut value = vec![format!("{total} target").fg(Color::DarkGray)];
+    if let Some(at) = panel.last_at_ms {
+        value.push(format!(" · {}", relative_age(now_ms, at)).fg(Color::DarkGray));
+    }
+    (Color::DarkGray, value)
+}
+
+pub(super) fn draw_disk(frame: &mut Frame, dash: &Dash, area: Rect) -> NavigationOverflow {
+    let lines = disk_view_lines(&dash.disk);
+    view_content(frame, area, lines);
+    NavigationOverflow::default()
+}
+
+fn disk_view_lines(panel: &DiskPanel) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if let Some(error) = &panel.error {
+        lines.push(Line::from(vec![
+            "  ✗ ".fg(Color::Red).bold(),
+            error.clone().into(),
+        ]));
+    }
+    let Some(report) = &panel.last else {
+        if panel.scan.is_none() && lines.is_empty() {
+            lines.push(Line::from(
+                "  no scan yet · press enter".fg(Color::DarkGray),
+            ));
+        }
+        return lines;
+    };
+    lines.extend(report.rows.iter().map(disk_row_line));
+    lines
+}
+
+fn disk_row_line(row: &DiskRow) -> Line<'static> {
+    let size = match row.bytes {
+        Some(bytes) => format_bytes(bytes),
+        None => "-".to_string(),
+    };
+    Line::from(vec![
+        format!("  {:<22}", row.label).fg(Color::White),
+        format!("{size:>10}").fg(Color::White).bold(),
+        format!("  {}", row.detail).fg(Color::DarkGray),
+    ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span_text(spans: &[Span<'static>]) -> String {
+        spans.iter().map(|span| span.content.as_ref()).collect()
+    }
+
+    fn report(rows: Vec<DiskRow>) -> DiskReport {
+        DiskReport { rows }
+    }
+
+    fn row(label: &str, bytes: Option<u64>) -> DiskRow {
+        DiskRow {
+            label: label.to_string(),
+            detail: "detail".to_string(),
+            bytes,
+        }
+    }
+
+    #[test]
+    fn disk_status_covers_panel_states() {
+        let now = 1_000_000_000;
+        let scanned = DiskPanel {
+            last: Some(report(vec![row("target", Some(3 * 1024 * 1024 * 1024))])),
+            last_at_ms: Some(now - 15_000),
+            scan: None,
+            error: None,
+        };
+        let scanning = DiskPanel {
+            scan: Some(spawn_never_finishing_scan()),
+            ..DiskPanel::new()
+        };
+        let failed = DiskPanel {
+            error: Some("boom".to_string()),
+            ..DiskPanel::new()
+        };
+        let cases = [
+            (DiskPanel::new(), Color::DarkGray, "enter to scan"),
+            (scanning, Color::Yellow, "scanning"),
+            (failed, Color::Red, "scan failed · boom"),
+            (scanned, Color::DarkGray, "3.0 GiB target · 15s ago"),
+        ];
+        for (panel, expected_color, expected_text) in cases {
+            let (color, spans) = disk_status(&panel, now);
+            assert_eq!(color, expected_color, "text: {expected_text}");
+            assert_eq!(span_text(&spans), expected_text);
+        }
+    }
+
+    fn spawn_never_finishing_scan() -> DiskScan {
+        let (_tx, rx) = channel();
+        std::mem::forget(_tx);
+        DiskScan {
+            rx,
+            progress: Arc::new(Mutex::new(String::new())),
+            started_at_ms: 0,
+        }
+    }
+
+    #[test]
+    fn target_root_rows_bucket_protected_roots_and_sum_the_rest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path();
+        let files = [
+            ("debug/a.bin", 3u64),
+            ("qol-dev/runtime/gen", 5),
+            ("qol-env/lane/img", 7),
+            ("release/lib.rlib", 11),
+            ("cargo-timings/t.html", 13),
+        ];
+        for (rel, len) in files {
+            let path = target.join(rel);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
+            std::fs::write(&path, vec![0; len as usize]).expect("file");
+        }
+
+        let rows = target_root_rows(target);
+
+        let cases = [
+            ("target", Some(39)),
+            ("target · debug", Some(3)),
+            ("target · qol-dev", Some(5)),
+            ("target · qol-env", Some(7)),
+            ("target · other", Some(24)),
+        ];
+        assert_eq!(rows.len(), cases.len());
+        for (label, bytes) in cases {
+            let row = rows
+                .iter()
+                .find(|row| row.label == label)
+                .unwrap_or_else(|| panic!("missing row: {label}"));
+            assert_eq!(row.bytes, bytes, "label: {label}");
+        }
+    }
+
+    #[test]
+    fn target_root_rows_report_missing_target_without_sizes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rows = target_root_rows(&dir.path().join("does-not-exist"));
+        assert!(rows.iter().all(|row| row.bytes.is_none()));
+        assert_eq!(rows[0].label, "target");
+    }
+
+    #[test]
+    fn disk_row_line_aligns_sizes_and_marks_missing_paths() {
+        let cases = [
+            (row("target", Some(2 * 1024 * 1024)), "2 MiB"),
+            (row("sccache", None), "-"),
+        ];
+        for (input, expected_size) in cases {
+            let text = disk_row_line(&input).to_string();
+            assert!(
+                text.contains(expected_size),
+                "line: {text:?} expected: {expected_size}"
+            );
+            assert!(text.contains(&input.label), "line: {text:?}");
+        }
+    }
+
+    #[test]
+    fn disk_view_lines_show_empty_state_error_and_report() {
+        assert_eq!(
+            disk_view_lines(&DiskPanel::new())[0].to_string(),
+            "  no scan yet · press enter"
+        );
+
+        let failed = DiskPanel {
+            error: Some("no repo".to_string()),
+            ..DiskPanel::new()
+        };
+        assert!(disk_view_lines(&failed)[0].to_string().contains("no repo"));
+
+        let scanned = DiskPanel {
+            last: Some(report(vec![row("target", Some(1024 * 1024))])),
+            ..DiskPanel::new()
+        };
+        let lines = disk_view_lines(&scanned);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].to_string().contains("target"));
+    }
+}

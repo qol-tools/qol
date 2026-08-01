@@ -5,6 +5,7 @@ use ratatui::style::Color;
 mod activity;
 mod console_state;
 mod dash;
+mod disk;
 mod doctor;
 mod draw;
 mod emu_panel;
