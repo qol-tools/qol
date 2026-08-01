@@ -29,6 +29,8 @@ const CANCEL_CYCLES: usize = 24;
 const SCREENSHOT_BURST: usize = 16;
 const COUNTDOWN_CYCLES: usize = 4;
 const TOP_BAND_MAX_ADJACENT_YAVG_DELTA: f64 = 2.0;
+const CURSOR_MOTION_STEPS: u32 = 60;
+const MIN_CURSOR_MOTION_FRAMES: usize = 15;
 
 pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     let mut guest = connect_desktop_guest(vm)?;
@@ -440,7 +442,7 @@ fn test_countdown_storm(
 
 fn set_recording_config(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
     let url = format!("{}/api/plugins/{PLUGIN_ID}/config", local_base_url());
-    let body = r#"{"audio":{"enabled":false,"inputs":[],"mic_device":"default","system_device":"default"},"video":{"crf":30,"preset":"ultrafast","framerate":30,"format":"mkv"},"capture":{"include_window_frame":true,"pin_border":true,"open_folder_after_save":false,"saved_feedback":"toast"},"shortcuts":{"copy_command":"copy_path"}}"#;
+    let body = r#"{"audio":{"enabled":false,"inputs":[],"mic_device":"default","system_device":"default"},"video":{"crf":30,"preset":"ultrafast","framerate":60,"format":"mkv"},"capture":{"include_window_frame":true,"pin_border":true,"open_folder_after_save":false,"saved_feedback":"toast"},"shortcuts":{"copy_command":"copy_path"}}"#;
     require_exec(
         guest,
         command(
@@ -510,6 +512,23 @@ fn test_recording(
         &["backend=cinnamon_after_paint", "outcome=ready"],
         ACTION_TIMEOUT,
     )?;
+    wait_for_probe_fields(
+        guest,
+        cursor,
+        "SHOT_RECORD_CAPTURE_READY",
+        &["backend=cinnamon_after_paint", "len="],
+        ACTION_TIMEOUT,
+    )?;
+    wait_for_probe_fields(
+        guest,
+        cursor,
+        "SHOT_RECORD_START_PLAN",
+        &[
+            "cursor=xfixes_actor_fallback_builtin",
+            "cursor_update=before_paint",
+        ],
+        ACTION_TIMEOUT,
+    )?;
     let fixture = wait_for_window_id(guest, FIXTURE_TITLE, ACTION_TIMEOUT)?;
     for (x, y) in [(200, 200), (500, 300)].into_iter().cycle().take(12) {
         require_exec(
@@ -526,7 +545,16 @@ fn test_recording(
             COMMAND_TIMEOUT,
         )?;
     }
-    thread::sleep(Duration::from_millis(900));
+    require_exec(
+        guest,
+        command(
+            "/usr/bin/xdotool",
+            &["windowmove", fixture.as_str(), "100", "100"],
+        ),
+        COMMAND_TIMEOUT,
+    )?;
+    move_pointer_smoothly(guest)?;
+    thread::sleep(Duration::from_millis(300));
     qmp.screendump(artifact)?;
 
     let stop_cursor = dispatch(guest, auth, "record")?;
@@ -555,6 +583,15 @@ fn test_recording(
         ],
         ACTION_TIMEOUT,
     )?;
+    let cursor_stats = wait_for_probe_fields(
+        guest,
+        stop_cursor,
+        "SHOT_RECORD_CURSOR_STATS",
+        &["paints=", "changes="],
+        ACTION_TIMEOUT,
+    )?;
+    let cursor_position_changes =
+        probe_usize(&cursor_stats.stdout, "SHOT_RECORD_CURSOR_STATS", "changes=")?;
     let recording = wait_for_command(
         guest,
         command(
@@ -608,6 +645,17 @@ fn test_recording(
             );
         }
     }
+    let conversion_log = require_exec(
+        guest,
+        command("/usr/bin/tail", &["-c", "32768", "/tmp/record-region.log"]),
+        COMMAND_TIMEOUT,
+    )?;
+    let (duplicated, dropped) = ffmpeg_timing_adjustments(&conversion_log.stdout);
+    if duplicated != 0 || dropped != 0 {
+        bail!(
+            "recording conversion rewrote capture cadence: duplicated={duplicated} dropped={dropped}"
+        );
+    }
     let band = require_exec(
         guest,
         command(
@@ -635,21 +683,41 @@ fn test_recording(
             "recording top band flickered: max adjacent YAVG delta {max_delta:.6} exceeded {TOP_BAND_MAX_ADJACENT_YAVG_DELTA:.6}"
         );
     }
+    let cursor_motion = require_exec(
+        guest,
+        command(
+            "/usr/bin/ffmpeg",
+            &[
+                "-hide_banner",
+                "-v",
+                "verbose",
+                "-sseof",
+                "-1.4",
+                "-i",
+                recording,
+                "-vf",
+                "crop=1000:120:100:640,tblend=all_mode=difference,bbox=min_val=24",
+                "-an",
+                "-f",
+                "null",
+                "-",
+            ],
+        ),
+        ACTION_TIMEOUT,
+    )?;
+    let cursor_motion_frames = cursor_motion_frame_count(&cursor_motion.stderr);
+    if cursor_motion_frames < MIN_CURSOR_MOTION_FRAMES {
+        bail!(
+            "recorded cursor was choppy: only {cursor_motion_frames} changed frames during {CURSOR_MOTION_STEPS}-step motion ({cursor_position_changes} positions observed by Cinnamon); expected at least {MIN_CURSOR_MOTION_FRAMES}"
+        );
+    }
     step_label(
         "recording",
         StepKind::Success,
         &format!(
-            "Cinnamon after-paint capture encoded {frames} frames with top-band max delta {max_delta:.6}"
+            "Cinnamon after-paint capture encoded {frames} frames with top-band max delta {max_delta:.6}, {cursor_motion_frames} cursor-motion frames, {cursor_position_changes} observed positions, and no conversion timing rewrites"
         ),
     );
-    require_exec(
-        guest,
-        command(
-            "/usr/bin/xdotool",
-            &["windowmove", fixture.as_str(), "100", "100"],
-        ),
-        COMMAND_TIMEOUT,
-    )?;
     require_no_capture_process(guest)
 }
 
@@ -671,6 +739,62 @@ fn top_band_yavg_stats(output: &str) -> Result<(usize, f64)> {
         .map(|pair| (pair[1] - pair[0]).abs())
         .fold(0.0_f64, f64::max);
     Ok((values.len(), max_delta))
+}
+
+fn cursor_motion_frame_count(output: &str) -> usize {
+    output
+        .lines()
+        .filter(|line| line.contains("Parsed_bbox") && line.contains(" x1:"))
+        .count()
+}
+
+fn ffmpeg_timing_adjustments(output: &str) -> (usize, usize) {
+    output
+        .split(['\r', '\n'])
+        .filter_map(|line| {
+            let duplicated = progress_usize(line, "dup=")?;
+            let dropped = progress_usize(line, "drop=")?;
+            Some((duplicated, dropped))
+        })
+        .next_back()
+        .unwrap_or((0, 0))
+}
+
+fn progress_usize(line: &str, prefix: &str) -> Option<usize> {
+    line.split_ascii_whitespace()
+        .find_map(|field| field.strip_prefix(prefix))?
+        .parse()
+        .ok()
+}
+
+fn probe_usize(output: &str, tag: &str, prefix: &str) -> Result<usize> {
+    output
+        .lines()
+        .find(|line| line.contains(&format!(" {tag} ")))
+        .and_then(|line| {
+            line.split_ascii_whitespace()
+                .find_map(|field| field.strip_prefix(prefix))
+        })
+        .map(|value| value.trim_matches('"'))
+        .context("probe did not contain the expected numeric field")?
+        .parse()
+        .with_context(|| format!("probe field {prefix} was not an unsigned integer"))
+}
+
+fn move_pointer_smoothly(guest: &mut GuestControlClient) -> Result<()> {
+    let mut motion = command("/usr/bin/xdotool", &[]);
+    for step in 0..CURSOR_MOTION_STEPS {
+        let x = 150 + step * 900 / CURSOR_MOTION_STEPS.saturating_sub(1);
+        motion.args.extend([
+            "mousemove".to_string(),
+            x.to_string(),
+            "700".to_string(),
+            "sleep".to_string(),
+            "0.016".to_string(),
+        ]);
+    }
+    require_exec(guest, motion, ACTION_TIMEOUT)?;
+    Ok(())
 }
 
 fn test_settings(
@@ -760,7 +884,9 @@ fn test_crash_recovery(guest: &mut GuestControlClient, auth: &str) -> Result<()>
 
 #[cfg(test)]
 mod tests {
-    use super::top_band_yavg_stats;
+    use super::{
+        cursor_motion_frame_count, ffmpeg_timing_adjustments, probe_usize, top_band_yavg_stats,
+    };
 
     #[test]
     fn top_band_stats_report_largest_adjacent_frame_change() {
@@ -776,5 +902,30 @@ mod tests {
     fn top_band_stats_reject_missing_and_malformed_samples() {
         assert!(top_band_yavg_stats("frame:0").is_err());
         assert!(top_band_yavg_stats("lavfi.signalstats.YAVG=bright").is_err());
+    }
+
+    #[test]
+    fn cursor_motion_count_ignores_unchanged_bbox_frames() {
+        let output = "[Parsed_bbox_2] n:0 pts_time:0.0\n[Parsed_bbox_2] n:1 pts_time:0.03 x1:10 x2:20 y1:4 y2:16 w:11 h:13\nother x1:30\n";
+
+        assert_eq!(cursor_motion_frame_count(output), 1);
+    }
+
+    #[test]
+    fn probe_metric_reads_cursor_position_changes() {
+        let output = "42 pid=9 SHOT_RECORD_CURSOR_STATS polls=91 changes=31\n";
+
+        assert_eq!(
+            probe_usize(output, "SHOT_RECORD_CURSOR_STATS", "changes=").unwrap(),
+            31
+        );
+    }
+
+    #[test]
+    fn ffmpeg_timing_adjustments_use_the_final_progress_sample() {
+        let output = "frame=70 dup=4 drop=8\rframe=631 dup=88 drop=44\n";
+
+        assert_eq!(ffmpeg_timing_adjustments(output), (88, 44));
+        assert_eq!(ffmpeg_timing_adjustments("frame=587 fps=60"), (0, 0));
     }
 }

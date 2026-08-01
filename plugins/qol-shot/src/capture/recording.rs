@@ -9,6 +9,7 @@ use crate::{platform, Config, Rect};
 
 const STATE_FILE_NAME: &str = "record-region.pid";
 const CAPTURE_STATE_VERSION: u32 = 1;
+const MIN_RECORDING_DIMENSION_PX: i32 = 16;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct PersistedCaptureState {
@@ -178,16 +179,33 @@ fn prepare_recording_rect(selected: Rect) -> Result<Rect> {
         None => (platform::full_screen_bounds()?, "full-screen"),
     };
     let rect = geometry::prepare_recording_rect(selected, &monitors, fallback_bounds);
-    if rect.w <= 0 || rect.h <= 0 {
+    let even = geometry::even_dimensions(rect);
+    if even.w < MIN_RECORDING_DIMENSION_PX || even.h < MIN_RECORDING_DIMENSION_PX {
         platform::show_notification(
             "Recording failed",
-            &format!("Invalid area: {}x{}", rect.w, rect.h),
+            &format!(
+                "Selected area is too small: {}x{} (minimum {}x{})",
+                even.w, even.h, MIN_RECORDING_DIMENSION_PX, MIN_RECORDING_DIMENSION_PX
+            ),
             1200,
         );
-        return Err(anyhow!("invalid recording area {}x{}", rect.w, rect.h));
+        qol_runtime::probe!(
+            "SHOT_RECORD_RECT",
+            "selected={} result=rejected reason=too-small prepared={} minimum={}x{}",
+            rect_label(selected),
+            rect_label(even),
+            MIN_RECORDING_DIMENSION_PX,
+            MIN_RECORDING_DIMENSION_PX
+        );
+        return Err(anyhow!(
+            "recording area {}x{} is smaller than {}x{}",
+            even.w,
+            even.h,
+            MIN_RECORDING_DIMENSION_PX,
+            MIN_RECORDING_DIMENSION_PX
+        ));
     }
 
-    let even = geometry::even_dimensions(rect);
     qol_runtime::probe!(
         "SHOT_RECORD_RECT",
         "selected={} monitors={} fallback={} fallback_rect={} prepared={} even={}",

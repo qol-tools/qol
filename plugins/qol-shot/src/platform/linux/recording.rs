@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use x11rb::connection::Connection;
+use x11rb::protocol::xfixes::ConnectionExt as XfixesExt;
+use x11rb::rust_connection::RustConnection;
 
 use crate::platform::{CaptureProcess, CaptureSession};
 use crate::{Config, Rect};
@@ -96,7 +99,7 @@ fn start_cinnamon_capture(
 
     qol_runtime::probe!(
         "SHOT_RECORD_START_PLAN",
-        "backend=cinnamon_after_paint rect={}x{}+{},{} fps={} format={} audio_inputs={}",
+        "backend=cinnamon_after_paint rect={}x{}+{},{} fps={} format={} audio_inputs={} cursor=xfixes_actor_fallback_builtin cursor_update=before_paint",
         rect.w,
         rect.h,
         rect.x,
@@ -151,10 +154,17 @@ fn wait_for_cinnamon_ready(child: &mut Child, output_file: &Path) -> Result<bool
         {
             return Ok(false);
         }
-        if output_file
-            .metadata()
-            .is_ok_and(|metadata| metadata.is_file())
-        {
+        if output_file.metadata().is_ok_and(|metadata| {
+            if !metadata.is_file() || metadata.len() == 0 {
+                return false;
+            }
+            qol_runtime::probe!(
+                "SHOT_RECORD_CAPTURE_READY",
+                "backend=cinnamon_after_paint len={}",
+                metadata.len()
+            );
+            true
+        }) {
             return Ok(true);
         }
         std::thread::sleep(CINNAMON_POLL_INTERVAL);
@@ -204,19 +214,90 @@ fn run_cinnamon_capture_helper(request_json: &str) -> Result<()> {
         serde_json::from_str(request_json).context("invalid Cinnamon capture request")?;
     CINNAMON_STOP_REQUESTED.store(false, Ordering::Release);
     install_cinnamon_helper_signal_handlers()?;
+    let cursor_guard = match XfixesCursorGuard::hide() {
+        Ok(guard) => Some(guard),
+        Err(error) => {
+            eprintln!(
+                "[qol-shot] XFixes cursor isolation unavailable, using Cinnamon's built-in cursor: {error:#}"
+            );
+            None
+        }
+    };
     let session = qol_platform::cinnamon::Session::connect().map_err(anyhow::Error::msg)?;
     session
-        .eval(&cinnamon_start_script(&request)?)
+        .eval(&cinnamon_start_script(&request, cursor_guard.is_some())?)
         .map_err(anyhow::Error::msg)?;
 
     while !CINNAMON_STOP_REQUESTED.load(Ordering::Acquire) {
         std::thread::sleep(CINNAMON_POLL_INTERVAL);
     }
 
-    session
+    let cursor_stats = session
         .eval(cinnamon_stop_script())
         .map_err(anyhow::Error::msg)?;
+    drop(cursor_guard);
+    let cursor_stats =
+        serde_json::from_str::<String>(&cursor_stats).unwrap_or_else(|_| cursor_stats.clone());
+    qol_runtime::probe!("SHOT_RECORD_CURSOR_STATS", "{cursor_stats}");
     Ok(())
+}
+
+struct XfixesCursorGuard {
+    connection: RustConnection,
+    root: u32,
+}
+
+impl XfixesCursorGuard {
+    fn hide() -> Result<Self> {
+        let (connection, screen_num) =
+            x11rb::connect(None).context("failed to connect to X11 for cursor isolation")?;
+        let root = connection
+            .setup()
+            .roots
+            .get(screen_num)
+            .context("X11 connection did not expose the selected screen")?
+            .root;
+        let version = connection
+            .xfixes_query_version(6, 0)
+            .context("failed to query XFixes")?
+            .reply()
+            .context("XFixes version query failed")?;
+        if version.major_version < 4 {
+            return Err(anyhow!(
+                "XFixes {}.{} does not support cursor hiding",
+                version.major_version,
+                version.minor_version
+            ));
+        }
+        connection
+            .xfixes_hide_cursor(root)
+            .context("failed to request XFixes cursor hiding")?
+            .check()
+            .context("XFixes rejected cursor hiding")?;
+        connection
+            .flush()
+            .context("failed to flush XFixes cursor hiding")?;
+        Ok(Self { connection, root })
+    }
+
+    fn show(&self) -> Result<()> {
+        self.connection
+            .xfixes_show_cursor(self.root)
+            .context("failed to request XFixes cursor restore")?
+            .check()
+            .context("XFixes rejected cursor restore")?;
+        self.connection
+            .flush()
+            .context("failed to flush XFixes cursor restore")
+    }
+}
+
+impl Drop for XfixesCursorGuard {
+    fn drop(&mut self) {
+        if let Err(error) = self.show() {
+            eprintln!("[qol-shot] failed to restore the X11 cursor: {error:#}");
+        }
+    }
 }
 
 fn install_cinnamon_helper_signal_handlers() -> Result<()> {
@@ -239,33 +320,126 @@ extern "C" fn cinnamon_helper_signal(_: libc::c_int) {
     CINNAMON_STOP_REQUESTED.store(true, Ordering::Release);
 }
 
-fn cinnamon_start_script(request: &CinnamonCaptureRequest) -> Result<String> {
+fn cinnamon_start_script(
+    request: &CinnamonCaptureRequest,
+    isolated_cursor: bool,
+) -> Result<String> {
     let request =
         serde_json::to_string(request).context("failed to encode Cinnamon script data")?;
     Ok(format!(
         r#"(() => {{
 const Cinnamon = imports.gi.Cinnamon;
+const Clutter = imports.gi.Clutter;
 const Meta = imports.gi.Meta;
+const Main = imports.ui.main;
+const Magnifier = imports.ui.magnifier;
 const request = {request};
+const isolatedCursor = {isolated_cursor};
 if (global.__qolShotRecorder && global.__qolShotRecorder.is_recording())
     throw new Error("qol-shot recorder is already active");
-const recorder = new Cinnamon.Recorder({{stage: global.stage, display: global.display}});
-recorder.set_area(request.rect.x, request.rect.y, request.rect.w, request.rect.h);
-recorder.set_framerate(request.framerate);
-recorder.set_draw_cursor(true);
-recorder.set_file_template(request.file_template);
-recorder.set_pipeline(request.pipeline);
-Meta.disable_unredirect_for_display(global.display);
-global.__qolShotUnredirectDisabled = true;
-const recordResult = recorder.record();
-const started = Array.isArray(recordResult) ? recordResult[0] : recordResult;
-if (!started) {{
-    Meta.enable_unredirect_for_display(global.display);
-    global.__qolShotUnredirectDisabled = false;
-    throw new Error("Cinnamon recorder rejected the capture pipeline");
+if (global.__qolShotCursorOverlay) {{
+    global.__qolShotCursorOverlay.destroy();
+    global.__qolShotCursorOverlay = null;
 }}
-global.__qolShotRecorder = recorder;
-return true;
+const tracker = Meta.CursorTracker.get_for_display(global.display);
+const cursorContent = new Magnifier.MouseSpriteContent();
+const cursorActor = new Clutter.Actor({{
+    request_mode: Clutter.RequestMode.CONTENT_SIZE,
+    reactive: false,
+}});
+cursorActor.content = cursorContent;
+let cursorChangedId = 0;
+let cursorMotionId = 0;
+let cursorPaintId = 0;
+let cursorDestroyed = false;
+let cursorPositionChanges = 0;
+let cursorMotionEvents = 0;
+let cursorPaints = 0;
+let cursorX = null;
+let cursorY = null;
+let cursorBaseScale = null;
+const updateCursorSprite = () => {{
+    cursorContent.texture = tracker.get_sprite();
+    if (cursorBaseScale === null)
+        cursorBaseScale = cursorContent._textureScale();
+    cursorContent.monitorScale = cursorContent._textureScale() / cursorBaseScale;
+    const [hotX, hotY] = tracker.get_hot();
+    cursorActor.set_anchor_point(hotX, hotY);
+}};
+const setCursorPosition = (x, y) => {{
+    if (x !== cursorX || y !== cursorY) {{
+        cursorPositionChanges++;
+        cursorX = x;
+        cursorY = y;
+    }}
+    cursorActor.set_position(x, y);
+}};
+const updateCursorPosition = () => {{
+    const [x, y] = global.get_pointer();
+    setCursorPosition(x, y);
+}};
+const captureCursorPaint = () => {{
+    cursorPaints++;
+    updateCursorPosition();
+}};
+const captureCursorMotion = (_actor, event) => {{
+    if (event.type() === Clutter.EventType.MOTION) {{
+        const [x, y] = event.get_coords();
+        cursorMotionEvents++;
+        setCursorPosition(x, y);
+    }}
+    return Clutter.EVENT_PROPAGATE;
+}};
+const cursorOverlay = {{
+    stats: () => `paints=${{cursorPaints}} events=${{cursorMotionEvents}} changes=${{cursorPositionChanges}}`,
+    destroy: () => {{
+        if (cursorDestroyed)
+            return;
+        cursorDestroyed = true;
+        if (cursorPaintId)
+            global.stage.disconnect(cursorPaintId);
+        if (cursorMotionId)
+            global.stage.disconnect(cursorMotionId);
+        if (cursorChangedId)
+            tracker.disconnect(cursorChangedId);
+        cursorActor.destroy();
+    }},
+}};
+try {{
+    if (isolatedCursor) {{
+        updateCursorSprite();
+        updateCursorPosition();
+        Main.uiGroup.add_child(cursorActor);
+        Main.uiGroup.set_child_above_sibling(cursorActor, null);
+        cursorChangedId = tracker.connect('cursor-changed', updateCursorSprite);
+        cursorMotionId = global.stage.connect('captured-event', captureCursorMotion);
+        cursorPaintId = global.stage.connect('before-paint', captureCursorPaint);
+        global.__qolShotCursorOverlay = cursorOverlay;
+    }}
+
+    const recorder = new Cinnamon.Recorder({{stage: global.stage, display: global.display}});
+    recorder.set_area(request.rect.x, request.rect.y, request.rect.w, request.rect.h);
+    recorder.set_framerate(request.framerate);
+    recorder.set_draw_cursor(!isolatedCursor);
+    recorder.set_file_template(request.file_template);
+    recorder.set_pipeline(request.pipeline);
+    Meta.disable_unredirect_for_display(global.display);
+    global.__qolShotUnredirectDisabled = true;
+    const recordResult = recorder.record();
+    const started = Array.isArray(recordResult) ? recordResult[0] : recordResult;
+    if (!started)
+        throw new Error("Cinnamon recorder rejected the capture pipeline");
+    global.__qolShotRecorder = recorder;
+    return true;
+}} catch (error) {{
+    cursorOverlay.destroy();
+    global.__qolShotCursorOverlay = null;
+    if (global.__qolShotUnredirectDisabled) {{
+        Meta.enable_unredirect_for_display(global.display);
+        global.__qolShotUnredirectDisabled = false;
+    }}
+    throw error;
+}}
 }})()"#
     ))
 }
@@ -274,14 +448,23 @@ fn cinnamon_stop_script() -> &'static str {
     r#"(() => {
 const Meta = imports.gi.Meta;
 const recorder = global.__qolShotRecorder;
-if (recorder && recorder.is_recording())
-    recorder.close();
-global.__qolShotRecorder = null;
-if (global.__qolShotUnredirectDisabled) {
-    Meta.enable_unredirect_for_display(global.display);
-    global.__qolShotUnredirectDisabled = false;
+let cursorStats = "paints=0 events=0 changes=0";
+try {
+    if (recorder && recorder.is_recording())
+        recorder.close();
+} finally {
+    global.__qolShotRecorder = null;
+    if (global.__qolShotCursorOverlay) {
+        cursorStats = global.__qolShotCursorOverlay.stats();
+        global.__qolShotCursorOverlay.destroy();
+        global.__qolShotCursorOverlay = null;
+    }
+    if (global.__qolShotUnredirectDisabled) {
+        Meta.enable_unredirect_for_display(global.display);
+        global.__qolShotUnredirectDisabled = false;
+    }
 }
-return true;
+return cursorStats;
 })()"#
 }
 
@@ -482,6 +665,14 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Pa
     let capture_file = session.capture_file.as_deref().unwrap_or(output_file);
     if let Err(error) = wait_for_recording_file(session, capture_file) {
         eprintln!("[qol-shot] recording finalization failed: {error:#}");
+        if discard_empty_capture(capture_file) {
+            qol_runtime::probe!(
+                "SHOT_RECORD_FINALIZE",
+                "stage=failed reason=empty-capture removed=true"
+            );
+            show_notification("Recording failed", "No video frames were produced", 3000);
+            return None;
+        }
         show_notification(
             "Recording save delayed",
             "The recorder is still finalizing the file",
@@ -523,26 +714,7 @@ fn convert_cinnamon_recording(
     output_file: &Path,
     config: &Config,
 ) -> Result<()> {
-    let format = recording_format(&config.video.format);
-    let mut args = vec![
-        "-y".to_string(),
-        "-i".to_string(),
-        capture_file.to_string_lossy().to_string(),
-    ];
-    if format == "webm" {
-        args.extend(["-c:v", "libvpx-vp9", "-b:v", "0", "-crf"].map(str::to_string));
-        args.push(config.video.crf.clamp(0, 63).to_string());
-        args.extend(["-c:a", "libopus", "-b:a", "192k"].map(str::to_string));
-    } else {
-        args.extend(["-c:v", "libx264", "-crf"].map(str::to_string));
-        args.push(config.video.crf.clamp(0, 51).to_string());
-        args.extend(["-preset", normalized_h264_preset(&config.video.preset)].map(str::to_string));
-        args.extend(["-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k"].map(str::to_string));
-        if matches!(format.as_str(), "mp4" | "mov") {
-            args.extend(["-movflags", "+faststart"].map(str::to_string));
-        }
-    }
-    args.push(output_file.to_string_lossy().to_string());
+    let args = cinnamon_conversion_args(capture_file, output_file, config);
 
     let log_file = File::options()
         .create(true)
@@ -570,9 +742,58 @@ fn convert_cinnamon_recording(
     })?;
     qol_runtime::probe!(
         "SHOT_RECORD_FINALIZE",
-        "stage=converted backend=cinnamon_after_paint format={format}"
+        "stage=converted backend=cinnamon_after_paint format={}",
+        recording_format(&config.video.format)
     );
     Ok(())
+}
+
+fn cinnamon_conversion_args(
+    capture_file: &Path,
+    output_file: &Path,
+    config: &Config,
+) -> Vec<String> {
+    let format = recording_format(&config.video.format);
+    let mut args = vec![
+        "-y".to_string(),
+        "-i".to_string(),
+        capture_file.to_string_lossy().to_string(),
+    ];
+    if format == "webm" {
+        args.extend(["-c:v", "libvpx-vp9", "-b:v", "0", "-crf"].map(str::to_string));
+        args.push(config.video.crf.clamp(0, 63).to_string());
+        args.extend(["-c:a", "libopus", "-b:a", "192k"].map(str::to_string));
+    } else {
+        args.extend(["-c:v", "libx264", "-crf"].map(str::to_string));
+        args.push(config.video.crf.clamp(0, 51).to_string());
+        args.extend(["-preset", normalized_h264_preset(&config.video.preset)].map(str::to_string));
+        args.extend(["-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k"].map(str::to_string));
+        if matches!(format.as_str(), "mp4" | "mov") {
+            args.extend(["-movflags", "+faststart"].map(str::to_string));
+        }
+    }
+    args.extend(["-fps_mode", "passthrough"].map(str::to_string));
+    args.push(output_file.to_string_lossy().to_string());
+    args
+}
+
+fn discard_empty_capture(capture_file: &Path) -> bool {
+    let Ok(metadata) = capture_file.symlink_metadata() else {
+        return false;
+    };
+    if !metadata.file_type().is_file() || metadata.len() != 0 {
+        return false;
+    }
+    match std::fs::remove_file(capture_file) {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!(
+                "[qol-shot] failed to remove empty capture {}: {error}",
+                capture_file.display()
+            );
+            false
+        }
+    }
 }
 
 fn wait_for_recording_file(session: &CaptureSession, output_file: &Path) -> Result<()> {
@@ -677,10 +898,51 @@ mod tests {
             file_template: r#"/tmp/a "quoted" recording.mov"#.to_string(),
             pipeline: r#"queue ! x264enc option-string="value" ! qtmux"#.to_string(),
         };
-        let script = cinnamon_start_script(&request).unwrap();
+        let script = cinnamon_start_script(&request, true).unwrap();
         assert!(script.contains(r#""file_template":"/tmp/a \"quoted\" recording.mov""#));
         assert!(script.contains("recorder.set_pipeline(request.pipeline)"));
         assert!(script.contains("Array.isArray(recordResult)"));
+        assert!(script.contains("const isolatedCursor = true"));
+        assert!(script.contains("recorder.set_draw_cursor(!isolatedCursor)"));
+        assert!(script.contains("new Magnifier.MouseSpriteContent()"));
+        assert!(script.contains("global.stage.connect('captured-event', captureCursorMotion)"));
+        assert!(script.contains("global.stage.connect('before-paint', captureCursorPaint)"));
+        assert!(script.contains("cursorContent._textureScale() / cursorBaseScale"));
+        assert!(!script.contains("tracker.set_pointer_visible"));
+    }
+
+    #[test]
+    fn cinnamon_script_can_fall_back_to_builtin_cursor() {
+        let request = CinnamonCaptureRequest {
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 800,
+                h: 600,
+            },
+            framerate: 60,
+            file_template: "/tmp/fallback.webm".to_string(),
+            pipeline: "queue ! vp8enc ! webmmux".to_string(),
+        };
+
+        let script = cinnamon_start_script(&request, false).unwrap();
+
+        assert!(script.contains("const isolatedCursor = false"));
+        assert!(script.contains("recorder.set_draw_cursor(!isolatedCursor)"));
+    }
+
+    #[test]
+    fn cinnamon_conversion_preserves_capture_timestamps() {
+        let config = Config::default();
+        let args = super::cinnamon_conversion_args(
+            std::path::Path::new("/tmp/input.webm"),
+            std::path::Path::new("/tmp/output.mp4"),
+            &config,
+        );
+
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-fps_mode", "passthrough"]));
     }
 
     #[test]

@@ -23,6 +23,7 @@ const CHIP_W: f32 = 300.0;
 const CHIP_H: f32 = 30.0;
 const CHIP_TOP: f32 = 12.0;
 const SELECTOR_STATE_POLL_MS: u64 = 16;
+const MIN_DRAG_DISTANCE_PX: f64 = 6.0;
 static SELECTOR_SEQ: AtomicU64 = AtomicU64::new(0);
 static CURRENT_PALETTE: LazyLock<ShotSelectorPalette> = LazyLock::new(shot_selector_runtime);
 
@@ -1441,7 +1442,7 @@ fn selected_rect(origin: Point<Pixels>, start: Point<Pixels>, end: Point<Pixels>
         w: (right - left).round() as i32,
         h: (bottom - top).round() as i32,
     };
-    if rect.w <= 0 || rect.h <= 0 {
+    if rect.w <= 0 || rect.h <= 0 || f64::from(rect.w.max(rect.h)) < MIN_DRAG_DISTANCE_PX {
         return None;
     }
     Some(rect)
@@ -1645,6 +1646,31 @@ mod tests {
                 point(px(8.0), px(12.0))
             ),
             None
+        );
+    }
+
+    #[test]
+    fn selected_rect_treats_tiny_pointer_jitter_as_a_click() {
+        assert_eq!(
+            selected_rect(
+                point(px(0.0), px(0.0)),
+                point(px(497.0), px(535.0)),
+                point(px(499.0), px(537.0)),
+            ),
+            None
+        );
+        assert_eq!(
+            selected_rect(
+                point(px(0.0), px(0.0)),
+                point(px(100.0), px(100.0)),
+                point(px(200.0), px(102.0)),
+            ),
+            Some(Rect {
+                x: 100,
+                y: 100,
+                w: 100,
+                h: 2,
+            })
         );
     }
 
