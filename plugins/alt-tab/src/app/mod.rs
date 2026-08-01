@@ -350,14 +350,6 @@ impl AltTabApp {
                 ctx,
                 Some(&mut *window),
             );
-            if let Some(wid) = gathered.fresh_preview {
-                state.evict_live_frame(wid);
-            }
-            if let Some((wid, buf)) = gathered.fresh_live_frame.clone() {
-                if let Some(frame) = buf.into_live_frame() {
-                    state.insert_live_frames([(wid, frame)].into_iter().collect());
-                }
-            }
             #[cfg(debug_assertions)]
             {
                 let is_stale = state

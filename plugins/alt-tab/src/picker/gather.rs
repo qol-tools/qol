@@ -3,27 +3,461 @@ use crate::app::AltTabApp;
 use crate::capture;
 use crate::config::AltTabConfig;
 use crate::discovery::WindowInfo;
+use crate::picker::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
 use crate::picker::{IconMap, PreviewMap, SharedIconCache};
+use futures::channel::oneshot;
 use gpui::*;
-use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
-static PREVIEW_FILL_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CaptureLane {
+    HiddenWarmer,
+    FocusLeave,
+}
 
-struct InFlightGuard;
-impl Drop for InFlightGuard {
-    fn drop(&mut self) {
-        PREVIEW_FILL_IN_FLIGHT.store(false, Ordering::Release);
+impl CaptureLane {
+    fn name(self) -> &'static str {
+        match self {
+            Self::HiddenWarmer => "hidden_warmer",
+            Self::FocusLeave => "focus_leave",
+        }
     }
+}
+
+const CAPTURE_WORKER_COUNT: usize = 2;
+
+enum BlockingCaptureResult {
+    Live(capture::SendCVBuf),
+    Preview(Option<qol_app_icon::RgbaImage>),
+}
+
+struct BlockingCaptureJob {
+    wid: u32,
+    dims: (usize, usize),
+    result: oneshot::Sender<BlockingCaptureResult>,
+}
+
+type CaptureBackend = dyn Fn(u32, (usize, usize)) -> BlockingCaptureResult + Send + Sync;
+
+struct CaptureWorkerPool {
+    jobs: SyncSender<BlockingCaptureJob>,
+    active_workers: Arc<AtomicUsize>,
+    capacity: usize,
+}
+
+impl CaptureWorkerPool {
+    fn new() -> Arc<Self> {
+        Self::with_backend(CAPTURE_WORKER_COUNT, Arc::new(capture_blocking))
+    }
+
+    fn with_backend(worker_count: usize, backend: Arc<CaptureBackend>) -> Arc<Self> {
+        let capacity = worker_count.max(1);
+        let (jobs, queue) = sync_channel(capacity);
+        let active_workers = Arc::new(AtomicUsize::new(0));
+        let queue = Arc::new(Mutex::new(queue));
+        let pool = Arc::new(Self {
+            jobs,
+            active_workers: active_workers.clone(),
+            capacity,
+        });
+        for index in 0..capacity {
+            spawn_capture_worker(
+                index,
+                queue.clone(),
+                backend.clone(),
+                active_workers.clone(),
+            );
+        }
+        pool
+    }
+
+    fn submit(
+        &self,
+        wid: u32,
+        dims: (usize, usize),
+    ) -> Result<oneshot::Receiver<BlockingCaptureResult>, &'static str> {
+        let admitted = self
+            .active_workers
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < self.capacity).then_some(active + 1)
+            })
+            .is_ok();
+        if !admitted {
+            return Err("capture_workers_full");
+        }
+        let (result, receiver) = oneshot::channel();
+        let job = BlockingCaptureJob { wid, dims, result };
+        if let Err(error) = self.jobs.try_send(job) {
+            self.active_workers.fetch_sub(1, Ordering::AcqRel);
+            return Err(match error {
+                TrySendError::Full(_) => "capture_workers_full",
+                TrySendError::Disconnected(_) => "capture_workers_closed",
+            });
+        }
+        Ok(receiver)
+    }
+
+    #[cfg(test)]
+    fn active_workers(&self) -> usize {
+        self.active_workers.load(Ordering::Acquire)
+    }
+}
+
+fn spawn_capture_worker(
+    index: usize,
+    queue: Arc<Mutex<Receiver<BlockingCaptureJob>>>,
+    backend: Arc<CaptureBackend>,
+    active_workers: Arc<AtomicUsize>,
+) {
+    let _ = thread::Builder::new()
+        .name(format!("qol-alt-tab-capture-{index}"))
+        .spawn(move || loop {
+            let job = queue.lock().ok().and_then(|queue| queue.recv().ok());
+            let Some(job) = job else {
+                return;
+            };
+            let result = backend(job.wid, job.dims);
+            active_workers.fetch_sub(1, Ordering::AcqRel);
+            let _ = job.result.send(result);
+        });
+}
+
+fn capture_blocking(wid: u32, dims: (usize, usize)) -> BlockingCaptureResult {
+    if capture::live_shots_available() {
+        if let Some(buffer) = capture_live_frame_blocking(wid, dims) {
+            return BlockingCaptureResult::Live(buffer);
+        }
+    }
+    let captured = capture::capture_previews_cg(&[(0, wid)], PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT);
+    BlockingCaptureResult::Preview(captured.into_iter().next().and_then(|(_, image)| image))
+}
+
+#[derive(Clone)]
+pub(super) struct PreviewCaptureScheduler {
+    warmer: Arc<Mutex<LaneState<PreviewCaptureRequest>>>,
+    focus_leave: Arc<Mutex<LaneState<PreviewCaptureRequest>>>,
+    active_workers: Arc<AtomicUsize>,
+    capture_workers: Arc<CaptureWorkerPool>,
+}
+
+struct LaneState<T> {
+    next_generation: usize,
+    active_generation: Option<usize>,
+    pending: Option<Queued<T>>,
+}
+
+impl<T> Default for LaneState<T> {
+    fn default() -> Self {
+        Self {
+            next_generation: 0,
+            active_generation: None,
+            pending: None,
+        }
+    }
+}
+
+struct Queued<T> {
+    generation: usize,
+    value: T,
+}
+
+enum Admission<T> {
+    Start(Queued<T>),
+    Pending {
+        generation: usize,
+        replaced: Option<Queued<T>>,
+    },
+}
+
+#[derive(Clone)]
+pub(super) struct PreviewCaptureRequest {
+    pub handle: WindowHandle<AltTabApp>,
+    pub window: WindowInfo,
+    pub preview_cache: SharedPreviewCache,
+    pub show_id: u64,
+}
+
+enum CaptureOutcome {
+    Committed,
+    Empty(&'static str),
+    Cancelled(&'static str),
+    Skipped(&'static str),
+}
+
+impl CaptureOutcome {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Committed => "committed",
+            Self::Empty(_) => "empty",
+            Self::Cancelled(_) => "cancelled",
+            Self::Skipped(_) => "skipped",
+        }
+    }
+
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::Committed => "none",
+            Self::Empty(reason) | Self::Cancelled(reason) | Self::Skipped(reason) => reason,
+        }
+    }
+}
+
+struct CaptureResult {
+    outcome: CaptureOutcome,
+    capture_duration: Duration,
+}
+
+#[derive(Clone, Copy)]
+struct CaptureIdentity {
+    show_id: u64,
+    wid: u32,
+}
+
+impl CaptureResult {
+    fn no_capture(outcome: CaptureOutcome) -> Self {
+        Self {
+            outcome,
+            capture_duration: Duration::ZERO,
+        }
+    }
+
+    fn with_capture(outcome: CaptureOutcome, capture_duration: Duration) -> Self {
+        Self {
+            outcome,
+            capture_duration,
+        }
+    }
+}
+
+struct CaptureTrace {
+    lane: CaptureLane,
+    phase: &'static str,
+    generation: usize,
+    active_workers: usize,
+    show_id: u64,
+    wid: u32,
+    reason: &'static str,
+    capture_duration: Duration,
+}
+
+struct CaptureFinishTrace<'a> {
+    lane: CaptureLane,
+    generation: usize,
+    active_workers: usize,
+    show_id: u64,
+    wid: u32,
+    outcome: &'a CaptureOutcome,
+    worker_duration: Duration,
+    capture_duration: Duration,
+    pending: bool,
+}
+
+impl<T> LaneState<T> {
+    fn admit(&mut self, value: T) -> Admission<T> {
+        self.next_generation = self.next_generation.wrapping_add(1);
+        let generation = self.next_generation;
+        let queued = Queued { generation, value };
+        if self.active_generation.is_some() {
+            let replaced = self.pending.replace(queued);
+            return Admission::Pending {
+                generation,
+                replaced,
+            };
+        }
+        self.active_generation = Some(generation);
+        Admission::Start(queued)
+    }
+
+    fn is_current(&self, generation: usize) -> bool {
+        self.active_generation == Some(generation) && self.pending.is_none()
+    }
+
+    fn finish(&mut self, generation: usize) -> Option<Queued<T>> {
+        if self.active_generation != Some(generation) {
+            return None;
+        }
+        let next = self.pending.take();
+        self.active_generation = next.as_ref().map(|queued| queued.generation);
+        next
+    }
+}
+
+impl PreviewCaptureScheduler {
+    pub(super) fn new() -> Self {
+        Self {
+            warmer: Arc::new(Mutex::new(LaneState::default())),
+            focus_leave: Arc::new(Mutex::new(LaneState::default())),
+            active_workers: Arc::new(AtomicUsize::new(0)),
+            capture_workers: CaptureWorkerPool::new(),
+        }
+    }
+
+    pub(super) fn active_workers(&self) -> usize {
+        self.active_workers.load(Ordering::Acquire)
+    }
+
+    pub(super) fn enqueue(&self, lane: CaptureLane, request: PreviewCaptureRequest, cx: &mut App) {
+        let show_id = request.show_id;
+        let wid = request.window.id;
+        let state = self.state(lane);
+        let Ok(mut state) = state.lock() else {
+            return;
+        };
+        let admission = state.admit(request);
+        match admission {
+            Admission::Start(job) => {
+                drop(state);
+                self.start(lane, job, cx);
+            }
+            Admission::Pending {
+                generation,
+                replaced,
+            } => {
+                let active_workers = self.active_workers();
+                drop(state);
+                if let Some(replaced) = replaced {
+                    trace_capture(CaptureTrace {
+                        lane,
+                        phase: "cancel",
+                        generation: replaced.generation,
+                        active_workers,
+                        show_id: replaced.value.show_id,
+                        wid: replaced.value.window.id,
+                        reason: "pending_replaced",
+                        capture_duration: Duration::ZERO,
+                    });
+                }
+                trace_capture(CaptureTrace {
+                    lane,
+                    phase: "enqueue_pending",
+                    generation,
+                    active_workers,
+                    show_id,
+                    wid,
+                    reason: "active_worker",
+                    capture_duration: Duration::ZERO,
+                });
+            }
+        }
+    }
+
+    fn state(&self, lane: CaptureLane) -> &Arc<Mutex<LaneState<PreviewCaptureRequest>>> {
+        match lane {
+            CaptureLane::HiddenWarmer => &self.warmer,
+            CaptureLane::FocusLeave => &self.focus_leave,
+        }
+    }
+
+    fn is_current(&self, lane: CaptureLane, generation: usize) -> bool {
+        self.state(lane)
+            .lock()
+            .map(|state| state.is_current(generation))
+            .unwrap_or(false)
+    }
+
+    fn start(&self, lane: CaptureLane, job: Queued<PreviewCaptureRequest>, cx: &mut App) {
+        let active_workers = self.active_workers.fetch_add(1, Ordering::AcqRel) + 1;
+        trace_capture(CaptureTrace {
+            lane,
+            phase: "start",
+            generation: job.generation,
+            active_workers,
+            show_id: job.value.show_id,
+            wid: job.value.window.id,
+            reason: "none",
+            capture_duration: Duration::ZERO,
+        });
+        let scheduler = self.clone();
+        let generation = job.generation;
+        let identity = CaptureIdentity {
+            show_id: job.value.show_id,
+            wid: job.value.window.id,
+        };
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let started = Instant::now();
+            let result = run_capture(cx, lane, job, &scheduler).await;
+            scheduler.finish(lane, generation, identity, result, started, cx);
+        })
+        .detach();
+    }
+
+    fn finish(
+        &self,
+        lane: CaptureLane,
+        generation: usize,
+        identity: CaptureIdentity,
+        result: CaptureResult,
+        started: Instant,
+        cx: &mut AsyncApp,
+    ) {
+        let next = self
+            .state(lane)
+            .lock()
+            .ok()
+            .and_then(|mut state| state.finish(generation));
+        let active_workers = self.active_workers.fetch_sub(1, Ordering::AcqRel) - 1;
+        let elapsed = started.elapsed();
+        let pending = next.is_some();
+        trace_capture_finish(CaptureFinishTrace {
+            lane,
+            generation,
+            active_workers,
+            show_id: identity.show_id,
+            wid: identity.wid,
+            outcome: &result.outcome,
+            worker_duration: elapsed,
+            capture_duration: result.capture_duration,
+            pending,
+        });
+        let Some(next) = next else {
+            return;
+        };
+        let scheduler = self.clone();
+        let _ = cx.update(|app_cx| scheduler.start(lane, next, app_cx));
+    }
+}
+
+fn trace_capture(trace: CaptureTrace) {
+    qol_runtime::probe!(
+        "PREVIEW_CAPTURE",
+        "lane={} phase={} generation={} active_workers={} show_id={} wid={} reason={} capture_duration_ms={} reveal_frame=show_cache_or_placeholder first_paint_latency_ms=not_measured",
+        trace.lane.name(),
+        trace.phase,
+        trace.generation,
+        trace.active_workers,
+        trace.show_id,
+        trace.wid,
+        trace.reason,
+        trace.capture_duration.as_millis(),
+    );
+}
+
+fn trace_capture_finish(trace: CaptureFinishTrace) {
+    qol_runtime::probe!(
+        "PREVIEW_CAPTURE",
+        "lane={} phase=finish generation={} active_workers={} show_id={} wid={} reason={} worker_duration_ms={} capture_duration_ms={} reveal_frame=show_cache_or_placeholder outcome={} pending={} first_paint_latency_ms=not_measured",
+        trace.lane.name(),
+        trace.generation,
+        trace.active_workers,
+        trace.show_id,
+        trace.wid,
+        trace.outcome.reason(),
+        trace.worker_duration.as_millis(),
+        trace.capture_duration.as_millis(),
+        trace.outcome.name(),
+        trace.pending,
+    );
 }
 
 pub(crate) struct GatheredWindows {
     pub windows: Vec<WindowInfo>,
     pub previews: PreviewMap,
     pub icons: IconMap,
-    pub fresh_preview: Option<u32>,
-    pub fresh_live_frame: Option<(u32, capture::SendCVBuf)>,
 }
 
 pub(super) fn gather(
@@ -59,70 +493,13 @@ pub(super) fn gather(
         windows,
         previews,
         icons,
-        fresh_preview: None,
-        fresh_live_frame: None,
     }
-}
-
-pub(super) fn capture_frontmost_live_frame(
-    windows: &[WindowInfo],
-    show_id: u64,
-) -> Option<(u32, capture::SendCVBuf)> {
-    use crate::rendering::preview_image::shot_request_dims;
-
-    let front = windows.first()?;
-    if front.is_minimized {
-        return None;
-    }
-    let wid = front.id;
-    let session = capture::cached_shots_session(&[wid])?;
-    let (w, h) = shot_request_dims(front.width, front.height);
-    let (tx, rx) = std::sync::mpsc::channel();
-    if !session.request_capture(wid, w, h, &tx) {
-        return None;
-    }
-    match rx.recv_timeout(std::time::Duration::from_millis(120)) {
-        Ok((_, Some(buf))) if buf.pixel_format() == capture::PIXEL_FORMAT_420F => {
-            #[cfg(debug_assertions)]
-            qol_runtime::probe!(
-                "PREVIEW_CAPTURE",
-                "show_id={show_id} source=on_open_sck targets=1 ids=[{wid}]"
-            );
-            #[cfg(not(debug_assertions))]
-            let _ = show_id;
-            Some((wid, buf))
-        }
-        _ => None,
-    }
-}
-
-pub(super) fn capture_frontmost_now(
-    windows: &[WindowInfo],
-    _show_id: u64,
-) -> Option<(u32, Arc<RenderImage>)> {
-    use crate::picker::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
-    use crate::rendering::preview_image::bgra_to_render_image;
-    let front = windows.first()?;
-    if front.is_minimized {
-        return None;
-    }
-    let wid = front.id;
-    let rgba = capture::capture_frontmost_preview(wid, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)?;
-    let img = bgra_to_render_image(rgba.data, rgba.width, rgba.height)?;
-    #[cfg(debug_assertions)]
-    qol_runtime::probe!(
-        "PREVIEW_CAPTURE",
-        "show_id={_show_id} source=on_open targets=1 ids=[{wid}]"
-    );
-    Some((wid, img))
 }
 
 fn windows_from_cache_or_discovery(
     _config: &AltTabConfig,
     window_cache: &WindowCache,
 ) -> Vec<WindowInfo> {
-    // dispatch_show writes the live query into window_cache before open_picker
-    // runs, so this is always populated by the time gather() is called.
     window_cache
         .lock()
         .ok()
@@ -237,305 +614,308 @@ pub(crate) fn build_icon_cache(raw_icons: HashMap<String, crate::discovery::Rgba
     cache
 }
 
-pub(super) struct PreviewFillRequest {
-    pub handle: WindowHandle<AltTabApp>,
-    pub windows: Vec<WindowInfo>,
-    pub preview_cache: SharedPreviewCache,
-    pub refresh_frontmost: bool,
-    pub refresh_previous_frontmost: bool,
+pub(super) fn capture_target_for_lane(
+    lane: CaptureLane,
+    windows: &[WindowInfo],
+) -> Option<WindowInfo> {
+    let index = match lane {
+        CaptureLane::HiddenWarmer => 0,
+        CaptureLane::FocusLeave => 1,
+    };
+    windows
+        .get(index)
+        .cloned()
+        .filter(|window| !window.is_minimized)
 }
 
-pub(super) fn spawn_preview_fill(req: PreviewFillRequest, cx: &mut App) {
-    if req.windows.iter().all(|w| w.is_minimized) {
-        return;
+fn cancellation_reason(
+    scheduler: &PreviewCaptureScheduler,
+    lane: CaptureLane,
+    generation: usize,
+) -> Option<&'static str> {
+    if !scheduler.is_current(lane, generation) {
+        return Some("superseded");
+    }
+    if picker_visibility_cancels(lane, crate::app::PICKER_VISIBLE.load(Ordering::Acquire)) {
+        return Some("picker_visible");
+    }
+    None
+}
+
+fn picker_visibility_cancels(lane: CaptureLane, picker_visible: bool) -> bool {
+    lane == CaptureLane::HiddenWarmer && picker_visible
+}
+
+async fn run_capture(
+    cx: &mut AsyncApp,
+    lane: CaptureLane,
+    job: Queued<PreviewCaptureRequest>,
+    scheduler: &PreviewCaptureScheduler,
+) -> CaptureResult {
+    use crate::rendering::preview_image::{bgra_to_render_image, shot_request_dims};
+
+    let generation = job.generation;
+    let request = job.value;
+    let show_id = request.show_id;
+    let wid = request.window.id;
+    if let Some(reason) = cancellation_reason(scheduler, lane, generation) {
+        trace_capture(CaptureTrace {
+            lane,
+            phase: "cancel",
+            generation,
+            active_workers: scheduler.active_workers(),
+            show_id,
+            wid,
+            reason,
+            capture_duration: Duration::ZERO,
+        });
+        return CaptureResult::no_capture(CaptureOutcome::Cancelled(reason));
+    }
+    if request.window.is_minimized {
+        return CaptureResult::no_capture(CaptureOutcome::Empty("minimized"));
     }
     let rendering = crate::rendering::RenderingFlow::current();
     if !rendering.captures_preview_fill() {
+        return CaptureResult::no_capture(CaptureOutcome::Skipped("preview_plane"));
+    }
+    let dims = shot_request_dims(request.window.width, request.window.height);
+    let receiver = match scheduler.capture_workers.submit(wid, dims) {
+        Ok(receiver) => receiver,
+        Err(reason) => return CaptureResult::no_capture(CaptureOutcome::Empty(reason)),
+    };
+    let capture_started = Instant::now();
+    let captured = match receiver.await {
+        Ok(result) => result,
+        Err(_) => {
+            return CaptureResult::no_capture(CaptureOutcome::Empty("capture_workers_closed"));
+        }
+    };
+    let capture_duration = capture_started.elapsed();
+    if let Some(reason) = cancellation_reason(scheduler, lane, generation) {
+        trace_capture(CaptureTrace {
+            lane,
+            phase: "cancel",
+            generation,
+            active_workers: scheduler.active_workers(),
+            show_id,
+            wid,
+            reason,
+            capture_duration,
+        });
+        return CaptureResult::with_capture(CaptureOutcome::Cancelled(reason), capture_duration);
+    }
+    match captured {
+        BlockingCaptureResult::Live(buffer) => {
+            let outcome = commit_live_frame(
+                cx,
+                lane,
+                generation,
+                scheduler,
+                request,
+                buffer,
+                capture_duration,
+            );
+            CaptureResult::with_capture(outcome, capture_duration)
+        }
+        BlockingCaptureResult::Preview(Some(rgba)) => {
+            let Some(image) = bgra_to_render_image(rgba.data, rgba.width, rgba.height) else {
+                return CaptureResult::with_capture(
+                    CaptureOutcome::Empty("decode_failed"),
+                    capture_duration,
+                );
+            };
+            let outcome = commit_preview(
+                cx,
+                lane,
+                generation,
+                scheduler,
+                request,
+                [(wid, image)].into_iter().collect(),
+                capture_duration,
+            );
+            CaptureResult::with_capture(outcome, capture_duration)
+        }
+        BlockingCaptureResult::Preview(None) => {
+            CaptureResult::with_capture(CaptureOutcome::Empty("capture_failed"), capture_duration)
+        }
+    }
+}
+
+fn capture_live_frame_blocking(
+    wid: u32,
+    (width, height): (usize, usize),
+) -> Option<capture::SendCVBuf> {
+    let session = capture::warm_shots_session(&[wid])?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    if !session.request_capture(wid, width, height, &tx) {
+        return None;
+    }
+    match rx.recv_timeout(Duration::from_millis(120)) {
+        Ok((reply_wid, Some(buf)))
+            if reply_wid == wid && buf.pixel_format() == capture::PIXEL_FORMAT_420F =>
+        {
+            Some(buf)
+        }
+        _ => None,
+    }
+}
+
+fn trace_preview_paint(
+    window: &mut Window,
+    lane: CaptureLane,
+    generation: usize,
+    active_workers: usize,
+    show_id: u64,
+    wid: u32,
+    capture_duration: Duration,
+) {
+    let committed_at = Instant::now();
+    window.on_next_frame(move |_, _| {
         qol_runtime::probe!(
             "PREVIEW_CAPTURE",
-            "source=fill outcome=skipped reason=preview_plane backend={} visible={} refresh_frontmost={} refresh_previous_frontmost={}",
-            rendering.preview_plane_backend().unwrap_or("none"),
-            crate::app::PICKER_VISIBLE.load(Ordering::Relaxed),
-            req.refresh_frontmost,
-            req.refresh_previous_frontmost
+            "lane={} phase=paint generation={} active_workers={} show_id={} wid={} reason=none capture_duration_ms={} reveal_frame=painted first_paint_latency_ms={}",
+            lane.name(),
+            generation,
+            active_workers,
+            show_id,
+            wid,
+            capture_duration.as_millis(),
+            committed_at.elapsed().as_millis(),
         );
-        return;
-    }
-    if PREVIEW_FILL_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/timing] preview_fill=skipped (in-flight)");
-        return;
-    }
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        let _guard = InFlightGuard;
-        fill_previews(cx, req).await;
-    })
-    .detach();
+    });
 }
 
-// idx 0 is the window the user was just on before Alt+Tab - the most-visible
-// card - so it is re-shot only while the picker is visible (refresh_frontmost).
-// idx 1 is usually the app window that just lost focus after MRU reorder.
-// Uncached windows always need a first capture.
-#[cfg(test)]
-fn select_capture_targets(
-    windows: &[WindowInfo],
-    cached_ids: &HashSet<u32>,
-    refresh_frontmost: bool,
-) -> Vec<(usize, u32)> {
-    select_capture_targets_with_focus(windows, cached_ids, refresh_frontmost, false)
-}
-
-fn select_capture_targets_with_focus(
-    windows: &[WindowInfo],
-    cached_ids: &HashSet<u32>,
-    refresh_frontmost: bool,
-    refresh_previous_frontmost: bool,
-) -> Vec<(usize, u32)> {
-    windows
-        .iter()
-        .enumerate()
-        .filter(|(_, w)| !w.is_minimized)
-        .filter(|(idx, w)| {
-            !cached_ids.contains(&w.id)
-                || (refresh_frontmost && *idx == 0)
-                || (refresh_previous_frontmost && *idx == 1)
-        })
-        .map(|(i, w)| (i, w.id))
-        .collect()
-}
-
-async fn fill_previews(cx: &mut AsyncApp, req: PreviewFillRequest) {
-    use crate::picker::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
-    use crate::rendering::preview_image::bgra_to_render_image;
-
-    if capture::live_shots_available() && fill_live_frames(cx, &req).await {
-        return;
-    }
-
-    #[cfg(debug_assertions)]
-    let t_start = std::time::Instant::now();
-
-    let cached_ids = snapshot_preview_keys(&req.preview_cache);
-    let eligible = req.windows.iter().filter(|w| !w.is_minimized).count();
-    let targets = select_capture_targets_with_focus(
-        &req.windows,
-        &cached_ids,
-        req.refresh_frontmost,
-        req.refresh_previous_frontmost,
-    );
-    if targets.is_empty() {
-        return;
-    }
-    #[cfg(debug_assertions)]
-    let (target_count, skipped_count) = (targets.len(), eligible.saturating_sub(targets.len()));
-    #[cfg(not(debug_assertions))]
-    let _ = eligible;
-    #[cfg(debug_assertions)]
-    let target_ids = sorted_target_ids(&targets);
-    #[cfg(debug_assertions)]
-    qol_runtime::probe!(
-        "PREVIEW_CAPTURE",
-        "source=fill refresh_frontmost={} refresh_previous_frontmost={} targets={} skipped={} ids=[{}]",
-        req.refresh_frontmost,
-        req.refresh_previous_frontmost,
-        target_count,
-        skipped_count,
-        format_ids(&target_ids),
-    );
-
-    let id_for_idx: HashMap<usize, u32> = targets.iter().copied().collect();
-    let executor = cx.background_executor().clone();
-    let capture_targets = targets.clone();
-    let captured = executor
-        .spawn(async move {
-            capture::capture_previews_cg(&capture_targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
-        })
-        .await;
-
-    let mut previews = PreviewMap::new();
-    for (idx, rgba) in captured {
-        let Some(rgba) = rgba else { continue };
-        let Some(&wid) = id_for_idx.get(&idx) else {
-            continue;
-        };
-        if let Some(img) = bgra_to_render_image(rgba.data, rgba.width, rgba.height) {
-            previews.insert(wid, img);
-        }
-    }
-    if previews.is_empty() {
-        return;
-    }
-    commit_previews_foreground(cx, req.handle, req.preview_cache.clone(), previews);
-
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "[alt-tab/timing] preview_fill={}ms ({} windows, {} skipped)",
-        t_start.elapsed().as_millis(),
-        target_count,
-        skipped_count,
-    );
-}
-
-async fn fill_live_frames(cx: &mut AsyncApp, req: &PreviewFillRequest) -> bool {
-    use crate::rendering::preview_image::shot_request_dims;
-
-    let covered = snapshot_live_frame_keys(cx, req.handle);
-    let targets = select_capture_targets_with_focus(
-        &req.windows,
-        &covered,
-        req.refresh_frontmost,
-        req.refresh_previous_frontmost,
-    );
-    if targets.is_empty() {
-        return true;
-    }
-    let requests: Vec<(u32, (usize, usize))> = req
-        .windows
-        .iter()
-        .filter(|w| targets.iter().any(|(_, wid)| *wid == w.id))
-        .map(|w| (w.id, shot_request_dims(w.width, w.height)))
-        .collect();
-    #[cfg(debug_assertions)]
-    qol_runtime::probe!(
-        "PREVIEW_CAPTURE",
-        "source=fill_sck targets={} ids=[{}]",
-        requests.len(),
-        format_ids(&requests.iter().map(|(wid, _)| *wid).collect::<Vec<_>>()),
-    );
-    let executor = cx.background_executor().clone();
-    let shots = executor
-        .spawn(async move { capture_live_frames_blocking(requests) })
-        .await;
-    if shots.is_empty() {
-        return false;
-    }
-    commit_live_frames_foreground(cx, req.handle, shots);
-    true
-}
-
-fn capture_live_frames_blocking(
-    requests: Vec<(u32, (usize, usize))>,
-) -> Vec<(u32, capture::SendCVBuf)> {
-    let wids: Vec<u32> = requests.iter().map(|(wid, _)| *wid).collect();
-    let Some(session) = capture::warm_shots_session(&wids) else {
-        return Vec::new();
-    };
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut shots = Vec::new();
-    for (wid, (w, h)) in requests {
-        if !session.request_capture(wid, w, h, &tx) {
-            continue;
-        }
-        match rx.recv_timeout(std::time::Duration::from_secs(1)) {
-            Ok((wid, Some(buf))) if buf.pixel_format() == capture::PIXEL_FORMAT_420F => {
-                shots.push((wid, buf));
+fn commit_live_frame(
+    cx: &mut AsyncApp,
+    lane: CaptureLane,
+    generation: usize,
+    scheduler: &PreviewCaptureScheduler,
+    request: PreviewCaptureRequest,
+    buffer: capture::SendCVBuf,
+    capture_duration: Duration,
+) -> CaptureOutcome {
+    let wid = request.window.id;
+    let show_id = request.show_id;
+    let handle = request.handle;
+    let committed = cx
+        .update(|cx| {
+            if cancellation_reason(scheduler, lane, generation).is_some() {
+                return false;
             }
-            _ => {}
-        }
+            handle
+                .update(cx, |view, window, cx| -> bool {
+                    let Some(frame) = buffer.into_live_frame() else {
+                        return false;
+                    };
+                    view.delegate.update(cx, |state, _| {
+                        state.insert_live_frames([(wid, frame)].into_iter().collect());
+                    });
+                    trace_preview_paint(
+                        window,
+                        lane,
+                        generation,
+                        scheduler.active_workers(),
+                        show_id,
+                        wid,
+                        capture_duration,
+                    );
+                    cx.notify();
+                    true
+                })
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    if committed {
+        return CaptureOutcome::Committed;
     }
-    shots
-}
-
-fn snapshot_live_frame_keys(cx: &mut AsyncApp, handle: WindowHandle<AltTabApp>) -> HashSet<u32> {
-    cx.update(|cx| {
-        handle
-            .update(cx, |view, _, cx| {
-                view.delegate.read(cx).live_frames.keys().copied().collect()
-            })
-            .unwrap_or_default()
-    })
-    .unwrap_or_default()
-}
-
-fn commit_live_frames_foreground(
-    cx: &mut AsyncApp,
-    handle: WindowHandle<AltTabApp>,
-    shots: Vec<(u32, capture::SendCVBuf)>,
-) {
-    let _ = cx.update(|cx| {
-        let _ = handle.update(cx, |view, _, cx| {
-            view.delegate.update(cx, |state, _| {
-                state.insert_live_frames(
-                    shots
-                        .into_iter()
-                        .filter_map(|(wid, buf)| buf.into_live_frame().map(|frame| (wid, frame)))
-                        .collect(),
-                );
-            });
-            cx.notify();
-        });
+    let reason = cancellation_reason(scheduler, lane, generation).unwrap_or("handle_unavailable");
+    if reason == "handle_unavailable" {
+        return CaptureOutcome::Empty(reason);
+    }
+    trace_capture(CaptureTrace {
+        lane,
+        phase: "cancel",
+        generation,
+        active_workers: scheduler.active_workers(),
+        show_id,
+        wid,
+        reason,
+        capture_duration,
     });
+    CaptureOutcome::Cancelled(reason)
 }
 
-fn snapshot_preview_keys(cache: &SharedPreviewCache) -> HashSet<u32> {
-    cache
-        .lock()
-        .ok()
-        .map(|c| c.keys().copied().collect())
-        .unwrap_or_default()
-}
-
-fn commit_previews_foreground(
+fn commit_preview(
     cx: &mut AsyncApp,
-    handle: WindowHandle<AltTabApp>,
-    cache: SharedPreviewCache,
+    lane: CaptureLane,
+    generation: usize,
+    scheduler: &PreviewCaptureScheduler,
+    request: PreviewCaptureRequest,
     previews: PreviewMap,
-) {
-    #[cfg(debug_assertions)]
-    let preview_count = previews.len();
-    #[cfg(debug_assertions)]
-    let preview_ids = sorted_preview_ids(&previews);
-    let _ = cx.update(|cx| {
-        if let Ok(mut pcache) = cache.lock() {
-            crate::rendering::image_registry::extend_with(&mut *pcache, previews.clone(), cx, None);
-            #[cfg(debug_assertions)]
-            crate::rendering::preview_trace::record_shared_fill(preview_ids.iter().copied());
-        }
-        let _ = handle.update(cx, |view, window, cx| {
-            view.update_previews(previews, window, cx);
-        });
-        #[cfg(debug_assertions)]
-        qol_runtime::probe!(
-            "PREVIEW_CACHE_WRITE",
-            "source=fill cache=shared n={} ids=[{}]",
-            preview_count,
-            format_ids(&preview_ids),
-        );
+    capture_duration: Duration,
+) -> CaptureOutcome {
+    let wid = request.window.id;
+    let show_id = request.show_id;
+    let handle = request.handle;
+    let cache = request.preview_cache;
+    let shared_previews = previews.clone();
+    let committed = cx
+        .update(|cx| {
+            if cancellation_reason(scheduler, lane, generation).is_some() {
+                return false;
+            }
+            if let Ok(mut cache) = cache.lock() {
+                crate::rendering::image_registry::extend_with(
+                    &mut *cache,
+                    shared_previews,
+                    cx,
+                    None,
+                );
+                #[cfg(debug_assertions)]
+                crate::rendering::preview_trace::record_shared_fill([wid]);
+            }
+            handle
+                .update(cx, |view, window, cx| {
+                    view.update_previews(previews, window, cx);
+                    trace_preview_paint(
+                        window,
+                        lane,
+                        generation,
+                        scheduler.active_workers(),
+                        show_id,
+                        wid,
+                        capture_duration,
+                    );
+                })
+                .is_ok()
+        })
+        .unwrap_or(false);
+    if committed {
+        return CaptureOutcome::Committed;
+    }
+    let reason = cancellation_reason(scheduler, lane, generation).unwrap_or("handle_unavailable");
+    if reason == "handle_unavailable" {
+        return CaptureOutcome::Empty(reason);
+    }
+    trace_capture(CaptureTrace {
+        lane,
+        phase: "cancel",
+        generation,
+        active_workers: scheduler.active_workers(),
+        show_id,
+        wid,
+        reason,
+        capture_duration,
     });
-}
-
-#[cfg(debug_assertions)]
-fn sorted_target_ids(targets: &[(usize, u32)]) -> Vec<u32> {
-    let mut ids: Vec<u32> = targets.iter().map(|(_, id)| *id).collect();
-    ids.sort_unstable();
-    ids
-}
-
-#[cfg(debug_assertions)]
-fn sorted_preview_ids(previews: &PreviewMap) -> Vec<u32> {
-    let mut ids: Vec<u32> = previews.keys().copied().collect();
-    ids.sort_unstable();
-    ids
-}
-
-#[cfg(debug_assertions)]
-fn format_ids(ids: &[u32]) -> String {
-    ids.iter()
-        .take(24)
-        .map(|id| id.to_string())
-        .collect::<Vec<_>>()
-        .join(" ")
+    CaptureOutcome::Cancelled(reason)
 }
 
 #[cfg(test)]
-mod preview_target_selection_tests {
-    use super::{select_capture_targets, select_capture_targets_with_focus};
+mod capture_lane_tests {
+    use super::{
+        capture_target_for_lane, picker_visibility_cancels, Admission, CaptureLane, LaneState,
+    };
     use crate::discovery::WindowInfo;
-    use std::collections::HashSet;
 
     fn w(id: u32, minimized: bool) -> WindowInfo {
         WindowInfo {
@@ -550,160 +930,143 @@ mod preview_target_selection_tests {
         }
     }
 
-    fn ids(v: &[(usize, u32)]) -> Vec<u32> {
-        v.iter().map(|(_, id)| *id).collect()
-    }
-
     #[test]
-    fn cold_cache_captures_all_non_minimized() {
-        let windows = vec![w(10, false), w(20, false), w(30, true), w(40, false)];
-        let cached = HashSet::new();
-        let got = select_capture_targets(&windows, &cached, true);
-        assert_eq!(ids(&got), vec![10, 20, 40]);
-        assert!(!got.iter().any(|(_, id)| *id == 30));
-    }
-
-    #[test]
-    fn warm_cache_all_cached_captures_only_frontmost() {
-        let windows = vec![w(10, false), w(20, false), w(30, false)];
-        let cached: HashSet<u32> = [10, 20, 30].into_iter().collect();
-        let got = select_capture_targets(&windows, &cached, true);
-        assert_eq!(ids(&got), vec![10]);
-        assert_eq!(got[0].0, 0, "idx 0 must be the frontmost");
-    }
-
-    #[test]
-    fn warm_cache_missing_id_is_also_captured() {
-        let windows = vec![w(10, false), w(20, false), w(30, false)];
-        let cached: HashSet<u32> = [10].into_iter().collect();
-        let got = select_capture_targets(&windows, &cached, true);
-        assert_eq!(ids(&got), vec![10, 20, 30]);
-    }
-
-    #[test]
-    fn warm_cache_missing_id_when_frontmost_already_cached() {
-        let windows = vec![w(10, false), w(20, false), w(30, false), w(40, false)];
-        let cached: HashSet<u32> = [10, 20, 40].into_iter().collect();
-        let got = select_capture_targets(&windows, &cached, true);
-        assert_eq!(ids(&got), vec![10, 30]);
-    }
-
-    #[test]
-    fn minimized_frontmost_not_captured_even_when_first() {
-        let windows = vec![w(10, true), w(20, false)];
-        let cached: HashSet<u32> = [20].into_iter().collect();
-        let got = select_capture_targets(&windows, &cached, true);
-        assert!(
-            got.is_empty(),
-            "minimized windows must never be capture targets"
-        );
-    }
-
-    #[test]
-    fn minimized_windows_without_cache_still_skipped() {
-        let windows = vec![w(10, true), w(20, true), w(30, false)];
-        let cached = HashSet::new();
-        let got = select_capture_targets(&windows, &cached, true);
-        assert_eq!(ids(&got), vec![30]);
-    }
-
-    #[test]
-    fn cold_cache_with_minimized_frontmost_still_captures_visible_windows() {
-        let windows = vec![w(10, true), w(20, false), w(30, false)];
-        let cached = HashSet::new();
-        let got = select_capture_targets(&windows, &cached, true);
-        assert_eq!(ids(&got), vec![20, 30]);
-        assert!(!got.iter().any(|(_, id)| *id == 10));
-    }
-
-    #[test]
-    fn empty_windows_yields_empty() {
-        let got = select_capture_targets(&[], &HashSet::new(), true);
-        assert!(got.is_empty());
-    }
-
-    #[test]
-    fn invisible_skips_already_cached_frontmost() {
-        let windows = vec![w(10, false), w(20, false), w(30, false)];
-        let cached: HashSet<u32> = [10, 20, 30].into_iter().collect();
-        let got = select_capture_targets(&windows, &cached, false);
-        assert!(
-            got.is_empty(),
-            "invisible refresh must not re-capture an already-cached frontmost"
-        );
-    }
-
-    #[test]
-    fn focus_refresh_captures_previous_frontmost_even_when_cached() {
-        let windows = vec![w(10, false), w(20, false), w(30, false)];
-        let cached: HashSet<u32> = [10, 20, 30].into_iter().collect();
-        let got = select_capture_targets_with_focus(&windows, &cached, false, true);
-        assert_eq!(ids(&got), vec![20]);
-        assert_eq!(got[0].0, 1, "idx 1 is the previous frontmost after focus");
-    }
-
-    #[test]
-    fn focus_refresh_skips_minimized_previous_frontmost() {
-        let windows = vec![w(10, false), w(20, true), w(30, false)];
-        let cached: HashSet<u32> = [10, 20, 30].into_iter().collect();
-        let got = select_capture_targets_with_focus(&windows, &cached, false, true);
-        assert!(got.is_empty());
-    }
-
-    #[test]
-    fn invisible_still_captures_uncached_windows() {
-        let windows = vec![w(10, false), w(20, false), w(30, false)];
-        let cached: HashSet<u32> = [10].into_iter().collect();
-        let got = select_capture_targets(&windows, &cached, false);
-        assert_eq!(
-            ids(&got),
-            vec![20, 30],
-            "uncached windows still need a first capture even while invisible"
-        );
-    }
-
-    #[test]
-    fn invisible_skips_minimized_but_captures_uncached() {
-        let windows = vec![w(10, true), w(20, false)];
-        let got = select_capture_targets(&windows, &HashSet::new(), false);
-        assert_eq!(
-            ids(&got),
-            vec![20],
-            "minimized filter wins regardless of refresh_frontmost"
-        );
-    }
-
-    #[test]
-    fn invisible_cold_cache_still_captures_all_non_minimized() {
+    fn hidden_warmer_only_targets_frontmost_window() {
         let windows = vec![w(10, false), w(20, false)];
-        let got = select_capture_targets(&windows, &HashSet::new(), false);
         assert_eq!(
-            ids(&got),
-            vec![10, 20],
-            "cold cache captures all non-minimized whether or not frontmost is forced"
+            capture_target_for_lane(CaptureLane::HiddenWarmer, &windows).map(|window| window.id),
+            Some(10)
         );
     }
 
     #[test]
-    fn invisible_mixed_captures_only_uncached_visible() {
-        let windows = vec![w(10, true), w(20, false), w(30, false)];
-        let cached: HashSet<u32> = [20].into_iter().collect();
-        let got = select_capture_targets(&windows, &cached, false);
+    fn focus_leave_only_targets_just_defocused_window() {
+        let windows = vec![w(10, false), w(20, false), w(30, false)];
         assert_eq!(
-            ids(&got),
-            vec![30],
-            "invisible: skip minimized, skip cached, capture uncached visible"
+            capture_target_for_lane(CaptureLane::FocusLeave, &windows).map(|window| window.id),
+            Some(20)
         );
     }
 
     #[test]
-    fn indices_returned_are_the_original_window_positions() {
-        let windows = vec![w(10, true), w(20, false), w(30, false)];
-        let cached: HashSet<u32> = [20, 30].into_iter().collect();
-        let got = select_capture_targets(&windows, &cached, true);
+    fn minimized_or_missing_lane_target_is_skipped() {
+        assert!(capture_target_for_lane(CaptureLane::HiddenWarmer, &[]).is_none());
         assert!(
-            got.is_empty(),
-            "no non-minimized frontmost + all cached = nothing to do"
+            capture_target_for_lane(CaptureLane::FocusLeave, &[w(10, false), w(20, true)])
+                .is_none()
         );
+        assert!(capture_target_for_lane(CaptureLane::HiddenWarmer, &[w(10, true)]).is_none());
+    }
+
+    #[test]
+    fn picker_visibility_only_cancels_hidden_warmer() {
+        assert!(picker_visibility_cancels(CaptureLane::HiddenWarmer, true));
+        assert!(!picker_visibility_cancels(CaptureLane::FocusLeave, true));
+        assert!(!picker_visibility_cancels(CaptureLane::FocusLeave, false));
+    }
+
+    #[test]
+    fn lane_queue_hands_off_one_latest_pending_request() {
+        let mut lane = LaneState::<u32>::default();
+        let first = match lane.admit(10) {
+            Admission::Start(job) => job,
+            Admission::Pending { .. } => panic!("first request must start"),
+        };
+        assert!(lane.is_current(first.generation));
+        let Admission::Pending {
+            generation: pending_generation,
+            replaced,
+        } = lane.admit(20)
+        else {
+            panic!("second request must remain pending");
+        };
+        assert!(replaced.is_none());
+        assert!(!lane.is_current(first.generation));
+        let Admission::Pending { replaced, .. } = lane.admit(30) else {
+            panic!("third request must replace the pending request");
+        };
+        assert_eq!(replaced.map(|job| job.value), Some(20));
+        let next = lane
+            .finish(first.generation)
+            .expect("latest request handoff");
+        assert_eq!(next.generation, pending_generation + 1);
+        assert_eq!(next.value, 30);
+        assert!(lane.is_current(next.generation));
+        assert!(lane.finish(next.generation).is_none());
+    }
+}
+
+#[cfg(test)]
+mod capture_lane_independence_tests {
+    use super::{Admission, LaneState};
+
+    #[test]
+    fn warmer_and_focus_leave_states_can_progress_independently() {
+        let mut warmer = LaneState::<u32>::default();
+        let mut focus_leave = LaneState::<u32>::default();
+        let warmer_job = match warmer.admit(1) {
+            Admission::Start(job) => job,
+            Admission::Pending { .. } => panic!("warmer must start"),
+        };
+        let focus_job = match focus_leave.admit(2) {
+            Admission::Start(job) => job,
+            Admission::Pending { .. } => panic!("focus leave must start"),
+        };
+        assert!(warmer.is_current(warmer_job.generation));
+        assert!(focus_leave.is_current(focus_job.generation));
+    }
+}
+
+#[cfg(test)]
+mod capture_worker_tests {
+    use super::{BlockingCaptureResult, CaptureWorkerPool};
+    use futures::executor::block_on;
+    use futures::future::join;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    #[test]
+    fn dedicated_capture_workers_bound_backend_and_keep_waiters_async() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(Barrier::new(3));
+        let release = Arc::new(Barrier::new(3));
+        let backend = {
+            let active = active.clone();
+            let peak = peak.clone();
+            let started = started.clone();
+            let release = release.clone();
+            Arc::new(move |_, _| {
+                let current = active.fetch_add(1, Ordering::AcqRel) + 1;
+                peak.fetch_max(current, Ordering::AcqRel);
+                started.wait();
+                release.wait();
+                active.fetch_sub(1, Ordering::AcqRel);
+                BlockingCaptureResult::Preview(None)
+            })
+        };
+        let pool = CaptureWorkerPool::with_backend(2, backend);
+        let first = pool.submit(10, (1, 1)).expect("first capture admission");
+        let second = pool.submit(20, (1, 1)).expect("second capture admission");
+        started.wait();
+        assert_eq!(pool.active_workers(), 2);
+        assert_eq!(pool.submit(30, (1, 1)).err(), Some("capture_workers_full"));
+
+        let release_thread = {
+            let release = release.clone();
+            thread::spawn(move || release.wait())
+        };
+        let heartbeat = Arc::new(AtomicUsize::new(0));
+        let heartbeat_for_future = heartbeat.clone();
+        let ((first, second), ()) = block_on(join(join(first, second), async move {
+            heartbeat_for_future.fetch_add(1, Ordering::AcqRel);
+        }));
+        release_thread.join().expect("capture release thread");
+        assert!(first.is_ok());
+        assert!(second.is_ok());
+        assert_eq!(heartbeat.load(Ordering::Acquire), 1);
+        assert_eq!(peak.load(Ordering::Acquire), 2);
+        assert_eq!(pool.active_workers(), 0);
     }
 }

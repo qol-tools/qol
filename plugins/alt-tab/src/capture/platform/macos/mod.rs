@@ -23,13 +23,6 @@ pub fn capture_previews_cg(
     cg::capture(targets, max_w, max_h)
 }
 
-pub fn capture_frontmost_preview(wid: u32, max_w: usize, max_h: usize) -> Option<RgbaImage> {
-    capture_previews_cg(&[(0, wid)], max_w, max_h)
-        .into_iter()
-        .next()
-        .and_then(|(_, image)| image)
-}
-
 pub fn get_app_icons(windows: &[WindowInfo]) -> HashMap<String, RgbaImage> {
     let mut icons: HashMap<String, RgbaImage> = windows
         .iter()

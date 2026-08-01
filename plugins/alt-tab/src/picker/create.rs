@@ -121,7 +121,6 @@ pub(crate) struct PickerInit {
     pub(crate) windows: Vec<WindowInfo>,
     pub(crate) previews: PreviewMap,
     pub(crate) icons: IconMap,
-    pub(crate) fresh_live_frame: Option<(u32, crate::capture::SendCVBuf)>,
 }
 
 impl PickerInit {
@@ -157,7 +156,6 @@ impl PickerInit {
             windows: gathered.windows,
             previews: gathered.previews,
             icons: gathered.icons,
-            fresh_live_frame: gathered.fresh_live_frame,
         }
     }
 
@@ -233,8 +231,6 @@ pub(crate) fn pre_create_ghost(
         windows: windows.to_vec(),
         previews: PreviewMap::new(),
         icons: IconMap::new(),
-        fresh_preview: None,
-        fresh_live_frame: None,
     };
     let init = PickerInit::new(
         config,

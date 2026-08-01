@@ -55,11 +55,7 @@ impl PickerState {
             card_padding: init.card_padding,
             layout_budget: init.layout_budget,
             live_previews: init.previews,
-            live_frames: init
-                .fresh_live_frame
-                .and_then(|(wid, buf)| buf.into_live_frame().map(|frame| (wid, frame)))
-                .into_iter()
-                .collect(),
+            live_frames: LiveFrameMap::new(),
             icon_cache: init.icons,
         }
     }
@@ -145,10 +141,6 @@ impl PickerState {
             self.live_frames.remove(wid);
         }
         self.insert_previews(previews, app, window);
-    }
-
-    pub(crate) fn evict_live_frame(&mut self, wid: u32) {
-        self.live_frames.remove(&wid);
     }
 
     pub(crate) fn insert_live_frames(&mut self, frames: LiveFrameMap) {
@@ -445,7 +437,6 @@ mod cycle_direction_tests {
             preview_cache: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             previews: HashMap::new(),
             icons: HashMap::new(),
-            fresh_live_frame: None,
         })
     }
 
@@ -609,7 +600,6 @@ mod set_windows_tests {
             preview_cache: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             previews: HashMap::new(),
             icons: HashMap::new(),
-            fresh_live_frame: None,
         });
         s.selected_index = selected;
         s

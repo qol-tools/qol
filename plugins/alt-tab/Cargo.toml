@@ -6,6 +6,7 @@ description = "Alt-Tab window switcher plugin for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
+futures = "0.3"
 gpui.workspace = true
 image = { version = "0.25", default-features = false }
 qol-apps.workspace = true

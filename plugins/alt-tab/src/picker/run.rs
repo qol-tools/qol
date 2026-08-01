@@ -1,8 +1,9 @@
+use super::monitor_listener::WarmerControl;
 use super::{open_picker, OpenPickerRequest};
 use crate::capture;
 use crate::config::AltTabConfig;
 use crate::discovery::{Platform, WindowDiscovery, WindowInfo};
-use crate::picker::gather::build_icon_cache;
+use crate::picker::gather::{build_icon_cache, PreviewCaptureScheduler};
 use crate::picker::{PickerWindowState, SharedIconCache};
 use crate::runtime::daemon;
 use gpui::*;
@@ -22,6 +23,11 @@ pub(super) struct PickerCaches {
     window_cache: WindowCache,
     icon_cache: SharedIconCache,
     preview_cache: SharedPreviewCache,
+    refresh_generation: Arc<AtomicUsize>,
+    show_generation: Arc<AtomicUsize>,
+    show_id: Arc<AtomicU64>,
+    capture_scheduler: PreviewCaptureScheduler,
+    warmer: WarmerControl,
 }
 
 #[derive(Clone)]
@@ -39,7 +45,20 @@ impl PickerCaches {
             window_cache: Arc::new(Mutex::new(Vec::new())),
             icon_cache: Arc::new(Mutex::new(HashMap::new())),
             preview_cache: Arc::new(Mutex::new(HashMap::new())),
+            refresh_generation: Arc::new(AtomicUsize::new(0)),
+            show_generation: Arc::new(AtomicUsize::new(0)),
+            show_id: Arc::new(AtomicU64::new(0)),
+            capture_scheduler: PreviewCaptureScheduler::new(),
+            warmer: WarmerControl::new(),
         }
+    }
+
+    fn next_show_generation(&self) -> usize {
+        self.show_generation.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    fn record_show(&self, show_id: u64) {
+        self.show_id.store(show_id, Ordering::Release);
     }
 }
 
@@ -92,7 +111,10 @@ pub(crate) fn run_app(
                 window_cache: state.caches.window_cache.clone(),
                 icon_cache: state.caches.icon_cache.clone(),
                 preview_cache: state.caches.preview_cache.clone(),
-                refresh_generation: Arc::new(AtomicUsize::new(0)),
+                refresh_generation: state.caches.refresh_generation.clone(),
+                show_id: state.caches.show_id.clone(),
+                capture_scheduler: state.caches.capture_scheduler.clone(),
+                warmer: state.caches.warmer.clone(),
             },
         );
         super::platform::pre_create(
@@ -104,7 +126,9 @@ pub(crate) fn run_app(
         );
 
         if show_on_start {
-            state.open_picker(&config, false, next_show_id(), cx);
+            let show_id = next_show_id();
+            state.caches.record_show(show_id);
+            state.open_picker(&config, false, show_id, cx);
         }
         spawn_daemon_loop(cx, rx, state);
     });
@@ -179,6 +203,8 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     #[cfg(debug_assertions)]
     let t_total = std::time::Instant::now();
     let show_id = next_show_id();
+    let generation = state.caches.next_show_generation();
+    state.caches.record_show(show_id);
     qol_runtime::probe!("SHOW_RECV", "show_id={show_id} reverse={reverse}");
 
     if crate::app::PICKER_VISIBLE.load(Ordering::Relaxed) {
@@ -200,6 +226,26 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
             eprintln!(
                 "[alt-tab/daemon] fast cycle, no requery ({}ms)",
                 t_total.elapsed().as_millis()
+            );
+            let cached_previews = state
+                .caches
+                .preview_cache
+                .lock()
+                .map(|cache| cache.len())
+                .unwrap_or(0);
+            let reveal_frame = if cached_previews > 0 {
+                "cached"
+            } else {
+                "placeholder"
+            };
+            #[cfg(debug_assertions)]
+            let total_ms = t_total.elapsed().as_millis();
+            #[cfg(not(debug_assertions))]
+            let total_ms = 0_u128;
+            qol_runtime::probe!(
+                "SHOW_TIMING",
+                "show_id={show_id} show_generation={generation} total={total_ms}ms config=0ms query=0ms(0 windows) update=0ms capture_lane=none active_workers={} cancellation_reason=none reveal_frame={reveal_frame} reveal_frame_ms={total_ms} first_paint_latency_ms=not_measured",
+                state.caches.capture_scheduler.active_workers(),
             );
             return;
         }
@@ -253,10 +299,22 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     #[cfg(not(debug_assertions))]
     let (config_ms, query_ms, window_count, update_ms, total_ms) =
         (0_u128, 0_u128, 0_usize, 0_u128, 0_u128);
+    let cached_previews = state
+        .caches
+        .preview_cache
+        .lock()
+        .map(|cache| cache.len())
+        .unwrap_or(0);
+    let reveal_frame = if cached_previews > 0 {
+        "cached"
+    } else {
+        "placeholder"
+    };
 
     qol_runtime::probe!(
         "SHOW_TIMING",
-        "total={total_ms}ms config={config_ms}ms query={query_ms}ms({window_count} windows) update={update_ms}ms"
+        "show_id={show_id} show_generation={generation} total={total_ms}ms config={config_ms}ms query={query_ms}ms({window_count} windows) update={update_ms}ms capture_lane=none active_workers={} cancellation_reason=none reveal_frame={reveal_frame} reveal_frame_ms={update_ms} first_paint_latency_ms=not_measured",
+        state.caches.capture_scheduler.active_workers(),
     );
 }
 
@@ -366,8 +424,9 @@ fn has_windows(windows: &[WindowInfo]) -> bool {
 
 #[cfg(test)]
 mod show_guard_tests {
-    use super::has_windows;
+    use super::{has_windows, PickerCaches};
     use crate::discovery::WindowInfo;
+    use std::sync::atomic::Ordering;
 
     fn w(id: u32) -> WindowInfo {
         WindowInfo {
@@ -398,5 +457,19 @@ mod show_guard_tests {
                 windows.len()
             );
         }
+    }
+
+    #[test]
+    fn show_generation_does_not_supersede_data_refresh() {
+        let caches = PickerCaches::new();
+        let data_generation = caches.refresh_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let show_generation = caches.next_show_generation();
+
+        assert_eq!(data_generation, 1);
+        assert_eq!(show_generation, 1);
+        assert_eq!(
+            caches.refresh_generation.load(Ordering::Acquire),
+            data_generation
+        );
     }
 }

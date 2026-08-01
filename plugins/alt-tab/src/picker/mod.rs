@@ -87,50 +87,17 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
         return;
     }
 
-    let mut gathered = gather(
+    let gathered = gather(
         req.config,
         &req.icon_cache,
         &req.window_cache,
         &req.preview_cache,
     );
-    seed_frontmost_preview(req, rendering, &mut gathered, cx);
     if try_reuse_existing(req, rendering, &placement, &gathered, cx) {
         return;
     }
     destroy_non_target_windows(req, &placement, cx);
     create_from_request(req, rendering, placement, gathered, cx);
-}
-
-fn seed_frontmost_preview(
-    req: &OpenPickerRequest,
-    rendering: RenderingFlow,
-    gathered: &mut GatheredWindows,
-    cx: &mut App,
-) {
-    if !rendering.captures_on_open() {
-        qol_runtime::probe!(
-            "PREVIEW_CAPTURE",
-            "show_id={} source=on_open outcome=skipped reason=preview_plane backend={}",
-            req.show_id,
-            rendering.preview_plane_backend().unwrap_or("none")
-        );
-        return;
-    }
-    if capture::live_shots_available() {
-        gathered.fresh_live_frame =
-            gather::capture_frontmost_live_frame(&gathered.windows, req.show_id);
-        return;
-    }
-    let Some((wid, img)) = gather::capture_frontmost_now(&gathered.windows, req.show_id) else {
-        return;
-    };
-    gathered.previews.insert(wid, img.clone());
-    gathered.fresh_preview = Some(wid);
-    if let Ok(mut cache) = req.preview_cache.lock() {
-        let mut fresh = crate::picker::PreviewMap::new();
-        fresh.insert(wid, img);
-        crate::rendering::image_registry::extend_with(&mut *cache, fresh, cx, None);
-    }
 }
 
 fn resolve_placement(
@@ -305,13 +272,7 @@ fn try_reuse_existing(
             req.current.borrow_mut().remove(source_key);
             req.current.borrow_mut().insert(target, handle);
         }
-        finalize_reuse(
-            handle,
-            gathered,
-            &req.icon_cache,
-            req.has_shown_once.clone(),
-            cx,
-        );
+        finalize_reuse(req, handle, gathered, cx);
         return true;
     }
     discard_old_window(req, source_key, handle, cx);
@@ -403,36 +364,25 @@ fn try_cycle_selection(
 }
 
 fn finalize_reuse(
+    req: &OpenPickerRequest,
     handle: WindowHandle<AltTabApp>,
     gathered: &GatheredWindows,
-    icon_cache: &SharedIconCache,
-    has_shown_once: Arc<AtomicBool>,
     cx: &mut App,
 ) {
     let previews = gathered.previews.clone();
     PICKER_VISIBLE.store(true, Ordering::Relaxed);
-    has_shown_once.store(true, Ordering::Release);
-    let fresh_preview = gathered.fresh_preview;
-    let fresh_live_frame = gathered.fresh_live_frame.clone();
+    req.has_shown_once.store(true, Ordering::Release);
     let _ = handle.update(cx, |view, window, cx| {
         view.ensure_live_preview(cx);
         view.delegate.update(cx, |state, ctx| {
-            state.insert_previews(previews, ctx, Some(window));
-            if let Some(wid) = fresh_preview {
-                state.evict_live_frame(wid);
-            }
-            if let Some((wid, buf)) = fresh_live_frame {
-                if let Some(frame) = buf.into_live_frame() {
-                    state.insert_live_frames([(wid, frame)].into_iter().collect());
-                }
-            }
+            state.insert_previews(previews, ctx, Some(window))
         });
         cx.notify();
     });
     let icon_req = IconFillRequest {
         handle,
         windows: gathered.windows.clone(),
-        icon_cache: icon_cache.clone(),
+        icon_cache: req.icon_cache.clone(),
     };
     spawn_icon_fill(icon_req, &gathered.icons, cx);
     cx.activate(true);

@@ -97,7 +97,7 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
                 painted_for_frame.store(true, Ordering::Release);
                 qol_runtime::probe!(
                     "SHOW_PAINTED",
-                    "show_id={show_id} frame={}ms",
+                    "show_id={show_id} capture_lane=none reveal_frame=painted capture_duration_ms=none first_paint_latency_ms={}ms",
                     t_show
                         .as_ref()
                         .map(|started| started.elapsed().as_millis())

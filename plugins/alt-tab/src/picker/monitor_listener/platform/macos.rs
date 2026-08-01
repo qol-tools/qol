@@ -5,6 +5,7 @@ pub(crate) fn data_refresh_listener_loop() {
     let Some(mut subscription) = client.subscribe(vec![
         RuntimeEventKind::WindowListChanged,
         RuntimeEventKind::FocusChanged,
+        RuntimeEventKind::CursorMoved,
     ]) else {
         return;
     };
@@ -13,8 +14,8 @@ pub(crate) fn data_refresh_listener_loop() {
             RuntimeEvent::FocusChanged { .. } => {
                 super::super::request_previous_frontmost_preview_refresh()
             }
-            RuntimeEvent::CursorMoved { .. }
-            | RuntimeEvent::ActiveMonitorChanged { .. }
+            RuntimeEvent::CursorMoved { .. } => super::super::record_recent_hid_activity(),
+            RuntimeEvent::ActiveMonitorChanged { .. }
             | RuntimeEvent::MonitorsChanged { .. }
             | RuntimeEvent::LauncherAppsSynced { .. }
             | RuntimeEvent::WindowListChanged => super::super::request_data_refresh(),

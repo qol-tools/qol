@@ -52,7 +52,7 @@ impl RenderingFlow {
     }
 
     pub(crate) fn captures_on_open(self) -> bool {
-        self.renders_gpui_preview_images()
+        false
     }
 
     pub(crate) fn captures_live_selection(self) -> bool {
@@ -87,11 +87,11 @@ mod tests {
     use super::RenderingFlow;
 
     #[test]
-    fn gpui_snapshot_flow_owns_images_and_capture() {
+    fn gpui_snapshot_flow_uses_background_capture_only() {
         let flow = RenderingFlow::gpui_snapshots();
 
         assert!(flow.renders_gpui_preview_images());
-        assert!(flow.captures_on_open());
+        assert!(!flow.captures_on_open());
         assert!(flow.captures_live_selection());
         assert!(flow.captures_preview_fill());
         assert_eq!(flow.preview_plane_backend(), None);
