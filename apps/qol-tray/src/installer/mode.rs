@@ -47,10 +47,6 @@ impl ModeConfig {
     pub fn is_dev(&self) -> bool {
         matches!(self.mode, ModeFlag::Dev)
     }
-
-    pub fn is_prod(&self) -> bool {
-        matches!(self.mode, ModeFlag::Prod)
-    }
 }
 
 impl ModeFlag {
@@ -86,7 +82,7 @@ mod tests {
         if cfg!(feature = "dev") {
             assert!(ModeConfig::default().is_dev());
         } else {
-            assert!(ModeConfig::default().is_prod());
+            assert!(!ModeConfig::default().is_dev());
         }
     }
 

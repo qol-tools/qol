@@ -5,7 +5,6 @@ pub mod file_logger;
 #[cfg(feature = "dev")]
 mod filter;
 pub(crate) mod platform;
-pub mod probe;
 pub(crate) mod rate_limiter;
 mod redaction;
 pub(crate) mod relay;

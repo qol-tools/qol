@@ -29,7 +29,7 @@ pub use commands::{local_http, net};
 pub use daemon::reconcile;
 pub use features::github_auth::credentials;
 pub use installer::{housekeeping, mode};
-pub use logging::{console_guard, probe};
+pub use logging::console_guard;
 pub use migrations as migrations_startup;
 pub(crate) use paths::file_io;
 pub use plugins::config::drain as config_drain;

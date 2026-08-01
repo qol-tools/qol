@@ -169,38 +169,12 @@ pub fn active_profile_name() -> String {
         .unwrap_or_else(|| DEFAULT_PROFILE_NAME.to_string())
 }
 
-pub fn set_active_profile_name(name: &str) -> Result<()> {
-    if !is_safe_path_component(name) {
-        return Err(anyhow!("invalid profile name"));
-    }
-    let path = active_profile_marker_path()?;
-    file_io::ensure_parent_dir(&path)?;
-    fs::write(&path, format!("{}\n", name))
-        .with_context(|| format!("Failed to write active profile marker {}", path.display()))
-}
-
-pub fn profile_active_dir() -> Result<PathBuf> {
-    active_scope_store().map(|s| s.dir())
-}
-
 pub fn profile_manifest_path() -> Result<PathBuf> {
     active_scope_store().map(|s| s.manifest_path())
 }
 
 pub fn profile_sync_config_path() -> Result<PathBuf> {
     profile_dir().map(|p| p.join("sync.json"))
-}
-
-pub fn profile_core_dir() -> Result<PathBuf> {
-    active_scope_store().map(|s| s.core_dir())
-}
-
-pub fn profile_os_dir() -> Result<PathBuf> {
-    active_scope_store().map(|s| s.os_dir())
-}
-
-pub fn profile_device_dir() -> Result<PathBuf> {
-    active_scope_store().map(|s| s.device_dir())
 }
 
 pub fn profile_plugins_lock_path() -> Result<PathBuf> {
@@ -460,18 +434,6 @@ mod tests {
     }
 
     #[test]
-    fn active_profile_name_roundtrip() {
-        let tmp = TempDir::new().unwrap();
-        let _guard = push_test_path_root(tmp.path());
-
-        let cases = ["work", "personal", "p1", "MixedCase"];
-        for name in cases {
-            set_active_profile_name(name).unwrap();
-            assert_eq!(active_profile_name(), name, "roundtrip: {}", name);
-        }
-    }
-
-    #[test]
     fn active_profile_name_falls_back_on_invalid_marker_content() {
         let tmp = TempDir::new().unwrap();
         let _guard = push_test_path_root(tmp.path());
@@ -483,64 +445,10 @@ mod tests {
         assert_eq!(active_profile_name(), DEFAULT_PROFILE_NAME);
     }
 
-    #[test]
-    fn set_active_profile_name_rejects_invalid_names() {
-        let tmp = TempDir::new().unwrap();
-        let _guard = push_test_path_root(tmp.path());
-
-        let invalid = [
-            "",
-            "../escape",
-            "with space",
-            "-leading-dash",
-            "with/slash",
-            "with\\backslash",
-        ];
-        for name in invalid {
-            assert!(
-                set_active_profile_name(name).is_err(),
-                "should reject: {:?}",
-                name
-            );
-        }
-    }
-
-    #[test]
-    fn profile_dirs_reflect_active_profile() {
-        let tmp = TempDir::new().unwrap();
-        let _guard = push_test_path_root(tmp.path());
-
-        set_active_profile_name("work").unwrap();
-        let cases: [(Result<PathBuf>, &str); 4] = [
-            (profile_active_dir(), "work"),
-            (profile_core_dir(), "work/core"),
-            (profile_device_dir(), "work/device"),
-            (profile_plugins_lock_path(), "work/core/plugins.lock.json"),
-        ];
-        for (result, expected_suffix) in cases {
-            let path = result.unwrap();
-            assert!(
-                path.ends_with(expected_suffix),
-                "{:?} should end with {}",
-                path,
-                expected_suffix
-            );
-        }
-    }
-
-    #[test]
-    fn profile_os_dir_uses_current_os() {
-        let tmp = TempDir::new().unwrap();
-        let _guard = push_test_path_root(tmp.path());
-
-        let os_dir = profile_os_dir().unwrap();
-        let sep = std::path::MAIN_SEPARATOR_STR;
-        let expected_tail = format!("os{sep}{}", current_os_subdir());
-        assert!(
-            os_dir.to_string_lossy().contains(&expected_tail),
-            "os dir should include current OS: {:?}",
-            os_dir
-        );
+    fn write_active_profile_marker(name: &str) {
+        let marker = active_profile_marker_path().unwrap();
+        file_io::ensure_parent_dir(&marker).unwrap();
+        fs::write(&marker, format!("{}\n", name)).unwrap();
     }
 
     #[test]
@@ -548,11 +456,11 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let _guard = push_test_path_root(tmp.path());
 
-        set_active_profile_name("personal").unwrap();
+        write_active_profile_marker("personal");
         let personal_hotkeys = hotkeys_path().unwrap();
         let personal_shortcuts = shortcuts_path().unwrap();
 
-        set_active_profile_name("work").unwrap();
+        write_active_profile_marker("work");
         let work_hotkeys = hotkeys_path().unwrap();
         let work_shortcuts = shortcuts_path().unwrap();
 
