@@ -703,7 +703,9 @@ pub(in crate::commands::emu::workflow) fn current_trace_cursor(
     Ok(TraceCursor { bytes })
 }
 
-fn trace_tail_command(cursor: TraceCursor) -> Result<CommandSpec> {
+pub(in crate::commands::emu::workflow) fn trace_tail_command(
+    cursor: TraceCursor,
+) -> Result<CommandSpec> {
     trace_tail_command_for(cursor, TRACE_LOG_PATH)
 }
 

@@ -2853,7 +2853,7 @@ fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
         });
     }
     let companion = match workflow_id {
-        "alt-tab-storm" => DesktopCompanionRecipe {
+        "alt-tab-performance" | "alt-tab-storm" => DesktopCompanionRecipe {
             package: "alt-tab",
             binary: "alt-tab",
             plugin_dir: "alt-tab",
@@ -3676,7 +3676,7 @@ fn execute_lanes(
                 continue;
             };
             let lane = active.swap_remove(index);
-            let result = finish_lane(lane, exit);
+            let result = finish_lane(lane, exit, launch);
             show_lane_finished(progress, &result);
             results.push(result);
         }
@@ -3885,7 +3885,7 @@ fn planned_lane(launch: &LaneLaunch<'_>, pending: &PendingLane) -> LaneResult {
     }
 }
 
-fn finish_lane(lane: ActiveLane, exit: SupervisorExit) -> LaneResult {
+fn finish_lane(lane: ActiveLane, exit: SupervisorExit, launch: &LaneLaunch<'_>) -> LaneResult {
     let report = read_optional_flow_report(&lane.report_path, &lane.run_id);
     let report_error = match &report {
         Ok(Some(_)) => None,
@@ -3909,7 +3909,10 @@ fn finish_lane(lane: ActiveLane, exit: SupervisorExit) -> LaneResult {
         .map(str::to_string);
     let passed = exit.cleanup.complete
         && lane_passed(exit.success, report_status.as_deref(), verdict.as_deref());
+    let artifacts_error =
+        copy_lane_artifacts(report.as_ref(), &lane.run_id, launch.flow_report_path);
     let error = combine_errors(report_error, exit.cleanup.error.clone());
+    let error = combine_errors(error, artifacts_error);
     LaneResult {
         run_id: lane.run_id.clone(),
         report_path: lane.report_path.clone(),
@@ -3927,6 +3930,33 @@ fn finish_lane(lane: ActiveLane, exit: SupervisorExit) -> LaneResult {
 
 fn lane_passed(process_success: bool, report_status: Option<&str>, verdict: Option<&str>) -> bool {
     process_success && report_status == Some("pass") && verdict == Some("pass")
+}
+
+fn copy_lane_artifacts(
+    report: Option<&Value>,
+    run_id: &str,
+    flow_report_path: &Path,
+) -> Option<String> {
+    let paths = report
+        .and_then(|value| value.get("workflow"))
+        .and_then(|value| value.get("artifacts"))
+        .and_then(Value::as_array)?;
+    let destination = flow_report_path.parent()?.join("artifacts").join(run_id);
+    let mut failures = Vec::new();
+    for path in paths.iter().filter_map(Value::as_str) {
+        let source = Path::new(path);
+        let Some(name) = source.file_name() else {
+            failures.push(format!("{path} has no file name"));
+            continue;
+        };
+        let copied = fs::create_dir_all(&destination)
+            .and_then(|()| fs::copy(source, destination.join(name)).map(|_| ()));
+        if let Err(error) = copied {
+            failures.push(format!("{path}: {error}"));
+        }
+    }
+    (!failures.is_empty())
+        .then(|| format!("failed to copy lane artifacts: {}", failures.join(", ")))
 }
 
 fn terminal_error(
@@ -4548,6 +4578,18 @@ mod tests {
     #[test]
     fn desktop_payload_recipes_cover_registered_payload_workflows() {
         let expected = [
+            (
+                "alt-tab-performance",
+                DesktopPayloadRecipe {
+                    companion: Some(DesktopCompanionRecipe {
+                        package: "alt-tab",
+                        binary: "alt-tab",
+                        plugin_dir: "alt-tab",
+                        plugin_id: "plugin-alt-tab",
+                    }),
+                    tray_features: None,
+                },
+            ),
             (
                 "alt-tab-storm",
                 DesktopPayloadRecipe {
@@ -5207,6 +5249,34 @@ mod tests {
     }
 
     #[test]
+    fn finished_lane_copies_workflow_artifacts_into_the_flow_run_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let case_artifact = temp.path().join("case/artifacts/metrics.json");
+        fs::create_dir_all(case_artifact.parent().unwrap()).unwrap();
+        fs::write(&case_artifact, b"{\"p50\":1}").unwrap();
+        let flow_report_path = temp.path().join("flow/report.json");
+        fs::create_dir_all(flow_report_path.parent().unwrap()).unwrap();
+        let report = json!({
+            "workflow": { "artifacts": [case_artifact.to_string_lossy()] },
+        });
+
+        let error = copy_lane_artifacts(Some(&report), "lane-1", &flow_report_path);
+
+        assert_eq!(error, None);
+        assert_eq!(
+            fs::read(temp.path().join("flow/artifacts/lane-1/metrics.json")).unwrap(),
+            b"{\"p50\":1}"
+        );
+        let missing = json!({
+            "workflow": { "artifacts": ["/a/b/does-not-exist.json"] },
+        });
+        let error = copy_lane_artifacts(Some(&missing), "lane-1", &flow_report_path);
+        assert!(error
+            .as_deref()
+            .is_some_and(|error| error.contains("does-not-exist.json")));
+    }
+
+    #[test]
     fn finished_lane_rejects_wrong_kind_and_missing_run_identity() {
         let cases = [
             (
@@ -5244,7 +5314,8 @@ mod tests {
                 }),
             };
 
-            let result = finish_lane(lane, passing_exit());
+            let executable = temp.path().join("qol");
+            let result = finish_lane(lane, passing_exit(), &fake_launch(&temp, &executable));
 
             assert!(!result.passed);
             assert!(result

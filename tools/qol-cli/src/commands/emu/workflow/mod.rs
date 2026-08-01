@@ -101,6 +101,7 @@ pub(crate) type SerialWorkflow = fn(&mut Run) -> Result<Verdict>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DesktopWorkflow {
+    AltTabPerformance,
     AltTabStorm,
     BluetoothStorm,
     HotkeyStorm,
@@ -139,6 +140,7 @@ pub(crate) fn run_desktop(
 ) -> Result<Verdict> {
     let platform = DesktopGuestPlatform::from_adapter(adapter)?;
     match workflow {
+        DesktopWorkflow::AltTabPerformance => alt_tab::run_performance(vm, platform),
         DesktopWorkflow::AltTabStorm => alt_tab::run(vm, platform),
         DesktopWorkflow::BluetoothStorm => bluetooth::run(vm, platform),
         DesktopWorkflow::HotkeyStorm => hotkeys::run(vm, platform),
@@ -155,6 +157,10 @@ const REGISTRY: &[Definition] = &[
     Definition::Serial {
         id: "leaves-no-trace",
         run: leaves_no_trace,
+    },
+    Definition::Desktop {
+        id: "alt-tab-performance",
+        run: DesktopWorkflow::AltTabPerformance,
     },
     Definition::Desktop {
         id: "alt-tab-storm",
@@ -225,6 +231,7 @@ mod tests {
     #[test]
     fn find_resolves_only_registered_workflows() {
         let cases = [
+            ("alt-tab-performance", true),
             ("alt-tab-storm", true),
             ("bluetooth-storm", true),
             ("hotkey-storm", true),
@@ -247,6 +254,7 @@ mod tests {
             ids(),
             vec![
                 "leaves-no-trace",
+                "alt-tab-performance",
                 "alt-tab-storm",
                 "bluetooth-storm",
                 "hotkey-storm",
@@ -263,6 +271,7 @@ mod tests {
     #[test]
     fn only_desktop_workflows_require_a_payload() {
         assert!(!find("leaves-no-trace").unwrap().requires_payload());
+        assert!(find("alt-tab-performance").unwrap().requires_payload());
         assert!(find("alt-tab-storm").unwrap().requires_payload());
         assert!(find("bluetooth-storm").unwrap().requires_payload());
         assert!(find("hotkey-storm").unwrap().requires_payload());

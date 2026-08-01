@@ -18,3 +18,11 @@ pub(super) fn run(vm: &BootedVm, guest: DesktopGuestPlatform) -> Result<Verdict>
         DesktopGuestPlatform::Windows => windows::run(vm),
     }
 }
+
+pub(super) fn run_performance(vm: &BootedVm, guest: DesktopGuestPlatform) -> Result<Verdict> {
+    match guest {
+        DesktopGuestPlatform::Linux => linux::run_performance(vm),
+        DesktopGuestPlatform::Macos => macos::run_performance(vm),
+        DesktopGuestPlatform::Windows => windows::run_performance(vm),
+    }
+}
