@@ -45,15 +45,6 @@ pub struct TranscriberRequest {
     pub options: BTreeMap<String, String>,
 }
 
-impl TranscriberRequest {
-    pub fn automatic() -> Self {
-        Self {
-            provider: "auto".to_owned(),
-            options: BTreeMap::new(),
-        }
-    }
-}
-
 pub struct SelectedTranscriber {
     pub descriptor: TranscriberDescriptor,
     pub transcriber: Box<dyn Transcriber>,
@@ -206,13 +197,6 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), descriptors.len());
         assert!(ids.contains(&"websocket"));
-    }
-
-    #[cfg(feature = "local-stt")]
-    #[test]
-    fn automatic_selection_uses_a_registered_provider_without_loading_it() {
-        let selected = create_transcriber(&TranscriberRequest::automatic()).unwrap();
-        assert_eq!(selected.descriptor.id, "candle-whisper");
     }
 
     #[test]

@@ -165,21 +165,4 @@ proptest! {
             prop_assert_eq!(sel.resolved(&order), Some(order[i]));
         }
     }
-
-    /// In the interior, down then up returns to the same session (reversible
-    /// away from the clamping edges).
-    #[test]
-    fn prop_down_then_up_is_identity_in_interior(
-        order in unique_order(3..16),
-        start in any::<prop::sample::Index>(),
-    ) {
-        // pick an interior start so neither clamp fires
-        let idx = 1 + start.index(order.len() - 2);
-        let mut sel = Selection::default();
-        sel.select(order[idx]);
-        let before = sel.anchored();
-        sel.move_down(&order);
-        sel.move_up(&order);
-        prop_assert_eq!(sel.anchored(), before);
-    }
 }

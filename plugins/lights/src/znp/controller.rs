@@ -41,7 +41,6 @@ impl Default for ControllerConfig {
 #[derive(Debug, Clone)]
 pub enum ZigbeeEvent {
     DeviceJoined(Device),
-    DeviceLeft([u8; 8]),
 }
 
 pub struct ZigbeeController {

@@ -17,12 +17,6 @@ pub struct Selection {
 }
 
 impl Selection {
-    /// The window the selection is pinned to, if any. Not guaranteed to still
-    /// be on screen - use [`Selection::resolved`] for the live target.
-    pub fn anchored(&self) -> Option<u64> {
-        self.anchor
-    }
-
     /// Pin the selection to a specific session (a click, or a jump target).
     pub fn select(&mut self, window_id: u64) {
         self.anchor = Some(window_id);

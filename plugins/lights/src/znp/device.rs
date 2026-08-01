@@ -58,16 +58,8 @@ impl DeviceRegistry {
         }
     }
 
-    pub fn remove(&mut self, ieee_address: &[u8; 8]) {
-        self.devices.retain(|d| &d.ieee_address != ieee_address);
-    }
-
     pub fn devices(&self) -> &[Device] {
         &self.devices
-    }
-
-    pub fn by_network_address(&self, addr: u16) -> Option<&Device> {
-        self.devices.iter().find(|d| d.network_address == addr)
     }
 
     pub fn by_ieee_address(&self, ieee: &[u8; 8]) -> Option<&Device> {
@@ -91,16 +83,6 @@ mod tests {
     }
 
     #[test]
-    fn register_and_lookup() {
-        let mut registry = DeviceRegistry::new();
-        registry.register(make_device(0x1234, 1));
-        assert_eq!(registry.devices().len(), 1);
-        let found = registry.by_network_address(0x1234);
-        assert!(found.is_some(), "expected device at 0x1234");
-        assert_eq!(found.unwrap().network_address, 0x1234);
-    }
-
-    #[test]
     fn update_existing_device_by_ieee() {
         let mut registry = DeviceRegistry::new();
         registry.register(make_device(0x1234, 1));
@@ -111,25 +93,6 @@ mod tests {
             "expected single device after update"
         );
         assert_eq!(registry.devices()[0].network_address, 0x5678);
-    }
-
-    #[test]
-    fn remove_device() {
-        let mut registry = DeviceRegistry::new();
-        let ieee = [0u8; 8];
-        let device = Device {
-            network_address: 0x0001,
-            ieee_address: ieee,
-            endpoints: vec![],
-        };
-        registry.register(device);
-        assert_eq!(registry.devices().len(), 1);
-        registry.remove(&ieee);
-        assert_eq!(
-            registry.devices().len(),
-            0,
-            "expected empty registry after remove"
-        );
     }
 
     #[test]

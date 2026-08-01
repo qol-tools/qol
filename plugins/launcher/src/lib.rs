@@ -7,8 +7,6 @@ pub mod launch;
 mod qol;
 pub mod ui;
 
-pub use app as daemon;
-
 pub use qol_frecency as frecency;
 pub use qol_gpui::monitor;
 pub use qol_gpui::window::open_window_with_focus;

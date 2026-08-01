@@ -32,17 +32,6 @@ pub struct RgbColor {
     pub blue: u8,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct LightState {
-    pub power: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub brightness: Option<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<RgbColor>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mirek: Option<u16>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LightCommand {
@@ -52,27 +41,4 @@ pub enum LightCommand {
     SetBrightness { level: u8 },
     SetColor { color: RgbColor },
     SetColorTemperature { mirek: u16 },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LightTargetInfo {
-    pub target: LightTarget,
-    pub name: String,
-    pub capabilities: LightCapabilities,
-    pub state: LightState,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BackendConnectionStatus {
-    Disconnected,
-    Connecting,
-    Connected,
-    Degraded,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BackendHealth {
-    pub status: BackendConnectionStatus,
-    pub summary: String,
 }

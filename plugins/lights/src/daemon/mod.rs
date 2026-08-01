@@ -43,9 +43,9 @@ fn device_monitor_loop(
     events: crossbeam_channel::Receiver<crate::znp::ZigbeeEvent>,
     service: Arc<Mutex<Option<LightService<ZigbeeBackend>>>>,
 ) {
-    loop {
-        match events.recv() {
-            Ok(crate::znp::ZigbeeEvent::DeviceJoined(device)) => {
+    while let Ok(event) = events.recv() {
+        match event {
+            crate::znp::ZigbeeEvent::DeviceJoined(device) => {
                 let ieee = format_ieee(&device.ieee_address);
                 let entry = DeviceEntry {
                     ieee_address: ieee.clone(),
@@ -72,8 +72,6 @@ fn device_monitor_loop(
                     }
                 }
             }
-            Ok(crate::znp::ZigbeeEvent::DeviceLeft(_)) => {}
-            Err(_) => break,
         }
     }
 }
