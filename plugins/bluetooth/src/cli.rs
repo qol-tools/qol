@@ -7,7 +7,7 @@ use qol_host_fixes::HostFixes;
 use crate::bluetooth::{
     normalize_address, AdapterHealth, DeviceInfo, ReconnectReport, ReconnectSelection,
 };
-use crate::hostfix::BluetoothHostFixes;
+use crate::hostfix::{self, BluetoothHostFixes};
 use crate::{config, platform, PLUGIN_ID};
 
 const BINARY_NAME: &str = "plugin-bluetooth";
@@ -305,6 +305,11 @@ fn doctor_checks() -> Vec<DoctorCheck> {
             "Verify the automatic reconnect allowlist contains valid addresses.",
             managed_devices_check,
         ),
+        DoctorCheck::new(
+            "host_takeover",
+            "Verify Bluetooth host ownership left no orphaned Blueman autostart override.",
+            host_takeover_check,
+        ),
     ]
 }
 
@@ -370,6 +375,23 @@ fn managed_devices_check() -> Result<DoctorCheckResult> {
             "{} managed device(s) configured",
             config.managed_devices.len()
         ),
+    ))
+}
+
+fn host_takeover_check() -> Result<DoctorCheckResult> {
+    if hostfix::orphaned_autostart_override() {
+        return Ok(DoctorCheckResult::warn(
+            "host_takeover",
+            "Blueman autostart is hidden by an orphaned qol ownership override",
+        )
+        .with_fix(format!(
+            "run: {BINARY_NAME} apply_host_fix {}",
+            hostfix::ORPHANED_AUTOSTART_FIX_ID
+        )));
+    }
+    Ok(DoctorCheckResult::ok(
+        "host_takeover",
+        "Bluetooth host ownership has no orphaned Blueman autostart override",
     ))
 }
 

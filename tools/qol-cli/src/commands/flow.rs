@@ -1120,6 +1120,7 @@ fn run_flow_inner(plan: FlowPlan, executable: &Path, verbose: bool) -> Result<()
                     .map(String::as_str),
                 arch: environment.definition.image.arch.as_deref(),
                 firmware: environment.definition.image.firmware.as_deref(),
+                usb_host: None,
             })?;
         }
         Ok(())

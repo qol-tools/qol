@@ -44,6 +44,8 @@ static DEVICE_ACTION_STATE: LazyLock<RwLock<Option<DeviceActionState>>> =
 static ADAPTER_STATE: LazyLock<RwLock<Option<AdapterHealth>>> = LazyLock::new(|| RwLock::new(None));
 static AUDIO_REPAIRS: LazyLock<RwLock<HashSet<Address>>> =
     LazyLock::new(|| RwLock::new(HashSet::new()));
+static CONNECTION_FLIGHTS: LazyLock<RwLock<HashSet<Address>>> =
+    LazyLock::new(|| RwLock::new(HashSet::new()));
 
 type DeviceStreams = SelectAll<LocalBoxStream<'static, (Address, bool)>>;
 type DiscoveryStream = LocalBoxStream<'static, AdapterEvent>;
@@ -133,6 +135,23 @@ enum AudioProfile {
 enum ConnectionMode {
     OneShot,
     Reconnect,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConnectionSource {
+    Explicit,
+    ManualReconnect,
+    AutoRetry,
+}
+
+impl ConnectionSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Explicit => "explicit",
+            Self::ManualReconnect => "manual_reconnect",
+            Self::AutoRetry => "auto_retry",
+        }
+    }
 }
 
 impl ConnectionMode {
@@ -291,7 +310,14 @@ pub fn connect_device(address: &str, power_on_adapter: bool) -> Result<DeviceInf
     runtime()?.block_on(async {
         let adapter = default_adapter().await?;
         ensure_powered(&adapter, power_on_adapter).await?;
-        let (device, _) = connect_with(&adapter, address, ConnectionMode::OneShot, None).await?;
+        let (device, _) = connect_with(
+            &adapter,
+            address,
+            ConnectionMode::OneShot,
+            ConnectionSource::Explicit,
+            None,
+        )
+        .await?;
         Ok(device)
     })
 }
@@ -659,8 +685,18 @@ async fn connect_with(
     adapter: &Adapter,
     address: Address,
     mode: ConnectionMode,
+    source: ConnectionSource,
     cached: Option<DeviceInfo>,
 ) -> Result<(DeviceInfo, bool)> {
+    let Some(_flight) = ConnectionFlightGuard::acquire(address) else {
+        qol_runtime::probe!(
+            "BLUETOOTH_CONNECT",
+            "device={} source={} outcome=already_in_flight",
+            redacted(address),
+            source.label(),
+        );
+        bail!("Bluetooth connection for {address} is already in flight");
+    };
     let mut device = adapter.device(address)?;
     let initial = match device_info(&device).await {
         Ok(info) => info,
@@ -690,7 +726,7 @@ async fn connect_with(
             .with_context(|| format!("BlueZ failed to trust {address}"))?;
     }
     if !device.is_connected().await? {
-        connect_all_profiles(&device, address).await?;
+        connect_all_profiles(&device, address, source).await?;
     }
     let paired = device_info(&device).await?;
     if is_audio_device(&paired) {
@@ -809,20 +845,26 @@ async fn discover_bredr_device_with_filter(adapter: &Adapter, address: Address) 
     }
 }
 
-async fn connect_all_profiles(device: &Device, address: Address) -> Result<()> {
+async fn connect_all_profiles(
+    device: &Device,
+    address: Address,
+    source: ConnectionSource,
+) -> Result<()> {
     let mut attempt = 1;
     loop {
         let result = device.connect().await;
         match &result {
             Ok(()) => qol_runtime::probe!(
                 "BLUETOOTH_CONNECT",
-                "device={} attempt={attempt} outcome=connected",
+                "device={} source={} attempt={attempt} outcome=connected",
                 redacted(address),
+                source.label(),
             ),
             Err(error) => qol_runtime::probe!(
                 "BLUETOOTH_CONNECT",
-                "device={} attempt={attempt} outcome={} kind={:?} reason={}",
+                "device={} source={} attempt={attempt} outcome={} kind={:?} reason={}",
                 redacted(address),
+                source.label(),
                 connect_error_outcome(&error.kind, &error.message),
                 error.kind,
                 error.message,
@@ -880,7 +922,7 @@ async fn connect_audio_profile(
     };
     qol_runtime::probe!(
         "BLUETOOTH_PROFILE_REPAIR",
-        "device={} stage=ensure_a2dp mode={} outcome={outcome}",
+        "device={} source=profile_repair stage=ensure_a2dp mode={} outcome={outcome}",
         redacted(address),
         mode.label(),
     );
@@ -934,7 +976,7 @@ async fn heal_stale_pipewire_transport(
     })?;
     qol_runtime::probe!(
         "BLUETOOTH_PROFILE_REPAIR",
-        "device={} stage=self_heal mode={}",
+        "device={} source=profile_repair stage=self_heal mode={}",
         redacted(address),
         mode.label(),
     );
@@ -956,7 +998,7 @@ async fn activate_pipewire_a2dp(
         if card_present && select_a2dp_sink(&card).await? {
             qol_runtime::probe!(
                 "BLUETOOTH_PROFILE_REPAIR",
-                "device={} stage=activate_pipewire_a2dp mode={} outcome=active",
+                "device={} source=profile_repair stage=activate_pipewire_a2dp mode={} outcome=active",
                 redacted(address),
                 mode.label(),
             );
@@ -970,7 +1012,7 @@ async fn activate_pipewire_a2dp(
             };
             qol_runtime::probe!(
                 "BLUETOOTH_PROFILE_REPAIR",
-                "device={} stage=activate_pipewire_a2dp mode={} outcome={}",
+                "device={} source=profile_repair stage=activate_pipewire_a2dp mode={} outcome={}",
                 redacted(address),
                 mode.label(),
                 outcome.label(),
@@ -1126,7 +1168,15 @@ async fn reconnect_with(
             Ok(device) => device.alias().await.unwrap_or_else(|_| address.to_string()),
             Err(_) => address.to_string(),
         };
-        match connect_with(adapter, address, ConnectionMode::Reconnect, None).await {
+        match connect_with(
+            adapter,
+            address,
+            ConnectionMode::Reconnect,
+            ConnectionSource::ManualReconnect,
+            None,
+        )
+        .await
+        {
             Ok((device, true)) => report.connected.push(device),
             Ok((device, false)) => report.already_connected.push(device),
             Err(error) => report.failures.push(ReconnectFailure {
@@ -1473,6 +1523,8 @@ async fn daemon_loop(
     let mut discovery: Option<DiscoverySession> = None;
     let mut subscribed = HashSet::new();
     let mut retries = retry_map(config);
+    let mut manager_reconcile = tokio::time::interval(Duration::from_secs(5));
+    manager_reconcile.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let known_addresses = adapter.device_addresses().await?;
     subscribe_addresses(
         &adapter,
@@ -1710,7 +1762,8 @@ async fn daemon_loop(
             }
             event = next_device_event(&mut device_streams) => {
                 let (address, connected) = event;
-                if connected {
+                let qol_in_flight = ConnectionFlightGuard::active(address);
+                if connected && !qol_in_flight {
                     spawn_audio_profile_ensure(address, AudioAdoption::Adopt);
                 }
                 if let Some(state) = retries.get_mut(&address) {
@@ -1723,8 +1776,13 @@ async fn daemon_loop(
                 }
                 qol_runtime::probe!(
                     "BLUETOOTH_CONNECTION",
-                    "device={} connected={connected}",
-                    redacted(address)
+                    "device={} connected={connected} origin={}",
+                    redacted(address),
+                    if qol_in_flight {
+                        "qol_in_flight"
+                    } else {
+                        "device_observed"
+                    }
                 );
             }
             event = next_discovery_event(&mut discovery) => {
@@ -1752,6 +1810,9 @@ async fn daemon_loop(
             }
             _ = wait_for_deadline(deadline) => {
                 attempt_due(&adapter, config, &mut retries).await;
+            }
+            _ = manager_reconcile.tick() => {
+                crate::hostfix::reconcile_claimed_managers();
             }
         }
     }
@@ -1803,11 +1864,15 @@ async fn run_explicit_device_action(
     ensure_powered(&adapter, power_on_adapter).await?;
     match action {
         ExplicitDeviceAction::Pair => pair_with(&adapter, address, cached).await,
-        ExplicitDeviceAction::Connect => {
-            connect_with(&adapter, address, ConnectionMode::OneShot, cached)
-                .await
-                .map(|(device, _)| device)
-        }
+        ExplicitDeviceAction::Connect => connect_with(
+            &adapter,
+            address,
+            ConnectionMode::OneShot,
+            ConnectionSource::Explicit,
+            cached,
+        )
+        .await
+        .map(|(device, _)| device),
     }
 }
 
@@ -2094,6 +2159,33 @@ async fn subscribe_addresses<'a>(
     }
 }
 
+struct ConnectionFlightGuard(Address);
+
+impl ConnectionFlightGuard {
+    fn acquire(address: Address) -> Option<Self> {
+        let claimed = {
+            let mut active = CONNECTION_FLIGHTS.write().ok()?;
+            active.insert(address)
+        };
+        claimed.then(|| Self(address))
+    }
+
+    fn active(address: Address) -> bool {
+        CONNECTION_FLIGHTS
+            .read()
+            .map(|active| active.contains(&address))
+            .unwrap_or(true)
+    }
+}
+
+impl Drop for ConnectionFlightGuard {
+    fn drop(&mut self) {
+        if let Ok(mut active) = CONNECTION_FLIGHTS.write() {
+            active.remove(&self.0);
+        }
+    }
+}
+
 struct AudioRepairGuard(Address);
 
 impl AudioRepairGuard {
@@ -2116,6 +2208,14 @@ impl Drop for AudioRepairGuard {
 
 fn spawn_audio_profile_ensure(address: Address, adoption: AudioAdoption) {
     std::mem::drop(tokio::spawn(async move {
+        let Some(_flight) = ConnectionFlightGuard::acquire(address) else {
+            qol_runtime::probe!(
+                "BLUETOOTH_PROFILE_REPAIR",
+                "device={} stage=ensure_a2dp source=device_reconnect outcome=already_in_flight",
+                redacted(address)
+            );
+            return;
+        };
         let Some(_guard) = AudioRepairGuard::acquire(address) else {
             qol_runtime::probe!(
                 "BLUETOOTH_PROFILE_REPAIR",
@@ -2248,18 +2348,28 @@ async fn attempt_due(
             .unwrap_or(1);
         qol_runtime::probe!(
             "BLUETOOTH_ATTEMPT",
-            "device={} attempt={attempt}",
-            redacted(address)
+            "device={} source={} attempt={attempt}",
+            redacted(address),
+            ConnectionSource::AutoRetry.label()
         );
-        match connect_with(adapter, address, ConnectionMode::Reconnect, None).await {
+        match connect_with(
+            adapter,
+            address,
+            ConnectionMode::Reconnect,
+            ConnectionSource::AutoRetry,
+            None,
+        )
+        .await
+        {
             Ok(_) => {
                 if let Some(state) = retries.get_mut(&address) {
                     state.connected();
                 }
                 qol_runtime::probe!(
                     "BLUETOOTH_RESULT",
-                    "device={} outcome=connected attempt={attempt}",
-                    redacted(address)
+                    "device={} source={} outcome=connected attempt={attempt}",
+                    redacted(address),
+                    ConnectionSource::AutoRetry.label()
                 );
             }
             Err(error) => {
@@ -2287,8 +2397,9 @@ fn schedule_failed(
         let delay = state.failed(now, policy);
         qol_runtime::probe!(
             "BLUETOOTH_RESULT",
-            "device={} outcome=retry_scheduled failures={} delay_ms={}",
+            "device={} source={} outcome=retry_scheduled failures={} delay_ms={}",
             redacted(*address),
+            ConnectionSource::AutoRetry.label(),
             state.failures(),
             delay.as_millis()
         );
@@ -2355,9 +2466,9 @@ mod tests {
     use super::{
         begin_device_action, complete_device_action_within, finish_device_action, pactl_has_card,
         pactl_sink_matching, parse_address, parse_daemon_request, runtime, set_device_action_state,
-        tolerated_profile_connect, transient_connect_error, AudioRepairGuard, DaemonAction,
-        DaemonCommand, DeviceActionTimeout, Duration, ErrorKind, Instant, ReadResult, Result,
-        RetryState, DEVICE_ACTION_STATE,
+        tolerated_profile_connect, transient_connect_error, AudioRepairGuard,
+        ConnectionFlightGuard, DaemonAction, DaemonCommand, DeviceActionTimeout, Duration,
+        ErrorKind, Instant, ReadResult, Result, RetryState, DEVICE_ACTION_STATE,
     };
     use qol_runtime::protocol::DaemonRequest;
     use std::collections::HashMap;
@@ -2565,6 +2676,19 @@ mod tests {
             AudioRepairGuard::acquire(first).is_some(),
             "the device must be repairable again once the guard drops"
         );
+    }
+
+    #[test]
+    fn connection_flights_cover_reconnect_and_profile_repair_for_one_device() {
+        let address = parse_address("AA:BB:CC:DD:EE:FF").unwrap();
+        let held = ConnectionFlightGuard::acquire(address).expect("flight should acquire");
+        assert!(
+            ConnectionFlightGuard::acquire(address).is_none(),
+            "a profile repair must not race an explicit or automatic reconnect"
+        );
+        assert!(ConnectionFlightGuard::active(address));
+        drop(held);
+        assert!(!ConnectionFlightGuard::active(address));
     }
 
     #[test]

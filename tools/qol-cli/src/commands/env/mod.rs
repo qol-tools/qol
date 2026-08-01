@@ -23,7 +23,7 @@ const READY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const TEARDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 const TYPED_WORKER_TERMINATION_GRACE: Duration = Duration::from_secs(2);
 const UP_USAGE: &str =
-    "qol env up <environment> [--count N] [--memory-mb N] [--cpus N] [--windowed] [--dev-worktree PATH] [--force]";
+    "qol env up <environment> [--count N] [--memory-mb N] [--cpus N] [--windowed] [--dev-worktree PATH] [--usb-host PATH] [--force]";
 const IMAGE_IMPORT_USAGE: &str =
     "qol env image import <environment> <source> --worktree <absolute-path> [--run-id ID]";
 
@@ -36,6 +36,7 @@ struct UpArgs {
     cpus: Option<u16>,
     windowed: bool,
     dev_worktree: Option<PathBuf>,
+    usb_host: Option<PathBuf>,
     force: bool,
 }
 
@@ -842,6 +843,7 @@ fn cmd_up(args: &[OsString], verbose: bool) -> Result<()> {
                 windowed: parsed.windowed,
                 case_root: &case_root,
                 dev_bundle: dev_bundle.as_ref(),
+                usb_host: parsed.usb_host.as_deref(),
             })?;
             if let Err(error) = spawn_lane(&child_args, parsed.windowed) {
                 lane.phase = LanePhase::Attempting;
@@ -1328,6 +1330,7 @@ fn parse_up_args(args: &[OsString]) -> Result<UpArgs> {
     let mut cpus = None;
     let mut windowed = false;
     let mut dev_worktree = None;
+    let mut usb_host = None;
     let mut force = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -1365,6 +1368,13 @@ fn parse_up_args(args: &[OsString]) -> Result<UpArgs> {
                 }
                 set_once(&mut dev_worktree, value, "--dev-worktree")?;
             }
+            Some("--usb-host") => {
+                let value = PathBuf::from(next_value(&mut iter, "--usb-host")?);
+                if !value.is_absolute() {
+                    bail!("--usb-host requires an absolute path");
+                }
+                set_once(&mut usb_host, value, "--usb-host")?;
+            }
             Some("--windowed") => set_flag(&mut windowed, "--windowed")?,
             Some("--force") => set_flag(&mut force, "--force")?,
             Some(value) if value.starts_with('-') => {
@@ -1380,6 +1390,9 @@ fn parse_up_args(args: &[OsString]) -> Result<UpArgs> {
     if count == 0 || count > maximum {
         bail!("--count must be between 1 and {maximum}");
     }
+    if usb_host.is_some() && count != 1 {
+        bail!("--usb-host requires exactly one environment lane");
+    }
     if windowed && dev_worktree.is_some() {
         bail!("artifact-backed development sandboxes must remain headless");
     }
@@ -1391,6 +1404,7 @@ fn parse_up_args(args: &[OsString]) -> Result<UpArgs> {
         cpus,
         windowed,
         dev_worktree,
+        usb_host,
         force,
     })
 }
@@ -1629,6 +1643,7 @@ struct EmuUpRequest<'a> {
     windowed: bool,
     case_root: &'a Path,
     dev_bundle: Option<&'a PreparedDevBundle>,
+    usb_host: Option<&'a Path>,
 }
 
 fn emu_up_args(request: EmuUpRequest<'_>) -> Result<Vec<OsString>> {
@@ -1642,6 +1657,7 @@ fn emu_up_args(request: EmuUpRequest<'_>) -> Result<Vec<OsString>> {
         windowed,
         case_root,
         dev_bundle,
+        usb_host,
     } = request;
     let guest_adapter = dev_bundle.map(|_| emu::GuestAdapter::MintCinnamon);
     let guest_image_revision = dev_bundle.and_then(|_| {
@@ -1677,6 +1693,7 @@ fn emu_up_args(request: EmuUpRequest<'_>) -> Result<Vec<OsString>> {
             .map(String::as_str),
         arch: environment.definition.image.arch.as_deref(),
         firmware: environment.definition.image.firmware.as_deref(),
+        usb_host,
     })
 }
 
@@ -2739,7 +2756,7 @@ fn display_optional_memory(memory_mb: Option<u64>) -> String {
 }
 
 fn help_text() -> &'static str {
-    "qol env\n\n  list\n  doctor [--repair|--fix|--lease-clear <run-id|--all>]\n  up <environment> [--count N] [--memory-mb N] [--cpus N] [--windowed] [--dev-worktree PATH] [--force]\n  image import <environment> <source> --worktree <absolute-path> [--run-id ID]\n  cancel <batch-run-id>\n  runs\n  down <run-id|environment|--all>\n  shot <run-id|environment>\n  exec <run-id|environment> <absolute-program> [args...]\n  drag <run-id|environment> <x1,y1> <x2,y2>\n\nexec runs a command in the guest as the desktop user over verified guest\ncontrol; drag drives the guest pointer through QMP. Both target prepared\ndesktop lanes started by `qol env up`.\n\nDefinitions live in flows/envs/*.toml. Local image_root, run_root, and [images]\noverrides live in the dev-envs.toml path shown by `qol env doctor`. Environment\ncapabilities select the required acceleration policy."
+    "qol env\n\n  list\n  doctor [--repair|--fix|--lease-clear <run-id|--all>]\n  up <environment> [--count N] [--memory-mb N] [--cpus N] [--windowed] [--dev-worktree PATH] [--usb-host PATH] [--force]\n  image import <environment> <source> --worktree <absolute-path> [--run-id ID]\n  cancel <batch-run-id>\n  runs\n  down <run-id|environment|--all>\n  shot <run-id|environment>\n  exec <run-id|environment> <absolute-program> [args...]\n  drag <run-id|environment> <x1,y1> <x2,y2>\n\nexec runs a command in the guest as the desktop user over verified guest\ncontrol; drag drives the guest pointer through QMP. Both target prepared\ndesktop lanes started by `qol env up`.\n\nDefinitions live in flows/envs/*.toml. Local image_root, run_root, and [images]\noverrides live in the dev-envs.toml path shown by `qol env doctor`. Environment\ncapabilities select the required acceleration policy."
 }
 
 fn print_help() {
@@ -2835,6 +2852,7 @@ mod tests {
                     cpus: None,
                     windowed: false,
                     dev_worktree: None,
+                    usb_host: None,
                     force: false,
                 },
             ),
@@ -2860,6 +2878,7 @@ mod tests {
                     cpus: Some(2),
                     windowed: true,
                     dev_worktree: None,
+                    usb_host: None,
                     force: true,
                 },
             ),
@@ -3116,6 +3135,7 @@ mod tests {
             windowed: false,
             case_root: &case_root,
             dev_bundle: None,
+            usb_host: None,
         })
         .unwrap();
         let actual = args
@@ -3161,6 +3181,7 @@ mod tests {
             windowed: true,
             case_root: &case_root,
             dev_bundle: None,
+            usb_host: None,
         })
         .unwrap();
         assert!(windowed.contains(&OsString::from("--windowed")));

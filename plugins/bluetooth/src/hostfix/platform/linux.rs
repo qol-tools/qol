@@ -1,5 +1,8 @@
 use anyhow::{bail, Context, Result};
+use std::fs;
+use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 const JOURNAL_WINDOW: &str = "-15 min";
 const RESTART_SCRIPT: &str = "systemctl restart bluetooth";
@@ -27,24 +30,25 @@ pub(crate) fn audio_server() -> Option<String> {
 }
 
 pub(crate) fn process_running(process: &str) -> bool {
-    Command::new("pgrep")
-        .args(["-f", process])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    !process_ids(process).is_empty()
 }
 
 pub(crate) fn stop_process(process: &str) -> Result<()> {
-    let status = Command::new("pkill")
-        .args(["-f", process])
-        .status()
-        .with_context(|| format!("failed to launch pkill for {process}"))?;
-    if !status.success() {
-        bail!("pkill did not stop {process}");
+    let pids = process_ids(process);
+    if pids.is_empty() {
+        bail!("{process} is no longer running");
     }
-    Ok(())
+    for pid in &pids {
+        qol_process::terminate_pid(*pid, Duration::from_secs(2));
+    }
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if pids.iter().all(|pid| !process_alive(*pid)) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    bail!("failed to stop {process} without leaving a live matching process")
 }
 
 pub(crate) fn start_process(process: &str) -> Result<()> {
@@ -59,4 +63,39 @@ pub(crate) fn start_process(process: &str) -> Result<()> {
 
 pub(crate) fn restart_service() -> Result<()> {
     qol_host_fixes::elevation::run_privileged("qol-bluetooth", RESTART_SCRIPT, &[])
+}
+
+fn process_ids(process: &str) -> Vec<u32> {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse().ok())
+        })
+        .filter(|pid| process_matches(*pid, process))
+        .collect()
+}
+
+fn process_matches(pid: u32, process: &str) -> bool {
+    let proc_dir = Path::new("/proc").join(pid.to_string());
+    if fs::read_to_string(proc_dir.join("comm")).is_ok_and(|comm| comm.trim() == process) {
+        return true;
+    }
+    let Ok(command_line) = fs::read(proc_dir.join("cmdline")) else {
+        return false;
+    };
+    command_line.split(|byte| *byte == 0).any(|argument| {
+        Path::new(std::str::from_utf8(argument).unwrap_or_default())
+            .file_name()
+            .is_some_and(|name| name == process)
+    })
+}
+
+fn process_alive(pid: u32) -> bool {
+    qol_process::is_pid_alive(pid) && !qol_process::is_pid_zombie(pid)
 }

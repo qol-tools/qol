@@ -1,4 +1,6 @@
 use anyhow::{bail, Context, Result};
+use std::ffi::OsString;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 pub(crate) fn available() -> bool {
@@ -20,4 +22,17 @@ pub(crate) fn run(label: &str, script: &str, args: &[String]) -> Result<()> {
         bail!("pkexec exited with {status}");
     }
     Ok(())
+}
+
+pub(crate) fn spawn(label: &str, program: &Path, args: &[OsString]) -> Result<std::process::Child> {
+    let mut command = Command::new("pkexec");
+    command
+        .arg(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    command
+        .spawn()
+        .with_context(|| format!("failed to launch privileged {label}"))
 }

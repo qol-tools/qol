@@ -30,6 +30,7 @@ mod platform;
 mod qmp;
 mod registry;
 mod serial;
+mod usb_host;
 mod workflow;
 
 pub(crate) use arch::{ArchGuess, Firmware, GuestArch};
@@ -279,6 +280,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
         return Ok(());
     }
     match command {
+        "__usb-host-lease" => usb_host::run_helper(rest),
         "list" => cmd_list(rest, verbose),
         "add" => cmd_add(rest, verbose),
         "open" => cmd_open(rest, verbose),
@@ -813,6 +815,7 @@ struct BootedVm {
     vm_status: String,
     runtime: RuntimeEvidence,
     child: machine::VmLifecycle,
+    usb_host_lease: Option<usb_host::UsbHostLease>,
     admission: EmuAdmission,
     started_at: u64,
 }
@@ -1047,6 +1050,7 @@ fn boot_vm_with_admission(
     cleanup_tracker: Option<machine::LifecycleCleanupTracker>,
 ) -> Result<BootedVm> {
     let root = repo_root()?;
+    validate_usb_host(launch.usb_host.as_deref())?;
     let discovered = discover_all()?;
     let target_path = Path::new(&launch.target);
     if discovered.environments.is_empty()
@@ -1357,11 +1361,19 @@ fn boot_vm_with_admission(
         &format!("{} · qmp 127.0.0.1:{qmp_port}", environment.id),
     );
     reservation.release_ports();
-    let qemu_pid = match lifecycle.spawn(
-        &qemu_system,
-        &qemu_args,
-        launch.display == launch::DisplayMode::None,
-    ) {
+    let mut usb_host_lease = None;
+    let spawn_result = match usb_host::acquire(launch.usb_host.as_deref(), &run_id) {
+        Ok(lease) => {
+            usb_host_lease = lease;
+            lifecycle.spawn(
+                &qemu_system,
+                &qemu_args,
+                launch.display == launch::DisplayMode::None,
+            )
+        }
+        Err(error) => Err(error),
+    };
+    let qemu_pid = match spawn_result {
         Ok(pid) => pid,
         Err(error) => {
             let cleanup_pending = lifecycle.spawn_cleanup_pending();
@@ -1618,6 +1630,7 @@ fn boot_vm_with_admission(
         vm_status,
         runtime,
         child: lifecycle,
+        usb_host_lease,
         admission,
         started_at,
     })
@@ -1729,6 +1742,7 @@ fn finalize_vm_with_status(
         vm_status,
         runtime,
         child: mut lifecycle,
+        mut usb_host_lease,
         admission,
         started_at,
     } = vm;
@@ -1760,6 +1774,11 @@ fn finalize_vm_with_status(
         })?;
         write_report(&run_dir, &report)
     })?;
+    if let Some(lease) = usb_host_lease.as_mut() {
+        lease
+            .release()
+            .context("failed to release the USB host lease")?;
+    }
     admission
         .release()
         .context("failed to release the emulation resource lease")?;
@@ -2234,7 +2253,20 @@ fn qemu_args(input: QemuArgsInput<'_>) -> Vec<String> {
             "virtio-blk-pci,drive=qolpayload,serial=qolpayload".to_string(),
         ]);
     }
+    if let Some(usb_host) = launch.usb_host.as_deref() {
+        args.extend([
+            "-device".to_string(),
+            format!(
+                "usb-host,hostdevice={},bus=xhci.0,id=qol-usb-host",
+                usb_host.display()
+            ),
+        ]);
+    }
     args
+}
+
+fn validate_usb_host(path: Option<&Path>) -> Result<()> {
+    usb_host::validate(path)
 }
 
 fn run_child_status(program: &Path, args: &[String], verbose: bool) -> Result<ExitStatus> {
@@ -2450,6 +2482,7 @@ fn report_json(input: ReportInput<'_>) -> Result<serde_json::Value> {
             "cpus": input.launch.cpus,
             "guest_adapter": input.launch.guest_adapter.map(GuestAdapter::as_str),
             "guest_image_revision": input.launch.guest_image_revision,
+            "usb_host": input.launch.usb_host,
         },
         "artifacts": {
             "run_dir": input.run_dir,
@@ -2924,6 +2957,7 @@ mod tests {
             vm_status: "shutdown".to_string(),
             runtime,
             child: machine::VmLifecycle::new(&run_dir),
+            usb_host_lease: None,
             admission: EmuAdmission::ExternallyReserved,
             started_at: 1,
         };

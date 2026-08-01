@@ -49,6 +49,7 @@ pub(crate) struct LaunchOptions {
     pub(crate) acceleration: AccelerationRequirement,
     pub(crate) arch: Option<GuestArch>,
     pub(crate) firmware: Option<Firmware>,
+    pub(crate) usb_host: Option<PathBuf>,
     pub(crate) worktree: Option<PathBuf>,
     pub(crate) image_import_config: Option<PathBuf>,
 }
@@ -73,6 +74,7 @@ impl LaunchOptions {
             acceleration: AccelerationRequirement::AllowTcg,
             arch: None,
             firmware: None,
+            usb_host: None,
             worktree: None,
             image_import_config: None,
         }
@@ -124,6 +126,7 @@ pub(crate) struct ChildLaunch<'a> {
     pub(crate) acceleration: Option<&'a str>,
     pub(crate) arch: Option<&'a str>,
     pub(crate) firmware: Option<&'a str>,
+    pub(crate) usb_host: Option<&'a Path>,
 }
 
 pub(crate) fn child_args(launch: ChildLaunch<'_>) -> Result<Vec<OsString>> {
@@ -221,6 +224,9 @@ pub(crate) fn child_args(launch: ChildLaunch<'_>) -> Result<Vec<OsString>> {
             OsString::from(firmware.as_str()),
         ]);
     }
+    if let Some(usb_host) = launch.usb_host {
+        append_absolute_path_option(&mut args, "--usb-host", usb_host)?;
+    }
     Ok(args)
 }
 
@@ -250,6 +256,7 @@ pub(crate) fn parse_launch_options(args: &[OsString], usage: &str) -> Result<Lau
     let mut acceleration = None;
     let mut arch = None;
     let mut firmware = None;
+    let mut usb_host = None;
     let mut index = 0;
 
     while index < args.len() {
@@ -368,6 +375,10 @@ pub(crate) fn parse_launch_options(args: &[OsString], usage: &str) -> Result<Lau
                 );
                 index += 2;
             }
+            "--usb-host" => {
+                parse_path_option(args, &mut usb_host, index, "--usb-host")?;
+                index += 2;
+            }
             option if option.starts_with('-') => bail!("unknown launch option `{option}`"),
             value => {
                 if value.is_empty() || target.is_some() {
@@ -397,6 +408,7 @@ pub(crate) fn parse_launch_options(args: &[OsString], usage: &str) -> Result<Lau
     options.acceleration = acceleration.unwrap_or(AccelerationRequirement::AllowTcg);
     options.arch = arch;
     options.firmware = firmware;
+    options.usb_host = usb_host;
     options.validate_payload_isolation()?;
     Ok(options)
 }
@@ -555,6 +567,7 @@ mod tests {
             acceleration: Some("hardware"),
             arch: Some("x86_64"),
             firmware: Some("bios"),
+            usb_host: None,
         }
     }
 
@@ -759,6 +772,22 @@ mod tests {
             assert_eq!(parsed.arch, Some(GuestArch::X86_64));
             assert_eq!(parsed.firmware, Some(Firmware::Uefi));
         }
+    }
+
+    #[test]
+    fn parses_and_forwards_an_explicit_usb_host_device() {
+        let parsed = parse(&["mint", "--usb-host", "/dev/bus/usb/001/007"]).unwrap();
+        assert_eq!(
+            parsed.usb_host.as_deref(),
+            Some(Path::new("/dev/bus/usb/001/007"))
+        );
+
+        let parent_lease = ParentLeaseClaim::parse("debian-batch-1").unwrap();
+        let mut launch = child_launch(ChildOperation::Up, &parent_lease);
+        launch.usb_host = Some(Path::new("/dev/bus/usb/001/007"));
+        let args = child_args(launch).unwrap();
+        assert_eq!(args[args.len() - 2], "--usb-host");
+        assert_eq!(args[args.len() - 1], "/dev/bus/usb/001/007");
     }
 
     #[test]

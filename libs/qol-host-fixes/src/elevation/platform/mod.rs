@@ -6,8 +6,8 @@ mod macos;
 mod windows;
 
 #[cfg(target_os = "linux")]
-pub(super) use linux::{available, run};
+pub(super) use linux::{available, run, spawn};
 #[cfg(target_os = "macos")]
-pub(super) use macos::{available, run};
+pub(super) use macos::{available, run, spawn};
 #[cfg(target_os = "windows")]
-pub(super) use windows::{available, run};
+pub(super) use windows::{available, run, spawn};
