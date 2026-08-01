@@ -1,7 +1,6 @@
 pub const SYS: u8 = 0x01;
 pub const AF: u8 = 0x04;
 pub const ZDO: u8 = 0x05;
-pub const SAPI: u8 = 0x06;
 pub const UTIL: u8 = 0x07;
 
 pub mod sys {
@@ -15,7 +14,6 @@ pub mod af {
     pub const REGISTER: u8 = 0x00;
     pub const DATA_REQUEST: u8 = 0x01;
     pub const DATA_CONFIRM: u8 = 0x80;
-    pub const INCOMING_MSG: u8 = 0x81;
 }
 
 pub mod zdo {
@@ -26,17 +24,9 @@ pub mod zdo {
     pub const ACTIVE_EP_REQ: u8 = 0x05;
     pub const ACTIVE_EP_RSP: u8 = 0x85;
     pub const MGMT_PERMIT_JOIN_REQ: u8 = 0x36;
-    pub const MGMT_PERMIT_JOIN_RSP: u8 = 0xB6;
     pub const STARTUP_FROM_APP: u8 = 0x40;
     pub const STATE_CHANGE_IND: u8 = 0xC0;
     pub const END_DEVICE_ANNCE_IND: u8 = 0xC1;
-}
-
-pub mod sapi {
-    pub const ZB_START_REQUEST: u8 = 0x00;
-    pub const ZB_START_CONFIRM: u8 = 0x80;
-    pub const ZB_WRITE_CONFIGURATION: u8 = 0x05;
-    pub const ZB_READ_CONFIGURATION: u8 = 0x04;
 }
 
 pub mod util {

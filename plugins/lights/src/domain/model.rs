@@ -13,14 +13,6 @@ pub enum LightTarget {
     Group { id: GroupId },
 }
 
-impl LightTarget {
-    pub fn main_device() -> Self {
-        Self::Device {
-            id: DeviceId("main".into()),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LightCapabilities {
     pub supports_power: bool,
@@ -31,19 +23,6 @@ pub struct LightCapabilities {
     pub min_mirek: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_mirek: Option<u16>,
-}
-
-impl LightCapabilities {
-    pub fn rgb_cct() -> Self {
-        Self {
-            supports_power: true,
-            supports_brightness: true,
-            supports_color: true,
-            supports_color_temperature: true,
-            min_mirek: Some(153),
-            max_mirek: Some(500),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -76,31 +55,11 @@ pub enum LightCommand {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Preset {
-    pub id: String,
-    pub name: String,
-    pub target: LightTarget,
-    #[serde(default)]
-    pub commands: Vec<LightCommand>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LightTargetInfo {
     pub target: LightTarget,
     pub name: String,
     pub capabilities: LightCapabilities,
     pub state: LightState,
-}
-
-impl LightTargetInfo {
-    pub fn main_rgb_cct() -> Self {
-        Self {
-            target: LightTarget::main_device(),
-            name: "Main Light".into(),
-            capabilities: LightCapabilities::rgb_cct(),
-            state: LightState::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,13 +75,4 @@ pub enum BackendConnectionStatus {
 pub struct BackendHealth {
     pub status: BackendConnectionStatus,
     pub summary: String,
-}
-
-impl BackendHealth {
-    pub fn degraded(summary: impl Into<String>) -> Self {
-        Self {
-            status: BackendConnectionStatus::Degraded,
-            summary: summary.into(),
-        }
-    }
 }

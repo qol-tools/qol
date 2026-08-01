@@ -44,10 +44,6 @@ impl DaemonState {
         })
     }
 
-    pub fn config(&self) -> &PluginConfig {
-        &self.config
-    }
-
     pub fn shared_service(&self) -> Arc<Mutex<Option<LightService<ZigbeeBackend>>>> {
         self.service.clone()
     }

@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 
 use crate::backend::LightBackend;
-use crate::domain::model::{BackendHealth, LightCommand, LightTarget, LightTargetInfo};
+use crate::domain::model::{LightCommand, LightTarget};
 
 pub struct LightService<B> {
     backend: B,
@@ -10,14 +10,6 @@ pub struct LightService<B> {
 impl<B: LightBackend> LightService<B> {
     pub fn new(backend: B) -> Self {
         Self { backend }
-    }
-
-    pub fn health(&self) -> BackendHealth {
-        self.backend.health()
-    }
-
-    pub fn list_targets(&self) -> Result<Vec<LightTargetInfo>> {
-        self.backend.list_targets()
     }
 
     pub fn backend(&self) -> &B {

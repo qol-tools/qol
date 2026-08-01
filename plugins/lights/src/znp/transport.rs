@@ -19,15 +19,6 @@ pub struct TransportConfig {
     pub baud_rate: u32,
 }
 
-impl Default for TransportConfig {
-    fn default() -> Self {
-        Self {
-            port: String::new(),
-            baud_rate: 115_200,
-        }
-    }
-}
-
 impl Transport {
     pub fn open(config: &TransportConfig) -> Result<Self> {
         let port = serialport::new(&config.port, config.baud_rate)
@@ -70,10 +61,6 @@ impl Transport {
         self.frames
             .recv_timeout(timeout)
             .map_err(|_| anyhow::anyhow!("receive timed out"))
-    }
-
-    pub fn receiver(&self) -> &Receiver<ZnpFrame> {
-        &self.frames
     }
 }
 

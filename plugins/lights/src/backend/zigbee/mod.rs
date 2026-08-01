@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::znp::zcl;
 use crate::znp::{ControllerConfig, Device, ZigbeeController, ZigbeeEvent};
 use anyhow::{anyhow, Context, Result};
@@ -7,14 +5,10 @@ use crossbeam_channel::Receiver;
 
 use crate::backend::LightBackend;
 use crate::config::model::BackendConfig;
-use crate::domain::model::{
-    BackendConnectionStatus, BackendHealth, DeviceId, LightCapabilities, LightCommand, LightState,
-    LightTarget, LightTargetInfo,
-};
+use crate::domain::model::{LightCommand, LightTarget};
 
 pub struct ZigbeeBackend {
     controller: ZigbeeController,
-    state_cache: HashMap<u16, LightState>,
     resolved_network_key: [u8; 16],
 }
 
@@ -35,7 +29,6 @@ impl ZigbeeBackend {
 
         Ok(Self {
             controller,
-            state_cache: HashMap::new(),
             resolved_network_key: network_key,
         })
     }
@@ -58,40 +51,6 @@ impl ZigbeeBackend {
 }
 
 impl LightBackend for ZigbeeBackend {
-    fn kind(&self) -> &'static str {
-        "zigbee-direct"
-    }
-
-    fn health(&self) -> BackendHealth {
-        BackendHealth {
-            status: BackendConnectionStatus::Connected,
-            summary: "zigbee coordinator connected".into(),
-        }
-    }
-
-    fn list_targets(&self) -> Result<Vec<LightTargetInfo>> {
-        let devices = self.controller.devices();
-        let targets = devices
-            .iter()
-            .map(|device| {
-                let ieee = format_ieee(&device.ieee_address);
-                LightTargetInfo {
-                    target: LightTarget::Device {
-                        id: DeviceId(ieee.clone()),
-                    },
-                    name: format!("0x{:04X}", device.network_address),
-                    capabilities: capabilities_from_device(device),
-                    state: self
-                        .state_cache
-                        .get(&device.network_address)
-                        .cloned()
-                        .unwrap_or_default(),
-                }
-            })
-            .collect();
-        Ok(targets)
-    }
-
     fn apply_command(&mut self, target: &LightTarget, command: &LightCommand) -> Result<()> {
         let (nwk_addr, device) = resolve_target(target, &self.controller)?;
 
@@ -236,32 +195,6 @@ fn resolve_network_key(configured: &str) -> Result<[u8; 16]> {
     Ok(key)
 }
 
-fn capabilities_from_device(device: &Device) -> LightCapabilities {
-    let has_cluster = |id: u16| {
-        device
-            .endpoints
-            .iter()
-            .any(|ep| ep.input_clusters.contains(&id))
-    };
-
-    LightCapabilities {
-        supports_power: has_cluster(zcl::CLUSTER_ON_OFF),
-        supports_brightness: has_cluster(zcl::CLUSTER_LEVEL),
-        supports_color: has_cluster(zcl::CLUSTER_COLOR),
-        supports_color_temperature: has_cluster(zcl::CLUSTER_COLOR),
-        min_mirek: if has_cluster(zcl::CLUSTER_COLOR) {
-            Some(153)
-        } else {
-            None
-        },
-        max_mirek: if has_cluster(zcl::CLUSTER_COLOR) {
-            Some(500)
-        } else {
-            None
-        },
-    }
-}
-
 fn rgb_to_cie_xy(r: u8, g: u8, b: u8) -> (u16, u16) {
     let gamma = |v: f64| {
         if v > 0.04045 {
@@ -355,13 +288,6 @@ fn resolve_by_ieee(
         .ok_or_else(|| anyhow!("device {} not found (by IEEE)", label))?
         .clone();
     Ok((nwk, device))
-}
-
-fn format_ieee(addr: &[u8; 8]) -> String {
-    addr.iter()
-        .map(|b| format!("{:02X}", b))
-        .collect::<Vec<_>>()
-        .join(":")
 }
 
 fn parse_hex_u16(hex_id: &str) -> Result<u16> {

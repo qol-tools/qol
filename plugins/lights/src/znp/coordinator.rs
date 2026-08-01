@@ -31,27 +31,7 @@ pub struct NetworkConfig {
     pub network_key: [u8; 16],
 }
 
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        Self {
-            pan_id: 0x1A62,
-            channel: 11,
-            network_key: [
-                0x01, 0x03, 0x05, 0x07, 0x09, 0x0B, 0x0D, 0x0F, 0x00, 0x02, 0x04, 0x06, 0x08, 0x0A,
-                0x0C, 0x0D,
-            ],
-        }
-    }
-}
-
-pub struct NetworkInfo {
-    pub ieee_address: [u8; 8],
-    pub short_address: u16,
-    pub pan_id: u16,
-    pub channel: u8,
-}
-
-pub fn startup(engine: &RequestEngine, config: &NetworkConfig) -> Result<NetworkInfo> {
+pub fn startup(engine: &RequestEngine, config: &NetworkConfig) -> Result<()> {
     eprintln!("[znp] resetting coordinator...");
     reset(engine).context("reset")?;
     eprintln!("[znp] ping...");
@@ -66,9 +46,9 @@ pub fn startup(engine: &RequestEngine, config: &NetworkConfig) -> Result<Network
     eprintln!("[znp] starting network...");
     start_network(engine).context("start_network")?;
     eprintln!("[znp] getting device info...");
-    let info = get_device_info(engine).context("get_device_info")?;
-    eprintln!("[znp] coordinator ready: addr=0x{:04X}", info.short_address);
-    Ok(info)
+    get_device_info(engine).context("get_device_info")?;
+    eprintln!("[znp] coordinator ready");
+    Ok(())
 }
 
 pub fn probe(engine: &RequestEngine) -> Result<()> {
@@ -78,24 +58,14 @@ pub fn probe(engine: &RequestEngine) -> Result<()> {
     Ok(())
 }
 
-pub fn get_device_info(engine: &RequestEngine) -> Result<NetworkInfo> {
+pub fn get_device_info(engine: &RequestEngine) -> Result<()> {
     let resp = engine.sreq(UTIL, util::GET_DEVICE_INFO, vec![])?;
     ensure!(
         resp.data.len() >= 10,
         "GET_DEVICE_INFO response too short: {} bytes",
         resp.data.len()
     );
-
-    let mut ieee_address = [0u8; 8];
-    ieee_address.copy_from_slice(&resp.data[0..8]);
-    let short_address = u16::from_le_bytes([resp.data[8], resp.data[9]]);
-
-    Ok(NetworkInfo {
-        ieee_address,
-        short_address,
-        pan_id: 0,
-        channel: 0,
-    })
+    Ok(())
 }
 
 pub fn permit_join(engine: &RequestEngine, duration_secs: u8) -> Result<()> {

@@ -5,8 +5,6 @@ pub mod hostfix;
 pub mod platform;
 mod settings;
 
-pub use bluetooth::retry;
-
 pub const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 pub const SETTINGS_SURFACE_ARG: &str = "__qol-settings-surface";
 
