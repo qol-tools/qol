@@ -67,6 +67,11 @@ pub struct ProcessTreeGuard {
     _inner: platform::ProcessTreeGuard,
 }
 
+pub struct OwnedProcessTree {
+    root_pid: u32,
+    guard: Option<ProcessTreeGuard>,
+}
+
 #[must_use]
 pub struct PreparedCommand<'guard> {
     guard: &'guard ProcessTreeGuard,
@@ -199,6 +204,91 @@ impl Drop for PreparedCommand<'_> {
 impl CurrentProcessTreeGuard {
     pub fn disarm(&mut self) -> io::Result<()> {
         self.inner.disarm()
+    }
+}
+
+pub fn spawn_owned(mut command: Command) -> io::Result<(Child, OwnedProcessTree)> {
+    #[cfg(windows)]
+    {
+        let guard = ProcessTreeGuard {
+            _inner: platform::own_process_tree()?,
+        };
+        let prepared = guard.prepare_command(command)?;
+        let child = match prepared.spawn() {
+            Ok(child) => child,
+            Err(error) => return Err(prepared_spawn_error(&guard, error)),
+        };
+        let root_pid = child.id();
+        return Ok((
+            child,
+            OwnedProcessTree {
+                root_pid,
+                guard: Some(guard),
+            },
+        ));
+    }
+
+    platform::isolate_owned_command(&mut command)?;
+    let child = command.spawn()?;
+    let root_pid = child.id();
+    Ok((
+        child,
+        OwnedProcessTree {
+            root_pid,
+            guard: None,
+        },
+    ))
+}
+
+#[cfg(windows)]
+fn prepared_spawn_error(guard: &ProcessTreeGuard, error: PreparedSpawnError) -> io::Error {
+    let cleanup = error.cleanup();
+    let source = error.source;
+    if cleanup != PreparedSpawnCleanup::RecoveryPending {
+        return source;
+    }
+    match guard.recover_pending_spawn(Duration::from_secs(2)) {
+        Ok(_) => source,
+        Err(recovery) => io::Error::new(
+            source.kind(),
+            format!("{source}; process-tree recovery failed: {recovery}"),
+        ),
+    }
+}
+
+impl OwnedProcessTree {
+    pub fn tree_has_exited(&self) -> io::Result<bool> {
+        match self.guard.as_ref() {
+            Some(guard) => guard.tree_has_exited(),
+            None => Ok(!platform::is_group_alive(self.root_pid)),
+        }
+    }
+
+    pub fn terminate_and_wait(&self, child: &mut Child, timeout: Duration) -> io::Result<()> {
+        let terminated = match self.guard.as_ref() {
+            Some(guard) => guard.terminate_and_wait(timeout).map(|_| ()),
+            None => {
+                let root_result = platform::terminate_owned(child, timeout);
+                if platform::is_group_alive(self.root_pid) {
+                    platform::terminate_group(self.root_pid, timeout);
+                }
+                root_result
+            }
+        };
+        match terminated {
+            Ok(()) => child.wait().map(|_| ()),
+            Err(error) => {
+                if !self.tree_has_exited().unwrap_or(false) {
+                    return Err(error);
+                }
+                match child.wait() {
+                    Ok(_) => Err(error),
+                    Err(reap) => Err(io::Error::other(format!(
+                        "{error}; root-process reap failed: {reap}"
+                    ))),
+                }
+            }
+        }
     }
 }
 

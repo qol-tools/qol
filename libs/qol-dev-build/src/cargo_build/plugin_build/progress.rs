@@ -1,17 +1,10 @@
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use crate::core::progress_estimator::CargoProgressEstimator;
 use crate::core::progress_parser::CargoProgressSnapshot;
 
-pub(super) fn emit_progress<F>(rx: &Receiver<CargoProgressSnapshot>, on_progress: &mut F)
-where
-    F: FnMut(u8, String),
-{
-    ProgressDriver::default().run(rx, on_progress);
-}
-
-struct ProgressDriver {
+pub(super) struct ProgressDriver {
     estimator: CargoProgressEstimator,
     latest_snapshot: Option<CargoProgressSnapshot>,
     last_percent: u8,
@@ -34,16 +27,17 @@ impl Default for ProgressDriver {
 }
 
 impl ProgressDriver {
-    fn run<F>(mut self, rx: &Receiver<CargoProgressSnapshot>, on_progress: &mut F)
+    pub(super) fn poll<F>(&mut self, rx: &Receiver<CargoProgressSnapshot>, on_progress: &mut F)
     where
         F: FnMut(u8, String),
     {
-        loop {
-            match rx.recv_timeout(Duration::from_millis(220)) {
-                Ok(snapshot) => self.on_snapshot(snapshot, on_progress),
-                Err(RecvTimeoutError::Timeout) => self.on_timeout(on_progress),
-                Err(RecvTimeoutError::Disconnected) => return,
-            }
+        let mut received = false;
+        while let Ok(snapshot) = rx.try_recv() {
+            received = true;
+            self.on_snapshot(snapshot, on_progress);
+        }
+        if !received && self.last_emit_at.elapsed() >= Duration::from_millis(220) {
+            self.on_timeout(on_progress);
         }
     }
 

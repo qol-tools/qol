@@ -71,6 +71,7 @@ where
         mut child,
         stdout,
         stderr,
+        process_tree,
     } = match start_build(root, &manifest_path, bins, &identity, &mut on_progress) {
         Ok(c) => c,
         Err(result) => return result,
@@ -84,7 +85,10 @@ where
         root,
         bins,
         &identity,
-        &mut child,
+        RunningCargo {
+            child: &mut child,
+            process_tree: &process_tree,
+        },
         artifact_stream,
         combined,
         &mut on_progress,
@@ -290,7 +294,7 @@ fn spawn_build(
 ) -> Result<CargoChild, String> {
     let mut command = tray_build_command(root, manifest_path, bins);
     identity.apply_to(&mut command);
-    spawn_piped(&mut command).map_err(|error| format!("Failed to run cargo build: {}", error))
+    spawn_piped(command).map_err(|error| format!("Failed to run cargo build: {}", error))
 }
 
 fn tray_build_command(root: &Path, manifest_path: &Path, bins: &[&str]) -> Command {
@@ -312,11 +316,16 @@ fn tray_build_command(root: &Path, manifest_path: &Path, bins: &[&str]) -> Comma
     command
 }
 
+struct RunningCargo<'a> {
+    child: &'a mut Child,
+    process_tree: &'a qol_process::OwnedProcessTree,
+}
+
 fn finish_build<F>(
     root: &Path,
     bins: &[&str],
     identity: &qol_build_identity::BuildIdentityEnvironment,
-    child: &mut Child,
+    running: RunningCargo<'_>,
     artifact_stream: Result<(u32, Vec<crate::cargo_build::CargoArtifact>), String>,
     combined: String,
     on_progress: &mut F,
@@ -324,9 +333,10 @@ fn finish_build<F>(
 where
     F: FnMut(u8, String),
 {
-    crate::cargo_build::finish_build(
+    crate::cargo_build::finish_build_owned(
         QOL_TRAY_ID,
-        child,
+        running.child,
+        running.process_tree,
         combined,
         on_progress,
         |output, progress| match artifact_stream {

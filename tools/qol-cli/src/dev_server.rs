@@ -1,7 +1,7 @@
 use crate::dev_console::TrayHandle;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::json;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::mpsc::Receiver;
@@ -105,6 +105,8 @@ pub(crate) struct BuildResultSnapshot {
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct BuildStateSnapshot {
     pub(crate) building: bool,
+    #[serde(default)]
+    pub(crate) progress: HashMap<String, serde_json::Value>,
     #[serde(default)]
     pub(crate) results: Option<Vec<BuildResultSnapshot>>,
 }
@@ -639,6 +641,7 @@ mod tests {
         let payload = r#"{"building":false,"progress":{"plugin-a":{"status":"building","percent":50,"phase":"cargo"}},"results":[{"plugin_id":"plugin-a","success":false,"output":"error: failed to compile","skipped":false}]}"#;
         let state: BuildStateSnapshot = serde_json::from_str(payload).unwrap();
         assert!(!state.building);
+        assert_eq!(state.progress.len(), 1);
         let result = &state.results.unwrap()[0];
         assert_eq!(result.plugin_id, "plugin-a");
         assert!(!result.success);

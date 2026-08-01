@@ -12,6 +12,7 @@ qol-build-identity.workspace = true
 qol-conventions.workspace = true
 qol-fs.workspace = true
 qol-plugin-api.workspace = true
+qol-process.workspace = true
 qol-workspace.workspace = true
 serde.workspace = true
 serde_json.workspace = true

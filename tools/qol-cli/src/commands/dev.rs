@@ -22,7 +22,6 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 const RELOAD_ENV: &str = "QOL_DEV_RELOAD";
-const PLUGIN_RELOAD_TIMEOUT: Duration = Duration::from_secs(120);
 const PLUGIN_RELOAD_INTERVAL: Duration = Duration::from_millis(500);
 
 const TRAY_DEV_BINS: [&str; 2] = ["qol-tray", "qol-tray-doctor"];
@@ -589,13 +588,20 @@ fn request_plugin_reload(verbose: bool, branch: Option<&str>) -> Result<()> {
 
 fn wait_for_dev_links_fresh() -> Result<()> {
     let started = Instant::now();
-    if !wait_for_build_to_finish(started)? {
-        return wait_for_dev_links_fresh_legacy(started);
+    let timeout = plugin_reload_timeout();
+    if !wait_for_build_to_finish(started, timeout)? {
+        return wait_for_dev_links_fresh_legacy(started, timeout);
     }
     ensure_dev_links_fresh()
 }
 
-fn wait_for_build_to_finish(started: Instant) -> Result<bool> {
+fn plugin_reload_timeout() -> Duration {
+    let plugin_count = fetch_dev_links().map_or(0, |links| links.len());
+    qol_dev_build::linked_plugin_build_timeout(plugin_count)
+}
+
+fn wait_for_build_to_finish(started: Instant, timeout: Duration) -> Result<bool> {
+    let mut timeout = timeout;
     let mut last_state;
     loop {
         match fetch_build_state() {
@@ -603,10 +609,15 @@ fn wait_for_build_to_finish(started: Instant) -> Result<bool> {
                 ensure_build_results_succeeded(state.results.as_deref())?;
                 return Ok(true);
             }
-            Ok(_) => last_state = "plugin build in progress".to_string(),
+            Ok(state) => {
+                timeout = timeout.max(qol_dev_build::linked_plugin_build_timeout(
+                    state.progress.len(),
+                ));
+                last_state = "plugin build in progress".to_string();
+            }
             Err(_) => return Ok(false),
         }
-        if started.elapsed() >= PLUGIN_RELOAD_TIMEOUT {
+        if started.elapsed() >= timeout {
             bail!("{last_state}");
         }
         std::thread::sleep(PLUGIN_RELOAD_INTERVAL);
@@ -645,7 +656,7 @@ fn ensure_dev_links_fresh() -> Result<()> {
     bail!("stale dev links: {}", stale.join(", "));
 }
 
-fn wait_for_dev_links_fresh_legacy(started: Instant) -> Result<()> {
+fn wait_for_dev_links_fresh_legacy(started: Instant, timeout: Duration) -> Result<()> {
     let mut last_state;
     loop {
         match fetch_dev_links() {
@@ -660,7 +671,7 @@ fn wait_for_dev_links_fresh_legacy(started: Instant) -> Result<()> {
                 last_state = format!("dev-link status unavailable: {error:#}");
             }
         }
-        if started.elapsed() >= PLUGIN_RELOAD_TIMEOUT {
+        if started.elapsed() >= timeout {
             bail!("{last_state}");
         }
         std::thread::sleep(PLUGIN_RELOAD_INTERVAL);

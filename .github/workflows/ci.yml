@@ -32,6 +32,7 @@ jobs:
       macos_test: ${{ steps.affected.outputs.macos_test }}
       macos_skip: ${{ steps.affected.outputs.macos_skip }}
       windows_process: ${{ steps.affected.outputs.windows_process }}
+      windows_dev_build: ${{ steps.affected.outputs.windows_dev_build }}
       windows_qol: ${{ steps.affected.outputs.windows_qol }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -197,6 +198,7 @@ jobs:
     needs: plan
     if: >-
       ${{ fromJSON(needs.plan.outputs.windows_process || 'false') ||
+      fromJSON(needs.plan.outputs.windows_dev_build || 'false') ||
       fromJSON(needs.plan.outputs.windows_qol || 'false') }}
     runs-on: windows-latest
     timeout-minutes: 20
@@ -213,6 +215,10 @@ jobs:
       - name: Check production CLI
         if: ${{ fromJSON(needs.plan.outputs.windows_qol) }}
         run: cargo check -p qol --bin qol --all-targets
+
+      - name: Test development build crate
+        if: ${{ fromJSON(needs.plan.outputs.windows_dev_build) }}
+        run: cargo test -p qol-dev-build --all-targets
 
       - name: Test process containment
         if: ${{ fromJSON(needs.plan.outputs.windows_process) }}

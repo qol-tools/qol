@@ -47,6 +47,17 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("debug-assertions", workflow)
         self.assertIn("timeout-minutes:", workflow)
 
+    def test_windows_dev_build_tests_follow_the_affected_plan(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+
+        for contract in [
+            "windows_dev_build: ${{ steps.affected.outputs.windows_dev_build }}",
+            "fromJSON(needs.plan.outputs.windows_dev_build || 'false')",
+            "if: ${{ fromJSON(needs.plan.outputs.windows_dev_build) }}",
+            "run: cargo test -p qol-dev-build --all-targets",
+        ]:
+            self.assertIn(contract, workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

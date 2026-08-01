@@ -92,6 +92,7 @@ def full_workspace(reason):
         {
             "full": True,
             "windows_process": True,
+            "windows_dev_build": True,
             "windows_qol": True,
             "ubuntu_clippy": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)} --all-targets{workspace_feature_flags(UBUNTU_EXCLUDE)}",
             "ubuntu_build": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}{workspace_feature_flags(UBUNTU_EXCLUDE)}",
@@ -111,6 +112,7 @@ def skip_all(reason):
         {
             "full": False,
             "windows_process": False,
+            "windows_dev_build": False,
             "windows_qol": False,
             "ubuntu_clippy": "",
             "ubuntu_build": "",
@@ -240,6 +242,7 @@ def main():
         {
             "full": False,
             "windows_process": "qol-process" in affected,
+            "windows_dev_build": "qol-dev-build" in affected,
             "windows_qol": "qol" in affected,
             "ubuntu_clippy": args(ubuntu, True),
             "ubuntu_build": args(ubuntu, False),

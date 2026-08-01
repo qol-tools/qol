@@ -107,36 +107,184 @@ pub struct CargoChild {
     pub child: Child,
     pub stdout: ChildStdout,
     pub stderr: ChildStderr,
+    pub(crate) process_tree: qol_process::OwnedProcessTree,
 }
 
-pub fn spawn_piped(command: &mut Command) -> Result<CargoChild, std::io::Error> {
+pub fn spawn_piped(mut command: Command) -> Result<CargoChild, std::io::Error> {
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command.spawn()?;
+    let (mut child, process_tree) = qol_process::spawn_owned(command)?;
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");
     Ok(CargoChild {
         child,
         stdout,
         stderr,
+        process_tree,
     })
 }
 
 pub const BUILD_TIMEOUT: Duration = Duration::from_secs(120);
+pub const BUILD_TERMINATION_GRACE: Duration = Duration::from_secs(2);
+
+const BUILD_WAIT_INTERVAL: Duration = Duration::from_millis(50);
 
 pub fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Result<bool, String> {
+    wait_with_timeout_and_poll("Cargo", child, timeout, || {})
+}
+
+pub fn wait_with_timeout_and_poll<F>(
+    plugin_id: &str,
+    child: &mut Child,
+    timeout: Duration,
+    on_poll: F,
+) -> Result<bool, String>
+where
+    F: FnMut(),
+{
+    wait_with_timeout_and_poll_inner(plugin_id, child, None, timeout, on_poll)
+}
+
+pub fn wait_with_timeout_and_poll_owned<F>(
+    plugin_id: &str,
+    child: &mut Child,
+    process_tree: &qol_process::OwnedProcessTree,
+    timeout: Duration,
+    on_poll: F,
+) -> Result<bool, String>
+where
+    F: FnMut(),
+{
+    wait_with_timeout_and_poll_inner(plugin_id, child, Some(process_tree), timeout, on_poll)
+}
+
+fn wait_with_timeout_and_poll_inner<F>(
+    plugin_id: &str,
+    child: &mut Child,
+    process_tree: Option<&qol_process::OwnedProcessTree>,
+    timeout: Duration,
+    mut on_poll: F,
+) -> Result<bool, String>
+where
+    F: FnMut(),
+{
     let start = Instant::now();
     loop {
+        on_poll();
         match child.try_wait() {
-            Ok(Some(status)) => return Ok(status.success()),
-            Ok(None) if start.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("Build timed out after {}s", timeout.as_secs()));
+            Ok(Some(status)) => {
+                let tree_exited = match tree_has_exited(child, process_tree) {
+                    Ok(exited) => exited,
+                    Err(error) => {
+                        let message = format!("Failed checking Cargo process tree: {error}");
+                        return match terminate_owned_tree(
+                            plugin_id,
+                            child,
+                            process_tree,
+                            "process-tree check error",
+                        ) {
+                            Ok(()) => Err(message),
+                            Err(cleanup_error) => Err(format!("{message}; {cleanup_error}")),
+                        };
+                    }
+                };
+                if !tree_exited {
+                    log::warn!(
+                        "[dev-build] event=cancellation plugin_id={} reason=orphaned_process_tree elapsed_ms={}",
+                        plugin_id,
+                        start.elapsed().as_millis()
+                    );
+                    terminate_owned_tree(plugin_id, child, process_tree, "orphaned process tree")?;
+                }
+                return Ok(status.success());
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(250)),
-            Err(e) => return Err(format!("Failed waiting for build: {}", e)),
+            Ok(None) if start.elapsed() >= timeout => {
+                let message = format!("Build timed out after {:?}", timeout);
+                log::warn!(
+                    "[dev-build] event=cancellation plugin_id={} reason=timeout elapsed_ms={} action=terminate_process_tree",
+                    plugin_id,
+                    start.elapsed().as_millis()
+                );
+                return match terminate_owned_tree(plugin_id, child, process_tree, "timeout") {
+                    Ok(()) => Err(message),
+                    Err(error) => Err(format!("{message}; {error}")),
+                };
+            }
+            Ok(None) => std::thread::sleep(BUILD_WAIT_INTERVAL),
+            Err(error) => {
+                let message = format!("Failed waiting for build: {error}");
+                return match terminate_owned_tree(plugin_id, child, process_tree, "wait error") {
+                    Ok(()) => Err(message),
+                    Err(cleanup_error) => Err(format!("{message}; {cleanup_error}")),
+                };
+            }
         }
     }
+}
+
+fn tree_has_exited(
+    child: &Child,
+    process_tree: Option<&qol_process::OwnedProcessTree>,
+) -> Result<bool, String> {
+    match process_tree {
+        Some(process_tree) => process_tree
+            .tree_has_exited()
+            .map_err(|error| format!("failed to inspect owned process tree: {error}")),
+        None => Ok(!qol_process::is_group_alive(child.id())),
+    }
+}
+
+fn terminate_owned_tree(
+    plugin_id: &str,
+    child: &mut Child,
+    process_tree: Option<&qol_process::OwnedProcessTree>,
+    reason: &str,
+) -> Result<(), String> {
+    let pid = child.id();
+    let termination = match process_tree {
+        Some(process_tree) => process_tree.terminate_and_wait(child, BUILD_TERMINATION_GRACE),
+        None => {
+            let termination = qol_process::terminate_owned(child, BUILD_TERMINATION_GRACE);
+            if qol_process::is_group_alive(pid) {
+                qol_process::terminate_group(pid, BUILD_TERMINATION_GRACE);
+            }
+            termination
+        }
+    };
+    let process_alive = qol_process::is_pid_alive(pid);
+    let tree_alive = tree_has_exited(child, process_tree)
+        .map(|exited| !exited)
+        .unwrap_or(true);
+    if let Err(error) = termination {
+        log::error!(
+            "[dev-build] event=reap plugin_id={} reason={} pid={} reaped=false process_tree_alive={} error={}",
+            plugin_id,
+            reason,
+            pid,
+            process_alive || tree_alive,
+            error
+        );
+        return Err(format!(
+            "failed to terminate and reap Cargo process tree (pid {pid}): {error}"
+        ));
+    }
+    if process_alive || tree_alive {
+        log::error!(
+            "[dev-build] event=reap plugin_id={} reason={} pid={} reaped=false process_tree_alive=true",
+            plugin_id,
+            reason,
+            pid
+        );
+        return Err(format!(
+            "Cargo process tree is still alive after termination (pid {pid})"
+        ));
+    }
+    log::warn!(
+        "[dev-build] event=reap plugin_id={} reason={} pid={} reaped=true process_tree_alive=false",
+        plugin_id,
+        reason,
+        pid
+    );
+    Ok(())
 }
 
 pub fn finish_build<F>(
@@ -149,7 +297,37 @@ pub fn finish_build<F>(
 where
     F: FnMut(u8, String),
 {
-    match wait_with_timeout(child, BUILD_TIMEOUT) {
+    let wait_result = wait_with_timeout_and_poll(plugin_id, child, BUILD_TIMEOUT, || {});
+    finish_build_after_wait(plugin_id, wait_result, output, on_progress, on_success)
+}
+
+pub fn finish_build_owned<F>(
+    plugin_id: &str,
+    child: &mut Child,
+    process_tree: &qol_process::OwnedProcessTree,
+    output: String,
+    on_progress: &mut F,
+    on_success: impl FnOnce(String, &mut F) -> BuildResult,
+) -> BuildResult
+where
+    F: FnMut(u8, String),
+{
+    let wait_result =
+        wait_with_timeout_and_poll_owned(plugin_id, child, process_tree, BUILD_TIMEOUT, || {});
+    finish_build_after_wait(plugin_id, wait_result, output, on_progress, on_success)
+}
+
+pub(crate) fn finish_build_after_wait<F>(
+    plugin_id: &str,
+    wait_result: Result<bool, String>,
+    output: String,
+    on_progress: &mut F,
+    on_success: impl FnOnce(String, &mut F) -> BuildResult,
+) -> BuildResult
+where
+    F: FnMut(u8, String),
+{
+    match wait_result {
         Ok(true) => on_success(output, on_progress),
         Ok(false) => failed_status_build(plugin_id, output),
         Err(message) => failed_build(plugin_id, message),
@@ -189,5 +367,76 @@ impl CargoPluginBuilder for CargoCommandPluginBuilder {
         on_progress: &mut dyn FnMut(u8, String),
     ) -> BuildResult {
         plugin_build::build_cargo_plugin_with_progress(plugin_id, path, on_progress)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    #[cfg(unix)]
+    struct ChildGuard(Option<Child>);
+
+    #[cfg(unix)]
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            if let Some(mut child) = self.0.take() {
+                let _ = qol_process::terminate_owned(&mut child, Duration::from_millis(20));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_terminates_and_reaps_the_owned_process_tree() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let child_pid_path = temp.path().join("child.pid");
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "sleep 30 & child=$!; printf '%s' \"$child\" > \"$QOL_TEST_CHILD_PID\"; wait",
+            ])
+            .env("QOL_TEST_CHILD_PID", &child_pid_path);
+        let CargoChild {
+            child,
+            stdout,
+            stderr,
+            process_tree,
+        } = spawn_piped(command).expect("spawn owned process");
+        drop(stdout);
+        drop(stderr);
+        let mut guard = ChildGuard(Some(child));
+        let root_pid = guard.0.as_ref().expect("child guard").id();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !child_pid_path.is_file() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(child_pid_path.is_file(), "child pid was not recorded");
+        let child_pid = std::fs::read_to_string(&child_pid_path)
+            .expect("child pid file")
+            .trim()
+            .parse::<u32>()
+            .expect("child pid");
+
+        let result = wait_with_timeout_and_poll_owned(
+            "timeout-test",
+            guard.0.as_mut().expect("child guard"),
+            &process_tree,
+            Duration::from_millis(100),
+            || {},
+        );
+        assert!(result.is_err(), "the hanging process must time out");
+        assert!(!qol_process::is_pid_alive(root_pid));
+        assert!(!qol_process::is_group_alive(root_pid));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while qol_process::is_pid_alive(child_pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !qol_process::is_pid_alive(child_pid),
+            "the descendant must not survive Cargo cancellation"
+        );
     }
 }

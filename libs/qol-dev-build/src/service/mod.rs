@@ -4,6 +4,7 @@ mod runner;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::adapters::{BuildFingerprintStore, CargoPluginBuilder, CoreEventSink};
 use crate::core;
@@ -11,6 +12,21 @@ use crate::core;
 use super::cargo_build::CargoCommandPluginBuilder;
 use super::fingerprint_store::JSON_BUILD_FINGERPRINT_STORE;
 use super::types::{BuildResult, BuildRun, PluginBuildProgress};
+
+pub const MAX_CONCURRENT_PLUGIN_BUILDS: usize = 4;
+
+const BUILD_RUN_TIMEOUT_MARGIN: Duration = Duration::from_secs(10);
+
+pub fn linked_plugin_build_timeout(plugin_count: usize) -> Duration {
+    let waves = plugin_count.saturating_add(MAX_CONCURRENT_PLUGIN_BUILDS - 1)
+        / MAX_CONCURRENT_PLUGIN_BUILDS;
+    let waves = waves.max(1);
+    let per_wave = crate::cargo_build::BUILD_TIMEOUT
+        .saturating_add(crate::cargo_build::BUILD_TERMINATION_GRACE);
+    per_wave
+        .saturating_mul(u32::try_from(waves).unwrap_or(u32::MAX))
+        .saturating_add(BUILD_RUN_TIMEOUT_MARGIN)
+}
 
 pub struct BuildApplicationService<'a> {
     builder: &'a dyn CargoPluginBuilder,
@@ -93,4 +109,28 @@ where
 
 pub fn build_linked_plugins(dev_links: &HashMap<String, PathBuf>) -> Vec<BuildResult> {
     build_linked_plugins_with_progress(dev_links, &HashMap::new(), |_| {}).results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linked_plugin_timeout_covers_queued_build_waves() {
+        let one_wave = linked_plugin_build_timeout(1);
+        assert_eq!(
+            one_wave,
+            linked_plugin_build_timeout(MAX_CONCURRENT_PLUGIN_BUILDS)
+        );
+        assert!(linked_plugin_build_timeout(MAX_CONCURRENT_PLUGIN_BUILDS + 1) > one_wave);
+        assert_eq!(
+            linked_plugin_build_timeout(MAX_CONCURRENT_PLUGIN_BUILDS * 2),
+            linked_plugin_build_timeout(MAX_CONCURRENT_PLUGIN_BUILDS + 1)
+        );
+        assert_eq!(
+            linked_plugin_build_timeout(0),
+            one_wave,
+            "an empty or unavailable link snapshot still gets a complete first-wave budget"
+        );
+    }
 }

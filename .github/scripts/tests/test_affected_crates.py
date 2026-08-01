@@ -77,6 +77,7 @@ class LocalPlannerContract(unittest.TestCase):
                         "ubuntu_test": "",
                         "macos_build": "",
                         "windows_process": True,
+                        "windows_dev_build": True,
                         "windows_qol": False,
                     }
                 )
@@ -90,6 +91,7 @@ class LocalPlannerContract(unittest.TestCase):
                     "ubuntu_skip": True,
                     "ubuntu_test": "",
                     "windows_process": True,
+                    "windows_dev_build": True,
                     "windows_qol": False,
                 },
             )
@@ -97,7 +99,8 @@ class LocalPlannerContract(unittest.TestCase):
                 github_output.read_text(),
                 "full=false\nubuntu_build=\nubuntu_skip=true\nubuntu_test=\n"
                 "macos_build=\n"
-                "windows_process=true\nwindows_qol=false\n",
+                "windows_process=true\nwindows_dev_build=true\n"
+                "windows_qol=false\n",
             )
 
     def test_terminal_plans_set_windows_targets(self):
@@ -110,6 +113,9 @@ class LocalPlannerContract(unittest.TestCase):
                     self.assertIs(emit.call_args.args[0]["full"], expected)
                     self.assertIs(
                         emit.call_args.args[0]["windows_process"], expected
+                    )
+                    self.assertIs(
+                        emit.call_args.args[0]["windows_dev_build"], expected
                     )
                     self.assertIs(
                         emit.call_args.args[0]["windows_qol"], expected
@@ -155,17 +161,22 @@ class LocalPlannerContract(unittest.TestCase):
         graph.return_value = {
             "foundation": {"dir": "libs/foundation", "deps": set()},
             "qol-process": {"dir": "libs/qol-process", "deps": {"foundation"}},
-            "qol": {"dir": "tools/qol-cli", "deps": {"qol-process"}},
+            "qol-dev-build": {
+                "dir": "libs/qol-dev-build",
+                "deps": {"qol-process"},
+            },
+            "qol": {"dir": "tools/qol-cli", "deps": {"qol-dev-build"}},
             "unrelated": {"dir": "libs/unrelated", "deps": set()},
         }
         cases = [
-            ("libs/qol-process/src/lib.rs", True, True),
-            ("libs/foundation/src/lib.rs", True, True),
-            ("tools/qol-cli/src/main.rs", False, True),
-            ("libs/unrelated/src/lib.rs", False, False),
+            ("libs/qol-process/src/lib.rs", True, True, True),
+            ("libs/foundation/src/lib.rs", True, True, True),
+            ("libs/qol-dev-build/src/lib.rs", False, True, True),
+            ("tools/qol-cli/src/main.rs", False, False, True),
+            ("libs/unrelated/src/lib.rs", False, False, False),
         ]
         with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
-            for path, process_expected, qol_expected in cases:
+            for path, process_expected, dev_build_expected, qol_expected in cases:
                 with self.subTest(path=path):
                     changed_files.return_value = [path]
                     emit.reset_mock()
@@ -175,6 +186,10 @@ class LocalPlannerContract(unittest.TestCase):
                     self.assertIs(
                         emit.call_args.args[0]["windows_process"],
                         process_expected,
+                    )
+                    self.assertIs(
+                        emit.call_args.args[0]["windows_dev_build"],
+                        dev_build_expected,
                     )
                     self.assertIs(
                         emit.call_args.args[0]["windows_qol"], qol_expected

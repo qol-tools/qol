@@ -181,6 +181,32 @@ fn ordinary_descendant_helper() {
 
 #[cfg(windows)]
 #[test]
+fn owned_process_tree_terminates_and_reaps_windows_descendants() {
+    let temp = tempfile::tempdir().unwrap();
+    let marker = temp.path().join("descendant");
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", "ordinary_descendant_helper", "--nocapture"])
+        .env("QOL_PROCESS_ORDINARY_DESCENDANT", &marker);
+    let (mut root, tree) = qol_process::spawn_owned(command).unwrap();
+    wait_for_path(&marker);
+    let root_pid = root.id();
+    let descendant_pid = read_pid(&marker);
+
+    assert!(qol_process::is_pid_alive(root_pid));
+    assert!(qol_process::is_pid_alive(descendant_pid));
+    let started = Instant::now();
+    tree.terminate_and_wait(&mut root, Duration::from_secs(2))
+        .unwrap();
+
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(tree.tree_has_exited().unwrap());
+    assert!(!qol_process::is_pid_alive(root_pid));
+    assert!(!qol_process::is_pid_alive(descendant_pid));
+}
+
+#[cfg(windows)]
+#[test]
 #[allow(clippy::zombie_processes)]
 fn abrupt_windows_job_owner_helper() {
     let Some(root) = std::env::var_os("QOL_PROCESS_WINDOWS_JOB_ROOT") else {

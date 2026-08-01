@@ -588,6 +588,10 @@ pub(crate) fn own_current_process_tree_with_guardian(
     guardian_command: Command,
 ) -> io::Result<ProcessTreeGuard> {
     drop(guardian_command);
+    own_process_tree()
+}
+
+pub(crate) fn own_process_tree() -> io::Result<ProcessTreeGuard> {
     process_tree_containment_support()?;
     Ok(ProcessTreeGuard {
         job: create_kill_on_close_job()?,
