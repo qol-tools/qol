@@ -137,10 +137,6 @@ pub fn daemon_autostart_held() -> bool {
     is_shadow() && !DAEMON_AUTOSTART_RELEASED.load(Ordering::Acquire)
 }
 
-pub fn release_daemon_autostart() {
-    DAEMON_AUTOSTART_RELEASED.store(true, Ordering::Release);
-}
-
 pub fn promote_to_stable() {
     PROMOTED_TO_STABLE.store(true, Ordering::Release);
     DAEMON_AUTOSTART_RELEASED.store(true, Ordering::Release);

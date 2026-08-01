@@ -6140,7 +6140,6 @@ dependencies = [
  "qol-fs",
  "qol-headless",
  "qol-host-fixes",
- "qol-platform",
  "qol-process",
  "qol-workspace",
  "ratatui",
@@ -6224,7 +6223,6 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
- "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
@@ -6272,7 +6270,6 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
- "tempfile",
 ]
 
 [[package]]

@@ -71,10 +71,6 @@ pub fn check_quick() -> Report {
     report::report(results)
 }
 
-pub fn fix_safe() -> FixReport {
-    fix_with_policy(FixPolicy::safe())
-}
-
 pub fn check_single(id: &str) -> Report {
     let ctx = DoctorContext::new();
     let results = run_selected(&Selector::Id(id.to_string()), &ctx);

@@ -30,11 +30,6 @@ pub fn command_label(command: &ExportedCommand) -> String {
     format!("{QOL_COMMAND_PREFIX}{}", command.label)
 }
 
-pub fn deeplink_url(route: &str, port: u16) -> String {
-    let r = route.trim_start_matches('#').trim_start_matches('/');
-    format!("http://localhost:{port}/#{r}")
-}
-
 /// Internal argv marker the macOS `openURLs` delegate uses to re-exec this
 /// binary as a pure courier: it forwards the `qol://` route (next argv) to the
 /// already-running daemon and exits, never starting a second daemon. Linux
@@ -65,23 +60,6 @@ pub fn parse_qol_url(input: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn deeplink_url_builds_localhost_hash_route() {
-        let port = qol_conventions::DEFAULT_PORT;
-        assert_eq!(
-            deeplink_url("shortcuts/add", port),
-            format!("http://localhost:{port}/#shortcuts/add")
-        );
-    }
-
-    #[test]
-    fn deeplink_url_strips_leading_hash_and_slash() {
-        let port = qol_conventions::DEFAULT_PORT;
-        let expected = format!("http://localhost:{port}/#shortcuts");
-        assert_eq!(deeplink_url("#shortcuts", port), expected);
-        assert_eq!(deeplink_url("/shortcuts", port), expected);
-    }
 
     #[test]
     fn exported_catalog_is_nonempty_with_unique_wellformed_entries() {
