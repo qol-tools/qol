@@ -9,6 +9,3 @@ description = "Typed host-to-guest control protocol for disposable qol developme
 anyhow = "1.0"
 serde.workspace = true
 serde_json.workspace = true
-
-[dev-dependencies]
-tempfile = "3.8"

@@ -26,7 +26,6 @@ qol-dev-orchestrator.workspace = true
 qol-fs.workspace = true
 qol-headless.workspace = true
 qol-host-fixes.workspace = true
-qol-platform.workspace = true
 qol-process.workspace = true
 qol-workspace.workspace = true
 serde.workspace = true

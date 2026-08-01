@@ -26,7 +26,6 @@ qol-process = { path = "libs/qol-process" }
 qol-runtime = { path = "libs/qol-runtime" }
 qol-search = { path = "libs/qol-search" }
 qol-migrations = { path = "libs/qol-migrations" }
-qol-wasm = { path = "libs/qol-wasm" }
 qol-apps = { path = "libs/qol-apps" }
 qol-app-icon = { path = "libs/qol-app-icon" }
 qol-gpui = { path = "libs/qol-gpui" }
@@ -38,7 +37,6 @@ qol-terminal-sessions = { path = "libs/qol-terminal-sessions" }
 qol-plugin-api = { path = "libs/qol-plugin-api" }
 qol-plugin-daemon = { path = "libs/qol-plugin-daemon" }
 qol-workspace = { path = "libs/qol-workspace" }
-qol-tray = { path = "apps/qol-tray" }
 
 # shared external deps (hoisted from the ex-qol-libs workspace)
 base64 = "0.22"
