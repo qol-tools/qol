@@ -155,6 +155,8 @@ pub(super) fn doctor_status(panel: &DoctorPanel, now_ms: u64) -> (Color, Vec<Spa
     (color, value)
 }
 
+const ROW_MAX_WIDTH: usize = 80;
+
 pub(super) fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) -> NavigationOverflow {
     let lines = doctor_view_lines(&dash.doctor);
     if lines.is_empty() {
@@ -180,15 +182,19 @@ pub(super) fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) -> Nav
     } else {
         friendly_doctor_line
     };
+    let row_width = (area.width as usize).min(ROW_MAX_WIDTH);
     let visible: Vec<Line> = lines
         .iter()
         .enumerate()
         .skip(start)
         .take(height)
-        .map(|(index, line)| ellipsize_line(render(line, index == cursor), area.width as usize))
+        .map(|(index, line)| ellipsize_line(render(line, index == cursor), row_width))
         .collect();
     view_content(frame, area, visible);
-    if dash.doctor_detail_open {
+    let selected_overflows = lines
+        .get(cursor)
+        .is_some_and(|line| render(line, true).width() > row_width);
+    if dash.doctor_detail_open || selected_overflows {
         if let Some(detail) = doctor_detail_text(&dash.doctor, cursor) {
             let width = panel_width(area).saturating_sub(2) as usize;
             render_bottom_panel(
@@ -900,6 +906,40 @@ mod tests {
 
         super::super::session::apply_action(&mut dash, Action::Back, false);
         assert_eq!(dash.view, View::Dashboard, "second back leaves the page");
+    }
+
+    #[test]
+    fn overflowing_selected_row_caps_at_the_row_width_and_auto_opens_details() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Doctor;
+        dash.keys_hidden = true;
+        let long = format!("stale grab for Super+Space {}", "detail ".repeat(20));
+        dash.doctor.last = Some(DoctorRun {
+            report: make_report(1, 0, 0, 0),
+            lines: vec![format!("[WARN] hotkey_shadows: {long}")],
+            details: vec![long.clone()],
+            scope: DoctorScope::Full,
+        });
+
+        let rows = super::super::testkit::render_rows_at(&mut dash, 110, 28);
+
+        let row = rows
+            .iter()
+            .find(|row| row.contains("▲"))
+            .expect("warn row missing");
+        assert!(
+            row.contains('…'),
+            "capped row must end in an ellipsis: {row:?}"
+        );
+        let ellipsis_at = row.chars().position(|ch| ch == '…').unwrap();
+        assert!(
+            ellipsis_at <= ROW_MAX_WIDTH + 4,
+            "row must cap at {ROW_MAX_WIDTH} cells inside a 110-wide frame: {row:?}"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("┤ details ├")),
+            "overflowing selection must auto-open the detail panel"
+        );
     }
 
     #[test]
