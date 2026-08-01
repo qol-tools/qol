@@ -94,25 +94,6 @@ impl ArtifactExpectation {
         }
     }
 
-    pub fn sandbox(binary: &str, package: &str, role: BuildRole, dev_features: bool) -> Self {
-        Self {
-            binary: binary.to_string(),
-            package: package.to_string(),
-            role,
-            intent: BuildIntent::Sandbox,
-            flavor: BuildFlavor {
-                profile: BuildProfile::Sandbox,
-                dev_features,
-            },
-            version: None,
-            target: None,
-            exact_source: None,
-            require_clean_source: false,
-            required_features: Vec::new(),
-            forbidden_features: Vec::new(),
-        }
-    }
-
     pub fn with_version(mut self, version: &str) -> Self {
         self.version = Some(version.to_string());
         self
@@ -135,11 +116,6 @@ impl ArtifactExpectation {
 
     pub fn require_feature(mut self, feature: &str) -> Self {
         insert_sorted_unique(&mut self.required_features, feature);
-        self
-    }
-
-    pub fn forbid_feature(mut self, feature: &str) -> Self {
-        insert_sorted_unique(&mut self.forbidden_features, feature);
         self
     }
 }

@@ -221,14 +221,6 @@ impl SettingsRuntime {
             })
     }
 
-    pub fn with_action(
-        mut self,
-        action: impl Fn(&str) -> Result<(), String> + Send + Sync + 'static,
-    ) -> Self {
-        self.action = Arc::new(move |name, _| action(name).map(|()| None));
-        self
-    }
-
     pub fn with_input_action(
         mut self,
         action: impl Fn(&str, serde_json::Value) -> Result<(), String> + Send + Sync + 'static,
@@ -292,10 +284,6 @@ pub fn run_plugin_settings(
         },
         runtime,
     )
-}
-
-pub fn request_hosted_settings(plugin_id: &str) -> Result<(), String> {
-    persistence::run_action(plugin_id, "settings", &serde_json::json!({})).map(drop)
 }
 
 pub fn run_standalone(panel: SettingsPanel, runtime: SettingsRuntime) -> anyhow::Result<()> {

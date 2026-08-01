@@ -44,24 +44,6 @@ impl PlainTextOutput {
     }
 }
 
-impl From<()> for PlainTextOutput {
-    fn from(_: ()) -> Self {
-        Self::Empty
-    }
-}
-
-impl From<String> for PlainTextOutput {
-    fn from(value: String) -> Self {
-        Self::Text(value)
-    }
-}
-
-impl From<&str> for PlainTextOutput {
-    fn from(value: &str) -> Self {
-        Self::Text(value.to_string())
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct CommandContext {
     command_path: Vec<String>,
@@ -306,10 +288,6 @@ impl Execution {
             stderr: ensure_trailing_newline(stderr.into()),
             exit_code: EXIT_RUNTIME_ERROR,
         }
-    }
-
-    pub fn as_exit_code(&self) -> ExitCode {
-        ExitCode::from(self.exit_code)
     }
 
     pub fn emit(self) -> ExitCode {

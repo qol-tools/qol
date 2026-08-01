@@ -23,10 +23,6 @@ impl DoctorCheck {
         &self.id
     }
 
-    pub fn about(&self) -> &str {
-        &self.about
-    }
-
     pub(crate) fn run(&self) -> DoctorCheckResult {
         match (self.handler)() {
             Ok(mut result) => {

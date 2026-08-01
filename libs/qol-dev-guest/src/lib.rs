@@ -291,21 +291,6 @@ pub struct GuestControlClient {
 }
 
 impl GuestControlClient {
-    pub fn connect(
-        address: SocketAddr,
-        connect_timeout: Duration,
-        hello_timeout: Duration,
-        expected_environment_id: &str,
-    ) -> Result<Self> {
-        Self::connect_cancellable(
-            address,
-            connect_timeout,
-            hello_timeout,
-            expected_environment_id,
-            || false,
-        )
-    }
-
     pub fn connect_cancellable(
         address: SocketAddr,
         connect_timeout: Duration,

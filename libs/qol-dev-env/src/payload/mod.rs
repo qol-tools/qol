@@ -143,16 +143,6 @@ pub fn verify_payload(root: &Path) -> Result<PreparedPayload> {
     })
 }
 
-pub fn create_read_only_iso(
-    payload: &PreparedPayload,
-    output_dir: &Path,
-    iso_program: &OsStr,
-) -> Result<PayloadImage> {
-    create_read_only_iso_with_runner(payload, output_dir, iso_program, |mut command| {
-        command.status().map_err(anyhow::Error::from)
-    })
-}
-
 pub fn create_read_only_iso_with_runner(
     payload: &PreparedPayload,
     output_dir: &Path,

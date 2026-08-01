@@ -22,10 +22,6 @@ impl BackendId {
         }
         Err(IdentityError::component("terminal backend", value))
     }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 impl Display for BackendId {
