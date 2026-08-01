@@ -134,6 +134,10 @@ mod linux {
         BufReader::new(stdout)
             .read_line(&mut ready)
             .context("failed to read privileged USB host lease readiness")?;
+        if let Some((step, detail)) = parse_setup_failure(&ready) {
+            let _ = wait_for_child(&mut child, HELPER_EXIT_GRACE);
+            bail!("USB host lease setup failed at the {step} step: {detail}");
+        }
         if !ready.starts_with("ready\t") {
             let status = child.try_wait().ok().flatten();
             bail!(
@@ -187,7 +191,17 @@ mod linux {
 
     pub(super) fn run_helper(args: &[OsString]) -> Result<()> {
         let args = parse_helper_args(args)?;
-        let mut lease = LeaseState::acquire(&args)?;
+        let mut lease = match LeaseState::acquire(&args) {
+            Ok(lease) => lease,
+            Err(failure) => {
+                println!("{}", setup_failure_line(failure.step, &failure.error));
+                std::io::stdout().flush().ok();
+                return Err(failure.error.context(format!(
+                    "USB host lease setup failed at the {} step",
+                    failure.step
+                )));
+            }
+        };
         println!("ready\t{}\t{}", lease.sysfs.display(), args.run_id);
         std::io::stdout()
             .flush()
@@ -333,8 +347,33 @@ mod linux {
         restored: bool,
     }
 
+    struct SetupFailure {
+        step: &'static str,
+        error: anyhow::Error,
+    }
+
     impl LeaseState {
-        fn acquire(args: &HelperArgs) -> Result<Self> {
+        fn acquire(args: &HelperArgs) -> std::result::Result<Self, SetupFailure> {
+            let mut lease = Self::inspect(args).map_err(|error| SetupFailure {
+                step: "inspect",
+                error,
+            })?;
+            if let Err(failure) = lease.detach_and_grant(args.uid) {
+                let error = match lease.restore() {
+                    Ok(()) => failure.error,
+                    Err(cleanup) => {
+                        anyhow!("{:#}; rollback failed: {cleanup:#}", failure.error)
+                    }
+                };
+                return Err(SetupFailure {
+                    step: failure.step,
+                    error,
+                });
+            }
+            Ok(lease)
+        }
+
+        fn inspect(args: &HelperArgs) -> Result<Self> {
             let sysfs = find_sysfs_device(&args.path)?;
             let vendor = read_sysfs_value(&sysfs, "idVendor")?;
             let product = read_sysfs_value(&sysfs, "idProduct")?;
@@ -346,7 +385,7 @@ mod linux {
                 );
             }
             let original_acl = capture_acl(&args.path)?;
-            let mut lease = Self {
+            Ok(Self {
                 node: args.path.clone(),
                 sysfs,
                 vendor,
@@ -354,24 +393,26 @@ mod linux {
                 original_acl,
                 interfaces,
                 restored: false,
-            };
-            if let Err(error) = lease.detach_and_grant(args.uid) {
-                let cleanup = lease.restore();
-                return Err(match cleanup {
-                    Ok(()) => anyhow!("USB host lease setup failed: {error:#}"),
-                    Err(cleanup) => anyhow!(
-                        "USB host lease setup failed: {error:#}; rollback failed: {cleanup:#}"
-                    ),
-                });
-            }
-            Ok(lease)
+            })
         }
 
-        fn detach_and_grant(&mut self, uid: u32) -> Result<()> {
+        fn detach_and_grant(&mut self, uid: u32) -> std::result::Result<(), SetupFailure> {
             for interface in &self.interfaces {
                 write_sysfs(&interface.driver.join("unbind"), &interface.name)
-                    .with_context(|| format!("failed to unbind {}", interface.name))?;
+                    .with_context(|| format!("failed to unbind {}", interface.name))
+                    .map_err(|error| SetupFailure {
+                        step: "unbind",
+                        error,
+                    })?;
             }
+            self.reset_and_verify().map_err(|error| SetupFailure {
+                step: "reset",
+                error,
+            })?;
+            grant_acl(&self.node, uid).map_err(|error| SetupFailure { step: "acl", error })
+        }
+
+        fn reset_and_verify(&self) -> Result<()> {
             reset_device(&self.node)?;
             let current_node = wait_for_device_node(&self.sysfs)?;
             if current_node != self.node {
@@ -381,7 +422,7 @@ mod linux {
                     current_node.display()
                 );
             }
-            grant_acl(&self.node, uid)
+            Ok(())
         }
 
         fn restore(&mut self) -> Result<()> {
@@ -640,6 +681,17 @@ mod linux {
         bail!("USB device node did not return after reset")
     }
 
+    fn setup_failure_line(step: &str, error: &anyhow::Error) -> String {
+        let detail = format!("{error:#}").replace(['\n', '\t'], " ");
+        format!("failed\t{step}\t{detail}")
+    }
+
+    fn parse_setup_failure(line: &str) -> Option<(&str, &str)> {
+        line.strip_prefix("failed\t")?
+            .trim_end_matches('\n')
+            .split_once('\t')
+    }
+
     fn process_start_time(pid: u32) -> Option<u64> {
         let content = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         let (_, remainder) = content.rsplit_once(") ")?;
@@ -705,6 +757,33 @@ mod linux {
                 String::from_utf8(rewritten).unwrap(),
                 "# file: /dev/bus/usb/001/009\n# owner: root\n# group: root\nuser::rw-\nuser:1000:rw-\n"
             );
+        }
+
+        #[test]
+        fn setup_failure_lines_round_trip_as_one_line() {
+            let cases = [
+                (
+                    "unbind",
+                    anyhow!("failed to unbind 1-4:1.0"),
+                    "failed to unbind 1-4:1.0",
+                ),
+                ("reset", anyhow!("line one\nline\ttwo"), "line one line two"),
+            ];
+            for (step, error, expected_detail) in cases {
+                let line = setup_failure_line(step, &error);
+                let (parsed_step, detail) = parse_setup_failure(&line).unwrap();
+                assert_eq!(parsed_step, step, "step: {step}");
+                assert_eq!(detail, expected_detail, "step: {step}");
+                assert_eq!(line.lines().count(), 1, "step: {step}");
+            }
+        }
+
+        #[test]
+        fn setup_failure_parse_ignores_non_failure_lines() {
+            let cases = ["ready\t/sys/x\trun-1", "failed", "failed\tunbind", ""];
+            for line in cases {
+                assert!(parse_setup_failure(line).is_none(), "line: {line:?}");
+            }
         }
 
         #[test]

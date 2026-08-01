@@ -1443,7 +1443,7 @@ fn boot_vm_with_admission(
                 }
             }
             lifecycle.finish(|removed| {
-                let report = report_json(ReportInput {
+                let mut report = report_json(ReportInput {
                     run_id: &run_id,
                     command_name,
                     launch: &launch,
@@ -1463,6 +1463,7 @@ fn boot_vm_with_admission(
                     next: boot_failure_next(command_name, arch_guess),
                     started_at,
                 })?;
+                report["error"] = json!(format!("{error:#}"));
                 write_report(&run_dir, &report)
             })?;
             return Err(with_stopping_report_error(
