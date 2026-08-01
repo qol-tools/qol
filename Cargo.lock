@@ -6534,6 +6534,7 @@ dependencies = [
  "qol-fs",
  "qol-gpui",
  "qol-headless",
+ "qol-host-fixes",
  "qol-hotkeys",
  "qol-migrations",
  "qol-plugin-api",

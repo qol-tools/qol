@@ -79,7 +79,6 @@ fn navigation_cue_unobstructed(dash: &Dash) -> bool {
     !dash.worktree_panel.is_active()
         && !dash.feature_panel.is_active()
         && !dash.filter_state.is_active()
-        && !dash.doctor_detail_open
         && !dash.copying
         && !dash.quit_prompt_active()
 }

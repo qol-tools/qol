@@ -943,6 +943,27 @@ mod tests {
     }
 
     #[test]
+    fn open_detail_panel_keeps_the_navigation_cue_visible() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Doctor;
+        dash.keys_hidden = true;
+        let details: Vec<String> = (0..40).map(|index| format!("detail {index}")).collect();
+        dash.doctor = panel_with_details(details.iter().map(String::as_str).collect(), None);
+        dash.doctor_detail_open = true;
+
+        let rows = super::super::testkit::render_rows_at(&mut dash, 110, 28);
+
+        assert!(
+            rows.iter().any(|row| row.contains("┤ details ├")),
+            "detail panel missing"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("│ v │")),
+            "below-overflow cue must stay visible while the panel is open"
+        );
+    }
+
+    #[test]
     fn activity_sign_stacks_above_the_detail_panel_instead_of_overlapping() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Doctor;
