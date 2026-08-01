@@ -93,6 +93,14 @@ pub fn spawn_target_cache_watch() {
     std::thread::spawn(|| {
         std::thread::sleep(TARGET_CACHE_WATCH_DELAY);
         let report = fix_single("cargo_target_total");
+        let applied = report.applied;
+        let failures = report.failures.len();
+        #[cfg(not(debug_assertions))]
+        let _ = (applied, failures);
+        qol_runtime::probe!(
+            "TARGET_CACHE",
+            "phase=watch applied={applied} failures={failures}"
+        );
         if report.applied > 0 {
             log::info!("doctor: target cache watch pruned stale cargo caches");
         }
