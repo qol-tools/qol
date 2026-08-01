@@ -85,6 +85,23 @@ pub fn fix_single(id: &str) -> FixReport {
     fix_with_selector_and_policy(Selector::Id(id.to_string()), FixPolicy::safe())
 }
 
+#[cfg(feature = "dev")]
+const TARGET_CACHE_WATCH_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
+
+pub fn spawn_target_cache_watch() {
+    #[cfg(feature = "dev")]
+    std::thread::spawn(|| {
+        std::thread::sleep(TARGET_CACHE_WATCH_DELAY);
+        let report = fix_single("cargo_target_total");
+        if report.applied > 0 {
+            log::info!("doctor: target cache watch pruned stale cargo caches");
+        }
+        for failure in &report.failures {
+            log::warn!("doctor: target cache watch fix failed: {failure}");
+        }
+    });
+}
+
 pub fn fix_single_with_policy(id: &str, policy: FixPolicy) -> FixReport {
     fix_with_selector_and_policy(Selector::Id(id.to_string()), policy)
 }
@@ -318,6 +335,13 @@ fn log_applied(action: &FixAction) {
         #[cfg(feature = "dev")]
         FixAction::PruneCargoIncrementalCache { path } => {
             log::info!("doctor: pruned cargo incremental cache {}", path.display());
+        }
+        #[cfg(feature = "dev")]
+        FixAction::PruneCargoTargetDir { target } => {
+            log::info!(
+                "doctor: pruned stale cargo target caches under {}",
+                target.display()
+            );
         }
         #[cfg(feature = "dev")]
         FixAction::HealDevLinkedPlugins { rebuild_ids } => {

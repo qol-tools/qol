@@ -1,6 +1,7 @@
+use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use super::cargo_target::{dir_size, format_bytes, workspace_root};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const ID: &str = "cargo_target_total";
 const WARN_BYTES: u64 = 10 * 1024 * 1024 * 1024;
@@ -19,7 +20,8 @@ impl DoctorCheck for CargoTargetTotalCheck {
             return CheckReport::ok("workspace root not found; skipping cargo target directory");
         };
         let path = root.join("target");
-        report_for(target_size(&path))
+        let prunable = super::super::diagnosis::prunable_target_bytes(&path);
+        report_for(target_size(&path), prunable, path)
     }
 }
 
@@ -38,20 +40,23 @@ fn target_size(path: &Path) -> TargetSize {
     }
 }
 
-fn report_for(size: TargetSize) -> CheckReport {
+fn report_for(size: TargetSize, prunable: u64, path: PathBuf) -> CheckReport {
     match size {
         TargetSize::Missing => CheckReport::ok("cargo target directory has not been created yet"),
-        TargetSize::Bytes(bytes) if bytes <= WARN_BYTES => {
-            CheckReport::ok(format!("cargo target directory is {}", format_bytes(bytes)))
-        }
+        TargetSize::Bytes(bytes) if prunable <= WARN_BYTES => CheckReport::ok(format!(
+            "cargo target directory is {} ({} prunable)",
+            format_bytes(bytes),
+            format_bytes(prunable)
+        )),
         TargetSize::Bytes(bytes) => CheckReport::warn(
             format!(
-                "cargo target directory is {} over the {} limit; stop the dev session (tray, plugins, qol dev all run from target/) and run cargo clean manually",
+                "cargo target directory is {} with {} of stale caches over the {} limit; pruning secondary target roots, incremental, and artifacts idle for 14+ days",
                 format_bytes(bytes),
+                format_bytes(prunable),
                 format_bytes(WARN_BYTES)
             ),
             ID,
-            Vec::new(),
+            vec![FixAction::PruneCargoTargetDir { target: path }],
         ),
         TargetSize::Unreadable(reason) => CheckReport::ok(format!(
             "cargo target directory unreadable, skipping: {reason}"
@@ -65,27 +70,39 @@ mod tests {
 
     #[test]
     fn missing_target_is_ok_without_fix() {
-        let report = report_for(TargetSize::Missing);
+        let report = report_for(TargetSize::Missing, 0, PathBuf::from("/repo/target"));
         assert!(report.issues.is_empty());
         assert!(report.fixes.is_empty());
     }
 
     #[test]
-    fn target_below_limit_is_ok_without_fix() {
-        let report = report_for(TargetSize::Bytes(WARN_BYTES));
-        assert!(report.issues.is_empty());
-        assert!(report.fixes.is_empty());
-        assert!(report.summary.contains("10.0 GiB"));
-    }
-
-    #[test]
-    fn target_above_limit_warns_with_manual_advice_only() {
-        let report = report_for(TargetSize::Bytes(WARN_BYTES + 1));
-        assert_eq!(report.issues.len(), 1);
-        assert!(
-            report.fixes.is_empty(),
-            "cargo clean must never run automatically: the live dev session executes from target/"
+    fn large_target_with_little_stale_weight_is_ok_without_fix() {
+        let report = report_for(
+            TargetSize::Bytes(20 * WARN_BYTES),
+            WARN_BYTES,
+            PathBuf::from("/repo/target"),
         );
-        assert!(report.summary.contains("stop the dev session"));
+        assert!(report.issues.is_empty());
+        assert!(report.fixes.is_empty());
+        assert!(report.summary.contains("10.0 GiB prunable"));
+    }
+
+    #[test]
+    fn stale_weight_above_limit_warns_with_prune_fix() {
+        let path = PathBuf::from("/repo/target");
+        let report = report_for(
+            TargetSize::Bytes(20 * WARN_BYTES),
+            WARN_BYTES + 1,
+            path.clone(),
+        );
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(
+            report.fixes,
+            vec![FixAction::PruneCargoTargetDir { target: path }],
+            "the prune must never be cargo clean: live dev caches stay protected"
+        );
+        assert!(report
+            .summary
+            .contains("stale caches over the 10.0 GiB limit"));
     }
 }
