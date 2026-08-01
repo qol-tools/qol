@@ -33,6 +33,7 @@ const LEGACY_EXTENSION_TARGET: &str = concat!(
 const CINNAMON_EXTENSION_FILES: [&str; 3] =
     ["extension.js", "generated-theme-tokens.js", "metadata.json"];
 const FIXTURE_COUNT: usize = 8;
+const FRESH_CLOSE_CYCLES: usize = 3;
 const RETAINED_CYCLES: usize = 50;
 const KEY_CYCLES: usize = 240;
 
@@ -54,6 +55,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     set_sticky_config(&mut guest, &auth)?;
     let picker = artifacts_dir.join("picker.ppm");
     test_sticky_input_storm(&mut guest, &auth, &mut qmp, &picker)?;
+    test_fresh_window_actions(&mut guest, &auth)?;
     test_retained_cycles(&mut guest, &auth)?;
     let settings = artifacts_dir.join("settings.ppm");
     test_settings(&mut guest, &auth, &mut qmp, &settings)?;
@@ -68,7 +70,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
             "/usr/bin/grep",
             &[
                 "-E",
-                "ACTIVATE_WIN|CMD_RECV|DISMISS|FOCUS_REASSERT|KEY_RECV|NAV_GRID|PREVIEW_PLANE_(INTEGRATION|SHOW)|RENDERING_FLOW|SHOW_(CYCLE_FAST|LIST|PAINTED|RECV)",
+                "ACTIVATE_WIN|CLOSE_WIN|CMD_RECV|DISMISS|FOCUS_REASSERT|KEY_RECV|NAV_GRID|PREVIEW_PLANE_(INTEGRATION|SHOW)|QUIT_APP|RENDERING_FLOW|SHOW_(CYCLE_FAST|LIST|PAINTED|RECV)",
                 TRACE_LOG_PATH,
             ],
         ),
@@ -77,7 +79,7 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
     step_label(
         "storm",
         StepKind::Success,
-        "Cinnamon legacy-link migration, compositor previews, hold mode, 8-window churn, 240 keys, 50 retained cycles, settings, guards, and crash recovery passed",
+        "Cinnamon legacy-link migration, compositor previews, hold mode, fresh close/quit actions, 8-window churn, 240 keys, 50 retained cycles, settings, guards, and crash recovery passed",
     );
     Ok(Verdict {
         pass: true,
@@ -199,7 +201,7 @@ fn key(guest: &mut GuestControlClient, value: &str) -> Result<()> {
 fn open_sticky(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
     let cursor = dispatch(guest, auth, "open")?;
     wait_for_probe_line(guest, cursor, "SHOW_PAINTED", "show_id=", ACTION_TIMEOUT)?;
-    wait_for_active_title(
+    wait_for_focus_title(
         guest,
         |title| title.starts_with(PICKER_PREFIX),
         "Alt Tab picker",
@@ -219,14 +221,14 @@ fn dismiss_sticky(guest: &mut GuestControlClient) -> Result<()> {
     Ok(())
 }
 
-fn wait_for_active_title(
+fn wait_for_focus_title(
     guest: &mut GuestControlClient,
     predicate: impl Fn(&str) -> bool,
     description: &str,
 ) -> Result<()> {
     let result = wait_for_window_title(
         guest,
-        &["getactivewindow", "getwindowname"],
+        &["getwindowfocus", "getwindowname"],
         predicate,
         description,
         ACTION_TIMEOUT,
@@ -362,6 +364,21 @@ fn test_sticky_input_storm(
     key(guest, "w")?;
     wait_for_probe_fields(
         guest,
+        action_cursor,
+        "KEY_RECV",
+        &["key=\"w\"", "visible=true"],
+        ACTION_TIMEOUT,
+    )?;
+    wait_for_probe_fields(
+        guest,
+        action_cursor,
+        "CLOSE_WIN",
+        &["outcome=sent"],
+        ACTION_TIMEOUT,
+    )?;
+    wait_for_fixture_count(guest, FIXTURE_COUNT - 1)?;
+    wait_for_probe_fields(
+        guest,
         cursor,
         "SHOW_LIST",
         &["path=ghost", &format!("n={}", FIXTURE_COUNT - 1)],
@@ -376,7 +393,7 @@ fn test_sticky_input_storm(
         bail!("Alt Tab file descriptors grew from {fds_before} to {fds_after}");
     }
     key(guest, "Return")?;
-    wait_for_active_title(
+    wait_for_focus_title(
         guest,
         |title| title.starts_with("qol-alt-tab-storm-"),
         "selected fixture",
@@ -385,6 +402,59 @@ fn test_sticky_input_storm(
         "input",
         StepKind::Success,
         &format!("{KEY_CYCLES} keys retained pid={pid_after} fds={fds_after}"),
+    );
+    Ok(())
+}
+
+fn test_fresh_window_actions(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
+    let mut expected = FIXTURE_COUNT - 1;
+    for _ in 0..FRESH_CLOSE_CYCLES {
+        let cursor = dispatch(guest, auth, "open")?;
+        wait_for_probe_line(guest, cursor, "SHOW_PAINTED", "show_id=", ACTION_TIMEOUT)?;
+        key(guest, "w")?;
+        wait_for_probe_fields(
+            guest,
+            cursor,
+            "KEY_RECV",
+            &["key=\"w\"", "visible=true"],
+            ACTION_TIMEOUT,
+        )?;
+        wait_for_probe_fields(
+            guest,
+            cursor,
+            "CLOSE_WIN",
+            &["outcome=sent"],
+            ACTION_TIMEOUT,
+        )?;
+        expected -= 1;
+        wait_for_fixture_count(guest, expected)?;
+        dismiss_sticky(guest)?;
+    }
+
+    let cursor = dispatch(guest, auth, "open")?;
+    wait_for_probe_line(guest, cursor, "SHOW_PAINTED", "show_id=", ACTION_TIMEOUT)?;
+    key(guest, "q")?;
+    wait_for_probe_fields(
+        guest,
+        cursor,
+        "KEY_RECV",
+        &["key=\"q\"", "visible=true"],
+        ACTION_TIMEOUT,
+    )?;
+    wait_for_probe_fields(
+        guest,
+        cursor,
+        "QUIT_APP",
+        &["outcome=sigterm_sent", "pid="],
+        ACTION_TIMEOUT,
+    )?;
+    expected -= 1;
+    wait_for_fixture_count(guest, expected)?;
+    dismiss_sticky(guest)?;
+    step_label(
+        "window-actions",
+        StepKind::Success,
+        &format!("{FRESH_CLOSE_CYCLES} fresh-show closes and one fresh-show quit reached XTerm"),
     );
     Ok(())
 }
@@ -414,7 +484,7 @@ fn test_settings(
     artifact: &std::path::Path,
 ) -> Result<()> {
     dispatch(guest, auth, "settings")?;
-    wait_for_active_title(
+    wait_for_focus_title(
         guest,
         |title| title.starts_with("Alt Tab Settings"),
         "native Alt Tab Settings",
@@ -486,6 +556,23 @@ fn wait_for_visible_picker_count(guest: &mut GuestControlClient, expected: usize
         ACTION_TIMEOUT,
         |outcome| outcome.stdout.trim().parse() == Ok(expected),
         &format!("{expected} visible Alt Tab picker windows"),
+    )?;
+    Ok(())
+}
+
+fn wait_for_fixture_count(guest: &mut GuestControlClient, expected: usize) -> Result<()> {
+    wait_for_command(
+        guest,
+        command(
+            "/usr/bin/bash",
+            &[
+                "-lc",
+                "xdotool search --onlyvisible --name '^qol-alt-tab-storm-' 2>/dev/null | wc -l",
+            ],
+        ),
+        ACTION_TIMEOUT,
+        |outcome| outcome.stdout.trim().parse() == Ok(expected),
+        &format!("{expected} visible Alt Tab fixture windows"),
     )?;
     Ok(())
 }

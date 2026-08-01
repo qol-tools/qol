@@ -56,8 +56,6 @@ struct Activator {
     conn: RustConnection,
     root: u32,
     active_atom: u32,
-    baseline_ms: u32,
-    baseline_at: Instant,
 }
 
 impl Activator {
@@ -65,13 +63,11 @@ impl Activator {
         let (conn, screen_num) = x11rb::connect(None).ok()?;
         let root = conn.setup().roots[screen_num].root;
         let active_atom = intern(&conn, b"_NET_ACTIVE_WINDOW")?;
-        let (baseline_ms, baseline_at) = probe_server_time(&conn, root)?;
+        ensure_server_baseline(&conn, root)?;
         Some(Self {
             conn,
             root,
             active_atom,
-            baseline_ms,
-            baseline_at,
         })
     }
 
@@ -93,7 +89,7 @@ impl Activator {
     }
 
     fn send_activate(&self, window_id: u32) -> u32 {
-        let time = self.server_now();
+        let time = server_now().unwrap_or(0);
         let event = ClientMessageEvent::new(32, window_id, self.active_atom, [2, time, 0, 0, 0]);
         let mask = EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT;
         let _ = self.conn.send_event(false, self.root, mask, event);
@@ -111,11 +107,22 @@ impl Activator {
         let mut values = reply.value32()?;
         values.next()
     }
+}
 
-    fn server_now(&self) -> u32 {
-        let elapsed = self.baseline_at.elapsed().as_millis() as u32;
-        self.baseline_ms.wrapping_add(elapsed)
+static SERVER_TIME_BASELINE: OnceLock<(u32, Instant)> = OnceLock::new();
+
+fn ensure_server_baseline(conn: &impl Connection, root: u32) -> Option<()> {
+    if SERVER_TIME_BASELINE.get().is_some() {
+        return Some(());
     }
+    let baseline = probe_server_time(conn, root)?;
+    let _ = SERVER_TIME_BASELINE.set(baseline);
+    Some(())
+}
+
+fn server_now() -> Option<u32> {
+    let (server_ms, at) = *SERVER_TIME_BASELINE.get()?;
+    Some(server_ms.wrapping_add(at.elapsed().as_millis() as u32))
 }
 
 fn probe_server_time(conn: &impl Connection, root: u32) -> Option<(u32, Instant)> {
@@ -153,30 +160,68 @@ fn probe_server_time(conn: &impl Connection, root: u32) -> Option<(u32, Instant)
 
 pub fn close_window(window_id: u32) -> super::CloseOutcome {
     let Some((conn, root)) = connect() else {
+        qol_runtime::probe!("CLOSE_WIN", "wid={window_id} outcome=no_connection");
         return super::CloseOutcome::Unsupported;
     };
     let Some(atom) = intern(&conn, b"_NET_CLOSE_WINDOW") else {
+        qol_runtime::probe!("CLOSE_WIN", "wid={window_id} outcome=no_atom");
         return super::CloseOutcome::Unsupported;
     };
-    send_to_root(&conn, root, window_id, atom, [0, 2, 0, 0, 0]);
+    if ensure_server_baseline(&conn, root).is_none() {
+        qol_runtime::probe!("CLOSE_WIN", "wid={window_id} outcome=no_timestamp");
+        return super::CloseOutcome::Unsupported;
+    }
+    let Some(time) = server_now() else {
+        qol_runtime::probe!("CLOSE_WIN", "wid={window_id} outcome=no_timestamp");
+        return super::CloseOutcome::Unsupported;
+    };
+    let payload = close_window_payload(time);
+    if !send_to_root(&conn, root, window_id, atom, payload) {
+        qol_runtime::probe!("CLOSE_WIN", "wid={window_id} outcome=send_failed");
+        return super::CloseOutcome::Unsupported;
+    }
+    qol_runtime::probe!(
+        "CLOSE_WIN",
+        "wid={window_id} outcome=sent timestamp={time} payload={payload:?}"
+    );
     super::CloseOutcome::Closed { quit_app: false }
 }
 
+fn close_window_payload(timestamp: u32) -> [u32; 5] {
+    [timestamp, 2, 0, 0, 0]
+}
+
 pub fn quit_app(window_id: u32) {
-    let Some((conn, _)) = connect() else { return };
+    let Some((conn, _)) = connect() else {
+        qol_runtime::probe!("QUIT_APP", "wid={window_id} outcome=no_connection");
+        return;
+    };
     let Some(pid_atom) = intern(&conn, b"_NET_WM_PID") else {
+        qol_runtime::probe!("QUIT_APP", "wid={window_id} outcome=no_pid_atom");
         return;
     };
     let Ok(reply) = conn.get_property(false, window_id, pid_atom, AtomEnum::CARDINAL, 0, 1) else {
+        qol_runtime::probe!("QUIT_APP", "wid={window_id} outcome=no_property");
         return;
     };
-    let Ok(prop) = reply.reply() else { return };
+    let Ok(prop) = reply.reply() else {
+        qol_runtime::probe!("QUIT_APP", "wid={window_id} outcome=no_reply");
+        return;
+    };
     let Some(pid) = prop.value32().and_then(|mut v| v.next()) else {
+        qol_runtime::probe!("QUIT_APP", "wid={window_id} outcome=no_pid");
         return;
     };
-    unsafe {
-        libc::kill(pid as i32, libc::SIGTERM);
+    let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    if result == 0 {
+        qol_runtime::probe!("QUIT_APP", "wid={window_id} outcome=sigterm_sent pid={pid}");
+        return;
     }
+    let error = std::io::Error::last_os_error();
+    qol_runtime::probe!(
+        "QUIT_APP",
+        "wid={window_id} outcome=sigterm_failed pid={pid} error={error}"
+    );
 }
 
 pub fn minimize_window_by_id(window_id: u32) {
@@ -186,7 +231,7 @@ pub fn minimize_window_by_id(window_id: u32) {
     let Some(atom) = intern(&conn, b"WM_CHANGE_STATE") else {
         return;
     };
-    send_to_root(&conn, root, window_id, atom, [3, 0, 0, 0, 0]);
+    let _ = send_to_root(&conn, root, window_id, atom, [3, 0, 0, 0, 0]);
 }
 
 fn connect() -> Option<(RustConnection, u32)> {
@@ -203,9 +248,27 @@ fn intern(conn: &impl Connection, name: &[u8]) -> Option<u32> {
         .map(|r| r.atom)
 }
 
-fn send_to_root(conn: &impl Connection, root: u32, window: u32, message_type: u32, data: [u32; 5]) {
+fn send_to_root(
+    conn: &impl Connection,
+    root: u32,
+    window: u32,
+    message_type: u32,
+    data: [u32; 5],
+) -> bool {
     let event = ClientMessageEvent::new(32, window, message_type, data);
     let mask = EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT;
-    let _ = conn.send_event(false, root, mask, event);
-    let _ = conn.flush();
+    let Ok(cookie) = conn.send_event(false, root, mask, event) else {
+        return false;
+    };
+    cookie.check().is_ok() && conn.flush().is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn close_window_payload_uses_ewmh_field_order() {
+        assert_eq!(close_window_payload(42), [42, 2, 0, 0, 0]);
+    }
 }

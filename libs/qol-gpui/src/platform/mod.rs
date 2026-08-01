@@ -70,17 +70,17 @@ pub enum ReassertStep {
 pub fn spawn_reassert_driver<F, G>(
     gen: &'static std::sync::atomic::AtomicU64,
     commit_gen: u64,
-    steps_ms: &[u64],
+    delays_ms: &[u64],
     mut poll: F,
     mut reassert: G,
 ) where
     F: FnMut() -> ReassertStep + Send + 'static,
     G: FnMut() + Send + 'static,
 {
-    let steps = steps_ms.to_vec();
+    let delays = delays_ms.to_vec();
     std::thread::spawn(move || {
-        for step_ms in steps {
-            std::thread::sleep(std::time::Duration::from_millis(step_ms));
+        for delay_ms in delays {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
             if gen.load(std::sync::atomic::Ordering::SeqCst) != commit_gen {
                 return;
             }
