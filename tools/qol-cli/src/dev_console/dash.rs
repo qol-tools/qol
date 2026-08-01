@@ -500,7 +500,6 @@ impl Dash {
                     self.disk
                         .scan
                         .as_ref()
-                        .filter(|scan| scan.announced)
                         .map(|scan| scan.activity(now_unix_ms()))
                 }),
         }

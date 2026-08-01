@@ -3,7 +3,9 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use qol_dev_build::target_cache::{format_bytes, path_bytes, prunable_target_bytes};
+use qol_dev_build::target_cache::{
+    format_bytes, path_bytes, prunable_target_bytes, SWEPT_CACHE_CEILING,
+};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Stylize};
 use ratatui::text::{Line, Span};
@@ -33,7 +35,6 @@ impl DiskPanel {
 
 pub(super) struct DiskScan {
     pub(super) rx: Receiver<Result<DiskReport, String>>,
-    pub(super) announced: bool,
     progress: Arc<Mutex<String>>,
     started_at_ms: u64,
 }
@@ -91,17 +92,10 @@ pub(super) fn start_disk_scan(dash: &mut Dash) {
     if dash.disk.scan.is_some() {
         return;
     }
-    dash.disk.scan = Some(spawn_disk_scan(true));
+    dash.disk.scan = Some(spawn_disk_scan());
 }
 
-pub(super) fn start_boot_disk_scan(dash: &mut Dash) {
-    if dash.disk.scan.is_some() {
-        return;
-    }
-    dash.disk.scan = Some(spawn_disk_scan(false));
-}
-
-fn spawn_disk_scan(announced: bool) -> DiskScan {
+fn spawn_disk_scan() -> DiskScan {
     let (tx, rx) = channel();
     let progress = Arc::new(Mutex::new(String::new()));
     let worker_progress = Arc::clone(&progress);
@@ -110,7 +104,6 @@ fn spawn_disk_scan(announced: bool) -> DiskScan {
     });
     DiskScan {
         rx,
-        announced,
         progress,
         started_at_ms: now_unix_ms(),
     }
@@ -142,7 +135,10 @@ fn scan_disk_usage(progress: &Arc<Mutex<String>>) -> Result<DiskReport, String> 
     set_progress(progress, "stale caches");
     rows.push(DiskRow {
         label: "target · prunable".to_string(),
-        detail: "stale caches the doctor auto-prunes over 10 GiB".to_string(),
+        detail: format!(
+            "the doctor auto-prunes debug caches to a {} ceiling",
+            format_bytes(SWEPT_CACHE_CEILING)
+        ),
         bytes: Some(prunable_target_bytes(&target)),
     });
     for worktree in qol_dev_build::tray::list_worktrees(&root) {
@@ -347,7 +343,7 @@ mod tests {
             error: None,
         };
         let scanning = DiskPanel {
-            scan: Some(never_finishing_scan(true)),
+            scan: Some(never_finishing_scan()),
             ..DiskPanel::new()
         };
         let failed = DiskPanel {
@@ -367,28 +363,21 @@ mod tests {
         }
     }
 
-    fn never_finishing_scan(announced: bool) -> DiskScan {
+    fn never_finishing_scan() -> DiskScan {
         let (tx, rx) = channel();
         std::mem::forget(tx);
         DiskScan {
             rx,
-            announced,
             progress: Arc::new(Mutex::new(String::new())),
             started_at_ms: 0,
         }
     }
 
     #[test]
-    fn only_announced_scans_surface_as_activity() {
+    fn live_scans_surface_as_the_disk_activity() {
         let mut dash = Dash::new(Vec::new());
-        dash.disk.scan = Some(never_finishing_scan(false));
-        assert!(
-            dash.activity().is_none(),
-            "the boot scan must not hold the frame busy"
-        );
-
-        dash.disk.scan = Some(never_finishing_scan(true));
-        let activity = dash.activity().expect("manual scan announces");
+        dash.disk.scan = Some(never_finishing_scan());
+        let activity = dash.activity().expect("live scan announces");
         assert_eq!(activity.title, "disk");
         assert_eq!(activity.phase, "scanning");
     }
