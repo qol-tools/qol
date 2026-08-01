@@ -8,7 +8,7 @@ pub use parse::{parse_ls, KittyLs};
 
 use crate::{
     BackendId, DeliveryMode, ScreenReader, SessionBinding, SessionFacts, SessionFocus,
-    SessionInventory, TerminalBackend, TerminalError, TextInput,
+    SessionInventory, TerminalBackend, TerminalError, TerminalSnapshot, TextInput,
 };
 
 const BACKEND_ID: &str = "kitty";
@@ -107,6 +107,21 @@ impl KittyBackend {
             capability: label,
         })
     }
+
+    fn read_screen_command(&self, target: &SessionBinding) -> Result<String, TerminalError> {
+        self.run(
+            "read screen",
+            &strings([
+                "@",
+                "get-text",
+                "--match",
+                &matcher(target),
+                "--extent",
+                "screen",
+            ]),
+            None,
+        )
+    }
 }
 
 impl Default for KittyBackend {
@@ -118,6 +133,15 @@ impl Default for KittyBackend {
 impl TerminalBackend for KittyBackend {
     fn id(&self) -> &BackendId {
         backend_id()
+    }
+
+    fn read_screen_from_snapshot(
+        &self,
+        snapshot: &TerminalSnapshot,
+        target: &SessionBinding,
+    ) -> Result<String, TerminalError> {
+        snapshot.validate_screen_target(target)?;
+        self.read_screen_command(target)
     }
 }
 
@@ -134,18 +158,7 @@ impl ScreenReader for KittyBackend {
             crate::SessionCapabilities::SCREEN_READING,
             "screen reading",
         )?;
-        self.run(
-            "read screen",
-            &strings([
-                "@",
-                "get-text",
-                "--match",
-                &matcher(target),
-                "--extent",
-                "screen",
-            ]),
-            None,
-        )
+        self.read_screen_command(target)
     }
 }
 
@@ -250,7 +263,11 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::{CommandOutput, CommandRunner, KittyBackend};
-    use crate::{kitty::backend_id, DeliveryMode, SessionBinding, SessionId, TextInput};
+    use crate::{
+        kitty::backend_id, DeliveryMode, SessionBinding, SessionCapabilities, SessionFacts,
+        SessionId, TerminalBackend, TerminalError, TerminalSessionService, TerminalSnapshot,
+        TextInput,
+    };
 
     #[derive(Default)]
     struct FakeRunner {
@@ -322,6 +339,77 @@ mod tests {
 
         assert!(error.to_string().contains("changed process"));
         assert_eq!(runner.calls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn snapshot_screen_reads_validate_binding_before_command() {
+        let runner = FakeRunner::with_outputs(vec![success(ls(42, 901))]);
+        let backend = Arc::new(KittyBackend::with_runner(runner.clone()));
+        let service =
+            TerminalSessionService::from_backends([backend.clone() as Arc<dyn TerminalBackend>])
+                .unwrap();
+        let snapshot = service.snapshot().unwrap();
+
+        let error = backend
+            .read_screen_from_snapshot(&snapshot, &binding(42, 900))
+            .unwrap_err();
+
+        assert!(matches!(error, TerminalError::TargetChanged { .. }));
+        assert_eq!(runner.calls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn snapshot_screen_reads_validate_capability_before_command() {
+        let runner = FakeRunner::with_outputs(Vec::new());
+        let backend = KittyBackend::with_runner(runner.clone());
+        let target = binding(42, 900);
+        let snapshot = TerminalSnapshot::new(vec![SessionFacts {
+            id: target.session_id().clone(),
+            root_pid: target.root_pid(),
+            cwd: "/a".to_owned(),
+            title: "Terminal".to_owned(),
+            at_prompt: false,
+            reported_cmd: None,
+            foreground_basenames: Vec::new(),
+            foreground_pids: Vec::new(),
+            capabilities: SessionCapabilities::NONE,
+        }]);
+
+        let error = backend
+            .read_screen_from_snapshot(&snapshot, &target)
+            .unwrap_err();
+
+        assert!(matches!(error, TerminalError::Unsupported { .. }));
+        assert!(runner.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn snapshot_reuses_discovery_and_unchanged_screen_reads() {
+        let runner =
+            FakeRunner::with_outputs(vec![success(ls(42, 900)), success("screen".to_owned())]);
+        let backend = KittyBackend::with_runner(runner.clone());
+        let service =
+            TerminalSessionService::from_backends([Arc::new(backend) as Arc<dyn TerminalBackend>])
+                .unwrap();
+        let snapshot = service.snapshot().unwrap();
+        let target = binding(42, 900);
+
+        assert_eq!(
+            service.read_screen_from(&snapshot, &target).unwrap(),
+            "screen"
+        );
+        assert_eq!(
+            service.read_screen_from(&snapshot, &target).unwrap(),
+            "screen"
+        );
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, ["@", "ls"]);
+        assert_eq!(
+            calls[1].0,
+            ["@", "get-text", "--match", "id:42", "--extent", "screen"]
+        );
     }
 
     fn binding(id: u64, root_pid: i32) -> SessionBinding {

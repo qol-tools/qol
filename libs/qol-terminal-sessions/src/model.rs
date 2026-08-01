@@ -1,9 +1,12 @@
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use crate::IdentityError;
+use crate::{IdentityError, TerminalError};
 
 const TOKEN_VERSION: &str = "v1";
 
@@ -174,6 +177,69 @@ pub struct SessionFacts {
 impl SessionFacts {
     pub fn binding(&self) -> Result<SessionBinding, IdentityError> {
         SessionBinding::new(self.id.clone(), self.root_pid)
+    }
+}
+
+#[derive(Clone)]
+pub struct TerminalSnapshot {
+    sessions: Arc<[SessionFacts]>,
+    screens: Arc<Mutex<HashMap<SessionBinding, String>>>,
+    created_at: Instant,
+}
+
+impl TerminalSnapshot {
+    pub(crate) fn new(sessions: Vec<SessionFacts>) -> Self {
+        Self {
+            sessions: Arc::from(sessions),
+            screens: Arc::new(Mutex::new(HashMap::new())),
+            created_at: Instant::now(),
+        }
+    }
+
+    pub fn sessions(&self) -> &[SessionFacts] {
+        &self.sessions
+    }
+
+    pub(crate) fn validate_screen_target(
+        &self,
+        target: &SessionBinding,
+    ) -> Result<(), TerminalError> {
+        let session = self
+            .sessions()
+            .iter()
+            .find(|session| session.id == *target.session_id())
+            .ok_or_else(|| TerminalError::TargetMissing(target.clone()))?;
+        if session.root_pid != target.root_pid() {
+            return Err(TerminalError::TargetChanged {
+                target: session.id.clone(),
+                expected_root_pid: target.root_pid(),
+                actual_root_pid: session.root_pid,
+            });
+        }
+        if session
+            .capabilities
+            .contains(SessionCapabilities::SCREEN_READING)
+        {
+            return Ok(());
+        }
+        Err(TerminalError::Unsupported {
+            target: target.session_id().clone(),
+            capability: "screen reading",
+        })
+    }
+
+    pub(crate) fn age_ms(&self) -> u128 {
+        self.created_at.elapsed().as_millis()
+    }
+
+    pub(crate) fn cached_screen(&self, target: &SessionBinding) -> Option<String> {
+        self.screens.lock().ok()?.get(target).cloned()
+    }
+
+    pub(crate) fn cache_screen(&self, target: SessionBinding, screen: String) {
+        if let Ok(mut screens) = self.screens.lock() {
+            screens.insert(target, screen);
+        }
     }
 }
 

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::session::status::Status;
 use crate::session::tool::Tool;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SessionState {
     pub window_id: u64,
     pub root_pid: i32,

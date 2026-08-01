@@ -17,6 +17,7 @@ use crate::ui::notify::{self, Notice};
 #[derive(Default)]
 pub struct ReconcileCaches {
     branch: git::BranchCache,
+    persisted: Option<(std::path::PathBuf, Vec<SessionState>)>,
 }
 
 fn pid_alive(pid: i32) -> bool {
@@ -126,11 +127,7 @@ pub fn tick_with_caches(
         }
     }
 
-    if let Ok(reg) = registry.lock() {
-        if let Some(path) = paths::state_path() {
-            persist::save(&path, &reg.sorted());
-        }
-    }
+    persist_if_changed(registry, caches);
     #[cfg(debug_assertions)]
     {
         let elapsed_ms = tick_start.elapsed().as_millis();
@@ -176,6 +173,57 @@ fn prune_missing(registry: &Arc<Mutex<Registry>>, panes: &[Pane]) {
     for id in stale {
         reg.remove(id);
     }
+}
+
+fn persist_if_changed(registry: &Arc<Mutex<Registry>>, caches: &mut ReconcileCaches) {
+    let Some(path) = paths::state_path() else {
+        qol_runtime::probe!(
+            "CLI_SESSIONS_RECON",
+            "phase=persist outcome=skip reason=no_path"
+        );
+        return;
+    };
+    let Ok(reg) = registry.lock() else {
+        qol_runtime::probe!(
+            "CLI_SESSIONS_RECON",
+            "phase=persist outcome=skip reason=registry_lock"
+        );
+        return;
+    };
+    let sessions = reg.sorted();
+    drop(reg);
+    if caches
+        .persisted
+        .as_ref()
+        .is_some_and(|(persisted_path, persisted)| {
+            persisted_path == &path && persisted == &sessions
+        })
+    {
+        qol_runtime::probe!(
+            "CLI_SESSIONS_RECON",
+            "phase=persist outcome=skip reason=unchanged sessions={}",
+            sessions.len()
+        );
+        return;
+    }
+    #[cfg(debug_assertions)]
+    let session_count = sessions.len();
+    #[cfg(not(debug_assertions))]
+    let session_count = 0_usize;
+    if persist::save(&path, &sessions) {
+        caches.persisted = Some((path, sessions));
+        qol_runtime::probe!(
+            "CLI_SESSIONS_RECON",
+            "phase=persist outcome=save reason=changed sessions={}",
+            session_count
+        );
+        return;
+    }
+    qol_runtime::probe!(
+        "CLI_SESSIONS_RECON",
+        "phase=persist outcome=error reason=write_failed sessions={}",
+        session_count
+    );
 }
 
 #[cfg(debug_assertions)]
@@ -248,7 +296,7 @@ fn apply(
     }
 
     if let Some(s) = reg.get_mut(pane_window_id) {
-        if status != s.status || status == Status::Working {
+        if status != s.status {
             s.last_activity = now;
         }
         s.status = status;

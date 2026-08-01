@@ -133,8 +133,11 @@ without guessing from command-name substrings: **is this pane a long-running
 service?** Two deterministic arms, OR'd:
 
 - **OS fact** - a server is a process holding a listening socket. The probe
-  snapshots all `LISTEN` pids (`lsof`) and the process tree (`ps`) once per tick,
-  then walks the pane's subtree (root + foreground pids and their descendants).
+  snapshots all `LISTEN` pids (`lsof`) and the process tree (`ps`) once per
+  reconcile pass, then walks the pane's subtree (root + foreground pids and
+  their descendants). A failed probe is scoped to that pass and is retried on
+  the next pass, so process transitions cannot be hidden by stale or negative
+  cache entries.
   A match means it listens, so it is live. The listener is usually a child
   (`qol` -> `node`), which is why the walk follows the subtree, not just the top
   pid.
@@ -145,6 +148,11 @@ service?** Two deterministic arms, OR'd:
 The probe is injected (`reconcile::tick` takes `&dyn ServiceProbe`), so tests use
 `NoServiceProbe` / a fake and never shell out. The reconciler only consults it
 for generic, non-`at_prompt` panes; everything else short-circuits to `false`.
+
+Kitty discovery produces one shared terminal snapshot per reconcile pass. Screen
+reads validate against that snapshot and reuse a screen result when the same
+target is requested again during the pass, avoiding a second Kitty discovery
+process for every pane.
 
 ## The Phase -> Status seam
 

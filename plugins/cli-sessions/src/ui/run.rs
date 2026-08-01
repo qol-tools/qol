@@ -202,11 +202,11 @@ fn spawn_reconcile_timer(
         let reg = registry.clone();
         let h = host.clone();
         let interpreter = cli_interpreter.clone();
-        let sc = service_commands.clone();
+        let commands = service_commands.clone();
         let cache = caches.clone();
         let now = now_secs();
         cx.background_spawn(async move {
-            let probe = SystemServiceProbe::snapshot(sc.to_vec());
+            let probe = SystemServiceProbe::snapshot(commands.to_vec());
             let notices = match cache.lock() {
                 Ok(mut caches) => reconcile::tick_with_caches(
                     &reg,

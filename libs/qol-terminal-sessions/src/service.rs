@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::{BackendId, DeliveryMode, SessionBinding, SessionFacts, SessionId, TerminalError};
+use crate::{
+    BackendId, DeliveryMode, SessionBinding, SessionFacts, SessionId, TerminalError,
+    TerminalSnapshot,
+};
 
 pub trait SessionInventory {
     fn discover(&self) -> Result<Vec<SessionFacts>, TerminalError>;
@@ -27,6 +30,12 @@ pub trait TextInput {
 pub trait TerminalBackend:
     SessionInventory + ScreenReader + SessionFocus + TextInput + Send + Sync
 {
+    fn read_screen_from_snapshot(
+        &self,
+        snapshot: &TerminalSnapshot,
+        target: &SessionBinding,
+    ) -> Result<String, TerminalError>;
+
     fn id(&self) -> &BackendId;
 }
 
@@ -73,6 +82,12 @@ impl Default for TerminalSessionService {
 
 impl SessionInventory for TerminalSessionService {
     fn discover(&self) -> Result<Vec<SessionFacts>, TerminalError> {
+        Ok(self.snapshot()?.sessions().to_vec())
+    }
+}
+
+impl TerminalSessionService {
+    pub fn snapshot(&self) -> Result<TerminalSnapshot, TerminalError> {
         let mut sessions = Vec::new();
         let mut first_error = None;
         for backend in self.backends.values() {
@@ -88,7 +103,39 @@ impl SessionInventory for TerminalSessionService {
             }
         }
         sessions.sort_by(|left, right| left.id.cmp(&right.id));
-        Ok(sessions)
+        let snapshot = TerminalSnapshot::new(sessions);
+        qol_runtime::probe!(
+            "TERMINAL_SESSIONS",
+            "operation=snapshot cache=load age_ms=0 sessions={}",
+            snapshot.sessions().len()
+        );
+        Ok(snapshot)
+    }
+
+    pub fn read_screen_from(
+        &self,
+        snapshot: &TerminalSnapshot,
+        target: &SessionBinding,
+    ) -> Result<String, TerminalError> {
+        snapshot.validate_screen_target(target)?;
+        if let Some(screen) = snapshot.cached_screen(target) {
+            qol_runtime::probe!(
+                "TERMINAL_SESSIONS",
+                "operation=read_screen cache=hit age_ms={}",
+                snapshot.age_ms()
+            );
+            return Ok(screen);
+        }
+        let screen = self
+            .backend_for(target.session_id())?
+            .read_screen_from_snapshot(snapshot, target)?;
+        snapshot.cache_screen(target.clone(), screen.clone());
+        qol_runtime::probe!(
+            "TERMINAL_SESSIONS",
+            "operation=read_screen cache=load age_ms={}",
+            snapshot.age_ms()
+        );
+        Ok(screen)
     }
 }
 

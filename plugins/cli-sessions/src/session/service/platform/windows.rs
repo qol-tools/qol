@@ -1,5 +1,5 @@
 use super::super::ProcessSnapshot;
 
-pub(in super::super) fn process_snapshot() -> ProcessSnapshot {
-    ProcessSnapshot::default()
+pub(in super::super) fn process_snapshot() -> Option<ProcessSnapshot> {
+    Some(ProcessSnapshot::default())
 }

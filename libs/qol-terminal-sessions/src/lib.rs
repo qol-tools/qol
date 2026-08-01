@@ -7,6 +7,7 @@ mod service;
 pub use error::{IdentityError, TerminalError};
 pub use model::{
     BackendId, DeliveryMode, SessionBinding, SessionCapabilities, SessionFacts, SessionId,
+    TerminalSnapshot,
 };
 pub use service::{
     ScreenReader, SessionFocus, SessionInventory, TerminalBackend, TerminalSessionService,

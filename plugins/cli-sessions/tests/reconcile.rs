@@ -346,6 +346,22 @@ fn tick_labels_generic_from_command() {
 }
 
 #[test]
+fn tick_does_not_refresh_activity_timestamp_while_working() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = FakeHost {
+        panes: vec![pane(22, "qol dev", false, &["zsh", "qol"], "qol dev")],
+        screen: String::new(),
+    };
+
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 100);
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 200);
+
+    let rows = reg.lock().unwrap().sorted();
+    assert_eq!(rows[0].last_activity, 100);
+    assert_eq!(rows[0].running_since, Some(100));
+}
+
+#[test]
 fn tick_refreshes_restored_identity_fields() {
     let reg = Arc::new(Mutex::new(Registry::default()));
     reg.lock().unwrap().restore(vec![SessionState {

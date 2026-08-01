@@ -15,11 +15,11 @@ Rule: every new performance test needs before and after numbers before it can ju
 
 ## Original Flow Map
 
-- Startup loads config, converts configured service commands to shared state, builds one `SystemServiceProbe::snapshot`, then runs an initial `reconcile::tick`.
+- Startup loads config, converts configured service commands to shared state, builds one `SystemServiceProbe::snapshot` for the initial pass, then runs an initial `reconcile::tick`.
 - The reconcile timer runs every 3s while the panel is visible and every 10s while hidden.
-- Each timer tick builds a fresh `SystemServiceProbe::snapshot`, then calls `reconcile::tick`.
-- `SystemServiceProbe::snapshot` shells out to `lsof -nP -iTCP -sTCP:LISTEN -Fp` and `ps -axo pid=,ppid=`.
-- `reconcile::tick` discovers panes, prunes stale rows, reads screens for agent tools, asks the service probe only for generic non-prompt panes, then persists registry state.
+- Each pass builds a scoped service probe. Its process snapshot is lazy and shared by the generic service checks in that pass only; successful, negative, and failed probe outcomes are all discarded before the next pass so service start/stop transitions remain observable.
+- Each timer tick creates one scoped Kitty terminal snapshot, prunes stale rows, reads screens for agent tools through that snapshot, asks the service probe only for generic non-prompt panes, then persists only changed registry state.
+- A refreshed process snapshot shells out to `lsof -nP -iTCP -sTCP:LISTEN -Fp` and `ps -axo pid=,ppid=`.
 - Existing correctness tests cover service classification through injected `ServiceProbe`; direct lazy-load tests were added with this change.
 
 ## Measurements

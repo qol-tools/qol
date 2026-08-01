@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
+use std::time::Instant;
 
 use crate::host::Pane;
 
@@ -19,14 +20,19 @@ impl ServiceProbe for NoServiceProbe {
 
 pub struct SystemServiceProbe {
     declared: Vec<String>,
-    snapshot: OnceLock<ProcessSnapshot>,
-    load: fn() -> ProcessSnapshot,
+    snapshot: OnceLock<CachedProcessSnapshot>,
+    load: fn() -> Option<ProcessSnapshot>,
 }
 
 #[derive(Default)]
 struct ProcessSnapshot {
     listeners: HashSet<i32>,
     children: HashMap<i32, Vec<i32>>,
+}
+
+struct CachedProcessSnapshot {
+    value: Option<ProcessSnapshot>,
+    loaded_at: Option<Instant>,
 }
 
 impl SystemServiceProbe {
@@ -39,7 +45,7 @@ impl SystemServiceProbe {
     }
 
     #[cfg(test)]
-    fn with_loader(declared: Vec<String>, load: fn() -> ProcessSnapshot) -> Self {
+    fn with_loader(declared: Vec<String>, load: fn() -> Option<ProcessSnapshot>) -> Self {
         Self {
             declared,
             snapshot: OnceLock::new(),
@@ -64,7 +70,10 @@ impl SystemServiceProbe {
     }
 
     fn subtree_listens(&self, pane: &Pane) -> bool {
-        let snapshot = self.snapshot.get_or_init(|| (self.load)());
+        let snapshot = self.process_snapshot();
+        let Some(snapshot) = snapshot.value.as_ref() else {
+            return false;
+        };
         let mut stack: Vec<i32> = pane.foreground_pids.clone();
         stack.push(pane.root_pid);
         let mut seen = HashSet::new();
@@ -80,6 +89,62 @@ impl SystemServiceProbe {
             }
         }
         false
+    }
+
+    fn process_snapshot(&self) -> &CachedProcessSnapshot {
+        #[cfg(debug_assertions)]
+        let was_cached = self.snapshot.get().is_some();
+        let snapshot = self.snapshot.get_or_init(|| {
+            let value = (self.load)();
+            #[cfg(debug_assertions)]
+            let outcome = if value.is_some() {
+                "available"
+            } else {
+                "transient_failure"
+            };
+            #[cfg(not(debug_assertions))]
+            let outcome = "unavailable";
+            qol_runtime::probe!(
+                "CLI_SESSIONS_RECON",
+                "phase=service_probe cache=load outcome={outcome} age_ms=0"
+            );
+            CachedProcessSnapshot {
+                value,
+                loaded_at: {
+                    #[cfg(debug_assertions)]
+                    {
+                        Some(Instant::now())
+                    }
+                    #[cfg(not(debug_assertions))]
+                    {
+                        None
+                    }
+                },
+            }
+        });
+        #[cfg(debug_assertions)]
+        if was_cached {
+            let outcome = if snapshot.value.is_some() {
+                "available"
+            } else {
+                "transient_failure"
+            };
+            let age_ms = snapshot
+                .loaded_at
+                .map_or(0, |loaded_at| loaded_at.elapsed().as_millis());
+            qol_runtime::probe!(
+                "CLI_SESSIONS_RECON",
+                "phase=service_probe cache=hit outcome={outcome} age_ms={age_ms}"
+            );
+        }
+        #[cfg(not(debug_assertions))]
+        qol_runtime::probe!(
+            "CLI_SESSIONS_RECON",
+            "phase=service_probe cache=hit outcome={} age_ms={}",
+            "unavailable",
+            snapshot.loaded_at.map_or(0_u128, |_| 0_u128)
+        );
+        snapshot
     }
 }
 
@@ -100,12 +165,27 @@ mod tests {
     static LOADS: AtomicUsize = AtomicUsize::new(0);
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
-    fn counted_snapshot() -> ProcessSnapshot {
+    fn counted_snapshot() -> Option<ProcessSnapshot> {
         LOADS.fetch_add(1, Ordering::SeqCst);
-        ProcessSnapshot {
+        Some(ProcessSnapshot {
             listeners: HashSet::from([44]),
             children: HashMap::from([(10, vec![44])]),
-        }
+        })
+    }
+
+    fn listening_snapshot() -> Option<ProcessSnapshot> {
+        Some(ProcessSnapshot {
+            listeners: HashSet::from([44]),
+            children: HashMap::from([(10, vec![44])]),
+        })
+    }
+
+    fn stopped_snapshot() -> Option<ProcessSnapshot> {
+        Some(ProcessSnapshot::default())
+    }
+
+    fn transient_failure() -> Option<ProcessSnapshot> {
+        None
     }
 
     fn reset_loads() {
@@ -154,6 +234,32 @@ mod tests {
         let probe = SystemServiceProbe::with_loader(Vec::new(), counted_snapshot);
         assert!(probe.is_service(&pane(10, "server", Vec::new())));
         assert!(probe.is_service(&pane(10, "server", Vec::new())));
+        assert_eq!(load_count(), 1);
+    }
+
+    #[test]
+    fn service_start_and_stop_transitions_are_seen_across_passes() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let stopped = SystemServiceProbe::with_loader(Vec::new(), stopped_snapshot);
+        let started = SystemServiceProbe::with_loader(Vec::new(), listening_snapshot);
+        let stopped_again = SystemServiceProbe::with_loader(Vec::new(), stopped_snapshot);
+        let pane = pane(10, "server", Vec::new());
+
+        assert!(!stopped.is_service(&pane));
+        assert!(started.is_service(&pane));
+        assert!(!stopped_again.is_service(&pane));
+    }
+
+    #[test]
+    fn transient_process_probe_failure_is_retried_on_next_pass() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_loads();
+        let failed = SystemServiceProbe::with_loader(Vec::new(), transient_failure);
+        let recovered = SystemServiceProbe::with_loader(Vec::new(), counted_snapshot);
+        let pane = pane(10, "server", Vec::new());
+
+        assert!(!failed.is_service(&pane));
+        assert!(recovered.is_service(&pane));
         assert_eq!(load_count(), 1);
     }
 
