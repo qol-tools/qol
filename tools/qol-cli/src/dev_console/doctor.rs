@@ -943,6 +943,40 @@ mod tests {
     }
 
     #[test]
+    fn activity_sign_stacks_above_the_detail_panel_instead_of_overlapping() {
+        let mut dash = Dash::new(Vec::new());
+        dash.view = View::Doctor;
+        dash.keys_hidden = true;
+        dash.doctor = panel_with_details(vec!["full message shown in the panel"], None);
+        dash.doctor_detail_open = true;
+        dash.doctor.manual = Some(manual_doctor(
+            DoctorMode::Fix,
+            "check rust_clippy",
+            now_unix_ms(),
+        ));
+
+        let rows = super::super::testkit::render_rows_at(&mut dash, 110, 28);
+
+        let details_row = rows
+            .iter()
+            .position(|row| row.contains("┤ details ├"))
+            .expect("details title missing");
+        let activity_row = rows
+            .iter()
+            .position(|row| row.contains("┤ doctor ├"))
+            .expect("activity title missing");
+        assert!(
+            activity_row < details_row,
+            "activity must stack above the detail panel"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("full message shown in the panel")),
+            "detail body must stay intact under the stacked signs"
+        );
+    }
+
+    #[test]
     fn detail_panel_shows_the_full_message() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Doctor;

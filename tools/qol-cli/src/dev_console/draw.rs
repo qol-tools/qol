@@ -26,6 +26,7 @@ use super::{ACK_TTL, BASE_ACCENT, ORANGE};
 pub(super) fn draw(frame: &mut Frame, dash: &mut Dash) {
     let accent = frame_accent(dash);
     render_util::set_frame_accent(accent);
+    render_util::reset_bottom_stack();
     let [_, body, _] = Layout::vertical([
         Constraint::Length(TITLE_CAP),
         Constraint::Min(0),

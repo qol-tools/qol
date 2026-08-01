@@ -12,10 +12,15 @@ use super::Dash;
 
 thread_local! {
     static ACCENT: Cell<Color> = const { Cell::new(Color::Green) };
+    static BOTTOM_RESERVED: Cell<u16> = const { Cell::new(0) };
 }
 
 pub(super) fn set_frame_accent(color: Color) {
     ACCENT.with(|cell| cell.set(color));
+}
+
+pub(super) fn reset_bottom_stack() {
+    BOTTOM_RESERVED.with(|cell| cell.set(0));
 }
 
 pub(super) fn accent() -> Color {
@@ -106,19 +111,22 @@ fn render_bottom_panel_with_width(
     accent: Color,
     width: u16,
 ) {
-    let height = (rows.len() as u16 + SignBox::CHROME_ROWS).min(area.height);
+    let reserved = BOTTOM_RESERVED.with(Cell::get);
+    let height =
+        (rows.len() as u16 + SignBox::CHROME_ROWS).min(area.height.saturating_sub(reserved));
     if width == 0 || height == 0 {
         return;
     }
     rows.truncate(SignBox::capacity(height));
     let rect = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
-        y: area.y + area.height.saturating_sub(height + 1),
+        y: area.y + area.height.saturating_sub(height + 1 + reserved),
         width,
         height,
     };
     frame.render_widget(Clear, rect);
     SignBox { title, rows }.render(frame, rect, accent);
+    BOTTOM_RESERVED.with(|cell| cell.set(reserved + height));
 }
 
 pub(super) struct Sign {
