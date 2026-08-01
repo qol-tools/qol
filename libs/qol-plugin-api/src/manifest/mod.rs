@@ -38,15 +38,6 @@ pub fn default_manifest_version() -> u32 {
     CURRENT_MANIFEST_VERSION
 }
 
-pub fn walk_menu_items(items: &[MenuItem], visit: &mut dyn FnMut(&MenuItem)) {
-    for item in items {
-        match item {
-            MenuItem::Submenu { items, .. } => walk_menu_items(items, visit),
-            _ => visit(item),
-        }
-    }
-}
-
 pub fn supports_current_platform(platforms: &Option<Vec<String>>) -> bool {
     match platforms {
         None => true,

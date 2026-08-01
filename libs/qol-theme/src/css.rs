@@ -6,7 +6,7 @@ use crate::{
     alt_tab_preview_plane_dark, dark_accent_preset, dark_accent_presets, dark_theme,
     dark_theme_with_accent_key, tray_theme_preset, tray_theme_presets, CssRgba, Theme,
     ThemeIdentity, ThemeMode, TrayThemePreset, DARK_REFERENCE, DARK_TRAY_INTERNAL, DARK_TRAY_RAMP,
-    DEFAULT_TRAY_THEME_KEY, DEV_ACCENT_KEY, PROD_ACCENT_KEY,
+    DEFAULT_TRAY_THEME_KEY, PROD_ACCENT_KEY,
 };
 
 pub fn dark_css() -> String {
@@ -198,7 +198,6 @@ pub fn tray_theme_js() -> String {
         out,
         "export const QOL_DEFAULT_ACCENT = \"{PROD_ACCENT_KEY}\";"
     );
-    let _ = writeln!(out, "export const QOL_DEV_ACCENT = \"{DEV_ACCENT_KEY}\";");
     let _ = writeln!(
         out,
         "export const QOL_DEFAULT_ACCENT_RGB = \"{}\";",
@@ -288,7 +287,6 @@ pub fn css_variables(selector: &str, theme: Theme) -> String {
     push_rgb(&mut out, "qol-system-accent-rgb", palette.accent);
     push_rgb(&mut out, "qol-system-success-rgb", palette.success);
     push_rgb(&mut out, "qol-system-danger-rgb", palette.danger);
-    push_rgb(&mut out, "qol-system-info-rgb", palette.info);
     push_rgb(&mut out, "qol-system-warning-rgb", palette.warning);
     push_rgb(&mut out, "qol-system-ink-rgb", reference.black);
     push_rgb(&mut out, "qol-system-paper-rgb", reference.white);
@@ -502,66 +500,10 @@ fn push_tray_ramp_variables(out: &mut String) {
         "qol-atmosphere-spacecraft-glow-b",
         DARK_TRAY_INTERNAL.atmosphere_spacecraft_glow_b,
     );
-    push_css_rgba(
-        out,
-        "qol-minimap-inactive-fill",
-        DARK_TRAY_INTERNAL.minimap_inactive_fill,
-    );
-    push_css_rgba(
-        out,
-        "qol-minimap-inactive-stroke",
-        DARK_TRAY_INTERNAL.minimap_inactive_stroke,
-    );
-    push_css_rgba(
-        out,
-        "qol-minimap-inactive-text",
-        DARK_TRAY_INTERNAL.minimap_inactive_text,
-    );
-    push_css_rgba(
-        out,
-        "qol-minimap-active-fill",
-        DARK_TRAY_INTERNAL.minimap_active_fill,
-    );
-    push_css_rgba(
-        out,
-        "qol-minimap-active-stroke",
-        DARK_TRAY_INTERNAL.minimap_active_stroke,
-    );
-    push_css_rgba(
-        out,
-        "qol-minimap-active-text",
-        DARK_TRAY_INTERNAL.minimap_active_text,
-    );
-    push_hex(
-        out,
-        "qol-dissolve-target-color",
-        DARK_TRAY_INTERNAL.dissolve_target,
-    );
     push_hex(
         out,
         "qol-config-field-thumb-bg",
         DARK_TRAY_INTERNAL.config_field_thumb_bg,
-    );
-    push_hex(out, "qol-config-qr-dark", DARK_TRAY_INTERNAL.config_qr_dark);
-    push_hex(
-        out,
-        "qol-config-qr-light",
-        DARK_TRAY_INTERNAL.config_qr_light,
-    );
-    push_hex(
-        out,
-        "qol-config-live-color-fallback",
-        DARK_TRAY_INTERNAL.config_live_color_fallback,
-    );
-    push_hex(
-        out,
-        "qol-config-color-thumb-stroke",
-        DARK_TRAY_INTERNAL.config_color_thumb_stroke,
-    );
-    push_css_rgba(
-        out,
-        "qol-config-color-thumb-shadow",
-        DARK_TRAY_INTERNAL.config_color_thumb_shadow,
     );
 }
 

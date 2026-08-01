@@ -13,7 +13,6 @@ pub struct AccentPreset {
 }
 
 pub const PROD_ACCENT_KEY: &str = "amber";
-pub const DEV_ACCENT_KEY: &str = "green";
 
 pub const DARK_ACCENT_PRESETS: [AccentPreset; 6] = [
     AccentPreset {
@@ -1038,48 +1037,24 @@ impl PickerSurfacePalette {
     }
 }
 
-pub fn launcher_dark() -> LauncherPalette {
-    dark_theme().components.launcher
-}
-
 pub fn launcher_runtime() -> LauncherPalette {
     runtime_dark_theme().components.launcher
-}
-
-pub fn cli_sessions_dark() -> CliSessionsPalette {
-    dark_theme().components.cli_sessions
 }
 
 pub fn cli_sessions_runtime() -> CliSessionsPalette {
     runtime_dark_theme().components.cli_sessions
 }
 
-pub fn remove_app_dark() -> RemoveAppPalette {
-    dark_theme().components.remove_app
-}
-
 pub fn remove_app_runtime() -> RemoveAppPalette {
     runtime_dark_theme().components.remove_app
-}
-
-pub fn shot_selector_dark() -> ShotSelectorPalette {
-    dark_theme().components.shot_selector
 }
 
 pub fn shot_selector_runtime() -> ShotSelectorPalette {
     runtime_dark_theme().components.shot_selector
 }
 
-pub fn shot_preview_dark() -> ShotPreviewPalette {
-    dark_theme().components.shot_preview
-}
-
 pub fn shot_preview_runtime() -> ShotPreviewPalette {
     runtime_dark_theme().components.shot_preview
-}
-
-pub fn toast_dark() -> ToastPalette {
-    dark_theme().components.toast
 }
 
 pub fn toast_runtime() -> ToastPalette {

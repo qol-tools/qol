@@ -11,7 +11,7 @@ use crate::core;
 
 use super::cargo_build::CargoCommandPluginBuilder;
 use super::fingerprint_store::JSON_BUILD_FINGERPRINT_STORE;
-use super::types::{BuildResult, BuildRun, PluginBuildProgress};
+use super::types::{BuildRun, PluginBuildProgress};
 
 pub const MAX_CONCURRENT_PLUGIN_BUILDS: usize = 4;
 
@@ -105,10 +105,6 @@ where
     build_linked_plugins_with_core_events(dev_links, known_fingerprints, |event| {
         events::emit_plugin_progress(event, &mut on_progress);
     })
-}
-
-pub fn build_linked_plugins(dev_links: &HashMap<String, PathBuf>) -> Vec<BuildResult> {
-    build_linked_plugins_with_progress(dev_links, &HashMap::new(), |_| {}).results
 }
 
 #[cfg(test)]

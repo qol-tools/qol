@@ -107,10 +107,6 @@ impl BuildIdentityEnvironment {
         Self::resolve(repo, BuildIntent::Sandbox, false)
     }
 
-    pub fn intent(&self) -> BuildIntent {
-        self.intent
-    }
-
     pub fn source(&self) -> &SourceIdentity {
         &self.source
     }
@@ -337,7 +333,7 @@ mod tests {
     fn production_identity_requires_and_records_a_clean_tree() {
         let repo = repo();
         let identity = BuildIdentityEnvironment::production(repo.path()).unwrap();
-        assert_eq!(identity.intent(), BuildIntent::Production);
+        assert_eq!(identity.intent, BuildIntent::Production);
         let SourceIdentity::Git {
             commit,
             head_tree,
@@ -363,7 +359,7 @@ mod tests {
         std::fs::write(repo.path().join("untracked.txt"), "three\n").unwrap();
 
         let identity = BuildIdentityEnvironment::development(repo.path()).unwrap();
-        assert_eq!(identity.intent(), BuildIntent::Development);
+        assert_eq!(identity.intent, BuildIntent::Development);
         let SourceIdentity::Git {
             head_tree,
             working_tree,

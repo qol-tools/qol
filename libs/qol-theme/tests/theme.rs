@@ -1,10 +1,8 @@
 use qol_color::{mix_rgb, with_alpha};
 use qol_theme::{
-    alt_tab_preview_plane_dark, cli_sessions_dark, css, dark_accent_preset, dark_theme,
-    dark_theme_with_accent_key, launcher_dark, remove_app_dark, resolve_surface_color,
-    runtime_dark_theme, shot_preview_dark, shot_selector_dark, toast_dark, PickerSurfacePalette,
-    ThemeMode, DARK_ACCENT_PRESETS, DARK_REFERENCE, DARK_SYSTEM, DARK_TRAY_INTERNAL,
-    DEV_ACCENT_KEY, PROD_ACCENT_KEY,
+    alt_tab_preview_plane_dark, css, dark_accent_preset, dark_theme, dark_theme_with_accent_key,
+    resolve_surface_color, runtime_dark_theme, PickerSurfacePalette, ThemeMode,
+    DARK_ACCENT_PRESETS, DARK_REFERENCE, DARK_SYSTEM, DARK_TRAY_INTERNAL, PROD_ACCENT_KEY,
 };
 use std::{
     fs,
@@ -22,7 +20,6 @@ fn dark_theme_has_explicit_reference_system_and_component_layers() {
         theme.system.accent,
         dark_accent_preset(PROD_ACCENT_KEY).unwrap().rgb
     );
-    assert_eq!(theme.components.launcher, launcher_dark());
 }
 
 #[test]
@@ -55,7 +52,7 @@ fn css_color_serializers_are_shared() {
 
 #[test]
 fn launcher_palette_derives_from_system_roles() {
-    let palette = launcher_dark();
+    let palette = dark_theme().components.launcher;
     assert_eq!(palette.bg, DARK_SYSTEM.surface_elevated);
     assert_eq!(palette.bg_badge, DARK_SYSTEM.surface_raised);
     assert_eq!(palette.text_selected, DARK_SYSTEM.text_primary);
@@ -70,7 +67,7 @@ fn launcher_palette_derives_from_system_roles() {
 
 #[test]
 fn cli_sessions_palette_derives_from_system_roles() {
-    let palette = cli_sessions_dark();
+    let palette = dark_theme().components.cli_sessions;
     assert_eq!(palette.panel_bg, DARK_SYSTEM.surface_elevated);
     assert_eq!(palette.chrome_bg, DARK_SYSTEM.surface_canvas);
     assert_eq!(palette.border, DARK_SYSTEM.border_subtle);
@@ -122,7 +119,7 @@ fn cli_sessions_palette_derives_from_system_roles() {
 
 #[test]
 fn remove_app_palette_derives_from_system_roles() {
-    let palette = remove_app_dark();
+    let palette = dark_theme().components.remove_app;
     assert_eq!(palette.panel_bg, DARK_SYSTEM.surface_elevated);
     assert_eq!(palette.chrome_bg, DARK_SYSTEM.surface_canvas);
     assert_eq!(
@@ -155,7 +152,7 @@ fn remove_app_palette_derives_from_system_roles() {
 
 #[test]
 fn shot_preview_palette_derives_from_system_roles() {
-    let palette = shot_preview_dark();
+    let palette = dark_theme().components.shot_preview;
     assert_eq!(palette.window_bg, DARK_SYSTEM.surface_elevated);
     assert_eq!(palette.thumb_border, DARK_SYSTEM.border_subtle);
     assert_eq!(palette.label_text, DARK_SYSTEM.text_secondary);
@@ -171,7 +168,7 @@ fn shot_preview_palette_derives_from_system_roles() {
 
 #[test]
 fn toast_palette_derives_from_system_roles() {
-    let palette = toast_dark();
+    let palette = dark_theme().components.toast;
     assert_eq!(palette.window_bg, DARK_SYSTEM.surface_elevated);
     assert_eq!(palette.border, DARK_SYSTEM.border_subtle);
     assert_eq!(palette.text_primary, DARK_SYSTEM.text_primary);
@@ -242,7 +239,7 @@ fn alt_tab_cinnamon_js_emits_clutter_color_strings() {
 
 #[test]
 fn shot_selector_palette_derives_from_system_roles() {
-    let palette = shot_selector_dark();
+    let palette = dark_theme().components.shot_selector;
     assert_eq!(palette.backdrop_rgba, with_alpha(DARK_SYSTEM.info, 0x24));
     assert_eq!(
         palette.panel_bg_rgba,
@@ -355,7 +352,6 @@ fn dark_css_emits_stable_token_names() {
             "    --qol-system-accent-rgb: 255, 180, 84;\n",
             "    --qol-system-success-rgb: 74, 222, 128;\n",
             "    --qol-system-danger-rgb: 255, 107, 107;\n",
-            "    --qol-system-info-rgb: 104, 176, 255;\n",
             "    --qol-system-warning-rgb: 255, 193, 7;\n",
             "    --qol-system-ink-rgb: 0, 0, 0;\n",
             "    --qol-system-paper-rgb: 255, 255, 255;\n",
@@ -397,7 +393,6 @@ fn tray_css_layers_tray_tokens_without_polluting_core() {
     assert!(tray.contains("    --qol-tray-blue-500: #4a9eff;\n"));
     assert!(tray.contains("    --qol-tray-border-default-2: #3e485b;\n"));
     assert!(tray.contains("    --qol-atmosphere-wood-bg: #120a05;\n"));
-    assert!(tray.contains("    --qol-minimap-active-text: rgba(255, 255, 255, 0.98);\n"));
     assert!(tray.contains("    --qol-accent-amber-hover: #ffc77a;\n"));
 }
 
@@ -417,7 +412,6 @@ fn tray_theme_js_emits_accent_presets_from_theme() {
         );
     }
     assert!(js.contains(&format!("QOL_DEFAULT_ACCENT = \"{PROD_ACCENT_KEY}\"")));
-    assert!(js.contains(&format!("QOL_DEV_ACCENT = \"{DEV_ACCENT_KEY}\"")));
     assert!(js.contains(&format!(
         "dissolveTargetColor: \"{}\"",
         hex6(DARK_TRAY_INTERNAL.dissolve_target)
@@ -587,7 +581,6 @@ fn themed_tray_internals_do_not_use_raw_color_literals() {
         "apps/qol-tray/ui/styles/theme-tokens.css",
         "apps/qol-tray/ui/fx/atmosphere/atmosphere.css",
         "apps/qol-tray/ui/fx/dissolve/engine.js",
-        "apps/qol-tray/ui/fx/dissolve/glitch-squares.js",
         "apps/qol-tray/ui/fx/dissolve/gpu.js",
         "apps/qol-tray/ui/fx/dissolve/index.js",
         "apps/qol-tray/ui/fx/dissolve/worker.js",
