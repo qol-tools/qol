@@ -1,8 +1,7 @@
 use crate::preview_plane::PreviewPlanePayload;
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Sender};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use zbus::zvariant::DynamicType;
 
@@ -22,6 +21,7 @@ struct Availability {
     available: bool,
 }
 
+#[derive(Debug)]
 enum PlaneCommand {
     Show {
         show_id: String,
@@ -54,23 +54,64 @@ fn should_send_show(payload_json: &str, last: Option<&str>) -> bool {
     last != Some(payload_json)
 }
 
-fn command_queue() -> &'static Sender<PlaneCommand> {
-    static QUEUE: OnceLock<Sender<PlaneCommand>> = OnceLock::new();
-    QUEUE.get_or_init(|| {
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            while let Ok(command) = rx.recv() {
-                match command {
-                    PlaneCommand::Show {
-                        show_id,
-                        item_count,
-                        payload_json,
-                    } => run_show_command(show_id, item_count, payload_json),
-                    PlaneCommand::Hide { reason } => run_hide_command(reason),
-                }
+struct CommandQueue {
+    pending: Mutex<Option<PlaneCommand>>,
+    wake: Condvar,
+}
+
+impl CommandQueue {
+    fn new() -> Self {
+        Self {
+            pending: Mutex::new(None),
+            wake: Condvar::new(),
+        }
+    }
+
+    fn enqueue(&self, command: PlaneCommand) -> Result<bool, ()> {
+        let Ok(mut pending) = self.pending.lock() else {
+            return Err(());
+        };
+        let replaced = pending.replace(command).is_some();
+        self.wake.notify_one();
+        Ok(replaced)
+    }
+
+    fn run(self: Arc<Self>) {
+        let mut client = None;
+        loop {
+            let command = {
+                let Ok(pending) = self.pending.lock() else {
+                    return;
+                };
+                let Ok(mut pending) = self.wake.wait_while(pending, |value| value.is_none()) else {
+                    return;
+                };
+                pending.take()
+            };
+            let Some(command) = command else {
+                continue;
+            };
+            match command {
+                PlaneCommand::Show {
+                    show_id,
+                    item_count,
+                    payload_json,
+                } => run_show_command(show_id, item_count, payload_json, &mut client),
+                PlaneCommand::Hide { reason } => run_hide_command(reason, &mut client),
             }
+        }
+    }
+}
+
+fn command_queue() -> &'static Arc<CommandQueue> {
+    static QUEUE: OnceLock<Arc<CommandQueue>> = OnceLock::new();
+    QUEUE.get_or_init(|| {
+        let queue = Arc::new(CommandQueue::new());
+        std::thread::spawn({
+            let worker = Arc::clone(&queue);
+            move || worker.run()
         });
-        tx
+        queue
     })
 }
 
@@ -200,18 +241,26 @@ pub(crate) fn show_async(payload: PreviewPlanePayload) {
         "PREVIEW_PLANE_SHOW",
         "backend=cinnamon_shell show_id={show_id} outcome=queued items={item_count}"
     );
-    if command_queue()
-        .send(PlaneCommand::Show {
-            show_id: show_id.clone(),
-            item_count,
-            payload_json,
-        })
-        .is_err()
-    {
-        qol_runtime::probe!(
+    let enqueue = command_queue().enqueue(PlaneCommand::Show {
+        show_id: show_id.clone(),
+        item_count,
+        payload_json,
+    });
+    match enqueue {
+        Ok(replaced) => {
+            if replaced {
+                qol_runtime::probe!(
+                    "PREVIEW_PLANE_SHOW",
+                    "backend=cinnamon_shell show_id={show_id} outcome=queued items={item_count} coalesced=true"
+                );
+            }
+        }
+        Err(()) => {
+            qol_runtime::probe!(
             "PREVIEW_PLANE_SHOW",
-            "backend=cinnamon_shell show_id={show_id} outcome=error reason=queue_closed items={item_count}"
+            "backend=cinnamon_shell show_id={show_id} outcome=error reason=queue_poisoned items={item_count}"
         );
+        }
     }
 }
 
@@ -223,24 +272,119 @@ pub(crate) fn hide_async(reason: &'static str) {
         "PREVIEW_PLANE_HIDE",
         "backend=cinnamon_shell reason={reason} outcome=queued"
     );
-    if command_queue().send(PlaneCommand::Hide { reason }).is_err() {
+    if command_queue()
+        .enqueue(PlaneCommand::Hide { reason })
+        .is_err()
+    {
         qol_runtime::probe!(
             "PREVIEW_PLANE_HIDE",
-            "backend=cinnamon_shell reason={reason} outcome=error reason=queue_closed"
+            "backend=cinnamon_shell reason={reason} outcome=error reason=queue_poisoned"
         );
     }
 }
 
-fn run_show_command(show_id: String, item_count: usize, payload_json: String) {
-    let started = Instant::now();
-    let result = call_plane_method(SHOW_METHOD, &show_arguments(&payload_json));
-    probe_show_result(&show_id, item_count, started, result);
+struct PlaneClient {
+    proxy: zbus::blocking::Proxy<'static>,
 }
 
-fn run_hide_command(reason: &'static str) {
+impl PlaneClient {
+    fn connect() -> Result<Self, String> {
+        let connection = zbus::blocking::connection::Builder::session()
+            .map_err(|error| format!("session connection: {error}"))?
+            .method_timeout(DBUS_TIMEOUT)
+            .build()
+            .map_err(|error| format!("session connection: {error}"))?;
+        let proxy = zbus::blocking::Proxy::new_owned(connection, DEST, OBJECT_PATH, INTERFACE)
+            .map_err(|error| format!("preview plane proxy: {error}"))?;
+        Ok(Self { proxy })
+    }
+
+    fn call<B>(&self, method: &str, body: &B) -> Result<String, String>
+    where
+        B: serde::Serialize + DynamicType,
+    {
+        let response: String = self
+            .proxy
+            .call(method, body)
+            .map_err(|error| format!("{method} call: {error}"))?;
+        validate_plane_response(&response)?;
+        Ok(response)
+    }
+}
+
+fn call_cached_plane_method<B>(
+    client: &mut Option<PlaneClient>,
+    method: &str,
+    body: &B,
+) -> Result<String, String>
+where
+    B: serde::Serialize + DynamicType,
+{
+    if client.is_none() {
+        *client = Some(PlaneClient::connect()?);
+    }
+    let result = client
+        .as_ref()
+        .ok_or_else(|| "preview plane client unavailable".to_string())?
+        .call(method, body);
+    if result.is_err() {
+        *client = None;
+    }
+    result
+}
+
+fn call_plane_with_recovery<B>(
+    client: &mut Option<PlaneClient>,
+    method: &str,
+    body: &B,
+) -> (Result<String, String>, u8)
+where
+    B: serde::Serialize + DynamicType,
+{
+    let mut result = call_cached_plane_method(client, method, body);
+    let mut recovery_attempts = 0_u8;
+    while result.is_err() && recovery_attempts < 2 {
+        if let Ok(mut last) = last_payload_cache().lock() {
+            *last = None;
+        }
+        super::cinnamon_extension::prepare();
+        recovery_attempts += 1;
+        result = call_cached_plane_method(client, method, body);
+    }
+    (result, recovery_attempts)
+}
+
+fn run_show_command(
+    show_id: String,
+    item_count: usize,
+    payload_json: String,
+    client: &mut Option<PlaneClient>,
+) {
     let started = Instant::now();
-    let result = call_plane_method(HIDE_METHOD, &());
-    probe_hide_result(reason, started, result);
+    let reused_connection = client.is_some();
+    let (result, recovery_attempts) =
+        call_plane_with_recovery(client, SHOW_METHOD, &show_arguments(&payload_json));
+    probe_show_result(
+        &show_id,
+        item_count,
+        started,
+        reused_connection,
+        recovery_attempts,
+        result,
+    );
+}
+
+fn run_hide_command(reason: &'static str, client: &mut Option<PlaneClient>) {
+    let started = Instant::now();
+    let reused_connection = client.is_some();
+    let (result, recovery_attempts) = call_plane_with_recovery(client, HIDE_METHOD, &());
+    probe_hide_result(
+        reason,
+        started,
+        reused_connection,
+        recovery_attempts,
+        result,
+    );
 }
 
 fn show_arguments(payload_json: &str) -> (&str,) {
@@ -251,18 +395,7 @@ fn call_plane_method<B>(method: &str, body: &B) -> Result<String, String>
 where
     B: serde::Serialize + DynamicType,
 {
-    let connection = zbus::blocking::connection::Builder::session()
-        .map_err(|error| format!("session connection: {error}"))?
-        .method_timeout(DBUS_TIMEOUT)
-        .build()
-        .map_err(|error| format!("session connection: {error}"))?;
-    let proxy = zbus::blocking::Proxy::new(&connection, DEST, OBJECT_PATH, INTERFACE)
-        .map_err(|error| format!("preview plane proxy: {error}"))?;
-    let response: String = proxy
-        .call(method, body)
-        .map_err(|error| format!("{method} call: {error}"))?;
-    validate_plane_response(&response)?;
-    Ok(response)
+    PlaneClient::connect()?.call(method, body)
 }
 
 fn validate_plane_response(response: &str) -> Result<(), String> {
@@ -280,6 +413,8 @@ fn probe_show_result(
     show_id: &str,
     item_count: usize,
     started: Instant,
+    reused_connection: bool,
+    recovery_attempts: u8,
     result: Result<String, String>,
 ) {
     #[cfg(debug_assertions)]
@@ -289,24 +424,37 @@ fn probe_show_result(
             Ok(response) => {
                 qol_runtime::probe!(
                     "PREVIEW_PLANE_SHOW",
-                    "backend=cinnamon_shell show_id={show_id} outcome=ok items={item_count} elapsed={elapsed_ms}ms result=\"{}\"",
+                    "backend=cinnamon_shell show_id={show_id} outcome=ok items={item_count} elapsed={elapsed_ms}ms reused_connection={reused_connection} recovery_attempts={recovery_attempts} result=\"{}\"",
                     trim_for_probe(&response)
                 );
             }
             Err(error) => {
                 qol_runtime::probe!(
                     "PREVIEW_PLANE_SHOW",
-                    "backend=cinnamon_shell show_id={show_id} outcome=error items={item_count} elapsed={elapsed_ms}ms error=\"{}\"",
+                    "backend=cinnamon_shell show_id={show_id} outcome=error items={item_count} elapsed={elapsed_ms}ms reused_connection={reused_connection} recovery_attempts={recovery_attempts} error=\"{}\"",
                     trim_for_probe(&error)
                 );
             }
         }
     }
     #[cfg(not(debug_assertions))]
-    let _ = (show_id, item_count, started, result);
+    let _ = (
+        show_id,
+        item_count,
+        started,
+        reused_connection,
+        recovery_attempts,
+        result,
+    );
 }
 
-fn probe_hide_result(reason: &'static str, started: Instant, result: Result<String, String>) {
+fn probe_hide_result(
+    reason: &'static str,
+    started: Instant,
+    reused_connection: bool,
+    recovery_attempts: u8,
+    result: Result<String, String>,
+) {
     #[cfg(debug_assertions)]
     {
         let elapsed_ms = started.elapsed().as_millis();
@@ -314,20 +462,26 @@ fn probe_hide_result(reason: &'static str, started: Instant, result: Result<Stri
             Ok(_) => {
                 qol_runtime::probe!(
                     "PREVIEW_PLANE_HIDE",
-                    "backend=cinnamon_shell reason={reason} outcome=ok elapsed={elapsed_ms}ms"
+                    "backend=cinnamon_shell reason={reason} outcome=ok elapsed={elapsed_ms}ms reused_connection={reused_connection} recovery_attempts={recovery_attempts}"
                 );
             }
             Err(error) => {
                 qol_runtime::probe!(
                     "PREVIEW_PLANE_HIDE",
-                    "backend=cinnamon_shell reason={reason} outcome=error elapsed={elapsed_ms}ms error=\"{}\"",
+                    "backend=cinnamon_shell reason={reason} outcome=error elapsed={elapsed_ms}ms reused_connection={reused_connection} recovery_attempts={recovery_attempts} error=\"{}\"",
                     trim_for_probe(&error)
                 );
             }
         }
     }
     #[cfg(not(debug_assertions))]
-    let _ = (reason, started, result);
+    let _ = (
+        reason,
+        started,
+        reused_connection,
+        recovery_attempts,
+        result,
+    );
 }
 
 #[cfg(debug_assertions)]
@@ -340,7 +494,7 @@ fn trim_for_probe(s: &str) -> String {
 mod tests {
     use super::{
         availability_decision, should_send_show, show_arguments, validate_plane_response,
-        Availability, AvailabilityDecision, AVAILABILITY_TTL,
+        Availability, AvailabilityDecision, CommandQueue, PlaneCommand, AVAILABILITY_TTL,
     };
     use std::time::{Duration, Instant};
     use zbus::zvariant::{serialized::Context, to_bytes, LE};
@@ -440,5 +594,30 @@ mod tests {
                 "cache: {cache:?}"
             );
         }
+    }
+
+    #[test]
+    fn command_queue_replaces_stale_pending_commands() {
+        let queue = CommandQueue::new();
+        assert!(!queue
+            .enqueue(PlaneCommand::Hide { reason: "first" })
+            .unwrap());
+        assert!(queue
+            .enqueue(PlaneCommand::Hide { reason: "latest" })
+            .unwrap());
+        let taken = queue.pending.lock().unwrap().take();
+        match taken {
+            Some(PlaneCommand::Hide { reason }) => {
+                assert_eq!(
+                    reason, "latest",
+                    "worker must drain only the newest command"
+                )
+            }
+            other => panic!("expected the coalesced hide, got {other:?}"),
+        }
+        assert!(
+            queue.pending.lock().unwrap().is_none(),
+            "a drained queue holds nothing else"
+        );
     }
 }
