@@ -52,7 +52,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alt-tab"
-version = "0.57.0"
+version = "0.57.1"
 dependencies = [
  "block2",
  "core-foundation 0.10.0",
@@ -6495,7 +6495,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.45.0"
+version = "3.45.1"
 dependencies = [
  "anyhow",
  "axum",
