@@ -742,7 +742,6 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
 
 .palette-item[data-selected-surface] {
     --selected-surface-wedge-z: calc(var(--z-selection-wedge) + 1);
-    --selected-surface-wedge-max-glide: 56;
 }
 
 .palette-item:hover,

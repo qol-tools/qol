@@ -37,8 +37,6 @@ export const FIELD_MAP = {
     gamepad: GamepadField,
 };
 
-export const SUPPORTED_FIELD_KINDS = Object.freeze(Object.keys(FIELD_MAP));
-
 export function renderField(field) {
     if (isSliderNumberField(field)) {
         return html`<${SliderField} key=${field.id} field=${field} />`;

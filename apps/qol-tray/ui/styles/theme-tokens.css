@@ -15,29 +15,19 @@
     --slate-200: var(--qol-tray-slate-200);
     --slate-100: var(--qol-reference-slate-100);
 
-    --blue-700: var(--qol-tray-blue-700);
-    --blue-600: var(--qol-tray-blue-600);
     --blue-500: var(--qol-tray-blue-500);
     --blue-400: var(--qol-reference-blue-400);
-    --blue-300: var(--qol-tray-blue-300);
 
     --green-700: var(--qol-tray-green-700);
-    --green-600: var(--qol-tray-green-600);
     --green-500: var(--qol-tray-green-500);
     --green-400: var(--qol-reference-green-400);
     --green-300: var(--qol-tray-green-300);
 
-    --red-700: var(--qol-tray-red-700);
     --red-600: var(--qol-tray-red-600);
     --red-500: var(--qol-reference-red-500);
-    --red-400: var(--qol-tray-red-400);
     --red-300: var(--qol-tray-red-300);
 
-    --amber-700: var(--qol-tray-amber-700);
-    --amber-600: var(--qol-tray-amber-600);
     --amber-500: var(--qol-reference-amber-500);
-    --amber-400: var(--qol-tray-amber-400);
-    --amber-300: var(--qol-tray-amber-300);
 
     --accent-rgb: var(--qol-system-accent-rgb);
     --success-rgb: var(--qol-system-success-rgb);
@@ -87,7 +77,6 @@
     --state-warning-border: rgba(var(--warning-rgb), 0.35);
     --state-info-border-strong: rgba(var(--accent-rgb), 0.4);
 
-    --layer-paper-02: rgba(var(--paper-rgb), 0.02);
     --layer-paper-03: rgba(var(--paper-rgb), 0.03);
     --layer-paper-05: rgba(var(--paper-rgb), 0.05);
     --layer-paper-06: rgba(var(--paper-rgb), 0.06);
@@ -95,14 +84,10 @@
     --layer-paper-08: rgba(var(--paper-rgb), 0.08);
     --layer-paper-10: rgba(var(--paper-rgb), 0.1);
     --layer-paper-12: rgba(var(--paper-rgb), 0.12);
-    --layer-paper-13: rgba(var(--paper-rgb), 0.13);
-    --layer-paper-14: rgba(var(--paper-rgb), 0.14);
     --layer-paper-15: rgba(var(--paper-rgb), 0.15);
     --layer-paper-16: rgba(var(--paper-rgb), 0.16);
-    --layer-paper-22: rgba(var(--paper-rgb), 0.22);
     --layer-paper-28: rgba(var(--paper-rgb), 0.28);
     --layer-paper-30: rgba(var(--paper-rgb), 0.3);
-    --layer-paper-100: rgba(var(--paper-rgb), 1);
 
     --layer-ink-18: rgba(var(--ink-rgb), 0.18);
     --layer-ink-20: rgba(var(--ink-rgb), 0.2);
@@ -133,7 +118,6 @@
 
     --accent: rgb(var(--accent-rgb));
     --accent-hover: var(--qol-accent-amber-hover);
-    --accent-glow: rgba(var(--accent-rgb), 0.3);
     --accent-glow-soft: rgba(var(--accent-rgb), 0.2);
     --accent-glow-faint: rgba(var(--accent-rgb), 0.18);
     --warning-glow-soft: rgba(var(--warning-rgb), 0.25);
@@ -190,7 +174,6 @@
     --border-w-1: 1px;
     --border-w-2: 2px;
     --border-w-3: 3px;
-    --space-0: 0;
     --space-1: 0.25rem;
     --space-1-1: 0.1rem;
     --space-1-5: 0.375rem;
@@ -220,19 +203,13 @@
     --pad-header-row: 0.7rem var(--space-4);
     --pad-list-row: 0.85rem var(--space-4);
     --pad-token-input: 0.6rem var(--space-4);
-    --pad-token-btn: var(--space-2) var(--space-4);
-    --pad-dev-tag: var(--space-1) 0.56rem;
     --pad-dev-content-mobile: var(--space-4) var(--space-4) var(--space-2);
     --pad-dev-frame-mobile: 0.9rem 0.9rem 0.18rem;
-    --bp-dev-md: 920px;
-    --bp-dev-sm: 860px;
-    --bp-dev-xs: 620px;
 
     --size-sidebar: 200px;
     --size-page-header: 48px;
     --size-content-max: 1200px;
     --size-grid-card-min: 280px;
-    --size-grid-card-max: 360px;
     --size-row-sm: 60px;
     --size-row-md: 64px;
     --size-card-min-h: 160px;
@@ -260,7 +237,6 @@
     --size-version-row-min: 2.55rem;
     --size-cpu-value-min: 3.85rem;
     --offset-menu-trigger-top: 0.38rem;
-    --offset-menu-trigger-right: 0.18rem;
 
     --z-base: 0;
     --z-1: 1;
@@ -285,7 +261,6 @@
     --fw-heavy: 650;
     --fw-bold: 700;
     --fs-caption-2: 0.62rem;
-    --fs-caption-2-plus: 0.64rem;
     --fs-caption-1-minus: 0.67rem;
     --fs-caption-1-plus: 0.68rem;
     --fs-caption: 0.69rem;
@@ -328,11 +303,7 @@
     --dur-spin: 0.8s;
     --transition: var(--dur-base);
 
-    --layer-ink-10: rgba(var(--ink-rgb), 0.1);
-    --layer-ink-12: rgba(var(--ink-rgb), 0.12);
     --layer-ink-50: rgba(var(--ink-rgb), 0.5);
-    --hairline: var(--layer-paper-07);
-    --hairline-strong: var(--layer-paper-10);
     --card-top-highlight: inset 0 1px 0 var(--layer-paper-08);
     --elevation-crisp-1: var(--card-top-highlight), 0 1px 2px var(--layer-ink-50), 0 4px 14px var(--layer-ink-35);
     --elevation-crisp-2: var(--card-top-highlight), 0 1px 2px var(--layer-ink-50), 0 8px 24px var(--layer-ink-45);

@@ -71,13 +71,6 @@ export function profileHealthLabel(syncStatus) {
     return 'Cloud sync not configured';
 }
 
-export function profileRemoteSummary(syncStatus) {
-    if (!syncStatus?.repo_url) {
-        return 'Cloud sync is not configured yet';
-    }
-    return `GitHub · ${syncStatus.repo_url}`;
-}
-
 export function connectActionLabel(configured, _providerKind) {
     if (configured) {
         return 'Save and Sync';

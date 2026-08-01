@@ -1,21 +1,6 @@
 import { clampIndex, sortByName, matchesQuery } from '../../utils/collections.js';
 import { resolvePluginVersion } from '../../utils/plugin-version.js';
 
-export function createStoreState() {
-    return {
-        plugins: [],
-        selectedIndex: 0,
-        searchQuery: '',
-        hasToken: false,
-        showTokenInput: false,
-        rateLimited: false,
-        cacheAgeSecs: null,
-        loading: false,
-        loadToken: 0,
-        feedback: null
-    };
-}
-
 export function formatCacheAge(secs) {
     if (secs === null || secs === undefined) return '';
     if (secs < 60) return 'just now';
@@ -23,16 +8,12 @@ export function formatCacheAge(secs) {
     return `${Math.floor(secs / 3600)}h ago`;
 }
 
-export function normalizeSearchQuery(value) {
-    return String(value ?? '').toLowerCase();
-}
-
 export function getFilteredPlugins(plugins, searchQuery) {
     if (!searchQuery) return plugins;
     return plugins.filter(p => matchesQuery([p?.name, p?.description], searchQuery));
 }
 
-export { clampIndex as clampSelectedIndex, sortByName as sortPluginsByName };
+export { sortByName as sortPluginsByName };
 
 export function resolveSelectedIndex(filtered, selectedId, fallbackIndex = 0) {
     if (!Array.isArray(filtered) || filtered.length === 0) return 0;

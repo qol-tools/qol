@@ -34,13 +34,6 @@ export function navigateGrid(selector, selectedIndex, direction) {
     }
 }
 
-export function useListNav(total, selectedIndex, setSelectedIndex) {
-    return useCallback((delta) => {
-        if (total === 0) return;
-        setSelectedIndex(i => Math.max(0, Math.min(total - 1, i + delta)));
-    }, [total, setSelectedIndex]);
-}
-
 function gridSelectionModel(selector, selectedIndex) {
     const rows = gridRows(selector);
     if (rows.length === 0) return null;

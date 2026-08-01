@@ -1,5 +1,5 @@
 import { html } from '../../lib/html.js';
-import { useCallback, useEffect, useMemo, useRef } from 'preact/hooks';
+import { useCallback, useMemo, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from './context.js';
 import {
     buildBranchOwnerMap,
@@ -11,61 +11,10 @@ import {
 } from '../../lib/qol-config.js';
 import { renderField, fieldSurfaceAttrs } from './field-map.js';
 import { dissolveIn, DISSOLVE_PRESETS } from '../../fx/dissolve/index.js';
-import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
 import { Surface } from '../../lib/components/Surface.js';
 import { PageShell } from '../../components/PageShell.js';
 import { PluginVersion } from '../../components/PluginVersion.js';
 import { findPluginById, readInstalledCache } from '../plugins/data.js';
-
-function useEscapeFallback(onClose, active) {
-    useEffect(() => {
-        if (!active) return undefined;
-        const onKey = (event) => {
-            if (event.key !== 'Escape') return;
-            event.preventDefault();
-            event.stopPropagation();
-            onClose();
-        };
-        document.addEventListener('keydown', onKey, true);
-        return () => document.removeEventListener('keydown', onKey, true);
-    }, [onClose, active]);
-}
-
-export function PluginConfigView({ onClose }) {
-    const ctx = usePluginConfigContext();
-    const isPlaceholder = !ctx || ctx.loading || (ctx && ctx.sections && ctx.sections.length === 0);
-    useEscapeFallback(onClose, isPlaceholder);
-
-    const section = ctx?.activeSection;
-
-    if (!ctx || ctx.loading) {
-        return html`
-            <div class="plugin-config-loading" onClick=${onClose} title="Press Escape or click to return">
-                Loading configuration...
-            </div>
-        `;
-    }
-    if (ctx.sections.length === 0) {
-        return html`
-            <div class="plugin-config-loading" onClick=${onClose} title="Press Escape or click to return">
-                No settings available.
-            </div>
-        `;
-    }
-
-    return html`
-        <${SurfaceContainer} className="plugin-config-detail" tabIndex="-1">
-            ${section && html`
-                <div class="config-detail-content">
-                    ${section.id !== '_root' && section.description && html`
-                        <p class="section-copy">${section.description}</p>
-                    `}
-                    <${ConfigSection} fields=${section.fields} />
-                </div>
-            `}
-        <//>
-    `;
-}
 
 export function PluginConfigSectionView({ pluginId, sectionId, onClose }) {
     const ctx = usePluginConfigContext();

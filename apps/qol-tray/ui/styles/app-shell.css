@@ -420,7 +420,6 @@ body {
 }
 
 [data-selected-surface] {
-    --selected-surface-wedge-max-glide: 120;
     --selected-surface-wedge-rest-x: 0px;
     --selected-surface-wedge-rest-y: 0px;
     --selected-surface-wedge-gap-x: 0px;

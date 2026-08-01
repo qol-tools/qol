@@ -4,10 +4,6 @@ export function isVisible(el) {
     return el.getClientRects().length > 0;
 }
 
-export function activateSurface(el) {
-    if (el instanceof HTMLElement) el.click();
-}
-
 export function surfaceContainsChildContainer(el) {
     if (!(el instanceof HTMLElement)) return false;
     const child = el.querySelector('[data-surface-container]');

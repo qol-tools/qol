@@ -74,10 +74,6 @@ export function setBackendTargets(model, targetIds) {
     };
 }
 
-export function hasActiveBackendTargets(model) {
-    return model.source === 'backend' && model.activeTargets.size > 0;
-}
-
 export function completeBackendTarget(model, targetId, mockTesting) {
     if (!mockTesting || model.source !== 'backend') {
         return { model, mockTesting, completed: false };
@@ -95,26 +91,6 @@ export function completeBackendTarget(model, targetId, mockTesting) {
         }),
         mockTesting: done ? false : mockTesting,
         completed: done
-    };
-}
-
-export function pruneInactiveTargets(model, runningById) {
-    const nextTargets = cloneTargets(model.activeTargets);
-    let changed = false;
-    for (const targetId of model.activeTargets) {
-        if (runningById.get(targetId) !== true) {
-            nextTargets.delete(targetId);
-            changed = true;
-        }
-    }
-    const done = nextTargets.size === 0;
-    return {
-        model: withModel(model, {
-            source: done ? null : model.source,
-            activeTargets: nextTargets
-        }),
-        changed,
-        done
     };
 }
 

@@ -17,8 +17,6 @@ export function useOverlayHide({
     );
 }
 
-export const useViewportHide = useOverlayHide;
-
 function attach(el, camera, navigation, alwaysVisible, occludeSelector) {
     if (!el) return undefined;
     if (alwaysVisible) {
