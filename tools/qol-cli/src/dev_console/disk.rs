@@ -33,6 +33,7 @@ impl DiskPanel {
 
 pub(super) struct DiskScan {
     pub(super) rx: Receiver<Result<DiskReport, String>>,
+    pub(super) announced: bool,
     progress: Arc<Mutex<String>>,
     started_at_ms: u64,
 }
@@ -90,10 +91,17 @@ pub(super) fn start_disk_scan(dash: &mut Dash) {
     if dash.disk.scan.is_some() {
         return;
     }
-    dash.disk.scan = Some(spawn_disk_scan());
+    dash.disk.scan = Some(spawn_disk_scan(true));
 }
 
-fn spawn_disk_scan() -> DiskScan {
+pub(super) fn start_boot_disk_scan(dash: &mut Dash) {
+    if dash.disk.scan.is_some() {
+        return;
+    }
+    dash.disk.scan = Some(spawn_disk_scan(false));
+}
+
+fn spawn_disk_scan(announced: bool) -> DiskScan {
     let (tx, rx) = channel();
     let progress = Arc::new(Mutex::new(String::new()));
     let worker_progress = Arc::clone(&progress);
@@ -102,6 +110,7 @@ fn spawn_disk_scan() -> DiskScan {
     });
     DiskScan {
         rx,
+        announced,
         progress,
         started_at_ms: now_unix_ms(),
     }
@@ -338,7 +347,7 @@ mod tests {
             error: None,
         };
         let scanning = DiskPanel {
-            scan: Some(spawn_never_finishing_scan()),
+            scan: Some(never_finishing_scan(true)),
             ..DiskPanel::new()
         };
         let failed = DiskPanel {
@@ -358,14 +367,30 @@ mod tests {
         }
     }
 
-    fn spawn_never_finishing_scan() -> DiskScan {
-        let (_tx, rx) = channel();
-        std::mem::forget(_tx);
+    fn never_finishing_scan(announced: bool) -> DiskScan {
+        let (tx, rx) = channel();
+        std::mem::forget(tx);
         DiskScan {
             rx,
+            announced,
             progress: Arc::new(Mutex::new(String::new())),
             started_at_ms: 0,
         }
+    }
+
+    #[test]
+    fn only_announced_scans_surface_as_activity() {
+        let mut dash = Dash::new(Vec::new());
+        dash.disk.scan = Some(never_finishing_scan(false));
+        assert!(
+            dash.activity().is_none(),
+            "the boot scan must not hold the frame busy"
+        );
+
+        dash.disk.scan = Some(never_finishing_scan(true));
+        let activity = dash.activity().expect("manual scan announces");
+        assert_eq!(activity.title, "disk");
+        assert_eq!(activity.phase, "scanning");
     }
 
     #[test]

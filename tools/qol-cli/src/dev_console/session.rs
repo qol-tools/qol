@@ -16,7 +16,7 @@ use super::console_state::{load_console_state, save_console_state};
 use super::dash::{
     flush_pokes, Dash, Health, HealthSnapshot, LinksState, Probes, ReloadOutcome, Row, View, ROWS,
 };
-use super::disk::{apply_disk_outcome, open_disk, start_disk_scan};
+use super::disk::{apply_disk_outcome, open_disk, start_boot_disk_scan, start_disk_scan};
 use super::doctor::{
     apply_doctor_outcome, doctor_scroll_len, open_doctor, spawn_doctor_probe, DoctorMode,
 };
@@ -69,6 +69,7 @@ pub(crate) fn run_session(
     dash.start_log_file();
     dash.boot_rx = boot;
     start_trace(&mut dash);
+    start_boot_disk_scan(&mut dash);
     let mut terminal = ratatui::init();
     let mut lines = lines;
     let result = tui_session(&mut terminal, child, &mut lines, &mut probes, &mut dash);
