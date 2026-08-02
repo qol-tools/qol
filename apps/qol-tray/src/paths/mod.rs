@@ -177,6 +177,10 @@ pub fn profile_sync_config_path() -> Result<PathBuf> {
     profile_dir().map(|p| p.join("sync.json"))
 }
 
+pub fn profile_os_dir() -> Result<PathBuf> {
+    active_scope_store().map(|s| s.os_dir())
+}
+
 pub fn profile_plugins_lock_path() -> Result<PathBuf> {
     active_scope_store().map(|s| s.plugins_lock_path())
 }

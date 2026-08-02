@@ -6514,6 +6514,7 @@ dependencies = [
  "libc",
  "log",
  "mach2 0.6.0",
+ "notify",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
