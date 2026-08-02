@@ -261,12 +261,18 @@ fn log_applied(action: &FixAction) {
             qol_combo,
             orphaned,
         } => {
+            let lifecycle = if *orphaned {
+                "quarantined until the desktop restarts"
+            } else {
+                "restored when qol-tray exits"
+            };
             log::info!(
-                "doctor: took {} back from {}{} (orphaned={}, restored when qol-tray exits)",
+                "doctor: took {} back from {}{} (orphaned={}, {})",
                 qol_combo,
                 dir,
                 key,
-                orphaned
+                orphaned,
+                lifecycle
             );
         }
         FixAction::DisableSymbolicHotkey {

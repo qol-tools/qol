@@ -104,6 +104,8 @@ pub(crate) struct BindingMutation {
 pub struct RestoreSummary {
     pub restored: usize,
     pub abandoned: usize,
+    pub quarantined: usize,
+    pub settled: usize,
     pub failures: Vec<String>,
 }
 
@@ -166,7 +168,8 @@ pub fn restore_all() -> RestoreSummary {
     let Some(root) = ledger::claims_dir() else {
         return RestoreSummary::default();
     };
-    restore_all_in(&root, &mut HostStore)
+    let compositor_started_at = platform::compositor().map(|found| found.started_at);
+    restore_all_in(&root, &mut HostStore, compositor_started_at)
 }
 
 fn take_over_in(
@@ -204,20 +207,47 @@ fn take_over_in(
     Ok(())
 }
 
-fn restore_all_in(root: &std::path::Path, store: &mut dyn BindingStore) -> RestoreSummary {
+fn restore_all_in(
+    root: &std::path::Path,
+    store: &mut dyn BindingStore,
+    compositor_started_at: Option<SystemTime>,
+) -> RestoreSummary {
     let mut summary = RestoreSummary::default();
     for claim in ledger::outstanding(root) {
         let full_key = dconf::full_key(&claim.dir, &claim.key);
         let current = store.read(&full_key).ok();
-        match ledger::decide_restore(&claim, current.as_deref()) {
-            ledger::RestoreDecision::Abandon => summary.abandoned += 1,
+        let decision = ledger::decide_restore(&claim, current.as_deref(), compositor_started_at);
+        let clear_claim = match decision {
+            ledger::RestoreDecision::Abandon => {
+                summary.abandoned += 1;
+                true
+            }
             ledger::RestoreDecision::Rewrite => {
                 if let Err(error) = store.write(&full_key, &claim.previous) {
                     summary.failures.push(format!("{full_key}: {error}"));
                     continue;
                 }
                 summary.restored += 1;
+                true
             }
+            ledger::RestoreDecision::Quarantine => {
+                summary.quarantined += 1;
+                false
+            }
+            ledger::RestoreDecision::Settle => {
+                summary.settled += 1;
+                true
+            }
+        };
+        qol_runtime::probe!(
+            "HOTKEY_TAKEOVER",
+            "phase=restore decision={} key={} combo={}",
+            decision.trace_label(),
+            qol_runtime::probe::token(&full_key),
+            qol_runtime::probe::token(&claim.qol_combo)
+        );
+        if !clear_claim {
+            continue;
         }
         if let Err(error) = ledger::clear(root, &claim) {
             summary.failures.push(format!("{full_key}: {error}"));
@@ -269,6 +299,7 @@ fn restart_hint(name: &str) -> &'static str {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::time::Duration;
 
     const ORPHAN_DIR: &str = "/org/cinnamon/desktop/keybindings/custom2/";
     const ORIGINAL: &str = "['<Shift><Super>s']";
@@ -327,19 +358,26 @@ mod tests {
         }
     }
 
+    fn managed_mutation() -> BindingMutation {
+        BindingMutation {
+            reach: BindingReach::Managed,
+            ..orphan_mutation()
+        }
+    }
+
     fn full_key() -> String {
         dconf::full_key(ORPHAN_DIR, "binding")
     }
 
     #[test]
-    fn take_over_then_restore_leaves_the_host_exactly_as_found() {
+    fn managed_take_over_then_restore_leaves_the_host_exactly_as_found() {
         let root = tempfile::tempdir().expect("tempdir");
         let mut store = FakeStore::with(&full_key(), ORIGINAL);
 
-        take_over_in(root.path(), &mut store, &orphan_mutation()).expect("take over");
+        take_over_in(root.path(), &mut store, &managed_mutation()).expect("take over");
         assert_eq!(store.get(&full_key()), Some("@as []"));
 
-        let summary = restore_all_in(root.path(), &mut store);
+        let summary = restore_all_in(root.path(), &mut store, None);
         assert_eq!(summary.restored, 1);
         assert_eq!(summary.abandoned, 0);
         assert!(summary.failures.is_empty(), "{:?}", summary.failures);
@@ -349,10 +387,37 @@ mod tests {
             "the desktop shortcut must come back byte-identical"
         );
         assert_eq!(
-            restore_all_in(root.path(), &mut store),
+            restore_all_in(root.path(), &mut store, None),
             RestoreSummary::default(),
             "a second restore must be a no-op, not a second rewrite"
         );
+    }
+
+    #[test]
+    fn orphan_takeover_stays_cleared_and_claimed_across_restore() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut store = FakeStore::with(&full_key(), ORIGINAL);
+
+        take_over_in(root.path(), &mut store, &orphan_mutation()).expect("take over");
+        let summary = restore_all_in(root.path(), &mut store, None);
+
+        assert_eq!(summary.restored, 0);
+        assert_eq!(summary.abandoned, 0);
+        assert_eq!(summary.quarantined, 1);
+        assert_eq!(summary.settled, 0);
+        assert!(summary.failures.is_empty(), "{:?}", summary.failures);
+        assert_eq!(store.get(&full_key()), Some("@as []"));
+        let claims = ledger::outstanding(root.path());
+        assert_eq!(claims.len(), 1);
+
+        let summary = restore_all_in(
+            root.path(),
+            &mut store,
+            Some(claims[0].recorded_at + Duration::from_secs(1)),
+        );
+        assert_eq!(summary.settled, 1);
+        assert_eq!(store.get(&full_key()), Some("@as []"));
+        assert!(ledger::outstanding(root.path()).is_empty());
     }
 
     #[test]
@@ -360,12 +425,12 @@ mod tests {
         let root = tempfile::tempdir().expect("tempdir");
         let mut store = FakeStore::with(&full_key(), ORIGINAL);
 
-        take_over_in(root.path(), &mut store, &orphan_mutation()).expect("first take over");
-        let mut second = orphan_mutation();
+        take_over_in(root.path(), &mut store, &managed_mutation()).expect("first take over");
+        let mut second = managed_mutation();
         second.next = "['XF86Keyboard']".into();
         take_over_in(root.path(), &mut store, &second).expect("second take over");
 
-        restore_all_in(root.path(), &mut store);
+        restore_all_in(root.path(), &mut store, None);
         assert_eq!(
             store.get(&full_key()),
             Some(ORIGINAL),
@@ -384,7 +449,7 @@ mod tests {
         assert!(error.to_string().contains("denied"), "{error}");
         assert_eq!(store.get(&full_key()), Some(ORIGINAL));
         assert_eq!(
-            restore_all_in(root.path(), &mut store),
+            restore_all_in(root.path(), &mut store, None),
             RestoreSummary::default()
         );
     }
@@ -398,7 +463,7 @@ mod tests {
             .write(&full_key(), "['<Super>F9']")
             .expect("user rebinds");
 
-        let summary = restore_all_in(root.path(), &mut store);
+        let summary = restore_all_in(root.path(), &mut store, None);
         assert_eq!(summary.abandoned, 1);
         assert_eq!(summary.restored, 0);
         assert_eq!(
@@ -474,7 +539,7 @@ mod tests {
             "{error}"
         );
         assert_eq!(
-            restore_all_in(root.path(), &mut store),
+            restore_all_in(root.path(), &mut store, None),
             RestoreSummary::default()
         );
     }

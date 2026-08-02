@@ -22,6 +22,19 @@ pub(crate) struct Claim {
 pub(crate) enum RestoreDecision {
     Rewrite,
     Abandon,
+    Quarantine,
+    Settle,
+}
+
+impl RestoreDecision {
+    pub(crate) fn trace_label(self) -> &'static str {
+        match self {
+            Self::Rewrite => "rewrite",
+            Self::Abandon => "abandon",
+            Self::Quarantine => "quarantine",
+            Self::Settle => "settle",
+        }
+    }
 }
 
 pub(crate) fn claims_dir() -> Option<PathBuf> {
@@ -66,12 +79,21 @@ pub(crate) fn outstanding(root: &Path) -> Vec<Claim> {
         .collect()
 }
 
-pub(crate) fn decide_restore(claim: &Claim, current: Option<&str>) -> RestoreDecision {
-    match current {
-        None => RestoreDecision::Rewrite,
-        Some(value) if value.trim() == claim.applied.trim() => RestoreDecision::Rewrite,
-        Some(_) => RestoreDecision::Abandon,
+pub(crate) fn decide_restore(
+    claim: &Claim,
+    current: Option<&str>,
+    compositor_started_at: Option<SystemTime>,
+) -> RestoreDecision {
+    if current.is_some_and(|value| value.trim() != claim.applied.trim()) {
+        return RestoreDecision::Abandon;
     }
+    if claim.reach != BindingReach::LegacyOrphan {
+        return RestoreDecision::Rewrite;
+    }
+    if restart_is_pending(claim, compositor_started_at) {
+        return RestoreDecision::Quarantine;
+    }
+    RestoreDecision::Settle
 }
 
 pub(crate) fn restart_pending(
@@ -80,12 +102,18 @@ pub(crate) fn restart_pending(
 ) -> Vec<&Claim> {
     claims
         .iter()
-        .filter(|claim| claim.reach == BindingReach::LegacyOrphan)
-        .filter(|claim| match compositor_started_at {
-            None => true,
-            Some(started) => started <= claim.recorded_at,
-        })
+        .filter(|claim| restart_is_pending(claim, compositor_started_at))
         .collect()
+}
+
+fn restart_is_pending(claim: &Claim, compositor_started_at: Option<SystemTime>) -> bool {
+    if claim.reach != BindingReach::LegacyOrphan {
+        return false;
+    }
+    match compositor_started_at {
+        None => true,
+        Some(started) => started <= claim.recorded_at,
+    }
 }
 
 #[cfg(test)]
@@ -178,24 +206,41 @@ mod tests {
     }
 
     #[test]
-    fn restore_is_abandoned_when_the_user_changed_the_binding_behind_us() {
-        let entry = claim(
-            "/org/cinnamon/desktop/keybindings/custom2/",
-            BindingReach::LegacyOrphan,
-            SystemTime::UNIX_EPOCH,
-        );
+    fn restore_policy_keeps_managed_bindings_reversible_and_orphans_quarantined() {
+        let recorded_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let managed = claim("/wm/", BindingReach::Managed, recorded_at);
+        let orphan = claim("/custom2/", BindingReach::LegacyOrphan, recorded_at);
+        let before = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(500));
+        let after = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_500));
         let cases = [
-            (None, RestoreDecision::Rewrite),
-            (Some("@as []"), RestoreDecision::Rewrite),
-            (Some("  @as []  "), RestoreDecision::Rewrite),
-            (Some("['<Super>k']"), RestoreDecision::Abandon),
-            (Some(""), RestoreDecision::Abandon),
+            (&managed, None, None, RestoreDecision::Rewrite),
+            (&managed, Some("@as []"), after, RestoreDecision::Rewrite),
+            (
+                &managed,
+                Some("['<Super>k']"),
+                None,
+                RestoreDecision::Abandon,
+            ),
+            (&orphan, None, None, RestoreDecision::Quarantine),
+            (
+                &orphan,
+                Some("  @as []  "),
+                before,
+                RestoreDecision::Quarantine,
+            ),
+            (&orphan, Some("@as []"), after, RestoreDecision::Settle),
+            (
+                &orphan,
+                Some("['<Super>k']"),
+                after,
+                RestoreDecision::Abandon,
+            ),
         ];
-        for (current, want) in cases {
+        for (entry, current, compositor_started_at, want) in cases {
             assert_eq!(
-                decide_restore(&entry, current),
+                decide_restore(entry, current, compositor_started_at),
                 want,
-                "current: {current:?}"
+                "entry: {entry:?}, current: {current:?}, compositor: {compositor_started_at:?}"
             );
         }
     }

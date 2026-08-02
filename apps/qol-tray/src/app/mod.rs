@@ -153,13 +153,19 @@ fn log_binding_restore(phase: &str, summary: hotkeys::RestoreSummary) {
     for failure in &summary.failures {
         log::warn!("[hotkey-takeover] {phase} restore failed: {failure}");
     }
-    if summary.restored == 0 && summary.abandoned == 0 {
+    if summary.restored == 0
+        && summary.abandoned == 0
+        && summary.quarantined == 0
+        && summary.settled == 0
+    {
         return;
     }
     log::info!(
-        "[hotkey-takeover] {phase} restore: {} desktop shortcut(s) put back, {} left to the user",
+        "[hotkey-takeover] {phase} restore: {} managed shortcut(s) put back, {} left to the user, {} orphan cleanup(s) quarantined, {} settled after desktop restart",
         summary.restored,
-        summary.abandoned
+        summary.abandoned,
+        summary.quarantined,
+        summary.settled
     );
 }
 

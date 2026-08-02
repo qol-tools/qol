@@ -1,6 +1,3 @@
-//! Reproduces a desktop-environment hotkey shadow in the guest and proves
-//! qol-tray takes the chord back reversibly.
-
 use std::thread;
 use std::time::Duration;
 
@@ -65,19 +62,24 @@ pub(super) fn run(vm: &BootedVm) -> Result<Verdict> {
 
     set_hotkeys(&mut guest, &auth, &baseline)?;
     shutdown_tray(&mut guest, &auth)?;
-    require_restored(&mut guest)?;
+    require_reconciled(&mut guest, "after qol-tray exited")?;
+
+    auth = launch_tray_and_wait_api(&mut guest)?;
+    require_reconciled(&mut guest, "after qol-tray restarted")?;
+    shutdown_tray(&mut guest, &auth)?;
+    require_reconciled(&mut guest, "after the second shutdown")?;
 
     let artifacts = write_artifacts(vm, &mut guest)?;
     step_label(
         "shadow",
         StepKind::Success,
-        "managed and orphaned desktop shortcuts were taken over, exercised, and restored",
+        "managed shortcuts were restored while orphan cleanup stayed quarantined",
     );
     Ok(Verdict {
         pass: true,
         traces: vec![
             format!("{MANAGED_KEY} taken over and restored"),
-            format!("{ORPHAN_KEY} taken over and restored"),
+            format!("{ORPHAN_KEY} cleared across a tray restart"),
         ],
         artifacts,
     })
@@ -152,17 +154,25 @@ fn require_chord_reaches_qol(
     Ok(())
 }
 
-fn require_restored(guest: &mut GuestControlClient) -> Result<()> {
-    require_binding(guest, MANAGED_KEY, GTK_COMBO, "after qol-tray exited")?;
-    require_binding(guest, ORPHAN_KEY, GTK_COMBO, "after qol-tray exited")?;
+fn require_reconciled(guest: &mut GuestControlClient, phase: &str) -> Result<()> {
+    require_binding(guest, MANAGED_KEY, GTK_COMBO, phase)?;
+    require_binding(guest, ORPHAN_KEY, CLEARED, phase)?;
     let markers = claim_markers(guest)?;
-    if !markers.is_empty() {
-        bail!("takeover claims outlived the qol-tray process: {markers:?}");
+    if markers.len() != 1 {
+        bail!("expected one quarantined orphan claim {phase}, found {markers:?}");
+    }
+    let body = require_exec(
+        guest,
+        command("/usr/bin/cat", &[&markers[0]]),
+        COMMAND_TIMEOUT,
+    )?;
+    if !body.stdout.contains("legacy_orphan") || !body.stdout.contains(QOL_COMBO) {
+        bail!("quarantined claim {phase} is not the orphaned shortcut: {body:?}");
     }
     step_label(
-        "restore",
+        "reconcile",
         StepKind::Success,
-        "the host was left exactly as found",
+        "the managed shortcut was restored and the orphan remained cleared",
     );
     Ok(())
 }
@@ -256,6 +266,13 @@ fn write_artifacts(
         command("/usr/bin/grep", &["HOTKEY_", TRACE_LOG_PATH]),
         COMMAND_TIMEOUT,
     )?;
+    if !trace
+        .stdout
+        .lines()
+        .any(|line| line.contains("HOTKEY_TAKEOVER") && line.contains("decision=quarantine"))
+    {
+        bail!("hotkey trace does not record the orphan quarantine decision");
+    }
     let trace_path = dir.join("hotkey-shadow-trace.log");
     std::fs::write(&trace_path, &trace.stdout)
         .with_context(|| format!("failed to write {}", trace_path.display()))?;
