@@ -370,15 +370,13 @@ impl CargoPluginBuilder for CargoCommandPluginBuilder {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::process::Command;
 
-    #[cfg(unix)]
     struct ChildGuard(Option<Child>);
 
-    #[cfg(unix)]
     impl Drop for ChildGuard {
         fn drop(&mut self) {
             if let Some(mut child) = self.0.take() {
@@ -387,7 +385,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn timeout_terminates_and_reaps_the_owned_process_tree() {
         let temp = tempfile::tempdir().expect("temporary directory");
