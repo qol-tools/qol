@@ -57,22 +57,26 @@ pub fn has_process_focus() -> bool {
     true
 }
 
-pub fn start_window_move(window: &mut gpui::Window) -> bool {
+pub fn start_window_move(window: &mut gpui::Window) {
     let Ok(handle) = HasWindowHandle::window_handle(window) else {
-        return false;
+        window.start_window_move();
+        return;
     };
     let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
-        return false;
+        window.start_window_move();
+        return;
     };
     let Some(view) = (unsafe { Retained::<NSView>::retain(handle.ns_view.as_ptr().cast()) }) else {
-        return false;
+        window.start_window_move();
+        return;
     };
     let Some(native_window) = view.window() else {
-        return false;
+        window.start_window_move();
+        return;
     };
     let Some(event) = native_window.currentEvent() else {
-        return false;
+        window.start_window_move();
+        return;
     };
     native_window.performWindowDragWithEvent(&event);
-    true
 }

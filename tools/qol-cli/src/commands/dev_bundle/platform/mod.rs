@@ -1,9 +1,17 @@
-#[cfg(not(unix))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod fallback;
-#[cfg(unix)]
-mod unix;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
-#[cfg(not(unix))]
-pub(super) use fallback::source_is_executable;
-#[cfg(unix)]
-pub(super) use unix::source_is_executable;
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub(super) use fallback::{ensure_build_supported, source_is_executable};
+#[cfg(target_os = "linux")]
+pub(super) use linux::{ensure_build_supported, source_is_executable};
+#[cfg(target_os = "macos")]
+pub(super) use macos::{ensure_build_supported, source_is_executable};
+#[cfg(target_os = "windows")]
+pub(super) use windows::{ensure_build_supported, source_is_executable};

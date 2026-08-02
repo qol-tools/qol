@@ -1,7 +1,6 @@
 mod platform;
 
-use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::{io::ErrorKind, path::PathBuf};
 
 use anyhow::Result;
 use qol_headless::{DoctorCheck, DoctorCheckResult};

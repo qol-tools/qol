@@ -27,7 +27,7 @@ struct CinnamonCaptureRequest {
     pipeline: String,
 }
 
-pub fn run_internal_capture_helper() -> Option<ExitCode> {
+pub(super) fn run_internal_capture_helper() -> Option<ExitCode> {
     let request = std::env::var(CINNAMON_HELPER_ENV).ok()?;
     Some(match run_cinnamon_capture_helper(&request) {
         Ok(()) => ExitCode::SUCCESS,

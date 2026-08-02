@@ -1,6 +1,6 @@
 use std::io;
 use std::os::unix::process::CommandExt;
-use std::process::Command;
+use std::process::{Child, Command};
 
 use super::unix::pid_t;
 pub(crate) use super::unix::{
@@ -27,6 +27,11 @@ pub(crate) fn isolate_owned_session(command: &mut Command) -> io::Result<()> {
         });
     }
     Ok(())
+}
+
+pub(crate) fn spawn_owned(mut command: Command) -> io::Result<(Child, Option<ProcessTreeGuard>)> {
+    isolate_owned_command(&mut command)?;
+    Ok((command.spawn()?, None))
 }
 
 fn raw_preexec_error() -> io::Error {

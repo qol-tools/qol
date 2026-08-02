@@ -591,7 +591,7 @@ pub(crate) fn own_current_process_tree_with_guardian(
     own_process_tree()
 }
 
-pub(crate) fn own_process_tree() -> io::Result<ProcessTreeGuard> {
+fn own_process_tree() -> io::Result<ProcessTreeGuard> {
     process_tree_containment_support()?;
     Ok(ProcessTreeGuard {
         job: create_kill_on_close_job()?,
@@ -599,6 +599,29 @@ pub(crate) fn own_process_tree() -> io::Result<ProcessTreeGuard> {
         terminating_processes: Mutex::new(Vec::new()),
         prepared: AtomicBool::new(false),
     })
+}
+
+pub(crate) fn spawn_owned(mut command: Command) -> io::Result<(Child, Option<ProcessTreeGuard>)> {
+    let guard = own_process_tree()?;
+    let prepared = guard.prepare_command(&mut command)?;
+    let child = guard
+        .spawn_prepared(&mut command, prepared)
+        .map_err(|error| prepared_spawn_error(&guard, error))?;
+    Ok((child, Some(guard)))
+}
+
+fn prepared_spawn_error(guard: &ProcessTreeGuard, error: PlatformSpawnFailure) -> io::Error {
+    let PlatformSpawnFailure { source, cleanup } = error;
+    if cleanup != PreparedSpawnCleanup::RecoveryPending {
+        return source;
+    }
+    match guard.recover_pending_spawn(Duration::from_secs(2)) {
+        Ok(()) => source,
+        Err(recovery) => io::Error::new(
+            source.kind(),
+            format!("{source}; process-tree recovery failed: {recovery}"),
+        ),
+    }
 }
 
 pub(crate) fn run_process_tree_guardian_entry() -> io::Result<()> {

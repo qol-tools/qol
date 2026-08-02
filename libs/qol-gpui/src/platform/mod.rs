@@ -53,11 +53,7 @@ pub fn process_focus_truth() -> Option<bool> {
 }
 
 pub fn start_window_move(window: &mut gpui::Window) {
-    #[cfg(target_os = "macos")]
-    if imp::start_window_move(window) {
-        return;
-    }
-    window.start_window_move();
+    imp::start_window_move(window);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

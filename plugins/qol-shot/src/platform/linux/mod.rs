@@ -22,8 +22,8 @@ pub use clipboard::{copy_image_to_clipboard, copy_path_to_clipboard};
 pub use display::{full_screen_bounds, get_monitors};
 pub use preview::{capture_frozen_frame, configure_preview_window, grab_preview_rgba};
 pub use recording::{
-    capture_screenshot, recording_format, recording_started, recording_stopped,
-    run_internal_capture_helper, start_capture, stop_capture,
+    capture_screenshot, recording_format, recording_started, recording_stopped, start_capture,
+    stop_capture,
 };
 use system::resolve_command;
 pub use system::{
@@ -72,6 +72,10 @@ pub fn pin_cache_enabled() -> bool {
 
 pub fn after_pin_open(title: &str) {
     qol_gpui::popup_window::hide_invisible(title);
+}
+
+pub fn run_internal_mode() -> Option<std::process::ExitCode> {
+    recording::run_internal_capture_helper()
 }
 
 pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Result<Option<Rect>> {

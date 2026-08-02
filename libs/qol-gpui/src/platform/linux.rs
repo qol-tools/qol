@@ -116,6 +116,10 @@ pub fn has_process_focus() -> bool {
     owns
 }
 
+pub fn start_window_move(window: &mut gpui::Window) {
+    window.start_window_move();
+}
+
 fn owns_window(conn: &RustConnection, mut window: u32, target_pid: u32) -> bool {
     loop {
         if window_pid(conn, window) == Some(target_pid) {

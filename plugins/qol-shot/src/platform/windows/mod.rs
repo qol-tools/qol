@@ -1,6 +1,9 @@
 use anyhow::{anyhow, Context, Result};
+use gpui::{Pixels, Point};
+use qol_gpui::monitor::ActiveMonitor;
 use qol_headless::DoctorCheckResult;
 use std::path::Path;
+use std::sync::mpsc;
 
 use crate::capture::frozen_frame::FrozenFrame;
 use crate::capture::space::CaptureKind;
@@ -19,6 +22,10 @@ pub fn pin_cache_enabled() -> bool {
 
 pub fn after_pin_open(_title: &str) {}
 
+pub fn run_internal_mode() -> Option<std::process::ExitCode> {
+    None
+}
+
 pub fn select_region(
     _kind: CaptureKind,
     _frozen_frame: Option<FrozenFrame>,
@@ -26,6 +33,16 @@ pub fn select_region(
     Err(anyhow!(
         "qol-shot: region selection is not implemented on Windows"
     ))
+}
+
+pub fn select_region_in_app(
+    _cx: &mut gpui::App,
+    _kind: CaptureKind,
+    _cursor: Option<(ActiveMonitor, Option<Point<Pixels>>)>,
+    _monitors: Vec<ActiveMonitor>,
+    _frozen_frame: Option<FrozenFrame>,
+) -> Option<mpsc::Receiver<Option<Rect>>> {
+    None
 }
 
 pub fn get_monitors() -> Result<Vec<Monitor>> {

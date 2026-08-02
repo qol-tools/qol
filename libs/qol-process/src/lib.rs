@@ -207,53 +207,16 @@ impl CurrentProcessTreeGuard {
     }
 }
 
-pub fn spawn_owned(mut command: Command) -> io::Result<(Child, OwnedProcessTree)> {
-    #[cfg(windows)]
-    {
-        let guard = ProcessTreeGuard {
-            _inner: platform::own_process_tree()?,
-        };
-        let prepared = guard.prepare_command(command)?;
-        let child = match prepared.spawn() {
-            Ok(child) => child,
-            Err(error) => return Err(prepared_spawn_error(&guard, error)),
-        };
-        let root_pid = child.id();
-        return Ok((
-            child,
-            OwnedProcessTree {
-                root_pid,
-                guard: Some(guard),
-            },
-        ));
-    }
-
-    platform::isolate_owned_command(&mut command)?;
-    let child = command.spawn()?;
+pub fn spawn_owned(command: Command) -> io::Result<(Child, OwnedProcessTree)> {
+    let (child, guard) = platform::spawn_owned(command)?;
     let root_pid = child.id();
     Ok((
         child,
         OwnedProcessTree {
             root_pid,
-            guard: None,
+            guard: guard.map(|_inner| ProcessTreeGuard { _inner }),
         },
     ))
-}
-
-#[cfg(windows)]
-fn prepared_spawn_error(guard: &ProcessTreeGuard, error: PreparedSpawnError) -> io::Error {
-    let cleanup = error.cleanup();
-    let source = error.source;
-    if cleanup != PreparedSpawnCleanup::RecoveryPending {
-        return source;
-    }
-    match guard.recover_pending_spawn(Duration::from_secs(2)) {
-        Ok(_) => source,
-        Err(recovery) => io::Error::new(
-            source.kind(),
-            format!("{source}; process-tree recovery failed: {recovery}"),
-        ),
-    }
 }
 
 impl OwnedProcessTree {

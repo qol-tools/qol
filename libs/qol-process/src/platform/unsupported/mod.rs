@@ -88,6 +88,11 @@ pub(crate) fn isolate_owned_command(_command: &mut Command) -> io::Result<()> {
     Err(unsupported())
 }
 
+pub(crate) fn spawn_owned(mut command: Command) -> io::Result<(Child, Option<ProcessTreeGuard>)> {
+    isolate_owned_command(&mut command)?;
+    Ok((command.spawn()?, None))
+}
+
 pub(crate) fn isolate_owned_session(_command: &mut Command) -> io::Result<()> {
     Err(unsupported())
 }

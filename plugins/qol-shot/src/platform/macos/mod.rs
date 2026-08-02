@@ -29,6 +29,11 @@ pub fn pin_cache_enabled() -> bool {
 }
 
 pub fn after_pin_open(_title: &str) {}
+
+pub fn run_internal_mode() -> Option<std::process::ExitCode> {
+    None
+}
+
 pub use system::{
     capture_frozen_frame, configure_pin_window, configure_preview_window, external_services_check,
     grab_preview_rgba, list_audio_sinks, list_audio_sources, open_url, permissions_check,

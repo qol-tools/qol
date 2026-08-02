@@ -1,6 +1,6 @@
 use std::io;
 use std::os::unix::process::CommandExt;
-use std::process::Command;
+use std::process::{Child, Command};
 
 pub(crate) use super::unix::{
     cancellation_requested, cancellation_signal_count, guard_current_process_tree,
@@ -26,6 +26,11 @@ pub(crate) fn isolate_owned_session(command: &mut Command) -> io::Result<()> {
         });
     }
     Ok(())
+}
+
+pub(crate) fn spawn_owned(mut command: Command) -> io::Result<(Child, Option<ProcessTreeGuard>)> {
+    isolate_owned_command(&mut command)?;
+    Ok((command.spawn()?, None))
 }
 
 pub(crate) fn is_pid_zombie(_pid: u32) -> bool {

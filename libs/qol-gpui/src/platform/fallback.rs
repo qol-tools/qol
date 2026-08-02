@@ -31,3 +31,7 @@ pub fn should_poll_focus() -> bool {
 pub fn has_process_focus() -> bool {
     true
 }
+
+pub fn start_window_move(window: &mut gpui::Window) {
+    window.start_window_move();
+}

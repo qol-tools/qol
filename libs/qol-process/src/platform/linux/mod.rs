@@ -1,5 +1,8 @@
 mod containment;
 
+use std::io;
+use std::process::{Child, Command};
+
 pub(crate) use super::unix::{
     cancellation_requested, cancellation_signal_count, guard_current_process_tree,
     install_cancellation_handler, is_group_alive, is_pid_alive, isolate_owned_command, kill_group,
@@ -11,3 +14,8 @@ pub(crate) use containment::{
     process_identity_matches, process_tree_containment_support, run_process_tree_guardian_entry,
     PreparedSpawn, ProcessTreeGuard,
 };
+
+pub(crate) fn spawn_owned(mut command: Command) -> io::Result<(Child, Option<ProcessTreeGuard>)> {
+    isolate_owned_command(&mut command)?;
+    Ok((command.spawn()?, None))
+}

@@ -148,9 +148,7 @@ fn collect_bundle_files(
 }
 
 fn build_bundle_artifacts(worktree: &Path, buildable: &[BuildablePlugin]) -> Result<()> {
-    if cfg!(not(target_os = "linux")) {
-        bail!("Mint Cinnamon development bundles can currently only be built on Linux hosts");
-    }
+    platform::ensure_build_supported()?;
     for mut command in bundle_build_commands(worktree, buildable) {
         let output = command
             .output()
