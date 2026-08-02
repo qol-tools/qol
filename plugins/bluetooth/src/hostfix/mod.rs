@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use qol_host_fixes::{elevation, takeover, Finding, FixState, HostFixes};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{LazyLock, Mutex};
 
 mod platform;
@@ -12,7 +12,6 @@ pub const ORPHANED_AUTOSTART_FIX_ID: &str = "blueman-autostart-orphaned";
 
 const WEDGED_THRESHOLD: usize = 2;
 const BLUEMAN_PROCESS: &str = "blueman-applet";
-const BLUEMAN_AUTOSTART: &str = "blueman.desktop";
 const AUTOSTART_BLOCK: &str = "[Desktop Entry]\nHidden=true\n";
 
 static HOST_FIX_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -229,79 +228,56 @@ fn restore_manager(dir: &Path, claim: &takeover::Claim, state: &ManagerClaimStat
 }
 
 fn capture_autostart(process: &str) -> Result<AutostartBackup> {
-    if process != BLUEMAN_PROCESS {
+    if process != BLUEMAN_PROCESS || !platform::supports_autostart() {
         return Ok(AutostartBackup::Unchanged);
     }
-    #[cfg(not(target_os = "linux"))]
-    return Ok(AutostartBackup::Unchanged);
-    #[cfg(target_os = "linux")]
-    {
-        let path = autostart_path()?;
-        let Ok(original) = std::fs::read_to_string(&path) else {
-            return Ok(AutostartBackup::Missing {
-                installed: AUTOSTART_BLOCK.to_string(),
-            });
-        };
-        if hidden_override(&original) {
-            return Ok(AutostartBackup::Unchanged);
-        }
-        Ok(AutostartBackup::Existing {
-            original,
+    let Some(original) = platform::read_autostart() else {
+        return Ok(AutostartBackup::Missing {
             installed: AUTOSTART_BLOCK.to_string(),
-        })
+        });
+    };
+    if hidden_override(&original) {
+        return Ok(AutostartBackup::Unchanged);
     }
+    Ok(AutostartBackup::Existing {
+        original,
+        installed: AUTOSTART_BLOCK.to_string(),
+    })
 }
 
 fn install_autostart(process: &str, backup: &AutostartBackup) -> Result<()> {
     if process != BLUEMAN_PROCESS || matches!(backup, AutostartBackup::Unchanged) {
         return Ok(());
     }
-    #[cfg(not(target_os = "linux"))]
-    return Ok(());
-    #[cfg(target_os = "linux")]
-    {
-        let path = autostart_path()?;
-        if let AutostartBackup::Existing { original, .. } = backup {
-            let current = std::fs::read_to_string(&path)
-                .map_err(|error| anyhow::anyhow!("failed to reread {}: {error}", path.display()))?;
-            if &current != original {
-                bail!("Blueman autostart changed while qol was claiming it");
-            }
+    if let AutostartBackup::Existing { original, .. } = backup {
+        let current = platform::read_autostart()
+            .ok_or_else(|| anyhow::anyhow!("failed to reread the Blueman autostart entry"))?;
+        if &current != original {
+            bail!("Blueman autostart changed while qol was claiming it");
         }
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, AUTOSTART_BLOCK)
-            .map_err(|error| anyhow::anyhow!("failed to write {}: {error}", path.display()))?;
-        Ok(())
     }
+    platform::write_autostart(AUTOSTART_BLOCK)
 }
 
 fn restore_autostart(process: &str, backup: &AutostartBackup) -> Result<()> {
     if process != BLUEMAN_PROCESS || matches!(backup, AutostartBackup::Unchanged) {
         return Ok(());
     }
-    #[cfg(not(target_os = "linux"))]
-    return Ok(());
-    #[cfg(target_os = "linux")]
-    {
-        let path = autostart_path()?;
-        let current = std::fs::read_to_string(&path)
-            .map_err(|error| anyhow::anyhow!("failed to reread {}: {error}", path.display()))?;
-        let installed = match backup {
-            AutostartBackup::Missing { installed }
-            | AutostartBackup::Existing { installed, .. } => installed,
-            AutostartBackup::Unchanged => return Ok(()),
-        };
-        if &current != installed {
-            bail!("Blueman autostart changed while qol owned it");
+    let installed = match backup {
+        AutostartBackup::Missing { installed } | AutostartBackup::Existing { installed, .. } => {
+            installed
         }
-        match backup {
-            AutostartBackup::Missing { .. } => std::fs::remove_file(&path)?,
-            AutostartBackup::Existing { original, .. } => std::fs::write(&path, original)?,
-            AutostartBackup::Unchanged => {}
-        }
-        Ok(())
+        AutostartBackup::Unchanged => return Ok(()),
+    };
+    let current = platform::read_autostart()
+        .ok_or_else(|| anyhow::anyhow!("failed to reread the Blueman autostart entry"))?;
+    if &current != installed {
+        bail!("Blueman autostart changed while qol owned it");
+    }
+    match backup {
+        AutostartBackup::Missing { .. } => platform::remove_autostart(),
+        AutostartBackup::Existing { original, .. } => platform::write_autostart(original),
+        AutostartBackup::Unchanged => Ok(()),
     }
 }
 
@@ -309,51 +285,22 @@ fn repair_orphaned_autostart() -> Result<String> {
     if !orphaned_autostart_override() {
         return Ok("Blueman autostart override is not orphaned".to_string());
     }
-    #[cfg(not(target_os = "linux"))]
-    return Ok("Blueman autostart override is not supported on this platform".to_string());
-    #[cfg(target_os = "linux")]
-    {
-        let path = autostart_path()?;
-        std::fs::remove_file(&path)?;
-        if !platform::process_running(BLUEMAN_PROCESS) {
-            platform::start_process(BLUEMAN_PROCESS)?;
-        }
-        Ok("Removed the orphaned Blueman autostart override and restored Blueman".to_string())
+    platform::remove_autostart()?;
+    if !platform::process_running(BLUEMAN_PROCESS) {
+        platform::start_process(BLUEMAN_PROCESS)?;
     }
+    Ok("Removed the orphaned Blueman autostart override and restored Blueman".to_string())
 }
 
 fn autostart_override_present(process: &str) -> bool {
     if process != BLUEMAN_PROCESS {
         return false;
     }
-    #[cfg(not(target_os = "linux"))]
-    return false;
-    #[cfg(target_os = "linux")]
-    autostart_path()
-        .ok()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .is_some_and(|content| content == AUTOSTART_BLOCK)
+    platform::read_autostart().is_some_and(|content| content == AUTOSTART_BLOCK)
 }
 
 fn hidden_override(content: &str) -> bool {
     content.lines().any(|line| line.trim() == "Hidden=true")
-}
-
-#[cfg(target_os = "linux")]
-fn autostart_path() -> Result<PathBuf> {
-    let config_root = match std::env::var_os("XDG_CONFIG_HOME") {
-        Some(path) if !path.is_empty() => PathBuf::from(path),
-        _ => std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .map(|home| home.join(".config"))
-            .ok_or_else(|| {
-                anyhow::anyhow!("HOME is unavailable for the Blueman autostart claim")
-            })?,
-    };
-    if !config_root.is_absolute() {
-        bail!("XDG_CONFIG_HOME must be an absolute path");
-    }
-    Ok(config_root.join("autostart").join(BLUEMAN_AUTOSTART))
 }
 
 fn claims_dir() -> Result<std::path::PathBuf> {

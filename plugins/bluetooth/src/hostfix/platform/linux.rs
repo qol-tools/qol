@@ -99,3 +99,47 @@ fn process_matches(pid: u32, process: &str) -> bool {
 fn process_alive(pid: u32) -> bool {
     qol_process::is_pid_alive(pid) && !qol_process::is_pid_zombie(pid)
 }
+
+const BLUEMAN_AUTOSTART: &str = "blueman.desktop";
+
+fn autostart_path() -> Result<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let config_root = match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(path) if !path.is_empty() => PathBuf::from(path),
+        _ => std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(".config"))
+            .ok_or_else(|| {
+                anyhow::anyhow!("HOME is unavailable for the Blueman autostart claim")
+            })?,
+    };
+    if !config_root.is_absolute() {
+        bail!("XDG_CONFIG_HOME must be an absolute path");
+    }
+    Ok(config_root.join("autostart").join(BLUEMAN_AUTOSTART))
+}
+
+pub(crate) fn read_autostart() -> Option<String> {
+    autostart_path()
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+}
+
+pub(crate) fn write_autostart(content: &str) -> Result<()> {
+    let path = autostart_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, content)
+        .map_err(|error| anyhow::anyhow!("failed to write {}: {error}", path.display()))
+}
+
+pub(crate) fn remove_autostart() -> Result<()> {
+    let path = autostart_path()?;
+    std::fs::remove_file(&path)
+        .map_err(|error| anyhow::anyhow!("failed to remove {}: {error}", path.display()))
+}
+
+pub(crate) fn supports_autostart() -> bool {
+    true
+}
