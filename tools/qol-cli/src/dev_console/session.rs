@@ -526,10 +526,7 @@ pub(super) fn apply_action(dash: &mut Dash, action: Action, modified: bool) {
             | View::EmuDetail => {}
         },
         Action::Back => {
-            if dash.view == View::Doctor && dash.doctor_detail_open {
-                dash.doctor_detail_open = false;
-                return;
-            }
+            dash.doctor_detail_open = false;
             dash.view = if dash.view == View::EmuDetail {
                 View::Emu
             } else {

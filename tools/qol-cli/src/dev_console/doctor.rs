@@ -560,6 +560,7 @@ fn outcome_status_label(status: OutcomeStatus) -> &'static str {
 mod tests {
     use super::*;
     use crate::dev_console::key_bindings::Action;
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
     fn span_text(spans: &[Span<'static>]) -> String {
         spans.iter().map(|span| span.content.as_ref()).collect()
@@ -892,20 +893,20 @@ mod tests {
     }
 
     #[test]
-    fn enter_toggles_the_detail_panel_and_back_closes_it_before_leaving() {
+    fn enter_opens_detail_panel_and_left_leaves_the_doctor_page() {
         let mut dash = Dash::new(Vec::new());
         dash.view = View::Doctor;
         dash.doctor = panel_with_details(vec!["full message"], None);
 
-        super::super::session::apply_action(&mut dash, Action::Activate, false);
+        super::super::session::handle_key(&mut dash, KeyCode::Enter, KeyModifiers::NONE);
         assert!(dash.doctor_detail_open, "enter opens the detail panel");
 
-        super::super::session::apply_action(&mut dash, Action::Back, false);
-        assert!(!dash.doctor_detail_open, "back closes the panel first");
-        assert_eq!(dash.view, View::Doctor, "back keeps the doctor page open");
-
-        super::super::session::apply_action(&mut dash, Action::Back, false);
-        assert_eq!(dash.view, View::Dashboard, "second back leaves the page");
+        super::super::session::handle_key(&mut dash, KeyCode::Left, KeyModifiers::NONE);
+        assert!(
+            !dash.doctor_detail_open,
+            "leaving the page clears detail state"
+        );
+        assert_eq!(dash.view, View::Dashboard, "left leaves the doctor page");
     }
 
     #[test]
