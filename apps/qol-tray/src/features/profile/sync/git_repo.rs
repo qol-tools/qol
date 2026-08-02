@@ -75,6 +75,12 @@ impl GitRepo {
     }
 
     pub fn pull(&self, token: Option<&str>) -> Result<PullOutcome> {
+        let outcome = self.fetch(token)?;
+        self.apply_pull(&outcome)?;
+        Ok(outcome)
+    }
+
+    pub fn fetch(&self, token: Option<&str>) -> Result<PullOutcome> {
         let repo = self.open_repo()?;
         let mut remote = repo
             .find_remote(DEFAULT_REMOTE)
@@ -91,7 +97,6 @@ impl GitRepo {
         let remote_oid = remote_branch_oid(&repo)?;
 
         let Some(local_oid) = local_oid else {
-            checkout_remote_into_local(&repo, remote_oid)?;
             return Ok(PullOutcome::FastForwarded {
                 from: String::new(),
                 to: remote_oid.to_string(),
@@ -112,7 +117,6 @@ impl GitRepo {
             return Ok(PullOutcome::AlreadyUpToDate);
         }
         if analysis.is_fast_forward() {
-            fast_forward(&repo, remote_oid)?;
             return Ok(PullOutcome::FastForwarded {
                 from: local_oid.to_string(),
                 to: remote_oid.to_string(),
@@ -122,6 +126,19 @@ impl GitRepo {
             local: local_oid.to_string(),
             remote: remote_oid.to_string(),
         })
+    }
+
+    pub fn apply_pull(&self, outcome: &PullOutcome) -> Result<()> {
+        let PullOutcome::FastForwarded { from, to } = outcome else {
+            return Ok(());
+        };
+        let repo = self.open_repo()?;
+        let remote_oid = git2::Oid::from_str(to)?;
+        if from.is_empty() {
+            checkout_remote_into_local(&repo, remote_oid)?;
+            return Ok(());
+        }
+        fast_forward(&repo, remote_oid)
     }
 
     pub fn commit_all(

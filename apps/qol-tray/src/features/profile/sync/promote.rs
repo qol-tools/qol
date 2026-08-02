@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
+use crate::features::profile::scope_store::{PLUGINS_LOCK_FILE, PLUGIN_CONFIGS_SUBDIR};
 use crate::features::profile::ProfileScopeStore;
+use crate::plugins::config::ProfileConfigInvalidation;
 
 pub(crate) fn promote_allowlisted_clone(staging: &Path, profile: &Path) -> Result<()> {
     if !staging.is_dir() {
@@ -9,17 +11,41 @@ pub(crate) fn promote_allowlisted_clone(staging: &Path, profile: &Path) -> Resul
     }
     let _mutation = crate::plugins::config::begin_runtime_config_global_mutation();
     let files = walk_files(staging)?;
+    let scope = profile_config_scope(staging, &files);
+    let scope_label = profile_config_scope_label(&scope);
+    let _profile_guard = match scope {
+        ProfileConfigInvalidation::All => crate::plugins::config::profile_config_write_guard(),
+        ProfileConfigInvalidation::Plugins(plugin_ids) => {
+            crate::plugins::config::profile_config_write_guard_for_plugins(plugin_ids)
+        }
+    };
+    let generation = crate::plugins::config::current_profile_config_generation();
+    let fingerprint = promotion_fingerprint(staging, &files);
     for absolute in files {
         let rel = absolute
             .strip_prefix(staging)
             .with_context(|| format!("strip prefix {}", absolute.display()))?
             .to_path_buf();
         if rel.starts_with(".git") {
-            trace_promote_entry(&rel, "skip", "git_dir");
+            trace_promote_entry(
+                &rel,
+                "skip",
+                "git_dir",
+                &scope_label,
+                generation,
+                &fingerprint,
+            );
             continue;
         }
         if !ProfileScopeStore::is_sync_allowlisted(&rel) {
-            trace_promote_entry(&rel, "skip", "not_allowlisted");
+            trace_promote_entry(
+                &rel,
+                "skip",
+                "not_allowlisted",
+                &scope_label,
+                generation,
+                &fingerprint,
+            );
             continue;
         }
         let dst = profile.join(&rel);
@@ -29,9 +55,62 @@ pub(crate) fn promote_allowlisted_clone(staging: &Path, profile: &Path) -> Resul
         }
         std::fs::copy(&absolute, &dst)
             .with_context(|| format!("copy {} -> {}", absolute.display(), dst.display()))?;
-        trace_promote_entry(&rel, "copy", "allowlisted");
+        trace_promote_entry(
+            &rel,
+            "copy",
+            "allowlisted",
+            &scope_label,
+            generation,
+            &fingerprint,
+        );
     }
     Ok(())
+}
+
+fn profile_config_scope(staging: &Path, files: &[PathBuf]) -> ProfileConfigInvalidation {
+    let mut plugin_ids = Vec::new();
+    for absolute in files {
+        let Ok(rel) = absolute.strip_prefix(staging) else {
+            return ProfileConfigInvalidation::All;
+        };
+        if rel.file_name().and_then(|name| name.to_str()) == Some(PLUGINS_LOCK_FILE) {
+            return ProfileConfigInvalidation::All;
+        }
+        if let Some(plugin_id) = plugin_config_id(rel) {
+            plugin_ids.push(plugin_id);
+        }
+    }
+    ProfileConfigInvalidation::Plugins(plugin_ids)
+}
+
+fn plugin_config_id(rel: &Path) -> Option<String> {
+    let parts = rel
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    let config_index = parts
+        .iter()
+        .position(|part| *part == PLUGIN_CONFIGS_SUBDIR)?;
+    if config_index + 2 != parts.len() {
+        return None;
+    }
+    parts
+        .last()
+        .and_then(|file| file.strip_suffix(".json"))
+        .filter(|plugin_id| !plugin_id.is_empty())
+        .map(str::to_string)
+}
+
+fn profile_config_scope_label(scope: &ProfileConfigInvalidation) -> String {
+    match scope {
+        ProfileConfigInvalidation::All => "all".to_string(),
+        ProfileConfigInvalidation::Plugins(plugin_ids) if plugin_ids.is_empty() => {
+            "none".to_string()
+        }
+        ProfileConfigInvalidation::Plugins(plugin_ids) => {
+            format!("plugins:{}", plugin_ids.join(","))
+        }
+    }
 }
 
 pub(super) fn promote_clone_git_dir(staging: &Path, profile: &Path) -> Result<()> {
@@ -97,17 +176,24 @@ fn walk_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-fn trace_promote_entry(rel: &Path, outcome: &str, reason: &str) {
+fn trace_promote_entry(
+    rel: &Path,
+    outcome: &str,
+    reason: &str,
+    scope: &str,
+    generation: u64,
+    fingerprint: &str,
+) {
     #[cfg(debug_assertions)]
     {
         qol_runtime::probe!(
             "PROFILE_SYNC_PROMOTE",
-            "entry={:?} outcome={outcome} reason={reason}",
-            rel.to_string_lossy()
+            "entry={:?} outcome={outcome} reason={reason} scope={scope:?} profile_generation={generation} consumed_generation={generation} acknowledged_generation=none fingerprint={fingerprint:?}",
+            rel.to_string_lossy(),
         );
     }
     #[cfg(not(debug_assertions))]
-    let _ = (rel, outcome, reason);
+    let _ = (rel, outcome, reason, scope, generation, fingerprint);
 }
 
 fn trace_walk_entry(root: &Path, path: &Path, outcome: &str, reason: &str) {
@@ -116,7 +202,22 @@ fn trace_walk_entry(root: &Path, path: &Path, outcome: &str, reason: &str) {
         .ok()
         .filter(|rel| !rel.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    trace_promote_entry(rel, outcome, reason);
+    trace_promote_entry(rel, outcome, reason, "unknown", 0, "unknown");
+}
+
+fn promotion_fingerprint(staging: &Path, files: &[PathBuf]) -> String {
+    files
+        .iter()
+        .find_map(|path| {
+            let relative = path.strip_prefix(staging).ok()?;
+            if !relative.ends_with(Path::new("core/plugins.lock.json")) {
+                return None;
+            }
+            std::fs::read(path)
+                .ok()
+                .map(|bytes| crate::plugins::config::redacted_profile_fingerprint(&bytes))
+        })
+        .unwrap_or_else(|| "none".to_string())
 }
 
 #[cfg(test)]
@@ -201,6 +302,50 @@ mod tests {
             b"{\"backup\":1}"
         );
         assert_eq!(read(&profile.join(".gitignore")), b"/active\n");
+    }
+
+    #[test]
+    fn promotion_advances_profile_generation() {
+        let (_tmp, staging, profile) = setup();
+        write(
+            &staging.join("default/core/plugins.lock.json"),
+            b"{\"plugins\":[]}",
+        );
+        let before = crate::plugins::config::current_profile_config_generation();
+
+        promote_allowlisted_clone(&staging, &profile).unwrap();
+
+        let after = crate::plugins::config::current_profile_config_generation();
+        assert!(after > before);
+    }
+
+    #[test]
+    fn promotion_waits_for_autostart_profile_read() {
+        let (_tmp, staging, profile) = setup();
+        write(
+            &staging.join("default/core/plugins.lock.json"),
+            b"{\"plugins\":[]}",
+        );
+        let read_guard = crate::plugins::config::profile_config_read_guard();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let staging_for_thread = staging.clone();
+        let profile_for_thread = profile.clone();
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = promote_allowlisted_clone(&staging_for_thread, &profile_for_thread);
+            done_tx.send(result.is_ok()).unwrap();
+        });
+
+        started_rx.recv().unwrap();
+        assert!(done_rx.try_recv().is_err());
+        drop(read_guard);
+        assert!(done_rx.recv().unwrap());
+        worker.join().unwrap();
+        assert_eq!(
+            read(&profile.join("default/core/plugins.lock.json")),
+            b"{\"plugins\":[]}"
+        );
     }
 
     #[test]

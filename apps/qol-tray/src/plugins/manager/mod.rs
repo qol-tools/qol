@@ -6,14 +6,19 @@ mod runtime;
 use super::{Plugin, PluginId, PluginIdentityIndex};
 use crate::plugins::resolver::ResolutionReport;
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub struct PluginManager {
     plugins: HashMap<PluginId, Plugin>,
     pub(super) identity_index: PluginIdentityIndex,
     resolution_report: ResolutionReport,
-    last_state_hash: Option<String>,
+    last_profile_generation: u64,
+    last_reconciled_plugin_generations: HashMap<String, u64>,
+    lifecycle_cancellation: Arc<qol_process::CancellationToken>,
+    #[cfg(test)]
+    profile_reconciliation_count: u64,
 }
 
 impl PluginManager {
@@ -22,18 +27,47 @@ impl PluginManager {
             plugins: HashMap::new(),
             identity_index: PluginIdentityIndex::default(),
             resolution_report: ResolutionReport::default(),
-            last_state_hash: None,
+            last_profile_generation: crate::plugins::config::current_profile_config_generation(),
+            last_reconciled_plugin_generations: HashMap::new(),
+            lifecycle_cancellation: Arc::new(qol_process::CancellationToken::new()),
+            #[cfg(test)]
+            profile_reconciliation_count: 0,
         }
     }
 
     pub fn load_plugins(&mut self) -> Result<()> {
         loading::load_plugins(self)?;
-        self.last_state_hash = Some(runtime::hash_active_plugin_state());
+        self.last_profile_generation = crate::plugins::config::current_profile_config_generation();
+        self.last_reconciled_plugin_generations.clear();
         Ok(())
     }
 
     pub fn autostart_daemons(&mut self) {
-        autostart::start_plugin_daemons(self.plugins.values_mut());
+        if self.lifecycle_cancellation.is_cancelled() {
+            return;
+        }
+        autostart::start_plugin_daemons(
+            self.plugins.values_mut(),
+            Some(&self.lifecycle_cancellation),
+        );
+    }
+
+    pub fn reconcile_and_autostart_daemons(&mut self) {
+        if self.lifecycle_cancellation.is_cancelled() {
+            return;
+        }
+        let reconciled = match self.reconcile_profile_generation() {
+            Ok(reconciled) => reconciled,
+            Err(error) => {
+                log::error!(
+                    "Failed to reconcile profile generation before daemon autostart: {error:#}"
+                );
+                return;
+            }
+        };
+        if !reconciled {
+            self.autostart_daemons();
+        }
     }
 
     pub fn wait_for_autostart_daemons_ready(&self, timeout: Duration) -> Vec<String> {
@@ -41,29 +75,122 @@ impl PluginManager {
     }
 
     pub fn reload_plugins(&mut self) -> Result<()> {
+        if self.lifecycle_cancellation.is_cancelled() {
+            return Ok(());
+        }
+        let observed_generation = crate::plugins::config::current_profile_config_generation();
         runtime::reload_plugins(self)?;
-        self.last_state_hash = Some(runtime::hash_active_plugin_state());
+        self.last_profile_generation = observed_generation;
+        self.last_reconciled_plugin_generations.clear();
         Ok(())
     }
 
     pub fn reload_plugin(&mut self, plugin_id: &str) -> Result<()> {
-        runtime::reload_plugin(self, plugin_id)?;
-        self.last_state_hash = Some(runtime::hash_active_plugin_state());
+        if self.lifecycle_cancellation.is_cancelled() {
+            return Ok(());
+        }
+        let consumed_generation = runtime::reload_plugin(self, plugin_id)?;
+        self.acknowledge_profile_plugin_generation(plugin_id, consumed_generation);
         Ok(())
     }
 
     pub fn reload_plugins_if_changed(&mut self) -> Result<bool> {
-        let current = runtime::hash_active_plugin_state();
-        if self.last_state_hash.as_ref() == Some(&current) {
+        self.reconcile_profile_generation()
+    }
+
+    pub fn reconcile_profile_generation(&mut self) -> Result<bool> {
+        if self.lifecycle_cancellation.is_cancelled() {
             return Ok(false);
         }
-        runtime::reload_plugins(self)?;
-        self.last_state_hash = Some(current);
-        Ok(true)
+        let Some((observed_generation, invalidation)) =
+            crate::plugins::config::profile_config_invalidation_since(self.last_profile_generation)
+        else {
+            return Ok(false);
+        };
+        #[cfg(test)]
+        {
+            self.profile_reconciliation_count += 1;
+        }
+        let reconciled = match invalidation {
+            crate::plugins::config::ProfileConfigInvalidation::All => {
+                runtime::reload_plugins(self)?;
+                self.last_reconciled_plugin_generations.clear();
+                true
+            }
+            crate::plugins::config::ProfileConfigInvalidation::Plugins(plugin_ids) => {
+                let plugin_ids = self.resolve_profile_plugin_ids(plugin_ids);
+                let mut reloaded = false;
+                for plugin_id in &plugin_ids {
+                    let invalidation_generation =
+                        self.profile_plugin_invalidation_generation(plugin_id);
+                    if self
+                        .last_reconciled_plugin_generations
+                        .get(plugin_id)
+                        .is_some_and(|generation| *generation >= invalidation_generation)
+                    {
+                        continue;
+                    }
+                    self.reload_plugin(plugin_id)?;
+                    reloaded = true;
+                }
+                reloaded
+            }
+        };
+        self.last_profile_generation = observed_generation;
+        Ok(reconciled)
+    }
+
+    fn resolve_profile_plugin_ids(&self, invalidated_ids: Vec<String>) -> Vec<String> {
+        let invalidated_ids = invalidated_ids.into_iter().collect::<HashSet<_>>();
+        let plugin_ids = self
+            .plugins
+            .values()
+            .filter(|plugin| {
+                invalidated_ids.contains(plugin.id.as_str())
+                    || invalidated_ids.contains(plugin.uid().as_str())
+            })
+            .map(|plugin| plugin.id.to_string())
+            .collect::<HashSet<_>>();
+        let mut plugin_ids = plugin_ids.into_iter().collect::<Vec<_>>();
+        plugin_ids.sort_unstable();
+        plugin_ids
+    }
+
+    fn profile_plugin_invalidation_generation(&self, plugin_id: &str) -> u64 {
+        let Some(plugin) = self.plugins.get(plugin_id) else {
+            return crate::plugins::config::profile_config_plugin_generation(plugin_id);
+        };
+        crate::plugins::config::profile_config_plugin_generation(plugin.id.as_str()).max(
+            crate::plugins::config::profile_config_plugin_generation(plugin.uid().as_str()),
+        )
+    }
+
+    pub fn acknowledge_profile_plugin_generation(&mut self, plugin_id: &str, generation: u64) {
+        self.last_reconciled_plugin_generations
+            .insert(plugin_id.to_string(), generation);
+        qol_runtime::probe!(
+            "PLUGIN_RELOAD",
+            "plugin={plugin_id} stage=ack scope=single consumed_generation={generation} acknowledged_generation={generation}"
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn profile_reconciliation_count(&self) -> u64 {
+        self.profile_reconciliation_count
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_plugin_for_test(&mut self, plugin: Plugin) {
+        self.plugins.insert(plugin.id.clone(), plugin);
     }
 
     pub fn shutdown(&mut self) {
+        self.lifecycle_cancellation.cancel();
         runtime::shutdown(self);
+    }
+
+    pub fn lifecycle_cancellation(&self) -> Arc<qol_process::CancellationToken> {
+        Arc::clone(&self.lifecycle_cancellation)
     }
 
     pub fn get(&self, plugin_id: &str) -> Option<&Plugin> {
@@ -87,6 +214,9 @@ impl PluginManager {
     }
 
     pub fn restart_running_plugin_daemon(&mut self, plugin_id: &str) -> Result<()> {
+        if self.lifecycle_cancellation.is_cancelled() {
+            anyhow::bail!("plugin daemon lifecycle is shutting down")
+        }
         runtime::restart_running_plugin_daemon(self, plugin_id)
     }
 
@@ -118,6 +248,9 @@ impl PluginManager {
     }
 
     pub fn ensure_plugin_daemon_running(&mut self, plugin_id: &str) -> Result<()> {
+        if self.lifecycle_cancellation.is_cancelled() {
+            anyhow::bail!("plugin daemon lifecycle is shutting down")
+        }
         runtime::ensure_plugin_daemon_running(self, plugin_id)
     }
 
@@ -263,6 +396,49 @@ items = []
                 .unwrap_or_else(|| panic!("missing snapshot for {id}"));
             assert_eq!(*expectation, expected, "plugin: {id}");
         }
+    }
+
+    #[test]
+    fn unchanged_generation_reconciliation_does_not_read_profile_state() {
+        let _env = crate::test_support::env_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _path = crate::paths::push_test_path_root(root.path());
+        let mut manager = PluginManager::new();
+
+        crate::plugins::config::reset_profile_config_read_count();
+        assert!(!manager.reconcile_profile_generation().unwrap());
+        assert_eq!(crate::plugins::config::profile_config_read_count(), 0);
+        assert_eq!(manager.profile_reconciliation_count(), 0);
+    }
+
+    #[test]
+    fn profile_generation_event_reconciles_once() {
+        let _env = crate::test_support::env_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _path = crate::paths::push_test_path_root(root.path());
+        let mut manager = PluginManager::new();
+
+        let _profile_guard = crate::plugins::config::profile_config_write_guard();
+        crate::daemon::ConfigBus::new().config_changed(crate::daemon::ConfigKind::Profile);
+        drop(_profile_guard);
+        assert!(manager.reconcile_profile_generation().unwrap());
+        assert!(!manager.reconcile_profile_generation().unwrap());
+        assert_eq!(manager.profile_reconciliation_count(), 1);
+    }
+
+    #[test]
+    fn changed_generation_reconciliation_does_not_hold_a_profile_read_guard() {
+        let _env = crate::test_support::env_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _path = crate::paths::push_test_path_root(root.path());
+        let mut manager = PluginManager::new();
+        {
+            let _profile_guard = crate::plugins::config::profile_config_write_guard();
+        }
+
+        crate::plugins::config::reset_profile_config_read_count();
+        assert!(manager.reconcile_profile_generation().unwrap());
+        assert_eq!(crate::plugins::config::profile_config_read_count(), 0);
     }
 
     #[cfg(unix)]

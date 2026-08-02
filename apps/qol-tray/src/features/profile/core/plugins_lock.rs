@@ -25,15 +25,21 @@ pub fn import_plugins(bundle: &ProfileImportBundle) -> Vec<PluginLockEntry> {
 pub fn sync_plugins_lock_from_plugins<'a>(
     plugins: impl IntoIterator<Item = &'a crate::plugins::Plugin>,
 ) -> Result<PluginsLock> {
-    super::ensure_profile_dirs()?;
-    let existing = super::load_plugins_lock().unwrap_or(PluginsLock {
-        version: CURRENT_PROFILE_VERSION,
-        plugins: Vec::new(),
-    });
-    let cached_urls = cached_repo_urls();
-    let lock = build_plugins_lock(plugins, &existing, &cached_urls);
-    super::save_plugins_lock(&lock)?;
-    Ok(lock)
+    sync_plugins_lock_from_plugins_with_generation(plugins).map(|(lock, _)| lock)
+}
+
+pub(crate) fn sync_plugins_lock_from_plugins_with_generation<'a>(
+    plugins: impl IntoIterator<Item = &'a crate::plugins::Plugin>,
+) -> Result<(PluginsLock, u64)> {
+    let plugins = plugins.into_iter().collect::<Vec<_>>();
+    super::storage::update_plugins_lock(|existing| {
+        let cached_urls = cached_repo_urls();
+        Ok(build_plugins_lock(
+            plugins.iter().copied(),
+            existing,
+            &cached_urls,
+        ))
+    })
 }
 
 pub(super) fn read_plugin_version(plugin_dir: &Path) -> std::result::Result<String, ()> {
@@ -43,20 +49,26 @@ pub(super) fn read_plugin_version(plugin_dir: &Path) -> std::result::Result<Stri
 
 pub(super) fn sync_plugins_lock_from_imported_state(
     plugins_dir: &Path,
-    previous_lock: &PluginsLock,
     requested_plugins: &[PluginLockEntry],
 ) -> Result<()> {
     let requested = PluginsLock {
         version: CURRENT_PROFILE_VERSION,
         plugins: requested_plugins.to_vec(),
     };
-    let cached_urls = cached_repo_urls();
-    let installed_plugins = load_installed_plugins_from_dir(plugins_dir);
-    let repo_urls = merged_repo_url_lock(previous_lock, &requested);
-    let mut lock =
-        build_plugins_lock_with_options(installed_plugins.iter(), &repo_urls, &cached_urls, false);
-    preserve_import_unsupported_entries(&mut lock, previous_lock, &requested);
-    super::save_plugins_lock(&lock)
+    super::storage::update_plugins_lock(|previous_lock| {
+        let cached_urls = cached_repo_urls();
+        let installed_plugins = load_installed_plugins_from_dir(plugins_dir);
+        let repo_urls = merged_repo_url_lock(previous_lock, &requested);
+        let mut lock = build_plugins_lock_with_options(
+            installed_plugins.iter(),
+            &repo_urls,
+            &cached_urls,
+            false,
+        );
+        preserve_import_unsupported_entries(&mut lock, previous_lock, &requested);
+        Ok(lock)
+    })
+    .map(|_| ())
 }
 
 fn cached_repo_urls() -> HashMap<String, String> {

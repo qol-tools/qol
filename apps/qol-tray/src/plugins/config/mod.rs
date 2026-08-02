@@ -19,12 +19,16 @@ use crate::plugins::manifest::PluginUid;
 use crate::plugins::paths as plugin_paths;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-
 const RUNTIME_CONFIG_RETRY_TIMEOUT: Duration = Duration::from_millis(750);
 const RUNTIME_CONFIG_RETRY_INTERVAL: Duration = Duration::from_millis(16);
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginConfigs {
@@ -98,6 +102,331 @@ pub(crate) fn should_sample_runtime_cache_hit() -> bool {
     runtime_cache::should_sample_cache_hit()
 }
 
+static PROFILE_CONFIG_LOCK: OnceLock<RwLock<()>> = OnceLock::new();
+static PROFILE_CONFIG_GENERATION: AtomicU64 = AtomicU64::new(0);
+static PROFILE_CONFIG_INVALIDATIONS: OnceLock<Mutex<ProfileConfigInvalidationState>> =
+    OnceLock::new();
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProfileConfigInvalidation {
+    All,
+    Plugins(Vec<String>),
+}
+
+#[derive(Default)]
+struct ProfileConfigInvalidationState {
+    all_generation: u64,
+    plugin_generations: HashMap<String, u64>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static PROFILE_CONFIG_READS: Cell<u64> = const { Cell::new(0) };
+}
+
+fn profile_config_lock() -> &'static RwLock<()> {
+    PROFILE_CONFIG_LOCK.get_or_init(|| RwLock::new(()))
+}
+
+fn profile_config_invalidations() -> &'static Mutex<ProfileConfigInvalidationState> {
+    PROFILE_CONFIG_INVALIDATIONS
+        .get_or_init(|| Mutex::new(ProfileConfigInvalidationState::default()))
+}
+
+pub(crate) struct ProfileConfigReadGuard {
+    _guard: RwLockReadGuard<'static, ()>,
+    generation: u64,
+}
+
+impl ProfileConfigReadGuard {
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+pub(crate) struct ProfileConfigWriteGuard {
+    _guard: RwLockWriteGuard<'static, ()>,
+}
+
+impl ProfileConfigWriteGuard {
+    pub(crate) fn mark_changed(&self, scope: ProfileConfigInvalidation) -> u64 {
+        mark_profile_config_changed(scope)
+    }
+}
+
+pub(crate) fn profile_config_read_guard() -> ProfileConfigReadGuard {
+    let guard = profile_config_lock()
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    #[cfg(test)]
+    PROFILE_CONFIG_READS.with(|reads| reads.set(reads.get() + 1));
+    let generation = PROFILE_CONFIG_GENERATION.load(Ordering::Acquire);
+    ProfileConfigReadGuard {
+        _guard: guard,
+        generation,
+    }
+}
+
+pub(crate) fn profile_config_write_guard() -> ProfileConfigWriteGuard {
+    profile_config_write_guard_for_scope(ProfileConfigInvalidation::All)
+}
+
+pub(crate) fn profile_config_write_guard_for_plugin(plugin_id: &str) -> ProfileConfigWriteGuard {
+    profile_config_write_guard_for_scope(ProfileConfigInvalidation::Plugins(vec![
+        plugin_id.to_string()
+    ]))
+}
+
+pub(crate) fn profile_config_write_guard_for_plugins(
+    plugin_ids: impl IntoIterator<Item = String>,
+) -> ProfileConfigWriteGuard {
+    profile_config_write_guard_for_scope(ProfileConfigInvalidation::Plugins(
+        plugin_ids.into_iter().collect(),
+    ))
+}
+
+pub(crate) fn profile_config_write_guard_unmarked() -> ProfileConfigWriteGuard {
+    let guard = profile_config_lock()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    ProfileConfigWriteGuard { _guard: guard }
+}
+
+fn profile_config_write_guard_for_scope(
+    scope: ProfileConfigInvalidation,
+) -> ProfileConfigWriteGuard {
+    let guard = profile_config_write_guard_unmarked();
+    guard.mark_changed(scope);
+    guard
+}
+
+fn mark_profile_config_changed(scope: ProfileConfigInvalidation) -> u64 {
+    let mut invalidations = profile_config_invalidations()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let generation = PROFILE_CONFIG_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    match scope {
+        ProfileConfigInvalidation::All => {
+            invalidations.all_generation = generation;
+            invalidations.plugin_generations.clear();
+        }
+        ProfileConfigInvalidation::Plugins(plugin_ids) => {
+            for plugin_id in plugin_ids {
+                invalidations
+                    .plugin_generations
+                    .insert(plugin_id, generation);
+            }
+        }
+    }
+    generation
+}
+
+pub(crate) fn profile_config_invalidation_since(
+    last_generation: u64,
+) -> Option<(u64, ProfileConfigInvalidation)> {
+    let invalidations = profile_config_invalidations()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let current_generation = current_profile_config_generation();
+    if current_generation == last_generation {
+        return None;
+    }
+    if invalidations.all_generation > last_generation {
+        return Some((current_generation, ProfileConfigInvalidation::All));
+    }
+    let mut plugin_ids = invalidations
+        .plugin_generations
+        .iter()
+        .filter(|(_, generation)| **generation > last_generation)
+        .map(|(plugin_id, _)| plugin_id.clone())
+        .collect::<Vec<_>>();
+    plugin_ids.sort_unstable();
+    Some((
+        current_generation,
+        ProfileConfigInvalidation::Plugins(plugin_ids),
+    ))
+}
+
+pub(crate) fn profile_config_plugin_generation(plugin_id: &str) -> u64 {
+    profile_config_invalidations()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .plugin_generations
+        .get(plugin_id)
+        .copied()
+        .unwrap_or_default()
+}
+
+pub(crate) fn current_profile_config_generation() -> u64 {
+    PROFILE_CONFIG_GENERATION.load(Ordering::Acquire)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_profile_config_read_count() {
+    PROFILE_CONFIG_READS.with(|reads| reads.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn profile_config_read_count() -> u64 {
+    PROFILE_CONFIG_READS.with(Cell::get)
+}
+
+pub(crate) fn redacted_profile_fingerprint(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+        .chars()
+        .take(12)
+        .collect()
+}
+
+struct RuntimeConfigTrace<'a> {
+    scope: &'a str,
+    generation: u64,
+    fingerprint: &'a str,
+    lock_load_outcome: &'a str,
+    fallback_reason: Option<&'a str>,
+    daemon_spawn_generation: Option<u64>,
+}
+
+struct RuntimeCacheMaterialization {
+    outcome: &'static str,
+    cache_load_outcome: &'static str,
+}
+
+struct RuntimeConfigLockSnapshot {
+    lock_entries: HashMap<String, crate::features::profile::core::PluginLockEntry>,
+    fingerprint: String,
+    lock_load_outcome: &'static str,
+    fallback_reason: Option<&'static str>,
+}
+
+pub(crate) struct RuntimeConfigContext {
+    manager: PluginConfigManager,
+    lock_entries: HashMap<String, crate::features::profile::core::PluginLockEntry>,
+    generation: u64,
+    fingerprint: String,
+    lock_load_outcome: &'static str,
+    fallback_reason: Option<&'static str>,
+}
+
+impl RuntimeConfigContext {
+    pub(crate) fn new() -> Result<Self> {
+        let profile_guard = profile_config_read_guard();
+        let manager = PluginConfigManager::new()?;
+        let snapshot = load_runtime_config_lock_snapshot(&manager);
+        let generation = profile_guard.generation();
+        drop(profile_guard);
+        Ok(Self {
+            manager,
+            lock_entries: snapshot.lock_entries,
+            generation,
+            fingerprint: snapshot.fingerprint,
+            lock_load_outcome: snapshot.lock_load_outcome,
+            fallback_reason: snapshot.fallback_reason,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn materialize_runtime_config_for_manifest(
+        &mut self,
+        plugin_id: &str,
+        manifest: &crate::plugins::manifest::PluginManifest,
+    ) -> Result<Option<serde_json::Value>> {
+        let profile_guard = profile_config_read_guard();
+        let result =
+            self.materialize_runtime_config_with_guard(&profile_guard, plugin_id, manifest, None);
+        drop(profile_guard);
+        result
+    }
+
+    pub(crate) fn prepare_runtime_config_for_spawn(
+        &mut self,
+        plugin_id: &str,
+        manifest: &crate::plugins::manifest::PluginManifest,
+    ) -> Result<ProfileConfigReadGuard> {
+        let profile_guard = profile_config_read_guard();
+        self.materialize_runtime_config_with_guard(
+            &profile_guard,
+            plugin_id,
+            manifest,
+            Some(profile_guard.generation()),
+        )?;
+        Ok(profile_guard)
+    }
+
+    fn materialize_runtime_config_with_guard(
+        &mut self,
+        profile_guard: &ProfileConfigReadGuard,
+        plugin_id: &str,
+        manifest: &crate::plugins::manifest::PluginManifest,
+        daemon_spawn_generation: Option<u64>,
+    ) -> Result<Option<serde_json::Value>> {
+        if profile_guard.generation() != self.generation {
+            let snapshot = load_runtime_config_lock_snapshot(&self.manager);
+            self.lock_entries = snapshot.lock_entries;
+            self.generation = profile_guard.generation();
+            self.fingerprint = snapshot.fingerprint;
+            self.lock_load_outcome = snapshot.lock_load_outcome;
+            self.fallback_reason = snapshot.fallback_reason;
+        }
+        let lock_entry = self.lock_entries.get(plugin_id);
+        let trace = RuntimeConfigTrace {
+            scope: plugin_id,
+            generation: self.generation,
+            fingerprint: &self.fingerprint,
+            lock_load_outcome: self.lock_load_outcome,
+            fallback_reason: self.fallback_reason,
+            daemon_spawn_generation,
+        };
+        self.manager.materialize_runtime_config_with_trace(
+            plugin_id,
+            lock_entry,
+            Some(manifest),
+            Some(trace),
+        )
+    }
+}
+
+fn load_runtime_config_lock_snapshot(manager: &PluginConfigManager) -> RuntimeConfigLockSnapshot {
+    match crate::features::profile::core::load_plugins_lock() {
+        Ok(lock) => {
+            let fingerprint = fingerprint_lock(&lock);
+            let mut lock_entries = HashMap::with_capacity(lock.plugins.len());
+            for entry in lock.plugins {
+                lock_entries.entry(entry.id.clone()).or_insert(entry);
+            }
+            RuntimeConfigLockSnapshot {
+                lock_entries,
+                fingerprint,
+                lock_load_outcome: "loaded",
+                fallback_reason: None,
+            }
+        }
+        Err(error) => {
+            log::warn!(
+                "Profile lock unavailable during daemon autostart; using manifest identity fallback: {error:#}"
+            );
+            RuntimeConfigLockSnapshot {
+                lock_entries: HashMap::new(),
+                fingerprint: fingerprint_path(&manager.store().plugins_lock_path()),
+                lock_load_outcome: "fallback",
+                fallback_reason: Some("lock_read_failed"),
+            }
+        }
+    }
+}
+
+fn fingerprint_lock(lock: &crate::features::profile::core::PluginsLock) -> String {
+    serde_json::to_vec(lock)
+        .map(|bytes| redacted_profile_fingerprint(&bytes))
+        .unwrap_or_else(|_| "unavailable".to_string())
+}
+
+fn fingerprint_path(path: &Path) -> String {
+    std::fs::read(path)
+        .map(|bytes| redacted_profile_fingerprint(&bytes))
+        .unwrap_or_else(|_| "unavailable".to_string())
+}
+
 impl PluginConfigManager {
     pub fn new() -> Result<Self> {
         Ok(Self::with_store(runtime_cache::active_scope_store()?))
@@ -124,6 +453,7 @@ impl PluginConfigManager {
     }
 
     pub fn save_configs(&self, configs: &PluginConfigs) -> Result<()> {
+        let _profile_guard = profile_config_write_guard();
         let _mutation = begin_runtime_config_mutation(&self.scope_store);
         store::save_configs(
             &self.scope_store.core_plugin_configs_dir(),
@@ -194,13 +524,29 @@ impl PluginConfigManager {
     }
 
     pub fn materialize_installed_runtime_configs(&self) -> Result<usize> {
+        let _profile_guard = profile_config_read_guard();
         let lock = crate::features::profile::core::load_plugins_lock()?;
+        let generation = current_profile_config_generation();
+        let fingerprint = fingerprint_lock(&lock);
         let mut count = 0;
         for entry in lock.plugins {
             let Some(manifest) = try_load_plugin_manifest(&entry.id) else {
                 continue;
             };
-            self.materialize_runtime_config_with(&entry.id, Some(&entry), Some(&manifest))?;
+            let trace = RuntimeConfigTrace {
+                scope: &entry.id,
+                generation,
+                fingerprint: &fingerprint,
+                lock_load_outcome: "loaded",
+                fallback_reason: None,
+                daemon_spawn_generation: None,
+            };
+            self.materialize_runtime_config_with_trace(
+                &entry.id,
+                Some(&entry),
+                Some(&manifest),
+                Some(trace),
+            )?;
             count += 1;
         }
         Ok(count)
@@ -219,11 +565,12 @@ impl PluginConfigManager {
         lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
         manifest: Option<&crate::plugins::manifest::PluginManifest>,
     ) -> Result<()> {
-        let _mutation = begin_runtime_config_mutation(&self.scope_store);
         let uid = uid_from_lock_manifest_or_id(lock_entry, manifest, plugin_id);
         let runtime_path = Self::plugin_config_path(plugin_id)?;
+        let _profile_guard = profile_config_write_guard_for_plugin(plugin_id);
+        let _mutation = begin_runtime_config_mutation(&self.scope_store);
         store::write_plugin_config(&runtime_path, &config)?;
-        save_plugin_config_split(&self.scope_store, &uid, &config, lock_entry, manifest)
+        save_plugin_config_split_unlocked(&self.scope_store, &uid, &config, lock_entry, manifest)
     }
 }
 
@@ -327,19 +674,51 @@ impl PluginConfigManager {
         }
     }
 
+    fn materialize_runtime_config_with_trace(
+        &self,
+        plugin_id: &str,
+        lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
+        manifest: Option<&crate::plugins::manifest::PluginManifest>,
+        trace: Option<RuntimeConfigTrace<'_>>,
+    ) -> Result<Option<serde_json::Value>> {
+        if let Some(manifest) = manifest {
+            if let Some(value) = runtime_cache::lookup(&self.scope_store, plugin_id, manifest) {
+                return Ok(value);
+            }
+        }
+        Ok(self
+            .materialize_runtime_config_once_with_trace(plugin_id, lock_entry, manifest, trace)?
+            .value)
+    }
+
     fn materialize_runtime_config_once(
         &self,
         plugin_id: &str,
         lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
         manifest: Option<&crate::plugins::manifest::PluginManifest>,
     ) -> Result<MaterializedRuntimeConfig> {
+        self.materialize_runtime_config_once_with_trace(plugin_id, lock_entry, manifest, None)
+    }
+
+    fn materialize_runtime_config_once_with_trace(
+        &self,
+        plugin_id: &str,
+        lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
+        manifest: Option<&crate::plugins::manifest::PluginManifest>,
+        trace: Option<RuntimeConfigTrace<'_>>,
+    ) -> Result<MaterializedRuntimeConfig> {
         #[cfg(test)]
         runtime_cache::record_materialization();
         let uid = uid_from_lock_manifest_or_id(lock_entry, manifest, plugin_id);
         let merged = load_plugin_config_merged(&self.scope_store, &uid, lock_entry, manifest)?;
         let runtime_path = Self::plugin_config_path(plugin_id)?;
-        let outcome = materialize_runtime_cache(&runtime_path, &merged)?;
-        trace_runtime_materialization(plugin_id, outcome);
+        let materialization = materialize_runtime_cache(&runtime_path, &merged)?;
+        trace_runtime_materialization(
+            plugin_id,
+            materialization.outcome,
+            materialization.cache_load_outcome,
+            trace,
+        );
         Ok(MaterializedRuntimeConfig {
             value: (!merged.as_object().is_some_and(|m| m.is_empty())).then_some(merged),
         })
@@ -363,15 +742,38 @@ fn wait_for_runtime_cache_change(
     changed
 }
 
-fn materialize_runtime_cache(path: &Path, merged: &serde_json::Value) -> Result<&'static str> {
+fn materialize_runtime_cache(
+    path: &Path,
+    merged: &serde_json::Value,
+) -> Result<RuntimeCacheMaterialization> {
     if merged.as_object().is_some_and(|m| m.is_empty()) {
-        return remove_runtime_cache(path);
+        let cache_load_outcome = if path.exists() {
+            "empty_existing"
+        } else {
+            "empty_missing"
+        };
+        return Ok(RuntimeCacheMaterialization {
+            outcome: remove_runtime_cache(path)?,
+            cache_load_outcome,
+        });
     }
-    if store::load_plugin_config(path).ok().as_ref() == Some(merged) {
-        return Ok("unchanged");
+    let cache_load_outcome = match store::load_plugin_config(path) {
+        Ok(value) if value == *merged => "hit",
+        Ok(_) => "mismatch",
+        Err(_) if path.exists() => "error",
+        Err(_) => "missing",
+    };
+    if cache_load_outcome == "hit" {
+        return Ok(RuntimeCacheMaterialization {
+            outcome: "unchanged",
+            cache_load_outcome,
+        });
     }
     store::write_plugin_config(path, merged)?;
-    Ok("written")
+    Ok(RuntimeCacheMaterialization {
+        outcome: "written",
+        cache_load_outcome,
+    })
 }
 
 fn remove_runtime_cache(path: &Path) -> Result<&'static str> {
@@ -382,17 +784,61 @@ fn remove_runtime_cache(path: &Path) -> Result<&'static str> {
     Ok("removed")
 }
 
-fn trace_runtime_materialization(plugin_id: &str, outcome: &str) {
+fn trace_runtime_materialization(
+    plugin_id: &str,
+    outcome: &str,
+    cache_load_outcome: &str,
+    trace: Option<RuntimeConfigTrace<'_>>,
+) {
+    let (
+        scope,
+        generation,
+        fingerprint,
+        lock_load_outcome,
+        fallback_reason,
+        daemon_spawn_generation,
+    ) = trace.map_or(
+        (
+            "none",
+            0,
+            "unknown",
+            "direct",
+            "none",
+            "unknown".to_string(),
+        ),
+        |trace| {
+            (
+                trace.scope,
+                trace.generation,
+                trace.fingerprint,
+                trace.lock_load_outcome,
+                trace.fallback_reason.unwrap_or("none"),
+                trace
+                    .daemon_spawn_generation
+                    .map_or_else(|| "none".to_string(), |generation| generation.to_string()),
+            )
+        },
+    );
     #[cfg(debug_assertions)]
     {
         qol_runtime::probe!(
             "PROFILE_CONFIG_MATERIALIZE",
-            "plugin={:?} cache=miss outcome={outcome}",
-            plugin_id
+            "plugin={:?} scope={scope:?} cache_load_outcome={cache_load_outcome} materialize_outcome={outcome} profile_generation={generation} fingerprint={fingerprint:?} lock_load_outcome={lock_load_outcome} fallback_reason={fallback_reason} consumed_generation={daemon_spawn_generation} acknowledged_generation=none",
+            plugin_id,
         );
     }
     #[cfg(not(debug_assertions))]
-    let _ = (plugin_id, outcome);
+    let _ = (
+        plugin_id,
+        scope,
+        outcome,
+        cache_load_outcome,
+        generation,
+        fingerprint,
+        lock_load_outcome,
+        fallback_reason,
+        daemon_spawn_generation,
+    );
 }
 
 fn trace_runtime_cache_wait(
@@ -487,7 +933,26 @@ pub fn save_plugin_config_split(
     lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
     manifest: Option<&crate::plugins::manifest::PluginManifest>,
 ) -> Result<()> {
+    let plugin_id = lock_entry
+        .map(|entry| entry.id.clone())
+        .or_else(|| {
+            manifest
+                .and_then(|manifest| manifest.plugin.id.as_ref())
+                .map(|plugin_id| plugin_id.as_str().to_string())
+        })
+        .unwrap_or_else(|| uid.as_str().to_string());
+    let _profile_guard = profile_config_write_guard_for_plugin(&plugin_id);
     let _mutation = begin_runtime_config_mutation(scope_store);
+    save_plugin_config_split_unlocked(scope_store, uid, config, lock_entry, manifest)
+}
+
+fn save_plugin_config_split_unlocked(
+    scope_store: &ProfileScopeStore,
+    uid: &PluginUid,
+    config: &serde_json::Value,
+    lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
+    manifest: Option<&crate::plugins::manifest::PluginManifest>,
+) -> Result<()> {
     let paths: PluginConfigSlicePaths =
         scope_store.plugin_config_slice_paths(uid, lock_entry, manifest)?;
     let default_decl = crate::plugins::manifest::ConfigDeclarations::default();

@@ -1410,4 +1410,306 @@ mod scoped_io {
             load_plugin_config_merged(&store, &lock.uid, Some(&lock), Some(&manifest)).unwrap();
         assert_eq!(merged, config, "round trip must preserve every field");
     }
+
+    #[test]
+    fn runtime_config_context_refreshes_after_guarded_lock_save() {
+        let env_root = TempDir::new().unwrap();
+        let _env = ConfigEnvGuard::new(env_root.path());
+        let store = crate::features::profile::ProfileScopeStore::from_active().unwrap();
+
+        let lock_entry = |id: &str, uid: &str| crate::features::profile::core::PluginLockEntry {
+            uid: crate::plugins::PluginUid::new(uid),
+            id: id.to_string(),
+            repo_url: "https://example.invalid/plugin.git".to_string(),
+            version: "1.0.0".to_string(),
+            platforms: None,
+        };
+        let manifest = |id: &str| -> crate::plugins::PluginManifest {
+            toml::from_str(&format!(
+                r#"
+[plugin]
+id = "{id}"
+name = "{id}"
+description = ""
+version = "1.0.0"
+
+[menu]
+label = "{id}"
+items = []
+"#
+            ))
+            .unwrap()
+        };
+        let write_config = |uid: &crate::plugins::PluginUid, value: serde_json::Value| {
+            let path = store.core_plugin_config_path(uid).unwrap();
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, serde_json::to_string(&value).unwrap()).unwrap();
+        };
+        let read_runtime = |id: &str| {
+            let path = PluginConfigManager::plugin_config_path(id).unwrap();
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(path).unwrap()).unwrap()
+        };
+
+        let old_entries = [
+            lock_entry("plugin-a", "uid-a-old"),
+            lock_entry("plugin-b", "uid-b-old"),
+        ];
+        crate::features::profile::core::save_plugins_lock(
+            &crate::features::profile::core::PluginsLock {
+                version: crate::features::profile::core::CURRENT_PROFILE_VERSION,
+                plugins: old_entries.to_vec(),
+            },
+        )
+        .unwrap();
+        write_config(&old_entries[0].uid, json!({"generation": "old-a"}));
+        write_config(&old_entries[1].uid, json!({"generation": "old-b"}));
+
+        let mut context = RuntimeConfigContext::new().unwrap();
+
+        let new_entries = [
+            lock_entry("plugin-a", "uid-a-new"),
+            lock_entry("plugin-b", "uid-b-new"),
+        ];
+        crate::features::profile::core::save_plugins_lock(
+            &crate::features::profile::core::PluginsLock {
+                version: crate::features::profile::core::CURRENT_PROFILE_VERSION,
+                plugins: new_entries.to_vec(),
+            },
+        )
+        .unwrap();
+        write_config(&new_entries[0].uid, json!({"generation": "new-a"}));
+        write_config(&new_entries[1].uid, json!({"generation": "new-b"}));
+
+        context
+            .materialize_runtime_config_for_manifest("plugin-a", &manifest("plugin-a"))
+            .unwrap();
+        context
+            .materialize_runtime_config_for_manifest("plugin-b", &manifest("plugin-b"))
+            .unwrap();
+        assert_eq!(read_runtime("plugin-a"), json!({"generation": "new-a"}));
+        assert_eq!(read_runtime("plugin-b"), json!({"generation": "new-b"}));
+    }
+
+    #[test]
+    fn runtime_config_context_refreshes_after_guarded_lock_save_with_existing_cache() {
+        let env_root = TempDir::new().unwrap();
+        let _env = ConfigEnvGuard::new(env_root.path());
+        let store = crate::features::profile::ProfileScopeStore::from_active().unwrap();
+        let entry = |uid: &str| crate::features::profile::core::PluginLockEntry {
+            uid: crate::plugins::PluginUid::new(uid),
+            id: "plugin-a".to_string(),
+            repo_url: "https://example.invalid/plugin.git".to_string(),
+            version: "1.0.0".to_string(),
+            platforms: None,
+        };
+        let manifest: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "plugin-a"
+uid = "manifest-uid"
+name = "plugin-a"
+description = ""
+version = "1.0.0"
+
+[menu]
+label = "plugin-a"
+items = []
+"#,
+        )
+        .unwrap();
+        let write_config = |uid: &str, value: &str| {
+            let path = store
+                .core_plugin_config_path(&crate::plugins::PluginUid::new(uid))
+                .unwrap();
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, format!(r#"{{"generation":"{value}"}}"#)).unwrap();
+        };
+        crate::features::profile::core::save_plugins_lock(
+            &crate::features::profile::core::PluginsLock {
+                version: crate::features::profile::core::CURRENT_PROFILE_VERSION,
+                plugins: vec![entry("uid-old")],
+            },
+        )
+        .unwrap();
+        write_config("uid-old", "old");
+        let mut context = RuntimeConfigContext::new().unwrap();
+        context
+            .materialize_runtime_config_for_manifest("plugin-a", &manifest)
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &fs::read_to_string(PluginConfigManager::plugin_config_path("plugin-a").unwrap())
+                    .unwrap()
+            )
+            .unwrap(),
+            json!({"generation": "old"})
+        );
+
+        crate::features::profile::core::save_plugins_lock(
+            &crate::features::profile::core::PluginsLock {
+                version: crate::features::profile::core::CURRENT_PROFILE_VERSION,
+                plugins: vec![entry("uid-new")],
+            },
+        )
+        .unwrap();
+        write_config("uid-new", "new");
+        context
+            .materialize_runtime_config_for_manifest("plugin-a", &manifest)
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &fs::read_to_string(PluginConfigManager::plugin_config_path("plugin-a").unwrap())
+                    .unwrap()
+            )
+            .unwrap(),
+            json!({"generation": "new"})
+        );
+    }
+
+    #[test]
+    fn autostart_context_falls_back_to_manifest_identity_when_lock_is_malformed() {
+        let env_root = TempDir::new().unwrap();
+        let _env = ConfigEnvGuard::new(env_root.path());
+        let store = crate::features::profile::ProfileScopeStore::from_active().unwrap();
+        let lock_path = store.plugins_lock_path();
+        fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        fs::write(&lock_path, b"{malformed").unwrap();
+        let manifest: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "plugin-a"
+uid = "manifest-uid"
+name = "plugin-a"
+description = ""
+version = "1.0.0"
+
+[menu]
+label = "plugin-a"
+items = []
+"#,
+        )
+        .unwrap();
+        let config_path = store
+            .core_plugin_config_path(&crate::plugins::PluginUid::new("manifest-uid"))
+            .unwrap();
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        fs::write(&config_path, r#"{"generation":"manifest"}"#).unwrap();
+
+        let mut context = RuntimeConfigContext::new().unwrap();
+        assert_eq!(context.lock_load_outcome, "fallback");
+        context
+            .materialize_runtime_config_for_manifest("plugin-a", &manifest)
+            .unwrap();
+
+        let runtime_path = PluginConfigManager::plugin_config_path("plugin-a").unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(runtime_path).unwrap())
+                .unwrap(),
+            json!({"generation": "manifest"})
+        );
+    }
+
+    #[test]
+    fn autostart_context_waits_for_profile_generation_transition() {
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+
+        let env_root = TempDir::new().unwrap();
+        let _env = ConfigEnvGuard::new(env_root.path());
+        let root = env_root.path().to_path_buf();
+        let store = crate::features::profile::ProfileScopeStore::from_active().unwrap();
+        let entry = |uid: &str| crate::features::profile::core::PluginLockEntry {
+            uid: crate::plugins::PluginUid::new(uid),
+            id: "plugin-a".to_string(),
+            repo_url: "https://example.invalid/plugin.git".to_string(),
+            version: "1.0.0".to_string(),
+            platforms: None,
+        };
+        let manifest: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "plugin-a"
+uid = "manifest-uid"
+name = "plugin-a"
+description = ""
+version = "1.0.0"
+
+[menu]
+label = "plugin-a"
+items = []
+"#,
+        )
+        .unwrap();
+        let write_config = |uid: &str, value: &str| {
+            let path = store
+                .core_plugin_config_path(&crate::plugins::PluginUid::new(uid))
+                .unwrap();
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, format!(r#"{{"generation":"{value}"}}"#)).unwrap();
+        };
+        crate::features::profile::core::save_plugins_lock(
+            &crate::features::profile::core::PluginsLock {
+                version: crate::features::profile::core::CURRENT_PROFILE_VERSION,
+                plugins: vec![entry("uid-old")],
+            },
+        )
+        .unwrap();
+        write_config("uid-old", "old");
+        let context = RuntimeConfigContext::new().unwrap();
+
+        let (ready_tx, ready_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let writer_root = root.clone();
+        let writer = std::thread::spawn(move || {
+            let _path_guard = crate::paths::push_test_path_root(&writer_root);
+            let _profile_guard = profile_config_write_guard();
+            let store = crate::features::profile::ProfileScopeStore::from_active().unwrap();
+            let lock_path = store.plugins_lock_path();
+            fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+            fs::write(
+                lock_path,
+                serde_json::to_string(&crate::features::profile::core::PluginsLock {
+                    version: crate::features::profile::core::CURRENT_PROFILE_VERSION,
+                    plugins: vec![entry("uid-new")],
+                })
+                .unwrap(),
+            )
+            .unwrap();
+            let config_path = store
+                .core_plugin_config_path(&crate::plugins::PluginUid::new("uid-new"))
+                .unwrap();
+            fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+            fs::write(&config_path, r#"{"generation":"new"}"#).unwrap();
+            ready_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        ready_rx.recv().unwrap();
+
+        let (started_tx, started_rx) = channel();
+        let (done_tx, done_rx) = channel();
+        let materializer_root = root.clone();
+        let materializer = std::thread::spawn(move || {
+            let _path_guard = crate::paths::push_test_path_root(&materializer_root);
+            started_tx.send(()).unwrap();
+            let mut context = context;
+            let success = context
+                .materialize_runtime_config_for_manifest("plugin-a", &manifest)
+                .is_ok();
+            done_tx.send(success).unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+
+        release_tx.send(()).unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        materializer.join().unwrap();
+        writer.join().unwrap();
+
+        let runtime_path = PluginConfigManager::plugin_config_path("plugin-a").unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(runtime_path).unwrap())
+                .unwrap(),
+            json!({"generation": "new"})
+        );
+    }
 }

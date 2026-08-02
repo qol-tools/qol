@@ -123,7 +123,18 @@ fn reload_manager_and_notify_inner(state: &AppState, sync_profile: bool, plugin_
         }
     };
     if reload_ok && sync_profile {
-        if let Err(error) =
+        if let Some(plugin_id) = plugin_id {
+            match crate::features::profile::core::sync_plugins_lock_from_plugins_with_generation(
+                manager.plugins(),
+            ) {
+                Ok((_, generation)) => {
+                    manager.acknowledge_profile_plugin_generation(plugin_id, generation);
+                }
+                Err(error) => {
+                    log::error!("Failed to sync profile plugins lock: {}", error);
+                }
+            }
+        } else if let Err(error) =
             crate::features::profile::core::sync_plugins_lock_from_plugins(manager.plugins())
         {
             log::error!("Failed to sync profile plugins lock: {}", error);

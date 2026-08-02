@@ -13,8 +13,15 @@ pub(super) use listener::DaemonListener;
 const DAEMON_STOP_GRACE: Duration = Duration::from_secs(2);
 
 pub(super) fn start_daemon(plugin: &mut Plugin) -> Result<()> {
+    start_daemon_with_context(plugin, None).map(|_| ())
+}
+
+pub(super) fn start_daemon_with_context(
+    plugin: &mut Plugin,
+    runtime_config: Option<&mut crate::plugins::config::RuntimeConfigContext>,
+) -> Result<Option<u64>> {
     let Some(daemon_config) = spawn::enabled_daemon(plugin).cloned() else {
-        return Ok(());
+        return Ok(None);
     };
 
     if let Some(existing) = plugin.daemon_listener.take() {
@@ -24,9 +31,14 @@ pub(super) fn start_daemon(plugin: &mut Plugin) -> Result<()> {
         plugin.daemon_listener = listener::bind_for_plugin(plugin, &daemon_config);
     }
 
-    let child = spawn::spawn_daemon(plugin, &daemon_config, plugin.daemon_listener.as_ref())?;
+    let (child, consumed_generation) = spawn::spawn_daemon(
+        plugin,
+        &daemon_config,
+        plugin.daemon_listener.as_ref(),
+        runtime_config,
+    )?;
     register_daemon(plugin, child);
-    Ok(())
+    Ok(Some(consumed_generation))
 }
 
 pub(super) fn existing_daemon_socket_ready(plugin: &Plugin) -> bool {

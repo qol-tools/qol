@@ -511,3 +511,92 @@ fn kill_plugin_processes_preserves_other_plugins_tracking() {
         assert_eq!(tracked_running.get("plugin-b::open"), Some(&999_003));
     });
 }
+
+#[test]
+fn on_demand_readiness_cannot_bypass_shutdown_reconciliation() {
+    let plugin_manager = Arc::new(Mutex::new(PluginManager::new()));
+    plugin_manager.lock().unwrap().shutdown();
+
+    let error = ensure_daemon_ready(
+        &plugin_manager,
+        "plugin-shutdown",
+        "action",
+        std::path::Path::new("/tmp/qol-test-daemon.sock"),
+        |_| true,
+    )
+    .expect_err("readiness must not bypass the lifecycle cancellation gate");
+    assert!(error.to_string().contains("shutting down"));
+}
+
+#[test]
+fn repeated_daemon_action_resolution_does_not_read_profile_state() {
+    let dir = TempDir::new().unwrap();
+    let plugin = make_plugin(
+        &dir,
+        "open",
+        None,
+        Some(DaemonConfig {
+            enabled: true,
+            command: "daemon".to_string(),
+            socket: Some("/tmp/qol-test.sock".to_string()),
+            port: None,
+            extra_ports: Vec::new(),
+        }),
+    );
+    let mut manager = PluginManager::new();
+    manager.insert_plugin_for_test(plugin);
+    let plugin_manager = Arc::new(Mutex::new(manager));
+
+    crate::plugins::config::reset_profile_config_read_count();
+    for _ in 0..5 {
+        let resolved = resolve_plugin_action(&plugin_manager, "plugin-test", "open").unwrap();
+        assert!(resolved.daemon_socket.is_some());
+    }
+    assert_eq!(crate::plugins::config::profile_config_read_count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn repeated_daemon_action_readiness_does_not_read_profile_state() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path_root = TempDir::new().unwrap();
+    let _path = crate::paths::push_test_path_root(path_root.path());
+    let plugin_dir = TempDir::new().unwrap();
+    let daemon = plugin_dir.path().join("daemon");
+    fs::write(&daemon, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    fs::set_permissions(&daemon, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut plugin = make_plugin(
+        &plugin_dir,
+        "open",
+        None,
+        Some(DaemonConfig {
+            enabled: true,
+            command: "daemon".to_string(),
+            socket: Some("/tmp/qol-test.sock".to_string()),
+            port: None,
+            extra_ports: Vec::new(),
+        }),
+    );
+    plugin.start_daemon().unwrap();
+
+    let mut manager = PluginManager::new();
+    manager.insert_plugin_for_test(plugin);
+    let plugin_manager = Arc::new(Mutex::new(manager));
+    crate::plugins::config::reset_profile_config_read_count();
+
+    for _ in 0..5 {
+        let resolved = resolve_plugin_action(&plugin_manager, "plugin-test", "open").unwrap();
+        ensure_daemon_ready(
+            &plugin_manager,
+            "plugin-test",
+            "open",
+            resolved.daemon_socket.as_deref().unwrap(),
+            |_| true,
+        )
+        .unwrap();
+    }
+
+    assert_eq!(crate::plugins::config::profile_config_read_count(), 0);
+    plugin_manager.lock().unwrap().shutdown();
+}

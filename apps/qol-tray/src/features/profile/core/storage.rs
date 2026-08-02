@@ -1,7 +1,7 @@
 use super::{PluginsLock, ProfileImportBundle, ProfileManifest, CURRENT_PROFILE_VERSION};
 use anyhow::{bail, Result};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 pub fn ensure_profile_dirs() -> Result<()> {
@@ -38,9 +38,59 @@ pub fn load_plugins_lock() -> Result<PluginsLock> {
 }
 
 pub fn save_plugins_lock(lock: &PluginsLock) -> Result<()> {
+    update_plugins_lock(|_| Ok(lock.clone())).map(|_| ())
+}
+
+pub(crate) fn update_plugins_lock<F>(build: F) -> Result<(PluginsLock, u64)>
+where
+    F: FnOnce(&PluginsLock) -> Result<PluginsLock>,
+{
     let _mutation = crate::plugins::config::begin_runtime_config_mutation_for_active_profile()?;
+    let profile_guard = crate::plugins::config::profile_config_write_guard_unmarked();
     ensure_profile_dirs()?;
-    crate::file_io::write_pretty_json(&crate::paths::profile_plugins_lock_path()?, lock)
+    let (previous, fallback) = match load_plugins_lock() {
+        Ok(previous) => (previous, false),
+        Err(_) => (
+            PluginsLock {
+                version: CURRENT_PROFILE_VERSION,
+                plugins: Vec::new(),
+            },
+            true,
+        ),
+    };
+    let lock = build(&previous)?;
+    let scope = if fallback {
+        crate::plugins::config::ProfileConfigInvalidation::All
+    } else {
+        crate::plugins::config::ProfileConfigInvalidation::Plugins(changed_plugin_ids(
+            &previous, &lock,
+        ))
+    };
+    let generation = profile_guard.mark_changed(scope);
+    crate::file_io::write_pretty_json(&crate::paths::profile_plugins_lock_path()?, &lock)?;
+    Ok((lock, generation))
+}
+
+fn changed_plugin_ids(previous: &PluginsLock, next: &PluginsLock) -> Vec<String> {
+    let previous = previous
+        .plugins
+        .iter()
+        .map(|entry| (entry.id.as_str(), entry))
+        .collect::<HashMap<_, _>>();
+    let next = next
+        .plugins
+        .iter()
+        .map(|entry| (entry.id.as_str(), entry))
+        .collect::<HashMap<_, _>>();
+    previous
+        .keys()
+        .chain(next.keys())
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|plugin_id| previous.get(plugin_id) != next.get(plugin_id))
+        .map(str::to_string)
+        .collect()
 }
 
 pub fn read_plugin_configs() -> Result<HashMap<String, Value>> {
@@ -53,6 +103,7 @@ pub fn read_plugin_configs() -> Result<HashMap<String, Value>> {
 }
 
 pub fn replace_plugin_configs(configs: &HashMap<String, Value>) -> Result<()> {
+    let _profile_guard = crate::plugins::config::profile_config_write_guard();
     let _mutation = crate::plugins::config::begin_runtime_config_mutation_for_active_profile()?;
     ensure_profile_dirs()?;
     replace_plugin_configs_in_dir(&crate::paths::profile_plugin_configs_dir()?, configs)

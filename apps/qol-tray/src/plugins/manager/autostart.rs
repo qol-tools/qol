@@ -6,21 +6,39 @@ use std::time::{Duration, Instant};
 pub(super) const DEV_DAEMON_AUTOSTART_MARKER: &str = ".qol-tray-dev-autostart";
 const DAEMON_READY_INTERVAL: Duration = Duration::from_millis(25);
 
-pub(super) fn start_plugin_daemons<'a, I>(plugins: I)
+pub(super) fn start_plugin_daemons<'a, I>(
+    plugins: I,
+    cancellation: Option<&qol_process::CancellationToken>,
+) -> Option<u64>
 where
     I: IntoIterator<Item = &'a mut Plugin>,
 {
     let mut expected_lifelines = Vec::new();
+    let mut runtime_config = None;
+    let mut runtime_config_attempted = false;
+    let mut consumed_generation: Option<u64> = None;
     for plugin in plugins {
+        if cancellation.is_some_and(qol_process::CancellationToken::is_cancelled) {
+            break;
+        }
         if !should_start_daemon(plugin) {
             continue;
         }
-        if daemon_enabled(plugin) {
+        let daemon_is_enabled = daemon_enabled(plugin);
+        if daemon_is_enabled && !runtime_config_attempted {
+            runtime_config = Some(crate::plugins::config::RuntimeConfigContext::new());
+            runtime_config_attempted = true;
+        }
+        if daemon_is_enabled {
             expected_lifelines.push(plugin.id.as_str().to_string());
         }
-        start_daemon(plugin);
+        if let Some(generation) = start_daemon(plugin, runtime_config.as_mut(), cancellation) {
+            consumed_generation =
+                Some(consumed_generation.map_or(generation, |current| current.max(generation)));
+        }
     }
     audit_host_death_lifelines(expected_lifelines);
+    consumed_generation
 }
 
 fn audit_host_death_lifelines(expected: Vec<String>) {
@@ -71,7 +89,14 @@ fn daemon_enabled(plugin: &Plugin) -> bool {
         .is_some_and(|daemon| daemon.enabled)
 }
 
-fn start_daemon(plugin: &mut Plugin) {
+fn start_daemon(
+    plugin: &mut Plugin,
+    runtime_config: Option<&mut anyhow::Result<crate::plugins::config::RuntimeConfigContext>>,
+    cancellation: Option<&qol_process::CancellationToken>,
+) -> Option<u64> {
+    if cancellation.is_some_and(qol_process::CancellationToken::is_cancelled) {
+        return None;
+    }
     if crate::dev_generation::is_rolling_restart()
         && super::super::daemon_lifecycle::existing_daemon_socket_ready(plugin)
     {
@@ -79,10 +104,23 @@ fn start_daemon(plugin: &mut Plugin) {
             "Preserving existing daemon for plugin {} during rolling restart",
             plugin.id
         );
-        return;
+        return None;
     }
-    if let Err(error) = plugin.start_daemon() {
-        log::error!("Failed to start daemon for plugin {}: {}", plugin.id, error);
+    let result = match runtime_config {
+        Some(Ok(runtime_config)) => {
+            super::super::daemon_lifecycle::start_daemon_with_context(plugin, Some(runtime_config))
+        }
+        Some(Err(error)) => Err(anyhow::anyhow!(
+            "Failed to load profile config for daemon autostart: {error:#}"
+        )),
+        None => plugin.start_daemon().map(|_| None),
+    };
+    match result {
+        Ok(generation) => generation,
+        Err(error) => {
+            log::error!("Failed to start daemon for plugin {}: {}", plugin.id, error);
+            None
+        }
     }
 }
 

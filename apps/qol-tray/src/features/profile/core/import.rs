@@ -1,8 +1,5 @@
 use super::storage::write_core_settings;
-use super::{
-    ApplyProfileResult, ImportPluginResult, PluginLockEntry, PluginsLock, ProfileImportBundle,
-    CURRENT_PROFILE_VERSION,
-};
+use super::{ApplyProfileResult, ImportPluginResult, PluginLockEntry, ProfileImportBundle};
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -13,10 +10,6 @@ pub async fn apply_import_bundle(
     bundle: &ProfileImportBundle,
 ) -> Result<ApplyProfileResult> {
     super::ensure_profile_dirs()?;
-    let previous_lock = super::load_plugins_lock().unwrap_or(PluginsLock {
-        version: CURRENT_PROFILE_VERSION,
-        plugins: Vec::new(),
-    });
     let plugins = super::import_plugins(bundle);
     validate_imported_plugin_configs(plugins_dir, bundle.plugin_configs.as_ref(), &plugins).await?;
     let plugin_results = reconcile_plugins(plugins_dir, &plugins).await;
@@ -24,11 +17,7 @@ pub async fn apply_import_bundle(
     if let Some(plugin_configs) = &bundle.plugin_configs {
         super::replace_plugin_configs(plugin_configs)?;
     }
-    super::plugins_lock::sync_plugins_lock_from_imported_state(
-        plugins_dir,
-        &previous_lock,
-        &plugins,
-    )?;
+    super::plugins_lock::sync_plugins_lock_from_imported_state(plugins_dir, &plugins)?;
     project_plugin_configs_to_dir(plugins_dir, bundle.plugin_configs.as_ref())?;
     let success = plugin_results
         .iter()

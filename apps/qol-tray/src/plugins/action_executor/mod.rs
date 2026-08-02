@@ -272,9 +272,12 @@ fn resolve_plugin_daemon_socket(
     plugin_id: &str,
 ) -> Result<std::path::PathBuf, ActionExecutionError> {
     let (identity, socket) = {
-        let plugins = plugin_manager
+        let mut plugins = plugin_manager
             .lock()
             .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
+        plugins
+            .reconcile_profile_generation()
+            .map_err(|error| ActionExecutionError::SpawnFailed(error.to_string()))?;
         let plugin = plugins
             .get(plugin_id)
             .ok_or_else(|| ActionExecutionError::PluginNotFound(PluginId::new(plugin_id)))?;
@@ -302,9 +305,12 @@ fn resolve_plugin_action(
     action_id: &str,
 ) -> Result<resolution::ResolvedAction, ActionExecutionError> {
     let (identity, resolved) = {
-        let plugins = plugin_manager
+        let mut plugins = plugin_manager
             .lock()
             .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
+        plugins
+            .reconcile_profile_generation()
+            .map_err(|error| ActionExecutionError::SpawnFailed(error.to_string()))?;
         let plugin = plugins
             .get(plugin_id)
             .ok_or_else(|| ActionExecutionError::PluginNotFound(PluginId::new(plugin_id)))?;
@@ -360,7 +366,8 @@ fn materialize_plugin_runtime_config(
                 "failed to materialize runtime config for {}: {error:#}",
                 plugin_id
             ))
-        })
+        })?;
+    Ok(())
 }
 
 fn trace_runtime_cache_hit(
@@ -427,10 +434,6 @@ fn ensure_daemon_ready(
     socket_path: &Path,
     readiness_probe: fn(&Path) -> bool,
 ) -> Result<(), ActionExecutionError> {
-    if readiness_probe(socket_path) {
-        return Ok(());
-    }
-
     {
         let mut plugins = plugin_manager
             .lock()
@@ -438,6 +441,10 @@ fn ensure_daemon_ready(
         plugins
             .ensure_plugin_daemon_running(plugin_id)
             .map_err(|error| ActionExecutionError::SpawnFailed(error.to_string()))?;
+    }
+
+    if readiness_probe(socket_path) {
+        return Ok(());
     }
 
     wait_for_daemon_socket(socket_path, readiness_probe)

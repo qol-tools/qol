@@ -16,8 +16,10 @@ pub(super) fn spawn_daemon(
     plugin: &Plugin,
     daemon_config: &DaemonConfig,
     daemon_listener: Option<&super::DaemonListener>,
-) -> Result<Child> {
-    materialize_runtime_config(plugin)?;
+    runtime_config: Option<&mut crate::plugins::config::RuntimeConfigContext>,
+) -> Result<(Child, u64)> {
+    let profile_guard = materialize_runtime_config_with_context(plugin, runtime_config)?;
+    let consumed_generation = profile_guard.generation();
     let daemon_path = daemon_path(plugin, daemon_config)?;
     let mut command = daemon_command(plugin, daemon_config, &daemon_path, daemon_listener);
     #[cfg(feature = "dev")]
@@ -35,7 +37,7 @@ pub(super) fn spawn_daemon(
             commit.as_deref(),
             child.stderr.take(),
         );
-        Ok(child)
+        Ok((child, consumed_generation))
     }
     #[cfg(feature = "dev")]
     {
@@ -46,14 +48,27 @@ pub(super) fn spawn_daemon(
             child.stderr.take(),
             relay_patterns,
         );
-        Ok(child)
+        Ok((child, consumed_generation))
     }
 }
 
-fn materialize_runtime_config(plugin: &Plugin) -> Result<()> {
+fn materialize_runtime_config(
+    plugin: &Plugin,
+) -> Result<crate::plugins::config::ProfileConfigReadGuard> {
+    let profile_guard = crate::plugins::config::profile_config_read_guard();
     crate::plugins::PluginConfigManager::new()?
         .materialize_runtime_config_for_manifest(plugin.id.as_str(), &plugin.manifest)?;
-    Ok(())
+    Ok(profile_guard)
+}
+
+fn materialize_runtime_config_with_context(
+    plugin: &Plugin,
+    runtime_config: Option<&mut crate::plugins::config::RuntimeConfigContext>,
+) -> Result<crate::plugins::config::ProfileConfigReadGuard> {
+    let Some(runtime_config) = runtime_config else {
+        return materialize_runtime_config(plugin);
+    };
+    runtime_config.prepare_runtime_config_for_spawn(plugin.id.as_str(), &plugin.manifest)
 }
 
 fn daemon_path(plugin: &Plugin, daemon_config: &DaemonConfig) -> Result<PathBuf> {

@@ -159,38 +159,71 @@ fn claim_promotion(is_shadow: bool, promoted: &std::sync::atomic::AtomicBool) ->
 #[cfg(feature = "dev")]
 fn complete_promotion_in_background(app_state: AppState) {
     tokio::spawn(async move {
+        let mut shutdown_rx = app_state.shutdown_tx.subscribe();
+        let lifecycle_cancellation = match app_state.plugin_manager.lock() {
+            Ok(manager) => manager.lifecycle_cancellation(),
+            Err(error) => {
+                log::error!("Plugin manager mutex poisoned during promoted startup: {error}");
+                return;
+            }
+        };
         let repair_state = app_state.clone();
-        let dev_links_repaired = tokio::task::spawn_blocking(repair_startup_state_after_promotion)
-            .await
-            .unwrap_or_else(|error| {
-                log::error!("promoted startup repair task failed: {}", error);
-                false
-            });
+        let dev_links_repaired = tokio::select! {
+            _ = shutdown_rx.recv() => {
+                lifecycle_cancellation.cancel();
+                return;
+            }
+            result = tokio::task::spawn_blocking(repair_startup_state_after_promotion) => {
+                result.unwrap_or_else(|error| {
+                    log::error!("promoted startup repair task failed: {}", error);
+                    false
+                })
+            }
+        };
         if dev_links_repaired {
-            tokio::task::spawn_blocking(move || {
+            let reload = tokio::task::spawn_blocking(move || {
                 helpers::reload_manager_and_notify_without_profile_sync(&repair_state);
-            })
-            .await
-            .unwrap_or_else(|error| {
-                log::error!("promoted plugin reload task failed: {}", error);
             });
+            tokio::select! {
+                _ = shutdown_rx.recv() => {
+                    lifecycle_cancellation.cancel();
+                    return;
+                }
+                result = reload => {
+                    if let Err(error) = result {
+                        log::error!("promoted plugin reload task failed: {}", error);
+                    }
+                }
+            }
         }
         let plugin_manager = app_state.plugin_manager.clone();
-        let missing_daemons = tokio::task::spawn_blocking(move || match plugin_manager.lock() {
+        let autostart = tokio::task::spawn_blocking(move || match plugin_manager.lock() {
             Ok(mut manager) => {
-                manager.autostart_daemons();
+                manager.reconcile_and_autostart_daemons();
                 manager.wait_for_autostart_daemons_ready(PROMOTED_DAEMON_READY_TIMEOUT)
             }
             Err(_) => {
                 log::error!("plugin manager lock poisoned during promoted daemon autostart");
                 Vec::new()
             }
-        })
-        .await
-        .unwrap_or_else(|error| {
-            log::error!("promoted daemon autostart task failed: {}", error);
-            Vec::new()
         });
+        let missing_daemons = tokio::select! {
+            _ = shutdown_rx.recv() => {
+                lifecycle_cancellation.cancel();
+                return;
+            }
+            result = autostart => result.unwrap_or_else(|error| {
+                log::error!("promoted daemon autostart task failed: {}", error);
+                Vec::new()
+            })
+        };
+        if !matches!(
+            shutdown_rx.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ) {
+            lifecycle_cancellation.cancel();
+            return;
+        }
         if missing_daemons.is_empty() {
             log::info!("Promoted dev generation: daemon autostart ready");
         } else {
@@ -326,19 +359,49 @@ fn assemble_app(
 fn start_sync_loop(app_state: &AppState) {
     let state = app_state.clone();
     tokio::spawn(async move {
+        let mut shutdown_rx = state.shutdown_tx.subscribe();
+        let lifecycle_cancellation = match state.plugin_manager.lock() {
+            Ok(manager) => manager.lifecycle_cancellation(),
+            Err(error) => {
+                log::error!("Plugin manager mutex poisoned during sync startup: {error}");
+                return;
+            }
+        };
         let mut interval = tokio::time::interval(
             crate::features::profile::sync::SyncService::auto_push_interval(),
         );
         loop {
-            interval.tick().await;
-            let result = match state.sync_service.auto_push_if_dirty().await {
-                Ok(result) => result,
-                Err(error) => {
-                    log::error!("Cloud sync auto-push failed: {error:#}");
-                    continue;
+            tokio::select! {
+                _ = shutdown_rx.recv() => {
+                    lifecycle_cancellation.cancel();
+                    return;
+                }
+                _ = interval.tick() => {}
+            }
+            let result = tokio::select! {
+                _ = shutdown_rx.recv() => {
+                    lifecycle_cancellation.cancel();
+                    return;
+                }
+                result = state.sync_service.auto_push_if_dirty() => match result {
+                    Ok(result) => result,
+                    Err(error) => {
+                        log::error!("Cloud sync auto-push failed: {error:#}");
+                        continue;
+                    }
                 }
             };
+            if lifecycle_cancellation.is_cancelled() {
+                return;
+            }
             if result.applied_remote {
+                if !matches!(
+                    shutdown_rx.try_recv(),
+                    Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+                ) {
+                    lifecycle_cancellation.cancel();
+                    return;
+                }
                 helpers::reload_manager_and_notify_without_profile_sync(&state);
             }
         }

@@ -24,6 +24,28 @@ struct ConfigEnvGuard {
     _path_root: crate::paths::TestPathRootGuard,
 }
 
+struct TestPathEnvGuard {
+    previous: Option<OsString>,
+}
+
+impl TestPathEnvGuard {
+    fn new(root: &Path) -> Self {
+        let previous = std::env::var_os("QOL_TRAY_TEST_PATH_ROOT");
+        std::env::set_var("QOL_TRAY_TEST_PATH_ROOT", root);
+        Self { previous }
+    }
+}
+
+impl Drop for TestPathEnvGuard {
+    fn drop(&mut self) {
+        if let Some(previous) = &self.previous {
+            std::env::set_var("QOL_TRAY_TEST_PATH_ROOT", previous);
+            return;
+        }
+        std::env::remove_var("QOL_TRAY_TEST_PATH_ROOT");
+    }
+}
+
 impl ConfigEnvGuard {
     fn new(root: &Path) -> Self {
         let path_root = crate::paths::push_test_path_root(root);
@@ -106,6 +128,16 @@ async fn setup_profile_env() -> (
     (guard, root, env, plugins_dir)
 }
 
+fn test_lock_entry(id: &str, uid: &str) -> PluginLockEntry {
+    PluginLockEntry {
+        uid: PluginUid::new(uid),
+        id: id.to_string(),
+        repo_url: format!("https://example.invalid/{id}.git"),
+        version: "1.0.0".to_string(),
+        platforms: None,
+    }
+}
+
 #[test]
 fn import_plugins_prefers_explicit_lock_entries() {
     let bundle = ProfileImportBundle {
@@ -126,6 +158,71 @@ fn import_plugins_prefers_explicit_lock_entries() {
     assert_eq!(plugins.len(), 1);
     assert_eq!(plugins[0].id, "plugin-test");
     assert_eq!(plugins[0].version, "1.2.3");
+}
+
+#[test]
+fn concurrent_lock_updates_serialize_scope_and_preserve_unrelated_state() {
+    let _env = crate::test_support::env_lock().blocking_lock();
+    let root = TempDir::new().unwrap();
+    let _path = TestPathEnvGuard::new(root.path());
+    save_plugins_lock(&PluginsLock {
+        version: CURRENT_PROFILE_VERSION,
+        plugins: vec![
+            test_lock_entry("plugin-a", "uid-a-old"),
+            test_lock_entry("plugin-b", "uid-b-old"),
+        ],
+    })
+    .unwrap();
+    let baseline = crate::plugins::config::current_profile_config_generation();
+
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let first = std::thread::spawn(move || {
+        super::storage::update_plugins_lock(|previous| {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            let mut next = previous.clone();
+            next.plugins
+                .iter_mut()
+                .find(|entry| entry.id == "plugin-a")
+                .unwrap()
+                .uid = PluginUid::new("uid-a-new");
+            Ok(next)
+        })
+    });
+    entered_rx.recv().unwrap();
+
+    let (attempted_tx, attempted_rx) = std::sync::mpsc::channel();
+    let second = std::thread::spawn(move || {
+        attempted_tx.send(()).unwrap();
+        super::storage::update_plugins_lock(|previous| {
+            let mut next = previous.clone();
+            next.plugins
+                .iter_mut()
+                .find(|entry| entry.id == "plugin-b")
+                .unwrap()
+                .uid = PluginUid::new("uid-b-new");
+            Ok(next)
+        })
+    });
+    attempted_rx.recv().unwrap();
+    release_tx.send(()).unwrap();
+
+    first.join().unwrap().unwrap();
+    second.join().unwrap().unwrap();
+
+    let lock = load_plugins_lock().unwrap();
+    assert_eq!(lock.plugins[0].uid, PluginUid::new("uid-a-new"));
+    assert_eq!(lock.plugins[1].uid, PluginUid::new("uid-b-new"));
+    let (_, invalidation) =
+        crate::plugins::config::profile_config_invalidation_since(baseline).unwrap();
+    assert_eq!(
+        invalidation,
+        crate::plugins::config::ProfileConfigInvalidation::Plugins(vec![
+            "plugin-a".to_string(),
+            "plugin-b".to_string(),
+        ])
+    );
 }
 
 #[test]

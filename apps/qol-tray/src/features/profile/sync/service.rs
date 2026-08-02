@@ -225,23 +225,31 @@ impl SyncService {
         };
         let token = require_github_token()?;
         let repo_path = crate::paths::profile_dir()?;
-        let repo_url = target.repo_url.clone();
+        let clone_target = target.clone();
         let pulled = tokio::task::spawn_blocking(move || -> Result<PullTaskOutput> {
-            let repo = match GitRepo::open(&repo_path) {
-                Ok(repo) => repo,
-                Err(_) => GitRepo::clone(&repo_url, &repo_path, Some(&token))?,
+            let (repo, cloned) = match GitRepo::open(&repo_path) {
+                Ok(repo) => (repo, false),
+                Err(_) => (
+                    clone_remote_via_staging(&clone_target, &repo_path, &token)?,
+                    true,
+                ),
             };
-            let outcome = repo.pull(Some(&token))?;
+            let outcome = repo.fetch(Some(&token))?;
+            let mut applied_remote = cloned;
+            if matches!(outcome, PullOutcome::FastForwarded { .. }) {
+                apply_fast_forward(&repo, &outcome, "pull")?;
+                applied_remote = true;
+            }
             let mut conflicts = Vec::new();
             let mut auto_applied = false;
             if matches!(outcome, PullOutcome::Diverged { .. }) {
                 let merge = reconcile(&repo)?;
                 if merge.conflicts.is_empty() {
-                    repo.reset_to_remote()?;
-                    write_merged_profile(&repo_path, &merge.merged)?;
+                    apply_merged_profile(&repo, &repo_path, &merge.merged, "pull")?;
                     repo.commit_all("merge remote changes", &SignatureSpec::default_for_app())?;
                     repo.push(Some(&token))?;
                     auto_applied = true;
+                    applied_remote = true;
                 } else {
                     conflicts = decorate_conflicts(&repo, merge.conflicts)?;
                 }
@@ -255,6 +263,7 @@ impl SyncService {
                 head,
                 conflicts,
                 auto_applied,
+                applied_remote,
             })
         })
         .await
@@ -268,14 +277,17 @@ impl SyncService {
             head,
             conflicts,
             auto_applied,
+            applied_remote,
         } = output;
         let message = match &outcome {
+            _ if applied_remote && matches!(outcome, PullOutcome::AlreadyUpToDate) => {
+                "Pulled changes from remote".to_string()
+            }
             PullOutcome::AlreadyUpToDate => "Already up to date".to_string(),
             PullOutcome::FastForwarded { .. } => "Pulled changes from remote".to_string(),
             PullOutcome::Diverged { .. } if auto_applied => "Merged remote changes".to_string(),
             PullOutcome::Diverged { .. } => format!("{} setting(s) need review", conflicts.len()),
         };
-        let applied = matches!(outcome, PullOutcome::FastForwarded { .. }) || auto_applied;
         let mut state = self.state_mut();
         if conflicts.is_empty() {
             state.incident = None;
@@ -306,7 +318,7 @@ impl SyncService {
         drop(state);
         Ok(SyncActionResult {
             message,
-            applied_remote: applied,
+            applied_remote,
             status: self.build_status_with(&saved, Some(&target)),
         })
     }
@@ -346,8 +358,7 @@ impl SyncService {
                 &ProfileSnapshot { files: remote },
                 &resolve,
             );
-            repo.reset_to_remote()?;
-            write_merged_profile(&repo_path, &merged.merged)?;
+            apply_merged_profile(&repo, &repo_path, &merged.merged, "resolve_conflicts")?;
             repo.commit_all("resolve sync conflicts", &SignatureSpec::default_for_app())?;
             repo.push(Some(&token))?;
             repo.head_sha()
@@ -740,6 +751,7 @@ struct PullTaskOutput {
     head: Option<String>,
     conflicts: Vec<ResolvableConflict>,
     auto_applied: bool,
+    applied_remote: bool,
 }
 
 struct PushTaskOutput {
@@ -756,21 +768,22 @@ fn push_profile_changes(
 ) -> Result<PushTaskOutput> {
     let repo = GitRepo::open(repo_path)?;
     ensure_gitignore(repo_path)?;
-    {
-        let _mutation = crate::plugins::config::begin_runtime_config_global_mutation();
-        repair_profile_uid_schema(repo_path)?;
-    }
+    repair_profile_schema_under_guard(repo_path)?;
     let local_commit = repo.commit_all(reason, &SignatureSpec::default_for_app())?;
-    let outcome = repo.pull(token)?;
+    let outcome = repo.fetch(token)?;
     let mut committed = local_commit.is_some();
     let mut conflicts = Vec::new();
-    let mut applied_remote = matches!(outcome, PullOutcome::FastForwarded { .. });
+    let mut applied_remote = false;
+
+    if matches!(outcome, PullOutcome::FastForwarded { .. }) {
+        apply_fast_forward(&repo, &outcome, "push")?;
+        applied_remote = true;
+    }
 
     if matches!(outcome, PullOutcome::Diverged { .. }) {
         let merge = reconcile(&repo)?;
         if merge.conflicts.is_empty() {
-            repo.reset_to_remote()?;
-            write_merged_profile(repo_path, &merge.merged)?;
+            apply_merged_profile(&repo, repo_path, &merge.merged, "push")?;
             let merge_commit =
                 repo.commit_all("merge remote changes", &SignatureSpec::default_for_app())?;
             committed |= merge_commit.is_some();
@@ -808,20 +821,66 @@ fn write_merged_profile(repo_path: &Path, merged: &BTreeMap<String, Value>) -> R
     Ok(())
 }
 
+fn apply_fast_forward(repo: &GitRepo, outcome: &PullOutcome, operation: &str) -> Result<u64> {
+    let profile_guard = crate::plugins::config::profile_config_write_guard_unmarked();
+    let generation =
+        profile_guard.mark_changed(crate::plugins::config::ProfileConfigInvalidation::All);
+    repo.apply_pull(outcome)?;
+    trace_profile_sync_apply(operation, "fast_forward", generation);
+    Ok(generation)
+}
+
+fn apply_merged_profile(
+    repo: &GitRepo,
+    repo_path: &Path,
+    merged: &BTreeMap<String, Value>,
+    operation: &str,
+) -> Result<u64> {
+    let profile_guard = crate::plugins::config::profile_config_write_guard_unmarked();
+    let generation =
+        profile_guard.mark_changed(crate::plugins::config::ProfileConfigInvalidation::All);
+    repo.reset_to_remote()?;
+    write_merged_profile(repo_path, merged)?;
+    trace_profile_sync_apply(operation, "merged", generation);
+    Ok(generation)
+}
+
+fn trace_profile_sync_apply(operation: &str, outcome: &str, generation: u64) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "PROFILE_SYNC_APPLY",
+        "operation={operation} outcome={outcome} scope=all profile_generation={generation} consumed_generation={generation} acknowledged_generation=none"
+    );
+    #[cfg(not(debug_assertions))]
+    let _ = (operation, outcome, generation);
+}
+
 fn commit_profile_schema_repair(
     repo_path: &Path,
     repo: &GitRepo,
     token: Option<&str>,
 ) -> Result<()> {
-    {
-        let _mutation = crate::plugins::config::begin_runtime_config_global_mutation();
-        repair_profile_uid_schema(repo_path)?;
+    if !repair_profile_schema_under_guard(repo_path)? {
+        return Ok(());
     }
     let commit = repo.commit_all("repair profile schema", &SignatureSpec::default_for_app())?;
     if commit.is_some() {
         repo.push(token)?;
     }
     Ok(())
+}
+
+fn repair_profile_schema_under_guard(repo_path: &Path) -> Result<bool> {
+    let profile_guard = crate::plugins::config::profile_config_write_guard_unmarked();
+    let _mutation = crate::plugins::config::begin_runtime_config_global_mutation();
+    let changed = repair_profile_uid_schema(repo_path)?;
+    if !changed {
+        return Ok(false);
+    }
+    let generation =
+        profile_guard.mark_changed(crate::plugins::config::ProfileConfigInvalidation::All);
+    trace_profile_sync_apply("schema_repair", "schema", generation);
+    Ok(true)
 }
 
 fn repair_profile_uid_schema(repo_path: &Path) -> Result<bool> {
@@ -886,7 +945,10 @@ mod tests {
     use git2::Repository;
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::ffi::OsString;
     use std::path::Path;
+    use std::sync::mpsc;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     const ALT_TAB_UID: &str = "a7f48ac7-3cd5-4402-a1fe-d517fbce0fd6";
@@ -904,6 +966,28 @@ mod tests {
     fn write_file(path: &Path, value: &Value) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
+    }
+
+    struct TestPathRootEnvGuard {
+        previous: Option<OsString>,
+    }
+
+    impl TestPathRootEnvGuard {
+        fn new(root: &Path) -> Self {
+            let previous = std::env::var_os("QOL_TRAY_TEST_PATH_ROOT");
+            std::env::set_var("QOL_TRAY_TEST_PATH_ROOT", root);
+            Self { previous }
+        }
+    }
+
+    impl Drop for TestPathRootEnvGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var("QOL_TRAY_TEST_PATH_ROOT", previous);
+                return;
+            }
+            std::env::remove_var("QOL_TRAY_TEST_PATH_ROOT");
+        }
     }
 
     fn sig() -> SignatureSpec {
@@ -979,6 +1063,264 @@ mod tests {
     }
 
     #[test]
+    fn fast_forward_profile_apply_invalidates_generation_for_remote_state() {
+        let tmp = TempDir::new().unwrap();
+        let url = init_bare_origin(&tmp.path().join("origin.git"));
+        let remote_path = tmp.path().join("remote/profile");
+        let remote = seed_profile_repo(&remote_path, &url);
+        let local_path = tmp.path().join("local/profile");
+        let local = GitRepo::clone(&url, &local_path, None).unwrap();
+
+        write_file(
+            &remote_path.join("default/core/plugin-configs/plugin-a.json"),
+            &json!({"value": 2}),
+        );
+        write_file(
+            &remote_path.join("default/core/plugins.lock.json"),
+            &json!({
+                "version": 1,
+                "plugins": [{"id": "plugin-a", "uid": "remote-uid", "version": "2.0.0"}]
+            }),
+        );
+        remote.commit_all("remote state", &sig()).unwrap();
+        remote.push(None).unwrap();
+
+        let outcome = local.fetch(None).unwrap();
+        assert!(matches!(outcome, PullOutcome::FastForwarded { .. }));
+        let before = crate::plugins::config::current_profile_config_generation();
+        apply_fast_forward(&local, &outcome, "test").unwrap();
+        let after = crate::plugins::config::current_profile_config_generation();
+
+        assert!(after > before);
+        assert_eq!(
+            read_json(&local_path.join("default/core/plugin-configs/plugin-a.json")),
+            json!({"value": 2})
+        );
+        assert_eq!(
+            read_json(&local_path.join("default/core/plugins.lock.json"))["plugins"][0]["uid"],
+            "remote-uid"
+        );
+    }
+
+    #[test]
+    fn fetch_waits_for_scoped_write_before_checkout_apply() {
+        let tmp = TempDir::new().unwrap();
+        let url = init_bare_origin(&tmp.path().join("origin.git"));
+        let remote_path = tmp.path().join("remote/profile");
+        let remote = seed_profile_repo(&remote_path, &url);
+        let local_path = tmp.path().join("local/profile");
+        let local = GitRepo::clone(&url, &local_path, None).unwrap();
+
+        write_file(
+            &remote_path.join("default/core/plugin-configs/plugin-a.json"),
+            &json!({"value": 2}),
+        );
+        remote.commit_all("remote state", &sig()).unwrap();
+        remote.push(None).unwrap();
+
+        let (writer_ready_tx, writer_ready_rx) = mpsc::channel();
+        let (writer_release_tx, writer_release_rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let _guard = crate::plugins::config::profile_config_write_guard_for_plugin("plugin-a");
+            writer_ready_tx.send(()).unwrap();
+            writer_release_rx.recv().unwrap();
+        });
+        writer_ready_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        let outcome = local.fetch(None).unwrap();
+        assert!(matches!(outcome, PullOutcome::FastForwarded { .. }));
+        assert_eq!(
+            read_json(&local_path.join("default/core/plugin-configs/plugin-a.json")),
+            json!({"value": 1}),
+            "fetch must not mutate the checkout before the guarded apply"
+        );
+
+        let (apply_started_tx, apply_started_rx) = mpsc::channel();
+        let (apply_finished_tx, apply_finished_rx) = mpsc::channel();
+        let apply_path = local_path.clone();
+        let apply_outcome = outcome.clone();
+        let apply = std::thread::spawn(move || {
+            apply_started_tx.send(()).unwrap();
+            let repo = GitRepo::open(&apply_path).unwrap();
+            apply_fast_forward(&repo, &apply_outcome, "race").unwrap();
+            apply_finished_tx.send(()).unwrap();
+        });
+        apply_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert!(
+            apply_finished_rx
+                .recv_timeout(Duration::from_millis(100))
+                .is_err(),
+            "guarded apply must wait for the concurrent scoped write"
+        );
+
+        writer_release_tx.send(()).unwrap();
+        writer.join().unwrap();
+        apply_finished_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        apply.join().unwrap();
+
+        assert_eq!(
+            read_json(&local_path.join("default/core/plugin-configs/plugin-a.json")),
+            json!({"value": 2})
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_conflict_resolution_is_seen_by_profile_reconciliation() {
+        let _env = crate::test_support::env_lock().lock().await;
+        let tmp = TempDir::new().unwrap();
+        let _path = TestPathRootEnvGuard::new(tmp.path());
+        let profile_path = crate::paths::profile_dir().unwrap();
+        let url = init_bare_origin(&tmp.path().join("origin.git"));
+        let repo = GitRepo::init(&profile_path, &url).unwrap();
+        write_file(
+            &profile_path.join("default/manifest.json"),
+            &json!({"version": 1}),
+        );
+        write_file(
+            &profile_path.join("default/core/plugin-configs/plugin-a.json"),
+            &json!({"value": 1}),
+        );
+        write_file(
+            &profile_path.join("default/core/plugins.lock.json"),
+            &json!({
+                "version": 1,
+                "plugins": [{
+                    "id": "plugin-a",
+                    "uid": "plugin-a",
+                    "repo_url": "https://example.com/plugin-a.git",
+                    "version": "1.0.0"
+                }]
+            }),
+        );
+        repo.commit_all("seed", &sig()).unwrap();
+        repo.push(None).unwrap();
+
+        let remote_path = tmp.path().join("remote/profile");
+        let remote = GitRepo::clone(&url, &remote_path, None).unwrap();
+        write_file(
+            &remote_path.join("default/core/plugin-configs/plugin-a.json"),
+            &json!({"value": 2}),
+        );
+        write_file(
+            &remote_path.join("default/core/plugins.lock.json"),
+            &json!({
+                "version": 1,
+                "plugins": [{
+                    "id": "plugin-a",
+                    "uid": "plugin-a",
+                    "repo_url": "https://example.com/plugin-a.git",
+                    "version": "2.0.0"
+                }]
+            }),
+        );
+        remote.commit_all("remote state", &sig()).unwrap();
+        remote.push(None).unwrap();
+
+        write_file(
+            &profile_path.join("default/core/plugin-configs/plugin-a.json"),
+            &json!({"value": 3}),
+        );
+        write_file(
+            &profile_path.join("default/core/plugins.lock.json"),
+            &json!({
+                "version": 1,
+                "plugins": [{
+                    "id": "plugin-a",
+                    "uid": "plugin-a",
+                    "repo_url": "https://example.com/plugin-a.git",
+                    "version": "1.5.0"
+                }]
+            }),
+        );
+        repo.commit_all("local state", &sig()).unwrap();
+        let outcome = repo.fetch(None).unwrap();
+        assert!(matches!(outcome, PullOutcome::Diverged { .. }));
+
+        write_file(
+            &crate::paths::github_auth_path().unwrap(),
+            &json!({
+                "access_token": "test-token",
+                "source": "oauth",
+                "scopes": ["repo"]
+            }),
+        );
+        save_sync_target(&SyncTarget {
+            repo_url: url,
+            auto_created: false,
+        })
+        .unwrap();
+
+        let manifest: crate::plugins::PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "plugin-a"
+name = "Plugin A"
+description = ""
+version = "1.0.0"
+
+[menu]
+label = "Plugin A"
+items = []
+"#,
+        )
+        .unwrap();
+        let mut runtime_context = crate::plugins::config::RuntimeConfigContext::new().unwrap();
+        let old_runtime = runtime_context
+            .materialize_runtime_config_for_manifest("plugin-a", &manifest)
+            .unwrap()
+            .unwrap();
+        assert_eq!(old_runtime, json!({"value": 3}));
+
+        let mut manager = crate::plugins::PluginManager::new();
+        let before_generation = crate::plugins::config::current_profile_config_generation();
+        let before_reconciliations = manager.profile_reconciliation_count();
+        let service = SyncService::new(crate::paths::plugins_dir().unwrap()).unwrap();
+        let result = service
+            .resolve_conflicts(vec![
+                ConflictChoice {
+                    file: "default/core/plugin-configs/plugin-a.json".to_string(),
+                    key_path: "value".to_string(),
+                    side: Side::Remote,
+                },
+                ConflictChoice {
+                    file: "default/core/plugins.lock.json".to_string(),
+                    key_path: "plugins.plugin-a".to_string(),
+                    side: Side::Remote,
+                },
+            ])
+            .await
+            .unwrap();
+        assert!(result.applied_remote);
+        assert!(crate::plugins::config::current_profile_config_generation() > before_generation);
+        assert_eq!(
+            read_json(&profile_path.join("default/core/plugin-configs/plugin-a.json")),
+            json!({"value": 2})
+        );
+        assert_eq!(
+            read_json(&profile_path.join("default/core/plugins.lock.json"))["plugins"][0]
+                ["version"],
+            "2.0.0"
+        );
+
+        assert!(manager.reconcile_profile_generation().unwrap());
+        assert_eq!(
+            manager.profile_reconciliation_count(),
+            before_reconciliations + 1
+        );
+        let new_runtime = runtime_context
+            .materialize_runtime_config_for_manifest("plugin-a", &manifest)
+            .unwrap()
+            .unwrap();
+        assert_eq!(new_runtime, json!({"value": 2}));
+    }
+
+    #[test]
     fn pull_before_push_merges_independent_remote_changes() {
         let tmp = TempDir::new().unwrap();
         let url = init_bare_origin(&tmp.path().join("origin.git"));
@@ -991,6 +1333,13 @@ mod tests {
             &alice_path.join("default/core/plugin-configs/plugin-a.json"),
             &json!({"value": 2}),
         );
+        write_file(
+            &alice_path.join("default/core/plugins.lock.json"),
+            &json!({
+                "version": 1,
+                "plugins": [{"id": "plugin-a", "uid": "remote-uid", "version": "2.0.0"}]
+            }),
+        );
         alice.commit_all("alice", &sig()).unwrap();
         alice.push(None).unwrap();
 
@@ -998,11 +1347,13 @@ mod tests {
             &bob_path.join("default/core/plugin-configs/plugin-b.json"),
             &json!({"enabled": true}),
         );
+        let before = crate::plugins::config::current_profile_config_generation();
         let output = push_profile_changes(&bob_path, None, "manual push").unwrap();
 
         assert!(output.conflicts.is_empty());
         assert!(output.committed);
         assert!(output.applied_remote);
+        assert!(crate::plugins::config::current_profile_config_generation() > before);
 
         let verify_path = tmp.path().join("verify/profile");
         GitRepo::clone(&url, &verify_path, None).unwrap();
@@ -1013,6 +1364,10 @@ mod tests {
         assert_eq!(
             read_json(&verify_path.join("default/core/plugin-configs/plugin-b.json")),
             json!({"enabled": true})
+        );
+        assert_eq!(
+            read_json(&verify_path.join("default/core/plugins.lock.json"))["plugins"][0]["uid"],
+            "remote-uid"
         );
     }
 

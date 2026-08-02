@@ -66,6 +66,10 @@ fn supervise_once(
     if crate::dev_generation::daemon_autostart_held() {
         return;
     }
+    if let Err(error) = reconcile_profile_generation(plugin_manager) {
+        log::error!("Daemon supervisor failed to reconcile profile generation: {error:#}");
+        return;
+    }
     state.begin_tick();
     reap_exited_daemons(plugin_manager);
     let snapshots = snapshot_daemons(plugin_manager);
@@ -105,6 +109,14 @@ fn supervise_once(
     if any_state_change {
         crate::hotkeys::trigger_reload();
     }
+}
+
+fn reconcile_profile_generation(plugin_manager: &Arc<Mutex<PluginManager>>) -> anyhow::Result<()> {
+    let mut manager = plugin_manager
+        .lock()
+        .map_err(|_| anyhow::anyhow!("plugin manager lock poisoned"))?;
+    manager.reconcile_profile_generation()?;
+    Ok(())
 }
 
 #[derive(Default)]
@@ -782,5 +794,96 @@ mod tests {
 
         assert!(state.records.contains_key(&kept));
         assert!(!state.records.contains_key(&removed), "stale record pruned");
+    }
+
+    #[test]
+    fn unchanged_supervisor_ticks_do_not_read_profile_state() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _path = crate::paths::push_test_path_root(root.path());
+        let plugin_manager = Arc::new(Mutex::new(PluginManager::new()));
+        let (health_tx, _health_rx) = crate::plugins::daemon_health::channel();
+        let publisher = HealthPublisher::new(
+            health_tx,
+            qol_conventions::DEFAULT_PORT,
+            root.path().join("health.json"),
+        );
+
+        crate::plugins::config::reset_profile_config_read_count();
+        let mut state = SupervisorState::default();
+        supervise_once(&plugin_manager, &mut state, &publisher);
+        supervise_once(&plugin_manager, &mut state, &publisher);
+
+        assert_eq!(crate::plugins::config::profile_config_read_count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn supervisor_reconciles_applied_profile_before_observing_daemon() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _env = crate::test_support::env_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let plugin_id = "plugin-supervisor-generation";
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let plugin_dir = plugins_dir.join(plugin_id);
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let daemon = plugin_dir.join("daemon");
+        std::fs::write(&daemon, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&daemon, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            format!(
+                r#"
+[plugin]
+id = "{plugin_id}"
+name = "{plugin_id}"
+description = ""
+version = "1.0.0"
+
+[menu]
+label = "{plugin_id}"
+items = []
+
+[daemon]
+enabled = true
+command = "daemon"
+"#
+            ),
+        )
+        .unwrap();
+        let config_dir = crate::paths::shared_config_dir().unwrap();
+        crate::plugins::registry::record_release_install(&config_dir, plugin_id, plugin_dir)
+            .unwrap();
+
+        let mut manager = PluginManager::new();
+        manager.load_plugins().unwrap();
+        manager.ensure_plugin_daemon_running(plugin_id).unwrap();
+        let old_pid = manager
+            .plugin_daemon_pid(&PluginId::new(plugin_id))
+            .unwrap();
+
+        {
+            let _profile_guard = crate::plugins::config::profile_config_write_guard();
+            let profile_configs = crate::paths::profile_plugin_configs_dir().unwrap();
+            std::fs::create_dir_all(&profile_configs).unwrap();
+            std::fs::write(profile_configs.join(format!("{plugin_id}.json")), "{}\n").unwrap();
+        }
+
+        let plugin_manager = Arc::new(Mutex::new(manager));
+        let (health_tx, _health_rx) = crate::plugins::daemon_health::channel();
+        let publisher = HealthPublisher::new(
+            health_tx,
+            qol_conventions::DEFAULT_PORT,
+            crate::paths::runtime_dir().join("supervisor-generation-health.json"),
+        );
+        supervise_once(&plugin_manager, &mut SupervisorState::default(), &publisher);
+
+        let manager = plugin_manager.lock().unwrap();
+        let new_pid = manager
+            .plugin_daemon_pid(&PluginId::new(plugin_id))
+            .unwrap();
+        assert_ne!(new_pid, old_pid);
+        assert!(!crate::process_utils::is_pid_alive(old_pid as i32));
     }
 }

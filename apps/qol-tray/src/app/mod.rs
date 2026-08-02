@@ -386,6 +386,7 @@ struct InitResult {
     plugin_manager: Arc<Mutex<PluginManager>>,
     feature_registry: Arc<FeatureRegistry>,
     events: Arc<qol_tray::daemon::EventBus>,
+    post_pull_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 #[cfg(feature = "dev")]
@@ -419,6 +420,7 @@ fn app_init_inner(
         init.shutdown_rx,
         init.update_available,
         init.events,
+        init.post_pull_task,
     )?;
     log::info!("QoL Tray daemon started successfully");
     if is_first_run() {
@@ -454,16 +456,6 @@ async fn async_init_inner(
             log::error!("qol-migrations[post-auth] failed: {error:#}");
         }
     }
-    if !shadow_generation && !rolling_restart {
-        let sync_for_pull = Arc::clone(&sync_service);
-        tokio::spawn(async move {
-            match sync_for_pull.pull_on_launch().await {
-                Ok(result) if result.applied_remote => materialize_installed_runtime_configs(),
-                Ok(_) => {}
-                Err(error) => log::error!("Cloud profile pull on launch failed: {error:#}"),
-            }
-        });
-    }
     let mut plugin_manager = PluginManager::new();
     plugin_manager.load_plugins()?;
     let plugin_manager = Arc::new(Mutex::new(plugin_manager));
@@ -492,11 +484,25 @@ async fn async_init_inner(
         plugin_manager.clone(),
         &daemon,
         shutdown_tx.clone(),
-        sync_service,
+        Arc::clone(&sync_service),
         #[cfg(feature = "dev")]
         health_rx,
         #[cfg(feature = "dev")]
         core_log_controls,
+    )
+    .await?;
+    let generation_restart = shadow_generation || rolling_restart;
+    let launch_pull_factory = if !shadow_generation && !rolling_restart {
+        let sync_for_pull = Arc::clone(&sync_service);
+        Some(move || tokio::spawn(async move { sync_for_pull.pull_on_launch().await }))
+    } else {
+        None
+    };
+    let (missing_generation_daemons, post_pull_task) = start_local_daemons_before_launch_pull(
+        plugin_manager.clone(),
+        generation_restart,
+        launch_pull_factory,
+        shutdown_tx.subscribe(),
     )
     .await?;
     if shadow_generation {
@@ -513,36 +519,6 @@ async fn async_init_inner(
             qol_tray::plugins::daemon_health::default_file_path(),
         ),
     );
-    let generation_restart = shadow_generation || rolling_restart;
-    let missing_generation_daemons = {
-        let plugin_manager = plugin_manager.clone();
-        match tokio::task::spawn_blocking(move || {
-            if qol_tray::dev_generation::daemon_autostart_held() {
-                log::info!(
-                    "Shadow dev generation: deferring plugin daemon autostart until promotion"
-                );
-                return Vec::new();
-            }
-            if let Ok(mut manager) = plugin_manager.lock() {
-                manager.autostart_daemons();
-                if generation_restart {
-                    return manager
-                        .wait_for_autostart_daemons_ready(DEV_GENERATION_DAEMON_READY_TIMEOUT);
-                }
-            } else {
-                log::error!("plugin manager lock poisoned during daemon autostart");
-            }
-            Vec::new()
-        })
-        .await
-        {
-            Ok(missing) => missing,
-            Err(error) => {
-                log::error!("daemon autostart task failed: {}", error);
-                Vec::new()
-            }
-        }
-    };
     if !missing_generation_daemons.is_empty() {
         let missing = missing_generation_daemons.join(", ");
         if shadow_generation {
@@ -566,7 +542,138 @@ async fn async_init_inner(
         plugin_manager,
         feature_registry,
         events: daemon.events.clone(),
+        post_pull_task,
     })
+}
+
+async fn start_local_daemons_before_launch_pull<F>(
+    plugin_manager: Arc<Mutex<PluginManager>>,
+    generation_restart: bool,
+    launch_pull_factory: Option<F>,
+    mut shutdown_rx: broadcast::Receiver<()>,
+) -> Result<(Vec<String>, Option<tokio::task::JoinHandle<()>>)>
+where
+    F: FnOnce() -> tokio::task::JoinHandle<anyhow::Result<qol_tray::sync::SyncActionResult>>,
+{
+    let missing_generation_daemons =
+        autostart_plugin_daemons(Arc::clone(&plugin_manager), generation_restart).await;
+    let Some(launch_pull_factory) = launch_pull_factory else {
+        return Ok((missing_generation_daemons, None));
+    };
+    let lifecycle_cancellation = plugin_manager
+        .lock()
+        .map_err(|_| anyhow::anyhow!("plugin manager lock poisoned"))?
+        .lifecycle_cancellation();
+    if !matches!(
+        shutdown_rx.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+    ) {
+        lifecycle_cancellation.cancel();
+        return Ok((missing_generation_daemons, None));
+    }
+    let launch_pull = launch_pull_factory();
+    let post_pull_task = tokio::spawn(reconcile_after_launch_pull(
+        launch_pull,
+        plugin_manager,
+        shutdown_rx,
+        lifecycle_cancellation,
+    ));
+    Ok((missing_generation_daemons, Some(post_pull_task)))
+}
+
+async fn reconcile_after_launch_pull(
+    mut launch_pull: tokio::task::JoinHandle<anyhow::Result<qol_tray::sync::SyncActionResult>>,
+    plugin_manager: Arc<Mutex<PluginManager>>,
+    mut shutdown_rx: broadcast::Receiver<()>,
+    lifecycle_cancellation: Arc<qol_process::CancellationToken>,
+) {
+    let pull_result = tokio::select! {
+        _ = shutdown_rx.recv() => {
+            lifecycle_cancellation.cancel();
+            launch_pull.abort();
+            return;
+        }
+        result = &mut launch_pull => result,
+    };
+    let pull_result = match pull_result {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => {
+            log::error!("Cloud profile pull on launch failed: {error:#}");
+            return;
+        }
+        Err(error) => {
+            if !lifecycle_cancellation.is_cancelled() {
+                log::error!("Cloud profile launch task failed: {error}");
+            }
+            return;
+        }
+    };
+    if !pull_result.applied_remote || lifecycle_cancellation.is_cancelled() {
+        return;
+    }
+
+    let cancellation_for_reconcile = Arc::clone(&lifecycle_cancellation);
+    let reconcile = tokio::task::spawn_blocking(move || {
+        if cancellation_for_reconcile.is_cancelled() {
+            return;
+        }
+        materialize_installed_runtime_configs();
+        if cancellation_for_reconcile.is_cancelled() {
+            return;
+        }
+        let mut manager = match plugin_manager.lock() {
+            Ok(manager) => manager,
+            Err(error) => {
+                log::error!("Plugin manager mutex poisoned after profile pull: {error}");
+                return;
+            }
+        };
+        if let Err(error) = manager.reconcile_profile_generation() {
+            log::error!("Failed to reconcile daemons after profile pull: {error:#}");
+        }
+    });
+    tokio::pin!(reconcile);
+    tokio::select! {
+        _ = shutdown_rx.recv() => {
+            lifecycle_cancellation.cancel();
+            reconcile.as_ref().abort();
+        }
+        result = &mut reconcile => {
+            if let Err(error) = result {
+                log::error!("Post-pull daemon reconciliation task failed: {error}");
+            }
+        }
+    }
+}
+
+async fn autostart_plugin_daemons(
+    plugin_manager: Arc<Mutex<PluginManager>>,
+    generation_restart: bool,
+) -> Vec<String> {
+    match tokio::task::spawn_blocking(move || {
+        if qol_tray::dev_generation::daemon_autostart_held() {
+            log::info!("Shadow dev generation: deferring plugin daemon autostart until promotion");
+            return Vec::new();
+        }
+        if let Ok(mut manager) = plugin_manager.lock() {
+            manager.reconcile_and_autostart_daemons();
+            if generation_restart {
+                return manager
+                    .wait_for_autostart_daemons_ready(DEV_GENERATION_DAEMON_READY_TIMEOUT);
+            }
+        } else {
+            log::error!("plugin manager lock poisoned during daemon autostart");
+        }
+        Vec::new()
+    })
+    .await
+    {
+        Ok(missing) => missing,
+        Err(error) => {
+            log::error!("daemon autostart task failed: {}", error);
+            Vec::new()
+        }
+    }
 }
 
 fn materialize_installed_runtime_configs() {
@@ -611,6 +718,26 @@ fn spawn_config_reconcilers(
         ],
         move || {
             features::launcher_apps::trigger_full_sync_with_manager(&pm_for_launcher);
+        },
+    );
+
+    let pm_for_plugins = plugin_manager.clone();
+    spawn_reconciler(
+        config,
+        &[ConfigKind::Plugins, ConfigKind::Profile],
+        move || {
+            let mut manager = match pm_for_plugins.lock() {
+                Ok(manager) => manager,
+                Err(error) => {
+                    log::error!(
+                        "Plugin manager mutex poisoned during generation reconcile: {error}"
+                    );
+                    return;
+                }
+            };
+            if let Err(error) = manager.reconcile_profile_generation() {
+                log::error!("Failed to reconcile plugin generation after config event: {error:#}");
+            }
         },
     );
 }
@@ -678,5 +805,67 @@ async fn check_for_updates() -> bool {
             log::debug!("Update check timed out");
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{reconcile_after_launch_pull, start_local_daemons_before_launch_pull};
+    use qol_tray::plugins::PluginManager;
+    use std::sync::Arc;
+    use tokio::sync::oneshot;
+    use tokio::time::{timeout, Duration};
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_daemons_start_before_a_pending_launch_pull() {
+        let manager = Arc::new(std::sync::Mutex::new(PluginManager::new()));
+        let (release_tx, release_rx) = oneshot::channel();
+        let (missing, post_pull_task) = start_local_daemons_before_launch_pull(
+            manager,
+            false,
+            Some(|| {
+                tokio::spawn(async move {
+                    release_rx.await.unwrap();
+                    anyhow::bail!("test pull remains pending until local startup completes")
+                })
+            }),
+            tokio::sync::broadcast::channel(1).1,
+        )
+        .await
+        .unwrap();
+        assert!(missing.is_empty());
+        let post_pull_task = post_pull_task.expect("launch pull reconciliation is tracked");
+        assert!(!post_pull_task.is_finished());
+        release_tx.send(()).unwrap();
+        timeout(Duration::from_secs(1), post_pull_task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_cancels_pending_launch_pull_reconciliation() {
+        let manager = Arc::new(std::sync::Mutex::new(PluginManager::new()));
+        let cancellation = manager.lock().unwrap().lifecycle_cancellation();
+        let (release_tx, release_rx) = oneshot::channel();
+        let launch_pull = tokio::spawn(async move {
+            release_rx.await.unwrap();
+            anyhow::bail!("test pull should have been cancelled")
+        });
+        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+        let task = tokio::spawn(reconcile_after_launch_pull(
+            launch_pull,
+            Arc::clone(&manager),
+            shutdown_rx,
+            Arc::clone(&cancellation),
+        ));
+        tokio::task::yield_now().await;
+        shutdown_tx.send(()).unwrap();
+        let _ = release_tx.send(());
+        timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cancellation.is_cancelled());
     }
 }
