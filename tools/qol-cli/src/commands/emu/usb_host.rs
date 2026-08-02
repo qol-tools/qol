@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -11,6 +11,7 @@ pub(crate) fn validate(path: Option<&Path>) -> Result<()> {
     }
     #[cfg(target_os = "linux")]
     {
+        use anyhow::Context;
         use std::os::unix::fs::FileTypeExt;
         let metadata = std::fs::metadata(path)
             .with_context(|| format!("failed to inspect USB device {}", path.display()))?;
