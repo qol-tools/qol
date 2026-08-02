@@ -24,7 +24,7 @@ enum WatchSignal {
     HostHint(PathBuf),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileEntry {
     pub name: String,
     pub path: PathBuf,
@@ -299,27 +299,37 @@ pub(crate) fn start(entries: SharedEntries) {
                     .collect::<Vec<_>>()
                     .join(", ")
             );
+            let mut publish_needed = !dirty_now.is_empty();
             if !dirty_files.is_empty() {
                 let changed_count = dirty_files.len();
-                file_entries = Arc::new(file_scan::refresh_files(
-                    &file_entries,
-                    &file_roots,
-                    &dirty_files,
-                ));
+                let refreshed = file_scan::refresh_files(&file_entries, &file_roots, &dirty_files);
                 dirty_files.clear();
-                file_cache::store(&file_roots, &file_entries);
+                let files_changed = file_entries.as_ref() != &refreshed;
+                if files_changed {
+                    file_entries = Arc::new(refreshed);
+                    file_cache::store(&file_roots, &file_entries);
+                    publish_needed = true;
+                }
                 qol_runtime::probe!(
                     "LAUNCHER_INDEX",
-                    "kind=files changed={} entries={}",
+                    "kind=files paths={} entries={} outcome={}",
                     changed_count,
                     file_entries.len(),
+                    if files_changed { "changed" } else { "noop" },
                 );
                 eprintln!(
-                    "[launcher] index: refreshed {changed_count} file path(s), {} entries",
-                    file_entries.len()
+                    "[launcher] index: refreshed {changed_count} file path(s), {} entries, {}",
+                    file_entries.len(),
+                    if files_changed {
+                        "changed"
+                    } else {
+                        "unchanged"
+                    }
                 );
             }
-            publish(&entries, &cache, &file_entries);
+            if publish_needed {
+                publish(&entries, &cache, &file_entries);
+            }
         }
     });
 }

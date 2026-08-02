@@ -277,7 +277,7 @@ window.QOL_DIAGRAM = (() => {
     {
       id: "t-boot", ord: "T0", label: "Cold start",
       steps: ["d-boot","d-paths","d-house","d-doctor","d-tokio","d-update","d-sync","d-feat","d-api","pl-load","pl-life","pl-track","pl-sup","px-a","p-lin","u-tray"],
-      narrative: "Pre-tokio (main thread, synchronous): bootstrap → init /tmp runtime dirs → housekeeping migrations → doctor auto-fix. Then Tokio multi-thread spins up: 2s update check, profile-sync pull on launch, feature registry mounts axum on :42700, plugin loader walks ~/.config/qol-tray/plugins/, lifecycle spawns daemons (tracker writes PIDs under /tmp/qol-tray/pids/), supervisor begins its 5s tick with 5-strike retry budget. Control then returns to the main thread, which builds the native TrayManager and enters the OS event loop — tray icon attaches at step 20, NOT step 1.",
+      narrative: "Pre-tokio (main thread, synchronous): bootstrap → init /tmp runtime dirs → housekeeping migrations → doctor auto-fix. Then Tokio multi-thread starts the bounded update check in parallel while profile sync, the axum server on :42700, plugin loading, daemon lifecycle, tracking, and supervision initialize. Control returns to the main thread without waiting for the network request, then builds the native TrayManager and enters the OS event loop — tray icon attaches at step 20, NOT step 1.",
     },
     // T1 — Tray click → daemon plugin
     {

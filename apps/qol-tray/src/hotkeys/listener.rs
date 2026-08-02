@@ -671,8 +671,8 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_keeps_physical_reconciliation_available_while_idle() {
-        const { assert!(super::super::platform::POLL_WHILE_IDLE) };
+    fn linux_polls_physical_state_only_while_an_action_is_held() {
+        const { assert!(!super::super::platform::POLL_WHILE_IDLE) };
         assert_eq!(super::super::platform::POLL_INTERVAL.as_millis(), 8);
     }
 

@@ -208,20 +208,31 @@ fn concurrent_lock_updates_serialize_scope_and_preserve_unrelated_state() {
     attempted_rx.recv().unwrap();
     release_tx.send(()).unwrap();
 
-    first.join().unwrap().unwrap();
-    second.join().unwrap().unwrap();
+    let (_, first_generation) = first.join().unwrap().unwrap();
+    let (_, second_generation) = second.join().unwrap().unwrap();
 
     let lock = load_plugins_lock().unwrap();
     assert_eq!(lock.plugins[0].uid, PluginUid::new("uid-a-new"));
     assert_eq!(lock.plugins[1].uid, PluginUid::new("uid-b-new"));
-    let (_, invalidation) =
-        crate::plugins::config::profile_config_invalidation_since(baseline).unwrap();
+    assert!(first_generation > baseline);
+    assert!(second_generation > first_generation);
+}
+
+#[test]
+fn plugin_lock_diff_reports_only_changed_plugins() {
+    let previous = PluginsLock {
+        version: CURRENT_PROFILE_VERSION,
+        plugins: vec![
+            test_lock_entry("plugin-a", "uid-a-old"),
+            test_lock_entry("plugin-b", "uid-b-stable"),
+        ],
+    };
+    let mut next = previous.clone();
+    next.plugins[0].uid = PluginUid::new("uid-a-new");
+
     assert_eq!(
-        invalidation,
-        crate::plugins::config::ProfileConfigInvalidation::Plugins(vec![
-            "plugin-a".to_string(),
-            "plugin-b".to_string(),
-        ])
+        super::storage::changed_plugin_ids(&previous, &next),
+        vec!["plugin-a".to_string()]
     );
 }
 

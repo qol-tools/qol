@@ -16,6 +16,7 @@ import {
 } from '../views/profile/actions.js';
 import { toast } from '../lib/toast.js';
 import { resolveInitialBranch } from './worktree-selection.js';
+import { syncStatusesEqual } from './sync-status.js';
 
 const BRANCH_KEY = 'dev.recompile.defaultBranch';
 const LEGACY_PATH_KEY = 'dev.recompile.defaultWorktree';
@@ -73,7 +74,7 @@ export function useApp({ onDissolve } = {}) {
     const refreshSyncStatus = useCallback(async () => {
         try {
             const nextStatus = await fetchSyncStatus();
-            setSyncStatus(nextStatus);
+            setSyncStatus(current => syncStatusesEqual(current, nextStatus) ? current : nextStatus);
             return nextStatus;
         } catch {
             return null;

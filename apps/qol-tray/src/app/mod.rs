@@ -438,10 +438,10 @@ async fn async_init_inner(
 ) -> Result<InitResult> {
     let shadow_generation = qol_tray::dev_generation::is_shadow();
     let rolling_restart = qol_tray::dev_generation::is_rolling_restart();
-    let update_available = if shadow_generation || rolling_restart {
-        false
+    let update_check = if shadow_generation || rolling_restart {
+        None
     } else {
-        check_for_updates().await
+        Some(tokio::spawn(check_for_updates()))
     };
     let (shutdown_tx, shutdown_rx) = broadcast::channel::<()>(1);
     let _state_server = qol_tray::runtime::RuntimeServer::start();
@@ -535,6 +535,7 @@ async fn async_init_inner(
     if let Err(error) = qol_tray::dev_generation::write_ready_file(ui_port) {
         log::error!("Failed to write dev generation ready file: {}", error);
     }
+    let update_available = finished_update_available(update_check).await;
     Ok(InitResult {
         shutdown_tx,
         shutdown_rx,
@@ -544,6 +545,17 @@ async fn async_init_inner(
         events: daemon.events.clone(),
         post_pull_task,
     })
+}
+
+async fn finished_update_available(update_check: Option<tokio::task::JoinHandle<bool>>) -> bool {
+    match update_check {
+        Some(check) if check.is_finished() => check.await.unwrap_or(false),
+        Some(_) => {
+            log::debug!("Update check continuing after startup");
+            false
+        }
+        None => false,
+    }
 }
 
 async fn start_local_daemons_before_launch_pull<F>(
@@ -810,11 +822,28 @@ async fn check_for_updates() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{reconcile_after_launch_pull, start_local_daemons_before_launch_pull};
+    use super::{
+        finished_update_available, reconcile_after_launch_pull,
+        start_local_daemons_before_launch_pull,
+    };
     use qol_tray::plugins::PluginManager;
     use std::sync::Arc;
     use tokio::sync::oneshot;
     use tokio::time::{timeout, Duration};
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pending_update_check_does_not_hold_startup() {
+        let pending = tokio::spawn(std::future::pending::<bool>());
+
+        let available = timeout(
+            Duration::from_millis(50),
+            finished_update_available(Some(pending)),
+        )
+        .await
+        .unwrap();
+
+        assert!(!available);
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn local_daemons_start_before_a_pending_launch_pull() {

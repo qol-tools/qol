@@ -6,7 +6,7 @@ use crate::hotkeys::capture::Combo;
 
 pub(in crate::hotkeys) const POLL_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(8);
-pub(in crate::hotkeys) const POLL_WHILE_IDLE: bool = true;
+pub(in crate::hotkeys) const POLL_WHILE_IDLE: bool = false;
 
 pub(super) fn release_active_grab(
     manager: &global_hotkey::GlobalHotKeyManager,

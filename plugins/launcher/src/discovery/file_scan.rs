@@ -15,7 +15,7 @@ pub(crate) fn scan_files(roots: Vec<PathBuf>) -> Vec<FileEntry> {
         }
         collect_files(&root, 0, &mut files);
     }
-    files.sort_by_key(|f| f.name.to_lowercase());
+    files.sort_by_cached_key(|file| file.name.to_lowercase());
     files
 }
 
@@ -24,19 +24,23 @@ pub(crate) fn refresh_files(
     roots: &[PathBuf],
     changed_paths: &HashSet<PathBuf>,
 ) -> Vec<FileEntry> {
+    let changed_paths = minimal_changed_paths(changed_paths);
+    let changed_prefixes = changed_paths
+        .iter()
+        .map(PathBuf::as_path)
+        .collect::<HashSet<_>>();
     let mut files = current
         .iter()
         .filter(|entry| {
-            !changed_paths
-                .iter()
-                .any(|changed| entry.path == *changed || entry.path.starts_with(changed))
+            !entry
+                .path
+                .ancestors()
+                .any(|path| changed_prefixes.contains(path))
         })
         .cloned()
         .collect::<Vec<_>>();
 
-    let mut changed_paths = changed_paths.iter().collect::<Vec<_>>();
-    changed_paths.sort();
-    for path in changed_paths {
+    for path in &changed_paths {
         if files.len() >= MAX_FILES {
             break;
         }
@@ -46,15 +50,34 @@ pub(crate) fn refresh_files(
         collect_changed_path(root, path, &mut files);
     }
 
-    files.sort_by(|left, right| {
-        left.name
-            .to_lowercase()
-            .cmp(&right.name.to_lowercase())
-            .then_with(|| left.path.cmp(&right.path))
-    });
+    files.sort_by_cached_key(|file| (file.name.to_lowercase(), file.path.clone()));
     files.dedup_by(|left, right| left.path == right.path);
     files.truncate(MAX_FILES);
     files
+}
+
+fn minimal_changed_paths(changed_paths: &HashSet<PathBuf>) -> Vec<PathBuf> {
+    let mut candidates = changed_paths.iter().cloned().collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        left.components()
+            .count()
+            .cmp(&right.components().count())
+            .then_with(|| left.cmp(right))
+    });
+    let mut selected = HashSet::new();
+    let mut paths = Vec::new();
+    for path in candidates {
+        if path
+            .ancestors()
+            .skip(1)
+            .any(|parent| selected.contains(parent))
+        {
+            continue;
+        }
+        selected.insert(path.clone());
+        paths.push(path);
+    }
+    paths
 }
 
 fn containing_root<'a>(roots: &'a [PathBuf], path: &Path) -> Option<&'a Path> {
@@ -143,9 +166,10 @@ fn collect_files(dir: &Path, depth: usize, out: &mut Vec<FileEntry>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{refresh_files, FileEntry};
+    use super::{minimal_changed_paths, refresh_files, FileEntry};
     use std::collections::HashSet;
     use std::fs;
+    use std::path::PathBuf;
 
     #[test]
     fn refresh_replaces_removed_and_created_files() {
@@ -196,5 +220,36 @@ mod tests {
         let refreshed = refresh_files(&current, &[root], &changed);
 
         assert!(refreshed.is_empty());
+    }
+
+    #[test]
+    fn refresh_collapses_nested_change_paths() {
+        let root = PathBuf::from("/files");
+        let changed = HashSet::from([
+            root.join("project"),
+            root.join("project/src"),
+            root.join("project/src/main.rs"),
+            root.join("other.txt"),
+        ]);
+
+        let paths = minimal_changed_paths(&changed);
+
+        assert_eq!(paths, vec![root.join("other.txt"), root.join("project")]);
+    }
+
+    #[test]
+    fn unchanged_file_contents_do_not_change_the_index() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let path = root.join("stable.txt");
+        fs::write(&path, "changed contents").unwrap();
+        let current = vec![FileEntry {
+            name: "stable.txt".to_string(),
+            path: path.clone(),
+        }];
+
+        let refreshed = refresh_files(&current, &[root], &HashSet::from([path]));
+
+        assert_eq!(refreshed, current);
     }
 }

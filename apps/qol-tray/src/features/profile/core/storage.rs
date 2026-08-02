@@ -71,7 +71,7 @@ where
     Ok((lock, generation))
 }
 
-fn changed_plugin_ids(previous: &PluginsLock, next: &PluginsLock) -> Vec<String> {
+pub(super) fn changed_plugin_ids(previous: &PluginsLock, next: &PluginsLock) -> Vec<String> {
     let previous = previous
         .plugins
         .iter()
